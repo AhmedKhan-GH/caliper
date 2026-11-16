@@ -1,8 +1,9 @@
 // Unit tests for the TensorBridge core — validation, colormap index math, and
-// the CPU staging bytes. Headless: a StubRenderer stands in for the GL/Metal
-// backend so the acceptance-rule matrix and the LUT arithmetic are exercised
-// without a window. The windowed GL pixel-exact proof lives in
-// tests/gfx/gfx_main.cpp (caliper_gfx_tests, ctest label "gfx").
+// the CPU staging bytes. Headless: a StubRenderer stands in for the Metal or
+// Vulkan backend so the acceptance-rule matrix and the LUT arithmetic are
+// exercised without a window; one named "staged" has no device path. The
+// windowed pixel-exact proof lives in tests/gfx/gfx_main.cpp (caliper_gfx_tests,
+// ctest label "gfx").
 #include <doctest/doctest.h>
 
 #include "tensor_bridge.h"
@@ -20,7 +21,7 @@ using namespace caliper_host;
 namespace {
 
 // Minimal HostRenderer that records the staged bytes and the device-path
-// calls, so we can assert the bridge's logic without any GL/Metal context.
+// calls, so we can assert the bridge's logic without any GPU context.
 class StubRenderer : public HostRenderer {
 public:
     explicit StubRenderer(const char* backend_name) : name_(backend_name) {}
@@ -171,8 +172,8 @@ TEST_CASE("expand_u8_to_rgba8: channel replication / alpha rules") {
 }
 
 TEST_CASE("acceptance matrix: only the frozen v1 shapes/dtypes are accepted") {
-    StubRenderer gl("gl");   // active device == CPU
-    TensorBridge b(gl);
+    StubRenderer staged("staged");   // active device == CPU
+    TensorBridge b(staged);
 
     float f[4] = {0, 1, 2, 3};
     uint8_t u[2 * 2 * 3] = {0};
@@ -215,7 +216,7 @@ TEST_CASE("acceptance matrix: only the frozen v1 shapes/dtypes are accepted") {
         t.strides[0] = 3;   // row stride != w -> gap
         CHECK(b.texture_from_tensor_mapped(&t, 0, 0, 3, 0) == 0);
     }
-    SUBCASE("foreign device rejected on GL backend") {
+    SUBCASE("foreign device rejected on a renderer with no device path") {
         CaliperTensor t = f32_2d(f, 2, 2);
         t.device = CALIPER_DEV_METAL;   // not the active (CPU) device
         CHECK(b.texture_from_tensor_mapped(&t, 0, 0, 3, 0) == 0);
@@ -230,18 +231,18 @@ TEST_CASE("acceptance matrix: only the frozen v1 shapes/dtypes are accepted") {
 }
 
 TEST_CASE("CPU staging bytes match the reference conversion") {
-    StubRenderer gl("gl");
-    TensorBridge b(gl);
+    StubRenderer staged("staged");
+    TensorBridge b(staged);
 
     float f[4] = {0.0f, 1.0f, 2.0f, 3.0f};   // 2x2 ramp
     CaliperTensor t = f32_2d(f, 2, 2);
     CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_VIRIDIS, 0, 3, 0);
     REQUIRE(id != 0);
-    REQUIRE(gl.upload_count == 1);
+    REQUIRE(staged.upload_count == 1);
 
     std::vector<uint8_t> ref(4 * 4);
     map_f32_to_rgba8(f, 2, 2, colormap_lut(CALIPER_CMAP_VIRIDIS), 0, 3, ref.data());
-    CHECK(gl.last_upload == ref);
+    CHECK(staged.last_upload == ref);
 
     // u8 (2x2x1) staged via expand reference
     uint8_t g[4] = {0, 85, 170, 255};
@@ -250,7 +251,7 @@ TEST_CASE("CPU staging bytes match the reference conversion") {
     REQUIRE(idu != 0);
     std::vector<uint8_t> refu(4 * 4);
     expand_u8_to_rgba8(g, 2, 2, 1, refu.data());
-    CHECK(gl.last_upload == refu);
+    CHECK(staged.last_upload == refu);
 }
 
 TEST_CASE("device tensor is validated then forwarded to the device path") {
@@ -303,21 +304,21 @@ public:
 TEST_CASE("copy counters: a CPU upload counts one copy, a device update none, a host colormap its upload") {
     float f[6] = {0, 1, 2, 3, 4, 5};   // 2x3
     SUBCASE("CPU tensor: one upload of the RGBA8 texels per create or update") {
-        StubRenderer gl("gl");
-        TensorBridge b(gl);
+        StubRenderer staged("staged");
+        TensorBridge b(staged);
         CaliperTensor t = f32_2d(f, 2, 3);
         CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_VIRIDIS, 0, 5, 0);
         REQUIRE(id != 0);
-        CHECK(gl.copy_count().copies == 1);
-        CHECK(gl.copy_count().bytes == 2 * 3 * 4);
+        CHECK(staged.copy_count().copies == 1);
+        CHECK(staged.copy_count().bytes == 2 * 3 * 4);
         REQUIRE(b.update_texture(id, &t));
-        CHECK(gl.copy_count().copies == 2);
-        CHECK(gl.copy_count().bytes == 2 * 2 * 3 * 4);
+        CHECK(staged.copy_count().copies == 2);
+        CHECK(staged.copy_count().bytes == 2 * 2 * 3 * 4);
         uint8_t g[2 * 2 * 3] = {};
         CaliperTensor tu = u8_3d(g, 2, 2, 3);   // RGB expands to RGBA on the CPU, then uploads
         REQUIRE(b.texture_from_tensor(&tu, 0) != 0);
-        CHECK(gl.copy_count().copies == 3);
-        CHECK(gl.copy_count().bytes == 2 * 2 * 3 * 4 + 2 * 2 * 4);
+        CHECK(staged.copy_count().copies == 3);
+        CHECK(staged.copy_count().bytes == 2 * 2 * 3 * 4 + 2 * 2 * 4);
     }
     SUBCASE("device tensor: read in place, no copy") {
         StubRenderer metal("metal");
@@ -344,20 +345,20 @@ TEST_CASE("copy counters: a CPU upload counts one copy, a device update none, a 
         CHECK(web.copy_count().bytes == 2 * 3 * sizeof(float));
     }
     SUBCASE("a refused upload counts nothing") {
-        StubRenderer gl("gl");
-        TensorBridge b(gl);
+        StubRenderer staged("staged");
+        TensorBridge b(staged);
         CaliperTensor t = f32_2d(f, 2, 3);
         CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_VIRIDIS, 0, 5, 0);
         REQUIRE(id != 0);
-        gl.tex_release(id);   // the stub's texture is gone: its upload refuses
+        staged.tex_release(id);   // the stub's texture is gone: its upload refuses
         CHECK_FALSE(b.update_texture(id, &t));
-        CHECK(gl.copy_count().copies == 1);
+        CHECK(staged.copy_count().copies == 1);
     }
 }
 
 TEST_CASE("release_texture / update_texture lifecycle") {
-    StubRenderer gl("gl");
-    TensorBridge b(gl);
+    StubRenderer staged("staged");
+    TensorBridge b(staged);
 
     float f[4] = {0, 1, 2, 3};
     CaliperTensor t = f32_2d(f, 2, 2);
@@ -370,7 +371,7 @@ TEST_CASE("release_texture / update_texture lifecycle") {
     CHECK(b.update_texture(id, &t2));
     std::vector<uint8_t> ref(16);
     map_f32_to_rgba8(f2, 2, 2, colormap_lut(CALIPER_CMAP_VIRIDIS), 0, 3, ref.data());
-    CHECK(gl.last_upload == ref);
+    CHECK(staged.last_upload == ref);
 
     // update rejects a shape/dtype mismatch
     uint8_t u[12] = {0};
@@ -379,13 +380,13 @@ TEST_CASE("release_texture / update_texture lifecycle") {
     CHECK_FALSE(b.update_texture(0, &t2));      // unknown id
 
     b.release_texture(id);
-    CHECK(gl.release_count == 1);
+    CHECK(staged.release_count == 1);
     CHECK_FALSE(b.update_texture(id, &t2));      // gone after release
 }
 
 TEST_CASE("alloc_shared: host buffer + texture pair, update-on-demand") {
-    StubRenderer gl("gl");
-    TensorBridge b(gl);
+    StubRenderer staged("staged");
+    TensorBridge b(staged);
 
     int64_t shape[3] = {2, 2, 4};
     CaliperTensor out{};
@@ -403,15 +404,15 @@ TEST_CASE("alloc_shared: host buffer + texture pair, update-on-demand") {
     CHECK(b.update_texture(tex, &out));
     std::vector<uint8_t> ref(16);
     expand_u8_to_rgba8(buf, 2, 2, 4, ref.data());
-    CHECK(gl.last_upload == ref);
+    CHECK(staged.last_upload == ref);
 
     b.free_shared(tex);
-    CHECK(gl.release_count == 1);
+    CHECK(staged.release_count == 1);
 }
 
 TEST_CASE("bridge caps() surfaces the renderer's stream-handoff capability (D24)") {
     // Default renderer: no stream honor -> caps 0 (adapters must drain).
-    StubRenderer plain("gl");
+    StubRenderer plain("staged");
     TensorBridge b_plain(plain);
     CHECK(b_plain.caps() == 0u);
 

@@ -103,7 +103,7 @@ public:
 
     // Device-resident update: src is a CaliperTensor whose data lives on this
     // backend's device (METAL buffer for metal). Returns false -> caller
-    // falls back to CPU staging. GL always returns false (frozen fallback).
+    // falls back to CPU staging.
     virtual bool tex_update_from_device(uint64_t tex, const CaliperTensor& t,
                                         const uint32_t* lut256 /*nullable*/,
                                         float vmin, float vmax) = 0;
@@ -123,7 +123,7 @@ public:
 
     // Diagnostic: which path the last device update took ("compute"/"blit" on
     // Metal). Lifted onto the interface (C2 review) so the bridge and gfx tests
-    // read it without dynamic_cast; GL and other CPU-staged backends default.
+    // read it without dynamic_cast; CPU-staged backends keep the default.
     virtual const char* last_device_path() const { return "cpu-staged"; }
 
     // Block the CALLING thread until the most recent device texture update
@@ -240,7 +240,7 @@ public:
         return false;
     }
 
-    // GLFW pre-window hint setup for this backend (GL profile vs NO_API).
+    // GLFW pre-window hint setup for this backend (NO_API: no GL context).
     virtual void window_hints() = 0;
 
     // ---- Embed canvas seam (libcaliper R4 L2a) ----------------------------
@@ -254,14 +254,14 @@ public:
     // These run PARALLEL to init()/new_frame()/render(): a renderer instance is
     // EITHER the exe's swapchain path OR an embed canvas, never both, so the
     // swapchain path (and its byte-exact geometry rows) is untouched. Default =
-    // unsupported: GL refuses (embed requires Metal or Vulkan — GL's context is
-    // GLFW-coupled chrome). The frame-order contract matches the swapchain
-    // path: canvas_new_frame CLEARS (opens the pass), canvas_render composites.
+    // unsupported: canvas_init refuses. The frame-order contract matches the
+    // swapchain path: canvas_new_frame CLEARS (opens the pass), canvas_render
+    // composites.
     enum CanvasMode { CANVAS_WINDOW = 0, CANVAS_OFFSCREEN = 1 };
-    virtual bool canvas_supported() const { return false; }
     // native_view: NSView*/HWND for CANVAS_WINDOW; NULL/ignored for OFFSCREEN.
     // Inits the ImGui RENDER backend on this device + the canvas target. false
-    // = honest refusal (nothing allocated, no state touched).
+    // = honest refusal (nothing allocated, no state touched), with the reason
+    // in start_error().
     virtual bool canvas_init(void* /*native_view*/, CanvasMode /*mode*/,
                              int /*w*/, int /*h*/) { return false; }
     virtual void canvas_resize(int /*w*/, int /*h*/) {}
@@ -282,7 +282,7 @@ public:
     // over: tightly packed opaque RGBA8 at the framebuffer's size, top row
     // first. A frame without a drawable leaves the request armed for the next
     // one. Default: unsupported (request returns false). Metal implements it;
-    // the GL and Vulkan backends keep the default.
+    // the Vulkan backend keeps the default.
     enum class WindowCapture { None, Pending, Ready, Failed };
     virtual bool window_capture_supported() const { return false; }
     virtual bool window_capture_request() { return false; }
@@ -292,9 +292,9 @@ public:
     }
 
     // Test-only: copy a texture's pixels back to host RGBA8 (w*h*4 bytes), or
-    // empty on failure. GL/Metal read back their handle directly in the gfx
-    // harness; Vulkan's CaliperTextureId is an opaque descriptor set, so the
-    // backend must do the copy. Not used on any hot path.
+    // empty on failure. Metal and Vulkan do the copy on their own queue (a
+    // Vulkan CaliperTextureId is an opaque descriptor set). Not used on any hot
+    // path.
     virtual std::vector<uint8_t> debug_readback_rgba8(uint64_t /*id*/,
                                                       int /*w*/, int /*h*/) {
         return {};
@@ -374,13 +374,6 @@ private:
     CopyCount copy_count_;
     std::string start_error_;
 };
-
-// GL factory (gl_renderer.cpp, C1). Any name -> GL; GL is the default backend
-// until the 2D migration. The Metal backend is a SEPARATE factory below rather
-// than a branch inside make_renderer(), because make_renderer() lives in the
-// frozen (do-not-touch) gl_renderer.cpp and GLRenderer is file-local there;
-// main.cpp does the env-driven selection between the two factories (C2).
-std::unique_ptr<HostRenderer> make_renderer(const char* name); // "gl"|"metal"|nullptr->default
 
 // Metal factory (metal_renderer.mm, C2; Apple-only translation unit). Returns
 // the Metal backend, still un-init'd — the caller runs window_hints()/init(),

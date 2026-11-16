@@ -1,8 +1,8 @@
 #pragma once
 // ============================================================================
 // The landing screen: a workstation home in the Sternbild house style, drawn
-// with Dear ImGui for every renderer backend (Metal, Vulkan, GL). It replaced
-// the GL-only IntroScreen and the plain fallback launcher list.
+// with Dear ImGui for every renderer backend (Metal, Vulkan). It replaced an
+// older intro screen and the plain launcher list.
 //
 // Layout (top to bottom):
 //   command bar   masthead (mark + CALIPER), the command line (filters the
@@ -51,7 +51,7 @@ public:
     // statuses are always fresh; `launch` reproduces a row activation.
     struct Context {
         caliper_host::AppletLoader* loader = nullptr;
-        const char* renderer_name = "";          // "metal" / "gl" / "vulkan"
+        const char* renderer_name = "";          // "metal" / "vulkan"
         std::function<void(int)> launch;         // launch applet by loader index
         // Unload and relaunch a quarantined applet (loader index); offered
         // only when AppletLoader::restartable says so.

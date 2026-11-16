@@ -419,17 +419,17 @@ endif()
 
 # ---------------------------------------------------------------------------
 # caliper_gfx_tests — windowed, pixel-exact tensor->texture proof (§16).
-# Separate binary because it pulls in the GL renderer (NOT caliper_host_lib):
-# it links the renderer + bridge sources directly into the exe/gfx-test scope.
-# Registered under the "gfx" label so `ctest -L gfx` selects it. Without a
-# GUI/GL context every case skips (gpu_skip.h): counted, and the binary exits
-# 77, which SKIP_RETURN_CODE turns into ctest "Skipped" rather than "Passed".
+# Separate binary because it pulls in the platform's renderer (NOT
+# caliper_host_lib): it links the renderer + bridge sources directly into the
+# exe/gfx-test scope. Registered under the "gfx" label so `ctest -L gfx` selects
+# it. Without a GUI session or a device every case skips (gpu_skip.h): counted,
+# and the binary exits 77, which SKIP_RETURN_CODE turns into ctest "Skipped"
+# rather than "Passed".
 # CALIPER_REQUIRE_GPU=1 makes those skips failures on a lane that must have a
 # GPU.
 add_executable(caliper_gfx_tests
     gfx/gfx_main.cpp
     ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
-    ${CMAKE_SOURCE_DIR}/src/host/renderer/gl_renderer.cpp
 )
 target_include_directories(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_gfx_tests PRIVATE
@@ -437,7 +437,7 @@ target_link_libraries(caliper_gfx_tests PRIVATE
 set_target_properties(caliper_gfx_tests PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
-# On Apple, the same §16 matrix runs on the Metal backend too (C5). Link the
+# On Apple, the §16 matrix runs on the Metal backend (C5). Link the
 # Metal HostRenderer backend and compile the harness itself as Objective-C++
 # with ARC so it can allocate the raw MTLBuffers the device paths consume and
 # blit textures back for verification.
@@ -472,7 +472,7 @@ if(APPLE)
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
 endif()
 
-# On Windows the same §16 matrix runs on the Vulkan backend (CPU-staged path),
+# On Windows the §16 matrix runs on the Vulkan backend (CPU-staged path),
 # plus hardware-gated CUDA device-path + alloc_shared byte-exact tests. Link the
 # Vulkan HostRenderer backend and compile cuda_driver.cpp in (the backend refs
 # it, and the CUDA tests build device tensors through it).

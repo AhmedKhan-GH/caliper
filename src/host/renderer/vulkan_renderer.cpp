@@ -410,8 +410,6 @@ public:
     // via caliper_core_event and owns io.DisplaySize/DeltaTime. Only ONE of
     // init() / canvas_init() is ever called on a given instance, so the exe
     // swapchain path (and its byte-exact geometry rows) is untouched.
-    bool canvas_supported() const override { return true; }
-
     bool canvas_init(void* native_view, CanvasMode mode, int w, int h) override {
         if (forced_start_failure()) return false;
         if (w <= 0 || h <= 0) return start_failed("the canvas size is not positive");
@@ -677,7 +675,7 @@ public:
         if (t.descset == VK_NULL_HANDLE) { destroy_tex(t); return false; }
 
         // Images start UNDEFINED; move to the rest layout so drawing an
-        // un-uploaded texture is defined (black), matching GL/Metal behavior.
+        // un-uploaded texture is defined (black), matching Metal.
         submit_once([&](VkCommandBuffer cb) {
             barrier(cb, t, VK_IMAGE_LAYOUT_UNDEFINED, t.rest_layout);
         });

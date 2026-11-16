@@ -7,7 +7,6 @@
 // Frame ordering matches the C1 contract: the CLEAR happens in new_frame()
 // (the Metal render pass is opened there with loadAction=Clear), the applet
 // draws its ImGui frame, then render() flushes RenderDrawData and presents.
-// This mirrors the GL backend's top-of-frame clear exactly.
 //
 // Compiled with ARC (-fobjc-arc, set in CMakeLists): ObjC strong references
 // live as members / in an internal id table; the uint64 texture ids handed to
@@ -527,8 +526,6 @@ public:
     // The ImGui *render* backend (imgui_impl_metal) is wired here; the *platform*
     // half is NOT (the embedder feeds io via caliper_core_event). Only ONE of
     // init() / canvas_init() is ever called on a given instance.
-    bool canvas_supported() const override { return true; }
-
     bool canvas_init(void* native_view, CanvasMode mode, int w, int h) override {
         if (forced_start_failure()) return false;
         if (w <= 0 || h <= 0) return start_failed("the canvas size is not positive");

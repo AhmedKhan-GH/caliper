@@ -325,7 +325,7 @@ CaliperTextureId TensorBridge::texture_from_tensor(const CaliperTensor* t, uint3
     const uint64_t tex = renderer_.tex_create_rgba8(w, h);
     if (tex == 0)                               { bridge_log("tex_create failed"); return 0; }
     // The PUBLIC CaliperTextureId is the renderer's ImGui-compatible handle
-    // (§5.4): the value imgui_impl_{metal,opengl3} bind directly as ImTextureID.
+    // (§5.4): the value imgui_impl_metal or imgui_impl_vulkan binds as ImTextureID.
     // The internal renderer id (`tex`) stays in Entry for upload/release.
     const CaliperTextureId id = renderer_.tex_imtexture_id(tex);
     if (id == 0) { renderer_.tex_release(tex); bridge_log("direct: null imtexture id"); return 0; }

@@ -264,7 +264,7 @@ TEST_CASE("synced_to_tensor: drain survives a concurrently-encoding training thr
     if (!mps_ok()) CALIPER_SKIP_NO_GPU("no MPS device");
     // The drain-path twin of the stress case above (the fix backported to main
     // as 8b0a010): the frame thread
-    // drains via synced_to_tensor — the no-caps / GL-fallback route — while a
+    // drains via synced_to_tensor — the route without the stream caps bit — while a
     // worker thread continuously enqueues MPS kernels.
     // torch::mps::synchronize() is just as unserialized as get_command_buffer()
     // (deviceSynchronize tail-calls MPSStream::synchronize — straight-line

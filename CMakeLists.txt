@@ -241,7 +241,7 @@ install(FILES
     "${CMAKE_BINARY_DIR}/caliper-sdk-config-version.cmake"
     DESTINATION lib/cmake/caliper-sdk COMPONENT sdk)
 
-# Host library: loader/negotiation logic, unit-testable without OpenGL.
+# Host library: loader/negotiation logic, unit-testable without a renderer.
 FetchContent_Declare(tomlplusplus
     GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
     GIT_TAG v3.4.0 GIT_SHALLOW TRUE)
@@ -503,10 +503,9 @@ endif()
 # The successor of caliper_host_lib for embedders: it aggregates the inner
 # headless layer (caliper_host_lib) with the renderer/bridge/service-vending
 # layer that used to be pinned in the caliper exe — host_services (service
-# registry + vending), tensor_bridge (bridge v1–v1.2 + geometry v1–v1_3), the
-# frozen GL fallback renderer — plus the ordered core lifecycle (core_lifecycle:
-# renderer selection + applet-canvas ImGui context). The caliper exe is now its
-# first embedder.
+# registry + vending), tensor_bridge (bridge v1–v1.2 + geometry v1–v1_3) — plus
+# the ordered core lifecycle (core_lifecycle: renderer selection + applet-canvas
+# ImGui context). The caliper exe is now its first embedder.
 #
 # caliper_host_lib stays a renderer-free INNER target so caliper_tests remains
 # headless (l1-survey do-not-touch): the renderer/bridge join the graph only at
@@ -529,7 +528,6 @@ add_library(libcaliper STATIC
     src/host/host_services.cpp
     src/host/export_service.cpp
     src/host/tensor_bridge.cpp
-    src/host/renderer/gl_renderer.cpp
     src/host/core_lifecycle.cpp
     src/host/embed/embed_core.cpp
     src/host/embed/embed_views.cpp
@@ -615,8 +613,8 @@ endif()
 add_executable(caliper
     src/main.cpp
     # Sternbild house style (SPEC-sternbild.md, workstation revision): colour
-    # tokens + drawing helpers, font loading, and the landing screen that
-    # replaced the GL-only IntroScreen for every renderer backend.
+    # tokens + drawing helpers, font loading, and the landing screen, drawn
+    # with ImGui on every renderer backend.
     src/host/ui/sternbild_theme.cpp
     src/host/ui/sternbild_fonts.cpp
     src/host/ui/landing_screen.cpp

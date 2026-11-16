@@ -15,8 +15,8 @@
 //
 // The star is an ImPlot3D scatter of ~2000 test-set embeddings, one series per
 // digit class (10 colors), updating live: a gray blob splits into ten lobes as
-// the learned 3-D bottleneck sharpens. ImPlot3D (not raw GL) => renderer-
-// agnostic (§6c): Metal by default, GL on CALIPER_RENDERER=gl.
+// the learned 3-D bottleneck sharpens. ImPlot3D (no graphics API calls) =>
+// renderer-agnostic (§6c): Metal on macOS, Vulkan on Windows.
 //
 // Threading discipline (docs/guides/ml-applet-cookbook.md is the full
 // treatment): the worker publishes under a mutex with generation counters —

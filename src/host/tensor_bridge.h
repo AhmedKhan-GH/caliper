@@ -163,8 +163,8 @@ private:
     // second bool was the reviewed defect, do not reintroduce it.
     enum class GeomRev : uint32_t { V1_1, V1_2, V1_3 };
     // Per-texture bookkeeping. The public CaliperTextureId handed to callers is
-    // the renderer's ImGui handle (tex_imtexture_id — what imgui_impl_{metal,
-    // opengl3} bind as ImTextureID; §5.4), and this table is keyed by it. The
+    // the renderer's ImGui handle (tex_imtexture_id — what imgui_impl_metal or
+    // imgui_impl_vulkan binds as ImTextureID; §5.4), and this table is keyed by it. The
     // internal renderer id (`tex` below) drives upload/release and never leaves
     // the host. Entry adds the shape/dtype/colormap needed to re-upload on
     // update_texture.

@@ -51,7 +51,7 @@ std::string renderer_start_refusal(const char* name, const std::string& why) {
 
 void core_create_ui_context() {
     // Host-owned ImGui/ImPlot contexts must exist before the renderer
-    // initializes its ImGui backends. None of these touch GL/Metal.
+    // initializes its ImGui backends. None of these touch the GPU.
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImPlot::CreateContext();
