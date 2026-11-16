@@ -8,12 +8,46 @@ endif()
 
 add_library(caliper_builder_loaders STATIC
     tensor.cpp
-    tensor_ops.cpp)
+    tensor_ops.cpp
+    file_io.cpp
+    npy.cpp
+    zip_reader.cpp
+    npz.cpp
+    safetensors.cpp
+    image.cpp
+    wav.cpp
+    hdf5.cpp)
 target_include_directories(caliper_builder_loaders PUBLIC "${CALIPER_BUILDER_INCLUDE_ROOT}")
+# stb_image is vendored in the tree; image.cpp compiles it with static linkage.
+target_include_directories(caliper_builder_loaders SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/stb")
 target_link_libraries(caliper_builder_loaders PUBLIC nlohmann_json::nlohmann_json)
 target_compile_features(caliper_builder_loaders PUBLIC cxx_std_17)
 
+# zlib inflates deflated npz members. Without it, stored members still load and
+# deflated ones are refused with a clear error.
+find_package(ZLIB)
+if(ZLIB_FOUND)
+    target_link_libraries(caliper_builder_loaders PRIVATE ZLIB::ZLIB)
+    target_compile_definitions(caliper_builder_loaders PRIVATE CALIPER_BUILDER_HAVE_ZLIB=1)
+else()
+    message(STATUS "caliper_builder: no zlib; the npz reader refuses deflated members")
+endif()
+
+set(_loaders_test_libs caliper_builder_loaders)
+if(ZLIB_FOUND)
+    list(APPEND _loaders_test_libs ZLIB::ZLIB)
+endif()
 caliper_builder_add_tests(loaders
     SOURCES
         tests/test_tensor_ops.cpp
-    LIBS caliper_builder_loaders)
+        tests/test_npy_npz.cpp
+        tests/test_safetensors.cpp
+        tests/test_image_wav.cpp
+    LIBS ${_loaders_test_libs})
+if(TARGET caliper_builder_loaders_tests)
+    target_include_directories(caliper_builder_loaders_tests SYSTEM PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/stb")
+    if(ZLIB_FOUND)
+        target_compile_definitions(caliper_builder_loaders_tests PRIVATE CALIPER_BUILDER_HAVE_ZLIB=1)
+    endif()
+endif()
