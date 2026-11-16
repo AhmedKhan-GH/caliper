@@ -31,6 +31,7 @@ Both fail with a configuration error when run from inside `design/` or with an a
 | [Catalog](catalog.md) | The list of every source with its schema, shape and rate, and its three commands |
 | [Command layer](command-layer.md) | The typed commands that everything acts through, with undo, the journal and approvals |
 | [Builder session](builder-session.md) | The headless object that binds the builder libraries for one workspace, and the stand-in host for tests |
+| [Builder pane](builder-pane.md) | The WYSIWYG builder: palettes of sources and primitives, the canvas, the property inspector and the spec text, with every edit a command |
 | [MCP server](mcp-server.md) | `caliper-mcp`, the stdio MCP server whose tools mirror the commands |
 | [ACP integration](acp-integration.md) | The side chat, which runs the user's own agent over the Agent Client Protocol |
 | [Widget agent](widget-agent.md) | The inline agent that changes one panel, selection, file or property from a ⌘K prompt, with a preview in place |
