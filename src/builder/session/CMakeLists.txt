@@ -48,6 +48,7 @@ caliper_builder_add_tests(session
         tests/test_table_conformance.cpp
         tests/test_spec_edit.cpp
         tests/test_session.cpp
+        tests/test_preview.cpp
         tests/test_resolve.cpp
         tests/test_command_server.cpp
         tests/test_acceptance.cpp

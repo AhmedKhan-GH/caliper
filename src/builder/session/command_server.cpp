@@ -388,7 +388,8 @@ struct CommandServer::Impl {
             if (!req.headers.emplace(name, trim(line.substr(colon + 1))).second) {
                 // Repeating a header that the checks read could smuggle a value past them.
                 static const char* kSingle[] = {"host", "origin", "authorization", "content-length", "content-type",
-                                                "transfer-encoding", "x-caliper-origin", "x-caliper-group"};
+                                                "transfer-encoding", "x-caliper-origin", "x-caliper-group",
+                                                "x-caliper-preview"};
                 for (const char* s : kSingle)
                     if (name == s) return 400;
             }
@@ -524,6 +525,7 @@ struct CommandServer::Impl {
         else if (claimed == "agent") inv.origin = CommandOrigin::agent;
         else return error_response(400, "X-Caliper-Origin is mcp, agent or api.");
         inv.group = header(req, "x-caliper-group");
+        inv.preview = header(req, "x-caliper-preview");
 
         SubmitOptions submit;
         if (inv.origin == CommandOrigin::api) {

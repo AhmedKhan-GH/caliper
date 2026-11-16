@@ -1898,7 +1898,7 @@
         "additionalProperties": false,
         "properties": {
           "applied": {
-            "description": "Whether the change was applied; false for a dry run.",
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
             "type": "boolean"
           },
           "diff": {
@@ -2200,7 +2200,7 @@
         "additionalProperties": false,
         "properties": {
           "applied": {
-            "description": "Whether the change was applied; false for a dry run.",
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
             "type": "boolean"
           },
           "diff": {
@@ -2427,7 +2427,7 @@
         "additionalProperties": false,
         "properties": {
           "applied": {
-            "description": "Whether the change was applied; false for a dry run.",
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
             "type": "boolean"
           },
           "diff": {
@@ -2637,7 +2637,7 @@
         "additionalProperties": false,
         "properties": {
           "applied": {
-            "description": "Whether the change was applied; false for a dry run.",
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
             "type": "boolean"
           },
           "diff": {
@@ -2958,7 +2958,7 @@
         "additionalProperties": false,
         "properties": {
           "applied": {
-            "description": "Whether the change was applied; false for a dry run.",
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
             "type": "boolean"
           },
           "diff": {
@@ -3314,7 +3314,7 @@
         "additionalProperties": false,
         "properties": {
           "applied": {
-            "description": "Whether the change was applied; false for a dry run.",
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
             "type": "boolean"
           },
           "diff": {
@@ -3607,7 +3607,7 @@
         "additionalProperties": false,
         "properties": {
           "applied": {
-            "description": "Whether the change was applied; false for a dry run.",
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
             "type": "boolean"
           },
           "diff": {
@@ -3787,7 +3787,7 @@
         "additionalProperties": false,
         "properties": {
           "applied": {
-            "description": "Whether the change was applied; false for a dry run.",
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
             "type": "boolean"
           },
           "diff": {
@@ -4042,7 +4042,7 @@
         "additionalProperties": false,
         "properties": {
           "applied": {
-            "description": "Whether the change was applied; false for a dry run.",
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
             "type": "boolean"
           },
           "diff": {
@@ -4166,6 +4166,296 @@
         "type": "object"
       },
       "summary": "Replaces the whole layout of the open spec. The layout is a flat list of nodes: each node splits its space horizontally or vertically between its children, with ratio the share of the first child, or shows them in tabs. A child is a panel id or another node's id, and root names the top node, or the one panel when there is only one. Every panel of the spec should appear once; a panel left out is not drawn. Undo restores the previous layout. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The new preview's id; one is made when absent.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "panel": {
+            "description": "A panel of the open spec that the preview is about, from spec.get.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "source": {
+            "description": "A source of the open spec that the preview is about, from spec.get; give panel or source, not both.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "id": "widget-1",
+          "panel": "heat"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "preview.begin",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The preview's id.",
+            "type": "string"
+          },
+          "panel": {
+            "description": "The panel the preview is scoped to, or null.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "description": "The source the preview is scoped to, or null.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "panel",
+          "source"
+        ],
+        "type": "object"
+      },
+      "summary": "Starts a preview of the open spec: a scratch copy on which edits of the open spec stack, each checked like a real edit, while the open spec, the undo history and the journal stay as they are. An edit reaches the preview when its call names the preview's id, which Caliper API takes in the X-Caliper-Preview header; spec.get, spec.validate and panel.render read the preview the same way. With panel or source the preview is scoped to that target: its edits may change only the target, the sources a target panel binds and the items the preview adds. preview.diff shows the stacked change, and only the person commits it, with Accept in Caliper. A preview ends when it is committed or discarded, or after 30 minutes without use."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The preview's id, from preview.begin.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "id": "widget-1"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "preview.diff",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "diff": {
+            "description": "The stacked change as a unified diff of the spec's canonical TOML text, from the open spec to the preview; empty when they are the same.",
+            "type": "string"
+          },
+          "edits": {
+            "description": "How many edits the preview holds.",
+            "type": "integer"
+          },
+          "id": {
+            "description": "The preview's id.",
+            "type": "string"
+          },
+          "panel": {
+            "description": "The panel the preview is scoped to, or null.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "description": "The source the preview is scoped to, or null.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "edits",
+          "diff",
+          "warnings",
+          "panel",
+          "source"
+        ],
+        "type": "object"
+      },
+      "summary": "Shows what a preview would change: the diff of the open spec's canonical TOML against the preview with every edit stacked on it, how many edits it holds and what the validator warns about. When the open spec changed since the edits were made, they are applied to it again first, and when one no longer applies the call fails with history.conflict. It changes nothing."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The preview's id, from preview.begin.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "id": "widget-1"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "preview.commit",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "edits": {
+            "description": "How many edits were applied.",
+            "type": "integer"
+          },
+          "id": {
+            "description": "The preview's id.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "edits",
+          "diff",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "summary": "Applies every edit of a preview to the open spec, in order, as one step that one undo reverts, and ends the preview. Only the person commits a preview, with Accept in Caliper: a call from an agent, from caliper-mcp or from a program is refused with preview.not_allowed. When the open spec changed since the edits were made, they are applied to it again, and when one no longer applies the commit is refused with history.conflict and nothing changes."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The preview's id, from preview.begin.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "id": "widget-1"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "preview.discard",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "edits": {
+            "description": "How many edits were dropped.",
+            "type": "integer"
+          },
+          "id": {
+            "description": "The preview's id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "edits"
+        ],
+        "type": "object"
+      },
+      "summary": "Ends a preview and drops its edits. The open spec, the undo history and the journal stay as they were, as if the preview had never been made."
     },
     {
       "args": {

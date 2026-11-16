@@ -26,8 +26,8 @@ from caliper_agent.provider import AgentError
 from caliper_agent.schema import MAX_DEPTH, validate
 from caliper_agent.toolset import JsonObjectArgs
 from caliper_agent.udiff import apply_unified_diff
-from caliper_agent.tools import (STRICT_UNSUPPORTED, TableError, acp_tool_kind, choose_strict, command_name,
-                                 derive_tools, is_strict_compatible, load_command_table, name_filter,
+from caliper_agent.tools import (NOT_FOR_THE_MODEL, STRICT_UNSUPPORTED, TableError, acp_tool_kind, choose_strict,
+                                 command_name, derive_tools, is_strict_compatible, load_command_table, name_filter,
                                  parse_command_table, split_type_lists, strip_for_strict, tool_name)
 
 
@@ -48,6 +48,10 @@ def _walk_all(schema):
 def test_every_command_of_the_real_table_becomes_a_tool_strict_within_the_limits():
     commands = load_command_table(COMMAND_TABLE)
     tools = derive_tools(commands)
+    # The preview commands are the app's and the sidecar's, never the model's.
+    assert {c.name for c in commands if c.group == "preview"} == {
+        "preview.begin", "preview.diff", "preview.commit", "preview.discard"}
+    commands = [c for c in commands if c.group not in NOT_FOR_THE_MODEL]
     assert len(tools) == len(commands) >= 35
     for tool, command in zip(tools, commands):
         assert tool.name == tool_name(command.name) and command_name(tool.name) == command.name

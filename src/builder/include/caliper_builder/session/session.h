@@ -9,7 +9,8 @@
 // that holds the whole descriptor table, and a CommandQueue over it. It binds
 // a handler for every command that needs no window: catalog.*, data.*,
 // loader.*, spec.*, source.*, panel.create, panel.patch, panel.remove,
-// layout.*, applet.* (the history commands come with the registry).
+// layout.*, preview.*, applet.* (the history commands come with the
+// registry).
 // app.info, app.applets, app.launch, panel.render and capture.frame stay
 // unbound until set_host() gives a SessionHost, which the app implements.
 //
@@ -24,6 +25,29 @@
 // keep the redo stack and write no journal line. Each edit has an exact undo: a closure pair that restores the spec
 // as it was, after checking that the open spec is still the document the
 // command changed (history.conflict otherwise).
+//
+// Stacked previews. preview.begin makes a preview of the open spec: an id, a
+// scratch copy (the shadow) that starts equal to the open spec, and the stack
+// of edits made on it. An edit of the open spec whose invocation names the
+// preview (CommandInvocation::preview, the header X-Caliper-Preview) applies
+// to the shadow instead, validated as a real edit, and reports no effect, so
+// it never reaches the journal or the history; with dry_run it is only
+// checked against the shadow. spec.get, spec.validate, panel.render and
+// resolve() read the shadow when they name the preview, and any other command
+// that mutates is refused with preview.not_previewable. A preview is always
+// the open spec with its stack applied: when the open spec changed under it,
+// the stack is applied again to the open spec before the preview is read,
+// and an edit that no longer applies answers history.conflict, as does a
+// preview begun on a spec that is no longer open. preview.diff gives the
+// stacked diff; preview.commit, from the ui and builder origins only
+// (preview.not_allowed otherwise), applies the stack to the open spec as the
+// registry's follow-ups, one undo step whose group is the preview's id;
+// preview.discard drops it without a trace. A preview scoped to a panel or a
+// source takes only edits of that target, of the sources a target panel binds
+// (through `from` too) and of the items the preview added
+// (preview.out_of_scope). PreviewLimits bounds the previews open at once,
+// the edits and bytes of one, and its idle time, after which it is dropped
+// (preview.expired).
 //
 // Paths. A path outside the workspace is accepted by data.import,
 // loader.create and loader.update only from the ui and builder origins, which
@@ -58,7 +82,10 @@
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -88,12 +115,22 @@ public:
 // The names of the commands that SessionHost serves.
 const std::vector<std::string>& session_host_commands();
 
+// The bounds of stacked previews.
+struct PreviewLimits {
+    std::size_t max_previews = 16;                  // open at once (preview.too_many)
+    std::size_t max_edits = 64;                     // stacked on one preview (preview.too_many_edits)
+    std::size_t max_bytes = std::size_t(4) << 20;   // the arguments of one preview's edits as JSON (preview.too_large)
+    std::chrono::milliseconds idle{30 * 60 * 1000};  // dropped after this long without use (preview.expired)
+    std::function<std::chrono::steady_clock::time_point()> now;  // for the idle time; tests set it
+};
+
 struct SessionOptions {
     StoreOptions store;
     JournalOptions journal;
     RegistryOptions registry;
     CommandQueue::Options queue;
     ResolveLimits resolve;
+    PreviewLimits preview;
 };
 
 // The open spec as the app reads it.
@@ -102,6 +139,16 @@ struct OpenSpec {
     std::optional<std::string> path;  // relative to the workspace; empty when never saved
     bool dirty = true;                // changed since it was opened or saved
     std::string text;                 // its canonical TOML
+};
+
+// A stacked preview as the app draws it in place.
+struct PreviewState {
+    Error error;         // spec.no_open_spec, preview.not_found, preview.expired, history.conflict
+    std::string id;
+    OpenSpec spec;       // the open spec with every edit of the preview applied
+    std::size_t edits = 0;
+    std::string panel;   // the panel it is scoped to, or empty
+    std::string source;  // the source it is scoped to, or empty
 };
 
 class Session {
@@ -141,8 +188,13 @@ public:
     spec::SourceResolver source_resolver() const;
 
     // The data of one panel of the open spec (resolve.h); spec.no_open_spec
-    // when no spec is open.
-    PanelData resolve(std::string_view panel_id) const;
+    // when no spec is open. With `preview`, the panel of that preview, which
+    // the app draws in place (preview.not_found, preview.expired,
+    // history.conflict); reading a preview counts as using it.
+    PanelData resolve(std::string_view panel_id, std::string_view preview = {}) const;
+
+    // A preview's spec, for the app to draw; reading it counts as using it.
+    PreviewState preview(std::string_view id) const;
 
     // Shuts the queue down (every waiting future completes with
     // command.shutdown) and closes the journal. The destructor does it too.

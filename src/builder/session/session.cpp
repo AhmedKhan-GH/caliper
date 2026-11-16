@@ -120,6 +120,20 @@ struct LoadedSpec {
     std::vector<spec::Diagnostic> diagnostics;
 };
 
+// A stacked preview: the open spec with the edits of `stack` applied, kept in
+// `shadow`, which was last computed from `base`.
+struct Preview {
+    std::string id;
+    std::uint64_t doc = 0;  // the document it was begun on
+    spec::Spec base;
+    spec::Spec shadow;
+    std::vector<CommandInvocation> stack;  // the edits that changed the shadow, in order, without dry_run
+    std::size_t bytes = 0;                 // their arguments as JSON text
+    std::string panel;                     // the scope: a panel or a source, or neither
+    std::string source;
+    std::chrono::steady_clock::time_point used;
+};
+
 struct Session::Impl {
     std::string workspace;
     SessionOptions options;
@@ -135,6 +149,11 @@ struct Session::Impl {
     mutable std::mutex doc_mutex;
     std::optional<Document> doc;
     std::uint64_t next_doc = 1;
+    // The stacked previews, under doc_mutex, and the ids of the last ones that
+    // expired, so that a late call learns why its preview is gone.
+    std::map<std::string, Preview> previews;
+    std::deque<std::string> expired;
+    std::uint64_t next_preview = 1;
     std::map<std::string, double> last_elapsed;  // by loader id; touched only by handlers
     // Invocations from agent, mcp and api that the policy asked about because
     // they run a Python loader, keyed by their id, name and arguments; a
@@ -754,14 +773,21 @@ struct Session::Impl {
         return open_loaded(std::move(loaded), std::move(result));
     }
 
-    CommandOutput spec_get(const CommandContext&) {
+    CommandOutput spec_get(const CommandContext& ctx) {
         std::lock_guard<std::mutex> lock(doc_mutex);
         if (!doc) return no_open_spec();
-        return CommandOutput::ok({{"id", doc->spec.applet.id},
+        const spec::Spec* s = &doc->spec;
+        if (!ctx.invocation.preview.empty()) {
+            Preview* p = nullptr;
+            if (Error e = use_preview(ctx.invocation.preview, "preview", &p)) return CommandOutput::fail(e);
+            s = &p->shadow;
+        }
+        const std::string text = spec::to_toml(*s);
+        return CommandOutput::ok({{"id", s->applet.id},
                                   {"path", doc->path ? json(*doc->path) : json(nullptr)},
-                                  {"dirty", doc->dirty()},
-                                  {"text", spec::to_toml(doc->spec)},
-                                  {"json", spec::to_json(doc->spec)}});
+                                  {"dirty", !doc->path || text != doc->saved_text},
+                                  {"text", text},
+                                  {"json", spec::to_json(*s)}});
     }
 
     CommandOutput spec_validate(const CommandContext& ctx) {
@@ -771,7 +797,13 @@ struct Session::Impl {
         } else {
             std::lock_guard<std::mutex> lock(doc_mutex);
             if (!doc) return no_open_spec();
-            diagnostics = spec::validate(doc->spec, resolver()).diagnostics;
+            const spec::Spec* s = &doc->spec;
+            if (!ctx.invocation.preview.empty()) {
+                Preview* p = nullptr;
+                if (Error e = use_preview(ctx.invocation.preview, "preview", &p)) return CommandOutput::fail(e);
+                s = &p->shadow;
+            }
+            diagnostics = spec::validate(*s, resolver()).diagnostics;
         }
         json errors = json::array();
         for (const auto& d : diagnostics)
@@ -788,6 +820,7 @@ struct Session::Impl {
         std::lock_guard<std::mutex> lock(doc_mutex);
         const json& args = ctx.invocation.args;
         const bool dry = bool_arg(args, "dry_run", false);
+        if (!ctx.invocation.preview.empty()) return preview_edit(ctx, dry);
         auto refused = [dry](CommandOutput out) {
             out.no_effect = dry;
             return out;
@@ -806,6 +839,267 @@ struct Session::Impl {
         const std::size_t bytes = 2 * (before_text.size() + after_text.size()) + 512;
         return CommandOutput::ok(std::move(result),
                                  change_spec(std::move(e.spec), !ctx.invocation.merge_key.empty(), bytes));
+    }
+
+    // ---- stacked previews (all under doc_mutex) ------------------------------
+
+    std::chrono::steady_clock::time_point preview_now() const {
+        return options.preview.now ? options.preview.now() : std::chrono::steady_clock::now();
+    }
+
+    // Drops the previews left unused for longer than the idle limit.
+    void sweep_previews() {
+        const auto now = preview_now();
+        for (auto it = previews.begin(); it != previews.end();) {
+            if (now - it->second.used > options.preview.idle) {
+                expired.push_back(it->first);
+                while (expired.size() > 64) expired.pop_front();
+                it = previews.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // Finds a preview, after dropping the expired ones, and marks it used.
+    Error find_preview(const std::string& id, const std::string& where, Preview** out) {
+        sweep_previews();
+        const auto it = previews.find(id);
+        if (it == previews.end()) {
+            if (std::find(expired.begin(), expired.end(), id) != expired.end()) {
+                const auto minutes = std::chrono::duration_cast<std::chrono::minutes>(options.preview.idle).count();
+                return Error("preview.expired",
+                             "The preview " + id + " was dropped after " + std::to_string(minutes) +
+                                 " minutes without use; preview.begin starts a new one.",
+                             where);
+            }
+            return Error("preview.not_found", "No preview has the id " + id + "; preview.begin starts one.", where);
+        }
+        it->second.used = preview_now();
+        *out = &it->second;
+        return {};
+    }
+
+    // Makes the preview's shadow the open spec with its stack applied again,
+    // when the open spec changed since the shadow was computed.
+    Error refresh_preview(Preview& p) {
+        if (!doc || doc->id != p.doc)
+            return Error("history.conflict", "The preview " + p.id +
+                                                 " was made on a spec that is no longer open; discard it and begin a "
+                                                 "new one on the open spec.");
+        if (doc->spec == p.base) return {};
+        spec::Spec s = doc->spec;
+        const spec::SourceResolver res = resolver();
+        for (const CommandInvocation& inv : p.stack) {
+            SpecEdit e = apply_spec_edit(s, inv.name, inv.args, res);
+            if (e.error)
+                return Error("history.conflict",
+                             "The open spec changed since the preview's edits were made, and its " + inv.name +
+                                 " no longer applies: " + e.error.message + " (" + e.error.code + ")",
+                             e.error.where);
+            s = std::move(e.spec);
+        }
+        p.base = doc->spec;
+        p.shadow = std::move(s);
+        return {};
+    }
+
+    Error use_preview(const std::string& id, const std::string& where, Preview** out) {
+        if (Error e = find_preview(id, where, out)) return e;
+        return refresh_preview(**out);
+    }
+
+    // The rule of a scoped preview: it takes new sources and panels, and
+    // changes only its target, the sources a target panel binds (following
+    // `from`) and the items it added itself.
+    Error check_scope(const Preview& p, const std::string& name, const json& args) const {
+        if (p.panel.empty() && p.source.empty()) return {};
+        const std::string target = p.panel.empty() ? "source " + p.source : "panel " + p.panel;
+        if (name == "spec.set_text" || name == "layout.set")
+            return Error("preview.out_of_scope",
+                         "A preview of the " + target + " cannot replace the whole spec or the whole layout; change "
+                                                        "the target with the other edits.",
+                         "name");
+        if (name == "source.add" || name == "panel.create") return {};
+        std::set<std::string> panels;
+        std::set<std::string> sources;
+        if (!p.panel.empty()) panels.insert(p.panel);
+        if (!p.source.empty()) sources.insert(p.source);
+        for (const CommandInvocation& inv : p.stack) {
+            if (inv.name == "panel.create") panels.insert(str_arg(inv.args, "id"));
+            if (inv.name == "source.add") sources.insert(str_arg(inv.args, "id"));
+        }
+        if (const spec::Panel* panel = p.panel.empty() ? nullptr : p.shadow.find_panel(p.panel)) {
+            std::vector<std::string> todo;
+            for (const auto& slot : panel->bind)
+                for (const std::string& b : slot.second.bindings) todo.push_back(b.substr(0, b.find('.')));
+            while (!todo.empty() && sources.size() < 4096) {
+                const std::string id = todo.back();
+                todo.pop_back();
+                if (!sources.insert(id).second) continue;
+                const spec::Source* src = p.shadow.find_source(id);
+                if (src && src->from) todo.push_back(*src->from);
+            }
+        }
+        const bool panel_edit = name == "panel.patch" || name == "panel.remove" || name == "layout.place";
+        const std::string id = str_arg(args, name == "layout.place" ? "panel" : "id");
+        if (panel_edit ? panels.count(id) : sources.count(id)) return {};
+        return Error("preview.out_of_scope",
+                     "This preview is about the " + target + ", so it changes only that target, the sources it "
+                     "binds and what the preview added; " + id + " is outside it.",
+                     name == "layout.place" ? "args.panel" : "args.id");
+    }
+
+    // An edit that names a preview: it applies to the shadow and reports no
+    // effect, so the registry neither journals it nor files a step.
+    CommandOutput preview_edit(const CommandContext& ctx, bool dry) {
+        auto quiet = [](CommandOutput out) {
+            out.no_effect = true;
+            return out;
+        };
+        if (!doc) return quiet(no_open_spec());
+        Preview* p = nullptr;
+        if (Error e = use_preview(ctx.invocation.preview, "preview", &p)) return quiet(CommandOutput::fail(e));
+        const std::string& name = ctx.invocation.name;
+        const json& args = ctx.invocation.args;
+        if (Error e = check_scope(*p, name, args)) return quiet(CommandOutput::fail(e));
+        SpecEdit e = apply_spec_edit(p->shadow, name, args, resolver());
+        if (e.error) return quiet(CommandOutput::fail(e.error));
+        const std::string label = spec_label();
+        json result = std::move(e.result);
+        result["warnings"] = warnings_json(e.warnings);
+        result["diff"] = unified_line_diff(spec::to_toml(p->shadow), spec::to_toml(e.spec), "a/" + label, "b/" + label);
+        result["applied"] = !dry;
+        if (dry || e.spec == p->shadow) return CommandOutput::unchanged(std::move(result));
+        CommandInvocation kept;
+        kept.id = ctx.invocation.id;
+        kept.name = name;
+        kept.args = args;
+        kept.args.erase("dry_run");
+        kept.origin = ctx.invocation.origin;
+        kept.merge_key = ctx.invocation.merge_key;
+        const std::size_t bytes = kept.args.dump(-1, ' ', false, json::error_handler_t::replace).size() + name.size();
+        // A run with one merge key sets the same thing each time, so its
+        // newest edit takes the place of the one before.
+        const bool merges = !kept.merge_key.empty() && !p->stack.empty() && p->stack.back().merge_key == kept.merge_key &&
+                            p->stack.back().name == name;
+        const std::size_t replaced = merges ? p->stack.back().args.dump(-1, ' ', false, json::error_handler_t::replace).size() +
+                                                  name.size()
+                                            : 0;
+        if (!merges && p->stack.size() >= options.preview.max_edits)
+            return quiet(fail("preview.too_many_edits",
+                              "The preview holds " + std::to_string(p->stack.size()) +
+                                  " edits, the most it takes; it can be committed or discarded, or a new one begun.",
+                              "preview"));
+        if (p->bytes - replaced + bytes > options.preview.max_bytes)
+            return quiet(fail("preview.too_large",
+                              "The preview's edits would hold more than " +
+                                  std::to_string(options.preview.max_bytes >> 10) + " KiB of arguments.",
+                              "preview"));
+        if (merges) {
+            p->bytes -= replaced;
+            p->stack.back() = std::move(kept);
+        } else {
+            p->stack.push_back(std::move(kept));
+        }
+        p->bytes += bytes;
+        p->shadow = std::move(e.spec);
+        return CommandOutput::unchanged(std::move(result));
+    }
+
+    static json scope_json(const std::string& id) { return id.empty() ? json(nullptr) : json(id); }
+
+    CommandOutput preview_begin(const CommandContext& ctx) {
+        std::lock_guard<std::mutex> lock(doc_mutex);
+        if (!doc) return no_open_spec();
+        sweep_previews();
+        const json& a = ctx.invocation.args;
+        std::string id = str_arg(a, "id");
+        const std::string panel = str_arg(a, "panel");
+        const std::string source = str_arg(a, "source");
+        if (!panel.empty() && !source.empty())
+            return fail("preview.bad_scope", "A preview is about a panel or a source, not both.", "args.source");
+        if (!panel.empty() && !doc->spec.find_panel(panel))
+            return fail("panel.not_found", "The open spec has no panel " + panel + "; spec.get lists them.", "args.panel");
+        if (!source.empty() && !doc->spec.find_source(source))
+            return fail("source.not_found", "The open spec has no source " + source + "; spec.get lists them.",
+                        "args.source");
+        if (!id.empty() && previews.count(id))
+            return fail("preview.exists", "A preview " + id + " is open already; preview.discard ends it.", "args.id");
+        if (previews.size() >= options.preview.max_previews)
+            return fail("preview.too_many", std::to_string(previews.size()) +
+                                                " previews are open, the most a workspace keeps; commit or discard "
+                                                "one first.");
+        while (id.empty() || previews.count(id)) id = "preview-" + std::to_string(next_preview++);
+        expired.erase(std::remove(expired.begin(), expired.end(), id), expired.end());
+        Preview p;
+        p.id = id;
+        p.doc = doc->id;
+        p.base = doc->spec;
+        p.shadow = doc->spec;
+        p.panel = panel;
+        p.source = source;
+        p.used = preview_now();
+        previews.emplace(id, std::move(p));
+        return CommandOutput::ok({{"id", id}, {"panel", scope_json(panel)}, {"source", scope_json(source)}});
+    }
+
+    CommandOutput preview_diff(const CommandContext& ctx) {
+        std::lock_guard<std::mutex> lock(doc_mutex);
+        if (!doc) return no_open_spec();
+        Preview* p = nullptr;
+        if (Error e = use_preview(str_arg(ctx.invocation.args, "id"), "args.id", &p)) return CommandOutput::fail(e);
+        const std::string label = spec_label();
+        return CommandOutput::ok(
+            {{"id", p->id},
+             {"edits", p->stack.size()},
+             {"diff", unified_line_diff(spec::to_toml(doc->spec), spec::to_toml(p->shadow), "a/" + label, "b/" + label)},
+             {"warnings", warnings_json(spec::validate(p->shadow, resolver()).diagnostics)},
+             {"panel", scope_json(p->panel)},
+             {"source", scope_json(p->source)}});
+    }
+
+    // Accept: the person's act, so only ui and builder commit. The edits run
+    // as the registry's follow-ups, after being applied again to the open
+    // spec here, so a stack that no longer applies changes nothing.
+    CommandOutput preview_commit(const CommandContext& ctx) {
+        if (!user_origin(ctx.invocation.origin))
+            return fail("preview.not_allowed",
+                        "Only the person commits a preview, with Accept in Caliper; it stays open for them to accept "
+                        "or reject.");
+        std::lock_guard<std::mutex> lock(doc_mutex);
+        if (!doc) return no_open_spec();
+        Preview* p = nullptr;
+        if (Error e = use_preview(str_arg(ctx.invocation.args, "id"), "args.id", &p)) return CommandOutput::fail(e);
+        const std::string label = spec_label();
+        json result{
+            {"id", p->id},
+            {"edits", p->stack.size()},
+            {"diff", unified_line_diff(spec::to_toml(doc->spec), spec::to_toml(p->shadow), "a/" + label, "b/" + label)},
+            {"warnings", warnings_json(spec::validate(p->shadow, resolver()).diagnostics)}};
+        std::vector<CommandInvocation> edits = std::move(p->stack);
+        const std::string group = p->id;
+        previews.erase(group);
+        if (edits.empty()) return CommandOutput::unchanged(std::move(result));
+        for (CommandInvocation& inv : edits) {
+            inv.id.clear();
+            inv.group = group;
+            inv.merge_key.clear();
+            inv.preview.clear();
+        }
+        CommandOutput out = CommandOutput::ok(std::move(result));
+        out.follow_ups = std::move(edits);
+        return out;
+    }
+
+    CommandOutput preview_discard(const CommandContext& ctx) {
+        std::lock_guard<std::mutex> lock(doc_mutex);
+        Preview* p = nullptr;
+        if (Error e = find_preview(str_arg(ctx.invocation.args, "id"), "args.id", &p)) return CommandOutput::fail(e);
+        const std::string id = p->id;
+        json result{{"id", id}, {"edits", p->stack.size()}};
+        previews.erase(id);
+        return CommandOutput::ok(std::move(result));
     }
 
     // ---- applets -----------------------------------------------------------
@@ -899,9 +1193,18 @@ struct Session::Impl {
             std::lock_guard<std::mutex> lock(doc_mutex);
             if (!doc) return no_open_spec();
             s = doc->spec;
+            if (!ctx.invocation.preview.empty()) {
+                Preview* p = nullptr;
+                if (Error e = use_preview(ctx.invocation.preview, "preview", &p)) return CommandOutput::fail(e);
+                s = p->shadow;
+            }
         }
         const std::string id = str_arg(ctx.invocation.args, "id");
-        if (!s.find_panel(id)) return fail("panel.not_found", "The open spec has no panel " + id + ".", "args.id");
+        if (!s.find_panel(id))
+            return fail("panel.not_found",
+                        std::string("The ") + (ctx.invocation.preview.empty() ? "open spec" : "preview") +
+                            " has no panel " + id + ".",
+                        "args.id");
         PanelData data = resolve_panel(s, id, *store, options.resolve);
         if (data.error) return CommandOutput::fail(data.error);
         return h->render_panel(s, data, static_cast<int>(int_arg(ctx.invocation.args, "width", 800)),
@@ -910,7 +1213,21 @@ struct Session::Impl {
 
     void bind_all() {
         auto bind = [this](const char* name, CommandOutput (Impl::*fn)(const CommandContext&)) {
-            registry->bind(name, [this, fn](const CommandContext& ctx) { return (this->*fn)(ctx); });
+            registry->bind(name, [this, fn](const CommandContext& ctx) {
+                // In a preview only the edits of the open spec run; any other
+                // change of the workspace is refused, quietly.
+                const std::string& n = ctx.invocation.name;
+                if (!ctx.invocation.preview.empty() && ctx.descriptor.mutates && !is_spec_edit_command(n) &&
+                    n != "preview.commit") {
+                    CommandOutput out = fail("preview.not_previewable",
+                                             n + " changes the workspace beyond the open spec, so it cannot run in a "
+                                                 "preview; send it without the preview.",
+                                             "preview");
+                    out.no_effect = true;
+                    return out;
+                }
+                return (this->*fn)(ctx);
+            });
         };
         bind("catalog.list", &Impl::catalog_list);
         bind("catalog.describe", &Impl::catalog_describe);
@@ -930,6 +1247,10 @@ struct Session::Impl {
         for (const char* name : {"spec.set_text", "source.add", "source.patch", "source.remove", "panel.create",
                                  "panel.patch", "panel.remove", "layout.place", "layout.set"})
             bind(name, &Impl::spec_edit);
+        bind("preview.begin", &Impl::preview_begin);
+        bind("preview.diff", &Impl::preview_diff);
+        bind("preview.commit", &Impl::preview_commit);
+        bind("preview.discard", &Impl::preview_discard);
         bind("applet.save", &Impl::applet_save);
         bind("applet.open", &Impl::applet_open);
         bind("applet.list", &Impl::applet_list);
@@ -1098,19 +1419,49 @@ std::optional<OpenSpec> Session::open_spec() const {
 
 spec::SourceResolver Session::source_resolver() const { return impl_->resolver(); }
 
-PanelData Session::resolve(std::string_view panel_id) const {
+PanelData Session::resolve(std::string_view panel_id, std::string_view preview) const {
     spec::Spec s;
     {
         std::lock_guard<std::mutex> lock(impl_->doc_mutex);
+        PanelData out;
+        out.panel = std::string(panel_id);
         if (!impl_->doc) {
-            PanelData out;
-            out.panel = std::string(panel_id);
             out.error = Error("spec.no_open_spec", "No spec is open.");
             return out;
         }
         s = impl_->doc->spec;
+        if (!preview.empty()) {
+            Preview* p = nullptr;
+            if (Error e = impl_->use_preview(std::string(preview), "preview", &p)) {
+                out.error = e;
+                return out;
+            }
+            s = p->shadow;
+        }
     }
     return resolve_panel(s, panel_id, *impl_->store, impl_->options.resolve);
+}
+
+PreviewState Session::preview(std::string_view id) const {
+    PreviewState out;
+    out.id = std::string(id);
+    std::lock_guard<std::mutex> lock(impl_->doc_mutex);
+    if (!impl_->doc) {
+        out.error = Error("spec.no_open_spec", "No spec is open.");
+        return out;
+    }
+    Preview* p = nullptr;
+    if (Error e = impl_->use_preview(out.id, "preview", &p)) {
+        out.error = e;
+        return out;
+    }
+    const Document& d = *impl_->doc;
+    const std::string text = spec::to_toml(p->shadow);
+    out.spec = OpenSpec{p->shadow, d.path, !d.path || text != d.saved_text, text};
+    out.edits = p->stack.size();
+    out.panel = p->panel;
+    out.source = p->source;
+    return out;
 }
 
 void Session::close() {

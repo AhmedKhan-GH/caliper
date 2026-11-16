@@ -61,6 +61,12 @@ STRICT_UNSUPPORTED = frozenset({
 # command checks the change and returns its diff without applying it.
 PREVIEW_ARG = "dry_run"
 
+# Command groups that are never offered to the model. The preview commands
+# belong to the app and the sidecar: edits reach a stacked preview through the
+# X-Caliper-Preview header, which the sidecar sets, and only the person
+# commits one.
+NOT_FOR_THE_MODEL = frozenset({"preview"})
+
 
 class TableError(Exception):
     """The command table could not be read or is malformed."""
@@ -360,11 +366,12 @@ def derive_tools(commands: list[Command], include: Callable[[Command], bool] | N
     """One tool per command, in the table's order (stable, for prompt caching).
 
     `include` keeps only the commands it accepts: the seam for a session whose
-    role needs fewer tools. The strict tools are chosen among those kept.
+    role needs fewer tools. The groups of NOT_FOR_THE_MODEL are always left
+    out. The strict tools are chosen among those kept.
     """
     tools = []
     for c in commands:
-        if include is not None and not include(c):
+        if c.group in NOT_FOR_THE_MODEL or (include is not None and not include(c)):
             continue
         stripped = split_type_lists(strip_for_strict(c.args))
         tools.append(ToolSpec(name=tool_name(c.name), command=c, input_schema=stripped,

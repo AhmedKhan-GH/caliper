@@ -216,7 +216,9 @@ const std::pair<const char*, const char*> kFragments[] = {
 
     {"diff", R"json({"type": "string", "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change."})json"},
 
-    {"applied", R"json({"type": "boolean", "description": "Whether the change was applied; false for a dry run."})json"},
+    {"applied", R"json({"type": "boolean", "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run."})json"},
+
+    {"preview_id", R"json({"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$", "minLength": 1, "maxLength": 64, "description": "The preview's id, from preview.begin."})json"},
 
     {"dry_run", R"json({"type": "boolean", "default": false, "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent."})json"},
 
@@ -700,6 +702,68 @@ const Row kRows[] = {
         "diff": {"$use": "diff"},
         "applied": {"$use": "applied"}}})json",
      R"json({"layout": {"root": "main", "nodes": [{"id": "main", "split": "horizontal", "ratio": 0.6, "children": ["heat", "right"]}, {"id": "right", "split": "vertical", "ratio": null, "children": ["mean", "loss"]}]}})json"},
+
+    // preview
+    {"preview.begin", false, false, true,
+     "Starts a preview of the open spec: a scratch copy on which edits of the open spec stack, each checked like a "
+     "real edit, while the open spec, the undo history and the journal stay as they are. An edit reaches the preview "
+     "when its call names the preview's id, which Caliper API takes in the X-Caliper-Preview header; spec.get, "
+     "spec.validate and panel.render read the preview the same way. With panel or source the preview is scoped to "
+     "that target: its edits may change only the target, the sources a target panel binds and the items the preview "
+     "adds. preview.diff shows the stacked change, and only the person commits it, with Accept in Caliper. A preview "
+     "ends when it is committed or discarded, or after 30 minutes without use.",
+     R"json({"type": "object", "additionalProperties": false, "required": [],
+      "properties": {
+        "id": {"$use": "preview_id", "description": "The new preview's id; one is made when absent."},
+        "panel": {"$use": "id", "description": "A panel of the open spec that the preview is about, from spec.get."},
+        "source": {"$use": "id", "description": "A source of the open spec that the preview is about, from spec.get; give panel or source, not both."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "panel", "source"],
+      "properties": {
+        "id": {"type": "string", "description": "The preview's id."},
+        "panel": {"type": ["string", "null"], "description": "The panel the preview is scoped to, or null."},
+        "source": {"type": ["string", "null"], "description": "The source the preview is scoped to, or null."}}})json",
+     R"json({"id": "widget-1", "panel": "heat"})json"},
+    {"preview.diff", false, false, true,
+     "Shows what a preview would change: the diff of the open spec's canonical TOML against the preview with every "
+     "edit stacked on it, how many edits it holds and what the validator warns about. When the open spec changed "
+     "since the edits were made, they are applied to it again first, and when one no longer applies the call fails "
+     "with history.conflict. It changes nothing.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id"],
+      "properties": {"id": {"$use": "preview_id"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "edits", "diff", "warnings", "panel", "source"],
+      "properties": {
+        "id": {"type": "string", "description": "The preview's id."},
+        "edits": {"type": "integer", "description": "How many edits the preview holds."},
+        "diff": {"type": "string", "description": "The stacked change as a unified diff of the spec's canonical TOML text, from the open spec to the preview; empty when they are the same."},
+        "warnings": {"$use": "warnings"},
+        "panel": {"type": ["string", "null"], "description": "The panel the preview is scoped to, or null."},
+        "source": {"type": ["string", "null"], "description": "The source the preview is scoped to, or null."}}})json",
+     R"json({"id": "widget-1"})json"},
+    {"preview.commit", true, false, true,
+     "Applies every edit of a preview to the open spec, in order, as one step that one undo reverts, and ends the "
+     "preview. Only the person commits a preview, with Accept in Caliper: a call from an agent, from caliper-mcp or "
+     "from a program is refused with preview.not_allowed. When the open spec changed since the edits were made, they "
+     "are applied to it again, and when one no longer applies the commit is refused with history.conflict and "
+     "nothing changes.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id"],
+      "properties": {"id": {"$use": "preview_id"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "edits", "diff", "warnings"],
+      "properties": {
+        "id": {"type": "string", "description": "The preview's id."},
+        "edits": {"type": "integer", "description": "How many edits were applied."},
+        "diff": {"$use": "diff"},
+        "warnings": {"$use": "warnings"}}})json",
+     R"json({"id": "widget-1"})json"},
+    {"preview.discard", false, false, true,
+     "Ends a preview and drops its edits. The open spec, the undo history and the journal stay as they were, as if "
+     "the preview had never been made.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id"],
+      "properties": {"id": {"$use": "preview_id"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "edits"],
+      "properties": {
+        "id": {"type": "string", "description": "The preview's id."},
+        "edits": {"type": "integer", "description": "How many edits were dropped."}}})json",
+     R"json({"id": "widget-1"})json"},
 
     // applet
     {"applet.save", true, true, true,

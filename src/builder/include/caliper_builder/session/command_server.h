@@ -30,7 +30,8 @@
 //
 // The origin is api, or mcp or agent when X-Caliper-Origin says so; any other
 // value is refused with 400, so a request can never claim the ui or builder
-// origin. X-Caliper-Group gives the group. A call from mcp or agent that needs
+// origin. X-Caliper-Group gives the group, and X-Caliper-Preview the id of a
+// stacked preview that the call's edits apply to. A call from mcp or agent that needs
 // approval is held while the person decides, up to `approval_wait` (120 s);
 // a call from api gets command.needs_approval with the approval id at once.
 //
