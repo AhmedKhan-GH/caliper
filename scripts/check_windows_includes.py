@@ -26,8 +26,9 @@ these lists stops its translation unit with "file not found", which is
 reported too. Then it scans what each first-party file contributes to the
 preprocessed output, on the Windows path only, for identifiers that MSVC's
 headers do not declare although the headers exist (sigaction, kill, SIGKILL,
-O_CLOEXEC, S_ISDIR, clock_gettime, ...) and for GCC and Clang extensions MSVC
-does not have (__attribute__, __builtin_*, __atomic_*).
+O_CLOEXEC, S_ISDIR, clock_gettime, M_PI without _USE_MATH_DEFINES, ...) and
+for GCC and Clang extensions MSVC does not have (__attribute__, __builtin_*,
+__atomic_*).
 
 The translation units are those of the macOS build's compile_commands.json,
 minus the macOS-only ones and plus the Windows-only ones, as CMakeLists.txt,
@@ -160,7 +161,9 @@ __builtin_clzll __builtin_ctz __builtin_ctzll __builtin_popcount __builtin_popco
 __builtin_bswap16 __builtin_bswap32 __builtin_bswap64 __builtin_unreachable __builtin_trap
 __builtin_assume __builtin_prefetch __builtin_memcpy __atomic_load_n __atomic_store_n
 __atomic_fetch_add __atomic_fetch_sub __atomic_exchange_n __atomic_compare_exchange_n
-__sync_synchronize __sync_fetch_and_add __thread __int128 typeof __typeof__ __PRETTY_FUNCTION__""".split()
+__sync_synchronize __sync_fetch_and_add __thread __int128 typeof __typeof__ __PRETTY_FUNCTION__
+M_E M_LOG2E M_LOG10E M_LN2 M_LN10 M_PI M_PI_2 M_PI_4 M_1_PI M_2_PI M_2_SQRTPI M_SQRT2 M_SQRT1_2""".split()
+# (MSVC's math.h defines the M_ constants only with _USE_MATH_DEFINES, as the stand-in does.)
 
 
 # What the preprocessor needs from the empty standard headers, as MSVC on x64 (LLP64) defines it.
@@ -184,6 +187,25 @@ STD_MACROS = {
 #define LLONG_MAX 9223372036854775807i64
 #define LLONG_MIN (-9223372036854775807i64 - 1)
 #define ULLONG_MAX 0xffffffffffffffffui64
+""",
+    # As the UCRT's math.h: no include guard around the constants, so a later
+    # #define _USE_MATH_DEFINES and #include <math.h> still defines them (libtorch does that).
+    "cmath": "math.h", "math.h": """#if defined(_USE_MATH_DEFINES) && !defined(_MATH_DEFINES_DEFINED)
+#define _MATH_DEFINES_DEFINED
+#define M_E 2.71828182845904523536
+#define M_LOG2E 1.44269504088896340736
+#define M_LOG10E 0.434294481903251827651
+#define M_LN2 0.693147180559945309417
+#define M_LN10 2.30258509299404568402
+#define M_PI 3.14159265358979323846
+#define M_PI_2 1.57079632679489661923
+#define M_PI_4 0.785398163397448309616
+#define M_1_PI 0.318309886183790671538
+#define M_2_PI 0.636619772367581343076
+#define M_2_SQRTPI 1.12837916709551257390
+#define M_SQRT2 1.41421356237309504880
+#define M_SQRT1_2 0.707106781186547524401
+#endif
 """,
     "cstdint": "stdint.h", "stdint.h": """#pragma once
 #define INT8_MAX 127
