@@ -677,14 +677,27 @@ TEST_CASE("builder app: an agent's applet.open of the dashboard on screen keeps 
 
 // An agent's new dashboard never ends the person's running applet: on a
 // compiled applet's page the spec opens in the session, the page stays, and
-// the app says so; Home, then F6 Dashboard on the landing, shows it.
+// the app says so; Home, then F6 Dashboard on the landing, shows it. The
+// applet is the first compiled one beside the app.
 TEST_CASE("builder app: an agent's new dashboard leaves the person's applet page" * doctest::test_suite("app")) {
     const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
     const std::string root = app_root(exe, "builder-app-agent-applet");
     if (root.empty()) return;
-    const std::filesystem::path hello = std::filesystem::path(exe).parent_path() / "applets" / "hello.caliper.toml";
-    if (!std::filesystem::exists(hello)) {
-        std::printf("caliper_builder_app: the applet page case is not run: no Hello applet beside the app\n");
+    // A compiled applet beside the app, whichever the build made: the host
+    // names none, so its id comes from its manifest.
+    std::string applet;
+    std::error_code ec;
+    for (const auto& f : std::filesystem::directory_iterator(std::filesystem::path(exe).parent_path() / "applets", ec)) {
+        if (!applet.empty() || f.path().string().find(".caliper.toml") == std::string::npos) continue;
+        std::istringstream in(read_text(f.path().string()));
+        for (std::string line; std::getline(in, line) && applet.empty();) {
+            const size_t q = line.find('"');
+            if (line.rfind("id", 0) == 0 && q != std::string::npos && line.find('"', q + 1) != std::string::npos)
+                applet = line.substr(q + 1, line.find('"', q + 1) - q - 1);
+        }
+    }
+    if (applet.empty()) {
+        std::printf("caliper_builder_app: the applet page case is not run: no compiled applet beside the app\n");
         return;
     }
     const std::string results = root + "/results.jsonl";
@@ -693,7 +706,7 @@ TEST_CASE("builder app: an agent's new dashboard leaves the person's applet page
     const auto run = run_app(exe, root,
                              "wait 30; page applet; wait-file " + results + "; wait 30; page applet; leave; wait 5; "
                              "shot applet; key escape; page landing; wait 10; key f6; page spec; wait 10; shot back; quit",
-                             {{"CALIPER_AUTOLAUNCH", "dev.caliper.hello"},
+                             {{"CALIPER_AUTOLAUNCH", applet},
                               {"CALIPER_COMMAND_SCRIPT", root + "/agent.jsonl"},
                               {"CALIPER_COMMAND_RESULTS", results}});
     INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
