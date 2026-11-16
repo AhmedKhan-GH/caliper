@@ -57,6 +57,7 @@ Every command that edits the open spec goes through one function, `apply_spec_ed
 - An edit that leaves the spec with any error is refused with the validator's own code and the document path in `where`, so the open spec is valid after every command and a preview can always draw it.
 - The result carries the validator's warnings, such as `spec.not_portable`, and the change as a unified diff of the spec's canonical TOML (`diff`, empty when the text does not change), with `applied`.
 - Each edit takes `dry_run`. A dry run checks the change and returns its warnings and its diff without applying it, so that the agent pane can show the change for approval before it happens, as contracts section 12 asks of the BYOK sidecar.
+- A dry run has no effect at all, whether it succeeds or is refused, and neither has an edit that leaves the spec as it was. The handler reports `no_effect` on its output, and the registry treats the invocation as a read: no undo step, the redo stack and an open merge kept, and no journal line. An agent that previews a change never costs the person their redo.
 
 `panel.create` without `place` puts the new panel to the right of the whole layout; the first panel of a spec becomes the whole layout. `place` and `layout.place` wrap the target's leaf in a split, or add a tab next to a target that is already a tab. `panel.remove` and `layout.place` take a panel's leaf out and collapse a split that is left with one child.
 
@@ -123,7 +124,7 @@ The test `test_table_conformance.cpp` keeps them in line: every source, panel an
 caliper-builder-host --workspace <dir> --api-dir <dir> [--port <n>] [--approve allow|deny|ask]
 ```
 
-It opens the workspace as a `Session`, listens on 127.0.0.1 on a free port (or `--port`), and writes `<api-dir>/api.json` with the shape of the app's API file: `version` 1, `pid`, `port`, `token` and `url`, `http://127.0.0.1:<port>/v0`. The file has mode 0600 and is removed on exit; it has no `stream_url`, because the stand-in serves no stream. The main thread drains the command queue, as the app's frame thread will. SIGTERM or SIGINT stops it: waiting calls are answered with `command.shutdown`, the API file goes, and it exits with 0. It never prints the session token.
+It opens the workspace as a `Session`, listens on 127.0.0.1 on a free port (or `--port`), and writes `<api-dir>/api.json` with the shape of the app's API file: `version` 1, `pid`, `port`, `token` and `url`, `http://127.0.0.1:<port>/v0`. The file has mode 0600 and is removed on exit. The app's file also has `stream_url`; the stand-in leaves it out, because it serves no stream, so a client that needs the stream must run against the app. The main thread drains the command queue, as the app's frame thread will. SIGTERM or SIGINT stops it: waiting calls are answered with `command.shutdown`, the API file goes, and it exits with 0. It never prints the session token.
 
 It serves `GET /v0/commands` and `POST /v0/commands/{name}` exactly as contracts sections 8 and 15 and the command layer page describe, and nothing else:
 
@@ -149,7 +150,8 @@ Both run headless in `test_acceptance.cpp`.
 
 ## Decisions
 
-- **`dry_run` and `diff` on every spec edit.** The agent pane must show a change before it applies (contracts section 12), and only the session can compute the canonical text after an edit. A dry run is a mutating command that records no undo step, so, like any such command, it clears the redo stack; the journal keeps it, and replay passes it by.
+- **`dry_run` and `diff` on every spec edit.** The agent pane must show a change before it applies (contracts section 12), and only the session can compute the canonical text after an edit.
+- **A command that changed nothing is a read, decided by its handler.** A descriptor's `mutates` is fixed per command, but whether one invocation changed anything is known only to its handler, so `CommandOutput` carries `no_effect` and the registry, not each handler, keeps the history and the journal untouched. An earlier version let a dry run clear the redo stack and write a journal line.
 - **Extension tables are not carried by the edit commands.** `x` is an open, recursive object, which a closed, strict tool schema cannot describe. `panel.patch` and `source.patch` keep an item's `x`, `spec.set_text` carries `x` anywhere, and `layout.set` replaces the layout without it.
 - **`panel.create` takes no required `bind`.** A text panel may have only `options.text`.
 - **Outside paths from agents are accepted when the person has already granted them.** It keeps the rule's purpose, that an agent cannot widen what loaders read, and lets an agent build a second loader over a file the person dropped.

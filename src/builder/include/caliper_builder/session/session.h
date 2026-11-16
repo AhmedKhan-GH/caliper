@@ -19,7 +19,9 @@
 // the validator's code, so the open spec is valid after every command. Each
 // edit returns the validator's warnings and the change as a unified diff of
 // the canonical TOML (`diff`), and takes `dry_run` to return them without
-// applying. Each edit has an exact undo: a closure pair that restores the spec
+// applying. A dry run, refused or not, and an edit that leaves the spec as it
+// was report no effect (CommandOutput::no_effect), so they file no undo step,
+// keep the redo stack and write no journal line. Each edit has an exact undo: a closure pair that restores the spec
 // as it was, after checking that the open spec is still the document the
 // command changed (history.conflict otherwise).
 //

@@ -466,7 +466,7 @@ TEST_CASE("the journal records the session, and a replay rebuilds the open spec"
     const JournalRead read = read_journal(f.ws + "/journal/commands.jsonl");
     REQUIRE(read.error.ok());
     CHECK(read.problems.empty());
-    CHECK(read.events.size() == 8);  // six do events, one failure, one undo
+    CHECK(read.events.size() == 7);  // five do events, one failure, one undo; the dry run left no line
     f.s->close();
     CHECK(invoke(*f.s, "spec.get").error.code == "command.shutdown");
 
@@ -537,4 +537,51 @@ TEST_CASE("running a Python loader asks every origin but the person's own, per i
     CHECK(err(*f.s, "loader.describe", {{"id", "py3"}}) == "loader.not_found");
     ok(*f.s, "history.redo");
     CHECK(ok(*f.s, "loader.describe", {{"id", "py3"}})["status"] == "never_run");
+}
+
+TEST_CASE("a dry run and an edit that changes nothing leave no trace in the history or the journal") {
+    Fixture f("no-effect");
+    ok(*f.s, "data.import", {{"paths", {"data/metrics.csv"}}});
+    ok(*f.s, "spec.new", {{"id", "n"}});
+    ok(*f.s, "source.add", {{"id", "m"}, {"catalog", "table:metrics"}});
+    ok(*f.s, "panel.create", {{"id", "p"}, {"primitive", "series"}, {"bind", {{"y", "m.loss"}}}});
+    ok(*f.s, "panel.patch", {{"id", "p"}, {"patch", {{"title", "A"}}}});
+    ok(*f.s, "history.undo");
+    const std::string journal = f.ws + "/journal/commands.jsonl";
+    const std::size_t lines = read_journal(journal).events.size();
+    const std::size_t steps = f.s->registry().history_state().undo.size();
+
+    // An agent previews two changes, one of them refused; the person's redo survives.
+    const json preview = ok(*f.s, "panel.patch", {{"id", "p"}, {"patch", {{"title", "B"}}}, {"dry_run", true}}, kAgent);
+    CHECK(preview["applied"] == false);
+    CHECK(preview["diff"].get<std::string>().find("+title = \"B\"") != std::string::npos);
+    CHECK(err(*f.s, "panel.remove", {{"id", "zz"}, {"dry_run", true}}, kAgent) == "panel.not_found");
+    CHECK(err(*f.s, "source.add", {{"id", "m"}, {"sql", "SELECT 1"}, {"dry_run", true}}, kMcp) == "source.exists");
+    CHECK(read_journal(journal).events.size() == lines);
+    CHECK(f.s->registry().history_state().can_redo);
+    CHECK(f.s->registry().history_state().undo.size() == steps);
+    ok(*f.s, "history.redo");
+    CHECK(f.s->open_spec()->spec.find_panel("p")->title == std::optional<std::string>("A"));
+
+    // An edit whose diff is empty files no step and writes no line either.
+    const std::size_t lines_after_redo = read_journal(journal).events.size();
+    const std::size_t steps_after_redo = f.s->registry().history_state().undo.size();
+    const json same = ok(*f.s, "panel.patch", {{"id", "p"}, {"patch", {{"title", "A"}}}});
+    CHECK(same["applied"] == true);
+    CHECK(same["diff"] == "");
+    CHECK(f.s->registry().history_state().undo.size() == steps_after_redo);
+    CHECK(read_journal(journal).events.size() == lines_after_redo);
+    // A real edit after them is journaled and undone as usual.
+    ok(*f.s, "panel.patch", {{"id", "p"}, {"patch", {{"title", "C"}}}});
+    CHECK(read_journal(journal).events.size() == lines_after_redo + 1);
+    ok(*f.s, "history.undo");
+    CHECK(f.s->open_spec()->spec.find_panel("p")->title == std::optional<std::string>("A"));
+
+    // Replay still gives the open spec.
+    const spec::Spec expected = f.s->open_spec()->spec;
+    f.s->close();
+    const SpecReplay replay = replay_spec_journal(f.ws);
+    REQUIRE(replay.error.ok());
+    REQUIRE(replay.spec);
+    CHECK(*replay.spec == expected);
 }

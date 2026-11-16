@@ -780,13 +780,21 @@ struct Session::Impl {
         return CommandOutput::ok({{"valid", valid}, {"errors", std::move(errors)}, {"warnings", warnings_json(diagnostics)}});
     }
 
+    // A dry run, whether it succeeds or fails, and an edit that leaves the
+    // spec as it was report no effect, so the registry treats them as reads:
+    // the redo stack stays, no undo step is filed and the journal is not
+    // written.
     CommandOutput spec_edit(const CommandContext& ctx) {
         std::lock_guard<std::mutex> lock(doc_mutex);
-        if (!doc) return no_open_spec();
         const json& args = ctx.invocation.args;
         const bool dry = bool_arg(args, "dry_run", false);
+        auto refused = [dry](CommandOutput out) {
+            out.no_effect = dry;
+            return out;
+        };
+        if (!doc) return refused(no_open_spec());
         SpecEdit e = apply_spec_edit(doc->spec, ctx.invocation.name, args, resolver());
-        if (e.error) return CommandOutput::fail(e.error);
+        if (e.error) return refused(CommandOutput::fail(e.error));
         const std::string before_text = spec::to_toml(doc->spec);
         const std::string after_text = spec::to_toml(e.spec);
         const std::string label = spec_label();
@@ -794,7 +802,7 @@ struct Session::Impl {
         result["warnings"] = warnings_json(e.warnings);
         result["diff"] = unified_line_diff(before_text, after_text, "a/" + label, "b/" + label);
         result["applied"] = !dry;
-        if (dry) return CommandOutput::ok(std::move(result));
+        if (dry || e.spec == doc->spec) return CommandOutput::unchanged(std::move(result));
         const std::size_t bytes = 2 * (before_text.size() + after_text.size()) + 512;
         return CommandOutput::ok(std::move(result),
                                  change_spec(std::move(e.spec), !ctx.invocation.merge_key.empty(), bytes));
