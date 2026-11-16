@@ -90,7 +90,11 @@ def destinations(out: list[Path] | None) -> list[Path]:
 
 def install(files: dict[str, bytes], folders: list[Path]) -> None:
     """Write the three files into each folder. Each file is written next to
-    its place and then renamed over it, so a server never reads half a file."""
+    its place and then renamed over it, so a server never reads half a file.
+    They get the mode a new file gets (mkstemp's own is owner-only, which a
+    wheel would carry into every install)."""
+    umask = os.umask(0)
+    os.umask(umask)
     for folder in folders:
         folder.mkdir(parents=True, exist_ok=True)
         for name in FILES:
@@ -98,6 +102,7 @@ def install(files: dict[str, bytes], folders: list[Path]) -> None:
             try:
                 with os.fdopen(fd, "wb") as f:
                     f.write(files[name])
+                os.chmod(tmp, 0o666 & ~umask)
                 os.replace(tmp, folder / name)
             except BaseException:
                 Path(tmp).unlink(missing_ok=True)

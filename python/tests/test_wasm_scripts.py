@@ -63,6 +63,8 @@ def test_install_replaces_each_file_whole(tmp_path):
     assert sorted(p.name for p in out.iterdir()) == sorted([*wasm_views.FILES, "caliper-view.js"])
     for name, data in good_files("2").items():
         assert (out / name).read_bytes() == data
+        if sys.platform != "win32":                       # readable by all, as a new file is
+            assert (out / name).stat().st_mode & 0o044 == 0o044
 
 
 # ---- build_wasm.py ---------------------------------------------------------------
