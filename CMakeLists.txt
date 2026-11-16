@@ -817,6 +817,13 @@ endif()
 # installs nothing, so the sdk and embed install components do not change.
 if(CALIPER_WITH_BUILDER)
     add_subdirectory(src/builder)
+    # Caliper API's command gateway over the builder session
+    # (src/host/api/session_gateway.h), which serves the session's command
+    # layer at /v0/commands. caliper_api itself builds without the builder.
+    add_library(caliper_api_session STATIC src/host/api/session_gateway.cpp)
+    target_link_libraries(caliper_api_session PUBLIC caliper_api caliper_builder_session)
+    set_target_properties(caliper_api_session PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
 endif()
 
 # The Python extension (caliper-python spike): a nanobind module over the embed
