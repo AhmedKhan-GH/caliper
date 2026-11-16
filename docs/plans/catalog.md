@@ -159,6 +159,10 @@ Each provider has a name (`[a-z][a-z0-9_-]{0,31}`, unique in its catalog) and a 
 
 `Catalog` keeps no cache. Every `list`, `describe` and `sample` asks the providers, so the catalog is always as fresh as they are. Each provider keeps its own state current: the loader provider updates its entries when a loader runs, the live provider when a session attaches or detaches and when a view first publishes, and the feed and metric providers read their services when they are asked. `Catalog::revision()` is the sum of the providers' revisions plus the number of times a provider was added or removed. Since every term only grows, a pane that shows the catalog can poll it once a frame and list again only when it changes.
 
+## Reserved names
+
+The kind `recording` is reserved for recorded sessions, which a later sprint stores in `workspace.duckdb` beside the loader tables; the schema name `caliper_recordings` is left free for them. Version 0 neither lists nor accepts it: `parse_catalog_id()` refuses `recording:<name>` like any unknown kind, with `catalog.invalid_id`, and the entry parser refuses the kind with `catalog.invalid_entry`. The kind will be added with fields of its own.
+
 ## Decisions
 
 - **Every key is present, and the parser is strict.** An agent reads the same fourteen keys for every source, and a provider's mistake is caught at the catalog rather than in a spec.

@@ -345,6 +345,15 @@ TEST_CASE("source ids split at the first colon and check both parts") {
     CHECK(cb::parse_catalog_id("tensor:" + std::string(257, 'n')).error.code == "catalog.invalid_id");
 }
 
+TEST_CASE("the reserved kind recording is refused in version 0") {
+    CHECK(!cb::catalog_kind_from_name("recording"));
+    CHECK(cb::parse_catalog_id("recording:x").error.code == "catalog.invalid_id");
+    json j = tensor_json();
+    j["kind"] = "recording";
+    j["id"] = "recording:attn_weights";
+    CHECK(fault_of(j) == "kind");
+}
+
 TEST_CASE("timestamps are UTC ISO 8601") {
     CHECK(cb::is_utc_timestamp("2026-11-15T12:00:00Z"));
     CHECK(cb::is_utc_timestamp("2026-11-15T12:00:00.123456789Z"));
