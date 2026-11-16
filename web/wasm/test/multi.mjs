@@ -37,6 +37,18 @@ const ready = new Promise((resolve, reject) => {
 });
 
 let browser = null;
+// Waits until every instance but skip has published a frame count from a
+// frame that began after this call, and then k - 1 frames more.
+async function framesPass(page, skip, k, timeout = 60000) {
+  const counts = () => page.evaluate(() => globalThis.caliperMulti.handles.map((h) => h.stats.frames));
+  const grown = async (min) => (await page.waitForFunction(([min, skip]) => {
+    const now = globalThis.caliperMulti.handles.map((h) => h.stats.frames);
+    return now.every((n, i) => i === skip || n >= min[i]) && now;
+  }, [min, skip], { polling: 'raf', timeout })).jsonValue();
+  const first = await grown((await counts()).map((n) => n + 1));
+  await grown(first.map((n) => n + k - 1));
+}
+
 let failed = true;
 try {
   const { port, token } = await ready;
@@ -53,8 +65,10 @@ try {
   await page.goto(`http://127.0.0.1:${port}/multi.html?${new URLSearchParams({ token, views: opt.views })}`);
   await page.waitForFunction(() => document.readyState === 'complete');
   const before = await heap();
-  await page.waitForFunction(() => globalThis.caliperMulti?.done, null, { timeout: 120000, polling: 200 });
-  await page.waitForTimeout(1500);
+  await page.waitForFunction(() => globalThis.caliperMulti?.done, null, { timeout: 120000, polling: 'raf' });
+  // Every instance has published a frame count from a frame after that, and
+  // drawn 15 frames more (waits on frames drawn, never on a fixed time).
+  await framesPass(page, null, 15);
   const after = await heap();
   const report = await page.evaluate(() => ({
     preloadMs: Math.round(globalThis.caliperMulti.preloadMs),
@@ -72,7 +86,8 @@ try {
     const counts = async () => page.evaluate(() => globalThis.caliperMulti.handles.map((h) => h.stats.frames));
     const c0 = await counts();
     await page.evaluate((i) => globalThis.caliperMulti.handles[i].destroy(), d);
-    await page.waitForTimeout(1000);
+    // The others draw 15 frames more; the destroyed one must not.
+    await framesPass(page, d, 15);
     const c1 = await counts();
     report.afterDestroy = {
       canvases: await page.evaluate(() => globalThis.caliperMulti.handles.filter((h) => h.canvas.isConnected).length),

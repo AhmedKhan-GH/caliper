@@ -74,7 +74,10 @@ try {
   const origin = `http://127.0.0.1:${notebook.address().port}`;
   await p.goto(origin + '/');
   await p.waitForFunction(() => globalThis.mounted || globalThis.mountError, null, { timeout: 60000 });
-  await p.waitForTimeout(1000);   // the module publishes its counters every 15 frames
+  // Until the module has published that it applied a snapshot (it publishes
+  // every 15 frames at first); past the deadline the check below fails.
+  await p.waitForFunction(() => globalThis.mountError || globalThis.mounted.stats?.updates > 0, null,
+                          { polling: 'raf', timeout: 60000 }).catch(() => undefined);
   const res = await p.evaluate(() => globalThis.mountError ? { error: globalThis.mountError }
     : { stats: globalThis.mounted.stats });
   await p.screenshot({ path: opt.out });

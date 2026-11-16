@@ -80,6 +80,22 @@ const ready = new Promise((resolve, reject) => {
   setTimeout(() => reject(new Error('stream_server.py did not start')), 20000);
 });
 
+// Waits until the module has published a frame count from a frame that began
+// after this call (it publishes at the end of a frame), then k - 1 frames more.
+// Checks wait on frames drawn, never on a fixed time: a software adapter on a
+// CI runner draws a frame in a second or more.
+async function framesPass(page, k = 2, timeout = 60000) {
+  const f0 = await page.evaluate(() => globalThis.caliperViews.caliperStats.frames);
+  const f1 = await (await page.waitForFunction((f) => {
+    const n = globalThis.caliperViews.caliperStats.frames;
+    return n > f && n;
+  }, f0, { polling: 'raf', timeout })).jsonValue();
+  if (k > 1) {
+    await page.waitForFunction((n) => globalThis.caliperViews.caliperStats.frames >= n, f1 + k - 1,
+                               { polling: 'raf', timeout });
+  }
+}
+
 let browser = null;
 let failed = true;
 try {
@@ -103,11 +119,12 @@ try {
       if (s.error) return true;
       const heat = /kind=1,/.test(s.viewInfo || '');
       return s.frames >= n && s.updates > 0 && (!heat || s.checkState === 2);
-    }, wantFrames, { timeout: 120000, polling: 250 });
+    }, wantFrames, { timeout: 120000, polling: 'raf' });
   } catch (e) {
     error = String(e);
   }
   if (opt.dataview) {
+    const replies = await page.evaluate(() => globalThis.caliperDataViews.length);
     const sent = await page.evaluate((json) => {
       const m = globalThis.caliperViews;
       const p = m.stringToNewUTF8(json);
@@ -116,7 +133,11 @@ try {
       return ok;
     }, opt.dataview);
     if (!sent) error = 'set_data_view refused';
-    await page.waitForTimeout(1000);
+    // The stream's reply, then two frames that draw what it sends.
+    else {
+      await page.waitForFunction((n) => globalThis.caliperDataViews.length > n, replies, { polling: 'raf', timeout: 60000 });
+      await framesPass(page);
+    }
   }
   if (opt.input) {
     const [ix, iy] = opt.input.split(',').map(Number);
@@ -124,7 +145,7 @@ try {
     await page.mouse.wheel(0, 240);
     await page.keyboard.press('KeyF');
     await page.keyboard.type('ab');
-    await page.waitForTimeout(300);
+    await framesPass(page);
   }
   if (opt.orbit) {
     const frames = () => page.evaluate(() => globalThis.caliperViews.caliperStats.frames);
@@ -134,9 +155,9 @@ try {
     const f0 = await frames();
     const t0 = Date.now();
     const end = t0 + Number(opt.orbit) * 1000;
+    // A measurement over the given time: each move is sent once the page has handled the last.
     for (let k = 0; Date.now() < end; ++k) {
       await page.mouse.move(vw2 + 120 * Math.sin(k / 20), vh2 + 60 * Math.cos(k / 27));
-      await page.waitForTimeout(8);
     }
     const f1 = await frames();
     const secs = (Date.now() - t0) / 1000;
@@ -144,6 +165,7 @@ try {
     globalThis.orbitReport = { seconds: +secs.toFixed(2), frames: f1 - f0, fps: +((f1 - f0) / secs).toFixed(1) };
   }
   const samples = [];
+  // A soak: the counters sampled over the given time, which is what it measures.
   if (Number(opt.seconds) > 0) {
     const end = Date.now() + Number(opt.seconds) * 1000;
     const every = Number(opt.sample || 0) * 1000;
@@ -165,8 +187,14 @@ try {
   await page.screenshot({ path: opt.out });
   if (opt.resize) {
     const [rw, rh] = opt.resize.split('x').map(Number);
+    const was = await page.evaluate(() => [globalThis.caliperViews.caliperStats.cssW, globalThis.caliperViews.caliperStats.cssH]);
     await page.setViewportSize({ width: rw, height: rh });
-    await page.waitForTimeout(600);
+    // The module has drawn at the new size, then two frames more.
+    await page.waitForFunction(([w, h]) => {
+      const s = globalThis.caliperViews.caliperStats;
+      return s.cssW !== w || s.cssH !== h;
+    }, was, { polling: 'raf', timeout: 60000 });
+    await framesPass(page);
     await page.screenshot({ path: opt.out.replace(/\.png$/, '') + '-resized.png' });
     report.resized = await page.evaluate(() => {
       const s = globalThis.caliperViews.caliperStats;
@@ -176,7 +204,7 @@ try {
   if (opt.hover) {
     const [hx, hy] = opt.hover.split(',').map(Number);
     await page.mouse.move(hx, hy);
-    await page.waitForTimeout(500);
+    await framesPass(page);
     await page.screenshot({ path: opt.out.replace(/\.png$/, '') + '-hover.png' });
   }
   console.log('report:', JSON.stringify(report, null, 2));
