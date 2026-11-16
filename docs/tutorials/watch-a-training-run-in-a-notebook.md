@@ -1,11 +1,14 @@
 # Watch a training run in a notebook
 
-This tutorial trains a model in a Jupyter notebook and shows three live views
+This tutorial trains a model in a Jupyter notebook and shows four live views
 of it inside the notebook while it trains: the loss as a series, the attention
-weights as a heatmap in which you choose a layer, a sequence and a head, and
-the model's embedding as a point cloud coloured by class. The same views open
-in a browser tab and in the Caliper app. The training loop runs at full speed,
-and Caliper samples it.
+weights as a heatmap in which you choose a layer, a sequence and a head, the
+model's embedding of an evaluation set as a point cloud coloured by class, and
+its predictions for the same evaluation set as a heatmap. A selection in the
+embedding marks the same sequences in the predictions. A panel of controls
+pauses and steps the training loop, changes its learning rate and saves a
+checkpoint while the cell runs. The same views open in a browser tab and in
+the Caliper app. The training loop runs at full speed, and Caliper samples it.
 
 The worked example is `examples/notebooks/live_training.ipynb`, a two-layer
 transformer that learns to classify synthetic token sequences, with nothing to
@@ -18,8 +21,9 @@ live](live-pytorch.md) introduces the view calls in a plain script, and
 [Network streaming](../explanations/network-streaming.md) explains the design
 that this page uses.
 
-<!-- SPRINT2-FILL screenshot: the three widgets (loss, attention, embedding) in
-JupyterLab after the loss has dropped, taken headless. Place the image here. -->
+<!-- SPRINT2-FILL screenshot: the controls panel and the four widgets (loss,
+attention, embedding, predictions) in JupyterLab after the loss has dropped,
+with a selection in the embedding, taken headless. Place the image here. -->
 
 ## Install
 
@@ -104,10 +108,42 @@ def forward(self, x):
 Because the embedding layer is 3-D, the point cloud is the model's own
 embedding, not a projection of it.
 
+## Controls and the evaluation set
+
+The next cell registers what a viewer can change or run while the model
+trains, and a fixed evaluation set that two views show:
+
+```python
+EVAL = 512
+eval_x, eval_y = make_batch(EVAL)
+eval_marker = (eval_x == MARKER).int().argmax(1)
+evaluation = caliper.items("eval", details={"class": eval_y, "marker at": eval_marker})
+
+lr = caliper.param("lr", 2e-3, min=1e-4, max=1e-1, log=True, help="learning rate")
+CHECKPOINT = os.path.join(tempfile.gettempdir(), "caliper-live-training.pt")
+
+
+@caliper.action("save checkpoint", help="saves the model's weights")
+def save_checkpoint():
+    torch.save(model.state_dict(), CHECKPOINT)
+    return f"saved {CHECKPOINT}"
+```
+
+`caliper.param` registers the learning rate as a **parameter**, a value that
+the viewers show as a slider, here on a log scale between 0.0001 and 0.1. The
+script reads `lr.value`; a viewer's change reaches it at the next step.
+`caliper.action` registers a function that a viewer runs with a button, here
+one that saves the model's weights. `caliper.items` names the 512 evaluation
+sequences an **item space**, `eval`, so that a selection of some of them in one
+view marks the same sequences in every view that shows them, and gives each
+sequence two details, its class and the position of its marker, which a viewer
+shows for the selected sequences. [Control a running script](../guides/control-a-running-script.md)
+explains each call.
+
 ## The widgets
 
-The widget cell creates one widget for each view and lays them out with
-ipywidgets:
+The widget cell creates one widget for each view and a panel of controls, and
+lays them out with ipywidgets:
 
 ```python
 from ipywidgets import HBox, VBox
@@ -115,15 +151,19 @@ from ipywidgets import HBox, VBox
 loss_widget = caliper.widget("loss", "series", height=200)
 attention_widget = caliper.widget("attention", "heatmap")
 embedding_widget = caliper.widget("embedding", "points")
+predictions_widget = caliper.widget("predictions", "heatmap", height=160)
 attention_widget.layout.flex = embedding_widget.layout.flex = "1 1 0"
 
-VBox([loss_widget, HBox([attention_widget, embedding_widget])])
+VBox([caliper.controls(), loss_widget, HBox([attention_widget, embedding_widget]), predictions_widget])
 ```
 
 `caliper.widget(name, kind)` returns an anywidget widget that shows the live
 view `name` from the server of `serve()`. The kind is optional; without it, the
 widget takes the kind from the stream. The widget is created before training
-starts and shows the view from its first snapshot.
+starts and shows the view from its first snapshot. `caliper.controls()` is the
+panel of the run's controls: its state with Pause or Resume and Step, the
+learning rate and the save action. The header of every view widget shows the
+run state and the same Pause and Step buttons.
 
 Each widget reads the server's WebSocket stream directly. The snapshots do not
 pass through the notebook's own message channel, so the widgets keep updating
@@ -132,14 +172,18 @@ while the training cell runs, and the kernel does no drawing work for them.
 ## The training loop
 
 The loop is the body of a function, `train(steps)`, so that the notebook can
-train again later. The training step is plain PyTorch, and three Caliper calls
-follow it:
+train again later. Each step starts with `caliper.step()`, the checkpoint of
+the controls, and copies the learning rate into the optimizer. The training
+step is plain PyTorch, and the Caliper calls follow it:
 
 ```python
 ATTENTION_DIMS = ("layer", "sequence", "head", "query", "key")
 ATTENTION_DEFAULT = {"index": {"layer": 1, "sequence": 0, "head": 0}}
 
-for _ in range(steps):
+for step in range(steps):
+    caliper.step()  # pauses, the new learning rate and actions take effect here
+    for group in opt.param_groups:
+        group["lr"] = lr.value
     x, y = make_batch(BATCH)
     x[:PROBES] = probe_x  # the same probe sequences at the top of every batch
     y[:PROBES] = probe_y
@@ -152,14 +196,25 @@ for _ in range(steps):
     caliper.series(loss.detach(), "loss")
     caliper.show(attention[:, :PROBES], "attention", cmap="magma",
                  dims=ATTENTION_DIMS, data_view=ATTENTION_DEFAULT)
-    caliper.points(z, y, "embedding", classes=CLASSES)
+    if step % 10 == 0:
+        with torch.no_grad():
+            eval_logits, eval_z, _ = model(eval_x)
+        caliper.points(eval_z, eval_y, "embedding", classes=CLASSES, items="eval")
+        caliper.show(eval_logits.softmax(1).T, "predictions", dims=("class", "sequence"),
+                     items={"sequence": "eval"})
 ```
 
 | Call | Tensor | Live view |
 |---|---|---|
 | `series(loss.detach(), "loss")` | 0-d tensor on MPS | A series that receives every value |
 | `show(attention[:, :PROBES], "attention", ...)` | `(2, 8, 4, 24, 24)`: layer, sequence, head, query, key | A 24x24 heatmap of the data view the viewer chose |
-| `points(z, y, "embedding", classes=CLASSES)` | `(256, 3)` positions and `(256,)` labels | 3-D points, coloured by class |
+| `points(eval_z, eval_y, "embedding", ...)` | `(512, 3)` positions and `(512,)` labels of the evaluation set | 3-D points, coloured by class |
+| `show(eval_logits.softmax(1).T, "predictions", ...)` | `(6, 512)`: class, sequence | The predicted probability of each class for each evaluation sequence |
+
+`caliper.step()` costs about 22 ns when nothing waits for it. `items="eval"`
+says that the points of the embedding are the sequences of the item space
+`eval`, and `items={"sequence": "eval"}` that the `sequence` dimension of the
+predictions indexes the same sequences.
 
 None of these calls reads a value back to the CPU. `series` takes the loss
 tensor itself, not `loss.item()`, so the loop never waits for the GPU. The
@@ -188,7 +243,8 @@ The [Caliper LIB](../references/python-api.md#data-views) reference lists every 
 The loss stays on a plateau above 1 for the first one to a few thousand steps
 and then falls to almost zero within a few hundred steps, once the model has
 learned to find the marker. At the same time the embedding separates into six clusters,
-one for each class colour. In layer 1 the row of the start token, row 0, puts
+one for each class colour, and each column of the predictions turns to one
+bright class. In layer 1 the row of the start token, row 0, puts
 nearly all its weight on one column, the class token after the marker. The
 training cell ends by printing the number of steps, the steps per second, the
 final loss and the accuracy on the last batch.
@@ -204,17 +260,26 @@ The choice belongs to that widget's subscription: a browser tab on the same
 view keeps its own data view, and the producer computes each data view that a
 viewer asks for once per snapshot.
 
-Selecting points in the embedding widget sends a `select` event. The widget
-stores the latest event in its `selection` trait, which Python reads:
+Selecting points in the embedding widget, with a Shift drag, selects those
+sequences of the evaluation set everywhere: the
+predictions widget marks their columns, and a table under the embedding shows
+their class and marker position. The selection travels on the stream, so it
+works while the training cell runs, and the script knows it at once:
+`evaluation.selection` holds the selected sequences.
+
+The selection is also a `select` event. The widget stores the latest event in
+its `selection` trait, which Python reads:
 
 ```python
 print("selection:", embedding_widget.selection)
+print("selected sequences:", evaluation.selection[:20])
 ```
 
 The selection is a dict with the view's name, the event's type and its detail.
 For points, the detail holds `indices`, the positions of the selected points in
-the snapshot that was shown, and `row_ids`, their indices in the source tensor.
-To run code on every new selection instead, pass a function to
+the snapshot that was shown, `row_ids`, their indices in the source tensor,
+and `space` and `items`, the item space and the selected sequences in it. To
+run code on every new selection instead, pass a function to
 `embedding_widget.on_select()`.
 
 The `data_view` trait works in both directions. The widget writes the data view
@@ -240,11 +305,25 @@ Besides a widget's traits, `server.on_event(fn)` calls `fn` with every event of
 every viewer, on a thread of its own, also while a cell runs, and
 `server.events()` returns the events received since its last call.
 
+## Pause, step and change the learning rate
+
+The controls act on the training cell while it runs. Pause, in the panel or in
+the header of any widget, stops the loop at its next `caliper.step()`: the
+loss stops growing, and every header reads `paused at` the step it stopped at.
+Step runs one more step and pauses again, and Resume lets the loop go on.
+Typing a learning rate in the panel's field, or dragging its slider, sends the
+value to the script, which clamps it to the range and takes it at its next
+step; the panel then shows the value the script took, and the loop copies it
+into the optimizer. Save checkpoint runs `save_checkpoint()` at the next step,
+on the training thread, and the panel shows what it returned. While the loop
+is paused, the learning rate changes and the action runs at once, in the step
+where the loop waits.
+
 ## Open the stream in a browser tab
 
 The link that `serve()` printed opens the viewer page: every view of the
 notebook in a grid, with the same pan, zoom, hover and data view picker as the
-widgets. A tab and the widgets can watch at the same time. Each viewer
+widgets, and the same panel of controls above them. A tab and the widgets can watch at the same time. Each viewer
 subscribes to the views it shows, and the producer does no work for a view that
 no viewer subscribes to.
 
@@ -280,7 +359,8 @@ every value, sent as deltas.
 
 The network route adds a copy of each snapshot from the device into the
 socket. Data views keep that copy small: the attention heatmap travels as 24x24
-values out of a tensor of 2 x 8 x 4 x 24 x 24, and the embedding as 256 points.
+values out of a tensor of 2 x 8 x 4 x 24 x 24, the embedding as 512 points
+and the predictions as 6 x 512 values.
 Encoding and sending happen outside the training loop, and a viewer that falls
 behind receives fewer snapshots rather than slowing training down.
 
@@ -288,7 +368,7 @@ The widgets draw in the browser, with WebGPU where it is available and Canvas
 2D otherwise, so drawing costs the kernel nothing.
 
 <!-- SPRINT2-FILL measured overhead: training throughput of this notebook with
-the three views served and watched, as a percentage of the same loop without
+the four views served and watched, as a percentage of the same loop without
 Caliper calls, on MPS, with the machine and torch version. Place the number
 here. -->
 
@@ -304,7 +384,10 @@ browser tab.
 ## Next
 
 - [Caliper LIB](../references/python-api.md#serve) documents `serve`, `widget`
-  and the data view arguments.
+  and the data view arguments, and its [Controls](../references/python-api.md#controls)
+  the calls of the controls.
+- [Control a running script](../guides/control-a-running-script.md) adds the
+  controls to a script of your own.
 - [Network streaming](../explanations/network-streaming.md) explains the
   transport, data views and the security position.
 - [Wire protocol](../references/wire-protocol.md) defines every message on the
