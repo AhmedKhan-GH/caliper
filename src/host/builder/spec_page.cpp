@@ -791,6 +791,11 @@ std::string SpecPage::widget_facts() const {
                       (w.edits() == 1 ? " edit" : " edits");
     if (!w.model_label().empty()) out += ", model " + w.model_label();
     if (w.error()) out += ", error " + w.error().code + ": " + one_line(w.error().message, 200);
+    if (!w.turn_input_tokens().empty()) {
+        out += ", tokens in";
+        for (long long t : w.turn_input_tokens()) out += " " + std::to_string(t);
+        out += ", out " + std::to_string(w.turn_output_tokens());
+    }
     if (!w.reply().empty()) out += ", reply " + one_line(w.reply(), 200);
     return out;
 }

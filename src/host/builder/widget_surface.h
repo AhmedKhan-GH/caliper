@@ -235,6 +235,10 @@ public:
     bool showing_full_diff() const { return show_full_diff_; }
     int edits() const { return edits_; }
     bool limit() const { return limit_; }
+    // The last turn's tokens as the agent reported them: the input of each
+    // model request and the output of all; empty before a turn ends.
+    const std::vector<long long>& turn_input_tokens() const { return turn_input_tokens_; }
+    long long turn_output_tokens() const { return turn_output_tokens_; }
     const std::optional<WidgetHandoff>& handoff() const { return handoff_; }
     const caliper_builder::Error& error() const { return error_; }
     const std::vector<WidgetExchange>& conversation() const { return conversation_; }
@@ -309,6 +313,8 @@ private:
     std::vector<std::string> bundle_cuts_;
     int edits_ = 0;
     bool limit_ = false;
+    std::vector<long long> turn_input_tokens_;   // the last turn's, per model request
+    long long turn_output_tokens_ = 0;
     bool show_full_diff_ = false;
     bool session_open_ = false;     // the agent has a session on preview_
     bool fresh_session_ = false;    // the next submit starts a new agent session

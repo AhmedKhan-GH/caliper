@@ -349,6 +349,8 @@ void WidgetSurface::on_agent(const WidgetAgentEvent& e) {
 
 void WidgetSurface::finish_turn(const WidgetAgentEvent& e) {
     if (e.stop_reason == "cancelled") return;   // the surface left the turn already
+    turn_input_tokens_ = e.input_tokens;
+    turn_output_tokens_ = e.output_tokens;
     reply_ = trimmed(reply_);
     if (!conversation_.empty()) conversation_.back().reply = reply_;
     progress_.clear();

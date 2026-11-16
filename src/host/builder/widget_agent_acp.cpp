@@ -385,6 +385,17 @@ bool AcpWidgetAgent::poll(WidgetAgentEvent* out) {
                                        ev.raw["_meta"].contains("caliper") && ev.raw["_meta"]["caliper"].is_object()
                                    ? ev.raw["_meta"]["caliper"].value("widget", json())
                                    : json();
+                const json u = ev.raw.is_object() && ev.raw.contains("_meta") && ev.raw["_meta"].is_object() &&
+                                       ev.raw["_meta"].contains("caliper") && ev.raw["_meta"]["caliper"].is_object()
+                                   ? ev.raw["_meta"]["caliper"].value("usage", json())
+                                   : json();
+                if (u.is_object()) {
+                    for (const json& r : u.value("per_request", json::array()))
+                        if (r.is_object() && r.contains("input_tokens") && r["input_tokens"].is_number_integer())
+                            e.input_tokens.push_back(r["input_tokens"].get<long long>());
+                    if (u.contains("output_tokens") && u["output_tokens"].is_number_integer())
+                        e.output_tokens = u["output_tokens"].get<long long>();
+                }
                 if (w.is_object()) {
                     if (w.contains("edits") && w["edits"].is_number_integer()) e.edits = w["edits"].get<int>();
                     e.limit = w.value("limit", false) == true;

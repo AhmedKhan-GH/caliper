@@ -171,7 +171,8 @@ public:
     bool panel_rect(const std::string& panel_id, float rect[4]) const;
     std::string widget_state() const;
     // What the inline surface shows besides its state, for the driver's log:
-    // its tag, its edits, the model, an error's code and message, and the
+    // its tag, its edits, the model, an error's code and message, the input
+    // tokens of each request of the last turn and its output tokens, and the
     // start of the reply, such as "tag LIMIT, 1 edit, model qwen, reply ...";
     // "" before any ⌘K.
     std::string widget_facts() const;
