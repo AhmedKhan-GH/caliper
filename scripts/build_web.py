@@ -29,7 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_WEB = ROOT / "web"
 DEFAULT_OUT = ROOT / "python" / "caliper" / "_web"
-REQUIRED = ("caliper-view.js", "caliper-widget.js", "index.html")
+REQUIRED = ("caliper-view.js", "caliper-widget.js", "caliper-controls-widget.js", "index.html")
 DEFAULT_WASM = ROOT / "web" / "wasm" / "build"
 WASM_FILES = ("caliper-views-loader.js", "caliper-views.js", "caliper-views.wasm")
 # Compared with line endings normalised, so a checkout that converts them

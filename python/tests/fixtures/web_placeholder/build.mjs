@@ -1,4 +1,4 @@
-// Builds the placeholder browser assets into dist/, the same three files the
+// Builds the placeholder browser assets into dist/, the same four files the
 // web/ package's build writes. scripts/build_web.py runs it like the real build:
 //
 //     python scripts/build_web.py --web python/tests/fixtures/web_placeholder
@@ -16,10 +16,12 @@ const note =
 
 const view = read("src/view.js");
 const widget = read("src/widget.js");
+const controls = read("src/controls-widget.js");
 const page = read("src/index.html");
 
 rmSync(new URL("dist", here), { recursive: true, force: true });
 mkdirSync(new URL("dist", here));
 write("dist/caliper-view.js", `// ${note}\n${view}\nexport { CaliperView, connect };\n`);
 write("dist/caliper-widget.js", `// ${note}\n${view}\n${widget}`);
+write("dist/caliper-controls-widget.js", `// ${note}\n${controls}`);
 write("dist/index.html", page.replace("<!-- NOTE -->", `<!-- ${note} -->`));

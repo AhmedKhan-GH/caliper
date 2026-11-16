@@ -35,9 +35,11 @@ def test_assets_are_found_in_the_source_tree(monkeypatch):
         assert name in names
         assert _assets.asset_path(name) == (PACKAGE_WEB / name).resolve()
         assert _assets.read_asset(name) == (PACKAGE_WEB / name).read_bytes()
-    # One default export (the anywidget module), written either way a bundler writes it.
-    widget = _assets.read_asset("caliper-widget.js")
-    assert len(re.findall(rb"export default|export\s*\{[^}]*\bas default\b", widget)) == 1
+    # One default export (the anywidget module), written either way a bundler writes it,
+    # in the widget of a view and in the widget of the controls panel.
+    for module in ("caliper-widget.js", "caliper-controls-widget.js"):
+        widget = _assets.read_asset(module)
+        assert len(re.findall(rb"export default|export\s*\{[^}]*\bas default\b", widget)) == 1, module
     assert b"caliper-view" in _assets.read_asset("index.html")
 
 

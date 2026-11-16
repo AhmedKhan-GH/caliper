@@ -24,7 +24,7 @@ from urllib.parse import unquote
 BUILD_COMMAND = "python scripts/build_web.py"
 # The files every build has (fonts and other files the page references come
 # beside them and are found the same way).
-REQUIRED = ("caliper-view.js", "caliper-widget.js", "index.html")
+REQUIRED = ("caliper-view.js", "caliper-widget.js", "caliper-controls-widget.js", "index.html")
 # Caliper's own views compiled to WebAssembly (web/wasm), served beside them:
 # the <caliper-view> element imports the loader from the stream's server and
 # draws with these views the kinds they list, and with its own views without
