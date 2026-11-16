@@ -8,26 +8,37 @@
 // blocks, and bulleted and numbered lists, nested up to three levels. Shown
 // as plain text with the markup taken out: headings, emphasis (*em*, _em_),
 // links and images (their text; a link's target is dropped and nothing is
-// made clickable), autolinks, HTML tags, block quotes, table rows (the cells
-// side by side) and rules (left out). Nothing here opens a link, loads a file
-// or makes a request; the output is text and styles.
+// made clickable), autolinks, the common HTML tags (so "<id>" stays text),
+// block quotes, table rows (the cells side by side) and rules (left out).
+// Nothing here opens a link, loads a file or makes a request; the output is
+// text and styles.
 //
-// HTML tags are only the common ones, so "<id>" stays text. Hostile or
-// unfinished text stays bounded and falls back to plain text: an unclosed
-// fence leaves its lines as paragraphs, an opening mark or backtick with no
-// closing one is taken out (so text still streaming in, "**Spe", shows
-// "Spe"), every mark of a run that formed a pair goes ("**Spec*" shows
-// "Spec"), and the inline pass skips a block longer than
-// MdLimits::max_inline or a line longer than max_line, which then shows as it
-// is. The block count, the delimiter stack and the
-// search for a closing mark are bounded, so the work is linear in the text.
+// Unfinished or hostile text falls back to plain text: an unclosed fence
+// leaves its lines as paragraphs, an opening mark or backtick with no closing
+// one is taken out (so text still streaming in, "**Spe", shows "Spe"), and
+// every mark of a run that formed a pair goes ("**Spec*" shows "Spec").
 //
-// Two parts, both without ImGui so that they are tested headless:
-//   - chat_markdown_blocks() parses a text into blocks of styled spans, and
-//     chat_markdown_plain() gives the same as plain text.
-//   - layout_chat_markdown() places the blocks in a width as runs of one
-//     style each, from text widths the caller measures, word-wrapped, a word
-//     wider than the line broken between characters.
+// What it costs. Parsing and layout are linear in the text: one pass over
+// the lines, with whether a closing fence exists further on read from a table
+// built backwards in the same pass, never by searching again; the closing
+// bracket, parenthesis, angle bracket and backtick run of each position read
+// from tables built in one pass over a block; the delimiter stack's search
+// bounded by MdLimits::max_search; and a long word broken from the widths of
+// its characters, each measured once. Only the first MdLimits::max_text
+// bytes of a text are read as Markdown; the rest, and a text's blocks past
+// MdLimits::max_blocks, are shown as plain text in blocks of at most
+// MdLimits::max_plain_block bytes. A line longer than max_line, and a
+// paragraph that grows past max_inline, show as plain text too. The tests
+// count the steps (chat_markdown_steps()) rather than time them.
+//
+// MdDocument keeps a text's blocks and layout between frames: when the text
+// grows by an append, as a streamed reply does, it parses again only from its
+// last finished block (a blank line, a closed code block or a heading ends
+// one), and lays out again only the blocks that changed; it parses again from
+// an unclosed fence once a fence of its kind arrives that may close it.
+//
+// The parts are without ImGui, so that they are tested headless: the blocks,
+// the plain text and a layout in a width from text widths the caller measures.
 // ============================================================================
 #include <cstddef>
 #include <functional>
@@ -54,12 +65,15 @@ struct MdBlock {
 };
 
 struct MdLimits {
-    static constexpr std::size_t max_text = 64 * 1024;   // beyond it, the text shows as it is
-    static constexpr std::size_t max_line = 2000;        // a longer line is a block of its own, as it is
-    static constexpr std::size_t max_inline = 8000;      // a longer block shows its text as it is
-    static constexpr std::size_t max_blocks = 400;       // the rest of the text is one block as it is
-    static constexpr std::size_t max_search = 64;        // openers looked at for one closing mark
-    static constexpr std::size_t max_code_lines = 1000;  // lines looked at for a fence's closing one
+    static constexpr std::size_t max_text = 64 * 1024;      // read as Markdown; the rest is plain text
+    static constexpr std::size_t max_line = 2000;           // a longer line is a plain block of its own
+    static constexpr std::size_t max_inline = 8000;         // a paragraph that grows past it shows as plain text
+    static constexpr std::size_t max_blocks = 400;          // the text after them is plain text
+    static constexpr std::size_t max_plain_block = 4096;    // a plain block past the limits, at most
+    static constexpr std::size_t max_search = 64;           // openers looked at for one closing mark
+    static constexpr std::size_t max_link_text = 512;       // a link's text, at most
+    static constexpr std::size_t max_link_target = 2048;    // a link's target, at most
+    static constexpr std::size_t max_tag = 256;             // an HTML tag or autolink, at most
 };
 
 std::vector<MdBlock> chat_markdown_blocks(const std::string& text);
@@ -67,6 +81,12 @@ std::vector<MdBlock> chat_markdown_blocks(const std::string& text);
 // The blocks as plain text: one line per block ("• " before a bullet, the
 // label before a number, a code block's lines as they are).
 std::string chat_markdown_plain(const std::string& text);
+
+// The work done by the parser and the layout in this thread since the last
+// reset, in steps of a few operations: the tests check that it grows
+// linearly with the text.
+std::size_t chat_markdown_steps();
+void chat_markdown_reset_steps();
 
 // ---- the layout ---------------------------------------------------------------------------
 
@@ -81,6 +101,10 @@ struct MdMetrics {
     float marker = 14.0f;     // the room of a bullet before its text
     float code_pad = 6.0f;    // inside a code block's plate
     float bold_extra = 0.6f;  // what bold adds to a run's width (the app draws it twice, offset)
+    bool operator==(const MdMetrics& o) const {
+        return line == o.line && code_line == o.code_line && gap == o.gap && indent == o.indent &&
+               marker == o.marker && code_pad == o.code_pad && bold_extra == o.bold_extra;
+    }
 };
 
 struct MdRun {
@@ -103,5 +127,41 @@ struct MdLayout {
 
 MdLayout layout_chat_markdown(const std::vector<MdBlock>& blocks, float width, const MdMetrics& m,
                               const MdMeasure& measure);
+
+// ---- a text kept between frames -----------------------------------------------------------
+
+class MdDocument {
+public:
+    // The text as it is now. An append is parsed from the last finished
+    // block; any other change parses the whole text.
+    void set_text(const std::string& text);
+    const std::string& text() const { return text_; }
+    const std::vector<MdBlock>& blocks() const { return blocks_; }
+    // The layout in a width; the blocks laid out before at the same width and
+    // metrics keep their runs.
+    const MdLayout& layout(float width, const MdMetrics& m, const MdMeasure& measure);
+
+    struct Pending {          // a fence with no closing one yet
+        std::size_t offset;   // the start of its line
+        std::size_t blocks;   // the blocks before it
+        char fence;           // ` or ~
+    };
+
+private:
+    void parse_from(std::size_t offset, std::size_t blocks);
+
+    std::string text_;
+    std::vector<MdBlock> blocks_;
+    // The last point an append cannot change: a line start, with the blocks before it.
+    std::size_t stable_offset_ = 0, stable_blocks_ = 0;
+    std::vector<Pending> pending_;   // the earliest unclosed fence of each kind before the stable point
+    // The layout: valid for the first laid_blocks_ blocks, at width_ and metrics_.
+    MdLayout layout_;
+    float width_ = -1.0f;
+    MdMetrics metrics_;
+    std::size_t laid_blocks_ = 0;
+    std::vector<std::size_t> block_runs_, block_plates_;   // where each laid-out block's runs and plates start
+    std::vector<float> block_y_;                           // the bottom of each laid-out block
+};
 
 }  // namespace caliper_host

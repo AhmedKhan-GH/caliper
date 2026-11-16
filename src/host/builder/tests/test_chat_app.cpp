@@ -31,6 +31,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cctype>
+#include <cstdio>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -468,19 +469,23 @@ TEST_CASE("chat app: a step of the input script waits as long as patience says, 
     o.env_remove = {"CALIPER_API", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"};
     acp::RunLimits lim;
     lim.timeout_ms = 90000;
-    const auto started = std::chrono::steady_clock::now();
     const auto run = acp::run_process(o, lim);
-    const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
     REQUIRE(run.error.ok());
     CHECK(run.err.find("[ui] patience 1800 frames") != std::string::npos);
     CHECK(run.err.find("[ui] patience 3 s") != std::string::npos);
     CHECK(run.err.find("[ui] found gate") != std::string::npos);
-    CHECK(run.err.find("[ui] stopped: wait-file " + never.string() + ": no file " + never.string()) !=
-          std::string::npos);
-    // A stopped script leaves the app running, so it ends at CALIPER_EXIT_AFTER;
-    // the default patience, 1800 frames, would not have stopped the step by then.
-    CHECK(took >= 3.0);
+    // The step stopped on the seconds of `patience`, not on the default of
+    // 1800 frames, whatever the frame rate: its line says how long it waited.
+    const std::string stop = "[ui] stopped: wait-file " + never.string() + ": no file " + never.string() + " (after ";
+    const size_t at = run.err.find(stop);
+    REQUIRE(at != std::string::npos);
+    int frames = -1;
+    double seconds = -1.0;
+    REQUIRE(std::sscanf(run.err.c_str() + at + stop.size(), "%d frames, %lf s)", &frames, &seconds) == 2);
+    CHECK(frames < 1800);
+    CHECK(seconds >= 3.0);
+    CHECK(seconds < 6.0);
     CHECK(run.status.success());
 
     // A value that is not a number of seconds stops the script at once.

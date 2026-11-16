@@ -265,3 +265,24 @@ TEST_CASE("side chat: this build's caliper-mcp is found beside the executable, e
     fake_program(dir, "caliper-mcp");
     CHECK(find_caliper_mcp(dir.string()) == (dir / "caliper-mcp").string());
 }
+
+// What the person allows on a permission card is the agent's own call, which
+// its file and diff show; a Caliper command named in the call's _meta or its
+// title must not stand in for it, or an agent could make a file write read as
+// a harmless command.
+TEST_CASE("side chat: a permission card shows the agent's own title, never a command the call names") {
+    ChatItem p;
+    p.kind = ChatItem::Kind::permission;
+    p.tool.title = "Edit notes.txt";
+    p.tool.caliper_command = "spec.get";
+    p.command = caliper_command_of(p.tool);
+    REQUIRE(p.command == "spec.get");   // the tool row may show it; the card does not
+    CHECK(chat_permission_label(p) == "Edit notes.txt");
+    p.tool.title = "mcp__caliper__spec_get";
+    CHECK(chat_permission_label(p) == "mcp__caliper__spec_get");
+    p.tool.title.clear();
+    p.diff_path = "notes.txt";
+    CHECK(chat_permission_label(p) == "notes.txt");
+    p.diff_path.clear();
+    CHECK(chat_permission_label(p) == "Tool call");
+}
