@@ -576,7 +576,9 @@ class MemoryWatch:
         low_in_a_row = 0
         while not self._done.is_set():
             free = free_percent()
-            model = resident_kb(lambda c: Path(c.split()[0]).name == "ollama")
+            # Ollama serves a model from a runner process of its own (llama-server),
+            # which holds the weights and the context; `ollama serve` itself is small.
+            model = resident_kb(lambda c: Path(c.split()[0]).name in ("ollama", "llama-server"))
             train = resident_kb(lambda c: str(TRAIN) in c and not is_shell(c))
             m = self.memory
             if free is not None:
