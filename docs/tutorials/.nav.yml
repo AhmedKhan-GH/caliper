@@ -5,5 +5,6 @@ nav:
   - first-ml-applet.md
   - live-pytorch.md
   - watch-a-training-run-in-a-notebook.md
+  - watch-the-loss-landscape-in-a-notebook.md
   - glob: "*"
     ignore_no_matches: true
