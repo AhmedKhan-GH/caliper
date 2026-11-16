@@ -1,0 +1,58 @@
+# Renderer core, step 9: the TypeScript WebGPU views removed. The references, taken at the step's first commit (2026-11-16)
+
+Taken on the code as it stood before the step: 0313e297 of sprint4-ts9, which is e950ec02 of sprint4-build with
+the fourteen review fixes that sprint4-build had then, on the reference Mac (M-series Max, 18 cores, 64 GB,
+macOS 27), in Playwright 1.65.0's headless Chromium, with the WebAssembly views built at that head by
+scripts/build_wasm.py (Emscripten pinned in web/wasm/emscripten-version.txt) and the colormap's cases written by
+caliper_colormap_cases built as .github/workflows/web.yml builds it.
+
+The step changes the browser package only (web/src, its tests and the bundles built from it). No native path
+changes, so the benchmarks and counters of "Keeping the fast path as fast" run no changed code and the graphics
+suite's rows are untouched. The browser's frame-rate measurements (web/test/perf.spec.ts and wasm.spec.ts's
+"orbit at an interactive rate") were not run: timing was held by the orchestrator while the GPU was in use.
+The webgpu project, which draws on the machine's GPU, was not run for the same reason; the TypeScript WebGPU
+views' pictures below are SwiftShader's.
+
+## The browser suite (web/, CALIPER_PYTHON with numpy and websockets, CALIPER_COLORMAP_CASES set)
+
+CI=1 npx playwright test --project=swiftshader --grep-invert "frame rate while orbiting|orbit at an interactive rate"
+  81 tests: 55 passed, 26 skipped, 0 failed (one worker, as CI runs it). The skipped are codec32.spec.ts's 24
+  (Node only, run once in canvas2d), colormap.spec.ts's C++ comparison (run once in canvas2d) and wasm.spec.ts's
+  memory test (webgpu only).
+npx playwright test --project=swiftshader --workers=1 test/e2e.spec.ts test/controls.spec.ts
+  11 tests: 11 passed. CI runs these two specs on canvas2d only; they ran here because their pages hold
+  TypeScript views of heatmaps, images and points, which drew with WebGPU on SwiftShader.
+CI=1 npx playwright test --project=canvas2d --grep-invert "frame rate while orbiting|orbit at an interactive rate"
+  133 tests: 113 passed, 20 skipped (the WebAssembly views' and the shader programs' tests, which need WebGPU).
+
+## Where the TypeScript WebGPU views drew
+
+Before the step the element's own views drew heatmaps, images and points with WebGPU (web/src/render/gpu.ts,
+heatmap-gpu.ts, points-gpu.ts) whenever the page had an adapter, that is in the webgpu and swiftshader projects,
+and with Canvas 2D in the canvas2d project. Series and histograms were always Canvas 2D. These are every test
+page on which they drew with WebGPU, with the capture each saved (CALIPER_SHOTS, <name>-swiftshader.png):
+
+| Spec | Tests | What the TypeScript WebGPU views drew | Captures |
+|---|---|---|---|
+| views.spec.ts | heatmap (5), image, points (4), the picker, the status dot | Heatmaps of 4 x 8 and 8 x 8 cells, a 2 x 3 RGBA image, 2-D points of four classes and a 3-D spiral of 2,000 points in magma; each asserted renderer "webgpu" and the colour of every cell, pixel or point | heatmap, image, picker, points-2d, points-3d |
+| fallback.spec.ts | auto without the WebAssembly views | The viewer page's two heatmaps, image and points; asserted renderer "webgpu" | none |
+| e2e.spec.ts | the viewer page (4 tests) | The same views of mock_server.py's stream; asserted renderer "webgpu" | page |
+| edges.spec.ts | four ranges | A 64 x 64 heatmap and 1,024 2-D points of every colormap edge case, each compared with the reference's colour | edges-edges-ts-<range>, edges-edge_points-ts-<range> |
+| points3d.spec.ts | box, depth cues, rotate, 2-D | The 3-D view's box, ticks, default camera, depth cues and rotate toggle, compared with the WebAssembly views | points3d-box-ts, points3d-cues-ts |
+| linked.spec.ts, controls.spec.ts | the second page of each | Points and a heatmap with renderer="ts" on a second page, drawing linked highlights | none (the captures are of the first page) |
+| perf.spec.ts | frame rate while orbiting | 100,000 3-D points | not run (timing held) |
+
+The notebook checks python/tests/test_widget.py and test_live_training_notebook.py also expected "webgpu" in
+their metal mode when the package has no WebAssembly views; they were not run.
+
+The TypeScript WebGPU views' pictures and those of the same tests on Canvas 2D (scratch tool pngdiff.mjs on
+the decoded RGBA) are not the same picture: 1,786 of 201,600 pixels differ for the heatmap, 888 for the image,
+1,120 for the 2-D points, 11,966 for the 3-D points, 12,572 for the 3-D box and 7,428 for the depth cues, at the
+cells' and points' edges and in the text, which the two browser configurations rasterise differently.
+
+## The bundles (node build.mjs, the same files as python/caliper/_web/)
+
+caliper-view.js               129147 bytes    42456 gzipped
+caliper-widget.js             119589 bytes    40278 gzipped
+caliper-controls-widget.js     45979 bytes    15087 gzipped
+index.html                    206683 bytes   155261 gzipped
