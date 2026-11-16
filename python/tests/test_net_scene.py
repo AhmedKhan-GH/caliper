@@ -858,3 +858,163 @@ def test_native_pump_waits_until_a_rate_limited_scene_frame_is_due():
     sc.native_wait = 1000.0
     sc.pending = [object()]                          # a copy in flight
     assert p.busy() is True and p.wait_ms() == nn.POLL_MS
+
+
+# ---------------------------------------------------------------------------
+# the native sender: scene frames up to the protocol's frame limit
+# ---------------------------------------------------------------------------
+class RawViewer:
+    """A viewer on a bare socket with a small receive buffer, so that it can stop reading and
+    make the sender queue frames for it. It reads the WebSocket frames itself."""
+
+    def __init__(self, server, rcvbuf=64 << 10):
+        import base64
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+        s.settimeout(20)
+        s.connect(("127.0.0.1", server.port))
+        key = base64.b64encode(os.urandom(16)).decode()
+        s.sendall((f"GET /v3/stream?token={server.token} HTTP/1.1\r\nHost: 127.0.0.1:{server.port}\r\n"
+                   f"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+                   "Sec-WebSocket-Version: 13\r\n\r\n").encode())
+        head = b""
+        while b"\r\n\r\n" not in head:
+            head += s.recv(1)
+        assert b" 101 " in head.split(b"\r\n")[0]
+        self.s = s
+        self.close_code = None
+
+    def send(self, msg) -> None:
+        import struct
+        payload = w.encode(msg)
+        n = len(payload)
+        hdr = bytes((0x82, 0x80 | n)) if n < 126 else bytes((0x82, 0x80 | 126)) + struct.pack("!H", n)
+        mask = os.urandom(4)
+        m = np.frombuffer(mask * (n // 4 + 1), np.uint8)[:n]
+        self.s.sendall(hdr + mask + (np.frombuffer(payload, np.uint8) ^ m).tobytes())
+
+    def _read(self, n: int) -> bytes:
+        out = bytearray()
+        while len(out) < n:
+            b = self.s.recv(min(n - len(out), 1 << 20))
+            if not b:
+                raise ConnectionError("the server closed the socket")
+            out += b
+        return bytes(out)
+
+    def next(self):
+        """The next wire message, or None once the server closed the connection (close_code)."""
+        import struct
+        b0, b1 = self._read(2)
+        n = b1 & 0x7F
+        if n == 126:
+            n = struct.unpack("!H", self._read(2))[0]
+        elif n == 127:
+            n = struct.unpack("!Q", self._read(8))[0]
+        payload = self._read(n)
+        op = b0 & 0x0F
+        if op == 0x8:
+            self.close_code = struct.unpack("!H", payload[:2])[0] if n >= 2 else 1005
+            return None
+        if op in (0x9, 0xA):
+            return self.next()
+        assert op == 0x2 and b0 & 0x80, f"opcode {op}"
+        return w.decode(payload)
+
+    def expect(self, pred, what: str):
+        while True:
+            m = self.next()
+            assert m is not None, f"closed with {self.close_code} waiting for {what}"
+            if pred(m):
+                return m
+
+    def close(self) -> None:
+        self.s.close()
+
+
+def _native_scene_frames(server, big_mib: float, waiting_mib: float) -> None:
+    """One mesh frame of about ``big_mib`` MiB reaches a viewer that reads; then, with the viewer
+    not reading, three of about ``waiting_mib`` MiB each, the first in the socket and two waiting
+    in the native sender's queue, reach it once it reads again."""
+    def mesh_rows(mib):
+        return max(3, int(mib * (1 << 20) / 12) // 3 * 3)  # (V, 3) f32 positions, V a multiple of 3
+
+    sc = caliper.scene("frames", up="+z")
+    v = RawViewer(server)
+    try:
+        v.send(w.Hello("viewer", [w.CAP_SCENES]))
+        v.expect(lambda m: isinstance(m, w.Views) and any(x["name"] == "frames" for x in m.views), "VIEWS")
+        v.send(w.Subscribe(1, "frames", 101))
+        assert v.expect(lambda m: isinstance(m, w.ViewReply), "the reply").error is None
+        v.expect(lambda m: isinstance(m, w.SceneClear) and m.reset, "the state")
+        n = mesh_rows(big_mib)
+        assert sc.mesh("big", torch.zeros(n, 3)) is True
+        m = v.expect(lambda m: isinstance(m, w.SceneUpdate) and m.path == "big", "the big mesh")
+        assert arr(m, "positions").shape == (n, 3)
+        # The viewer stops reading while three frames go out.
+        links = list(server.producer.links)
+        sent = sum(ln.stats["scenes_sent"] for ln in links)
+        n = mesh_rows(waiting_mib)
+        for path in ("a", "b", "c"):
+            assert sc.mesh(path, torch.full((n, 3), 0.5)) is True
+        end = time.monotonic() + 20
+        while sum(ln.stats["scenes_sent"] for ln in links) < sent + 3 and time.monotonic() < end:
+            time.sleep(0.005)
+        got = []
+        while len(got) < 3:
+            m = v.expect(lambda m: isinstance(m, w.SceneUpdate), "the waiting meshes")
+            got.append(m.path)
+            assert arr(m, "positions").shape == (n, 3)
+        assert got == ["a", "b", "c"]
+    finally:
+        v.close()
+
+
+@pytest.mark.skipif(not NATIVE, reason="caliper._netio is not built (python scripts/build_netio.py)")
+def test_native_sender_sends_scene_frames_past_its_control_cap(monkeypatch):
+    """The native sender's scene frames are bounded by the protocol's frame limit and its own
+    backlog of two, not by the 16 MiB cap on a connection's control replies: a mesh frame over
+    16 MiB, and two waiting frames over 8 MiB each, reach the viewer."""
+    from caliper import _netio
+    assert _netio.MAX_SCENE_BYTES == _net_scene.NATIVE_BACKLOG * w.MAX_FRAME_BYTES
+    monkeypatch.setenv("CALIPER_SESSION", "0")
+    monkeypatch.setenv("CALIPER_NETIO", "1")
+    server = caliper.serve(port=0)
+    try:
+        assert type(server).__name__ == "NativeServer"
+        _native_scene_frames(server, 17, 10)
+    finally:
+        server.close()
+
+
+def test_pump_native_counts_only_the_frames_a_connection_took():
+    """send() returns False for a connection that is closing (its queue overflowed, or it
+    went): pump_native counts that frame as refused, not as sent, and gives the link nothing
+    more this round."""
+    import collections
+    import types
+
+    class Nio:
+        def __init__(self):
+            self.calls = 0
+
+        def queued(self, conn):
+            return 0
+
+        def send(self, conn, frame):
+            self.calls += 1
+            return False
+
+    q = _net_scene.SubQueue(1, "s", 0.0)
+    for _ in range(3):
+        q.state.append(w.SceneClear(1, "s", 0, 0, "", reset=True, state=True))
+    scenes = _net_scene.LinkScenes()
+    scenes.subs[1] = q
+    nio = Nio()
+    link = types.SimpleNamespace(scenes=scenes, conn=7, p=types.SimpleNamespace(nio=nio),
+                                 stats=collections.Counter())
+    _net_scene.route_of(types.SimpleNamespace()).pump_native([link], time.monotonic())
+    assert nio.calls == 1
+    assert link.stats["scenes_sent"] == 0
+    assert link.stats["scenes_refused"] == 1
