@@ -356,13 +356,13 @@ struct SpecPage::Impl {
         const ImRect x(ImVec2(corner.x - side, corner.y), ImVec2(corner.x, corner.y + side));
         items["remove:" + f.id] = x;
         if (building()) builder->claim_canvas(SpecRect{x.Min.x, x.Min.y, x.GetWidth(), x.GetHeight()});
-        const ImVec2 back = ImGui::GetCursorScreenPos();
+        // The cursor stays after the button: moving it back past the panel's
+        // content with nothing submitted there is an error in ImGui.
         ImGui::SetCursorScreenPos(x.Min);
         ImGui::PushID(f.id.c_str());
         const bool clicked = ImGui::InvisibleButton("##panel.remove", x.GetSize());
         const bool on_x = ImGui::IsItemHovered();
         ImGui::PopID();
-        ImGui::SetCursorScreenPos(back);
         const bool menu = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
         const bool over = !menu && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
                           ImGui::IsMouseHoveringRect(f.rect.Min, f.rect.Max);
