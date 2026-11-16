@@ -769,13 +769,18 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
             g.lasso.insert(g.lasso.end(), {io.MousePos.x, io.MousePos.y});
     }
     Camera& c = v.cam;
-    // With an event sink the camera moves only once a drag left the click slop,
-    // and never while selecting.
-    const bool drag = active && (!ev || (g.moved && !g.selecting));
-    if (drag && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) {
-        const float dx = io.MouseDelta.x, dy = io.MouseDelta.y;
-        const bool pan = ev ? (g.button != 0 || g.alt || g.ctrl)
-                            : (ImGui::IsMouseDown(ImGuiMouseButton_Middle) || io.KeyShift);
+    // The camera moves once a drag left the click slop, never while selecting,
+    // and follows the pointer from where it last moved the camera, so a fast
+    // drag whose movement and release land in one frame still moves it.
+    const bool valid = ImGui::IsMousePosValid();
+    const float dx = valid ? io.MousePos.x - g.lx : 0.0f, dy = valid ? io.MousePos.y - g.ly : 0.0f;
+    if (valid) {
+        g.lx = io.MousePos.x;
+        g.ly = io.MousePos.y;
+    }
+    const bool drag = (g.down || released) && g.moved && !g.selecting;
+    if (drag && (dx != 0.0f || dy != 0.0f)) {
+        const bool pan = g.button != 0 || g.alt || g.ctrl;
         if (v.dims == 3 && !pan) {
             c.az += dx * 0.01f;
             c.el = std::clamp(c.el + dy * 0.01f, -1.55f, 1.55f);

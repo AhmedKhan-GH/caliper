@@ -851,6 +851,42 @@ TEST_CASE("live_views/interaction: a drag in the plot pans the view and leaves i
     CHECK(lv->geo_window[1] > held[1] + 500.0);   // following again: the window reaches step 1499
 }
 
+TEST_CASE("live_views/points: a drag whose movement and release land in one frame still pans") {
+    Core c(800, 600);
+    if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
+    std::vector<float> pts = {0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0};
+    CaliperTensor tp = tensor(pts.data(), CALIPER_DT_F32, {4, 3}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot sp = snap("pts2", CALIPER_LIVE_KIND_POINTS, &tp);
+    sp.points_dims = 2;
+    REQUIRE(caliper_core_live_apply(c.core, &sp) == 1);
+    c.frames(4);
+    auto send = [&](CaliperEventType type, float x, float y, int down) {
+        CaliperInputEvent e{};
+        e.struct_size = sizeof e;
+        e.type = type;
+        e.x = x;
+        e.y = y;
+        e.button = 0;
+        e.down = down;
+        caliper_core_event(c.core, &e);
+    };
+    caliper_live_views::View* pv = caliper_live_views::find(c.core, "pts2");
+    REQUIRE(pv != nullptr);
+    REQUIRE(pv->geo_valid);
+    const double x0 = pv->geo_window[0], span = pv->geo_window[1] - pv->geo_window[0];
+    const float cx = pv->geo_area[0] + pv->geo_area[2] * 0.5f, cy = pv->geo_area[1] + pv->geo_area[3] * 0.5f;
+    send(CALIPER_EVENT_MOUSE_MOVE, cx, cy, 0);
+    c.frames(1);
+    send(CALIPER_EVENT_MOUSE_BUTTON, cx, cy, 1);
+    c.frames(1);
+    // The whole movement and the release in one frame.
+    send(CALIPER_EVENT_MOUSE_MOVE, cx + 80.0f, cy, 0);
+    send(CALIPER_EVENT_MOUSE_BUTTON, cx + 80.0f, cy, 0);
+    c.frames(3);
+    // The points followed the pointer 80 px right: the window moved left by as much.
+    CHECK(pv->geo_window[0] == doctest::Approx(x0 - span * 80.0 / pv->geo_area[2]).epsilon(0.02));
+}
+
 TEST_CASE("live_views/gates: every refusal is specific; nothing is created") {
     Core c(64, 64, /*attach=*/false);
     std::vector<float> h(16, 0.0f);

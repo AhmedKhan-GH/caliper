@@ -333,6 +333,18 @@ test.describe('selections in the WebAssembly views', () => {
       await page.mouse.move(c.x + 80, c.y, { steps: 4 });
       await page.mouse.up();
       await expect.poll(async () => (await geometry(page, 'p')).geo.window[0]).toBeLessThan(z[0]);
+      // A fast drag, one movement and the release right after it, pans by all of it.
+      await page.waitForTimeout(300);
+      const g1 = await geometry(page, 'p');
+      const [w0, w1] = g1.geo.window;
+      const q = g1.at((w0 + w1) / 2, (g1.geo.window[2] + g1.geo.window[3]) / 2);
+      await page.mouse.move(q.x, q.y);
+      await page.mouse.down();
+      await page.mouse.move(q.x + 80, q.y);
+      await page.mouse.up();
+      const shift = ((w1 - w0) * 80) / g1.geo.area[2];
+      await expect.poll(async () => w0 - (await geometry(page, 'p')).geo.window[0]).toBeGreaterThan(shift * 0.95);
+      expect(w0 - (await geometry(page, 'p')).geo.window[0]).toBeLessThan(shift * 1.05);
     } finally {
       srv.proc.kill();
     }
