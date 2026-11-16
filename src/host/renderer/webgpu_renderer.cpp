@@ -659,6 +659,21 @@ bool WebGpuRenderer::geom_draw_primitives(uint64_t view_tex, const float* view16
 
 // ---- readback ------------------------------------------------------------------------------------
 
+void WebGpuRenderer::readback_async(gfx::Texture tex, uint32_t w, uint32_t h,
+                                    std::function<void(std::vector<uint8_t>)> done) {
+    if (!gfx_ || !gfx_->alive(tex)) {
+        done({});
+        return;
+    }
+    const gfx::Readback rb = gfx_->read_texture(tex, 0, 0, w, h);
+    if (!rb) {
+        report(*gfx_, "readback");
+        done({});
+        return;
+    }
+    readbacks_.push_back({rb, std::move(done)});
+}
+
 void WebGpuRenderer::readback_async(uint64_t id, std::function<void(std::vector<uint8_t>)> done) {
     Tex* t = gfx_ ? find(id) : nullptr;
     if (!t) {

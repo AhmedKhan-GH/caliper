@@ -7,11 +7,12 @@
 // as the v1.2 views. Every window starts with a Pause/Resume button (one GLOBAL
 // pause: caliper_core_live_set_paused) and an info line.
 //
-//   POINTS     a geometry render target sized to the window's content region
-//              (physical pixels; recreated when it drifts more than 8 px),
-//              redrawn from the imported payload buffer whenever the payload,
-//              the camera or the size changed (zero-copy: the GPU reads the
-//              producer's buffer). 3-D: a drag orbits, a right, middle, alt or
+//   POINTS     a scene of the scene core drawn through the graphics layer
+//              (live_points.h) into a target sized to the window's content
+//              region (physical pixels; recreated when it drifts more than 8
+//              px), redrawn from the imported payload buffers whenever the
+//              payload, the camera or the size changed (zero-copy on the in-place
+//              route: the GPU reads the producer's buffer). 3-D: a drag orbits, a right, middle, alt or
 //              ctrl drag pans, the wheel zooms. 2-D: a drag pans, the wheel
 //              zooms about the cursor. A double click, the Fit button or the F
 //              key fits the camera to the bbox. Opaque points with depth test
@@ -44,12 +45,11 @@
 // dimmed. Without a sink a selection stays in the view.
 #include "live/live_views_state.h"
 
+#include "live/live_points.h"
 #include "live/live_scene.h"
 #include "live/live_views_scene.h"
 #include "renderer/host_renderer.h"
 #include "tensor_bridge.h"   // colormap_lut
-
-#include <caliper/services/geometry_v1_1.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>   // the header's items in the title bar
@@ -68,64 +68,16 @@
 #include <vector>
 
 using caliper_embed_views::TensorView;
-using caliper_host::HostGeomDraw;
 using caliper_host::HostRenderer;
 
 namespace caliper_live_views {
 
-// Tableau 10 + six lighter companions, packed r | g<<8 | b<<16 | a<<24.
-#define LV_RGB(r, g, b) (0xff000000u | ((uint32_t)(b) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(r))
-const uint32_t kPalette[16] = {
-    LV_RGB(31, 119, 180),  LV_RGB(255, 127, 14),  LV_RGB(44, 160, 44),   LV_RGB(214, 39, 40),
-    LV_RGB(148, 103, 189), LV_RGB(140, 86, 75),   LV_RGB(227, 119, 194), LV_RGB(127, 127, 127),
-    LV_RGB(188, 189, 34),  LV_RGB(23, 190, 207),  LV_RGB(174, 199, 232), LV_RGB(255, 187, 120),
-    LV_RGB(152, 223, 138), LV_RGB(255, 152, 150), LV_RGB(197, 176, 213), LV_RGB(196, 156, 148),
-};
-
 namespace {
 
-constexpr uint32_t kFlat = LV_RGB(220, 220, 230);  // points without aux
 constexpr int      kHysteresisPx = 8;
 constexpr int      kMaxTarget = 8192;
 constexpr uint64_t kHoverBudget = 1u << 18;
 constexpr size_t   kSeriesRawMax = 8192;
-constexpr float    kFovY = 45.0f * 3.14159265f / 180.0f;
-
-struct V3 { float x, y, z; };
-V3 sub(V3 a, V3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
-V3 cross(V3 a, V3 b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
-float dot(V3 a, V3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
-V3 norm3(V3 a) {
-    const float l = std::sqrt(dot(a, a));
-    return l > 0 ? V3{a.x / l, a.y / l, a.z / l} : V3{0, 0, 1};
-}
-
-// Right-handed lookAt, column-major.
-void look_at(V3 eye, V3 at, V3 up, float* m) {
-    const V3 f = norm3(sub(at, eye));
-    const V3 s = norm3(cross(f, up));
-    const V3 u = cross(s, f);
-    const float t[16] = {s.x, u.x, -f.x, 0, s.y, u.y, -f.y, 0, s.z, u.z, -f.z, 0,
-                         -dot(s, eye), -dot(u, eye), dot(f, eye), 1};
-    std::memcpy(m, t, sizeof(t));
-}
-
-// z in [0,1] perspective (Metal NDC), column-major.
-void perspective(float fovy, float aspect, float zn, float zf, float* m) {
-    const float f = 1.0f / std::tan(fovy * 0.5f);
-    std::memset(m, 0, 16 * sizeof(float));
-    m[0] = f / aspect;
-    m[5] = f;
-    m[10] = zf / (zn - zf);
-    m[11] = -1.0f;
-    m[14] = (zn * zf) / (zn - zf);
-}
-
-V3 eye_of(const Camera& c) {
-    const float ce = std::cos(c.el), se = std::sin(c.el);
-    const float ca = std::cos(c.az), sa = std::sin(c.az);
-    return {c.tx + c.dist * ce * ca, c.ty + c.dist * se, c.tz + c.dist * ce * sa};
-}
 
 std::string window_label(const View& v) { return v.name + "###caliper.view." + v.name; }
 
@@ -565,7 +517,7 @@ Pick pick_point(const View& v, const float mvp[16], ImVec2 p0, ImVec2 sz, ImVec2
         const float dx = sx - m.x, dy = sy - m.y;
         // With the depth cues a point is drawn larger or smaller by its distance.
         const float half = att_ref > 0.0f
-            ? (half_px - 1.0f) * std::clamp(att_ref / cw, caliper_host::kPointAttenMin, caliper_host::kPointAttenMax) + 1.0f
+            ? (half_px - 1.0f) * std::clamp(att_ref / cw, caliper_scene::kPointAttenMin, caliper_scene::kPointAttenMax) + 1.0f
             : half_px;
         if (std::fabs(dx) <= half && std::fabs(dy) <= half) {
             if (bucket > 0 || nz < key) { bucket = 0; key = nz; best = {(int64_t)i, sx, sy}; }
@@ -581,16 +533,6 @@ Pick pick_point(const View& v, const float mvp[16], ImVec2 p0, ImVec2 sz, ImVec2
     }
     return best;
 }
-
-void mul_cm(const float* a, const float* b, float* out) {   // out = a * b
-    for (int c = 0; c < 4; ++c)
-        for (int r = 0; r < 4; ++r) {
-            float acc = 0.f;
-            for (int k = 0; k < 4; ++k) acc += a[k * 4 + r] * b[c * 4 + k];
-            out[c * 4 + r] = acc;
-        }
-}
-
 
 // Screen positions of the current sample under `mvp` (NaN: behind the camera
 // or outside the depth range), as pick_point projects them.
@@ -691,14 +633,30 @@ bool stage_selection(CaliperCore* core, View& v) {
     return true;
 }
 
-// rgba blended towards `ground` as the browser views dim unselected points.
-uint32_t dimmed(uint32_t c, uint32_t ground) {
-    uint32_t out = 0xff000000u;
-    for (int k = 0; k < 3; ++k) {
-        const float a = (float)((c >> (8 * k)) & 0xff), b = (float)((ground >> (8 * k)) & 0xff);
-        out |= (uint32_t)std::lround(a * 0.28f + b * 0.72f) << (8 * k);
-    }
-    return out;
+// The look of the view's points for the scene: its colour source, range, box and size.
+PointsLook points_look(const View& v, uint32_t ground) {
+    PointsLook l;
+    l.dims = v.dims;
+    l.colour = !v.cur.aux ? PointsColour::Flat : v.label_count > 0 ? PointsColour::Classes : PointsColour::Values;
+    l.colormap = v.colormap;
+    l.vmin = v.pvmin;
+    l.vmax = v.pvmax;
+    l.has_bbox = v.has_bbox;
+    std::memcpy(l.bbox, v.bbox, sizeof l.bbox);
+    l.size_px = caliper_scene::default_point_size(v.cur.n);
+    l.ground = ground;
+    return l;
+}
+
+PointsArrays points_arrays(const PointsPayload& p) {
+    PointsArrays a;
+    a.pos = p.pos ? p.pos->buffer : caliper_gfx::Buffer{};
+    a.pos_offset = p.pos_off;
+    a.pos_cpu = p.pos_cpu;
+    a.aux = p.aux ? p.aux->buffer : caliper_gfx::Buffer{};
+    a.aux_offset = p.aux_off;
+    a.count = p.n;
+    return a;
 }
 
 // ---- the box around 3-D points ------------------------------------------------
@@ -718,6 +676,7 @@ struct BoxInk {
     float font_px, k;   // the type's ImGui size; the layout's scale (10.5 px = 1)
 };
 
+struct V3 { float x, y, z; };
 struct Clip4 { float x, y, z, w; };
 
 Clip4 clip_of(const float m[16], V3 p) {
@@ -970,32 +929,56 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         std::snprintf(line, sizeof line, "points N=%lld %d-D  %s", (long long)v.count, v.dims, tel);
         debug_line(core, line);
     }
-
-    const ImVec2 avail = ImGui::GetContentRegionAvail();
-    if (avail.x < 4.0f || avail.y < 4.0f) { ImGui::End(); return; }
-    const int want_w = std::clamp((int)(avail.x * core->scale), 1, kMaxTarget);
-    const int want_h = std::clamp((int)(avail.y * core->scale), 1, kMaxTarget);
-    if (!v.view_rid || std::abs(want_w - v.tex_w) > kHysteresisPx ||
-        std::abs(want_h - v.tex_h) > kHysteresisPx) {
-        const uint64_t nr = r->geom_create_view_ex(want_w, want_h, CALIPER_GEOM_VIEW_DEPTH);
-        if (nr) {
-            // The previous target may still be sampled by an in-flight frame:
-            // its command buffers retain it, so dropping our reference is safe.
-            if (v.view_rid) r->tex_release(v.view_rid);
-            v.view_rid = nr;
-            v.tex_w = want_w;
-            v.tex_h = want_h;
-            ++v.creates;
-            v.dirty = true;
-            v.hover_dirty = true;
-        }
-    }
-    if (!v.view_rid) {
-        ImGui::TextUnformatted("render target unavailable");
+    PointsScene* sc = points_scene(core, v, nullptr);
+    if (!sc) {
+        ImGui::TextWrapped("%s", v.points ? v.points->notice.c_str() : "points cannot be drawn here");
         ImGui::End();
         return;
     }
+    // The GPU time of the view's completed draws, for the frame statistics.
+    const caliper_gfx::Stats st = sc->poll();
+    if (st.gpu_ms > 0.0 && r) r->note_draw_gpu_ms(st.gpu_ms, st.gpu_submits);
+
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    if (avail.x < 4.0f || avail.y < 4.0f) { ImGui::End(); return; }
+    int want_w = std::clamp((int)(avail.x * core->scale), 1, kMaxTarget);
+    int want_h = std::clamp((int)(avail.y * core->scale), 1, kMaxTarget);
+    if (sc->has_target() && std::abs(want_w - (int)sc->width()) <= kHysteresisPx &&
+        std::abs(want_h - (int)sc->height()) <= kHysteresisPx) {
+        want_w = (int)sc->width();
+        want_h = (int)sc->height();
+    } else {
+        ++v.creates;   // a new render target this frame
+        v.dirty = true;
+        v.hover_dirty = true;
+    }
+    v.tex_w = want_w;
+    v.tex_h = want_h;
     const float aspect = (float)v.tex_w / (float)v.tex_h;
+    // The plot clears to the window's ground, as the browser's points view draws on its plate, so
+    // the dimmed rest of a selection stays visible.
+    const uint32_t clear = ImGui::GetColorU32(ImGuiCol_WindowBg) | 0xff000000u;
+    if (clear != v.ground) {
+        v.ground = clear;
+        v.content_dirty = true;
+        v.dirty = true;
+    }
+    // The scene's batches: the view's points, and the selected points over the dimmed rest.
+    const bool ev = true;
+    auto set_content = [&]() {
+        if (!v.have_cur) return;
+        const bool sel = ev && v.sel_count && stage_selection(core, v) && v.have_sel_draw;
+        const PointsArrays all = points_arrays(v.cur);
+        const PointsArrays chosen = sel ? points_arrays(v.sel_draw) : PointsArrays{};
+        std::string why;
+        if (!sc->set(all, sel ? &chosen : nullptr, points_look(v, clear), &why))
+            core->log(1, "live: points '" + v.name + "': " + why);
+        v.content_sel = sel ? v.sel_version * 2 + 1 : 0;
+        v.content_updates = v.updates;
+        v.content_dirty = false;
+        v.dirty = true;
+    };
+    if (v.content_dirty) set_content();
     if (v.fit_pending && v.have_cur) fit_points(v, aspect);
 
     // ---- input (an invisible button owns the area so drags never move the window)
@@ -1008,7 +991,6 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     ImGuiIO& io = ImGui::GetIO();
     // The browser element's gestures, in the app as in the browser; what
     // people do leaves only through an event sink (emit sends nothing without).
-    const bool ev = true;
     Gesture& g = v.gesture;
     const bool released = ev && track_gesture(v, io.MousePos, v.have_cur && v.cur.pos_cpu);
     if (ev && g.down && g.selecting) {
@@ -1019,7 +1001,6 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                              io.MousePos.y != g.lasso.back()))
             g.lasso.insert(g.lasso.end(), {io.MousePos.x, io.MousePos.y});
     }
-    Camera& c = v.cam;
     // The camera moves once a drag left the click slop, never while selecting,
     // and follows the pointer from where it last moved the camera, so a fast
     // drag whose movement and release land in one frame still moves it.
@@ -1035,45 +1016,22 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         emit(S, v, "toggle", Detail().text("name", "rotate").flag("on", false).str());
     }
     if (v.auto_rotate && v.dims == 3 && v.have_cur) {
-        c.az += std::min(io.DeltaTime, 0.1f) * kRotateRate;
+        sc->turn(double(std::min(io.DeltaTime, 0.1f) * kRotateRate));
         v.dirty = true;
         v.hover_dirty = true;
     }
     const bool drag = (g.down || released) && g.moved && !g.selecting;
     if (drag && (dx != 0.0f || dy != 0.0f)) {
         const bool pan = g.button != 0 || g.alt || g.ctrl;
-        if (v.dims == 3 && !pan) {
-            c.az += dx * 0.01f;
-            c.el = std::clamp(c.el + dy * 0.01f, -1.55f, 1.55f);
-        } else if (v.dims == 3) {
-            const V3 eye = eye_of(c);
-            const V3 f = norm3(sub(V3{c.tx, c.ty, c.tz}, eye));
-            const V3 s = norm3(cross(f, V3{0, 1, 0}));
-            const V3 u = cross(s, f);
-            const float k = 2.0f * c.dist * std::tan(kFovY * 0.5f) / avail.y;
-            c.tx += (-s.x * dx + u.x * dy) * k;
-            c.ty += (-s.y * dx + u.y * dy) * k;
-            c.tz += (-s.z * dx + u.z * dy) * k;
-        } else {
-            const float k = 2.0f * c.half_h / avail.y;
-            c.tx -= dx * k;
-            c.ty += dy * k;
-        }
+        if (v.dims == 3 && !pan) sc->orbit(dx, dy);
+        else sc->pan(dx, dy, avail.y);
         v.dirty = true;
         v.hover_dirty = true;
     }
     if (hovered && io.MouseWheel != 0.0f) {
-        const float f = std::pow(0.9f, io.MouseWheel);
-        if (v.dims == 3) {
-            c.dist = std::clamp(c.dist * f, c.radius * 1e-3f, c.radius * 1e3f);
-        } else {
-            const float mx = (io.MousePos.x - p0.x) / avail.x * 2.0f - 1.0f;
-            const float my = 1.0f - (io.MousePos.y - p0.y) / avail.y * 2.0f;
-            const float wx = c.tx + mx * c.half_h * aspect, wy = c.ty + my * c.half_h;
-            c.half_h = std::clamp(c.half_h * f, c.radius * 1e-5f, c.radius * 1e5f);
-            c.tx = wx - mx * c.half_h * aspect;
-            c.ty = wy - my * c.half_h;
-        }
+        const float mx = (io.MousePos.x - p0.x) / avail.x * 2.0f - 1.0f;
+        const float my = 1.0f - (io.MousePos.y - p0.y) / avail.y * 2.0f;
+        sc->zoom(io.MouseWheel, mx, my, aspect);
         v.dirty = true;
         v.hover_dirty = true;
     }
@@ -1082,15 +1040,15 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
          (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))) && v.have_cur)
         fit_points(v, aspect);
 
-    float V[16], P[16], mvp[16];
-    camera_matrices(v, aspect, V, P);
-    mul_cm(P, V, mvp);
+    float mvp[16];
+    if (!sc->mvp((uint32_t)v.tex_w, (uint32_t)v.tex_h, mvp)) std::fill(mvp, mvp + 16, 0.0f);
     const float half_px = 0.5f * point_size_px(v.have_cur ? v.cur.n : 0, core->scale) / core->scale + 1.0f;
-    // The depth cues of 3-D points (HostGeomDraw): sizes relative to the size
-    // at the camera's target, and the points behind the target dimmed towards
-    // the far side of the data's bounding sphere.
-    const bool cues = v.dims == 3 && v.depth_cues;
-    const float att_ref = cues ? c.dist : 0.0f;
+    // The depth cues of 3-D points (PointsScene::cue_values): sizes relative to the size at the
+    // camera's target, which hover and picks follow, and the points behind the target dimmed
+    // towards the far side of the data's bounding sphere.
+    sc->set_depth_cues(v.depth_cues);
+    float att_ref = 0.0f, fade_w0 = 0.0f, fade_w1 = 0.0f;
+    sc->cue_values(&att_ref, &fade_w0, &fade_w1);
 
     // ---- a finished gesture: a selection, a cleared selection or a pick
     if (released && v.have_cur && v.cur.pos_cpu) {
@@ -1141,96 +1099,40 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
             v.dirty = true;
         }
     }
+    // A selection that changed changes the scene's batches.
+    const uint64_t sel_key = (ev && v.sel_count) ? v.sel_version * 2 + 1 : 0;
+    if (v.have_cur && (sel_key != v.content_sel || v.content_updates != v.updates)) set_content();
 
-    // ---- GPU: redraw the render target when something changed
-    // The plot clears to the window's ground, as the browser's points view
-    // draws on its plate, so the dimmed rest of a selection stays visible.
-    // In 3-D the ground is transparent, so the box's back layer, drawn before
-    // the image, shows behind the points.
-    const uint32_t clear = ImGui::GetColorU32(ImGuiCol_WindowBg) | 0xff000000u;
+    // ---- GPU: compile and submit when something changed
+    // In 3-D the target's ground is transparent, so the box's back layer, drawn before the image,
+    // shows behind the points; the dimmed rest of a selection is dimmed toward the window's ground.
     const uint32_t ground = v.dims == 3 ? (clear & 0x00ffffffu) : clear;
     if (v.dirty) {
-        bool ok;
-        if (v.have_cur) {
-            HostGeomDraw d[2];
-            d[0].pos_alloc = v.cur.pos->rid;
-            d[0].pos_offset = v.cur.pos_off;
-            d[0].vertex_count = v.cur.n;
-            d[0].topology = CALIPER_GEOM_TOPO_POINTS;
-            d[0].shade_mode = CALIPER_GEOM_SHADE_UNLIT;
-            d[0].blend_mode = CALIPER_GEOM_BLEND_OPAQUE;
-            d[0].depth_flags = v.dims == 3 ? (CALIPER_GEOM_DEPTH_TEST | CALIPER_GEOM_DEPTH_WRITE) : 0u;
-            d[0].size_px = point_size_px(v.cur.n, core->scale);
-            if (v.cur.aux) {
-                d[0].color_mode = CALIPER_GEOM_COLOR_COLORMAP;
-                d[0].exact_colormap = true;   // each value's colour exactly as map_f32_to_rgba8
-                d[0].attr_alloc = v.cur.aux->rid;
-                d[0].attr_offset = v.cur.aux_off;
-                d[0].lut256 = v.lut;
-                d[0].vmin = v.pvmin;
-                d[0].vmax = v.pvmax;
-            } else {
-                d[0].color_mode = CALIPER_GEOM_COLOR_FLAT;
-                d[0].flat_rgba = kFlat;
-            }
-            if (cues) {
-                d[0].att_ref = att_ref;
-                d[0].fade_w0 = c.dist;
-                d[0].fade_w1 = c.dist + c.radius;
-            }
-            // A selection: every point dimmed, then the selected ones over
-            // them in their own colours (depth test less-equal lets them win),
-            // at full strength: no fade.
-            uint32_t dim_lut[256];
-            uint32_t count = 1;
-            if (ev && v.sel_count && stage_selection(core, v)) {
-                d[1] = d[0];
-                d[1].fade_w0 = d[1].fade_w1 = 0.0f;
-                d[1].pos_alloc = v.sel_draw.pos->rid;
-                d[1].pos_offset = 0;
-                d[1].vertex_count = v.sel_draw.n;
-                if (v.cur.aux && v.sel_draw.aux) {
-                    d[1].attr_alloc = v.sel_draw.aux->rid;
-                    d[1].attr_offset = 0;
-                    for (int i = 0; i < 256; ++i) dim_lut[i] = dimmed(v.lut[i], clear);
-                    d[0].lut256 = dim_lut;
-                } else {
-                    d[1].color_mode = CALIPER_GEOM_COLOR_FLAT;
-                    d[1].flat_rgba = kFlat;
-                    d[0].color_mode = CALIPER_GEOM_COLOR_FLAT;
-                    d[0].flat_rgba = dimmed(kFlat, clear);
-                }
-                count = 2;
-            }
-            const auto t0 = std::chrono::steady_clock::now();
-            ok = r->geom_draw_primitives(v.view_rid, V, P, d, count, ground);
-            v.draw_cpu_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-            ++v.redraws;
-            if (ok) {
-                void* h = r->geom_draw_retain_last();
-                if (v.cur.last_draw) r->device_update_release(v.cur.last_draw);
-                v.cur.last_draw = h;
-                if (count == 2) {
-                    void* h2 = r->geom_draw_retain_last();
-                    if (v.sel_draw.last_draw) r->device_update_release(v.sel_draw.last_draw);
-                    v.sel_draw.last_draw = h2;
-                }
-            }
-        } else {
-            ok = r->geom_draw_primitives(v.view_rid, V, P, nullptr, 0, ground);
+        const auto t0 = std::chrono::steady_clock::now();
+        caliper_gfx::Serial serial = 0;
+        std::string why;
+        const bool ok = sc->render((uint32_t)v.tex_w, (uint32_t)v.tex_h, core->scale, ground, &serial, &why);
+        v.draw_cpu_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        ++v.redraws;
+        if (ok && serial) {
+            if (v.have_cur) v.cur.last_draw = serial;
+            if (v.have_sel_draw && v.content_sel) v.sel_draw.last_draw = serial;
         }
+        if (!ok && !v.draw_failed) core->log(1, "live: points '" + v.name + "': " + why);
         v.dirty = false;   // a refused draw is not retried every frame (it logs)
         v.draw_failed = !ok;
     }
-    if (v.draw_failed) ImGui::TextUnformatted("points draw refused by the renderer (see log)");
+    if (v.draw_failed) ImGui::TextUnformatted("points draw refused by the graphics layer (see log)");
     ImDrawList* dl = ImGui::GetWindowDrawList();
     // 3-D: the box's back layer under the points, its front layer over them.
     float bx[6];
     const bool boxed = v.dims == 3 && points_box(v, bx);
     BoxFrame frame;
     BoxInk ink{};
-    if (boxed) {
-        frame = box_frame(bx, eye_of(c), mvp, p0, avail);
+    const caliper_scene::Orbit* orbit = std::get_if<caliper_scene::Orbit>(&sc->camera());
+    if (boxed && orbit) {
+        const caliper_scene::Vec3 e = caliper_scene::orbit_eye(*orbit);
+        frame = box_frame(bx, V3{float(e.x), float(e.y), float(e.z)}, mvp, p0, avail);
         const bool house = !core->views_bare;
         const Look& L = S->look;
         // The browser element's inks on a page (web/src/views/box3d.ts), the host's in a window.
@@ -1254,9 +1156,9 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         draw_box_back(dl, frame, p0, avail, ink);
         dl->PopClipRect();
     }
-    dl->AddImage((ImTextureID)r->tex_imtexture_id(v.view_rid), p0,
-                 ImVec2(p0.x + avail.x, p0.y + avail.y));
-    if (boxed) {
+    if (const uint64_t tex = sc->imgui_texture())
+        dl->AddImage((ImTextureID)tex, p0, ImVec2(p0.x + avail.x, p0.y + avail.y));
+    if (boxed && orbit) {
         dl->PushClipRect(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), true);
         draw_box_front(dl, frame, p0, avail, ink, &v.box_labels);
         dl->PopClipRect();
@@ -1266,15 +1168,14 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     v.geo_valid = true;
     v.geo_area[0] = p0.x; v.geo_area[1] = p0.y; v.geo_area[2] = avail.x; v.geo_area[3] = avail.y;
     v.geo_ydown = false;
-    if (v.dims == 2) {
-        v.geo_window[0] = (double)c.tx - (double)c.half_h * aspect;
-        v.geo_window[1] = (double)c.tx + (double)c.half_h * aspect;
-        v.geo_window[2] = (double)c.ty - (double)c.half_h;
-        v.geo_window[3] = (double)c.ty + (double)c.half_h;
+    if (const caliper_scene::PanZoom* pz = std::get_if<caliper_scene::PanZoom>(&sc->camera())) {
+        v.geo_window[0] = pz->center[0] - pz->half_height * aspect;
+        v.geo_window[1] = pz->center[0] + pz->half_height * aspect;
+        v.geo_window[2] = pz->center[1] - pz->half_height;
+        v.geo_window[3] = pz->center[1] + pz->half_height;
     } else {
         std::fill(v.geo_window, v.geo_window + 4, 0.0);
     }
-
     // ---- the selection being drawn, and how many points are selected
     if (ev && g.down && g.selecting && g.lasso.size() >= 4) {
         dl->PushClipRect(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), true);
@@ -2318,37 +2219,13 @@ std::string info_text(const CaliperCore* core, const View& v) {
     }
 }
 
-// The browser's points view's sizes (web/src/views/points.ts, radius()):
-// the side of a point in logical px, from 7 for a few hundred points down to
-// 3 past 50,000.
-float point_size_px(uint64_t n, float scale) {
-    const float base = n > 50000 ? 3.0f : n > 5000 ? 4.0f : n > 500 ? 5.5f : 7.0f;
-    return base * scale;
-}
+// The browser's points view's sizes (web/src/views/points.ts, radius()), which the scene core
+// keeps: the side of a point in logical px, from 7 for a few hundred points down to 3 past 50,000.
+float point_size_px(uint64_t n, float scale) { return caliper_scene::default_point_size(n) * scale; }
 
-void camera_matrices(const View& v, float aspect, float view16[16], float proj16[16]) {
-    const Camera& c = v.cam;
-    if (!(aspect > 0.0f)) aspect = 1.0f;
-    if (v.dims == 3) {
-        look_at(eye_of(c), V3{c.tx, c.ty, c.tz}, V3{0, 1, 0}, view16);
-        const float r = std::max(c.radius, 1e-6f);
-        float zn = std::max(c.dist - 2.0f * r, std::max(c.dist * 1e-3f, 1e-6f));
-        float zf = c.dist + 2.0f * r;
-        if (zf <= zn * 1.001f) zf = zn * 2.0f;
-        perspective(kFovY, aspect, zn, zf, proj16);
-    } else {
-        std::memset(view16, 0, 16 * sizeof(float));
-        view16[0] = view16[5] = view16[10] = view16[15] = 1.0f;
-        const float hh = std::max(c.half_h, 1e-12f), hw = hh * aspect;
-        std::memset(proj16, 0, 16 * sizeof(float));
-        proj16[0] = 1.0f / hw;
-        proj16[5] = 1.0f / hh;
-        proj16[10] = 0.0f;           // z ignored: every point at NDC depth 0.5
-        proj16[12] = -c.tx / hw;
-        proj16[13] = -c.ty / hh;
-        proj16[14] = 0.5f;
-        proj16[15] = 1.0f;
-    }
+bool points_mvp(const View& v, float out[16]) {
+    const PointsScene* sc = v.points ? v.points->scene.get() : nullptr;
+    return sc && v.tex_w > 0 && v.tex_h > 0 && sc->mvp((uint32_t)v.tex_w, (uint32_t)v.tex_h, out);
 }
 
 void draw_view(CaliperCore* core, CaliperLiveViewsState* S, View& v) {

@@ -37,7 +37,8 @@
 #include "gfx/colormap_keys.h"   // derive_keys, for the test of the keys this build derives
 #include "live/live_scene.h"         // a scene view's facts
 #include "live/live_views_scene.h"
-#include "live/live_views_state.h"   // the points check reads the view's camera and payload
+#include "live/live_points.h"        // the points check reads the view's scene, camera and payload
+#include "live/live_views_state.h"
 #include "host_services.h"
 #include "renderer/webgpu_renderer.h"
 #include "tensor_bridge.h"   // colormap_lut, map_f32_to_rgba8 (the CPU reference)
@@ -247,9 +248,20 @@ void publish() {
             // A points view: its camera, the rotate toggle, the depth cues and
             // the box's tick labels (digits, signs, dots, e, = and separators).
             if (v->kind == CALIPER_LIVE_KIND_POINTS) {
+                // The scene core's orbit in 3-D (az, el, distance, the fitted radius); zero angles and
+                // distance in 2-D, whose camera is a pan and zoom.
+                double cam[4] = {0.0, 0.0, 0.0, 0.0};
+                if (const caliper_live_views::PointsScene* sc = v->points ? v->points->scene.get() : nullptr) {
+                    if (const caliper_scene::Orbit* o = std::get_if<caliper_scene::Orbit>(&sc->camera())) {
+                        cam[0] = o->azimuth;
+                        cam[1] = o->elevation;
+                        cam[2] = o->distance;
+                    }
+                    cam[3] = sc->radius();
+                }
                 std::snprintf(b, sizeof b,
                               ",\"dims\":%d,\"camera\":[%.9g,%.9g,%.9g,%.9g],\"rotate\":%s,\"cues\":%s,\"box\":\"",
-                              v->dims, v->cam.az, v->cam.el, v->cam.dist, v->cam.radius,
+                              v->dims, cam[0], cam[1], cam[2], cam[3],
                               v->auto_rotate ? "true" : "false", v->depth_cues ? "true" : "false");
                 geo += b;
                 if (v->dims == 3) geo += v->box_labels;
@@ -297,8 +309,8 @@ void publish() {
         if (tv.tex && unchecked(tv.name)) all = false;
     if (g.core && g.core->live_views)
         for (const auto& v : g.core->live_views->views)
-            if (v->kind == CALIPER_LIVE_KIND_POINTS && v->label_count > 0 && v->view_rid &&
-                unchecked(v->name))
+            if (v->kind == CALIPER_LIVE_KIND_POINTS && v->label_count > 0 && v->points && v->points->scene &&
+                v->points->scene->has_target() && unchecked(v->name))
                 all = false;
     put("checkState", all ? 2 : g.checks.empty() && !g.check_pending ? 0 : 1);
     put("checkMismatch", g.checks.empty() ? -1.0 : (double)mism);
@@ -329,17 +341,12 @@ void finish_check(Page::Check c) {
 // Records mismatches and, in maxdiff, how many points were compared. False when
 // there is nothing to check yet.
 bool start_points_check(caliper_live_views::View& v) {
-    if (!v.have_cur || !v.cur.pos_cpu || !v.cur.aux_cpu || !v.view_rid || v.dirty) return false;
-    const int W = v.tex_w, H = v.tex_h;
+    caliper_live_views::PointsScene* sc = v.points ? v.points->scene.get() : nullptr;
+    if (!v.have_cur || !v.cur.pos_cpu || !v.cur.aux_cpu || !sc || !sc->has_target() || v.dirty) return false;
+    const int W = (int)sc->width(), H = (int)sc->height();
     const uint64_t n = v.cur.n;
-    float V[16], P[16], M[16];
-    caliper_live_views::camera_matrices(v, (float)W / (float)H, V, P);
-    for (int c = 0; c < 4; ++c)
-        for (int r = 0; r < 4; ++r) {
-            float acc = 0.0f;
-            for (int k = 0; k < 4; ++k) acc += P[k * 4 + r] * V[c * 4 + k];
-            M[c * 4 + r] = acc;
-        }
+    float M[16];   // the scene core's clip-from-world matrix, as the draw gets it
+    if (!caliper_live_views::points_mvp(v, M)) return false;
     struct Proj { float x, y, z, w; bool ok; };
     std::vector<Proj> pr(n);
     const float* pos = (const float*)v.cur.pos_cpu;
@@ -353,10 +360,12 @@ bool start_points_check(caliper_live_views::View& v) {
     }
     // Half the side a point is drawn with, plus a pixel: with the depth cues
     // its size follows its distance, as the renderer draws it.
-    const bool cues = v.dims == 3 && v.depth_cues;
+    float att_ref = 0.0f, fade_w0 = 0.0f, fade_w1 = 0.0f;   // the scene's cues, zero when off
+    sc->cue_values(&att_ref, &fade_w0, &fade_w1);
+    const bool cues = att_ref > 0.0f;
     const float side = caliper_live_views::point_size_px(n, g.core->scale);
     auto half_of = [&](const Proj& p) {
-        const float k = cues ? std::clamp(v.cam.dist / p.w, caliper_host::kPointAttenMin, caliper_host::kPointAttenMax) : 1.0f;
+        const float k = cues ? std::clamp(att_ref / p.w, caliper_scene::kPointAttenMin, caliper_scene::kPointAttenMax) : 1.0f;
         return 0.5f * side * k + 1.0f;
     };
     struct Want { int px, py; uint32_t rgba; };
@@ -368,7 +377,7 @@ bool start_points_check(caliper_live_views::View& v) {
     for (uint64_t i = 0; i < n && wants->size() < 256; i += stride) {
         const Proj& a = pr[i];
         if (!a.ok || a.x < 1 || a.y < 1 || a.x >= W - 1 || a.y >= H - 1 || a.z < 0 || a.z > 1) continue;
-        if (cues && a.w > v.cam.dist) continue;   // dimmed by the fade
+        if (fade_w1 > fade_w0 && a.w > fade_w0) continue;   // dimmed by the fade
         bool covered = false;
         for (uint64_t j = 0; j < n && !covered; ++j) {
             if (j == i || !pr[j].ok) continue;
@@ -383,7 +392,7 @@ bool start_points_check(caliper_live_views::View& v) {
     if (wants->empty()) return false;
     g.check_pending = true;
     const std::string name = v.name;
-    g.renderer->readback_async(v.view_rid, [wants, name, W, H](std::vector<uint8_t> got) {
+    g.renderer->readback_async(sc->color(), (uint32_t)W, (uint32_t)H, [wants, name, W, H](std::vector<uint8_t> got) {
         Page::Check c;
         c.view = name;
         c.kind = CALIPER_LIVE_KIND_POINTS;

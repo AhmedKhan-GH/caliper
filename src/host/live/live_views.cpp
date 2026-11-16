@@ -18,14 +18,15 @@
 //   POINTS           the current payload is re-read by the GPU whenever the
 //                    view redraws, so it stays claimed for as long as it is
 //                    current. read_done = 1 once the last frame that drew any
-//                    SUPERSEDED payload has retired (their imports are released
-//                    then). A CPU payload is staged into a view-owned buffer at
-//                    apply and is free at once.
+//                    SUPERSEDED payload has completed in the graphics layer
+//                    (their imports are released then). A CPU payload is copied
+//                    by the layer at apply and is free at once.
 //   SERIES/HISTOGRAM copied at apply; always 1.
 #include "caliper/live_views.h"
 
 #include "embed/embed_core.h"
 #include "embed/render_stats.h"   // copy counters
+#include "live/live_points.h"
 #include "live/live_scene.h"
 #include "live/live_views_scene.h"
 #include "live/live_views_state.h"
@@ -59,6 +60,11 @@ uint64_t now_ns() {
 #endif
 
 namespace caliper_live_views {
+
+PointsHolder::~PointsHolder() {
+    scene.reset();   // its targets and resources go back to the layer before the layer goes
+    gfx.reset();
+}
 
 namespace {
 
@@ -130,18 +136,15 @@ TensorView* find_v12(CaliperCore* core, const std::string& name) {
 }
 
 // ---- releases ------------------------------------------------------------
-void unref_import(CaliperCore* core, View& v, Import* im) {
+void unref_import(CaliperCore*, View& v, Import* im) {
     if (!im || --im->refs > 0) return;
-    if (core->renderer && im->rid) core->renderer->release_external_allocation(im->rid);
-    metal_release(im->owned);
+    if (v.points && v.points->scene && im->buffer) v.points->scene->gfx().release(im->buffer);
     v.imports.erase(std::remove_if(v.imports.begin(), v.imports.end(),
                                    [&](const std::unique_ptr<Import>& p) { return p.get() == im; }),
                     v.imports.end());
 }
 
 void release_payload(CaliperCore* core, View& v, PointsPayload& p) {
-    if (p.last_draw && core->renderer) core->renderer->device_update_release(p.last_draw);
-    p.last_draw = nullptr;
     unref_import(core, v, p.pos);
     unref_import(core, v, p.aux);
     p = PointsPayload{};
@@ -160,13 +163,10 @@ void release_typed(CaliperCore* core, View& v) {
     v.have_sel_draw = false;
     for (auto& p : v.retired) release_payload(core, v, p);
     v.retired.clear();
-    for (auto& im : v.imports) {   // empty unless a payload leaked a ref
-        if (r && im->rid) r->release_external_allocation(im->rid);
-        metal_release(im->owned);
-    }
+    for (auto& im : v.imports)   // empty unless a payload leaked a ref
+        if (v.points && v.points->scene && im->buffer) v.points->scene->gfx().release(im->buffer);
     v.imports.clear();
-    if (r && v.view_rid) r->tex_release(v.view_rid);
-    v.view_rid = 0;
+    v.points.reset();   // the scene's targets go back to the layer, then the layer
     v.tex_w = v.tex_h = 0;
     if (v.owns_v12 && find_v12(core, v.name)) caliper_core_view_remove(core, v.name.c_str());
     v.owns_v12 = false;
@@ -290,81 +290,68 @@ bool apply_texture(CaliperCore* core, View& v, const CaliperLiveSnapshot& s,
     return true;
 }
 
-// Bind one points buffer (positions or aux) as a renderer import: METAL is
-// imported in place (cached by buffer pointer, the whole buffer so every slot
-// of a shm segment shares it); CPU is staged into a fresh view-owned shared
-// MTLBuffer (copied now, so the caller's bytes are free on return).
+// The path label of a points payload from the route its import took: "points-imported" in place,
+// "points-cpu-staged" for a copy of host memory, as the old view named them.
+const char* points_path(caliper_gfx::Route r) {
+    switch (r) {
+        case caliper_gfx::Route::InPlace: return "points-imported";
+        case caliper_gfx::Route::CopiedFromHost: return "points-cpu-staged";
+        case caliper_gfx::Route::CopiedOnGpu: return "points-gpu-copied";
+        case caliper_gfx::Route::Refused: break;
+    }
+    return "points-refused";
+}
+
+// Bind one points buffer (positions or aux) with one import of the graphics layer: an MTLBuffer is
+// imported in place, up to the end of the window (cached by buffer, so that every slot of a shm
+// segment before it shares the import), and the layer refuses a window past the buffer's end or a
+// buffer of another device; host memory is copied (transient: the caller's bytes are free on
+// return), and the copy counts in the view's copy counters.
 bool bind_buffer(CaliperCore* core, View& v, const CaliperTensor& t, uint64_t off,
                  uint64_t bytes, const char* what, Import** out, uint64_t* out_off,
                  const uint8_t** out_cpu, std::string* why) {
-    HostRenderer* r = core->renderer.get();
-    if (t.device == CALIPER_DEV_METAL) {
-        const BufferInfo bi = metal_buffer_info(t.data);
-        if (!bi.ok) { *why = std::string(what) + ": not an MTLBuffer"; return false; }
-        if (off > bi.length || bytes > bi.length - off) {
-            *why = std::string(what) + ": window [" + std::to_string(off) + ", " +
-                   std::to_string(off + bytes) + ") exceeds the MTLBuffer length " +
-                   std::to_string(bi.length);
-            return false;
-        }
-        Import* im = nullptr;
+    PointsScene* sc = points_scene(core, v, why);
+    if (!sc) return false;
+    caliper_gfx::Backend& g = sc->gfx();
+    const bool metal = t.device == CALIPER_DEV_METAL;
+    const uint64_t end = metal ? off + bytes : bytes;
+    if (metal)
         for (auto& p : v.imports)
-            if (!p->owned && p->buf == t.data && p->bytes >= bi.length) { im = p.get(); break; }
-        if (!im) {
-            const uint64_t rid = r->import_external_allocation(t.data, bi.length,
-                                                               CALIPER_ALLOC_HANDLE_MTLBUFFER);
-            if (!rid) {
-                *why = std::string(what) + ": MTLBuffer import refused (the buffer lives "
-                       "on another GPU, or the renderer cannot import)";
-                return false;
+            if (p->key == t.data && p->bytes >= end) {
+                ++p->refs;
+                *out = p.get();
+                *out_off = off;
+                *out_cpu = p->cpu ? p->cpu + off : nullptr;
+                return true;
             }
-            auto p = std::make_unique<Import>();
-            p->buf = t.data;
-            p->rid = rid;
-            p->bytes = bi.length;
-            im = p.get();
-            v.imports.push_back(std::move(p));
-        }
-        ++im->refs;
-        *out = im;
-        *out_off = off;
-        *out_cpu = bi.contents ? (const uint8_t*)bi.contents + off : nullptr;
-        return true;
-    }
-    // A renderer that copies host memory itself (the browser's WebGPU renderer).
-    if (const uint64_t rid = r->import_host_allocation((const uint8_t*)t.data + off, bytes)) {
-        caliper_stats::note_copy(core, v.name, bytes);   // the upload into the renderer's buffer
-        auto p = std::make_unique<Import>();
-        p->rid = rid;
-        p->bytes = bytes;
-        p->refs = 1;
-        p->host.assign((const uint8_t*)t.data + off, (const uint8_t*)t.data + off + bytes);
-        *out = p.get();
-        *out_off = 0;
-        *out_cpu = p->host.data();
-        v.imports.push_back(std::move(p));
-        return true;
-    }
-    void* dev = r->native_device();
-    if (!dev) { *why = std::string(what) + ": CPU payload needs a Metal renderer"; return false; }
-    void* buf = metal_new_shared_buffer(dev, (const uint8_t*)t.data + off, bytes);
-    if (!buf) { *why = std::string(what) + ": staging buffer allocation failed"; return false; }
-    caliper_stats::note_copy(core, v.name, bytes);   // the host copy into the staging buffer
-    const uint64_t rid = r->import_external_allocation(buf, bytes, CALIPER_ALLOC_HANDLE_MTLBUFFER);
-    if (!rid) {
-        metal_release(buf);
-        *why = std::string(what) + ": staging buffer import refused";
+    caliper_gfx::ExternalBuffer e;
+    e.kind = metal ? caliper_gfx::ExternalKind::MetalBuffer : caliper_gfx::ExternalKind::HostMemory;
+    e.handle = metal ? t.data : (void*)((const uint8_t*)t.data + off);
+    e.size = end;
+    e.usage = caliper_gfx::kVertex;
+    e.transient = !metal;
+    e.label = what;
+    const caliper_gfx::ImportResult r = g.import_buffer(e);
+    if (!r.buffer) {
+        *why = std::string(what) + ": window [" + std::to_string(off) + ", " + std::to_string(off + bytes) + ") of the " +
+               (metal ? "MTLBuffer" : "host memory") + " cannot be imported: " + r.reason;
         return false;
     }
+    if (r.bytes_copied) caliper_stats::note_copy(core, v.name, r.bytes_copied);   // the layer's copy of host bytes
     auto p = std::make_unique<Import>();
-    p->buf = buf;
-    p->rid = rid;
-    p->bytes = bytes;
-    p->owned = buf;
+    p->key = metal ? t.data : nullptr;
+    p->buffer = r.buffer;
+    p->bytes = end;
+    p->route = r.route;
     p->refs = 1;
+    p->cpu = static_cast<const uint8_t*>(g.mapped(r.buffer));
+    if (!p->cpu && !metal) {   // the layer maps nothing here (a browser): our own copy for hover
+        p->host.assign((const uint8_t*)t.data + off, (const uint8_t*)t.data + off + bytes);
+        p->cpu = p->host.data();
+    }
     *out = p.get();
-    *out_off = 0;
-    *out_cpu = (const uint8_t*)metal_buffer_info(buf).contents;
+    *out_off = metal ? off : 0;
+    *out_cpu = p->cpu ? p->cpu + *out_off : nullptr;
     v.imports.push_back(std::move(p));
     return true;
 }
@@ -434,8 +421,10 @@ bool apply_points(CaliperCore* core, View& v, const CaliperLiveSnapshot& s,
     v.dirty = true;
     v.hover_dirty = true;
     v.count = (int64_t)n;
-    v.imported = d.device == CALIPER_DEV_METAL;
-    v.path = v.imported ? "points-imported" : "points-cpu-staged";
+    // The label and the flag come from the route the layer took, never from the tensor's device.
+    v.imported = p.pos->route == caliper_gfx::Route::InPlace;
+    v.path = points_path(p.pos->route);
+    v.content_dirty = true;
 
     poll_handles(core, v);   // a superseded payload that was never drawn retires now
     if (s.flags & CALIPER_LIVE_APPLY_WAIT_GPU) {
@@ -595,8 +584,6 @@ bool validate(CaliperCore* core, const CaliperLiveSnapshot& s, std::string* why)
                     return no("bad colormap " + std::to_string(s.colormap) +
                               " (0 viridis, 1 magma, 2 rdbu)");
             }
-            if (!core->renderer->supports_geometry_primitives())
-                return no("points: the renderer has no geometry pipeline (points need Metal)");
             break;
         }
         case CALIPER_LIVE_KIND_SERIES:
@@ -615,6 +602,27 @@ double ms_since(std::chrono::steady_clock::time_point t0) {
 }  // namespace
 
 // ---- shared with live_views_draw.cpp -----------------------------------
+PointsScene* points_scene(CaliperCore* core, View& v, std::string* why) {
+    if (!v.points) {
+        auto h = std::make_shared<PointsHolder>();
+        caliper_gfx::Backend* g = nullptr;
+        const caliper_gfx::ProgramDesc* programs = nullptr;
+        if (open_layer(core, "points", &h->gfx, &g, &programs, &h->notice)) {
+            h->scene = std::make_unique<PointsScene>(*g, programs);
+            std::string err;
+            if (!h->scene->init(&err)) {
+                h->scene.reset();
+                h->gfx.reset();
+                h->notice = "the points view could not start: " + err;
+            }
+        }
+        v.points = std::move(h);
+    }
+    if (!v.points->scene && why) *why = "points: " + v.points->notice;
+    return v.points->scene.get();
+}
+
+
 View* find(CaliperCore* core, const char* name) {
     if (!core->live_views || !name) return nullptr;
     for (auto& v : core->live_views->views)
@@ -793,8 +801,9 @@ void poll_handles(CaliperCore* core, View& v) {
             ++i;
         }
     }
+    caliper_gfx::Backend* g = v.points && v.points->scene ? &v.points->scene->gfx() : nullptr;
     for (size_t i = 0; i < v.retired.size();) {
-        if (r->device_update_is_done(v.retired[i].last_draw)) {   // NULL (never drawn) = done
+        if (v.retired[i].last_draw == 0 || !g || g->completed(v.retired[i].last_draw)) {   // never drawn = done
             PointsPayload p = v.retired[i];
             v.retired.erase(v.retired.begin() + (std::ptrdiff_t)i);
             release_payload(core, v, p);
@@ -805,54 +814,9 @@ void poll_handles(CaliperCore* core, View& v) {
 }
 
 void fit_points(View& v, float aspect) {
-    float b[6] = {-1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f};
-    bool have = false;
-    if (v.has_bbox) {
-        std::memcpy(b, v.bbox, sizeof b);
-        have = true;
-    } else if (v.have_cur && v.cur.pos_cpu) {
-        // No producer bbox: scan the CPU-visible payload (sampled above 4M).
-        const float* P = (const float*)v.cur.pos_cpu;
-        const uint64_t n = v.cur.n;
-        const uint64_t stride = n > (4u << 20) ? (n + (4u << 20) - 1) / (4u << 20) : 1;
-        float lo[3] = {INFINITY, INFINITY, INFINITY}, hi[3] = {-INFINITY, -INFINITY, -INFINITY};
-        for (uint64_t i = 0; i < n; i += stride) {
-            const float* q = P + 3 * i;
-            if (!std::isfinite(q[0]) || !std::isfinite(q[1]) || !std::isfinite(q[2])) continue;
-            for (int k = 0; k < 3; ++k) {
-                lo[k] = std::min(lo[k], q[k]);
-                hi[k] = std::max(hi[k], q[k]);
-            }
-            have = true;
-        }
-        if (have)
-            for (int k = 0; k < 3; ++k) { b[2 * k] = lo[k]; b[2 * k + 1] = hi[k]; }
-    }
-    (void)have;
-    if (v.dims == 2) b[4] = b[5] = 0.0f;
-    const float cx = 0.5f * (b[0] + b[1]), cy = 0.5f * (b[2] + b[3]), cz = 0.5f * (b[4] + b[5]);
-    const float ex = 0.5f * std::fabs(b[1] - b[0]), ey = 0.5f * std::fabs(b[3] - b[2]),
-                ez = 0.5f * std::fabs(b[5] - b[4]);
-    Camera& c = v.cam;
-    c.tx = cx;
-    c.ty = cy;
-    c.tz = cz;
-    if (!(aspect > 0.0f)) aspect = 1.0f;
-    if (v.dims == 3) {
-        float r = std::sqrt(ex * ex + ey * ey + ez * ez);
-        if (!(r > 1e-12f) || !std::isfinite(r)) r = 1.0f;
-        c.radius = r;
-        const float half_fovy = 22.5f * 3.14159265f / 180.0f;
-        const float half_fovx = std::atan(std::tan(half_fovy) * aspect);
-        c.dist = r / std::sin(std::min(half_fovy, half_fovx)) * kCamFit;
-        c.az = kCamAz;   // the default three-quarter view, as every renderer
-        c.el = kCamEl;
-    } else {
-        float hh = std::max(ey, ex / aspect);
-        if (!(hh > 1e-12f) || !std::isfinite(hh)) hh = 1.0f;
-        c.half_h = hh * 1.08f;
-        c.radius = std::max(std::max(ex, ey), 1e-6f);
-    }
+    // The scene core's fit to the scene's bounds, at the default three-quarter view in 3-D, as every
+    // renderer fits.
+    if (v.points && v.points->scene) v.points->scene->fit(aspect > 0.0f ? double(aspect) : 1.0);
     v.fit_pending = false;
     v.dirty = true;
     v.hover_dirty = true;
@@ -1089,19 +1053,21 @@ extern "C" int caliper_core_live_view_readback(CaliperCore* core, const char* na
                    " view has no texture; use caliper_core_live_view_values");
         return 0;
     }
-    if (!v->view_rid) {
+    PointsScene* ps = v->points ? v->points->scene.get() : nullptr;
+    if (!ps || !ps->has_target()) {
         core->fail(std::string("live_view_readback('") + name +
                    "'): no render target yet (run a frame after the first apply)");
         return 0;
     }
-    const size_t need = (size_t)v->tex_w * (size_t)v->tex_h * 4;
+    const size_t need = (size_t)ps->width() * (size_t)ps->height() * 4;
     if (buf_bytes < need) {
         core->fail("live_view_readback: buffer too small (need " + std::to_string(need) + " bytes)");
         return 0;
     }
-    std::vector<uint8_t> px = core->renderer->debug_readback_rgba8(v->view_rid, v->tex_w, v->tex_h);
-    if (px.size() != need) {
-        core->fail("live_view_readback: renderer readback failed");
+    std::vector<uint8_t> px;
+    std::string why;
+    if (!ps->read_pixels(&px, &why) || px.size() != need) {
+        core->fail("live_view_readback: " + why);
         return 0;
     }
     std::memcpy(buf, px.data(), need);

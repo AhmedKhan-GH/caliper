@@ -50,6 +50,15 @@ void scene_note(CaliperCore* core, const std::string& name, const std::string& t
 // A new round of messages: the info line's bytes count from here.
 void scene_begin_round(CaliperCore* core, const std::string& name);
 
+// The graphics layer's backend for a new view that draws through the scene core (a scene view, a
+// points view) and the backend's table of generated programs. On Metal the view owns a backend of
+// its own on the renderer's device and queue (*owned), so that its submits are ordered with the
+// renderer's frame by commit order and its statistics are its own; in a browser it borrows the
+// WebGPU renderer's (*owned stays null). False with *notice, which names `what` ("scenes",
+// "points"), when no backend can start here.
+bool open_layer(CaliperCore* core, const char* what, std::unique_ptr<caliper_gfx::Backend>* owned,
+                caliper_gfx::Backend** gfx, const caliper_gfx::ProgramDesc** programs, std::string* notice);
+
 // The scene view of a live view, or null.
 SceneView* scene_view(CaliperCore* core, const char* name);
 SceneView* scene_view(View& v);

@@ -19,6 +19,7 @@
 #include <caliper/live_views.h>
 
 #include "live/live_clock.h"         // StampClock (network stamps into the viewer's clock)
+#include "live/live_points.h"        // the points view's scene and its orbit camera (white-box)
 #include "live/live_views_state.h"   // kPalette (white-box: the exact categorical colours)
 #include "tensor_bridge.h"           // map_f32_to_rgba8 / colormap_lut (CPU reference)
 #include "embed/render_stats.h"      // copy counters (white-box)
@@ -558,6 +559,15 @@ TEST_CASE("live_views/points: 3-D continuous colormap and CPU-staged payloads dr
     CHECK(caliper_core_live_view_read_done(c.core, "cloud") == 1);
 }
 
+// The orbit camera of a 3-D points view, which the scene core keeps (live_points.h).
+static const caliper_scene::Orbit& orbit_of(caliper_live_views::View* pv) {
+    REQUIRE(pv->points);
+    REQUIRE(pv->points->scene);
+    const caliper_scene::Orbit* o = std::get_if<caliper_scene::Orbit>(&pv->points->scene->camera());
+    REQUIRE(o != nullptr);
+    return *o;
+}
+
 TEST_CASE("live_views/points: 3-D points draw a box with ticks, nearer points larger and farther ones "
           "dimmer with their hue kept, and turn with the rotate toggle until a drag") {
     Core c(640, 480);
@@ -587,8 +597,8 @@ TEST_CASE("live_views/points: 3-D points draw a box with ticks, nearer points la
     caliper_live_views::View* pv = caliper_live_views::find(c.core, "box3");
     REQUIRE(pv != nullptr);
     // The default three-quarter camera, as every renderer's.
-    CHECK(pv->cam.az == doctest::Approx(caliper_live_views::kCamAz));
-    CHECK(pv->cam.el == doctest::Approx(caliper_live_views::kCamEl));
+    CHECK(orbit_of(pv).azimuth == doctest::Approx(caliper_live_views::kCamAz));
+    CHECK(orbit_of(pv).elevation == doctest::Approx(caliper_live_views::kCamEl));
     // The box: tick labels on x, y and z.
     MESSAGE("box labels: " << pv->box_labels);
     CHECK(pv->box_labels.find("x=") != std::string::npos);
@@ -636,12 +646,12 @@ TEST_CASE("live_views/points: 3-D points draw a box with ticks, nearer points la
 
     // The rotate toggle turns the view until a drag in it.
     REQUIRE(caliper_live_views::set_toggle(c.core, "box3", "rotate", true));
-    const float az0 = pv->cam.az;
+    const double az0 = orbit_of(pv).azimuth;
     for (int i = 0; i < 6; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         c.frames(1);
     }
-    CHECK(pv->cam.az > az0);
+    CHECK(orbit_of(pv).azimuth > az0);
     auto send = [&](CaliperEventType type, float x, float y, int down) {
         CaliperInputEvent e{};
         e.struct_size = sizeof e;
@@ -662,9 +672,9 @@ TEST_CASE("live_views/points: 3-D points draw a box with ticks, nearer points la
     send(CALIPER_EVENT_MOUSE_BUTTON, cx + 30.0f, cy, 0);
     c.frames(2);
     CHECK_FALSE(pv->auto_rotate);
-    const float az1 = pv->cam.az;
+    const double az1 = orbit_of(pv).azimuth;
     c.frames(4);
-    CHECK(pv->cam.az == az1);
+    CHECK(orbit_of(pv).azimuth == az1);
 }
 
 TEST_CASE("live_views/points: screenshots of a 3-D cluster scene from three angles (CALIPER_TEST_SHOTS)") {
@@ -687,8 +697,7 @@ TEST_CASE("live_views/points: screenshots of a 3-D cluster scene from three angl
     REQUIRE(pv != nullptr);
     const struct { const char* name; float daz, del; } angles[] = {{"a", 0.0f, 0.0f}, {"b", 1.6f, 0.0f}, {"c", -0.9f, 0.55f}};
     for (const auto& a : angles) {
-        pv->cam.az = caliper_live_views::kCamAz + a.daz;
-        pv->cam.el = caliper_live_views::kCamEl + a.del;
+        pv->points->scene->set_angles(caliper_live_views::kCamAz + a.daz, caliper_live_views::kCamEl + a.del);
         pv->dirty = true;
         c.frames(3);
         std::vector<uint8_t> canvas(900 * 640 * 4);
@@ -749,14 +758,15 @@ TEST_CASE("live_views/points: value-coloured points have map_f32_to_rgba8's colo
         CaliperLiveViewInfo vi = info(c.core, "edge_points");
         std::vector<uint8_t> px = readback(c.core, "edge_points", vi.width, vi.height);
         REQUIRE(px.size() == (size_t)vi.width * vi.height * 4);
-        float V[16], P[16];
-        caliper_live_views::camera_matrices(*pv, (float)vi.width / (float)vi.height, V, P);
+        float M[16];   // the clip-from-world matrix the draw gets (2-D: an orthographic pan and zoom)
+        REQUIRE(caliper_live_views::points_mvp(*pv, M));
         int wrong = 0, compared = 0;
         std::string first;
         for (int i = 0; i < N; ++i) {
             // The point's centre on the render target (2-D: the view matrix is the identity).
             const float x = pos[3 * i], y = pos[3 * i + 1];
-            const float cx = P[0] * x + P[12], cy = P[5] * y + P[13];
+            const float cw = M[3] * x + M[7] * y + M[15];
+            const float cx = (M[0] * x + M[4] * y + M[12]) / cw, cy = (M[1] * x + M[5] * y + M[13]) / cw;
             const int sx = (int)((cx * 0.5f + 0.5f) * vi.width), sy = (int)((0.5f - cy * 0.5f) * vi.height);
             if (sx < 0 || sy < 0 || sx >= vi.width || sy >= vi.height) continue;
             uint8_t want[4];
@@ -1272,11 +1282,11 @@ TEST_CASE("live_views/gates: every refusal is specific; nothing is created") {
         cuda.device = CALIPER_DEV_CUDA;
         refuse(snap("g", CALIPER_LIVE_KIND_HEATMAP, &cuda), "device must be CPU or METAL");
     }
-    // METAL window beyond the buffer (points and series check it up front)
+    // METAL window beyond the buffer (the layer's import refuses it for points; series check it up front)
     {
         std::vector<float> big(300);
         CaliperTensor tbig = tensor(ptr(mb), CALIPER_DT_F32, {100, 3}, CALIPER_DEV_METAL);
-        refuse(snap("g", CALIPER_LIVE_KIND_POINTS, &tbig), "exceeds the MTLBuffer length");
+        refuse(snap("g", CALIPER_LIVE_KIND_POINTS, &tbig), "the MTLBuffer is shorter than the size claimed");
         CaliperTensor sbig = tensor(ptr(mb), CALIPER_DT_F32, {1000}, CALIPER_DEV_METAL);
         CaliperLiveSnapshot x = snap("g", CALIPER_LIVE_KIND_SERIES, &sbig);
         x.series_total = 5;
@@ -1565,73 +1575,6 @@ TEST_CASE("live_views/copies: each route counts its known copies; METAL payloads
     CHECK(caliper_stats::renderer_total(c.core).copies == 2 + 1 + 2 + 1 + 1);
 }
 
-// The browser's route, headless: a renderer that copies host memory itself
-// (HostRenderer::import_host_allocation, which the WebGPU renderer implements)
-// takes a CPU points payload, and each buffer counts one copy. A fake core
-// around a renderer that only keeps the bytes stands in for the browser's.
-namespace {
-class HostImportRenderer : public caliper_host::HostRenderer {
-public:
-    bool init(GLFWwindow*) override { return true; }
-    void new_frame() override {}
-    void render(int, int) override {}
-    void shutdown() override {}
-    const char* name() const override { return "host-import"; }
-    void window_hints() override {}
-    uint64_t tex_create_rgba8(int, int) override { return 0; }
-    bool tex_upload_rgba8(uint64_t, const void*, int, int) override { return false; }
-    void tex_release(uint64_t) override {}
-    uint64_t tex_imtexture_id(uint64_t) override { return 0; }
-    bool tex_update_from_device(uint64_t, const CaliperTensor&, const uint32_t*, float, float) override {
-        return false;
-    }
-    bool supports_geometry_primitives() const override { return true; }
-    uint64_t import_host_allocation(const void* data, uint64_t bytes) override {
-        const uint64_t id = next_++;
-        allocs[id].assign((const uint8_t*)data, (const uint8_t*)data + bytes);
-        return id;
-    }
-    void release_external_allocation(uint64_t id) override { allocs.erase(id); }
-    std::map<uint64_t, std::vector<uint8_t>> allocs;
-
-private:
-    uint64_t next_ = 1;
-};
-}  // namespace
-
-TEST_CASE("live_views/copies: the browser's host import counts one copy per buffer (headless)") {
-    CaliperCore core;
-    auto owned = std::make_unique<HostImportRenderer>();
-    HostImportRenderer* r = owned.get();
-    core.renderer = std::move(owned);
-    core.canvas_ready = true;
-
-    const int N = 64;
-    std::vector<float> pos(N * 3, 0.5f), val(N, 2.0f);
-    CaliperTensor tp = tensor(pos.data(), CALIPER_DT_F32, {N, 3}, CALIPER_DEV_CPU);
-    CaliperTensor tv = tensor(val.data(), CALIPER_DT_F32, {N}, CALIPER_DEV_CPU);
-    CaliperLiveSnapshot s = snap("cloud", CALIPER_LIVE_KIND_POINTS, &tp);
-    s.aux = &tv;
-    s.vmin = 0.0f;
-    s.vmax = 4.0f;
-    REQUIRE_MESSAGE(caliper_core_live_apply(&core, &s) == 1, core.last_error);
-    CHECK(r->allocs.size() == 2);   // positions and values, both copied by the renderer
-    CHECK(r->copy_count().copies == 2);
-    CHECK(r->copy_count().bytes == (uint64_t)N * 12 + (uint64_t)N * 4);
-    caliper_stats::ViewCopies v = copies_of(&core, "cloud");
-    CHECK(v.total.copies == 2);
-    CHECK(v.last.copies == 2);
-    CHECK(v.total.bytes == (uint64_t)N * 12 + (uint64_t)N * 4);
-
-    // The next payload copies again; the superseded one is released on shutdown.
-    REQUIRE(caliper_core_live_apply(&core, &s) == 1);
-    v = copies_of(&core, "cloud");
-    CHECK(v.total.copies == 4);
-    CHECK(v.last.copies == 2);
-    caliper_live_views_shutdown(&core);
-    CHECK(r->allocs.empty());
-}
-
 // Frame statistics (CALIPER_METAL_STATS, read when the renderer is made): frame
 // times, the GPU time of each update and of each view draw, and the updates by
 // path, over a window that a read resets. Without the variable nothing is kept.
@@ -1683,7 +1626,9 @@ TEST_CASE("live_views/frame stats: CALIPER_METAL_STATS records frame and GPU tim
         CHECK(fs.frame_gpu_n >= 4);
         std::map<std::string, uint64_t> upd(fs.updates.begin(), fs.updates.end());
         CHECK(upd["compute-imported"] >= 5);
-        CHECK(upd["primitives-imported"] >= 1);
+        // The points draw through the graphics layer, not as a renderer update: their GPU time
+        // reaches the view-draw series above (HostRenderer::note_draw_gpu_ms), and no update by path.
+        CHECK(upd.count("primitives-imported") == 0);
         // The read reset the window.
         REQUIRE(caliper_stats::frame_stats(c.core, &fs, false));
         CHECK(fs.frames == 0);

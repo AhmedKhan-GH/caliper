@@ -91,6 +91,10 @@ public:
     // browser cannot block on a buffer map). `done` gets an empty vector on
     // failure.
     void readback_async(uint64_t tex, std::function<void(std::vector<uint8_t>)> done);
+    // The same for a texture of the graphics layer made on this renderer's backend (a view's
+    // render target), w x h from its top-left corner.
+    void readback_async(caliper_gfx::Texture tex, uint32_t w, uint32_t h,
+                        std::function<void(std::vector<uint8_t>)> done);
     // Mean milliseconds from queue submit to "work done" over the frames
     // rendered so far, and how many frames that covers.
     double gpu_ms_mean() const { return gpu_n_ ? gpu_ms_sum_ / (double)gpu_n_ : 0.0; }

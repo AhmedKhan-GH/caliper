@@ -4,12 +4,10 @@
 // live_views_metal.mm (the few MTLBuffer queries a .cpp cannot make).
 // Host-internal: nothing here crosses the C seam.
 //
-// GPU resources of a POINTS view live in the RENDERER's tables directly
-// (HostRenderer::geom_create_view_ex / import_external_allocation /
-// geom_draw_primitives), not in the TensorBridge's: the bridge's point draw
-// only takes a built-in colormap id, and a categorical palette needs its own
-// 256-entry LUT, which the renderer seam accepts. Every such resource is
-// released through the renderer by view removal or caliper_live_views_shutdown,
+// A POINTS view draws through the scene core and the graphics layer
+// (live_points.h): its payload buffers are imports of the layer, each made by one
+// import_buffer call whose route sets the view's path label, and every such
+// resource goes back to the layer by view removal or caliper_live_views_shutdown,
 // which embed_core.cpp calls while the renderer is still alive. HEATMAP and
 // IMAGE views are embed v1.2 TensorViews (core->views, same name); this file
 // only adds the typed bookkeeping around them.
@@ -17,8 +15,10 @@
 
 #include "caliper/live_views.h"
 #include "embed/embed_core.h"
+#include "gfx/gfx.h"
 #include "live/live_source.h"   // PayloadMap
 #include "scene/camera_defaults.h"   // the 3-D views' default camera
+#include "scene/scene.h"             // kPalette
 
 #include <imgui.h>
 
@@ -65,18 +65,20 @@ struct Look {
 };
 
 // ---- points --------------------------------------------------------------
-// One renderer import of an MTLBuffer, shared by every payload of the view
-// that lives in the same buffer (a shm segment holds all slots of a view in one
-// buffer; the window transport may use one buffer per slot). Refcounted by the
-// payloads that use it; released when the last one retires.
+// One import of the graphics layer. An MTLBuffer is imported in place and shared
+// by every payload of the view that lives in the same buffer up to the end of
+// its window (a shm segment holds all slots of a view in one buffer; the window
+// transport may use one buffer per slot); host memory is copied. Refcounted by
+// the payloads that use it; released to the layer when the last one retires,
+// and the layer frees it once the last frame that read it completed.
 struct Import {
-    void*    buf = nullptr;       // id<MTLBuffer> (cache key; kept alive by the import)
-    uint64_t rid = 0;             // renderer import id
-    uint64_t bytes = 0;           // imported length (the whole buffer)
-    void*    owned = nullptr;     // +1 buffer we made for a CPU payload (released after rid)
+    void*    key = nullptr;       // the MTLBuffer of an in-place import (cache key); null for a copy
+    caliper_gfx::Buffer buffer;   // the layer's buffer
+    uint64_t bytes = 0;           // imported length, from byte 0 of the handle
+    caliper_gfx::Route route = caliper_gfx::Route::Refused;
+    const uint8_t* cpu = nullptr; // its CPU view at byte 0 (the layer's mapping), or null
     int      refs = 0;
-    // A CPU payload the renderer copied with import_host_allocation: our own
-    // copy of the bytes, the CPU view hover reads.
+    // A copy the layer maps nothing for (a browser): our own copy of the bytes, the CPU view hover reads.
     std::vector<uint8_t> host;
 };
 
@@ -88,7 +90,17 @@ struct PointsPayload {
     const uint8_t* pos_cpu = nullptr;   // CPU view of the positions (NULL: no hover)
     const uint8_t* aux_cpu = nullptr;   // CPU view of aux (NULL: hover shows no value)
     uint64_t       n = 0;
-    void*          last_draw = nullptr; // +1 handle on the last frame that drew it
+    caliper_gfx::Serial last_draw = 0;  // the layer's submit of the last frame that drew it (0: none)
+};
+
+class PointsScene;
+// What a points view draws through: the layer's backend, owned or the renderer's, and the scene.
+// Without a backend the view shows `notice` instead.
+struct PointsHolder {
+    std::unique_ptr<caliper_gfx::Backend> gfx;   // owned; null when the view borrows the renderer's
+    std::unique_ptr<PointsScene> scene;
+    std::string notice;
+    ~PointsHolder();
 };
 
 // What a person did in a view, for the host's event sink (set_event_sink):
@@ -124,21 +136,14 @@ struct Gesture {
 // azimuth kCamAz and elevation kCamEl (radians; the eye at target + dist *
 // (cos el cos az, sin el, cos el sin az)), at the distance that fits the
 // data's bounding sphere into the narrower field of view with kCamFit to
-// spare, for the box's labels. The rotate tool turns the azimuth at
-// kRotateRate radians a second.
+// spare, for the box's labels. The points view's camera is the scene core's
+// orbit (live_points.h), which a fit returns to this view. The rotate tool
+// turns the azimuth at kRotateRate radians a second.
 constexpr float kCamAz = (float)caliper_scene::kDefaultAzimuth;
 constexpr float kCamEl = (float)caliper_scene::kDefaultElevation;
 constexpr float kCamFit = (float)caliper_scene::kDefaultFitMargin;
 static_assert(kCamAz == 0.95f && kCamEl == 0.42f && kCamFit == 1.15f, "the points view's camera as before");
 constexpr float kRotateRate = 0.35f;
-
-struct Camera {
-    // 3-D orbit around (tx,ty,tz); 2-D: centre (tx,ty), half height half_h.
-    float tx = 0.0f, ty = 0.0f, tz = 0.0f;
-    float dist = 3.0f, az = kCamAz, el = kCamEl;
-    float radius = 1.0f;
-    float half_h = 1.0f;
-};
 
 struct View {
     std::string name;
@@ -166,7 +171,10 @@ struct View {
     std::vector<uint8_t> tex_copy;
 
     // POINTS.
-    uint64_t    view_rid = 0;                 // renderer id of the render target
+    std::shared_ptr<PointsHolder> points;     // its scene and the layer it draws through
+    bool        content_dirty = true;         // the scene's batches need setting again
+    uint64_t    content_sel = 0, content_updates = 0;   // the selection and update the batches show
+    uint32_t    ground = 0;                   // the plot's clear colour the batches were set with
     int         tex_w = 0, tex_h = 0;
     std::vector<std::unique_ptr<Import>> imports;
     PointsPayload cur;
@@ -178,7 +186,6 @@ struct View {
     bool        has_bbox = false;
     float       bbox[6] = {};                 // xmin,xmax,ymin,ymax,zmin,zmax (stats)
     bool        fit_pending = true;
-    Camera      cam;
     // 3-D: turning slowly about the up axis (the header's rotate tool, off
     // until pressed; any drag stops it), and the depth cues (nearer points
     // larger, farther points dimmer; on unless set_toggle "depth" turns them
@@ -351,17 +358,21 @@ bool set_payload_map(CaliperCore* core, const char* name, const caliper_live::Pa
 bool stage_host(CaliperCore* core, View& v, const void* bytes, uint64_t len, Import** out,
                 const uint8_t** cpu, std::string* why);
 void drop_payload(CaliperCore* core, View& v, PointsPayload& p);
+// The points view's scene and the layer it draws through, made on first use; null with *why (may
+// be null) where no backend of the layer can start, and the view's notice says why.
+PointsScene* points_scene(CaliperCore* core, View& v, std::string* why);
 void  poll_handles(CaliperCore* core, View& v);   // retire done handles (non-blocking)
-void  fit_points(View& v, float aspect);          // camera from bbox (stats or CPU scan)
+void  fit_points(View& v, float aspect);          // the scene core's fit to the scene's bounds
 
 // live_views_draw.cpp
 void draw_view(CaliperCore* core, CaliperLiveViewsState* S, View& v);
 // The text of a view's header after its name ("1,000 points  3-D  10 classes"), as the header draws it.
 std::string info_text(const CaliperCore* core, const View& v);
-// Column-major matrices for the current camera (also used by hover).
-void camera_matrices(const View& v, float aspect, float view16[16], float proj16[16]);
-// The fixed 16-colour categorical palette (r | g<<8 | b<<16 | a<<24).
-extern const uint32_t kPalette[16];
+// The f32 clip-from-world matrix of a points view's camera at its render target's size, as the
+// draws get it from the scene core (hover, lasso and the browser's self-check project with it).
+bool points_mvp(const View& v, float out[16]);
+// The fixed 16-colour categorical palette (r | g<<8 | b<<16 | a<<24), the scene core's.
+using caliper_scene::kPalette;
 // The side in physical pixels of the square a points view draws per point.
 float point_size_px(uint64_t n, float scale);
 

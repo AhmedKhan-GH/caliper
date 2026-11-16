@@ -29,40 +29,6 @@ SceneHolder::~SceneHolder() {
 
 namespace {
 
-// The layer's backend for a new scene view and the backend's table of programs. On Metal each
-// scene view owns a backend of its own on the renderer's device and queue, so that its submits are
-// ordered with the renderer's frame by commit order and its statistics (the info line's GPU time,
-// the frame's encode time) are its own. In a browser the view borrows the WebGPU renderer's
-// backend, which a module instance's views share (an element mounts one view per instance).
-bool make_backend(CaliperCore* core, SceneHolder* h, caliper_gfx::Backend** out,
-                  const caliper_gfx::ProgramDesc** programs) {
-    caliper_host::HostRenderer* r = core->renderer.get();
-#if defined(__EMSCRIPTEN__)
-    if (caliper_gfx::Backend* b = r ? static_cast<caliper_host::WebGpuRenderer*>(r)->gfx() : nullptr) {
-        *out = b;
-        *programs = caliper_gfx::shaders::kWebgpuPrograms;
-        return true;
-    }
-    h->notice = "scenes need the graphics layer's WebGPU backend, which has not started";
-#elif defined(__APPLE__)
-    if (r && r->native_device() && r->native_queue()) {
-        h->gfx = caliper_gfx::make_metal_backend(r->native_device(), r->native_queue());
-        if (h->gfx) {
-            *out = h->gfx.get();
-            *programs = caliper_gfx::shaders::kMetalPrograms;
-            return true;
-        }
-    }
-    h->notice = "scenes need the Metal renderer";
-#else
-    (void)r;
-    h->notice = "scenes need the Metal renderer or a browser with WebGPU";
-#endif
-    (void)out;
-    (void)programs;
-    return false;
-}
-
 CaliperLiveViewsState* views_state(CaliperCore* core) {
     if (!core->live_views) core->live_views = new CaliperLiveViewsState();
     return core->live_views;
@@ -74,6 +40,37 @@ View* find_scene(CaliperCore* core, const std::string& name) {
 }
 
 }  // namespace
+
+bool open_layer(CaliperCore* core, const char* what, std::unique_ptr<caliper_gfx::Backend>* owned,
+                caliper_gfx::Backend** out, const caliper_gfx::ProgramDesc** programs, std::string* notice) {
+    caliper_host::HostRenderer* r = core ? core->renderer.get() : nullptr;
+#if defined(__EMSCRIPTEN__)
+    (void)owned;
+    if (caliper_gfx::Backend* b = r ? static_cast<caliper_host::WebGpuRenderer*>(r)->gfx() : nullptr) {
+        *out = b;
+        *programs = caliper_gfx::shaders::kWebgpuPrograms;
+        return true;
+    }
+    *notice = std::string(what) + " need the graphics layer's WebGPU backend, which has not started";
+#elif defined(__APPLE__)
+    if (r && r->native_device() && r->native_queue()) {
+        *owned = caliper_gfx::make_metal_backend(r->native_device(), r->native_queue());
+        if (*owned) {
+            *out = owned->get();
+            *programs = caliper_gfx::shaders::kMetalPrograms;
+            return true;
+        }
+    }
+    *notice = std::string(what) + " need the Metal renderer";
+#else
+    (void)r;
+    (void)owned;
+    *notice = std::string(what) + " need the Metal renderer or a browser with WebGPU";
+#endif
+    (void)out;
+    (void)programs;
+    return false;
+}
 
 bool scene_open(CaliperCore* core, const std::string& name, const caliper_net::wire::SceneView& info,
                 std::string* why) {
@@ -104,7 +101,7 @@ bool scene_open(CaliperCore* core, const std::string& name, const caliper_net::w
         auto h = std::make_shared<SceneHolder>();
         caliper_gfx::Backend* gfx = nullptr;
         const caliper_gfx::ProgramDesc* programs = nullptr;
-        if (make_backend(core, h.get(), &gfx, &programs)) {
+        if (open_layer(core, "scenes", &h->gfx, &gfx, &programs, &h->notice)) {
             h->view = std::make_unique<SceneView>(*gfx, programs);
             std::string err;
             if (!h->view->init(&err)) {
