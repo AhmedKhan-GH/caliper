@@ -21,7 +21,7 @@ Not built: timelines and stamps, the parts `arrows`, `boxes`, `image` and `camer
 
 ## The capability
 
-A viewer announces `scenes` in HELLO when it draws scenes, and a producer and a hub announce it in WELCOME when they send them. A producer lists a view of kind 6 in VIEWS, and sends SCENE_UPDATE and SCENE_CLEAR, only to a peer that announced `scenes`; a SUBSCRIBE to a scene from another peer is answered with `unknown_view`. A hub announces `scenes` to the producers that connect to it.
+A viewer announces `scenes` in HELLO when it draws scenes, and a producer and a hub announce it in WELCOME when they send them. A producer lists a view of kind 6 in VIEWS, and sends SCENE_UPDATE and SCENE_CLEAR, only to a peer that announced `scenes`; a SUBSCRIBE to a scene from another peer is answered with `unknown_view`. A hub announces `scenes` to the producers that connect to it. The key `static` of SCENE_UPDATE and SCENE_CLEAR comes with `scenes` alone, since a scene's state needs it while no timeline is built.
 
 ## The kind scene
 
