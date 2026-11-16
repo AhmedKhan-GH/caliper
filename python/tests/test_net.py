@@ -1369,3 +1369,37 @@ def test_calls_spread_in_a_step_share_a_tick(server, device):
             return ring.counters["taken"] - n0, ring.counters["ticks"] - k0
     taken, ticks = run(go())
     assert ticks >= 25 and taken >= 2 * ticks - 2, (taken, ticks)
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_view_subscribed_while_a_series_ticks_alone(server, device):
+    """A view not called for a while is subscribed while a watched series, called
+    first in each step, opens and closes ticks on its own; the view is then
+    served from its next steps on. Each step is longer than a tick, so every
+    series call opens one: a view called after the series used to be shut out
+    of the ring by those ticks for good."""
+    H = torch.randn(32, 32, device=device)
+    loss = torch.zeros((), device=device)
+
+    def series_only():
+        time.sleep(0.02)
+        caliper.series(loss + 1, name="loss")
+
+    def step():
+        series_only()
+        caliper.show(H, name="h")
+
+    async def go():
+        async with Client(server) as c:
+            step()                                       # both views exist
+            await c.subscribe(1, "loss", pump=series_only)
+            end = time.perf_counter() + 1.3              # h is not called: it goes stale
+            while time.perf_counter() < end:
+                series_only()
+            await c.subscribe(2, "h", pump=series_only)
+            n0 = server.ring.views["h"].seq
+            for _ in range(15):
+                step()
+            return server.ring.views["h"].seq - n0
+    served = run(go())
+    assert served >= 10, served
