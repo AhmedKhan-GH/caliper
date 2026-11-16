@@ -7,10 +7,9 @@ reject. This page explains what each role is for, what each costs, how each can 
 data goes, what each may do, and when the widget agent hands a request to the chat.
 
 !!! note "Status"
-    Neither the side chat nor the widget agent's inline prompt is built yet. What exists today are the parts underneath
-    them: the ACP client that runs an agent, Caliper's own agent `caliper-agent`, the store that keeps your key, and the
-    command layer they act through. They are tested without the app's panes, which come once the parts are wired into
-    the app. The designs are in ACP integration (`design/acp-integration.md`),
+    The widget agent's inline prompt works on the app's spec page ([Widget agent](../references/widget-agent.md)). The
+    side chat is built as a component and tested with a stub agent, but is not yet on the app's page
+    ([Side chat](../references/side-chat.md)). The designs are in ACP integration (`design/acp-integration.md`),
     Widget agent (`design/widget-agent.md`) and Widget agent sidecar (`design/byok-agent.md`).
 
 ## What the two have in common

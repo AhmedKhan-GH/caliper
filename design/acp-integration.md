@@ -10,8 +10,10 @@ whatever model it supports, local models included, and Caliper never handles its
 protocol and the agents offered on 15 November 2026, the design of the side chat, and what is built on this branch.
 
 **Built on this branch:** the client library `caliper_builder_acp` (a subprocess helper, a JSON-RPC peer and
-`AcpClient`), a stub agent for tests, the headless tool `caliper-acp-harness`, and their tests. **Planned:** the side
-chat itself, its wiring to the command layer, and everything listed under [what waits](#what-is-built-and-what-waits).
+`AcpClient`), a stub agent for tests, the headless tool `caliper-acp-harness`, and their tests; and the side chat as a
+host component (`src/host/builder/side_chat.h`) with its capture tool `caliper-chat-shot`, not yet connected to the
+app's page ([The side chat as built](#the-side-chat-as-built)). **Planned:** the side chat in the app and everything
+listed under [what waits](#what-is-built-and-what-waits).
 The earlier proposal is the "Agent integration" section of the [applet builder](applet-builder.md) page.
 
 ## The protocol on 15 November 2026
@@ -322,8 +324,10 @@ side chat                    agent ── starts ──► caliper-mcp ── Ca
 
 ### Turns, permission prompts and spec diffs
 
-There are two kinds of approval, and the side chat shows both as the same card: a title, a diff when there is one, and one
-button per option.
+There are two kinds of approval, and both show a change the same way: a title, the compact diff of
+`src/host/builder/diff_card.h` when there is one, and one button per option. The agent's own requests are cards in the
+side chat; command approvals are cards on the approval cards' strip, which the side chat points to (see
+[One card for one change](#approvals-and-diffs-for-every-agent)).
 
 1. **ACP permission requests** come from the agent's own tools, such as a file edit. The card shows the tool call's
    diff and the agent's options, and the side chat answers with `respond_permission()`. An `allow_always` option is offered
@@ -375,9 +379,12 @@ a second prompt for the same change. It now reads `review.status` once per turn 
 Caliper does not ask itself: with the app reviewing its spec edits and holding its destructive commands, it sends no
 permission request and no dry run for them, and the call waits in Caliper until the person decides there. Against an
 app without `review.status`, it asks as before. The side chat follows the same rule: command approvals come from the
-command layer and permission requests from the agent's own tools, and the pane, which is not built yet, will show both
-as one kind of card; the command approvals' cards are built (below). An agent that asks before a Caliper command it is about to send would make two cards for one
-change, so the side chat's opening prompt, planned with the pane, will ask it not to.
+command layer and permission requests from the agent's own tools. As built, the two are not one kind of card in the
+pane: the agent's own permission request is a card in the conversation, drawn with the compact diff that the inline
+surface and the approval cards use, and a command approval is decided on the approval cards' strip, where the
+conversation shows one row that points to it (the command and "waiting"), so that no change has two cards. An agent
+that asks before a Caliper command it is about to send would make two cards for one change, so the side chat's opening
+context asks it not to (`chat_opening_block()`).
 
 The app's API server serves the command endpoints and holds a call from `agent` or `mcp` while the person decides,
 and the app shows each pending approval as a card, so an outside agent's change over MCP waits in the app for the
@@ -441,27 +448,31 @@ Decided while building them:
 What remains: the side chat's own cards for the permission requests of an agent's tools, beside these, and the review
 setting per origin in its settings.
 
+The side chat mirrors its agent's pending approvals as rows in the conversation that point to these cards, so that no change has two cards.
+
 What the command layer cannot enforce is an agent's own file and shell tools, which act outside Caliper. The agent's
 own permission settings govern them (Claude Code's and Codex's modes, Gemini CLI's modes, opencode's `permissions`
 rules), and the side chat shows the agent's mode and warns about modes that skip permission, as [Risks](#risks) says.
 
 ### Cancellation
 
-The Stop button calls `cancel()`. The client sends `session/cancel`, answers every open permission request as
+Cancel, which takes the place of Send in the input row while a turn runs, calls `cancel()`. The client sends `session/cancel`, answers every open permission request as
 cancelled (each card disappears through a `permission_withdrawn` event), and waits for the turn to end. An agent that
-does not end the turn within 10 seconds gets a synthetic end with `acp.cancel_unanswered`, and the side chat offers to stop
-the agent. A cancelled turn that the agent answers with an error is shown as cancelled, as the protocol intends.
+does not end the turn within 10 seconds gets a synthetic end with `acp.cancel_unanswered`, and the side chat offers
+Restart in its header, which stops the agent and starts a new one. A cancelled turn that the agent answers with an error is shown as cancelled, as the protocol intends.
 
 ### Crashes and hangs
 
 - **A crash** produces `turn_ended` with `acp.agent_exited` and then `agent_exited` with the exit status. The side chat shows
-  the status and the tail of the agent's stderr, and offers to restart, which starts a new process and a new session;
+  the status and the last line of the agent's stderr, elided to one line, and offers Restart in its header, which starts a new process and a new session;
   `session/load` can restore history later for agents that support it.
 - **A hang** is a turn with no message for two minutes, not counting the time a permission card waits for the user. The
-  client reports it once as `stalled`, and the side chat offers Stop and Stop the agent. There is no fixed time limit for a
+  client reports it once as `stalled`, and the side chat shows STALLED with Cancel in the input row and Restart in the
+  header. There is no fixed time limit for a
   turn, since long turns are normal.
 - **Bad messages** (malformed lines, oversized messages, unknown response ids, wrong nesting) are dropped and reported
-  as `protocol_fault` events, which the side chat lists under diagnostics, not in the chat.
+  as `protocol_fault` events, which the side chat counts in a FAULTS chip in its header and lists behind it, not in the
+  conversation.
 - **Limits:** 8 MiB per message, nesting depth 128, 64 MiB of unsent output, 1024 calls in flight, 20,000 queued
   events (chunks are dropped first, and the drop is reported) and 64 KiB of stderr.
 - **Shutdown** closes the agent's input, waits up to a second for it to exit, then sends SIGTERM to its process group
@@ -489,10 +500,13 @@ reasons:
 | `gemini` | Gemini CLI | `gemini --acp` | `gemini`, then choose a sign-in method |
 | `opencode` | opencode | `opencode acp` | `opencode auth login`; none for a local model |
 
-These are the agents that Caliper detects. The first three rows are `known_agents()` in `caliper_builder/acp/agents.h`
-today, and adding `opencode` there is a work item. Any other ACP agent is added by its command in the settings, as a
-custom agent. A custom agent is one command line, split into
-words as a POSIX shell would split them but run without a shell, plus optional variable names to pass. The agent
+These are the agents that Caliper detects, the four rows of `known_agents()` in `caliper_builder/acp/agents.h`. The side
+chat finds one by looking for its commands on PATH, without running anything: Claude Code needs `npx` and `claude`,
+Codex `npx` and `codex`, Gemini CLI `gemini` and opencode `opencode`. **Decision:** an adapter's preset also needs the
+agent's own command, since `npx` alone says nothing about the agent being installed or logged in. Any other ACP agent is
+added by its command in the settings, as a custom agent. A custom agent is one command line, split into
+words as a POSIX shell would split them but run without a shell; the optional variable names to pass are not built,
+since the agent inherits the app's environment. The agent
 command and its variables live in the app's own settings, never in a workspace, because a workspace from elsewhere
 must not be able to choose a program to run. The MCP server handed to the agent is always the `caliper-mcp` that
 ships with the app, given by absolute path, never one named by workspace files.
@@ -523,7 +537,7 @@ and [FAQ](https://docs.ollama.com/faq) pages:
    Select one with `"model": "ollama/<model>"` in the person's global `~/.config/opencode/opencode.jsonc` rather than in
    the workspace, for the reason under [Risks](#risks). For an Ollama server elsewhere, opencode takes its
    OpenAI-compatible URL, with `/v1`, in `providers.ollama.settings.baseURL`.
-5. In Caliper, choose the `opencode` preset, or until it exists add `opencode acp` as a custom agent, and mark the agent
+5. In Caliper, choose the `opencode` preset (or add `opencode acp` as a custom agent), and mark the agent
    as running on a local model, so that the side chat shows a note while a training run is live
    ([Widget agent](widget-agent.md#gpu-contention) gives the reasons and the advice).
 6. Review opencode's `permissions`, and add the `external_directory` rule above to be asked before it leaves the
@@ -562,6 +576,54 @@ Nothing of the preview was applied, and the widget agent's preview is dropped wh
 chat's agent makes the change through commands, under the approvals above, and the side chat shows the whole prompt
 as the person's message. `AcpClient::prompt_blocks()` sends such blocks today, and `AgentInfo` holds the agent's
 prompt capabilities from `initialize`.
+
+As built, the handoff is not sent by itself: `chat_handoff_draft()` makes a draft of the request and these blocks, and
+`SideChat::open_handoff()` puts it into the input, with one chip per block (context, spec, source, render,
+conversation, preview diff, ids), for the person to send or clear. The blocks are shaped for the agent when the message
+is sent, after the agent has started and declared its capabilities, and the request goes last, since the bundle's first
+block says that only the request says what to do. **Decision:** a draft rather than a sent prompt, so that the person
+sees and may edit what goes to their own agent.
+
+### The side chat as built
+
+`src/host/builder/side_chat.h` holds the pane as a component in the pattern of the inline surface: a state machine
+(`SideChat`), the layout as plain rectangles (`layout_chat_column()` and `layout_chat_pane()`), and its ImGui side
+(`draw()`). It is not connected to the app's page yet; the page owns one `SideChat`, calls `update()` each frame,
+claims the right column's lower part with `layout_chat_column()`, and calls `draw()` with that rectangle.
+
+- **States.** No agent, idle, starting, ready, running (with a stalled flag), cancelling, needs login, exited and
+  failed. The header shows the state as a tag (STARTING, RUNNING, STALLED, STOPPING, LOGIN, EXITED, FAILED, NO AGENT),
+  the agent's name, its version from `agentInfo` and its mode, the mode in bronze when it skips permission
+  (`bypassPermissions`, `yolo`, `agent-full-access`).
+- **Starting.** **Decision:** the agent starts when the person sends the first message, not when the pane opens, so
+  the pane opens quietly; the message waits for the session. `start()` and `session/new` run on a worker thread, and
+  shutting a client down runs on another, so the frame thread never waits for an agent.
+- **The conversation.** The person's messages with the chips of a draft; the agent's text, streamed into one message;
+  its thoughts as one line, which a click opens; its tool calls as rows with a status mark, the command's name for a
+  Caliper tool (recognised from the names the agents give MCP tools, such as `mcp__caliper__panel_create`), the title
+  and the status in a word; its plan as rows; its permission requests as cards with the file, the compact diff for a
+  `*.spec.toml` (a new panel's primitive and title first, then its other keys and every other change) or the unified
+  diff for any other file, Diff for the full diff, and one button per option, `allow_always` only when the setting
+  allows it; a row for each command approval of the turn; and the stop reason in a word (DONE, STOPPED, DECLINED,
+  LIMIT, FAILED).
+- **Login.** When `session/new` answers that the agent needs a login, the pane shows LOGIN with the agent's own login
+  methods and the commands of the preset's hint, and Restart; it never asks for a key and runs no login flow.
+- **No agent.** The four agents by name with the programs looked for, and one action, Custom command.
+- **The input.** One line, more with Shift or Command and Enter, up to six; Enter sends; the agent picker beside it
+  lists the agents by name, NOT FOUND for those not on PATH, and Custom command.
+- **The layout.** The right column is 28 % of the window's width with a minimum of 300 points that grows with the text
+  scale; with Selection or Properties open above it, the chat takes 55 % of the column's height with a minimum of 220
+  points, and the upper part gives way first. In the pane, the mode, then the version, then the agent's name in the
+  header, then the picker's name, then the buttons' keys collapse as it narrows, and the FAULTS chip and then the state's
+  tag give way to the header's buttons.
+- **The opening context.** Before a session's first message the chat sends `chat_opening_block()`, a block for the
+  assistant that asks the agent to change specs through the caliper tools and not to ask before a Caliper command.
+- **The environment.** **Decision:** detection and the launch use a PATH that the app gives
+  (`ChatEnvironment::path`), the app's own when it gives none; reading the login shell's environment for an app
+  started from the Finder is not built.
+- **Captures.** `caliper-chat-shot` draws a dashboard with the spec runtime beside the pane on the offscreen canvas,
+  runs a session, Caliper API's server with the session's command gateway and an API file, and drives the chat with
+  `caliper_chat_stub_agent`, a test agent named "Stub agent" that calls Caliper through the `caliper-mcp` it is handed.
 
 ## The manual check with a real agent
 
@@ -613,19 +675,24 @@ Built on this branch, in `src/builder/acp/` and `src/builder/include/caliper_bui
 - Tests: the peer over in-process pipes, the subprocess helper, the client against every stub script, and the harness
   end to end (ctest `builder_acp` and `builder_acp_harness`).
 
+In `src/host/builder/`: the side chat (`side_chat.h`) as [built](#the-side-chat-as-built), with `opencode` in
+`known_agents()`, `caliper-chat-shot`, `caliper_chat_stub_agent` and their tests (ctest `caliper_side_chat`, headless,
+and `caliper_side_chat_gpu`, the capture scenario as a process).
+
 Waiting for later work:
 
-- The side chat itself, its cards and diagnostics, after sprint 2 merges.
-- The side chat's cards for its agent's permission requests (its command approvals are the app's approval cards), the
-  review setting per origin in its settings, and the opening prompt.
-- `opencode` in `known_agents()`, the setting that marks an agent as running on a local model, and the warning when a
-  workspace holds an opencode configuration.
-- Receiving a handoff from the widget agent, with the bundle shaped by the agent's prompt capabilities.
+- The side chat on the app's page: the Chat toggle in the page bar, the settings that hold the chosen agent and the
+  custom command, and Caliper API started for it, since `caliper-mcp` needs the API file.
+- The review setting per origin in the side chat's settings, and running the spec validator on an agent's own edit of a
+  spec file before the person answers.
+- The setting that marks an agent as running on a local model, with the note while a run is live, and the warning when
+  a workspace holds an opencode configuration.
+- The packaging of `caliper-mcp` beside the app's executable; a development build finds it in its build tree.
 - `session/load`, `session/resume`, modes and config options in the side chat, images in prompts, and version 2.
 - The Windows implementation of `Process`.
 - The environment of a GUI app: an app started from the Finder does not inherit the user's shell `PATH`, so `npx` or
-  `gemini` may not be found. One answer is to read the login shell's environment once; Caliper will decide when it
-  builds the side chat.
+  `gemini` may not be found. The side chat takes the PATH the app gives it; reading the login shell's environment once
+  is one answer, not built.
 - Reading the agent registry at runtime instead of the fixed presets.
 
 ## Decisions
@@ -649,6 +716,13 @@ Waiting for later work:
   local models included, with no Caliper code for any of them; opencode on Ollama is the worked example.
 - **Four detected agents and a custom command.** Claude Code, Codex, Gemini CLI and opencode have presets; any other
   agent is added by its command.
+- **Detection by the agent's own command,** without running anything: an adapter's preset needs `npx` and the agent.
+- **The agent starts with the first message,** so the pane opens quietly.
+- **The handoff is a draft** the person sends, never a prompt sent by itself.
+- **One card for one change in the pane:** the agent's own permission requests are cards in the conversation, command
+  approvals are decided on the approval cards' strip and shown as one row each.
+- **Restart in one place,** the header, for a stalled, exited, failed or logged-out agent and for a cancel that was
+  never answered.
 - **Review of spec edits in the command layer,** with the diff attached to the pending approval, so that no agent can
   skip it.
 - **One kind of approval card for every agent,** in a strip above the jobs tray on every page, with the REVIEW mark on
