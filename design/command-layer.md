@@ -485,7 +485,6 @@ These were found in the review of sprint 3's first pull request and left for a l
 - **Approvals from `api` never expire.** An `api` caller does not wait, so its approvals stay until the person decides, and many of them could fill the 64 pending slots so that agents get `command.too_many_pending`. A long expiry for approvals nobody waits for, and a share of the slots for each origin, would bound it.
 - **A command can join another's undo step.** A group joins the top step whatever its origin and whether it is still open, so an agent that sends a preview's id as its group after an Accept appends its command to the person's step. A group should join only the open top step of the same origin, and the step of a commit should close after its follow-ups.
 - **A timing test of the stand-in's server.** The connection-bound test of `test_command_server.cpp` still waits 300 ms for the first connection to take the slot. The approval test of that file now decides its held calls when they are parked, rather than inside a 400 ms window.
-- **The sidecar's tools.** `caliper-agent` should leave out every command whose `agents` is false, as `caliper-mcp` does.
 
 ## Open questions
 
