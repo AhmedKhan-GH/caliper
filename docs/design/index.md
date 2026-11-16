@@ -1,6 +1,8 @@
-# Plans
+# Design
 
-Plans describe work that is not built yet. The [roadmap](roadmap.md) is the one place for order and status; each other page here is a technical proposal that the roadmap points to. When a proposal is built, its content moves into the guides, references and explanations, and the proposal page is deleted.
+The pages in this section are proposals for work that is not built yet. The rest of the site, the tutorials, guides, references and explanations, describes what Caliper is and does today; this section describes only what it may become.
+
+The [roadmap](roadmap.md) is the one place for order and status. Each other page here is a technical proposal that the roadmap points to. When a proposal is built, its content moves into the guides, references and explanations, and the proposal page is deleted, so that nothing built is described only here.
 
 | Page | Proposal |
 |---|---|
