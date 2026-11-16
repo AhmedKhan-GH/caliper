@@ -332,6 +332,19 @@ TEST_CASE("builder app: only a link of the browser viewer on loopback goes to th
     std::string why;
     CHECK_FALSE(caliper_host::open_in_default_browser("file:///etc/hosts", &why));
     CHECK(why == "not a link of the browser viewer");
+    // The applet a link names is a workspace's applet id: a lower-case letter,
+    // then lower-case letters, digits, _ or -, 64 at most; never . or ..
+    using caliper_host::viewer_applet_id;
+    CHECK(viewer_applet_id("training-run"));
+    CHECK(viewer_applet_id("a_1"));
+    CHECK(viewer_applet_id(std::string(64, 'a')));
+    const std::vector<std::string> bad_ids = {".", "..", "", "Run", "1run", "-run", "run.42", "run/42",
+                                              std::string(65, 'a')};
+    for (const std::string& bad : bad_ids) {
+        CHECK_FALSE_MESSAGE(viewer_applet_id(bad), bad);
+        CHECK_FALSE_MESSAGE(viewer_link_openable("http://127.0.0.1:7341/v0/spec?token=abc&applet=" + bad), bad);
+    }
+    CHECK_FALSE(viewer_link_openable("http://127.0.0.1:7341/v0/spec?token=abc&applet=run&applet=.."));
 }
 
 // Home from a dashboard just made and saved: the landing selects that

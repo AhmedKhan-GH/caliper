@@ -26,8 +26,35 @@ bool viewer_link_openable(const std::string& url) {
     while (i < url.size() && std::isdigit((unsigned char)url[i])) ++i;
     if (i == digits || i - digits > 5) return false;
     if (url.compare(i, 9, "/v0/spec?") != 0) return false;
-    for (const char c : url)
-        if (!std::isalnum((unsigned char)c) && !std::strchr(":/?=&._-", c)) return false;
+    // The query: the token, then at most one applet, and nothing else.
+    std::string query = url.substr(i + 9), token, applet;
+    bool has_applet = false;
+    while (!query.empty()) {
+        const size_t amp = query.find('&');
+        const std::string part = query.substr(0, amp);
+        query = amp == std::string::npos ? std::string() : query.substr(amp + 1);
+        if (part.rfind("token=", 0) == 0 && token.empty()) {
+            token = part.substr(6);
+            if (token.empty()) return false;
+            for (const char c : token)
+                if (!std::isalnum((unsigned char)c) && c != '_' && c != '-') return false;
+        } else if (part.rfind("applet=", 0) == 0 && !has_applet) {
+            has_applet = true;
+            applet = part.substr(7);
+        } else {
+            return false;
+        }
+        if (amp == std::string::npos) break;
+    }
+    return !token.empty() && (!has_applet || viewer_applet_id(applet));
+}
+
+bool viewer_applet_id(const std::string& id) {
+    // The workspace's rule for an applet id, the spec format's: a lower-case
+    // letter, then at most 63 lower-case letters, digits, _ or -.
+    if (id.empty() || id.size() > 64 || id[0] < 'a' || id[0] > 'z') return false;
+    for (const char c : id)
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) return false;
     return true;
 }
 

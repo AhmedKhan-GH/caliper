@@ -14,8 +14,15 @@
 
 namespace caliper_host {
 
-// True for a link of the browser viewer on loopback (see above).
+// True for a link of the browser viewer on loopback (see above): its query
+// is the token, of [A-Za-z0-9_-], and at most one applet, which
+// viewer_applet_id() takes, and nothing else.
 bool viewer_link_openable(const std::string& url);
+
+// True for an id a link of the viewer may name, by the workspace's rule for
+// an applet id (the spec format's): a lower-case letter, then at most 63
+// lower-case letters, digits, _ or -. So never "." or "..".
+bool viewer_applet_id(const std::string& id);
 
 // Opens `url` in the default browser; false, with the reason, when the link
 // is not one viewer_link_openable() takes or the browser cannot be started.
