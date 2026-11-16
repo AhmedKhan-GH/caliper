@@ -12,7 +12,9 @@ Built:
 - the command handlers that edit a spec (`spec.*`, `source.*`, `panel.*`, `layout.*`), in the builder session ([Builder session](builder-session.md));
 - the first slice of the spec runtime in `src/host/spec_runtime/`, which draws a spec's panels natively from the data the session resolves, with its development harness `caliper-spec-shot` and the renderer behind `panel.render`, described in [The spec runtime](#the-spec-runtime).
 
-Planned: the loader's knowledge of the `kind = "spec"` manifest and the page of the app that shows a spec applet, which call the runtime; the data of `live:`, `feed:` and `metric:` sources in the runtime; and the runtime in the web viewer that reads the canonical JSON.
+The loader knows the spec applet's manifest (item 5 of the integration order in [Builder overview](builder-overview.md)): the manifest parser reads `kind = "spec"` without the builder, the loader lists spec applets from the search folders, their subfolders and the open workspace's `applets/` folder, and with the builder it validates a spec applet's spec through this library ([The manifest of a spec applet](#the-manifest-of-a-spec-applet)). The command handlers that edit a spec are built in the session ([Builder session](builder-session.md)).
+
+Planned: the page of the app that shows a spec applet, which calls the runtime; the data of `live:`, `feed:` and `metric:` sources in the runtime; and the runtime in the web viewer that reads the canonical JSON.
 
 ## Two examples
 
@@ -428,13 +430,25 @@ spec = "attention-entropy.spec.toml"
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `applet.kind` | string | No | `"library"` (the default, today's compiled applets) or `"spec"`. |
-| `applet.spec` | string | Yes, for `kind = "spec"` | The spec's file name, `<id>.spec.toml`, in the same folder. It is a file name only, with no `/`, `\` or `..`. |
+| `applet.kind` | string | No | `"library"` (the default, today's compiled applets) or `"spec"`. Any other value is a manifest error. |
+| `applet.spec` | string | Yes, for `kind = "spec"` | The spec's file name, `<id>.spec.toml`, in the same folder. It is a plain file name: not empty, not `.` or `..`, at most 255 bytes, with no `/`, `\`, `:` or control character. |
 
-- `[compat].abi_epoch` is not required for a spec applet and is not written, because there is no binary to check. `[compat].torch`, `[build]` and `[services]` do not apply either. `[compat].min_host` still applies.
-- The manifest's `applet.id` keeps the manifest's grammar (`[a-z0-9.-]`, dot-separated), which has no `_`. `applet.save` writes `local.<id>`, with each `_` of the workspace id replaced by `-`, unless the caller names another id; it refuses an id that another applet of the workspace already has.
+- `[compat].abi_epoch` is not required for a spec applet and is not written, because there is no binary to check. The loader refuses it as a manifest error, and likewise `[compat].torch`, `[build]`, `[services]` and `[data]`, so that a library's manifest with `kind = "spec"` added by mistake is never taken for a spec applet. `[compat].min_host` still applies. `[data].schema` has no meaning for a spec applet, which keeps no data of its own: the host gives it no data folder.
+- The manifest's `applet.id` keeps the manifest's grammar (`[a-z0-9.-]`, dot-separated), which has no `_`. `applet.save` writes `local.<id>`, with each `_` of the workspace id replaced by `-`, unless the caller names another id; it refuses an id that another applet of the workspace already has. The loader never compares the folder's name with the manifest id.
 - `applet.save` writes `name` from the spec's `applet.title` (or its id), `summary` from `applet.description` when that is one line of at most 200 characters, and `version = "0.1.0"` for a new applet.
-- The loader learns this kind after sprint 2 merges. Until then, a host lists such a folder as a failed applet, because it finds no library.
+- The spec names the format version it needs with `caliper_spec`. When it lists the applet, the loader reads that line without parsing the TOML and refuses a version it does not read.
+
+### The spec applet in the loader
+
+Built in `src/host/applet_manifest.*`, `src/host/applet_loader.*` and `src/host/applet_spec.*`, with Manifest, Refusal messages and Caliper CLI (`docs/references/manifest.md`, `docs/references/refusals.md`, `docs/references/cli.md`) as the reference:
+
+- The manifest parser reads `kind` and builds without the builder. The loader lists a spec applet with the statuses of a compiled one and chooses one copy per manifest id by the same rule, whatever the kind. It never maps or calls anything for it, and gives it no data folder.
+- A spec applet is found in the folders of the search order, as a manifest directly in a searched folder or one folder down (`<folder>/<name>/<stem>.caliper.toml`, as a workspace keeps them), and in the open workspace's `applets/` folder, which the loader is told with `AppletLoader::set_workspace` and which `applet_search_dirs` places after the development folders and before the user applets folder. The workspace's folder holds spec applets only: a compiled applet's manifest there is refused and its library never opened.
+- Listing is cheap: the manifest (at most 64 KiB and no dotted key of more than 32 parts, one folder down or in the workspace), the spec file (a regular file in the manifest's folder, not a symbolic link, at most 512 KiB), its `caliper_spec` line, `min_host`, the spec runtime and the format version.
+- With the builder (`CALIPER_WITH_BUILDER`), `caliper_host_lib` links `caliper_builder_spec`, and `AppletLoader::check_spec` reads the spec again, parses it with `parse_toml`, validates it with `validate` and locates every diagnostic; the first error becomes the applet's reason. `read_spec_file` in `applet_spec.h` returns the parsed spec for the app. Without the builder every spec applet is refused with the reason that the build has no spec runtime.
+- `launch()` on a spec applet validates it and returns false, leaving a valid one `READY` with a recognisable reason until the app opens its page instead.
+- `caliper list` and `caliper check` print each applet's kind, `caliper check` validates a spec applet fully and prints the validator's diagnostics with their lines and columns, `caliper install` refuses a spec applet, and `GET /v0/applets` has a `kind` field.
+- A test saves an applet through a `Session` and lists it through the loader, which accepts what `applet.save` writes unchanged.
 
 ## Limits
 
@@ -521,11 +535,16 @@ The schema test reads the schema through a test-only checker, `tests/schema_chec
 - **The resolver describes catalog ids only,** which keeps the spec module free of the catalog and of DuckDB; the columns of a `sql` result are left to the command layer.
 - **A patch cannot change an id,** because bindings and the layout name it; a rename is a separate command, not in v0.
 - **The spec applet's manifest omits `abi_epoch`,** because a spec has no binary, and its id keeps the manifest's grammar, which has no `_`.
+- **The keys of a library are errors in a spec applet's manifest,** not ignored, so that a mistaken `kind` never makes a library's manifest a spec applet.
+- **The loader reads the version line, not the TOML, when it lists a spec applet,** so listing never parses a spec; the full parse and validation run at launch and in `caliper check`.
+- **No symbolic link for a spec,** wherever it points: a plain file name keeps the spec in its folder, and refusing every link is simpler than resolving one.
+- **A workspace holds spec applets only,** because a workspace is data that anyone may hand to a person; compiled applets run only from folders a person installs into or names.
+- **The workspace's folder comes after the development folders and before the user applets folder,** so a development build named on the command line wins a tie, and the open workspace's copy wins a tie with an installed one.
 
 ## Defects in the contracts
 
 - Section 6 allows a table named `x` "at any level", but `x` is also a slot of `series` and `points`. The fix: `bind` has no extension table.
 - Section 6 lets a split hold several children with one `ratio`, without saying what the ratio means for more than two. The fix: `ratio` is allowed only with exactly two children.
 - Section 2 gives workspace applet ids an `_`, which a manifest id may not hold. The fix: `applet.save` maps `_` to `-` and refuses a clash.
-- The manifest's `[compat].abi_epoch` is required today, which a spec applet cannot meet. The fix: the loader will not require it for `kind = "spec"`.
+- The manifest's `[compat].abi_epoch` was required, which a spec applet cannot meet. The fix, built: the loader does not require it for `kind = "spec"`, and refuses it there.
 - A `sql` source runs in the browser by one of two routes: the query runs where the data lives and the result is streamed, which is the default of version 0, or it runs in the page with DuckDB-WASM, which is the later path. Neither route is built yet.
