@@ -25,12 +25,44 @@ Caliper starts the agent as a child process and speaks ACP version 1 on its stan
 | `--api-file <path>` | Caliper API's file, which gives the loopback address and the session token |
 | `--command-table <path>` | The command table as JSON |
 | `--widget-scopes <path>` | The scope rule below; by default `widget_scopes.json` beside the command table. Without it, widget sessions are refused |
+| `--preset <id>` | A provider preset, which fills the provider and the base URL (below) |
 | `--provider claude\|openai-compatible`, `--base-url <url>`, `--model <id>`, `--effort <level>` | Where model requests go, and the defaults of a session in the general role |
 | `--cache-dir <path>` | The folder of the capability cache that `caliper-agent probe` writes; the agent reads its answer for the model at start |
 | `--model-tools yes\|no`, `--model-vision yes\|no`, `--context-length <tokens>` | What the model can do, when Caliper knows it; each wins over the cache |
 
 The Claude API key reaches the agent in `ANTHROPIC_API_KEY`, and a key for an OpenAI-compatible server in
 `CALIPER_MODEL_API_KEY`, never in its arguments. `-I` keeps the workspace folder off Python's import path.
+
+### Presets
+
+The presets are one table, `presets.json` in the agent's package, which Caliper's key store reads too:
+
+| Id | Preset | Base URL | Key |
+|---|---|---|---|
+| `anthropic` | Claude | `https://api.anthropic.com`, fixed | Required, in `ANTHROPIC_API_KEY` |
+| `openai` | OpenAI | `https://api.openai.com/v1` | Required, in `CALIPER_MODEL_API_KEY` |
+| `gemini` | Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | Required, in `CALIPER_MODEL_API_KEY` |
+| `openrouter` | OpenRouter | `https://openrouter.ai/api/v1` | Required, in `CALIPER_MODEL_API_KEY` |
+| `ollama` | Ollama | `http://localhost:11434/v1`, or another host with `--base-url` | None |
+| `lmstudio` | LM Studio | `http://localhost:1234/v1`, or another host with `--base-url` | None |
+| `custom` | Custom | `--base-url`, required | Optional, in `CALIPER_MODEL_API_KEY` |
+
+The model is always the person's choice. The Claude, OpenAI, Gemini and OpenRouter presets take no other base URL, so
+a preset's key only goes to that preset's host. A base URL must be an http or https address without a user name,
+password, query or fragment; anything else makes the agent exit with 2. The answer to `initialize` names the choice,
+with what the pane should warn about:
+
+```json
+{"_meta": {"caliper": {"provider": {"preset": "lmstudio", "api": "openai-compatible",
+  "base_url": "http://192.0.2.10:1234/v1", "host": "192.0.2.10", "loopback": false,
+  "warnings": [{"code": "remote_host", "message": "..."}, {"code": "unencrypted", "message": "..."}]}}}}
+```
+
+`remote_host` is given for a local preset or a Custom entry on a host that is not loopback, since prompts and
+workspace data then leave the machine, and `unencrypted` for plain http to such a host.
+
+Besides the key itself, the agent scrubs from everything it writes any text shaped like a Claude API key (`sk-ant-`),
+an OpenRouter key (`sk-or-v1-` and 64 hexadecimal digits) or a Google API key (`AIza` and 35 characters).
 
 With `CALIPER_AGENT_OFFLINE=1`, which every test of the repository sets, the agent reaches no model server off
 loopback: it answers `session/new` and `session/prompt` with an error whose `data.code` is `agent.offline` unless it runs
@@ -42,8 +74,7 @@ a scripted model, a stubbed transport or a server on a loopback address.
 it when the person picks a model:
 
 ```sh
-<python> -I -m caliper_agent probe --provider openai-compatible --base-url http://localhost:11434/v1 \
-    --model <id> --cache-dir <settings folder>
+<python> -I -m caliper_agent probe --preset ollama --model <id> --cache-dir <settings folder>
 ```
 
 For an OpenAI-compatible server it lists the server's models, makes one streamed request that asks the model to call a
@@ -53,6 +84,7 @@ and makes no request that costs tokens. The key comes from the environment, as f
 
 | Option | Meaning |
 |---|---|
+| `--preset <id>`, `--provider`, `--base-url` | The provider, as for the agent |
 | `--cache-dir <path>` | Keep the answer in `model-capabilities.json` in this folder, and answer from it while it is fresh (30 days) |
 | `--refresh` | Probe again even when the cache has a fresh answer |
 | `--list-models` | Only list the server's models, with no test request |

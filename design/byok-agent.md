@@ -58,6 +58,7 @@ path, so a file such as `json.py` in a workspace would run as code.
 |---|---|
 | `--api-file <path>` | Caliper API's file; default `api.json` in `CALIPER_DATA_DIR`, else in the app-data folder of the OS |
 | `--command-table <path>` | The descriptor table as JSON; default a copy beside the package, else the repository's `src/builder/commands/command_table.json` |
+| `--preset <id>` | A provider preset of `caliper_agent/presets.json` (`anthropic`, `openai`, `gemini`, `openrouter`, `ollama`, `lmstudio`, `custom`), which fills the provider and the base URL ([Widget agent](widget-agent.md#presets)) |
 | `--provider <name>` | `claude` (the default), the Claude API, or `openai-compatible`, a server at `--base-url` |
 | `--base-url <url>` | The OpenAI-compatible server, such as `http://127.0.0.1:11434/v1` for Ollama |
 | `--model <id>` | The model of new sessions; default `claude-opus-5-5` on the Claude API, required for an OpenAI-compatible server |
@@ -493,7 +494,8 @@ could later clear them without editing the history. `--no-compaction` turns comp
 7. **On the wire.** The SDK (2.x) sends it in the `Authorization` header of requests to `api.anthropic.com` only.
 8. **Never written out.** Every line the sidecar writes to the client, every stderr line, every log record and every
    exception report passes through the scrubber, which replaces the key, Caliper API's session token and anything
-   shaped like an Anthropic key with `[redacted]`. Tool output given to the model is scrubbed too. Errors from the
+   shaped like a Claude, OpenRouter or Google API key with `[redacted]`
+   ([Widget agent](widget-agent.md#presets) says where each shape was read). Tool output given to the model is scrubbed too. Errors from the
    API are reduced to their message and scrubbed. The key is never in a file, a spec, the journal, a session update or
    a command line.
 9. **At the end.** The key goes with the sidecar's process. The C++ store overwrites the strings it held when a key
@@ -515,9 +517,13 @@ test calls the Keychain store, because touching the login keychain can show a sy
 and covered by the manual check. Error codes: `keystore.bad_provider`, `keystore.bad_key`, `keystore.not_found`,
 `keystore.unsupported`, `keystore.failed`; no error quotes a key.
 
-The store already takes a provider id, and the Keychain item's account is that id. It knows one provider today,
-`anthropic`. With the presets of the [Widget agent](widget-agent.md#presets) page it gains one id per preset, so each
-provider that needs a key has an entry of its own; that change is a work item.
+The store takes a provider id, and the Keychain item's account is that id, so each provider that needs a key has an
+item of its own: the presets `anthropic`, `openai`, `gemini` and `openrouter`, and a Custom entry's `custom-` account
+(`custom_key_account()`). The ids come from `caliper_agent/presets.json`, embedded at build time, which the sidecar
+reads too. `ollama` and `lmstudio` take no key (`keystore.no_key_needed`), and `place_key_in_environment()` places none
+for them; it puts the Claude key in `ANTHROPIC_API_KEY` and any other in `CALIPER_MODEL_API_KEY`, and removes the other
+variable and every redirecting one ([Widget agent](widget-agent.md#presets)). Error codes add
+`keystore.no_key_needed`.
 
 ## Checked against the protocol's schema
 
@@ -734,6 +740,9 @@ A fake Caliper API runs on loopback in the test process, and a fake OpenAI-compa
   overrides and with bad usage; and the sidecar's use of the cache (a refused session, vision and the context length in
   the session and the request, options over overrides over a fresh probe, a stale entry ignored).
 - `tests/test_offline.py`: the offline switch (Security notes above).
+- `tests/test_presets.py`: `presets.json` against both tables of the Widget agent page, the Custom account, hostile base
+  URLs, the choices of preset, provider and base URL with their warnings, every documented key shape scrubbed, and
+  `--preset` on the sidecar (with `initialize`'s `_meta.caliper.provider`) and on the probe.
 - `tests/test_inprocess.py`: the turn in process with Pydantic AI's `TestModel`, which calls tools with arguments made
   from their schemas, and with `FunctionModel`, which checks that a context block goes with the prompt and never into
   the system prompt.
@@ -774,8 +783,9 @@ A fake Caliper API runs on loopback in the test process, and a fake OpenAI-compa
   permission request of its own, that the completed edits' diffs chain from the new spec to the fixture's canonical
   text, that the applet saved on disk equals the fixture, that every journal line comes from the origin `agent` and
   that no dry run was journaled, that each step was one model request, and that the key appears nowhere.
-- `tests/test_key_store.cpp` (doctest): the memory store, the checks of providers and keys, the placement in a
-  child's environment, and that no error quotes a key.
+- `tests/test_key_store.cpp` (doctest): the memory store with one key per provider, the presets table, the Custom
+  account, the checks of providers and keys, the placement of each provider's key in a child's environment and of none
+  for a local server, the offline switch passed through, and that no error quotes a key.
 - `tests/manual_local_model.py`: not a test of the suite, but the manual run against a local model server described
   [above](#one-run-on-a-local-model); it starts no server and pulls no model.
 
@@ -846,7 +856,8 @@ Built on this branch:
   depending on `pydantic-ai-slim[anthropic]` (2.68 up to the next major), `anthropic` 2.x and `openai` 3.x, with
   `pytest` and `agent-client-protocol` as test extras.
 - The key store: `src/builder/include/caliper_builder/agent/key_store.h`, `src/builder/agent/key_store.cpp` and
-  `keychain_store_macos.cpp`.
+  `keychain_store_macos.cpp`, with one key per provider, and the presets in `caliper_agent/presets.json`
+  (`presets.py`).
 - Widget sessions (`widget.py`, the widget prompt, the `handoff` toolset), with the scope rule in
   `src/builder/commands/widget_scopes.json`.
 - The tests listed above, and the ctest entries `builder_agent`, `builder_agent_py`, `builder_agent_e2e` and
@@ -859,7 +870,7 @@ Waiting for later work:
 - The settings: the presets, the key field for each provider and its remove control, the model and effort pickers
   from the config options, and status lines from `_meta.caliper.status`.
 - On top of the provider layer: passing the chosen provider, base URL and key from the app when it starts the
-  sidecar, and running `caliper-agent probe` from the settings; one key per provider in `KeyStore`.
+  sidecar, and running `caliper-agent probe` from the settings.
 - Server-side refusal fallbacks, once Pydantic AI keeps the reply's `fallback` block ([Refusals](#refusals)).
 - Spawning the sidecar from the app with the key store, and a packaged Python runtime with a lock file.
 - The Windows Credential Manager store, with one entry per provider.

@@ -11,7 +11,8 @@ loop, the Claude settings, the key handling and the tests on that page are built
 on top of them. The person's side is in Agent roles (`docs/explanations/agent-roles.md`) and
 Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`).
 
-**Built on this branch:** the sidecar, its tests and the key store, which that page lists; stacked previews in the
+**Built on this branch:** the sidecar, its tests and the key store, which that page lists; the presets as data with one
+key per provider in the key store (item 17, [Presets](#presets)); stacked previews in the
 session ([below](#preview-and-apply-on-the-command-layer)); the `_meta` argument of `AcpClient::new_session()` that
 carries the widget session's fields; widget sessions in the sidecar (item 12): the target, the tool scope from one
 rule kept as data, the preview header, the widget system prompt, images and embedded context in prompts, the turn
@@ -435,6 +436,19 @@ The widget agent's settings offer presets, each of which fills the base URL; the
 where needed, enters a key. The sidecar reaches every preset today, from its command line; the settings that offer
 them are planned.
 
+**Built: the presets as data.** The table below is one file, `src/builder/agent/caliper_agent/presets.json`, which the
+sidecar reads (`caliper_agent/presets.py`, `--preset <id>`) and the key store embeds at build time, so both know the
+same ids, base URLs and key variables; a test keeps the file and both tables of this section equal. The ids are
+`anthropic` (the Claude preset, which keeps the key store's existing id and Keychain account), `openai`, `gemini`,
+`openrouter`, `ollama`, `lmstudio` and `custom`. No preset names a default model: the person picks one, and the Claude
+preset offers the sidecar's four Claude models. The sidecar checks its options as hostile input: the Claude preset's
+base URL is fixed, the hosted presets take no other base URL (so a preset's key only ever goes to that preset's
+documented host; another server is the Custom preset), a local preset may point at another host or port, and every
+base URL must be an http or https address without a user name, password, query or fragment. A local preset or a
+Custom entry on a host that is not loopback is reported with a `remote_host` warning, and plain http to such a host
+with an `unencrypted` warning, in `initialize`'s `_meta.caliper.provider`, on stderr and in the probe's output, for
+the pane to show.
+
 | Preset | Base URL | Key |
 |---|---|---|
 | Claude | The native Claude API, `https://api.anthropic.com`, fixed in code as today | A Claude API key |
@@ -471,10 +485,26 @@ services and servers that the Custom preset reaches; none was run for this page.
 **Keys.** Each preset that needs a key has its own entry in the operating system's credential store: on macOS a
 Keychain item of the service `caliper.agent-keys` with the preset's id as the account, as the Claude key is stored
 today. A Custom entry's account is `custom-` followed by the first 12 hexadecimal digits of the SHA-256 of its base
-URL. `KeyStore` already takes a provider id and knows only `anthropic`, so it gains the presets' ids. Each key reaches
+URL. Each key reaches
 the sidecar only in its environment at spawn, the variables that could send a request elsewhere or add a credential are
 removed at spawn and again at start, and the scrubber covers every key, as for Claude today. Local servers need no key,
 so none is stored or sent.
+
+**Built: one key per provider.** `KeyStore` takes the presets' ids that need a key (`anthropic`, `openai`, `gemini`,
+`openrouter`) and a Custom entry's `custom-` account (`custom_key_account()`, which takes the base URL without trailing
+slashes; the sidecar computes the same, and a test in each language pins one value); it refuses a key for `ollama` and
+`lmstudio` with `keystore.no_key_needed`, and still has no function that returns a key for display.
+`place_key_in_environment()` puts the Claude key in `ANTHROPIC_API_KEY` and every OpenAI-compatible key in
+`CALIPER_MODEL_API_KEY`, the variables the sidecar reads, and removes the other one and every variable that could
+redirect the child; for a local server, and for a Custom entry without a key, it places none. The variable is the one
+the sidecar reads rather than the OpenAI SDK's own `OPENAI_API_KEY`, which the sidecar removes at start so that an
+OpenAI key can never reach another server. The Keychain store makes
+one item per provider (its account is the id), and the Windows store stays a stub. **Scrubbing:** besides the exact key,
+the scrubber replaces every key shape that a provider's own documentation shows, read on 16 November 2026: `sk-ant-`
+for Claude, `sk-or-v1-` with 64 lowercase hexadecimal digits (OpenRouter's authentication page), and `AIza` with 35
+more characters for a Google API key, which the Gemini preset takes (the example key on Google Cloud's API keys page).
+OpenAI's API reference refused an automated read and its quickstart shows only a placeholder, so no OpenAI shape was
+added; its key is still scrubbed exactly.
 
 ### Capabilities and degradations
 
@@ -690,7 +720,7 @@ and L six to ten; each figure is rough.
 | 14 | In part: the inline surface on a panel, the prompt, the preview drawn in place, Accept, Reject and Refine, Ask in chat handed to the page, and the agent over `AcpClient`. Left: the selection, dropped-file and property entry points, connecting the surface in the app's page, and the packaging of `caliper-agent` and a Python runtime | M, 4 days |
 | 15 | Adopted: Pydantic AI as the provider layer, with the Claude and OpenAI-compatible providers built in the sidecar. What remains is passing the chosen provider, base URL and key from the app when it starts the sidecar; widget sessions (12) and the probe (16) build on it | S, 1 day |
 | 16 | Done: the capability probe and its cache, with the override (`caliper-agent probe`) | None left |
-| 17 | The presets and one key per provider in the settings, with `KeyStore` knowing the presets' ids | M, 3 days |
+| 17 | The presets and one key per provider in the settings. Done: the presets as data, `KeyStore` with one key per provider, the sidecar's `--preset` and its checks and warnings, and the scrubbing of every documented key shape. Left: the settings pane | S, 1 day |
 | 18 | The provider conformance suite, its stubs and its reference page | M, 4 days |
 | 19 | The GPU contention note | S, 1 day |
 

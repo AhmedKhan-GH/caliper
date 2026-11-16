@@ -17,8 +17,9 @@ again. [Agent roles](../explanations/agent-roles.md) explains how the widget age
 
 ## Choose a provider
 
-The widget agent's settings offer presets, each of which fills in the address of the model's API. Only Claude can be
-chosen in the settings today; the agent itself already works with the others, and the settings for them are planned.
+The widget agent's settings offer presets, each of which fills in the address of the model's API. The settings are
+planned; the agent itself already takes every preset, with `--preset`, and Caliper's key store already keeps one key
+for each provider that needs one.
 
 | Preset | Key | Status |
 |---|---|---|
@@ -48,7 +49,8 @@ Keep the key to yourself. Anyone who has it can make requests that your account 
 
 Caliper keeps the key in the macOS Keychain, as an item of the service `caliper.agent-keys` that can be read only while
 your Mac is unlocked and is never synchronised to your other devices. Each provider that needs a key gets an item of
-its own. Caliper does not write the key to a file, a log, the workspace or the journal. When it starts the agent, it
+its own, named after the preset (`anthropic` for Claude, `openai`, `gemini`, `openrouter`); a Custom server's item is
+named after its address. Ollama and LM Studio need no key, so none is kept for them. Caliper does not write the key to a file, a log, the workspace or the journal. When it starts the agent, it
 gives the key to the agent in its environment, and the agent sends it only to the provider's API.
 
 ## Pick a model
