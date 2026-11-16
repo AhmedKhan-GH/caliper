@@ -286,6 +286,8 @@ The layer's tests run in three suites:
   Further rows run the generated index clamp as a dispatch and make every generated program's pipelines.
   `CALIPER_GFX_CAPTURE_DIR` writes PNG captures of the rows, and `CALIPER_GFX_LAYER_BENCH=1` runs a row that times
   the CPU encoding of 1,000 draws a frame on both backends.
+- `web/test/wasm.spec.ts` runs the WebGPU backend in headless Chromium, on SwiftShader and on the machine's GPU, each
+  with a default and a compatibility-mode device ([Testing](testing.md)).
 
 ## The scene core
 
@@ -352,5 +354,3 @@ Its tests run in two suites:
   item that the picker decodes. `CALIPER_GFX_CAPTURE_DIR` writes the captures `first-scene-points.png` and
   `first-scene-surface.png`, and `CALIPER_GFX_SCENE_BENCH=1` runs a row that reports the compile time and the
   layer's encode time of the surface scene and of a scene of 1,000 entities.
-- `web/test/wasm.spec.ts` runs the WebGPU backend in headless Chromium, on SwiftShader and on the machine's GPU, each
-  with a default and a compatibility-mode device ([Testing](testing.md)).
