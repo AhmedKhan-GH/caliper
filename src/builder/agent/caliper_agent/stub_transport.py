@@ -23,6 +23,11 @@ API's response shape; a tool_use block may give "raw_input", the exact JSON
 text to stream instead of its "input".
 
 A request to any host other than the Claude API's is refused and recorded.
+
+`GET /v1/models` and `GET /v1/models/<id>` (the Models API, which the
+capability probe reads) are answered from the script's `"models"`, a list of
+model objects in the API's shape (`id`, `display_name`, `max_input_tokens`,
+`capabilities`, ...), with the required fields filled in; they take no step.
 """
 
 from __future__ import annotations
@@ -122,10 +127,27 @@ class StubTransport(httpx2.AsyncBaseTransport):
     def __init__(self, script: dict) -> None:
         self._steps = list(script.get("steps", []))
         self._record = script.get("record")
+        self._script_models = [m for m in script.get("models", []) if isinstance(m, dict)]
         self._lock = threading.Lock()
         self.requests: list[dict] = []
         self.hosts: list[str] = []
         self.backoff_scale = float(script.get("backoff_scale", 1.0))
+
+    def _models(self, path: str) -> httpx2.Response:
+        def full(m: dict) -> dict:
+            return {"type": "model", "created_at": "2026-01-01T00:00:00Z", "display_name": m.get("id", ""),
+                    "lifecycle": "active", **m}
+        models = [full(m) for m in self._script_models]
+        if path.rstrip("/") == "/v1/models":
+            return httpx2.Response(200, json={"data": models, "has_more": False,
+                                              "first_id": models[0]["id"] if models else None,
+                                              "last_id": models[-1]["id"] if models else None})
+        wanted = path[len("/v1/models/"):]
+        for m in models:
+            if m.get("id") == wanted:
+                return httpx2.Response(200, json=m)
+        return httpx2.Response(404, json={"type": "error", "error": {"type": "not_found_error",
+                                                                     "message": f"model: {wanted}"}})
 
     def _log(self, entry: dict) -> None:
         self.requests.append(entry)
@@ -149,6 +171,8 @@ class StubTransport(httpx2.AsyncBaseTransport):
         self._log(entry)
         if host != API_HOST:
             raise httpx2.ConnectError(f"The stub transport refuses the host {host}.", request=request)
+        if request.method == "GET" and request.url.path.startswith("/v1/models"):
+            return self._models(request.url.path)
         if not self._steps:
             return httpx2.Response(500, json={"type": "error", "error": {"type": "api_error",
                                                                           "message": "The stub script has no more steps."}})

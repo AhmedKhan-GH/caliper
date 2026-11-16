@@ -20,7 +20,7 @@ import time
 import pytest
 
 from conftest import AGENT_DIR, FAKE_KEY, AgentProcess, message_text
-from test_openai_compat import FakeOpenAI
+from fake_openai import FakeOpenAI
 
 
 class ProxyTrap:

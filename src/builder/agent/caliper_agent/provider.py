@@ -29,10 +29,25 @@ class Settings:
 @dataclass
 class Capabilities:
     """What a model can do, as far as the sidecar knows. A provider may learn
-    more from the server's answers and lower these for the rest of the sidecar."""
+    more from the server's answers and lower these for the rest of the sidecar.
+
+    `context_length` is the model's context length in tokens, None when it is
+    not known; `sources` says where each answer came from (option, override,
+    probe, server, known, default, observed), for `session/new`'s answer."""
 
     tools: bool = True
     vision: bool = True
+    context_length: int | None = None
+    sources: dict = field(default_factory=dict)
+
+    def as_meta(self, model: str) -> dict:
+        """The `_meta.caliper.model` of `session/new`'s answer."""
+        return {"id": model, "tools": self.tools, "vision": self.vision, "context_length": self.context_length,
+                "sources": {"tools": self.sources.get("tools", "default"),
+                            "vision": self.sources.get("vision", "default"),
+                            "context_length": self.sources.get("context_length",
+                                                               "unknown" if self.context_length is None
+                                                               else "default")}}
 
 
 class AgentError(Exception):

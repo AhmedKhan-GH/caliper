@@ -7,7 +7,10 @@ Methods served (ACP version 1, agent side):
   login method (the key comes from the app).
 - `session/new`: a session with its own history, model, effort and review
   setting, offered to the pane as config options (`model`, `effort` for the
-  Claude API, `review`). The `mcpServers` of the request are not started: this
+  Claude API, `review`). The answer's `_meta.caliper.model` says what the
+  sidecar assumes of the model (tool calling, vision, the context length and
+  where each came from), so the app can size the context bundle; a model
+  known to have no tool calling refuses the session with `agent.no_tools`. The `mcpServers` of the request are not started: this
   agent reaches Caliper through Caliper API itself. With
   `_meta.caliper.widget` the session is a widget session (widget.py): one
   target, a tool scope and the app's preview, the widget system prompt, the
@@ -207,13 +210,25 @@ class Agent:
         model, effort = self._default_model, self._default_effort
         if widget is not None and self._claude:
             model, effort = WIDGET_CLAUDE_MODEL, WIDGET_CLAUDE_EFFORT
+        caliper_meta: dict = {}
+        if self._provider is not None:
+            caps = self._provider.capabilities(model)
+            if not caps.tools:
+                # A model without tool calling cannot drive Caliper: no session
+                # is made, and the reason is one the pane can show.
+                raise RpcError(INVALID_PARAMS, f"The model {model} cannot call tools, so it cannot drive Caliper. "
+                                               "Choose a model that supports tool calling.",
+                               {"code": "agent.no_tools", "model": model, "capability": "tools",
+                                "source": caps.sources.get("tools", "default"), "retryable": False})
+            caliper_meta["model"] = caps.as_meta(model)
         state = SessionState(id=sid, cwd=cwd.rstrip("/") or "/", settings=Settings(model=model, effort=effort),
                              widget=widget)
         self._sessions[sid] = Session(state)
         result: dict = {"sessionId": sid, "configOptions": self._config_options(state)}
         if widget is not None:
-            result["_meta"] = {"caliper": {"widget": {"target": widget.target, "scope": list(widget.scope),
-                                                      "preview": widget.preview}}}
+            caliper_meta["widget"] = {"target": widget.target, "scope": list(widget.scope), "preview": widget.preview}
+        if caliper_meta:
+            result["_meta"] = {"caliper": caliper_meta}
         return result
 
     def _set_config_option(self, params: Any) -> dict:

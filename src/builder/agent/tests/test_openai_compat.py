@@ -11,86 +11,11 @@ leaves the machine and no key is used.
 from __future__ import annotations
 
 import json
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
 from conftest import AgentProcess, message_text, statuses
-
-
-class FakeOpenAI:
-    """POST /v1/chat/completions, streamed. Replies are taken in order."""
-
-    def __init__(self, replies: list[dict], *, refuse_tools: bool = False, refuse_images: bool = False) -> None:
-        self.replies = list(replies)
-        self.refuse_tools = refuse_tools
-        self.refuse_images = refuse_images
-        self.requests: list[dict] = []
-        self.headers: list[dict] = []
-        fake = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *args):
-                pass
-
-            def _json(self, status: int, doc: dict) -> None:
-                body = json.dumps(doc).encode()
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-            def do_POST(self):
-                length = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(length))
-                fake.requests.append(body)
-                fake.headers.append({k.lower(): v for k, v in self.headers.items()})
-                if self.path != "/v1/chat/completions":
-                    self._json(404, {"error": {"message": "not found"}})
-                    return
-                if fake.refuse_tools and body.get("tools"):
-                    self._json(400, {"error": {"message": "fake-model does not support tools",
-                                               "type": "invalid_request_error"}})
-                    return
-                if fake.refuse_images and "image_url" in json.dumps(body.get("messages")):
-                    self._json(400, {"error": {"message": "image input is not supported by this model",
-                                               "type": "invalid_request_error"}})
-                    return
-                reply = fake.replies.pop(0) if fake.replies else {"text": "(no more replies)"}
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.end_headers()
-                for chunk in fake.chunks(reply, body.get("model", "")):
-                    self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
-                self.wfile.write(b"data: [DONE]\n\n")
-
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.base_url = f"http://127.0.0.1:{self.server.server_address[1]}/v1"
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-
-    @staticmethod
-    def chunks(reply: dict, model: str) -> list[dict]:
-        def chunk(delta: dict, finish: str | None = None) -> dict:
-            return {"id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 0, "model": model,
-                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
-        out = [chunk({"role": "assistant"})]
-        if "text" in reply:
-            out += [chunk({"content": reply["text"][i:i + 8]}) for i in range(0, len(reply["text"]), 8)]
-        for n, call in enumerate(reply.get("tool_calls", [])):
-            out.append(chunk({"tool_calls": [{"index": n, "id": call["id"], "type": "function",
-                                              "function": {"name": call["name"], "arguments": ""}}]}))
-            out.append(chunk({"tool_calls": [{"index": n, "function": {"arguments": call["arguments"]}}]}))
-        # Some servers say "stop" even after tool calls; the sidecar runs them anyway.
-        out.append(chunk({}, reply.get("finish", "tool_calls" if reply.get("tool_calls") else "stop")))
-        out.append({"id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 0, "model": model,
-                    "choices": [], "usage": {"prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14}})
-        return out
-
-    def close(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
+from fake_openai import FakeOpenAI
 
 
 @pytest.fixture
@@ -147,10 +72,13 @@ def test_a_server_without_tool_calling_says_it_cannot_drive_caliper(openai_agent
     response, updates = agent.prompt(sid, "Try again")
     assert "cannot drive Caliper" in message_text(updates) and len(server.requests) == 1
 
+    # Known in advance (the probe's answer, or the app's option): no session is made.
     agent, server = openai_agent([{"text": "never"}], "--model-tools", "no")
-    sid = agent.start_session()
-    response, updates = agent.prompt(sid, "Hello")
-    assert "cannot drive Caliper" in message_text(updates) and server.requests == []
+    response, _ = agent.request("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
+    response, _ = agent.request("session/new", {"cwd": "/tmp/caliper-test-workspace", "mcpServers": []})
+    assert response["error"]["data"]["code"] == "agent.no_tools"
+    assert response["error"]["data"]["source"] == "option"
+    assert "cannot drive Caliper" in response["error"]["message"] and server.requests == []
 
 
 def test_a_server_without_vision_gets_the_capture_as_text(openai_agent, caliper):
@@ -190,3 +118,25 @@ def test_a_lenient_server_gets_error_results_it_can_correct(openai_agent, calipe
     # What a server that does not know `strict` was sent.
     strict_sent = [t["function"].get("strict") for t in server.requests[0]["tools"]]
     assert set(strict_sent) <= {True, None}
+
+
+@pytest.mark.parametrize("field", ["reasoning", "reasoning_content", "think_tags"])
+def test_reasoning_in_any_field_becomes_thoughts(openai_agent, field):
+    agent, server = openai_agent([{"text": "Here it is.", "thought": "The user wants a greeting."}], reasoning=field)
+    sid = agent.start_session()
+    response, updates = agent.prompt(sid, "Say something")
+    assert response["result"]["stopReason"] == "end_turn"
+    thoughts = "".join(u["content"]["text"] for u in updates
+                       if u.get("sessionUpdate") == "agent_thought_chunk" and "_meta" not in u)
+    assert "The user wants a greeting." in thoughts
+    assert message_text(updates) == "Here it is."
+
+
+@pytest.mark.parametrize("style", ["whole", "split", "pieces"])
+def test_arguments_streamed_in_any_shape_run_the_call(openai_agent, caliper, style):
+    agent, server = openai_agent([{"tool_calls": [_call("call_1", "catalog_list", '{"kind": "table"}')]},
+                                  {"text": "One table."}], args_style=style)
+    sid = agent.start_session()
+    response, updates = agent.prompt(sid, "What data do I have?")
+    assert response["result"]["stopReason"] == "end_turn"
+    assert [c["args"] for c in caliper.commands("catalog.list")] == [{"kind": "table"}]

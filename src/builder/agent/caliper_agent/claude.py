@@ -35,7 +35,7 @@ retries are off (`max_retries=0`): the loop retries through Pydantic AI's
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 import anthropic
 from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
@@ -71,6 +71,12 @@ MAX_TOKENS = 64000
 COMPACTION = {"edits": [{"type": "compact_20260112"}]}
 
 
+def known_capabilities(context_length: int | None = None, context_source: str = "unknown") -> Capabilities:
+    """What every model of the picker can do, without a probe."""
+    return Capabilities(tools=True, vision=True, context_length=context_length,
+                        sources={"tools": "known", "vision": "known", "context_length": context_source})
+
+
 def model_ids() -> tuple[str, ...]:
     return tuple(m.id for m in MODELS)
 
@@ -101,7 +107,7 @@ class ClaudeProvider:
     default_model = DEFAULT_MODEL
 
     def __init__(self, key: Secret, *, transport: Any = None, compaction: bool = True,
-                 backoff_scale: float = 1.0) -> None:
+                 backoff_scale: float = 1.0, facts: Callable[[str], Capabilities] | None = None) -> None:
         # With CALIPER_AGENT_OFFLINE set, only a stubbed transport may stand in for the API.
         check_provider("claude", stubbed=transport is not None)
         http_client = DefaultAsyncHttpxClient(transport=transport) if transport is not None else None
@@ -116,6 +122,7 @@ class ClaudeProvider:
         self._provider = AnthropicProvider(anthropic_client=self._client)
         self._models: dict[str, AnthropicModel] = {}
         self._compaction = compaction
+        self._facts = facts
         self.backoff_scale = max(0.0, backoff_scale)
         self.extra: dict[str, Any] = {}
 
@@ -128,7 +135,11 @@ class ClaudeProvider:
         return dict(claude_settings(settings.model, settings.effort, compaction=self._compaction))
 
     def capabilities(self, model_id: str) -> Capabilities:
-        return Capabilities(tools=True, vision=True)
+        """Every model in the picker calls tools and reads images; the context
+        length is known once the probe has read the Models API (capabilities.py)."""
+        if self._facts is not None:
+            return self._facts(model_id)
+        return known_capabilities()
 
     def lower(self, model_id: str, *, tools: bool | None = None, vision: bool | None = None) -> None:
         pass  # every model in the picker calls tools and reads images

@@ -238,8 +238,10 @@ class ScriptedProvider:
         return dict(claude_settings(settings.model, settings.effort, compaction=self._compaction))
 
     def capabilities(self, model_id: str) -> Capabilities:
-        return Capabilities(tools=self._state.capabilities.get("tools", True),
-                            vision=self._state.capabilities.get("vision", True))
+        caps = self._state.capabilities
+        return Capabilities(tools=caps.get("tools", True), vision=caps.get("vision", True),
+                            context_length=caps.get("context_length"),
+                            sources={k: "script" for k in ("tools", "vision", "context_length") if k in caps})
 
     def lower(self, model_id: str, *, tools: bool | None = None, vision: bool | None = None) -> None:
         if tools is False:
