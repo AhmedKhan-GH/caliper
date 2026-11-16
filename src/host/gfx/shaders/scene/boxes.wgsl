@@ -51,6 +51,10 @@ fn vs_box_wire(in: BoxIn) -> VOut {
   return o;
 }
 
+// The faces of a filled box are translucent: a quarter of the item's alpha, so that
+// an opaque colour still shows what lies behind them.
+const kFaceAlpha: f32 = 0.25;
+
 // Filled boxes: 6 faces of two triangles, 36 vertices; the first 6 are the face
 // at z = +1, which is all a 2-D box draws. Each normal is an axis vector, so the
 // pose maps it onto a vector parallel to the true normal under any rotation and
@@ -68,6 +72,6 @@ fn vs_box_solid(in: BoxIn) -> VOut {
   o.pos = to_target(p.mvp * (pose * vec4<f32>(on_axis(axis, sgn, q.x * 2.0 - 1.0, q.y), 1.0)));
   var c = item_color(in.color_src);
   if (p.shade_mode == 1u) { c = lambert(c, inst_normal(pose, on_axis(axis, sgn, 0.0, 0.0))); }
-  o.color = c;
+  o.color = vec4<f32>(c.rgb, c.a * kFaceAlpha);
   return o;
 }

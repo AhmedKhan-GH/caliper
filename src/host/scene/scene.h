@@ -197,6 +197,13 @@ struct Batch {
     uint32_t dims() const;                    // 2 or 3, from the positions, origins or centers; 0 for images
 };
 
+// The parts a clear removes (SceneTree::clear).
+inline constexpr uint32_t kClearTransform = 1u << 0;
+inline constexpr uint32_t kClearCamera = 1u << 1;
+inline constexpr uint32_t clear_bit(Primitive p) { return 1u << (1 + int(p)); }
+inline constexpr uint32_t kClearBatches = 0x7eu << 1;   // every primitive
+inline constexpr uint32_t kClearAll = kClearTransform | kClearCamera | kClearBatches;
+
 struct ClassEntry {
     uint32_t id = 0;
     std::string label;
@@ -237,8 +244,10 @@ public:
     bool set_camera(EntityId e, const Pinhole& c, bool static_item = false, std::string* error = nullptr);
     bool set_batch(EntityId e, const Batch& b, bool static_item = false, std::string* error = nullptr);
     // Removes the entity's transform, camera and batches, and with subtree those of its whole
-    // subtree: the stamped layers only, or both layers for a static clear.
-    void clear(EntityId e, bool subtree, bool static_clear = false);
+    // subtree: the stamped layers only, or both layers for a static clear. parts limits the
+    // clear to some parts (kClearTransform, kClearCamera, clear_bit(primitive)), as a SCENE_CLEAR
+    // that names its parts does.
+    void clear(EntityId e, bool subtree, bool static_clear = false, uint32_t parts = kClearAll);
     // Empties the scene: every entity but the root, every part, the class table. Old ids die.
     void reset();
     // The person hides an entity (and its subtree) in the view.
