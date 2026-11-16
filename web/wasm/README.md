@@ -21,7 +21,24 @@ This folder builds Caliper's own view layer (the live views, Dear ImGui and ImPl
 | `test/multi.mjs`, `test/pages/multi.html` | The headless check of several mounts on one page through the loader |
 | `test/cross_origin.mjs` | The headless check of the loader imported from another origin, as a notebook page does |
 
-The view-layer library compiles these shared files unchanged: `src/host/live/live_views.cpp`, `live_views_draw.cpp` and `live_unsupported.cpp`, `src/host/embed/embed_views.cpp` (the embed v1.2 views and the hosted core, split out of `embed_core.cpp`), `src/host/tensor_bridge.cpp` and the WebGPU renderer. It does not compile `embed_core.cpp`, so nothing of the applet loader, the service registry, the job system or the app paths is referenced.
+## What compiles
+
+The module compiles the native app's view code unchanged, so the views in the browser are the app's views. Only the parts that a browser cannot have are left out or stood in for.
+
+| Native files | In the module |
+|---|---|
+| `src/host/live/live_views.cpp`, `live_views_draw.cpp` | Compiled unchanged. The non-Apple block of `live_views.cpp` stands in for `live_views_metal.mm` |
+| `src/host/live/live_unsupported.cpp` | Compiled: the stand-in for the shared-memory attach of `live_core.cpp` and `live_attach.cpp` |
+| `src/host/embed/embed_views.cpp` | Compiled unchanged: the embed v1.2 views and the hosted core (`caliper_core_create_hosted`, `caliper_core_hosted_frame`), split out of `embed_core.cpp` |
+| `src/host/tensor_bridge.cpp` | Compiled unchanged. The heatmap and image views keep the bridge, which colormaps through the renderer's `tex_update_mapped_from_host` when the renderer offers it, as the WebGPU renderer does; native renderers keep the default `false` |
+| `src/host/net/wire.cpp`, `json.cpp` | Compiled unchanged into `caliper_wire`, the codec of wire protocol v3 that the native source and the hub use too |
+| `src/host/ui/sternbild_fonts.cpp`, `sternbild_theme.cpp` | Compiled unchanged: the app's faces and style |
+| `src/host/host_services.cpp` | Replaced by `src/web_services.cpp`, which provides the three functions the views use (`services_set_renderer`, `services_renderer`, `services_bridge`); the real file pulls in DuckDB, the stores and the job system |
+| `embed_core.cpp`, `live_core.cpp`, `live_attach.cpp`, `live_net_source.mm`, `live_session.mm`, `live_client.mm`, `live_views_metal.mm`, `viewer_main.mm` | Not compiled: the applet loader, the services, the jobs and the app paths, the native transports and the macOS viewer shell |
+| `metal_renderer.mm`, `vulkan_renderer.cpp`, `gl_renderer.cpp` | Not compiled. `src/host/renderer/webgpu_renderer.cpp` draws instead |
+| Dear ImGui, ImPlot, `imgui_impl_wgpu` | Compiled unchanged. ImPlot3D, the node editor and the text editor are not compiled |
+
+The module has no GLFW: the renderer draws on the canvas's WebGPU surface, and `src/web_input.cpp` feeds ImGui from the canvas's own listeners.
 
 ## Building
 
@@ -32,6 +49,8 @@ EMSDK=<emsdk> web/wasm/build.sh <build dir>
 ```
 
 The output is `<build dir>/caliper-views.wasm` and its JavaScript glue `<build dir>/caliper-views.js`, an ES module whose default export is `createCaliperViews(moduleArgs)`. `moduleArgs.canvas` is the canvas the instance draws on; every instance looks up only its own canvas, so several instances can share a page. The build was measured with Emscripten 6.0.13. Its first run downloads Emscripten's `emdawnwebgpu` port into the emsdk cache.
+
+The WebGPU binding is that port (`--use-port=emdawnwebgpu`), whose Dawn package each Emscripten release pins; this SDK no longer has the older `-sUSE_WEBGPU` binding. The port provides the standard `webgpu.h`, which Dawn also offers natively, so the same renderer can later serve the native Dawn fallback that the roadmap plans. A browser hands out a WebGPU device only through promises, so `src/main.cpp` requests the adapter and the device with callbacks and starts the frame loop from the device's callback; the module needs neither Asyncify nor JSPI. The Release link runs Closure over the glue, has no file system (`-sFILESYSTEM=0`; the views never open a file) and caps the heap, as [Memory](#memory) describes.
 
 ## Mounting the views on a page
 
@@ -63,7 +82,7 @@ The loader also exports `CALIPER_VIEWS_KINDS`, the one list of the kinds these v
 
 ## Pan, zoom and follow
 
-The views pan and zoom as the element's TypeScript views do, in the browser and in the native app alike, and only the plot area takes a drag, so a floating window in the app moves only by its title bar. A heatmap or image zooms about the pointer with the wheel, pans with a drag and fits again on a double click; magnified so far that a cell covers a physical pixel or more, it is sampled nearest so that cells stay cells, and hover, picks and selections report the cell under the pointer at any zoom. A series or histogram fits its axes to the data every frame while it follows; a drag or the wheel stops it following and keeps the user's view while new values arrive, and a double click follows again. The element's header has the same `log` and `follow` toggles for both renderers: the page sets them with `handle.setToggle(name, on)`, and the loader's `onToggle(name, on)` reports a view that changed one itself. In the browser (a bare view with an event sink), a heatmap or image also takes the element's layout: axes of row and column indices that follow pan and zoom and are labelled with source indices, the dims' names, a colorbar beside a heatmap, a heatmap stretched to the plot area and an image at equal aspect. In the app the cells stay square, between the view's info line and its telemetry bar.
+The views pan and zoom as the element's TypeScript views do, in the browser and in the native app alike, and only the plot area takes a drag, so a floating window in the app moves only by its title bar. A heatmap or image zooms about the pointer with the wheel, pans with a drag and fits again on a double click; magnified so far that a cell covers a physical pixel or more, it is sampled nearest so that cells stay cells, and hover, picks and selections report the cell under the pointer at any zoom. A series or histogram fits its axes to the data every frame while it follows; a drag or the wheel stops it following and keeps the user's view while new values arrive, and a double click follows again. The element's header has the same `log` and `follow` toggles for both renderers: the page sets them with `handle.setToggle(name, on)`, and the loader's `onToggle(name, on)` reports a view that changed one itself. In the browser (a bare view with an event sink), a heatmap or image also takes the element's layout: axes of row and column indices that follow pan and zoom and are labelled with source indices, the dims' names, a colorbar beside a heatmap, a heatmap stretched to the plot area and an image at equal aspect. In the app the cells stay square, between the view's info line and its telemetry bar. The axes' tick labels are the element's 10.5 px mono. ImGui sizes a face by its line height and CSS by its em, and Source Code Pro is 1.257 em from ascent to descent, so the views draw them at 13.2 ImGui px; at 10.5 they came out at about 8 CSS px.
 
 ## Selections, picks and hovers
 
@@ -93,6 +112,16 @@ A notebook page imports the loader from another origin, so each of the three nee
 
 Every listener sits on the instance's own canvas: pointer events with pointer capture for drags, the wheel, keys while the canvas has focus (a click gives it focus) and focus changes. The page keeps a wheel turn or a key only when ImGui does not want it. Each frame the canvas's backing store is sized to its CSS box times the device pixel ratio, so the canvas follows its element and text is rasterised at the screen's density. The views look as they do in the native app: the module embeds the app's faces (IBM Plex Sans Condensed and Source Code Pro, unchanged from `assets/fonts`, both under the SIL Open Font License 1.1) and applies its style with `sternbild::load_fonts_from_memory` and `sternbild::apply_style`.
 
+## Shaders
+
+The renderer's two shaders are written by hand in WGSL, in `src/host/renderer/webgpu_renderer.cpp`: `kColormapWgsl`, the compute shader that colormaps a heatmap, and `kPointsWgsl`, which draws points. They are not translated from the native shaders, because three limits of WebGPU change their design rather than their syntax:
+
+- WebGPU has no push constants, so the parameters that the Vulkan shaders take as push constants are uniform buffers here.
+- WebGPU draws a point as one pixel, so points are instanced quads ([Points](#points)).
+- A vertex stage may read at most eight storage buffers by default, and none in WebGPU's compatibility mode. The native geometry path pulls its vertices from eight storage buffers and a uniform buffer, so it does not carry over as it is; the renderer draws points only and refuses other geometry.
+
+WGSL also has no `isnan`, lets an implementation assume that no NaN or infinity reaches float arithmetic, and allows a division 2.5 ULP of error. The colormap below is built so that none of that changes a byte.
+
 ## The colormap
 
 A heatmap is colormapped on the GPU by a compute shader written in WGSL (`kColormapWgsl` in `src/host/renderer/webgpu_renderer.cpp`), and it gives exactly the bytes of the CPU reference `map_f32_to_rgba8` on every adapter. Recomputing the reference's formula on the GPU did not: WGSL allows a division 2.5 ULP of error and lets an implementation assume that no NaN or infinity reaches float arithmetic, and on Metal a few texels of a large heatmap came out one level away from the reference. The shader therefore does no arithmetic on the value. For each index k from 1 to 255 the CPU finds, by a binary search over the floats that runs the reference itself, the threshold at which the reference first gives index k or more (the last such float for a decreasing range). The reference is monotone in the value, because each IEEE operation in it is, so a value's index is the number of thresholds it has passed, and the shader finds that number with eight exact float comparisons. NaN takes index 0, tested on the bits, and a flat range gives index 0 everywhere, as in the reference. The thresholds change only with the range, and computing them takes about 8,000 evaluations of the reference, well under a millisecond.
@@ -111,6 +140,42 @@ Measured headless (SwiftShader) over 7 minutes of streaming at 60 snapshots per 
 
 A data view change that changes the payload's shape makes the heatmap a new texture, and a resize makes the points a new render target. The renderer destroys a released texture at once and releases its view at the end of the frame: the ImGui backend makes one bind group per texture view while it records a frame and releases them all when the frame is recorded, so nothing released outlives the frame. The module reports what the renderer holds as `textures`, `allocations` and `retiredViews`. Measured headless on the Mac's GPU over 300 data view changes and 300 resizes after a warm-up (`test/wasm.spec.ts`), which made 300 new textures and 300 new render targets: the renderer held 2 textures and 4 buffers before and after, no released view was left waiting, and the bytes in use of the two modules went from 2,545,072 to 2,545,096. The page's JavaScript heap, after a garbage collection, stayed between 3.0 and 3.35 MB over 900 changes, moving by no more than it moves in 18 seconds of streaming without changes.
 
+## Size
+
+Release build, as `python/caliper/_web` ships it:
+
+| File | Raw | gzip -9 | Brotli 11 |
+|---|---|---|---|
+| `caliper-views.wasm` | 1,377,813 B | 596,238 B | 481,507 B |
+| `caliper-views.js` | 32,489 B | 12,764 B | 11,216 B |
+| `caliper-views-loader.js` | 7,415 B | 2,894 B | 2,431 B |
+
+A page therefore transfers about 495 KB of the module with Brotli, once per page however many views it mounts. The module holds about 0.97 MB of code and a 407 KB data segment, of which the two embedded faces take 321 KB (Source Code Pro 210 KB, IBM Plex Sans Condensed 111 KB). Attributed by origin in a relink at `-O1` that keeps function names, where little is inlined across origins, the code is:
+
+| Origin | Share of code |
+|---|---|
+| Dear ImGui | 44% |
+| Caliper | 29%: the wire codec and the source about half, the view layer and the hosted core a quarter, then the renderer, the tensor bridge and the page host |
+| ImPlot | 12% |
+| libc and compiler runtime | 8% |
+| libc++ | 2.5% |
+| emdawnwebgpu (the C side of `webgpu.h`) | 1.6% |
+| stb_truetype | 1.4% |
+| `imgui_impl_wgpu` | 0.6% |
+
+Dear ImGui and ImPlot are more than half of the code, and the faces more than three quarters of the data.
+
+## Frame time
+
+`check.mjs` reports the module's mean work per frame on the browser's main thread: `pollMs` applies what arrived, `uiMs` builds the ImGui frame with the live views, `encodeMs` records and submits it, and `gpuMs` is the time from submit to the queue reporting the work done. With the synthetic producer's six views (a 256 × 192 heatmap, a series, a histogram, a 64 × 64 heatmap, 4,000 points in 3-D and a 256 × 192 image) on a 1280 × 800 canvas at 60 snapshots per second each:
+
+| Adapter | Frames per second | CPU per frame (ms) | Poll (ms) | ImGui frame (ms) | Encode (ms) | GPU (ms) |
+|---|---|---|---|---|---|---|
+| Metal | 60 | 0.79 | 0.51 | 0.17 | 0.11 | 0.68 |
+| SwiftShader | 15 | 0.74 | 0.40 | 0.20 | 0.14 | 255 |
+
+Sixty frames per second is the browser's animation-frame rate, so the Metal row is capped, not saturated. SwiftShader rasterises on the CPU, so its GPU column measures that emulation and says nothing about a real GPU. Large snapshots cost a second copy, from WebAssembly memory into the browser's GPU process. With a 2048 × 2048 heatmap updated every frame, 16 MB went into the GPU process per frame and the time from submit to done rose to about 70 ms on both adapters, because the queue backed up. That is one reason producers send data views rather than whole tensors.
+
 ## The stream
 
 An instance reads its settings from `Module.caliperConfig`: `src` is the stream's URL, `ws://127.0.0.1:<port>/v3/stream?token=<token>`, `view` names the one view to show (every view of the session when empty) and `kind` the kind that view must have. The instance connects as a viewer: HELLO, WELCOME, the server's default attach, SUBSCRIBE for its views at 60 snapshots per second, then SNAPSHOT and SERIES messages, which the live views draw. It answers PING, pings after 10 seconds without input and closes after 30. `Module._caliper_views_set_data_view(json)` sends a VIEW_REQUEST for the shown view, and `Module.onDataView(view, dataView)` hears every data view the producer resolved. The frames go through the C++ codec in `src/host/net/wire.h`, which the native viewer uses too. Each snapshot's stamp is mapped into the page's clock (`src/host/live/live_clock.h`) before the live views see it, so their latency figure is the delay above the fastest recent message, which each view labels "rel lat"; the protocol has no clock exchange, so a constant transit time is not included.
@@ -125,7 +190,7 @@ CALIPER_PYTHON=<python> node check.mjs --build <build dir> --out <shot.png> --ad
 CALIPER_PYTHON=<python> node check.mjs --build <build dir> --out <shot.png> --view loss --kind series --hover 400,150
 ```
 
-The check starts `stream_server.py`, which serves the build directory and the stream on one port on 127.0.0.1, opens `demo.html` in headless Chromium, waits for frames and applied snapshots, prints the module's counters as JSON and saves screenshots. `swiftshader` uses Chromium's software WebGPU adapter and `metal` the Mac's GPU. The module also reads back each heatmap and image texture once and compares it, byte for byte, with what the CPU makes of the same snapshot (the reference colormap for a heatmap, the bytes themselves for an image); its counters list the results as `checks`.
+The check starts `stream_server.py`, which serves the build directory and the stream on one port on 127.0.0.1, opens `demo.html` in headless Chromium, waits for frames and applied snapshots, prints the module's counters as JSON and saves screenshots. `swiftshader` uses Chromium's software WebGPU adapter and `metal` the Mac's GPU. The flags matter: Playwright's headless shell gives WebGPU a SwiftShader adapter with only `--enable-unsafe-webgpu --enable-features=Vulkan,WebGPU`, but cannot present a WebGPU canvas then (`getCurrentTexture()` returns an invalid texture and the device is lost), in a page of plain JavaScript as well. `--use-angle=swiftshader` makes the software path present, and `--use-angle=metal` gives the Mac's GPU; the checks and the web package's tests pass these. The module also reads back each heatmap and image texture once and compares it, byte for byte, with what the CPU makes of the same snapshot (the reference colormap for a heatmap, the bytes themselves for an image); its counters list the results as `checks`.
 
 ## In CI
 

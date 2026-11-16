@@ -1,6 +1,6 @@
 # Streaming and embedding
 
-This page plans how other programs use Caliper: scripts and notebooks that stream data to a viewer, a viewer that runs in a browser, applets that run in a browser over the same data, and programs that embed Caliper. The minimal embedding package and the first pieces of data streaming are built: the wire protocol, the notebook widget and the first browser views. The transport in the Python client, `caliper.serve()`, the `caliper serve` hub and a native source that attaches the Caliper app to a stream are built too. Data views of tensors and the Python script's connection to the hub, `caliper.connect()`, are built as well. After a successful [spike](web-viewer-spike.md), the web viewer draws the live views with Caliper's own view layer. The rest is planned. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status. What is built today is described in [Live streaming](../explanations/live-streaming.md), [Network streaming](../explanations/network-streaming.md), the [Python API](../references/python-api.md), the [Wire protocol](../references/wire-protocol.md) and [Embedding Caliper](../references/embedding.md).
+This page plans how other programs use Caliper: scripts and notebooks that stream data to a viewer, a viewer that runs in a browser, applets that run in a browser over the same data, and programs that embed Caliper. The minimal embedding package and the first pieces of data streaming are built: the wire protocol, the notebook widget and the first browser views. The transport in the Python client, `caliper.serve()`, the `caliper serve` hub and a native source that attaches the Caliper app to a stream are built too. Data views of tensors and the Python script's connection to the hub, `caliper.connect()`, are built as well. The web viewer draws the live views with Caliper's own view layer, compiled to WebAssembly. The rest is planned. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status. What is built today is described in [Live streaming](../explanations/live-streaming.md), [Network streaming](../explanations/network-streaming.md), the [Python API](../references/python-api.md), the [Wire protocol](../references/wire-protocol.md) and [Embedding Caliper](../references/embedding.md).
 
 ## The order of surfaces
 
@@ -33,32 +33,35 @@ A data view decides which data travels, and a live view, such as a series or a h
 
 ## The web viewer
 
-The web viewer is Caliper's own view layer, which is the live views, ImGui, ImPlot and ImPlot3D, compiled to WebAssembly with Emscripten and drawn by a WebGPU backend behind `HostRenderer`. Its first form holds the views only, with no applet loader and no DuckDB. Whether its texture live views keep the tensor bridge is decided when the view layer is split from the native core. It ships in the `web/` package, behind the `<caliper-view>` element, the notebook widget and the viewer page that `caliper.serve()` serves.
-
-The [web viewer spike](web-viewer-spike.md) showed that this path works. The live views compiled for WebAssembly without changes, and a heatmap and a series drew in headless Chromium on a software and a hardware WebGPU adapter.
+The web viewer is Caliper's own view layer, which is the live views, ImGui, ImPlot and ImPlot3D, compiled to WebAssembly with Emscripten and drawn by a WebGPU backend behind `HostRenderer`. Its first form holds the views only, with no applet loader and no DuckDB; the views and the hosted core are split from the native core into `embed_views.cpp`, and the texture live views keep the tensor bridge. It ships in the `web/` package, behind the `<caliper-view>` element, the notebook widget and the viewer page that `caliper.serve()` serves. `web/wasm/README.md` describes the module, and [Rendering](../explanations/rendering.md#the-webgpu-backend) its renderer.
 
 The notebook widget and the viewer page draw every live view kind with the web viewer where WebGPU is available: heatmap, image, series, histogram and points. Small views written for the browser in TypeScript, over the same protocol, remain as the fallback where WebGPU is absent, where they draw with Canvas 2D. Both select, pick and hover with the same gestures and send the same events.
 
 The web viewer then grows in this order:
 
-1. Caliper's real views in notebooks and browsers.
-2. Every built-in view, including points, geometry and ImPlot3D.
+1. Done: Caliper's real views in notebooks and browsers, for every live view kind.
+2. Every built-in view. Points are built; the geometry path and ImPlot3D remain, and need a WebGPU geometry pipeline within WebGPU's limit on the storage buffers of a vertex stage.
 3. The whole Caliper interface in a browser, with the landing screen, docking and the panes. It needs storage in the browser's file system, DuckDB's WebAssembly build, and cross-origin isolation, without which a browser does not let a page use threads.
 4. Applets in the browser, through the split into computation and interface described in [Applets in the browser](#applets-in-the-browser).
 5. The same WebGPU backend as the native fallback through Dawn, described in [Renderers](#renderers).
+
+Smaller steps remain for the views of the first step: the clipboard and multi-touch gestures in the canvas, a CI job that runs the module's checks on SwiftShader (the recipe is in `web/wasm/README.md`), and testing in Safari, in Firefox and on Windows.
 
 No computation runs in the browser. libtorch does not run there, and the plan adds no second ML stack: the browser shows what a producer sends. An applet reaches a browser through the split described in [Applets in the browser](#applets-in-the-browser): its interface, compiled to WebAssembly, draws there from the data stream. An applet that has not been ported to the split is shown only in the native app.
 
 ## Limits in the browser
 
-These limits hold for the web viewer at every step. The facts come from the [web viewer spike](web-viewer-spike.md).
+These limits hold for the web viewer at every step. They were measured in headless Chromium on a software and a hardware WebGPU adapter.
 
 - **Computation stays native.** The browser draws what a producer sends and computes nothing. Data views are computed by the producer on its own device.
 - **The heap stops at 4 GB.** WebAssembly in the browser is 32-bit, so the web viewer cannot hold more than 4 GB, and it bounds the size of the snapshots it accepts.
-- **Each snapshot is copied twice.** A snapshot crosses the network, and the browser then copies it from WebAssembly memory into its GPU process. In the spike, a 2048 by 2048 heatmap sent 16 MB into the GPU process every frame, and the GPU queue backed up. Sampling and data views keep snapshots small for this reason as well.
-- **Colours match exactly, by a different route.** Natively, Caliper's colormap matches its CPU reference byte for byte. WGSL does not promise the same arithmetic, and the spike saw a few texels of the largest heatmaps differ by one level on Metal. The web viewer therefore compares each value against thresholds that the CPU derives from its own colormap function, and its heatmaps match the CPU reference exactly on the adapters tested.
-- **ImGui is not a web page.** ImGui draws the whole interface into one canvas. Keyboard and text input, the clipboard and touch need work in a browser, and the spike verified none of them. The canvas gives the browser's accessibility tools nothing to read, so a screen reader cannot follow the interface.
-- **Most browsers are untested.** The spike ran only in headless Chromium. Chromium-based browsers ship WebGPU, while support in Safari and Firefox depends on the version and the platform, and neither was tested; nor were Windows and HiDPI screens. Where WebGPU is absent, the views written for the browser draw instead.
+- **Each snapshot is copied twice.** A snapshot crosses the network, and the browser then copies it from WebAssembly memory into its GPU process. A 2048 by 2048 heatmap updated every frame sent 16 MB into the GPU process per frame, and the GPU queue backed up. Sampling and data views keep snapshots small for this reason as well.
+- **Colours match exactly, by a different route.** Natively, Caliper's colormap matches its CPU reference byte for byte. WGSL does not promise the same arithmetic: recomputing the formula on the GPU left a few texels of the largest heatmaps one level off on Metal. The web viewer therefore compares each value against thresholds that the CPU derives from its own colormap function, and its heatmaps match the CPU reference exactly on the adapters tested.
+- **ImGui is not a web page.** ImGui draws the whole interface into one canvas. The pointer, the wheel, keys and text reach it while the canvas has focus, but the clipboard and multi-touch gestures do not. The canvas gives the browser's accessibility tools nothing to read, so a screen reader cannot follow the interface.
+- **Most browsers are untested.** The views are tested in headless Chromium only, on SwiftShader and on the Mac's GPU, at device pixel ratios of 1 and 2. Chromium-based browsers ship WebGPU, while support in Safari and Firefox depends on the version and the platform, and neither is tested, nor is Windows. Where WebGPU is absent, the views written for the browser draw instead.
+- **The WebGPU binding moves with Emscripten.** The core of `webgpu.h` is stable, but Emscripten's `emdawnwebgpu` port and its Emscripten-specific parts change, and each Emscripten release pins its own Dawn package, so an Emscripten update can need changes in the renderer.
+- **Headless tests depend on flags.** Headless Chromium presents a WebGPU canvas on SwiftShader only with `--use-angle=swiftshader`, and a Chromium update can change which flags work.
+- **The download grows with the views.** The module is about 495 KB with Brotli, of which Dear ImGui and ImPlot are more than half of the code and the two embedded faces most of the data. ImPlot3D and the geometry path will add to it.
 
 ## Serving
 

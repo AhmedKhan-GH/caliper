@@ -5,7 +5,7 @@ reachable from. OpenGL cannot do that on a Mac: it is deprecated there, capped a
 the memory that PyTorch's MPS backend allocates. Every Mac tensor would take a round trip through the CPU on its way
 to becoming a texture, in the hottest loop the framework owns.
 
-The answer is to keep graphics out of the contract entirely. This page describes the seam that does it, the three
+The answer is to keep graphics out of the contract entirely. This page describes the seam that does it, the
 backends behind it, how each one updates a texture, and how the geometry path draws 3-D data. How a tensor reaches
 pixels without a CPU round trip, and what each path costs, is in [Zero-copy tensor visualization](zero-copy.md).
 
@@ -26,6 +26,7 @@ backend is its own translation unit, and the host picks one at startup.
 | Metal | Default on macOS | A compute pass (f32 with a colormap) or a blit (u8) reads the MPS `MTLBuffer` in place | No CPU staging. Apple-only translation unit |
 | Vulkan with CUDA interop | Default on Windows | A CUDA kernel writes the Vulkan image directly; see [the update ladder](#the-update-ladder-on-windows) | Details in [Vulkan and CUDA on Windows](vulkan-cuda.md). Windows-only translation unit |
 | OpenGL 3.3 core | `CALIPER_RENDERER=gl`, or the only backend on other platforms | The bridge colormaps on the CPU and uploads the result | The fallback, loaded through GLEW. `tex_update_from_device` always returns `false` |
+| WebGPU | The browser views (`web/wasm`) | A WGSL compute pass colormaps the host-memory snapshot into the texture | Browser only; see [the WebGPU backend](#the-webgpu-backend) |
 
 `core_select_renderer()` in `src/host/core_lifecycle.cpp` picks the default: Metal on macOS and Vulkan on Windows.
 `CALIPER_RENDERER=gl` selects OpenGL on either. If the native backend fails to initialize (no driver, a remote
@@ -36,6 +37,31 @@ for Metal, for Vulkan (the CPU-staged rows, which run on any Vulkan driver) and 
 rows, which run when the paired CUDA device is the only one in the machine).
 
 The plan for the renderers is in the [roadmap](../plans/roadmap.md#renderers).
+
+## The WebGPU backend
+
+The browser views are the native view layer compiled to WebAssembly, and `src/host/renderer/webgpu_renderer.cpp`
+draws them behind the same `HostRenderer` seam, on the browser's own WebGPU through the standard `webgpu.h`. It
+covers what the live views use:
+
+- **The frame.** The renderer draws on the canvas's WebGPU surface and records ImGui's draw data through
+  `imgui_impl_wgpu`, with nearest sampling for magnified heatmap cells.
+- **Textures.** RGBA8 textures for images and heatmaps. Every snapshot arrives as host memory, so the bridge asks the
+  renderer to colormap it through `tex_update_mapped_from_host`, an additive hook that native backends leave at its
+  default `false`. A WGSL compute pass then gives exactly the bytes of the CPU reference `map_f32_to_rgba8`: the CPU
+  derives, from that function itself, the value at which each of the 255 colour steps begins, and the shader only
+  compares values with those thresholds, so the GPU's rounding cannot change a colour.
+- **Points.** A points payload is copied into a GPU buffer through `HostRenderer::import_host_allocation`, and each
+  point is drawn as an instanced quad of the native point size, with the native colour rule and depth test, because
+  WebGPU draws a point as one pixel. Released buffers are reused for the next snapshot of the same size.
+- **Lifetimes.** A released texture is destroyed at once, and its view is released at the end of the frame, after
+  ImGui's backend has dropped the bind groups it made while recording that frame.
+
+It refuses the rest of the interface: device tensors and imported GPU memory (a browser has neither), geometry other
+than points, and the embed canvas. Its two shaders are written by hand in WGSL, because WebGPU has no push constants,
+draws points one pixel wide and limits the storage buffers of a vertex stage, which changes the native shaders' design
+and not only their syntax. `web/wasm/README.md` gives the module's build, its size and its checks. The same renderer
+is planned as the native fallback through Dawn ([roadmap](../plans/roadmap.md#renderers)).
 
 The host's own screens carry no raw OpenGL either. The landing screen, the launch flow and the dashboards are drawn
 with ImGui, so they look the same on every backend.
