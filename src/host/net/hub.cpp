@@ -195,6 +195,7 @@ struct VSub {
     uint64_t last_us = 0;
     bool sent_any = false;
     SnapPtr pending;                 // latest wins
+    uint64_t pending_n = 0;          // counts the snapshots made pending (a held CONTROLS waits for one)
     uint64_t next = 0;               // series: next absolute index to send
     uint64_t backfill = std::numeric_limits<uint64_t>::max();
 };
@@ -222,6 +223,12 @@ struct Peer {
     SharedBytes pending_controls;
     std::map<std::string, SharedBytes> pending_selections;
     size_t controls_waiting = 0;
+    // A CONTROLS held for the data the hub had for this viewer when it came:
+    // per subscription, the pending snapshot (its pending_n) and the series
+    // index to reach. A newer CONTROLS replaces it and adds what it waits for.
+    SharedBytes held_controls;
+    uint64_t held_since_us = 0;
+    std::map<uint32_t, uint64_t> held_snaps, held_series;
     // producer
     std::string session;
 };
@@ -461,6 +468,13 @@ struct Hub::Impl {
     // full they wait, and a newer CONTROLS (or SELECTION of the same item
     // space) replaces the waiting one, as the protocol coalesces them.
     static constexpr size_t kMetaQueueLimit = size_t(256) << 10;
+    // How long a CONTROLS waits for the data before it, at most: the senders'
+    // CALIPER_NET_ORDER_WAIT_MS.
+#ifdef CALIPER_NET_ORDER_WAIT_MS
+    static constexpr uint64_t kOrderWaitUs = uint64_t(CALIPER_NET_ORDER_WAIT_MS) * 1000;
+#else
+    static constexpr uint64_t kOrderWaitUs = 2000000;
+#endif
 
     void offer_controls(Peer& p, const SharedBytes& frame) {
         if (!p.cap_controls || !frame) return;
@@ -497,10 +511,81 @@ struct Hub::Impl {
         p.pending_selections.clear();
     }
 
+    // A hub delivers a run state after the data it received before it, or
+    // after 2 s, so that a paused view shows the step the run stopped at. A
+    // CONTROLS for a viewer waits until each of its subscriptions has sent, or
+    // replaced with a newer one, the snapshot that was pending when the
+    // CONTROLS came, and has sent its series up to where they then ended. It
+    // never waits for the viewer to drain: while data streams, an echo waits
+    // for at most one message per subscription. kOrderWaitUs after the first
+    // CONTROLS held for a viewer it goes anyway, with any newer one in its place.
+    void deliver_controls(Peer& p, const SharedBytes& frame) {
+        if (!p.cap_controls || !frame) return;
+        if (Session* s = session_of(p))
+            for (const auto& kv : p.subs) {
+                const VSub& v = kv.second;
+                if (v.series) {
+                    auto h = s->series.find(v.view);
+                    if (h != s->series.end() && std::max(v.next, h->second.first) < h->second.end()) {
+                        uint64_t& need = p.held_series[kv.first];
+                        need = std::max(need, h->second.end());
+                    }
+                } else if (v.pending) {
+                    p.held_snaps[kv.first] = v.pending_n;
+                }
+            }
+        if (!p.held_controls && p.held_snaps.empty() && p.held_series.empty()) {
+            offer_controls(p, frame);
+            return;
+        }
+        if (!p.held_controls) {
+            p.held_since_us = now_us();
+            ++c.controls_held;
+        }
+        p.held_controls = frame;
+        p.dirty = true;
+    }
+
+    // In pump(): sends a held CONTROLS once what it waits for has gone out or
+    // been replaced, or its time is up.
+    void release_controls(Peer& p, uint64_t now) {
+        if (!p.held_controls) return;
+        Session* s = session_of(p);
+        for (auto it = p.held_snaps.begin(); it != p.held_snaps.end();) {
+            auto v = p.subs.find(it->first);
+            const bool waits = v != p.subs.end() && v->second.pending && v->second.pending_n == it->second;
+            it = waits ? std::next(it) : p.held_snaps.erase(it);
+        }
+        for (auto it = p.held_series.begin(); it != p.held_series.end();) {
+            auto v = p.subs.find(it->first);
+            bool waits = false;
+            if (s && v != p.subs.end() && v->second.series) {
+                auto h = s->series.find(v->second.view);
+                if (h != s->series.end())
+                    waits = std::max(v->second.next, h->second.first) < std::min(it->second, h->second.end());
+            }
+            it = waits ? std::next(it) : p.held_series.erase(it);
+        }
+        const bool waits = !p.held_snaps.empty() || !p.held_series.empty();
+        if (waits && now < p.held_since_us + kOrderWaitUs) return;
+        if (waits) ++c.controls_hold_expired;
+        SharedBytes frame = std::move(p.held_controls);
+        drop_held_controls(p);
+        offer_controls(p, frame);
+    }
+
+    void drop_held_controls(Peer& p) {
+        p.held_controls.reset();
+        p.held_snaps.clear();
+        p.held_series.clear();
+        p.held_since_us = 0;
+    }
+
     // Right after the VIEWS of an attachment: the session's latest CONTROLS and
-    // every item space's selection that is not empty.
+    // every item space's selection that is not empty. A new attachment has no
+    // data pending, so its CONTROLS goes at once, before any SUBSCRIBE.
     void send_state(Peer& p, const Session& s) {
-        if (p.cap_controls && s.controls) offer_controls(p, s.controls);
+        if (p.cap_controls && s.controls) deliver_controls(p, s.controls);
         if (p.cap_selection)
             for (const auto& kv : s.selections)
                 if (!kv.second.empty) offer_selection(p, kv.first, kv.second.frame);
@@ -540,6 +625,7 @@ struct Hub::Impl {
         // The controls and selections of the session it leaves are not sent.
         p.pending_controls.reset();
         p.pending_selections.clear();
+        drop_held_controls(p);
         auto it = sessions.find(p.attached);
         if (it != sessions.end()) it->second.viewers.erase(p.conn);
         p.attached.clear();
@@ -746,6 +832,7 @@ struct Hub::Impl {
             v.sent_any = false;
         } else {
             v.pending = ch.latest;
+            ++v.pending_n;
         }
         p.dirty = true;
         (void)s;
@@ -765,6 +852,7 @@ struct Hub::Impl {
         if (it == p.subs.end()) return;
         if (Session* s = session_of(p)) leave(*s, p, it->second);
         p.subs.erase(sub);
+        if (p.held_controls) p.dirty = true;   // it may have waited for this one
     }
 
     // The viewer's request is answered by a channel that has resolved.
@@ -1053,14 +1141,15 @@ struct Hub::Impl {
     }
 
     // The producer's CONTROLS: kept (also after the session ends) and passed
-    // to every viewer of the session that announced `controls`.
+    // to every viewer of the session that announced `controls`, after the data
+    // the hub received before it (deliver_controls).
     void producer_controls(Session& s, SharedBytes buf) {
         if (s.controls) meta_bytes -= s.controls->size();
         s.controls = buf;
         meta_bytes += buf->size();
         for (ConnId v : s.viewers) {
             auto pt = peers.find(v);
-            if (pt != peers.end() && !pt->second.closing) offer_controls(pt->second, buf);
+            if (pt != peers.end() && !pt->second.closing) deliver_controls(pt->second, buf);
         }
         if (retained() > opt.max_retained_bytes) enforce_budget();
     }
@@ -1580,6 +1669,7 @@ struct Hub::Impl {
             if (!v) continue;
             if (v->pending) ++c.snapshots_superseded;
             v->pending = snap;
+            ++v->pending_n;
             mark_dirty(k.conn);
         }
         if (retained() > opt.max_retained_bytes) enforce_budget();
@@ -1801,12 +1891,24 @@ struct Hub::Impl {
     }
 
     // ---- delivery --------------------------------------------------------------------------
-    // Hands the next data message of one viewer to its socket, if the last one
-    // has drained: series before snapshots, the subscription that waited
-    // longest first, each at most at its max_rate.
+    // A held CONTROLS goes right behind the data it waited for, in the same
+    // send queue; until then the viewer is due again when its wait runs out.
     void pump(Peer& p, uint64_t now) {
         p.due_us = 0;
         if (p.closing) return;
+        release_controls(p, now);
+        pump_data(p, now);
+        if (!p.held_controls) return;
+        release_controls(p, now);
+        if (!p.held_controls) return;
+        const uint64_t until = p.held_since_us + kOrderWaitUs;
+        if (!p.due_us || until < p.due_us) p.due_us = until;
+    }
+
+    // Hands the next data message of one viewer to its socket, if the last one
+    // has drained: series before snapshots, the subscription that waited
+    // longest first, each at most at its max_rate.
+    void pump_data(Peer& p, uint64_t now) {
         if (p.pending_controls || !p.pending_selections.empty()) flush_meta(p);   // control messages first
         if (p.in_flight) return;
         Session* s = session_of(p);

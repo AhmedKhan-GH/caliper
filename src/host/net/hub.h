@@ -47,7 +47,10 @@
 // (at most CALIPER_NET_MAX_ITEM_SPACES), also after the session ends, passes
 // them to every viewer of the session that announced the capability, and
 // sends them to a viewer right after the VIEWS of an attachment; a newer one
-// replaces one still waiting for a slow viewer. VIEWS reach a viewer without
+// replaces one still waiting for a slow viewer. A CONTROLS reaches a viewer
+// after the data the hub received before it, or after 2 s
+// (CALIPER_NET_ORDER_WAIT_MS), so that a paused view shows the step the run
+// stopped at. VIEWS reach a viewer without
 // `selection` with the item spaces removed, and a select event reaches a
 // producer without `selection` without them. A viewer's CONTROL goes to the
 // producer of its own session only with allow_control (--allow-control, off
@@ -145,6 +148,8 @@ struct HubStats {
     // 3.1
     uint64_t controls_forwarded = 0, controls_refused = 0, control_replies = 0;
     uint64_t controls_out = 0, selections_out = 0, selections_dropped = 0;
+    uint64_t controls_held = 0;             // CONTROLS that waited for the data before them
+    uint64_t controls_hold_expired = 0;     // of which went after 2 s with that data still unsent
     size_t controls_waiting = 0;            // CONTROLs waiting for the producer's answer
     uint64_t refused_host = 0, refused_origin = 0, refused_token = 0, refused_full = 0;
     uint64_t http_files = 0, http_not_found = 0;

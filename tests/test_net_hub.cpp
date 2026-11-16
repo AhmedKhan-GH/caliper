@@ -518,9 +518,10 @@ protected:
 
 public:
     // 3.1: the run state and one parameter, "lr".
-    void send_controls(const char* state, double lr) {
+    void send_controls(const char* state, double lr, int64_t step = -1) {
         wire::Controls c;
         c.run.set("state", state);
+        if (step >= 0) c.run.set("step", step);
         Json param = Json::object();
         param.set("name", "lr");
         param.set("type", CALIPER_NET_PARAM_NUMBER);
@@ -1568,6 +1569,281 @@ TEST_CASE("net/hub 3.1: controls waiting for a script are bounded per viewer") {
     REQUIRE(w.until([&] { return v->control_replies(2000).size() == 1; }));
     CHECK(v->control_replies(2000)[0]->error.find("code")->as_string() == CALIPER_NET_ERR_LIMIT);
     CHECK(h.stats().controls_waiting == 64);
+}
+
+// ---- 3.1: a run state after the data before it -------------------------------------------
+// A hub delivers a run state after the data it received before it, or after
+// 2 s, so that a paused view shows the step the run stopped at.
+namespace {
+int64_t step_of(const wire::Controls& c) {
+    uint64_t n = 0;
+    const Json* s = c.run.find("step");
+    return s && s->get_u64(&n) ? (int64_t)n : -1;
+}
+
+// The position in v's inbox of the first CONTROLS with this state and step, -1 when none.
+int controls_index(const Peer& v, const std::string& state, int64_t step) {
+    for (size_t i = 0; i < v.inbox.size(); ++i)
+        if (auto* c = std::get_if<wire::Controls>(&v.inbox[i].m))
+            if (c->run.find("state")->as_string() == state && step_of(*c) == step) return (int)i;
+    return -1;
+}
+
+int snapshot_index(const Peer& v, uint32_t sub, uint64_t seq) {
+    for (size_t i = 0; i < v.inbox.size(); ++i)
+        if (auto* s = std::get_if<wire::Snapshot>(&v.inbox[i].m))
+            if (s->sub == sub && s->seq == seq) return (int)i;
+    return -1;
+}
+
+// One past the highest series index that the first n messages of v's inbox carry on sub.
+uint64_t series_end_before(const Peer& v, uint32_t sub, int n) {
+    uint64_t end = 0;
+    for (int i = 0; i < n && i < (int)v.inbox.size(); ++i)
+        if (auto* s = std::get_if<wire::Series>(&v.inbox[(size_t)i].m))
+            if (s->sub == sub) end = std::max<uint64_t>(end, s->start + s->values.size / 4);
+    return end;
+}
+
+// Polls the producer all the time and the viewer only every few milliseconds,
+// so that the hub holds data in the viewer's send queue and pending for it.
+bool drain_slowly(Peer& p, Peer& v, const std::function<bool()>& done, int ms = 10000) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    for (int i = 0; std::chrono::steady_clock::now() < end; ++i) {
+        p.poll(0);
+        if (i % 6 == 0) v.poll(0);
+        if (done()) return true;
+        std::this_thread::sleep_for(std::chrono::microseconds(500));
+    }
+    return done();
+}
+
+double secs_between(uint64_t a_ns, uint64_t b_ns) { return (double)(int64_t)(b_ns - a_ns) / 1e9; }
+
+std::vector<float> filled(size_t n, float x) { return std::vector<float>(n, x); }
+}  // namespace
+
+TEST_CASE("net/hub 3.1: a slowly draining viewer gets each paused step's data before the run state, every time") {
+    HubOptions o;
+    o.allow_control = true;
+    HubRunner h(o);
+    World w;
+    auto p = producer(w, h, "clp-order", 1, 1, kProducer31, true);
+    auto v = viewer(w, h, kCaps31);
+    REQUIRE(w.until([&] { return v->views() && v->views()->session && v->last<wire::Controls>(); }));
+    v->subscribe(1, "heat", 1, Json(), 240);
+    v->subscribe(2, "loss", 2, Json(), 240);
+    REQUIRE(w.until([&] { return v->reply(1) && v->reply(2) && p->subs_of("heat").size() == 1; }));
+
+    // A run paused step by step: each step sends series values and two
+    // snapshots, the second its last, then CONTROLS paused at that step. The
+    // viewer drains slowly, so the step's data is still pending or in the
+    // viewer's send queue when the CONTROLS reaches the hub.
+    const int N = 100;
+    int in_order = 0;
+    for (int k = 1; k <= N; ++k) {
+        p->send_controls("stepping", 0.01, k - 1);
+        p->append(filled(3000, (float)k));
+        p->snapshot((float)k, 256, 256);
+        p->snapshot((float)k + 0.5f, 256, 256);
+        const uint64_t seq = p->seq, total = p->total();
+        p->send_controls("paused", 0.01, k);
+        REQUIRE(drain_slowly(*p, *v, [&] { return controls_index(*v, "paused", k) >= 0; }));
+        const int ic = controls_index(*v, "paused", k);
+        const int is = snapshot_index(*v, 1, seq);
+        const bool ok = is >= 0 && is < ic && series_end_before(*v, 2, ic) >= total;
+        if (!ok) MESSAGE("step " << k << ": CONTROLS at " << ic << ", its snapshot at " << is << ", series to "
+                                 << series_end_before(*v, 2, ic) << " of " << total);
+        in_order += ok ? 1 : 0;
+        v->inbox.clear();
+    }
+    CHECK(in_order == N);
+    CHECK(h.stats().controls_hold_expired == 0);
+    MESSAGE(h.stats().controls_held << " of the run states waited for their data");
+}
+
+TEST_CASE("net/hub 3.1: a run state waits at most 2 s for data the viewer's max_rate holds back") {
+    HubRunner h;
+    World w;
+    auto p = producer(w, h, "clp-rate", 1, 1, kProducer31, true);
+    auto v = viewer(w, h, kCaps31);
+    REQUIRE(w.until([&] { return v->views() && v->views()->session && v->last<wire::Controls>(); }));
+    v->subscribe(1, "heat", 1, Json(), 0.2);   // one snapshot per 5 s, after a burst of two
+    REQUIRE(w.until([&] { return v->reply(1) && p->subs_of("heat").size() == 1; }));
+    for (int i = 1; i <= 2; ++i) {
+        p->snapshot((float)i);
+        REQUIRE(w.until([&] { return v->snapshots(1).size() == (size_t)i; }));
+    }
+    p->snapshot(3);   // pending for about 5 s
+    w.spin(50);
+    const uint64_t sent = mono_ns();
+    p->send_controls("paused", 0.01, 3);
+    REQUIRE(w.until([&] { return controls_index(*v, "paused", 3) >= 0; }, 5000));
+    const double waited = secs_between(sent, v->inbox[(size_t)controls_index(*v, "paused", 3)].at_ns);
+    MESSAGE("the run state waited " << waited << " s");
+    CHECK(waited > 1.8);
+    CHECK(waited < 3.0);
+    CHECK(v->snapshots(1).size() == 2);   // it went without the snapshot before it
+    CHECK(h.stats().controls_held == 1);
+    CHECK(h.stats().controls_hold_expired == 1);
+}
+
+TEST_CASE("net/hub 3.1: a viewer that stops reading gets the run state after 2 s, ahead of the data it waited for") {
+    HubRunner h;
+    World w;
+    auto p = producer(w, h, "clp-stuck", 1, 1, kProducer31, true);
+    auto v = viewer(w, h, kCaps31);
+    REQUIRE(w.until([&] { return v->views() && v->views()->session && v->last<wire::Controls>(); }));
+    v->subscribe(1, "heat", 1, Json(), 240);
+    REQUIRE(w.until([&] { return v->reply(1) && p->subs_of("heat").size() == 1; }));
+
+    // The viewer reads nothing more: 1 MiB snapshots fill its socket until the
+    // hub replaces the one pending for it.
+    const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    for (int i = 0; h.stats().snapshots_superseded < 3 && std::chrono::steady_clock::now() < limit; ++i) {
+        p->snapshot((float)i, 512, 512);
+        p->poll(0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    REQUIRE(h.stats().snapshots_superseded >= 3);
+    const uint64_t sent = mono_ns();
+    p->send_controls("paused", 0.01, 1);
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (h.stats().controls_hold_expired == 0 && std::chrono::steady_clock::now() < until) {
+        p->poll(0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const double waited = secs_between(sent, mono_ns());
+    MESSAGE("the hub let the run state go after " << waited << " s");
+    CHECK(h.stats().controls_held == 1);
+    REQUIRE(h.stats().controls_hold_expired == 1);
+    CHECK(waited > 1.9);
+    CHECK(waited < 3.0);
+    // When it reads again it gets the run state.
+    REQUIRE(w.until([&] { return controls_index(*v, "paused", 1) >= 0; }));
+}
+
+TEST_CASE("net/hub 3.1: parameter echoes are not held back while data streams") {
+    HubRunner h;
+    World w;
+    auto p = producer(w, h, "clp-echo", 1, 1, kProducer31, true);
+    auto v = viewer(w, h, kCaps31);
+    REQUIRE(w.until([&] { return v->views() && v->views()->session && v->last<wire::Controls>(); }));
+    // The viewer takes 20 messages a second per subscription while the
+    // producer sends 200: the hub always has a snapshot and series values
+    // pending for it, and is never drained.
+    v->subscribe(1, "heat", 1, Json(), 20);
+    v->subscribe(2, "loss", 2, Json(), 20);
+    REQUIRE(w.until([&] { return v->reply(1) && v->reply(2) && p->subs_of("heat").size() == 1; }));
+    std::map<int, uint64_t> sent;   // echo number -> when the producer sent it
+    const auto start = std::chrono::steady_clock::now();
+    auto next_data = start, next_echo = start + std::chrono::milliseconds(50);
+    int echoes = 0;
+    while (std::chrono::steady_clock::now() < start + std::chrono::milliseconds(1600)) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_data) {
+            p->snapshot((float)p->seq, 128, 128);
+            p->append(filled(16, 1.0f));
+            next_data += std::chrono::milliseconds(5);
+        }
+        if (now >= next_echo && echoes < 15) {
+            ++echoes;
+            sent[echoes] = mono_ns();
+            p->send_controls("running", 0.001 * echoes, 1000 + echoes);   // as a set's answer
+            next_echo += std::chrono::milliseconds(100);
+        }
+        p->poll(0);
+        v->poll(0);
+        std::this_thread::sleep_for(std::chrono::microseconds(300));
+    }
+    REQUIRE(w.until([&] { return controls_index(*v, "running", 1000 + 15) >= 0; }));
+    double worst = 0;
+    int got = 0;
+    for (int k = 1; k <= 15; ++k) {
+        const int i = controls_index(*v, "running", 1000 + k);
+        if (i < 0) continue;
+        worst = std::max(worst, secs_between(sent[k], v->inbox[(size_t)i].at_ns));
+        ++got;
+    }
+    MESSAGE(got << " echoes, the slowest after " << worst * 1000 << " ms; " << h.stats().controls_held
+                << " waited for data");
+    CHECK(got == 15);
+    CHECK(worst < 0.25);
+    CHECK(h.stats().controls_held > 0);   // they did wait for the data before them, briefly
+    CHECK(h.stats().controls_hold_expired == 0);
+}
+
+TEST_CASE("net/hub 3.1: a single step shows the step's data before the run state that says paused") {
+    HubOptions o;
+    o.allow_control = true;
+    HubRunner h(o);
+    World w;
+    auto p = producer(w, h, "clp-step", 1, 1, kProducer31, true);
+    auto v = viewer(w, h, kCaps31);
+    REQUIRE(w.until([&] { return v->views() && v->views()->session && v->last<wire::Controls>(); }));
+    v->subscribe(1, "heat", 1, Json(), 240);
+    v->subscribe(2, "loss", 2, Json(), 240);
+    REQUIRE(w.until([&] { return v->reply(1) && v->reply(2) && p->subs_of("heat").size() == 1; }));
+    // Paused at step 4.
+    p->append(filled(4, 4.0f));
+    p->snapshot(4, 512, 512);
+    p->send_controls("paused", 0.01, 4);
+    REQUIRE(drain_slowly(*p, *v, [&] { return controls_index(*v, "paused", 4) >= 0; }));
+    v->inbox.clear();
+
+    // The viewer steps once; the script answers, says stepping, runs step 5
+    // and pauses at it.
+    v->control(21, CALIPER_NET_OP_STEP);
+    REQUIRE(w.until([&] { return v->control_replies(21).size() == 1 && p->controls_in.size() == 1; }));
+    CHECK(p->controls_in[0].op == CALIPER_NET_OP_STEP);
+    p->send_controls("stepping", 0.01, 4);
+    p->append(filled(30000, 5.0f));
+    p->snapshot(5, 512, 512);
+    const uint64_t seq = p->seq, total = p->total();
+    p->send_controls("paused", 0.01, 5);
+    REQUIRE(drain_slowly(*p, *v, [&] { return controls_index(*v, "paused", 5) >= 0; }));
+    const int stepping = controls_index(*v, "stepping", 4), snap = snapshot_index(*v, 1, seq),
+              paused = controls_index(*v, "paused", 5);
+    CHECK(stepping >= 0);
+    CHECK(snap > stepping);
+    CHECK(paused > snap);
+    CHECK(series_end_before(*v, 2, paused) == total);
+    CHECK(v->snapshots(1).back()->seq == seq);
+}
+
+TEST_CASE("net/hub 3.1: a late viewer of a paused run gets the run state right after VIEWS and the step's data after "
+          "it subscribes") {
+    HubRunner h;
+    World w;
+    auto p = producer(w, h, "clp-late", 1, 1, kProducer31, true);
+    auto early = viewer(w, h, kCaps31);
+    REQUIRE(w.until([&] { return early->views() && early->views()->session; }));
+    early->subscribe(1, "heat", 1, Json(), 240);
+    early->subscribe(2, "loss", 2, Json(), 240);
+    REQUIRE(w.until([&] { return early->reply(1) && early->reply(2) && p->subs_of("heat").size() == 1; }));
+    for (int k = 1; k <= 9; ++k) {
+        p->append(filled(100, (float)k));
+        p->snapshot((float)k, 256, 256);
+    }
+    const uint64_t seq = p->seq, total = p->total();
+    p->send_controls("paused", 0.01, 9);
+    REQUIRE(w.until([&] { return controls_index(*early, "paused", 9) >= 0; }));
+    CHECK(snapshot_index(*early, 1, seq) < controls_index(*early, "paused", 9));
+    const uint64_t held = h.stats().controls_held;
+
+    auto late = viewer(w, h, kCaps31);
+    REQUIRE(w.until([&] { return late->views() && late->views()->session && late->last<wire::Controls>(); }));
+    const int iv = late->first_index(CALIPER_NET_MSG_VIEWS), ic = controls_index(*late, "paused", 9);
+    CHECK(iv >= 0);
+    CHECK(ic == iv + 1);   // the kept run state, right after VIEWS, before any SUBSCRIBE
+    late->subscribe(1, "heat", 1, Json(), 240);
+    late->subscribe(2, "loss", 2, Json(), 240);
+    REQUIRE(w.until([&] { return !late->snapshots(1).empty() && late->series(2).size() == total; }));
+    CHECK(late->snapshots(1).front()->seq == seq);   // the paused step's snapshot
+    CHECK(snapshot_index(*late, 1, seq) > ic);
+    CHECK(late->series(2).rbegin()->first == total - 1);
+    CHECK(h.stats().controls_held == held);   // nothing was pending for it: nothing waited
+    CHECK(late->count<wire::Controls>() == 1);
 }
 
 // The relay's latency and throughput: a 512 x 512 f32 heatmap (1 MiB) at 60 Hz
