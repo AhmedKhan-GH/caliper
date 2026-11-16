@@ -280,6 +280,9 @@ public:
     // Lays the spec out in `area` and draws it, on the frame thread, inside a
     // window that covers the area.
     void draw(const ImRect& area, const SpecLook& look);
+    // A spec with no panels shows "No panels" over its applet id; with a hint
+    // (the builder's, in build mode), "No panels" over the hint instead.
+    void set_empty_hint(std::string hint) { empty_hint_ = std::move(hint); }
 
     // The layout of the last draw.
     const SpecLayout& layout() const { return layout_; }
@@ -312,6 +315,7 @@ private:
     SpecTabChoice tabs_;
     SpecColorKey key_;
     SpecLayout layout_;
+    std::string empty_hint_;
     std::function<float(const SpecPanelFrame&)> reserve_;
     std::function<void(const SpecPanelFrame&)> overlay_;
 };

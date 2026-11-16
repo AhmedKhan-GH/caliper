@@ -496,6 +496,8 @@ void BuilderPane::draw_body(const ImRect& area, SpecRuntime& runtime, const Spec
         d.plans_text = open_->text;
     }
     if (open_) runtime.set_spec(open_->spec);
+    // An empty canvas says how to start in build mode (canvas_hint()).
+    runtime.set_empty_hint(canvas_hint());
     if (!build_) {
         runtime.draw(area, look);
         return;
@@ -702,7 +704,8 @@ void BuilderPane::draw_body(const ImRect& area, SpecRuntime& runtime, const Spec
                 if (si != d.plans.end() && si->second.refusal) ImGui::SetTooltip("%s", si->second.refusal.message.c_str());
             }
         }
-        // An empty canvas shows the runtime's own state, "No panels".
+        // An empty canvas shows the runtime's own state, "No panels", with
+        // how to start under it (canvas_hint()).
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();

@@ -15,7 +15,7 @@ Built in `src/host/builder/` as the library `caliper_builder_pane` (with `CALIPE
 - in the app: the pane on the spec page (`spec_page.h`), the page bar's items, files dropped on the window (GLFW's drop callback in `src/main.cpp`), F3 New dashboard on the landing screen (`src/host/ui/landing_screen.h`), and the hidden input driver's builder steps (`spec_ui_driver.h`);
 - the tests in `src/host/builder/tests/`, run as `caliper_builder_pane` (headless), `caliper_builder_pane_gpu` (the tool as a process) and `caliper_builder_app` (the hidden app).
 
-In the spec runtime, `SpecLayout` gained `splits`, every split node on a shown path with its rectangle, axis, divider and ratio, so that the pane hits and drags a divider from the layout's own rectangles (`src/host/spec_runtime/spec_layout.h`). Nothing else of the runtime changed.
+In the spec runtime, `SpecLayout` gained `splits`, every split node on a shown path with its rectangle, axis, divider and ratio, so that the pane hits and drags a divider from the layout's own rectangles (`src/host/spec_runtime/spec_layout.h`), and `set_empty_hint()`, the line an empty spec shows under "No panels" in build mode. Nothing else of the runtime changed.
 
 Left: the pane on the live page, and Windows, where the builder is off.
 
@@ -50,7 +50,7 @@ A panel needs its required slots: the validator refuses one without them (`spec.
 
 ## The canvas
 
-The canvas is the spec runtime's own drawing of the open spec. In build mode:
+The canvas is the spec runtime's own drawing of the open spec. A spec with no panel says "No panels" and, in build mode, how to start under it: "Drop a data file, or pick a source in Sources" (`BuilderPane::canvas_hint()`, drawn by the runtime in the empty state's place of the applet id, in the house face). In build mode:
 
 - **Focus.** A click inside a panel focuses it; the focused panel has the bronze frame of the spec page, and Properties shows it. ⌫ removes it (`panel.remove`).
 - **Moving.** A panel's title strip drags it. Dropped on another panel's edge it goes left of, right of, above or below that panel; on its centre, into tabs with it; in the band along the canvas's border, at that edge of the whole layout.

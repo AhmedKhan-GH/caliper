@@ -310,6 +310,9 @@ public:
     bool add_transform(caliper_builder::spec::TransformOp op);
     bool set_transform(size_t index, const nlohmann::json& transform);   // the whole transform, as in source.add
     bool remove_transform(size_t index);
+    // What an empty canvas says in build mode under "No panels": how to
+    // start. "" outside build mode and once the open spec has a panel.
+    std::string canvas_hint() const;
     // The spec's own applet id, title and description (no focus), sent as
     // spec.set_text.
     bool set_spec_id(const std::string& id);

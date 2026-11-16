@@ -934,6 +934,11 @@ bool BuilderPane::set_transform(size_t index, const json& transform) {
     return run_plan(std::move(plan), "transform." + std::to_string(index));
 }
 
+std::string BuilderPane::canvas_hint() const {
+    if (!build_ || !open_ || !open_->spec.panels.empty()) return {};
+    return "Drop a data file, or pick a source in Sources";
+}
+
 bool BuilderPane::remove_transform(size_t index) {
     if (blocked()) return false;
     const spec::Source* s = spec_source();

@@ -82,7 +82,8 @@ Dragging a primitive onto the canvas places the new panel where it is dropped.
 
 ## The canvas
 
-The canvas draws the spec as the page does outside build mode.
+The canvas draws the spec as the page does outside build mode. While the spec has no panel, it says so, and how to
+start: "No panels", and under it "Drop a data file, or pick a source in Sources".
 
 | Gesture | What it does |
 |---|---|

@@ -577,6 +577,20 @@ TEST_CASE("builder pane: a primitive that does not fit says what it takes") {
     REQUIRE(p.add_primitive(spec::Primitive::heatmap));
 }
 
+// A new dashboard's empty canvas says how to start in build mode, and
+// nothing more once it has a panel or outside build mode.
+TEST_CASE("builder pane: an empty canvas says how to start") {
+    Rig r = rig("pane-empty");
+    BuilderPane& p = *r.pane;
+    CHECK(p.canvas_hint() == "Drop a data file, or pick a source in Sources");
+    p.set_build_mode(false);
+    CHECK(p.canvas_hint().empty());
+    p.set_build_mode(true);
+    p.select("table:run42_metrics");
+    REQUIRE(p.add_primitive(spec::Primitive::series));
+    CHECK(p.canvas_hint().empty());
+}
+
 TEST_CASE("builder pane: renames reach every reference, and the spec's own title") {
     Rig r = rig("pane-rename");
     BuilderPane& p = *r.pane;

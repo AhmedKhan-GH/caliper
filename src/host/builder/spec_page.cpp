@@ -504,6 +504,7 @@ struct SpecPage::Impl {
                 });
                 builder->draw(area, *runtime, look, &focused);
             } else {
+                runtime->set_empty_hint({});
                 runtime->draw(area, look);
                 focus_and_frame();
             }
