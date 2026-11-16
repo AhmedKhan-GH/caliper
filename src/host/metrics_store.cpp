@@ -4,6 +4,7 @@
 
 #include <duckdb.hpp>
 
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <unordered_set>
@@ -34,6 +35,11 @@ struct MetricsStore::Impl {
     std::mutex mu;
     uint64_t   next_id = 1;  // monotonic id source; seeded MAX(id)+1 on open
 
+    // Grows with every change of runs or scalars (revision()); written under
+    // mu, read without it.
+    std::atomic<uint64_t> revision{1};
+    void changed() { revision.fetch_add(1, std::memory_order_release); }
+
     // Known run ids, kept in sync under mu. Writers probe this instead of a SQL
     // COUNT so a hot training loop (a scalar per step) stays inert-for-unknown
     // without a round-trip per call. Seeded from disk in open().
@@ -56,6 +62,7 @@ void MetricsStore::close() {
     impl_->con.reset();
     impl_->db.reset();
     impl_->known_runs.clear();
+    impl_->changed();
 }
 
 bool MetricsStore::open(const std::string& path) {
@@ -111,6 +118,7 @@ bool MetricsStore::open(const std::string& path) {
     }
 
     auto& con = *impl_->con;
+    impl_->changed();
     impl_->ins_run       = con.Prepare("INSERT INTO runs VALUES (?, ?, ?, ?, ?)");
     impl_->ins_scalar    = con.Prepare("INSERT INTO scalars VALUES (?, ?, ?, ?)");
     impl_->ins_histogram = con.Prepare("INSERT INTO histograms VALUES (?, ?, ?, ?, ?)");
@@ -138,6 +146,7 @@ uint64_t MetricsStore::begin_run(const std::string& experiment,
     if (!res || res->HasError()) return 0;
     impl_->known_runs.insert(id);
     ++impl_->next_id;
+    impl_->changed();
     return id;
 }
 
@@ -157,6 +166,7 @@ void MetricsStore::scalar(uint64_t run, const std::string& tag,
     args.push_back(duckdb::Value::BIGINT(step));
     args.push_back(duckdb::Value::DOUBLE(value));
     impl_->ins_scalar->Execute(args, /*allow_stream_result=*/true);
+    impl_->changed();
 }
 
 void MetricsStore::histogram(uint64_t run, const std::string& tag, int64_t step,
@@ -220,6 +230,7 @@ void MetricsStore::delete_run(uint64_t run) {
     del("DELETE FROM images WHERE run = ?");
     del("DELETE FROM runs WHERE id = ?");
     impl_->known_runs.erase(run);   // future writes to this id: inert
+    impl_->changed();
 }
 
 void MetricsStore::clear_all() {
@@ -229,6 +240,7 @@ void MetricsStore::clear_all() {
                             "DELETE FROM images", "DELETE FROM runs"})
         impl_->con->Query(sql);
     impl_->known_runs.clear();
+    impl_->changed();
     // next_id is deliberately NOT reset: artifacts lineage keys on run ids.
 }
 
@@ -292,6 +304,54 @@ std::vector<std::pair<int64_t, double>> MetricsStore::scalars(
     auto res = stmt->Execute(args, /*allow_stream_result=*/true);
     if (!res || res->HasError()) return out;
 
+    for (auto chunk = res->Fetch(); chunk; chunk = res->Fetch()) {
+        for (duckdb::idx_t row = 0; row < chunk->size(); ++row) {
+            out.emplace_back(chunk->GetValue(0, row).GetValue<int64_t>(),
+                             chunk->GetValue(1, row).GetValue<double>());
+        }
+    }
+    return out;
+}
+
+uint64_t MetricsStore::revision() const {
+    return impl_->revision.load(std::memory_order_acquire);
+}
+
+std::vector<ScalarSeriesInfo> MetricsStore::scalar_series() {
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    std::vector<ScalarSeriesInfo> out;
+    if (!impl_->con) return out;
+    auto res = impl_->con->Query(
+        "SELECT run, tag, COUNT(*), MAX(step) FROM scalars GROUP BY run, tag ORDER BY run, tag");
+    if (!res || res->HasError()) return out;
+    for (auto chunk = res->Fetch(); chunk; chunk = res->Fetch()) {
+        for (duckdb::idx_t row = 0; row < chunk->size(); ++row) {
+            ScalarSeriesInfo s;
+            s.run       = static_cast<uint64_t>(chunk->GetValue(0, row).GetValue<int64_t>());
+            s.tag       = duckdb::StringValue::Get(chunk->GetValue(1, row));
+            s.points    = chunk->GetValue(2, row).GetValue<int64_t>();
+            s.last_step = chunk->GetValue(3, row).GetValue<int64_t>();
+            out.push_back(std::move(s));
+        }
+    }
+    return out;
+}
+
+std::vector<std::pair<int64_t, double>> MetricsStore::scalars(uint64_t run, const std::string& tag,
+                                                              uint64_t last) {
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    std::vector<std::pair<int64_t, double>> out;
+    if (!impl_->con || last == 0) return out;
+    auto stmt = impl_->con->Prepare(
+        "SELECT step, value FROM (SELECT step, value FROM scalars WHERE run = ? AND tag = ? "
+        "ORDER BY step DESC LIMIT ?) ORDER BY step");
+    if (!stmt || stmt->HasError()) return out;
+    duckdb::vector<duckdb::Value> args;
+    args.push_back(duckdb::Value::BIGINT(static_cast<int64_t>(run)));
+    args.push_back(duckdb::Value(tag));
+    args.push_back(duckdb::Value::BIGINT(static_cast<int64_t>(last > (uint64_t)INT64_MAX ? INT64_MAX : last)));
+    auto res = stmt->Execute(args, /*allow_stream_result=*/true);
+    if (!res || res->HasError()) return out;
     for (auto chunk = res->Fetch(); chunk; chunk = res->Fetch()) {
         for (duckdb::idx_t row = 0; row < chunk->size(); ++row) {
             out.emplace_back(chunk->GetValue(0, row).GetValue<int64_t>(),
