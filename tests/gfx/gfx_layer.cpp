@@ -667,6 +667,73 @@ TEST_CASE("gfx/Metal layer: a frame the core refuses leaves the target untouched
     CHECK(read_back(*gfx, color, W, H) == before);      // the new clear never ran
 }
 
+TEST_CASE("gfx/Metal layer: a write after a queued write lands last, while the queued one waits behind other work") {
+    // A write to a resource that an unfinished submit uses is queued as a blit. Here that blit
+    // waits behind a command buffer that waits on an event, the submit that used the resource
+    // completes, and a second write follows. The second write is the newer one, so a readback
+    // ordered after both must see its bytes, for a buffer and for a shared texture alike.
+    caliper_host::HostRenderer* renderer = gfx_metal_renderer();
+    std::unique_ptr<Backend> gfx = metal_layer();
+    if (!gfx || renderer == nullptr) CALIPER_SKIP_NO_GPU("no Metal device");
+    id<MTLDevice> device = (__bridge id<MTLDevice>)renderer->native_device();
+    id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)renderer->native_queue();
+    const uint32_t kW = 64;   // one row of RGBA8, 256 bytes
+    std::vector<uint32_t> older(kW), newer(kW);
+    for (uint32_t i = 0; i < kW; ++i) {
+        older[i] = 0xff000000u | i;
+        newer[i] = 0xff00ff00u | (i << 16);
+    }
+    // Both events are signalled whatever happens, so that nothing stays held on the shared queue.
+    struct Gates {
+        id<MTLSharedEvent> submit, queue;
+        ~Gates() {
+            submit.signaledValue = 1;
+            queue.signaledValue = 1;
+        }
+    };
+    for (const bool texture : {false, true}) {
+        @autoreleasepool {
+            CAPTURE(texture);
+            Gates gates{[device newSharedEvent], [device newSharedEvent]};
+            Buffer buf = gfx->create_buffer({kW * 4, kCopySrc | kCopyDst, false, "written"});
+            Texture tex = gfx->create_texture({kW, 1, Format::RGBA8Unorm, kSampled | kCopyDstTex | kCopySrcTex, "written"});
+            REQUIRE((buf && tex));
+            // The submit that uses the resource waits on the first event, so it is unfinished
+            // when the first write comes: the buffer is its copy's source, the texture its target.
+            Frame f;
+            f.wait(ExternalSync{ExternalSync::MetalEvent, (__bridge void*)gates.submit, 1});
+            f.copy_buffer_to_texture(buf, 0, kW * 4, tex);
+            const Serial s = gfx->submit(std::move(f));
+            REQUIRE_MESSAGE(s != 0, gfx->last_error());
+            // Other work on the queue that waits on the second event, ahead of the queued write.
+            id<MTLCommandBuffer> hold = [queue commandBuffer];
+            [hold encodeWaitForEvent:gates.queue value:1];
+            [hold commit];
+            auto write = [&](const std::vector<uint32_t>& d) {
+                return texture ? gfx->write_texture(tex, d.data(), kW * 4) : gfx->write_buffer(buf, 0, d.data(), kW * 4);
+            };
+            REQUIRE(write(older));
+            gates.submit.signaledValue = 1;
+            REQUIRE(gfx->wait(s));
+            CHECK(gfx->last_use(texture ? tex.id : buf.id) == s);   // the submit is over
+            REQUIRE(write(newer));
+            gates.queue.signaledValue = 1;
+            if (!texture) {   // the buffer is read through a copy into the texture, after both writes
+                Frame copy;
+                copy.copy_buffer_to_texture(buf, 0, kW * 4, tex);
+                REQUIRE(gfx->submit(std::move(copy)) != 0);
+            }
+            const std::vector<uint8_t> got = read_back(*gfx, tex, kW, 1);
+            const size_t d = first_diff(got, newer.data(), kW * 4);
+            const bool holds_older = first_diff(got, older.data(), kW * 4) == SIZE_MAX;
+            CHECK_MESSAGE(d == SIZE_MAX, "the readback differs from the newer write at byte ", d,
+                          std::string(holds_older ? ": it holds the older, queued write" : ""));
+            gfx->release(buf);
+            gfx->release(tex);
+        }
+    }
+}
+
 // The layer's CPU encode time for a draw list of 1,000 draws, on the recording backend and on
 // Metal: building the list (a uniform slice and a record per draw) and submitting it
 // (validation, the arena upload, encoding and commit). Opt-in, because timing needs a quiet
