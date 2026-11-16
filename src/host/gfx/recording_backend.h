@@ -2,7 +2,9 @@
 // records every resource operation and keeps a copy of every frame it is given, holds buffer
 // and texture contents in host memory, applies writes, copies and the clears of render passes
 // (RGBA8, BGRA8 and R8 colour targets take the clear colour, ID targets 0, depth 1.0; it does
-// not rasterise), and answers readbacks from those contents. Completion is immediate by
+// not rasterise or run dispatches), and answers readbacks from those contents. Where its caps
+// grant the import of an MTLBuffer or of Win32 memory, it takes any handle as a stand-in of the
+// claimed size with no memory behind it. Completion is immediate by
 // default; with auto_complete off a test completes serials itself, to exercise the
 // asynchronous paths.
 #pragma once
@@ -68,7 +70,7 @@ protected:
     uint64_t on_imgui_texture_id(uint32_t slot) override;
 
 private:
-    struct Buf { std::vector<uint8_t> own; uint8_t* wrapped = nullptr; uint64_t size = 0; };
+    struct Buf { std::vector<uint8_t> own; uint8_t* wrapped = nullptr; uint64_t size = 0; bool standin = false; };
     struct Tex { std::vector<uint8_t> px; uint32_t w = 0, h = 0, bpp = 0; Format format = Format::RGBA8Unorm; };
     uint8_t* bytes(uint32_t slot) { Buf& b = buffers_[slot]; return b.wrapped ? b.wrapped : b.own.data(); }
     void retire(Serial s);

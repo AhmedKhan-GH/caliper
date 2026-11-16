@@ -1,4 +1,5 @@
 #include "tensor_bridge.h"
+#include "gfx/colormap_keys.h"
 #include "renderer/host_renderer.h"
 #include <caliper/services/log_v1.h>
 
@@ -272,20 +273,65 @@ void expand_u8_to_rgba8(const uint8_t* src, int w, int h, int c, uint8_t* dst) {
 // TensorBridge
 // ---------------------------------------------------------------------------
 
-TensorBridge::TensorBridge(HostRenderer& renderer) : renderer_(renderer) {
-    // The backend declares the device its zero-copy path imports (spec §3.4).
-    // Vulkan reports CUDA only when a UUID-matched CUDA device is actually
-    // paired, so on a hybrid/CPU-Vulkan box the bridge advertises CPU and
-    // never accepts a CUDA tensor it would only end up staging.
-    active_device_ = renderer.interop_device();
+namespace {
+
+using caliper_gfx::Buffer;
+using caliper_gfx::Texture;
+
+// The reason every texture, import and view is refused where the renderer runs
+// no backend of the graphics layer (design/renderer-core.md, "The Vulkan
+// renderer until Windows parity").
+std::string no_backend(const HostRenderer& r) {
+    return std::string("the ") + r.name() + " renderer runs no backend of the graphics layer here: "
+           "Windows has none until the layer's Vulkan backend lands with Windows parity";
+}
+
+// A texture the bridge colormaps or fills (storage), uploads into (copy
+// destination), reads back (copy source) and ImGui samples.
+constexpr uint32_t kTextureUsage = caliper_gfx::kSampled | caliper_gfx::kStorageTex |
+                                   caliper_gfx::kCopyDstTex | caliper_gfx::kCopySrcTex;
+
+}  // namespace
+
+TensorBridge::TensorBridge(HostRenderer& renderer)
+    : renderer_(renderer), keys_(std::make_unique<caliper_gfx::cmap::KeyBlockCache>()) {}
+
+TensorBridge::~TensorBridge() {
+    // The renderer outlives the bridge (services_set_renderer(nullptr) drops it
+    // first), so its layer is still here to take everything back.
+    caliper_gfx::Backend* g = renderer_.gfx();
+    if (g == nullptr) return;
+    for (auto& kv : entries_) {
+        if (kv.second.tex) g->release(kv.second.tex);
+        if (kv.second.depth) g->release(kv.second.depth);
+    }
+    for (auto& kv : imported_) g->release(kv.second.buffer);
+}
+
+caliper_gfx::Backend* TensorBridge::gfx(const char* what) const {
+    caliper_gfx::Backend* g = renderer_.gfx();
+    if (g == nullptr && what != nullptr) bridge_log((std::string(what) + ": " + no_backend(renderer_)).c_str());
+    return g;
 }
 
 uint32_t TensorBridge::caps() const {
-    uint32_t c = renderer_.honors_stream_ordered_handoff()
-        ? CALIPER_BRIDGE_CAP_STREAM_ORDERED : 0u;
-    if (renderer_.supports_external_import())
-        c |= CALIPER_BRIDGE_CAP_IMPORT_ALLOC;
-    return c;
+    const caliper_gfx::Backend* g = renderer_.gfx();
+    if (g == nullptr) return 0u;
+    const caliper_gfx::Caps& c = g->caps();
+    uint32_t bits = 0u;
+    if (c.has(caliper_gfx::kCapWaitMetalEvent) || c.has(caliper_gfx::kCapWaitCudaStream))
+        bits |= CALIPER_BRIDGE_CAP_STREAM_ORDERED;
+    if (c.has(caliper_gfx::kCapImportMetalBuffer) || c.has(caliper_gfx::kCapImportWin32Memory))
+        bits |= CALIPER_BRIDGE_CAP_IMPORT_ALLOC;
+    return bits;
+}
+
+CaliperDeviceKind TensorBridge::active_device() const {
+    const caliper_gfx::Backend* g = renderer_.gfx();
+    if (g == nullptr) return CALIPER_DEV_CPU;
+    if (g->caps().has(caliper_gfx::kCapImportMetalBuffer)) return CALIPER_DEV_METAL;
+    if (g->caps().has(caliper_gfx::kCapImportWin32Memory)) return CALIPER_DEV_CUDA;
+    return CALIPER_DEV_CPU;
 }
 
 namespace {
@@ -314,27 +360,50 @@ bool accept_common(const CaliperTensor& t, CaliperDeviceKind active) {
 }
 }  // namespace
 
+CaliperTextureId TensorBridge::add_texture(Entry e, const char* what) {
+    caliper_gfx::Backend* g = gfx(what);
+    if (g == nullptr) return 0;
+    e.tex = g->create_texture({(uint32_t)e.w, (uint32_t)e.h, caliper_gfx::Format::RGBA8Unorm, kTextureUsage,
+                               "caliper.bridge.texture"});
+    if (!e.tex) {
+        bridge_log((std::string(what) + ": texture refused: " + g->last_error()).c_str());
+        return 0;
+    }
+    // The PUBLIC CaliperTextureId is the layer's ImGui handle (§5.4): the value
+    // imgui_impl_metal or imgui_impl_wgpu binds as ImTextureID.
+    const CaliperTextureId id = g->imgui_texture_id(e.tex);
+    if (id == 0) { g->release(e.tex); bridge_log((std::string(what) + ": null imtexture id").c_str()); return 0; }
+    entries_[id] = std::move(e);
+    return id;
+}
+
+void TensorBridge::drop(Entry& e) {
+    if (caliper_gfx::Backend* g = renderer_.gfx()) {
+        if (e.tex) g->release(e.tex);
+        if (e.depth) g->release(e.depth);
+    }
+    e.tex = e.depth = {};
+}
+
 CaliperTextureId TensorBridge::texture_from_tensor(const CaliperTensor* t, uint32_t) {
     if (!t)                                     { bridge_log("null tensor");  return 0; }
     if (t->dtype != CALIPER_DT_U8 || t->ndim != 3) { bridge_log("direct: want 3D u8"); return 0; }
     const int c = (int)t->shape[2];
     if (c < 1 || c > 4)                         { bridge_log("direct: C not in 1..4"); return 0; }
-    if (!accept_common(*t, active_device_))     return 0;
-
-    const int h = (int)t->shape[0], w = (int)t->shape[1];
-    const uint64_t tex = renderer_.tex_create_rgba8(w, h);
-    if (tex == 0)                               { bridge_log("tex_create failed"); return 0; }
-    // The PUBLIC CaliperTextureId is the renderer's ImGui-compatible handle
-    // (§5.4): the value imgui_impl_{metal,opengl3} bind directly as ImTextureID.
-    // The internal renderer id (`tex`) stays in Entry for upload/release.
-    const CaliperTextureId id = renderer_.tex_imtexture_id(tex);
-    if (id == 0) { renderer_.tex_release(tex); bridge_log("direct: null imtexture id"); return 0; }
+    if (!gfx("direct")) return 0;
+    if (!accept_common(*t, active_device()))    return 0;
 
     Entry e;
-    e.tex = tex; e.w = w; e.h = h; e.dtype = CALIPER_DT_U8;
+    e.w = (int)t->shape[1]; e.h = (int)t->shape[0]; e.dtype = CALIPER_DT_U8;
     e.channels = c; e.mapped = false;
-    if (!upload_into(e, t)) { renderer_.tex_release(tex); bridge_log("direct: upload failed"); return 0; }
-    entries_[id] = std::move(e);
+    const CaliperTextureId id = add_texture(std::move(e), "direct");
+    if (id == 0) return 0;
+    if (!upload_into(entries_[id], t)) {
+        drop(entries_[id]);
+        entries_.erase(id);
+        bridge_log("direct: upload failed");
+        return 0;
+    }
     return id;
 }
 
@@ -343,19 +412,20 @@ CaliperTextureId TensorBridge::texture_from_tensor_mapped(const CaliperTensor* t
     if (!t)                                        { bridge_log("null tensor"); return 0; }
     if (t->dtype != CALIPER_DT_F32 || t->ndim != 2) { bridge_log("mapped: want 2D f32"); return 0; }
     if (colormap_lut(colormap) == nullptr)         { bridge_log("mapped: bad colormap"); return 0; }
-    if (!accept_common(*t, active_device_))        return 0;
-
-    const int h = (int)t->shape[0], w = (int)t->shape[1];
-    const uint64_t tex = renderer_.tex_create_rgba8(w, h);
-    if (tex == 0)                                  { bridge_log("tex_create failed"); return 0; }
-    const CaliperTextureId id = renderer_.tex_imtexture_id(tex);   // ImGui handle (§5.4)
-    if (id == 0) { renderer_.tex_release(tex); bridge_log("mapped: null imtexture id"); return 0; }
+    if (!gfx("mapped")) return 0;
+    if (!accept_common(*t, active_device()))       return 0;
 
     Entry e;
-    e.tex = tex; e.w = w; e.h = h; e.dtype = CALIPER_DT_F32;
+    e.w = (int)t->shape[1]; e.h = (int)t->shape[0]; e.dtype = CALIPER_DT_F32;
     e.mapped = true; e.colormap = colormap; e.vmin = vmin; e.vmax = vmax;
-    if (!upload_into(e, t)) { renderer_.tex_release(tex); bridge_log("mapped: upload failed"); return 0; }
-    entries_[id] = std::move(e);
+    const CaliperTextureId id = add_texture(std::move(e), "mapped");
+    if (id == 0) return 0;
+    if (!upload_into(entries_[id], t)) {
+        drop(entries_[id]);
+        entries_.erase(id);
+        bridge_log("mapped: upload failed");
+        return 0;
+    }
     return id;
 }
 
@@ -381,7 +451,7 @@ bool TensorBridge::update_texture(CaliperTextureId tex, const CaliperTensor* t) 
     if (e.view) { bridge_log("update: id is a geometry view"); return false; }
 
     if (!desc_matches_entry(e, *t)) return false;
-    if (!accept_common(*t, active_device_)) return false;
+    if (!accept_common(*t, active_device())) return false;
     return upload_into(e, t);
 }
 
@@ -389,7 +459,7 @@ void TensorBridge::release_texture(CaliperTextureId tex) {
     auto it = entries_.find(tex);
     if (it == entries_.end()) return;
     if (it->second.view) { bridge_log("release: id is a geometry view"); return; }
-    renderer_.tex_release(it->second.tex);
+    drop(it->second);
     entries_.erase(it);
 }
 
@@ -418,31 +488,22 @@ bool TensorBridge::alloc_shared(CaliperDType dtype, int32_t ndim,
     }
     const size_t bytes = (size_t)numel * (size_t)dtype_size(dtype);
 
-    const uint64_t tex = renderer_.tex_create_rgba8(w, h);
-    if (tex == 0) { bridge_log("alloc_shared: tex_create failed"); return false; }
-    const CaliperTextureId id = renderer_.tex_imtexture_id(tex);   // ImGui handle (§5.4)
-    if (id == 0) { renderer_.tex_release(tex); bridge_log("alloc_shared: null imtexture id"); return false; }
-
+    // The tensor is CPU memory the bridge owns; update_texture then puts it
+    // into the texture as any CPU tensor. A backend whose kernels can write a
+    // layer texture in place (kCapCudaWritesTexture) is the device-shared
+    // route, which comes with the layer's Vulkan backend.
     Entry e;
-    e.tex = tex; e.w = w; e.h = h; e.dtype = dtype; e.channels = channels;
+    e.w = w; e.h = h; e.dtype = dtype; e.channels = channels;
     e.mapped = mapped; e.colormap = CALIPER_CMAP_VIRIDIS; e.vmin = 0.0f; e.vmax = 1.0f;
     e.shared = true;
-
-    // Literal zero-copy (§3.5): when the backend imports our device, back the
-    // shared tensor with a device buffer the applet's kernels write in place —
-    // update_texture then does no copy. Falls back to a CPU-unified vector when
-    // the backend has no device-shared texture path (GL or CUDA unpaired).
-    void* device_ptr = nullptr;
-    const bool device_shared =
-        active_device_ != CALIPER_DEV_CPU &&
-        renderer_.alloc_device_shared(tex, (uint64_t)bytes, &device_ptr) &&
-        device_ptr != nullptr;
-    if (!device_shared) e.shared_buf.assign(bytes, 0);
-    Entry& stored = (entries_[id] = std::move(e));
+    e.shared_buf.assign(bytes, 0);
+    const CaliperTextureId id = add_texture(std::move(e), "alloc_shared");
+    if (id == 0) return false;
+    Entry& stored = entries_[id];
 
     std::memset(out, 0, sizeof(*out));
     out->struct_size = sizeof(CaliperTensor);
-    out->data = device_shared ? device_ptr : stored.shared_buf.data();
+    out->data = stored.shared_buf.data();
     out->dtype = dtype;
     out->ndim = ndim;
     int64_t st = 1;
@@ -451,7 +512,7 @@ bool TensorBridge::alloc_shared(CaliperDType dtype, int32_t ndim,
         out->strides[i] = st;
         st *= shape[i];
     }
-    out->device = device_shared ? active_device_ : CALIPER_DEV_CPU;
+    out->device = CALIPER_DEV_CPU;
     out->device_index = 0;
 
     *out_texture = id;
@@ -473,19 +534,37 @@ CaliperAllocId TensorBridge::import_allocation(void* os_handle,
         handle_type != CALIPER_ALLOC_HANDLE_OPAQUE_FD &&
         handle_type != CALIPER_ALLOC_HANDLE_MTLBUFFER)
                                      { bridge_log("import: bad handle type"); return 0; }
-    const uint64_t rid =
-        renderer_.import_external_allocation(os_handle, size_bytes, handle_type);
-    if (rid == 0) { bridge_log("import: renderer refused"); return 0; }  // no insert
+    caliper_gfx::Backend* g = gfx("import");
+    if (g == nullptr) return 0;
+    if (handle_type == CALIPER_ALLOC_HANDLE_OPAQUE_FD) {
+        bridge_log("import: refused: an opaque file descriptor is not importable on this platform");
+        return 0;
+    }
+    caliper_gfx::ExternalBuffer ext;
+    ext.kind = handle_type == CALIPER_ALLOC_HANDLE_MTLBUFFER ? caliper_gfx::ExternalKind::MetalBuffer
+                                                             : caliper_gfx::ExternalKind::Win32Memory;
+    ext.handle = os_handle;
+    // The layer takes whole 4-byte words; every window the bridge and the
+    // geometry service read is a whole number of them.
+    ext.size = size_bytes / 4 * 4;
+    ext.usage = caliper_gfx::kVertex | caliper_gfx::kIndex | caliper_gfx::kStorage | caliper_gfx::kCopySrc;
+    ext.allow_copy = false;   // in place, or not at all: an import never copies
+    ext.label = "caliper.bridge.import";
+    if (ext.size == 0) { bridge_log("import: refused: smaller than one 4-byte word"); return 0; }
+    const caliper_gfx::ImportResult r = g->import_buffer(ext);
+    if (!r.buffer) { bridge_log(("import: refused: " + r.reason).c_str()); return 0; }   // no insert
 
     const CaliperAllocId id = next_alloc_id_++;
-    imported_[id] = ImportedAlloc{rid, size_bytes};
+    imported_[id] = ImportedAlloc{r.buffer, size_bytes};
     return id;
 }
 
 void TensorBridge::release_allocation(CaliperAllocId a) {
     auto it = imported_.find(a);
     if (it == imported_.end()) return;   // invalid id / double release: no-op
-    renderer_.release_external_allocation(it->second.renderer_id);
+    // The layer destroys it once the last submit that read it completed; a
+    // geometry draw's command buffer holds its own reference.
+    if (caliper_gfx::Backend* g = renderer_.gfx()) g->release(it->second.buffer);
     imported_.erase(it);
 }
 
@@ -506,21 +585,19 @@ bool TensorBridge::update_texture_from_alloc(CaliperTextureId tex, CaliperAllocI
     // allocation + offset are the address), so the null-data check is skipped.
     if (!desc_matches_entry(e, *desc)) return false;
     int64_t extent = 0;
-    if (!accept_shape(*desc, active_device_, &extent)) return false;
+    if (!accept_shape(*desc, active_device(), &extent)) return false;
 
     // Host-side bounds (the analog of cuMemGetAddressRange): the byte window the
-    // desc addresses must lie inside the imported allocation. The renderer
-    // re-checks against the real device allocation before touching it.
+    // desc addresses must lie inside the imported allocation. The layer
+    // re-checks against the buffer it imported before touching it.
     const uint64_t bytes = (uint64_t)extent * (uint64_t)dtype_size(desc->dtype);
     if (offset_bytes > alloc.size_bytes || bytes > alloc.size_bytes - offset_bytes) {
         bridge_log("update_alloc: window out of imported bounds"); return false;
     }
 
-    // Forward to the device update-from-imported path with the texture's stored
-    // (pinned-at-create) colormap/vmin/vmax — same values update_texture uses.
-    return renderer_.tex_update_from_imported(e.tex, alloc.renderer_id,
-                                              offset_bytes, *desc,
-                                              e.colormap, e.vmin, e.vmax);
+    // The texture's stored (pinned-at-create) colormap/vmin/vmax, as
+    // update_texture uses.
+    return upload_into(e, desc, alloc.buffer, offset_bytes);
 }
 
 bool TensorBridge::set_mapping(CaliperTextureId tex, int32_t colormap,
@@ -539,6 +616,8 @@ bool TensorBridge::set_mapping(CaliperTextureId tex, int32_t colormap,
 // --- caliper.geometry.v1: imported 3-D points into offscreen views ---------
 
 uint32_t TensorBridge::geom_caps() const {
+    // The geometry draws read the layer's imports and render into its textures.
+    if (renderer_.gfx() == nullptr) return 0u;
     const bool primitives = renderer_.supports_geometry_primitives();
     uint32_t c = (renderer_.supports_geometry() || primitives)
         ? CALIPER_GEOM_CAP_IMPORTED_POINTS : 0u;
@@ -555,17 +634,11 @@ CaliperTextureId TensorBridge::geom_create_view(uint32_t w, uint32_t h) {
     if (w == 0 || h == 0 || w > 16384 || h > 16384) {
         bridge_log("geom_view: bad size"); return 0;
     }
-    const uint64_t rid = renderer_.geom_create_view((int)w, (int)h);
-    if (rid == 0) { bridge_log("geom_view: renderer refused"); return 0; }
-    const CaliperTextureId pub = renderer_.tex_imtexture_id(rid);
-    Entry e;
-    e.tex  = rid;
-    e.w    = (int)w;
-    e.h    = (int)h;
-    e.view = true;
-    e.view_depth = false;
-    entries_[pub] = std::move(e);
-    return pub;
+    if (!gfx("geom_view")) return 0;
+    if (!renderer_.supports_geometry() && !renderer_.supports_geometry_primitives()) {
+        bridge_log("geom_view: renderer refused (no geometry here)"); return 0;
+    }
+    return make_view(w, h, false, "geom_view");
 }
 
 CaliperTextureId TensorBridge::geom_create_view_ex(uint32_t w, uint32_t h,
@@ -576,18 +649,43 @@ CaliperTextureId TensorBridge::geom_create_view_ex(uint32_t w, uint32_t h,
     if ((flags & ~CALIPER_GEOM_VIEW_DEPTH) != 0u) {
         bridge_log("geom_view_ex: bad flags"); return 0;
     }
+    if (!gfx("geom_view_ex")) return 0;
     if (!renderer_.supports_geometry_primitives()) {
         bridge_log("geom_view_ex: primitives unsupported"); return 0;
     }
-    const uint64_t rid = renderer_.geom_create_view_ex((int)w, (int)h, flags);
-    if (rid == 0) { bridge_log("geom_view_ex: renderer refused"); return 0; }
-    const CaliperTextureId pub = renderer_.tex_imtexture_id(rid);
+    return make_view(w, h, (flags & CALIPER_GEOM_VIEW_DEPTH) != 0u, "geom_view_ex");
+}
+
+CaliperTextureId TensorBridge::make_view(uint32_t w, uint32_t h, bool depth, const char* what) {
+    caliper_gfx::Backend* g = renderer_.gfx();
+    // A layer texture the geometry draws render into and ImGui samples, and a
+    // depth target beside it; both cleared at once (opaque black, depth 1), so
+    // sampling before the first draw is defined.
     Entry e;
-    e.tex  = rid;
-    e.w    = (int)w;
-    e.h    = (int)h;
+    e.w = (int)w;
+    e.h = (int)h;
     e.view = true;
-    e.view_depth = (flags & CALIPER_GEOM_VIEW_DEPTH) != 0u;
+    e.view_depth = depth;
+    e.tex = g->create_texture({w, h, caliper_gfx::Format::RGBA8Unorm,
+                               caliper_gfx::kSampled | caliper_gfx::kRenderTarget | caliper_gfx::kCopySrcTex,
+                               "caliper.geometry.view"});
+    if (e.view_depth && e.tex)
+        e.depth = g->create_texture({w, h, caliper_gfx::Format::Depth32Float, caliper_gfx::kRenderTarget,
+                                     "caliper.geometry.depth"});
+    caliper_gfx::Frame f;
+    if (e.tex && (e.depth || !e.view_depth)) {
+        caliper_gfx::RenderTarget target;
+        target.color = e.tex;
+        target.depth = e.depth;
+        target.clear_rgba = 0xff000000u;
+        f.render(caliper_gfx::DrawList(target));
+    }
+    if (!e.tex || (e.view_depth && !e.depth) || g->submit(std::move(f)) == 0) {
+        bridge_log((std::string(what) + ": renderer refused: " + g->last_error()).c_str());
+        drop(e);
+        return 0;
+    }
+    const CaliperTextureId pub = g->imgui_texture_id(e.tex);
     entries_[pub] = std::move(e);
     return pub;
 }
@@ -595,7 +693,7 @@ CaliperTextureId TensorBridge::geom_create_view_ex(uint32_t w, uint32_t h,
 void TensorBridge::geom_release_view(CaliperTextureId view) {
     auto it = entries_.find(view);
     if (it == entries_.end() || !it->second.view) return;   // wrong door: no-op
-    renderer_.tex_release(it->second.tex);
+    drop(it->second);
     entries_.erase(it);
 }
 
@@ -628,7 +726,7 @@ bool TensorBridge::geom_draw_points(CaliperTextureId view,
             pos_bytes > pa->second.size_bytes - pos_offset) {
             bridge_log("geom_draw: positions out of imported bounds"); return false;
         }
-        pos_rid = pa->second.renderer_id;
+        pos_rid = pa->second.buffer.id;
 
         if (attr_alloc != 0) {
             auto aa = imported_.find(attr_alloc);
@@ -641,10 +739,10 @@ bool TensorBridge::geom_draw_points(CaliperTextureId view,
             }
             lut = colormap_lut(colormap);
             if (!lut) { bridge_log("geom_draw: bad colormap"); return false; }
-            attr_rid = aa->second.renderer_id;
+            attr_rid = aa->second.buffer.id;
         }
     }
-    return renderer_.geom_draw_points(vt->second.tex, cam->view, cam->proj,
+    return renderer_.geom_draw_points(vt->second.tex.id, cam->view, cam->proj,
                                       pos_rid, pos_offset, count,
                                       attr_rid, attr_offset,
                                       lut, vmin, vmax, size_px, clear_rgba);
@@ -800,7 +898,7 @@ bool TensorBridge::geom_draw_primitives_impl(
                           4u, "indices")) {
                 return false;
             }
-            index_rid = ia->second.renderer_id;
+            index_rid = ia->second.buffer.id;
             consumed = d->index_count;
         }
         if ((d->topology == CALIPER_GEOM_TOPO_LINES ||
@@ -823,7 +921,7 @@ bool TensorBridge::geom_draw_primitives_impl(
                           12u, "normals")) {
                 return false;
             }
-            normal_rid = na->second.renderer_id;
+            normal_rid = na->second.buffer.id;
         }
 
         uint64_t attr_rid = 0;
@@ -836,7 +934,7 @@ bool TensorBridge::geom_draw_primitives_impl(
                           4u, "attributes")) {
                 return false;
             }
-            attr_rid = aa->second.renderer_id;
+            attr_rid = aa->second.buffer.id;
             if (d->color_mode == CALIPER_GEOM_COLOR_COLORMAP) {
                 lut = colormap_lut(d->colormap);
                 if (!lut) { reject_i("bad colormap"); return false; }
@@ -892,7 +990,7 @@ bool TensorBridge::geom_draw_primitives_impl(
                               d13->instance_count, 64u, "instances")) {
                     return false;
                 }
-                instance_rid = ma->second.renderer_id;
+                instance_rid = ma->second.buffer.id;
             }
 
             if (has_tint) {
@@ -919,7 +1017,7 @@ bool TensorBridge::geom_draw_primitives_impl(
                 if (d13->instance_attr_offset / 4u > UINT32_MAX) {
                     reject_i("instance attr base exceeds 32 bits"); return false;
                 }
-                instance_attr_rid = ta->second.renderer_id;
+                instance_attr_rid = ta->second.buffer.id;
                 // G12: the tint needs a resolvable colormap. Tint-LUT rule
                 // (§3.3): an instanced-tint draw carries a real LUT regardless
                 // of base color_mode, resolved from the base record's colormap.
@@ -940,12 +1038,12 @@ bool TensorBridge::geom_draw_primitives_impl(
             auto te = entries_.find(d12->texture);
             if (te == entries_.end()) { reject_i("unknown texture"); return false; }
             if (te->second.view) { reject_i("geometry view used as texture"); return false; }
-            uv_rid = ua->second.renderer_id;
-            texture_rid = te->second.tex;
+            uv_rid = ua->second.buffer.id;
+            texture_rid = te->second.tex.id;
         }
 
         HostGeomDraw hd;
-        hd.pos_alloc = pa->second.renderer_id;
+        hd.pos_alloc = pa->second.buffer.id;
         hd.pos_offset = d->pos_offset;
         hd.vertex_count = d->vertex_count;
         hd.index_alloc = index_rid;
@@ -979,39 +1077,89 @@ bool TensorBridge::geom_draw_primitives_impl(
     }
 
     const HostGeomDraw* resolved_ptr = resolved.empty() ? nullptr : resolved.data();
-    return renderer_.geom_draw_primitives(vt->second.tex, cam->view, cam->proj,
+    return renderer_.geom_draw_primitives(vt->second.tex.id, vt->second.depth.id, cam->view, cam->proj,
                                           resolved_ptr, draw_count, clear_rgba);
 }
 
-bool TensorBridge::upload_into(Entry& e, const CaliperTensor* t) {
-    if (t->device != CALIPER_DEV_CPU) {
-        // Device path — extent already bounded by accept_common (finding #1).
-        const uint32_t* lut = e.mapped ? colormap_lut(e.colormap) : nullptr;
-        return renderer_.tex_update_from_device(e.tex, *t, lut, e.vmin, e.vmax);
+bool TensorBridge::upload_into(Entry& e, const CaliperTensor* t, caliper_gfx::Buffer alloc,
+                               uint64_t offset_bytes) {
+    caliper_gfx::Backend* g = gfx("update");
+    if (g == nullptr) return false;
+    caliper_gfx::TensorSource src;
+    src.w = (uint32_t)e.w;
+    src.h = (uint32_t)e.h;
+    caliper_gfx::TextureMapping m;
+    // An image of one or three channels from the host becomes RGBA8 texels
+    // here, one row after another; the layer then uploads them once.
+    std::vector<uint8_t> expanded;
+    CaliperTensor rgba;
+    if (e.mapped) {
+        const caliper_gfx::shaders::Cmap* block = keys_->block(e.colormap, e.vmin, e.vmax);
+        if (block == nullptr) { bridge_log("update: bad colormap"); return false; }
+        m.cmap = block;
+        m.cmap_bytes = (uint32_t)sizeof *block;
+        src.dtype = CALIPER_DT_F32;
+        src.channels = 1;
+        src.stride_x = 1;
+    } else {
+        src.dtype = CALIPER_DT_U8;
+        src.channels = 4;
+        src.stride_x = 4;
+        if (e.channels != 4) {
+            if (alloc || t->device != CALIPER_DEV_CPU) {
+                bridge_log("update: a device image must have four channels (RGBA8)");
+                return false;
+            }
+            expanded.resize((size_t)e.w * (size_t)e.h * 4);
+            expand_u8_to_rgba8((const uint8_t*)t->data, e.w, e.h, e.channels, expanded.data());
+            rgba = *t;
+            rgba.data = expanded.data();
+            rgba.shape[2] = 4;
+            t = &rgba;
+        }
     }
-    // A backend that colormaps host memory on its GPU (the browser's WebGPU
-    // renderer, web/wasm) takes the f32 bytes as they are; every other backend
-    // returns false and keeps the CPU staging below.
-    // Either way the host bytes are copied once into GPU memory, an upload the
-    // renderer's copy counters count (HostRenderer::note_copy): the f32 values
-    // here, the converted RGBA8 texels below. The device path above makes none.
-    if (e.mapped &&
-        renderer_.tex_update_mapped_from_host(e.tex, (const float*)t->data, e.w, e.h,
-                                              colormap_lut(e.colormap), e.vmin, e.vmax)) {
-        last_upload_path_ = renderer_.last_device_path();
-        renderer_.note_copy((uint64_t)e.w * (uint64_t)e.h * sizeof(float));
-        return true;
+    src.tensor = t;
+    src.buffer = alloc;
+    src.offset = offset_bytes;
+    const caliper_gfx::UpdateResult r = g->update_texture_from_tensor(e.tex, src, m);
+    if (!r.ok) {
+        bridge_log(("update: refused by the graphics layer: " + g->last_error()).c_str());
+        return false;
     }
-    last_upload_path_ = "cpu-staged";
-    std::vector<uint8_t> staging((size_t)e.w * (size_t)e.h * 4);
-    if (e.mapped)
-        map_f32_to_rgba8((const float*)t->data, e.w, e.h,
-                         colormap_lut(e.colormap), e.vmin, e.vmax, staging.data());
-    else
-        expand_u8_to_rgba8((const uint8_t*)t->data, e.w, e.h, e.channels, staging.data());
-    if (!renderer_.tex_upload_rgba8(e.tex, staging.data(), e.w, e.h)) return false;
-    renderer_.note_copy(staging.size());
+    last_path_ = r.path;
+    last_serial_ = r.serial;
+    // A copy of host bytes on the way to pixels is counted where the views'
+    // copy counters read it (HostRenderer::note_copy); an in-place read is not.
+    if (r.route == caliper_gfx::Route::CopiedFromHost) renderer_.note_copy(r.bytes_copied);
     return true;
+}
+
+bool TensorBridge::completed(uint64_t serial) const {
+    const caliper_gfx::Backend* g = renderer_.gfx();
+    return serial == 0 || g == nullptr || g->completed(serial);
+}
+
+void TensorBridge::wait(uint64_t serial) {
+    caliper_gfx::Backend* g = renderer_.gfx();
+    if (serial != 0 && g != nullptr) g->wait(serial);
+}
+
+caliper_gfx::Texture TensorBridge::texture(CaliperTextureId tex) const {
+    auto it = entries_.find(tex);
+    return it == entries_.end() ? caliper_gfx::Texture{} : it->second.tex;
+}
+
+bool TensorBridge::readback(CaliperTextureId tex, std::vector<uint8_t>* rgba) {
+    auto it = entries_.find(tex);
+    caliper_gfx::Backend* g = renderer_.gfx();
+    if (it == entries_.end() || g == nullptr || rgba == nullptr) return false;
+    const Entry& e = it->second;
+    const caliper_gfx::Readback rb = g->read_texture(e.tex, 0, 0, (uint32_t)e.w, (uint32_t)e.h);
+    if (!rb) return false;
+    // Ordered after every submit and every command buffer committed before it
+    // on the queue, so it sees every update and draw made before the call.
+    if (!g->wait(g->last_use(e.tex))) { g->release(rb); return false; }
+    return g->take_readback(rb, rgba) && rgba->size() == (size_t)e.w * (size_t)e.h * 4;
 }
 
 }  // namespace caliper_host

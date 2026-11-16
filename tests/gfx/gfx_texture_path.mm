@@ -19,7 +19,10 @@
 // committed record tests/gfx/references/texture_path.txt was made at the first commit of migration
 // step 8 from the old path, before any code moved. A line per case holds the readback's FNV-1a
 // hash, the path label, the renderer's copies and bytes for the update, and how many texels of the
-// old path differ from the CPU reference (cpu_ref_differs, "none" when it equals it). The line
+// old path differ from the CPU reference (cpu_ref_differs, "none" when it equals it). The first row
+// holds the texture path to it: every texel equals the CPU reference, the readback equals the
+// record byte for byte wherever the record equals the CPU reference too, and the path label,
+// copies and bytes are the record's. The second row compares with the old path's images. The line
 // format is the one of the points view's rows:
 //
 //   <case> <width>x<height> fnv1a64=<16 hex digits> <key>=<value> ... info=<text to the line's end>
@@ -571,17 +574,15 @@ caliper_host::HostRenderer::CopyCount copies_now() {
     return r ? r->copy_count() : caliper_host::HostRenderer::CopyCount{};
 }
 
-// A bridge texture's texels, read back on the renderer's queue after every update made before it.
+// A bridge texture's texels, read back through the graphics layer after every update made before it.
 std::vector<uint8_t> bridge_readback(CaliperTextureId id, int w, int h) {
-    return caliper_host::services_renderer()->debug_readback_rgba8(id, w, h);
+    std::vector<uint8_t> px;
+    if (!caliper_host::services_bridge()->readback(id, &px) || px.size() != (size_t)w * h * 4) px.clear();
+    return px;
 }
 
-// The path label of the bridge's last update of a texture.
-std::string bridge_path(const Case& c) {
-    if (c.src == Src::Cpu && c.client != Client::BridgeAlloc) return caliper_host::services_bridge()->last_upload_path();
-    const char* p = caliper_host::services_renderer()->last_device_path();
-    return p ? p : "";
-}
+// The path label of the bridge's last update of a texture, as the graphics layer returned it.
+std::string bridge_path(const Case&) { return caliper_host::services_bridge()->last_path(); }
 
 Result run_bridge(Core& core, const Case& c) {
     Result r;
@@ -826,11 +827,192 @@ TEST_CASE("gfx/Metal texture path: every case against its reference record") {
         REQUIRE_MESSAGE(want != nullptr, "no reference line in ", refs.path());
         CHECK(got.width == want->width);
         CHECK(got.height == want->height);
-        CHECK(got.hash == want->hash);
-        for (const char* key : {"path", "imported", "copies", "bytes", "cpu_ref_differs"})
+        // Every texel is the CPU reference's. Where the old path's record equals the CPU reference
+        // too, the readback is the old path's, byte for byte; where it does not (its fast math put
+        // values one level off or flushed subnormals), the second row lists those pixels.
+        const std::vector<size_t> off = differing(r.px, r.want);
+        CHECK_MESSAGE(off.empty(), off.size(), " texels differ from the CPU reference");
+        if (want->field("cpu_ref_differs") == "none") CHECK(got.hash == want->hash);
+        for (const char* key : {"path", "imported", "copies", "bytes"})
             CHECK_MESSAGE(got.field(key) == want->field(key), key);
     }
     MESSAGE(run, " cases run");
+}
+
+namespace {
+
+// The level of a colormap whose colour a texel has, nearest to `near` where levels share a colour;
+// -1 for a colour that is no level's.
+int level_of(const uint8_t* px, int32_t colormap, int near) {
+    const uint32_t* lut = caliper_host::colormap_lut(colormap);
+    const uint32_t c = px[0] | (px[1] << 8) | (px[2] << 16) | (uint32_t(px[3]) << 24);
+    int best = -1;
+    for (int k = 0; k < 256; ++k)
+        if (lut[k] == c && (best < 0 || std::abs(k - near) < std::abs(best - near))) best = k;
+    return best;
+}
+
+bool subnormal(float f) { return f != 0.0f && std::fpclassify(f) == FP_SUBNORMAL; }
+
+std::string coords(const std::vector<size_t>& at, int w, size_t limit) {
+    std::string s;
+    for (size_t i = 0; i < at.size() && i < limit; ++i)
+        s += (i ? ", (" : "(") + std::to_string(at[i] % w) + ", " + std::to_string(at[i] / w) + ")";
+    if (at.size() > limit) s += " and " + std::to_string(at.size() - limit) + " more";
+    return s;
+}
+
+}  // namespace
+
+// The comparison of migration step 8: each case's readback against the old path's image of the
+// same case, read from CALIPER_GFX_REFERENCE_IMAGES (the PNG files that CALIPER_GFX_CAPTURE_DIR
+// wrote at the step's first commit), pixel by pixel. A pixel may differ only where the new image
+// equals the CPU reference and the old one does not; each case prints one sentence with the
+// number of differing pixels, their reasons and their coordinates (the first 24, and every one in
+// texture-<case>-differs.txt beside the captures when CALIPER_GFX_CAPTURE_DIR is set).
+TEST_CASE("gfx/Metal texture path: the new path's images against the old path's, pixel by pixel") {
+    const char* old_dir = env("CALIPER_GFX_REFERENCE_IMAGES");
+    if (old_dir == nullptr) {
+        MESSAGE("CALIPER_GFX_REFERENCE_IMAGES names no folder of the old path's images; nothing compared");
+        return;
+    }
+    Core core;
+    if (!core.gpu) CALIPER_SKIP_NO_GPU("no Metal device");
+    size_t run = 0, explained_total = 0;
+    for (const Case& c : all_cases()) {
+        if (!selected(c)) continue;
+        ++run;
+        INFO("case " << c.name);
+        const std::string file = std::string(old_dir) + "/texture-" + c.name + ".png";
+        int w = 0, h = 0, n = 0;
+        uint8_t* old = stbi_load(file.c_str(), &w, &h, &n, 4);
+        REQUIRE_MESSAGE(old != nullptr, "no old image ", file);
+        std::vector<uint8_t> was(old, old + (size_t)w * h * 4);
+        stbi_image_free(old);
+        REQUIRE(w == c.w);
+        REQUIRE(h == c.h);
+        const Result r = run_case(core, c);
+        REQUIRE(r.ok);
+        REQUIRE(r.px.size() == was.size());
+        const std::vector<float> values = c.channels == 0 ? f32_values(c) : std::vector<float>{};
+        const bool flushed_range = subnormal(c.vmin) || subnormal(c.vmax);
+        std::vector<size_t> flushed, boundary, other_old, wrong_new;
+        size_t differ = 0;
+        for (size_t i = 0; i < was.size() / 4; ++i) {
+            const uint8_t* o = &was[i * 4];
+            const uint8_t* nw = &r.px[i * 4];
+            const uint8_t* ref = &r.want[i * 4];
+            const bool new_ref = std::memcmp(nw, ref, 4) == 0;
+            if (!new_ref) wrong_new.push_back(i);
+            if (std::memcmp(o, nw, 4) == 0) continue;
+            ++differ;
+            if (!new_ref) continue;
+            // The new texel is the reference's and the old one is not: say why the old was wrong.
+            if (c.channels == 0 && (flushed_range || subnormal(values[i]))) {
+                flushed.push_back(i);
+                continue;
+            }
+            const int want_level = c.channels == 0 ? level_of(ref, c.colormap, 0) : -1;
+            const int old_level = c.channels == 0 ? level_of(o, c.colormap, want_level) : -1;
+            if (want_level >= 0 && old_level >= 0 && std::abs(old_level - want_level) == 1) boundary.push_back(i);
+            else other_old.push_back(i);
+        }
+        const size_t total = was.size() / 4;
+        std::string sentence = "case " + c.name + ": " + std::to_string(differ) + " of " + std::to_string(total) +
+                               " pixels differ between the old path's image and the new one";
+        if (differ == 0) {
+            sentence += ".";
+        } else {
+            sentence += "; " + std::to_string(flushed.size() + boundary.size() + other_old.size()) +
+                        " of them are pixels where the new image equals the CPU reference map_f32_to_rgba8 and the old one "
+                        "does not: " + std::to_string(flushed.size()) +
+                        " because the old shader's fast math flushed a subnormal range end or value to zero" +
+                        (flushed.empty() ? "" : " at " + coords(flushed, c.w, 24)) + ", " + std::to_string(boundary.size()) +
+                        " at a colormap level boundary that the old shader's division put one level off" +
+                        (boundary.empty() ? "" : " at " + coords(boundary, c.w, 24)) + ", and " +
+                        std::to_string(other_old.size()) + " for another reason" +
+                        (other_old.empty() ? "" : " at " + coords(other_old, c.w, 24)) + "; " +
+                        std::to_string(differ - flushed.size() - boundary.size() - other_old.size()) +
+                        " differ where the new image is not the CPU reference.";
+        }
+        std::printf("[texture-compare] %s\n", sentence.c_str());
+        if (const char* dir = env("CALIPER_GFX_CAPTURE_DIR"); dir != nullptr && differ > 0) {
+            std::ofstream f(std::string(dir) + "/texture-" + c.name + "-differs.txt");
+            auto list = [&](const char* why, const std::vector<size_t>& at) {
+                for (size_t i : at) f << (i % c.w) << " " << (i / c.w) << " " << why << "\n";
+            };
+            list("flushed-subnormal", flushed);
+            list("level-boundary", boundary);
+            list("other", other_old);
+        }
+        explained_total += flushed.size() + boundary.size();
+        CHECK_MESSAGE(wrong_new.empty(), wrong_new.size(), " pixels of the new image differ from the CPU reference at ",
+                      coords(wrong_new, c.w, 24));
+        CHECK_MESSAGE(other_old.empty(), "pixels that differ for no known reason at ", coords(other_old, c.w, 24));
+    }
+    MESSAGE(run, " cases compared with the old path's images; ", explained_total,
+            " pixels differ, each where the old path differed from the CPU reference");
+}
+
+// The canvas: a heatmap live view drawn raw (one texel on one canvas pixel at the top-left corner)
+// shows its layer texture through ImGui exactly. A windowed heatmap and an image are then drawn
+// beside it, and with CALIPER_GFX_CAPTURE_DIR set the canvas is written as texture-canvas.png.
+TEST_CASE("gfx/Metal texture path: the views draw their layer textures on the canvas") {
+    Core core;
+    if (!core.gpu) CALIPER_SKIP_NO_GPU("no Metal device");
+    const int W = 96, H = 64;
+    std::vector<float> ramp((size_t)W * H);
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) ramp[(size_t)y * W + x] = -1.0f + 2.0f * (float)x / (float)(W - 1) + 0.25f * (float)y / (float)H;
+    CaliperTensor t = tensor(ramp.data(), CALIPER_DT_F32, {H, W}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot s{};
+    s.struct_size = sizeof s;
+    s.name = "raw";
+    s.kind = CALIPER_LIVE_KIND_HEATMAP;
+    s.data = &t;
+    s.colormap = CALIPER_CMAP_RDBU;
+    s.vmin = -1.0f;
+    s.vmax = 1.25f;
+    s.flags = CALIPER_LIVE_APPLY_RAW;
+    s.seq = 1;
+    REQUIRE_MESSAGE(caliper_core_live_apply(core.core, &s) == 1, caliper_core_last_error(core.core));
+    for (int i = 0; i < 3; ++i) caliper_core_frame(core.core);
+    std::vector<uint8_t> canvas(256 * 256 * 4);
+    REQUIRE(caliper_core_read_pixels(core.core, canvas.data(), 256 * 4) == 1);
+    std::vector<uint8_t> want((size_t)W * H * 4);
+    caliper_host::map_f32_to_rgba8(ramp.data(), W, H, caliper_host::colormap_lut(CALIPER_CMAP_RDBU), -1.0f, 1.25f,
+                                   want.data());
+    size_t bad = 0;
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x)
+            bad += std::memcmp(&canvas[((size_t)y * 256 + x) * 4], &want[((size_t)y * W + x) * 4], 4) != 0;
+    CHECK_MESSAGE(bad == 0, bad, " of ", W * H, " pixels of the raw heatmap differ from the CPU reference on the canvas");
+
+    // A windowed heatmap from an MTLBuffer and an image, drawn in the views' grid.
+    id<MTLBuffer> buf = metal_buffer(core, Src::Shared, ramp.data(), ramp.size() * 4, 0);
+    CaliperTensor tm = tensor((__bridge void*)buf, CALIPER_DT_F32, {H, W}, CALIPER_DEV_METAL);
+    s.name = "heatmap";
+    s.data = &tm;
+    s.colormap = CALIPER_CMAP_VIRIDIS;
+    s.flags = 0;
+    REQUIRE_MESSAGE(caliper_core_live_apply(core.core, &s) == 1, caliper_core_last_error(core.core));
+    std::vector<uint8_t> img((size_t)W * H * 4);
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {
+            uint8_t* p = &img[((size_t)y * W + x) * 4];
+            p[0] = (uint8_t)(x * 255 / (W - 1));
+            p[1] = (uint8_t)(y * 255 / (H - 1));
+            p[2] = (uint8_t)((x ^ y) & 0xff);
+            p[3] = 255;
+        }
+    CaliperTensor ti = tensor(img.data(), CALIPER_DT_U8, {H, W, 4}, CALIPER_DEV_CPU);
+    s.name = "image";
+    s.kind = CALIPER_LIVE_KIND_IMAGE;
+    s.data = &ti;
+    REQUIRE_MESSAGE(caliper_core_live_apply(core.core, &s) == 1, caliper_core_last_error(core.core));
+    for (int i = 0; i < 3; ++i) caliper_core_frame(core.core);
+    REQUIRE(caliper_core_read_pixels(core.core, canvas.data(), 256 * 4) == 1);
+    capture("canvas", canvas, 256, 256);
 }
 
 CALIPER_GPU_TEST_MAIN()

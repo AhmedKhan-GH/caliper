@@ -30,6 +30,7 @@
 
 #include "embed/embed_core.h"
 #include "embed/render_stats.h"   // copy counters
+#include "host_services.h"        // services_bridge: the texture views' update serials
 #include "live/live_attach.h"   // the session-row text the picker shares with the app
 #include "live/live_controls.h"
 #include "live/live_net_source.h"
@@ -37,6 +38,7 @@
 #include "live/live_source.h"
 #include "live/live_views_scene.h"   // scene views (kind 6) and their messages
 #include "live/live_views_state.h"   // the event sink and the payload maps of a stream's views
+#include "tensor_bridge.h"
 
 #include <imgui.h>
 
@@ -109,7 +111,7 @@ struct CaliperLiveState {
         // v1.2 path
         float       vmin = 0.0f, vmax = 1.0f;
         bool        have_range = false;     // last finite range (non-finite stats fallback)
-        void*       inflight = nullptr;     // +1 handle on this view's last GPU update
+        uint64_t    inflight = 0;           // the graphics layer's serial of this view's last GPU update
         std::string error;
     };
     std::vector<View> views;
@@ -140,10 +142,7 @@ bool uses_live_views(uint32_t kind) {
            (kind != CALIPER_LIVE_KIND_HEATMAP && kind != CALIPER_LIVE_KIND_IMAGE);
 }
 
-void drop_inflight(CaliperCore* core, View& v) {
-    if (v.inflight) core->renderer->device_update_release(v.inflight);
-    v.inflight = nullptr;
-}
+void drop_inflight(CaliperCore*, View& v) { v.inflight = 0; }
 
 void remove_view(CaliperCore* core, View& v) {
     drop_inflight(core, v);
@@ -202,7 +201,7 @@ void reconcile(CaliperCore* core, CaliperLiveState* L, const std::vector<SourceV
         if (it != L->views.end()) {
             next.push_back(std::move(*it));
             it->key = 0;   // consumed
-            it->inflight = nullptr;
+            it->inflight = 0;
             it->shown = false;
             continue;
         }
@@ -264,8 +263,8 @@ bool apply_v12(CaliperCore* core, View& v, const Snapshot& s) {
         v.error = caliper_core_last_error(core);
         return false;
     }
-    drop_inflight(core, v);
-    v.inflight = core->renderer->device_update_retain_last();
+    const caliper_host::TensorBridge* bridge = caliper_host::services_bridge();
+    v.inflight = bridge ? bridge->last_serial() : 0;
     return true;
 }
 
@@ -351,7 +350,8 @@ bool read_done(CaliperCore* core, View& v) {
     if (!v.shown) return true;
     if (v.typed) return caliper_core_live_view_read_done(core, v.name.c_str()) == 1;
     if (!v.inflight) return true;
-    if (!core->renderer->device_update_is_done(v.inflight)) return false;
+    const caliper_host::TensorBridge* bridge = caliper_host::services_bridge();
+    if (bridge && !bridge->completed(v.inflight)) return false;
     drop_inflight(core, v);
     return true;
 }

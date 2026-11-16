@@ -124,8 +124,23 @@ void RecordingBackend::on_write_texture(uint32_t slot, const void* data, uint32_
 void* RecordingBackend::on_mapped(uint32_t slot) { return bytes(slot); }
 
 bool RecordingBackend::on_import_buffer(uint32_t slot, const ExternalBuffer& ext, ImportResult* r) {
+    // Device memory, where the caps say this backend imports it: a stand-in of the claimed size
+    // with no memory behind it, reported in place, so that headless tests can drive the in-place
+    // routes (the tensor bridge's imports and device tensors) with any handle, which is never
+    // read. A copy reads it as zeros.
+    if ((ext.kind == ExternalKind::MetalBuffer && caps().has(kCapImportMetalBuffer)) ||
+        (ext.kind == ExternalKind::Win32Memory && caps().has(kCapImportWin32Memory))) {
+        grow(buffers_, slot);
+        buffers_[slot] = Buf{};
+        buffers_[slot].size = ext.size;
+        buffers_[slot].standin = true;
+        r->route = Route::InPlace;
+        r->bytes_copied = 0;
+        ops_.push_back({OpKind::Import, HandleKind::Buffer, slot, 0, 0, r->route});
+        return true;
+    }
     if (ext.kind != ExternalKind::HostMemory) {
-        r->reason = "the recording backend imports host memory only";
+        r->reason = "the recording backend imports host memory, and device memory only where its caps say so";
         return false;
     }
     grow(buffers_, slot);
@@ -176,8 +191,12 @@ bool RecordingBackend::on_submit(Serial s, const Frame& frame, Stats*, std::stri
     for (const Pass& pass : frame.passes()) {
         if (const auto* c = std::get_if<CopyPass>(&pass)) {
             Tex& t = textures_[handle_slot(c->dst.id)];
-            const uint8_t* src = bytes(handle_slot(c->src.id)) + c->offset;
             const size_t row = size_t(t.w) * t.bpp;
+            if (buffers_[handle_slot(c->src.id)].standin) {
+                std::fill(t.px.begin(), t.px.end(), uint8_t(0));
+                continue;
+            }
+            const uint8_t* src = bytes(handle_slot(c->src.id)) + c->offset;
             for (uint32_t y = 0; y < t.h; ++y) std::memcpy(t.px.data() + y * row, src + size_t(y) * c->row_pitch, row);
         } else if (const auto* r = std::get_if<RenderPass>(&pass)) {
             const RenderTarget& tg = r->list.target();
@@ -240,6 +259,7 @@ uint64_t RecordingBackend::on_imgui_texture_id(uint32_t slot) { return uint64_t(
 std::vector<uint8_t> RecordingBackend::buffer_bytes(Buffer b) const {
     if (!alive(b)) return {};
     const Buf& buf = buffers_[handle_slot(b.id)];
+    if (buf.standin) return {};
     const uint8_t* p = buf.wrapped ? buf.wrapped : buf.own.data();
     return std::vector<uint8_t>(p, p + buf.size);
 }

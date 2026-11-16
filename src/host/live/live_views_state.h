@@ -153,10 +153,10 @@ struct View {
     int64_t     count = 0;
 
     // HEATMAP / IMAGE: the v1.2 view of the same name is ours (created or
-    // adopted by an apply), and the +1 completion handles of its device
-    // updates that have not retired yet (polled, never waited on).
+    // adopted by an apply), and the graphics layer's serials of its device
+    // updates that have not completed yet (polled, never waited on).
     bool               owns_v12 = false;
-    std::vector<void*> pending;
+    std::vector<uint64_t> pending;
     float              vmin = 0.0f, vmax = 1.0f;
     bool               have_range = false;    // last finite AUTO range
     void*              tex_buf = nullptr;     // MTLBuffer of the last METAL payload

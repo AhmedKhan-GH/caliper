@@ -536,9 +536,9 @@ bool ex_render_readback(uint32_t w, uint32_t h, const CaliperGeomCamera* cam,
         // draw_primitives.
         return ex_refuse("the geometry gates refused the draws (reason logged)");
     }
-    out_px = r->debug_readback_rgba8(view, static_cast<int>(w),
-                                     static_cast<int>(h));
+    const bool read = b->readback(view, &out_px);
     b->geom_release_view(view);
+    if (!read) out_px.clear();
     if (out_px.size() != static_cast<size_t>(w) * h * 4u)
         return ex_refuse("the offscreen readback came back short");
     return true;
