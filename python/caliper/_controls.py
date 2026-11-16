@@ -804,8 +804,9 @@ class Controls:
         with self.lock:
             routes = list(self.routes)
         if not routes:
-            warnings.warn("caliper.pause(): no stream server runs, so no viewer could resume "
-                          "the run; it goes on", RuntimeWarning, stacklevel=3)
+            warnings.warn("caliper.pause(): no stream server that carries controls runs, so "
+                          "no viewer could resume the run; it goes on", RuntimeWarning,
+                          stacklevel=3)
             return False
         if sum(r._controllers() for r in routes) == 0:
             warnings.warn(f"caliper.pause(): no connection may control the run now; it "
