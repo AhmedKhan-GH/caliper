@@ -15,7 +15,7 @@ executable to its agent.
 ## What you need running
 
 1. The app with Caliper API on: `caliper --api`, or the app with its side chat's agent started, which starts the API
-   itself ([Started by the side chat](api.md#started-by-the-side-chat)).
+   itself ([Started by the app](api.md#started-by-the-app)).
 2. `caliper-mcp`, which ships beside the `caliper` executable; a development build puts it at `src/builder/mcp/caliper-mcp` in the build folder.
 
 While the API is on, the app writes the **API file**, `api.json` in the app-data folder ([Folders and environment
