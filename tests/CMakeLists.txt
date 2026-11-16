@@ -134,6 +134,7 @@ add_executable(caliper_scene_tests
     scene/test_scene_pick.cpp
     scene/test_scene_row.cpp
     scene/test_scene_layer.cpp
+    scene/test_scene_scale_bar.cpp
 )
 target_link_libraries(caliper_scene_tests PRIVATE doctest::doctest caliper_scene)
 set_target_properties(caliper_scene_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
