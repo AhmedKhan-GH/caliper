@@ -51,7 +51,7 @@ jobs:
       # The emsdk checkout at the tag of the pinned release, with that release
       # installed. The cache keeps the toolchain and the emdawnwebgpu port that
       # the first build downloads into upstream/emscripten/cache.
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: ~/emsdk
           key: emsdk-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.emscripten }}
@@ -68,7 +68,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '26'
       # Builds into web/wasm/build and copies the three files into
@@ -131,7 +131,7 @@ jobs:
       - run: '"$CALIPER_PYTHON" -m pytest --noconftest -q python/tests/test_assets.py python/tests/test_wasm_scripts.py'
         env:
           PYTHONPATH: python
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: caliper-views
           path: |
@@ -142,7 +142,7 @@ jobs:
       # The checks' screenshots, Playwright's HTML report and the failed tests'
       # traces and screenshots (npx playwright show-trace reads a trace).
       - if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: browser-views-report
           path: |
@@ -172,7 +172,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: caliper-views
           path: python/caliper/_web
@@ -194,7 +194,7 @@ jobs:
           done
       # The wheel's tag and every extension and executable in it say macOS 14.0.
       - run: python3 scripts/check_macos_min.py 14.0 "$RUNNER_TEMP"/dist/caliper-*.whl
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: caliper-wheel
           path: ${{ runner.temp }}/dist/*.whl
