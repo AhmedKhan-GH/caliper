@@ -300,6 +300,10 @@ TEST_CASE("caliper-mcp's app_launch over unsaved work says that the open waits f
     };
     // The agent saves One, then starts Draft, which it never saves: the open
     // spec has unsaved changes. Over a saved spec nothing of this asks.
+    // No spec open yet: spec.get answers so, as a result that its output schema allows.
+    const json none = call("spec_get", json::object());
+    CHECK(none["isError"] == false);
+    CHECK(none["structuredContent"] == json({{"open", false}}));
     CHECK(call("spec_new", {{"id", "one"}, {"title", "One"}})["isError"] == false);
     CHECK(call("applet_save", json::object())["isError"] == false);
     CHECK(call("spec_new", {{"id", "draft"}, {"title", "Draft"}})["isError"] == false);
@@ -322,6 +326,7 @@ TEST_CASE("caliper-mcp's app_launch over unsaved work says that the open waits f
     MESSAGE("app_launch: " << text);
     // Nothing has changed: Draft is still the open spec.
     CHECK(call("spec_get", json::object())["structuredContent"]["id"] == "draft");
+    CHECK(call("spec_get", json::object())["structuredContent"]["open"] == true);
 
     server->close_stdin();
     ExitStatus mcp_exit;
