@@ -7,10 +7,11 @@
 #
 # The sidecar's pytest suite runs as the ctest builder_agent_py when
 # CALIPER_BUILDER_TEST_PYTHON names a Python interpreter that has the sidecar's
-# dependencies (anthropic, pytest; the loaders module's tests of the same
-# variable also need numpy), for example the .venv of this folder:
+# dependencies (pydantic-ai-slim with its anthropic and openai extras, pytest;
+# the loaders module's tests of the same variable also need numpy and pyarrow),
+# for example the .venv of this folder:
 #   uv venv --python 3.12 src/builder/agent/.venv
-#   uv pip install --python src/builder/agent/.venv/bin/python anthropic pytest numpy
+#   uv pip install --python src/builder/agent/.venv/bin/python "pydantic-ai-slim[anthropic,openai]" pytest numpy pyarrow
 #   cmake ... -DCALIPER_BUILDER_TEST_PYTHON=src/builder/agent/.venv/bin/python
 # Without it the test reports that it was skipped.
 set(_agent_sources key_store.cpp)
@@ -46,7 +47,7 @@ endif()
 
 if(BUILD_TESTS)
     set(CALIPER_BUILDER_TEST_PYTHON "" CACHE FILEPATH
-        "A Python interpreter with anthropic and pytest, to run the caliper-agent tests")
+        "A Python interpreter with pydantic-ai-slim[anthropic,openai] and pytest, to run the caliper-agent tests")
     if(CALIPER_BUILDER_TEST_PYTHON)
         add_test(NAME builder_agent_py
             COMMAND "${CALIPER_BUILDER_TEST_PYTHON}" -m pytest -q -p no:cacheprovider
@@ -62,7 +63,7 @@ if(BUILD_TESTS)
     else()
         add_test(NAME builder_agent_py
             COMMAND ${CMAKE_COMMAND} -E echo
-                "builder_agent_py skipped: set CALIPER_BUILDER_TEST_PYTHON to a Python with anthropic and pytest")
+                "builder_agent_py skipped: set CALIPER_BUILDER_TEST_PYTHON to a Python with pydantic-ai and pytest")
         set_tests_properties(builder_agent_py PROPERTIES SKIP_REGULAR_EXPRESSION "builder_agent_py skipped")
     endif()
 endif()

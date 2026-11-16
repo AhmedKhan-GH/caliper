@@ -42,7 +42,8 @@ def test_a_turn_through_the_cpp_client(tmp_path):
         message(tool_use("toolu_capture", "capture_frame", {}), stop="tool_use"),
         message(text("The loss panel is in the spec and the applet is saved.")),
     ]
-    script, record = write_script(tmp_path, steps)
+    # The anthropic route: the real Anthropic model behind the stubbed transport.
+    script, record = write_script(tmp_path, steps, route="anthropic")
     agent = " ".join(shlex.quote(a) for a in [sys.executable, "-P", "-m", "caliper_agent",
                                                "--command-table", str(COMMAND_TABLE), "--api-file", str(fake.api_file)])
     env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}

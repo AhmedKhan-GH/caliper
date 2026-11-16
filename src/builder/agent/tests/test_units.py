@@ -15,38 +15,54 @@ from conftest import COMMAND_TABLE, FAKE_KEY, tiny_png
 from caliper_agent import keyguard
 from caliper_agent.caliper_api import (ApiFileError, MAX_IMAGE_BYTES, default_api_file, output_from_envelope,
                                        parse_api_file, png_size)
-from caliper_agent.claude import NO_SERVER_FALLBACK, api_tool, echo_content, model_ids
+from pydantic_ai.exceptions import ModelHTTPError, ModelRateLimitError, ToolFailed
+from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ThinkingPart, ToolCallPart, ToolReturnPart
+from pydantic_ai.models._anthropic_schema_limits import exceeded_limit
+
+from caliper_agent.claude import FALLBACK_KEY, NO_SERVER_FALLBACK, echo_after_fallback, model_ids
+from caliper_agent.loop import classify, close_tool_calls
+from caliper_agent.openai_compat import BaseUrlError, check_base_url, refusal_kind
+from caliper_agent.provider import AgentError
 from caliper_agent.schema import MAX_DEPTH, validate
+from caliper_agent.toolset import JsonObjectArgs
 from caliper_agent.udiff import apply_unified_diff
-from caliper_agent.tools import (STRICT_UNSUPPORTED, TableError, acp_tool_kind, command_name, derive_tools,
-                                 is_strict_compatible, load_command_table, parse_command_table, strip_for_strict,
-                                 tool_name)
+from caliper_agent.tools import (STRICT_UNSUPPORTED, TableError, acp_tool_kind, choose_strict, command_name,
+                                 derive_tools, is_strict_compatible, load_command_table, name_filter,
+                                 parse_command_table, split_type_lists, strip_for_strict, tool_name)
 
 
 # ---- tools ---------------------------------------------------------------------------------
 
 
-def _walk_schemas(schema):
+def _walk_all(schema):
     yield schema
     for sub in (schema.get("properties") or {}).values():
-        yield from _walk_schemas(sub)
+        yield from _walk_all(sub)
     for key in ("items", "additionalProperties"):
         if isinstance(schema.get(key), dict):
-            yield from _walk_schemas(schema[key])
+            yield from _walk_all(schema[key])
+    for sub in schema.get("anyOf") or []:
+        yield from _walk_all(sub)
 
 
-def test_every_command_of_the_real_table_becomes_a_strict_tool():
+def test_every_command_of_the_real_table_becomes_a_tool_strict_within_the_limits():
     commands = load_command_table(COMMAND_TABLE)
     tools = derive_tools(commands)
     assert len(tools) == len(commands) >= 35
     for tool, command in zip(tools, commands):
         assert tool.name == tool_name(command.name) and command_name(tool.name) == command.name
-        assert tool.strict, f"{command.name} should be a strict tool"
-        for schema in _walk_schemas(tool.input_schema):
+        assert tool.strict, f"{command.name} should be strict-compatible"
+        for schema in _walk_all(tool.input_schema):
             assert not (STRICT_UNSUPPORTED & set(schema)), command.name
-        api = api_tool(tool, strict=True)
-        assert api["strict"] is True and api["eager_input_streaming"] is True
-        assert api["description"].startswith(command.summary.strip()[:20])
+            assert not isinstance(schema.get("type"), list), command.name
+        assert tool.description.startswith(command.summary.strip()[:20])
+    # The tools sent strict fit the Claude API's limits for one request, by
+    # Pydantic AI's own count; the commands that change something come first.
+    strict = [t for t in tools if t.send_strict]
+    assert 10 <= len(strict) <= 20
+    assert exceeded_limit([t.input_schema for t in strict], None) is None
+    assert exceeded_limit([t.input_schema for t in tools], None) is not None
+    assert {"spec_set_text", "source_add", "loader_run", "applet_open"} <= {t.name for t in strict}
     by_name = {t.name: t for t in tools}
     assert "Caliper asks the user" in by_name["applet_save"].description
     assert "Caliper asks the user" not in by_name["catalog_list"].description
@@ -90,7 +106,7 @@ def test_an_open_object_makes_only_its_tool_non_strict():
                                                           "required": [], "properties": {}}, "result": {}}]}
     patch, info = derive_tools(parse_command_table(json.dumps(table)))
     assert not patch.strict and info.strict
-    assert "strict" not in api_tool(patch, strict=True)
+    assert not patch.send_strict and info.send_strict
     assert not is_strict_compatible({"type": "object", "properties": {}, "additionalProperties": False})
     assert not is_strict_compatible({"$ref": "#/x"})
 
@@ -295,25 +311,133 @@ def test_envelopes_and_images():
 # ---- the Claude provider's pure parts --------------------------------------------------------
 
 
+def _marker(model_from: str, model_to: str) -> TextPart:
+    return TextPart(content="", provider_details={FALLBACK_KEY: {"type": "fallback", "from": {"model": model_from},
+                                                                 "to": {"model": model_to}}})
+
+
 def test_echo_after_a_mid_reply_fallback():
-    fallback = {"type": "fallback", "from": {"model": "a"}, "to": {"model": "b"}}
-    blocks = [{"type": "thinking", "thinking": "x", "signature": "s"}, {"type": "text", "text": "partial"},
-              {"type": "redacted_thinking", "data": "r"}, {"type": "tool_use", "id": "t1", "name": "n", "input": {}},
-              {"type": "server_tool_use", "id": "s1"}, {"type": "web_search_tool_result", "tool_use_id": "s1"},
-              {"type": "server_tool_use", "id": "s2"}, {"type": "mystery"}, fallback,
-              {"type": "thinking", "thinking": "y", "signature": "t"}, {"type": "text", "text": "answer"},
-              {"type": "tool_use", "id": "t2", "name": "n", "input": {}}]
-    out = echo_content(blocks)
-    assert [b["type"] for b in out] == ["text", "server_tool_use", "web_search_tool_result", "fallback", "thinking",
-                                        "text", "tool_use"]
-    assert out[-1]["id"] == "t2"
-    plain = [{"type": "thinking", "thinking": "x", "signature": "s"}, {"type": "text", "text": "t"}]
-    assert echo_content(plain) == plain
+    parts = [ThinkingPart(content="x", signature="s"), TextPart(content="partial"),
+             ToolCallPart(tool_name="n", args="{}", tool_call_id="t1"), _marker("a", "b"),
+             ThinkingPart(content="y", signature="t"), TextPart(content="answer"),
+             ToolCallPart(tool_name="n", args="{}", tool_call_id="t2")]
+    out = echo_after_fallback(ModelResponse(parts=list(parts)))
+    kinds = [type(p).__name__ for p in out.parts]
+    assert kinds == ["TextPart", "TextPart", "ThinkingPart", "TextPart", "ToolCallPart"]
+    assert out.parts[1].provider_details[FALLBACK_KEY]["to"] == {"model": "b"}
+    assert out.parts[-1].tool_call_id == "t2"
+    # Two hops: everything before the last boundary but text and boundaries goes.
+    two = echo_after_fallback(ModelResponse(parts=[_marker("a", "b"), ThinkingPart(content="z", signature="u"),
+                                                   _marker("b", "c"), TextPart(content="end")]))
+    assert [type(p).__name__ for p in two.parts] == ["TextPart", "TextPart", "TextPart"]
+    plain = [ThinkingPart(content="x", signature="s"), TextPart(content="t")]
+    assert echo_after_fallback(ModelResponse(parts=list(plain))).parts == plain
+
+
+def test_the_private_hooks_the_fallback_workaround_overrides_still_exist():
+    # CaliperAnthropicModel overrides two private methods of Pydantic AI; if a
+    # new version renames them, this fails instead of fallbacks breaking quietly.
+    import inspect
+    from pydantic_ai.models.anthropic import AnthropicModel
+    from pydantic_ai.models.anthropic._streaming import AnthropicStreamedResponse
+    assert list(inspect.signature(AnthropicModel._map_text_part).parameters) == [
+        "self", "message", "part", "assistant_content_params"]
+    assert list(inspect.signature(AnthropicStreamedResponse._map_content_block_start).parameters) == ["self", "event"]
+    assert inspect.iscoroutinefunction(AnthropicModel._process_streamed_response)
 
 
 def test_models():
     assert model_ids() == ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2")
     assert NO_SERVER_FALLBACK == {"claude-haiku-5-5"}
+
+
+# ---- the turn's pure parts --------------------------------------------------------------------
+
+
+def test_type_lists_become_any_of_and_keep_their_meaning():
+    schema = {"type": "object", "additionalProperties": False, "required": ["a", "b"],
+              "properties": {"a": {"type": ["integer", "array"], "items": {"type": "integer"}, "description": "d"},
+                             "b": {"type": ["string", "null"], "enum": ["x", "y", None]},
+                             "c": {"type": ["number"]}}}
+    out = split_type_lists(schema)
+    assert out["properties"]["a"] == {"anyOf": [{"type": "integer"}, {"type": "array", "items": {"type": "integer"}}],
+                                      "description": "d"}
+    assert out["properties"]["b"] == {"anyOf": [{"type": "string", "enum": ["x", "y"]}, {"type": "null"}]}
+    assert out["properties"]["c"] == {"type": "number"}
+    for value, ok in (({"a": 1, "b": None}, True), ({"a": [1, 2], "b": "x"}, True), ({"a": "1", "b": "x"}, False)):
+        assert (validate(value, schema) is None) == ok
+
+
+def test_choose_strict_stays_within_the_limits():
+    def command_table(n, optional):
+        return {"version": 0, "commands": [
+            {"name": f"g.c{i}", "summary": "S.", "mutates": i % 2 == 0,
+             "args": {"type": "object", "additionalProperties": False, "required": [],
+                      "properties": {f"p{j}": {"type": "string"} for j in range(optional)}}}
+            for i in range(n)]}
+    tools = derive_tools(parse_command_table(json.dumps(command_table(30, 0))))
+    assert sum(t.send_strict for t in tools) == 20
+    assert all(t.send_strict for t in tools if t.command.mutates)  # the mutating ones first
+    tools = derive_tools(parse_command_table(json.dumps(command_table(10, 5))))
+    assert sum(t.send_strict for t in tools) == 4  # 4 x 5 optional parameters <= 24
+    assert exceeded_limit([t.input_schema for t in tools if t.send_strict], None) is None
+    assert choose_strict([]) == []
+
+
+def test_the_tool_filter_keeps_names_and_groups():
+    commands = load_command_table(COMMAND_TABLE)
+    tools = derive_tools(commands, name_filter("catalog, spec.get"))
+    assert sorted(t.name for t in tools) == ["catalog_describe", "catalog_list", "catalog_sample", "spec_get"]
+
+
+def test_tool_calls_without_results_are_closed():
+    call = ToolCallPart(tool_name="a", args="{}", tool_call_id="c1")
+    call2 = ToolCallPart(tool_name="b", args="{}", tool_call_id="c2")
+    history = [ModelRequest(parts=[]), ModelResponse(parts=[call, call2])]
+    out = close_tool_calls(history, "Cancelled.")
+    [closing] = out[2:]
+    assert [(p.tool_call_id, p.outcome, p.content) for p in closing.parts] == [("c1", "failed", "Cancelled."),
+                                                                               ("c2", "failed", "Cancelled.")]
+    partial = history + [ModelRequest(parts=[ToolReturnPart(tool_name="a", content="ok", tool_call_id="c1")],
+                                      state="interrupted")]
+    out = close_tool_calls(partial, "Cancelled.")
+    assert [p.tool_call_id for p in out[-1].parts] == ["c1", "c2"] and out[-1].state == "complete"
+    assert close_tool_calls(out, "again") == out
+    assert close_tool_calls([], "x") == []
+
+
+def test_errors_are_classified_by_pydantic_ais_categories():
+    retry = classify(ModelHTTPError.for_category(ModelRateLimitError, status_code=429, model_name="m",
+                                                 headers={"retry-after": "7"}), "Claude API", "m")
+    assert (retry.kind, retry.http_status, retry.delay) == ("rate_limit", 429, 7.0)
+    for status, code in ((401, "agent.key_rejected"), (402, "agent.billing"), (403, "agent.forbidden"),
+                         (404, "agent.model_unavailable"), (413, "agent.request_too_large"),
+                         (400, "agent.bad_request")):
+        with pytest.raises(AgentError) as err:
+            classify(ModelHTTPError(status, "m", {"error": {"message": f"key {FAKE_KEY}"}}), "Claude API", "m")
+        assert err.value.code == code and FAKE_KEY not in err.value.message
+    assert classify(ModelHTTPError(503, "m"), "Claude API", "m").kind == "server"
+    with pytest.raises(AgentError):
+        classify(RuntimeError("boom"), "Claude API", "m")
+
+
+def test_openai_compatible_refusals_and_addresses():
+    assert refusal_kind("registry.ollama.ai/library/x does not support tools") == "tools"
+    assert refusal_kind("This model does not support image input") == "vision"
+    assert refusal_kind("context length exceeded") is None
+    assert check_base_url("http://127.0.0.1:11434/v1/") == "http://127.0.0.1:11434/v1"
+    for bad in ("ftp://x/v1", "http://user:pw@host/v1", "not a url"):
+        with pytest.raises(BaseUrlError):
+            check_base_url(bad)
+
+
+def test_the_args_validator_takes_json_objects_only():
+    v = JsonObjectArgs()
+    assert v.validate_json('{"a": 1}') == {"a": 1}
+    for bad in ('{"a": ', "[1]", "3", "nul"):
+        with pytest.raises(ToolFailed) as err:
+            v.validate_json(bad)
+        assert "INVALID_JSON" in json.loads(err.value.message)
 
 
 # ---- applying a unified diff ------------------------------------------------------------------

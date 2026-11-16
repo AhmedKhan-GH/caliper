@@ -4,12 +4,12 @@ Methods served (ACP version 1, agent side):
 
 - `initialize`: answers version 1 whatever the client offers first, declares
   no optional capability, and lists no login method (the key comes from the app).
-- `session/new`: a session with its own conversation, model, effort and review
-  setting, offered to the pane as config options (`model`, `effort`, `review`).
-  The `mcpServers` of the request are not started: this agent reaches Caliper
-  through Caliper API itself.
-- `session/set_config_option`: changes one of the three; the new value applies
-  from the next model request.
+- `session/new`: a session with its own history, model, effort and review
+  setting, offered to the pane as config options (`model`, `effort` for the
+  Claude API, `review`). The `mcpServers` of the request are not started: this
+  agent reaches Caliper through Caliper API itself.
+- `session/set_config_option`: changes one of them; the new value applies from
+  the next model request.
 - `session/prompt`: runs one turn and answers with its stop reason, and with the
   turn's token usage under `_meta.caliper.usage`. Without a key the turn is
   refused with error -32000 and a message the pane shows.
@@ -25,7 +25,9 @@ import asyncio
 import logging
 import os
 import uuid
-from typing import Any, Callable
+from typing import Any
+
+from pydantic_ai import Agent as GraphAgent
 
 from . import __version__
 from .acp import AUTH_REQUIRED, INVALID_PARAMS, METHOD_NOT_FOUND, Connection, RpcError
@@ -46,34 +48,43 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")
 _EFFORT_NAMES = {"low": "Low", "medium": "Medium", "high": "High", "xhigh": "Extra high", "max": "Maximum"}
 
 _NO_KEY_MESSAGE = ("No Claude API key is set. Add your key in the agent pane's settings to use the "
-                   "Claude API backend.")
-_BAD_KEY_MESSAGE = ("The Claude API key that Caliper passed is not well formed. Enter the key again "
+                   "Claude API.")
+_BAD_KEY_MESSAGE = ("The API key that Caliper passed is not well formed. Enter the key again "
                     "in the agent pane's settings.")
 
 
 class Session:
     def __init__(self, state: SessionState) -> None:
         self.state = state
+        self.runner: TurnRunner | None = None
         self.task: asyncio.Task | None = None
-        self.cancel_requested = False
 
 
 class Agent:
-    def __init__(self, conn: Connection, provider_factory: Callable[[], Provider] | None, key_status: str,
-                 tools: list[ToolSpec], api: CaliperApi, *, model_ids: tuple[str, ...], model_names: dict,
-                 default_model: str, default_effort: str, usage_log: str | None = None) -> None:
+    def __init__(self, conn: Connection, provider: Provider | None, key_status: str, tools: list[ToolSpec],
+                 graph: GraphAgent, api: CaliperApi, *, default_model: str, default_effort: str,
+                 usage_log: str | None = None, key_required: bool = True) -> None:
         self._usage_log = usage_log
         self._conn = conn
-        self._provider_factory = provider_factory
-        self._provider: Provider | None = None
+        self._provider = provider
         self._key_status = key_status
+        self._key_required = key_required
         self._tools = {t.name: t for t in tools}
+        self._graph = graph
         self._api = api
-        self._model_ids = model_ids
-        self._model_names = model_names
         self._default_model = default_model
         self._default_effort = default_effort
         self._sessions: dict[str, Session] = {}
+
+    @property
+    def _claude(self) -> bool:
+        return self._provider is None or self._provider.name == "Claude API"
+
+    @property
+    def _model_ids(self) -> tuple[str, ...]:
+        if self._provider is None:
+            return (self._default_model,)
+        return tuple(m.id for m in self._provider.models)
 
     async def aclose(self) -> None:
         if self._provider is not None:
@@ -98,13 +109,13 @@ class Agent:
     def on_notification(self, method: str, params: Any) -> None:
         if method == "session/cancel" and isinstance(params, dict):
             session = self._sessions.get(params.get("sessionId"))
-            if session is not None and session.task is not None and not session.task.done():
-                session.cancel_requested = True
-                session.task.cancel()
+            if session is not None and session.runner is not None:
+                session.runner.cancel()
 
     # ---- methods -------------------------------------------------------------------
 
     def _initialize(self, params: Any) -> dict:
+        title = "Caliper agent (Claude API)" if self._claude else f"Caliper agent ({self._provider.name})"
         return {
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": {
@@ -113,24 +124,29 @@ class Agent:
                 "mcpCapabilities": {"http": False, "sse": False},
             },
             "authMethods": [],
-            "agentInfo": {"name": "caliper-agent", "title": "Caliper agent (Claude API)", "version": __version__},
+            "agentInfo": {"name": "caliper-agent", "title": title, "version": __version__},
         }
 
     def _config_options(self, s: SessionState) -> list[dict]:
-        return [
-            {"id": "model", "name": "Model", "description": "The Claude model this session uses.",
+        names = {m.id: m.name for m in self._provider.models} if self._provider is not None else {}
+        options = [
+            {"id": "model", "name": "Model", "description": "The model this session uses.",
              "category": "model", "type": "select", "currentValue": s.settings.model,
-             "options": [{"value": m, "name": self._model_names.get(m, m)} for m in self._model_ids]},
-            {"id": "effort", "name": "Effort",
-             "description": "How much the model thinks before it acts. Higher is slower and costs more.",
-             "category": "thought_level", "type": "select", "currentValue": s.settings.effort,
-             "options": [{"value": e, "name": _EFFORT_NAMES[e]} for e in EFFORTS]},
+             "options": [{"value": m, "name": names.get(m, m)} for m in self._model_ids]},
+        ]
+        if self._claude:
+            options.append(
+                {"id": "effort", "name": "Effort",
+                 "description": "How much the model thinks before it acts. Higher is slower and costs more.",
+                 "category": "thought_level", "type": "select", "currentValue": s.settings.effort,
+                 "options": [{"value": e, "name": _EFFORT_NAMES[e]} for e in EFFORTS]})
+        options.append(
             {"id": "review", "name": "Review spec changes",
              "description": "Ask before each change to the open spec, or only before deleting or overwriting saved data.",
              "type": "select", "currentValue": s.review,
              "options": [{"value": REVIEW_SPEC_CHANGES, "name": "Ask before each spec change"},
-                         {"value": REVIEW_DESTRUCTIVE_ONLY, "name": "Ask only before deleting or overwriting"}]},
-        ]
+                         {"value": REVIEW_DESTRUCTIVE_ONLY, "name": "Ask only before deleting or overwriting"}]})
+        return options
 
     def _new_session(self, params: Any) -> dict:
         if not isinstance(params, dict):
@@ -140,10 +156,8 @@ class Agent:
             raise RpcError(INVALID_PARAMS, "session/new needs an absolute cwd.")
         if len(self._sessions) >= MAX_SESSIONS:
             raise RpcError(INVALID_PARAMS, f"This agent keeps at most {MAX_SESSIONS} sessions.")
-        provider = self._ensure_provider()
         sid = "byok-" + uuid.uuid4().hex[:16]
-        conversation = provider.new_conversation() if provider is not None else None
-        state = SessionState(id=sid, cwd=cwd.rstrip("/") or "/", conversation=conversation,
+        state = SessionState(id=sid, cwd=cwd.rstrip("/") or "/",
                              settings=Settings(model=self._default_model, effort=self._default_effort))
         self._sessions[sid] = Session(state)
         return {"sessionId": sid, "configOptions": self._config_options(state)}
@@ -159,18 +173,13 @@ class Agent:
         s = session.state
         if config_id == "model" and value in self._model_ids:
             s.settings.model = value
-        elif config_id == "effort" and value in EFFORTS:
+        elif config_id == "effort" and self._claude and value in EFFORTS:
             s.settings.effort = value
         elif config_id == "review" and value in (REVIEW_SPEC_CHANGES, REVIEW_DESTRUCTIVE_ONLY):
             s.review = value
         else:
             raise RpcError(INVALID_PARAMS, f"Unknown config option or value: {config_id!s:.64}.")
         return {"configOptions": self._config_options(s)}
-
-    def _ensure_provider(self) -> Provider | None:
-        if self._provider is None and self._provider_factory is not None:
-            self._provider = self._provider_factory()
-        return self._provider
 
     @staticmethod
     def _prompt_text(blocks: Any) -> str:
@@ -199,25 +208,24 @@ class Agent:
         session = self._sessions.get(params.get("sessionId"))
         if session is None:
             raise RpcError(INVALID_PARAMS, "Unknown session.")
-        if session.task is not None and not session.task.done():
+        if session.runner is not None:
             raise RpcError(INVALID_PARAMS, "A turn is already running in this session.")
         text = self._prompt_text(params.get("prompt"))
-        if self._key_status != KeyStatus.PRESENT:
-            message = _NO_KEY_MESSAGE if self._key_status == KeyStatus.MISSING else _BAD_KEY_MESSAGE
-            raise RpcError(AUTH_REQUIRED, message, {"code": "agent.no_key" if self._key_status == KeyStatus.MISSING
-                                                    else "agent.bad_key"})
-        provider = self._ensure_provider()
-        assert provider is not None
-        session.task = asyncio.current_task()
-        session.cancel_requested = False
-        runner = TurnRunner(self._conn, provider, self._api, self._tools, session.state, self._usage_log)
+        if self._key_status == KeyStatus.MALFORMED or (self._key_required and self._key_status != KeyStatus.PRESENT):
+            message = _BAD_KEY_MESSAGE if self._key_status == KeyStatus.MALFORMED else _NO_KEY_MESSAGE
+            raise RpcError(AUTH_REQUIRED, message, {"code": "agent.bad_key" if self._key_status == KeyStatus.MALFORMED
+                                                    else "agent.no_key"})
+        assert self._provider is not None
+        runner = TurnRunner(self._conn, self._provider, self._graph, self._api, self._tools, session.state,
+                            self._usage_log)
+        session.runner = runner
         try:
             stop = await runner.run(text)
         except AgentError as exc:
             data = {"code": exc.code, "retryable": exc.retryable, **exc.data}
             raise RpcError(exc.rpc_code, exc.message, data) from None
         finally:
-            session.task = None
-        if session.cancel_requested:
+            session.runner = None
+        if runner.cancel_requested:
             stop = "cancelled"
-        return {"stopReason": stop, "_meta": {"caliper": {"usage": runner.usage}}}
+        return {"stopReason": stop, "_meta": {"caliper": {"usage": runner.usage.as_dict()}}}

@@ -1,8 +1,9 @@
 // The BYOK agent on the real command layer, end to end and headless:
 // caliper-acp-harness (the real C++ ACP client) drives the caliper-agent
 // sidecar, whose tools call a running caliper-builder-host over a fresh
-// workspace that holds a Parquet and a safetensors file. The model is the
-// scripted transport of the sidecar, with a fake key: its conversation imports
+// workspace that holds a Parquet and a safetensors file. The model is scripted
+// through Pydantic AI's FunctionModel (the sidecar's test switch, route
+// "function"), with a fake key: its conversation imports
 // the files, runs their loaders, builds the three-panel dashboard of the spec
 // fixture dashboard.spec.toml source by source and panel by panel, sets the
 // layout and saves the applet, while the harness allows every permission
@@ -61,7 +62,7 @@ std::string tool_name(const std::string& command) {
 TEST_CASE("the BYOK agent builds the dashboard through caliper-builder-host") {
     const std::string python = CALIPER_BUILDER_TEST_PYTHON;
     if (python.empty()) {
-        std::printf("builder_agent_e2e skipped: set CALIPER_BUILDER_TEST_PYTHON to a Python with anthropic\n");
+        std::printf("builder_agent_e2e skipped: set CALIPER_BUILDER_TEST_PYTHON to a Python with pydantic-ai\n");
         std::fflush(stdout);
         return;
     }
@@ -237,13 +238,17 @@ TEST_CASE("the BYOK agent builds the dashboard through caliper-builder-host") {
     CHECK(done["source.add"] == static_cast<int>(dashboard.sources.size()));
     CHECK(done["layout.set"] == 1);
 
-    // The model's requests went to the Claude API's host only, with the key as a credential.
+    // One model request per step, all answered by the scripted FunctionModel,
+    // and the key in none of them.
     const std::string requests = read_text(record);
     CHECK(requests.find(kFakeKey) == std::string::npos);
     std::size_t count = 0;
     for (std::size_t p = 0; (p = requests.find('\n', p)) != std::string::npos; ++p) ++count;
     CHECK(count == steps.size());
-    CHECK(requests.find("\"host\": \"api.anthropic.com\"") != std::string::npos);
+    std::size_t function_route = 0;
+    for (std::size_t p = 0; (p = requests.find("\"route\": \"function\"", p)) != std::string::npos; ++p)
+        ++function_route;
+    CHECK(function_route == steps.size());
 }
 
 #endif

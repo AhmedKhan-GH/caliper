@@ -23,8 +23,11 @@ import threading
 import traceback
 from typing import Iterable
 
-# The variable the SDK reads, and the only way the key enters the sidecar.
+# The variable the Claude API SDK reads, and the only way the Claude key enters
+# the sidecar.
 KEY_ENV = "ANTHROPIC_API_KEY"
+# The key of an OpenAI-compatible server, when it needs one (openai_compat.py).
+MODEL_KEY_ENV = "CALIPER_MODEL_API_KEY"
 
 # Variables that would let the SDK pick another credential, send requests to
 # another host, add headers or log requests. They are removed at start so that
@@ -43,6 +46,16 @@ OVERRIDE_ENV = (
     "ANTHROPIC_WORKSPACE_ID",
     "ANTHROPIC_LOG",
     "ANTHROPIC_WEBHOOK_SIGNING_KEY",
+    # The OpenAI SDK, which Pydantic AI uses for OpenAI-compatible servers.
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_ORG_ID",
+    "OPENAI_PROJECT_ID",
+    "OPENAI_WEBHOOK_SECRET",
+    "OPENAI_LOG",
+    # Pydantic AI's own gateway and telemetry switches.
+    "PYDANTIC_AI_GATEWAY_API_KEY",
+    "LOGFIRE_TOKEN",
 )
 
 MAX_KEY_LENGTH = 1024
@@ -92,14 +105,14 @@ def _is_well_formed(value: str) -> bool:
     return all(0x21 <= ord(c) <= 0x7E for c in value)
 
 
-def take_key_from_environment(environ: dict | None = None) -> tuple[Secret | None, str]:
-    """Reads the key once and removes it, and every override, from the environment.
+def take_key_from_environment(environ: dict | None = None, name: str = KEY_ENV) -> tuple[Secret | None, str]:
+    """Reads the key in `name` once and removes it, and every override, from the environment.
 
     Returns the key (or None) and a KeyStatus value. The status never carries
     any part of the value.
     """
     env = os.environ if environ is None else environ
-    raw = env.pop(KEY_ENV, None)
+    raw = env.pop(name, None)
     for name in OVERRIDE_ENV:
         env.pop(name, None)
     if raw is None or raw == "":
@@ -215,5 +228,5 @@ def install_guards(level: int = logging.WARNING) -> None:
     root.addHandler(handler)
     root.setLevel(level)
     # The SDK and its HTTP library log request details at debug level; keep them quiet.
-    for name in ("anthropic", "httpx2", "httpcore2", "httpx", "httpcore"):
+    for name in ("anthropic", "openai", "pydantic_ai", "httpx2", "httpcore2", "httpx", "httpcore"):
         logging.getLogger(name).setLevel(logging.WARNING)

@@ -1,8 +1,10 @@
 """Shared fixtures: the sidecar as a child process, a fake Caliper API and scripts.
 
-No test calls the real Claude API or needs a key: the sidecar runs with a fake
-key and the scripted transport of caliper_agent/stub_transport.py, and every
-file a test writes is under pytest's tmp_path.
+No test calls a real model or needs a key: the sidecar runs with a fake key and
+a script (caliper_agent/scripted.py), answered either by Pydantic AI's
+FunctionModel ("function" route, the default) or as Claude API events under
+the real Anthropic model (the "anthropic" route, caliper_agent/stub_transport.py).
+Every file a test writes is under pytest's tmp_path.
 """
 
 from __future__ import annotations
@@ -205,10 +207,14 @@ def message(*content: dict, stop: str = "end_turn", usage: dict | None = None, *
     return {"message": spec}
 
 
-def write_script(folder: Path, steps: list[dict]) -> tuple[Path, Path]:
+def write_script(folder: Path, steps: list[dict], route: str = "function", **extra) -> tuple[Path, Path]:
+    """A script for the sidecar's test switch. `route` "function" answers with
+    Pydantic AI's FunctionModel; "anthropic" answers as the Claude API's wire
+    format, under the real Anthropic model (caliper_agent/scripted.py)."""
     record = folder / "requests.jsonl"
     script = folder / "script.json"
-    script.write_text(json.dumps({"steps": steps, "record": str(record), "backoff_scale": 0}))
+    script.write_text(json.dumps({"steps": steps, "record": str(record), "backoff_scale": 0, "route": route,
+                                  **extra}))
     return script, record
 
 
@@ -345,10 +351,10 @@ def run_agent(tmp_path, caliper):
     """Starts the sidecar with a script; closes it after the test."""
     started: list[AgentProcess] = []
 
-    def start(steps: list[dict] | None, **kwargs) -> tuple[AgentProcess, Path]:
+    def start(steps: list[dict] | None, route: str = "function", **kwargs) -> tuple[AgentProcess, Path]:
         folder = tmp_path / f"agent{len(started) + 1}"
         folder.mkdir()
-        script, record = write_script(folder, steps) if steps is not None else (None, folder / "none.jsonl")
+        script, record = write_script(folder, steps, route) if steps is not None else (None, folder / "none.jsonl")
         kwargs.setdefault("api_file", caliper.api_file)
         agent = AgentProcess(script=script, **kwargs)
         started.append(agent)
@@ -360,6 +366,22 @@ def run_agent(tmp_path, caliper):
         # Whatever the test did, the key never reaches the client or stderr.
         assert FAKE_KEY not in agent.all_output()
         assert FAKE_TOKEN not in agent.all_output()
+
+
+# ---- what the function route recorded --------------------------------------------------
+
+
+def parts(messages: list[dict], kind: str) -> list[dict]:
+    """Every part of a kind (`user-prompt`, `tool-return`, `tool-call`, `text`, `thinking`)."""
+    return [p for m in messages for p in m["parts"] if p.get("part_kind") == kind]
+
+
+def tool_results(messages: list[dict]) -> dict[str, dict]:
+    return {p["tool_call_id"]: p for p in parts(messages, "tool-return")}
+
+
+def prompts(messages: list[dict]) -> list:
+    return [p["content"] for p in parts(messages, "user-prompt")]
 
 
 def message_text(updates: list[dict]) -> str:

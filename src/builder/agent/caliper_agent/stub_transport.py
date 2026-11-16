@@ -1,17 +1,12 @@
-"""A scripted stand-in for the Claude API, for tests only.
+"""A stubbed HTTP transport that speaks the Claude API's wire format, for tests only.
 
-When the environment variable CALIPER_AGENT_TEST_SCRIPT names a JSON file, the
-sidecar sends its Claude API requests to this transport instead of the
-network. Nothing leaves the process: each request is answered with the next
-step of the script, written as the streamed events the Messages API sends.
-The switch can only make the sidecar talk to a file; it cannot send the key or
-any data anywhere.
-
-The script:
-
-    {"steps": [<step>, ...],
-     "record": "<optional path of a JSON Lines file of the requests seen>",
-     "backoff_scale": <optional factor for retry delays, 0 in tests>}
+When the test script (scripted.py) has `"route": "anthropic"`, the sidecar
+builds the real Claude API provider, Pydantic AI's Anthropic model on the
+official SDK, with this transport under the SDK's HTTP client. Nothing leaves
+the process: each request is answered with the next step of the script,
+written as the streamed events the Messages API sends, and recorded with its
+headers and body (the credential headers left out), so the tests can check
+exactly what the provider sends. The steps are those of scripted.py:
 
 A step is one of:
 
@@ -34,17 +29,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import threading
-from pathlib import Path
 
 import httpx2
 
 from .keyguard import scrub
 
 API_HOST = "api.anthropic.com"
-SCRIPT_ENV = "CALIPER_AGENT_TEST_SCRIPT"
-MAX_SCRIPT_BYTES = 4 << 20
 
 
 def _sse(event: str, data: dict) -> bytes:
@@ -183,20 +174,3 @@ class StubTransport(httpx2.AsyncBaseTransport):
         events = render_events(step["message"], model, index)
         return httpx2.Response(200, headers={"content-type": "text/event-stream", "request-id": f"req_stub_{index}"},
                                stream=_EventStream(events, step.get("hang_after")))
-
-
-def load_script(path: str) -> dict:
-    p = Path(path)
-    if p.stat().st_size > MAX_SCRIPT_BYTES:
-        raise ValueError("The test script is larger than 4 MiB.")
-    doc = json.loads(p.read_text(encoding="utf-8"))
-    if not isinstance(doc, dict) or not isinstance(doc.get("steps"), list):
-        raise ValueError("The test script has no list of steps.")
-    return doc
-
-
-def transport_from_environment() -> StubTransport | None:
-    path = os.environ.get(SCRIPT_ENV, "")
-    if not path:
-        return None
-    return StubTransport(load_script(path))
