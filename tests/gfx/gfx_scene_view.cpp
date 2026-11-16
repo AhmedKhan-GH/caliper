@@ -52,6 +52,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -535,6 +536,284 @@ TEST_CASE("gfx/Metal scene view: every primitive drawn from protocol 3.2 message
             CHECK(v.counts().items == 4 + 2 + 2);
         }
     }
+}
+
+namespace {
+
+// What decode_pick would find for a pointer at the centre of pixel (px, py) in the reference's pick
+// identities: the texel with an identity nearest the pointer within the radius and the view. robust:
+// the hit pixel and its neighbours show one identity with no near tie in depth, and no other
+// identity lies within 1.5 pixels of the nearest distance, so that a GPU's rounding cannot change it.
+struct PickExpect {
+    bool hit = false, robust = false;
+    bool solid = false;   // the hit pixel and its eight neighbours show the same identity
+    int x = 0, y = 0;
+    uint32_t id = 0;
+};
+PickExpect expect_pick(const draw_reference::Reference& ref, int px, int py, int radius = 8) {
+    PickExpect e;
+    const double cx = px + 0.5, cy = py + 0.5, r2 = double(radius) * radius;
+    double best = 1e300;
+    for (int j = py - radius; j < py + radius; ++j)
+        for (int i = px - radius; i < px + radius; ++i) {
+            if (i < 0 || j < 0 || i >= ref.W || j >= ref.H) continue;
+            const uint32_t id = ref.id[size_t(j) * ref.W + i];
+            if (!id) continue;
+            const double d2 = (i + 0.5 - cx) * (i + 0.5 - cx) + (j + 0.5 - cy) * (j + 0.5 - cy);
+            if (d2 > r2 || d2 >= best) continue;
+            best = d2;
+            e.hit = true;
+            e.x = i;
+            e.y = j;
+            e.id = id;
+        }
+    const double limit = e.hit ? std::pow(std::sqrt(best) + 1.5, 2.0) : std::pow(radius + 2.0, 2.0);
+    e.robust = true;
+    for (int j = py - radius - 2; j < py + radius + 2 && e.robust; ++j)
+        for (int i = px - radius - 2; i < px + radius + 2 && e.robust; ++i) {
+            if (i < 0 || j < 0 || i >= ref.W || j >= ref.H) continue;
+            const uint32_t id = ref.id[size_t(j) * ref.W + i];
+            const double d2 = (i + 0.5 - cx) * (i + 0.5 - cx) + (j + 0.5 - cy) * (j + 0.5 - cy);
+            if (id && id != e.id && d2 <= limit) e.robust = false;
+        }
+    if (e.hit) {
+        e.solid = true;
+        for (int dj = -1; dj <= 1; ++dj)
+            for (int di = -1; di <= 1; ++di) {
+                const int i = std::clamp(e.x + di, 0, ref.W - 1), j = std::clamp(e.y + dj, 0, ref.H - 1);
+                const size_t k = size_t(j) * ref.W + i;
+                if (ref.contested[k] || (ref.id[k] != e.id && ref.id[k] != 0)) e.robust = false;
+                if (ref.id[k] != e.id) e.solid = false;
+            }
+    }
+    return e;
+}
+
+// Waits for the view's pick on Metal (the test may block; a view never does) and takes it.
+caliper_scene::PickPass::Result take_pick(Backend& gfx, SceneView& v, caliper_scene::Hit* hit) {
+    caliper_scene::PickPass::Result r = caliper_scene::PickPass::Result::Pending;
+    for (int tries = 0; tries < 100 && r == caliper_scene::PickPass::Result::Pending; ++tries) {
+        gfx.wait(v.pick_pass()->last_use());
+        gfx.poll();
+        r = v.poll_pick(hit);
+    }
+    return r;
+}
+
+}  // namespace
+
+// Picks on Metal through the scene view's pick pass, against the identities of a CPU rasterisation
+// of the same compiled draws in pick mode (every draw opaque, writing depth where it tests it): at an
+// interior pixel of every draw of every primitive fixture, the exact entity, primitive, part and
+// item; at pointers whose nearest hit lies on the edge of the 16 x 16 window or whose window passes
+// the view's edge; a miss; and a result dropped because the view drew another frame first. The
+// world position from the depth is compared with the reference's depth unprojected in double.
+TEST_CASE("gfx/Metal scene view: the pick pass finds every primitive, through transforms and cameras, and drops stale results") {
+    ViewRig probe_rig;
+    if (!probe_rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    probe_rig.view.reset();
+    size_t probes = 0, solid_probes = 0, edge_probes = 0, border_probes = 0, misses = 0, positions = 0;
+    size_t through_transforms = 0;
+    std::set<std::string> kinds;   // primitive / part / overlay of every draw picked
+    double worst_position = 0;   // as a share of the scene's bounding radius
+    for (const primitive_fixtures::Fixture& f : primitive_fixtures::all()) {
+        CAPTURE(f.name);
+        ViewRig rig;
+        REQUIRE(rig.init(f.info.space.c_str(), f.info.up.c_str(), f.info.units.c_str()));
+        SceneView& v = *rig.view;
+        primitive_rows::Row row;
+        row.fixture = f;
+        REQUIRE_MESSAGE(row.draw(v), row.error);
+        draw_reference::Rasteriser rr(v.last_draws(), v.last_map(), v.tree(), row.parts, int(primitive_fixtures::kSize),
+                                      int(primitive_fixtures::kSize));
+        rr.pick = true;
+        rr.run();
+        REQUIRE(rr.problems.empty());
+        const draw_reference::Reference& ref = rr.ref;
+        const caliper_scene::DrawMap& map = v.last_map();
+        const double radius = v.tree().scene_bounds().valid ? v.tree().scene_bounds().radius() : 1.0;
+        const int S = int(primitive_fixtures::kSize);
+
+        auto check_hit = [&](const PickExpect& e, int px, int py, bool exact_texel) {
+            caliper_scene::Hit hit;
+            std::string why;
+            REQUIRE_MESSAGE(v.request_pick(px + 0.5f, py + 0.5f, &why), why);
+            const caliper_scene::PickPass::Result r = take_pick(*rig.gfx, v, &hit);
+            if (!e.hit) {
+                CHECK_MESSAGE(r == caliper_scene::PickPass::Result::Miss, "a miss at (", px, ", ", py, ")");
+                return;
+            }
+            REQUIRE_MESSAGE(r == caliper_scene::PickPass::Result::Hit, "a hit at (", px, ", ", py, ")");
+            const int draw = draw_reference::Reference::draw_of(e.id);
+            const uint32_t item = (e.id & 0xffffffu) - 1;
+            const caliper_scene::DrawMapEntry& me = map.entries.at(size_t(draw));
+            CHECK_MESSAGE(hit.entity == me.entity, "at (", px, ", ", py, "): ", v.tree().path(hit.entity), " for ", v.tree().path(me.entity));
+            CHECK(hit.primitive == me.primitive);
+            CHECK(hit.part == me.part);
+            CHECK(hit.overlay == me.overlay);
+            const int tx = e.x - (int(std::floor(px + 0.5f)) - 8), ty = e.y - (int(std::floor(py + 0.5f)) - 8);
+            if (exact_texel) {
+                CHECK(hit.texel[0] == tx);
+                CHECK(hit.texel[1] == ty);
+            } else {
+                CHECK(std::abs(hit.texel[0] - tx) <= 1);
+                CHECK(std::abs(hit.texel[1] - ty) <= 1);
+            }
+            if (me.primitive == caliper_scene::Primitive::Mesh && me.part == caliper_scene::DrawPart::Batch) {
+                const auto& tri = rr.mesh_vertices.at(draw).at(item);   // a vertex of the triangle under the pixel
+                CHECK((hit.item == tri[0] || hit.item == tri[1] || hit.item == tri[2]));
+            } else if (me.primitive == caliper_scene::Primitive::Image && me.part == caliper_scene::DrawPart::Batch) {
+                CHECK(hit.item == 0);   // an image writes no item; its pixel comes from its quad
+                // The image pixel under the hit, from the reference's quad: its UV at the pixel centre.
+                if (exact_texel) {
+                    REQUIRE(hit.has_pixel);
+                    bool found = false;
+                    for (const uint32_t ti : ref.tris_of.at(e.id)) {
+                        const draw_reference::Tri& t = ref.tris[ti];
+                        double q[3], z, mw;
+                        bool inside;
+                        if (!draw_reference::weights(t.v, e.x + 0.5, e.y + 0.5, q, &z, &inside, &mw) || !inside) continue;
+                        const double u = q[0] * t.v[0].uv[0] + q[1] * t.v[1].uv[0] + q[2] * t.v[2].uv[0];
+                        const double w = q[0] * t.v[0].uv[1] + q[1] * t.v[1].uv[1] + q[2] * t.v[2].uv[1];
+                        const uint32_t px_u = std::min(uint32_t(u * me.image_size[0]), me.image_size[0] - 1);
+                        const uint32_t px_v = std::min(uint32_t(w * me.image_size[1]), me.image_size[1] - 1);
+                        CHECK_MESSAGE(std::abs(int(hit.pixel[0]) - int(px_u)) <= (item ? 0 : 1), "image column");
+                        CHECK_MESSAGE(std::abs(int(hit.pixel[1]) - int(px_v)) <= (item ? 0 : 1), "image row");
+                        found = true;
+                        break;
+                    }
+                    CHECK(found);
+                }
+            } else {
+                CHECK_MESSAGE(hit.item == item, "at (", px, ", ", py, ") in ", v.tree().path(me.entity));
+            }
+            // The world position from the depth, in 3-D outside a pinhole's flat pixel space.
+            const bool three_d = v.tree().space() == caliper_scene::Space::k3D && !me.overlay;
+            CHECK(hit.has_position == three_d);
+            if (three_d && hit.has_position && exact_texel) {
+                const double X = 2.0 * (e.x + 0.5) / S - 1.0, Y = 1.0 - 2.0 * (e.y + 0.5) / S;
+                double q[4];
+                caliper_scene::transform_h(map.inverse_view_proj, {X, Y, ref.depth_d[size_t(e.y) * S + e.x]}, q);
+                const caliper_scene::Vec3 want{q[0] / q[3], q[1] / q[3], q[2] / q[3]};
+                const double off = caliper_scene::length(hit.position - want) / radius;
+                worst_position = std::max(worst_position, off);
+                CHECK_MESSAGE(off < 1e-4, "the position at (", px, ", ", py, ") is off by ", off, " of the radius");
+                ++positions;
+                // Through the entity transforms: the hit lies on the entity's own box, in its own frame,
+                // within the edges' 3 pixels on screen (0.04 scene units at that distance).
+                if (f.name == "boxes" && v.tree().path(hit.entity) == "arm/link0/link1") {
+                    caliper_scene::Mat4 inv;
+                    REQUIRE(caliper_scene::inverse(v.tree().world(hit.entity), &inv));
+                    const caliper_scene::Vec3 l = caliper_scene::transform_point(inv, hit.position);
+                    const double k = 0.04;
+                    CHECK_MESSAGE((std::fabs(l.x) <= 0.05 + k && std::fabs(l.y) <= 0.05 + k && l.z >= -k && l.z <= 0.4 + k),
+                                  "link1's local hit ", l.x, " ", l.y, " ", l.z);
+                    ++through_transforms;
+                }
+            }
+        };
+
+        // A pixel of every draw nearest its centroid, inside the draw where it is wider than a pixel
+        // (texel (8, 8) exactly), else on it (a line one or two pixels wide: within a texel).
+        for (size_t d = 0; d < map.entries.size(); ++d) {
+            double sx = 0, sy = 0;
+            size_t n = 0;
+            for (int j = 0; j < S; ++j)
+                for (int i = 0; i < S; ++i) {
+                    const uint32_t id = ref.id[size_t(j) * S + i];
+                    if (id && draw_reference::Reference::draw_of(id) == int(d)) sx += i, sy += j, ++n;
+                }
+            if (n == 0) {   // covered everywhere, as a pinhole's translucent image covers the 3-D content
+                MESSAGE("draw ", d, " of ", f.name, " (", v.tree().path(map.entries[d].entity), ") is covered everywhere");
+                continue;
+            }
+            int bx = -1, by = -1;
+            double bd = 1e300;
+            bool solid = false;
+            for (int j = 2; j < S - 2; ++j)
+                for (int i = 2; i < S - 2; ++i) {
+                    const uint32_t id = ref.id[size_t(j) * S + i];
+                    if (!id || draw_reference::Reference::draw_of(id) != int(d)) continue;
+                    const PickExpect e = expect_pick(ref, i, j);
+                    if (!e.robust || e.x != i || e.y != j || (solid && !e.solid)) continue;
+                    const double dd = (i - sx / n) * (i - sx / n) + (j - sy / n) * (j - sy / n);
+                    if ((e.solid && !solid) || dd < bd) bd = dd, bx = i, by = j, solid = e.solid;
+                }
+            if (bx < 0) {   // a draw seen edge-on or under others everywhere: picked in another fixture
+                MESSAGE("draw ", d, " of ", f.name, " (", v.tree().path(map.entries[d].entity), ") has no pixel to pick robustly");
+                continue;
+            }
+            check_hit(expect_pick(ref, bx, by), bx, by, solid);
+            ++probes;
+            solid_probes += solid ? 1 : 0;
+            const caliper_scene::DrawMapEntry& me = map.entries[d];
+            kinds.insert(std::string(caliper_scene::primitive_name(me.primitive)) + "/" + std::to_string(int(me.part)) +
+                         (me.overlay ? "/overlay" : ""));
+        }
+        // Pointers whose nearest hit lies on the window's edge, and windows past the view's edge.
+        int edges_here = 0, borders_here = 0;
+        for (int j = 0; j < S && (edges_here < 2 || borders_here < 2); j += 3)
+            for (int i = 0; i < S && (edges_here < 2 || borders_here < 2); i += 3) {
+                const PickExpect e = expect_pick(ref, i, j);
+                if (!e.robust || !e.hit) continue;
+                const int tx = e.x - (i - 8), ty = e.y - (j - 8);
+                const bool on_edge = tx == 0 || tx == 15 || ty == 0 || ty == 15;
+                const bool past_view = i < 8 || j < 8 || i >= S - 8 || j >= S - 8;
+                if (on_edge && edges_here < 2) {
+                    check_hit(e, i, j, false);
+                    ++edges_here;
+                    ++edge_probes;
+                } else if (past_view && borders_here < 2) {
+                    check_hit(e, i, j, false);
+                    ++borders_here;
+                    ++border_probes;
+                }
+            }
+        // A miss: nothing within the radius and two pixels more.
+        bool missed = false;
+        for (int j = 0; j < S && !missed; j += 5)
+            for (int i = 0; i < S && !missed; i += 5) {
+                const PickExpect e = expect_pick(ref, i, j);
+                if (e.hit || !e.robust) continue;
+                check_hit(e, i, j, true);
+                missed = true;
+                ++misses;
+            }
+        CHECK_MESSAGE(missed, f.name, " has no empty place");
+        // A result that arrives after the view drew another frame is dropped.
+        {
+            std::string why;
+            REQUIRE(v.request_pick(128.5f, 128.5f, &why));
+            v.orbit(2.0f, 0.0f);
+            REQUIRE_MESSAGE(v.render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, &why), why);
+            caliper_scene::Hit hit;
+            CHECK(take_pick(*rig.gfx, v, &hit) == caliper_scene::PickPass::Result::Dropped);
+        }
+        // Nothing is submitted while nobody asks: the view's own frames are the only ones.
+        const uint64_t submits = v.pick_pass()->submits();
+        for (int k = 0; k < 5; ++k) {
+            std::string why;
+            REQUIRE(v.render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, &why));
+            caliper_scene::Hit hit;
+            CHECK(v.poll_pick(&hit) == caliper_scene::PickPass::Result::None);
+        }
+        CHECK(v.pick_pass()->submits() == submits);
+    }
+    MESSAGE("picks: ", probes, " pixels, one of every draw (", solid_probes, " inside a draw wider than a pixel), ", edge_probes,
+            " on the window's edge, ", border_probes,
+            " with the window past the view's edge, ", misses, " misses; ", positions,
+            " world positions within ", worst_position, " of the scene's radius of the reference's");
+    CHECK(edge_probes > 0);
+    CHECK(border_probes > 0);
+    CHECK(through_transforms > 0);
+    // Every primitive and part was picked: points, lines, arrows, wire and filled boxes, meshes, images
+    // in 2-D and flat through a pinhole, depth clouds, frustums, and 2-D drawing through a pinhole.
+    std::string all;
+    for (const std::string& k : kinds) all += k + " ";
+    MESSAGE("kinds picked: ", all);
+    for (const char* k : {"points/0", "lines/0", "arrows/0", "boxes/0", "boxes/1", "mesh/0", "image/0", "image/2",
+                          "lines/3", "image/0/overlay", "points/0/overlay", "boxes/0/overlay", "arrows/0/overlay"})
+        CHECK_MESSAGE(kinds.count(k) == 1, "no pick of ", k);
 }
 
 TEST_CASE("gfx/Metal scene view: a late attach receives a reset and the state; clears keep static items") {

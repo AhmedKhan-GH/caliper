@@ -9,13 +9,17 @@
 // window back asynchronously; the view hands the bytes to Picker::deliver, which drops a result
 // that a newer request superseded or that arrives after the draw list changed, and decodes the
 // texel nearest the pointer into a hit: the entity, the primitive, the item, and where a depth
-// was read, the world position. An image writes no item; its pixel is found from its quad.
+// was read, the world position. An image writes no item; its pixel is found from its quad. PickPass
+// runs all of this on a backend of the graphics layer.
 #pragma once
 
+#include "gfx/gfx.h"
 #include "scene/compile.h"
+#include "scene/resources.h"
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace caliper_scene {
@@ -66,6 +70,73 @@ private:
     PickWindow window_;
     uint64_t serial_ = 0;
     bool pending_ = false;
+};
+
+// ---- The pick pass on the graphics layer --------------------------------------------------------
+// On a pointer event the view asks for a pick at a pixel. The pass compiles the pick variants of the
+// visible draws (SceneCompiler::compile_pick) into a window of 2r x 2r pixels around the pointer, 16 x 16
+// for the default radius of 8: an RG32Uint target with its own Depth32Float target in a 3-D scene, which
+// the window reaches by zooming clip space. Every pickable draw writes its pick id and its item (the
+// instance; a vertex of the triangle for a mesh; 0 for an image, whose pixel is found from its quad).
+// The pass submits that frame and starts the layer's asynchronous readbacks of both targets; poll()
+// takes them a frame or two later and decodes the texel nearest the pointer with the Picker. A result
+// is dropped when a newer request superseded it or when the view drew another frame since the request
+// (its generation changed), because the pixels the person points at have changed. The pass costs
+// nothing while the pointer is still: it submits only when asked.
+//
+// Like BackendResources, it is the scene core's helper over a backend of the layer; the scene core's
+// compiler itself never calls one.
+class PickPass {
+public:
+    explicit PickPass(caliper_gfx::Backend& backend, int radius_px = 8);
+    ~PickPass();
+    PickPass(const PickPass&) = delete;
+    PickPass& operator=(const PickPass&) = delete;
+
+    // Compiles and submits the pick pass around (x, y), in physical pixels of the view whose size
+    // `options` gives, and starts the readbacks. `generation` names the frame the view shows now. A
+    // new request supersedes an unanswered one. False, with why, when the scene did not compile or
+    // the layer refused the frame.
+    bool request(const SceneTree& tree, const ViewCamera& camera, const CompileOptions& options,
+                 SceneCompiler& compiler, Resources& res, float x, float y, uint64_t generation,
+                 std::string* why);
+
+    enum class Result { None, Pending, Hit, Miss, Dropped };
+    // Takes the readbacks once both are in. Hit fills *out; Miss: no pickable pixel within the
+    // radius; Dropped: the view's frame changed since the request; Pending: not yet; None: nothing
+    // was asked.
+    Result poll(uint64_t generation, Hit* out);
+    bool pending() const { return waiting_; }
+
+    // Counters: pick frames submitted, results decoded (hits and misses), results dropped.
+    uint64_t submits() const { return submits_; }
+    uint64_t answered() const { return answered_; }
+    uint64_t dropped() const { return dropped_; }
+    const PickWindow& window() const { return window_; }
+    caliper_gfx::Serial serial() const { return serial_; }   // the last pick frame's submit
+    // The last work on the window's targets, their readbacks included (a test may wait on it).
+    caliper_gfx::Serial last_use() const;
+    // The window as read back by the last answered request: ids (8 bytes a texel) and depth (4).
+    const std::vector<uint8_t>& last_ids() const { return ids_; }
+    const std::vector<uint8_t>& last_depth() const { return depth_; }
+
+private:
+    bool targets(bool depth, std::string* why);
+    void cancel();
+
+    caliper_gfx::Backend& gfx_;
+    int radius_;
+    caliper_gfx::Texture ids_target_, depth_target_;
+    caliper_gfx::Readback rb_ids_, rb_depth_;
+    bool have_ids_ = false, have_depth_ = false, want_depth_ = false;
+    std::vector<uint8_t> ids_, depth_;
+    Picker picker_;
+    PickWindow window_;
+    DrawMap map_;
+    uint64_t generation_ = 0;
+    bool waiting_ = false;
+    uint64_t submits_ = 0, answered_ = 0, dropped_ = 0;
+    caliper_gfx::Serial serial_ = 0;
 };
 
 }  // namespace caliper_scene

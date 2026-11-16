@@ -35,6 +35,7 @@
 #include "tensor_bridge.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -220,6 +221,8 @@ struct Reference {
     std::vector<uint32_t> rgba, id;   // id: (draw + 1) << 24 | (item + 1), 0 for the clear
     std::vector<uint32_t> base;       // the identity of the last opaque write, under any blended ones
     std::vector<float> depth;
+    std::vector<double> depth_d;      // the same depth before its rounding to f32
+    std::vector<uint8_t> contested;   // a write tied in depth with another identity, within 1e-5
     std::vector<uint8_t> tol;         // how far each pixel's colour may move
     std::vector<int> tol_of_draw;     // per draw: the tolerance of its unblended pixels
     std::vector<bool> blended_draw;   // per draw: alpha blended
@@ -233,7 +236,8 @@ struct Reference {
 
     Reference(int w, int h, uint32_t c)
         : W(w), H(h), clear(c), rgba(size_t(w) * h, c), id(size_t(w) * h, 0), base(size_t(w) * h, 0),
-          depth(size_t(w) * h, 1.0f), tol(size_t(w) * h, 0) {}
+          depth(size_t(w) * h, 1.0f), depth_d(size_t(w) * h, 1.0), contested(size_t(w) * h, 0),
+          tol(size_t(w) * h, 0) {}
 
     static uint32_t make_id(int draw, uint32_t item) { return uint32_t(draw + 1) << 24 | ((item + 1) & 0xffffffu); }
     static int draw_of(uint32_t ident) { return int(ident >> 24) - 1; }
@@ -278,6 +282,8 @@ struct Reference {
                 if (!weights(v, i + 0.5, j + 0.5, q, &z, &inside, &mw) || !inside) continue;
                 if (z < 0 || z > 1) continue;
                 const size_t k = size_t(j) * W + i;
+                // Near ties in depth between two identities: the GPU may break them the other way.
+                if (st.depth_test && id[k] != 0 && id[k] != ident && std::fabs(z - depth_d[k]) < 1e-5) contested[k] = 1;
                 if (st.depth_test && !(float(z) <= depth[k])) continue;
                 float c[4];
                 if (!shades[size_t(shade)](v, q, c)) continue;
@@ -297,7 +303,10 @@ struct Reference {
                 }
                 id[k] = ident;
                 ++writes[size_t(draw_of(ident))];
-                if (st.depth_write) depth[k] = float(z);
+                if (st.depth_write) {
+                    depth[k] = float(z);
+                    depth_d[k] = z;
+                }
             }
     }
 
@@ -379,6 +388,10 @@ struct Rasteriser {
     const SceneParts& parts;
     Reference ref;
     std::vector<std::string> problems;
+    // The pick pass instead of the colour pass: every draw opaque and writing depth where it tests
+    // it, as compile_pick sets its pipelines; the identities are then what the pick window holds.
+    bool pick = false;
+    std::map<int, std::vector<std::array<uint32_t, 3>>> mesh_vertices;   // per mesh draw: each triangle's vertices
 
     Rasteriser(const caliper_gfx::DrawList& l, const DrawMap& m, const caliper_scene::SceneTree& t,
                const SceneParts& p, int w, int h)
@@ -900,11 +913,14 @@ struct Rasteriser {
         };
         const bool flat = !nrm && !uvs;
         const bool textured = bool(uvs);
+        std::vector<std::array<uint32_t, 3>>& tv = mesh_vertices[draw];
         for (uint64_t t = 0; t < T; ++t) {
             RVert v[3];
             float pv[3][3];
+            tv.push_back({});
             for (int k = 0; k < 3; ++k) {
                 const uint64_t vi = idx ? std::min<uint64_t>(idx.u(3 * t + k), V - 1) : 3 * t + k;
+                tv.back()[size_t(k)] = uint32_t(vi);
                 for (int c = 0; c < 3; ++c) pv[k][c] = c < int(pos.width) ? pos.f(vi, uint32_t(c)) : 0.0f;
                 v[k] = to_screen(mul(p.mvp, pv[k][0], pv[k][1], pv[k][2]), ref.W, ref.H);
                 vertex_colour(vi, v[k].c);
@@ -969,6 +985,10 @@ struct Rasteriser {
             st.depth_test = e->depth_test;
             st.depth_write = e->depth_write;
             st.blend = e->translucent;
+            if (pick) {
+                st.blend = false;
+                st.depth_write = st.depth_test;
+            }
             if (r.scissor[2] != 0xffff || r.scissor[3] != 0xffff)
                 for (int k = 0; k < 4; ++k) st.scissor[k] = r.scissor[k];
             const bool lit = e->primitive == Primitive::Mesh && e->part == DrawPart::Batch;

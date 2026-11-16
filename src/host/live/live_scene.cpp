@@ -87,6 +87,7 @@ SceneView::SceneView(caliper_gfx::Backend& backend, const caliper_gfx::ProgramDe
 SceneView::~SceneView() {
     for (auto& kv : slots_) release(kv.second);
     slots_.clear();
+    pick_.reset();
     res_.reset();
     if (color_) gfx_.release(color_);
     if (depth_) gfx_.release(depth_);
@@ -94,6 +95,7 @@ SceneView::~SceneView() {
 
 bool SceneView::init(std::string* why) {
     res_ = std::make_unique<BackendResources>(gfx_, programs_, caliper_gfx::cmap::colormap_source(colormaps_));
+    pick_ = std::make_unique<PickPass>(gfx_);
     return res_->init(why);
 }
 
@@ -620,6 +622,20 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
     // Every upload above is in the slot's buffers; the store takes the batch now.
     if (!tree_.set_batch(e, b, u.is_static, &problem)) return failed();
     slot.batch = b;
+    slot.items = u.items ? *u.items : std::string();
+    slot.ax_start = 0, slot.ax_step = 1, slot.ax_count = 0, slot.ax_size = 0;
+    if (u.axes.is_array() && u.axes.size() > 0 && u.axes.at(u.axes.size() - 1).is_object()) {
+        const caliper_net::Json& ax = u.axes.at(u.axes.size() - 1);   // the item dim's
+        auto get = [&](const char* k, int64_t d) {
+            int64_t v = d;
+            const caliper_net::Json* j = ax.find(k);
+            return j && j->get_i64(&v) ? v : d;
+        };
+        slot.ax_start = get("start", 0);
+        slot.ax_step = get("step", 1);
+        slot.ax_count = get("count", 0);
+        slot.ax_size = get("size", 0);
+    }
     slot.cpu_rows = std::move(cpu_rows);   // the batch's CPU views point into these buffers
     slot.cpu_ids = std::move(cpu_ids);
     slot.present = true;
@@ -764,6 +780,62 @@ std::vector<std::string> SceneView::cameras() const {
 std::vector<LabelAnchor> SceneView::labels() const {
     if (!width_ || !height_) return {};
     return project_labels(tree_, effective_camera(), width_, height_);
+}
+
+// ---- picking ---------------------------------------------------------------------------------------
+
+bool SceneView::request_pick(float x, float y, std::string* why) {
+    if (!pick_ || !res_ || !width_ || !height_) {
+        if (why) *why = "the scene view has not drawn yet";
+        return false;
+    }
+    CompileOptions opt;
+    opt.width = width_;
+    opt.height = height_;
+    opt.pixel_scale = scale_;
+    opt.clear_rgba = clear_;
+    return pick_->request(tree_, effective_camera(), opt, compiler_, *res_, x, y, generation_, why);
+}
+
+PickPass::Result SceneView::poll_pick(Hit* out) {
+    return pick_ ? pick_->poll(generation_, out) : PickPass::Result::None;
+}
+
+int64_t SceneView::row_id(const std::string& path, Primitive p, int64_t index) const {
+    const EntityId e = tree_.find(path);
+    const bool fixed = e && tree_.batch_static(e, p);
+    const auto it = slots_.find(Key{path, int(p), fixed});
+    if (it == slots_.end() || it->second.ax_size <= 0) return index;
+    const Slot& s = it->second;
+    return s.ax_start + (index * s.ax_count) / s.ax_size * s.ax_step;
+}
+
+std::string SceneView::pick_detail(const Hit& h) const {
+    if (h.part == DrawPart::Frustum || h.part == DrawPart::Axes) return {};
+    const std::string path = tree_.path(h.entity);
+    // A depth cloud's point is a pixel of its depth image; an image's item is its pixel too.
+    int64_t index = int64_t(h.item);
+    if (h.primitive == Primitive::Image && h.part == DrawPart::Batch) {
+        const Batch* b = tree_.batch(h.entity, Primitive::Image);
+        index = h.has_pixel && b ? int64_t(h.pixel[1]) * b->image_width + h.pixel[0] : 0;
+    }
+    caliper_net::Json d = caliper_net::Json::object();
+    d.set("entity", caliper_net::Json(path));
+    d.set("primitive", caliper_net::Json(primitive_name(h.primitive)));
+    d.set("index", caliper_net::Json(index));
+    d.set("row_id", caliper_net::Json(row_id(path, h.primitive, index)));
+    if (h.primitive == Primitive::Image && h.has_pixel) {
+        caliper_net::Json px = caliper_net::Json::array();
+        px.push(caliper_net::Json(int64_t(h.pixel[0])));
+        px.push(caliper_net::Json(int64_t(h.pixel[1])));
+        d.set("pixel", px);
+    }
+    if (h.has_position) {
+        caliper_net::Json pos = caliper_net::Json::array();
+        for (double c : {h.position.x, h.position.y, h.position.z}) pos.push(caliper_net::Json(c));
+        d.set("position", pos);
+    }
+    return d.dump();
 }
 
 bool SceneView::in_pixel_space(EntityId e) const {
@@ -931,6 +1003,7 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
         return false;
     }
     ++cost_.frames;
+    ++generation_;
     return true;
 }
 

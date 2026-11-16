@@ -33,6 +33,7 @@
 #include "net/wire.h"
 #include "scene/camera.h"
 #include "scene/compile.h"
+#include "scene/pick.h"
 #include "scene/scene.h"
 
 #include <cstdint>
@@ -114,6 +115,25 @@ public:
     // The anchors of the labels at the view's size and camera, nearest first, at most 512.
     std::vector<caliper_scene::LabelAnchor> labels() const;
 
+    // ---- picking (design/scenes.md, "Picking, hover and selection") --------------------------------
+    // Asks for a pick at (x, y), in physical pixels of the view's target, through the scene core's
+    // pick pass: the pick variants of the drawn scene into a 16 x 16 window around the pointer. The
+    // answer comes from poll_pick a frame or two later; a result whose frame the view replaced since,
+    // or that a newer request superseded, is dropped. Nothing is submitted while nobody asks.
+    bool request_pick(float x, float y, std::string* why);
+    caliper_scene::PickPass::Result poll_pick(caliper_scene::Hit* out);
+    bool pick_pending() const { return pick_ && pick_->pending(); }
+    const caliper_scene::PickPass* pick_pass() const { return pick_.get(); }
+    // The frames the view has drawn: the generation a pick belongs to.
+    uint64_t generation() const { return generation_; }
+    // The detail of a pick or hover event for a hit, as protocol 3.2 gives it: entity, primitive,
+    // index (the item in the sent batch), row_id (its source index through the batch's payload axes)
+    // and, where the depth gave one, position. "" for a hit on something that is no batch item (a
+    // camera's frustum or an entity's axes): a hover there reports nothing.
+    std::string pick_detail(const caliper_scene::Hit& h) const;
+    // The source index of item `index` of the batch (path, primitive), through its payload axes.
+    int64_t row_id(const std::string& path, caliper_scene::Primitive p, int64_t index) const;
+
     // Compiles and submits when something changed since the last frame, into a target of
     // width x height physical pixels. False with *why when the layer refused the frame.
     bool render(uint32_t width, uint32_t height, float pixel_scale, uint32_t clear_rgba, std::string* why);
@@ -155,6 +175,10 @@ private:
         uint32_t tex_w = 0, tex_h = 0;
         caliper_gfx::Format tex_format = caliper_gfx::Format::RGBA8Unorm;
         std::vector<uint8_t> cpu_rows, cpu_ids;   // CPU views for the labels: positions or centres, class ids
+        // The payload axis of the batch's item dim, when the producer sampled it (the update's `axes`),
+        // and the item space its rows are (`items`).
+        int64_t ax_start = 0, ax_step = 1, ax_count = 0, ax_size = 0;
+        std::string items;
         bool present = false;
     };
     struct Key {
@@ -187,6 +211,8 @@ private:
     caliper_scene::SceneCompiler compiler_;
     caliper_scene::ViewCamera camera_ = caliper_scene::Orbit{};
     std::string through_;              // the camera entity looked through, or ""
+    std::unique_ptr<caliper_scene::PickPass> pick_;
+    uint64_t generation_ = 0;          // colour frames submitted
     std::map<Key, Slot> slots_;
     std::vector<uint8_t> scratch_;
     std::vector<std::string> notes_;

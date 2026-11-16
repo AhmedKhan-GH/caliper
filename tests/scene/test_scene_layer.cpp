@@ -380,3 +380,77 @@ TEST_CASE("images replaced at a new size keep the layer's live textures and bind
         CHECK_MESSAGE(groups[i] == groups[0], "live bind groups in round ", i, ": ", groups[i], ", in the first: ", groups[0]);
     }
 }
+
+TEST_CASE("the pick pass on the layer: one submit and two readbacks per request, none while still, drops and supersedes") {
+    // The recording backend validates and records; its readbacks come back cleared, so every answer
+    // here is a miss. The rows on Metal check what a pick finds (tests/gfx/gfx_scene_view.cpp).
+    Layer L;
+    SceneTree t;
+    Batch cloud = bounded(Batch{}, -1, 1);
+    cloud.primitive = Primitive::Points;
+    cloud.arrays = {L.array(Role::Positions, 10, 12, VertexFormat::F32x3, 0)};
+    REQUIRE(t.set_batch(t.ensure("cloud"), cloud));
+    t.update();
+    L.res.update_class_table(t);
+    ViewCamera cam = Orbit{};
+    fit(cam, t.scene_bounds(), 400.0 / 300.0);
+    CompileOptions o;
+    o.width = 400;
+    o.height = 300;
+    SceneCompiler compiler;
+    PickPass pass(L.backend);
+    using Op = RecordingBackend::OpKind;
+    const size_t submits0 = L.backend.count(Op::Submit), reads0 = L.backend.count(Op::ReadTexture);
+
+    // Nothing asked: nothing submitted, nothing to take.
+    Hit hit;
+    CHECK(pass.poll(1, &hit) == PickPass::Result::None);
+    CHECK(L.backend.count(Op::Submit) == submits0);
+
+    // One request: one frame of the pick variants into the 16 x 16 window, the ids and the depth read back.
+    std::string why;
+    REQUIRE_MESSAGE(pass.request(t, cam, o, compiler, L.res, 200.0f, 150.0f, 1, &why), why);
+    CHECK(pass.submits() == 1);
+    CHECK(L.backend.count(Op::Submit) == submits0 + 1);
+    CHECK(L.backend.count(Op::ReadTexture) == reads0 + 2);
+    CHECK(pass.window().width == 16);
+    CHECK(pass.window().x0 == 192);
+    CHECK(pass.poll(1, &hit) == PickPass::Result::Miss);
+    CHECK(pass.answered() == 1);
+    CHECK(pass.last_ids().size() == 16 * 16 * 8);
+    CHECK(pass.last_depth().size() == 16 * 16 * 4);
+    CHECK(pass.poll(1, &hit) == PickPass::Result::None);   // answered once
+
+    // The pointer still: the view asks nothing, and nothing more is submitted.
+    for (int i = 0; i < 10; ++i) CHECK(pass.poll(1, &hit) == PickPass::Result::None);
+    CHECK(L.backend.count(Op::Submit) == submits0 + 1);
+
+    // The view drew another frame before the answer: dropped.
+    REQUIRE(pass.request(t, cam, o, compiler, L.res, 10.0f, 10.0f, 1, &why));
+    CHECK(pass.poll(2, &hit) == PickPass::Result::Dropped);
+    CHECK(pass.dropped() == 1);
+
+    // A newer request supersedes an unanswered one: its readbacks are cancelled, one answer comes.
+    REQUIRE(pass.request(t, cam, o, compiler, L.res, 10.0f, 10.0f, 2, &why));
+    REQUIRE(pass.request(t, cam, o, compiler, L.res, 399.0f, 299.0f, 2, &why));
+    CHECK(pass.window().x0 == 391);
+    CHECK(pass.poll(2, &hit) == PickPass::Result::Miss);
+    CHECK(pass.poll(2, &hit) == PickPass::Result::None);
+    CHECK(pass.submits() == 4);
+    CHECK(pass.answered() == 2);
+
+    // A 2-D scene has no depth target: only the ids are read back.
+    SceneTree flat(Space::k2D);
+    Batch dots;
+    dots.primitive = Primitive::Points;
+    dots.arrays = {L.array(Role::Positions, 4, 8, VertexFormat::F32x2, 0)};
+    REQUIRE(flat.set_batch(flat.root(), bounded(dots)));
+    flat.update();
+    ViewCamera pz = PanZoom{};
+    fit(pz, flat.scene_bounds(), 400.0 / 300.0);
+    const size_t reads1 = L.backend.count(Op::ReadTexture);
+    REQUIRE(pass.request(flat, pz, o, compiler, L.res, 200.0f, 150.0f, 3, &why));
+    CHECK(L.backend.count(Op::ReadTexture) == reads1 + 1);
+    CHECK(pass.poll(3, &hit) == PickPass::Result::Miss);
+    CHECK(pass.last_depth().empty());
+}
