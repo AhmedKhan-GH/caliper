@@ -52,8 +52,9 @@ endif()
 # DuckDB, as one target the modules link: caliper_builder_duckdb.
 add_library(caliper_builder_duckdb INTERFACE)
 if(TARGET duckdb_static)
-    target_link_libraries(caliper_builder_duckdb INTERFACE
-        duckdb_static duckdb_generated_extension_loader parquet_extension core_functions_extension)
+    # The host's DuckDB with every extension it links statically, json among
+    # them (CALIPER_DUCKDB_LIBS in cmake/Dependencies.cmake).
+    target_link_libraries(caliper_builder_duckdb INTERFACE ${CALIPER_DUCKDB_LIBS})
     set(CALIPER_BUILDER_HAVE_DUCKDB ON)
 elseif(CALIPER_BUILDER_DUCKDB_DIR)
     find_library(CALIPER_BUILDER_DUCKDB_LIB duckdb

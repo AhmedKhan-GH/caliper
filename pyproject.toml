@@ -52,6 +52,8 @@ CALIPER_WITH_LLAMA = "OFF"
 CMAKE_OSX_DEPLOYMENT_TARGET = "14.0"
 # The builder (src/builder) is not part of Caliper LIB; OFF keeps its targets
 # and its nlohmann/json download out of the wheel's configure.
+# The builder (src/builder) is not part of Caliper LIB; OFF keeps its targets,
+# its nlohmann/json download and DuckDB's json extension out of the wheel.
 CALIPER_WITH_BUILDER = "OFF"
 
 [tool.pytest.ini_options]

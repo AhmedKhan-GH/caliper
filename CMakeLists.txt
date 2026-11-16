@@ -114,10 +114,12 @@ option(CALIPER_WITH_SLANG "Configure the vendored slang (SystemVerilog) library"
 option(CALIPER_WITH_LLAMA "Configure the vendored llama.cpp (+ apply its local patches)" ON)
 # The builder (src/builder, design/builder-overview.md): the spec, catalog,
 # command, loaders, ACP, session, MCP and agent libraries, caliper-mcp,
-# caliper-acp-harness, caliper-builder-host and their tests. It is OFF by
-# default on Windows: its sources have not been compiled with MSVC yet, and
-# the Windows CI lane builds every target and runs every test, so a Windows
-# session turns it on with -DCALIPER_WITH_BUILDER=ON and fixes what fails there.
+# caliper-acp-harness, caliper-builder-host and their tests. ON also links
+# DuckDB's json extension into the host's DuckDB, for the loaders' JSON and
+# JSONL readers (cmake/Dependencies.cmake). It is OFF by default on Windows:
+# its sources have not been compiled with MSVC yet, and the Windows CI lane
+# builds every target and runs every test, so a Windows session turns it on
+# with -DCALIPER_WITH_BUILDER=ON and fixes what fails there.
 if(WIN32)
     set(_caliper_builder_default OFF)
 else()
@@ -278,10 +280,7 @@ target_include_directories(caliper_host_lib PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_host_lib
     PUBLIC caliper::sdk
     PRIVATE tomlplusplus::tomlplusplus
-            duckdb_static
-            duckdb_generated_extension_loader
-            parquet_extension
-            core_functions_extension)
+            ${CALIPER_DUCKDB_LIBS})
 
 # Device query (caliper.device.v1): Metal-API-only on Apple, no ML framework
 # linked. The Metal/Foundation frameworks flow PUBLIC so consumers of
