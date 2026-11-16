@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include "applet_loader.h"
+#include "test_temp.h"
 #include <caliper/fixture_host.h>
 #include <cstdlib>
 #include <filesystem>
@@ -80,7 +81,7 @@ TEST_CASE("loader: relaunch tears down the old instance first") {
 TEST_CASE("loader: descriptor/manifest agreement is enforced") {
     // Manifest lies about the version -> launch must fail with a reason.
     caliper::testing::FixtureHost fx;
-    fs::path dir = fs::temp_directory_path() / "caliper-liar";
+    fs::path dir = caliper_test::unique_temp_path("caliper-liar");
     fs::create_directories(dir);
     fs::copy_file(fs::path(CALIPER_TEST_APPLETS_DIR) / lib_name("hello"),
                   dir / lib_name("hello"), fs::copy_options::overwrite_existing);
@@ -102,7 +103,7 @@ TEST_CASE("loader: descriptor/manifest agreement is enforced") {
 }
 
 TEST_CASE("loader: epoch mismatch refused before any dlopen") {
-    fs::path dir = fs::temp_directory_path() / "caliper-epoch99";
+    fs::path dir = caliper_test::unique_temp_path("caliper-epoch99");
     fs::create_directories(dir);
     std::ofstream(dir / "fake.caliper.toml") <<
         "[applet]\nid=\"x.fake\"\nname=\"Fake\"\nversion=\"1.0.0\"\n"
@@ -117,7 +118,7 @@ TEST_CASE("loader: epoch mismatch refused before any dlopen") {
 }
 
 TEST_CASE("loader: missing binary is a Failed card, not a crash") {
-    fs::path dir = fs::temp_directory_path() / "caliper-nobin";
+    fs::path dir = caliper_test::unique_temp_path("caliper-nobin");
     fs::create_directories(dir);
     std::ofstream(dir / "ghost.caliper.toml") <<
         "[applet]\nid=\"x.ghost\"\nname=\"Ghost\"\nversion=\"1.0.0\"\n"
@@ -152,7 +153,7 @@ TEST_CASE("loader: a path-escaping manifest id is a Failed card, never a data di
     // (and create_directories at launch) outside the data root. Such ids are
     // refused before any path is built; the card still has a title (fname).
     caliper::testing::FixtureHost fx;
-    fs::path dir = fs::temp_directory_path() / "caliper-badid";
+    fs::path dir = caliper_test::unique_temp_path("caliper-badid");
     fs::create_directories(dir);
     const char* ids[] = {"../../caliper-escaped", "a..b", "Dev.Caliper.Hello",
                          "dev.under_score", "a/b", ".lead", "trail."};
@@ -186,7 +187,7 @@ TEST_CASE("loader: descriptor-required service missing refuses with the friendly
     // host without log.v1 passes the pre-dlopen manifest check (Ready), then
     // refuses at launch with the same card text negotiate() would have used.
     caliper::testing::FixtureHost fx;
-    fs::path dir = fs::temp_directory_path() / "caliper-underdeclared";
+    fs::path dir = caliper_test::unique_temp_path("caliper-underdeclared");
     fs::create_directories(dir);
     fs::copy_file(fs::path(CALIPER_TEST_APPLETS_DIR) / lib_name("hello"),
                   dir / lib_name("hello"), fs::copy_options::overwrite_existing);
@@ -212,13 +213,12 @@ TEST_CASE("loader: descriptor-required service missing refuses with the friendly
 // applet's stored data").
 // ---------------------------------------------------------------------------
 
-// A fresh folder under the system temp dir, removed when the case ends.
+// A new folder of this run's own under the system temp dir (test_temp.h),
+// removed when the case ends.
 struct TempDir {
     fs::path path;
     explicit TempDir(const std::string& name)
-        : path(fs::temp_directory_path() / ("caliper-test-" + name)) {
-        std::error_code ec;
-        fs::remove_all(path, ec);
+        : path(caliper_test::unique_temp_path("caliper-test-" + name)) {
         fs::create_directories(path);
     }
     ~TempDir() {

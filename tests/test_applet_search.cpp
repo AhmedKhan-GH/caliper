@@ -4,6 +4,7 @@
 #include <doctest/doctest.h>
 #include "applet_loader.h"
 #include "host_cli.h"
+#include "test_temp.h"
 #include <caliper/fixture_host.h>
 #include <filesystem>
 #include <fstream>
@@ -29,9 +30,7 @@ HostCaps caps() { return HostCaps{2, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"
 struct TempDir {
     fs::path path;
     explicit TempDir(const std::string& name)
-        : path(fs::temp_directory_path() / ("caliper-search-" + name)) {
-        std::error_code ec;
-        fs::remove_all(path, ec);
+        : path(caliper_test::unique_temp_path("caliper-search-" + name)) {
         fs::create_directories(path);
     }
     ~TempDir() {

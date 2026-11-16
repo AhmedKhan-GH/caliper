@@ -31,6 +31,7 @@
 #include "tensor_bridge.h"          // caliper_host::expand_u8_to_rgba8 (shared ref)
 #include "renderer/host_renderer.h"
 #include "app_paths.h"              // caliper::app_data_path (data_dir routing)
+#include "test_temp.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -70,8 +71,7 @@ namespace {
 class StderrTap {
 public:
     StderrTap() {
-        path_ = (std::filesystem::temp_directory_path() /
-                 "embed_stderr_tap.txt").string();
+        path_ = caliper_test::unique_temp_path("embed_stderr_tap").string() + ".txt";
         std::fflush(stderr);
         saved_fd_ = caliper_dup(caliper_fileno(stderr));
         std::freopen(path_.c_str(), "w", stderr);
@@ -88,7 +88,11 @@ public:
         ss << in.rdbuf();
         return ss.str();
     }
-    ~StderrTap() { drain(); }
+    ~StderrTap() {
+        drain();
+        std::error_code ec;
+        std::filesystem::remove(path_, ec);
+    }
 private:
     std::string path_;
     int saved_fd_ = -1;
@@ -679,10 +683,10 @@ TEST_CASE("embed/metrics.v1_1: a host reads runs+scalars via the ABI (Arrow) "
 TEST_CASE("embed/data_dir: a per-core data_dir roots the stores under it; "
           "NULL keeps the default") {
     namespace fs = std::filesystem;
-    // A temp root distinct from the default app-data. Cleaned up front so a
-    // stale prior run cannot mask the "landed under root" assertion (portable:
-    // no getpid, the Windows box reruns this battery).
-    fs::path root = fs::temp_directory_path() / "caliper_embed_datadir_test";
+    // A temp root distinct from the default app-data, of this run's own
+    // (test_temp.h, portable). Cleaned up front as well, so nothing stale can
+    // mask the "landed under root" assertion.
+    fs::path root = caliper_test::unique_temp_path("caliper_embed_datadir_test");
     std::error_code ec;
     fs::remove_all(root, ec);
 

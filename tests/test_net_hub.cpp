@@ -12,6 +12,7 @@
 #include "net/hub.h"
 #include "net/wire.h"
 #include "net/ws.h"
+#include "test_temp.h"
 
 #include <algorithm>
 #include <atomic>
@@ -992,7 +993,7 @@ TEST_CASE("net/hub: a new process under an ended session's id takes it over, as 
 
 TEST_CASE("net/hub: the token, Host and Origin checks, and the static files") {
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "caliper-hub-assets";
+    const fs::path dir = caliper_test::unique_temp_path("caliper-hub-assets");
     std::error_code ec;
     fs::remove_all(dir, ec);
     fs::create_directories(dir / "fonts");
@@ -1285,7 +1286,7 @@ TEST_CASE("net/hub: the token and the hub file") {
     CHECK_FALSE(caliper_net::valid_token("short"));
     CHECK_FALSE(caliper_net::valid_token("has a space-0123456789abcdef"));
 
-    const fs::path dir = fs::temp_directory_path() / "caliper-hub-file";
+    const fs::path dir = caliper_test::unique_temp_path("caliper-hub-file");
     std::error_code ec;
     fs::remove_all(dir, ec);
     fs::create_directories(dir);

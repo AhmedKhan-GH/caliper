@@ -12,6 +12,7 @@
 
 #include "host_services.h"
 #include "export_service.h"
+#include "test_temp.h"
 #include "renderer/host_renderer.h"
 
 #include <caliper/caliper.hpp>
@@ -54,11 +55,21 @@ using namespace caliper_host;
 
 namespace {
 
+// This run's folder for the files the cases write (test_temp.h), removed when
+// the process exits.
+struct ExportTmp {
+    fs::path dir = caliper_test::unique_temp_path("caliper_export_tests");
+    ~ExportTmp() {
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+};
+
 std::string tmp_path(const char* leaf) {
-    fs::path p = fs::temp_directory_path() / "caliper_export_tests";
+    static ExportTmp tmp;
     std::error_code ec;
-    fs::create_directories(p, ec);
-    return (p / leaf).string();
+    fs::create_directories(tmp.dir, ec);
+    return (tmp.dir / leaf).string();
 }
 
 std::vector<uint8_t> read_file(const std::string& path) {
