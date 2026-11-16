@@ -308,8 +308,16 @@ and data views let each viewer choose which part of a tensor travels.
 [Network streaming](../explanations/network-streaming.md) explains the design,
 the [Wire protocol](wire-protocol.md) reference defines the messages, and
 [Watch a training run in a notebook](../tutorials/watch-a-training-run-in-a-notebook.md)
-uses all three. `websockets` is a dependency of the package. The widget needs
+uses all three. `caliper.connect()` streams the same views to a `caliper serve`
+hub instead, or as well. `websockets` is a dependency of the package. The widget needs
 the extra `caliper[notebook]`, which adds anywidget.
+
+The server's sender is native when `caliper._netio` is built: a C++ thread that
+never takes the GIL encodes and sends. `python scripts/build_netio.py`, run with
+the script's Python, builds it and copies it into the installed package.
+Without it, `serve()` uses a sender written in Python and says so once on
+stderr, and `connect()` raises `RuntimeError`. `CALIPER_NETIO=0` chooses the
+sender written in Python.
 
 ### serve
 
@@ -374,6 +382,46 @@ nothing in them runs as a command.
 
 `close()` may be called more than once. It also runs at `caliper.close()` and at
 interpreter exit, and the server works as a context manager that closes it.
+
+### connect
+
+```python
+hub = caliper.connect(url=None)
+```
+
+Stream every view of this process to a `caliper serve` hub on this machine, as
+a producer, and return the connection, a `caliper._net_native.HubConnection`.
+[Run a hub](../guides/run-a-hub.md) explains the hub.
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `url` | `str` or `None` | `None` | The hub's stream URL with its token, `ws://127.0.0.1:<port>/v3/stream?token=<token>`, or the viewer link it prints. `None` reads `CALIPER_HUB_URL`, then the hub file: `CALIPER_HUB_FILE`, or `hub.json` in the app-data folder (`~/Library/Application Support/Caliper/hub.json` on macOS) |
+
+`connect()` returns at once and never blocks the training loop: the native
+sender connects in the background. When the hub cannot be reached or the
+connection drops, it tries again after 0.5 seconds, doubling the wait up to 30
+seconds, and proposes the session id the hub assigned, so that the hub resumes
+the session. It stops when the hub ends the connection with BYE `replaced`.
+The views reach the hub through the same calls as for `serve()`: a view takes a
+snapshot for the hub only while a viewer of the hub watches it. Caliper LIB
+keeps one producer per process, so `serve()` and `connect()` in one script
+share it, and every view call reaches both.
+
+It raises `ValueError` for a URL that has no token or names a host other than
+127.0.0.1 or localhost, and `RuntimeError` when no URL is given and there is no
+hub file, or when the native sender is not built.
+
+| Member | Meaning |
+|---|---|
+| `url` | The hub's stream URL, without the token |
+| `session` | The session id the hub assigned; the proposed `clp-<pid>-<6 hex>` until it answers |
+| `state` | `connecting`, `connected`, `waiting` (to try again), `replaced` (another connection of this session took over) or `closed` |
+| `connected` | `True` while the connection is open |
+| `stats()` | A dict with `state`, `connected`, `session`, `error` (the last failure, or empty), `attempts` and `connects` |
+| `wait_connected(timeout=10.0)` | Wait, polling, until the connection is open; `True` if it is. For tests and scripts, not for the training loop |
+| `close()` | End the connection to the hub; a running `serve()` keeps serving |
+
+`caliper.close()` ends the connection as well.
 
 ### widget
 

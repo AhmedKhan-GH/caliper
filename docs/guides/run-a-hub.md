@@ -48,8 +48,15 @@ A script connects to `ws://127.0.0.1:<port>/v3/stream?token=<token>` as a produc
 
 Scripts on the same machine find the hub through the **hub file**, which the hub writes when it starts and removes when it stops. It is `hub.json` in the app-data folder (`~/Library/Application Support/Caliper/hub.json` on macOS), or the path in `CALIPER_HUB_FILE`. Only its owner can read it, because it holds the token along with the port.
 
-!!! note "Python specifics pending"
-    The Python call that connects a script to a hub, `caliper.connect(url=None)`, is being built on the native sender. How it takes the address, where it looks for the token, and how it reconnects will be described here and in the [Caliper LIB](../references/python-api.md) reference when it lands.
+In Python, `caliper.connect()` connects the script to the hub:
+
+```python
+import caliper
+
+hub = caliper.connect()
+```
+
+It takes the hub's address and token from its argument, either the stream URL `ws://127.0.0.1:<port>/v3/stream?token=<token>` or the viewer link that the hub prints. Without an argument it reads `CALIPER_HUB_URL`, and without that the hub file; it raises `RuntimeError` when there is no hub file. It returns at once and connects in the background, so the training loop never waits for the hub. When the hub cannot be reached or the connection drops, it tries again after half a second, doubling the wait up to 30 seconds, and proposes the session id the hub gave it, so that its session resumes. It stops trying when the hub closes the connection with BYE `replaced`. A script can also run `caliper.serve()`: every view call then reaches the hub and the script's own viewers. `connect()` needs the native sender, which `python scripts/build_netio.py` builds, and the [Python API](../references/python-api.md#connect) lists what it returns.
 
 A script that loses its connection and connects again with the same id, pid and start time **resumes** its session. The hub closes the old connection, if it is still open, with BYE `replaced`, keeps the session's viewers attached and subscribes again to every view they watch.
 

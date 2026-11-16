@@ -30,10 +30,19 @@ repository root:
 
 ```sh
 uv pip install --python .venv/bin/python --reinstall-package caliper "$(ls dist/caliper-*.whl)[notebook]" jupyterlab
+.venv/bin/python scripts/build_netio.py
 .venv/bin/jupyter lab examples/notebooks/live_training.ipynb
 ```
 
-The server needs nothing beyond Caliper LIB, which depends on `websockets`. In
+The second command builds the native sender of `caliper.serve()`,
+`caliper._netio`, in a few seconds and copies it into the installed package.
+Run it once, and again after you reinstall the wheel. Without it, the server
+uses a slower sender written in Python and says so once when it starts; the
+[cost of streaming](../explanations/network-streaming.md#cost-of-streaming)
+compares the two.
+
+The server needs nothing beyond Caliper LIB, which
+depends on `websockets`. In
 VS Code, open the notebook and choose `.venv/bin/python` as its kernel.
 
 The notebook reads one setting from the environment: `CALIPER_NOTEBOOK_STEPS`

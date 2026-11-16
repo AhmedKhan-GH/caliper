@@ -14,12 +14,20 @@ The notebook needs an Apple Silicon Mac, Python 3.12 and PyTorch with MPS. On
 a machine without MPS it trains on the CPU, more slowly. Build the wheel as
 [Watch a PyTorch training run live](../../docs/tutorials/live-pytorch.md#build-and-install-the-wheel)
 describes, then install it with the extra `caliper[notebook]` and a notebook
-front end, from the repository root:
+front end, build the native sender once, and open the notebook, from the
+repository root:
 
 ```sh
 uv pip install --python .venv/bin/python --reinstall-package caliper "$(ls dist/caliper-*.whl)[notebook]" jupyterlab
+.venv/bin/python scripts/build_netio.py
 .venv/bin/jupyter lab examples/notebooks/live_training.ipynb
 ```
+
+`scripts/build_netio.py` compiles `caliper._netio`, the native sender of
+`caliper.serve()`, in a few seconds and copies it into the installed package.
+Without it, `serve()` uses a slower sender written in Python and says so once.
+Reinstalling the wheel removes the module, so run the script again after a
+reinstall.
 
 Run the cells from top to bottom. In VS Code, open the notebook and choose the
 `.venv` interpreter as its kernel.
