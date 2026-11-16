@@ -1,46 +1,54 @@
 """Step 4 of the walk-through in the hidden app: the side chat with a real agent on a local model.
 
 The side chat runs caliper-agent, Caliper's own ACP agent, on a model served
-by Ollama on this machine, so that no account or key is used: its custom command
-is `chat-agent.sh` beside this folder, the script a person gives the chat. The app is attached to a live stream, the person's message is "Plot
+by Ollama on this machine, so that no account or key is used: its custom
+command is `chat-agent.sh` beside this folder, the script a person gives the
+chat. The app is attached to a live stream, the person's message is "Plot
 attention entropy per layer while it trains", every edit the agent sends waits
 on an approval card and is approved, and the dashboard the agent builds then
 draws the stream live on the spec page beside the chat.
 
-    python3 step4_side_chat.py --build <build folder> --out <folder> [--agent-python <python>] \
-        [--work <folder>] [--model qwen3.8:27b] [--base-url http://127.0.0.1:11434/v1] \
-        [--context-length 32768] [--runs 1] [--minutes 10] [--size 1440x900]
-        [--stream producer|train --train-python <python>]
+    python3 step4_side_chat.py --agent-python <python> [--caliper <app>] [--out <folder>] [--work <folder>]
+        [--size 1440x900] [--url <stream link> | --stream producer|train --train-python <python>]
+        [--workspace <folder> --app-data <folder>] [--model qwen3.8:27b]
+        [--base-url http://127.0.0.1:11434/v1] [--context-length 32768] [--runs 1] [--minutes 10]
 
-- `--build` is a build folder of the repository with `caliper`,
-  `caliper_attention_producer` and the applets in it.
+The options are those of hidden_app.py.
 - `--agent-python` is a Python with caliper-agent's dependencies
   (`src/builder/agent/pyproject.toml`), which chat-agent.sh takes from
   CALIPER_AGENT_PYTHON; the agent runs from this repository's source, so
   nothing is installed. The app gets the PATH of an app started from the
   Finder, the system's folders only, which its agent inherits.
-- The stream is `caliper_attention_producer` by default, a test tool that
-  stands in for the training script with the same views and no torch; with
-  `--stream train` it is `train.py` beside this folder, run by `--train-python`
-  (a Python with torch and Caliper LIB).
+- The stream: with `--url`, a stream that is already running, such as the
+  one run_all.py starts. Otherwise the script starts its own:
+  `caliper_attention_producer` beside the caliper executable by default, a
+  test tool that stands in for the training script with the same views and
+  no torch, or with `--stream train` `train.py` beside this folder, run by
+  `--train-python` (a Python with torch and Caliper LIB).
+- With `--workspace` and `--app-data`, as in run_all.py --story, the app
+  works in the story's workspace, and the agent's dashboard is made there
+  beside the one of steps 2 and 3.
 
 What the script plays is the person's part, through the hidden app's input
 script (CALIPER_TEST_SPEC_UI): it opens the chat, types the message and presses
 Enter, waits until the approval strip shows the first card and captures it,
-waits for the turn's
-end, waits for the spec page, which the app shows for the agent's new spec, and
-captures the dashboard twice a few seconds apart. Each approval card is
-decided through the hidden app's test-only decisions file
+waits for the turn's end, waits for the spec page, which the app shows for the
+agent's new spec, and captures the dashboard twice a few seconds apart. Each
+approval card is decided through the hidden app's test-only decisions file
 (CALIPER_TEST_APPROVALS), which applies the decision through the same path as
-the card's Approve button: a thread here reads the app's `[approval] ... waiting`
-lines and approves each card once the first has been captured.
+the card's Approve button: a thread here reads the app's `[approval] ...
+waiting` lines and approves each card once the first has been captured.
 
 Captures are written to `--out` as step4-<what>-<W>x<H>.png (request, card,
-live-a, live-b), from the first run that got there. Every run's files are kept
-under `--work`, and the script prints one JSON object per run: how it ended,
-the seconds to the first card and to the end of the turn, the approvals, and
-the commands the agent's turn sent, from the workspace's journal. It exits with
-0 when at least one run built a dashboard with panels.
+live-a, live-b), W x H the window's size in points, from the first run that got
+there. Every run's files go into a new subfolder of `--work`, or into a
+temporary folder that is removed at the end, and the script prints one JSON
+object per run: how it ended, the seconds to the first card and to the end of
+the turn, the approvals, and the commands the agent's turn sent, from the
+workspace's journal. It exits with 0 when at least one run built a dashboard
+with panels, 1 when none did, 2 when something it needs is missing, and 130
+when interrupted. Every process it starts is stopped by its pid when it ends,
+fails or is interrupted.
 
 CALIPER_AGENT_OFFLINE=1 is set for everything it starts, so caliper-agent
 reaches no host off this machine. The app never starts a detected agent: the
@@ -51,64 +59,26 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shlex
 import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from hidden_app import (FAILED, INTERRUPTED, MISSING, OK, Children, Stop, add_options, app_env, caliper_problem,
+                        clean_env, fresh_folder, work_folder)
+
 HERE = Path(__file__).resolve().parent
-REPO = HERE.parents[2]
+TRAIN = HERE.parent / "train.py"
+PRODUCER = "caliper_attention_producer"
 REQUEST = "Plot attention entropy per layer while it trains"
 APPROVAL = re.compile(r"^\[approval\] (\S+) (\S+) \((\w+)\) (.*)$")
-
-
-# ---- the processes this script starts ---------------------------------------------------------
-# Every child is registered when it starts and stopped by its pid when the
-# script ends, however it ends: normally, on an error, or on SIGINT or SIGTERM.
-# The hidden app also has CALIPER_EXIT_AFTER as a backstop.
-CHILDREN: list[subprocess.Popen] = []
-
-
-def spawn(argv: list[str], **kwargs) -> subprocess.Popen:
-    proc = subprocess.Popen(argv, **kwargs)
-    CHILDREN.append(proc)
-    return proc
-
-
-def stop_children() -> None:
-    for proc in reversed(CHILDREN):
-        if proc.poll() is None:
-            proc.terminate()
-    deadline = time.monotonic() + 15
-    for proc in reversed(CHILDREN):
-        try:
-            proc.wait(timeout=max(0.1, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-
-
-def on_signal(signum, frame) -> None:
-    stop_children()
-    sys.exit(128 + signum)
-
-
-def new_folder(parent: str | None, prefix: str) -> Path:
-    """A new, empty folder of this script's own: inside `parent` when given (the
-    caller's folder, whose contents are left alone), else a temporary one."""
-    if parent:
-        Path(parent).mkdir(parents=True, exist_ok=True)
-        return Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
-    return Path(tempfile.mkdtemp(prefix="caliper-" + prefix))
 
 
 def loopback(url: str) -> bool:
@@ -121,7 +91,7 @@ def check_model(base_url: str, model: str) -> str:
     try:
         with opener.open(base_url.rstrip("/") + "/models", timeout=5) as r:
             ids = [m.get("id") for m in json.loads(r.read()).get("data", [])]
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         return f"the model server at {base_url} does not answer ({exc})"
     return "" if model in ids else f"the model server does not list {model}; it lists {', '.join(map(str, ids))}"
 
@@ -155,39 +125,41 @@ class Log:
         return None
 
 
-def start_stream(args, folder: Path) -> tuple[subprocess.Popen, str]:
-    """The live stream: its process and the link the app attaches to."""
+def start_stream(children: Children, args, folder: Path, data: Path) -> tuple[subprocess.Popen, str]:
+    """The script's own live stream: its process and the link the app attaches to. train.py gets the
+    app's data folder, where its stream file goes, never the person's own."""
     if args.stream == "train":
-        argv = [args.train_python, str(HERE.parent / "train.py"), "--seconds", str(args.minutes * 60 + 120)]
+        argv = [args.train_python, "-u", str(TRAIN), "--seconds", str(args.minutes * 60 + 120)]
         want = re.compile(r"(http://127\.0\.0\.1:\S+|ws://127\.0\.0\.1:\S+)")
+        name, sig = "train.py", signal.SIGINT
     else:
-        argv = [str(Path(args.build) / "caliper_attention_producer"), "--layers", "6", "--heads", "8",
-                "--tokens", "64", "--hz", "8"]
+        argv = [str(Path(args.caliper).parent / PRODUCER), "--layers", "6", "--heads", "8", "--tokens", "64",
+                "--hz", "8"]
         want = re.compile(r"\[producer\] hub (\S+)")
-    log = (folder / "stream.log").open("w")
-    proc = spawn(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env_for_children())
-    link = ""
+        name, sig = PRODUCER, signal.SIGTERM
+    proc = children.start(name, argv, stop_signal=sig, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          stdin=subprocess.DEVNULL, env=dict(clean_env(), CALIPER_DATA_DIR=str(data)))
+    # A thread copies the stream's output to its log, so that the wait for the link below ends at its
+    # deadline even when the stream prints nothing.
+    lines: list[str] = []
+
+    def copy() -> None:
+        with (folder / "stream.log").open("w") as log:
+            for raw in proc.stdout:
+                line = raw.decode("utf-8", "replace")
+                log.write(line)
+                log.flush()
+                lines.append(line)
+
+    threading.Thread(target=copy, daemon=True).start()
     deadline = time.monotonic() + 120
-    while not link and time.monotonic() < deadline:
-        raw = proc.stdout.readline()
-        if not raw:
-            break
-        line = raw.decode("utf-8", "replace")
-        log.write(line)
-        log.flush()
-        m = want.search(line)
+    while time.monotonic() < deadline and proc.poll() is None:
+        m = next((m for m in map(want.search, list(lines)) if m), None)
         if m:
-            link = m.group(1)
-    threading.Thread(target=lambda: [log.write(r.decode("utf-8", "replace")) or log.flush() for r in proc.stdout],
-                     daemon=True).start()
-    return proc, link
-
-
-def env_for_children() -> dict:
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("ANTHROPIC_", "OPENAI_", "CALIPER_MODEL_API_KEY", "CALIPER_TEST_", "CALIPER_API"))}
-    env["CALIPER_AGENT_OFFLINE"] = "1"
-    return env
+            return proc, m.group(1)
+        time.sleep(0.2)
+    m = next((m for m in map(want.search, list(lines)) if m), None)
+    return proc, m.group(1) if m else ""
 
 
 def agent_command(usage_log: Path | None = None) -> str:
@@ -244,54 +216,60 @@ def journal(ws: Path) -> list[dict]:
     path = ws / "journal" / "commands.jsonl"
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    out = []
+    for line in path.read_text().splitlines():
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            pass
+    return out
 
 
 def copy_shots(raw: Path, out: Path, size: str) -> list[str]:
-    """The run's frames as step4-<what>-<W>x<H>.png, scaled to the window's size in points."""
-    w, h = size.split("x")
+    """The run's frames as step4-<what>-<W>x<H>.png, as captured."""
     written = []
     for name in ("request", "card", "live-a", "live-b"):
         src = raw / f"{name}.png"
-        if not src.exists():
-            continue
-        dst = out / f"step4-{name}-{size}.png"
-        if shutil.which("sips"):
-            subprocess.run(["sips", "-z", h, w, str(src), "--out", str(dst)], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, check=False)
-        else:
+        if src.exists():
+            dst = out / f"step4-{name}-{size}.png"
             shutil.copyfile(src, dst)
-        written.append(str(dst))
+            written.append(str(dst))
     return written
 
 
-def one_run(args, n: int, work: Path) -> dict:
-    folder = Path(tempfile.mkdtemp(prefix=f"run-{n}-", dir=work))   # new and empty, made here
-    ws, data, apps, raw = folder / "ws", folder / "data", folder / "apps", folder / "raw"
-    for d in (ws, data, apps, raw):
-        d.mkdir(parents=True)
+def one_run(children: Children, args, n: int, work: Path) -> dict:
+    folder = fresh_folder(work, f"run-{n}")
+    story = bool(args.workspace)
+    ws = Path(args.workspace).resolve() if story else folder / "ws"
+    data = Path(args.app_data).resolve() if story else folder / "data"
+    apps, raw = folder / "apps", folder / "raw"
+    for d in (data, apps, raw):
+        d.mkdir(parents=True, exist_ok=True)
+    before = len(journal(ws))                     # in the story, the workspace's journal already holds earlier steps
     decisions, gate = folder / "decisions.txt", folder / "first-card-captured"
     decisions.touch()
+    # The chat's agent, chosen as a person chooses it in the picker.
     (data / "side-chat.json").write_text(json.dumps({
         "agent": "custom", "custom_name": "Caliper agent", "custom_command": agent_command(folder / "usage.jsonl"),
         "allow_always": False, "open": False}))
-    report: dict = {"run": n, "model": args.model, "stream": args.stream}
-    stream, link = start_stream(args, folder)
+    report: dict = {"run": n, "model": args.model, "stream": "given" if args.url else args.stream,
+                    "story": story}
+    if args.url:
+        stream, link = None, args.url
+    else:
+        stream, link = start_stream(children, args, folder, data)
     if not link:
-        stream.terminate()
         report["outcome"] = "the stream printed no link"
         return report
-    build = Path(args.build)
-    env = env_for_children()
-    env.update(agent_environment(args))
-    # The PATH an app started from the Finder has, which its agents inherit.
-    env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
-    env.update({"CALIPER_DATA_DIR": str(data), "CALIPER_USER_APPLETS_DIR": str(apps), "CALIPER_WINDOW_SIZE": args.size,
-                "CALIPER_TEST_APPROVALS": str(decisions), "CALIPER_TEST_SPEC_UI": ui_script(args, gate),
-                "CALIPER_TEST_SPEC_UI_SHOTS": str(raw), "CALIPER_EXIT_AFTER": str(args.minutes * 60 + 600)})
+    build = Path(args.caliper).parent
+    extra = dict(agent_environment(args), CALIPER_TEST_APPROVALS=str(decisions))
+    env = app_env(data, apps, args.size, ui_script(args, gate), raw, exit_after=args.minutes * 60 + 600, extra=extra)
+    argv = [str(args.caliper), "--hidden", "--url", link, "--workspace", str(ws)]
+    if (build / "applets").is_dir():
+        argv[2:2] = ["--applets", str(build / "applets")]
     start = time.monotonic()
-    app = spawn([str(build / "caliper"), "--hidden", "--applets", str(build / "applets"), "--url", link,
-                            "--workspace", str(ws)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env)
+    app = children.start("the app", argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                         stdin=subprocess.DEVNULL, env=env)
     log = Log(folder / "app.log")
     reader = threading.Thread(target=log.follow, args=(app.stderr, start), daemon=True)
     reader.start()
@@ -301,21 +279,18 @@ def one_run(args, n: int, work: Path) -> dict:
     try:
         app.wait(timeout=args.minutes * 60 + 660)
     except subprocess.TimeoutExpired:
-        app.terminate()
-        app.wait(timeout=30)
-    done.set()
+        children.stop(app)
+    finally:
+        done.set()
     reader.join(timeout=5)
-    stream.terminate()
-    try:
-        stream.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        stream.kill()
+    if stream is not None:
+        children.stop(stream)
 
     sent = log.first("[ui] pressed enter")
     first_card = next((t for t, line in log.snapshot() if APPROVAL.match(line) and line.endswith(" waiting")), None)
     ended = log.first("[ui] the chat is ready")
     stopped = next((line for _, line in log.snapshot() if line.startswith("[ui] stopped")), "")
-    agent = [e for e in journal(ws) if e.get("origin") == "agent"]
+    agent = [e for e in journal(ws)[before:] if e.get("origin") == "agent"]
     counts: dict[str, int] = {}
     for e in agent:
         key = e["name"] if e.get("ok") else f"{e['name']} failed ({e.get('error', {}).get('code', '?')})"
@@ -343,49 +318,50 @@ def one_run(args, n: int, work: Path) -> dict:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--build", required=True)
-    p.add_argument("--agent-python", help="the Python chat-agent.sh runs caliper-agent with (CALIPER_AGENT_PYTHON); "
-                                          "by default the repository's .venv/bin/python, else python3")
-    p.add_argument("--out", required=True)
-    p.add_argument("--work", help="a folder in which the script makes a new folder of its own for the runs' files "
-                                  "(default: a new temporary folder); nothing in it is removed")
-    p.add_argument("--model", default="qwen3.8:27b")
-    p.add_argument("--base-url", default="http://127.0.0.1:11434/v1")
+    add_options(p, train=True, agent=True, model=True, url=True)
+    p.add_argument("--base-url", default="http://127.0.0.1:11434/v1",
+                   help="the model server's OpenAI-compatible address, on this machine")
     p.add_argument("--context-length", type=int,
                    help="the context the model is loaded with, in tokens (caliper-agent's --context-length)")
     p.add_argument("--runs", type=int, default=1)
     p.add_argument("--minutes", type=int, default=10, help="how long the agent's turn may take")
-    p.add_argument("--size", default="1440x900")
-    p.add_argument("--stream", choices=("producer", "train"), default="producer")
-    p.add_argument("--train-python", help="with --stream train: a Python with torch and Caliper LIB")
+    p.add_argument("--stream", choices=("producer", "train"), default="producer",
+                   help="without --url, the stream the script starts itself")
     args = p.parse_args()
+    problems = [caliper_problem(args.caliper)]
     if not loopback(args.base_url):
-        print("step4: --base-url must be a server on this machine", file=sys.stderr)
-        return 2
-    if args.stream == "train" and not args.train_python:
-        print("step4: --stream train needs --train-python", file=sys.stderr)
-        return 2
+        problems.append("--base-url must be a server on this machine")
+    if args.url and not loopback(args.url):
+        problems.append("--url must be a stream on this machine")
+    if not args.url and args.stream == "train" and not args.train_python:
+        problems.append("--stream train needs --train-python")
+    if not args.url and args.stream == "producer" and not (Path(args.caliper).parent / PRODUCER).is_file():
+        problems.append(f"no {PRODUCER} beside {args.caliper}; build it, or give --url or --stream train")
+    if bool(args.workspace) != bool(args.app_data):
+        problems.append("--workspace and --app-data go together")
+    for problem in filter(None, problems):
+        print(f"step4: {problem}", file=sys.stderr)
+        return MISSING
     why = check_model(args.base_url, args.model)
     if why:
         print(f"step4: {why}", file=sys.stderr)
-        return 2
-    signal.signal(signal.SIGINT, on_signal)
-    signal.signal(signal.SIGTERM, on_signal)
-    work = new_folder(args.work, "step4-")
-    out = Path(args.out)
+        return MISSING
+    out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    os.environ["CALIPER_AGENT_OFFLINE"] = "1"
     captured = False
-    try:
-        for n in range(1, args.runs + 1):
-            report = one_run(args, n, work)
-            if not captured and report.get("outcome") == "built a dashboard":
-                report["captures"] = copy_shots(Path(report["folder"]) / "raw", out, args.size)
-                captured = True
-            print(json.dumps(report), flush=True)
-    finally:
-        stop_children()
-    return 0 if captured else 1
+    with Children() as children:
+        try:
+            work = work_folder(args, 4)
+            for n in range(1, args.runs + 1):
+                report = one_run(children, args, n, work)
+                if not captured and report.get("outcome") == "built a dashboard":
+                    report["captures"] = copy_shots(Path(report["folder"]) / "raw", out, args.size)
+                    captured = True
+                print(json.dumps(report), flush=True)
+        except Stop as why:
+            print(f"step4: interrupted by {why}", flush=True)
+            return INTERRUPTED
+    return OK if captured else FAILED
 
 
 if __name__ == "__main__":

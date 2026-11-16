@@ -171,8 +171,9 @@ cannot reshape its data, which is why the script computes the entropy per head i
 Home detaches the app from the stream; the script keeps training, and the link works again while it runs. Step 2
 starts from the landing screen, so press **esc Home** now.
 
-The dry run of this step starts the script, starts the app hidden with `--url` and the link, checks the catalog's
-live sources over Caliper API, writes a capture of the live page and the catalog's live entries to
+The dry run of this step starts the script and the app hidden on the same app-data folder, presses F4 and Enter on
+the listed stream, checks the catalog's live sources over Caliper API, goes Home and checks that the app stays
+attached, writes captures of the session list and the live page and the catalog's live entries to
 `build/build_a_dashboard/` (`--out` changes it), and prints one line per check:
 
 ```sh
