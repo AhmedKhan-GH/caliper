@@ -49,7 +49,8 @@ if(BUILD_TESTS AND TARGET doctest::doctest)
         ${_widget_dir}/tests/test_widget_surface.cpp
         ${_widget_dir}/tests/test_widget_layout.cpp
         ${_widget_dir}/tests/test_widget_shot.cpp
-        ${_widget_dir}/tests/test_widget_agent_acp.cpp)
+        ${_widget_dir}/tests/test_widget_agent_acp.cpp
+        ${_widget_dir}/tests/test_widget_app.cpp)
     target_link_libraries(caliper_widget_surface_tests PRIVATE caliper_widget_surface doctest::doctest
         caliper_builder_duckdb caliper_builder_session_host)
     target_include_directories(caliper_widget_surface_tests PRIVATE ${THIRD_PARTY_DIR}/stb
@@ -65,7 +66,7 @@ if(BUILD_TESTS AND TARGET doctest::doctest)
     add_dependencies(caliper_widget_surface_tests caliper-widget-shot caliper_acp_stub_agent)
     # Headless: the state machine over a real session, the preview's life,
     # the compact diff and the layout.
-    add_test(NAME caliper_widget_surface COMMAND caliper_widget_surface_tests --test-suite-exclude=gpu,agent)
+    add_test(NAME caliper_widget_surface COMMAND caliper_widget_surface_tests --test-suite-exclude=gpu,agent,app)
     # Offscreen: caliper-widget-shot as a process, checked by image properties.
     add_test(NAME caliper_widget_surface_gpu COMMAND caliper_widget_surface_tests --test-suite=gpu)
     # The agent over ACP: the real caliper-agent sidecar with its scripted
@@ -79,6 +80,13 @@ if(BUILD_TESTS AND TARGET doctest::doctest)
     # switch, caliper-agent refuses to build a real provider client.
     set_tests_properties(caliper_widget_surface caliper_widget_surface_gpu caliper_widget_surface_agent
         PROPERTIES ENVIRONMENT "CALIPER_AGENT_OFFLINE=1")
+    # ⌘K in the hidden app with the real sidecar on a test script (POSIX).
+    if(TARGET caliper AND NOT WIN32)
+        add_test(NAME caliper_widget_app COMMAND caliper_widget_surface_tests --test-suite=app)
+        set_tests_properties(caliper_widget_app PROPERTIES LABELS "builder;widget;cli" TIMEOUT 300
+            ENVIRONMENT "CALIPER_AGENT_OFFLINE=1;CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>"
+            SKIP_REGULAR_EXPRESSION "caliper_widget_app skipped")
+    endif()
     set_tests_properties(caliper_widget_surface_agent PROPERTIES TIMEOUT 300
         SKIP_REGULAR_EXPRESSION "caliper_widget_surface_agent skipped")
 endif()

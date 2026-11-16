@@ -304,25 +304,28 @@ struct SpecPage::Impl {
         ImGui::TextUnformatted("\xe2\x80\xba");   // ›
         ImGui::PopStyleColor();
         ImGui::PopFont();
-        if (command_focus) {
-            ImGui::SetKeyboardFocusHere();
-            command_focus = false;
-        }
         ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_NavCursor, IM_COL32(0, 0, 0, 0));   // the rule marks it
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
         ImGui::SetNextItemWidth(240.0f);
         char buf[256];
         std::snprintf(buf, sizeof buf, "%s", command.c_str());
         const bool entered = ImGui::InputTextWithHint("##spec.command", "Panel", buf, sizeof buf,
                                                       ImGuiInputTextFlags_EnterReturnsTrue);
+        if (command_focus) {
+            // The page bar is a menu bar, where keyboard focus does not go;
+            // the input is activated instead, from the next frame.
+            ImGui::ActivateItemByID(ImGui::GetItemID());
+            command_focus = false;
+        }
         const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
         ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(a.x, b.y - 1.0f), b,
                                                   ImGui::IsItemActive() ? sternbild::col::parchment
                                                                         : sternbild::col::rule);
         ImGui::PopStyleVar();
-        ImGui::PopStyleColor(3);
+        ImGui::PopStyleColor(4);
         if (command != buf) {
             command = buf;
             const std::string found = find_panel(command);
