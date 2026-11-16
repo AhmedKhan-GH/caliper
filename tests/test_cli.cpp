@@ -7,6 +7,7 @@
 #include "host_cli.h"
 #include "net/wire.h"
 #include "net/ws.h"
+#include "spec_applet_fixture.h"
 #include "test_proc.h"
 #include "test_temp.h"
 #include <chrono>
@@ -316,10 +317,10 @@ TEST_CASE("cli: list shows every copy in search order, with reasons") {
     const Run r = run({"list", "--applets", dev.c_str()}, ctx);
     CHECK(r.code == 0);
     const std::string expected =
-        "REFUSED   x.app  2.0.0  " + dev + "\n"
+        "REFUSED   x.app  2.0.0  library  " + dev + "\n"
         "          Built against libtorch 9.9.9; this host provides no libtorch.\n"
-        "READY     x.app  1.0.0  " + t.str("user") + "\n"
-        "SHADOWED  x.app  1.0.0  " + t.str("shipped") + "\n"
+        "READY     x.app  1.0.0  library  " + t.str("user") + "\n"
+        "SHADOWED  x.app  1.0.0  library  " + t.str("shipped") + "\n"
         "          Version 1.0.0 in " + t.str("user") + " is used instead.\n";
     CHECK(r.out == expected);
 }
@@ -463,6 +464,7 @@ TEST_CASE("cli: info and list as JSON hold what the text forms print") {
     CHECK(refused.find("folder")->as_string() == t.str("dev"));
     CHECK(refused.find("reason")->as_string() ==
           "Built against libtorch 9.9.9; this host provides no libtorch.");
+    CHECK(refused.find("kind")->as_string() == "library");
     CHECK(list->at(1).find("status")->as_string() == "READY");
     CHECK(list->at(1).find("reason")->as_string().empty());
 }
@@ -618,8 +620,8 @@ TEST_CASE("cli: check passes a good folder and fails a bad one") {
     const std::string good = t.str("good");
     const Run ok = run({"check", good.c_str()}, ctx);
     CHECK(ok.code == 0);
-    CHECK(ok.out == "READY  x.a  1.0.0  " + good + "\n"
-                    "READY  x.b  0.3.0  " + good + "\n"
+    CHECK(ok.out == "READY  x.a  1.0.0  library  " + good + "\n"
+                    "READY  x.b  0.3.0  library  " + good + "\n"
                     "2 of 2 applets pass the checks\n");
 
     fake_applet(t.path / "bad", "a", "x.a", "1.0.0", "min_host=\"9.0.0\"\n");
@@ -645,6 +647,83 @@ TEST_CASE("cli: check passes a good folder and fails a bad one") {
     const Run empty = run({"check", t.str("empty").c_str()}, ctx);
     CHECK(empty.code == 1);
     CHECK(empty.err == "caliper: no applets in " + t.str("empty") + "\n");
+}
+
+TEST_CASE("cli: list shows spec applets with their kind, as JSON too") {
+    TempDir t("list-spec");
+    const CliContext ctx = context(t);
+    caliper_test::write_spec_applet(t.path / "user" / "demo", "demo", "local.demo", "0.1.0");
+    fake_applet(t.path / "user", "x", "x.app", "1.0.0");
+    const std::string folder = (t.path / "user" / "demo").string();
+    const Run r = run({"list"}, ctx);
+    CHECK(r.code == 0);
+    if (spec_runtime_available()) {
+        CHECK(r.out == "READY  local.demo  0.1.0  spec     " + folder + "\n"
+                       "READY  x.app       1.0.0  library  " + t.str("user") + "\n");
+    } else {
+        CHECK(r.out == "REFUSED  local.demo  0.1.0  spec     " + folder + "\n"
+                       "         " + no_spec_runtime_reason() + "\n"
+                       "READY    x.app       1.0.0  library  " + t.str("user") + "\n");
+    }
+
+    AppletLoader L(ctx.caps, ctx.data_root);
+    L.scan(applet_search_dirs({}, nullptr, ctx.user_dir, ctx.shipped_dir));
+    caliper_net::Json j;
+    std::string err;
+    const std::string text = applets_json(L);
+    REQUIRE_MESSAGE(caliper_net::Json::parse(text.data(), text.size(), &j, &err), err);
+    const caliper_net::Json* list = j.find("applets");
+    REQUIRE(list);
+    REQUIRE(list->size() == 2);
+    CHECK(list->at(0).find("kind")->as_string() == "spec");
+    CHECK(list->at(0).find("id")->as_string() == "local.demo");
+    CHECK(list->at(0).find("folder")->as_string() == folder);
+    CHECK(list->at(1).find("kind")->as_string() == "library");
+}
+
+TEST_CASE("cli: check validates a spec applet fully and prints its diagnostics") {
+    if (!spec_runtime_available()) return;   // listed as refused, as list shows
+    TempDir t("check-spec");
+    const CliContext ctx = context(t);
+
+    // A valid spec with a warning passes, and the warning is printed with
+    // its line and column.
+    caliper_test::write_spec_applet(t.path / "ws" / "applets" / "warned", "warned",
+                                    "local.warned", "0.1.0", caliper_test::kWarningSpec);
+    const std::string warned = (t.path / "ws" / "applets" / "warned").string();
+    const Run ok = run({"check", warned.c_str()}, ctx);
+    CHECK(ok.code == 0);
+    const std::string head = "READY  local.warned  0.1.0  spec  " + warned + "\n";
+    CHECK(ok.out.rfind(head, 0) == 0);
+    CHECK(ok.out.find("       warned.spec.toml:6:") == head.size());
+    CHECK(ok.out.find(": warning spec.unused_source: ") != std::string::npos);
+    CHECK(ok.out.find("1 of 1 applets pass the checks\n") != std::string::npos);
+
+    // A spec that fails validation fails the check, with every error under it.
+    caliper_test::write_spec_applet(t.path / "ws" / "applets" / "broken", "broken",
+                                    "local.broken", "0.1.0", caliper_test::kInvalidSpec);
+    const std::string broken = (t.path / "ws" / "applets" / "broken").string();
+    const Run bad = run({"check", broken.c_str()}, ctx);
+    CHECK(bad.code == 1);
+    CHECK(bad.out.rfind("FAILED  local.broken  0.1.0  spec  " + broken + "\n"
+                        "        broken.spec.toml:9:", 0) == 0);
+    CHECK(bad.out.find(": error spec.unknown_source: ") != std::string::npos);
+    CHECK(bad.out.find("0 of 1 applets pass the checks\n") != std::string::npos);
+
+    // The workspace's applets/ folder holds its applets one folder down.
+    const std::string applets = (t.path / "ws" / "applets").string();
+    const Run both = run({"check", applets.c_str()}, ctx);
+    CHECK(both.code == 1);
+    CHECK(both.out.find("FAILED  local.broken  0.1.0  spec  " + broken) != std::string::npos);
+    CHECK(both.out.find("READY   local.warned  0.1.0  spec  " + warned) != std::string::npos);
+    CHECK(both.out.find("1 of 2 applets pass the checks\n") != std::string::npos);
+
+    // install takes no spec applet.
+    const Run in = run({"install", warned.c_str()}, ctx);
+    CHECK(in.code == 1);
+    CHECK(in.err == "caliper: nothing installed; local.warned is a spec applet, which install "
+                    "does not take\n");
+    CHECK_FALSE(fs::exists(t.path / "user"));
 }
 
 TEST_CASE("cli: install copies passing applets into the user folder, or nothing") {
@@ -772,7 +851,7 @@ TEST_CASE("cli: check and install take a build folder whose applets are in apple
     const Run r = run({"check", build.c_str()}, ctx);
     CHECK(r.code == 0);
     CHECK(r.out == "using the applets in " + applets + "\n"
-                   "READY  x.a  1.0.0  " + applets + "\n"
+                   "READY  x.a  1.0.0  library  " + applets + "\n"
                    "1 of 1 applets pass the checks\n");
     // Named directly, the folder is used as given and nothing more is said.
     const Run direct = run({"check", applets.c_str()}, ctx);

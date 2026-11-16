@@ -83,6 +83,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <ostream>
 #include <string>
 #include <system_error>
@@ -561,19 +562,27 @@ inline std::string list_id(const AppletEntry& a) {
     return a.manifest.id.empty() ? a.manifest.name : a.manifest.id;
 }
 
-// One line per applet: status, id, version, folder, in columns; a refused,
-// failed or shadowed applet's reason on the next line, under the id.
-inline void print_entries(const AppletLoader& L, std::ostream& out) {
+// One line per applet: status, id, version, kind (library or spec), folder,
+// in columns; a refused, failed or shadowed applet's reason on the next line,
+// under the id. `notes`, when given, holds lines to print under an entry
+// after its reason, or in its place for a failed entry: check's diagnostics
+// of a spec applet, whose first error is the reason of a failed one.
+inline void print_entries(const AppletLoader& L, std::ostream& out,
+                          const std::map<int, std::vector<std::string>>* notes = nullptr) {
     const std::vector<int> order = list_order(L);
     auto id_of = [](const AppletEntry& a) { return list_id(a); };
     auto version_of = [](const AppletEntry& a) {
         return a.manifest.version.empty() ? std::string("-") : a.manifest.version;
     };
-    size_t ws = 0, wi = 0, wv = 0;
+    auto kind_of = [](const AppletEntry& a) {
+        return std::string(applet_kind_word(a.manifest.kind));
+    };
+    size_t ws = 0, wi = 0, wv = 0, wk = 0;
     for (int i : order) {
         ws = std::max(ws, std::string(applet_status_word(L.at(i).status)).size());
         wi = std::max(wi, id_of(L.at(i)).size());
         wv = std::max(wv, version_of(L.at(i)).size());
+        wk = std::max(wk, kind_of(L.at(i)).size());
     }
     auto pad = [](const std::string& s, size_t w) {
         return s + std::string(w > s.size() ? w - s.size() : 0, ' ');
@@ -581,13 +590,25 @@ inline void print_entries(const AppletLoader& L, std::ostream& out) {
     for (int i : order) {
         const AppletEntry& a = L.at(i);
         out << pad(applet_status_word(a.status), ws) << "  " << pad(id_of(a), wi)
-            << "  " << pad(version_of(a), wv) << "  " << a.folder << "\n";
-        if (a.status != AppletStatus::Ready && !a.status_text.empty())
-            out << std::string(ws + 2, ' ') << a.status_text << "\n";
+            << "  " << pad(version_of(a), wv) << "  " << pad(kind_of(a), wk) << "  "
+            << a.folder << "\n";
+        const std::vector<std::string>* lines = nullptr;
+        if (notes)
+            if (auto it = notes->find(i); it != notes->end()) lines = &it->second;
+        // A failed spec applet's reason is its first error, which its
+        // diagnostics hold too.
+        const bool reason = a.status != AppletStatus::Ready && !a.status_text.empty() &&
+                            !(lines && a.status == AppletStatus::Failed);
+        if (reason) out << std::string(ws + 2, ' ') << a.status_text << "\n";
+        if (lines)
+            for (const std::string& line : *lines) out << std::string(ws + 2, ' ') << line << "\n";
     }
 }
 
 // Scans one folder and prints it; the number of applets that do not pass.
+// A spec applet that passes the listing checks is then validated in full
+// (AppletLoader::check_spec), and its diagnostics are printed under it with
+// their lines and columns; one with an error fails.
 inline int check_folder(const std::string& folder, AppletLoader& L,
                         std::ostream& out, std::ostream& err) {
     std::error_code ec;
@@ -605,7 +626,17 @@ inline int check_folder(const std::string& folder, AppletLoader& L,
     }
     if (resolve_applet_folder(folder) != folder)   // its applets/ subfolder
         out << "using the applets in " << dirs.front() << "\n";
-    print_entries(L, out);
+    std::map<int, std::vector<std::string>> notes;
+    for (int i = 0; i < L.count(); i++) {
+        const AppletEntry& a = L.at(i);
+        if (a.manifest.kind != AppletKind::Spec || !passes(a)) continue;
+        std::vector<SpecDiagnostic> found;
+        L.check_spec(i, &found);
+        const std::string file = fs::path(a.spec_path).filename().string();
+        for (const SpecDiagnostic& d : found)
+            notes[i].push_back(format_spec_diagnostic(file, d, true));
+    }
+    print_entries(L, out, &notes);
     int failing = 0;
     for (int i = 0; i < L.count(); i++) failing += passes(L.at(i)) ? 0 : 1;
     return failing;
@@ -765,6 +796,13 @@ inline int run_install(const CommandLine& cl, const CliContext& ctx, std::ostrea
             << " applets do not pass the checks\n";
         return 1;
     }
+    // A spec applet has no library to place; it lives in a workspace.
+    for (int i = 0; i < L.count(); i++)
+        if (L.at(i).manifest.kind == AppletKind::Spec) {
+            err << "caliper: nothing installed; " << L.at(i).manifest.id
+                << " is a spec applet, which install does not take\n";
+            return 1;
+        }
     fs::create_directories(ctx.user_dir, ec);
     if (!fs::is_directory(ctx.user_dir, ec)) {
         err << "caliper: cannot create " << ctx.user_dir << "\n";
@@ -1078,9 +1116,10 @@ inline std::string info_json(const CliContext& ctx) {
 }
 
 // What `caliper list` prints for the applets of `L`, in its order, as a JSON
-// object {"applets": [{"status", "id", "version", "folder", "reason"}]}: the
-// status word, the version ("" when the manifest has none) and the reason that
-// list prints under the id ("" for a READY applet).
+// object {"applets": [{"status", "id", "version", "kind", "folder", "reason"}]}:
+// the status word, the version ("" when the manifest has none), the kind
+// ("library" or "spec") and the reason that list prints under the id ("" for
+// a READY applet).
 inline std::string applets_json(const AppletLoader& L) {
     using caliper_net::Json;
     Json list = Json::array();
@@ -1090,6 +1129,7 @@ inline std::string applets_json(const AppletLoader& L) {
         e.set("status", applet_status_word(a.status));
         e.set("id", cli_detail::list_id(a));
         e.set("version", a.manifest.version);
+        e.set("kind", applet_kind_word(a.manifest.kind));
         e.set("folder", a.folder);
         e.set("reason", a.status == AppletStatus::Ready ? std::string() : a.status_text);
         list.push(std::move(e));
