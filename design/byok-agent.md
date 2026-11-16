@@ -664,20 +664,30 @@ models are used, in the test above, and the routing is a few lines of `agent.py`
   only to the base URL given, which must be an http or https address without a user name or password. Its only other
   connection is Caliper API on loopback, and an API file that names another address is refused. The model clients
   honour the system's HTTPS proxy settings, as any application does, so a user behind a proxy can work; TLS stays end
-  to end. The Caliper API client ignores proxies. Pydantic AI's price snapshot and telemetry API make no request.
+  to end. Under the offline switch they do not (below). The Caliper API client ignores proxies. Pydantic AI's price snapshot and telemetry API make no request.
 - **The test switch.** `CALIPER_AGENT_TEST_SCRIPT` replaces the model with a scripted file, answered by Pydantic AI's
   `FunctionModel` or, for the wire tests, by a stubbed Claude transport. It cannot send data anywhere, but it would let
   whoever sets the environment script the model's replies, so the key store removes it at spawn.
 - **The offline switch.** With `CALIPER_AGENT_OFFLINE=1` (`caliper_agent/offline.py`) the sidecar reaches no host off
   loopback: it never builds the Claude provider on its real transport, nor an OpenAI-compatible provider whose base URL
   is not a loopback address, and answers `session/new` and `session/prompt` with an error whose `data.code` is
-  `agent.offline`; a socket guard also refuses every name resolution and connection off loopback for the life of the
-  process. Only the scripted model, the stubbed transports and servers on loopback run. Every test and tool of
-  `src/builder/` that starts the sidecar sets it (the pytest fixtures, the C++ end-to-end tests, the CMake test
-  environments and the manual local-model run), since a test once lost its script switch at spawn and the sidecar
-  took its real route. `place_key_in_environment()` passes the switch to the child with the parent's value, even when
-  the spawn options remove or replace it, and keeps removing `CALIPER_AGENT_TEST_SCRIPT`. `tests/test_offline.py`
-  checks it with a proxy trap on loopback that must see no connection.
+  `agent.offline`. A socket guard also refuses, for the life of the process, every name resolution
+  (`getaddrinfo`, `gethostbyname`, `gethostbyname_ex`) and every connection or datagram (`connect`, `connect_ex`,
+  `sendto`, `sendmsg`) off loopback; a host given as bytes is checked like text, and a host or a socket family it
+  cannot classify is refused. The proxy variables are removed from the environment, and every HTTP client is built
+  with `trust_env=False`, since a proxy on loopback would pass the guard and forward the request. Only the scripted
+  model, the project's own `StubTransport` (no other transport, not even a subclass) and servers on loopback run. The
+  pytest process installs the same guard. Every test of both build trees runs with the switch, from one place:
+  `caliper_offline_tests()` (`src/builder/cmake/CaliperOfflineTests.cmake`) has ctest set it in its own environment,
+  which every test process inherits, and the entry `builder_offline_switch` fails when an entry runs without it or
+  sets it otherwise. The entries that start the app or the sidecar set it explicitly too, as do the pytest fixtures,
+  the C++ end-to-end tests and the manual local-model run, since a test once lost its script switch at spawn and the
+  sidecar took its real route. `place_key_in_environment()` passes the switch to the child with the parent's value,
+  even when the spawn options remove or replace it, and keeps removing `CALIPER_AGENT_TEST_SCRIPT`. The conformance
+  runner's `--real`, the one path without the switch, also needs `CALIPER_CONFORMANCE_REAL=1` and is refused while
+  the switch is set or under ctest or pytest. `tests/test_offline.py` checks the guard with `.invalid` names and
+  TEST-NET addresses only, in a child whose real socket calls are replaced by recorders, and with a proxy trap on
+  loopback that must see no connection.
 - **The import path.** The sidecar must be started with `-I` (or `-P`) so the workspace folder is never on its import
   path.
 - **Prompt injection.** Everything a tool returns is workspace data. The system prompt says so, destructive commands
@@ -792,6 +802,17 @@ A fake Caliper API runs on loopback in the test process, and a fake OpenAI-compa
   for a local server, the offline switch passed through, and that no error quotes a key.
 - `tests/manual_local_model.py`: not a test of the suite, but the manual run against a local model server described
   [above](#one-run-on-a-local-model); it starts no server and pulls no model.
+
+Open items in the tests' timing, seen in a sweep and left for later:
+
+- `tests/test_loop.py`, the two cancel tests: each asserts an upper bound on wall-clock time (under 10 and under 8
+  seconds) to show that the cancel did not wait for the stalled stream. On a slow or loaded machine that bound can
+  fail with nothing wrong; a check on state (the stream's task cancelled, no further request recorded) would not.
+- `tests/manual_local_model.py` polls its child every 50 ms; it is a manual tool, not a test of the suite.
+- `tests/test_dashboard_e2e.cpp` polls for the host's API file every 25 ms, at most 400 times (10 seconds), which
+  waits on state but with a fixed bound; `tests/test_widget_e2e.cpp` and the conformance runner drain a child's
+  output in 2 ms steps, which is a loop, not a wait.
+- The timeouts of the pytest helpers (`request`, `_collect`, `subprocess.run`) only bound a hang.
 
 ctest runs the pytest suite as `builder_agent_py`, and the tests on the real command layer as `builder_agent_e2e` and
 `builder_agent_widget`, when the CMake variable `CALIPER_BUILDER_TEST_PYTHON` names an interpreter that has the package with its test extras
