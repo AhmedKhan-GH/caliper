@@ -349,8 +349,9 @@ set_target_properties(caliper_api PROPERTIES
 # (validation, handles, the uniform arena, frames, serials, readback) and the recording
 # backend that the headless tests use. Portable C++17 with no graphics API and nothing
 # Emscripten cannot compile, so the native backends, the tests and the WebAssembly views
-# share it. On Apple the Metal backend of the layer is added below. No renderer draws
-# through the layer yet.
+# share it. On Apple the Metal backend of the layer is added below. The browser views draw
+# through the layer's WebGPU backend (web/wasm, its own Emscripten project); the native
+# renderers keep their own paths for now.
 add_library(caliper_gfx STATIC
     src/host/gfx/core.cpp
     src/host/gfx/recording_backend.cpp
@@ -370,8 +371,8 @@ endif()
 # The scene core of the renderer core (design/renderer-core.md, "The scene core"): the scene
 # store, world matrices, cameras, bounds and fitting, compiling scenes into draw lists of the
 # graphics layer (src/host/gfx/gfx.h), picking, and BackendResources, its handles over a backend
-# of the layer. Plain C++17 that never calls a GPU itself; nothing uses it yet, and
-# caliper_scene_tests (tests/scene) checks it headless.
+# of the layer. Plain C++17 that never calls a GPU itself. No view uses it yet; the graphics
+# suite's scene rows draw it on Metal, and caliper_scene_tests (tests/scene) checks it headless.
 add_library(caliper_scene STATIC
     src/host/scene/path.cpp
     src/host/scene/scene_tree.cpp
