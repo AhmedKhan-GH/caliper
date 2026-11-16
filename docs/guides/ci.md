@@ -7,7 +7,7 @@ This page describes how Caliper is built and tested on GitHub Actions: what runs
 | Workflow | File | Runs on | Does |
 |---|---|---|---|
 | Build | `.github/workflows/build.yml` | pushes to `main` and every pull request, except changes only to `site/`, `docs/`, `design/`, `mkdocs.yml` or Markdown files; also manually | builds Caliper and runs the test suite on macOS and Windows |
-| Browser views | `.github/workflows/web.yml` | pull requests and pushes to `main` that change a source of the WebAssembly views, the `web/` package, the Python package's browser files or the scripts that handle them; also manually | builds the WebAssembly views at the pinned Emscripten, checks them and the `<caliper-view>` element in headless Chromium on SwiftShader, and uploads them as the artifact `caliper-views`; for `main` and on request, it also builds the wheel with them |
+| Browser views | `.github/workflows/web.yml` | pull requests and pushes to `main` that change a source of the WebAssembly views, the `web/` package, the Python package's browser files or the scripts that handle them; also manually | builds the WebAssembly views at the pinned Emscripten, checks them and the `<caliper-view>` element in headless Chromium (see [The Browser views tests](#the-browser-views-tests)), and uploads them as the artifact `caliper-views`; for `main` and on request, it also builds the wheel with them |
 | Docs | `.github/workflows/docs.yml` | pull requests that touch `docs/`, `design/`, `docs-theme/`, `mkdocs.yml` or the files the docs embed; also manually | builds the docs site and the design pages with `--strict`, so a broken link fails the pull request, and publishes nothing |
 | Deploy Pages | `.github/workflows/pages.yml` | pushes to `main` that touch `site/`, `docs/`, `design/`, `mkdocs.yml` or the files the docs embed | builds the docs with MkDocs and publishes them with the landing page, and checks that the design pages build, without publishing them |
 
@@ -38,6 +38,10 @@ Each lane runs these steps:
 9. **Always** print `sccache --show-stats`.
 
 To reproduce a lane locally, run the same configure, build and test commands. The README's [Quick start](https://github.com/AhmedKhan-GH/caliper#quick-start) covers the prerequisites.
+
+## The Browser views tests
+
+The web package's Playwright tests run in two steps on a hosted macOS runner with three cores and no GPU. The first runs the `swiftshader` project, WebGPU on the SwiftShader software adapter, one test at a time, and only the specs that draw with WebGPU: the WebAssembly views, the renderer choice and its fallback, the 3-D points, the colormap's shaders, linked selection and the specs that read pixels. The second runs the `canvas2d` project, with WebGPU off, on two workers and with every spec, among them the protocol and round-trip specs (`codec`, `controls` and `e2e`) and the frame-rate measurement, which run there only. Software rasterising is slow on three cores, so specs that test the protocol rather than drawing do not wait on it. `web/playwright.config.ts` sets this from `CI`; without it every project runs every spec. The `webgpu` project needs a GPU and runs only locally. A failed step keeps Playwright's HTML report and the traces of the failed tests in the artifact `browser-views-report`.
 
 ## Caches
 

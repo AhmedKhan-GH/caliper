@@ -93,10 +93,11 @@ jobs:
           node cross_origin.mjs --build ../build --out "$RUNNER_TEMP/shots/cross-origin.png"
       # The element with the fresh module from python/caliper/_web/, and without it
       # (fallback.spec.ts). The webgpu project needs a GPU and is left out. The
-      # swiftshader project runs first and on its own, one test at a time
-      # (playwright.config.ts sets the workers from CI), and the canvas2d project
-      # after it, also when it failed. Each step logs the runner's cores, and
-      # Playwright's first line the workers it uses.
+      # swiftshader project runs first and on its own, one test at a time, and
+      # only the specs that draw with WebGPU; the canvas2d project runs after it,
+      # also when it failed, with every spec, the protocol and round-trip specs
+      # among them (playwright.config.ts sets both from CI). Each step logs the
+      # runner's cores, and Playwright's first line the workers it uses.
       # On a failure the HTML report and a trace of each failed test are kept
       # (uploaded below); the report never opens a browser.
       - name: Build the web package for its tests
