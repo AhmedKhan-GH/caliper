@@ -7,8 +7,10 @@
 #       cmake -S src/builder -B <build> -G Ninja -DCALIPER_BUILDER_DUCKDB_DIR=<dir>
 #     where <dir> holds duckdb.hpp and the libduckdb shared library of a DuckDB
 #     release (the version the host pins, v1.5.6);
-#   - from the root CMakeLists.txt with add_subdirectory(src/builder), where it
-#     uses the host's toml++ and its statically built DuckDB.
+#   - from the root CMakeLists.txt, which adds it with add_subdirectory(src/builder)
+#     when CALIPER_WITH_BUILDER is ON (the default, except on Windows); there it
+#     uses the host's toml++, doctest, BUILD_TESTS and statically built DuckDB,
+#     and its ctest entries sit beside the host's.
 # Each module is a subfolder with its own CMakeLists.txt, added when present.
 cmake_minimum_required(VERSION 3.18...4.2)
 

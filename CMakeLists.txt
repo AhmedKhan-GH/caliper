@@ -112,6 +112,18 @@ option(CALIPER_BUILD_PYTHON  "Build the caliper Python extension (python/, nanob
 # plus slang's boost_regex/mimalloc network clones).
 option(CALIPER_WITH_SLANG "Configure the vendored slang (SystemVerilog) library" ON)
 option(CALIPER_WITH_LLAMA "Configure the vendored llama.cpp (+ apply its local patches)" ON)
+# The builder (src/builder, design/builder-overview.md): the spec, catalog,
+# command, loaders, ACP, session, MCP and agent libraries, caliper-mcp,
+# caliper-acp-harness, caliper-builder-host and their tests. It is OFF by
+# default on Windows: its sources have not been compiled with MSVC yet, and
+# the Windows CI lane builds every target and runs every test, so a Windows
+# session turns it on with -DCALIPER_WITH_BUILDER=ON and fixes what fails there.
+if(WIN32)
+    set(_caliper_builder_default OFF)
+else()
+    set(_caliper_builder_default ON)
+endif()
+option(CALIPER_WITH_BUILDER "Build the builder libraries, tools and tests (src/builder)" ${_caliper_builder_default})
 if(CALIPER_BUILD_APPLETS AND NOT CALIPER_WITH_TORCH)
     message(STATUS "CALIPER_WITH_TORCH=OFF: most of applets/* need libtorch, forcing CALIPER_BUILD_APPLETS=OFF")
     set(CALIPER_BUILD_APPLETS OFF)
@@ -798,6 +810,14 @@ if(BUILD_TESTS)
     else()
         message(STATUS "Python 3 not found: caliper_host_names_no_applet is not registered")
     endif()
+endif()
+
+# The builder (src/builder) with the host's toml++, doctest and static DuckDB.
+# It comes after enable_testing(), so that its ctest entries (builder_*) are
+# registered beside the host's. Nothing in the host links it yet and it
+# installs nothing, so the sdk and embed install components do not change.
+if(CALIPER_WITH_BUILDER)
+    add_subdirectory(src/builder)
 endif()
 
 # The Python extension (caliper-python spike): a nanobind module over the embed
