@@ -1,6 +1,8 @@
 // Reader names, extensions and magic bytes.
 #include <caliper_builder/loaders/readers.h>
 
+#include <caliper_builder/loaders/python_loader.h>
+
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -142,6 +144,9 @@ Error one_char(const std::string& key, const nlohmann::json& v, bool allow_tab) 
 }  // namespace
 
 Error validate_reader_options(ReaderKind reader, const nlohmann::json& options) {
+    if (reader == ReaderKind::python) {
+        return parse_python_options(options.is_null() ? nlohmann::json::object() : options, nullptr);
+    }
     if (options.is_null()) return {};
     if (!options.is_object()) return Error("loader.bad_value", "The reader options are a table.", "reader");
     for (auto it = options.begin(); it != options.end(); ++it) {

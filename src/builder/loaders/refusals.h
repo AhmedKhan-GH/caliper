@@ -10,14 +10,16 @@ namespace caliper_builder {
 namespace detail {
 
 // loader.pickle_refused, with the message of the contracts: the safe routes are
-// a conversion to safetensors or the Python loader, which reads torch files
-// weights-only. `what` says what was found ("an object dtype").
+// a conversion to safetensors or a Python loader whose script calls
+// out.torch_weights(), which reads torch files weights-only. `what` says what
+// was found ("an object dtype").
 inline Error pickle_refused(const std::string& path, const std::string& what) {
     return Error("loader.pickle_refused",
                  "The file holds pickle data (" + what +
-                     "), which Caliper does not load because loading a pickle can run code; convert it to "
-                     "safetensors, or use the Python loader, which reads torch files weights-only "
-                     "(torch.load(weights_only=True)) and marks the catalog entry with a warning.",
+                     "), which Caliper's readers do not load because loading a pickle can run code; convert it to "
+                     "safetensors, or load it with a Python loader (reader = \"python\") whose script calls "
+                     "out.torch_weights(path), which reads torch files weights-only "
+                     "(torch.load(weights_only=True)) and marks each catalog entry with a warning.",
                  path);
 }
 

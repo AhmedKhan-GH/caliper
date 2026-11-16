@@ -57,5 +57,27 @@ std::string file_stem(const std::string& path) {
     return fs::u8path(path).stem().u8string();
 }
 
+int json_depth(const uint8_t* text, std::size_t size, int stop_at) {
+    int depth = 0, max_depth = 0;
+    bool in_string = false, escape = false;
+    for (std::size_t i = 0; i < size; ++i) {
+        const uint8_t c = text[i];
+        if (in_string) {
+            if (escape) escape = false;
+            else if (c == '\\') escape = true;
+            else if (c == '"') in_string = false;
+            continue;
+        }
+        if (c == '"') in_string = true;
+        else if (c == '{' || c == '[') {
+            if (++depth > max_depth) max_depth = depth;
+            if (max_depth > stop_at) return max_depth;
+        } else if (c == '}' || c == ']') {
+            --depth;
+        }
+    }
+    return max_depth;
+}
+
 }  // namespace detail
 }  // namespace caliper_builder

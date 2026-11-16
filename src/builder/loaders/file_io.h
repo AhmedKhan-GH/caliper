@@ -5,6 +5,7 @@
 // loaders module.
 #include <caliper_builder/error.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <string>
@@ -42,6 +43,11 @@ inline bool fits(uint64_t a, uint64_t b, uint64_t limit) { return a <= limit && 
 
 // The file name without folders and without its last extension.
 std::string file_stem(const std::string& path);
+
+// The nesting depth of JSON text, counted outside strings, so that a hostile
+// document cannot exhaust the parser's or the destructor's stack. Counting
+// stops once the depth exceeds `stop_at`.
+int json_depth(const uint8_t* text, std::size_t size, int stop_at);
 
 }  // namespace detail
 }  // namespace caliper_builder

@@ -417,11 +417,12 @@ TEST_CASE("every reader through a run") {
     CHECK(imgs.sources[0].shape == std::vector<int64_t>{2, 2, 3});
     CHECK(imgs.sources[0].title == "img (img_a.png)");
 
-    // The reserved Python reader.
+    // A Python loader runs only with the caller's approval (test_python_loader.cpp has the rest).
     REQUIRE(store->save(loader_from("caliper_loader = 0\n[loader]\nid = \"py\"\n[input]\npath = \"t.tsv\"\n"
-                                    "reader = \"python\"\n[[output]]\nname = \"py\"\n"))
+                                    "reader = \"python\"\n[reader]\nscript = \"s.py\"\n[[output]]\nname = \"py\"\n"
+                                    "table = \"*\"\n"))
                 .ok());
-    CHECK(store->run("py").error.code == "loader.python_not_available");
+    CHECK(store->run("py").error.code == "loader.python_needs_approval");
     // A named tensor that the file lacks.
     REQUIRE(store->save(loader_from("caliper_loader = 0\n[loader]\nid = \"nz\"\n[input]\npath = \"n.npz\"\n"
                                     "[[output]]\nname = \"nz\"\ntensor = \"absent\"\n"))

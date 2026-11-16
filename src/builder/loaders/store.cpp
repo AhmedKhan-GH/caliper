@@ -16,6 +16,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -449,6 +450,7 @@ struct LoaderStore::Impl {
             if (std::find(files.begin(), files.end(), id) == files.end()) {
                 if (Error e = remove_sources_of(id)) return e;
                 if (Error e = db->execute("DELETE FROM caliper.loaders WHERE \"id\" = " + lit(id))) return e;
+                remove_python_outputs(id);
             }
         }
         for (const std::string& id : files) {
@@ -467,11 +469,30 @@ struct LoaderStore::Impl {
         }
         if (Error e = db->execute("DELETE FROM caliper.sources; DELETE FROM caliper.loaders;")) return e;
         const std::string now = now_utc();
-        for (const std::string& id : loader_file_ids()) {
+        const std::vector<std::string> ids = loader_file_ids();
+        for (const std::string& id : ids) {
             if (!valid_id(id)) continue;
             bool ok = false;
             if (Error e = index_loader_file(id, now, &ok)) return e;
-            if (ok) run(id);
+            if (ok) run(id, RunOptions{}, nullptr, true);
+        }
+        // Kept outputs of loaders that are gone, or are no longer Python loaders, are removed.
+        std::vector<fs::path> orphans;
+        std::error_code oec;
+        for (fs::directory_iterator it(ws() / "loader-outputs", oec), end; !oec && it != end; it.increment(oec)) {
+            const std::string name = it->path().filename().u8string();
+            bool keep = false;
+            std::string text;
+            if (std::find(ids.begin(), ids.end(), name) != ids.end() &&
+                !read_text(loader_file(name), kMaxLoaderText, &text)) {
+                LoaderParse parsed = parse_loader(text);
+                keep = parsed.error || (parsed.loader.reader && *parsed.loader.reader == ReaderKind::python);
+            }
+            if (!keep) orphans.push_back(it->path());
+        }
+        for (const fs::path& p : orphans) {
+            std::error_code rec;
+            fs::remove_all(p, rec);
         }
         // Derived tensors that no source uses any more are removed.
         std::set<std::string> used;
@@ -482,6 +503,103 @@ struct LoaderStore::Impl {
             const std::string p = fs::canonical(it->path(), rec).u8string();
             if (!rec && !used.count(p) && it->is_regular_file(rec)) fs::remove(it->path(), rec);
         }
+        return {};
+    }
+
+    // One tensor source: its transforms applied, and its bytes either mapped
+    // where they lie or written as a derived tensor under a temporary name.
+    Error add_tensor(const Loader& l, std::size_t oi, const LoaderOutput& o, const std::string& name,
+                     const std::string& title, const ReadTensor& t, const std::string& shown,
+                     const std::vector<std::string>& extra_warnings, const std::string& now,
+                     std::set<std::string>* names, std::vector<LoadedSource>* out, std::vector<PendingFile>* pending) {
+        if (!names->insert(name).second) {
+            return Error("loader.name_collision", "Two tensors of the loader become the source tensor:" + name + ".");
+        }
+        if (out->size() >= options.max_sources_per_run) {
+            return Error("loader.too_large", "The run makes more sources than its limit of " +
+                                                 std::to_string(options.max_sources_per_run) + ".");
+        }
+        TensorData data = t.data;
+        bool derived = t.derived;
+        if (!o.transforms.empty()) {
+            TensorResult tr = apply_transforms(data, o.transforms);
+            if (tr.error) {
+                tr.error.where = "output[" + std::to_string(oi) + "]." + tr.error.where;
+                return tr.error;
+            }
+            data = std::move(tr.tensor);
+            derived = true;
+        }
+        LoadedSource s;
+        s.id = "tensor:" + name;
+        s.kind = "tensor";
+        s.name = name;
+        s.title = title;
+        s.loader = l.id;
+        s.file = shown;
+        s.dtype = data.dtype();
+        s.shape = data.shape();
+        s.rate_hz = t.rate_hz;
+        s.bytes = static_cast<int64_t>(data.nbytes());
+        s.warnings = t.warnings;
+        s.warnings.insert(s.warnings.end(), extra_warnings.begin(), extra_warnings.end());
+        s.updated_at = now;
+        s.tensor = t.name;
+        s.derived = derived;
+        if (derived) {
+            const fs::path final = ws() / "tensors" / fs::u8path(name + ".npy");
+            const fs::path temp = fs::u8path(final.u8string() + ".tmp");
+            uint64_t offset = 0;
+            if (Error e = write_npy(temp.u8string(), data, &offset)) return e;
+            pending->push_back({temp, final});
+            s.data_file = final.u8string();
+            s.data_offset = static_cast<int64_t>(offset);
+        } else {
+            s.data_file = data.file();
+            s.data_offset = static_cast<int64_t>(data.file_offset());
+        }
+        out->push_back(std::move(s));
+        return {};
+    }
+
+    // One table source: a view or table named `name` over the files of `read`.
+    Error add_table(const Loader& l, std::size_t i, const LoaderOutput& o, const std::string& name,
+                    const std::string& title, const TabularRead& read, int64_t bytes,
+                    const std::vector<std::string>& extra_warnings, const std::string& now,
+                    std::vector<LoadedSource>* made) {
+        if (!db->relation_type(name).empty() || !select_sources("\"id\" = " + lit("table:" + name)).empty()) {
+            return Error("loader.source_exists",
+                         "A table or view named " + name + " exists already and is not this loader's.",
+                         "output[" + std::to_string(i) + "].name");
+        }
+        if (made->size() >= options.max_sources_per_run) {
+            return Error("loader.too_large", "The run makes more sources than its limit of " +
+                                                 std::to_string(options.max_sources_per_run) + ".");
+        }
+        TableMade table;
+        if (Error e = make_table_output(*db, read, TableOutput{name, o.mode && *o.mode == "table", o.sql}, &table)) {
+            if (!e.where.empty() && e.where.rfind("output", 0) != 0) {
+                e.where = "output[" + std::to_string(i) + "]." + e.where;
+            }
+            return e;
+        }
+        LoadedSource s;
+        s.id = "table:" + name;
+        s.kind = "table";
+        s.name = name;
+        s.title = title;
+        s.loader = l.id;
+        s.file = l.path;
+        s.columns = table.columns;
+        s.rows = table.rows;
+        s.bytes = bytes;
+        s.updated_at = now;
+        s.table_mode = o.mode.value_or("view");
+        s.warnings = extra_warnings;
+        if (db->needs_quotes(name)) {
+            s.warnings.push_back("The name " + name + " is an SQL keyword; quote it in SQL, as \"" + name + "\".");
+        }
+        made->push_back(std::move(s));
         return {};
     }
 
@@ -540,78 +658,428 @@ struct LoaderStore::Impl {
                         name = multi ? make_id(o.name + "_" + stem) : o.name;
                         title = (o.title.empty() ? o.name : o.title) + (multi ? " (" + filename + ")" : "");
                     }
-                    if (!names.insert(name).second) {
-                        return Error("loader.name_collision", "Two tensors of the loader become the source tensor:" +
-                                                                  name + ".");
-                    }
-                    if (out->size() >= options.max_sources_per_run) {
-                        return Error("loader.too_large", "The run makes more sources than its limit of " +
-                                                             std::to_string(options.max_sources_per_run) + ".");
-                    }
-                    TensorData data = t->data;
-                    bool derived = t->derived;
-                    if (!o.transforms.empty()) {
-                        TensorResult tr = apply_transforms(data, o.transforms);
-                        if (tr.error) {
-                            tr.error.where = "output[" + std::to_string(oi) + "]." + tr.error.where;
-                            return tr.error;
-                        }
-                        data = std::move(tr.tensor);
-                        derived = true;
-                    }
-                    LoadedSource s;
-                    s.id = "tensor:" + name;
-                    s.kind = "tensor";
-                    s.name = name;
-                    s.title = title;
-                    s.loader = l.id;
-                    s.file = shown;
-                    s.dtype = data.dtype();
-                    s.shape = data.shape();
-                    s.rate_hz = t->rate_hz;
-                    s.bytes = static_cast<int64_t>(data.nbytes());
-                    s.warnings = t->warnings;
-                    s.updated_at = now;
-                    s.tensor = t->name;
-                    s.derived = derived;
-                    if (derived) {
-                        const fs::path final = ws() / "tensors" / fs::u8path(name + ".npy");
-                        const fs::path temp = fs::u8path(final.u8string() + ".tmp");
-                        uint64_t offset = 0;
-                        if (Error e = write_npy(temp.u8string(), data, &offset)) return e;
-                        pending->push_back({temp, final});
-                        s.data_file = final.u8string();
-                        s.data_offset = static_cast<int64_t>(offset);
-                    } else {
-                        s.data_file = data.file();
-                        s.data_offset = static_cast<int64_t>(data.file_offset());
-                    }
-                    out->push_back(std::move(s));
+                    if (Error e = add_tensor(l, oi, o, name, title, *t, shown, {}, now, &names, out, pending)) return e;
                 }
             }
         }
         return {};
     }
 
-    RunResult run(const std::string& id) {
+    // ---- Python loaders: their folders under loader-outputs/<id>/ ----
+
+    fs::path python_root(const std::string& id) const { return ws() / "loader-outputs" / fs::u8path(id); }
+
+    // The run folders of a Python loader: run-<n> holds a run's checked
+    // outputs, tmp-<n> a run in progress.
+    struct RunFolder {
+        uint64_t n = 0;
+        fs::path path;
+        bool kept = false;
+    };
+    std::vector<RunFolder> python_folders(const std::string& id) const {
+        std::vector<RunFolder> found;
+        std::error_code ec;
+        for (fs::directory_iterator it(python_root(id), ec), end; !ec && it != end; it.increment(ec)) {
+            const std::string name = it->path().filename().u8string();
+            const bool kept = name.rfind("run-", 0) == 0;
+            if (!kept && name.rfind("tmp-", 0) != 0) continue;
+            const std::string digits = name.substr(4);
+            if (digits.empty() || digits.size() > 18 ||
+                !std::all_of(digits.begin(), digits.end(), [](char c) { return c >= '0' && c <= '9'; })) {
+                continue;
+            }
+            std::error_code sec;
+            const fs::file_status st = fs::symlink_status(it->path(), sec);
+            if (sec || fs::is_symlink(st) || !fs::is_directory(st)) continue;
+            found.push_back({std::stoull(digits), it->path(), kept});
+        }
+        return found;
+    }
+
+    // The newest run-<n> folder with a manifest, or an empty path.
+    fs::path latest_kept(const std::string& id) const {
+        fs::path best;
+        uint64_t best_n = 0;
+        for (const RunFolder& f : python_folders(id)) {
+            std::error_code ec;
+            if (f.kept && (best.empty() || f.n > best_n) && fs::is_regular_file(f.path / "manifest.json", ec)) {
+                best = f.path;
+                best_n = f.n;
+            }
+        }
+        return best;
+    }
+
+    // Removes every run-<n> folder but `keep`, and with `stale` every tmp-<n> too.
+    void prune_python(const std::string& id, const fs::path& keep, bool stale) {
+        for (const RunFolder& f : python_folders(id)) {
+            if ((f.kept && f.path != keep) || (!f.kept && stale)) {
+                std::error_code ec;
+                fs::remove_all(f.path, ec);
+            }
+        }
+    }
+
+    void remove_python_outputs(const std::string& id) {
+        if (!valid_id(id)) return;
+        std::error_code ec;
+        fs::remove_all(python_root(id), ec);
+    }
+
+    // A Python loader's script: a regular file inside the workspace (not a
+    // grant), with no ".." segment and no symbolic link that leads out.
+    Error resolve_script(const std::string& script, bool must_exist, std::string* canonical) const {
+        fs::path p = fs::u8path(script);
+        for (const fs::path& part : p) {
+            if (part == "..") {
+                return Error("loader.path_not_allowed", "The script path of a Python loader may not use `..`.",
+                             "reader.script");
+            }
+        }
+        if (!p.is_absolute()) p = ws() / p;
+        std::error_code ec;
+        const fs::path c = fs::canonical(p, ec);
+        if (ec) {
+            if (must_exist) {
+                return Error("loader.io", "The Python loader's script " + script + " does not exist.", "reader.script");
+            }
+            if (!path_within(p.lexically_normal().u8string(), workspace)) {
+                return Error("loader.path_not_allowed", "The script of a Python loader must lie inside the workspace.",
+                             "reader.script");
+            }
+            return {};
+        }
+        if (!path_within(c.u8string(), workspace)) {
+            return Error("loader.path_not_allowed", "The script of a Python loader must lie inside the workspace.",
+                         "reader.script");
+        }
+        if (!fs::is_regular_file(c, ec)) {
+            return Error("loader.io", "The Python loader's script " + script + " is not a regular file.",
+                         "reader.script");
+        }
+        if (canonical) *canonical = c.u8string();
+        return {};
+    }
+
+    // The sources of a Python loader from the checked outputs in `kept`: each
+    // [[output]] selects tensors or tables of the manifest by name or "*", and
+    // the native readers read them.
+    Error python_sources(const Loader& l, const fs::path& kept, const PythonManifest& m, const std::string& now,
+                         std::vector<LoadedSource>* made, std::vector<PendingFile>* pending,
+                         std::vector<std::string>* warnings) {
+        std::set<std::string> tensor_names, table_names;
+        std::vector<bool> used(m.outputs.size(), false);
+        for (std::size_t oi = 0; oi < l.outputs.size(); ++oi) {
+            const LoaderOutput& o = l.outputs[oi];
+            const bool want_tensor = o.tensor.has_value();
+            const std::string kind = want_tensor ? "tensor" : "table";
+            const std::string& wanted = want_tensor ? *o.tensor : *o.table;
+            const bool star = wanted == "*";
+            bool found = false;
+            for (std::size_t mi = 0; mi < m.outputs.size(); ++mi) {
+                const PythonOutput& mo = m.outputs[mi];
+                if (mo.kind != kind || !(star || mo.name == wanted)) continue;
+                found = true;
+                used[mi] = true;
+                std::error_code ec;
+                const fs::path c = fs::canonical(kept / fs::u8path(mo.file), ec);
+                if (ec || !path_within(c.u8string(), workspace)) {
+                    return Error("loader.path_not_allowed", "A Python loader's output lies outside the workspace.",
+                                 mo.file);
+                }
+                const std::string file = c.u8string();
+                if (Error e = check_not_pickle(file, options.limits)) return e;
+                std::vector<std::string> extra = mo.warnings;
+                extra.insert(extra.end(), m.warnings.begin(), m.warnings.end());
+                const std::string name = star ? make_id(o.name + mo.name) : o.name;
+                const std::string title =
+                    star ? (mo.title.empty() ? mo.name : mo.title) : (o.title.empty() ? o.name : o.title);
+                if (want_tensor) {
+                    TensorReadResult read = read_npy(file, options.limits);
+                    if (read.error) return read.error;
+                    if (read.tensors.size() != 1 || !mo.dtype || !mo.shape ||
+                        read.tensors[0].data.dtype() != *mo.dtype || read.tensors[0].data.shape() != *mo.shape) {
+                        return Error("loader.malformed",
+                                     "The tensor file " + mo.file + " does not hold the dtype and shape that the "
+                                                                    "Python loader's manifest declares.",
+                                     mo.file);
+                    }
+                    ReadTensor t = read.tensors[0];
+                    t.name = mo.name;
+                    if (Error e = add_tensor(l, oi, o, name, title, t, l.path, extra, now, &tensor_names, made, pending)) {
+                        return e;
+                    }
+                } else {
+                    TabularRead read{ReaderKind::parquet, {file}, json::object(), {}};
+                    if (fs::u8path(mo.file).extension() == ".csv") {
+                        TypedCsvHeader header = read_typed_csv_header(file, options.python_limits);
+                        if (header.error) return header.error;
+                        read.reader = ReaderKind::csv;
+                        read.csv_columns = std::move(header.columns);
+                    }
+                    if (!table_names.insert(name).second) {
+                        return Error("loader.name_collision", "Two tables of the loader become the source table:" +
+                                                                  name + ".");
+                    }
+                    if (Error e = add_table(l, oi, o, name, title, read, static_cast<int64_t>(mo.bytes), extra, now,
+                                            made)) {
+                        return e;
+                    }
+                }
+            }
+            if (!star && !found) {
+                return Error(want_tensor ? "loader.tensor_not_found" : "loader.table_not_found",
+                             "The Python loader's script wrote no " + kind + " named " + wanted + ".",
+                             "output[" + std::to_string(oi) + "]." + kind);
+            }
+        }
+        for (std::size_t mi = 0; mi < m.outputs.size(); ++mi) {
+            if (!used[mi]) {
+                warnings->push_back("The script wrote the " + m.outputs[mi].kind + " " + m.outputs[mi].name +
+                                    ", which no output of the loader selects.");
+            }
+        }
+        return {};
+    }
+
+    // ---- runs ----
+
+    RunResult failed(const std::string& id, const std::string& now, Error e) {
+        set_status(id, now, e);
+        RunResult res;
+        res.error = std::move(e);
+        return res;
+    }
+
+    using MakeSources =
+        std::function<Error(std::vector<LoadedSource>*, std::vector<PendingFile>*, std::vector<std::string>*)>;
+
+    // Replaces a loader's sources in one transaction with those `make` creates,
+    // then renames the derived tensors into place and deletes the previous ones.
+    // A failure rolls everything back and keeps the previous sources whole.
+    RunResult commit_run(const Loader& l, const std::string& now, const MakeSources& make) {
+        RunResult res;
+        const std::string& id = l.id;
+        std::vector<LoadedSource> made;
+        std::vector<PendingFile> pending;
+        auto discard = [&] {
+            std::error_code ec;
+            for (const PendingFile& p : pending) fs::remove(p.temp, ec);
+        };
+        const std::vector<LoadedSource> old = select_sources("\"loader\" = " + lit(id));
+        if (Error e = db->begin()) return failed(id, now, e);
+        Error err = [&]() -> Error {
+            for (const LoadedSource& s : old) {
+                if (s.kind == "table") {
+                    if (Error e = db->drop_relation(s.name)) return e;
+                }
+            }
+            if (Error e = db->execute("DELETE FROM caliper.sources WHERE \"loader\" = " + lit(id))) return e;
+            if (Error e = make(&made, &pending, &res.warnings)) return e;
+            for (const LoadedSource& s : made) {
+                if (s.kind == "tensor" && !select_sources("\"id\" = " + lit(s.id)).empty()) {
+                    return Error("loader.source_exists", "The source " + s.id + " belongs to another loader.");
+                }
+            }
+            for (const LoadedSource& s : made) {
+                if (Error e = db->execute(std::string("INSERT INTO caliper.sources (") + kSourceColumns +
+                                          ") VALUES " + source_values(s))) {
+                    return e;
+                }
+            }
+            return set_status(id, now, Error());
+        }();
+        if (err) {
+            db->rollback();
+            discard();
+            return failed(id, now, err);
+        }
+        if (Error e = db->commit()) {
+            db->rollback();
+            discard();
+            return failed(id, now, e);
+        }
+        std::set<std::string> kept;
+        for (const PendingFile& p : pending) {
+            std::error_code ec;
+            fs::rename(p.temp, p.final, ec);
+            if (ec) {
+                fs::remove(p.final, ec);
+                fs::rename(p.temp, p.final, ec);
+            }
+            kept.insert(p.final.u8string());
+        }
+        for (const LoadedSource& s : old) {
+            if (s.derived && !kept.count(s.data_file) && path_within(s.data_file, (ws() / "tensors").u8string())) {
+                std::error_code ec;
+                fs::remove(fs::u8path(s.data_file), ec);
+            }
+        }
+        res.sources = std::move(made);
+        return res;
+    }
+
+    // A Python loader. With `reuse_kept` (a rebuild) the script does not run:
+    // the sources are read back from the newest kept outputs, if there are any.
+    // Otherwise the script runs in tmp-<n>/out with the store's lock released,
+    // its checked files move to run-<n>, and the sources are read from there.
+    RunResult run_python(const Loader& l, const std::string& now, const RunOptions& run_options,
+                         std::unique_lock<std::mutex>* lock, bool reuse_kept) {
+        RunResult res;
+        const std::string id = l.id;
+        if (Error e = check_loader_for_reader(l, ReaderKind::python)) return failed(id, now, e);
+        PythonReaderOptions po;
+        if (Error e = parse_python_options(l.reader_options, &po)) return failed(id, now, e);
+        auto ingest = [&](const fs::path& kept) {
+            PythonManifestRead m = read_python_manifest(kept.u8string(), options.python_limits);
+            if (m.error) return failed(id, now, m.error);
+            return commit_run(l, now, [&](std::vector<LoadedSource>* made, std::vector<PendingFile>* pending,
+                                          std::vector<std::string>* warnings) {
+                return python_sources(l, kept, m.manifest, now, made, pending, warnings);
+            });
+        };
+        if (reuse_kept) {
+            const fs::path kept = latest_kept(id);
+            if (kept.empty()) return res;
+            RunResult r = ingest(kept);
+            if (r.error.ok()) prune_python(id, kept, true);
+            return r;
+        }
+        if (!run_options.allow_python) {
+            res.error = Error("loader.python_needs_approval",
+                              "Running the Python loader " + id +
+                                  " runs its script with your privileges, so each run needs your approval.",
+                              id);
+            return res;
+        }
+        ExpandResult expanded = expand_input(l.path, roots());
+        if (expanded.error) return failed(id, now, expanded.error);
+        if (expanded.files.size() != 1) {
+            return failed(id, now,
+                          Error("loader.bad_value",
+                                "A Python loader reads one file, and `input.path` matches " +
+                                    std::to_string(expanded.files.size()) + ".",
+                                "input.path"));
+        }
+        std::string script;
+        if (Error e = resolve_script(po.script, true, &script)) return failed(id, now, e);
+        PythonInterpreter python = resolve_python(po.python);
+        if (python.error) return failed(id, now, python.error);
+
+        // A fresh folder for this run: tmp-<n>/host and tmp-<n>/out.
+        std::error_code ec;
+        const fs::path root = python_root(id);
+        fs::create_directories(root, ec);
+        uint64_t n = 1;
+        for (const RunFolder& f : python_folders(id)) n = std::max(n, f.n + 1);
+        fs::path tmp;
+        for (int tries = 0; tries < 64; ++tries, ++n) {
+            const fs::path candidate = root / fs::u8path("tmp-" + std::to_string(n));
+            if (fs::create_directory(candidate, ec) && !ec) {
+                tmp = candidate;
+                break;
+            }
+        }
+        if (tmp.empty()) {
+            return failed(id, now, Error("loader.io", "A folder for the Python loader's run could not be created.",
+                                         root.u8string()));
+        }
+        const fs::path out_dir = tmp / "out";
+        const fs::path host_dir = tmp / "host";
+        auto cleanup = [&] {
+            std::error_code rec;
+            fs::remove_all(tmp, rec);
+        };
+        fs::create_directory(out_dir, ec);
+        if (!ec) fs::create_directory(host_dir, ec);
+        std::string host = options.python.host_script;
+        if (!ec && host.empty()) {
+            host = (host_dir / "loader_host.py").u8string();
+            if (Error e = write_text_atomic(host_dir / "loader_host.py", embedded_loader_host())) {
+                cleanup();
+                return failed(id, now, e);
+            }
+        }
+        if (ec) {
+            cleanup();
+            return failed(id, now, Error("loader.io", "A folder for the Python loader's run could not be created.",
+                                         tmp.u8string()));
+        }
+        PythonScriptRun args;
+        args.python = python;
+        args.host_script = host;
+        args.script = script;
+        args.input = expanded.files[0];
+        args.output_dir = fs::canonical(out_dir, ec).u8string();
+        args.timeout_s = po.timeout_s;
+        if (ec) {
+            cleanup();
+            return failed(id, now, Error("loader.io", "The Python loader's output folder could not be resolved.",
+                                         out_dir.u8string()));
+        }
+
+        if (lock) lock->unlock();
+        PythonScriptResult ran = run_python_script(args, options.python, options.python_limits);
+        if (lock) lock->lock();
+
+        if (ran.error) {
+            cleanup();
+            return failed(id, now, ran.error);
+        }
+        if (!loader_row(id, nullptr)) {
+            cleanup();
+            res.error = Error("loader.not_found", "The loader " + id + " was removed while its script ran.");
+            return res;
+        }
+        // The checked files move to run-<n>, with the manifest as the host wrote it.
+        const fs::path kept = root / fs::u8path("run-" + std::to_string(n));
+        if (!fs::create_directory(kept, ec) || ec) {
+            cleanup();
+            return failed(id, now, Error("loader.io", "The Python loader's outputs could not be kept.", kept.u8string()));
+        }
+        Error moved;
+        for (const PythonOutput& o : ran.manifest.outputs) {
+            fs::rename(out_dir / fs::u8path(o.file), kept / fs::u8path(o.file), ec);
+            if (ec) {
+                moved = Error("loader.io", "The Python loader's output " + o.file + " could not be kept.", o.file);
+                break;
+            }
+        }
+        if (!moved) moved = write_text_atomic(kept / "manifest.json", ran.manifest.to_json().dump(1));
+        cleanup();
+        if (moved) {
+            fs::remove_all(kept, ec);
+            return failed(id, now, moved);
+        }
+        RunResult r = ingest(kept);
+        if (r.error) {
+            fs::remove_all(kept, ec);
+            return r;
+        }
+        prune_python(id, kept, false);
+        return r;
+    }
+
+    // Runs a loader. `lock` is the store's lock, which a Python loader releases
+    // while its script runs; `reuse_kept` is set by rebuild().
+    RunResult run(const std::string& id, const RunOptions& run_options, std::unique_lock<std::mutex>* lock,
+                  bool reuse_kept) {
         RunResult res;
         const std::string now = now_utc();
         if (!valid_id(id) || !loader_row(id, nullptr)) {
             res.error = Error("loader.not_found", "There is no saved loader " + id + ".");
             return res;
         }
-        auto fail = [&](Error e) {
-            set_status(id, now, e);
-            res.error = std::move(e);
-            res.sources.clear();
-            return res;
-        };
+        auto fail = [&](Error e) { return failed(id, now, std::move(e)); };
         std::string text;
         if (Error e = read_text(loader_file(id), kMaxLoaderText, &text)) return fail(e);
         LoaderParse parsed = parse_loader(text);
         if (parsed.error) return fail(parsed.error);
         const Loader& l = parsed.loader;
         if (l.id != id) return fail(Error("loader.bad_id", "The loader's id differs from its file name."));
+        // A Python loader names its reader, and its input is handed to the
+        // script, never to a native reader, so the pickle check does not apply.
+        if (l.reader && *l.reader == ReaderKind::python) return run_python(l, now, run_options, lock, reuse_kept);
 
         ExpandResult expanded = expand_input(l.path, roots());
         if (expanded.error) return fail(expanded.error);
@@ -635,113 +1103,29 @@ struct LoaderStore::Impl {
                 }
             }
         }
-        if (reader == ReaderKind::python) {
-            return fail(Error("loader.python_not_available",
-                              "The Python loader is planned and not available in this build; convert the file to a "
-                              "format a native reader knows."));
-        }
         if (Error e = check_loader_for_reader(l, reader)) return fail(e);
 
-        std::vector<LoadedSource> made;
-        std::vector<PendingFile> pending;
-        auto discard = [&] {
-            std::error_code ec;
-            for (const PendingFile& p : pending) fs::remove(p.temp, ec);
-        };
-        const std::vector<LoadedSource> old = select_sources("\"loader\" = " + lit(id));
-        if (Error e = db->begin()) return fail(e);
-        Error err = [&]() -> Error {
-            for (const LoadedSource& s : old) {
-                if (s.kind == "table") {
-                    if (Error e = db->drop_relation(s.name)) return e;
-                }
+        RunResult r = commit_run(l, now, [&](std::vector<LoadedSource>* made, std::vector<PendingFile>* pending,
+                                             std::vector<std::string>* warnings) -> Error {
+            if (!reader_is_tabular(reader)) return tensor_outputs(l, reader, expanded.files, now, made, pending, warnings);
+            uint64_t total = 0;
+            for (const std::string& f : expanded.files) {
+                std::error_code ec;
+                total += static_cast<uint64_t>(fs::file_size(fs::u8path(f), ec));
             }
-            if (Error e = db->execute("DELETE FROM caliper.sources WHERE \"loader\" = " + lit(id))) return e;
-            if (reader_is_tabular(reader)) {
-                uint64_t total = 0;
-                for (const std::string& f : expanded.files) {
-                    std::error_code ec;
-                    total += static_cast<uint64_t>(fs::file_size(fs::u8path(f), ec));
-                }
-                TabularRead read{reader, expanded.files, l.reader_options};
-                for (std::size_t i = 0; i < l.outputs.size(); ++i) {
-                    const LoaderOutput& o = l.outputs[i];
-                    if (!db->relation_type(o.name).empty() ||
-                        !select_sources("\"id\" = " + lit("table:" + o.name)).empty()) {
-                        return Error("loader.source_exists",
-                                     "A table or view named " + o.name + " exists already and is not this loader's.",
-                                     "output[" + std::to_string(i) + "].name");
-                    }
-                    TableMade table;
-                    if (Error e = make_table_output(*db, read, TableOutput{o.name, o.mode && *o.mode == "table", o.sql},
-                                                    &table)) {
-                        if (!e.where.empty() && e.where.rfind("output", 0) != 0) {
-                            e.where = "output[" + std::to_string(i) + "]." + e.where;
-                        }
-                        return e;
-                    }
-                    LoadedSource s;
-                    s.id = "table:" + o.name;
-                    s.kind = "table";
-                    s.name = o.name;
-                    s.title = o.title.empty() ? o.name : o.title;
-                    s.loader = l.id;
-                    s.file = l.path;
-                    s.columns = table.columns;
-                    s.rows = table.rows;
-                    s.bytes = static_cast<int64_t>(total);
-                    s.updated_at = now;
-                    s.table_mode = o.mode.value_or("view");
-                    if (db->needs_quotes(o.name)) {
-                        s.warnings.push_back("The name " + o.name + " is an SQL keyword; quote it in SQL, as \"" +
-                                             o.name + "\".");
-                    }
-                    made.push_back(std::move(s));
-                }
-            } else {
-                if (Error e = tensor_outputs(l, reader, expanded.files, now, &made, &pending, &res.warnings)) return e;
-                for (const LoadedSource& s : made) {
-                    if (!select_sources("\"id\" = " + lit(s.id)).empty()) {
-                        return Error("loader.source_exists", "The source " + s.id + " belongs to another loader.");
-                    }
-                }
-            }
-            for (const LoadedSource& s : made) {
-                if (Error e = db->execute(std::string("INSERT INTO caliper.sources (") + kSourceColumns +
-                                          ") VALUES " + source_values(s))) {
+            const TabularRead read{reader, expanded.files, l.reader_options, {}};
+            for (std::size_t i = 0; i < l.outputs.size(); ++i) {
+                const LoaderOutput& o = l.outputs[i];
+                if (Error e = add_table(l, i, o, o.name, o.title.empty() ? o.name : o.title, read,
+                                        static_cast<int64_t>(total), {}, now, made)) {
                     return e;
                 }
             }
-            return set_status(id, now, Error());
-        }();
-        if (err) {
-            db->rollback();
-            discard();
-            return fail(err);
-        }
-        if (Error e = db->commit()) {
-            db->rollback();
-            discard();
-            return fail(e);
-        }
-        std::set<std::string> kept;
-        for (const PendingFile& p : pending) {
-            std::error_code ec;
-            fs::rename(p.temp, p.final, ec);
-            if (ec) {
-                fs::remove(p.final, ec);
-                fs::rename(p.temp, p.final, ec);
-            }
-            kept.insert(p.final.u8string());
-        }
-        for (const LoadedSource& s : old) {
-            if (s.derived && !kept.count(s.data_file) && path_within(s.data_file, (ws() / "tensors").u8string())) {
-                std::error_code ec;
-                fs::remove(fs::u8path(s.data_file), ec);
-            }
-        }
-        res.sources = std::move(made);
-        return res;
+            return {};
+        });
+        // A loader that was a Python loader before no longer needs its kept outputs.
+        if (r.error.ok()) remove_python_outputs(id);
+        return r;
     }
 };
 
@@ -817,6 +1201,11 @@ Error LoaderStore::save(const Loader& loader) {
     if (checked.error) return checked.error;
     ExpandResult expanded = expand_input(loader.path, im.roots());
     if (expanded.error && expanded.error.code != "loader.no_match") return expanded.error;
+    if (checked.loader.reader && *checked.loader.reader == ReaderKind::python) {
+        PythonReaderOptions po;
+        if (Error e = parse_python_options(checked.loader.reader_options, &po)) return e;
+        if (Error e = im.resolve_script(po.script, false, nullptr)) return e;
+    }
     const std::string text = write_loader(checked.loader);
     if (Error e = write_text_atomic(im.loader_file(loader.id), text)) return e;
     return im.upsert_loader(loader.id, loader.title.empty() ? loader.id : loader.title, text, now_utc());
@@ -863,12 +1252,13 @@ Error LoaderStore::remove(const std::string& id) {
     }
     if ((e = im.db->commit())) return e;
     fs::remove(im.loader_file(id), ec);
+    im.remove_python_outputs(id);
     return {};
 }
 
-RunResult LoaderStore::run(const std::string& id) {
-    std::lock_guard<std::mutex> lock(impl_->mutex);
-    return impl_->run(id);
+RunResult LoaderStore::run(const std::string& id, const RunOptions& options) {
+    std::unique_lock<std::mutex> lock(impl_->mutex);
+    return impl_->run(id, options, &lock, false);
 }
 
 std::vector<LoaderStore::ImportItem> LoaderStore::import_files(const std::vector<std::string>& paths,

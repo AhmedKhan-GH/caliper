@@ -7,7 +7,9 @@
 //   [input]    path (a file or a glob), reader (optional; inferred)
 //   [reader]   the reader's options
 //   [[output]] name, title, mode, sql (tabular readers) or tensor and
-//              [[output.transform]] records (tensor readers)
+//              [[output.transform]] records (tensor readers); a Python loader's
+//              output selects one of the script's outputs with `tensor` (and
+//              may transform it) or `table` (with mode and sql)
 //
 // Parsing is strict: an unknown key, a wrong type or a missing key is an error
 // whose `where` is the line and column ("12:7") when the text came from TOML,
@@ -37,7 +39,8 @@ struct LoaderOutput {
     std::string title;                 // empty: the name
     std::optional<std::string> mode;   // "view" (the default) or "table"; tabular readers only
     std::optional<std::string> sql;    // one SELECT over `input`; tabular readers only
-    std::optional<std::string> tensor; // a tensor name or "*"; tensor readers only
+    std::optional<std::string> tensor; // a tensor name or "*"; tensor readers and the python reader
+    std::optional<std::string> table;  // a table name or "*"; the python reader only
     std::vector<TensorTransform> transforms;
 };
 
@@ -74,8 +77,10 @@ std::optional<ReaderKind> declared_reader(const Loader& loader);
 
 // Checks the parts that depend on the reader: tabular readers take mode and
 // sql, tensor readers take tensor and transforms, multi-tensor readers need
-// tensor, single-tensor readers refuse it, and the reader options must suit the
-// reader. Run again once the reader is known.
+// tensor, single-tensor readers refuse it, the python reader needs exactly one
+// of tensor (with transforms) and table (with mode and sql, but no sql for
+// "*"), only the python reader takes table, and the reader options must suit
+// the reader. Run again once the reader is known.
 Error check_loader_for_reader(const Loader& loader, ReaderKind reader);
 
 // Makes a valid id or source name from any text: lower case, every character

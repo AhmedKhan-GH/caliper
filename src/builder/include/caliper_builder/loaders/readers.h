@@ -4,8 +4,9 @@
 //
 // A reader is one of csv, parquet, json, jsonl, arrow, npy, npz, safetensors,
 // hdf5, image, wav and python. The first five produce tables through DuckDB;
-// the others produce tensors, except python, which is reserved for the Python
-// loader. Extensions compare without case. No function here throws.
+// the others produce tensors, except python, the Python loader, which runs a
+// script out of process and makes both (python_loader.h). Extensions compare
+// without case. No function here throws.
 #include <caliper_builder/error.h>
 
 #include <nlohmann/json.hpp>
@@ -51,7 +52,8 @@ bool reader_for_format(const std::string& format, ReaderKind* out);
 //            null (a string of at most 256 characters), union_by_name (bool)
 //   parquet: union_by_name;  json: format ("auto", "array", "unstructured"),
 //   union_by_name;  jsonl: union_by_name;  hdf5: dataset (a string);
-//   image: channels (0 to 4); every other reader takes no options.
+//   image: channels (0 to 4);  python: script (required), python,
+//   timeout_s (see python_loader.h); every other reader takes no options.
 Error validate_reader_options(ReaderKind reader, const nlohmann::json& options);
 
 }  // namespace caliper_builder

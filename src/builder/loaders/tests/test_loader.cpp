@@ -193,9 +193,13 @@ TEST_CASE("the loader format refuses what it does not define") {
     CHECK(parse_error("caliper_loader = 0\n[loader]\nid = \"a\"\n[input]\npath = \"x.bin\"\n[[output]]\nname = \"t\"\n"
                       "sql = \"SELECT 1\"\n")
               .ok());
-    // The python reader is reserved: it parses, and its run is refused.
+    // The python reader needs its script and outputs that select a tensor or a table
+    // (test_python_loader.cpp has the rest).
     CHECK(parse_error("caliper_loader = 0\n[loader]\nid = \"a\"\n[input]\npath = \"x.pt\"\nreader = \"python\"\n"
                       "[[output]]\nname = \"t\"\n")
+              .code == "loader.missing_key");
+    CHECK(parse_error("caliper_loader = 0\n[loader]\nid = \"a\"\n[input]\npath = \"x.pt\"\nreader = \"python\"\n"
+                      "[reader]\nscript = \"s.py\"\n[[output]]\nname = \"t\"\ntensor = \"*\"\n")
               .ok());
     // Limits.
     CHECK(parse_error(std::string(kMaxLoaderText + 1, ' ')).code == "loader.too_large");

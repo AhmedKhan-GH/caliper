@@ -99,6 +99,19 @@ Error tabular_relation(Db& db, const TabularRead& read, std::string* sql) {
     switch (read.reader) {
         case ReaderKind::csv:
             function = "read_csv";
+            if (!read.csv_columns.empty()) {
+                if (!o.empty()) return Error("loader.bad_value", "A typed CSV file takes no reader options.");
+                std::string columns;
+                for (const ColumnInfo& c : read.csv_columns) {
+                    if (!sql_text_ok(c.name, false) || !sql_text_ok(c.type, false)) {
+                        return Error("loader.malformed", "A column name holds a control character.", read.files[0]);
+                    }
+                    columns += (columns.empty() ? "" : ", ") + sql_literal(c.name) + ": " + sql_literal(c.type);
+                }
+                add("header = true, auto_detect = false, delim = ',', quote = '\"', escape = '\"', "
+                    "allow_quoted_nulls = false, columns = {" + columns + "}");
+                break;
+            }
             if (o.contains("header")) add("header = " + boolean(o["header"]));
             if (o.contains("delimiter")) add("delim = " + sql_literal(o["delimiter"].get<std::string>()));
             else if (lower_extension(read.files[0]) == ".tsv") add("delim = " + sql_literal("\t"));

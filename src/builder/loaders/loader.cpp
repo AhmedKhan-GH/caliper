@@ -222,7 +222,9 @@ LoaderParse from_json(const json& j, const Context& ctx) {
             r.error = ctx.error("loader.bad_value", "`" + path + "` is a table.", path);
             return r;
         }
-        if ((r.error = check_keys(o, {"name", "title", "mode", "sql", "tensor", "transform"}, path, ctx))) return r;
+        if ((r.error = check_keys(o, {"name", "title", "mode", "sql", "tensor", "table", "transform"}, path, ctx))) {
+            return r;
+        }
         LoaderOutput out;
         s.reset();
         if ((r.error = get_string(o, "name", path, ctx, true, 64, false, &s))) return r;
@@ -255,6 +257,13 @@ LoaderParse from_json(const json& j, const Context& ctx) {
             return r;
         }
         out.tensor = s;
+        s.reset();
+        if ((r.error = get_string(o, "table", path, ctx, false, 1024, false, &s))) return r;
+        if (s && s->empty()) {
+            r.error = ctx.error("loader.bad_value", "`" + path + ".table` names a table or is \"*\".", path + ".table");
+            return r;
+        }
+        out.table = s;
         auto transforms = o.find("transform");
         if (transforms != o.end()) {
             if (!transforms->is_array()) {
@@ -375,14 +384,42 @@ std::optional<ReaderKind> declared_reader(const Loader& l) {
 }
 
 Error check_loader_for_reader(const Loader& l, ReaderKind reader) {
-    if (reader != ReaderKind::python) {
-        if (Error e = validate_reader_options(reader, l.reader_options)) return e;
-    }
+    if (Error e = validate_reader_options(reader, l.reader_options)) return e;
     const std::string rname = reader_name(reader);
     for (std::size_t i = 0; i < l.outputs.size(); ++i) {
         const LoaderOutput& o = l.outputs[i];
         const std::string path = "output[" + std::to_string(i) + "]";
-        if (reader == ReaderKind::python) continue;
+        if (reader == ReaderKind::python) {
+            if (o.tensor.has_value() == o.table.has_value()) {
+                return Error(o.tensor ? "loader.bad_value" : "loader.missing_key",
+                             "A Python loader's `" + path +
+                                 "` selects exactly one of `tensor` and `table`: a name the script writes, or \"*\" "
+                                 "for all of that kind.",
+                             path);
+            }
+            if (o.tensor && (o.mode || o.sql)) {
+                return Error("loader.bad_value", "`" + path + "` selects a tensor, so `mode` and `sql` do not apply.",
+                             path + (o.mode ? ".mode" : ".sql"));
+            }
+            if (o.table && !o.transforms.empty()) {
+                return Error("loader.bad_value",
+                             "`" + path + "` selects a table, so `transform` does not apply; use `sql`.",
+                             path + ".transform");
+            }
+            if (o.table && *o.table == "*" && o.sql) {
+                return Error("loader.bad_value",
+                             "`" + path + "` selects every table, so it cannot carry one `sql`; select each table by "
+                                          "name instead.",
+                             path + ".sql");
+            }
+            continue;
+        }
+        if (o.table) {
+            return Error("loader.bad_value",
+                         "Only a Python loader's output selects a table by name, so `" + path +
+                             ".table` does not apply to the " + rname + " reader.",
+                         path + ".table");
+        }
         if (reader_is_tabular(reader)) {
             if (o.tensor) {
                 return Error("loader.bad_value", "The " + rname + " reader makes tables, so `" + path +
@@ -475,6 +512,7 @@ json Loader::to_json() const {
         if (o.mode) oj["mode"] = *o.mode;
         if (o.sql) oj["sql"] = *o.sql;
         if (o.tensor) oj["tensor"] = *o.tensor;
+        if (o.table) oj["table"] = *o.table;
         if (!o.transforms.empty()) {
             json ts = json::array();
             for (const TensorTransform& t : o.transforms) ts.push_back(transform_to_json(t));
@@ -506,6 +544,7 @@ std::string write_loader(const Loader& l) {
         if (o.mode) out += "mode = " + toml_string(*o.mode) + "\n";
         if (o.sql) out += "sql = " + toml_string(*o.sql) + "\n";
         if (o.tensor) out += "tensor = " + toml_string(*o.tensor) + "\n";
+        if (o.table) out += "table = " + toml_string(*o.table) + "\n";
         for (const TensorTransform& t : o.transforms) {
             const json tj = transform_to_json(t);
             out += "\n  [[output.transform]]\n  op = " + toml_value(tj["op"]) + "\n";

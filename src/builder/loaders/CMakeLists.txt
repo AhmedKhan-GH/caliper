@@ -24,13 +24,30 @@ add_library(caliper_builder_loaders STATIC
     loader.cpp
     paths.cpp
     inference.cpp
+    python_loader.cpp
     store.cpp)
 target_include_directories(caliper_builder_loaders PUBLIC "${CALIPER_BUILDER_INCLUDE_ROOT}")
+
+# The Python loader's host script is embedded in the library, so that the app
+# can write it next to a run and start it by path without Caliper LIB.
+set(CALIPER_BUILDER_LOADER_HOST_PY "${CMAKE_CURRENT_SOURCE_DIR}/../../../python/caliper/loader_host.py")
+set(_loader_host_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/loader_host_py.inc")
+add_custom_command(
+    OUTPUT "${_loader_host_inc}"
+    COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CALIPER_BUILDER_LOADER_HOST_PY}" "-DOUTPUT=${_loader_host_inc}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_file.cmake"
+    DEPENDS "${CALIPER_BUILDER_LOADER_HOST_PY}" "${CMAKE_CURRENT_SOURCE_DIR}/embed_file.cmake"
+    COMMENT "Embedding loader_host.py"
+    VERBATIM)
+target_sources(caliper_builder_loaders PRIVATE "${_loader_host_inc}")
+target_include_directories(caliper_builder_loaders PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+
 # stb_image is vendored in the tree; image.cpp compiles it with static linkage.
 target_include_directories(caliper_builder_loaders SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/stb")
+# The Python loader starts its process with the acp module's subprocess helper.
 target_link_libraries(caliper_builder_loaders
     PUBLIC nlohmann_json::nlohmann_json
-    PRIVATE caliper_builder_duckdb tomlplusplus::tomlplusplus)
+    PRIVATE caliper_builder_duckdb tomlplusplus::tomlplusplus caliper_builder_acp)
 target_compile_features(caliper_builder_loaders PUBLIC cxx_std_17)
 
 # zlib inflates deflated npz members. Without it, stored members still load and
@@ -68,11 +85,18 @@ endif()
 
 # The Python loader. CALIPER_BUILDER_TEST_PYTHON names an interpreter with numpy
 # (and pyarrow, for the Parquet path), such as a `uv venv` in the worktree. When
-# it is empty, loader_host.py's own tests are reported as skipped.
-set(CALIPER_BUILDER_LOADER_HOST_PY "${CMAKE_CURRENT_SOURCE_DIR}/../../../python/caliper/loader_host.py")
+# it is empty, the tests that run Python print that they are skipped and the
+# rest still run; loader_host.py's own tests are reported as skipped.
 set(CALIPER_BUILDER_TEST_PYTHON "" CACHE FILEPATH
     "A Python interpreter with numpy for the Python loader tests; empty skips the tests that run Python")
 if(BUILD_TESTS AND NOT WIN32)
+    caliper_builder_add_tests(loaders_python
+        SOURCES tests/test_python_loader.cpp
+        LIBS caliper_builder_loaders caliper_builder_acp)
+    target_compile_definitions(caliper_builder_loaders_python_tests PRIVATE
+        CALIPER_BUILDER_TEST_PYTHON="${CALIPER_BUILDER_TEST_PYTHON}"
+        CALIPER_BUILDER_LOADER_HOST_PY="${CALIPER_BUILDER_LOADER_HOST_PY}"
+        CALIPER_BUILDER_PYTHON_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/python")
     if(CALIPER_BUILDER_TEST_PYTHON)
         add_test(NAME builder_loaders_python_host
             COMMAND "${CALIPER_BUILDER_TEST_PYTHON}" -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_loader_host.py"

@@ -28,6 +28,11 @@ struct TabularRead {
     ReaderKind reader = ReaderKind::csv;
     std::vector<std::string> files;
     nlohmann::json options = nlohmann::json::object();  // validated reader options
+    // A CSV file with the typed header of the Python loader (python_loader.h):
+    // when set, the csv reader skips the header, detects nothing and reads
+    // these columns with the convention's quoting and NULL rules. The options
+    // must then be empty.
+    std::vector<ColumnInfo> csv_columns;
 };
 
 struct TableOutput {

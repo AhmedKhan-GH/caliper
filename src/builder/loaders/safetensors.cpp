@@ -21,29 +21,6 @@ Error malformed(const std::string& where, const std::string& what) {
     return Error("loader.malformed", "The safetensors header is malformed: " + what + ".", where);
 }
 
-// The nesting depth of JSON text, counted outside strings, so that a hostile
-// header cannot exhaust the parser's or the destructor's stack.
-int json_depth(const std::vector<uint8_t>& text, int stop_at) {
-    int depth = 0, max_depth = 0;
-    bool in_string = false, escape = false;
-    for (uint8_t c : text) {
-        if (in_string) {
-            if (escape) escape = false;
-            else if (c == '\\') escape = true;
-            else if (c == '"') in_string = false;
-            continue;
-        }
-        if (c == '"') in_string = true;
-        else if (c == '{' || c == '[') {
-            if (++depth > max_depth) max_depth = depth;
-            if (max_depth > stop_at) return max_depth;
-        } else if (c == '}' || c == ']') {
-            --depth;
-        }
-    }
-    return max_depth;
-}
-
 struct Entry {
     std::string name;
     std::string dtype_text;
@@ -120,7 +97,7 @@ TensorReadResult read_safetensors(const std::string& path, const TensorFilter& f
         result.error = malformed(path, "it does not start with '{'");
         return result;
     }
-    if (json_depth(header, limits.max_json_depth) > limits.max_json_depth) {
+    if (json_depth(header.data(), header.size(), limits.max_json_depth) > limits.max_json_depth) {
         result.error = malformed(path, "it is nested too deeply");
         return result;
     }

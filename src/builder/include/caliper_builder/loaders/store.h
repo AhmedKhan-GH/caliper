@@ -5,12 +5,20 @@
 //   loaders/<id>.loader.toml   one saved loader each (loader.h)
 //   inputs.toml                the files and folders the user granted
 //   tensors/<name>.npy         derived tensors
+//   loader-outputs/<id>/run-<n>/   the checked outputs of a Python loader's
+//                              last run: manifest.json, .npy, .parquet, .csv
 // and workspace.duckdb holds the views and tables that loaders made plus two
 // tables, caliper.loaders (one row per loader: the recipe text, timestamps and
 // the last run's status) and caliper.sources (one row per output, the fields
 // of LoadedSource). rebuild() recreates every row from the text files by
-// running each loader again; open() rebuilds a database that is missing or has
-// no caliper schema, and otherwise brings the rows in line with the files.
+// running each loader again, except that a Python loader's sources are read
+// back from its kept outputs and its script never runs; open() rebuilds a
+// database that is missing or has no caliper schema, and otherwise brings the
+// rows in line with the files.
+//
+// A Python loader (python_loader.h) runs the user's code, so run() refuses one
+// unless RunOptions::allow_python is set for that run, and the store's lock is
+// released while the script runs.
 //
 // Safety (docs/plans/loaders.md, "Safety"): every input path must lie in the
 // workspace or in a grant; the database is opened with external access off,
@@ -25,6 +33,7 @@
 #include <caliper_builder/error.h>
 #include <caliper_builder/loaders/loaded_source.h>
 #include <caliper_builder/loaders/loader.h>
+#include <caliper_builder/loaders/python_loader.h>
 #include <caliper_builder/loaders/query.h>
 #include <caliper_builder/loaders/tensor.h>
 #include <caliper_builder/loaders/tensor_readers.h>
@@ -43,6 +52,15 @@ struct StoreOptions {
     std::string memory_limit = "1GB";
     ReaderLimits limits;
     uint64_t max_sources_per_run = 10000;
+    PythonProcessOptions python;       // how a Python loader's process starts
+    PythonOutputLimits python_limits;  // what a Python loader may hand back
+};
+
+// The permissions of one run.
+struct RunOptions {
+    // The user approved running this Python loader's script now. Without it,
+    // run() fails a Python loader with loader.python_needs_approval.
+    bool allow_python = false;
 };
 
 // A row of caliper.loaders. Times are UTC ISO 8601 text; last_run_at and the
@@ -102,8 +120,9 @@ public:
     // and their derived tensors.
     Error remove(const std::string& id);
     // Runs a saved loader: replaces its sources atomically, or leaves the
-    // previous ones whole when it fails. The status is recorded either way.
-    RunResult run(const std::string& id);
+    // previous ones whole when it fails. The status is recorded either way,
+    // except for a Python loader refused for want of approval.
+    RunResult run(const std::string& id, const RunOptions& options = {});
 
     // For files the user dropped: grants each one outside the workspace (when
     // `grant_outside`), infers its reader and saves a default loader for it.
@@ -141,7 +160,8 @@ public:
 
     // Recreates the database rows from the workspace files: drops the
     // relations loaders made, empties both tables, reads every loader file and
-    // runs each loader. A loader that fails keeps its row with the error.
+    // runs each loader, reading a Python loader's kept outputs instead of
+    // running its script. A loader that fails keeps its row with the error.
     Error rebuild();
 
     struct Impl;
