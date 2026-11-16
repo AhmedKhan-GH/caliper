@@ -8,7 +8,7 @@ widget agent, share the GPU with a training run, and remove the key again.
 [Agent roles](../explanations/agent-roles.md) explains how the widget agent differs from the side chat.
 
 !!! note "Status"
-    The settings and ⌘K on a panel are built. ⌘K on a selection, on a dropped file and on a property comes next.
+    The settings and ⌘K on a panel, on a selection, on a dropped file and on a property are built.
     Until Caliper ships the agent with its own Python runtime, Caliper finds the agent through the environment
     variable `CALIPER_AGENT_PYTHON`, an interpreter that has `caliper-agent`'s dependencies, and the agent reaches
     your workspace through Caliper API, so start Caliper with `--api`.
@@ -131,8 +131,9 @@ say what is still missing: **No provider**, **No key**, **No model** or **Invali
 4. When the request is bigger than one panel, choose **Ask in chat**, which sends it, with what the widget agent knew,
    to the side chat.
 
-When you change the settings, the next ⌘K uses them. If something goes wrong, the prompt shows it with a short tag,
-such as DECLINED or NO PROVIDER, and the actions that help:
+A change in the settings takes effect at once: an open ⌘K prompt closes, its preview is discarded and a request still
+running is cancelled, and the next ⌘K uses the new settings. If something goes wrong, the prompt shows it with a short
+tag, such as DECLINED or NO PROVIDER, and the actions that help:
 
 - **No provider is set up**, or the model cannot call tools. ⌘K offers Setup and Ask in chat; Setup opens the settings.
 - **The API did not accept the key.** The key was revoked or mistyped; create a new one and enter it with Replace.
@@ -191,8 +192,8 @@ ACP integration (`design/acp-integration.md`) sets up opencode with a model serv
 
 ## Remove the key
 
-In the settings, choose the preset and then **Remove**. The Key row then says Not set, and ⌘K offers only Setup and
-Ask in chat until you enter a key again.
+In the settings, choose the preset and then **Remove**. The Key row then says Not set, the agent that was started with
+the key stops at once, and ⌘K offers only Setup and Ask in chat until you enter a key again.
 
 The key also appears in the Keychain Access app as an item of the service `caliper.agent-keys`, and deleting it there
 has the same effect. If you think someone else has seen the key, also revoke it on the service's API keys page, so it

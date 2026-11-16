@@ -279,7 +279,9 @@ first, then the command input, then the panel's focus, and last goes Home.
   row in the builder's Sources palette (and ⌘K with that row selected and no panel focused does the same). The prompt
   opens under the row, for the file's loader and its catalog ids. An answer without a change is shown in the card,
   over up to four lines, with Text for the whole of a longer one; a proposed panel is previewed as above. With no spec
-  open, the preview's `spec.new` is undone again when the preview is discarded.
+  open, the preview first runs `spec.new` from the `ui` origin. A discard, or the surface going, undoes that step again
+  while it is still the top of the undo stack, known by the step's id from `history.list`; when another step was
+  committed after it, the new spec stays. Accept leaves two undo steps: the new spec, then the change.
 - **A property.** In build mode, ⌘K shows beside the focused panel's title and each of its options in Properties while
   the row is under the pointer. It opens the prompt under that row for that one property, such as
   `options.colormap`, and the edit is previewed in the panel.
@@ -302,7 +304,8 @@ works, the row shows its latest step: the command it calls, or the last line of 
 6. Closing the prompt ends the session with `session/close`.
 
 One `caliper-agent` process serves every ⌘K. It is started at the first ⌘K with the provider's key placed only in its
-environment, and it is kept running.
+environment, and it is kept running until the settings change: a change ends it at once, with its API file and token,
+and the next ⌘K starts it again from the new settings.
 
 **States and actions.** Each state shows a tag and its actions:
 
@@ -356,10 +359,18 @@ of the work area's height below the work area's top, and its height is its conte
 | Capabilities | Tool calling, vision and the context length with where each came from (probe, server, known, override, assumed), Yes, No and Auto for the person's override (`caliper-agent probe --set`), and **Probe** (`--refresh`) |
 | Note | Shared GPU, while a live run is attached and the base URL is a loopback address |
 
-The settings never read a key back. They call `KeyStore::set()`, `has()` and `remove()` only, and wipe the field's
-text when it is saved or cancelled. A hidden app's key store is an in-memory one, so it never touches the Keychain.
-The probe runs as a child process with the key placed only in its environment, and with `CALIPER_AGENT_OFFLINE` passed
-through when the app has it.
+The settings never show a key or read one back for themselves. They call `KeyStore::set()`, `has()` and `remove()`,
+and wipe the field's text when it is saved or cancelled. A hidden app's key store is an in-memory one, so it never
+touches the Keychain. The one place a key leaves the store is the probe's start: **Probe**, **List** and the
+overrides run `caliper-agent probe` as a child process, and `place_key_in_environment()` copies the chosen provider's
+key into that child's environment, as it does for the sidecar, in `ANTHROPIC_API_KEY` or `CALIPER_MODEL_API_KEY`. It
+also removes from the child's environment every other key variable and every variable that could redirect it, such as
+`ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL`, so no key or endpoint of the app's own environment reaches the provider,
+and passes `CALIPER_AGENT_OFFLINE` through when the app has it. When the store cannot place the key, or the provider
+requires one and there is no store, the probe does not run, and its tag says why: No key, Malformed key or Unreadable
+key. A provider that needs no key is probed with no key variable at all. When the app quits or the settings go while a
+probe runs, its child is ended at once (SIGKILL to its process group) and reaped on the probe's own thread, so the
+frame never waits for it; an answer that comes after the model or the address changed is dropped.
 
 **`widget-agent.json`**, in the app-data folder beside `side-chat.json`, holds the choice and never a key:
 
@@ -373,8 +384,11 @@ A file that does not parse counts as no choice, and an unknown preset is dropped
 person's overrides are kept apart, in `model-capabilities.json` in the same folder, which the agent reads with
 `--cache-dir`.
 
-**The agent's start.** The inline surface's agent is made from the settings each time they change while the prompt is
-closed. It starts `caliper-agent` with `--preset`, `--base-url` (Ollama, LM Studio and Custom), `--model`, `--effort`
+**The agent's start.** The inline surface's agent is made from the settings at the first ⌘K after they change. A
+change (a preset, an address, a model, an effort, a key saved or removed, or a probe's answer for the current model)
+applies at once, on any page: an open prompt closes as Close closes it, so a running turn is cancelled and its preview
+discarded, and the agent goes with its sidecar, whose API file and token are revoked; a removed key so leaves the
+sidecar's environment at once. It starts `caliper-agent` with `--preset`, `--base-url` (Ollama, LM Studio and Custom), `--model`, `--effort`
 (Claude) and `--cache-dir`, and `place_key_in_environment()` puts the provider's key in its environment: in
 `ANTHROPIC_API_KEY` for Claude, in `CALIPER_MODEL_API_KEY` for the others, and none for a local server. ⌘K has no
 provider, and offers Setup and Ask in chat, when no preset is chosen, the address is not valid, an OpenAI-compatible

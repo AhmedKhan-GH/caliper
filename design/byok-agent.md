@@ -526,8 +526,9 @@ item of its own: the presets `anthropic`, `openai`, `gemini` and `openrouter`, a
 (`custom_key_account()`). The ids come from `caliper_agent/presets.json`, embedded at build time, which the sidecar
 reads too. `ollama` and `lmstudio` take no key (`keystore.no_key_needed`), and `place_key_in_environment()` places none
 for them; it puts the Claude key in `ANTHROPIC_API_KEY` and any other in `CALIPER_MODEL_API_KEY`, and removes the other
-variable and every redirecting one ([Widget agent](widget-agent.md#presets)). Error codes add
-`keystore.no_key_needed`.
+variable and every redirecting one ([Widget agent](widget-agent.md#presets)). `strip_key_environment()` removes
+them all and places nothing, for a child that must not see a key of the app's own environment when no store is asked
+for one (the settings' probe without a store). Error codes add `keystore.no_key_needed`.
 
 ## Checked against the protocol's schema
 

@@ -190,9 +190,10 @@ struct SpecSelection {
 
 // The rows of a selection, from a prepared panel: for a range of a series,
 // x and each line's value at every drawn step inside the range (the drawn
-// steps, after the decimation of long series); for points, x, y (and z) of
-// every drawn point inside the rectangle. At most `max_rows`; `total` counts
-// them all. NaN for a value a line lacks at that step.
+// steps, after the decimation of long series); for points on a 2-D panel, x
+// and y of every drawn point inside the rectangle (a 3-D points panel gives
+// no rows). At most `max_rows`; `total` counts them all. NaN for a value a
+// line lacks at that step.
 struct SpecSelectionRows {
     std::vector<std::string> columns;
     std::vector<std::vector<double>> rows;
