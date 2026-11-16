@@ -151,6 +151,20 @@ target_link_libraries(caliper_colormap_exhaustive PRIVATE caliper::sdk Threads::
 set_target_properties(caliper_colormap_exhaustive PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 add_test(NAME caliper_colormap_exhaustive COMMAND caliper_colormap_exhaustive)
 set_tests_properties(caliper_colormap_exhaustive PROPERTIES LABELS "slow" SKIP_RETURN_CODE 77 TIMEOUT 1800)
+# The generated colormap_texture on Metal, through the layer as it compiles it, against the
+# reference for all 2^32 inputs on the same ranges, also under the label slow (Apple only).
+if(APPLE)
+    add_executable(caliper_colormap_gpu_exhaustive
+        test_colormap_gpu_exhaustive.mm
+        ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp)
+    set_source_files_properties(test_colormap_gpu_exhaustive.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(caliper_colormap_gpu_exhaustive PRIVATE caliper_gfx caliper::sdk Threads::Threads
+        "-framework Metal" "-framework Foundation")
+    set_target_properties(caliper_colormap_gpu_exhaustive PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+        OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+    add_test(NAME caliper_colormap_gpu_exhaustive COMMAND caliper_colormap_gpu_exhaustive)
+    set_tests_properties(caliper_colormap_gpu_exhaustive PROPERTIES LABELS "slow" SKIP_RETURN_CODE 77 TIMEOUT 3600)
+endif()
 
 # caliper_colormap_cases <file> writes the colormap's boundary cases, with the C++ reference's
 # RGBA for each input, for the browser rows (web/test/shaders.spec.ts, colormap.spec.ts).
