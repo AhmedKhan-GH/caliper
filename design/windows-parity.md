@@ -10,7 +10,11 @@ On Windows the fast path is Vulkan with CUDA interop, where macOS uses Metal wit
 - **The Vulkan backend, the CUDA interop paths and the gfx suite have been verified on Windows hardware before.** Verify on Windows hardware (`docs/guides/verify-on-windows.md`) describes the procedure.
 - **The code already handles several Windows details.** The loader opens an applet with `LoadLibraryA` and looks for `<stem>.dll`, with or without the `lib` prefix. `CALIPER_APPLET_PATH` uses `;` as its separator, and the user applets folder is `%APPDATA%\Caliper\applets\`. The lock around the data-schema stamp uses `LockFileEx`. `caliper shot` draws into the Vulkan offscreen canvas and reads the frame back, with no window. The `caliper-embed` package installs `bin\caliper_embed.dll`, `lib\caliper_embed.lib`, the headers and the CMake package, without the `caliper_live_*` calls, which exist on macOS only, and `embed_host` copies the DLL beside itself.
 - **No one has yet run on Windows hardware** applets loaded from outside the repository, the Caliper CLI subcommands, `caliper shot` or the Caliper Embed package.
-- **The network stream, the hub, Caliper API, the web viewer and the notebook widget are not built yet** on any platform. They come on macOS first, in the order of the [streaming plan](streaming-and-embedding.md).
+- **The network stream, the hub, Caliper API, `caliper build`, the web viewer and the notebook widget are built and tested on macOS.** None of their code has been compiled with MSVC yet. It was checked by reading, by a syntax check of its Windows branches against the documented Winsock declarations, and by a check that the code the Windows lane compiles never turns a `std::filesystem::path` into a `std::string` implicitly. The first Windows CI run is their first compile; docs/guides/verify-on-windows.md, section "Watch the first Windows CI run", lists what to look for. On Windows they stand as follows.
+    - **Compiled and tested in process.** The WebSocket layer, the codec of wire protocol v3, the hub and the Caliper API server (`src/host/net/`, `src/host/api/`) are portable C++ on Winsock, and their cases in `caliper_tests` run in the Windows lane, as do the unit cases of the command line, `caliper build`'s searches among them.
+    - **Refused.** The executable refuses `caliper serve`, `caliper build`, `--api` and `--url` before anything starts: it prints `... is not available on Windows yet` and exits with 1 (`windows_unavailable` in `src/host/host_cli.h`), and it ignores `CALIPER_API`. The `caliper_cli_windows_*` tests check this in the lane, and docs/references/cli.md, section "On Windows", describes it.
+    - **macOS only.** The app's network source, the live attach and the shared-memory sessions. On Windows `src/host/live/live_unsupported.cpp` stands in for them, and every attach, `caliper_core_live_attach_url` included, fails with a reason. The live controls and the typed live views compile on Windows.
+    - **Not run on Windows.** The process-level tests of `caliper serve`, `caliper shot --api`, the hidden app, its run bar and `caliper build`, which are registered on macOS only; the network transport of Caliper LIB, `caliper.serve()` and the notebook widget; and the web viewer in a browser on Windows.
 
 ## The steps
 
@@ -31,6 +35,7 @@ Each step ends with a check that must pass on a Windows machine with an NVIDIA G
 - **The CLI and the app's console.** `caliper.exe` is a console program today, so the subcommands print to the terminal that started them, and starting the app from Explorer also opens a console window. Make the app a GUI-subsystem program and ship a console entry point for the subcommands beside it, such as a small `caliper.com`, so `caliper list` works in PowerShell and `cmd`, as the `code` command does for Visual Studio Code.
 - **`caliper shot`.** It is kept as it is: it draws into the Vulkan offscreen canvas and reads the frame back, and it has not been run on Windows hardware yet. Compare its PNG with a macOS shot of the same applet.
 - **Dock roles** need nothing Windows-specific, but check them in a `shot` capture.
+- **`caliper build`** runs CMake through `posix_spawn` and reads its output through a pipe. Give it a Windows process runner (`CreateProcess` with redirected output), then lift its refusal in `windows_unavailable` and run `tests/cli_build.cmake` on Windows.
 - **Done when** a scope built outside the repository against the installed Caliper SDK loads through `caliper dev`, passes `caliper check`, and appears correctly in a `caliper shot` capture on Windows.
 
 ### 3. Caliper LIB
@@ -43,7 +48,7 @@ Each step ends with a check that must pass on a Windows machine with an NVIDIA G
 
 ### 4. Streaming, the hub and Caliper API
 
-- The app's network source, the `caliper serve` hub and Caliper API v0 on Winsock.
+- The app's network source, the `caliper serve` hub and Caliper API v0 on Winsock. The in-process tests of the hub and the API already run in the Windows lane. Port the network source, which is Objective-C++ for macOS today, and lift each refusal in `windows_unavailable` once its process-level test runs on Windows; those tests use POSIX processes and signals (`tests/test_proc.h`), so they need a Windows runner first.
 - Bind to 127.0.0.1 only, so Windows Defender Firewall never prompts.
 - Keep the API token file in `%APPDATA%\Caliper\`, readable only by the user.
 - **Done when** a CUDA script streams to the app, to a browser and through the hub on one Windows machine, and every API v0 endpoint passes its tests.

@@ -185,7 +185,7 @@ When none of them holds the SDK, `build` says where it looked and lets CMake sea
 - the configure fails. When CMake found no working C++ compiler, no build tool for its generator, or no SDK, a last line says which and how to install it, such as `caliper: no Caliper SDK was found. Install it from a Caliper build with cmake --install <build folder> --prefix <prefix> --component sdk, then set CALIPER_SDK_DIR=<prefix> or use the prefix ~/caliper-sdk`;
 - the build fails, or an applet in the build folder fails the checks.
 
-`build` is built and tested on macOS. On Windows it says that it is not available yet and exits with 1; configure and build there with CMake as [SDK package](sdk-package.md#using-the-package) describes.
+`build` is built and tested on macOS. The Windows build refuses it (see [On Windows](#on-windows)); configure and build there with CMake as [SDK package](sdk-package.md#using-the-package) describes.
 
 ### caliper info
 
@@ -290,8 +290,12 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | A check failed, nothing was found, or a file operation failed. `build` also exits with 1 when CMake, a compiler or the SDK is missing or the build fails, `dev` when its folder is not a folder, `shot` when its applet cannot be launched or is quarantined, when the renderer cannot draw offscreen, or when Caliper API cannot listen, and `serve` when it cannot listen or cannot use its token file or assets folder. |
+| 1 | A check failed, nothing was found, or a file operation failed. `build` also exits with 1 when CMake, a compiler or the SDK is missing or the build fails, `dev` when its folder is not a folder, `shot` when its applet cannot be launched or is quarantined, when the renderer cannot draw offscreen, or when Caliper API cannot listen, and `serve` when it cannot listen or cannot use its token file or assets folder. On Windows, `serve`, `build`, `--api` and `--url` exit with 1 before anything starts ([On Windows](#on-windows)). |
 | 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets`, `--url`, `--api`, `--api-port` or `--hidden` with a subcommand that does not take it, `--url` without a link or given twice, `--api-port` or `--allow-control` without `--api` when starting the app, `dev` or `shot`, an option of `shot` or `serve` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a port out of range, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
+
+## On Windows
+
+The Windows build refuses `caliper serve`, `caliper build`, `--api` (when starting the app, with `dev` and with `shot`) and `--url` before anything starts. It prints one line, such as `caliper: caliper serve is not available on Windows yet`, and exits with 1. A wrong command line is still a usage error with exit code 2. The code of these pieces compiles on Windows, and the in-process tests of the WebSocket layer, the hub and Caliper API run in the Windows CI lane, but none of them has run on Windows as a process yet, and the network source that `--url` attaches through exists on macOS only. `CALIPER_API=1` is ignored on Windows, and a line on standard error says so. Every other subcommand behaves as this page describes.
 
 ## Environment variables
 
@@ -302,7 +306,7 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 | `CALIPER_DATA_DIR` | Moves the whole app-data folder: the stores, `imgui.ini`, `data/`, `live/` and, unless `CALIPER_USER_APPLETS_DIR` is set, the user applets folder `applets/`. `check` reads its data-schema stamps there and `install` copies into its `applets/`; `list`, `check`, `info`, `new` and `--help` create nothing in it, whether it is set or not. `shot` keeps its stores and the applet's data folder there when it is set, and in a temporary folder when it is not. |
 | `CALIPER_CHROMELESS` | `1` draws the applet page without the page bar, the status bar and the jobs tray, in the app and in `shot`. |
 | `CALIPER_HUB_FILE` | Replaces the path of the hub file that `serve` writes, `hub.json` in the app-data folder, when it is set and not empty. |
-| `CALIPER_API` | `1` serves [Caliper API](api.md) as `--api` does, when starting the app and with `dev` and `shot`. |
+| `CALIPER_API` | `1` serves [Caliper API](api.md) as `--api` does, when starting the app and with `dev` and `shot`. Ignored on Windows ([On Windows](#on-windows)). |
 | `CALIPER_HIDDEN` | `1` runs the app with its window never shown, as `--hidden` does: a testing aid (see [The hidden window](#the-hidden-window)). |
 | `CALIPER_SDK_DIR` | The prefix of the installed SDK that `build` uses, when it is set and not empty. |
 | `CALIPER_CMAKE` | The cmake that `build` runs, when it is set and not empty. |
