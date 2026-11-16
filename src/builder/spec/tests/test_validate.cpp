@@ -488,3 +488,20 @@ TEST_CASE("a cycle is reported once, and sources fed by it are unknown") {
     CHECK(info(c, prev).shape == std::optional<std::vector<std::int64_t>>({12, 12, 64, 64}));
     CHECK_FALSE(has(c.diagnostics, "spec.unused_source"));
 }
+
+TEST_CASE("a full report keeps its errors before its warnings") {
+    // 300 sources the catalog does not know: one too_many error, then a
+    // warning for each, which fills the report. The panels' errors come after.
+    std::string body;
+    for (int i = 0; i < 300; ++i)
+        body += "[[source]]\nid = \"s" + std::to_string(i) + "\"\ncatalog = \"tensor:missing" + std::to_string(i) +
+                "\"\n";
+    for (int i = 0; i < 10; ++i) body += panel("p" + std::to_string(i), "histogram", "values = \"nope\"");
+    auto r = check(body);
+    CHECK(r.diagnostics.size() == cs::limits::kDiagnostics);
+    CHECK_FALSE(r.ok());
+    int errors = 0;
+    for (const auto& d : r.diagnostics) errors += d.is_error();
+    CHECK(errors == 11);
+    CHECK(has(r.diagnostics, "spec.unknown_source", "panel[9].bind.values"));
+}

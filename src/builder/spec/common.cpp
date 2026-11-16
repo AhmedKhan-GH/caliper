@@ -2,8 +2,10 @@
 // paths, the diagnostic sink and the value rules.
 #include "internal.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 
 namespace caliper_builder::spec::detail {
 
@@ -234,7 +236,14 @@ std::string index_path(const std::string& base, std::size_t index) {
 
 void Sink::add(Severity s, std::string code, std::string message, std::string path) {
     if (s == Severity::error) ++errors_;
-    if (full()) return;
+    if (full()) {
+        // A full report keeps errors before warnings, so that a report with an
+        // error never reads as a pass: the last warning gives way.
+        if (s != Severity::error) return;
+        auto warning = std::find_if(out_.rbegin(), out_.rend(), [](const Diagnostic& d) { return !d.is_error(); });
+        if (warning == out_.rend()) return;
+        out_.erase(std::next(warning).base());
+    }
     Diagnostic d;
     d.severity = s;
     d.code = std::move(code);

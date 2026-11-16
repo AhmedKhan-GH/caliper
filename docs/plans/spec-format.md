@@ -437,7 +437,7 @@ Every size is bounded, and each limit has its error code:
 | `options.text` | 16,384 characters | `spec.string_too_long` |
 | Any other string, such as one inside `x` | 65,536 characters | `spec.string_too_long` |
 | An integer | ±(2^53 − 1) | `spec.out_of_range` |
-| Diagnostics in one report | 256; the rest are dropped | |
+| Diagnostics in one report | 256; errors are kept before warnings, and the rest are dropped | |
 
 The parser checks the text size and the length of dotted TOML keys before it parses, and the value count and nesting before it decodes, so a hostile document costs a bounded amount of work. TOML's dotted keys need the early check because each part is a nested table, which the TOML library would otherwise build and free recursively. Validation follows chains of `from` without recursion and stops walking the layout at its limits.
 

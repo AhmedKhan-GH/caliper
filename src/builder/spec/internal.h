@@ -56,6 +56,8 @@ public:
     void error(std::string code, std::string message, std::string path);
     void warning(std::string code, std::string message, std::string path);
     std::size_t errors() const { return errors_; }
+    // At limits::kDiagnostics entries the sink is full; an error then replaces
+    // the last warning, and anything else is dropped.
     bool full() const { return out_.size() >= limits::kDiagnostics; }
 
 private:
