@@ -25,6 +25,7 @@
 #include "host/live/live_views_state.h"   // the views' header look
 #include "host/api/app_api.h"
 #include "host/api/window_captures.h"
+#include "host/builder/app_hooks.h"
 #include "app_paths.h"
 
 #include <string>
@@ -293,15 +294,15 @@ public:
             note_live_events();
             note_control_lines();
 
-            // Caliper API (--api): the calls that read or change the app run
-            // here, between frames, as CALIPER_AUTOLAUNCH launches. A capture
-            // arms the read-back of the frame drawn next (window_captures.h).
-            if (api_.running()) {
-                serve_api();
-                captures_.before_frame(*renderer_, [this](uint64_t t, int status, const std::string& why) {
-                    api_.reply_error(t, status, why);
-                });
-            }
+            // Caliper API (--api) and the builder session's commands: the
+            // calls that read or change the app run here, between frames, as
+            // CALIPER_AUTOLAUNCH launches. A capture arms the read-back of the
+            // frame drawn next (window_captures.h).
+            if (api_.running()) serve_api();
+            session_.frame();
+            captures_.before_frame(*renderer_, [this](uint64_t t, int status, const std::string& why) {
+                capture_error(t, status, why);
+            });
 
             int dw, dh;
             glfwGetFramebufferSize(window_, &dw, &dh);
@@ -393,15 +394,15 @@ public:
 
             renderer_->render(dw, dh);
 
-            // Caliper API's captures: a read-back that has finished on the GPU
-            // answers its calls; one still copying is picked up by a later frame.
-            if (api_.running())
-                captures_.after_frame(
-                    *renderer_,
-                    [this](uint64_t t, uint32_t w, uint32_t h, std::vector<uint8_t> rgba) {
-                        api_.reply_capture(t, w, h, std::move(rgba));
-                    },
-                    [this](uint64_t t, int status, const std::string& why) { api_.reply_error(t, status, why); });
+            // The captures: a read-back that has finished on the GPU answers
+            // its calls; one still copying is picked up by a later frame.
+            captures_.after_frame(
+                *renderer_,
+                [this](uint64_t t, uint32_t w, uint32_t h, std::vector<uint8_t> rgba) {
+                    if (t == caliper_host::AppSession::kCaptureTicket) session_.capture_ready(w, h, std::move(rgba));
+                    else api_.reply_capture(t, w, h, std::move(rgba));
+                },
+                [this](uint64_t t, int status, const std::string& why) { capture_error(t, status, why); });
 
             // Deferred detach (esc Home on the live page), for the same reason
             // as the applet teardown below: the views' textures and imports are
@@ -446,9 +447,25 @@ public:
         landing_.log("api", api_.url());
     }
 
+    // The builder session (host/builder/app_session.h) for the workspace of
+    // the command line. It opens nothing yet.
+    void start_session(const caliper_host::CommandLine& cl) {
+        caliper_host::AppSession::Hooks h = caliper_host::app_session_hooks();
+        h.applets_json = [this] { return caliper_host::applets_json(loader_); };
+        h.launch = [this](const std::string& id) { return launch_by_id(id); };
+        if (!renderer_->window_capture_supported())
+            h.capture_unavailable = caliper_host::WindowCaptures::unsupported(renderer_->name());
+        h.request_capture = [this] { captures_.add(caliper_host::AppSession::kCaptureTicket); };
+        h.log = [this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); };
+        session_.start(caliper_host::app_session_options(cl), std::move(h));
+    }
+
     void cleanup() {
-        // The API first: calls still waiting for a frame get 503.
+        // The API first: calls still waiting for a frame get 503. Then the
+        // builder session: its worker, its journal and its database close
+        // here, before the host's own stores.
         api_.stop();
+        session_.close();
         // Workers FIRST: a job may hold a pointer into applet state, so every
         // worker must be joined before close_all() destroys that state (the
         // 139-at-exit was a worker touching a freed applet mid-teardown).
@@ -518,40 +535,44 @@ private:
         }
     }
 
-    // POST /v0/applets/{id}/launch: opens that applet's page as a click on
-    // its row does. The page shown goes first, as Home takes it: an applet
-    // is torn down, a live session detached.
+    // POST /v0/applets/{id}/launch and the session's app.launch: opens that
+    // applet's page as a click on its row does. The page shown goes first, as
+    // Home takes it: an applet is torn down, a live session detached.
     void api_launch(const caliper_api::Call& c) {
-        const int i = loader_.find(c.applet_id);
-        if (i < 0) {
-            api_.reply_error(c.ticket, 404,
-                             "no applet with the id " + c.applet_id +
-                                 " in the search folders (GET /v0/applets lists them)");
-            return;
-        }
+        const caliper_host::LaunchOutcome o = launch_by_id(c.applet_id);
+        if (o.status == 200) api_.reply(c.ticket, 200, o.body);
+        else api_.reply_error(c.ticket, o.status, o.body);
+    }
+
+    caliper_host::LaunchOutcome launch_by_id(const std::string& id) {
+        const int i = loader_.find(id);
+        if (i < 0)
+            return {404, "no applet with the id " + id + " in the search folders (GET /v0/applets lists them)",
+                    "app.applet_not_found"};
         if (page_ == AppPage::Applet && active_applet_ == i) {
             const auto& a = loader_.at(i);
-            api_.reply(c.ticket, 200,
-                       caliper_host::launched_json(a.manifest.id, a.manifest.version, true));
-            return;
+            return {200, caliper_host::launched_json(a.manifest.id, a.manifest.version, true), ""};
         }
         if (loader_.at(i).status != caliper_host::AppletStatus::Ready) {
             const auto& a = loader_.at(i);
-            api_.reply_error(c.ticket, 409,
-                             c.applet_id + " cannot be launched (" +
-                                 caliper_host::applet_status_word(a.status) + "): " +
-                                 a.status_text);
-            return;
+            return {409,
+                    id + " cannot be launched (" + caliper_host::applet_status_word(a.status) + "): " + a.status_text,
+                    "app.launch_refused"};
         }
         if (page_ == AppPage::Applet) leave_applet_page(active_applet_);
         else if (page_ == AppPage::Live) leave_live_page();
         launch_applet(i);
         const auto& a = loader_.at(i);
         if (page_ == AppPage::Applet && active_applet_ == i)
-            api_.reply(c.ticket, 200,
-                       caliper_host::launched_json(a.manifest.id, a.manifest.version, false));
-        else
-            api_.reply_error(c.ticket, 409, c.applet_id + " failed to launch: " + a.status_text);
+            return {200, caliper_host::launched_json(a.manifest.id, a.manifest.version, false), ""};
+        return {409, id + " failed to launch: " + a.status_text, "app.launch_failed"};
+    }
+
+    // A capture that cannot be served: the API's call gets the status, the
+    // session's capture.frame the reason.
+    void capture_error(uint64_t t, int status, const std::string& why) {
+        if (t == caliper_host::AppSession::kCaptureTicket) session_.capture_failed(why);
+        else api_.reply_error(t, status, why);
     }
 
     void launch_applet(int idx) {
@@ -939,7 +960,8 @@ private:
     int32_t live_pid_ = 0;
     bool pending_detach_ = false;     // esc Home on the live page: detach after render
     caliper_host::AppApi api_;        // Caliper API (--api); not running without it
-    caliper_host::WindowCaptures captures_;   // the API's captures of the window's frame
+    caliper_host::WindowCaptures captures_;   // the API's and the session's captures of the window's frame
+    caliper_host::AppSession session_;        // the builder session of the workspace
     double live_frame_t_ = 0.0;       // start of the live page's current frame
     int autoattach_pid_ = 0;          // CALIPER_AUTOATTACH, until attached
     std::unique_ptr<caliper_live::UiDriver> ui_driver_;   // CALIPER_TEST_UI with --hidden
@@ -1023,6 +1045,7 @@ int main(int argc, char** argv) {
         std::cerr << "Initialization failed" << std::endl;
         return 1;
     }
+    app.start_session(cl);
     if (caliper_host::api_wanted(cl)) app.start_api(cl);
     if (!cl.url.empty()) app.attach_at_start(cl.url);
 

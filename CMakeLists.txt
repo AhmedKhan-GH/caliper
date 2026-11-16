@@ -599,6 +599,10 @@ add_executable(caliper
     # dispatches (here and in caliper_tests).
     src/host/cli_build.cpp
     src/host/host_cli.cpp
+    # The builder session in the app (src/host/builder/app_session.h): the
+    # session when the builder is built (below), a stub that opens nothing
+    # when it is not.
+    src/host/builder/app_session.cpp
 )
 # app_paths.cpp is no longer compiled by path here: it arrives via
 # libcaliper -> caliper_app_paths (PUBLIC). Compiling it here too would be an
@@ -827,6 +831,35 @@ if(CALIPER_WITH_BUILDER)
     # The spec runtime, which draws a spec's panels from the session's data,
     # with its harness caliper-spec-shot and its tests.
     add_subdirectory(src/host/spec_runtime)
+endif()
+
+# The builder session in the app (src/host/builder/app_session.h): with the
+# builder, the caliper executable links the session library and
+# app_session.cpp holds the session instead of its stub. Its tests drive the
+# session with a fake frame loop and the hidden app with a command script
+# (tests/test_app_session.cpp); the second is POSIX only, as the hidden app's
+# other process tests are, and is skipped without a Metal device.
+if(TARGET caliper_builder_session)
+    target_link_libraries(caliper PRIVATE caliper_builder_session)
+    target_compile_definitions(caliper PRIVATE CALIPER_WITH_BUILDER=1)
+    if(BUILD_TESTS)
+        add_executable(caliper_app_session_tests tests/test_app_session.cpp src/host/builder/app_session.cpp)
+        target_link_libraries(caliper_app_session_tests PRIVATE caliper_builder_test_main doctest::doctest
+            caliper_builder_session caliper_host_lib)
+        target_include_directories(caliper_app_session_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/host ${CMAKE_SOURCE_DIR}/tests ${CMAKE_SOURCE_DIR}/third_party/stb)
+        target_compile_definitions(caliper_app_session_tests PRIVATE CALIPER_WITH_BUILDER=1)
+        set_target_properties(caliper_app_session_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+        add_test(NAME caliper_app_session COMMAND caliper_app_session_tests "--test-case-exclude=*hidden app*")
+        set_tests_properties(caliper_app_session PROPERTIES LABELS "builder" TIMEOUT 120)
+        if(NOT WIN32)
+            add_test(NAME caliper_app_session_hidden
+                     COMMAND caliper_app_session_tests "--test-case=app session: the hidden app*")
+            set_tests_properties(caliper_app_session_hidden PROPERTIES LABELS "cli;builder" TIMEOUT 240
+                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>"
+                SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+        endif()
+    endif()
 endif()
 
 # The Python extension (caliper-python spike): a nanobind module over the embed

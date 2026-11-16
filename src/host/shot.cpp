@@ -6,6 +6,7 @@
 #include "app_paths.h"
 #include "applet_loader.h"
 #include "background_process.h"
+#include "builder/app_hooks.h"
 #include "core_lifecycle.h"
 #include "export_service.h"
 #include "host_services.h"
@@ -72,6 +73,7 @@ fs::path make_temp_root() {
 struct ShotSession {
     fs::path temp_root;                      // removed last, when set
     std::unique_ptr<AppApi> api;             // stopped first: waiting calls get 503
+    std::unique_ptr<AppSession> session;     // closed next, before the host's stores
     std::unique_ptr<AppletLoader> loader;
     std::unique_ptr<AppletPage> page;        // the dock-hint sink points into it
     std::unique_ptr<HostRenderer> renderer;
@@ -81,6 +83,7 @@ struct ShotSession {
 
     ~ShotSession() {
         if (api) api->stop();
+        if (session) session->close();
         if (services) {
             // Workers first: a job may hold a pointer into applet state.
             host_job_system().cancel_all_and_join();
@@ -225,29 +228,22 @@ int run_shot(const CommandLine& cl) {
         old_term = std::signal(SIGTERM, shot_on_signal);
     }
 
-    // A launch through the API: the page shows that applet from this frame
-    // on. The applet shown goes first, as Home takes it in the app; when the
-    // new one fails to launch, the previous one is launched again. False when
-    // that fails too and the shot has no applet left.
-    auto api_launch = [&](const caliper_api::Call& c) {
-        const int want = loader.find(c.applet_id);
-        if (want < 0) {
-            s.api->reply_error(c.ticket, 404,
-                               "no applet with the id " + c.applet_id +
-                                   " in the search folders (GET /v0/applets lists them)");
-            return true;
-        }
+    // A launch through the API or the session's app.launch: the page shows
+    // that applet from this frame on. The applet shown goes first, as Home
+    // takes it in the app; when the new one fails to launch, the previous one
+    // is launched again, and `lost` is set when that fails too and the shot
+    // has no applet left.
+    bool lost = false;
+    auto launch = [&](const std::string& want_id) -> LaunchOutcome {
+        const int want = loader.find(want_id);
+        if (want < 0)
+            return {404, "no applet with the id " + want_id + " in the search folders (GET /v0/applets lists them)",
+                    "app.applet_not_found"};
         const AppletEntry& w = loader.at(want);
-        if (want == current) {
-            s.api->reply(c.ticket, 200, launched_json(w.manifest.id, w.manifest.version, true));
-            return true;
-        }
-        if (w.status != AppletStatus::Ready) {
-            s.api->reply_error(c.ticket, 409, c.applet_id + " cannot be launched (" +
-                                                  applet_status_word(w.status) + "): " +
-                                                  w.status_text);
-            return true;
-        }
+        if (want == current) return {200, launched_json(w.manifest.id, w.manifest.version, true), ""};
+        if (w.status != AppletStatus::Ready)
+            return {409, want_id + " cannot be launched (" + applet_status_word(w.status) + "): " + w.status_text,
+                    "app.launch_refused"};
         host_job_system().cancel_all_and_join();
         loader.teardown(current);
         {
@@ -255,23 +251,36 @@ int run_shot(const CommandLine& cl) {
             if (loader.launch(want, applet_host_proto())) {
                 current = want;
                 page.enter();
-                s.api->reply(c.ticket, 200,
-                             launched_json(loader.at(want).manifest.id,
-                                           loader.at(want).manifest.version, false));
-                return true;
+                return {200, launched_json(loader.at(want).manifest.id, loader.at(want).manifest.version, false),
+                        ""};
             }
             ui_checkpoint.recover();
         }
-        s.api->reply_error(c.ticket, 409,
-                           c.applet_id + " failed to launch: " + loader.at(want).status_text);
+        const LaunchOutcome failed{409, want_id + " failed to launch: " + loader.at(want).status_text,
+                                   "app.launch_failed"};
         const UiCheckpoint ui_checkpoint = UiCheckpoint::store();
         if (loader.launch(current, applet_host_proto())) {
             page.enter();
-            return true;
+            return failed;
         }
         ui_checkpoint.recover();
-        return false;
+        lost = true;
+        return failed;
     };
+
+    // The builder session (builder/app_session.h) for the workspace of the
+    // command line, drained where the API's calls are taken. Its capture.frame
+    // reads back the canvas at the end of the frame drawn next. Without
+    // CALIPER_DATA_DIR the default workspace is under the temporary root.
+    bool capture_wanted = false;
+    s.session = std::make_unique<AppSession>();
+    {
+        AppSession::Hooks h = app_session_hooks();
+        h.applets_json = [&] { return applets_json(loader); };
+        h.launch = launch;
+        h.request_capture = [&] { capture_wanted = true; };
+        s.session->start(app_session_options(cl), std::move(h));
+    }
 
     // N frames at about 60 a second, as the app draws them, so jobs and
     // workers the applet starts get the time they get in the app.
@@ -282,7 +291,8 @@ int run_shot(const CommandLine& cl) {
     double last = 0.0;
     bool alive = true;
     int frames = 0;
-    for (int f = 0; f < cl.frames && alive && !g_stop; ++f) {
+    // A command script keeps the frames coming until it is done.
+    for (int f = 0; (f < cl.frames || s.session->script_running()) && alive && !g_stop; ++f) {
         // The API's calls of this frame: the applets and launches now, before
         // the frame is drawn, and captures once it is rendered.
         std::vector<uint64_t> captures;
@@ -292,13 +302,17 @@ int run_shot(const CommandLine& cl) {
                     s.api->reply(c.ticket, 200, applets_json(loader));
                 } else if (c.kind == caliper_api::Call::Kind::Capture) {
                     captures.push_back(c.ticket);
-                } else if (!api_launch(c)) {
-                    return fail(loader.at(current).manifest.id +
-                                " failed to launch again after a launch through Caliper API: " +
-                                loader.at(current).status_text);
+                } else {
+                    const LaunchOutcome o = launch(c.applet_id);
+                    if (o.status == 200) s.api->reply(c.ticket, 200, o.body);
+                    else s.api->reply_error(c.ticket, o.status, o.body);
                 }
             }
         }
+        s.session->frame();
+        if (lost)
+            return fail(loader.at(current).manifest.id + " failed to launch again after a launch: " +
+                        loader.at(current).status_text);
         if (f > 0)
             std::this_thread::sleep_until(start + std::chrono::microseconds(
                                                       (int64_t)f * 1000000 / 60));
@@ -326,6 +340,19 @@ int run_shot(const CommandLine& cl) {
         s.renderer->canvas_render();
         alive = r.alive;
         ++frames;
+
+        // The session's capture: this frame, read back as the image is, opaque.
+        if (capture_wanted) {
+            capture_wanted = false;
+            std::vector<uint8_t> px((size_t)W * (size_t)H * 4);
+            if (s.renderer->canvas_read_pixels(px.data(), W * 4)) {
+                for (size_t i = 3; i < px.size(); i += 4) px[i] = 255;
+                s.session->capture_ready((uint32_t)W, (uint32_t)H, std::move(px));
+            } else {
+                s.session->capture_failed(std::string("could not read the frame back from the ") +
+                                          s.renderer->name() + " renderer");
+            }
+        }
 
         // Captures: this frame, read back as the image is, opaque.
         if (!captures.empty()) {
