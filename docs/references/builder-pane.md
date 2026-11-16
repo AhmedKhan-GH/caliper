@@ -134,7 +134,9 @@ A slice's or a reduce's axis is a choice of every axis of the step's input, each
 `axis 1 · 0–3` for an axis of 4, and with its name where the source carries names: a live view's dims are named by the
 stream, as in `axis 0 layer · 0–3`, and a step that takes an axis away takes its name with it; a tensor from a
 safetensors file has none. While the shape is not known, as for a live view before its first snapshot, the axis is a
-number. A slice's index shows its axis's range at the right of the field. An index outside it is set to the nearer
+number. A slice takes one axis, and a click on another moves it there. A reduce takes a list of axes: a click on an
+axis adds it to the list or takes it out, every axis in the list is highlighted, and the last one stays, since a reduce
+over no axis is not one. A slice's index shows its axis's range at the right of the field. An index outside it is set to the nearer
 end, `3` for a `7` typed on an axis of 4, and the field says so in place of the range, `7 is outside 0–3`, until the
 next change of the transforms. A negative index counts from the end, as the spec format says.
 
@@ -157,12 +159,15 @@ new panel's block at the end of the text, or a title changed in the middle of it
 ⌘O Open in browser in the page bar opens the saved dashboard that the page shows in your default browser, at the
 browser viewer of [Caliper API](api.md#get-v0spec), which draws it with the layout and the look of the spec page. It
 works in build mode and outside it. The browser shows the dashboard as it was last saved, so save first to show a
-change; the button is disabled, with the reason in its tooltip, for a dashboard that was never saved and for a spec
-applet found outside the workspace.
+change: while the dashboard has unsaved changes the button's tooltip says "the browser shows the saved dashboard", and
+once its link is out the status bar says so too, after `unsaved`. The button is disabled, with the reason in its
+tooltip, for a dashboard that was never saved and for a spec applet found outside the workspace.
 
 When the app was started without `--api`, the button starts Caliper API as the side chat does: on a free port of
 127.0.0.1 only, with new tokens, said in Activity and shown in the status bar as `api 127.0.0.1:<port>`. It stays on
-until the app quits, since the page in the browser keeps reading the dashboard's data. What the link carries and who
+until the app quits, since the page in the browser keeps reading the dashboard's data. What would refuse the link, a
+build without the browser viewer or an id that cannot be a link, is asked before the API starts, and when the link
+cannot be handed over all the same, an API started for it alone stops again. What the link carries and who
 can use it is in [Caliper API](api.md#started-by-the-app).
 
 ## Keys

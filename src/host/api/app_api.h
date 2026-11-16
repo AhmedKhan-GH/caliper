@@ -104,6 +104,11 @@ public:
     // reason when the link would carry either, when the API is not running,
     // when this build has no spec page, or when `applet` is not an id.
     std::string viewer_link(const std::string& applet, std::string* why) const;
+    // Whether viewer_link() can give a link of `applet` once the API runs:
+    // false, with the reason, for a build with no browser viewer or an id
+    // that viewer_applet_id() (open_url.h) refuses. Needs no running API, so
+    // that a caller asks before it starts one.
+    static bool viewer_link_possible(const std::string& applet, std::string* why);
 
 private:
     std::string file_json(const std::string& token) const;

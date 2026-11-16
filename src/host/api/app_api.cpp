@@ -2,6 +2,7 @@
 #include "api/app_api.h"
 
 #include "api/spec_page.h"
+#include "open_url.h"
 
 #include "export_service.h"
 #include "negotiation.h"
@@ -137,17 +138,25 @@ void AppApi::revoke_agent_file(const std::string& path) {
     }
 }
 
+bool AppApi::viewer_link_possible(const std::string& applet, std::string* why) {
+    auto refuse = [&](const char* reason) {
+        if (why) *why = reason;
+        return false;
+    };
+    if (caliper_api::spec_page_html().empty()) return refuse("this build has no browser viewer");
+    // A workspace id, as applet.save names the folder: nothing to escape,
+    // and never "." or "..".
+    if (!viewer_applet_id(applet)) return refuse("the dashboard's id cannot be a link");
+    return true;
+}
+
 std::string AppApi::viewer_link(const std::string& applet, std::string* why) const {
     auto refuse = [&](const char* reason) {
         if (why) *why = reason;
         return std::string();
     };
+    if (!viewer_link_possible(applet, why)) return {};
     if (!server_) return refuse("Caliper API is not running");
-    if (caliper_api::spec_page_html().empty()) return refuse("this build has no browser viewer");
-    // A workspace id, as applet.save names the folder: nothing to escape.
-    if (applet.empty() || applet.size() > 128) return refuse("the dashboard has no workspace id");
-    for (const char c : applet)
-        if (!std::isalnum((unsigned char)c) && c != '-' && c != '_' && c != '.') return refuse("the dashboard's id cannot be a link");
     const std::string base = server_->spec_url();
     const std::string mark = std::string("?") + CALIPER_NET_TOKEN_PARAM + "=";
     const size_t at = base.find(mark);

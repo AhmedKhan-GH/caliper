@@ -228,9 +228,15 @@ TEST_CASE("agent settings app: List and Probe from the input driver, and a wait 
                        "(preset), 2 models, state none") != std::string::npos);
     CHECK(run.err.find("[ui] the settings are done: tools yes (probe), vision yes (probe), context 16384 (preset), "
                        "2 models, state none") != std::string::npos);
-    // The wait of 600 seconds ended at once.
-    CHECK(run.err.find("[ui] stopped: until prompt 600: the surface is unavailable, not prompt") != std::string::npos);
-    CHECK(seconds < 120);
+    // The wait of 600 seconds ended at once, on a state that does not change
+    // by itself: the driver says so, where a wait that ran out says only
+    // what the surface showed.
+    CHECK(run.err.find("[ui] stopped: until prompt 600: the surface is unavailable, not prompt, a state that does "
+                       "not change by itself") != std::string::npos);
+    // A backstop only: the app closes itself at CALIPER_EXIT_AFTER, well
+    // inside the process's limit and the wait's 600 seconds.
+    CHECK_FALSE(run.timed_out);
+    CHECK(seconds < 600);
 }
 
 TEST_CASE("agent settings app: the Shared GPU note while a live run is attached" * doctest::test_suite("app")) {

@@ -1655,7 +1655,8 @@ void BuilderPane::draw_source_properties(Rows& rows) {
                 return;
             }
             const int64_t rank = (int64_t)axes.size();
-            const int64_t chosen = now ? (*now < 0 ? *now + rank : *now) : -1;
+            // Every axis the step uses is highlighted: a reduce's whole list.
+            const std::vector<int64_t> chosen = transform_axes_chosen(i);
             const float gap = std::round(2.0f * s), pad_w = std::round(10.0f * s);
             const float avail = rows.x1 - rows.m.pad - (rows.x0 + rows.label_w);
             int lines = 1;
@@ -1688,13 +1689,14 @@ void BuilderPane::draw_source_properties(Rows& rows) {
                 const bool ch = ImGui::IsItemHovered();
                 ImGui::PopID();
                 d.item(base + ":axis:" + std::to_string(k), c);
-                const bool on = k == chosen;
+                const bool on = std::find(chosen.begin(), chosen.end(), k) != chosen.end();
                 if (on) rows.dl->AddRectFilled(c.Min, c.Max, L.plate);
                 else if (ch) rows.dl->AddRectFilled(c.Min, c.Max, L.plate_hover);
                 if (on) rows.dl->AddRectFilled(v2(c.Min.x, c.Max.y - 1.0f), c.Max, L.accent);
                 put(rows.dl, L.mono, L.mono_size, v2(c.Min.x + std::round(5.0f * s), c.Min.y + (c.GetHeight() - d.mono_h()) * 0.5f),
                     on ? L.text : L.secondary, fit(L.mono, L.mono_size, o, c.GetWidth() - std::round(5.0f * s)));
-                if (click && !on) set_transform_axis(i, k);
+                // A click on a reduce's chosen axis takes it out of the list.
+                if (click && (!on || t.op == spec::TransformOp::reduce)) set_transform_axis(i, k);
                 x += w + gap;
             }
         };

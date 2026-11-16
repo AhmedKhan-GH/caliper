@@ -963,6 +963,18 @@ int64_t axis_size(const std::vector<PaneShape>& shapes, size_t index, int64_t ax
 
 }  // namespace
 
+std::vector<int64_t> BuilderPane::transform_axes_chosen(size_t index) {
+    std::vector<int64_t> out;
+    const spec::Source* s = spec_source();
+    if (!s || index >= s->transforms.size() || s->transforms[index].axis.empty()) return out;
+    const spec::Transform& t = s->transforms[index];
+    const auto rank = (int64_t)transform_axes(index).size();
+    // A slice names one axis; a reduce every axis of its list.
+    const size_t n = t.op == spec::TransformOp::reduce ? t.axis.size() : 1;
+    for (size_t k = 0; k < n; ++k) out.push_back(t.axis[k] < 0 && rank > 0 ? t.axis[k] + rank : t.axis[k]);
+    return out;
+}
+
 std::string BuilderPane::transform_index_range(size_t index) {
     const spec::Source* s = spec_source();
     if (!s || index >= s->transforms.size() || s->transforms[index].op != spec::TransformOp::slice ||
@@ -999,6 +1011,19 @@ bool BuilderPane::set_transform_axis(size_t index, int64_t axis) {
     if (!s || index >= s->transforms.size()) return refuse(Error("source.not_found", "No transform there.", ""));
     const spec::Transform& was = s->transforms[index];
     json t = transform_json(was);
+    if (was.op == spec::TransformOp::reduce) {
+        // A reduce's axes are a list: the click adds the axis or takes it
+        // out, and the last one stays, since a reduce over none is not one.
+        std::vector<int64_t> axes = transform_axes_chosen(index);
+        const auto rank = (int64_t)transform_axes(index).size();
+        const int64_t a = axis < 0 && rank > 0 ? axis + rank : axis;
+        const auto it = std::find(axes.begin(), axes.end(), a);
+        if (it != axes.end() && axes.size() == 1) return true;
+        if (it != axes.end()) axes.erase(it);
+        else axes.insert(std::upper_bound(axes.begin(), axes.end(), a), a);
+        t["axis"] = axes.size() == 1 ? json(axes.front()) : json(axes);
+        return set_transform(index, t);
+    }
     t["axis"] = axis;
     bool clamped = false;
     int64_t asked = 0;

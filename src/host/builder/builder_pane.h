@@ -326,13 +326,17 @@ public:
     // name where the source carries one), one choice each; empty when the
     // input's shape is not known, and Properties then shows the number.
     std::vector<std::string> transform_axes(size_t index);
+    // The axes the step uses, as indices into transform_axes(): a slice's
+    // one, every axis of a reduce's list; Properties highlights each.
+    std::vector<int64_t> transform_axes_chosen(size_t index);
     // A slice's index range on its axis ("0–3"), "" when not known.
     std::string transform_index_range(size_t index);
     // A slice's index; one outside its axis's range is set to the nearer end
     // of it, and transform_note() says so until the next transform edit.
     bool set_slice_index(size_t index, int64_t value);
-    // A slice's or a reduce's axis; a slice's index is kept within the new
-    // axis's range the same way.
+    // A slice's axis, its index kept within the new axis's range the same
+    // way; a reduce's axis is added to its list or taken out of it, never
+    // leaving the list empty.
     bool set_transform_axis(size_t index, int64_t axis);
     // "7 is outside 0–3", after an index was set to the end of its range;
     // "" otherwise. transform_note_step() is the step it is about.

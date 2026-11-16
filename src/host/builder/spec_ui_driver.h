@@ -15,7 +15,7 @@
 //   leave                the pointer leaves the window (no hover is left behind)
 //   key <chord>          a press and release of a chord: cmd, shift and one
 //                        key (a letter, a digit, enter, escape, backspace,
-//                        f3, f4, f5, up, down, comma), such as "cmd+k"
+//                        f3, f4, f5, f6, up, down, comma), such as "cmd+k"
 //                        (Ctrl+K off macOS) or "cmd+shift+z"
 //   type <text>          the text as the keyboard's characters; "\n" is a
 //                        line break
@@ -26,8 +26,10 @@
 //                        real model's turn), else kPatience frames; a state
 //                        that does not change by itself (failed, declined,
 //                        handoff, conflict, unavailable) stops the script at
-//                        once when it is not the one waited for. The log line
-//                        adds what the surface shows (SpecPage::widget_facts())
+//                        once when it is not the one waited for, and the stop
+//                        says "a state that does not change by itself", which
+//                        a wait that ran out does not. The log line adds what
+//                        the surface shows (SpecPage::widget_facts())
 //   shot <name>          read the next frame back into <name>.png
 //   chat open|close      the side chat's toggle (chat_pane.h)
 //   chat focus           puts the keyboard into the chat's input
@@ -73,7 +75,12 @@
 //   pane source <key>    wait until the builder lists that source and no
 //                        import runs
 //   pane focus <panel>   wait until the builder's focused panel is <panel>
-//   page <name>          wait until the app shows that page (landing, spec, live)
+//   page <name>          wait until the app shows that page (landing, spec,
+//                        live, applet)
+//   browser note <text>|none
+//                        wait until the spec page's note about ⌘O Open in
+//                        browser (SpecPage::browser_note()) is that text, or
+//                        none
 //   command-line <text>|none
 //                        wait until the landing's command line holds that
 //                        text, or nothing
@@ -424,6 +431,19 @@ public:
             next("page " + s.arg);
             return;
         }
+        if (s.verb == "browser") {
+            std::stringstream words(s.arg);
+            std::string what, rest;
+            words >> what;
+            std::getline(words, rest);
+            while (!rest.empty() && rest.front() == ' ') rest.erase(rest.begin());
+            if (what != "note") return void(error_ = "browser takes note <text>|none");
+            const std::string want = rest == "none" ? std::string() : rest;
+            const std::string now = page.browser_note();
+            if (now != want) return patience("the browser note is " + (now.empty() ? std::string("none") : "\"" + now + "\""));
+            next("the browser note is " + (want.empty() ? std::string("none") : "\"" + want + "\""));
+            return;
+        }
         if (s.verb == "command-line") {
             const std::string want = s.arg == "none" ? std::string() : s.arg;
             if (command_line_ != want)
@@ -511,7 +531,9 @@ public:
                 // A state that does not change by itself ends the wait.
                 if (now == "failed" || now == "declined" || now == "handoff" || now == "conflict" ||
                     now == "unavailable")
-                    return void(error_ = "until " + s.arg + ": " + why);
+                    return void(error_ = "until " + s.arg + ": the surface is " + now + ", not " + want +
+                                         ", a state that does not change by itself" +
+                                         (facts.empty() ? "" : " (" + facts + ")"));
                 return patience_for(seconds, why);
             }
             next("the surface is " + want + (facts.empty() ? "" : " (" + facts + ")"));
@@ -694,6 +716,8 @@ private:
                 keys.push_back(ImGuiKey_F4);
             } else if (p == "f5") {
                 keys.push_back(ImGuiKey_F5);
+            } else if (p == "f6") {
+                keys.push_back(ImGuiKey_F6);
             } else if (p == "up") {
                 keys.push_back(ImGuiKey_UpArrow);
             } else if (p == "down") {

@@ -108,6 +108,12 @@ public:
         // "attached", and Enter on it calls show_live too.
         const LiveSession* live = nullptr;
         std::function<void()> show_live;
+        // The builder session's open spec, by its title ("" for none): the
+        // command bar shows it with F6 Dashboard, which calls show_spec, as
+        // F5 does for the live page, so that a dashboard left with Home, or
+        // one an agent opened behind an applet's page, has a way back.
+        std::string open_spec;
+        std::function<void()> show_spec;
         // A spec applet's facts for the Inspector, from its spec file. Null,
         // or false, leaves the rows that need them out.
         std::function<bool(const caliper_host::AppletEntry&, SpecAppletFacts*)> spec_facts;
@@ -182,6 +188,9 @@ private:
     LiveSession live_;               // ... and is this, for the command bar
     std::function<void()> show_live_;
     bool pending_show_live_ = false; // F5 / Live page: the live page after the frame
+    std::string open_spec_;          // Context::open_spec, for the command bar
+    std::function<void()> show_spec_;
+    bool pending_show_spec_ = false; // F6 / Dashboard: the spec page after the frame
     std::string command_;            // command-line text (filters instruments)
     unsigned int command_id_ = 0;    // the command line's ImGuiID, for its edit state
     bool focus_command_ = false;     // ⌘K / Ctrl+K: focus the command line

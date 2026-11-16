@@ -192,6 +192,9 @@ public:
     // whose edits they review. The person's own spec.new shows the page by
     // its own path (SpecPage::take_new()), in build mode.
     uint64_t specs_opened() const;
+    // Of those, the ones an agent sent (the origins agent and mcp): an
+    // applet.open, a spec.new or a spec.open.
+    uint64_t agent_specs_opened() const;
     // Every applet.save that succeeded: the app lists the workspace's
     // applets again for each.
     uint64_t applets_saved() const;
