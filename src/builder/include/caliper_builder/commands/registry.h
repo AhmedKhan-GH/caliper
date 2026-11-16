@@ -125,6 +125,7 @@ public:
     void set_approval_policy(ApprovalPolicy policy);  // empty: the default policy
     void set_approval_review(ApprovalReview review);  // empty: no review is kept
     void set_approval_check(ApprovalCheck check);     // empty: an approval always holds
+    void set_approval_notes(ApprovalNotes notes);     // empty: no notes
     void set_journal(CommandJournal* journal);        // not owned; may be null
     void set_frame_thread(std::optional<std::thread::id> id);
 
@@ -170,7 +171,9 @@ private:
         nlohmann::json review;             // what the ApprovalReview gave
     };
 
-    CommandResult run(const CommandInvocation& inv, const Entry& entry, const std::vector<std::uint64_t>& steps);
+    CommandResult run(const CommandInvocation& inv, const Entry& entry, const std::vector<std::uint64_t>& steps,
+                      const std::string& allowed_by = {});
+    ApprovalNote ask_notes(const CommandDescriptor& d, const CommandInvocation& inv);
     CommandResult run_follow_ups(const CommandInvocation& inv, const Entry& entry, CommandOutput& out);
     CommandResult run_history_move(const CommandInvocation& inv, bool undo, const std::vector<std::uint64_t>& steps);
     CommandResult run_history_list(const CommandInvocation& inv);
@@ -181,7 +184,8 @@ private:
     Error redo_record(HistoryRecord& record, const CommandInvocation& by);
     Error undo_step(HistoryStep& step, const CommandInvocation& by);
     Error redo_step(HistoryStep& step, const CommandInvocation& by);
-    std::uint64_t journal_do(const CommandInvocation& inv, bool ok, const std::string& error);
+    std::uint64_t journal_do(const CommandInvocation& inv, bool ok, const std::string& error,
+                             const std::string& allowed_by = {});
     void journal_history(const CommandInvocation& inv, bool undo, const std::string& group,
                          std::vector<std::uint64_t> seqs, bool ok, const std::string& error);
     bool wrong_thread(const CommandDescriptor& d) const;
@@ -201,6 +205,7 @@ private:
     ApprovalPolicy policy_;
     ApprovalReview review_;
     ApprovalCheck check_;
+    ApprovalNotes notes_;
     std::optional<std::thread::id> frame_thread_;
     std::uint64_t next_invocation_ = 1;
     std::uint64_t next_approval_ = 1;

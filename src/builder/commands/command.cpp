@@ -50,6 +50,23 @@ std::optional<CommandOrigin> command_origin_from_name(std::string_view name) {
     return std::nullopt;
 }
 
+const char* command_effect_name(CommandEffect effect) {
+    switch (effect) {
+        case CommandEffect::read: return "read";
+        case CommandEffect::edit: return "edit";
+        case CommandEffect::change:
+        case CommandEffect::unset: return "change";
+    }
+    return "change";
+}
+
+std::optional<CommandEffect> command_effect_from_name(std::string_view name) {
+    if (name == "read") return CommandEffect::read;
+    if (name == "edit") return CommandEffect::edit;
+    if (name == "change") return CommandEffect::change;
+    return std::nullopt;
+}
+
 Error check_command_name(std::string_view name) {
     const Error bad("command.invalid_invocation",
                     "A command name is group.verb: a group of [a-z][a-z0-9]*, a dot and a verb of [a-z][a-z0-9_]*, "
@@ -94,7 +111,8 @@ json command_descriptor_to_json(const CommandDescriptor& d) {
                 {"mutates", d.mutates},
                 {"destructive", d.destructive},
                 {"frame_thread", d.frame_thread},
-                {"agents", d.agents}};
+                {"agents", d.agents},
+                {"effect", command_effect_name(d.effect)}};
 }
 
 std::string command_tool_name(std::string_view command_name) {
@@ -127,17 +145,22 @@ Error check_command_invocation(const CommandInvocation& inv) {
                 return invalid(std::string("A ") + where + " holds only A-Z, a-z, 0-9, '.', '_', ':', '/' and '-'.",
                                where);
     }
+    if (inv.client.size() > 32) return invalid("A client has at most 32 characters.", "client");
+    for (const char c : inv.client)
+        if (!lower(c)) return invalid("A client holds only a-z.", "client");
     return {};
 }
 
 json command_invocation_to_json(const CommandInvocation& inv) {
-    return json{{"id", safe_string(inv.id)},
+    json out{{"id", safe_string(inv.id)},
                 {"name", safe_string(inv.name)},
                 {"args", inv.args},
                 {"origin", command_origin_name(inv.origin)},
                 {"group", inv.group.empty() ? json(nullptr) : safe_string(inv.group)},
                 {"merge_key", inv.merge_key.empty() ? json(nullptr) : safe_string(inv.merge_key)},
                 {"preview", inv.preview.empty() ? json(nullptr) : safe_string(inv.preview)}};
+    if (!inv.client.empty()) out["client"] = safe_string(inv.client);
+    return out;
 }
 
 CommandInvocationParse command_invocation_from_json(const json& v) {
@@ -149,7 +172,7 @@ CommandInvocationParse command_invocation_from_json(const json& v) {
     for (const auto& item : v.items()) {
         const std::string& k = item.key();
         if (k != "id" && k != "name" && k != "args" && k != "origin" && k != "group" && k != "merge_key" &&
-            k != "preview") {
+            k != "preview" && k != "client") {
             out.error = invalid("An invocation has no field of this name.", k);
             return out;
         }
@@ -189,14 +212,17 @@ CommandInvocationParse command_invocation_from_json(const json& v) {
         return out;
     }
     inv.origin = *origin;
-    for (const char* k : {"group", "merge_key", "preview"}) {
+    for (const char* k : {"group", "merge_key", "preview", "client"}) {
         if (!v.contains(k) || v[k].is_null()) continue;
         if (!v[k].is_string()) {
             out.error = invalid(std::string(k) + " is a string or null.", k);
             return out;
         }
         const std::string key = k;
-        (key == "group" ? inv.group : key == "merge_key" ? inv.merge_key : inv.preview) = v[k].get<std::string>();
+        (key == "group"       ? inv.group
+         : key == "merge_key" ? inv.merge_key
+         : key == "preview"   ? inv.preview
+                              : inv.client) = v[k].get<std::string>();
     }
     out.error = check_command_invocation(inv);
     return out;

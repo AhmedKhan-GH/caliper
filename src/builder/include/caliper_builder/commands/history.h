@@ -89,6 +89,10 @@ struct HistoryStepSummary {
     std::string group;
     CommandOrigin origin = CommandOrigin::ui;
     std::string at;
+    // The journal seqs of the step's do events, so that the app can tell
+    // which journaled command a step holds (an edit an agent's mode applied,
+    // which the side chat offers to undo). Not in the JSON form.
+    std::vector<std::uint64_t> seqs;
 };
 
 nlohmann::json history_step_summary_to_json(const HistoryStepSummary& summary);

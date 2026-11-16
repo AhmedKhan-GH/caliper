@@ -38,6 +38,18 @@ using ApprovalReview = std::function<nlohmann::json(const CommandDescriptor&, co
 // void (CommandRegistry::approve()). A check that throws gives false.
 using ApprovalCheck = std::function<bool(const CommandDescriptor&, const CommandInvocation&)>;
 
+// What a policy says beside its decision. When the registry has ApprovalNotes,
+// it asks them right after the policy, for the same invocation: `message` is
+// what a denial answers with (the registry's own words when empty), and
+// `allowed_by` names what allowed an invocation that would otherwise have
+// asked, an agent's mode or a rule (permissions.h), which the journal records
+// on the do event. Notes that throw give none.
+struct ApprovalNote {
+    std::string message;
+    std::string allowed_by;
+};
+using ApprovalNotes = std::function<ApprovalNote(const CommandDescriptor&, const CommandInvocation&)>;
+
 // One invocation waiting for the person's decision, as the UI shows it.
 struct PendingApproval {
     std::string approval;  // the approval id, "ap-<n>"

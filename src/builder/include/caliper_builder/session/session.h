@@ -81,12 +81,25 @@
 // - applet.save from agent, mcp or api asks only when it would overwrite a
 //   saved applet, since writing a new one destroys nothing.
 //
+// Agent permissions (permissions.h). The policy above is the Ask mode. The
+// side chat's agent (origin agent, client "chat") and caliper-mcp's clients
+// (origin mcp) each have a mode, and rules for this session and saved ones,
+// applied after it: Read only refuses what would change something, and an
+// invocation the policy would ask about may run without a card under Accept
+// edits (an edit of the open spec), Allow all (the chat's only) or a rule,
+// unless its approval is bound to content; a rule never covers a Python
+// run. What a mode or rule allowed is journaled with "allowed_by". Modes and
+// rules change only through the functions below, which the app's own UI
+// calls; no command reads or sets them. The modes and the saved rules are
+// kept in SessionOptions::permissions_file when it is given.
+//
 // Threads. Commands run where the registry runs them: invoke() on the calling
 // thread, or the queue's drain(). open_spec() and resolve() may be called
 // from any thread; they read the open spec under the session's own lock. No
 // function here throws.
 #include <caliper_builder/catalog/catalog.h>
 #include <caliper_builder/commands/journal.h>
+#include <caliper_builder/commands/permissions.h>
 #include <caliper_builder/commands/queue.h>
 #include <caliper_builder/commands/registry.h>
 #include <caliper_builder/error.h>
@@ -191,7 +204,13 @@ struct SessionOptions {
     ResolveLimits resolve;
     PreviewLimits preview;
     ReviewSettings review;
+    // The saved agent permissions (permissions.h): agent-permissions.json in
+    // the app-data folder. Empty: modes and rules live in memory only.
+    std::string permissions_file;
 };
+
+// A rule's reach when the person answers a card: this session, or saved.
+enum class RuleScope { session, saved };
 
 // The open spec as the app reads it.
 struct OpenSpec {
@@ -244,6 +263,36 @@ public:
     // app's settings; it holds from the next invocation the policy sees.
     void set_review(CommandOrigin origin, bool on);
     ReviewSettings review() const;
+
+    // ---- agent permissions: the app's own UI only (see above)
+    // The mode in force: allow_all while Allow all is on for the chat.
+    AgentMode agent_mode(AgentPrincipal who) const;
+    // Sets the mode of the side chat's agent or of mcp clients. Allow all is
+    // for the chat only (permissions.allow_all_chat_only otherwise) and is
+    // never saved; another mode turns it off and is saved.
+    Error set_agent_mode(AgentPrincipal who, AgentMode mode);
+    // The side chat's agent id, whose saved rules apply to the chat ("" for
+    // none). The chat calls it when its agent starts.
+    void set_chat_agent(const std::string& agent_id);
+    // The chat's agent ended: Allow all goes off and the chat's session
+    // rules go. Its pending approvals stay on their cards until they are
+    // decided or their wait runs out, as before.
+    void end_chat_session();
+    // Whether a card of this parked invocation offers the rules: a governed
+    // agent's command that may be allowed always, not bound to content and
+    // not running a Python loader.
+    bool approval_offers_rules(const CommandInvocation& parked) const;
+    // Adds the rule a card's answer gives for the parked invocation's own
+    // command and agent, before the app approves it; the saved scope writes
+    // the file. permissions.no_rule when the card offers none.
+    Error allow_always(const CommandInvocation& parked, RuleScope scope);
+    std::vector<AgentRule> saved_agent_rules() const;
+    // Removes a saved rule and writes the file; false when there was none.
+    bool revoke_agent_rule(const AgentRule& rule);
+    // The chat's agent id (set_chat_agent()), or "".
+    std::string chat_agent() const;
+    // What reading the permissions file ignored, one sentence each.
+    std::vector<std::string> permission_problems() const;
 
     // The open spec, or nothing.
     std::optional<OpenSpec> open_spec() const;

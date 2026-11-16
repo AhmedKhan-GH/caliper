@@ -222,6 +222,7 @@ json journal_event_to_json(const JournalEvent& e) {
                 {"event", e.event}};
     if (!e.ok) out["error"] = e.error;
     if (e.event != "do") out["seqs"] = e.seqs;
+    if (!e.allowed_by.empty()) out["allowed_by"] = e.allowed_by;
     return out;
 }
 
@@ -235,7 +236,7 @@ JournalEventParse journal_event_from_json(const json& v) {
     for (const auto& item : v.items()) {
         const std::string& k = item.key();
         if (k != "seq" && k != "ts" && k != "origin" && k != "name" && k != "args" && k != "ok" && k != "group" &&
-            k != "event" && k != "error" && k != "seqs")
+            k != "event" && k != "error" && k != "seqs" && k != "allowed_by")
             return fail("An event has no field of this name.", k);
     }
     for (const char* k : {"seq", "ts", "origin", "name", "args", "ok", "group", "event"})
@@ -267,6 +268,11 @@ JournalEventParse journal_event_from_json(const json& v) {
     if (v.contains("error")) {
         if (!v["error"].is_string()) return fail("error is a code.", "error");
         e.error = v["error"].get<std::string>();
+    }
+    if (v.contains("allowed_by")) {
+        if (!v["allowed_by"].is_string() || e.event != "do")
+            return fail("allowed_by is a string on a do event.", "allowed_by");
+        e.allowed_by = v["allowed_by"].get<std::string>();
     }
     if (v.contains("seqs")) {
         if (e.event == "do") return fail("Only an undo or redo event lists seqs.", "seqs");

@@ -38,6 +38,21 @@ enum class CommandOrigin { ui, builder, agent, mcp, api, viewer };
 const char* command_origin_name(CommandOrigin origin);
 std::optional<CommandOrigin> command_origin_from_name(std::string_view name);
 
+// What a command does, by which an agent's mode decides it (permissions.h):
+// `read` reads, or proposes without changing the workspace (a stacked
+// preview's begin, diff and discard); `edit` edits the open spec in memory,
+// which undo reverses exactly; `change` does anything else that changes
+// something: it writes or deletes saved data, runs a loader, replaces the open
+// spec or the page the app shows, or moves the history. Accept edits applies
+// only `edit` without a card. Every command of the table states one (a test
+// checks it); `unset`, which a descriptor made elsewhere may leave, counts as
+// `change`, so a command nobody classified asks.
+enum class CommandEffect { unset, read, edit, change };
+
+// "read", "edit" or "change" ("change" for unset).
+const char* command_effect_name(CommandEffect effect);
+std::optional<CommandEffect> command_effect_from_name(std::string_view name);
+
 struct CommandDescriptor {
     std::string name;     // group.verb
     std::string summary;  // what the command does, for an agent that has never seen Caliper
@@ -52,6 +67,7 @@ struct CommandDescriptor {
     // refuses them to agents with command.not_allowed, and the clients that
     // build an agent's tools from the table leave them out.
     bool agents = true;
+    CommandEffect effect = CommandEffect::unset;  // what it does (above)
 };
 
 Error check_command_name(std::string_view name);
@@ -61,7 +77,7 @@ Error check_command_name(std::string_view name);
 Error check_command_descriptor(const CommandDescriptor& descriptor);
 
 // {"name", "summary", "args", "result", "examples", "mutates", "destructive",
-// "frame_thread", "agents"}.
+// "frame_thread", "agents", "effect"}.
 nlohmann::json command_descriptor_to_json(const CommandDescriptor& descriptor);
 
 // "panel_create" for "panel.create", and back; an empty string when the input
@@ -82,6 +98,12 @@ struct CommandInvocation {
     // edit the open spec ignore it. Over Caliper API it is the header
     // X-Caliper-Preview. Empty: none.
     std::string preview;
+    // Which agent the app started sent it, from the token of the request,
+    // never from the request itself: "chat" for the side chat's agent,
+    // "widget" for the widget agent's sidecar; empty for every other caller.
+    // An agent's mode and rules (permissions.h) govern the origin agent with
+    // the client "chat", and the origin mcp. 0 to 32 characters of a-z.
+    std::string client;
 };
 
 // Checks the id, the name, the group and the merge key, and that `args` is an

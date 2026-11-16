@@ -188,6 +188,18 @@ struct Session::Impl {
         std::string digest;
     };
     std::deque<Bound> bound;  // under review_mutex
+    // Agent permissions (permissions.h), under perm_mutex: the saved modes
+    // and rules, Allow all of the chat's session, the chat's agent id, the
+    // rules of this session by principal, and the note of the invocation the
+    // policy decided last, which the registry asks for next.
+    mutable std::mutex perm_mutex;
+    AgentPermissionsFile perms;
+    bool chat_allow_all = false;
+    std::string chat_agent;
+    std::set<std::string> chat_session_rules;
+    std::set<std::string> mcp_session_rules;
+    std::vector<std::string> perm_problems;
+    std::pair<std::string, ApprovalNote> last_note;
     std::mutex close_mutex;
     bool closed = false;
 
@@ -1564,7 +1576,67 @@ struct Session::Impl {
         return true;
     }
 
+    // ---- agent permissions -----------------------------------------------------
+
+    bool is_bound(const std::string& key) {
+        std::lock_guard<std::mutex> lock(review_mutex);
+        return std::any_of(bound.begin(), bound.end(), [&](const Bound& b) { return b.key == key; });
+    }
+
+    bool python_pending(const std::string& key) {
+        std::lock_guard<std::mutex> lock(python_mutex);
+        return std::find(python_asked.begin(), python_asked.end(), key) != python_asked.end();
+    }
+
+    // The saved rules' agent of a principal: "mcp", or the chat's agent id.
+    std::string rule_agent(AgentPrincipal who) const {
+        if (who == AgentPrincipal::mcp) return "mcp";
+        if (who == AgentPrincipal::chat && chat_agent != "mcp" && valid_rule_agent(chat_agent)) return chat_agent;
+        return {};
+    }
+
+    AgentMode mode_of(AgentPrincipal who) const {
+        if (who == AgentPrincipal::chat) return chat_allow_all ? AgentMode::allow_all : perms.chat;
+        if (who == AgentPrincipal::mcp) return perms.mcp;
+        return AgentMode::ask;
+    }
+
+    Error save_perms() {
+        if (options.permissions_file.empty()) return {};
+        return write_agent_permissions(options.permissions_file, perms);
+    }
+
+    // The session's policy with the agent's mode and rules applied, and the
+    // note the registry asks for next.
     ApprovalDecision policy(const CommandDescriptor& d, const CommandInvocation& inv) {
+        const ApprovalDecision base = base_policy(d, inv);
+        const AgentPrincipal who = agent_principal(inv);
+        if (who == AgentPrincipal::none) return base;
+        const std::string key = invocation_key(inv);
+        PermissionContext c;
+        c.bound = base == ApprovalDecision::ask && is_bound(key);
+        c.python = base == ApprovalDecision::ask && python_pending(key);
+        std::lock_guard<std::mutex> lock(perm_mutex);
+        c.mode = mode_of(who);
+        c.session_rule = (who == AgentPrincipal::chat ? chat_session_rules : mcp_session_rules).count(inv.name) > 0;
+        const std::string agent = rule_agent(who);
+        c.saved_rule = !agent.empty() && std::find(perms.rules.begin(), perms.rules.end(),
+                                                   AgentRule{agent, inv.name}) != perms.rules.end();
+        const PermissionVerdict v = decide_agent_permission(d, inv, base, c);
+        last_note = {key, ApprovalNote{v.message, v.allowed_by}};
+        return v.decision;
+    }
+
+    ApprovalNote note_of(const CommandInvocation& inv) {
+        const std::string key = invocation_key(inv);
+        std::lock_guard<std::mutex> lock(perm_mutex);
+        if (last_note.first != key) return {};
+        ApprovalNote out = std::move(last_note.second);
+        last_note = {};
+        return out;
+    }
+
+    ApprovalDecision base_policy(const CommandDescriptor& d, const CommandInvocation& inv) {
         if (!user_origin(inv.origin) && runs_python(inv)) {
             // Running a script runs the user's code, so every such invocation
             // asks, whatever the command's flags say.
@@ -1640,6 +1712,13 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
             [raw](const CommandDescriptor&, const CommandInvocation& inv) { return raw->parked_review(inv); });
         im.registry->set_approval_check(
             [raw](const CommandDescriptor&, const CommandInvocation& inv) { return raw->approval_holds(inv); });
+        im.registry->set_approval_notes(
+            [raw](const CommandDescriptor&, const CommandInvocation& inv) { return raw->note_of(inv); });
+        if (!im.options.permissions_file.empty()) {
+            AgentPermissionsRead read = read_agent_permissions(im.options.permissions_file);
+            im.perms = std::move(read.file);
+            im.perm_problems = std::move(read.problems);
+        }
         for (CommandOrigin o : {CommandOrigin::ui, CommandOrigin::builder, CommandOrigin::agent, CommandOrigin::mcp,
                                 CommandOrigin::api})
             im.review_on[static_cast<std::size_t>(o)].store(im.options.review.on(o));
@@ -1701,6 +1780,91 @@ void Session::set_host(std::shared_ptr<SessionHost> host) {
 
 void Session::set_review(CommandOrigin origin, bool on) {
     impl_->review_on[static_cast<std::size_t>(origin)].store(on);
+}
+
+AgentMode Session::agent_mode(AgentPrincipal who) const {
+    std::lock_guard<std::mutex> lock(impl_->perm_mutex);
+    return impl_->mode_of(who);
+}
+
+Error Session::set_agent_mode(AgentPrincipal who, AgentMode mode) {
+    Impl& im = *impl_;
+    std::lock_guard<std::mutex> lock(im.perm_mutex);
+    if (who == AgentPrincipal::none) return Error("permissions.no_principal", "Only the side chat's agent and mcp clients have a mode.");
+    if (mode == AgentMode::allow_all) {
+        if (who != AgentPrincipal::chat)
+            return Error("permissions.allow_all_chat_only", "Allow all is only for the side chat's agent, for its session.");
+        im.chat_allow_all = true;  // never saved
+        return {};
+    }
+    if (who == AgentPrincipal::chat) {
+        im.chat_allow_all = false;
+        im.perms.chat = mode;
+    } else {
+        im.perms.mcp = mode;
+    }
+    return im.save_perms();
+}
+
+void Session::set_chat_agent(const std::string& agent_id) {
+    std::lock_guard<std::mutex> lock(impl_->perm_mutex);
+    impl_->chat_agent = agent_id;
+}
+
+std::string Session::chat_agent() const {
+    std::lock_guard<std::mutex> lock(impl_->perm_mutex);
+    return impl_->chat_agent;
+}
+
+void Session::end_chat_session() {
+    std::lock_guard<std::mutex> lock(impl_->perm_mutex);
+    impl_->chat_allow_all = false;
+    impl_->chat_session_rules.clear();
+}
+
+bool Session::approval_offers_rules(const CommandInvocation& parked) const {
+    const AgentPrincipal who = agent_principal(parked);
+    if (who == AgentPrincipal::none || !rule_command_allowed(parked.name)) return false;
+    const std::string key = Impl::invocation_key(parked);
+    if (impl_->is_bound(key) || impl_->python_pending(key)) return false;
+    std::lock_guard<std::mutex> lock(impl_->perm_mutex);
+    return who == AgentPrincipal::mcp || !impl_->rule_agent(who).empty();
+}
+
+Error Session::allow_always(const CommandInvocation& parked, RuleScope scope) {
+    if (!approval_offers_rules(parked))
+        return Error("permissions.no_rule", "This approval cannot become a rule; it is decided on its card each time.",
+                     parked.name);
+    Impl& im = *impl_;
+    const AgentPrincipal who = agent_principal(parked);
+    std::lock_guard<std::mutex> lock(im.perm_mutex);
+    if (scope == RuleScope::session) {
+        (who == AgentPrincipal::chat ? im.chat_session_rules : im.mcp_session_rules).insert(parked.name);
+        return {};
+    }
+    const AgentRule rule{im.rule_agent(who), parked.name};
+    if (std::find(im.perms.rules.begin(), im.perms.rules.end(), rule) == im.perms.rules.end()) im.perms.rules.push_back(rule);
+    return im.save_perms();
+}
+
+std::vector<AgentRule> Session::saved_agent_rules() const {
+    std::lock_guard<std::mutex> lock(impl_->perm_mutex);
+    return impl_->perms.rules;
+}
+
+bool Session::revoke_agent_rule(const AgentRule& rule) {
+    Impl& im = *impl_;
+    std::lock_guard<std::mutex> lock(im.perm_mutex);
+    const auto it = std::find(im.perms.rules.begin(), im.perms.rules.end(), rule);
+    if (it == im.perms.rules.end()) return false;
+    im.perms.rules.erase(it);
+    im.save_perms();
+    return true;
+}
+
+std::vector<std::string> Session::permission_problems() const {
+    std::lock_guard<std::mutex> lock(impl_->perm_mutex);
+    return impl_->perm_problems;
 }
 
 ReviewSettings Session::review() const {

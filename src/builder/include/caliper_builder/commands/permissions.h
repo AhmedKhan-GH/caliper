@@ -1,0 +1,133 @@
+#pragma once
+// Agent permissions (design/command-layer.md, Agent permissions): the modes
+// and rules by which the person lets an agent's commands run without a card,
+// or refuses them all. The command layer applies them, never the agent.
+//
+// Who they govern. The side chat's agent (the origin agent with the client
+// "chat", which comes from the token the app issued for that chat) and the
+// clients of caliper-mcp (the origin mcp) each have a mode, Ask by default.
+// Nothing else is governed: the person's own UI never asks, the viewer only
+// reads, the person's api token behaves as before, and the widget agent's
+// sidecar (the client "widget") keeps its preview with Accept.
+//
+// The modes:
+//   - Ask: the session's policy as it was, with a card for what asks.
+//   - Accept edits: an edit of the open spec (CommandEffect::edit) that would
+//     ask runs at once; it is still journaled, with "allowed_by", and undone
+//     like any step. Everything else that asks still asks.
+//   - Read only: reads and proposals run (a dry run, an edit into a stacked
+//     preview, the previews' own commands); every other command that would
+//     change something is refused with command.denied and a plain message.
+//   - Allow all: only for the side chat's agent, only for its session: never
+//     saved, off when the chat's agent ends or the app quits. What would ask
+//     runs without a card.
+// The rules: answering a card "for this session" or "always" allows that
+// command (by the name of the command the command layer runs) for the chat's
+// agent, or for mcp clients, in this session or, saved, until the person
+// revokes it. A saved rule is kept per agent: the chat's agent id, or "mcp".
+//
+// What no mode and no rule changes: the registry refuses before any policy a
+// viewer's change and history.undo or history.redo from an agent; an approval
+// bound to content (an overwrite of a saved applet, the replacement of an open
+// spec with unsaved changes) always asks, since the card shows what is
+// written; a rule never covers running a Python loader, which only a card or
+// Allow all lets run; and Read only beats every rule. Nothing an agent sends
+// sets a mode or a rule: there is no command for them, and only the app's UI
+// calls the session's functions that change them.
+//
+// The saved file (agent-permissions.json in the app-data folder), written
+// owner-only (0600) through a temporary file:
+//   {"version": 1, "modes": {"chat": "ask", "mcp": "accept_edits"},
+//    "rules": [{"agent": "claude", "command": "panel.patch"}, ...]}
+// read_agent_permissions() ignores, and reports, a malformed file, an unknown
+// field, a mode it does not know or that may not be saved (allow_all), and a
+// rule for an unknown agent id or for a command that is not an agent's; on
+// POSIX a file that others may write grants nothing. A missing file is the
+// defaults: Ask, no rules. No function here throws.
+#include <caliper_builder/commands/approval.h>
+#include <caliper_builder/commands/command.h>
+#include <caliper_builder/error.h>
+
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace caliper_builder {
+
+enum class AgentMode { ask, accept_edits, read_only, allow_all };
+
+// "ask", "accept_edits", "read_only", "allow_all".
+const char* agent_mode_name(AgentMode mode);
+std::optional<AgentMode> agent_mode_from_name(std::string_view name);
+// The word the app shows: "Ask", "Accept edits", "Read only", "Allow all".
+const char* agent_mode_label(AgentMode mode);
+// The mode after `mode` in the cycle of Shift-Tab: Ask, Accept edits, Read
+// only, then Ask again. Allow all is not in it; from Allow all it gives Ask.
+AgentMode next_agent_mode(AgentMode mode);
+
+// Whose mode and rules an invocation falls under.
+enum class AgentPrincipal { none, chat, mcp };
+// chat for the origin agent with the client "chat", mcp for the origin mcp,
+// none for everything else.
+AgentPrincipal agent_principal(const CommandInvocation& invocation);
+
+// Whether the invocation would change something, as Read only judges it: a
+// command whose effect is `read` does not; an `edit` does unless it is a dry
+// run or names a stacked preview; any other command does.
+bool invocation_changes(const CommandDescriptor& descriptor, const CommandInvocation& invocation);
+
+// What decides one governed invocation besides its command.
+struct PermissionContext {
+    AgentMode mode = AgentMode::ask;  // the principal's mode, allow_all while that is on
+    bool session_rule = false;        // a rule of this session allows the command
+    bool saved_rule = false;          // a saved rule of the agent allows it
+    bool bound = false;               // its approval is bound to content: only a card decides
+    bool python = false;              // it runs a Python loader: no rule covers it
+};
+
+struct PermissionVerdict {
+    ApprovalDecision decision = ApprovalDecision::ask;
+    std::string allowed_by;  // "accept_edits", "allow_all", "session_rule", "saved_rule" when they turned ask into allow
+    std::string message;     // a denial's plain message
+};
+
+// The decision for an invocation whose policy, without modes, gave `base`.
+// Not governed: `base`. Read only: deny what changes something. Otherwise
+// only an ask can become an allow: never when bound; Allow all; Accept edits
+// for an edit; a session rule, then a saved rule, unless it runs Python.
+PermissionVerdict decide_agent_permission(const CommandDescriptor& descriptor, const CommandInvocation& invocation,
+                                          ApprovalDecision base, const PermissionContext& context);
+
+// One saved rule: the agent ("mcp" for caliper-mcp's clients, else the side
+// chat's agent id) may run the command without a card.
+struct AgentRule {
+    std::string agent;
+    std::string command;
+    bool operator==(const AgentRule& o) const { return agent == o.agent && command == o.command; }
+};
+
+// The id a saved rule names: "mcp", or 1 to 64 characters of a-z 0-9 _ -
+// for a chat agent ("claude", "custom").
+bool valid_rule_agent(std::string_view agent);
+// A command an agent may be allowed always: in the table, open to agents,
+// and one that changes something.
+bool rule_command_allowed(std::string_view command);
+
+struct AgentPermissionsFile {
+    AgentMode chat = AgentMode::ask;  // never allow_all
+    AgentMode mcp = AgentMode::ask;   // never allow_all
+    std::vector<AgentRule> rules;
+};
+
+struct AgentPermissionsRead {
+    AgentPermissionsFile file;
+    std::vector<std::string> problems;  // one plain sentence for each thing ignored
+};
+AgentPermissionsRead read_agent_permissions(const std::string& path);
+// The file's JSON text, allow_all written as ask.
+std::string agent_permissions_text(const AgentPermissionsFile& file);
+// Writes it owner-only through a temporary file in the same folder.
+Error write_agent_permissions(const std::string& path, const AgentPermissionsFile& file);
+
+}  // namespace caliper_builder
