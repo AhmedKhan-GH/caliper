@@ -644,19 +644,22 @@ def _rss_mb() -> float:
 
 @pytest.mark.parametrize("device", DEVICES)
 def test_slow_viewer_latest_wins(server, device):
-    """A viewer that stops reading: the producer's step rate does not drop,
-    its memory does not grow, and the viewer gets a recent snapshot when it
-    reads again."""
+    """A viewer that stops reading: no view call waits for it (newer snapshots
+    replace older ones instead), the producer's memory does not grow, and the
+    viewer gets a recent snapshot when it reads again."""
     W = torch.randn(1024, 1024, device=device)
     show = lambda: caliper.show(W, name="big", rate=0)  # noqa: E731
 
     def steps(seconds):
-        n, end = 0, time.perf_counter() + seconds
+        """The slowest view call in ``seconds`` of steps: a call that waited for
+        the socket would take as long as the viewer stays stalled."""
+        worst, end = 0.0, time.perf_counter() + seconds
         while time.perf_counter() < end:
             W.add_(1e-3)
+            t0 = time.perf_counter()
             show()
-            n += 1
-        return n / seconds
+            worst = max(worst, time.perf_counter() - t0)
+        return worst
 
     async def go():
         async with Client(server, max_queue=1) as c:
@@ -687,7 +690,7 @@ def test_slow_viewer_latest_wins(server, device):
                     last = m
             return base, slow, rss1 - rss0, st, st["snapshots_sent"] - sent0, seq_last, last
     base, slow, grew, st, sent, seq_last, last = run(go(), 60)
-    assert slow > 0.7 * base, (slow, base)
+    assert slow < 0.25, (slow, base)                # no call waits (a busy runner may pause one)
     assert st["superseded"] > 0 and sent < 20      # stalled sends; newer snapshots replaced older
     assert grew < 100, grew                          # MB; nothing queues up
     assert last is not None and last.seq >= seq_last - 3

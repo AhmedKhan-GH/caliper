@@ -511,7 +511,9 @@ def test_a_closed_server_releases_a_paused_run(ctl, fast):
         assert ctl.state == "running"
 
 
-def test_the_last_controller_leaving_releases_after_the_grace(ctl, fast):
+def test_the_last_controller_leaving_releases_after_the_grace(ctl, fast, monkeypatch):
+    # a grace well above the 0.1 s gap below, so a slow runner stays within it
+    monkeypatch.setattr(C, "RELEASE_GRACE_S", 1.0)
     t = Fake()
     r = ctl.attach(t)
     with Loop() as loop:
@@ -524,7 +526,7 @@ def test_the_last_controller_leaving_releases_after_the_grace(ctl, fast):
         t.n = 0
         start = time.monotonic()
         wait_for(lambda: ctl.state == "running")
-        assert time.monotonic() - start >= 0.2
+        assert time.monotonic() - start >= 0.9
         a = loop.count
         wait_for(lambda: loop.count > a)
 
