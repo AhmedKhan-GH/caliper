@@ -131,6 +131,11 @@ private:
     struct DrawSlot {
         WGPUBuffer params = nullptr;
         WGPUBuffer lut = nullptr;
+        // The colour thresholds of [th_vmin, th_vmax] (colormap_thresholds).
+        WGPUBuffer th = nullptr;
+        bool th_valid = false;
+        float th_vmin = 0.0f, th_vmax = 0.0f;
+        uint32_t th_mode = 0;
     };
 
     Tex* find(uint64_t id);

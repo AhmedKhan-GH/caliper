@@ -31,8 +31,10 @@ namespace {
 // more (the last one, for a decreasing range). The reference is monotone in
 // v, because every IEEE operation in it is, so the index of v is the number
 // of thresholds it has passed, which the shader finds with a binary search of
-// exact float comparisons. mode 0 is a flat range (vmax == vmin: index 0), 1
-// an increasing and 2 a decreasing one; NaN takes index 0, tested on the bits.
+// exact float comparisons. mode 0 is a range whose width vmax - vmin is zero,
+// infinite or NaN, where the reference maps every value to index 0 (t is 0 or
+// NaN), 1 an increasing and 2 a decreasing one; NaN takes index 0, tested on
+// the bits. The points shader colours by value the same way.
 // Push constants do not exist in WebGPU, so the parameters are a uniform.
 const char* kColormapWgsl = R"wgsl(
 struct CmapParams {
@@ -80,57 +82,6 @@ struct CmapParams {   // matches the WGSL struct (32 bytes)
     uint32_t mode, pad1;
 };
 static_assert(sizeof(CmapParams) == 32, "WGSL uniform layout");
-
-// Floats in their numeric order as unsigned keys (-inf lowest, +inf highest).
-uint32_t float_key(float f) {
-    uint32_t u;
-    std::memcpy(&u, &f, 4);
-    return (u & 0x80000000u) ? ~u : (u | 0x80000000u);
-}
-float key_float(uint32_t k) {
-    const uint32_t u = (k & 0x80000000u) ? (k & 0x7fffffffu) : ~k;
-    float f;
-    std::memcpy(&f, &u, 4);
-    return f;
-}
-
-// The reference's index of v, from the reference itself (an identity LUT).
-int reference_index(float v, float vmin, float vmax) {
-    static uint32_t ident[256];
-    static bool init = false;
-    if (!init) {
-        for (uint32_t i = 0; i < 256; ++i) ident[i] = i;
-        init = true;
-    }
-    uint8_t out[4];
-    caliper_host::map_f32_to_rgba8(&v, 1, 1, ident, vmin, vmax, out);
-    return out[0];
-}
-
-// T[1..255] for [vmin, vmax] (T[0] unused) and the mode, as the shader reads them.
-uint32_t colormap_thresholds(float vmin, float vmax, float* T) {
-    const float denom = vmax - vmin;
-    if (!(denom != 0.0f)) return 0u;
-    const bool inc = denom > 0.0f;
-    const uint32_t lo_key = float_key(-INFINITY), hi_key = float_key(INFINITY);
-    T[0] = 0.0f;
-    for (int k = 1; k < 256; ++k) {
-        uint32_t lo = lo_key, hi = hi_key;
-        if (inc) {   // the first v with index >= k (+inf has 255)
-            while (lo < hi) {
-                const uint32_t mid = lo + (hi - lo) / 2;
-                if (reference_index(key_float(mid), vmin, vmax) >= k) hi = mid; else lo = mid + 1;
-            }
-        } else {     // the last v with index >= k (-inf has 255)
-            while (lo < hi) {
-                const uint32_t mid = lo + (hi - lo + 1) / 2;
-                if (reference_index(key_float(mid), vmin, vmax) >= k) lo = mid; else hi = mid - 1;
-            }
-        }
-        T[k] = key_float(lo);
-    }
-    return inc ? 1u : 2u;
-}
 
 WGPUStringView sv(const char* s) { return WGPUStringView{s, WGPU_STRLEN}; }
 
@@ -303,6 +254,7 @@ void WebGpuRenderer::shutdown() {
     for (auto& s : slots_) {
         release_buf(s.params);
         release_buf(s.lut);
+        release_buf(s.th);
     }
     slots_.clear();
     for (auto& p : points_pipelines_) release(p, wgpuRenderPipelineRelease);
@@ -484,11 +436,13 @@ struct Params {
     pos_base: u32, attr_base: u32, color_mode: u32, flat_rgba: u32,
     vmin: f32, vmax: f32, size_px: f32, att_ref: f32,
     viewport: vec2<f32>, fade_w: vec2<f32>,
+    cmap_mode: u32,   // the colour thresholds' mode (colormap_thresholds)
 };
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage, read> pos: array<f32>;
 @group(0) @binding(2) var<storage, read> attr: array<f32>;
 @group(0) @binding(3) var<storage, read> lut: array<u32>;
+@group(0) @binding(4) var<storage, read> th: array<f32>;   // T[1..255]
 
 struct VOut {
     @builtin(position) position: vec4<f32>,
@@ -505,6 +459,21 @@ fn is_nan_bits(v: f32) -> bool {
     return (b & 0x7f800000u) == 0x7f800000u && (b & 0x007fffffu) != 0u;
 }
 
+// A value's colour index exactly as the reference's, as the heatmap's
+// colormap finds it: the thresholds it has passed, NaN at index 0.
+fn index_of(v: f32) -> u32 {
+    if (is_nan_bits(v) || p.cmap_mode == 0u) { return 0u; }
+    var lo = 1u;
+    var hi = 256u;
+    loop {
+        if (lo >= hi) { break; }
+        let mid = (lo + hi) / 2u;
+        let passed = select(v <= th[mid], th[mid] <= v, p.cmap_mode == 1u);
+        if (passed) { lo = mid + 1u; } else { hi = mid; }
+    }
+    return lo - 1u;
+}
+
 @vertex
 fn vs(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VOut {
     var corners = array<vec2<f32>, 6>(vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0),
@@ -518,12 +487,7 @@ fn vs(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VOu
     let k = corners[vid] * (size / p.viewport) * c.w;
     c = vec4<f32>(c.x + k.x, c.y + k.y, c.z, c.w);
     var col = unpack(p.flat_rgba);
-    if (p.color_mode == 1u) {
-        let v = attr[p.attr_base + iid];
-        var t = 0.0;
-        if (!is_nan_bits(v) && p.vmax > p.vmin) { t = clamp((v - p.vmin) / (p.vmax - p.vmin), 0.0, 1.0); }
-        col = unpack(lut[u32(t * 255.0 + 0.5)]);
-    }
+    if (p.color_mode == 1u) { col = unpack(lut[index_of(attr[p.attr_base + iid])]); }
     // Farther points dimmer with their hue kept (kPointFadeFloor): the colour
     // scaled from 1 at w = fade_w.x to 0.5 at w = fade_w.y.
     if (p.fade_w.y > p.fade_w.x) {
@@ -537,15 +501,16 @@ fn vs(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VOu
 fn fs(i: VOut) -> @location(0) vec4<f32> { return i.color; }
 )wgsl";
 
-struct PointParams {   // matches the WGSL struct (112 bytes)
+struct PointParams {   // matches the WGSL struct (128 bytes)
     float mvp[16];
     uint32_t pos_base, attr_base, color_mode, flat_rgba;
     float vmin, vmax, size_px;
     float att_ref;
     float viewport[2];
     float fade_w[2];
+    uint32_t cmap_mode, pad[3];
 };
-static_assert(sizeof(PointParams) == 112, "WGSL uniform layout");
+static_assert(sizeof(PointParams) == 128, "WGSL uniform layout");
 
 void mul4(const float* a, const float* b, float* out) {   // out = a * b, column-major
     for (int c = 0; c < 4; ++c)
@@ -648,9 +613,9 @@ bool WebGpuRenderer::ensure_points_pipelines() {
     md.label = sv("caliper.points");
     points_module_ = wgpuDeviceCreateShaderModule(device_, &md);
     if (!points_module_) return false;
-    WGPUBindGroupLayoutEntry e[4];
+    WGPUBindGroupLayoutEntry e[5];
     for (auto& x : e) x = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 5; ++i) {
         e[i].binding = (uint32_t)i;
         e[i].visibility = WGPUShaderStage_Vertex;
     }
@@ -658,8 +623,9 @@ bool WebGpuRenderer::ensure_points_pipelines() {
     e[1].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
     e[2].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
     e[3].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+    e[4].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
     WGPUBindGroupLayoutDescriptor bl = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
-    bl.entryCount = 4;
+    bl.entryCount = 5;
     bl.entries = e;
     points_layout_ = wgpuDeviceCreateBindGroupLayout(device_, &bl);
     WGPUPipelineLayoutDescriptor pl = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
@@ -759,6 +725,16 @@ bool WebGpuRenderer::geom_draw_primitives(uint64_t view_tex, const float* view16
         DrawSlot& sl = slots_[i];
         if (!sl.params) sl.params = make_buffer(device_, sizeof(PointParams), WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst);
         if (!sl.lut) sl.lut = make_buffer(device_, 1024, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
+        if (!sl.th) sl.th = make_buffer(device_, 1024, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
+        // The colour thresholds change with the range only.
+        if (cmap && (!sl.th_valid || sl.th_vmin != d.vmin || sl.th_vmax != d.vmax)) {
+            float T[256];
+            sl.th_mode = colormap_thresholds(d.vmin, d.vmax, T);
+            if (sl.th_mode) wgpuQueueWriteBuffer(queue_, sl.th, 0, T, sizeof T);
+            sl.th_vmin = d.vmin;
+            sl.th_vmax = d.vmax;
+            sl.th_valid = true;
+        }
         PointParams pp{};
         std::memcpy(pp.mvp, mvp, sizeof mvp);
         pp.pos_base = (uint32_t)(d.pos_offset / 4);
@@ -773,18 +749,20 @@ bool WebGpuRenderer::geom_draw_primitives(uint64_t view_tex, const float* view16
         pp.att_ref = d.att_ref;
         pp.fade_w[0] = d.fade_w0;
         pp.fade_w[1] = d.fade_w1;
+        pp.cmap_mode = cmap ? sl.th_mode : 0u;
         wgpuQueueWriteBuffer(queue_, sl.params, 0, &pp, sizeof pp);
         static const uint32_t kZeroLut[256] = {};
         wgpuQueueWriteBuffer(queue_, sl.lut, 0, cmap ? d.lut256 : kZeroLut, 1024);
-        WGPUBindGroupEntry be[4];
+        WGPUBindGroupEntry be[5];
         for (auto& x : be) x = WGPU_BIND_GROUP_ENTRY_INIT;
         be[0].binding = 0; be[0].buffer = sl.params; be[0].size = sizeof(PointParams);
         be[1].binding = 1; be[1].buffer = pa->second.buffer; be[1].size = (pa->second.bytes + 3) & ~uint64_t(3);
         be[2].binding = 2; be[2].buffer = attr; be[2].size = (attr_bytes + 3) & ~uint64_t(3);
         be[3].binding = 3; be[3].buffer = sl.lut; be[3].size = 1024;
+        be[4].binding = 4; be[4].buffer = sl.th; be[4].size = 1024;
         WGPUBindGroupDescriptor bd = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
         bd.layout = points_layout_;
-        bd.entryCount = 4;
+        bd.entryCount = 5;
         bd.entries = be;
         Enc e;
         e.pipeline = points_pipeline(t.depth != nullptr, d.depth_flags);
