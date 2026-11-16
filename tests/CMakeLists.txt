@@ -192,6 +192,7 @@ if(TARGET caliper)
         "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
         "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
         "-DBUILD_TYPE=$<CONFIG>"
+        "-DMACOS_MIN=$<$<PLATFORM_ID:Darwin>:${CMAKE_OSX_DEPLOYMENT_TARGET}>"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cli_new_build.cmake")
     set_tests_properties(caliper_cli_new_builds PROPERTIES LABELS "cli;sdk" TIMEOUT 900)
 
@@ -209,6 +210,7 @@ if(TARGET caliper)
             "-DGENERATOR=${CMAKE_GENERATOR}"
             "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
             "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DMACOS_MIN=$<$<PLATFORM_ID:Darwin>:${CMAKE_OSX_DEPLOYMENT_TARGET}>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cli_build.cmake")
         set_tests_properties(caliper_cli_build PROPERTIES LABELS "cli;sdk" TIMEOUT 900)
     endif()

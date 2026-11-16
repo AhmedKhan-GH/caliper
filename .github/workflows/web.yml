@@ -163,6 +163,8 @@ jobs:
           for f in caliper-views-loader.js caliper-views.js caliper-views.wasm; do
             echo "$listing" | grep -q "caliper/_web/$f\$" || { echo "the wheel lacks $f"; exit 1; }
           done
+      # The wheel's tag and every extension and executable in it say macOS 14.0.
+      - run: python3 scripts/check_macos_min.py 14.0 "$RUNNER_TEMP"/dist/caliper-*.whl
       - uses: actions/upload-artifact@v6
         with:
           name: caliper-wheel

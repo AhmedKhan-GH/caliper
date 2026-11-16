@@ -12,7 +12,7 @@
 #
 #   cmake -DEXE=<caliper> -DCALIPER_BUILD_DIR=<build> -DWORK_DIR=<dir>
 #         [-DGENERATOR=<generator>] [-DMAKE_PROGRAM=<path>] [-DCXX_COMPILER=<path>]
-#         -P cli_build.cmake
+#         [-DMACOS_MIN=<version>] -P cli_build.cmake
 cmake_minimum_required(VERSION 3.18)
 foreach(var EXE CALIPER_BUILD_DIR WORK_DIR)
     if(NOT ${var})
@@ -85,6 +85,17 @@ if(NOT out MATCHES "READY +com\\.example\\.built +0\\.1\\.0 .*1 of 1 applets pas
 endif()
 if(NOT EXISTS "${WORK_DIR}/built/build/applets/built.caliper.toml")
     message(FATAL_ERROR "caliper build left no manifest in built/build/applets")
+endif()
+# On macOS the library carries the host's minimum macOS (MACOS_MIN, the core
+# build's CMAKE_OSX_DEPLOYMENT_TARGET), which the SDK package passes on.
+if(MACOS_MIN)
+    file(GLOB libs "${WORK_DIR}/built/build/applets/*.dylib")
+    execute_process(COMMAND vtool -show-build ${libs} OUTPUT_VARIABLE shown ERROR_VARIABLE shown)
+    string(REGEX MATCHALL "minos [0-9.]+" minos "${shown}")
+    list(REMOVE_DUPLICATES minos)
+    if(NOT libs OR NOT minos STREQUAL "minos ${MACOS_MIN}")
+        message(FATAL_ERROR "the library caliper build made does not say macOS ${MACOS_MIN} as its minimum:\n${shown}")
+    endif()
 endif()
 message(STATUS "caliper build: configured, built and checked ${WORK_DIR}/built")
 
