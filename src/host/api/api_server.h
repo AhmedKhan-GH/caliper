@@ -236,6 +236,7 @@ struct Call {
     uint64_t ticket = 0;
     Kind kind = Kind::Applets;
     std::string applet_id;   // Launch
+    std::string origin;      // the origin of the request's token: "api", "mcp" or "agent"
 };
 
 struct Stats {

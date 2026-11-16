@@ -558,13 +558,15 @@ bool SpecPage::take_open(const AppSession& session) {
     return true;
 }
 
-bool SpecPage::request_open(AppSession& session, const std::string& id) {
+bool SpecPage::request_open(AppSession& session, const std::string& id, const std::string& origin) {
     cb::Session* s = session.session();
     if (!s) return false;
     cb::CommandInvocation inv;
     inv.name = "applet.open";
     inv.args = {{"id", id}};
-    inv.origin = cb::CommandOrigin::ui;
+    // From who asked; a name that is not an origin is a program's (api), never
+    // the person's.
+    inv.origin = cb::command_origin_from_name(origin).value_or(cb::CommandOrigin::api);
     impl_->request = s->queue().submit(std::move(inv));
     impl_->request_is_new = false;
     impl_->request_error.clear();
@@ -875,7 +877,7 @@ SpecPage::SpecPage() : impl_(std::make_unique<Impl>()) {}
 SpecPage::~SpecPage() = default;
 bool SpecPage::built() { return false; }
 bool SpecPage::take_open(const AppSession&) { return false; }
-bool SpecPage::request_open(AppSession&, const std::string&) { return false; }
+bool SpecPage::request_open(AppSession&, const std::string&, const std::string&) { return false; }
 bool SpecPage::request_answered(std::string*) { return false; }
 bool SpecPage::request_new(AppSession&, const std::string&) { return false; }
 bool SpecPage::take_new() { return false; }

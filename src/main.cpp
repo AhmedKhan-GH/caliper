@@ -562,7 +562,7 @@ public:
         cl_ = cl;
         caliper_host::AppSession::Hooks h = caliper_host::app_session_hooks();
         h.applets_json = [this] { return caliper_host::applets_json(loader_); };
-        h.launch = [this](const std::string& id) { return launch_by_id(id); };
+        h.launch = [this](const std::string& id, const std::string& origin) { return launch_by_id(id, origin); };
         if (!renderer_->window_capture_supported())
             h.capture_unavailable = caliper_host::WindowCaptures::unsupported(renderer_->name());
         h.request_capture = [this] { captures_.add(caliper_host::AppSession::kCaptureTicket); };
@@ -867,12 +867,14 @@ private:
 
     // A launch of a spec applet (a row, Enter, CALIPER_AUTOLAUNCH, app.launch,
     // POST /v0/applets/{id}/launch): its spec is checked, then one in the
-    // workspace opens through the session's applet.open, from the ui origin,
-    // as soon as the session is open, and the page follows that command as
-    // for any origin; one found elsewhere is drawn from its file without
+    // workspace opens through the session's applet.open, from the origin of
+    // who asked (`origin`: "ui" for the person's own launch, else the
+    // app.launch's or the API token's, so that an agent's replacement of
+    // unsaved changes waits on an approval card), as soon as the session is
+    // open, and the page follows that command as for any origin; one found elsewhere is drawn from its file without
     // becoming the open spec. False, with the reason in Activity, when its
     // spec does not validate or its file does not read.
-    bool launch_spec_applet(int idx, std::string* why) {
+    bool launch_spec_applet(int idx, std::string* why, const std::string& origin = "ui") {
         const std::string name = loader_.at(idx).manifest.name;
         landing_.log("launch", name);
         landing_.select(idx);
@@ -885,6 +887,7 @@ private:
         const std::string ws_id = workspace_applet_id(loader_.at(idx));
         if (!ws_id.empty()) {
             pending_spec_open_ = ws_id;
+            pending_spec_origin_ = origin;
             return true;
         }
         if (page_ == AppPage::Applet) leave_applet_page(active_applet_);
@@ -907,7 +910,7 @@ private:
     void note_spec_applets() {
         if (!pending_spec_open_.empty()) {
             if (session_.session()) {
-                spec_page_.request_open(session_, pending_spec_open_);
+                spec_page_.request_open(session_, pending_spec_open_, pending_spec_origin_);
                 pending_spec_open_.clear();
             } else if (!session_.open_error().empty()) {
                 landing_.log("launch failed", pending_spec_open_, session_.open_error());
@@ -1050,12 +1053,14 @@ private:
     // Home takes it: an applet is torn down; an attached live session stays
     // attached.
     void api_launch(const caliper_api::Call& c) {
-        const caliper_host::LaunchOutcome o = launch_by_id(c.applet_id);
+        const caliper_host::LaunchOutcome o = launch_by_id(c.applet_id, c.origin.empty() ? "api" : c.origin);
         if (o.status == 200) api_.reply(c.ticket, 200, o.body);
         else api_.reply_error(c.ticket, o.status, o.body);
     }
 
-    caliper_host::LaunchOutcome launch_by_id(const std::string& id) {
+    // `origin`: who asked, "ui" for the person (and CALIPER_AUTOLAUNCH, the
+    // person's own setting), else the app.launch's or the API token's.
+    caliper_host::LaunchOutcome launch_by_id(const std::string& id, const std::string& origin = "ui") {
         const int i = loader_.find(id);
         if (i < 0)
             return {404, "no applet with the id " + id + " in the search folders (GET /v0/applets lists them)",
@@ -1076,7 +1081,7 @@ private:
             // The page opens with the applet.open that this sends, a frame
             // or two later.
             std::string why;
-            if (!launch_spec_applet(i, &why)) return {409, id + " failed to launch: " + why, "app.launch_failed"};
+            if (!launch_spec_applet(i, &why, origin)) return {409, id + " failed to launch: " + why, "app.launch_failed"};
             const auto& b = loader_.at(loader_.find(id));
             return {200, caliper_host::launched_json(b.manifest.id, b.manifest.version, false), ""};
         }
@@ -1632,6 +1637,7 @@ private:
     bool pending_spec_home_ = false;  // Home on the spec page: leave after render
     std::string workspace_dir_;       // the session's workspace, whose spec applets are listed
     std::string pending_spec_open_;   // a workspace spec applet to open once the session is open
+    std::string pending_spec_origin_ = "ui";   // ... from the origin of who asked for it
     std::vector<std::vector<std::string>> pending_drops_;   // files dropped on the window, in order
     bool new_requested_ = false;      // a new spec waits for the session
     bool new_pending_ = false;        // its spec.new is in the queue

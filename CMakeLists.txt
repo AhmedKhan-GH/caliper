@@ -958,7 +958,8 @@ if(TARGET caliper_builder_session)
             # Home and the spec page until Detach, a second stream and a
             # stream that ends, files dropped on the live page, and "Save
             # changes to <name>?" before F3, an open from the landing and a
-            # close over unsaved changes.
+            # close over unsaved changes, and an agent's launch over unsaved
+            # changes held on an approval card.
             foreach(_case IN ITEMS
                     "entropy|app live: attention entropy per layer*"
                     "f4_stream|app live: F4 lists a caliper.serve() stream*"
@@ -967,7 +968,9 @@ if(TARGET caliper_builder_session)
                     "drop|app live: files dropped on the live page*"
                     "save_new|app save: F3 New dashboard over unsaved changes*"
                     "save_open|app save: opening another dashboard*"
-                    "save_close|app save: closing the window*")
+                    "save_close|app save: closing the window*"
+                    "launch_mcp|app launch: an outside agent's launch*"
+                    "launch_agent|app launch: an in-app agent's launch*")
                 string(REPLACE "|" ";" _parts "${_case}")
                 list(GET _parts 0 _name)
                 list(GET _parts 1 _filter)

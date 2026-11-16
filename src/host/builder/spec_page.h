@@ -99,10 +99,13 @@ public:
     // True once for each applet.open that succeeded since the last call.
     bool take_open(const AppSession& session);
 
-    // Sends applet.open for the workspace's spec applet `id` from the ui
-    // origin through the session's queue, without waiting; the page opens
-    // when it succeeds. False when the session is not open.
-    bool request_open(AppSession& session, const std::string& id);
+    // Sends applet.open for the workspace's spec applet `id` through the
+    // session's queue, without waiting, from `origin`: "ui" for the person's
+    // own launch, or the origin of the agent or program that asked ("api",
+    // "mcp", "agent"), whose replacement of unsaved changes then waits on an
+    // approval card as its own command would. The page opens when it
+    // succeeds. False when the session is not open.
+    bool request_open(AppSession& session, const std::string& id, const std::string& origin = "ui");
     // The answer of the last request_open(), once it has come: true, with
     // `error` empty when it succeeded and holding the reason otherwise.
     bool request_answered(std::string* error);

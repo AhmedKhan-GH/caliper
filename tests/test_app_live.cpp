@@ -707,6 +707,8 @@ TEST_CASE("app save: opening another dashboard from the landing over unsaved cha
     CHECK(ok(a.port, a.token, "app.launch", {{"id", "local.one"}})["id"] == "local.one");   // the manifest's id
     CHECK(eventually(a.app, [&] { return a.spec()["id"] == "one"; }));
     CHECK(a.count("[save] Save changes to") == asked);
+    // The person's own launches asked the question and put up no card.
+    CHECK(a.app.text.find("[approval]") == std::string::npos);
     REQUIRE(script_ended(a.app, 30000));
     CHECK_MESSAGE(a.app.text.find("[ui] done") != std::string::npos, a.app.text);
     ::kill(a.app.pid, SIGTERM);
@@ -738,6 +740,146 @@ TEST_CASE("app save: closing the window over unsaved changes asks first; Cancel 
     CHECK_MESSAGE(a.app.wait(60000) == 0, a.app.text);   // Don't Save: it quits
     CHECK(a.app.text.find("[save] Don't Save") != std::string::npos);
     CHECK_FALSE(fs::exists(t.str("ws/applets/draft")));
+}
+
+// ---- an agent's launch of a dashboard over unsaved changes ----
+
+namespace {
+
+// POST /v0/applets/<id>/launch with `token`.
+Http launch_v0(uint16_t port, const std::string& token, const std::string& id) {
+    return http(port, "POST", "/v0/applets/" + id + "/launch", token);
+}
+
+// The app lists the workspace's applet `id` (after an applet.save it rescans).
+bool lists(SaveApp& a, const std::string& id) {
+    return eventually(a.app, [&] {
+        const Http r = http(a.port, "GET", "/v0/applets", a.token);
+        return r.status == 200 && r.body.find("\"" + id + "\"") != std::string::npos;
+    });
+}
+
+}  // namespace
+
+TEST_CASE("app launch: an outside agent's launch of a dashboard over unsaved changes waits on an approval card; "
+          "over a saved spec, and with the person's own token, it opens at once") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("launch-mcp");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    const std::string decisions = t.str("decisions");
+    std::ofstream(decisions).flush();
+    SaveApp a;
+    {
+        std::vector<std::string> e = app_env(env, t, "wait 1", t.str(""));
+        e.push_back("CALIPER_TEST_APPROVALS=" + decisions);
+        REQUIRE(a.app.start(env.exe,
+                            {"--hidden", "--applets", env.applets, "--api", "--api-port", "0", "--workspace", t.str("ws")},
+                            e));
+        if (!has_metal(a.app)) {
+            ::kill(a.app.pid, SIGTERM);
+            a.app.wait(30000);
+            return;
+        }
+        REQUIRE_MESSAGE(a.app.read_until("[api] Spec applets in a browser", 60000), a.app.text);
+        const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
+        REQUIRE(api.is_object());
+        a.port = api["port"].get<uint16_t>();
+        a.token = start_token(a.app);
+        REQUIRE(a.token.size() >= 22);
+    }
+    // The API file's token is an outside agent's, origin mcp.
+    const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
+    const std::string mcp = api["token"].get<std::string>();
+    REQUIRE(mcp != a.token);
+    ok(a.port, a.token, "spec.new", {{"id", "one"}, {"title", "One"}});
+    ok(a.port, a.token, "applet.save");
+    ok(a.port, a.token, "spec.new", {{"id", "two"}, {"title", "Two"}});
+    ok(a.port, a.token, "applet.save");
+    REQUIRE(lists(a, "local.one"));
+    REQUIRE(lists(a, "local.two"));
+    CHECK(ok(a.port, a.token, "applet.open", {{"id", "one"}})["title"] == "One");
+    CHECK(a.spec()["dirty"] == false);
+    auto cards = [&](const std::string& origin) { return a.count("applet.open (" + origin + ") waiting"); };
+
+    // Over a saved spec: an agent's launch opens at once, with no card.
+    REQUIRE(launch_v0(a.port, mcp, "local.two").status == 200);
+    CHECK(eventually(a.app, [&] { return a.spec()["id"] == "two"; }));
+    CHECK(cards("mcp") == 0);
+
+    // Over unsaved changes: held on a card, and nothing changes until it is
+    // approved.
+    retitle(a, "Two", "Two edited");
+    REQUIRE(launch_v0(a.port, mcp, "local.one").status == 200);
+    REQUIRE_MESSAGE(eventually(a.app, [&] { return cards("mcp") == 1; }), a.app.text);
+    CHECK(a.spec()["id"] == "two");
+    CHECK(a.spec()["dirty"] == true);
+    std::ofstream(decisions, std::ios::app) << "approve applet.open mcp\n";
+    CHECK(eventually(a.app, [&] { return a.spec()["id"] == "one"; }));
+
+    // The same through the command layer's app.launch (caliper-mcp's way),
+    // denied this time: the open spec stays, unsaved.
+    retitle(a, "One", "One edited");
+    {
+        const Http r = http(a.port, "POST", "/v0/commands/app.launch", mcp, json{{"id", "local.two"}}.dump());
+        REQUIRE(r.status == 200);
+        CHECK_MESSAGE(json::parse(r.body)["ok"] == true, r.body);
+    }
+    REQUIRE_MESSAGE(eventually(a.app, [&] { return cards("mcp") == 2; }), a.app.text);
+    std::ofstream(decisions, std::ios::app) << "deny applet.open mcp\n";
+    CHECK(eventually(a.app, [&] { return a.app.text.find("applet.open (mcp) denied") != std::string::npos; }));
+    CHECK(a.spec()["id"] == "one");
+    CHECK(a.spec()["dirty"] == true);
+
+    // The person's own token (origin api, not under review): at once, as
+    // the design says, and ⌘Z would bring the unsaved spec back.
+    REQUIRE(launch_v0(a.port, a.token, "local.two").status == 200);
+    CHECK(eventually(a.app, [&] { return a.spec()["id"] == "two"; }));
+    CHECK(cards("api") == 0);
+    ::kill(a.app.pid, SIGTERM);
+    CHECK_MESSAGE(a.app.wait(30000) == 0, a.app.text);
+}
+
+TEST_CASE("app launch: an in-app agent's launch of a dashboard over unsaved changes waits on an approval card") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("launch-agent");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    // A first run saves the dashboard One into the workspace.
+    {
+        SaveApp first;
+        if (!first.start(env, t, "wait 1", t.str(""))) return;
+        ok(first.port, first.token, "spec.new", {{"id", "one"}, {"title", "One"}});
+        ok(first.port, first.token, "applet.save");
+        ::kill(first.app.pid, SIGTERM);
+        REQUIRE(first.app.wait(30000) == 0);
+    }
+    // The second starts a new spec, unsaved, then launches One from the
+    // origin agent, as the side chat's agent's app.launch arrives.
+    const std::string script = t.str("script.jsonl");
+    std::ofstream(script) << R"({"name": "spec.new", "args": {"id": "draft", "title": "Draft"}})" << "\n"
+                          << R"({"name": "app.launch", "args": {"id": "local.one"}, "origin": "agent"})" << "\n";
+    const std::string decisions = t.str("decisions");
+    std::ofstream(decisions).flush();
+    Proc app;
+    std::vector<std::string> e = app_env(env, t, "wait 1", t.str(""));
+    e.push_back("CALIPER_COMMAND_SCRIPT=" + script);
+    e.push_back("CALIPER_TEST_APPROVALS=" + decisions);
+    REQUIRE(app.start(env.exe, {"--hidden", "--applets", env.applets, "--api", "--api-port", "0", "--workspace", t.str("ws")},
+                      e));
+    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
+    REQUIRE(api.is_object());
+    const uint16_t port = api["port"].get<uint16_t>();
+    const std::string token = start_token(app);
+    REQUIRE_MESSAGE(app_says(app, "applet.open (agent) waiting", 60000), app.text);
+    CHECK(ok(port, token, "spec.get")["id"] == "draft");
+    std::ofstream(decisions, std::ios::app) << "approve applet.open agent\n";
+    CHECK(eventually(app, [&] { return ok(port, token, "spec.get")["id"] == "one"; }));
+    ::kill(app.pid, SIGTERM);
+    CHECK_MESSAGE(app.wait(30000) == 0, app.text);
 }
 
 TEST_CASE("app live: attention entropy per layer, from a live stream, on the spec page while it trains") {
