@@ -1,5 +1,6 @@
 #include <caliper_builder/commands/queue.h>
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -185,6 +186,14 @@ std::optional<CommandResult> CommandQueue::approval_outcome(const std::string& a
     for (auto it = outcomes_.rbegin(); it != outcomes_.rend(); ++it)
         if (it->first == approval_id) return it->second;
     return std::nullopt;
+}
+
+std::optional<std::chrono::milliseconds> CommandQueue::approval_time_left(const std::string& approval_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = waiting_approval_.find(approval_id);
+    if (it == waiting_approval_.end() || !it->second.deadline) return std::nullopt;
+    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(*it->second.deadline - options_.now());
+    return std::max(left, std::chrono::milliseconds(0));
 }
 
 }  // namespace caliper_builder

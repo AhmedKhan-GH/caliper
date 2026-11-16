@@ -87,6 +87,13 @@ public:
     bool is_shut_down() const;
     std::size_t waiting() const;
     std::optional<CommandResult> approval_outcome(const std::string& approval_id) const;
+    // How long a caller still waits for the decision on `approval_id` before
+    // the next drain() withdraws it with command.approval_timeout, by the
+    // queue's clock (Options::now); zero once the time is up. Nothing when no
+    // caller waits on it with a time limit (an api call, a command script, a
+    // wait without a limit) or it is not waiting. The app's approval cards
+    // show it.
+    std::optional<std::chrono::milliseconds> approval_time_left(const std::string& approval_id) const;
 
 private:
     enum class Kind { invoke, approve, deny };

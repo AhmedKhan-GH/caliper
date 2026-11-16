@@ -172,6 +172,8 @@ TEST_CASE("a caller that must answer at once gets needs_approval and reads the o
     const CommandResult asked = f.get();
     REQUIRE(asked.error.code == "command.needs_approval");
     CHECK(!queue.approval_outcome(asked.approval));
+    // Nobody waits on it, so it has no time limit.
+    CHECK(!queue.approval_time_left(asked.approval));
     queue.approve(asked.approval);
     queue.drain();
     REQUIRE(queue.approval_outcome(asked.approval));
@@ -194,11 +196,16 @@ TEST_CASE("a wait with a time limit is withdrawn when nobody decides") {
     auto f = queue.submit(inv("toy.delete", 1, CommandOrigin::mcp), limited);
     queue.drain();
     const std::string approval = registry.pending_approvals().at(0).approval;
+    REQUIRE(queue.approval_time_left(approval));
+    CHECK(*queue.approval_time_left(approval) == 120s);
     clock += 119s;
     queue.drain();
     CHECK_FALSE(ready(f));
+    CHECK(*queue.approval_time_left(approval) == 1s);
     clock += 2s;
+    CHECK(*queue.approval_time_left(approval) == 0s);
     queue.drain();
+    CHECK(!queue.approval_time_left(approval));
     REQUIRE(ready(f));
     CHECK(f.get().error.code == "command.approval_timeout");
     CHECK(registry.pending_approvals().empty());
