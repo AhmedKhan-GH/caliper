@@ -81,7 +81,7 @@ A recipe is at most 1 MiB of text, and an output's `sql` at most 64 KiB. The can
 | `npy` | `.npy` | `\x93NUMPY` | native | one tensor | none |
 | `npz` | `.npz` | `PK\x03\x04` | native zip reader, stored or deflate members | tensors | none |
 | `safetensors` | `.safetensors` | a little-endian length, then `{` | native, header JSON plus mapped bytes | tensors | none |
-| `hdf5` | `.h5`, `.hdf5` | `\x89HDF\r\n\x1a\n` | libhdf5 when the build finds it | tensors | `dataset` |
+| `hdf5` | `.h5`, `.hdf5` | `\x89HDF\r\n\x1a\n` | a refusal on this branch; libhdf5 when a build finds it, planned | tensors | `dataset` |
 | `image` | `.png`, `.jpg`, `.jpeg` | `\x89PNG`, `\xFF\xD8\xFF` | stb_image | one tensor `u8 [H, W, C]` | `channels` |
 | `wav` | `.wav` | `RIFF....WAVE` | native | one tensor `[frames, channels]` with `rate_hz` | none |
 | `python` | anything else | none | a Python loader, out of process | tables and tensors | planned |
@@ -108,7 +108,7 @@ The reader options:
 - **`safetensors`** reads the 8-byte header length, the JSON header and the byte buffer, and maps every tensor's bytes. The dtypes `BOOL`, `U8`, `I8`, `U16`, `I16`, `U32`, `I32`, `U64`, `I64`, `F16`, `F32` and `F64` map onto the catalog's dtypes. `BF16` is converted to a derived `f32` tensor with a warning, because bfloat16 is common in model weights and the catalog has no such dtype; the `F8` types are skipped with a warning.
 - **`image`** decodes a PNG or a JPEG into `u8 [H, W, C]`, converting 16-bit PNG samples to 8 bits, and stores it as a derived tensor.
 - **`wav`** reads PCM with 8, 16, 24 or 32 bits per sample, IEEE float with 32 or 64 bits, and `WAVE_FORMAT_EXTENSIBLE` with either sub-format. It produces `[frames, channels]` with `rate_hz` set to the sample rate. 8-bit PCM is `u8` (unsigned, as WAV stores it), 16-bit `i16`, 24-bit `i32` (sign-extended, so the values keep their 24-bit range), 32-bit `i32`, and float `f32` or `f64`. Every format except 24-bit PCM is mapped where it lies.
-- **`hdf5`** is compiled as a refusal on the machines this branch was built on, because the build found no libhdf5; see [HDF5](#hdf5).
+- **`hdf5`** is a refusal on this branch; see [HDF5](#hdf5).
 - The tabular readers produce one `table` source per output, with the columns and DuckDB types read back from the database and the row count. The `json` and `jsonl` readers need DuckDB's JSON extension. The DuckDB release this branch builds against has it built in; the host's static DuckDB links only the `parquet` and `core_functions` extensions, so there both readers fail with `loader.json_not_available` until the host links `json` too. No reader needs any other extension, and none is ever loaded or installed at run time.
 
 ### Inferring the reader
@@ -136,7 +136,7 @@ The plan stays the same: a later stream fetches nanoarrow at a pinned release, d
 
 ### HDF5
 
-The `hdf5` reader uses libhdf5 when `find_package(HDF5)` finds it at configure time, and the build never fetches or installs it. Without it the reader is compiled as a refusal, `loader.hdf5_not_available`, whose message points to the Python loader (which reads the file with h5py) or to a conversion to safetensors or `.npy`. The machines this branch was built on have no libhdf5, so the refusal is what is built and tested.
+On this branch the `hdf5` reader is a refusal, `loader.hdf5_not_available`, whose message points to the Python loader (which reads the file with h5py) or to a conversion to safetensors or `.npy`. `find_package(HDF5)` finds no library on the machine this branch was built on, and the build never fetches or installs one, so no HDF5 code is compiled and `hdf5_available()` returns false. The plan is a reader behind `find_package(HDF5 COMPONENTS C)` that, when the library is found, reads one dataset (`reader.dataset`) or every dataset, with the same size checks as the other readers; a build without the library keeps the refusal.
 
 ## Globs
 
