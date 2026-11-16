@@ -267,7 +267,9 @@ TEST_CASE("acceptance over HTTP: the same dashboard through caliper-builder-host
     {
         Host host(ws, root + "/api");
         // The descriptor table, and the checks of a request.
-        CHECK(http(host.port, "GET", "/v0/commands", host.token).json_body() == command_table_to_json());
+        // The token is mcp's, so the person's undo and redo are not listed.
+        const json listed = http(host.port, "GET", "/v0/commands", host.token).json_body();
+        CHECK(listed["commands"].size() == command_table().size() - 2);
         CHECK(http(host.port, "GET", "/v0/commands", "").status == 401);
 
         // An agent imports files inside the workspace only.
@@ -303,9 +305,10 @@ TEST_CASE("acceptance over HTTP: the same dashboard through caliper-builder-host
             }
             host.ok_call(name, args);
         }
-        host.ok_call("history.undo", {{"steps", 2}});
-        CHECK(host.ok_call("spec.get", json::object())["json"]["panel"].size() == 2);
-        host.ok_call("history.redo", {{"steps", 2}});
+        // Undo and redo are the person's: an agent's call is refused, and
+        // the spec stays as the agent built it.
+        CHECK(host.call("history.undo", {{"steps", 2}})["error"]["code"] == "command.not_allowed");
+        CHECK(host.call("history.redo", {{"steps", 2}})["error"]["code"] == "command.not_allowed");
         const json got = host.ok_call("spec.get", json::object());
         CHECK(got["text"] == spec::to_toml(dashboard));
         CHECK(got["dirty"] == true);
@@ -313,8 +316,9 @@ TEST_CASE("acceptance over HTTP: the same dashboard through caliper-builder-host
         // A new applet is saved without approval; overwriting it waits.
         CHECK(host.ok_call("applet.save", json::object())["id"] == "run42-dashboard");
         CHECK(host.call("applet.save", json::object())["error"]["code"] == "applet.exists");
+        // The agent takes a change back with an edit that reverts it.
         host.ok_call("panel.patch", {{"id", "rows"}, {"patch", {{"title", "Metrics"}}}});
-        host.ok_call("history.undo", json::object());
+        host.ok_call("panel.patch", {{"id", "rows"}, {"patch", {{"title", nullptr}}}});
         const json overwritten = host.call_with_approval("applet.save", {{"overwrite", true}}, "allow");
         CHECK(overwritten["ok"] == true);
 

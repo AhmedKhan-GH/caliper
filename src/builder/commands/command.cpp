@@ -93,7 +93,8 @@ json command_descriptor_to_json(const CommandDescriptor& d) {
                 {"examples", d.examples},
                 {"mutates", d.mutates},
                 {"destructive", d.destructive},
-                {"frame_thread", d.frame_thread}};
+                {"frame_thread", d.frame_thread},
+                {"agents", d.agents}};
 }
 
 std::string command_tool_name(std::string_view command_name) {

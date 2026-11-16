@@ -1,6 +1,7 @@
 {
   "commands": [
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {},
@@ -67,6 +68,7 @@
       "summary": "Describes the running Caliper app: its version, the ABI epoch its applets must be built for, the services it offers, and the versions of the SDK, libtorch and its interface libraries. It changes nothing."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {},
@@ -137,6 +139,7 @@
       "summary": "Lists the applets the app found, as caliper list shows them: each applet's manifest id, its version, its kind (library or spec), its folder, its status (READY, ACTIVE for the one open now, REFUSED, SHADOWED) and the reason when it cannot run. The id is what app.launch takes. It changes nothing."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -193,6 +196,7 @@
       "summary": "Opens the page of one applet, as a click on its row on the app's landing screen does. The page shown before is closed first, and an attached live session is detached. The id is an applet's manifest id from app.applets."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -481,6 +485,7 @@
       "summary": "Lists the sources in the catalog: every table, tensor, live view, feed channel and metric that a spec can bind, with its schema, shape and rate. A source id is <kind>:<name>, such as table:run42_metrics or live:attn.weights; a spec source names it in its catalog field. Filter by kind or by the start of the name. It changes nothing."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -738,6 +743,7 @@
       "summary": "Gives one catalog source in full: its kind, where it comes from, its columns and row count for a table, feed or metric, its dtype and shape for a tensor or live view, its rate, its size, whether it can run in the browser viewer, and any warnings. The id comes from catalog.list."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -1017,6 +1023,7 @@
       "summary": "Shows a little of a source's data, to learn what it holds before binding it. A table, feed or metric gives up to limit rows (20 by default). A tensor or live view gives its statistics (min, max, mean, standard deviation and the count of non-finite values) and a box of its values, at most 64 per axis and 4096 in all, placed with start and count. The id comes from catalog.list. It changes nothing."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -1116,6 +1123,7 @@
       "summary": "Runs one read-only SQL SELECT, in DuckDB's dialect, over the workspace's tables, which are the table: sources of the catalog named without the table: prefix. It returns at most limit rows (1000 by default) and stops after timeout_ms (5000 by default). Use it to explore data or to try the SQL of a spec source. It changes nothing."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -1233,6 +1241,7 @@
       "summary": "Creates a loader for each file path given, choosing the reader from the file's extension (csv, tsv, parquet, json, jsonl, arrow, npy, npz, safetensors, hdf5, png, jpg, wav), and runs the new loaders unless run is false, so that the files' contents appear in the catalog as table: and tensor: sources. Paths are relative to the workspace; a path outside it is accepted only from the person's own drop or file dialog. Pickle files are refused. Undo deletes the loaders it created and their outputs."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {},
@@ -1316,6 +1325,7 @@
       "summary": "Lists the workspace's saved loaders. A loader is a saved recipe that turns files into catalog sources: a file or glob, a reader, and optional SQL or tensor transforms. Each has an id, which the other loader commands take. It changes nothing."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -1434,6 +1444,7 @@
       "summary": "Gives one loader in full: its TOML recipe, its reader and input path, how its last run went and the catalog sources it made. The id comes from loader.list."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -1488,6 +1499,7 @@
       "summary": "Saves a new loader from its TOML recipe, as loaders/<id>.loader.toml in the workspace, and runs it when run is true. The recipe holds caliper_loader = 0; a [loader] table with id and title; an [input] table with path (a file or glob relative to the workspace) and an optional reader; optional [reader] options; and one or more [[output]] tables, each with a name and an optional SQL SELECT over the relation input, or a tensor to select. It fails when a loader with that id exists. Undo deletes it."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -1550,6 +1562,7 @@
       "summary": "Replaces the recipe of an existing loader with new TOML text, whose [loader] id must stay the same, and runs it when run is true. It overwrites the saved recipe, so an agent's call needs the person's approval. Undo restores the previous recipe; the tables the new recipe made stay until the loader runs again. The id comes from loader.list."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -1633,6 +1646,7 @@
       "summary": "Runs a loader: reads its input files and rebuilds its outputs, which replaces the tables and tensors its previous run made. A Python loader runs as a separate process. This cannot be undone, and an agent's call needs the person's approval. The id comes from loader.list."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -1687,6 +1701,7 @@
       "summary": "Deletes a saved loader and, unless keep_outputs is true, the catalog sources it made. An agent's call needs the person's approval. Undo restores the recipe; its outputs come back when it runs again. The id comes from loader.list."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -1746,6 +1761,7 @@
       "summary": "Starts a new, empty spec and makes it the open spec: the one the builder shows and that the source, panel and layout commands edit. A spec is the text that describes an applet built from data: its sources, its panels and their layout. The id names the applet, in lower case with digits, - and _. Undo returns to the spec that was open before."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -1820,6 +1836,7 @@
       "summary": "Opens a spec file of the workspace as the open spec. The path is relative to the workspace and ends in .spec.toml, such as applets/attention-entropy/attention-entropy.spec.toml. To open a saved applet by its id, use applet.open. Undo returns to the spec that was open before, with its unsaved changes."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -1881,6 +1898,7 @@
       "summary": "Returns the open spec as its TOML text and as its canonical JSON form, with its applet id, the file it was saved to or opened from, and whether it has unsaved changes. With applet, it returns that saved spec applet's spec instead, read from its files without opening it. It changes nothing."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -1964,6 +1982,7 @@
       "summary": "Replaces the whole open spec with new TOML text after checking it; text with an error is refused, and the open spec stays as it was. Use spec.validate first to see every error. Undo restores the previous text. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -2056,6 +2075,7 @@
       "summary": "Checks a spec and lists its errors and warnings, each with a code, a message and where it is. It checks the given text, or the open spec when no text is given. An invalid spec is reported in the result, not as an error. It changes nothing."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -2266,6 +2286,7 @@
       "summary": "Adds a source to the open spec. A spec source gives data a name that panels bind. It has exactly one of catalog (a catalog source id from catalog.list, such as live:attn.weights), sql (one read-only SELECT over the workspace's tables) or from (the id of another source of this spec), and an optional list of tensor transforms (slice, reduce, normalise) for tensor-shaped data. Undo removes it. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -2619,6 +2640,7 @@
       "summary": "Changes a source of the open spec with a JSON merge patch (RFC 7386): the keys given replace the source's own, and a key set to null is removed. The id cannot change. The id comes from spec.get. Undo restores the source. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -2703,6 +2725,7 @@
       "summary": "Removes a source from the open spec. A source that a panel binds, or that another source derives from, cannot be removed until they change. The id comes from spec.get. Undo restores it. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -3024,6 +3047,7 @@
       "summary": "Adds a panel to the open spec. A panel draws one primitive from the sources it binds: series (lines), heatmap (a colour-mapped grid), points (a 2-D or 3-D cloud), histogram, table, image or text. bind maps each slot of the primitive to a spec source id, or to <source>.<column> for one column of a tabular source. place puts it beside, above, below or in tabs with another panel; without place, the panel goes to the right of the whole layout. Undo removes it. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -3589,6 +3613,7 @@
       "summary": "Changes a panel of the open spec with a JSON merge patch (RFC 7386) of its title, primitive, bindings and options: the keys given replace the panel's own, a key set to null is removed, and bind and options merge key by key. The id cannot change. The id comes from spec.get. Undo restores the panel. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -3673,6 +3698,7 @@
       "summary": "Removes a panel from the open spec and from its layout. The id comes from spec.get. Undo restores it in its place. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -3740,6 +3766,7 @@
       "summary": "Draws one panel of the open spec off screen and returns it as a PNG image, so that you can check what it looks like. width and height are in pixels, 800 by 500 by default. The id comes from spec.get. It changes nothing."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -3881,6 +3908,7 @@
       "summary": "Returns the data of one panel as the browser viewer draws it: the panel's data after its sources' transforms, within the bounds of what a panel can show (long lines as a min/max envelope, large grids and clouds sampled at a stride, a histogram's bin counts, the first 1,000 rows of a table), with a version. Pass the version you have as known, and the answer is unchanged, with no data, until the panel's sources, the spec or the catalog change. It reads a saved spec applet with applet, else the open spec. It changes nothing."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -4070,6 +4098,7 @@
       "summary": "Places a panel of the open spec next to another one, the target: beside puts it to the right, above and below above or below, tabbed in tabs with the target. ratio is the share of the space the placed panel gets, from 0.05 to 0.95, half by default. A panel already in the layout is moved. Undo restores the previous layout. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -4325,6 +4354,7 @@
       "summary": "Replaces the whole layout of the open spec. The layout is a flat list of nodes: each node splits its space horizontally or vertically between its children, with ratio the share of the first child, or shows them in tabs. A child is a panel id or another node's id, and root names the top node, or the one panel when there is only one. Every panel of the spec should appear once; a panel left out is not drawn. Undo restores the previous layout. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -4395,6 +4425,7 @@
       "summary": "Starts a preview of the open spec: a scratch copy on which edits of the open spec stack, each checked like a real edit, while the open spec, the undo history and the journal stay as they are. An edit reaches the preview when its call names the preview's id, which Caliper API takes in the X-Caliper-Preview header; spec.get, spec.validate and panel.render read the preview the same way. With panel or source the preview is scoped to that target: its edits may change only the target, the sources a target panel binds and the items the preview adds. preview.diff shows the stacked change, and only the person commits it, with Accept in Caliper. A preview ends when it is committed or discarded, or after 30 minutes without use."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -4490,6 +4521,7 @@
       "summary": "Shows what a preview would change: the diff of the open spec's canonical TOML against the preview with every edit stacked on it, how many edits it holds and what the validator warns about. When the open spec changed since the edits were made, they are applied to it again first, and when one no longer applies the call fails with history.conflict. It changes nothing."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -4569,6 +4601,7 @@
       "summary": "Applies every edit of a preview to the open spec, in order, as one step that one undo reverts, and ends the preview. Only the person commits a preview, with Accept in Caliper: a call from an agent, from caliper-mcp or from a program is refused with preview.not_allowed. When the open spec changed since the edits were made, they are applied to it again, and when one no longer applies the commit is refused with history.conflict and nothing changes."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -4615,6 +4648,7 @@
       "summary": "Ends a preview and drops its edits. The open spec, the undo history and the journal stay as they were, as if the preview had never been made."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -4669,6 +4703,7 @@
       "summary": "Saves the open spec as a spec applet of the workspace: the folder applets/<id>/ with a manifest <id>.caliper.toml and the spec <id>.spec.toml. The id is the spec's applet id unless one is given. Saving over an existing applet needs overwrite set to true. It writes files, so an agent's call needs the person's approval, and it cannot be undone."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -4743,6 +4778,7 @@
       "summary": "Opens a saved spec applet of the workspace by its id, from applet.list, as the open spec, so that it can be edited. Undo returns to the spec that was open before."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {},
@@ -4803,6 +4839,7 @@
       "summary": "Lists the spec applets saved in the workspace, with each one's id, title, folder and the time it was last saved. The id is what applet.open takes. It changes nothing."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {},
@@ -4849,6 +4886,7 @@
       "summary": "Says which of your commands wait for the person's approval in Caliper before they run: destructive commands, and edits of the open spec when the person reviews spec changes from your origin (for agents, on by default). A call that waits is held until the person decides, for up to 120 seconds, or answered with command.needs_approval; a dry run, an edit of a preview and an edit that changes nothing never wait. An agent that asks the person itself before a change can leave out what Caliper already asks. It changes nothing."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {},
@@ -4888,6 +4926,7 @@
       "summary": "Returns the frame the app draws, the whole window, as a PNG image, so that you can see the app as the person does. It changes nothing."
     },
     {
+      "agents": false,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -4982,9 +5021,10 @@
         ],
         "type": "object"
       },
-      "summary": "Undoes the most recent change to the workspace, or the given number of steps. A step is one command, several commands sent with the same group, or a run of commands merged by a merge key, such as a slider drag. Undo restores the open spec and the saved loader recipes; it does not undo saving an applet or running a loader. Undoing a step that overwrote or deleted saved data may need the person's approval when an agent asks. history.list shows the steps first."
+      "summary": "Undoes the most recent change to the workspace, or the given number of steps. A step is one command, several commands sent with the same group, or a run of commands merged by a merge key, such as a slider drag. Undo restores the open spec and the saved loader recipes; it does not undo saving an applet or running a loader. Undo is the person's tool: the app's UI, the builder and programs over Caliper API may undo, and an agent may not; an agent takes back a change with an edit. history.list shows the steps first."
     },
     {
+      "agents": false,
       "args": {
         "additionalProperties": false,
         "properties": {
@@ -5079,9 +5119,10 @@
         ],
         "type": "object"
       },
-      "summary": "Redoes the step that was undone most recently, or the given number of steps. Any new change to the workspace clears what can be redone. Redoing a step that overwrites or deletes saved data may need the person's approval when an agent asks."
+      "summary": "Redoes the step that was undone most recently, or the given number of steps. Any new change to the workspace clears what can be redone. Redo is the person's tool, as undo is: an agent may not redo."
     },
     {
+      "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {

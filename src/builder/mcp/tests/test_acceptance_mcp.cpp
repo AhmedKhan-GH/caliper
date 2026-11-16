@@ -149,11 +149,18 @@ TEST_CASE("acceptance over MCP: an outside agent builds the dashboard through ca
     const json discover = child.request("discover", "server/discover", json::object());
     CHECK(discover["result"]["supportedVersions"][0] == "2026-07-28");
     const json tools = child.request("tools", "tools/list", json::object())["result"]["tools"];
-    const json table = command_table_to_json();
+    // Every command an agent may run is a tool; the person's undo and redo are not.
+    json table = command_table_to_json();
+    json agents_may = json::array();
+    for (const auto& c : table["commands"])
+        if (c["agents"] == true) agents_may.push_back(c);
+    table["commands"] = agents_may;
     REQUIRE(tools.size() == table["commands"].size());
+    REQUIRE(tools.size() == command_table().size() - 2);
     std::set<std::string> names;
     for (const auto& t : tools) names.insert(t["name"].get<std::string>());
     for (const auto& c : table["commands"]) CHECK(names.count(command_tool_name(c["name"].get<std::string>())) == 1);
+    CHECK(names.count("history_undo") == 0);
 
     const json resources = child.request("resources", "resources/list", json::object())["result"];
     std::set<std::string> uris;

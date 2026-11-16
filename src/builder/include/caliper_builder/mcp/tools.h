@@ -68,7 +68,9 @@ struct ToolTableLimits {
     static constexpr std::size_t max_commands = 1024;
 };
 
-// Builds the tools of `descriptors`. A descriptor that fails
+// Builds the tools of `descriptors`. A descriptor whose `agents` is false
+// (history.undo, history.redo: the person's own tools) is left out without a
+// report, since no agent may run it. A descriptor that fails
 // check_command_descriptor(), repeats a name or makes a tool name MCP refuses
 // is dropped and reported (mcp.bad_descriptor).
 ToolTableBuild build_tool_table(std::vector<CommandDescriptor> descriptors, std::string source);
@@ -77,7 +79,8 @@ ToolTableBuild build_tool_table(std::vector<CommandDescriptor> descriptors, std:
 // The envelope must be that, with version 0 and at most max_commands
 // commands; otherwise the whole table is refused (mcp.bad_command_table). A
 // command must hold the eight descriptor fields with their types (other
-// fields are ignored); one that does not is dropped and reported. Then
+// fields are ignored); one that does not is dropped and reported. `agents` is
+// read when present, and true when an older app sends none. Then
 // build_tool_table(..., "app").
 ToolTableBuild parse_app_command_table(const nlohmann::json& body);
 

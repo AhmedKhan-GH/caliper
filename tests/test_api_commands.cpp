@@ -550,7 +550,9 @@ TEST_CASE("api commands: caliper-mcp drives a session through the app's API serv
     caliper_builder::mcp::test::McpChild child({"--api-file", api_file.string()});
     const json tools = child.request("tools", "tools/list", json::object());
     REQUIRE(tools.contains("result"));
-    CHECK(tools["result"]["tools"].size() == caliper_builder::command_table_to_json()["commands"].size());
+    std::size_t agents_may = 0;  // caliper-mcp offers no tool for the person's undo and redo
+    for (const auto& c : caliper_builder::command_table_to_json()["commands"]) agents_may += c["agents"] == true;
+    CHECK(tools["result"]["tools"].size() == agents_may);
     const json result = child.call("new", "spec_new", {{"id", "from-mcp"}, {"title", "From MCP"}});
     INFO(result.dump());
     CHECK(result["isError"] == false);

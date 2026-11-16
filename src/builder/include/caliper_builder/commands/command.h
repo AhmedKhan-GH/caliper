@@ -47,6 +47,11 @@ struct CommandDescriptor {
     bool mutates = false;       // changes workspace state; journaled and undoable
     bool destructive = false;   // deletes or overwrites saved data, or runs a Python loader
     bool frame_thread = false;  // must run on the app's frame thread
+    // Whether an agent may run it: the origins agent and mcp. history.undo
+    // and history.redo are the person's tools and say false; the registry
+    // refuses them to agents with command.not_allowed, and the clients that
+    // build an agent's tools from the table leave them out.
+    bool agents = true;
 };
 
 Error check_command_name(std::string_view name);
@@ -56,7 +61,7 @@ Error check_command_name(std::string_view name);
 Error check_command_descriptor(const CommandDescriptor& descriptor);
 
 // {"name", "summary", "args", "result", "examples", "mutates", "destructive",
-// "frame_thread"}.
+// "frame_thread", "agents"}.
 nlohmann::json command_descriptor_to_json(const CommandDescriptor& descriptor);
 
 // "panel_create" for "panel.create", and back; an empty string when the input

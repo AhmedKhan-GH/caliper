@@ -48,10 +48,13 @@ json error_of(const json& tool_result) {
 
 }  // namespace
 
-TEST_CASE("every command of the table becomes one valid tool") {
-    const auto& table = command_table();
-    REQUIRE(!table.empty());
-    ToolTableBuild b = build_tool_table(table, "built-in");
+TEST_CASE("every command of the table that agents may run becomes one valid tool") {
+    // The person's own commands (agents false) are left out, unreported.
+    std::vector<CommandDescriptor> table;
+    for (const auto& d : command_table())
+        if (d.agents) table.push_back(d);
+    REQUIRE(table.size() == command_table().size() - 2);
+    ToolTableBuild b = build_tool_table(command_table(), "built-in");
     REQUIRE(b.error.ok());
     REQUIRE(b.table);
     CHECK(b.dropped.empty());
@@ -105,16 +108,39 @@ TEST_CASE("tool names follow MCP's rule") {
     CHECK_FALSE(is_valid_mcp_tool_name("caf\xc3\xa9"));
 }
 
+TEST_CASE("the person's commands, undo and redo, are no tools for an agent") {
+    ToolTableBuild built = build_tool_table(command_table(), "built-in");
+    REQUIRE(built.table);
+    ToolTableBuild app = parse_app_command_table(command_table_to_json());
+    REQUIRE(app.table);
+    for (const ToolTable* t : {built.table.get(), app.table.get()}) {
+        CHECK(t->find_command("history.undo") == nullptr);
+        CHECK(t->find_command("history.redo") == nullptr);
+        CHECK(t->find_command("history.list") != nullptr);
+        for (const auto& tool : t->tools) CHECK(tool["name"] != "history_undo");
+    }
+}
+
 TEST_CASE("the app's table is parsed strictly and a bad command is dropped alone") {
     const json body = command_table_to_json();
     ToolTableBuild ok = parse_app_command_table(body);
     REQUIRE(ok.error.ok());
     CHECK(ok.table->source == "app");
-    CHECK(ok.table->commands.size() == command_table().size());
+    const std::size_t agents_may = command_table().size() - 2;  // not history.undo, history.redo
+    CHECK(ok.table->commands.size() == agents_may);
     CHECK(ok.dropped.empty());
     // The same table from the app and built in has the same fingerprint.
     CHECK(ok.table->fingerprint == build_tool_table(command_table(), "built-in").table->fingerprint);
-    CHECK(ok.table->to_json() == body);
+    json shown = body;
+    json kept = json::array();
+    for (const auto& c : body["commands"])
+        if (c["agents"] == true) kept.push_back(c);
+    shown["commands"] = kept;
+    CHECK(ok.table->to_json() == shown);
+    // An app that predates the flag: every command it sends is an agent's.
+    json older = body;
+    for (auto& c : older["commands"]) c.erase("agents");
+    CHECK(parse_app_command_table(older).table->commands.size() == command_table().size());
 
     CHECK(parse_app_command_table(json::array()).error.code == "mcp.bad_command_table");
     json v1 = body;
@@ -136,7 +162,7 @@ TEST_CASE("the app's table is parsed strictly and a bad command is dropped alone
     ToolTableBuild part = parse_app_command_table(mixed);
     REQUIRE(part.error.ok());
     CHECK(part.dropped.size() == 4);
-    CHECK(part.table->commands.size() == command_table().size() - 2);
+    CHECK(part.table->commands.size() == agents_may - 2);
     CHECK(part.table->find_command(command_table()[0].name) == nullptr);
     CHECK(part.table->find_command(command_table()[2].name) != nullptr);
 }

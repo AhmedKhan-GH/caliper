@@ -284,7 +284,11 @@ TEST_CASE("a modern session drives every route of the fake API") {
     CHECK(d["result"]["supportedVersions"][0] == "2026-07-28");
 
     const json list = child.request("l", "tools/list", json::object());
-    const json app_table = api.table();
+    json app_table = api.table();
+    json agents_may = json::array();  // the person's undo and redo are no tools
+    for (const auto& c : app_table["commands"])
+        if (c.value("agents", true)) agents_may.push_back(c);
+    app_table["commands"] = agents_may;
     REQUIRE(list["result"]["tools"].size() == app_table["commands"].size());
     for (std::size_t i = 0; i < app_table["commands"].size(); ++i)
         CHECK(list["result"]["tools"][i]["name"] == command_tool_name(app_table["commands"][i]["name"].get<std::string>()));
@@ -430,7 +434,7 @@ TEST_CASE("the app restarting, a stale token, a changed table and an app without
     CHECK(ack["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"] == "sub");
 
     CHECK(child.call(2, "app_info", json::object(), false)["isError"] == false);
-    const std::size_t full = api.table()["commands"].size();
+    const std::size_t full = api.table()["commands"].size() - 2;  // not history.undo, history.redo
     CHECK(child.request(3, "tools/list", json::object(), false)["result"]["tools"].size() == full);
 
     // The app's token changes but the file still names the old one.
@@ -475,7 +479,8 @@ TEST_CASE("the app restarting, a stale token, a changed table and an app without
     const json none = error_of(child.call(9, command_tool_name(plain->name), plain->examples[0], false));
     CHECK(none["code"] == "mcp.no_command_layer");
     CHECK(none["message"].get<std::string>().find("no command layer yet") != std::string::npos);
-    CHECK(child.request(10, "tools/list", json::object(), false)["result"]["tools"].size() == command_table().size());
+    CHECK(child.request(10, "tools/list", json::object(), false)["result"]["tools"].size() ==
+          command_table().size() - 2);  // not history.undo, history.redo
 
     // The app exits and leaves its file, then the file goes.
     api.server->stop();

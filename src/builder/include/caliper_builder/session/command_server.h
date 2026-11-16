@@ -6,7 +6,10 @@
 // the app is wired; the app's own API server replaces it at the wiring
 // (design/builder-session.md, The stand-in host).
 //
-//   GET  /v0/commands         the descriptor table, command_table_to_json()
+//   GET  /v0/commands         the descriptor table, command_table_to_json(),
+//                             without the commands whose `agents` is false
+//                             (history.undo, history.redo) for an agent's or
+//                             mcp's token
 //   POST /v0/commands/{name}  the `args` object as a JSON body; the result
 //                             envelope with HTTP 200 whether ok or not
 //

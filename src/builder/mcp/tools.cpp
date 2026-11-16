@@ -98,6 +98,9 @@ ToolTableBuild build_tool_table(std::vector<CommandDescriptor> descriptors, std:
     table->source = std::move(source);
     std::set<std::string> names;
     for (auto& d : descriptors) {
+        // The person's own commands (history.undo, history.redo) are no tools
+        // for an agent; the app refuses them to the agent and mcp origins.
+        if (!d.agents) continue;
         if (Error err = check_command_descriptor(d)) {
             out.dropped.push_back({"mcp.bad_descriptor", err.message, d.name.size() <= 64 ? d.name : std::string()});
             continue;
@@ -171,6 +174,9 @@ ToolTableBuild parse_app_command_table(const json& body) {
         d.mutates = mutates->get<bool>();
         d.destructive = destructive->get<bool>();
         d.frame_thread = frame_thread->get<bool>();
+        // An app that predates the flag sends none; its commands are agents'.
+        const auto agents = c.find("agents");
+        if (agents != c.end() && agents->is_boolean()) d.agents = agents->get<bool>();
         descriptors.push_back(std::move(d));
     }
     out = build_tool_table(std::move(descriptors), "app");

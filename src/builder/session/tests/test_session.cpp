@@ -331,7 +331,8 @@ TEST_CASE("the open spec is edited with dry runs, diffs, warnings and exact undo
         REQUIRE(parked.error.code == "command.needs_approval");
         REQUIRE(f.s->registry().approve(parked.approval).ok);
     }
-    ok(*f.s, "history.undo", json::object(), kAgent);
+    CHECK(err(*f.s, "history.undo", json::object(), kAgent) == "command.not_allowed");  // the person's tool
+    ok(*f.s, "history.undo");
     CHECK(f.s->open_spec()->spec.find_panel("p")->options.x_label == std::nullopt);
     CHECK(f.s->open_spec()->spec.find_panel("q")->options.colormap == std::nullopt);
 

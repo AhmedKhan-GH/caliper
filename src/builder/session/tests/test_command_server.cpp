@@ -68,7 +68,13 @@ TEST_CASE("GET /v0/commands gives the descriptor table and POST runs a command")
     Served sv("server-basic");
     const HttpReply list = http(sv.port, "GET", "/v0/commands", sv.token);
     CHECK(list.status == 200);
-    CHECK(list.json_body() == command_table_to_json());
+    // The token is mcp's: the table without the person's undo and redo.
+    json shown = command_table_to_json();
+    json kept = json::array();
+    for (const auto& c : shown["commands"])
+        if (c["agents"] == true) kept.push_back(c);
+    shown["commands"] = kept;
+    CHECK(list.json_body() == shown);
     CHECK(has_header(list, "Cache-Control: no-store"));
     CHECK(has_header(list, "X-Content-Type-Options: nosniff"));
     CHECK(has_header(list, "Connection: close"));

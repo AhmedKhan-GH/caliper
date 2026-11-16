@@ -203,7 +203,7 @@ TEST_CASE("the legacy handshake negotiates a revision and serves the client") {
     REQUIRE(list.contains("result"));
     CHECK_FALSE(list["result"].contains("resultType"));
     CHECK_FALSE(list["result"].contains("ttlMs"));
-    CHECK(list["result"]["tools"].size() == command_table().size());
+    CHECK(list["result"]["tools"].size() == command_table().size() - 2);  // not undo, redo
 
     const json missing = h.request(7, "resources/read", {{"uri", "caliper://docs/none.md"}});
     const json seven = 7;
@@ -250,7 +250,7 @@ TEST_CASE("modern requests carry their revision and get the revision's result fi
     CHECK(list["result"]["resultType"] == "complete");
     CHECK(list["result"]["ttlMs"] == 0);
     CHECK(list["result"]["cacheScope"] == "public");
-    CHECK(list["result"]["tools"].size() == command_table().size());
+    CHECK(list["result"]["tools"].size() == command_table().size() - 2);  // not undo, redo
     const json cursor = h.request(11, "tools/list", modern({{"cursor", "abc"}}));
     const json eleven = 11;
     check_error(cursor, -32602, &eleven);
@@ -270,6 +270,13 @@ TEST_CASE("tools/call checks the tool and its arguments before it looks for the 
     const json unknown = h.request(1, "tools/call", modern({{"name", "no_such_tool"}, {"arguments", json::object()}}));
     const json one = 1;
     check_error(unknown, -32602, &one);
+    // The person's undo and redo are no tools: a forced call is refused as unknown.
+    for (const char* forced : {"history_undo", "history_redo"}) {
+        const json r = h.request(std::string("forced-") + forced, "tools/call",
+                                 modern({{"name", forced}, {"arguments", json::object()}}));
+        const json id = std::string("forced-") + forced;
+        check_error(r, -32602, &id);
+    }
     const json no_name = h.request(2, "tools/call", modern({{"arguments", json::object()}}));
     const json two = 2;
     check_error(no_name, -32602, &two);
@@ -281,6 +288,7 @@ TEST_CASE("tools/call checks the tool and its arguments before it looks for the 
     // tool error the model can correct.
     int id = 100;
     for (const auto& d : table) {
+        if (!d.agents) continue;  // no tool: the person's undo and redo
         const json r = h.request(id++, "tools/call",
                                  modern({{"name", command_tool_name(d.name)}, {"arguments", {{"no_such_argument", 1}}}}));
         CAPTURE(d.name);
@@ -380,7 +388,13 @@ TEST_CASE("resources are listed in pages and read by URI") {
     CHECK(page["result"]["resultType"] == "complete");
 
     const json table = h.request("read-2", "resources/read", modern({{"uri", kCommandTableUri}}));
-    CHECK(json::parse(table["result"]["contents"][0]["text"].get<std::string>()) == command_table_to_json());
+    // The table the agent reads is its tools': without the person's undo and redo.
+    json agents_table = command_table_to_json();
+    json kept = json::array();
+    for (const auto& c : agents_table["commands"])
+        if (c["agents"] == true) kept.push_back(c);
+    agents_table["commands"] = kept;
+    CHECK(json::parse(table["result"]["contents"][0]["text"].get<std::string>()) == agents_table);
     const json schema = h.request("read-3", "resources/read", modern({{"uri", kSpecSchemaUri}}));
     const json parsed = json::parse(schema["result"]["contents"][0]["text"].get<std::string>(), nullptr, false);
     CHECK(parsed.is_object());

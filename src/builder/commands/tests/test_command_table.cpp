@@ -238,8 +238,10 @@ TEST_CASE("command_table.json is exactly the table's JSON, so the sidecar sees t
     CHECK(body["commands"].size() == cb::command_table().size());
     CHECK(body["commands"][0]["name"] == "app.info");
     for (const auto& c : body["commands"]) {
-        CHECK(c.size() == 8);
-        for (const char* k : {"name", "summary", "args", "result", "examples", "mutates", "destructive", "frame_thread"})
+        CHECK(c.size() == 9);
+        for (const char* k :
+             {"name", "summary", "args", "result", "examples", "mutates", "destructive", "frame_thread", "agents"})
             CHECK(c.contains(k));
+        CHECK(c["agents"] == (c["name"] != "history.undo" && c["name"] != "history.redo"));
     }
 }

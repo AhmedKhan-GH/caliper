@@ -20,7 +20,9 @@
 //      and merging are kept, and no journal line is written unless the
 //      journal also records read-only commands.
 // history.undo, history.redo and history.list are built in: every registry
-// has them, bound to the history it owns. Undoing or redoing a step asks the
+// has them, bound to the history it owns. Undo and redo are the person's
+// tools (their descriptors say agents = false), so the origins agent and mcp
+// get command.not_allowed for them; an agent reverts a change with an edit. Undoing or redoing a step asks the
 // approval policy about each destructive command in it, with the history
 // command's origin; a failed undo or redo rolls the step back, drops the
 // steps that depend on it and answers history.undo_failed or

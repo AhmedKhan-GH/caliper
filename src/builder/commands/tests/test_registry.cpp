@@ -478,19 +478,20 @@ TEST_CASE("a custom policy can deny, and a throwing policy denies") {
     CHECK(r.invoke(inv("toy.get")).ok);
 }
 
-TEST_CASE("an agent cannot redo or undo a destructive step without approval") {
+TEST_CASE("a program cannot redo or undo a destructive step without approval") {
     CommandRegistry r;
     Store s;
     add_toy(r, s, /*destructive=*/true);
     REQUIRE(r.invoke(inv("toy.set", {{"key", "a"}, {"value", 1}})).ok);
-    // The person may undo it; an agent must ask.
-    const auto asked = r.invoke(inv("history.undo", {}, CommandOrigin::agent));
+    // The person may undo it; a program over Caliper API must ask (an agent
+    // may not undo at all).
+    const auto asked = r.invoke(inv("history.undo", {}, CommandOrigin::api));
     REQUIRE(asked.error.code == "command.needs_approval");
     CHECK(s.values["a"] == 1);
     REQUIRE(r.approve(asked.approval).ok);
     CHECK(s.values.empty());
 
-    const auto redo = r.invoke(inv("history.redo", {}, CommandOrigin::mcp));
+    const auto redo = r.invoke(inv("history.redo", {}, CommandOrigin::api));
     REQUIRE(redo.error.code == "command.needs_approval");
     // The history changes before the approval: the approved redo is refused.
     REQUIRE(r.invoke(inv("toy.set", {{"key", "b"}, {"value", 2}})).ok);
@@ -680,4 +681,47 @@ TEST_CASE("the approval review is kept with each parked invocation and shown in 
     CHECK(cb::pending_approval_to_json(pending[1])["review"].is_null());
     REQUIRE(r.approve(asked.approval).ok);
     CHECK(s.values["a"] == 2);
+}
+
+TEST_CASE("history.undo and history.redo are the person's: agent and mcp are refused before any policy or history work") {
+    const fs::path dir = fs::path(CALIPER_BUILDER_TEST_TMP) / "registry-history-agents";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    const std::string path = (dir / "commands.jsonl").string();
+    auto opened = CommandJournal::open(path);
+    REQUIRE(opened.error.ok());
+    CommandRegistry r;
+    r.set_journal(opened.journal.get());
+    Store s;
+    add_toy(r, s);
+    int asked = 0;
+    r.set_approval_policy([&](const CommandDescriptor& d, const CommandInvocation& i) {
+        ++asked;
+        return cb::default_approval_policy(d, i);
+    });
+    REQUIRE(r.invoke(inv("toy.set", {{"key", "a"}, {"value", 1}}, CommandOrigin::agent)).ok);
+    const std::size_t lines = cb::read_journal(path).events.size();
+    for (const char* name : {"history.undo", "history.redo"})
+        for (CommandOrigin o : {CommandOrigin::agent, CommandOrigin::mcp}) {
+            CAPTURE(name);
+            asked = 0;
+            const CommandResult refused = r.invoke(inv(name, json::object(), o));
+            CHECK(refused.error.code == "command.not_allowed");
+            CHECK(refused.error.message.find("edit") != std::string::npos);
+            CHECK(asked == 0);
+        }
+    CHECK(s.values["a"] == 1);
+    CHECK(r.history_state().undo.size() == 1);
+    CHECK(cb::read_journal(path).events.size() == lines);
+    CHECK(r.pending_approvals().empty());
+    // history.list stays readable for agents; the person and programs undo and redo.
+    CHECK(r.invoke(inv("history.list", json::object(), CommandOrigin::mcp)).ok);
+    REQUIRE(r.invoke(inv("history.undo", json::object(), CommandOrigin::ui)).ok);
+    CHECK(s.values.count("a") == 0);
+    REQUIRE(r.invoke(inv("history.redo", json::object(), CommandOrigin::api)).ok);
+    CHECK(s.values["a"] == 1);
+    REQUIRE(r.invoke(inv("history.undo", json::object(), CommandOrigin::builder)).ok);
+    // The descriptors say so, for the clients that build tools from them.
+    for (const auto& d : cb::history_command_descriptors())
+        CHECK(cb::command_descriptor_to_json(d)["agents"] == (d.name == "history.list"));
 }

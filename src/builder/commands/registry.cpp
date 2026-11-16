@@ -50,6 +50,7 @@ json move_result_schema(const char* verb) {
 CommandDescriptor make_history(const char* name, const char* summary, json args, json result, json example,
                                bool mutates) {
     CommandDescriptor d;
+    d.agents = !mutates;  // undo and redo are the person's; the list is everyone's
     d.name = name;
     d.summary = summary;
     d.args = std::move(args);
@@ -126,14 +127,14 @@ std::vector<CommandDescriptor> history_command_descriptors() {
         "Undoes the most recent change to the workspace, or the given number of steps. A step is one command, "
         "several commands sent with the same group, or a run of commands merged by a merge key, such as a slider "
         "drag. Undo restores the open spec and the saved loader recipes; it does not undo saving an applet or "
-        "running a loader. Undoing a step that overwrote or deleted saved data may need the person's approval "
-        "when an agent asks. history.list shows the steps first.",
+        "running a loader. Undo is the person's tool: the app's UI, the builder and programs over Caliper API "
+        "may undo, and an agent may not; an agent takes back a change with an edit. history.list shows the "
+        "steps first.",
         steps_arg_schema, move_result_schema("undone"), json{{"steps", 1}}, true));
     out.push_back(make_history(
         "history.redo",
         "Redoes the step that was undone most recently, or the given number of steps. Any new change to the "
-        "workspace clears what can be redone. Redoing a step that overwrites or deletes saved data may need the "
-        "person's approval when an agent asks.",
+        "workspace clears what can be redone. Redo is the person's tool, as undo is: an agent may not redo.",
         steps_arg_schema, move_result_schema("redone"), json{{"steps", 1}}, true));
     json list_args = json::parse(R"json({
       "type": "object", "additionalProperties": false, "required": [],
@@ -360,6 +361,14 @@ CommandResult CommandRegistry::invoke(CommandInvocation inv) {
     if (inv.origin == CommandOrigin::viewer && entry.descriptor.mutates)
         return CommandResult::failure(
             inv.id, Error("command.not_allowed", inv.name + " changes the workspace, and the viewer origin only reads.",
+                          "origin"));
+    // The person's own commands (history.undo and history.redo) are refused
+    // to agents before any policy or history work, so they are never journaled.
+    if (!entry.descriptor.agents && (inv.origin == CommandOrigin::agent || inv.origin == CommandOrigin::mcp))
+        return CommandResult::failure(
+            inv.id, Error("command.not_allowed",
+                          inv.name + " is the person's own tool, so an agent cannot run it; to take back a change, "
+                                     "send an edit that reverts it, which the person reviews.",
                           "origin"));
     if (!entry.handler)
         return CommandResult::failure(

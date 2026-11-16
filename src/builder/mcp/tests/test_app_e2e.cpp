@@ -177,7 +177,7 @@ TEST_CASE("caliper-mcp drives the real app end to end") {
     const json discover = request(*server, &out_log, &buf, "d", "server/discover", json::object());
     CHECK(discover["result"]["supportedVersions"][0] == "2026-07-28");
     const json list = request(*server, &out_log, &buf, "l", "tools/list", json::object());
-    CHECK(list["result"]["tools"].size() == command_table().size());
+    CHECK(list["result"]["tools"].size() == command_table().size() - 2);  // not history.undo, history.redo
 
     const json info = request(*server, &out_log, &buf, 1, "tools/call", {{"name", "app_info"}, {"arguments", json::object()}});
     REQUIRE_MESSAGE(info["result"]["isError"] == false, info.dump());

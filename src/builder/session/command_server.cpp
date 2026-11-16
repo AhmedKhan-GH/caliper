@@ -499,7 +499,15 @@ struct CommandServer::Impl {
         }
         if (req.method == "GET") {
             if (length > 0 || !req.body.empty()) return error_response(413, "A GET takes no body.");
-            return json_response(command_table_to_json());
+            // An agent's token is not shown the person's own commands.
+            json table = command_table_to_json();
+            if (options.origin == CommandOrigin::agent || options.origin == CommandOrigin::mcp) {
+                json kept = json::array();
+                for (auto& c : table["commands"])
+                    if (c.value("agents", true)) kept.push_back(std::move(c));
+                table["commands"] = std::move(kept);
+            }
+            return json_response(table);
         }
         if (cl.empty()) return error_response(411, "A POST needs Content-Length.");
         if (length > options.max_body_bytes) return error_response(413, "The body is larger than 1 MiB.");
