@@ -23,6 +23,7 @@
 // the frame loop. No Asyncify is needed.
 #include "fonts.h"
 #include "net_source.h"
+#include "net/json.h"
 #include "page_style.h"
 #include "source_poll.h"
 #include "web_input.h"
@@ -522,14 +523,29 @@ void on_event(const caliper_live_views::LiveEvent& e) {
         g.publish_soon = true;
         return;
     }
+    // The page may add to a selection's detail what the view layer does not
+    // know: the item space of the axis and the selected items (3.1).
+    std::string detail = e.detail;
+    if (std::strcmp(e.type, "select") == 0) {
+        char* aug = (char*)EM_ASM_PTR({
+            var f = Module["onAugment"];
+            if (!f) return 0;
+            var d = f(UTF8ToString($0), JSON.parse(UTF8ToString($1)));
+            return d ? stringToNewUTF8(JSON.stringify(d)) : 0;
+        }, e.view.c_str(), e.detail.c_str());
+        if (aug) {
+            detail = aug;
+            std::free(aug);
+        }
+    }
     if (g.net) {
         const uint64_t key = g.net->key_of(e.view);
-        if (key && g.net->send_event(key, e.type, e.detail)) ++g.events_sent;
+        if (key && g.net->send_event(key, e.type, detail)) ++g.events_sent;
     }
     EM_ASM({
         var cb = Module["onEvent"];
         if (cb) cb(UTF8ToString($0), UTF8ToString($1), JSON.parse(UTF8ToString($2)));
-    }, e.view.c_str(), e.type, e.detail.c_str());
+    }, e.view.c_str(), e.type, detail.c_str());
     if (std::strcmp(e.type, "hover") != 0) g.publish_soon = true;
 }
 
@@ -701,6 +717,26 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_set_toggle(const char* name, int on) {
             caliper_live_views::set_toggle(g.core, v->name.c_str(), name, on != 0))
             ++n;
     g.publish_soon = true;
+    return n > 0 ? 1 : 0;
+}
+
+// The linked selection of the shown view (or of every view): the axis that
+// carries the selection's item space ("points", "rows", "columns", "steps"),
+// or "" to clear, and the items as a JSON array of integers. 1 when a view took it.
+EMSCRIPTEN_KEEPALIVE int caliper_views_set_link(const char* axis, const char* items_json) {
+    if (!g.core || !g.core->live_views) return 0;
+    std::vector<int64_t> items;
+    caliper_net::Json j;
+    if (items_json && caliper_net::Json::parse(items_json, std::strlen(items_json), &j, nullptr) && j.is_array())
+        for (size_t i = 0; i < j.size(); ++i) {
+            int64_t x = 0;
+            if (j.at(i).get_i64(&x)) items.push_back(x);
+        }
+    int n = 0;
+    for (const auto& v : g.core->live_views->views)
+        if ((g.cfg.view.empty() || v->name == g.cfg.view) &&
+            caliper_live_views::set_link(g.core, v->name.c_str(), axis, items))
+            ++n;
     return n > 0 ? 1 : 0;
 }
 

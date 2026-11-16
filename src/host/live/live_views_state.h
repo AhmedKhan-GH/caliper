@@ -185,6 +185,13 @@ struct View {
     bool    zoom_limits = false;          // set these limits (x0, x1, y0, y1) this frame
     double  zoom_lim[4] = {};
     float   zoom_rate_saved = 0.0f;       // ImPlot's own wheel zoom, off while the view zooms
+    // Linked selection (wire protocol 3.1): the items of an item space that the
+    // host says one axis of this view carries, sorted. Points are drawn over
+    // the dimmed rest, heatmap rows or columns are marked, series steps get
+    // markers. link_axis: 0 none, 1 points, 2 rows, 3 columns, 4 steps.
+    int     link_axis = 0;
+    std::vector<int64_t> link_items;
+    uint64_t link_version = 0, link_for_version = 0, link_for_updates = 0;
     // The item last hovered, for tests: a point's index, a series step, a
     // histogram bin, or a cell row * columns + column; -1 for none.
     int64_t hover_item = -1;
@@ -227,6 +234,10 @@ void set_event_sink(CaliperCore* core, EventSink sink);
 // their own changes of a toggle to the sink as type "toggle" with detail
 // {"name": ..., "on": ...}, which a host keeps from the producer.
 bool set_toggle(CaliperCore* core, const char* name, const char* toggle, bool on);
+// The linked selection of view `name`: the items (any order) of the item
+// space that its axis "points", "rows", "columns" or "steps" carries, or no
+// axis ("" or null) to clear it. False: no such view.
+bool set_link(CaliperCore* core, const char* name, const char* axis, std::vector<int64_t> items);
 // How the last applied snapshot of view `name` maps onto its source; the
 // host calls it right after caliper_core_live_apply. False: no such view.
 bool set_payload_map(CaliperCore* core, const char* name, const caliper_live::PayloadMap& map);

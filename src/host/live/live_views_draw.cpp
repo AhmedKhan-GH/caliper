@@ -219,6 +219,12 @@ void source_range(const caliper_live::PayloadAxis* ax, int64_t i0, int64_t i1, i
     *b = ax->start + (p1 - 1) * ax->step + 1;
 }
 
+// Whether a linked selection holds an item in the source range [a, b).
+bool linked_in(const View& v, int64_t a, int64_t b) {
+    auto it = std::lower_bound(v.link_items.begin(), v.link_items.end(), a);
+    return it != v.link_items.end() && *it < b;
+}
+
 // A press, the drag and the release of a gesture on the item drawn just
 // before (an InvisibleButton). Returns true on the release frame.
 bool track_gesture(View& v, ImVec2 mouse, bool may_select) {
@@ -604,6 +610,28 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         g.lasso.clear();
     }
     if (released) g.selecting = false;
+
+    // ---- a linked selection: the points whose source row is a selected item,
+    // recomputed for every new link and every new sample.
+    if (ev && v.have_cur && v.link_axis == 1 &&
+        (v.link_for_version != v.link_version || v.link_for_updates != v.updates)) {
+        v.link_for_version = v.link_version;
+        v.link_for_updates = v.updates;
+        {
+            const caliper_live::PayloadAxis* ax = v.map.axes.empty() ? nullptr : &v.map.axes.back();
+            std::vector<uint8_t> sel(v.cur.n, 0);
+            uint64_t count = 0;
+            for (uint64_t i = 0; i < v.cur.n; ++i)
+                if (std::binary_search(v.link_items.begin(), v.link_items.end(), source_index(ax, (int64_t)i))) {
+                    sel[i] = 1;
+                    ++count;
+                }
+            v.selected = count ? std::move(sel) : std::vector<uint8_t>();
+            v.sel_count = count;
+            ++v.sel_version;
+            v.dirty = true;
+        }
+    }
 
     // ---- GPU: redraw the render target when something changed
     // Bare views (a page draws the chrome) clear to the window's ground.
@@ -1027,6 +1055,27 @@ void draw_series(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
             }
             if (v.sel_s1 > v.sel_s0) plot_band((double)v.sel_s0, (double)(v.sel_s1 - 1), true);
             if (g.down && g.selecting && g.moved) plot_band(g.d0x, g.d1x, false);
+            // A linked selection: markers at the selected steps that are held
+            // (at most 4096, the first ones).
+            if (v.link_axis == 4 && n) {
+                std::vector<double> mx, my;
+                for (int64_t step : v.link_items) {
+                    if (step < lo || step >= hi) continue;
+                    const float y = v.values[(size_t)(step - lo)];
+                    if (!std::isfinite(y)) continue;
+                    mx.push_back((double)step);
+                    my.push_back(y);
+                    if (mx.size() >= 4096) break;
+                }
+                if (!mx.empty()) {
+                    ImPlotSpec spec;
+                    spec.Marker = ImPlotMarker_Circle;
+                    spec.MarkerSize = 3.5f;
+                    spec.MarkerFillColor = ImGui::ColorConvertU32ToFloat4(kSelLine);
+                    spec.MarkerLineColor = ImGui::ColorConvertU32ToFloat4(kSelLine);
+                    ImPlot::PlotScatter("##linked", mx.data(), my.data(), (int)mx.size(), spec);
+                }
+            }
         }
         after_plot(S, v);
         plot_geometry(v);
@@ -1392,6 +1441,32 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
                 const ImVec2 lo(std::min(a.x, b.x), std::min(a.y, b.y)), hi(std::max(a.x, b.x), std::max(a.y, b.y));
                 dl->AddRectFilled(lo, hi, kSelFill);
                 dl->AddRect(lo, hi, kSelLine, 0.0f, 0, 1.0f);
+            }
+            // A linked selection: each run of rows (or columns) that stand
+            // for a selected item gets a band over the image, an outline and
+            // a mark at the image's edge.
+            if ((v.link_axis == 2 || v.link_axis == 3) && !v.link_items.empty()) {
+                const bool rows = v.link_axis == 2;
+                const CellAxes cax = cell_axes(v);
+                const caliper_live::PayloadAxis* ax = rows ? cax.row : cax.col;
+                const int64_t n = rows ? tv->h : tv->w;
+                const int64_t per = ax && cax.tile && ax->size > 0 ? ax->size : n;   // a mosaic repeats the axis per cell
+                auto marked = [&](int64_t i) {
+                    int64_t a, b;
+                    source_range(ax, i % per, i % per + 1, &a, &b);
+                    return linked_in(v, a, b);
+                };
+                for (int64_t i = 0; i < n;) {
+                    if (!marked(i)) { ++i; continue; }
+                    int64_t j = i + 1;
+                    while (j < n && marked(j)) ++j;
+                    const ImVec2 p0 = rows ? px(0.0, (double)i) : px((double)i, 0.0);
+                    const ImVec2 p1 = rows ? px(W, (double)j) : px((double)j, H);
+                    dl->AddRectFilled(p0, p1, kSelFill);
+                    dl->AddRect(p0, p1, kSelLine, 0.0f, 0, 1.5f);
+                    dl->AddRectFilled(p0, rows ? ImVec2(p0.x + 4.0f, p1.y) : ImVec2(p1.x, p0.y + 4.0f), kSelLine);
+                    i = j;
+                }
             }
             dl->PopClipRect();
         }

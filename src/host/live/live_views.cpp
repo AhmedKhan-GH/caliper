@@ -631,6 +631,27 @@ bool set_toggle(CaliperCore* core, const char* name, const char* toggle, bool on
     return true;
 }
 
+bool set_link(CaliperCore* core, const char* name, const char* axis, std::vector<int64_t> items) {
+    View* v = core ? find(core, name) : nullptr;
+    if (!v) return false;
+    const std::string a = axis ? axis : "";
+    const int old = v->link_axis;
+    v->link_axis = a == "points" ? 1 : a == "rows" ? 2 : a == "columns" ? 3 : a == "steps" ? 4 : 0;
+    if (old == 1 && v->link_axis != 1 && v->sel_count) {
+        // The linked selection of the points went; a selection made here stays
+        // until it does.
+        v->selected.clear();
+        v->sel_count = 0;
+        ++v->sel_version;
+    }
+    std::sort(items.begin(), items.end());
+    items.erase(std::unique(items.begin(), items.end()), items.end());
+    v->link_items = v->link_axis ? std::move(items) : std::vector<int64_t>();
+    ++v->link_version;
+    v->dirty = true;
+    return true;
+}
+
 bool set_payload_map(CaliperCore* core, const char* name, const caliper_live::PayloadMap& map) {
     View* v = core ? find(core, name) : nullptr;
     if (!v) return false;
