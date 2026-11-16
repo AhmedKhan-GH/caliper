@@ -618,8 +618,11 @@ add_executable(caliper
     # which renders it into an offscreen canvas and writes a PNG.
     src/host/ui/applet_page.cpp
     src/host/shot.cpp
-    # Caliper API v0 for the app and for `caliper shot` (--api).
+    # Caliper API v0 for the app and for `caliper shot` (--api), and the
+    # spec page's Open in browser, which hands the viewer's link to the
+    # default browser.
     src/host/api/app_api.cpp
+    src/host/open_url.cpp
     # caliper build <folder>: CMake against the installed SDK, then check, and
     # the out-of-line part of host_cli.h. Compiled wherever host_cli.h
     # dispatches (here and in caliper_tests).

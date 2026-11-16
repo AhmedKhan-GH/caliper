@@ -27,8 +27,9 @@ There are three ways to the pane:
 - **An open spec.** ⌘B Build in the page bar (Ctrl+B Build elsewhere) turns build mode on and off for the spec the
   page shows. A spec applet found outside the workspace is drawn from its file and has no Build.
 
-A dashboard is saved with ⌘S Save as a spec applet of the workspace, `applets/<id>/`, and appears in the landing
-screen's list at once.
+A dashboard is saved with ⌘S Save as a spec applet of the workspace, `applets/<id>/`, and appears at once under
+Projects on the landing screen, which selects it when you go Home from it. A saved dashboard opens in a browser with
+⌘O Open in browser in the page bar ([Open in browser](#open-in-browser)).
 
 ## Where things are
 
@@ -49,8 +50,9 @@ wide as the chat is outside build mode); each has a minimum that grows with the 
 strip goes first, then the right column, then the left, and the canvas keeps its minimum.
 
 The page bar holds, after Home and the spec's title, ⌘B Build and, in build mode, ⌘T Text, ⌘Z Undo, ⇧⌘Z Redo and ⌘S
-Save, with ⌘L Chat and ⌘K Command at its right end. When the bar is too narrow for them, only Build stays; the others
-keep their keys. The code of the last refused or failed change follows the buttons, with its reason in a tooltip.
+Save, with ⌘O Open in browser, ⌘L Chat and ⌘K Command at its right end. When the bar is too narrow for them, only Build
+stays; the others keep their keys. The code of the last refused or failed change follows the buttons, with its reason
+in a tooltip.
 
 ## Sources
 
@@ -82,7 +84,8 @@ Dragging a primitive onto the canvas places the new panel where it is dropped.
 
 ## The canvas
 
-The canvas draws the spec as the page does outside build mode.
+The canvas draws the spec as the page does outside build mode. While the spec has no panel, it says so, and how to
+start: "No panels", and under it "Drop a data file, or pick a source in Sources".
 
 | Gesture | What it does |
 |---|---|
@@ -114,6 +117,14 @@ yet takes its id here before it is added; its first transform, or the first pane
 of the open spec, ⌘K beside what it reads and beside its transforms opens the widget agent's prompt for that property
 ([Widget agent](widget-agent.md)).
 
+A slice's or a reduce's axis is a choice of every axis of the step's input, each with its index range, such as
+`axis 1 · 0–3` for an axis of 4, and with its name where the source carries names: a live view's dims are named by the
+stream, as in `axis 0 layer · 0–3`, and a step that takes an axis away takes its name with it; a tensor from a
+safetensors file has none. While the shape is not known, as for a live view before its first snapshot, the axis is a
+number. A slice's index shows its axis's range at the right of the field. An index outside it is set to the nearer
+end, `3` for a `7` typed on an axis of 4, and the field says so in place of the range, `7 is outside 0–3`, until the
+next change of the transforms. A negative index counts from the end, as the spec format says.
+
 With nothing focused (Esc gives a source's focus up): the spec's id, title and description, its numbers of panels and
 sources, and its file.
 
@@ -128,6 +139,19 @@ valid spec, and other changes wait until the text is fixed or left. A change mad
 shows in the text at once, and the strip scrolls to the last line that changed when that line is out of view, so a
 new panel's block at the end of the text, or a title changed in the middle of it, comes into view.
 
+## Open in browser
+
+⌘O Open in browser in the page bar opens the saved dashboard that the page shows in your default browser, at the
+browser viewer of [Caliper API](api.md#get-v0spec), which draws it with the layout and the look of the spec page. It
+works in build mode and outside it. The browser shows the dashboard as it was last saved, so save first to show a
+change; the button is disabled, with the reason in its tooltip, for a dashboard that was never saved and for a spec
+applet found outside the workspace.
+
+When the app was started without `--api`, the button starts Caliper API as the side chat does: on a free port of
+127.0.0.1 only, with new tokens, said in Activity and shown in the status bar as `api 127.0.0.1:<port>`. It stays on
+until the app quits, since the page in the browser keeps reading the dashboard's data. What the link carries and who
+can use it is in [Caliper API](api.md#started-by-the-app).
+
 ## Keys
 
 | Key | Action |
@@ -137,6 +161,7 @@ new panel's block at the end of the text, or a title changed in the middle of it
 | ⌘E, Esc | Edit the text, and back |
 | ⌘Z, ⇧⌘Z | Undo and redo, unless a text field has the keyboard |
 | ⌘S | Save |
+| ⌘O | Open the saved dashboard in a browser |
 | ⏎ | Add the selection, in Sources |
 | ⌫ | Remove the focused panel |
 | ⌘K | The inline prompt in the focused panel ([Widget agent](widget-agent.md)) |

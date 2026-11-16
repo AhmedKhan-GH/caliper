@@ -47,9 +47,11 @@
 //   chat picker          opens the agent picker
 //   cards <n>            wait until the approval cards' strip shows at least n
 //                        waiting cards at its full height (approval_cards.h)
-//   click <item> [fx fy] a click on a builder pane's named rectangle
-//                        (BuilderPane::item_rect: "source:table:metrics",
-//                        "primitive:series", "prop:title", "bar:save", ...),
+//   click <item> [fx fy] a click on a named rectangle of the spec page
+//                        (SpecPage::item_rect: "page:browser") or of the
+//                        builder pane (BuilderPane::item_rect:
+//                        "source:table:metrics", "primitive:series",
+//                        "prop:title", "bar:save", ...),
 //                        at the fractions fx, fy of it (0.5 0.5 by default); a
 //                        negative fraction counts pixels from its right or
 //                        bottom edge
@@ -75,6 +77,12 @@
 //   command-line <text>|none
 //                        wait until the landing's command line holds that
 //                        text, or nothing
+//   landing selected <applet id>
+//                        wait until the landing's selected row is the applet
+//                        with that manifest id
+//   landing projects <applet id>,...|none
+//                        wait until Projects lists exactly those dashboards
+//                        (manifest ids, in their order), or none
 //   widget <label>       presses the inline surface's action of that label
 //                        ("Setup", "Ask in chat", ...) once the surface offers it,
 //                        through the surface's own act(), as its button does
@@ -189,6 +197,12 @@ public:
     void set_page(std::string page) { page_ = std::move(page); }
     // The landing's command line, for the `command-line` step; the app sets it.
     void set_command_line(std::string text) { command_line_ = std::move(text); }
+    // The landing's selected row (its manifest id, "" for none) and the
+    // dashboards Projects lists, for the `landing` steps; the app sets them.
+    void set_landing(std::string selected, std::vector<std::string> projects) {
+        landing_selected_ = std::move(selected);
+        landing_projects_ = std::move(projects);
+    }
     void set_drop(std::function<void(std::vector<std::string>)> drop) { drop_ = std::move(drop); }
     // The waiting cards the approval strip shows (ApprovalTray::shown_waiting()), for `cards`.
     void set_cards(std::function<int()> cards) { cards_ = std::move(cards); }
@@ -401,6 +415,24 @@ public:
             if (command_line_ != want)
                 return patience("the command line holds " + (command_line_.empty() ? std::string("nothing") : "\"" + command_line_ + "\""));
             next("the command line holds " + (want.empty() ? std::string("nothing") : "\"" + want + "\""));
+            return;
+        }
+        if (s.verb == "landing") {
+            std::stringstream words(s.arg);
+            std::string what, want;
+            words >> what >> want;
+            auto shown = [](const std::string& t) { return t.empty() ? std::string("none") : t; };
+            if (what == "selected") {
+                if (landing_selected_ != want) return patience("the landing's selection is " + shown(landing_selected_));
+                next("the landing's selection is " + want);
+            } else if (what == "projects") {
+                std::string listed;
+                for (const auto& id : landing_projects_) listed += (listed.empty() ? "" : ",") + id;
+                if (shown(listed) != want) return patience("Projects lists " + shown(listed));
+                next("Projects lists " + want);
+            } else {
+                error_ = "landing takes selected <applet id> or projects <applet id>,...|none";
+            }
             return;
         }
         if (s.verb == "pane") {
@@ -649,7 +681,9 @@ private:
 #if CALIPER_WITH_BUILDER
         BuilderPane* b = page.builder();
         SpecRect r;
-        if (!b || !b->item_rect(name, &r)) return false;
+        float pr[4];
+        if (page.item_rect(name, pr)) r = SpecRect{pr[0], pr[1], pr[2], pr[3]};
+        else if (!b || !b->item_rect(name, &r)) return false;
         *x = std::round(fx < 0.0f ? r.right() + fx : fx > 1.0f ? r.x + fx : r.x + r.w * fx);
         *y = std::round(fy < 0.0f ? r.bottom() + fy : fy > 1.0f ? r.y + fy : r.y + r.h * fy);
         return true;
@@ -682,7 +716,8 @@ private:
 #if CALIPER_WITH_BUILDER
     AgentSettings* settings_ = nullptr;
 #endif
-    std::string page_, command_line_;
+    std::string page_, command_line_, landing_selected_;
+    std::vector<std::string> landing_projects_;
     std::function<void(std::vector<std::string>)> drop_;
     std::function<int()> cards_;
     float drag_a_[2] = {0, 0}, drag_b_[2] = {0, 0};

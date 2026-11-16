@@ -47,6 +47,9 @@ namespace cb = caliper_builder;
 
 namespace {
 
+// The label of ⌘O in the page bar.
+constexpr const char* kBrowserLabel = "Open in browser";
+
 // The data of the open spec's panels through the session, kept off the
 // session while its worker runs a long command (AppSession::worker_busy()):
 // the worker holds the registry's and the store's locks, and only the frame
@@ -142,6 +145,10 @@ struct SpecPage::Impl {
     bool has_spec = false;
     bool dirty = false;
     bool from_file = false;   // enter_file(): a spec applet's file, not the open spec
+    // The open spec's saved applet in the workspace (applets/<id>/), "" while
+    // it was never saved: what ⌘O Open in browser shows.
+    std::string saved_id;
+    float browser_rect[4] = {0, 0, 0, 0};   // the button, as the last frame drew it
 
     std::optional<std::future<cb::CommandResult>> request;
     std::string request_error;
@@ -157,6 +164,11 @@ struct SpecPage::Impl {
     std::unique_ptr<InlineWidget> widget;
     bool hidden = false;
     ChatPane* chat = nullptr;   // the side chat, when the app has one
+    // ⌘O Open in browser (set_open_in_browser()), and its last refusal.
+    std::function<std::string(const std::string&)> open_in_browser;
+    std::string browser_why;
+    // The names of a catalog source's dims, for the builder's Properties.
+    std::function<std::vector<std::string>(const std::string&)> dim_names;
     ApiFiles api_files;         // the sidecar's own API file
     std::string widget_api_file;
 
@@ -327,6 +339,9 @@ struct SpecPage::Impl {
             AppSession* a = &app;
             auto port = std::make_unique<SessionBuilderPort>(
                 *s, [a] { return a->worker_busy(); }, [a] { return a->journaled(); });
+            port->set_dim_names([this](const std::string& id) {
+                return dim_names ? dim_names(id) : std::vector<std::string>();
+            });
             builder = std::make_unique<BuilderPane>(std::move(port));
             builder->set_layout_rule(spec_page_layout_rule);
             // ⌘K in the builder: a dropped file's row and a property's row, a
@@ -361,11 +376,36 @@ struct SpecPage::Impl {
             runtime->clear_spec();
             has_spec = false;
             applet_id.clear();
+            saved_id.clear();
             panels = sources = 0;
             return;
         }
         show(open->spec);
         dirty = open->dirty;
+        saved_id = saved_applet(open->path);
+    }
+
+    // The workspace id of a spec saved at `path` (relative to the workspace,
+    // applets/<id>/<file>), "" for one never saved or saved elsewhere.
+    static std::string saved_applet(const std::optional<std::string>& path) {
+        if (!path) return {};
+        const std::filesystem::path p(*path);
+        auto it = p.begin();
+        if (it == p.end() || it->string() != "applets") return {};
+        if (++it == p.end()) return {};
+        return it->string();
+    }
+
+    // ⌘O Open in browser: disabled, with the reason, while there is nothing
+    // the browser's page can show.
+    std::string browser_disabled() const {
+        if (from_file) return "the browser shows the workspace's saved dashboards";
+        if (saved_id.empty()) return "save the dashboard first";
+        return {};
+    }
+    void open_browser() {
+        if (!open_in_browser || !browser_disabled().empty()) return;
+        browser_why = open_in_browser(saved_id);
     }
 
     void show(const cb::spec::Spec& spec) {
@@ -398,9 +438,18 @@ struct SpecPage::Impl {
             const char* key = "Ctrl K";
 #endif
             const float w = ImGui::CalcTextSize(key).x + ImGui::CalcTextSize("Command").x + 32.0f;
-            // ⌘L Chat, then ⌘K Command at the right end.
+            // ⌘O Open in browser, ⌘L Chat, then ⌘K Command at the right end.
             const float cw = chat ? ChatPane::toggle_width() + ImGui::GetStyle().ItemSpacing.x : 0.0f;
-            const float right = ImGui::GetWindowContentRegionMax().x - w - cw - sternbild::metric::pad;
+#ifdef __APPLE__
+            const char* okey = "\xe2\x8c\x98O";   // ⌘O
+#else
+            const char* okey = "Ctrl O";
+#endif
+            const bool browser = open_in_browser && has_spec;
+            const float bw = browser ? ImGui::CalcTextSize(okey).x + ImGui::CalcTextSize(kBrowserLabel).x + 32.0f +
+                                           ImGui::GetStyle().ItemSpacing.x
+                                     : 0.0f;
+            const float right = ImGui::GetWindowContentRegionMax().x - w - cw - bw - sternbild::metric::pad;
             // The builder's items after the title, in the room the right end
             // leaves (only ⌘B Build when it is short); none for a spec
             // applet's file, which the builder does not edit.
@@ -410,6 +459,15 @@ struct SpecPage::Impl {
                 ImGui::SameLine();
             }
             if (right > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(right);
+            browser_rect[2] = browser_rect[3] = 0.0f;
+            if (browser) {
+                const std::string off = browser_disabled();
+                if (sternbild::key_button(okey, kBrowserLabel, off.empty(), off.c_str())) open_browser();
+                const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+                browser_rect[0] = a.x, browser_rect[1] = a.y, browser_rect[2] = b.x - a.x, browser_rect[3] = b.y - a.y;
+                // Why the last try did not reach the browser.
+                if (off.empty() && !browser_why.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", browser_why.c_str());
+            }
             if (chat) chat->draw_toggle();
             if (sternbild::key_button(key, "Command")) *command_key = true;
             ImGui::EndMainMenuBar();
@@ -511,6 +569,7 @@ struct SpecPage::Impl {
                 });
                 builder->draw(area, *runtime, look, &focused);
             } else {
+                runtime->set_empty_hint({});
                 runtime->draw(area, look);
                 focus_and_frame();
             }
@@ -658,6 +717,10 @@ SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, 
     // order follows only when neither is open.
     const bool command_key = clicked_command || ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_K);
     if (im.chat) im.chat->read_keys();   // ⌘L Chat
+    // ⌘O Open in browser, unless a text field has the keyboard.
+    if (im.open_in_browser && im.has_spec && !ImGui::GetIO().WantTextInput &&
+        ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_O))
+        im.open_browser();
     const bool esc_key = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
     if (im.widget_open() && esc_key) {
         im.widget->surface().escape();
@@ -748,6 +811,21 @@ void SpecPage::set_agent_settings(AgentSettings* settings) {
     if (im.settings) im.settings->set_on_change(nullptr);
     im.settings = settings;
     if (settings) settings->set_on_change([&im] { im.retire_widget(); });
+}
+
+void SpecPage::set_open_in_browser(std::function<std::string(const std::string&)> open) {
+    impl_->open_in_browser = std::move(open);
+}
+
+void SpecPage::set_dim_names(std::function<std::vector<std::string>(const std::string&)> names) {
+    impl_->dim_names = std::move(names);
+}
+
+bool SpecPage::item_rect(const std::string& name, float rect[4]) const {
+    const Impl& im = *impl_;
+    if (name != "page:browser" || im.browser_rect[2] <= 0.0f) return false;
+    for (int i = 0; i < 4; ++i) rect[i] = im.browser_rect[i];
+    return true;
 }
 
 bool SpecPage::widget_action(const std::string& label) {
@@ -919,6 +997,9 @@ void SpecPage::set_api_files(ApiFiles) {}
 void SpecPage::set_chat(ChatPane*) {}
 void SpecPage::set_agent_settings(AgentSettings*) {}
 bool SpecPage::widget_action(const std::string&) { return false; }
+void SpecPage::set_open_in_browser(std::function<std::string(const std::string&)>) {}
+void SpecPage::set_dim_names(std::function<std::vector<std::string>(const std::string&)>) {}
+bool SpecPage::item_rect(const std::string&, float*) const { return false; }
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
 std::string SpecPage::widget_state() const { return "idle"; }
 std::string SpecPage::widget_facts() const { return {}; }

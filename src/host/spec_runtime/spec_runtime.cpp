@@ -789,6 +789,20 @@ void draw_state(const PanelState& st, const ImRect& c, const SpecLook& L) {
     if (!detail.empty()) text_at(dl, L.mono, L.mono_size - 1.0f, ImVec2(cx - b.x * 0.5f, top + a.y + gap), L.faint, detail);
 }
 
+// An empty state with a line of plain words under its label, in the house
+// face: how to start, where the builder shows it.
+void draw_hint(const std::string& label_in, const std::string& hint_in, const ImRect& c, const SpecLook& L) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const std::string label = fit_text(L.ui, L.ui_size, label_in, c.GetWidth());
+    const std::string hint = fit_text(L.ui, L.ui_size, hint_in, c.GetWidth());
+    const ImVec2 a = text_size(L.ui, L.ui_size, label), b = text_size(L.ui, L.ui_size, hint);
+    const float gap = 6.0f * L.text_scale;
+    const float top = c.Min.y + std::max(0.0f, (c.GetHeight() - a.y - gap - b.y) * 0.5f);
+    const float cx = (c.Min.x + c.Max.x) * 0.5f;
+    text_at(dl, L.ui, L.ui_size, ImVec2(cx - a.x * 0.5f, top), L.secondary, label);
+    text_at(dl, L.ui, L.ui_size, ImVec2(cx - b.x * 0.5f, top + a.y + gap), L.faint, hint);
+}
+
 }  // namespace
 
 // ---- the look ----------------------------------------------------------------------
@@ -1261,7 +1275,8 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
     const std::optional<spec::LayoutNode> root = caliper_builder::effective_layout(shown);
     if (!root) {
         dl->AddRectFilled(area.Min, area.Max, L.ground);
-        draw_state({PanelStateKind::empty, "No panels", shown.applet.id}, area, L);
+        if (empty_hint_.empty()) draw_state({PanelStateKind::empty, "No panels", shown.applet.id}, area, L);
+        else draw_hint("No panels", empty_hint_, area, L);
         return;
     }
     const SpecLayoutMetrics m = SpecLayoutMetrics::for_text_scale(L.text_scale);

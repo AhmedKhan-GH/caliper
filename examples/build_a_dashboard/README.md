@@ -106,8 +106,8 @@ Start the app with Caliper API on, which the widget agent needs:
 cmake-build-release/caliper --api
 ```
 
-It prints two lines that you need later: the API's address with your session token, and the link of the spec page in
-a browser.
+It prints two lines: the API's address with your session token, and the link of the spec page in a browser. You need
+neither later, since step 6 opens the dashboard in your browser from the app.
 
 ```text
 [api] Caliper API on http://127.0.0.1:7341/v0 with the session token <token> (agents read <API file>, whose commands are reviewed)
@@ -244,8 +244,10 @@ Choose **Deny** instead, and the dashboard stays as it was and the agent is told
 
 Not yet verified by a dry run.
 
-Press ⌘S **Save**. The dashboard is saved as a spec applet of the workspace and appears in the landing screen's list.
-Press **esc Home**, select the dashboard in the list, and press Enter: it opens again with the same panels. To open
-it in a browser, take the second `[api]` line that the app printed when it started, replace `<id>` with the
-dashboard's id, such as `attention-entropy`, and open the address in your browser. The page draws the saved dashboard
-with the layout and look of the app's spec page, and asks the app for each panel's data once a second.
+Press ⌘S **Save**. The dashboard is saved as a spec applet of the workspace and appears under Projects on the landing
+screen. Press ⌘O **Open in browser** in the page bar: your default browser opens the saved dashboard, drawn with the
+layout and look of the app's spec page, and the page asks the app for each panel's data once a second. Had you
+started the app without `--api`, it starts Caliper API on 127.0.0.1 for this and shows its address in the status bar.
+The link carries a viewer token, which reads the workspace's saved dashboards and their data and nothing else, and it
+works until the app quits. Press **esc Home**: the landing selects the dashboard under Projects, and Enter opens it
+again with the same panels.

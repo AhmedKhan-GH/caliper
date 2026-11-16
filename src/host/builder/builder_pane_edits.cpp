@@ -136,6 +136,73 @@ std::vector<PaneShape> pane_transform_shapes(const spec::Spec& s, const std::str
     return out;
 }
 
+// ---- transform axes ---------------------------------------------------------------------
+
+void pane_name_dims(std::vector<PaneShape>& shapes, const std::vector<spec::Transform>& transforms,
+                    const std::vector<std::string>& names) {
+    auto tensor = [](const PaneShape& sh) { return sh.known && !sh.tabular; };
+    if (shapes.empty() || !tensor(shapes[0]) || names.empty() || shapes[0].dims.size() != names.size()) return;
+    std::vector<std::string> now = names;
+    shapes[0].names = now;
+    for (size_t k = 0; k < transforms.size() && k + 1 < shapes.size(); ++k) {
+        const spec::Transform& t = transforms[k];
+        const auto rank = (int64_t)now.size();
+        auto axis_at = [&](int64_t a) { return a < 0 ? a + rank : a; };
+        switch (t.op) {
+            case spec::TransformOp::slice: {
+                if (t.axis.empty()) return;
+                const int64_t a = axis_at(t.axis.front());
+                if (a < 0 || a >= rank) return;
+                if (t.index) now.erase(now.begin() + a);
+                break;
+            }
+            case spec::TransformOp::reduce: {
+                if (t.axis.empty()) return;
+                std::vector<bool> gone(now.size(), false);
+                for (const int64_t x : t.axis) {
+                    const int64_t a = axis_at(x);
+                    if (a < 0 || a >= rank) return;
+                    gone[(size_t)a] = true;
+                }
+                if (t.keepdims.value_or(false)) break;
+                std::vector<std::string> kept;
+                for (size_t d = 0; d < now.size(); ++d)
+                    if (!gone[d]) kept.push_back(now[d]);
+                now = std::move(kept);
+                break;
+            }
+            case spec::TransformOp::normalise: break;
+        }
+        PaneShape& next = shapes[k + 1];
+        if (!tensor(next) || next.dims.size() != now.size()) return;
+        next.names = now;
+    }
+}
+
+std::string pane_index_range(int64_t size) {
+    if (size <= 0) return {};
+    if (size == 1) return "0";
+    return "0\xe2\x80\x93" + std::to_string(size - 1);   // 0–3
+}
+
+std::string pane_axis_text(int64_t axis, int64_t size, const std::string& name) {
+    std::string out = "axis " + std::to_string(axis);
+    if (!name.empty()) out += " " + name;
+    const std::string range = pane_index_range(size);
+    if (!range.empty()) out += " \xc2\xb7 " + range;   // axis 1 · 0–3
+    return out;
+}
+
+int64_t pane_clamp_index(int64_t index, int64_t size, bool* clamped) {
+    if (clamped) *clamped = false;
+    if (size <= 0) return index;
+    if (index >= size || index < -size) {
+        if (clamped) *clamped = true;
+        return index >= size ? size - 1 : 0;
+    }
+    return index;
+}
+
 // ---- primitives, slots and options ------------------------------------------------------
 
 const std::vector<Primitive>& pane_primitives() {

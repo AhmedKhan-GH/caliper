@@ -228,6 +228,11 @@ public:
     int find(const std::string& id) const;
     AppletEntry&       at(int i)       { return entries_[i]; }
     const AppletEntry& at(int i) const { return entries_[i]; }
+    // The entry was found in the open workspace's applets/ folder: one of the
+    // person's dashboards when it is a spec applet.
+    bool in_workspace(int i) const {
+        return workspace_rank_ >= 0 && i >= 0 && i < (int)entries_.size() && entries_[i].search_rank == workspace_rank_;
+    }
 
     // host_proto: filled CaliperHost except applet_data_dir, which the loader
     // points at this entry's sandbox dir before initialize().

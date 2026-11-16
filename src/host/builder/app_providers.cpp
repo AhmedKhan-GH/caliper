@@ -39,6 +39,11 @@ void AppProviders::frame(AppSession& session, const caliper_live::Attachment& li
     if (im.providers.live) im.providers.live->update(live);
 }
 
+std::vector<std::string> AppProviders::dim_names(const std::string& catalog_id) const {
+    const Impl& im = *impl_;
+    return im.providers.live ? im.providers.live->dim_names(catalog_id) : std::vector<std::string>();
+}
+
 void AppProviders::close(AppSession& session) {
     Impl& im = *impl_;
     if (im.session && im.session == session.session()) unregister_catalog_providers(*im.session);
@@ -53,6 +58,7 @@ AppProviders::AppProviders() : impl_(std::make_unique<Impl>()) {}
 AppProviders::~AppProviders() = default;
 void AppProviders::frame(AppSession&, const caliper_live::Attachment&) {}
 void AppProviders::close(AppSession&) {}
+std::vector<std::string> AppProviders::dim_names(const std::string&) const { return {}; }
 
 #endif
 

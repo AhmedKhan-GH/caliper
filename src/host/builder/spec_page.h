@@ -168,6 +168,21 @@ public:
     // its API token; the next ⌘K makes it again from the settings. The page
     // listens until shutdown(). Null: no settings.
     void set_agent_settings(AgentSettings* settings);
+    // ⌘O Open in browser in the page bar: the saved dashboard the page shows,
+    // in the person's default browser, at the spec page of Caliper API with
+    // a viewer token (api_server.h, THE SPEC PAGE). The app does the opening
+    // (src/main.cpp): `open` gets the dashboard's workspace id and returns ""
+    // once the link has gone to the browser, or why not, which the page keeps
+    // for the button's tooltip. Null leaves the button out. The button is
+    // disabled, with the reason, for a dashboard that was never saved and for
+    // a spec applet's file from outside the workspace.
+    void set_open_in_browser(std::function<std::string(const std::string& applet_id)> open);
+    // Where Properties reads the names of a catalog source's dims, such as a
+    // live view's (AppProviders::dim_names()); none without it.
+    void set_dim_names(std::function<std::vector<std::string>(const std::string& catalog_id)> names);
+    // For the hidden app's input driver: a named rectangle of the page's own
+    // ("page:browser"), in window points, as the last frame drew it.
+    bool item_rect(const std::string& name, float rect[4]) const;
     // For the hidden app's input driver (builder/spec_ui_driver.h): a shown
     // panel's rectangle in window points, and the inline surface's state
     // ("idle" before any ⌘K).

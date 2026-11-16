@@ -10,17 +10,24 @@
 //                 the line's actions as key buttons: ⌘K Command, ↑ ↓, esc Clear
 //   dock space    four panes in ImGui docking, first-run layout built with
 //                 DockBuilder and persisted in the app-data imgui.ini:
-//                   Projects     (empty state; F2 Open folder disabled with
-//                                 the reason "not yet available"; F3 New
-//                                 dashboard, a new spec in build mode, titled
-//                                 by "new <title>" on the command line; F4 Attach
-//                                 to process opens the live sessions of
-//                                 training scripts here: script, pid, start
-//                                 time, state, views; ↑↓ select, Enter /
-//                                 double-click attach, esc back)
-//                   Instruments  (installed applets: name, id, version, tag,
-//                                 status; ↑↓ select, Enter / double-click
-//                                 launch)
+//                   Projects     (the person's own work: the open
+//                                 workspace's dashboards, its spec applets,
+//                                 with name, id and status, one selection
+//                                 and one ↑↓ list with Instruments, Enter /
+//                                 double-click open; under them, or alone as
+//                                 the empty state, the ways in: F2 Open
+//                                 folder disabled with the reason "not yet
+//                                 available"; F3 New dashboard, a new spec in
+//                                 build mode, titled by "new <title>" on the
+//                                 command line; F4 Attach to process opens
+//                                 the live sessions of training scripts
+//                                 here: script, pid, start time, state,
+//                                 views; ↑↓ select, Enter / double-click
+//                                 attach, esc back)
+//                   Instruments  (installed applets, every applet but the
+//                                 workspace's dashboards: name, id, version,
+//                                 tag, status; ↑↓ select, Enter /
+//                                 double-click launch)
 //                   Inspector    (the selected applet's manifest: id, version,
 //                                 tag, summary, libtorch, required / optional
 //                                 services, data schema, SDK, status text,
@@ -122,6 +129,9 @@ public:
         selected_ = index;
         scroll_to_selected_ = true;
     }
+    // The dashboards Projects listed in the last frame, by loader index, in
+    // their order (the hidden input driver's `landing projects` step).
+    const std::vector<int>& project_rows() const { return project_rows_; }
 
 private:
     struct LogLine {
@@ -135,6 +145,7 @@ private:
     void draw_command_bar();
     void draw_dock_space();
     void draw_projects(const Context& ctx);
+    void draw_dashboards(const Context& ctx, float height);   // Projects' table of dashboards
     void draw_sessions(const Context& ctx);   // Projects in attach mode (F4)
     void draw_instruments(const Context& ctx);
     void draw_inspector(const Context& ctx);
@@ -153,6 +164,8 @@ private:
     std::vector<LogLine> log_;
 
     std::vector<int> rows_;          // visible loader indices, filtered + sorted
+    std::vector<int> project_rows_;  // of which the workspace's dashboards, under Projects
+    int dashboards_ = 0;             // the workspace's dashboards, filtered or not
     int sort_column_ = 3;            // Instruments sort column (TAG) ...
     bool sort_descending_ = false;   // ... and direction, from the table spec
     bool command_active_ = false;    // the command line is being edited
