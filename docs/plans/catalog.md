@@ -20,7 +20,7 @@ Planned:
 
 ## The entry
 
-An entry describes one source. Its JSON form always has all fifteen keys, with `null` where a value does not apply or is not known:
+An entry describes one source. Its JSON form always has all fourteen keys, with `null` where a value does not apply or is not known:
 
 ```json
 {
@@ -161,7 +161,7 @@ Each provider has a name (`[a-z][a-z0-9_-]{0,31}`, unique in its catalog) and a 
 
 ## Decisions
 
-- **Every key is present, and the parser is strict.** An agent reads the same fifteen keys for every source, and a provider's mistake is caught at the catalog rather than in a spec.
+- **Every key is present, and the parser is strict.** An agent reads the same fourteen keys for every source, and a provider's mistake is caught at the catalog rather than in a spec.
 - **The `origin` keys are a closed set.** The command table's schemas are closed for strict tools, so the entry's schema must be closed too. A provider that needs a new key adds it here and in the parser.
 - **A metric's name is `<run id>/<tag>`.** Run names are not unique.
 - **A slice is flat, with its shape.** It keeps the sample's schema closed and non-recursive, and `shape` says how to read it.
