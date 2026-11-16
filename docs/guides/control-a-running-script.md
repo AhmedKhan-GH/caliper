@@ -86,7 +86,7 @@ caliper.show(logits.softmax(1), "predictions", items="eval")
 
 The points of `embedding` and the rows of `predictions` are both samples of the item space `eval`, numbered from 0. Select a cluster of points in the embedding, and the predictions heatmap marks the rows of the same samples. For `show` the name applies to the rows, for `points` to the points, and for `series` to its index; with `dims`, `items={"sample": "eval"}` names a dimension instead.
 
-`caliper.items()` adds details that a viewer shows in a small table beside the selection:
+`caliper.items()` adds details that a viewer shows in a small table under the view in which the selection was made:
 
 ```python
 caliper.items("eval", details={"class": eval_y, "marker at": marker_positions})
