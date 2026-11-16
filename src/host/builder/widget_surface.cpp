@@ -590,8 +590,8 @@ void WidgetSurface::abandon() {
     diff_.clear();
     full_diff_.clear();
     show_full_diff_ = false;
-    if (sink_ && !shown_panel_.empty()) sink_->clear(shown_panel_);
-    shown_panel_.clear();
+    created_spec_ = false;
+    clear_shown();
     end_session();
     text_.clear();
     conversation_.clear();
