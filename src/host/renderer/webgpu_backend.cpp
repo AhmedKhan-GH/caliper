@@ -644,7 +644,7 @@ bool WebGpuBackend::on_create_render_pipeline(uint32_t slot, const RenderPipelin
     push_scope();
     pp.render = wgpuDeviceCreateRenderPipeline(device_, &rp);
     pop_scope((std::string("render pipeline ") + (d.label ? d.label : "")).c_str());
-    pp.program_slot = handle_slot(d.program.id);
+    pp.group_mask = pr->group_mask;
     pp.vertex_layout_count = d.vertex_layout_count;
     if (!pp.render) *error = "wgpuDeviceCreateRenderPipeline failed";
     return pp.render != nullptr;
@@ -676,7 +676,7 @@ bool WebGpuBackend::on_create_compute_pipeline(uint32_t slot, const ComputePipel
     push_scope();
     pp.compute = wgpuDeviceCreateComputePipeline(device_, &cd);
     pop_scope((std::string("compute pipeline ") + (d.label ? d.label : "")).c_str());
-    pp.program_slot = handle_slot(d.program.id);
+    pp.group_mask = pr->group_mask;
     if (!pp.compute) *error = "wgpuDeviceCreateComputePipeline failed";
     return pp.compute != nullptr;
 }
@@ -859,10 +859,8 @@ bool WebGpuBackend::on_submit(Serial s, const Frame& frame, Stats*, std::string*
     };
     auto groups_ok = [&](Pipeline p, const BindGroup* gs) {
         const Pipe* pp = at(pipelines_, handle_slot(p.id));
-        const Prog* pr = at(programs_, pp->program_slot);
-        const uint8_t mask = pr ? pr->group_mask : 0;
         for (uint32_t g = 0; g < kMaxBindGroups; ++g) {
-            if (!(mask & (1u << g))) continue;
+            if (!(pp->group_mask & (1u << g))) continue;
             const Group* gr = at(groups_, handle_slot(gs[g].id));
             if (!gr || !gr->group) return false;
         }
@@ -941,11 +939,10 @@ bool WebGpuBackend::on_submit(Serial s, const Frame& frame, Stats*, std::string*
     };
     auto resolve = [&](Pipeline p, const BindGroup* gs, const uint32_t* dyn, uint64_t arena_base, Bound out[kMaxBindGroups]) {
         const Pipe* pp = at(pipelines_, handle_slot(p.id));
-        const Prog* pr = at(programs_, pp->program_slot);
         uint32_t k = 0;
         for (uint32_t g = 0; g < kMaxBindGroups; ++g) {
             out[g] = Bound{};
-            if (!(pr->group_mask & (1u << g))) continue;
+            if (!(pp->group_mask & (1u << g))) continue;
             const Group* gr = at(groups_, handle_slot(gs[g].id));
             out[g].group = gr->group;
             for (uint32_t j = 0; j < gr->dynamic_count && k < kMaxDynamicOffsets; ++j, ++k)

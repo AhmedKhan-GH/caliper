@@ -16,7 +16,9 @@
 //      pipeline that also writes the ID target, so blending has a list of its own.
 // Every edge lies on a pixel boundary and every colour is a byte divided by 255, so each texel of
 // the colour, ID and depth targets and of both textures is known exactly; the CPU computes them
-// and the readbacks must equal them byte for byte.
+// and the readbacks must equal them byte for byte. The draw program is released before the frame
+// is submitted: its pipelines and bind groups hold what they need, so the frame draws as if it
+// were alive.
 //
 // The report is "ok" or "fail" and then: color, id, depth, fill and copy, the texels that differ
 // in each readback; import, the route label and bytes copied of the colour stream's import;
@@ -351,6 +353,9 @@ bool gfx_selftest_start(gfx::Backend& b, std::string* why) {
     g1.entries[0].texture = S.fill;
     S.fill_g1 = b.create_bind_group(g1);
     if (!S.draw_g0 || !S.fill_g0 || !S.fill_g1) return fail("bind groups");
+    // The draw program goes before the frame.
+    b.release(S.draw_prog);
+    S.draw_prog = {};
 
     // The frame.
     gfx::Frame f;

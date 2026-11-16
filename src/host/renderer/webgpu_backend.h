@@ -97,7 +97,9 @@ private:
     struct Pipe {
         WGPURenderPipeline render = nullptr;
         WGPUComputePipeline compute = nullptr;
-        uint32_t program_slot = 0;
+        // The program's groups, copied at creation: the program may be released while its
+        // pipelines live, and its slot taken by another program.
+        uint8_t group_mask = 0;
         uint8_t vertex_layout_count = 0;
     };
     struct Group {
