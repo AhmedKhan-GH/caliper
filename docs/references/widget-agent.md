@@ -83,7 +83,10 @@ For an OpenAI-compatible server it lists the server's models, makes one streamed
 tool with fixed arguments and one that asks it to name the colour of a small PNG, each with at most 1,024 output
 tokens and 60 seconds, and reads the context length where the server reports it. For a server on this machine it also
 asks Ollama's `POST /api/show` for the model's metadata, which loads nothing, and keeps the bytes of context cache one
-token takes as the quirk `kv_bytes_per_token`; a server that is not Ollama answers 404 and nothing is kept. For the
+token takes as the quirk `kv_bytes_per_token`; a server that is not Ollama answers 404 and nothing is kept. The
+metadata's context length is the most the model takes, not what the server runs it with, so it is not used: after the
+test requests have loaded the model, the probe reads Ollama's `GET /api/ps`, which states the context in force, and
+otherwise leaves the context length unknown. For the
 Ollama preset the two test requests go to Ollama's own chat API with the preset's context length, as the agent's do
 (see [Ollama's own chat API](#ollamas-own-chat-api)), and that context length is the answer, with the source
 `preset`. For Claude it reads the Models API and makes no request that costs tokens. The key comes from the

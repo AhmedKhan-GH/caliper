@@ -669,7 +669,14 @@ agent will. With it, the same probe left `/api/ps` at a context of 16,384 tokens
   keeps the context cache one token takes (`kv_bytes_per_token`: attention layers, key and value heads and their
   sizes, at 16 bits). The settings tag Context cache about N GB when the context length times that reaches 4 GB. With
   the preset's own lengths the note covers a person who raises the context length, and an Ollama server reached as
-  Custom, which loads the model at its full context.
+  Custom, which loads the model at the context Ollama chooses.
+- **A context length only from a reliable source.** The metadata's `context_length` is the most the model takes, not
+  what the server runs it with, so the probe never takes it as the context length. A context length is recorded only
+  where the sidecar chose it (the Ollama preset) or the server states the one in force: for any other server on
+  loopback the probe reads Ollama's `GET /api/ps` after its test calls have loaded the model, and takes the context
+  that the server runs the model with; otherwise the length stays unknown. The no-truncation rule stays off wherever
+  the sidecar did not choose the length, since a number it cannot trust would let it pass requests the server cuts or
+  refuse requests that fit.
 - **Open: compaction for a full context.** Instead of ending the turn when the conversation no longer fits, the
   sidecar could summarize the earlier conversation and go on, as the Claude API's server-side compaction does. Not
   built; the person starts again or raises the context length.

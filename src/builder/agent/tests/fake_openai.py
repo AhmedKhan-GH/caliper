@@ -80,7 +80,8 @@ class FakeOpenAI:
                  models: list[dict] | None = None, lmstudio: int | None = None, require_key: str | None = None,
                  responder: Callable[[dict], dict] | None = None, record: str | None = None,
                  native_ids: bool = True, show: dict | None = None,
-                 prompt_tokens: list[int] | None = None) -> None:
+                 prompt_tokens: list[int] | None = None, ps_context: int | None = None,
+                 native_error: tuple[int, str] | None = None) -> None:
         self.replies = list(replies or [])
         self.refuse_tools = refuse_tools
         self.refuse_images = refuse_images
@@ -98,6 +99,8 @@ class FakeOpenAI:
         self.native_ids = native_ids
         self.show = show   # Ollama's model_info for POST /api/show; None answers 404
         self.prompt_tokens = list(prompt_tokens or [])   # prompt_eval_count of each native reply, else 11
+        self.ps_context = ps_context   # the context_length GET /api/ps gives for each listed model; None: none listed
+        self.native_error = native_error   # (status, message) for every /api/chat request, as Ollama refuses one
         self.requests: list[dict] = []
         self.native_requests: list[dict] = []
         self.headers: list[dict] = []
@@ -139,6 +142,10 @@ class FakeOpenAI:
                 if self.path == "/v1/models" and fake.models is not None:
                     self._json(200, {"object": "list", "data": [{"object": "model", "owned_by": "fake", **m}
                                                                 for m in fake.models]})
+                elif self.path == "/api/ps":
+                    loaded = [{"name": m["id"], "model": m["id"], "context_length": fake.ps_context}
+                              for m in (fake.models or [])] if fake.ps_context else []
+                    self._json(200, {"models": loaded})
                 elif self.path.startswith("/api/v0/models/") and fake.lmstudio is not None:
                     self._json(200, {"id": self.path.rsplit("/", 1)[-1], "object": "model", "type": "llm",
                                      "max_context_length": fake.lmstudio})
@@ -165,6 +172,9 @@ class FakeOpenAI:
                 if self.path == "/api/chat":
                     with fake._lock:
                         fake.native_requests.append(body)
+                    if fake.native_error is not None:
+                        self._json(fake.native_error[0], {"error": fake.native_error[1]})
+                        return
                     view = fake.openai_view(body)
                     error = fake.refusal(view)
                     if error is not None:

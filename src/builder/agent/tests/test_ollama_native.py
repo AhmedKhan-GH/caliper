@@ -258,12 +258,24 @@ def test_the_probe_reads_how_much_cache_a_token_takes(tmp_path):
         assert doc["capabilities"]["context_length"]["value"] == OLLAMA_CONTEXT   # the preset's, not 262,144
         assert "/api/show" in server.paths
 
-        # A Custom address of an Ollama server is loaded at the model's full context, which the probe reports.
+        # A Custom address of an Ollama server: the model's metadata gives the most it can take, not what the server
+        # runs it with, so it is not the context length; without the server's word the length stays unknown.
         code, doc, err = run_probe_cli("--preset", "custom", "--base-url", server.base_url, "--model", "qwen-test",
                                        "--cache-dir", str(tmp_path / "custom"))
         assert code == 0, err
-        assert doc["capabilities"]["context_length"] == {"value": 262144, "source": "server",
-                                                          "detail": "Reported by the server's model metadata."}
+        assert doc["probe"]["context_length"]["value"] is None
+        assert doc["capabilities"]["context_length"]["source"] == "default"
         assert doc["quirks"]["kv_bytes_per_token"] == 17 * 4 * 512 * 2
+    finally:
+        server.close()
+    # With the model loaded, Ollama's /api/ps states the context in force, which the probe takes.
+    server = FakeOpenAI(models=[{"id": "qwen-test"}], show=HYBRID_27B_INFO, ps_context=32768)
+    try:
+        code, doc, err = run_probe_cli("--preset", "custom", "--base-url", server.base_url, "--model", "qwen-test",
+                                       "--cache-dir", str(tmp_path / "custom-ps"))
+        assert code == 0, err
+        assert doc["capabilities"]["context_length"] == {
+            "value": 32768, "source": "server", "detail": "The context the server runs the model with (Ollama's /api/ps)."}
+        assert server.paths.index("/api/ps") > server.paths.index("/v1/chat/completions")   # after the test calls
     finally:
         server.close()
