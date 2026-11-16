@@ -119,13 +119,13 @@ struct SpecPage::Impl {
     // The session the page reads: a new one (the workspace opened, or the
     // session closed) gets a new source.
     void bind(AppSession& app) {
+        if (workspace.empty()) workspace = folder_name(app.workspace());
         cb::Session* s = app.session();
         if (s == bound) return;
         bound = s;
         source = s ? std::make_unique<PageSource>(*s, app) : nullptr;
         runtime->set_source(source.get());
         journal_read.reset();
-        workspace = folder_name(app.workspace());
     }
 
     // The open spec, read again when the journal recorded a command since.

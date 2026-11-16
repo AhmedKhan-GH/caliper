@@ -449,6 +449,10 @@ public:
     // said on stderr and in Activity, and the app runs without it.
     void start_api(const caliper_host::CommandLine& cl) {
         std::string why;
+        // The command endpoints serve the builder session's command layer; a
+        // command opens the default workspace on first use. Set before the
+        // server listens, so that no request finds it without one.
+        api_.set_command_gateway(session_.command_gateway());
         // A capture reads the window's frame back where the renderer can
         // (Metal); elsewhere it is answered 501 with the reason.
         const std::string capture_unavailable =
@@ -458,6 +462,7 @@ public:
         if (!api_.start(cl, capture_unavailable, caliper::app_data_location(), std::cout, &why)) {
             std::cerr << "[api] not started: " << why << std::endl;
             landing_.log("api not started", why);
+            api_.set_command_gateway(nullptr);
             return;
         }
         landing_.log("api", api_.url());
@@ -484,6 +489,7 @@ public:
         // builder session: its worker, its journal and its database close
         // here, before the host's own stores.
         api_.stop();
+        api_.set_command_gateway(nullptr);
         session_.set_panel_renderer(nullptr);
         session_.close();
         // Workers FIRST: a job may hold a pointer into applet state, so every

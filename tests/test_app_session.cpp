@@ -12,6 +12,7 @@
 // then stops it with SIGTERM and reads what it left in the workspace.
 #include <doctest/doctest.h>
 
+#include "api/command_gateway.h"
 #include "builder/app_session.h"
 #include "builder/panel_renderer.h"
 #include "job_system.h"
@@ -20,6 +21,7 @@
 #include "test_proc.h"
 #endif
 
+#include <caliper_builder/commands/approval.h>
 #include <caliper_builder/commands/journal.h>
 #include <caliper_builder/session/session.h>
 
@@ -465,7 +467,8 @@ TEST_CASE("app session: one Activity line per journaled command, with its origin
     json dry = note;
     dry["dry_run"] = true;
     REQUIRE(call(s, inv("panel.create", dry, cb::CommandOrigin::mcp)).ok);   // a preview: no line
-    REQUIRE(call(s, inv("panel.create", note, cb::CommandOrigin::mcp)).ok);
+    // From api, whose spec edits are not reviewed, so the edit runs at once.
+    REQUIRE(call(s, inv("panel.create", note, cb::CommandOrigin::api)).ok);
     CHECK(call(s, inv("panel.create", note, cb::CommandOrigin::agent)).error.code == "panel.exists");
     REQUIRE(call(s, inv("spec.get")).ok);   // a read: no line
     REQUIRE(call(s, inv("history.undo")).ok);
@@ -477,7 +480,7 @@ TEST_CASE("app session: one Activity line per journaled command, with its origin
     REQUIRE(lines.size() == 5);
     CHECK(lines[0] == std::array<std::string, 3>{"workspace", t.str("ws"), "--workspace"});
     CHECK(lines[1] == std::array<std::string, 3>{"ui command", "spec.new", ""});
-    CHECK(lines[2] == std::array<std::string, 3>{"mcp command", "panel.create", ""});
+    CHECK(lines[2] == std::array<std::string, 3>{"api command", "panel.create", ""});
     CHECK(lines[3] == std::array<std::string, 3>{"agent command", "panel.create", "panel.exists"});
     CHECK(lines[4] == std::array<std::string, 3>{"ui command", "history.undo", ""});
     const std::string err = loop.err.str();
@@ -546,8 +549,12 @@ TEST_CASE("app session: the command script runs through the queue and writes eac
                "{\"name\": \"spec.new\", \"args\": {\"id\": \"demo\", \"title\": \"Demo\"}}\n"
                "\n"
                "not json\n"
-               "{\"name\": \"panel.create\", \"origin\": \"mcp\", \"args\": {\"id\": \"note\", \"primitive\": \"text\", "
-               "\"options\": {\"text\": \"a note\"}}}\n"
+               // An agent's spec edit is reviewed: approved by the script...
+               "{\"name\": \"panel.create\", \"origin\": \"mcp\", \"approve\": true, \"args\": {\"id\": \"note\", "
+               "\"primitive\": \"text\", \"options\": {\"text\": \"a note\"}}}\n"
+               // ...or left pending, and the script goes on.
+               "{\"name\": \"panel.create\", \"origin\": \"mcp\", \"args\": {\"id\": \"note2\", "
+               "\"primitive\": \"text\", \"options\": {\"text\": \"another\"}}}\n"
                "{\"name\": \"capture.frame\"}\n");
     FrameLoop loop;
     AppSession::Options o = options(t.str("ws"));
@@ -563,7 +570,7 @@ TEST_CASE("app session: the command script runs through the queue and writes eac
     std::vector<json> results;
     std::istringstream in(read_text(t.str("results.jsonl")));
     for (std::string line; std::getline(in, line);) results.push_back(json::parse(line));
-    REQUIRE(results.size() == 5);
+    REQUIRE(results.size() == 6);
     CHECK(results[0]["line"] == 2);
     CHECK(results[0]["name"] == "spec.new");
     CHECK(results[0]["ok"] == true);
@@ -571,13 +578,110 @@ TEST_CASE("app session: the command script runs through the queue and writes eac
     CHECK(results[1]["error"]["code"] == "command.invalid_invocation");
     CHECK(results[2]["name"] == "panel.create");
     CHECK(results[2]["ok"] == true);
-    CHECK(results[3]["name"] == "capture.frame");
-    CHECK(results[3]["result"]["png_base64"] == b64("PNG:4x2"));
-    CHECK(results[4] == json{{"done", true}, {"commands", 4}, {"failed", 1}});
+    CHECK(results[2]["approved"].get<std::string>().rfind("ap-", 0) == 0);
+    CHECK(results[3]["name"] == "panel.create");
+    CHECK(results[3]["error"]["code"] == "command.needs_approval");
+    CHECK(results[3]["error"]["approval"].get<std::string>().rfind("ap-", 0) == 0);
+    CHECK(results[4]["name"] == "capture.frame");
+    CHECK(results[4]["result"]["png_base64"] == b64("PNG:4x2"));
+    CHECK(results[5] == json{{"done", true}, {"commands", 5}, {"failed", 2}});
     const auto read = cb::read_journal(t.str("ws") + "/journal/commands.jsonl");
-    REQUIRE(read.events.size() == 2);
+    REQUIRE(read.events.size() >= 2);
+    CHECK(read.events[1].name == "panel.create");
     CHECK(read.events[1].origin == cb::CommandOrigin::mcp);
-    CHECK(loop.err.str().find("[session] script done: 4 commands, 1 failed") != std::string::npos);
+    CHECK(read.events[1].ok);
+    CHECK(loop.err.str().find("[session] script done: 5 commands, 2 failed") != std::string::npos);
+}
+
+TEST_CASE("app session: an agent's spec edit is held with its diff in the pending list and runs on approval") {
+    TempDir t("review");
+    FrameLoop loop;
+    loop.run(options(t.str("ws")));
+    cb::Session& s = loop.open();
+    REQUIRE(call(s, inv("spec.new", {{"id", "demo"}, {"title", "Demo"}})).ok);
+    const auto gateway = loop.session.command_gateway();
+    REQUIRE(gateway);
+
+    // From mcp, reviewed by default: the edit waits for the person.
+    auto held = s.queue().submit(
+        inv("panel.create", {{"id", "note"}, {"primitive", "text"}, {"options", {{"text", "a note"}}}},
+            cb::CommandOrigin::mcp));
+    std::string id;
+    json pending;
+    const auto until = std::chrono::steady_clock::now() + 10s;
+    while (id.empty() && std::chrono::steady_clock::now() < until) {
+        for (const auto& p : s.registry().pending_approvals()) {
+            id = p.approval;
+            pending = cb::pending_approval_to_json(p);
+        }
+        std::this_thread::sleep_for(2ms);
+    }
+    REQUIRE_FALSE(id.empty());
+    CHECK(held.wait_for(50ms) == std::future_status::timeout);
+    INFO(pending.dump());
+    CHECK(pending["invocation"]["name"] == "panel.create");
+    REQUIRE(pending["review"].is_object());
+    const std::string diff = pending["review"]["diff"].get<std::string>();
+    CHECK(diff.find("+id = \"note\"") != std::string::npos);
+    CHECK(s.open_spec()->spec.panels.empty());
+
+    // GET /v0/approvals/{id} gives the same review, read from the pending
+    // approvals of the last frame.
+    json looked = json::object();
+    while (looked.value("state", "") != "pending" && std::chrono::steady_clock::now() < until) {
+        looked = json::parse(gateway->approval_json(id));
+        std::this_thread::sleep_for(2ms);
+    }
+    CHECK(looked["state"] == "pending");
+    CHECK(looked["name"] == "panel.create");
+    CHECK(looked["origin"] == "mcp");
+    CHECK(looked["review"]["diff"] == diff);
+
+    // Approved, it runs as it was shown.
+    REQUIRE(s.queue().approve(id).get().ok);
+    REQUIRE(held.wait_for(10s) == std::future_status::ready);
+    CHECK(held.get().ok);
+    CHECK(s.open_spec()->spec.panels.size() == 1);
+    CHECK(json::parse(gateway->approval_json(id))["state"] == "decided");
+}
+
+TEST_CASE("app session: Caliper API's gateway opens the default workspace on the first command") {
+    TempDir t("gateway");
+    FrameLoop loop;
+    loop.run(options(t.str("default-ws"), false));
+    const auto gateway = loop.session.command_gateway();
+    REQUIRE(gateway);
+    CHECK(json::parse(gateway->table_json())["commands"].size() > 30);
+    while (loop.frames < 10) std::this_thread::sleep_for(1ms);
+    CHECK_FALSE(fs::exists(t.str("default-ws")));   // the table needs no workspace
+
+    caliper_api::CommandRequest r;
+    r.id = "api-1";
+    r.name = "spec.new";
+    r.args = R"({"id": "demo"})";
+    r.origin = "api";
+    std::unique_ptr<caliper_api::PendingCommand> p = gateway->submit(r);
+    const auto until = std::chrono::steady_clock::now() + 20s;
+    while (!p->ready() && std::chrono::steady_clock::now() < until) std::this_thread::sleep_for(2ms);
+    REQUIRE(p->ready());
+    const json env = json::parse(p->envelope());
+    CHECK(env["id"] == "api-1");
+    CHECK(env["ok"] == true);
+    CHECK(fs::exists(t.str("default-ws") + "/journal/commands.jsonl"));
+    CHECK(json::parse(gateway->approval_json("ap-9")) ==
+          json{{"approval", "ap-9"}, {"state", "unknown"}, {"result", nullptr}});
+
+    // A refused request answers at once; after the session closes, commands
+    // answer command.shutdown.
+    r.origin = "ui";
+    std::unique_ptr<caliper_api::PendingCommand> bad = gateway->submit(r);
+    REQUIRE(bad->ready());
+    CHECK(json::parse(bad->envelope())["error"]["code"] == "command.invalid_invocation");
+    loop.finish();
+    r.origin = "api";
+    std::unique_ptr<caliper_api::PendingCommand> late = gateway->submit(r);
+    REQUIRE(late->ready());
+    CHECK(json::parse(late->envelope())["error"]["code"] == "command.shutdown");
 }
 
 #ifndef _WIN32
@@ -656,8 +760,16 @@ TEST_CASE("app session: the hidden app runs a command script on its workspace an
     } else {
         CHECK(results[10]["error"]["code"] == "capture.unavailable");
     }
-    CHECK(results[11]["error"]["code"] == "command.not_available");
-    CHECK(results.back() == json{{"done", true}, {"commands", (int)script.size()}, {"failed", metal ? 1 : 2}});
+    // panel.render draws the panel with the spec runtime on a canvas that
+    // shares the app's font atlas.
+    if (metal) {
+        REQUIRE_MESSAGE(results[11]["ok"] == true, results[11].dump());
+        CHECK(results[11]["result"]["width"] == 800);
+        CHECK(results[11]["result"]["height"] == 500);
+    } else {
+        CHECK(results[11]["error"]["code"] == "panel.render_failed");
+    }
+    CHECK(results.back() == json{{"done", true}, {"commands", (int)script.size()}, {"failed", metal ? 0 : 2}});
 
     // SIGTERM closes the hidden window as a click would; the session closes
     // its journal and its database before the process ends.

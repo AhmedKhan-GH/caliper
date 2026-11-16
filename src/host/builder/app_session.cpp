@@ -2,9 +2,11 @@
 #include "builder/app_session.h"
 
 #if CALIPER_WITH_BUILDER
+#include "api/session_gateway.h"
 #include "builder/panel_renderer.h"
 
 #include <caliper_builder/commands/command.h>
+#include <caliper_builder/commands/command_table.h>
 #include <caliper_builder/commands/journal.h>
 #include <caliper_builder/commands/queue.h>
 #include <caliper_builder/session/session.h>
@@ -114,6 +116,14 @@ json parse_object(const std::string& text) {
 
 }  // namespace
 
+// What the API's gateway and its held commands reach the session through:
+// null once the session closes, so a command held by the server after that
+// answers command.shutdown instead of touching a closed session.
+struct GatewayCore {
+    std::mutex m;
+    AppSession::Impl* im = nullptr;
+};
+
 struct AppSession::Impl {
     enum class State { idle, opening, opened, ready, failed, closed };
     enum class Capture { none, armed, ready, failed };
@@ -158,6 +168,12 @@ struct AppSession::Impl {
     std::vector<Line> lines;   // from the journal, any thread
     std::atomic<uint64_t> journaled{0};        // every journaled command
     std::atomic<uint64_t> applets_opened{0};   // every applet.open that succeeded
+
+    // Caliper API's gateway (command_gateway()), and the pending approvals as
+    // the last frame without a worker read them, for its approval lookups.
+    std::shared_ptr<GatewayCore> gateway;
+    std::mutex pending_m;
+    std::vector<cb::PendingApproval> pending;
 
     // capture.frame: touched on the frame thread only.
     Capture cap = Capture::none;
@@ -362,6 +378,24 @@ struct AppSession::Impl {
         if (!s || busy.load(std::memory_order_acquire)) return;
         pump(*s);
         flush_lines();
+        // The approvals Caliper API's lookups read, while the registry is free.
+        if (gateway && !busy.load(std::memory_order_acquire)) {
+            std::vector<cb::PendingApproval> p = s->registry().pending_approvals();
+            std::lock_guard<std::mutex> lock(pending_m);
+            pending = std::move(p);
+        }
+    }
+
+    // The adopted session, or null; any thread.
+    cb::Session* ready_session() {
+        std::lock_guard<std::mutex> lock(m);
+        return state == State::ready ? session.get() : nullptr;
+    }
+
+    // Why the workspace could not be opened, once that is known; any thread.
+    std::string open_failure() {
+        std::lock_guard<std::mutex> lock(m);
+        return state == State::failed ? (error.empty() ? std::string("unknown") : error) : std::string();
     }
 
     // ---- SessionHost --------------------------------------------------------
@@ -453,6 +487,7 @@ struct AppSession::Impl {
             if (first == std::string::npos || text[first] == '#') continue;
             json j = json::parse(text, nullptr, false);
             std::string name;
+            std::string approved;   // the approval the script gave, for "approve": true
             cb::CommandResult r;
             if (j.is_discarded() || !j.is_object()) {
                 r = cb::CommandResult::failure(
@@ -460,9 +495,27 @@ struct AppSession::Impl {
             } else {
                 if (!j.contains("origin")) j["origin"] = "ui";
                 if (j.contains("name") && j["name"].is_string()) name = j["name"].get<std::string>();
+                // "approve": true approves the line's command, as the person
+                // would, when it asks; without it a command that asks answers
+                // command.needs_approval and the script goes on, so a script
+                // never waits for a decision that nobody can make.
+                bool approve = false;
+                if (const auto a = j.find("approve"); a != j.end()) {
+                    approve = a->is_boolean() && a->get<bool>();
+                    j.erase(a);
+                }
                 cb::CommandInvocationParse p = cb::command_invocation_from_json(j);
-                if (p.error) r = cb::CommandResult::failure("", p.error);
-                else r = s.queue().submit(std::move(p.invocation)).get();
+                if (p.error) {
+                    r = cb::CommandResult::failure("", p.error);
+                } else {
+                    cb::SubmitOptions so;
+                    so.wait_for_approval = false;
+                    r = s.queue().submit(std::move(p.invocation), so).get();
+                    if (approve && !r.ok && r.error.code == "command.needs_approval" && !r.approval.empty()) {
+                        approved = r.approval;
+                        r = s.queue().approve(approved).get();
+                    }
+                }
             }
             ++count;
             if (!r.ok) {
@@ -473,6 +526,7 @@ struct AppSession::Impl {
             json line = cb::command_result_to_json(r);
             line["line"] = line_no;
             line["name"] = name;
+            if (!approved.empty()) line["approved"] = approved;
             write(line);
             if (r.error.code == "command.shutdown") break;
         }
@@ -484,6 +538,11 @@ struct AppSession::Impl {
     // ---- shutdown ----------------------------------------------------------
 
     void close() {
+        // Commands the API still holds answer command.shutdown from now on.
+        if (gateway) {
+            std::lock_guard<std::mutex> lock(gateway->m);
+            gateway->im = nullptr;
+        }
         cb::Session* s = nullptr;
         {
             std::lock_guard<std::mutex> lock(m);
@@ -516,6 +575,95 @@ struct AppSession::Impl {
         binding.reset();
     }
 };
+
+namespace {
+
+std::string shutdown_envelope(const std::string& id) {
+    return caliper_api::command_error_json(id, "command.shutdown", "The app's builder session has closed.", "");
+}
+
+// A command from Caliper API: handed to the session's queue as soon as the
+// session is there, by whichever thread asks first whether it is ready.
+class AppCommand final : public caliper_api::PendingCommand {
+public:
+    AppCommand(std::shared_ptr<GatewayCore> core, cb::CommandInvocation inv, cb::SubmitOptions options)
+        : core_(std::move(core)), inv_(std::move(inv)), options_(options) {}
+
+    bool ready() override {
+        std::lock_guard<std::mutex> lock(m_);
+        if (!inner_) {
+            std::lock_guard<std::mutex> c(core_->m);
+            if (!core_->im) {
+                inner_ = caliper_api::ready_command(shutdown_envelope(inv_.id));
+            } else if (cb::Session* s = core_->im->ready_session()) {
+                inner_ = caliper_api::queued_command(s->queue().submit(std::move(inv_), options_));
+            } else {
+                const std::string why = core_->im->open_failure();
+                if (why.empty()) return false;   // still opening
+                inner_ = caliper_api::ready_command(caliper_api::command_error_json(
+                    inv_.id, "command.not_available", "The workspace could not be opened: " + why, ""));
+            }
+        }
+        return inner_->ready();
+    }
+
+    std::string envelope() override {
+        std::lock_guard<std::mutex> lock(m_);
+        return inner_ ? inner_->envelope() : shutdown_envelope(inv_.id);
+    }
+
+private:
+    std::mutex m_;
+    std::shared_ptr<GatewayCore> core_;
+    cb::CommandInvocation inv_;
+    cb::SubmitOptions options_;
+    std::unique_ptr<caliper_api::PendingCommand> inner_;
+};
+
+class AppGateway final : public caliper_api::CommandGateway {
+public:
+    explicit AppGateway(std::shared_ptr<GatewayCore> core)
+        : core_(std::move(core)),
+          table_(caliper_builder::command_table_to_json().dump(-1, ' ', false, json::error_handler_t::replace)) {}
+
+    std::string table_json() const override { return table_; }
+
+    // On the frame thread.
+    std::unique_ptr<caliper_api::PendingCommand> submit(caliper_api::CommandRequest request) override {
+        caliper_api::RequestInvocation r = caliper_api::request_invocation(std::move(request));
+        if (!r.refused.empty()) return caliper_api::ready_command(std::move(r.refused));
+        {
+            std::lock_guard<std::mutex> lock(core_->m);
+            if (!core_->im) return caliper_api::ready_command(shutdown_envelope(r.invocation.id));
+            core_->im->ensure_open();
+        }
+        auto cmd = std::make_unique<AppCommand>(core_, std::move(r.invocation), r.options);
+        cmd->ready();   // to the queue now when the session is there
+        return cmd;
+    }
+
+    // On the frame thread: the queue's outcomes and the pending approvals of
+    // the last frame without a worker, never the registry itself.
+    std::string approval_json(const std::string& approval_id) override {
+        std::optional<cb::CommandResult> outcome;
+        std::vector<cb::PendingApproval> pending;
+        {
+            std::lock_guard<std::mutex> lock(core_->m);
+            if (core_->im) {
+                if (cb::Session* s = core_->im->ready_session()) outcome = s->queue().approval_outcome(approval_id);
+                std::lock_guard<std::mutex> p(core_->im->pending_m);
+                pending = core_->im->pending;
+            }
+        }
+        return caliper_api::approval_state_json(approval_id, outcome, pending);
+    }
+
+private:
+    std::shared_ptr<GatewayCore> core_;
+    const std::string table_;
+};
+
+}  // namespace
 
 AppSession::AppSession() : impl_(std::make_unique<Impl>()) {}
 
@@ -597,6 +745,19 @@ uint64_t AppSession::journaled() const { return impl_->journaled.load(std::memor
 
 uint64_t AppSession::applets_opened() const { return impl_->applets_opened.load(std::memory_order_acquire); }
 
+std::shared_ptr<caliper_api::CommandGateway> AppSession::command_gateway() {
+    Impl& im = *impl_;
+    {
+        std::lock_guard<std::mutex> lock(im.m);
+        if (!im.started || im.state == Impl::State::closed) return nullptr;
+    }
+    if (!im.gateway) {
+        im.gateway = std::make_shared<GatewayCore>();
+        im.gateway->im = &im;
+    }
+    return std::make_shared<AppGateway>(im.gateway);
+}
+
 #else  // !CALIPER_WITH_BUILDER
 
 // Without the builder there is no session: a chosen workspace and a command
@@ -631,6 +792,7 @@ bool AppSession::script_running() const { return false; }
 void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderSeam>) {}
 uint64_t AppSession::journaled() const { return 0; }
 uint64_t AppSession::applets_opened() const { return 0; }
+std::shared_ptr<caliper_api::CommandGateway> AppSession::command_gateway() { return nullptr; }
 
 #endif
 

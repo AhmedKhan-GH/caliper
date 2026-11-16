@@ -869,7 +869,7 @@ if(TARGET caliper_builder_session)
     if(BUILD_TESTS)
         add_executable(caliper_app_session_tests tests/test_app_session.cpp src/host/builder/app_session.cpp)
         target_link_libraries(caliper_app_session_tests PRIVATE caliper_builder_test_main doctest::doctest
-            caliper_builder_session caliper_host_lib)
+            caliper_builder_session caliper_api_session caliper_host_lib)
         target_include_directories(caliper_app_session_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src/host ${CMAKE_SOURCE_DIR}/tests ${CMAKE_SOURCE_DIR}/third_party/stb)
         target_compile_definitions(caliper_app_session_tests PRIVATE CALIPER_WITH_BUILDER=1)
@@ -879,6 +879,24 @@ if(TARGET caliper_builder_session)
         endif()
         add_test(NAME caliper_app_session COMMAND caliper_app_session_tests "--test-case-exclude=*hidden app*")
         set_tests_properties(caliper_app_session PROPERTIES LABELS "builder" TIMEOUT 120)
+        # The whole route of an outside agent against the hidden app: Caliper
+        # API's command endpoints build, open, render and capture a dashboard,
+        # and caliper-mcp calls a command tool (tests/test_app_route.cpp).
+        if(NOT WIN32 AND TARGET caliper-mcp)
+            add_executable(caliper_app_route_tests tests/test_app_route.cpp)
+            target_link_libraries(caliper_app_route_tests PRIVATE caliper_builder_test_main doctest::doctest
+                caliper_builder_acp caliper_builder_duckdb)
+            target_include_directories(caliper_app_route_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests
+                ${CMAKE_SOURCE_DIR}/src/builder/mcp/tests ${CMAKE_SOURCE_DIR}/src/builder/session/tests
+                ${CMAKE_SOURCE_DIR}/third_party/stb)
+            target_compile_definitions(caliper_app_route_tests PRIVATE CALIPER_MCP_EXE="$<TARGET_FILE:caliper-mcp>")
+            set_target_properties(caliper_app_route_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+            add_dependencies(caliper_app_route_tests caliper caliper-mcp)
+            add_test(NAME caliper_app_route COMMAND caliper_app_route_tests)
+            set_tests_properties(caliper_app_route PROPERTIES LABELS "cli;builder" TIMEOUT 240
+                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>"
+                SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+        endif()
         if(NOT WIN32)
             add_test(NAME caliper_app_session_hidden
                      COMMAND caliper_app_session_tests "--test-case=app session: the hidden app*")

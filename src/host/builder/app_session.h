@@ -56,7 +56,11 @@
 // at a time through the queue, as an outside client does, and appends each
 // result to CALIPER_COMMAND_RESULTS when it is set: one JSON line per command,
 // {"line", "name", "id", "ok", "result" | "error"}, then {"done": true,
-// "commands", "failed"}.
+// "commands", "failed"}. A command that asks for the person's approval (a
+// destructive one, or an agent's spec edit under review) never holds the
+// script: it answers command.needs_approval with its approval id, which stays
+// pending, unless its line has "approve": true, in which case the script
+// approves it as the person would and writes the result with "approved".
 //
 // Shutdown. close() shuts the queue down (waiting calls get command.shutdown),
 // waits for the worker and the script, and closes the journal and the
@@ -78,6 +82,10 @@
 
 namespace caliper_builder {
 class Session;
+}
+
+namespace caliper_api {
+class CommandGateway;   // api/command_gateway.h
 }
 
 namespace caliper_host {
@@ -179,6 +187,19 @@ public:
     // Every applet.open that succeeded, from any origin: the app shows the
     // spec page for each.
     uint64_t applets_opened() const;
+
+    // Caliper API's command gateway over this session (api/command_gateway.h),
+    // for AppApi::set_command_gateway(), so that the app serves
+    // /v0/commands. It serves the command table at once. A command that
+    // comes before the workspace is open opens it, the default workspace on
+    // first use as wait_open() does, and goes to the queue once the frame
+    // thread has adopted the session; when the workspace cannot be opened it
+    // answers command.not_available with the reason. GET /v0/approvals/{id}
+    // reads the pending approvals as the last frame without a worker left
+    // them, so a lookup never waits for a loader that holds the registry.
+    // After close() its commands answer command.shutdown. The app clears it
+    // from the API before the session closes. Null without the builder.
+    std::shared_ptr<caliper_api::CommandGateway> command_gateway();
 
     struct Impl;
 

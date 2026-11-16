@@ -85,7 +85,10 @@ struct ShotSession {
     bool services = false;
 
     ~ShotSession() {
-        if (api) api->stop();
+        if (api) {
+            api->stop();
+            api->set_command_gateway(nullptr);
+        }
         if (session) {
             // panel.render's canvas shares the shot's font atlas: it goes
             // while the shot's UI context is still there.
@@ -235,20 +238,6 @@ int run_shot(const CommandLine& cl) {
     SpecPage& spec_page = *s.spec_page;
     bool on_spec = spec_shot;
 
-    // Caliper API (--api) while the frames are drawn. The canvas is offscreen,
-    // so a capture is read back from it at the end of a frame, as the image is.
-    void (*old_int)(int) = SIG_DFL;
-    void (*old_term)(int) = SIG_DFL;
-    if (api_wanted(cl)) {
-        s.api = std::make_unique<AppApi>();
-        std::string why;
-        if (!s.api->start(cl, "", user_data_folder, std::cout, &why))
-            return fail("cannot start Caliper API: " + why);
-        g_stop = 0;
-        old_int = std::signal(SIGINT, shot_on_signal);
-        old_term = std::signal(SIGTERM, shot_on_signal);
-    }
-
     // A launch through the API or the session's app.launch: the page shows
     // that applet from this frame on. The applet shown goes first, as Home
     // takes it in the app; when the new one fails to launch, the previous one
@@ -309,6 +298,24 @@ int run_shot(const CommandLine& cl) {
         // A spec applet needs the workspace, also the default one.
         if (spec_shot) s.session->ensure_open();
     }
+
+    // Caliper API (--api) while the frames are drawn. The canvas is offscreen,
+    // so a capture is read back from it at the end of a frame, as the image is.
+    void (*old_int)(int) = SIG_DFL;
+    void (*old_term)(int) = SIG_DFL;
+    if (api_wanted(cl)) {
+        s.api = std::make_unique<AppApi>();
+        // Its command endpoints serve the session's command layer, from the
+        // first request on.
+        s.api->set_command_gateway(s.session->command_gateway());
+        std::string why;
+        if (!s.api->start(cl, "", user_data_folder, std::cout, &why))
+            return fail("cannot start Caliper API: " + why);
+        g_stop = 0;
+        old_int = std::signal(SIGINT, shot_on_signal);
+        old_term = std::signal(SIGTERM, shot_on_signal);
+    }
+
 
     // N frames at about 60 a second, as the app draws them, so jobs and
     // workers the applet starts get the time they get in the app.

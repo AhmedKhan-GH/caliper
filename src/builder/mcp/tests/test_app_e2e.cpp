@@ -2,8 +2,8 @@
 // and 17. When the CMake variable CALIPER_BUILDER_TEST_APP names a caliper
 // executable, the test starts it with --hidden --api --api-port 0 and a
 // CALIPER_DATA_DIR of its own, runs caliper-mcp against the API file the app
-// writes, calls app_info, app_applets, capture_frame and one command tool, and
-// stops the app with SIGTERM. The app is never started without --hidden.
+// writes, calls app_info, app_applets, capture_frame and one command tool,
+// which the app's builder session answers, and stops the app with SIGTERM. The app is never started without --hidden.
 // Without the variable the test reports itself skipped. POSIX only.
 #include "../codec.h"
 
@@ -212,7 +212,8 @@ TEST_CASE("caliper-mcp drives the real app end to end") {
         MESSAGE("capture_frame: a " << w << " by " << h << " PNG, " << differing << " pixels differ from the first");
     }
 
-    // A tool of the command layer, which this app does not have yet.
+    // A tool of the command layer, which the app serves over its builder
+    // session; the default workspace under the app-data folder opens for it.
     const CommandDescriptor* command = nullptr;
     for (const auto& d : command_table())
         if (d.name.rfind("app.", 0) != 0 && d.name != "capture.frame" && !d.examples.empty() && !d.mutates) {
@@ -222,11 +223,11 @@ TEST_CASE("caliper-mcp drives the real app end to end") {
     REQUIRE(command);
     const json cmd = request(*server, &out_log, &buf, 4, "tools/call",
                              {{"name", command_tool_name(command->name)}, {"arguments", command->examples[0]}});
-    REQUIRE(cmd["result"]["isError"] == true);
-    const json cmd_error = tool_error(cmd["result"]);
-    CHECK(cmd_error["code"] == "mcp.no_command_layer");
-    CHECK(cmd_error["message"].get<std::string>().find("no command layer yet") != std::string::npos);
-    MESSAGE(command->name << ": " << cmd_error["code"].get<std::string>());
+    INFO(cmd.dump());
+    CHECK(cmd["result"]["isError"] == false);
+    CHECK(cmd["result"]["structuredContent"].is_object());
+    CHECK(fs::exists(data / "workspace" / "journal"));
+    MESSAGE(command->name << ": " << cmd["result"]["structuredContent"].dump().substr(0, 200));
 
     const json page = request(*server, &out_log, &buf, 5, "resources/read", {{"uri", "caliper://docs/references/manifest.md"}});
     CHECK(page["result"]["contents"][0]["text"].get<std::string>().rfind("# Manifest", 0) == 0);
