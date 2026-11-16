@@ -203,6 +203,14 @@ test('scene view info and the scene data view', () => {
   expect(Object.keys(SCENE_DATA_VIEW.budget).sort()).toEqual(['max_extent', 'max_items', 'max_points', 'max_vertices']);
 });
 
+test('a null key of a scene means the same as an absent one, as in the golden VIEWS', () => {
+  const v = decode(read('views_scene_nulls.bin'));
+  expect(v.type).toBe('views');
+  const entry = (v as { views: ViewEntry[] }).views[0];
+  expect(entry.scene).toEqual({ space: null, up: null, units: null });
+  expect(sceneViewInfo(entry)).toEqual({ space: '3d', up: '+y', units: 'm' });
+});
+
 test('the 3.2 constants agree with include/caliper/live_net.h', () => {
   const text = fs.readFileSync(path.join(REPO, 'include', 'caliper', 'live_net.h'), 'utf8');
   const block = text.slice(text.indexOf('PROTOCOL 3.2 DRAFT: THE SCENES SUBSET'));

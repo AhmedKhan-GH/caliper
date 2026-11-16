@@ -214,6 +214,15 @@ def test_scene_view_info():
             w.scene_view_info({"kind": 6, "scene": sc})
 
 
+def test_scene_view_info_null_keys_are_absent():
+    """A null key means the same as an absent one: the golden VIEWS whose scene keys are null."""
+    v = w.decode((V32 / "views_scene_nulls.bin").read_bytes())
+    assert v.views[0]["scene"] == {"space": None, "up": None, "units": None}
+    assert w.scene_view_info(v.views[0]) == {"space": "3d", "up": "+y", "units": "m"}
+    assert w.scene_view_info({"kind": 6, "scene": {"space": "2d", "units": None}}) == \
+        {"space": "2d", "up": "-y", "units": "m"}
+
+
 def test_default_scene_data_view_only():
     view = {"id": 1, "name": "s", "kind": int(w.Kind.SCENE), "sources": []}
     for req in (None, {}, w.SCENE_DATA_VIEW):
