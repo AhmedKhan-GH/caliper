@@ -527,6 +527,26 @@ void WidgetSurface::close() {
     enter(WidgetState::idle);
 }
 
+void WidgetSurface::abandon() {
+    if (state_ == WidgetState::running && pending_turn_.empty()) agent_.cancel();
+    pending_turn_.clear();
+    pending_discards_.clear();
+    pending_commit_ = false;
+    preview_.clear();
+    edits_ = 0;
+    diff_.clear();
+    full_diff_.clear();
+    show_full_diff_ = false;
+    if (sink_ && !shown_panel_.empty()) sink_->clear(shown_panel_);
+    shown_panel_.clear();
+    end_session();
+    text_.clear();
+    conversation_.clear();
+    reset_turn();
+    fresh_session_ = true;
+    enter(WidgetState::idle);
+}
+
 void WidgetSurface::act(WidgetAction action) {
     switch (action) {
         case WidgetAction::accept: accept(); break;

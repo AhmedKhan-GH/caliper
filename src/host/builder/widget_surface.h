@@ -196,6 +196,11 @@ public:
     void open_model();       // declined: the widget agent's settings
     void toggle_diff();      // preview: the full diff or the compact one
     void close();            // back to idle, discarding the preview and closing the session
+    // Forgets the preview and ends the agent's session without a command:
+    // the builder session has closed, or is about to, and its previews go
+    // with it. After it, nothing of the surface touches the session again,
+    // not even its destructor.
+    void abandon();
     void act(WidgetAction action);
 
     // ---- per frame: the agent's events, the open spec changing under the

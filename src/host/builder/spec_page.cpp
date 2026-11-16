@@ -235,7 +235,10 @@ struct SpecPage::Impl {
         cb::Session* s = app.session();
         if (s == bound) return;
         if (widget) {
-            widget.reset();   // its session goes, and it detaches from the runtime
+            // Its session has gone or changed: the surface forgets its
+            // preview without a command to it, then detaches.
+            widget->surface().abandon();
+            widget.reset();
             install_overlay();
         }
         bound = s;
@@ -707,8 +710,14 @@ bool SpecPage::facts(const std::string& spec_path, SpecAppletFacts* out) {
 }
 
 void SpecPage::shutdown() {
+    // The app has closed the builder session by now (main.cpp closes it
+    // before the renderer, and the page's textures need the renderer gone
+    // first): the inline surface forgets its preview without a command,
+    // since a command into the closed session crashed the app on quitting
+    // with a prompt open; then it goes, before the runtime it is attached to.
+    if (impl_->widget) impl_->widget->surface().abandon();
+    impl_->widget.reset();
     impl_->builder.reset();
-    impl_->widget.reset();   // before the runtime it is attached to
     impl_->runtime.reset();
     impl_->source.reset();
     impl_->bound = nullptr;

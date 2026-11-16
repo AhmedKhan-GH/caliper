@@ -599,3 +599,57 @@ TEST_CASE("widget surface: the agent's thoughts show as the progress line, and a
     CHECK(r.surface->model_label() == "Claude Opus 5.5");
     CHECK(r.agent->models()[1].current);
 }
+
+TEST_CASE("widget surface: abandoned after its session closed, the surface sends it nothing, not even when destroyed") {
+    // A session that notes every call made after it closed.
+    struct Guard : SessionWidgetSession {
+        using SessionWidgetSession::SessionWidgetSession;
+        bool closed = false;
+        mutable int after_close = 0;
+        caliper_builder::CommandResult run(const std::string& name, json args) override {
+            if (closed) {
+                ++after_close;
+                return caliper_builder::CommandResult::failure("", caliper_builder::Error("command.shutdown", name, ""));
+            }
+            return SessionWidgetSession::run(name, std::move(args));
+        }
+    };
+    for (const bool with_abandon : {true, false}) {
+        CAPTURE(with_abandon);
+        const std::string root = fresh_dir(with_abandon ? "widget-abandon" : "widget-no-abandon");
+        auto s = dashboard_workspace(root + "/ws", root + "/data");
+        auto t = std::chrono::steady_clock::now();
+        ScriptedWidgetAgent agent(script_of({linear_turn()}),
+                                  [&s](caliper_builder::CommandInvocation inv) { return s->invoke(std::move(inv)); },
+                                  [&t] { return t; });
+        Guard host(*s);
+        FakeSink sink;
+        {
+            WidgetSurface::Hooks hooks;
+            hooks.now = [&t] { return t; };
+            WidgetSurface surface(host, agent, hooks);
+            surface.set_preview_sink(&sink);
+            REQUIRE(surface.open(WidgetTarget::for_panel("curves")));
+            surface.set_text("Use a linear y axis");
+            surface.submit();
+            for (int i = 0; i < 20; ++i) {
+                t += milliseconds(50);
+                surface.update();
+            }
+            REQUIRE(surface.state() == WidgetState::preview);   // a preview is showing
+            if (with_abandon) {
+                surface.abandon();
+                CHECK(surface.state() == WidgetState::idle);
+                CHECK(surface.preview_id().empty());
+                CHECK(sink.cleared == std::vector<std::string>{"curves"});
+                CHECK(agent.sessions_closed() == 1);
+            }
+            // The app closes the builder session, then the surface goes.
+            host.closed = true;
+        }
+        // Abandoned, nothing reached the closed session; without it, the
+        // destructor's discard did, which is what crashed the app on quitting.
+        CHECK(host.after_close == (with_abandon ? 0 : 1));
+        s->close();
+    }
+}
