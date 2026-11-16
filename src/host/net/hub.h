@@ -128,6 +128,11 @@ struct HubOptions {
     std::function<void(ConnId, const HttpRequest&)> on_request;
     std::function<void()> on_tick;
     int tick_ms = 0;
+    // For an embedded server with an endpoint that takes a body (Caliper
+    // API's command endpoint): the most body bytes to read for a request head,
+    // 0 for none, as net/ws.h's Options::body_limit. A body must arrive within
+    // handshake_timeout_ms. Called on the hub's thread, before the Host check.
+    std::function<size_t(const HttpRequest&)> body_limit;
 };
 
 // Counters and sizes, as of the end of the hub's last loop round.

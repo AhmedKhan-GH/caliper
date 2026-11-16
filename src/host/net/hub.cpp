@@ -301,6 +301,8 @@ struct Hub::Impl {
         o.max_queued_bytes = h.max_queued_bytes;
         o.max_connections = h.max_tcp_connections;
         o.header_timeout_ms = h.handshake_timeout_ms;
+        o.body_limit = h.body_limit;
+        o.body_timeout_ms = h.handshake_timeout_ms;
         return o;
     }
 
