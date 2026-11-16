@@ -138,7 +138,7 @@ async def control(url: str, session: str, lr: float, seconds: float = 8.0) -> di
                 lr = next((p for p in msg.params if p["name"] == "lr"), None)
                 if lr is not None:
                     out["lr"], out["pending"] = lr["value"], lr.get("pending")
-                if not sent:
+                if not sent and lr is not None:   # once the script has registered it
                     sent = True
                     await ws.send(W.encode(W.Control(1, W.OP_SET, "lr", lr_value(lr))))
                     await ws.send(W.encode(W.Control(2, W.OP_RUN, "save")))

@@ -28,7 +28,8 @@ Python environment with torch, numpy and websockets. It checks, in order:
 With --connect the two scripts are tests/hub/producer_connect.py instead,
 which stream with the package's own caliper.connect() (the native sender
 must be built: python scripts/build_netio.py), and their sessions are found
-in the session list by pid. With --bench it then measures the relay with a
+in the session list by pid. They take the controls of step 7 through the
+package: caliper.param(), caliper.action() and caliper.step(). With --bench it then measures the relay with a
 512 x 512 heatmap at 60 Hz to four Python viewers in other processes. It
 prints one line per check and exits with 0 when all of them pass.
 """
@@ -128,8 +129,8 @@ def main() -> int:
 
         # 2. two scripts
         if a.connect:
-            pa = spawn([sys.executable, os.path.join(HERE, "producer_connect.py"), "--seconds", "48"],
-                       "producer-a.log")
+            pa = spawn([sys.executable, os.path.join(HERE, "producer_connect.py"), "--seconds", "48",
+                        "--controls"], "producer-a.log")
             pb = spawn([sys.executable, os.path.join(HERE, "producer_connect.py"), "--seconds", "26"],
                        "producer-b.log")
         else:
@@ -221,8 +222,7 @@ def main() -> int:
             bench(spawn, url, hub_file, work)
 
         # 7. controls (protocol 3.1): refused by this hub, forwarded by one with --allow-control
-        if not a.connect:                   # the package's scripts expose no controls yet
-            controls(spawn, url, caliper, work)
+        controls(spawn, url, caliper, work, ida, a.connect)
 
         # 8. stop
         pa.terminate()
@@ -249,8 +249,8 @@ def main() -> int:
     return 0 if not FAILED else 1
 
 
-def controls(spawn, url: str, caliper: str, work: str) -> None:
-    r = asyncio.run(viewer.control(url, "e2e-a", 0.05, seconds=6.0))
+def controls(spawn, url: str, caliper: str, work: str, session: str, connect: bool) -> None:
+    r = asyncio.run(viewer.control(url, session, 0.05, seconds=6.0))
     check("controls" in r["capabilities"] and r["control"] is False,
           f"the hub announces controls and says this viewer may not control: {r['capabilities']} {r['control']}")
     check(r["controls"] >= 1 and r["lr"] == 0.001,
@@ -268,14 +268,22 @@ def controls(spawn, url: str, caliper: str, work: str) -> None:
     with open(hub_file2) as f:
         h2 = json.load(f)
     url2 = f"{h2['stream_url']}?token={h2['token']}"
-    pc = spawn([sys.executable, os.path.join(HERE, "producer.py"), "--hub-file", hub_file2, "--id", "e2e-ctl",
-                "--seconds", "12", "--controls"], "producer-ctl.log")
+    if connect:
+        pc = spawn([sys.executable, os.path.join(HERE, "producer_connect.py"), "--seconds", "12",
+                    "--controls"], "producer-ctl.log", {"CALIPER_HUB_FILE": hub_file2})
+    else:
+        pc = spawn([sys.executable, os.path.join(HERE, "producer.py"), "--hub-file", hub_file2, "--id",
+                    "e2e-ctl", "--seconds", "12", "--controls"], "producer-ctl.log")
+    sid = "e2e-ctl"
     t0 = time.monotonic()
     while time.monotonic() - t0 < 30:
-        if any(s["id"] == "e2e-ctl" for s in asyncio.run(viewer.sessions(url2))):
+        got = asyncio.run(viewer.sessions(url2))
+        if connect:
+            sid = {s.get("pid"): s["id"] for s in got}.get(pc.pid, sid)
+        if any(s["id"] == sid for s in got):
             break
         time.sleep(0.3)
-    r = asyncio.run(viewer.control(url2, "e2e-ctl", 0.05, seconds=8.0))
+    r = asyncio.run(viewer.control(url2, sid, 0.05, seconds=8.0))
     check(r["control"] is True, f"a hub started with --allow-control says the viewer may control: {r['control']}")
     set_r, run_r = r["replies"][1], r["replies"][2]
     check(len(set_r) == 1 and set_r[0]["status"] == "ok" and set_r[0]["value"] == 0.05,
