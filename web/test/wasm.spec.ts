@@ -401,7 +401,10 @@ test.describe('pan and zoom in the WebAssembly views', () => {
       await page.mouse.move(q.x + 1, q.y);
       await expect.poll(async () => (await state(page, 'h')).hover).toEqual({ r: 2, c: 5 });
       expect((await received(srv, 'h', 'hover')).detail).toEqual({ row: 2, col: 5, value: 21 });
-      // Magnified, every pixel of a cell has the cell's colour (nearest sampling).
+      // Magnified, every pixel of a cell has the cell's colour (nearest sampling);
+      // the pointer moves off the view first, so that no tooltip covers the cell.
+      await page.mouse.move(2, 2);
+      await page.waitForTimeout(200);
       const box = (await page.locator('caliper-view[view="h"] .body .wasm canvas').boundingBox())!;
       const png = decodePng(await page.screenshot({ clip: box }));
       const lut = colormapLut('viridis');
@@ -450,6 +453,7 @@ test.describe('pan and zoom in the WebAssembly views', () => {
       await page.mouse.move(c.x + 80, c.y, { steps: 4 });
       await page.mouse.up();
       await expect.poll(async () => (await win(page, 's')).x0).toBeLessThan(z.x0);
+      await page.waitForTimeout(400);   // the pan has landed
       const held = await win(page, 's');
       await page.waitForTimeout(500);
       expect(await win(page, 's')).toEqual(held);
