@@ -130,7 +130,8 @@ std::string shadowed_reason(const std::string& winner_version,
 // searched folder: a manifest of kind "spec" in a subfolder of a searched
 // folder (<dir>/<name>/<stem>.caliper.toml), as a workspace keeps them. A
 // subfolder that is a symbolic link or whose name starts with '.' is skipped,
-// and at most this many subfolders of one folder are looked at.
+// and at most this many subfolders of one folder, and this many manifests in
+// them, are looked at.
 inline constexpr std::size_t kMaxSpecSubfolders = 4096;
 // The largest manifest read from a subfolder or from the workspace's folder.
 inline constexpr std::uintmax_t kMaxSpecManifestBytes = 64 * 1024;
