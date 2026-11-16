@@ -7,19 +7,20 @@ caliper._netio is built) and on the CPU and, where there is one, MPS:
   arrays, cast and bounded on the device;
 * a late subscriber receives the static items and the current state, opened
   by SCENE_CLEAR with reset;
-* a rate limit drops a batch and never a static one;
+* a rate limit drops a batch and never a static one, and a viewer's
+  max_rate holds each entity part to one batch per interval, the newest
+  waiting;
 * every refusal raises, attached or not, and the arguments that are not
   built yet raise NotImplementedError;
 * a viewer without the capability "scenes" sees no scene;
 * the calls of demo 0 (the loss landscape) run in their order;
-* the cost of a call with nothing attached stays small."""
+* a call with nothing attached takes no snapshot."""
 from __future__ import annotations
 
 import asyncio
 import math
 import os
 import re
-import statistics
 import time
 import warnings
 
@@ -28,7 +29,7 @@ import pytest
 import torch
 
 import caliper
-from caliper import _scene, _wire as w
+from caliper import _net_scene, _scene, _wire as w
 
 websockets = pytest.importorskip("websockets")
 from websockets.asyncio.client import connect  # noqa: E402
@@ -104,17 +105,6 @@ class Viewer:
             except asyncio.TimeoutError:
                 pass
 
-    async def quiet(self, seconds=0.3) -> list:
-        """Everything that arrives within ``seconds``."""
-        end = time.monotonic() + seconds
-        while (left := end - time.monotonic()) > 0:
-            try:
-                self.inbox.append(await self.recv(left))
-            except asyncio.TimeoutError:
-                break
-        out, self.inbox = self.inbox, []
-        return out
-
     async def subscribe(self, sub, view, max_rate=None, data_view=None):
         if view not in self.views:
             await self.expect(w.Views, lambda m: any(v["name"] == view for v in m.views))
@@ -128,17 +118,39 @@ class Viewer:
         return await self.expect(w.SceneUpdate, lambda m: m.path == path and
                                  (part is None or m.part == part), timeout)
 
-    async def state(self, sub):
-        """The scene's state for subscription ``sub``: the reset, then the updates."""
+    async def state(self, sub, n):
+        """The scene's state for subscription ``sub``: the reset, then its ``n`` updates,
+        waited for as events. A subscription's state goes before any other batch of it, so a
+        test that must know no more state came logs a batch and waits for that."""
         clear = await self.expect(w.SceneClear, lambda m: m.sub == sub)
         assert clear.reset and clear.state and clear.path == ""
-        out = []
-        for m in await self.quiet(0.5):
-            if isinstance(m, w.SceneUpdate) and m.sub == sub and m.state:
-                out.append(m)
-            else:
-                self.inbox.append(m)
+        out = [await self.expect(w.SceneUpdate, lambda m: m.sub == sub and m.state) for _ in range(n)]
+        assert not [m for m in self.inbox if isinstance(m, w.SceneUpdate) and m.sub == sub and m.state]
         return out
+
+
+async def until(pred, timeout=10.0):
+    """Wait for published state: ``pred`` read every 2 ms until it holds."""
+    end = time.monotonic() + timeout
+    while not pred():
+        if time.monotonic() > end:
+            raise TimeoutError("the state the test waits for was not published")
+        await asyncio.sleep(0.002)
+
+
+class Clock:
+    """The clock caliper/_scene.py reads for a batch's rate limit, set by the test, so that
+    the limit is checked on a known sequence of calls and times rather than on how fast the
+    machine makes the calls. Every other function of the time module is the real one."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def perf_counter(self):
+        return self.now
+
+    def __getattr__(self, name):
+        return getattr(time, name)
 
 
 def arr(m, name):
@@ -166,7 +178,7 @@ def test_mesh_lines_and_points_reach_a_viewer(server, device):
             assert r.data_view == w.SCENE_DATA_VIEW
             assert v.views["landscape"]["kind"] == w.Kind.SCENE
             assert w.scene_view_info(v.views["landscape"]) == {"space": "3d", "up": "+z", "units": ""}
-            await v.state(1)
+            await v.state(1, 0)
             assert sc.mesh("surface", pos, tri, values=vals, cmap="viridis", vmin=-4.0, vmax=2.0)
             assert sc.lines("path", path, strip_lengths=[7], colors=(235, 235, 235), rate=10)
             assert sc.points("cloud", pts, colors=rgb, radii=radii)
@@ -208,7 +220,7 @@ def test_segments_strips_per_strip_colours_and_auto_range(server):
     async def body():
         async with Viewer(server) as v:
             await v.subscribe(1, "lines")
-            await v.state(1)
+            await v.state(1, 0)
             sc.lines("box", seg, width=1.5, values=torch.tensor([0.0, 1.0, 2.0, 3.0]))
             sc.lines("tracks", strips, strip_lengths=torch.tensor([3, 2]), colors=colours)
             a = await v.update("box")
@@ -230,7 +242,7 @@ def test_2d_scene_mesh(server):
         async with Viewer(server) as v:
             assert w.scene_view_info((await v.expect(w.Views)).views[0])["space"] == "2d"
             await v.subscribe(1, "flat")
-            await v.state(1)
+            await v.state(1, 0)
             sc.mesh("shape", tri, colors=[(10, 20, 30)] * 3)
             m = await v.update("shape")
             assert arr(m, "positions").shape == (3, 2)
@@ -247,7 +259,7 @@ def test_points_and_segments_over_the_budget_are_sampled_by_stride(server):
     async def body():
         async with Viewer(server) as v:
             await v.subscribe(1, "big")
-            await v.state(1)
+            await v.state(1, 0)
             sc.points("cloud", pos, values=torch.arange(n, dtype=torch.float32))
             m = await v.update("cloud", timeout=20)
             size = w.DEFAULT_MAX_POINTS
@@ -280,7 +292,7 @@ def test_late_subscriber_gets_static_items_and_the_current_state(server, device)
     async def body():
         async with Viewer(server) as a:
             await a.subscribe(1, "world")
-            st = await a.state(1)
+            st = await a.state(1, 1)
             assert [(m.path, m.part, m.static) for m in st] == [("", "lines", True)]
             np.testing.assert_array_equal(arr(st[0], "positions"), frame.cpu().numpy())
             surf = torch.rand(6, 3).to(device)
@@ -290,7 +302,7 @@ def test_late_subscriber_gets_static_items_and_the_current_state(server, device)
             await a.update("current")
             async with Viewer(server) as b:
                 await b.subscribe(7, "world")
-                st = await b.state(7)
+                st = await b.state(7, 3)
                 assert [(m.path, m.part) for m in st] == [("", "lines"), ("current", "points"),
                                                           ("surface", "mesh")]
                 assert all(m.state for m in st) and [m.static for m in st] == [True, False, False]
@@ -309,7 +321,7 @@ def test_static_items_logged_before_serve_are_listed_and_sent(monkeypatch):
         async def body():
             async with Viewer(s) as v:
                 await v.subscribe(1, "setup")
-                st = await v.state(1)
+                st = await v.state(1, 1)
                 assert [(m.path, m.static) for m in st] == [("anchor", True)]
         run(body())
     finally:
@@ -324,27 +336,35 @@ def test_a_newer_static_item_replaces_the_older(server):
     async def body():
         async with Viewer(server) as v:
             await v.subscribe(1, "setup")
-            st = await v.state(1)
+            st = await v.state(1, 1)
             assert len(st) == 1 and arr(st[0], "positions").shape == (4, 3)
     run(body())
 
 
-def test_rate_limit_drops_a_batch_and_never_a_static_one(server):
-    sc = caliper.scene("rates", rate=2)
+def test_rate_limit_drops_a_batch_and_never_a_static_one(server, monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(_scene, "time", clock)
+    sc = caliper.scene("rates", rate=2)                                   # 0.5 s per batch
 
     async def body():
         async with Viewer(server) as v:
             await v.subscribe(1, "rates")
-            await v.state(1)
+            await v.state(1, 0)
             got = [sc.points("p", torch.full((1, 3), float(i))) for i in range(20)]
-            assert got[0] is True and not any(got[1:])                   # 2 per second
+            assert got[0] is True and not any(got[1:])                   # 20 calls at one time
             assert all(sc.points("q", torch.zeros(1, 3), static=True) for _ in range(5))
             assert sc.points("r", torch.zeros(1, 3), rate=0) and sc.points("r", torch.zeros(1, 3), rate=0)
-            msgs = await v.quiet(0.8)
-            ups = [m for m in msgs if isinstance(m, w.SceneUpdate)]
-            assert [arr(m, "positions")[0, 0] for m in ups if m.path == "p"] == [0.0]
-            assert len([m for m in ups if m.path == "q"]) >= 1            # coalesced per part
-            assert _scene.SCENES["rates"].counters["rate_limited"] == 19
+            counters = _scene.SCENES["rates"].counters
+            assert counters["rate_limited"] == 19
+            assert arr(await v.update("p"), "positions")[0, 0] == 0.0     # the first one is sent
+            await v.update("q")
+            await v.update("r")
+            clock.now += 0.25
+            assert sc.points("p", torch.full((1, 3), 20.0)) is False      # within the interval
+            clock.now += 0.25
+            assert sc.points("p", torch.full((1, 3), 21.0)) is True       # the next interval
+            assert arr(await v.update("p"), "positions")[0, 0] == 21.0
+            assert counters["rate_limited"] == 20 and counters["taken"] == 1 + 5 + 2 + 1
     run(body())
 
 
@@ -355,21 +375,48 @@ def test_unwatched_batches_cost_no_snapshot(server):
 
 
 def test_max_rate_applies_to_each_entity_part(server):
+    """A subscription's max_rate holds each entity part to one batch per 1/max_rate, and the
+    batches logged meanwhile wait as one, the newest. Nothing here depends on how fast the
+    machine is: the slow subscription's interval (1,000 s) is far longer than the test, so
+    after its first batch of each part the 39 that follow can only wait as one; the paced one
+    (4 a second) receives each part in order, the newest last, and every batch it does not
+    receive was replaced by a newer one."""
     sc = caliper.scene("pace", rate=0)
+    route = _net_scene.route_of(server.ring)
+
+    def value(m):
+        return float(arr(m, "positions")[0, 0])
 
     async def body():
-        async with Viewer(server) as v:
-            await v.subscribe(1, "pace", max_rate=4)
-            await v.state(1)
-            t0 = time.monotonic()
-            while time.monotonic() - t0 < 1.0:
-                sc.points("a", torch.zeros(1, 3))
-                sc.points("b", torch.zeros(1, 3))
-                await asyncio.sleep(0.01)
-            msgs = await v.quiet(0.4)
+        async with Viewer(server) as paced, Viewer(server) as slow:
+            await paced.subscribe(1, "pace", max_rate=4)
+            await slow.subscribe(2, "pace", max_rate=0.001)
+            await paced.state(1, 0)
+            await slow.state(2, 0)
             for p in ("a", "b"):
-                n = len([m for m in msgs if isinstance(m, w.SceneUpdate) and m.path == p])
-                assert 2 <= n <= 7, (p, n)                     # 4 per second each, not 100
+                assert sc.points(p, torch.zeros(1, 3))
+            for v in (paced, slow):                                   # the first goes at once
+                for p in ("a", "b"):
+                    assert value(await v.update(p)) == 0.0
+            for i in range(1, 40):
+                for p in ("a", "b"):
+                    assert sc.points(p, torch.full((1, 3), float(i)))
+            got = {}
+            for p in ("a", "b"):
+                got[p] = [0.0]
+                while got[p][-1] != 39.0:
+                    got[p].append(value(await paced.update(p)))
+                assert all(x < y for x, y in zip(got[p], got[p][1:])), got[p]   # newer each time
+            links = {sub: (link, q) for (link, sub), q in route.subs["pace"].items()}
+            link, q = links[2]
+
+            def newest_waits():
+                return all(k in q.pending and float(q.pending[k].arrays["positions"][0, 0]) == 39.0
+                           for k in (("a", w.PART_POINTS), ("b", w.PART_POINTS)))
+
+            await until(newest_waits)                         # the slow one's 39 wait as one
+            assert link.stats["scene_superseded"] == 2 * 38
+            assert links[1][0].stats["scene_superseded"] == 80 - len(got["a"]) - len(got["b"])
     run(body())
 
 
@@ -397,7 +444,7 @@ def test_remove_ends_the_scene(server):
     async def body():
         async with Viewer(server) as v:
             await v.subscribe(1, "gone")
-            await v.state(1)
+            await v.state(1, 0)
             assert sc.points("p", torch.zeros(1, 3), static=True)
             assert caliper.remove("gone") is False
             await v.expect(w.Views, lambda m: all(x["name"] != "gone" for x in m.views))
@@ -406,7 +453,12 @@ def test_remove_ends_the_scene(server):
             assert sc.points("q", torch.zeros(1, 3)) is False       # nobody subscribes yet
             await v.expect(w.Views, lambda m: any(x["name"] == "gone" for x in m.views))
             await v.subscribe(2, "gone")
-            assert await v.state(2) == []                         # the static item went with it
+            assert await v.state(2, 0) == []
+            assert sc.points("q", torch.ones(1, 3))                 # watched now
+            assert (await v.update("q")).sub == 2
+            # A subscription's state goes before its other batches: none came before q, so the
+            # static item went with the scene.
+            assert not [m for m in v.inbox if isinstance(m, w.SceneUpdate) and m.sub == 2]
             caliper.scene("other")
             caliper.remove("other")
             again = caliper.scene("other")
@@ -615,7 +667,7 @@ def test_the_demo_sequence_runs(server):
     async def body():
         async with Viewer(server, caps=(w.CAP_SCENES, w.CAP_CONTROLS)) as v:
             await v.subscribe(1, "landscape")
-            st = await v.state(1)
+            st = await v.state(1, 1)
             assert [(m.path, m.part, m.static) for m in st] == [("", "lines", True)]
             assert arr(st[0], "positions").shape == (12 * 2 + 18 * 2, 3)
             for step in range(12):
@@ -655,25 +707,31 @@ def test_the_demo_sequence_runs(server):
 # cost with nothing attached, and no device wait on the training thread
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("device", DEVICES)
-def test_a_call_with_nothing_attached_is_cheap(server, device):
+def test_a_call_with_nothing_attached_is_cheap(server, device, monkeypatch):
+    """With nothing attached a call runs its checks and returns False: no snapshot, nothing
+    queued, no device work. What that costs in time is a benchmark row, not a test:
+    python/bench/bench_call_cost.py --scenes, outside CI (docs/references/python-api.md,
+    "Cost of a call")."""
     sc = caliper.scene("cost")
     pos = torch.rand(1681, 3, device=device)
     tri = torch.randint(0, 1681, (3200, 3), device=device, dtype=torch.int32)
     vals = torch.rand(1681, device=device)
-    pc = time.perf_counter_ns
-    meds = {}
-    for name, fn in [("mesh", lambda: sc.mesh("surface", pos, tri, values=vals, vmin=-4.0, vmax=2.0)),
-                     ("points", lambda: sc.points("current", pos[:1], colors=(255, 80, 80))),
-                     ("lines", lambda: sc.lines("path", pos[:40], strip_lengths=[40]))]:
-        ts = []
-        for _ in range(2000):
-            a = pc()
+
+    def no_snapshot(*a, **kw):
+        raise AssertionError("a call with nothing attached took a snapshot")
+
+    monkeypatch.setattr(_scene, "_snapshot", no_snapshot)
+    route = _net_scene.route_of(server.ring)
+    queued = route.counters["queued"]
+    calls = [lambda: sc.mesh("surface", pos, tri, values=vals, vmin=-4.0, vmax=2.0),
+             lambda: sc.points("current", pos[:1], colors=(255, 80, 80)),
+             lambda: sc.lines("path", pos[:40], strip_lengths=[40])]
+    for _ in range(100):
+        for fn in calls:
             assert fn() is False
-            ts.append(pc() - a)
-        meds[name] = statistics.median(ts) / 1e3
-    print("scene calls, nothing attached, median us:", meds)
-    assert all(m < 50.0 for m in meds.values()), meds
-    assert _scene.SCENES["cost"].counters.get("taken", 0) == 0
+    counters = _scene.SCENES["cost"].counters
+    assert counters["unwatched"] == 300 and counters.get("taken", 0) == 0
+    assert route.counters["queued"] == queued
 
 
 def test_the_training_thread_never_waits_for_the_device():
