@@ -27,7 +27,7 @@ const DATA = process.env.CALIPER_SPEC_E2E_DATA ?? '';
 const SHOTS = process.env.CALIPER_SHOTS ?? '';
 
 test.beforeEach(({}, info) => {
-  test.skip(info.project.name !== 'canvas2d', 'the spec page draws with Canvas 2D: one project is enough');
+  test.skip(info.project.name !== 'swiftshader', 'the spec page draws with Canvas 2D: one project is enough');
   test.skip(!BIN || !fs.existsSync(BIN), 'needs the built app in CALIPER_BIN');
   test.skip(!DATA && !fs.existsSync(PYTHON), 'needs a Python with pyarrow in CALIPER_PYTHON');
 });

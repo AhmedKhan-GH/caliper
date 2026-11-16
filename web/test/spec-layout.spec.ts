@@ -12,7 +12,7 @@ import { computeLayout, effectiveLayout, layoutShares, metricsForTextScale, pane
 import type { Spec } from '../src/spec/types.js';
 import { REPO } from './util.js';
 
-test.beforeEach(({}, info) => test.skip(info.project.name !== 'canvas2d', 'pure layout arithmetic: one project is enough'));
+test.beforeEach(({}, info) => test.skip(info.project.name !== 'swiftshader', 'pure layout arithmetic: one project is enough'));
 
 const FIXTURES = path.join(REPO, 'src', 'builder', 'spec', 'tests', 'fixtures');
 

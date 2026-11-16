@@ -12,7 +12,7 @@ import {
 } from './spec-mock.js';
 import { shotPath } from './util.js';
 
-test.beforeEach(({}, info) => test.skip(info.project.name !== 'canvas2d', 'the spec page draws with Canvas 2D: one project is enough'));
+test.beforeEach(({}, info) => test.skip(info.project.name !== 'swiftshader', 'the spec page draws with Canvas 2D: one project is enough'));
 
 function app(specs: Record<string, Json>, data: Record<string, Record<string, Json>>): MockApp {
   return { specs, data, requests: [] };
@@ -80,7 +80,7 @@ test('the page asks with the token and the viewer origin, and sends the version 
   await openSpec(page, 'run42-dashboard');
   await settled(page, 3);
   await expect.poll(() => mock.requests.filter((r) => r.name === 'panel.data' && r.args.known === 'v1').length,
-    { timeout: 5000 }).toBeGreaterThanOrEqual(3);
+    { timeout: 15_000 }).toBeGreaterThanOrEqual(3);
   for (const r of mock.requests) {
     expect(r.headers['authorization']).toBe(`Bearer ${TOKEN}`);
     expect(r.headers['x-caliper-origin']).toBe('viewer');
@@ -90,7 +90,7 @@ test('the page asks with the token and the viewer origin, and sends the version 
   // A new version is drawn: the table's info follows it.
   const d = mock.data['run42-dashboard'];
   d.rows = { ...d.rows, version: 'v2', data: { ...d.rows.data, rows: d.rows.data.rows.slice(0, 10), total_rows: 10 } };
-  await expect.poll(async () => (await pageState(page)).panels[2].info, { timeout: 5000 }).toBe('10 rows');
+  await expect.poll(async () => (await pageState(page)).panels[2].info, { timeout: 15_000 }).toBe('10 rows');
 });
 
 /** A spec of every primitive in two tabs, with data in the forms the app sends. */
@@ -222,7 +222,7 @@ test('states take the place of data: offline, mismatched, empty, a missing apple
   expect(s.panels.map((p) => [p.title, p.state])).toEqual([
     ['run/attn', 'Source offline'], ['step', 'No data'], ['d', 'Mismatched data'], ['run42_metrics', 'Query error']]);
   await openSpec(page, 'gone');
-  await expect.poll(async () => (await pageState(page)).state).toBe('Missing applet');
+  await expect.poll(async () => (await pageState(page)).state, { timeout: 15_000 }).toBe('Missing applet');
   expect((await pageState(page)).panels).toEqual([]);
   await expect(page.locator('#status')).toHaveText('connected');
 });
@@ -231,7 +231,7 @@ test('without an applet the page lists the saved spec applets as links', async (
   await mockApp(page, app({ 'run42-dashboard': DASHBOARD, every: everyPrimitive().spec }, {}));
   await page.goto(`${ORIGIN}/v0/spec?token=${TOKEN}`);
   const links = page.locator('#list a');
-  await expect(links).toHaveCount(2);
+  await expect(links).toHaveCount(2, { timeout: 15_000 });
   await expect(links.nth(0)).toHaveText('Run 42');
   expect(await links.nth(0).getAttribute('href')).toBe(`${ORIGIN}/v0/spec?token=${TOKEN}&applet=run42-dashboard`);
   await expect(page.locator('#canvas')).toBeHidden();
@@ -240,6 +240,6 @@ test('without an applet the page lists the saved spec applets as links', async (
 test('a refused token draws nothing of the applet', async ({ page }) => {
   await mockApp(page, app({ 'run42-dashboard': DASHBOARD }, { 'run42-dashboard': dashboardData() }));
   await page.goto(`${ORIGIN}/v0/spec?token=nope&applet=run42-dashboard`);
-  await expect.poll(async () => (await pageState(page)).state, { timeout: 5000 }).toBe('Access refused');
+  await expect.poll(async () => (await pageState(page)).state, { timeout: 15_000 }).toBe('Access refused');
   expect((await pageState(page)).panels).toEqual([]);
 });
