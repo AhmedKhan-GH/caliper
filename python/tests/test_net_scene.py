@@ -787,3 +787,50 @@ def test_a_hello_without_capabilities_is_a_3_1_viewer(server):
                     break
             assert m.error["code"] == w.ERR_UNKNOWN_VIEW
     run(body())
+
+
+def test_strip_lengths_that_do_not_add_up_drop_the_batch_when_finished(monkeypatch):
+    """Strip lengths in a device tensor are checked on the network thread once their copy is
+    done (_net_scene.finish): lengths that do not add up to the vertices, or a length below 1,
+    drop the batch with a warning instead of sending a frame that every receiver refuses. The
+    batches here are made from CPU tensors past the call's own check, as an MPS call makes them."""
+    monkeypatch.setenv("CALIPER_SESSION", "0")
+    sc = caliper.scene("strips")
+    pos = torch.zeros(5, 3)
+
+    def batch(lengths):
+        spec = _scene._Spec(w.PART_LINES, pos, None, None, 0, None, None,
+                            {"mode": w.LINES_STRIPS, "width": 2.0},
+                            extra={"strip_lengths": torch.tensor(lengths, dtype=torch.int32)})
+        return _scene._snapshot(sc._s, "path", spec, False)
+
+    for lengths in ([2, 2], [3, 3], [5, 0], []):
+        b = batch(lengths)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            assert _net_scene.finish(b) is False, lengths
+        assert b.arrays is None
+        assert any("strip lengths" in str(r.message) for r in rec), lengths
+    b = batch([2, 3])
+    assert _net_scene.finish(b) is True
+    assert list(b.arrays["strip_lengths"]) == [2, 3]
+
+
+@pytest.mark.skipif(not MPS, reason="no MPS device")
+def test_device_strip_lengths_that_do_not_add_up_never_reach_a_viewer(server):
+    sc = caliper.scene("strips", up="+z")
+    pos = torch.zeros(5, 3, device="mps")
+
+    async def body():
+        async with Viewer(server) as v:
+            await v.subscribe(1, "strips")
+            await v.state(1, 0)
+            with warnings.catch_warnings(record=True) as rec:
+                warnings.simplefilter("always")
+                assert sc.lines("bad", pos, strip_lengths=torch.tensor([2, 2], device="mps")) is True
+                assert sc.lines("good", pos, strip_lengths=torch.tensor([2, 3], device="mps")) is True
+                m = await v.update("good")
+            assert list(arr(m, "strip_lengths")) == [2, 3]
+            assert not [x for x in v.inbox if isinstance(x, w.SceneUpdate) and x.path == "bad"]
+            assert any("strip lengths" in str(r.message) for r in rec)
+    run(body())
