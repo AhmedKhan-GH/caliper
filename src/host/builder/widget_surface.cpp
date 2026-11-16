@@ -57,141 +57,6 @@ caliper_builder::ContextBundle SessionWidgetSession::bundle(const WidgetTarget& 
     return caliper_builder::build_context_bundle(session_, target.to_builder(), o);
 }
 
-// ---- the compact diff -------------------------------------------------------------------
-
-namespace {
-
-// A value as the card shows it: JSON, with whole numbers without a
-// fraction and a space after each comma.
-std::string show_value(const json& v) {
-    if (v.is_number_float()) {
-        const double d = v.get<double>();
-        char buf[32];
-        if (std::isfinite(d) && std::fabs(d) < 1e15 && d == std::floor(d)) std::snprintf(buf, sizeof buf, "%.0f", d);
-        else std::snprintf(buf, sizeof buf, "%.6g", d);
-        return buf;
-    }
-    if (v.is_array()) {
-        std::string s = "[";
-        for (size_t i = 0; i < v.size(); ++i) s += (i ? ", " : "") + show_value(v[i]);
-        return s + "]";
-    }
-    if (v.is_object()) {
-        std::string s = "{";
-        bool first = true;
-        for (auto it = v.begin(); it != v.end(); ++it) {
-            s += (first ? "" : ", ") + json(it.key()).dump() + ": " + show_value(it.value());
-            first = false;
-        }
-        return s + "}";
-    }
-    return v.dump();
-}
-
-std::string compact_value(const json& v, size_t max_value) {
-    std::string s = show_value(v);
-    if (s.size() > max_value && max_value > 3) {
-        // Cut on a character boundary of UTF-8.
-        size_t cut = max_value - 1;
-        while (cut > 0 && ((unsigned char)s[cut] & 0xC0) == 0x80) --cut;
-        s = s.substr(0, cut) + "\xE2\x80\xA6";   // …
-    }
-    return s;
-}
-
-// Flattens objects to dotted keys; arrays and scalars are leaves.
-void flatten(const json& v, const std::string& prefix, std::map<std::string, json>* out) {
-    if (v.is_object() && !v.empty()) {
-        for (auto it = v.begin(); it != v.end(); ++it)
-            flatten(it.value(), prefix.empty() ? it.key() : prefix + "." + it.key(), out);
-    } else {
-        (*out)[prefix] = v;
-    }
-}
-
-void diff_objects(const json& before, const json& after, const std::string& label, bool strip_options, size_t max_value,
-                  std::vector<WidgetDiffLine>* out) {
-    std::map<std::string, json> a, b;
-    flatten(before, "", &a);
-    flatten(after, "", &b);
-    std::set<std::string> keys;
-    for (const auto& kv : a) keys.insert(kv.first);
-    for (const auto& kv : b) keys.insert(kv.first);
-    for (const std::string& k : keys) {
-        auto ia = a.find(k), ib = b.find(k);
-        if (ia != a.end() && ib != b.end() && ia->second == ib->second) continue;
-        std::string key = k;
-        if (strip_options && key.rfind("options.", 0) == 0) key = key.substr(8);
-        if (!label.empty()) key = label + (key.empty() ? "" : "." + key);
-        WidgetDiffLine line;
-        line.key = key;
-        if (ia == a.end()) {
-            line.kind = WidgetDiffLine::Kind::added;
-            line.after = compact_value(ib->second, max_value);
-        } else if (ib == b.end()) {
-            line.kind = WidgetDiffLine::Kind::removed;
-            line.before = compact_value(ia->second, max_value);
-        } else {
-            line.before = compact_value(ia->second, max_value);
-            line.after = compact_value(ib->second, max_value);
-        }
-        out->push_back(std::move(line));
-    }
-}
-
-}  // namespace
-
-std::vector<WidgetDiffLine> widget_compact_diff(const spec::Spec& before, const spec::Spec& after,
-                                                const std::string& panel, size_t max_value) {
-    std::vector<WidgetDiffLine> out;
-    // The target panel first, its keys relative to it.
-    const spec::Panel* pa = panel.empty() ? nullptr : before.find_panel(panel);
-    const spec::Panel* pb = panel.empty() ? nullptr : after.find_panel(panel);
-    if (pa && pb) {
-        json ja = spec::to_json(*pa), jb = spec::to_json(*pb);
-        ja.erase("id");
-        jb.erase("id");
-        diff_objects(ja, jb, "", true, max_value, &out);
-    } else if (pa && !pb) {
-        out.push_back({WidgetDiffLine::Kind::removed, "panel " + panel, panel, ""});
-    }
-    // The other panels and the sources: added, removed, or their changed keys.
-    auto items = [&](const char* what, auto list_a, auto list_b) {
-        std::map<std::string, json> a, b;
-        for (const auto* x : list_a) a[x->id] = spec::to_json(*x);
-        for (const auto* x : list_b) b[x->id] = spec::to_json(*x);
-        for (const auto& kv : b)
-            if (!a.count(kv.first)) out.push_back({WidgetDiffLine::Kind::added, std::string(what) + " " + kv.first, "", kv.first});
-        for (const auto& kv : a) {
-            auto it = b.find(kv.first);
-            if (it == b.end()) {
-                out.push_back({WidgetDiffLine::Kind::removed, std::string(what) + " " + kv.first, kv.first, ""});
-            } else if (it->second != kv.second) {
-                json x = kv.second, y = it->second;
-                x.erase("id");
-                y.erase("id");
-                diff_objects(x, y, std::string(what) + " " + kv.first, false, max_value, &out);
-            }
-        }
-    };
-    std::vector<const spec::Panel*> panels_a, panels_b;
-    for (const auto& p : before.panels)
-        if (p.id != panel) panels_a.push_back(&p);
-    for (const auto& p : after.panels)
-        if (p.id != panel || !pa) panels_b.push_back(&p);
-    if (!pa)
-        for (auto it = panels_a.begin(); it != panels_a.end();) it = (*it)->id == panel ? panels_a.erase(it) : it + 1;
-    items("panel", panels_a, panels_b);
-    std::vector<const spec::Source*> sources_a, sources_b;
-    for (const auto& s : before.sources) sources_a.push_back(&s);
-    for (const auto& s : after.sources) sources_b.push_back(&s);
-    items("source", sources_a, sources_b);
-    const json la = before.layout ? spec::to_json(*before.layout) : json();
-    const json lb = after.layout ? spec::to_json(*after.layout) : json();
-    if (la != lb) out.push_back({WidgetDiffLine::Kind::changed, "layout", "", ""});
-    return out;
-}
-
 // ---- names ------------------------------------------------------------------------------
 
 const char* widget_state_name(WidgetState state) {
@@ -992,28 +857,13 @@ void WidgetSurface::detach() {
 
 namespace {
 
-ImVec2 text_extent(ImFont* f, float size, const std::string& s) {
-    if (!f) f = ImGui::GetFont();
-    return f->CalcTextSizeA(size, FLT_MAX, 0.0f, s.c_str(), s.c_str() + s.size());
-}
+// The card's text helpers (diff_card.h).
+ImVec2 text_extent(ImFont* f, float size, const std::string& s) { return card_text_extent(f, size, s); }
 
-std::string fit(ImFont* f, float size, const std::string& s, float w) {
-    if (text_extent(f, size, s).x <= w) return s;
-    static const std::string kDots = "\xE2\x80\xA6";
-    if (text_extent(f, size, kDots).x > w) return {};
-    size_t n = s.size();
-    while (n > 0) {
-        --n;
-        while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) --n;
-        const std::string t = s.substr(0, n) + kDots;
-        if (text_extent(f, size, t).x <= w) return t;
-    }
-    return kDots;
-}
+std::string fit(ImFont* f, float size, const std::string& s, float w) { return card_fit_text(f, size, s, w); }
 
 void draw_text(ImDrawList* dl, ImFont* f, float size, ImVec2 p, ImU32 c, const std::string& s) {
-    dl->AddText(f ? f : ImGui::GetFont(), size, ImVec2(std::round(p.x), std::round(p.y)), c, s.c_str(),
-                s.c_str() + s.size());
+    card_draw_text(dl, f, size, p, c, s);
 }
 
 ImVec2 v2(float x, float y) { return ImVec2(x, y); }
@@ -1252,7 +1102,6 @@ void WidgetSurface::overlay(const SpecPanelFrame& f) {
                 ImGui::SetCursorScreenPos(d.Min);
                 ImGui::PushStyleColor(ImGuiCol_ChildBg, 0);
                 if (ImGui::BeginChild("##widget.diff", d.GetSize(), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
-                    ImDrawList* cdl = ImGui::GetWindowDrawList();
                     if (!reply_.empty()) {
                         // The agent's reply in full, which the card's one line elides.
                         ImGui::PushFont(L.ui, L.small_size);
@@ -1264,64 +1113,13 @@ void WidgetSurface::overlay(const SpecPanelFrame& f) {
                         ImGui::PopFont();
                         ImGui::Dummy(v2(1.0f, std::round(4.0f * s)));
                     }
-                    size_t start = 0;
-                    int n = 0;
-                    const float x = ImGui::GetCursorScreenPos().x;
-                    while (start < full_diff_.size()) {
-                        const size_t end = full_diff_.find('\n', start);
-                        const std::string line = full_diff_.substr(start, end == std::string::npos ? std::string::npos : end - start);
-                        start = end == std::string::npos ? full_diff_.size() : end + 1;
-                        const ImVec2 p = ImGui::GetCursorScreenPos();
-                        const ImU32 c = !line.empty() && line[0] == '+' && line.rfind("+++", 0) != 0   ? L.text
-                                        : !line.empty() && line[0] == '-' && line.rfind("---", 0) != 0 ? L.faint
-                                                                                                       : sternbild::with_alpha(L.faint, 150);
-                        draw_text(cdl, L.mono, L.mono_size, v2(x, p.y + (lh - mono_h) * 0.5f), c, line);
-                        if (!line.empty() && line[0] == '-' && line.rfind("---", 0) != 0) {
-                            const float lw = text_extent(L.mono, L.mono_size, line).x;
-                            cdl->AddRectFilled(v2(x + text_extent(L.mono, L.mono_size, "-").x, std::round(p.y + lh * 0.5f)),
-                                               v2(x + lw, std::round(p.y + lh * 0.5f) + 1.0f), L.faint);
-                        }
-                        ImGui::Dummy(v2(1.0f, lh));
-                        ++n;
-                    }
-                    (void)n;
+                    draw_unified_diff(L, full_diff_, lh);
                 }
                 ImGui::EndChild();
                 ImGui::PopStyleColor();
             } else {
-                // The compact diff: the key, the old value struck through in
-                // faint, the arrow, the new value in parchment.
-                float key_w = 0.0f;
-                for (int i = 0; i < lay.diff_shown && i < (int)diff_.size(); ++i)
-                    key_w = std::max(key_w, text_extent(L.mono, L.mono_size, diff_[(size_t)i].key).x);
-                key_w = std::min(key_w, d.GetWidth() * 0.4f) + std::round(16.0f * s);
-                for (int i = 0; i < lay.diff_shown && i < (int)diff_.size(); ++i) {
-                    const WidgetDiffLine& line = diff_[(size_t)i];
-                    const float y = d.Min.y + lh * (float)i, ty = y + (lh - mono_h) * 0.5f;
-                    float x = d.Min.x;
-                    draw_text(dl, L.mono, L.mono_size, v2(x, ty), L.secondary, fit(L.mono, L.mono_size, line.key, key_w - 8.0f * s));
-                    x += key_w;
-                    const std::string arrow = "\xE2\x86\x92";   // →
-                    if (line.kind != WidgetDiffLine::Kind::added && !line.before.empty()) {
-                        const std::string b = fit(L.mono, L.mono_size, line.before, (d.Max.x - x) * 0.45f);
-                        const float bw = text_extent(L.mono, L.mono_size, b).x;
-                        draw_text(dl, L.mono, L.mono_size, v2(x, ty), L.faint, b);
-                        dl->AddRectFilled(v2(x, std::round(ty + mono_h * 0.55f)), v2(x + bw, std::round(ty + mono_h * 0.55f) + 1.0f), L.faint);
-                        x += bw + std::round(10.0f * s);
-                    }
-                    if (line.kind == WidgetDiffLine::Kind::changed && line.before.empty() && line.after.empty()) continue;
-                    draw_text(dl, L.mono, L.mono_size, v2(x, ty), L.faint, arrow);
-                    x += text_extent(L.mono, L.mono_size, arrow).x + std::round(10.0f * s);
-                    if (line.kind == WidgetDiffLine::Kind::removed)
-                        draw_text(dl, L.mono, L.mono_size, v2(x, ty), L.faint, "unset");
-                    else
-                        draw_text(dl, L.mono, L.mono_size, v2(x, ty), L.text, fit(L.mono, L.mono_size, line.after, d.Max.x - x));
-                }
-                if (lay.diff_folded) {
-                    const int rest = (int)diff_.size() - lay.diff_shown;
-                    const float y = d.Min.y + lh * (float)lay.diff_shown;
-                    draw_text(dl, L.mono, L.mono_size, v2(d.Min.x, y + (lh - mono_h) * 0.5f), L.faint, "+" + std::to_string(rest));
-                }
+                // The compact diff (diff_card.h).
+                draw_compact_diff(dl, L, d, diff_, lay.diff_shown, lay.diff_folded);
             }
         }
         for (size_t i = 0; i < lay.buttons.size() && i < in.card_actions.size(); ++i) button(lay.buttons[i], in.card_actions[i]);

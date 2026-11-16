@@ -46,6 +46,7 @@
 //
 // Built only with CALIPER_WITH_BUILDER.
 // ============================================================================
+#include "builder/diff_card.h"
 #include "builder/widget_agent.h"
 
 #include <caliper_builder/commands/command.h>
@@ -123,23 +124,8 @@ public:
 
 // ---- the compact diff -------------------------------------------------------------------
 
-// One changed key between the open spec and the preview: a key of the target
-// panel relative to it (options without their "options." prefix: y_log,
-// title, bind.y), or of another item ("panel rows", "source metrics.catalog",
-// "layout").
-struct WidgetDiffLine {
-    enum class Kind { changed, added, removed };
-    Kind kind = Kind::changed;
-    std::string key;
-    std::string before;   // the old value, compact; empty when added
-    std::string after;    // the new value, compact; empty when removed
-};
-
-// The changed keys of `panel` and of the rest of the spec, the panel's first.
-// Values are compact JSON, cut at `max_value` characters.
-std::vector<WidgetDiffLine> widget_compact_diff(const caliper_builder::spec::Spec& before,
-                                                const caliper_builder::spec::Spec& after, const std::string& panel,
-                                                size_t max_value = 40);
+// WidgetDiffLine and widget_compact_diff() are in diff_card.h, which the
+// approval cards share.
 
 // ---- the state machine ------------------------------------------------------------------
 

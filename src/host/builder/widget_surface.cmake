@@ -4,7 +4,8 @@
 #
 #   caliper_widget_surface   the surface's state machine, its layout and its
 #                            ImGui side, the WidgetAgent interface with the
-#                            scripted agent, and the agent over AcpClient
+#                            scripted agent, the agent over AcpClient, and the
+#                            diff card it shares with the approval cards
 #   caliper-widget-shot      a development tool, not installed: the surface
 #                            driven through a scripted scenario on one panel of
 #                            a spec, a PNG at each state
@@ -20,7 +21,8 @@ add_library(caliper_widget_surface STATIC
     ${_widget_dir}/widget_agent.cpp
     ${_widget_dir}/widget_agent_acp.cpp
     ${_widget_dir}/widget_app.cpp
-    ${_widget_dir}/widget_surface.cpp)
+    ${_widget_dir}/widget_surface.cpp
+    ${_widget_dir}/diff_card.cpp)
 # Where the app finds caliper-agent's package and the command table until the
 # sidecar is packaged with a Python runtime (widget_app.h); only this file.
 set_source_files_properties(${_widget_dir}/widget_app.cpp PROPERTIES
