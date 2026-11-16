@@ -7,6 +7,7 @@ This page describes how Caliper is built and tested on GitHub Actions: what runs
 | Workflow | File | Runs on | Does |
 |---|---|---|---|
 | Build | `.github/workflows/build.yml` | pushes to `main` and every pull request, except changes only to `site/`, `docs/`, `design/`, `mkdocs.yml` or Markdown files; also manually | builds Caliper and runs the test suite on macOS and Windows |
+| Browser views | `.github/workflows/web.yml` | pull requests and pushes to `main` that change a source of the WebAssembly views, the `web/` package, the Python package's browser files or the scripts that handle them; also manually | builds the WebAssembly views at the pinned Emscripten, checks them and the `<caliper-view>` element in headless Chromium on SwiftShader, and uploads them as the artifact `caliper-views`; for `main` and on request, it also builds the wheel with them |
 | Docs | `.github/workflows/docs.yml` | pull requests that touch `docs/`, `design/`, `docs-theme/`, `mkdocs.yml` or the files the docs embed; also manually | builds the docs site and the design pages with `--strict`, so a broken link fails the pull request, and publishes nothing |
 | Deploy Pages | `.github/workflows/pages.yml` | pushes to `main` that touch `site/`, `docs/`, `design/`, `mkdocs.yml` or the files the docs embed | builds the docs with MkDocs and publishes them with the landing page, and checks that the design pages build, without publishing them |
 

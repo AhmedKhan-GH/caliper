@@ -210,32 +210,35 @@ The check starts `stream_server.py`, which serves the build directory and the st
 
 ## In CI
 
-A CI job on a macOS runner builds the module and runs the headless checks on SwiftShader, which needs no GPU. It needs cmake, ninja, Node and Python 3.12 or later, and caches the emsdk folder, whose `upstream/emscripten/cache` holds the downloaded `emdawnwebgpu` port.
+The Browser views workflow (`.github/workflows/web.yml`) runs on a pull request or a push to `main` that changes a source of the module or the web package. Its first job, on a macOS runner, installs the pinned Emscripten from the emsdk tag of the same name, caching the emsdk folder, whose `upstream/emscripten/cache` holds the downloaded `emdawnwebgpu` port. It builds the module with `scripts/build_wasm.py`, runs the checks above and the web package's tests on SwiftShader, which needs no GPU, and checks that the checked-in TypeScript bundle matches a fresh build. It then uploads the three files as the artifact `caliper-views`. Its second job, on pushes to `main` and on request, puts that artifact into `python/caliper/_web/` and builds the wheel, which fails without it. The `webgpu` project of the web package's tests and the 100,000-point measurement need a GPU and are left out.
+
+The job's commands, which also run on a Mac with Node and Python 3.12 or later:
 
 ```sh
 # Emscripten, pinned
-git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
-"$RUNNER_TEMP/emsdk/emsdk" install 6.0.13
-"$RUNNER_TEMP/emsdk/emsdk" activate 6.0.13
+v=$(cat web/wasm/emscripten-version.txt)
+git clone --depth 1 --branch "$v" https://github.com/emscripten-core/emsdk.git ~/emsdk
+~/emsdk/emsdk install "$v" && ~/emsdk/emsdk activate "$v"
 
-# The module
-EMSDK="$RUNNER_TEMP/emsdk" python3 scripts/build_wasm.py --no-copy
+# The module, built and copied into python/caliper/_web/
+EMSDK=~/emsdk python3 scripts/build_wasm.py
 
 # The checks of the module (Playwright's Chromium headless shell, SwiftShader)
-python3 -m venv "$RUNNER_TEMP/py" && "$RUNNER_TEMP/py/bin/pip" install numpy websockets
-(cd web/wasm/test && npm ci && npx playwright-core install chromium-headless-shell)
-export CALIPER_PYTHON="$RUNNER_TEMP/py/bin/python"
-(cd web/wasm/test &&
-  node check.mjs --build ../build --out "$RUNNER_TEMP/shots/views.png" --adapter swiftshader &&
-  node check.mjs --build ../build --out "$RUNNER_TEMP/shots/edges.png" --view edges --kind heatmap &&
-  node check.mjs --build ../build --out "$RUNNER_TEMP/shots/points.png" --view embedding --kind points --dims 2 &&
-  node multi.mjs --build ../build --out "$RUNNER_TEMP/shots/multi.png" --destroy 1 &&
-  node cross_origin.mjs --build ../build --out "$RUNNER_TEMP/shots/cross-origin.png")
+python3 -m venv /tmp/py && /tmp/py/bin/pip install numpy websockets pytest pyyaml
+export CALIPER_PYTHON=/tmp/py/bin/python
+(cd web/wasm/test && npm ci && npx playwright-core install chromium-headless-shell &&
+  node check.mjs --build ../build --out /tmp/shots/views.png --adapter swiftshader &&
+  node check.mjs --build ../build --out /tmp/shots/edges.png --view edges --kind heatmap &&
+  node check.mjs --build ../build --out /tmp/shots/points.png --view embedding --kind points --dims 2 &&
+  node multi.mjs --build ../build --out /tmp/shots/multi.png --destroy 1 &&
+  node cross_origin.mjs --build ../build --out /tmp/shots/cross-origin.png)
 
-# The element with these views (the web package's tests), and the packaged copies
-(cd web && npm ci && npx playwright install chromium-headless-shell &&
-  CALIPER_WASM_DIR=../web/wasm/build npx playwright test --project=swiftshader --project=canvas2d)
-"$RUNNER_TEMP/py/bin/python" scripts/build_web.py --check
+# The element with these views and without them, the TypeScript bundle, and the packaged files
+(cd web && npm ci && npx playwright install chromium-headless-shell && node build.mjs --test &&
+  npx playwright test --project=swiftshader --project=canvas2d)
+"$CALIPER_PYTHON" scripts/build_web.py --check --no-install
+CALIPER_REQUIRE_WEB_VIEWS=1 PYTHONPATH=python "$CALIPER_PYTHON" -m pytest --noconftest \
+  python/tests/test_assets.py python/tests/test_wasm_scripts.py
 ```
 
-Each `check.mjs` run exits with 1 when the module reports an error or a check finds a differing texel or point; the `webgpu` project of the web package's tests and the 100,000-point measurement need a GPU and are left out. `build_web.py --check` fails when the TypeScript bundle checked into `python/caliper/_web` is not a fresh build of `web/`.
+Each `check.mjs` run exits with 1 when the module reports an error or a check finds a differing texel or point.

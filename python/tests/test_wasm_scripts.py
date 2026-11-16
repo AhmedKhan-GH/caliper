@@ -360,3 +360,22 @@ def test_fetch_offline_fails_with_a_clear_message(checkout, tmp_path):
     assert "scripts/build_wasm.py" in r.stderr
     assert installed(tmp_path / "out") == {}
 
+
+
+def test_the_workflow_runs_when_a_source_of_the_module_changes():
+    # fetch_wasm.py takes an earlier commit's build when none of INPUTS changed
+    # since, which is right only if the Browser views workflow runs whenever
+    # one of them changes.
+    yaml = pytest.importorskip("yaml")
+    flow = yaml.safe_load((REPO / ".github" / "workflows" / "web.yml").read_text())
+    on = flow.get("on") or flow.get(True)              # YAML 1.1 reads the key `on` as True
+
+    def covers(pattern: str, source: str) -> bool:
+        return pattern in (source, f"{source}/**") or (
+            pattern.endswith("/**") and f"{source}/".startswith(pattern[:-2]))
+
+    for event in ("push", "pull_request"):
+        paths = on[event]["paths"]
+        for source in wasm_views.INPUTS:
+            assert any(covers(p, source) for p in paths), (event, source)
+        assert ".github/workflows/web.yml" in paths

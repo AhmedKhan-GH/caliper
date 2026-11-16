@@ -1,0 +1,172 @@
+# .github/workflows/web.yml
+name: Browser views
+on:
+  push:
+    branches: [main]
+    # The module's sources (scripts/wasm_views.py INPUTS, which fetch_wasm.py
+    # relies on), the web package, the Python package's assets and the scripts
+    # and packaging that handle them.
+    paths: ['web/**', 'src/**', 'include/**', 'sdk/include/**', 'assets/fonts/**',
+            'third_party/imgui', 'third_party/implot',
+            'python/caliper/**', 'python/check_web_views.cmake',
+            'python/tests/test_assets.py', 'python/tests/test_wasm_scripts.py',
+            'scripts/build_wasm.py', 'scripts/fetch_wasm.py', 'scripts/wasm_views.py',
+            'scripts/build_web.py', 'pyproject.toml', '.github/workflows/web.yml']
+  pull_request:
+    paths: ['web/**', 'src/**', 'include/**', 'sdk/include/**', 'assets/fonts/**',
+            'third_party/imgui', 'third_party/implot',
+            'python/caliper/**', 'python/check_web_views.cmake',
+            'python/tests/test_assets.py', 'python/tests/test_wasm_scripts.py',
+            'scripts/build_wasm.py', 'scripts/fetch_wasm.py', 'scripts/wasm_views.py',
+            'scripts/build_web.py', 'pyproject.toml', '.github/workflows/web.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Builds Caliper's views compiled to WebAssembly (web/wasm) at the pinned
+  # Emscripten release, checks them and the <caliper-view> element in headless
+  # Chromium on SwiftShader, which needs no GPU, and uploads them as the
+  # artifact caliper-views, which scripts/fetch_wasm.py downloads and the wheel
+  # job below packs. The files are not checked in.
+  views:
+    # macOS, as in the Build workflow's first lane: the headless checks' flags
+    # (web/wasm/README.md, "Checking") are verified on macOS.
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      # test_assets.py fails instead of skipping without the views.
+      CALIPER_REQUIRE_WEB_VIEWS: '1'
+    steps:
+      - uses: actions/checkout@v7
+      # Only the two submodules the module compiles. Their pins are on their
+      # remotes, so init-submodules.sh and its fallbacks are not needed here.
+      - run: git submodule update --init --depth 1 third_party/imgui third_party/implot
+      - run: brew install ninja
+      - id: pin
+        run: echo "emscripten=$(cat web/wasm/emscripten-version.txt)" >> "$GITHUB_OUTPUT"
+      # The emsdk checkout at the tag of the pinned release, with that release
+      # installed. The cache keeps the toolchain and the emdawnwebgpu port that
+      # the first build downloads into upstream/emscripten/cache.
+      - uses: actions/cache@v5
+        with:
+          path: ~/emsdk
+          key: emsdk-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.emscripten }}
+      - name: Install Emscripten
+        env:
+          EMSCRIPTEN_VERSION: ${{ steps.pin.outputs.emscripten }}
+        run: |
+          if [ ! -x "$HOME/emsdk/emsdk" ]; then
+            git clone --depth 1 --branch "$EMSCRIPTEN_VERSION" https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          fi
+          "$HOME/emsdk/emsdk" install "$EMSCRIPTEN_VERSION"
+          "$HOME/emsdk/emsdk" activate "$EMSCRIPTEN_VERSION"
+          echo "EMSDK=$HOME/emsdk" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '26'
+      # Builds into web/wasm/build and copies the three files into
+      # python/caliper/_web/, as in a checkout. It refuses another Emscripten.
+      - run: python scripts/build_wasm.py
+      # A Python for the producers of the checks and for the tests.
+      - run: |
+          python -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/pip" install numpy websockets pytest pyyaml
+          echo "CALIPER_PYTHON=$RUNNER_TEMP/py/bin/python" >> "$GITHUB_ENV"
+      # The module on its own, in Playwright's Chromium headless shell on SwiftShader.
+      - name: Check the module
+        working-directory: web/wasm/test
+        run: |
+          npm ci
+          npx playwright-core install chromium-headless-shell
+          mkdir -p "$RUNNER_TEMP/shots"
+          node check.mjs --build ../build --out "$RUNNER_TEMP/shots/views.png" --adapter swiftshader
+          node check.mjs --build ../build --out "$RUNNER_TEMP/shots/edges.png" --view edges --kind heatmap
+          node check.mjs --build ../build --out "$RUNNER_TEMP/shots/points.png" --view embedding --kind points --dims 2
+          node multi.mjs --build ../build --out "$RUNNER_TEMP/shots/multi.png" --destroy 1
+          node cross_origin.mjs --build ../build --out "$RUNNER_TEMP/shots/cross-origin.png"
+      # The element with the fresh module from python/caliper/_web/, and without it
+      # (fallback.spec.ts). The webgpu project needs a GPU and is left out.
+      - name: Test the web package
+        working-directory: web
+        run: |
+          npm ci
+          npx playwright install chromium-headless-shell
+          node build.mjs --test
+          npx playwright test --project=swiftshader --project=canvas2d
+      # The TypeScript bundle stays checked in; it must match a fresh build of web/.
+      - run: '"$CALIPER_PYTHON" scripts/build_web.py --check --no-install'
+      - run: '"$CALIPER_PYTHON" -m pytest --noconftest -q python/tests/test_assets.py python/tests/test_wasm_scripts.py'
+        env:
+          PYTHONPATH: python
+      - uses: actions/upload-artifact@v6
+        with:
+          name: caliper-views
+          path: |
+            python/caliper/_web/caliper-views-loader.js
+            python/caliper/_web/caliper-views.js
+            python/caliper/_web/caliper-views.wasm
+          if-no-files-found: error
+      - if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: browser-views-screenshots
+          path: |
+            ${{ runner.temp }}/shots
+            web/test-results
+          if-no-files-found: ignore
+
+  # The wheel, with the views the job above built, as a release would build
+  # it: the artifact goes into python/caliper/_web/ first, and the wheel build
+  # fails without it (python/check_web_views.cmake, CI=true). It compiles the
+  # native core from source, so it runs for main and on request, not for every
+  # pull request.
+  wheel:
+    needs: views
+    if: github.event_name != 'pull_request'
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - run: brew install ninja
+      # The full set of submodules, as in the Build workflow.
+      - run: ./init-submodules.sh
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.19.0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v7
+        with:
+          name: caliper-views
+          path: python/caliper/_web
+      - name: Build the wheel
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '14.0'
+          SCCACHE_GHA_ENABLED: 'true'
+          # scikit-build-core passes CMAKE_ARGS to the configure.
+          CMAKE_ARGS: >-
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+            -DCMAKE_OBJC_COMPILER_LAUNCHER=sccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=sccache
+        run: |
+          python -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/pip" install build
+          "$RUNNER_TEMP/py/bin/python" -m build --wheel --outdir "$RUNNER_TEMP/dist"
+          listing=$(unzip -l "$RUNNER_TEMP"/dist/caliper-*.whl)
+          for f in caliper-views-loader.js caliper-views.js caliper-views.wasm; do
+            echo "$listing" | grep -q "caliper/_web/$f\$" || { echo "the wheel lacks $f"; exit 1; }
+          done
+      - uses: actions/upload-artifact@v6
+        with:
+          name: caliper-wheel
+          path: ${{ runner.temp }}/dist/*.whl
+          if-no-files-found: error
+      - if: always()
+        run: sccache --show-stats
