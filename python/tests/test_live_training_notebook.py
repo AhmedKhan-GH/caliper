@@ -128,6 +128,7 @@ def test_live_training_notebook(tmp_path, mode):
         sys.path.insert(0, str(REPO))
     from tests.headless.notebook import notebook_session
     from tests.headless.screenshot import png_stats
+    from tests.headless.views import animation_frames, drawn, snapshots_pass
     shots = Path(os.environ.get("CALIPER_TEST_ARTIFACTS") or tmp_path / "shots")
     shots.mkdir(parents=True, exist_ok=True)
     steps = os.environ.get("CALIPER_NOTEBOOK_STEPS", "6000")
@@ -164,9 +165,11 @@ def test_live_training_notebook(tmp_path, mode):
         # the frames the element's points view drew.
         for n in names:
             area = nb.page.locator(f'caliper-view[view="{n}"] canvas:visible').first
+            drawn(nb.page, n)
             before = nb.page.evaluate(STATE, n)
             first = area.screenshot()
-            nb.page.wait_for_timeout(1500)
+            snapshots_pass(nb.page, n, 3)
+            drawn(nb.page, n)
             second = area.screenshot()
             after = nb.page.evaluate(STATE, n)
             (shots / f"notebook-{mode}-{n}.png").write_bytes(second)
@@ -191,9 +194,11 @@ def test_live_training_notebook(tmp_path, mode):
         nb.page.mouse.move(lx + 80, ly, steps=5)
         nb.page.mouse.up()
         nb.wait(f"() => (({STATE})('loss') || {{}}).follow === false", timeout=10)
-        nb.page.wait_for_timeout(300)
+        drawn(nb.page, "loss")                             # the pan has landed
         held = nb.page.evaluate(STATE, "loss")
-        nb.page.wait_for_timeout(1500)
+        # New steps arrive, and the window stays where the pan left it.
+        nb.wait(f"() => (({STATE})('loss') || {{}}).info !== {json.dumps(held['info'])}", timeout=30)
+        drawn(nb.page, "loss")
         later = nb.page.evaluate(STATE, "loss")
         assert not cell_done(nb, train_cell), "training ended before the loss check; raise the steps"
         assert later["window"] == held["window"], (held["window"], later["window"])
@@ -210,7 +215,8 @@ def test_live_training_notebook(tmp_path, mode):
         att.locator('select[data-dim="head"]').select_option("i:2")
         nb.wait(f"() => {{ const s = ({STATE})('attention'); const i = s && s.dataView.index;"
                 " return !!i && i.layer === 0 && i.sequence === 0 && i.head === 2; }", timeout=30)
-        nb.page.wait_for_timeout(300)
+        snapshots_pass(nb.page, "attention", 2)            # data of the new data view
+        drawn(nb.page, "attention")
         after = att.locator("canvas:visible").first.screenshot()
         assert changed(before, after)
         att.screenshot(path=str(shots / f"notebook-{mode}-attention-layer0-head2.png"))
@@ -262,7 +268,7 @@ def test_live_training_notebook(tmp_path, mode):
         at = int(paused["run"].rsplit(" ", 1)[1])
         paused = settled(nb, paused, at - 1)
         assert loss_values(paused) == at - 1, paused
-        nb.page.wait_for_timeout(1200)
+        animation_frames(nb.page, 60)                     # it holds for 60 frames of the page
         still = nb.page.evaluate(STATE, "loss")
         assert still["run"] == paused["run"] and still["info"] == paused["info"], (paused, still)
         assert toggle.inner_text() == "Resume"
@@ -271,7 +277,7 @@ def test_live_training_notebook(tmp_path, mode):
         stepped = first_state(nb, "loss", f"(s) => s.run === 'paused at {at + 1}'")
         stepped = settled(nb, stepped, at)
         assert loss_values(stepped) == at, stepped
-        nb.page.wait_for_timeout(500)
+        animation_frames(nb.page, 30)
         still = nb.page.evaluate(STATE, "loss")
         assert still["run"] == stepped["run"] and still["info"] == stepped["info"], (stepped, still)
         # The learning rate in the controls panel, set while the run is paused:
@@ -300,7 +306,7 @@ def test_live_training_notebook(tmp_path, mode):
         emb.scroll_into_view_if_needed()
         box = emb.bounding_box()
         nb.page.mouse.dblclick(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-        nb.page.wait_for_timeout(300)
+        drawn(nb.page, "embedding", 4)                    # press, release, press, release
         x0, y0 = box["x"] + box["width"] * 0.03, box["y"] + box["height"] * 0.03
         x1, y1 = box["x"] + box["width"] * 0.97, box["y"] + box["height"] * 0.97
         nb.page.mouse.move(x0, y0)
@@ -314,7 +320,7 @@ def test_live_training_notebook(tmp_path, mode):
         nb.page.keyboard.up("Shift")
         nb.wait(f"() => (({STATE})('embedding') || {{}}).selected > 0", timeout=20)
         assert nb.page.evaluate(STATE, "embedding")["renderer"] == renderers["embedding"]
-        nb.page.wait_for_timeout(300)
+        drawn(nb.page, "embedding")
         nb.page.locator('caliper-view[view="embedding"]').screenshot(
             path=str(shots / f"notebook-{mode}-embedding-selection.png"))
         # Linked selection: a second rectangle over the left part of the
@@ -334,11 +340,12 @@ def test_live_training_notebook(tmp_path, mode):
         nb.wait(f"() => {{ const l = (({STATE})('predictions') || {{}}).linked;"
                 " return !!l && l.space === 'eval' && l.items.length > 0 && l.items.length < 512; }",
                 timeout=20)
-        nb.page.wait_for_timeout(300)
         nb.wait(f"() => /class/.test((({STATE})('embedding') || {{}}).details || '')", timeout=20)
         linked = nb.page.evaluate(STATE, "predictions")["linked"]
         details = nb.page.evaluate(STATE, "embedding")["details"]
         assert "marker at" in details, details
+        drawn(nb.page, "predictions")
+        drawn(nb.page, "embedding")
         nb.page.locator('caliper-view[view="predictions"]').screenshot(
             path=str(shots / f"notebook-{mode}-predictions-linked.png"))
         nb.page.locator('caliper-view[view="embedding"]').screenshot(

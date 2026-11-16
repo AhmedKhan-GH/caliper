@@ -263,6 +263,7 @@ def test_widget_draws_in_jupyterlab(tmp_path, mode):
         sys.path.insert(0, str(REPO))
     from tests.headless.notebook import notebook_session
     from tests.headless.screenshot import png_stats
+    from tests.headless.views import drawn, snapshots_pass
     shots = Path(os.environ.get("CALIPER_TEST_ARTIFACTS") or tmp_path / "shots")
     shots.mkdir(parents=True, exist_ok=True)
     out = tmp_path / "out"
@@ -286,9 +287,11 @@ def test_widget_draws_in_jupyterlab(tmp_path, mode):
         area = view.locator("canvas:visible").first
         cell = nb.page.locator(".jp-CodeCell").filter(has=view)
         cell.scroll_into_view_if_needed()
-        nb.page.wait_for_timeout(500)
+        name = nb.page.evaluate("() => __caliperHarness.deepQueryAll('caliper-view')[0].getAttribute('view')")
+        drawn(nb.page, name)
         first = area.screenshot()
-        nb.page.wait_for_timeout(800)
+        snapshots_pass(nb.page, name, 3)                  # the stream goes on
+        drawn(nb.page, name)
         second = area.screenshot()
         cell.screenshot(path=shots / f"widget-{mode}-cell.png")
         assert png_stats(first).nonblank(), png_stats(first).to_dict()

@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
-import time
 from pathlib import Path
 
 import nbformat
@@ -30,6 +29,7 @@ from .screenshot import png_difference, png_stats, screenshot_element, screensho
 HERE = Path(__file__).parent
 SELFTEST = HERE / "mock_widget" / "selftest.ipynb"
 CANVAS = ".mock-view canvas"  # inside the widget's open shadow root
+RECEIVED = "() => Number(__caliperHarness.deepQueryAll('.mock-view')[0].dataset.received || 0)"
 
 CANVAS_2D_PAGE = """<!doctype html>
 <body style="margin:0;background:#181715">
@@ -188,7 +188,9 @@ def test_widget_stays_live_while_a_later_cell_runs(shots):
         session.wait(lambda page: any(c["running"] and c["index"] == 2
                                       for c in session.state()["cells"]), timeout=30)
         first = session.page.locator(CANVAS).screenshot(path=str(shots / "live-a.png"))
-        time.sleep(0.5)
+        # Three more frames of the stream arrive (the widget draws each as it comes).
+        got = session.page.evaluate(RECEIVED)
+        session.wait(f"() => ({RECEIVED})() >= {got + 3}", timeout=30)
         second = session.page.locator(CANVAS).screenshot(path=str(shots / "live-b.png"))
         assert session.state()["cells"][2]["running"], "the loop ended before the second shot"
         assert png_stats(first).nonblank() and png_stats(second).nonblank()

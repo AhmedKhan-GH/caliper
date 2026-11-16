@@ -89,6 +89,7 @@ function render({ model, el }) {
     socket.onmessage = (event) => {
       if (typeof event.data === "string") return;
       received += 1;
+      host.dataset.received = String(received);   // for the checks, which wait on frames received
       draw(event.data);
     };
     socket.onclose = () => {
