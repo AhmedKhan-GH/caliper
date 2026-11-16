@@ -38,9 +38,9 @@ jobs:
     steps:
       # Submodules come from the repo's own script, not checkout's recursion:
       # some pins are not fetchable from their remotes (init-submodules.sh
-      # explains which and falls back to the default branch) and GLEW's
-      # sources are generated afterwards. It wipes third_party/ first, so the
-      # libtorch cache is restored only after it has run.
+      # explains which and falls back to the default branch). It wipes
+      # third_party/ first, so the libtorch cache is restored only after it
+      # has run.
       - uses: actions/checkout@v7
       - run: brew install ninja
       - run: ./init-submodules.sh
@@ -73,7 +73,7 @@ jobs:
           cmake-build-release/caliper cmake-build-release/caliper_viewer
           cmake-build-release/libcaliper_embed.dylib
       # The GPU suites (gfx, export, embed, torch) skip without a device and
-      # report that as Skipped, not Passed. A hosted runner's Metal/GL
+      # report that as Skipped, not Passed. A hosted runner's Metal
       # availability is not guaranteed, so skips are accepted here; a lane
       # that must have a GPU sets CALIPER_REQUIRE_GPU=1 to turn them into
       # failures.
@@ -108,9 +108,9 @@ jobs:
   windows:
     # CPU-only: USE_CUDA falls back when no toolkit is found (CMakeLists.txt
     # "USE_CUDA is ON but no CUDA toolkit found"), libtorch comes as the CPU
-    # zip, GLEW as the prebuilt zip, Vulkan through volk (no SDK) with glslang
-    # fetched and built in-tree. DuckDB from source under MSVC is slow, hence
-    # the longer timeout. A Windows failure fails the run, as a macOS one does.
+    # zip, and Vulkan through volk (no SDK) with glslang fetched and built
+    # in-tree. DuckDB from source under MSVC is slow, hence the longer timeout.
+    # A Windows failure fails the run, as a macOS one does.
     runs-on: windows-latest
     timeout-minutes: 150
     defaults:
@@ -123,10 +123,8 @@ jobs:
       - run: ./init-submodules.sh
       - uses: actions/cache@v5
         with:
-          path: |
-            third_party/libtorch-release
-            third_party/glew-prebuilt
-          key: libtorch-win-cpu-${{ env.LIBTORCH_VERSION }}-glew-2.3.1
+          path: third_party/libtorch-release
+          key: libtorch-win-cpu-${{ env.LIBTORCH_VERSION }}
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: v0.19.0
