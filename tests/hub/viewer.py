@@ -159,6 +159,55 @@ async def control(url: str, session: str, lr: float, seconds: float = 8.0) -> di
     return out
 
 
+async def pause_order(url: str, session: str, seconds: float = 8.0, after: int = 100) -> dict:
+    """Protocol 3.1 ordering through a hub: subscribe to the session's loss
+    series, pause the run, and note the loss values received before the
+    CONTROLS that says paused, and later; then resume. The script calls
+    caliper.step(steps) before each step's work, so the run state "paused at
+    k" should come after the SERIES that brings the loss to k values. It
+    pauses once the loss has ``after`` values, so that values keep coming
+    when it does. Returns
+    the run's step, the loss total received before that CONTROLS, and the
+    total some time later."""
+    import websockets
+    out = {"step": None, "before": None, "later": None, "errors": []}
+    total = 0
+    async with websockets.connect(url, compression=None, max_size=W.MAX_FRAME_BYTES, ping_interval=None) as ws:
+        await ws.send(W.encode(W.Hello(W.ROLE_VIEWER, [W.CAP_CONTROLS, W.CAP_SELECTION],
+                                       {"name": "hub-e2e-order", "version": "1"})))
+        await ws.send(W.encode(W.Attach(session)))
+        state = "start"
+        end = time.monotonic() + seconds
+        settle_until = None
+        while time.monotonic() < end:
+            if settle_until is not None and time.monotonic() >= settle_until:
+                break
+            try:
+                msg = W.decode(await asyncio.wait_for(ws.recv(), 0.25))
+            except asyncio.TimeoutError:
+                continue
+            if isinstance(msg, W.Views) and state == "start" and any(v["name"] == "loss" for v in msg.views):
+                await ws.send(W.encode(W.Subscribe(1, "loss", 1)))
+                state = "subscribed"
+            elif isinstance(msg, W.Series) and msg.view == "loss":
+                total = max(total, msg.total)
+                if state == "subscribed" and total >= after:
+                    await ws.send(W.encode(W.Control(1, W.OP_PAUSE)))
+                    state = "pausing"
+            elif isinstance(msg, W.Controls) and state == "pausing" and msg.run.get("state") == W.RUN_PAUSED:
+                out["step"], out["before"] = msg.run.get("step"), total
+                state = "paused"
+                settle_until = time.monotonic() + 1.0
+            elif isinstance(msg, W.Ping):
+                await ws.send(W.encode(W.Pong(msg.nonce)))
+            elif isinstance(msg, W.Error):
+                out["errors"].append(f"error {msg.code}: {msg.message}")
+        out["later"] = total
+        await ws.send(W.encode(W.Control(2, W.OP_RESUME)))
+        await ws.send(W.encode(W.Bye(W.BYE_NORMAL, "done")))
+    return out
+
+
 def lr_value(param) -> float:
     """The value the e2e check sets: half the parameter's maximum."""
     return (param or {}).get("max", 0.1) / 2

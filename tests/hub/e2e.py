@@ -29,7 +29,12 @@ With --connect the two scripts are tests/hub/producer_connect.py instead,
 which stream with the package's own caliper.connect() (the native sender
 must be built: python scripts/build_netio.py), and their sessions are found
 in the session list by pid. They take the controls of step 7 through the
-package: caliper.param(), caliper.action() and caliper.step(). With --bench it then measures the relay with a
+package: caliper.param(), caliper.action() and caliper.step(), and a viewer
+pauses one of them through the hub: the run pauses at a step and the viewer
+then holds exactly that step's loss values. --hub-pause-order also checks the
+protocol's order through the hub, that the paused state reached the viewer
+after those values (a hub delivers a run state after the data it received
+before it); without it the order seen is printed. With --bench it then measures the relay with a
 512 x 512 heatmap at 60 Hz to four Python viewers in other processes. It
 prints one line per check and exits with 0 when all of them pass.
 """
@@ -89,6 +94,9 @@ def main() -> int:
     ap.add_argument("--bench", action="store_true", help="also measure the relay at 60 Hz to four viewers")
     ap.add_argument("--connect", action="store_true",
                     help="the scripts stream with caliper.connect() (tests/hub/producer_connect.py)")
+    ap.add_argument("--hub-pause-order", action="store_true",
+                    help="with --connect, check that the hub delivers a pause's run state after the "
+                         "data it received before it")
     a = ap.parse_args()
     caliper = os.path.join(a.build, "caliper")
     caliper_viewer = os.path.join(a.build, "caliper_viewer")
@@ -222,7 +230,7 @@ def main() -> int:
             bench(spawn, url, hub_file, work)
 
         # 7. controls (protocol 3.1): refused by this hub, forwarded by one with --allow-control
-        controls(spawn, url, caliper, work, ida, a.connect)
+        controls(spawn, url, caliper, work, ida, a.connect, a.hub_pause_order)
 
         # 8. stop
         pa.terminate()
@@ -249,7 +257,8 @@ def main() -> int:
     return 0 if not FAILED else 1
 
 
-def controls(spawn, url: str, caliper: str, work: str, session: str, connect: bool) -> None:
+def controls(spawn, url: str, caliper: str, work: str, session: str, connect: bool,
+             hub_pause_order: bool = False) -> None:
     r = asyncio.run(viewer.control(url, session, 0.05, seconds=6.0))
     check("controls" in r["capabilities"] and r["control"] is False,
           f"the hub announces controls and says this viewer may not control: {r['capabilities']} {r['control']}")
@@ -291,6 +300,22 @@ def controls(spawn, url: str, caliper: str, work: str, session: str, connect: bo
     check(r["lr"] == 0.05 and r["pending"] is None, f"and set at the script's next checkpoint: lr = {r['lr']}")
     check([x["status"] for x in run_r] == ["queued", "ok"] and (run_r[-1]["message"] or "").startswith("saved at step"),
           f"running save is queued, then answered with its result: {run_r}")
+    if connect:
+        # A pause through the hub: the script sends the paused step's data before its
+        # run state, and the viewer ends up with exactly that step's loss values.
+        o = asyncio.run(viewer.pause_order(url2, sid))
+        check(o["step"] is not None and o["later"] == o["step"] and not o["errors"],
+              f"a pause through the hub stops the run at step {o['step']}, and the viewer holds "
+              f"that step's loss values: {o['later']} ({o['errors']})")
+        # THE HUB'S ORDER, switched on with --hub-pause-order: the hub delivers the run
+        # state after the data it received before it.
+        if hub_pause_order:
+            check(o["before"] == o["step"],
+                  f"the hub delivered the paused state after those values: {o['before']} of "
+                  f"{o['step']} had arrived before it")
+        else:
+            print(f"info  through the hub, {o['before']} of {o['step']} loss values arrived before "
+                  "the paused state (checked with --hub-pause-order)", flush=True)
     try:
         pc.wait(timeout=30)
     except subprocess.TimeoutExpired:
