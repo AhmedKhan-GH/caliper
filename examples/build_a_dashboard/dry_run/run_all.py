@@ -295,7 +295,7 @@ def prerequisites(ctx, steps: list[Step], env: dict) -> list[str]:
         if not ctx.agent_python:
             problems.append("No Python for caliper-agent: give --agent-python or set CALIPER_AGENT_PYTHON.")
         else:
-            why = python_lacks(ctx.agent_python, "import pydantic_ai, openai", env)
+            why = python_lacks(ctx.agent_python, "import pydantic_ai, openai, anthropic", env)
             if why:
                 problems.append(f"The Python for caliper-agent, {ctx.agent_python}, lacks its dependencies "
                                 f"(src/builder/agent/pyproject.toml): {why}")
