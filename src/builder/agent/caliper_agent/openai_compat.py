@@ -47,42 +47,12 @@ from pydantic_ai.providers.openai_compatible import OpenAICompatibleProvider
 
 from .keyguard import Secret
 from .offline import check_provider
+from .presets import MAX_BASE_URL, BaseUrlError, check_base_url  # noqa: F401  (re-exported)
 from .provider import Capabilities, ModelInfo, Settings
 
 KEY_ENV = "CALIPER_MODEL_API_KEY"
 MAX_TOKENS = 16384
 PROVIDER_NAME = "caliper-openai-compatible"
-
-
-class BaseUrlError(ValueError):
-    pass
-
-
-MAX_BASE_URL = 2048
-
-
-def check_base_url(url: str) -> str:
-    """The base URL as hostile input: an http or https address of at most 2,048
-    printable characters, with a host, and without a user name, a password, a
-    query or a fragment, which could carry a credential into the cache or a log."""
-    if not isinstance(url, str) or not url or len(url) > MAX_BASE_URL or any(
-            ord(c) <= 0x20 or ord(c) == 0x7F for c in url):
-        raise BaseUrlError("--base-url must be an http or https address of at most 2,048 characters, "
-                           "without spaces.")
-    try:
-        parts = urlsplit(url)
-        port = parts.port
-    except ValueError:
-        raise BaseUrlError("--base-url is not a valid address.") from None
-    if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise BaseUrlError("--base-url must be an http or https address, such as http://127.0.0.1:11434/v1.")
-    if parts.username or parts.password:
-        raise BaseUrlError("--base-url must not carry a user name or password; pass a key in "
-                           f"{KEY_ENV} instead.")
-    if parts.query or parts.fragment or url.endswith(("?", "#")):
-        raise BaseUrlError("--base-url must not carry a query or a fragment.")
-    del port
-    return url.rstrip("/")
 
 
 class OpenAICompatProvider:

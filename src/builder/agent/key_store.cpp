@@ -1,6 +1,11 @@
-// The KeyStore front (validation), the in-memory store, the placement of a key
-// in a child's environment, and the system store where no native one exists yet.
+// The KeyStore front (validation), the presets, the in-memory store, the
+// placement of a key in a child's environment, and the system store where no
+// native one exists yet.
 #include <caliper_builder/agent/key_store.h>
+#include <caliper_builder/commands/sha256.h>
+#include <caliper_builder/presets_json.h>
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cstdlib>
@@ -22,18 +27,39 @@ const char* const kOverrideVariables[] = {
     "ANTHROPIC_IDENTITY_TOKEN_FILE", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID",
     "ANTHROPIC_SERVICE_ACCOUNT_ID",  "ANTHROPIC_WORKSPACE_ID",      "ANTHROPIC_LOG",
     "ANTHROPIC_WEBHOOK_SIGNING_KEY",
+    // The OpenAI SDK, which the sidecar uses for OpenAI-compatible servers, and
+    // Pydantic AI's gateway and telemetry; the sidecar removes them too.
+    "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID", "OPENAI_WEBHOOK_SECRET", "OPENAI_LOG",
+    "PYDANTIC_AI_GATEWAY_API_KEY", "LOGFIRE_TOKEN",
     // The sidecar's test switch, which replaces the Claude API with a scripted
     // file; the app never passes it on.
     "CALIPER_AGENT_TEST_SCRIPT",
 };
 
+// The variables a key reaches the sidecar in; each spawn keeps only the one of
+// the provider chosen.
+const char* const kKeyVariables[] = {"ANTHROPIC_API_KEY", "CALIPER_MODEL_API_KEY"};
+constexpr const char* kCustomPrefix = "custom-";
+constexpr const char* kCustomKeyVariable = "CALIPER_MODEL_API_KEY";
+
+bool is_custom_account(const std::string& provider) {
+    static const std::regex kCustom("^custom-[0-9a-f]{12}$");
+    return std::regex_match(provider, kCustom);
+}
+
 Error check_provider(const std::string& provider) {
     static const std::regex kProvider("^[a-z][a-z0-9_-]{0,31}$");
     if (provider.size() > 32 || !std::regex_match(provider, kProvider))
         return {"keystore.bad_provider", "A provider id is 1 to 32 characters of a-z, 0-9, _ and -, starting with a letter."};
-    if (key_variable(provider) == nullptr)
+    if (!is_provider(provider))
         return {"keystore.bad_provider", "Caliper knows no provider called " + provider + "."};
     return {};
+}
+
+KeyNeed parse_need(const std::string& s) {
+    if (s == "none") return KeyNeed::none;
+    if (s == "optional") return KeyNeed::optional;
+    return KeyNeed::required;
 }
 
 Error check_key(const std::string& key) {
@@ -72,55 +98,118 @@ void wipe(std::string* s) {
     s->shrink_to_fit();
 }
 
-const char* key_variable(const std::string& provider) {
-    if (provider == kAnthropicProvider) return "ANTHROPIC_API_KEY";
+const std::vector<ProviderPreset>& provider_presets() {
+    static const std::vector<ProviderPreset> presets = [] {
+        std::vector<ProviderPreset> out;
+        const nlohmann::json doc = nlohmann::json::parse(detail::kPresetsJson, nullptr, false);
+        if (!doc.is_object() || !doc.contains("presets") || !doc["presets"].is_array()) return out;
+        for (const auto& p : doc["presets"]) {
+            if (!p.is_object()) continue;
+            ProviderPreset preset;
+            preset.id = p.value("id", "");
+            preset.name = p.value("name", "");
+            preset.api = p.value("api", "");
+            if (p.contains("base_url") && p["base_url"].is_string()) preset.base_url = p["base_url"].get<std::string>();
+            preset.key = parse_need(p.value("key", "required"));
+            if (p.contains("key_env") && p["key_env"].is_string()) preset.key_variable = p["key_env"].get<std::string>();
+            preset.local = p.value("local", false);
+            if (!preset.id.empty()) out.push_back(std::move(preset));
+        }
+        return out;
+    }();
+    return presets;
+}
+
+const ProviderPreset* find_preset(const std::string& id) {
+    for (const auto& p : provider_presets())
+        if (p.id == id) return &p;
     return nullptr;
+}
+
+std::string custom_key_account(const std::string& base_url) {
+    std::string url = base_url;
+    while (!url.empty() && url.back() == '/') url.pop_back();
+    return kCustomPrefix + command_sha256_hex(url).substr(0, 12);
+}
+
+bool is_provider(const std::string& provider) {
+    if (is_custom_account(provider)) return true;
+    // "custom" itself is the preset; its keys are named by custom_key_account().
+    return provider != "custom" && find_preset(provider) != nullptr;
+}
+
+KeyNeed key_need(const std::string& provider) {
+    if (is_custom_account(provider)) return KeyNeed::optional;
+    const ProviderPreset* p = find_preset(provider);
+    return p ? p->key : KeyNeed::none;
+}
+
+const char* key_variable(const std::string& provider) {
+    if (is_custom_account(provider)) return kCustomKeyVariable;
+    if (provider == "custom") return nullptr;
+    const ProviderPreset* p = find_preset(provider);
+    if (!p || p->key == KeyNeed::none || p->key_variable.empty()) return nullptr;
+    return p->key_variable.c_str();
 }
 
 Error KeyStore::set(const std::string& provider, const std::string& key) {
     if (Error e = check_provider(provider)) return e;
+    if (key_need(provider) == KeyNeed::none) {
+        const ProviderPreset* p = find_preset(provider);
+        return {"keystore.no_key_needed", "The " + (p ? p->name : provider) + " preset is a server on this machine and needs no key."};
+    }
     if (Error e = check_key(key)) return e;
     return do_set(provider, key);
 }
 
 KeyPresence KeyStore::has(const std::string& provider) {
     if (Error e = check_provider(provider)) return {e, false};
+    if (key_need(provider) == KeyNeed::none) return {{}, false};
     return do_has(provider);
 }
 
 Error KeyStore::remove(const std::string& provider) {
     if (Error e = check_provider(provider)) return e;
+    if (key_need(provider) == KeyNeed::none) return {};
     return do_remove(provider);
 }
 
 Error place_key_in_environment(KeyStore& store, const std::string& provider, acp::SpawnOptions* spawn) {
     if (!spawn) return {"keystore.failed", "No spawn options were given."};
     if (Error e = check_provider(provider)) return e;
+    const KeyNeed need = key_need(provider);
     std::string key;
-    Error e = store.do_read(provider, &key);
-    if (e) {
-        wipe(&key);
-        return e;
+    if (need != KeyNeed::none) {
+        Error e = store.do_read(provider, &key);
+        if (e) {
+            wipe(&key);
+            // A Custom entry may have no key: then none is placed.
+            if (!(need == KeyNeed::optional && e.code == "keystore.not_found")) return e;
+        } else if (Error bad = check_key(key)) {
+            wipe(&key);
+            return {"keystore.bad_key", "The stored key is not well formed; enter it again."};
+        }
     }
-    if (Error bad = check_key(key)) {
-        wipe(&key);
-        return {"keystore.bad_key", "The stored key is not well formed; enter it again."};
-    }
-    const std::string variable = key_variable(provider);
+    const std::string variable = key.empty() ? std::string() : std::string(key_variable(provider));
 
+    auto stripped = [&](const std::string& name) {
+        for (const char* o : kOverrideVariables)
+            if (name == o) return true;
+        for (const char* k : kKeyVariables)
+            if (name == k) return true;
+        return false;
+    };
     auto& env = spawn->env;
-    env.erase(std::remove_if(env.begin(), env.end(),
-                             [&](const acp::EnvVar& v) {
-                                 if (v.name == variable) return true;
-                                 for (const char* o : kOverrideVariables)
-                                     if (v.name == o) return true;
-                                 return false;
-                             }),
+    env.erase(std::remove_if(env.begin(), env.end(), [&](const acp::EnvVar& v) { return stripped(v.name); }),
               env.end());
-    for (const char* o : kOverrideVariables)
-        if (std::find(spawn->env_remove.begin(), spawn->env_remove.end(), o) == spawn->env_remove.end())
-            spawn->env_remove.emplace_back(o);
-    env.push_back(acp::EnvVar{variable, key});
+    auto add_removed = [&](const char* name) {
+        if (name == variable) return;
+        if (std::find(spawn->env_remove.begin(), spawn->env_remove.end(), name) == spawn->env_remove.end())
+            spawn->env_remove.emplace_back(name);
+    };
+    for (const char* o : kOverrideVariables) add_removed(o);
+    for (const char* k : kKeyVariables) add_removed(k);
+    if (!key.empty()) env.push_back(acp::EnvVar{variable, key});
     wipe(&key);
     pass_offline_switch(spawn);
     return {};

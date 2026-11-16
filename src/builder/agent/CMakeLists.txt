@@ -1,8 +1,8 @@
 # The agent module (design/byok-agent.md):
-#   caliper_builder_agent  the key store of the agent pane's BYOK backend: an
-#                          interface, an in-memory store for tests and the macOS
-#                          Keychain store (compiled on macOS, never called by a
-#                          test); other systems get a stub
+#   caliper_builder_agent  the key store of the widget agent, one key per
+#                          provider preset: an interface, an in-memory store for
+#                          tests and the macOS Keychain store (compiled on macOS,
+#                          never called by a test); other systems get a stub
 #   caliper_agent/         the Python sidecar caliper-agent (its own pyproject.toml)
 #
 # The sidecar's pytest suite runs as the ctest builder_agent_py when
@@ -23,6 +23,15 @@ add_library(caliper_builder_agent STATIC ${_agent_sources})
 target_include_directories(caliper_builder_agent PUBLIC "${CALIPER_BUILDER_INCLUDE_ROOT}")
 target_link_libraries(caliper_builder_agent PUBLIC caliper_builder_acp)
 target_compile_features(caliper_builder_agent PUBLIC cxx_std_17)
+# The provider presets, which caliper-agent reads at start, embedded in the key
+# store (key_store.cpp) so that both know the same ids and key variables; the
+# SHA-256 of a Custom entry's base URL comes from the commands library.
+set(_presets "${CMAKE_CURRENT_SOURCE_DIR}/caliper_agent/presets.json")
+file(READ "${_presets}" CALIPER_PRESETS_JSON)
+configure_file(presets_json.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/caliper_builder/presets_json.h" @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_presets}")
+target_include_directories(caliper_builder_agent PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(caliper_builder_agent PRIVATE caliper_builder_commands nlohmann_json::nlohmann_json)
 if(APPLE)
     target_link_libraries(caliper_builder_agent PRIVATE "-framework Security" "-framework CoreFoundation")
 endif()

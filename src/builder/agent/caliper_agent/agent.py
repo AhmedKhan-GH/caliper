@@ -89,11 +89,15 @@ class Agent:
     def __init__(self, conn: Connection, provider: Provider | None, key_status: str, tools: list[ToolSpec],
                  graph: GraphAgent, api: CaliperApi, *, default_model: str, default_effort: str,
                  usage_log: str | None = None, key_required: bool = True, commands: list[Command] | None = None,
-                 scope_rule: ScopeRule | None = None, refusal: Exception | None = None) -> None:
+                 scope_rule: ScopeRule | None = None, refusal: Exception | None = None,
+                 provider_meta: dict | None = None) -> None:
         self._usage_log = usage_log
         # Why no provider may run (offline.py): every session/new and
         # session/prompt is then answered with this error.
         self._refusal = refusal
+        # Where model requests go, with the warnings the pane shows
+        # (presets.py), for initialize's `_meta.caliper.provider`.
+        self._provider_meta = provider_meta
         self._conn = conn
         self._provider = provider
         self._key_status = key_status
@@ -163,6 +167,7 @@ class Agent:
             },
             "authMethods": [],
             "agentInfo": {"name": "caliper-agent", "title": title, "version": __version__},
+            **({"_meta": {"caliper": {"provider": self._provider_meta}}} if self._provider_meta is not None else {}),
         }
 
     def _config_options(self, s: SessionState) -> list[dict]:

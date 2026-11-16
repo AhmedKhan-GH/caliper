@@ -1,7 +1,9 @@
 // The macOS Keychain implementation of KeyStore, through the Security
 // framework's SecItem functions. A key is a generic password item:
 //   kSecAttrService     "caliper.agent-keys"
-//   kSecAttrAccount     the provider id ("anthropic")
+//   kSecAttrAccount     the provider id ("anthropic", "openai", "gemini",
+//                       "openrouter", or "custom-" and 12 hex digits), so each
+//                       provider has an item of its own
 //   kSecAttrAccessible  kSecAttrAccessibleWhenUnlockedThisDeviceOnly
 //   kSecAttrSynchronizable false (never sent to other devices)
 // Every Error names the OSStatus and never the key. No automated test calls this

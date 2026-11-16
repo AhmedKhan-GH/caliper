@@ -38,6 +38,10 @@ caliper-agent = "caliper_agent.cli:main"
 [tool.setuptools.packages.find]
 include = ["caliper_agent*"]
 
+[tool.setuptools.package-data]
+# The provider presets, which the key store embeds at build time too.
+caliper_agent = ["presets.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-p no:cacheprovider"

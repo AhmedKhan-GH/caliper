@@ -2,12 +2,12 @@
 
     caliper-agent [--api-file PATH] [--command-table PATH] [--widget-scopes PATH]
                   [--tools LIST]
-                  [--provider claude|openai-compatible] [--base-url URL]
+                  [--preset ID] [--provider claude|openai-compatible] [--base-url URL]
                   [--model ID] [--effort LEVEL] [--model-tools yes|no]
                   [--model-vision yes|no] [--context-length TOKENS]
                   [--cache-dir PATH] [--no-compaction]
                   [--usage-log PATH] [--version]
-    caliper-agent probe --model ID [--provider ...] [--base-url URL] [--cache-dir PATH]
+    caliper-agent probe --model ID [--preset ID] [--provider ...] [--base-url URL] [--cache-dir PATH]
                   [--refresh] [--list-models] [--no-vision-probe] [--set NAME=VALUE ...]
 
 `caliper-agent probe` checks what a model can do and prints one JSON object
@@ -97,8 +97,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--widget-scopes", help="the widget agent's scope rule (default: widget_scopes.json beside "
                                                 "the command table)")
     parser.add_argument("--tools", help="only these commands, as a comma-separated list of names and groups")
-    parser.add_argument("--provider", choices=("claude", "openai-compatible"), default="claude",
-                        help="where model requests go (default: claude, the Claude API)")
+    parser.add_argument("--preset", help="a provider preset of presets.json: anthropic (Claude), openai, gemini, "
+                                         "openrouter, ollama, lmstudio or custom")
+    parser.add_argument("--provider", choices=("claude", "openai-compatible"),
+                        help="where model requests go (default: the preset's, else claude, the Claude API)")
     parser.add_argument("--base-url", help="the OpenAI-compatible server, such as http://127.0.0.1:11434/v1")
     parser.add_argument("--model", help="the model of new sessions (default: claude-opus-5-5 on the Claude API)")
     parser.add_argument("--effort", choices=EFFORTS, help="the effort of new sessions (default: high)")
@@ -137,7 +139,8 @@ def main(argv: list[str] | None = None) -> int:
     from .capabilities import ProbeCache, claude_facts, resolve
     from .claude import API_BASE_URL, DEFAULT_EFFORT, DEFAULT_MODEL, MODELS, ClaudeProvider
     from .loop import build_agent
-    from .openai_compat import BaseUrlError, OpenAICompatProvider, check_base_url
+    from .openai_compat import BaseUrlError, OpenAICompatProvider
+    from .presets import PresetError, choose
     from .prompt import SYSTEM_PROMPT
     from .scripted import SCRIPT_ENV, ScriptedProvider, load_script
     from .stub_transport import StubTransport
@@ -179,9 +182,17 @@ def main(argv: list[str] | None = None) -> int:
     for warning in (cache.warnings if cache is not None else []):
         print(f"caliper-agent: {warning}", file=sys.stderr)
 
+    try:
+        choice = choose(args.preset, args.provider, args.base_url)
+    except (PresetError, BaseUrlError) as exc:
+        print(f"caliper-agent: {exc}", file=sys.stderr)
+        return 2
+    for warning in choice.warnings():
+        print(f"caliper-agent: {warning['message']}", file=sys.stderr)
+
     provider = None
     refusal: OfflineError | None = None
-    if args.provider == "claude":
+    if choice.api == "claude":
         model_ids = tuple(m.id for m in MODELS)
         if args.model is not None and args.model not in model_ids:
             print(f"caliper-agent: unknown model {args.model}; choose one of {', '.join(model_ids)}.",
@@ -200,12 +211,12 @@ def main(argv: list[str] | None = None) -> int:
                 except OfflineError as exc:
                     refusal = exc
     else:
-        if not args.base_url or not args.model:
-            print("caliper-agent: --provider openai-compatible needs --base-url and --model.", file=sys.stderr)
+        if not args.model:
+            print("caliper-agent: an OpenAI-compatible server needs --model.", file=sys.stderr)
             return 2
         key_status, key_required, default_model = model_status, False, args.model
+        base_url = choice.base_url
         try:
-            base_url = check_base_url(args.base_url)
             check_provider("openai-compatible", base_url=base_url)
             entry = cache.get(base_url, args.model) if cache is not None else None
             known = resolve(entry, options={"tools": _yes_no(args.model_tools), "vision": _yes_no(args.model_vision),
@@ -217,9 +228,6 @@ def main(argv: list[str] | None = None) -> int:
                                             sources={"tools": known.tools.source, "vision": known.vision.source,
                                                      "context_length": known.context_length.source},
                                             quirks=known.quirks)
-        except BaseUrlError as exc:
-            print(f"caliper-agent: {exc}", file=sys.stderr)
-            return 2
         except OfflineError as exc:
             refusal = exc
     if refusal is not None:
@@ -232,7 +240,8 @@ def main(argv: list[str] | None = None) -> int:
         api = CaliperApi(Path(args.api_file) if args.api_file else None)
         agent = Agent(conn, provider, key_status, tools, graph, api, default_model=default_model,
                       default_effort=args.effort or DEFAULT_EFFORT, usage_log=args.usage_log,
-                      key_required=key_required, commands=commands, scope_rule=scope_rule, refusal=refusal)
+                      key_required=key_required, commands=commands, scope_rule=scope_rule, refusal=refusal,
+                      provider_meta=choice.as_meta())
         try:
             await conn.serve(agent.on_request, agent.on_notification)
         finally:
@@ -269,7 +278,8 @@ def probe_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="caliper-agent probe",
                                      description="Checks what a model can do (tool calling, vision, context length) "
                                                  "and prints one JSON object.")
-    parser.add_argument("--provider", choices=("claude", "openai-compatible"), default="claude")
+    parser.add_argument("--preset", help="a provider preset of presets.json")
+    parser.add_argument("--provider", choices=("claude", "openai-compatible"))
     parser.add_argument("--base-url", help="the OpenAI-compatible server")
     parser.add_argument("--model", required=True, help="the model to check")
     parser.add_argument("--cache-dir", help="the folder of the capability cache")
@@ -292,7 +302,7 @@ def probe_main(argv: list[str]) -> int:
 
     from .capabilities import DEFAULT_CONTEXT_LENGTH, CacheError, Entry, ProbeCache, resolve
     from .claude import API_BASE_URL
-    from .openai_compat import BaseUrlError, check_base_url
+    from .presets import BaseUrlError, PresetError, choose
     from .probe import now_iso, probe_claude, probe_openai_compatible
     from .scripted import SCRIPT_ENV, load_script
     from .stub_transport import StubTransport
@@ -301,17 +311,12 @@ def probe_main(argv: list[str]) -> int:
         print(SCRUBBER.scrub(f"caliper-agent probe: {message}"), file=sys.stderr)
         return 2
 
-    if args.provider == "openai-compatible":
-        if not args.base_url:
-            return fail("--provider openai-compatible needs --base-url.")
-        try:
-            base_url = check_base_url(args.base_url)
-        except BaseUrlError as exc:
-            return fail(str(exc))
-    else:
-        if args.base_url:
-            return fail("the Claude API's base URL is fixed; --base-url is for an OpenAI-compatible server.")
-        base_url = API_BASE_URL
+    try:
+        choice = choose(args.preset, args.provider, args.base_url)
+    except (PresetError, BaseUrlError) as exc:
+        return fail(str(exc))
+    kind = choice.api
+    base_url = choice.base_url or API_BASE_URL
     try:
         overrides = [_parse_override(item) for item in args.set]
     except ValueError as exc:
@@ -329,7 +334,7 @@ def probe_main(argv: list[str]) -> int:
 
     transport = None
     script_path = os.environ.get(SCRIPT_ENV, "")
-    if script_path and args.provider == "claude":
+    if script_path and kind == "claude":
         try:
             script = load_script(script_path)
         except (OSError, ValueError) as exc:
@@ -337,14 +342,17 @@ def probe_main(argv: list[str]) -> int:
         transport = StubTransport(script)
 
     async def run_probe(list_only: bool):
-        if args.provider == "claude":
+        if kind == "claude":
             return await probe_claude(args.model, claude_key if claude_status == KeyStatus.PRESENT else None,
                                       transport=transport, list_only=list_only)
         return await probe_openai_compatible(base_url, args.model,
                                              model_key if model_status == KeyStatus.PRESENT else None,
+                                             preset=choice.preset.id if choice.preset is not None else None,
                                              vision=not args.no_vision_probe, list_only=list_only)
 
-    out: dict = {"version": 1, "provider": args.provider, "base_url": base_url, "model": args.model}
+    out: dict = {"version": 1, "preset": choice.preset.id if choice.preset is not None else None,
+                 "provider": kind, "base_url": base_url, "model": args.model}
+    warnings += [w["message"] for w in choice.warnings()]
     if args.list_models:
         result = asyncio.run(run_probe(True))
         out.update({"models": result.models, "errors": result.errors, "warnings": warnings})
@@ -363,8 +371,8 @@ def probe_main(argv: list[str]) -> int:
     if cache is not None and (result is not None or overrides):
         cache.save()
         warnings += [w for w in cache.warnings if w not in warnings]
-    known = resolve(entry, default_context=DEFAULT_CONTEXT_LENGTH if args.provider == "openai-compatible" else None)
-    if args.provider == "claude":
+    known = resolve(entry, default_context=DEFAULT_CONTEXT_LENGTH if kind == "openai-compatible" else None)
+    if kind == "claude":
         known.tools.value, known.tools.source = True, "known"
     context = known.context_length.value
     if isinstance(context, int) and context < DEFAULT_CONTEXT_LENGTH:

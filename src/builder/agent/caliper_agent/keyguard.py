@@ -9,7 +9,7 @@ it wrapped in a `Secret` whose repr never shows it.
 Every text that leaves the process (ACP messages, stderr lines, log records,
 exception reports) passes through the `Scrubber`, which replaces each
 registered secret (the key, Caliper API's session token) and anything shaped
-like an Anthropic key with a marker. `install_guards()` routes uncaught
+like a Claude, OpenRouter or Google API key with a marker. `install_guards()` routes uncaught
 exceptions and log records through it.
 """
 
@@ -61,8 +61,18 @@ OVERRIDE_ENV = (
 MAX_KEY_LENGTH = 1024
 REDACTED = "[redacted]"
 
-# Anything that looks like an Anthropic key, even one that is not ours.
-_KEY_SHAPE = re.compile(r"sk-ant-[A-Za-z0-9_\-]{8,}")
+# Anything shaped like a provider's key, even one that is not ours; each
+# shape was read in the provider's own documentation (design/widget-agent.md,
+# Presets): a Claude API key starts with sk-ant-; an OpenRouter key is sk-or-v1-
+# and 64 lowercase hexadecimal digits (its authentication page); a Google API
+# key, which the Gemini preset takes, is AIza and 35 more characters (the
+# example key of Google Cloud's API keys page). OpenAI's documentation that
+# could be read shows no key's shape, so only the exact key is replaced there.
+_KEY_SHAPES = (
+    ("sk-ant-", re.compile(r"sk-ant-[A-Za-z0-9_\-]{8,}")),
+    ("sk-or-v1-", re.compile(r"sk-or-v1-[0-9a-f]{64}")),
+    ("AIza", re.compile(r"AIza[0-9A-Za-z_\-]{35}")),
+)
 
 
 class Secret:
@@ -149,14 +159,16 @@ class Scrubber:
         for value in secrets:
             if value in text:
                 text = text.replace(value, REDACTED)
-        if "sk-ant-" in text:
-            text = _KEY_SHAPE.sub(REDACTED, text)
+        for marker, shape in _KEY_SHAPES:
+            if marker in text:
+                text = shape.sub(REDACTED, text)
         return text
 
     def contains_secret(self, text: str) -> bool:
         with self._lock:
             secrets = list(self._secrets)
-        return any(value in text for value in secrets) or bool(_KEY_SHAPE.search(text))
+        return any(value in text for value in secrets) or any(
+            marker in text and shape.search(text) for marker, shape in _KEY_SHAPES)
 
 
 # The process-wide scrubber. Modules that register a secret use this one.

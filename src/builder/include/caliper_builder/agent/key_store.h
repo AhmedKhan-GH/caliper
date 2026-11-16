@@ -1,8 +1,8 @@
 #pragma once
-// caliper_builder::agent::KeyStore: where Caliper keeps the API key of the agent
-// pane's BYOK backend (bring your own key). The key lives in the operating
-// system's credential store and nowhere else: never in a file, a spec, the
-// journal, a log, an Error or a command line.
+// caliper_builder::agent::KeyStore: where Caliper keeps the API keys of the
+// widget agent's providers (bring your own key), one key per provider. A key
+// lives in the operating system's credential store and nowhere else: never in
+// a file, a spec, the journal, a log, an Error or a command line.
 //
 // The interface sets a key, says whether one is set, and removes it. It has no
 // function that returns a key, for display or otherwise. The one way a key
@@ -12,9 +12,15 @@
 // environment the variables that could make the child use another credential,
 // another endpoint or extra headers.
 //
-// A provider is named by a short id; "anthropic" (the Claude API) is the only
-// one now. A key must be 1 to 1024 bytes of printable ASCII without spaces, the
-// rule the sidecar applies too. Errors never quote a key.
+// A provider is named by an id from the presets (caliper_agent/presets.json,
+// embedded here at build time and read by the sidecar too): "anthropic" (the
+// Claude preset), "openai", "gemini" and "openrouter" take a key; "ollama" and
+// "lmstudio" are local servers that take none, so set() refuses them and
+// place_key_in_environment() places nothing for them; a Custom entry is named
+// by custom_key_account() of its base URL, and its key is optional. The id is
+// the account of the Keychain item, so each provider has an item of its own. A
+// key must be 1 to 1024 bytes of printable ASCII without spaces, the rule the
+// sidecar applies too. Errors never quote a key.
 //
 // Implementations:
 //   MemoryKeyStore           in memory, for tests; it overwrites what it held
@@ -41,7 +47,7 @@
 // manual check in design/byok-agent.md.
 //
 // Error codes: keystore.bad_provider, keystore.bad_key, keystore.not_found,
-// keystore.unsupported, keystore.failed.
+// keystore.no_key_needed, keystore.unsupported, keystore.failed.
 #include <caliper_builder/acp/subprocess.h>
 #include <caliper_builder/error.h>
 
@@ -49,6 +55,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace caliper_builder::agent {
 
@@ -57,7 +64,37 @@ constexpr const char* kKeychainService = "caliper.agent-keys";
 constexpr std::size_t kMaxKeyBytes = 1024;
 constexpr const char* kOfflineVariable = "CALIPER_AGENT_OFFLINE";
 
-// The variable a provider's key is placed in, or nullptr for an unknown provider.
+// Whether a provider takes a key.
+enum class KeyNeed { required, optional, none };
+
+// One preset of caliper_agent/presets.json.
+struct ProviderPreset {
+    std::string id;            // "anthropic", "openai", ...; also the key's account
+    std::string name;          // "Claude", "OpenAI", ...
+    std::string api;           // "claude" or "openai-compatible"
+    std::string base_url;      // as the design page gives it; empty for Custom
+    KeyNeed key = KeyNeed::required;
+    std::string key_variable;  // where the key reaches the sidecar; empty when it takes none
+    bool local = false;        // a server on this machine
+};
+
+// The presets, in the table's order (Claude, OpenAI, Gemini, OpenRouter,
+// Ollama, LM Studio, Custom).
+const std::vector<ProviderPreset>& provider_presets();
+const ProviderPreset* find_preset(const std::string& id);
+
+// The id of a Custom entry's key: "custom-" and the first 12 hexadecimal
+// digits of the SHA-256 of its base URL without trailing slashes, as the
+// sidecar computes it (caliper_agent/presets.py).
+std::string custom_key_account(const std::string& base_url);
+
+// Whether a provider id is one the store knows, and whether it takes a key.
+bool is_provider(const std::string& provider);
+KeyNeed key_need(const std::string& provider);
+
+// The variable a provider's key is placed in: ANTHROPIC_API_KEY for Claude,
+// CALIPER_MODEL_API_KEY for an OpenAI-compatible provider that takes a key;
+// nullptr for a local server or an unknown provider.
 const char* key_variable(const std::string& provider);
 
 // Whether a key is set. `error` is set when the store could not tell.
@@ -70,8 +107,10 @@ class KeyStore;
 
 // Copies the provider's key into `spawn->env` (replacing an entry of the same
 // name), removes from `spawn->env` and adds to `spawn->env_remove` every
-// variable that could redirect the child, and leaves `spawn` unchanged on any
-// error. An AcpClient takes the result as `agent_env` and `agent_env_remove`.
+// variable that could redirect the child and every other provider's key
+// variable, and leaves `spawn` unchanged on any error. For a local server, and
+// for a Custom entry without a key, it places no key and removes all of them.
+// An AcpClient takes the result as `agent_env` and `agent_env_remove`.
 Error place_key_in_environment(KeyStore& store, const std::string& provider, acp::SpawnOptions* spawn);
 
 // When this process has CALIPER_AGENT_OFFLINE, sets it in `spawn->env` with
@@ -115,7 +154,8 @@ private:
     std::map<std::string, std::string> keys_;
 };
 
-// The operating system's credential store (see above). Never null.
+// The operating system's credential store (see above), one item per provider.
+// Never null.
 std::unique_ptr<KeyStore> make_system_key_store();
 
 // Overwrites a string's bytes before clearing it. Best effort: copies the
