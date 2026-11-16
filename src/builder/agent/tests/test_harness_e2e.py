@@ -101,7 +101,8 @@ def test_a_turn_through_the_cpp_client(tmp_path):
     assert result["ok"] is True and result["stop_reason"] == "end_turn"
 
     commands = [(c["path"], c["origin"], bool((c["args"] or {}).get("dry_run"))) for c in fake.calls
-                if c["path"].startswith("/v0/commands/") and c["path"] != "/v0/commands/spec.get"]
+                if c["path"].startswith("/v0/commands/")
+                and c["path"] not in ("/v0/commands/spec.get", "/v0/commands/review.status")]
     assert commands == [("/v0/commands/catalog.list", "agent", False), ("/v0/commands/panel.create", "agent", True),
                         ("/v0/commands/panel.create", "agent", False), ("/v0/commands/applet.save", "agent", False)]
     assert fake.calls[-1]["path"] == "/v0/capture.png"

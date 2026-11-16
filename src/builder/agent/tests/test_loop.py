@@ -653,6 +653,42 @@ def test_allow_always_stops_asking_for_spec_changes_but_not_for_destructive_ones
     assert len(caliper.commands("panel.create", dry=True)) == 1
 
 
+def test_what_caliper_reviews_itself_is_not_asked_twice(run_agent, caliper):
+    # The app holds spec edits and destructive commands for the person, so the
+    # sidecar sends no permission request and no dry run for them.
+    caliper.handlers["review.status"] = lambda args: {"ok": True, "result": {
+        "origin": "agent", "spec_edits": True, "destructive": True}}
+    panel = {"id": "heat", "primitive": "heatmap", "bind": {"values": "entropy"}}
+    steps = [message(tool_use("t_p", "panel_create", panel),
+                     tool_use("t_d", "loader_delete", {"id": "old"}), stop="tool_use"),
+             message(text("Done.")),
+             message(tool_use("t_q", "panel_create", {"id": "q", "primitive": "text"}),
+                     tool_use("t_e", "loader_delete", {"id": "older"}), stop="tool_use"),
+             message(text("Done again."))]
+    agent, _ = run_agent(steps)
+    sid = agent.start_session("/tmp/ws")
+    asked = []
+    response, updates = agent.prompt(sid, "Add a heatmap", on_permission=lambda p: asked.append(p) or allow(p))
+    assert response["result"]["stopReason"] == "end_turn"
+    assert asked == []
+    assert len(caliper.commands("panel.create", dry=None)) == 1 and len(caliper.commands("loader.delete")) == 1
+    assert len(caliper.commands("review.status")) == 1  # once for the turn
+    # The completed edit still shows its change, from the command's own diff.
+    done = next(u for u in updates if u["sessionUpdate"] == "tool_call_update" and u["toolCallId"] == "t_p"
+                and u.get("status") == "completed")
+    assert done["content"][0]["type"] == "diff" and 'id = "heat"' in done["content"][0]["newText"]
+
+    # When the app reviews spec edits only, the sidecar still asks before a
+    # destructive command, and the setting is read again in the next turn.
+    caliper.handlers["review.status"] = lambda args: {"ok": True, "result": {
+        "origin": "agent", "spec_edits": True, "destructive": False}}
+    response, _ = agent.prompt(sid, "Again", on_permission=lambda p: asked.append(p) or allow(p))
+    assert response["result"]["stopReason"] == "end_turn"
+    assert [p["toolCall"]["toolCallId"] for p in asked] == ["t_e"]
+    assert len(caliper.commands("review.status")) == 2
+    assert len(caliper.commands("panel.create", dry=True)) == 0
+
+
 def test_capture_unavailable_is_a_clear_tool_error(tmp_path):
     from conftest import AgentProcess, FakeCaliper, write_script
     fake = FakeCaliper(tmp_path, capture_status=501)

@@ -8,7 +8,10 @@ there, before any tool runs:
 - `stop` or `tool_call`: the node runs; each tool call goes to
   `CaliperToolset`, which hands it back to `TurnRunner.run_tool()` (validated
   against the command's full schema, previewed, approved when it must be, then
-  sent to Caliper API), one at a time and in order. A reply without tool calls
+  sent to Caliper API), one at a time and in order. What Caliper reviews itself
+  (`review.status`: spec edits with review on, destructive commands) is not
+  asked again through `session/request_permission`: Caliper holds the call
+  until the person decides there, so each change gets one card. A reply without tool calls
   ends the run with ACP stop reason `end_turn`.
 - `length` (`max_tokens` or a full context window): the node does not run, so
   no tool of a cut-off reply runs; each call gets an error result in the
@@ -380,6 +383,8 @@ class TurnRunner:
         self._task: asyncio.Task | None = None
         self.cancel_requested = False
         self._group = ""
+        # What Caliper asks the person itself (review.status), read once per turn.
+        self._app_review: tuple[bool, bool] | None = None
 
     # ---- cancellation ------------------------------------------------------------------------------
 
@@ -398,6 +403,7 @@ class TurnRunner:
         s = self.session
         s.turns += 1
         self._group = f"{s.id}-t{s.turns}"
+        self._app_review = None
         self._task = asyncio.current_task()
         model_id = s.settings.model
         caps = self._provider.capabilities(model_id)
@@ -625,10 +631,15 @@ class TurnRunner:
             raise ToolFailed(invalid_json(args, problem))
 
         previewable = command.previewable and args.get(PREVIEW_ARG) is not True
+        # Caliper may hold the call for the person itself; what it asks, the
+        # sidecar does not ask again, so one change gets one card.
+        app_edits, app_destructive = (await self._app_reviews()) if previewable or command.destructive \
+            else (False, False)
+        own_review = previewable and self.session.review == REVIEW_SPEC_CHANGES and not app_edits
         before = await self._api.spec_text() if previewable else None
 
         preview_diff: str | None = None
-        if previewable and self.session.review == REVIEW_SPEC_CHANGES:
+        if own_review:
             preview = await self._api.call(command.name, {**args, PREVIEW_ARG: True}, group)
             if not preview.ok:
                 # The change itself is refused; the real call would be too.
@@ -638,8 +649,7 @@ class TurnRunner:
             diff = preview.result.get("diff") if isinstance(preview.result, dict) else None
             preview_diff = diff if isinstance(diff, str) else None
         # A preview that changes nothing needs no approval.
-        ask = command.destructive or (previewable and self.session.review == REVIEW_SPEC_CHANGES
-                                      and preview_diff != "")
+        ask = (command.destructive and not app_destructive) or (own_review and preview_diff != "")
         if ask:
             decision = await self._ask(call_id, command, args, before, preview_diff)
             if decision == "cancelled":
@@ -663,6 +673,17 @@ class TurnRunner:
         if out.png is not None:
             return [text, BinaryContent(data=out.png, media_type="image/png")]
         return text
+
+    async def _app_reviews(self) -> tuple[bool, bool]:
+        """Whether Caliper itself holds this sidecar's spec edits and its destructive
+        commands for the person, from `review.status`, read once per turn. An app
+        without that command, or an answer without the fields, holds neither, and
+        the sidecar asks as before."""
+        if self._app_review is None:
+            out = await self._api.call("review.status", {}, self._group)
+            result = out.result if out.ok and isinstance(out.result, dict) else {}
+            self._app_review = (result.get("spec_edits") is True, result.get("destructive") is True)
+        return self._app_review
 
     def _diff_content(self, before: tuple[str, str] | None, diff: str | None) -> dict | None:
         """The change as an ACP diff (old and new text), else as the unified diff in a text block."""

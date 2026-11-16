@@ -6,9 +6,13 @@
 // "function"), with a fake key: its conversation imports
 // the files, runs their loaders, builds the three-panel dashboard of the spec
 // fixture dashboard.spec.toml source by source and panel by panel, sets the
-// layout and saves the applet, while the harness allows every permission
-// request. The test checks the transcript (each spec edit shown as a diff
-// before it runs), the saved spec on disk against the fixture, and the journal.
+// layout and saves the applet. The stand-in host reviews the agent's spec
+// edits and holds its destructive commands, as the app does, and approves
+// each one; the sidecar reads review.status and so sends no permission request
+// of its own. The test checks the host's approvals (each spec edit approved
+// once, with its diff), the transcript (no permission request, each edit
+// completed with its diff), the saved spec on disk against the fixture, and
+// the journal.
 //
 // It needs CALIPER_BUILDER_TEST_PYTHON, an interpreter with the sidecar's
 // dependencies; without it the test says it is skipped.
@@ -112,14 +116,25 @@ TEST_CASE("the BYOK agent builds the dashboard through caliper-builder-host") {
     const std::string record = root + "/requests.jsonl";
     write_text(script, json{{"steps", steps}, {"record", record}, {"backoff_scale", 0}}.dump());
 
-    // The stand-in for the app's command endpoints. It approves what the app
-    // would hold for the person, since the harness answers the sidecar's own
-    // permission requests.
+    // The stand-in for the app's command endpoints, reviewing the agent's
+    // spec edits as the app does by default. It approves what it holds and
+    // prints a line for each approval, which a thread reads.
     acp::SpawnOptions host_options;
-    host_options.argv = {CALIPER_BUILDER_HOST_EXE, "--workspace", ws, "--api-dir", root + "/api", "--approve", "allow"};
+    host_options.argv = {CALIPER_BUILDER_HOST_EXE, "--workspace", ws, "--api-dir", root + "/api",
+                         "--approve", "allow", "--review", "agent,mcp"};
     Error spawn_error;
     std::unique_ptr<acp::Process> host = acp::Process::spawn(host_options, &spawn_error);
     REQUIRE_MESSAGE(host, spawn_error.message);
+    std::string host_out;
+    std::thread host_reader([&] {
+        char buf[16384];
+        for (;;) {
+            std::size_t got = 0;
+            const acp::IoStatus st = host->read_stdout(buf, sizeof buf, &got, 200);
+            if (st == acp::IoStatus::ok) host_out.append(buf, got);
+            else if (st != acp::IoStatus::timeout) break;
+        }
+    });
     const std::string api_file = root + "/api/api.json";
     for (int i = 0; i < 400 && !fs::exists(api_file); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(25));
     REQUIRE(fs::exists(api_file));
@@ -144,6 +159,7 @@ TEST_CASE("the BYOK agent builds the dashboard through caliper-builder-host") {
     const acp::RunResult run = acp::run_process(harness, limits);
     REQUIRE_MESSAGE(run.error.ok(), run.error.message);
     const acp::ExitStatus host_status = host->terminate(10000);
+    host_reader.join();
     INFO("harness stdout tail: " << run.out.substr(run.out.size() > 6000 ? run.out.size() - 6000 : 0));
     INFO("harness stderr tail: " << run.err.substr(run.err.size() > 3000 ? run.err.size() - 3000 : 0));
     CHECK(run.out.find(kFakeKey) == std::string::npos);
@@ -191,8 +207,49 @@ TEST_CASE("the BYOK agent builds the dashboard through caliper-builder-host") {
     }
     CHECK(done_at.size() == command_of.size());
 
-    // Every spec edit was shown as a diff before it ran, and the diffs chain
-    // from the spec that spec.new made to the fixture's canonical text.
+    // No double prompt: the sidecar asked nothing itself, since the host
+    // reviews its edits and holds its destructive commands.
+    CHECK(asked_at.empty());
+
+    // The host held and approved each spec edit once, with its diff, and the
+    // two loader runs, in the order the agent sent them; saving a new applet
+    // needs no approval.
+    std::vector<json> approvals;
+    std::size_t at = 0;
+    while (at < host_out.size()) {
+        const std::size_t end = host_out.find('\n', at);
+        const json j = json::parse(host_out.substr(at, end == std::string::npos ? std::string::npos : end - at),
+                                   nullptr, false);
+        if (j.is_object() && j.contains("approval")) approvals.push_back(j);
+        if (end == std::string::npos) break;
+        at = end + 1;
+    }
+    std::vector<std::string> held;
+    for (int n = 1; n < next; ++n) {
+        const std::string& command = command_of["toolu_" + std::to_string(n)];
+        if (command == "source.add" || command == "panel.create" || command == "layout.set" || command == "loader.run")
+            held.push_back(command);
+    }
+    REQUIRE(approvals.size() == held.size());
+    for (std::size_t i = 0; i < approvals.size(); ++i) {
+        CAPTURE(i);
+        const json& a = approvals[i];
+        CHECK(a["name"] == held[i]);
+        CHECK(a["origin"] == "agent");
+        CHECK(a["decided"] == "allow");
+        if (held[i] == "loader.run") {
+            CHECK(a["review"].is_null());
+        } else {
+            REQUIRE(a["review"].is_object());
+            const std::string diff = a["review"]["diff"].get<std::string>();
+            CHECK(diff.rfind("--- a/", 0) == 0);
+            CHECK(diff.find("\n+") != std::string::npos);
+            CHECK(a["review"]["warnings"].is_array());
+        }
+    }
+
+    // Every spec edit completed with its diff, and the diffs chain from the
+    // spec that spec.new made to the fixture's canonical text.
     std::string previous;
     int edits = 0;
     for (int n = 1; n < next; ++n) {
@@ -201,20 +258,15 @@ TEST_CASE("the BYOK agent builds the dashboard through caliper-builder-host") {
         CAPTURE(id);
         CAPTURE(command);
         const bool edit = command == "source.add" || command == "panel.create" || command == "layout.set";
-        const bool destructive = command == "loader.run" || command == "applet.save";
-        CHECK((asked_at.count(id) == 1) == (edit || destructive));
         if (!edit) continue;
         ++edits;
-        REQUIRE(asked_at.count(id));
         REQUIRE(done_at.count(id));
-        CHECK(asked_at[id] < done_at[id]);
-        const json& preview = preview_of[id];
-        REQUIRE_MESSAGE(preview.is_object(), "no diff in the permission request");
-        CHECK(preview["path"] == ws + "/applets/run42-dashboard/run42-dashboard.spec.toml");
-        CHECK(preview["new_text"] != preview["old_text"]);
-        if (!previous.empty()) CHECK(preview["old_text"] == previous);
-        previous = preview["new_text"];
-        CHECK(change_of[id] == preview);  // what ran is what was shown
+        const json& change = change_of[id];
+        REQUIRE_MESSAGE(change.is_object(), "no diff in the completed call");
+        CHECK(change["path"] == ws + "/applets/run42-dashboard/run42-dashboard.spec.toml");
+        CHECK(change["new_text"] != change["old_text"]);
+        if (!previous.empty()) CHECK(change["old_text"] == previous);
+        previous = change["new_text"];
     }
     CHECK(edits == static_cast<int>(dashboard.sources.size() + dashboard.panels.size() + 1));
     CHECK(previous == canonical);
