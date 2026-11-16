@@ -353,6 +353,12 @@ if(APPLE)
     target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_HAVE_METAL=1)
     set_source_files_properties(gfx/gfx_main.cpp PROPERTIES
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
+    # The graphics layer's rows on Metal (src/host/gfx), on the same renderer's device.
+    target_sources(caliper_gfx_tests PRIVATE gfx/gfx_layer.cpp)
+    target_link_libraries(caliper_gfx_tests PRIVATE caliper_gfx)
+    target_include_directories(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
+    set_source_files_properties(gfx/gfx_layer.cpp PROPERTIES
+        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
 endif()
 
 # On Windows the same §16 matrix runs on the Vulkan backend (CPU-staged path),

@@ -571,6 +571,12 @@ id<MTLBuffer> device_buffer_private(const void* src, size_t bytes) {
 
 }  // namespace
 
+// The Metal environment's renderer for the graphics layer's rows (gfx_layer.cpp), or nullptr
+// without a Metal device.
+caliper_host::HostRenderer* gfx_metal_renderer() {
+    return metal_env().ok ? metal_env().renderer.get() : nullptr;
+}
+
 TEST_CASE("gfx/Metal: 4x4 f32 ramp mapped through viridis is pixel-exact (staged)") {
     if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend(); mat_f32_viridis(bk);
