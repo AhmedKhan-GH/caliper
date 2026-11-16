@@ -128,7 +128,7 @@ function captureBlock(): Buffer {
   for (let k = 0; k < 256; k++) {
     const x = (k / 255) * (stops.length - 1), i = Math.min(Math.floor(x), stops.length - 2), f = x - i;
     const c = stops[i].map((v, j) => Math.round(v + (stops[i + 1][j] - v) * f));
-    block.writeUInt32LE((c[0] | (c[1] << 8) | (c[2] << 16) | (255 << 24)) >>> 0, 1056 + 4 * k);
+    block.writeUInt32LE((c[0] | (c[1] << 8) | (c[2] << 16) | (255 << 24)) >>> 0, 16 + 16 * k + 8);   // level k's colour
   }
   return block;
 }

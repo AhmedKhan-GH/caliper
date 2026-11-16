@@ -7,7 +7,8 @@
 //
 //   key_of            the key of a float's bits, an unsigned integer in the floats' numeric order
 //   derive_keys       the 255 keys of a range, each found by binary search over keys
-//   fill_block        a Cmap block (the generated uniform struct) from the keys and a table
+//   fill_block        a Cmap block (the generated uniform struct) from the keys and a table: one
+//                     16-byte entry per level, its first key, the next level's first key, its colour
 //   colormap_index    the integer decision, as the shader takes it; colormap_rgba its colour
 //   resolve_range     the range of a mapping whose ends may come from statistics
 //   KeyBlockCache     the key blocks of a view or of the layer, by colormap and range
@@ -48,7 +49,7 @@ namespace caliper_gfx {
 namespace cmap {
 
 inline constexpr uint32_t kSentinel = 0xffffffffu;   // a key that no float reaches
-inline constexpr uint32_t kKeyCount = 260;           // keys[0..259]: the block's 65 x 4 words
+inline constexpr uint32_t kKeyCount = 257;           // key[0..256]: each level's first key, and the end
 
 // ---- Keys --------------------------------------------------------------------------------------
 
@@ -62,7 +63,7 @@ CALIPER_CMAP_HD inline bool nan_bits(uint32_t bits) { return (bits & 0x7fffffffu
 
 struct Keys {
     uint32_t flip = 0;               // 0xffffffff for a decreasing range, whose keys are flipped
-    uint32_t key[kKeyCount] = {};    // key[0] = 0; key[k] for k in 1..255; key[256..259] = kSentinel
+    uint32_t key[kKeyCount] = {};    // key[0] = 0; key[k] for k in 1..255; key[256] = kSentinel
 };
 
 // The reference's level of one value: map_f32_to_rgba8 itself, read through an identity table.
@@ -101,28 +102,32 @@ inline Keys derive_keys(float vmin, float vmax) {
         }
         k.key[l] = from = a;
     }
-    for (uint32_t l = 256; l < kKeyCount; ++l) k.key[l] = kSentinel;
+    k.key[256] = kSentinel;
     return k;
 }
 
 // ---- The block ---------------------------------------------------------------------------------
 
-static_assert(sizeof(Keys::key) == sizeof(shaders::Cmap::keys), "the block's keys");
-static_assert(sizeof(shaders::Cmap::lut) == 256 * 4, "the block's table");
+static_assert(sizeof(shaders::Cmap::levels) == 256 * 16, "the block's levels: one 16-byte entry each");
 
-// The Cmap block of a range: the range itself (for the shader's guess), the flip, the keys and
-// a 256-entry table packed r | g << 8 | b << 16 | a << 24 (zero when lut256 is null).
+// The Cmap block of a range: the range itself (for the shader's guess), the flip, and for each
+// level k the entry (key[k], key[k + 1], the table's colour k packed r | g << 8 | b << 16 | a << 24,
+// 0); the colours are zero when lut256 is null. A level test and the level's colour are then one
+// load in the shader, from a uniform array of vec4, whose 16-byte stride WGSL requires.
 inline void fill_block(const Keys& k, float vmin, float vmax, const uint32_t* lut256, shaders::Cmap* out) {
     std::memset(out, 0, sizeof *out);
     out->vmin = vmin;
     out->vmax = vmax;
     out->flip = k.flip;
-    std::memcpy(out->keys, k.key, sizeof out->keys);
-    if (lut256 != nullptr) std::memcpy(out->lut, lut256, sizeof out->lut);
+    for (uint32_t l = 0; l < 256; ++l) {
+        out->levels[l][0] = k.key[l];
+        out->levels[l][1] = k.key[l + 1];
+        out->levels[l][2] = lut256 != nullptr ? lut256[l] : 0u;
+    }
 }
 
 // The block of a built-in colormap (CALIPER_CMAP_*) and a range. False for an unknown colormap,
-// whose block has its keys and a zero table.
+// whose block has its keys and zero colours.
 inline bool derive_block(int32_t colormap, float vmin, float vmax, shaders::Cmap* out) {
     const uint32_t* lut = caliper_host::colormap_lut(colormap);
     fill_block(derive_keys(vmin, vmax), vmin, vmax, lut, out);
@@ -131,10 +136,16 @@ inline bool derive_block(int32_t colormap, float vmin, float vmax, shaders::Cmap
 
 // ---- The decision, as the shader takes it ------------------------------------------------------
 
-CALIPER_CMAP_HD inline uint32_t key_at(const shaders::Cmap& m, uint32_t k) { return m.keys[k >> 2][k & 3u]; }
-CALIPER_CMAP_HD inline bool level_ok(const shaders::Cmap& m, uint32_t key, uint32_t k) {
-    return key >= key_at(m, k) && key < key_at(m, k + 1);
+// The first key of level k, 0 to 256 (256: the end, kSentinel).
+CALIPER_CMAP_HD inline uint32_t key_at(const shaders::Cmap& m, uint32_t k) {
+    return k < 256 ? m.levels[k][0] : m.levels[255][1];
 }
+// Whether a key lies in level k, from that level's entry alone.
+CALIPER_CMAP_HD inline bool level_ok(const shaders::Cmap& m, uint32_t key, uint32_t k) {
+    return key >= m.levels[k][0] && key < m.levels[k][1];
+}
+// The packed colour of level k.
+CALIPER_CMAP_HD inline uint32_t level_rgba(const shaders::Cmap& m, uint32_t k) { return m.levels[k][2]; }
 
 // The usual float formula, which only chooses which comparisons run. WGSL's clamp and u32()
 // saturate; here NaN and out-of-range values are clamped first, so the conversion is defined.
@@ -157,18 +168,17 @@ CALIPER_CMAP_HD inline uint32_t colormap_index(uint32_t bits, const shaders::Cma
     if (level_ok(m, key, g)) return g;
     if (g > 0 && level_ok(m, key, g - 1)) return g - 1;
     if (g < 255 && level_ok(m, key, g + 1)) return g + 1;
-    uint32_t lo = 0, hi = 256;   // key_at(lo) <= key < key_at(hi)
+    uint32_t lo = 0, hi = 256;   // level lo starts at or below key, level hi above it
     while (hi - lo > 1) {
         const uint32_t mid = (lo + hi) / 2;
-        if (key >= key_at(m, mid)) lo = mid; else hi = mid;
+        if (key >= m.levels[mid][0]) lo = mid; else hi = mid;
     }
     return lo;
 }
 
 // The packed colour of a value's bits, r | g << 8 | b << 16 | a << 24.
 CALIPER_CMAP_HD inline uint32_t colormap_rgba(uint32_t bits, const shaders::Cmap& m) {
-    const uint32_t k = colormap_index(bits, m);
-    return m.lut[k >> 2][k & 3u];
+    return level_rgba(m, colormap_index(bits, m));
 }
 
 // ---- Mappings ----------------------------------------------------------------------------------
@@ -247,8 +257,8 @@ public:
         return block(m.colormap, r.vmin, r.vmax);
     }
 
-    // Copies the block into out; for an unknown colormap, a block with the range and zero keys
-    // and table, which draws transparent black.
+    // Copies the block into out; for an unknown colormap, a block with the range and zero
+    // levels, which draws transparent black.
     void fill(int32_t colormap, float vmin, float vmax, shaders::Cmap* out) {
         if (const shaders::Cmap* b = block(colormap, vmin, vmax)) { *out = *b; return; }
         std::memset(out, 0, sizeof *out);

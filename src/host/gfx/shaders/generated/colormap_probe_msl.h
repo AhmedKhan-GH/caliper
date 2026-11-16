@@ -23,44 +23,29 @@ struct _mslBufferSizes {
 };
 
 struct type_3 {
-    metal::uint4 inner[65];
-};
-struct type_4 {
-    metal::uint4 inner[64];
+    metal::uint4 inner[256];
 };
 struct Cmap {
     float vmin;
     float vmax;
     uint flip;
     uint pad;
-    type_3 keys;
-    type_4 lut;
+    type_3 levels;
 };
-typedef uint type_7[1];
+typedef uint type_6[1];
 
-uint key_at(
-    uint k,
-    constant Cmap& m
-) {
-    uint _e9 = m.keys.inner[k >> 2u][k & 3u];
-    return _e9;
-}
-
-bool level_ok(
+bool in_level(
     uint key,
-    uint k_1,
-    constant Cmap& m
+    metal::uint4 e
 ) {
     bool local = {};
-    uint _e2 = key_at(k_1, m);
-    if (key >= _e2) {
-        uint _e8 = key_at(k_1 + 1u, m);
-        local = key < _e8;
+    if (key >= e.x) {
+        local = key < e.y;
     } else {
         local = false;
     }
-    bool _e11 = local;
-    return _e11;
+    bool _e9 = local;
+    return _e9;
 }
 
 uint naga_f2u32(float value) {
@@ -71,69 +56,64 @@ uint naga_div(uint lhs, uint rhs) {
     return lhs / metal::select(rhs, 1u, rhs == 0u);
 }
 
-uint colormap_index(
+metal::uint4 colormap_entry(
     uint bits,
     constant Cmap& m
 ) {
-    bool local_1 = {};
-    bool local_2 = {};
     uint lo = 0u;
     uint hi = 256u;
     if ((bits & 2147483647u) > 2139095040u) {
-        return 0u;
+        metal::uint4 _e8 = m.levels.inner[0];
+        return _e8;
     }
-    uint _e16 = m.flip;
-    uint key_1 = (((bits >> 31u) != 0u) ? ~(bits) : (bits | 2147483648u)) ^ _e16;
+    uint _e19 = m.flip;
+    uint key_1 = (((bits >> 31u) != 0u) ? ~(bits) : (bits | 2147483648u)) ^ _e19;
     float v = as_type<float>(bits);
-    float _e21 = m.vmin;
-    float _e25 = m.vmax;
-    float _e28 = m.vmin;
-    uint g = metal::min(naga_f2u32((metal::clamp((v - _e21) / (_e25 - _e28), 0.0, 1.0) * 255.0) + 0.5), 255u);
-    bool _e41 = level_ok(key_1, g, m);
-    if (_e41) {
-        return g;
+    float _e24 = m.vmin;
+    float _e28 = m.vmax;
+    float _e31 = m.vmin;
+    uint g = metal::min(naga_f2u32((metal::clamp((v - _e24) / (_e28 - _e31), 0.0, 1.0) * 255.0) + 0.5), 255u);
+    metal::uint4 e_1 = m.levels.inner[g];
+    bool _e48 = in_level(key_1, e_1);
+    if (_e48) {
+        return e_1;
     }
     if (g > 0u) {
-        bool _e48 = level_ok(key_1, g - 1u, m);
-        local_1 = _e48;
-    } else {
-        local_1 = false;
-    }
-    bool _e50 = local_1;
-    if (_e50) {
-        return g - 1u;
+        metal::uint4 d = m.levels.inner[g - 1u];
+        bool _e57 = in_level(key_1, d);
+        if (_e57) {
+            return d;
+        }
     }
     if (g < 255u) {
-        bool _e59 = level_ok(key_1, g + 1u, m);
-        local_2 = _e59;
-    } else {
-        local_2 = false;
-    }
-    bool _e61 = local_2;
-    if (_e61) {
-        return g + 1u;
+        metal::uint4 u = m.levels.inner[g + 1u];
+        bool _e66 = in_level(key_1, u);
+        if (_e66) {
+            return u;
+        }
     }
     uint2 loop_bound = uint2(4294967295u);
     while(true) {
         if (metal::all(loop_bound == uint2(0u))) { break; }
         loop_bound -= uint2(loop_bound.y == 0u, 1u);
-        uint _e68 = hi;
-        uint _e69 = lo;
-        if ((_e68 - _e69) <= 1u) {
+        uint _e71 = hi;
+        uint _e72 = lo;
+        if ((_e71 - _e72) <= 1u) {
             break;
         }
-        uint _e73 = lo;
-        uint _e74 = hi;
-        uint mid = naga_div(_e73 + _e74, 2u);
-        uint _e78 = key_at(mid, m);
-        if (key_1 >= _e78) {
+        uint _e76 = lo;
+        uint _e77 = hi;
+        uint mid = naga_div(_e76 + _e77, 2u);
+        uint _e85 = m.levels.inner[mid].x;
+        if (key_1 >= _e85) {
             lo = mid;
         } else {
             hi = mid;
         }
     }
-    uint _e80 = lo;
-    return _e80;
+    uint _e89 = lo;
+    metal::uint4 _e91 = m.levels.inner[_e89];
+    return _e91;
 }
 
 metal::float4 unpack_rgba(
@@ -146,10 +126,9 @@ metal::float4 cmap_color(
     uint bits_1,
     constant Cmap& m
 ) {
-    uint _e1 = colormap_index(bits_1, m);
-    uint _e10 = m.lut.inner[_e1 >> 2u][_e1 & 3u];
-    metal::float4 _e11 = unpack_rgba(_e10);
-    return _e11;
+    metal::uint4 _e1 = colormap_entry(bits_1, m);
+    metal::float4 _e3 = unpack_rgba(_e1.z);
+    return _e3;
 }
 
 struct cs_colormap_probeInput {
@@ -157,8 +136,8 @@ struct cs_colormap_probeInput {
 [[max_total_threads_per_threadgroup(64)]] kernel void cs_colormap_probe(
   metal::uint3 id [[thread_position_in_grid]]
 , constant Cmap& m [[buffer(0)]]
-, device type_7 const& probe_in [[buffer(1)]]
-, device type_7& probe_out [[buffer(2)]]
+, device type_6 const& probe_in [[buffer(1)]]
+, device type_6& probe_out [[buffer(2)]]
 , constant _mslBufferSizes& _buffer_sizes [[buffer(15)]]
 ) {
     uint _e7 = probe_in[id.x];

@@ -87,7 +87,7 @@ public:
         std::memset(out, 0, sizeof *out);
         out->vmin = vmin;
         out->vmax = vmax;
-        out->keys[0][1] = 0xC0000000u | colormap;   // recognisable in the arena
+        out->levels[0][1] = 0xC0000000u | colormap;   // recognisable in the arena
         ++cmap_requests;
     }
 

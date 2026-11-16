@@ -54,7 +54,7 @@ inline constexpr BindingDesc kScenePointsBindings[] = {
     {0, 0, BindingType::Uniform, uint8_t(kStageVertex), true, 48, Format::RGBA8Unorm, 0},  // frame
     {0, 1, BindingType::Texture, uint8_t(kStageVertex), false, 0, Format::RGBA8Unorm, 0},  // class_table
     {1, 0, BindingType::Uniform, uint8_t(kStageVertex | kStageFragment), true, 192, Format::RGBA8Unorm, 1},  // p
-    {1, 1, BindingType::Uniform, uint8_t(kStageVertex), true, 2080, Format::RGBA8Unorm, 2},  // m
+    {1, 1, BindingType::Uniform, uint8_t(kStageVertex), true, 4112, Format::RGBA8Unorm, 2},  // m
     {2, 3, BindingType::UintTexture, uint8_t(kStageVertex), false, 0, Format::RGBA8Unorm, 1},  // img_value
 };
 inline constexpr VertexInputDesc kScenePointsVertexInputs[] = {
@@ -83,7 +83,7 @@ inline constexpr BindingDesc kSceneLinesBindings[] = {
     {0, 0, BindingType::Uniform, uint8_t(kStageVertex), true, 48, Format::RGBA8Unorm, 0},  // frame
     {0, 1, BindingType::Texture, uint8_t(kStageVertex), false, 0, Format::RGBA8Unorm, 0},  // class_table
     {1, 0, BindingType::Uniform, uint8_t(kStageVertex), true, 192, Format::RGBA8Unorm, 1},  // p
-    {1, 1, BindingType::Uniform, uint8_t(kStageVertex), true, 2080, Format::RGBA8Unorm, 2},  // m
+    {1, 1, BindingType::Uniform, uint8_t(kStageVertex), true, 4112, Format::RGBA8Unorm, 2},  // m
 };
 inline constexpr VertexInputDesc kSceneLinesVertexInputs[] = {
     {"vs_lines", 0, VertexFormat::F32x3},  // vec3<f32>
@@ -113,7 +113,7 @@ inline constexpr BindingDesc kSceneMeshBindings[] = {
     {0, 0, BindingType::Uniform, uint8_t(kStageVertex), true, 48, Format::RGBA8Unorm, 0},  // frame
     {0, 1, BindingType::Texture, uint8_t(kStageVertex), false, 0, Format::RGBA8Unorm, 0},  // class_table
     {1, 0, BindingType::Uniform, uint8_t(kStageVertex | kStageFragment), true, 192, Format::RGBA8Unorm, 1},  // p
-    {1, 1, BindingType::Uniform, uint8_t(kStageVertex), true, 2080, Format::RGBA8Unorm, 2},  // m
+    {1, 1, BindingType::Uniform, uint8_t(kStageVertex), true, 4112, Format::RGBA8Unorm, 2},  // m
     {2, 0, BindingType::Texture, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 1},  // img_rgba
     {2, 1, BindingType::Sampler, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 0},  // img_sampler
 };
@@ -175,7 +175,7 @@ inline constexpr BindingDesc kSceneBoxesBindings[] = {
     {0, 0, BindingType::Uniform, uint8_t(kStageVertex), true, 48, Format::RGBA8Unorm, 0},  // frame
     {0, 1, BindingType::Texture, uint8_t(kStageVertex), false, 0, Format::RGBA8Unorm, 0},  // class_table
     {1, 0, BindingType::Uniform, uint8_t(kStageVertex), true, 192, Format::RGBA8Unorm, 1},  // p
-    {1, 1, BindingType::Uniform, uint8_t(kStageVertex), true, 2080, Format::RGBA8Unorm, 2},  // m
+    {1, 1, BindingType::Uniform, uint8_t(kStageVertex), true, 4112, Format::RGBA8Unorm, 2},  // m
 };
 inline constexpr VertexInputDesc kSceneBoxesVertexInputs[] = {
     {"vs_box_wire", 0, VertexFormat::F32x3},  // vec3<f32>
@@ -211,7 +211,7 @@ inline constexpr BindingDesc kSceneImageBindings[] = {
     {0, 0, BindingType::Uniform, uint8_t(kStageVertex | kStageFragment), true, 48, Format::RGBA8Unorm, 0},  // frame
     {0, 1, BindingType::Texture, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 0},  // class_table
     {1, 0, BindingType::Uniform, uint8_t(kStageVertex | kStageFragment), true, 192, Format::RGBA8Unorm, 1},  // p
-    {1, 1, BindingType::Uniform, uint8_t(kStageFragment), true, 2080, Format::RGBA8Unorm, 2},  // m
+    {1, 1, BindingType::Uniform, uint8_t(kStageFragment), true, 4112, Format::RGBA8Unorm, 2},  // m
     {2, 0, BindingType::Texture, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 1},  // img_rgba
     {2, 1, BindingType::Sampler, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 0},  // img_sampler
     {2, 2, BindingType::UintTexture, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 2},  // img_class
@@ -236,20 +236,20 @@ inline constexpr EntryDesc kColormapProbeEntries[] = {
     {"cs_colormap_probe", kStageCompute, {64, 1, 1}},
 };
 inline constexpr BindingDesc kColormapProbeBindings[] = {
-    {1, 1, BindingType::Uniform, uint8_t(kStageCompute), true, 2080, Format::RGBA8Unorm, 0},  // m
+    {1, 1, BindingType::Uniform, uint8_t(kStageCompute), true, 4112, Format::RGBA8Unorm, 0},  // m
     {3, 0, BindingType::Storage, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 1},  // probe_in
     {3, 1, BindingType::StorageReadWrite, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 2},  // probe_out
 };
 
 // ---- colormap_texture
 inline constexpr EntryDesc kColormapTextureEntries[] = {
-    {"cs_colormap_texture", kStageCompute, {8, 8, 1}},
+    {"cs_colormap_texture", kStageCompute, {16, 8, 1}},
 };
 inline constexpr BindingDesc kColormapTextureBindings[] = {
     {0, 0, BindingType::Uniform, uint8_t(kStageCompute), true, 16, Format::RGBA8Unorm, 0},  // tp
     {0, 1, BindingType::Storage, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 1},  // tex_values
     {0, 2, BindingType::StorageTexture, uint8_t(kStageCompute), false, 0, Format::RGBA8Unorm, 0},  // tex_out
-    {1, 1, BindingType::Uniform, uint8_t(kStageCompute), true, 2080, Format::RGBA8Unorm, 2},  // m
+    {1, 1, BindingType::Uniform, uint8_t(kStageCompute), true, 4112, Format::RGBA8Unorm, 2},  // m
 };
 
 // The descriptions by program id, with no sources, for code that needs no backend.

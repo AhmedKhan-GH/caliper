@@ -18,8 +18,8 @@
 // CALIPER_GFX_CMAP_BENCH=1 runs the timing row: the GPU time of the integer-decision pass (the
 // generated colormap_texture, compiled as the layer compiles it) against the float pass of the
 // Metal renderer today (cmap_f32, copied below for this measurement only, compiled as the
-// renderer compiles it), on 1,024 x 1,024 and 2,048 x 2,048 heatmaps, with two variants of the
-// integer pass that attribute its cost. Compiled as Objective-C++ with ARC on Apple.
+// renderer compiles it), on 1,024 x 1,024 and 2,048 x 2,048 heatmaps, and the integer pass with the
+// other math mode. Compiled as Objective-C++ with ARC on Apple.
 #include <doctest/doctest.h>
 #include "../gpu_skip.h"
 
@@ -227,7 +227,8 @@ TEST_CASE("gfx/Metal colormap: the texture path's compute form matches map_f32_t
             sh::TexParams tp{kWidth, c.rows, from_import ? kBase : 0u, kWidth};
             const uint32_t offsets[2] = {f.uniform(&tp, sizeof tp), f.uniform(&c.block, sizeof c.block)};
             const BindGroup groups[2] = {group0, group1};
-            f.dispatch(pipe, groups, offsets, (kWidth + 7) / 8, (c.rows + 7) / 8, 1);
+            const uint16_t* wg = sh::kProgramDescriptions[prog].entries[0].workgroup_size;   // 16 x 16
+            f.dispatch(pipe, groups, offsets, (kWidth + wg[0] - 1) / wg[0], (c.rows + wg[1] - 1) / wg[1], 1);
             const Serial s = gfx->submit(std::move(f));
             REQUIRE_MESSAGE(s != 0, gfx->last_error());
             const std::vector<uint8_t> got = read_back(*gfx, out, kWidth, c.rows);
@@ -439,22 +440,14 @@ double pct(std::vector<double> v, double p) {
 
 }  // namespace
 
-// Replaces every occurrence of `from` in `text`; the count must be at least `min`.
-std::string edited(std::string text, const std::string& from, const std::string& to, int min = 1) {
-    int n = 0;
-    for (size_t at = 0; (at = text.find(from, at)) != std::string::npos; at += to.size(), ++n) text.replace(at, from.size(), to);
-    REQUIRE_MESSAGE(n >= min, "the generated MSL no longer has: ", from);
-    return text;
-}
-
 TEST_CASE("gfx/Metal colormap: timing — GPU time of the integer-decision pass against the float pass") {
     if (std::getenv("CALIPER_GFX_CMAP_BENCH") == nullptr) return;
     caliper_host::HostRenderer* renderer = gfx_metal_renderer();
     if (renderer == nullptr) CALIPER_SKIP_NO_GPU("no Metal device");
     id<MTLDevice> device = (__bridge id<MTLDevice>)renderer->native_device();
     id<MTLCommandQueue> queue = [device newCommandQueue];
-    auto compile = [&](const std::string& msl, bool fast, const char* entry) -> id<MTLComputePipelineState> {
-        MTLCompileOptions* o = [MTLCompileOptions new];
+    auto compile = [&](const char* msl, bool fast, const char* entry) -> id<MTLComputePipelineState> {
+        MTLCompileOptions* o = [MTLCompileOptions new];   // only the math mode, as the layer sets it
         if (@available(macOS 15.0, *)) {
             o.mathMode = fast ? MTLMathModeFast : MTLMathModeSafe;
         } else {
@@ -464,42 +457,30 @@ TEST_CASE("gfx/Metal colormap: timing — GPU time of the integer-decision pass 
 #pragma clang diagnostic pop
         }
         NSError* err = nil;
-        id<MTLLibrary> lib = [device newLibraryWithSource:@(msl.c_str()) options:o error:&err];
-        if (lib == nil) { MESSAGE("compile: ", [[err localizedDescription] UTF8String]); return nil; }
+        id<MTLLibrary> lib = [device newLibraryWithSource:@(msl) options:o error:&err];
+        if (lib == nil) return nil;
         return [device newComputePipelineStateWithFunction:[lib newFunctionWithName:@(entry)] error:&err];
     };
-    // The integer pass as the layer compiles it (safe math, the generated 8 x 8 workgroup) and
-    // the float pass as the renderer compiles it (default options, which are fast math, 16 x 16),
-    // then variants that attribute the difference. Each variant edits the MSL text and exists only
-    // here; the two marked "not exact" drop steps of the decision and only time what is left.
+    // The integer pass is the generated colormap_texture compiled as the layer compiles it (fast math
+    // when its description says so) and dispatched with its own workgroup; the float pass is the
+    // Metal renderer's cmap_f32, copied into this test, compiled as the renderer compiles it (default
+    // options, which are fast math) with its 16 x 16 groups. A third pass, the integer one with safe
+    // math, shows what the compile option is worth.
     const uint32_t prog = uint32_t(sh::ProgramId::colormap_texture);
-    const std::string im = sh::kMetalPrograms[prog].msl;
-    const std::string wide = edited(im, "[[max_total_threads_per_threadgroup(64)]]", "[[max_total_threads_per_threadgroup(256)]]");
-    const std::string in_device = edited(im, "constant Cmap&", "device const Cmap&", 3);
-    std::string flat = edited(im, "metal::uint4 inner[65];", "uint inner[260];");
-    flat = edited(flat, "metal::uint4 inner[64];", "uint inner[256];");
-    flat = edited(flat, "m.keys.inner[k >> 2u][k & 3u]", "m.keys.inner[k]");
-    flat = edited(flat, "m.lut.inner[_e1 >> 2u][_e1 & 3u]", "m.lut.inner[_e1]");
-    const std::string guess_only = edited(im, "    bool _e41 = level_ok(key_1, g, m);", "    return g;\n    bool _e41 = level_ok(key_1, g, m);");
-    const std::string two_tests = edited(im, "    if (_e41) {\n        return g;\n    }", "    return _e41 ? g : 0u;");
-    const std::string flt_constant = edited(kFloatPassMsl, "device const uint*   lut", "constant uint*       lut");
-    struct Pass { const char* name; id<MTLComputePipelineState> ps; bool integer; uint32_t tg; };
+    const sh::ProgramDescription& d = sh::kProgramDescriptions[prog];
+    const bool fast = sh::kMetalPrograms[prog].fast_math;
+    const uint32_t wx = d.entries[0].workgroup_size[0], wy = d.entries[0].workgroup_size[1];
+    struct Pass { std::string name; id<MTLComputePipelineState> ps; bool integer; uint32_t tx, ty; };
     std::vector<Pass> passes = {
-        {"integer decision (layer: safe math, 8 x 8)", compile(im, false, "cs_colormap_texture"), true, 8},
-        {"float pass (renderer: default fast math, 16 x 16)", compile(kFloatPassMsl, true, "cmap_f32"), false, 16},
-        {"integer, fast math", compile(im, true, "cs_colormap_texture"), true, 8},
-        {"integer, 16 x 16 workgroup", compile(wide, false, "cs_colormap_texture"), true, 16},
-        {"integer, block in device memory", compile(in_device, false, "cs_colormap_texture"), true, 8},
-        {"integer, keys and table as flat u32 arrays", compile(flat, false, "cs_colormap_texture"), true, 8},
-        {"integer, flat arrays, fast math, 16 x 16", compile(edited(flat, "[[max_total_threads_per_threadgroup(64)]]", "[[max_total_threads_per_threadgroup(256)]]"), true, "cs_colormap_texture"), true, 16},
-        {"not exact: guess and table load only", compile(guess_only, false, "cs_colormap_texture"), true, 8},
-        {"not exact: guess and its two comparisons only", compile(two_tests, false, "cs_colormap_texture"), true, 8},
-        {"float pass, safe math", compile(kFloatPassMsl, false, "cmap_f32"), false, 16},
-        {"float pass, table in constant memory", compile(flt_constant, true, "cmap_f32"), false, 16},
+        {std::string("integer decision, as the layer compiles it (") + (fast ? "fast" : "safe") + " math, " +
+             std::to_string(wx) + " x " + std::to_string(wy) + ")",
+         compile(sh::kMetalPrograms[prog].msl, fast, "cs_colormap_texture"), true, wx, wy},
+        {"float pass (renderer: default fast math, 16 x 16)", compile(kFloatPassMsl, true, "cmap_f32"), false, 16, 16},
+        {std::string("integer decision with ") + (fast ? "safe" : "fast") + " math",
+         compile(sh::kMetalPrograms[prog].msl, !fast, "cs_colormap_texture"), true, wx, wy},
     };
     for (const Pass& p : passes) REQUIRE_MESSAGE(bool(p.ps), p.name);
     const size_t kFloat = 1;
-    const sh::ProgramDescription& d = sh::kProgramDescriptions[prog];
     const int at_tp = binding_msl(d, 0, 0), at_values = binding_msl(d, 0, 1), at_out = binding_msl(d, 0, 2),
               at_cmap = binding_msl(d, 1, 1);
     REQUIRE((at_tp >= 0 && at_values >= 0 && at_out >= 0 && at_cmap >= 0));
@@ -534,12 +515,12 @@ TEST_CASE("gfx/Metal colormap: timing — GPU time of the integer-decision pass 
             MTLTextureDescriptor* td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
                                                                                           width:size height:size mipmapped:NO];
             td.usage = MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
-            td.storageMode = MTLStorageModePrivate;
+            td.storageMode = MTLStorageModeShared;
             id<MTLTexture> dst = [device newTextureWithDescriptor:td];
             const sh::TexParams tp{size, size, 0, size};
             const uint32_t sizes[1] = {uint32_t(v.size() * 4)};
             const FloatParams fp{size, size, 1, size, 0.0f, 1.0f};
-            auto run = [&](const Pass& p) {
+            auto run = [&](const Pass& p, int n) {
                 id<MTLCommandBuffer> cb = [queue commandBuffer];
                 id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
                 [enc setComputePipelineState:p.ps];
@@ -555,31 +536,39 @@ TEST_CASE("gfx/Metal colormap: timing — GPU time of the integer-decision pass 
                     [enc setBytes:&fp length:sizeof fp atIndex:2];
                     [enc setTexture:dst atIndex:0];
                 }
-                for (int i = 0; i < kPerBuffer; ++i)
-                    [enc dispatchThreadgroups:MTLSizeMake((size + p.tg - 1) / p.tg, (size + p.tg - 1) / p.tg, 1)
-                        threadsPerThreadgroup:MTLSizeMake(p.tg, p.tg, 1)];
+                for (int i = 0; i < n; ++i)
+                    [enc dispatchThreadgroups:MTLSizeMake((size + p.tx - 1) / p.tx, (size + p.ty - 1) / p.ty, 1)
+                        threadsPerThreadgroup:MTLSizeMake(p.tx, p.ty, 1)];
                 [enc endEncoding];
                 [cb commit];
                 [cb waitUntilCompleted];
-                return (cb.GPUEndTime - cb.GPUStartTime) * 1e6 / kPerBuffer;
+                return (cb.GPUEndTime - cb.GPUStartTime) * 1e6 / n;
             };
+            // Every pass gives the reference's bytes before it is timed.
+            std::vector<uint8_t> ref(v.size() * 4), got(v.size() * 4);
+            caliper_host::map_f32_to_rgba8(v.data(), int(size), int(size), lut, 0.0f, 1.0f, ref.data());
+            for (const Pass& p : passes) {
+                run(p, 1);
+                [dst getBytes:got.data() bytesPerRow:size * 4 fromRegion:MTLRegionMake2D(0, 0, size, size) mipmapLevel:0];
+                CHECK_MESSAGE(got == ref, p.name);
+            }
             const size_t n = passes.size();
             std::vector<std::vector<double>> t(n);
             for (int i = 0; i < kWarm; ++i)
-                for (const Pass& p : passes) run(p);
+                for (const Pass& p : passes) run(p, kPerBuffer);
             for (int i = 0; i < kSamples; ++i)
                 for (size_t k = 0; k < n; ++k) {
                     const size_t j = (k + size_t(i)) % n;   // each pass first in turn
-                    t[j].push_back(run(passes[j]));
+                    t[j].push_back(run(passes[j], kPerBuffer));
                 }
             double load[3] = {};
             getloadavg(load, 3);
             const double base = pct(t[kFloat], 0.5);
             for (size_t k = 0; k < n; ++k) {
                 const double m = pct(t[k], 0.5);
-                std::printf("[gfx-cmap-bench] %u x %u, %s: %-48s median %7.1f us, p95 %7.1f us per pass, %5.2fx the float "
+                std::printf("[gfx-cmap-bench] %u x %u, %s: %-56s median %7.1f us, p95 %7.1f us per pass, %5.2fx the float "
                             "pass (%+.1f us); %d samples of %d dispatches; load %.2f\n", size, size, fields[field],
-                            passes[k].name, m, pct(t[k], 0.95), m / base, m - base, kSamples, kPerBuffer, load[0]);
+                            passes[k].name.c_str(), m, pct(t[k], 0.95), m / base, m - base, kSamples, kPerBuffer, load[0]);
             }
             std::fflush(stdout);
         }

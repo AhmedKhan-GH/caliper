@@ -196,7 +196,7 @@ async function capture(dev, progs, codes, blockB64, fixture) {
     const { groups, layout } = layouts(dev, prog);
     const res = {
       '0,0': { buffer: frameBuf, offset: 0, size: 48 }, '0,1': classTable.createView(),
-      '1,0': { buffer: primBuf, offset: 0, size: 192 }, '1,1': { buffer: cmapBuf, offset: 0, size: 2080 },
+      '1,0': { buffer: primBuf, offset: 0, size: 192 }, '1,1': { buffer: cmapBuf, offset: 0, size: block.length },
       '2,0': imgRgba.createView(), '2,1': sampler, '2,3': imgValue.createView(),
     };
     const bind = groups.map((l, g) => dev.createBindGroup({ layout: l,
@@ -345,7 +345,8 @@ async function colormapTexture(dev, prog, code, blockB64, inputsB64) {
   pass.setPipeline(pipe);
   pass.setBindGroup(0, g0, [0]);
   pass.setBindGroup(1, g1, [0]);
-  pass.dispatchWorkgroups(256 / 8, Math.ceil(rows / 8));
+  const wg = prog.entries.find((e) => e.name === 'cs_colormap_texture').workgroup_size;
+  pass.dispatchWorkgroups(Math.ceil(256 / wg[0]), Math.ceil(rows / wg[1]));
   pass.end();
   dev.queue.submit([enc.finish()]);
   const out = await readTexture(dev, tex, rows);

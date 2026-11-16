@@ -153,7 +153,7 @@ TEST_CASE("points: instanced quads with per-point positions, values through a co
     CHECK(q.vmin == -1.0f);
     CHECK(q.vmax == 3.0f);
     const sh::Cmap m = cmap_of(c.list, r);
-    CHECK(m.keys[0][1] == (0xC0000000u | 2u));
+    CHECK(m.levels[0][1] == (0xC0000000u | 2u));
     CHECK(m.vmin == -1.0f);
     // proj_scale is the projection's scale, and mvp is P * V * M from the stated eye.
     const Orbit& o = std::get<Orbit>(cam);

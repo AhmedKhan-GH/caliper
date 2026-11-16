@@ -88,16 +88,14 @@ struct alignas(16) Cmap {
     float vmax;  // 4
     uint32_t flip;  // 8
     uint32_t pad;  // 12
-    uint32_t keys[65][4];  // 16
-    uint32_t lut[64][4];  // 1056
+    uint32_t levels[256][4];  // 16
 };
-static_assert(sizeof(Cmap) == 2080, "Cmap");
+static_assert(sizeof(Cmap) == 4112, "Cmap");
 static_assert(offsetof(Cmap, vmin) == 0, "Cmap::vmin");
 static_assert(offsetof(Cmap, vmax) == 4, "Cmap::vmax");
 static_assert(offsetof(Cmap, flip) == 8, "Cmap::flip");
 static_assert(offsetof(Cmap, pad) == 12, "Cmap::pad");
-static_assert(offsetof(Cmap, keys) == 16, "Cmap::keys");
-static_assert(offsetof(Cmap, lut) == 1056, "Cmap::lut");
+static_assert(offsetof(Cmap, levels) == 16, "Cmap::levels");
 
 struct alignas(16) ClampParams {
     uint32_t count;  // 0

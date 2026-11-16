@@ -87,7 +87,7 @@
           "stages": [
             "vertex"
           ],
-          "size": 2080,
+          "size": 4112,
           "storage_format": null,
           "msl_index": 2,
           "dynamic": true
@@ -302,7 +302,7 @@
           "stages": [
             "vertex"
           ],
-          "size": 2080,
+          "size": 4112,
           "storage_format": null,
           "msl_index": 2,
           "dynamic": true
@@ -482,7 +482,7 @@
           "stages": [
             "vertex"
           ],
-          "size": 2080,
+          "size": 4112,
           "storage_format": null,
           "msl_index": 2,
           "dynamic": true
@@ -978,7 +978,7 @@
           "stages": [
             "vertex"
           ],
-          "size": 2080,
+          "size": 4112,
           "storage_format": null,
           "msl_index": 2,
           "dynamic": true
@@ -1201,7 +1201,7 @@
           "stages": [
             "fragment"
           ],
-          "size": 2080,
+          "size": 4112,
           "storage_format": null,
           "msl_index": 2,
           "dynamic": true
@@ -1430,7 +1430,7 @@
           "stages": [
             "compute"
           ],
-          "size": 2080,
+          "size": 4112,
           "storage_format": null,
           "msl_index": 0,
           "dynamic": true
@@ -1556,7 +1556,7 @@
           "stages": [
             "compute"
           ],
-          "size": 2080,
+          "size": 4112,
           "storage_format": null,
           "msl_index": 2,
           "dynamic": true
@@ -1567,7 +1567,7 @@
           "name": "cs_colormap_texture",
           "stage": "compute",
           "workgroup_size": [
-            8,
+            16,
             8,
             1
           ],
@@ -1910,7 +1910,7 @@
     "Cmap": {
       "kind": "struct",
       "name": "Cmap",
-      "size": 2080,
+      "size": 4112,
       "members": [
         {
           "name": "vmin",
@@ -1949,29 +1949,13 @@
           }
         },
         {
-          "name": "keys",
+          "name": "levels",
           "offset": 16,
           "type": {
             "kind": "array",
-            "count": 65,
+            "count": 256,
             "stride": 16,
-            "size": 1040,
-            "element": {
-              "kind": "vector",
-              "scalar": "u32",
-              "count": 4,
-              "size": 16
-            }
-          }
-        },
-        {
-          "name": "lut",
-          "offset": 1056,
-          "type": {
-            "kind": "array",
-            "count": 64,
-            "stride": 16,
-            "size": 1024,
+            "size": 4096,
             "element": {
               "kind": "vector",
               "scalar": "u32",

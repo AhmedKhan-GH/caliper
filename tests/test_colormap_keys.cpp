@@ -34,7 +34,17 @@ uint64_t xorshift(uint64_t& s) {
     return s * 2685821657736338717ull;
 }
 
-const uint32_t* keys_of(const shaders::Cmap& c) { return &c.keys[0][0]; }
+// The block's first key of each level, 0 to 256, and its colours.
+std::vector<uint32_t> keys_of(const shaders::Cmap& c) {
+    std::vector<uint32_t> k(cmap::kKeyCount);
+    for (uint32_t l = 0; l < cmap::kKeyCount; ++l) k[l] = cmap::key_at(c, l);
+    return k;
+}
+std::vector<uint32_t> colours_of(const shaders::Cmap& c) {
+    std::vector<uint32_t> t(256);
+    for (uint32_t l = 0; l < 256; ++l) t[l] = cmap::level_rgba(c, l);
+    return t;
+}
 
 }  // namespace
 
@@ -69,10 +79,12 @@ TEST_CASE("colormap keys: each range's keys start at 0, never fall, end in senti
     for (const auto& r : colormap_cases::ranges()) {
         INFO("range " << r.name);
         const shaders::Cmap c = colormap_cases::block(r, table);
-        const uint32_t* k = keys_of(c);
+        const std::vector<uint32_t> k = keys_of(c);
         CHECK(k[0] == 0);
         for (uint32_t l = 1; l < cmap::kKeyCount; ++l) CHECK(k[l] >= k[l - 1]);
-        for (uint32_t l = 256; l < cmap::kKeyCount; ++l) CHECK(k[l] == cmap::kSentinel);
+        CHECK(k[256] == cmap::kSentinel);
+        // Each level's entry holds its own first key and the next level's.
+        for (uint32_t l = 0; l < 256; ++l) CHECK((c.levels[l][0] == k[l] && c.levels[l][1] == k[l + 1] && c.levels[l][3] == 0));
         CHECK(as_bits(c.vmin) == as_bits(r.vmin));
         CHECK(as_bits(c.vmax) == as_bits(r.vmax));
         const bool decreasing = r.vmax < r.vmin && std::isfinite(r.vmin) && std::isfinite(r.vmax) &&
@@ -85,7 +97,7 @@ TEST_CASE("colormap keys: each range's keys start at 0, never fall, end in senti
         } else {
             CHECK(k[255] != cmap::kSentinel);   // a finite range reaches the top level
         }
-        CHECK(std::memcmp(c.lut, table.data(), sizeof c.lut) == 0);
+        CHECK(colours_of(c) == table);
     }
 }
 
@@ -109,7 +121,8 @@ TEST_CASE("colormap keys: the integer decision matches map_f32_to_rgba8 byte for
             bad_index += cmap::colormap_index(in[j], c) != cmap::reference_index(in[j], r.vmin, r.vmax);
         CHECK(bad_index == 0);
         total += in.size();
-        for (uint32_t l = 1; l < 256; ++l) edges += keys_of(c)[l] != cmap::kSentinel;
+        const std::vector<uint32_t> ks = keys_of(c);
+        for (uint32_t l = 1; l < 256; ++l) edges += ks[l] != cmap::kSentinel;
     }
     MESSAGE(total << " inputs over " << rs.size() << " ranges, " << edges << " keys below the sentinel");
 }
@@ -140,7 +153,8 @@ TEST_CASE("colormap keys: the float guess chooses comparisons but never the leve
 TEST_CASE("colormap keys: a built-in colormap's block holds its table, and an unknown colormap is refused") {
     shaders::Cmap c{};
     CHECK(cmap::derive_block(CALIPER_CMAP_MAGMA, -1.0f, 3.0f, &c));
-    CHECK(std::memcmp(c.lut, caliper_host::colormap_lut(CALIPER_CMAP_MAGMA), sizeof c.lut) == 0);
+    const uint32_t* magma = caliper_host::colormap_lut(CALIPER_CMAP_MAGMA);
+    CHECK(colours_of(c) == std::vector<uint32_t>(magma, magma + 256));
     CHECK(c.vmin == -1.0f);
     CHECK(c.vmax == 3.0f);
     float v[3] = {-1.0f, 1.0f, 3.0f};
@@ -153,8 +167,8 @@ TEST_CASE("colormap keys: a built-in colormap's block holds its table, and an un
     }
     shaders::Cmap u{};
     CHECK_FALSE(cmap::derive_block(97, 0.0f, 1.0f, &u));
-    CHECK(keys_of(u)[255] != cmap::kSentinel);   // the keys are there; the table is zero
-    for (uint32_t k = 0; k < 256; ++k) CHECK((&u.lut[0][0])[k] == 0);
+    CHECK(keys_of(u)[255] != cmap::kSentinel);   // the keys are there; the colours are zero
+    CHECK(colours_of(u) == std::vector<uint32_t>(256, 0u));
 }
 
 TEST_CASE("colormap keys: a mapping takes an AUTO end from the statistics as the snapshot flags do") {
@@ -197,7 +211,8 @@ TEST_CASE("colormap keys: the cache derives each mapping once, keeps exact bits 
     CHECK(z != a);
     const shaders::Cmap* m = cache.block(CALIPER_CMAP_MAGMA, 0.0f, 1.0f);
     REQUIRE(m != nullptr);
-    CHECK(std::memcmp(m->lut, caliper_host::colormap_lut(CALIPER_CMAP_MAGMA), sizeof m->lut) == 0);
+    const uint32_t* magma = caliper_host::colormap_lut(CALIPER_CMAP_MAGMA);
+    CHECK(colours_of(*m) == std::vector<uint32_t>(magma, magma + 256));
     CHECK(cache.size() == 3);
     CHECK(cache.stats().misses == 3);
     // Use a again, then add a fourth: the least recently used (-0, 1) goes.
@@ -243,12 +258,12 @@ TEST_CASE("colormap keys: timing — one derivation and one cache hit") {
     // with the derived keys standing in for the reference.
     auto evaluations = [](float vmin, float vmax) {
         size_t n = 2;
-        const shaders::Cmap c = colormap_cases::block({"", vmin, vmax}, colormap_cases::lut());
+        const std::vector<uint32_t> keys = keys_of(colormap_cases::block({"", vmin, vmax}, colormap_cases::lut()));
         uint32_t from = 0x007fffffu;
         for (uint32_t l = 1; l < 256; ++l) {
-            if (keys_of(c)[l] == cmap::kSentinel) continue;
+            if (keys[l] == cmap::kSentinel) continue;
             uint32_t a = from, b = 0xff800000u;
-            while (a < b) { const uint32_t mid = a + (b - a) / 2; ++n; if (mid >= keys_of(c)[l]) b = mid; else a = mid + 1; }
+            while (a < b) { const uint32_t mid = a + (b - a) / 2; ++n; if (mid >= keys[l]) b = mid; else a = mid + 1; }
             from = a;
         }
         return n;
@@ -282,7 +297,7 @@ TEST_CASE("colormap keys: timing — one derivation and one cache hit") {
         uint32_t seen = 0;   // reads each copy, so that the copies are not elided
         for (int i = 0; i < kHits; ++i) {
             cache.fill(CALIPER_CMAP_VIRIDIS, lo[i & 3], lo[i & 3] + 1.0f, &out);
-            seen += out.keys[(i * 7) & 63][i & 3] + out.lut[(i * 13) & 63][(i >> 2) & 3];
+            seen += out.levels[(i * 7) & 255][i & 3] + out.levels[(i * 13) & 255][2];
         }
         const auto t2 = clock::now();
         CHECK(acc != 0);
@@ -290,7 +305,7 @@ TEST_CASE("colormap keys: timing — one derivation and one cache hit") {
         ns_block.push_back(std::chrono::duration<double, std::nano>(t1 - t0).count() / kHits);
         ns_fill.push_back(std::chrono::duration<double, std::nano>(t2 - t1).count() / kHits);
     }
-    std::printf("[cmap-bench] cache hit: block() median %.1f ns, fill() with the 2,080-byte copy median %.1f ns; "
+    std::printf("[cmap-bench] cache hit: block() median %.1f ns, fill() with the 4,112-byte copy median %.1f ns; "
                 "%llu hits, %llu misses; load %.2f\n", median(ns_block), median(ns_fill),
                 (unsigned long long)cache.stats().hits, (unsigned long long)cache.stats().misses, load[0]);
     std::fflush(stdout);

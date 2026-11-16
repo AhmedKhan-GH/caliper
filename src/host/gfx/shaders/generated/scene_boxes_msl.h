@@ -64,20 +64,16 @@ struct VOut {
     metal::float3 obj;
 };
 struct type_9 {
-    metal::uint4 inner[65];
-};
-struct type_10 {
-    metal::uint4 inner[64];
+    metal::uint4 inner[256];
 };
 struct Cmap {
     float vmin;
     float vmax;
     uint flip;
     uint pad;
-    type_9 keys;
-    type_10 lut;
+    type_9 levels;
 };
-struct type_12 {
+struct type_11 {
     metal::float2 inner[6];
 };
 struct BoxIn {
@@ -90,33 +86,22 @@ struct BoxIn {
     uint color_src;
     char _pad6[12];
 };
-struct type_14 {
+struct type_13 {
     uint inner[3];
 };
 
-uint key_at(
-    uint k,
-    constant Cmap& m
-) {
-    uint _e9 = m.keys.inner[k >> 2u][k & 3u];
-    return _e9;
-}
-
-bool level_ok(
+bool in_level(
     uint key,
-    uint k_1,
-    constant Cmap& m
+    metal::uint4 e
 ) {
     bool local = {};
-    uint _e2 = key_at(k_1, m);
-    if (key >= _e2) {
-        uint _e8 = key_at(k_1 + 1u, m);
-        local = key < _e8;
+    if (key >= e.x) {
+        local = key < e.y;
     } else {
         local = false;
     }
-    bool _e11 = local;
-    return _e11;
+    bool _e9 = local;
+    return _e9;
 }
 
 uint naga_f2u32(float value) {
@@ -127,69 +112,64 @@ uint naga_div(uint lhs, uint rhs) {
     return lhs / metal::select(rhs, 1u, rhs == 0u);
 }
 
-uint colormap_index(
+metal::uint4 colormap_entry(
     uint bits,
     constant Cmap& m
 ) {
-    bool local_1 = {};
-    bool local_2 = {};
     uint lo = 0u;
     uint hi = 256u;
     if ((bits & 2147483647u) > 2139095040u) {
-        return 0u;
+        metal::uint4 _e8 = m.levels.inner[0];
+        return _e8;
     }
-    uint _e16 = m.flip;
-    uint key_1 = (((bits >> 31u) != 0u) ? ~(bits) : (bits | 2147483648u)) ^ _e16;
+    uint _e19 = m.flip;
+    uint key_1 = (((bits >> 31u) != 0u) ? ~(bits) : (bits | 2147483648u)) ^ _e19;
     float v = as_type<float>(bits);
-    float _e21 = m.vmin;
-    float _e25 = m.vmax;
-    float _e28 = m.vmin;
-    uint g = metal::min(naga_f2u32((metal::clamp((v - _e21) / (_e25 - _e28), 0.0, 1.0) * 255.0) + 0.5), 255u);
-    bool _e41 = level_ok(key_1, g, m);
-    if (_e41) {
-        return g;
+    float _e24 = m.vmin;
+    float _e28 = m.vmax;
+    float _e31 = m.vmin;
+    uint g = metal::min(naga_f2u32((metal::clamp((v - _e24) / (_e28 - _e31), 0.0, 1.0) * 255.0) + 0.5), 255u);
+    metal::uint4 e_1 = m.levels.inner[g];
+    bool _e48 = in_level(key_1, e_1);
+    if (_e48) {
+        return e_1;
     }
     if (g > 0u) {
-        bool _e48 = level_ok(key_1, g - 1u, m);
-        local_1 = _e48;
-    } else {
-        local_1 = false;
-    }
-    bool _e50 = local_1;
-    if (_e50) {
-        return g - 1u;
+        metal::uint4 d = m.levels.inner[g - 1u];
+        bool _e57 = in_level(key_1, d);
+        if (_e57) {
+            return d;
+        }
     }
     if (g < 255u) {
-        bool _e59 = level_ok(key_1, g + 1u, m);
-        local_2 = _e59;
-    } else {
-        local_2 = false;
-    }
-    bool _e61 = local_2;
-    if (_e61) {
-        return g + 1u;
+        metal::uint4 u = m.levels.inner[g + 1u];
+        bool _e66 = in_level(key_1, u);
+        if (_e66) {
+            return u;
+        }
     }
     uint2 loop_bound = uint2(4294967295u);
     while(true) {
         if (metal::all(loop_bound == uint2(0u))) { break; }
         loop_bound -= uint2(loop_bound.y == 0u, 1u);
-        uint _e68 = hi;
-        uint _e69 = lo;
-        if ((_e68 - _e69) <= 1u) {
+        uint _e71 = hi;
+        uint _e72 = lo;
+        if ((_e71 - _e72) <= 1u) {
             break;
         }
-        uint _e73 = lo;
-        uint _e74 = hi;
-        uint mid = naga_div(_e73 + _e74, 2u);
-        uint _e78 = key_at(mid, m);
-        if (key_1 >= _e78) {
+        uint _e76 = lo;
+        uint _e77 = hi;
+        uint mid = naga_div(_e76 + _e77, 2u);
+        uint _e85 = m.levels.inner[mid].x;
+        if (key_1 >= _e85) {
             lo = mid;
         } else {
             hi = mid;
         }
     }
-    uint _e80 = lo;
-    return _e80;
+    uint _e89 = lo;
+    metal::uint4 _e91 = m.levels.inner[_e89];
+    return _e91;
 }
 
 metal::float4 unpack_rgba(
@@ -202,10 +182,9 @@ metal::float4 cmap_color(
     uint bits_1,
     constant Cmap& m
 ) {
-    uint _e1 = colormap_index(bits_1, m);
-    uint _e10 = m.lut.inner[_e1 >> 2u][_e1 & 3u];
-    metal::float4 _e11 = unpack_rgba(_e10);
-    return _e11;
+    metal::uint4 _e1 = colormap_entry(bits_1, m);
+    metal::float4 _e3 = unpack_rgba(_e1.z);
+    return _e3;
 }
 
 metal::float4 hidden(
@@ -299,7 +278,7 @@ metal::float4 to_target(
 metal::float2 quad_corner(
     uint c_4
 ) {
-    type_12 t_1 = type_12 {{metal::float2(0.0, -1.0), metal::float2(1.0, -1.0), metal::float2(0.0, 1.0), metal::float2(0.0, 1.0), metal::float2(1.0, -1.0), metal::float2(1.0, 1.0)}};
+    type_11 t_1 = type_11 {{metal::float2(0.0, -1.0), metal::float2(1.0, -1.0), metal::float2(0.0, 1.0), metal::float2(0.0, 1.0), metal::float2(1.0, -1.0), metal::float2(1.0, 1.0)}};
     metal::float2 _e22 = t_1.inner[metal::min(unsigned(c_4), 5u)];
     return _e22;
 }
@@ -308,15 +287,15 @@ bool clip_near(
     thread metal::float4& a,
     thread metal::float4& b
 ) {
-    bool local_3 = {};
+    bool local_1 = {};
     float za = a.z;
     float zb = b.z;
     if (za < 0.0) {
-        local_3 = zb < 0.0;
+        local_1 = zb < 0.0;
     } else {
-        local_3 = false;
+        local_1 = false;
     }
-    bool _e13 = local_3;
+    bool _e13 = local_1;
     if (_e13) {
         return false;
     }
@@ -364,8 +343,8 @@ metal::float4 segment_corner(
     metal::float2 off = (metal::float2(-(dir.y), dir.x) * (_e39.y * w)) + (dir * ((_e39.x > 0.5) ? w : -(w)));
     metal::float4 _e58 = a_1;
     metal::float4 _e59 = b_1;
-    metal::float4 e = (_e39.x > 0.5) ? _e59 : _e58;
-    metal::float4 _e72 = to_target(metal::float4(e.xy + ((off / half_vp) * e.w), e.z, e.w), frame);
+    metal::float4 e_2 = (_e39.x > 0.5) ? _e59 : _e58;
+    metal::float4 _e72 = to_target(metal::float4(e_2.xy + ((off / half_vp) * e_2.w), e_2.z, e_2.w), frame);
     return _e72;
 }
 
@@ -465,8 +444,7 @@ vertex vs_box_wireOutput vs_box_wire(
 , constant PrimParams& p [[buffer(1)]]
 , constant Cmap& m [[buffer(2)]]
 ) {
-)msl"
-R"msl(    const BoxIn in_2 = { vid, iid, {}, varyings_2.center, varyings_2.half_size, varyings_2.rotation, varyings_2.color_src };
+    const BoxIn in_2 = { vid, iid, {}, varyings_2.center, varyings_2.half_size, varyings_2.rotation, varyings_2.color_src };
     VOut o = {};
     uint axis = {};
     float s = {};
@@ -475,14 +453,15 @@ R"msl(    const BoxIn in_2 = { vid, iid, {}, varyings_2.center, varyings_2.half_
     uint _e8 = p.item_base;
     o.pick = metal::uint2(_e5, _e8 + in_2.iid);
     metal::float4 _e14 = item_color(in_2.color_src, frame, class_table, p, m);
-    o.color = _e14;
-    uint e_1 = naga_div(in_2.vid, 6u);
-    axis = naga_div(naga_mod(e_1, 4u), 2u);
-    s = ((e_1 & 1u) != 0u) ? 1.0 : -1.0;
-    t = (e_1 >= 4u) ? 1.0 : -1.0;
-    if (e_1 >= 8u) {
+)msl"
+R"msl(    o.color = _e14;
+    uint e_3 = naga_div(in_2.vid, 6u);
+    axis = naga_div(naga_mod(e_3, 4u), 2u);
+    s = ((e_3 & 1u) != 0u) ? 1.0 : -1.0;
+    t = (e_3 >= 4u) ? 1.0 : -1.0;
+    if (e_3 >= 8u) {
         axis = 2u;
-        t = ((e_1 & 2u) != 0u) ? 1.0 : -1.0;
+        t = ((e_3 & 2u) != 0u) ? 1.0 : -1.0;
     }
     metal::float4x4 _e47 = box_pose(in_2);
     metal::float4x4 _e50 = p.mvp;
@@ -530,7 +509,7 @@ vertex vs_box_solidOutput vs_box_solid(
 ) {
     const BoxIn in_3 = { vid_1, iid_1, {}, varyings_3.center, varyings_3.half_size, varyings_3.rotation, varyings_3.color_src };
     VOut o_1 = {};
-    type_14 order = type_14 {{2u, 0u, 1u}};
+    type_13 order = type_13 {{2u, 0u, 1u}};
     metal::float4 c = {};
     uint _e5 = p.pick_id;
     uint _e8 = p.item_base;

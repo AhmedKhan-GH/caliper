@@ -82,10 +82,10 @@ inline std::vector<uint32_t> inputs(const Range& r, const caliper_gfx::shaders::
         in.push_back(b + 1);
         in.push_back(b - 1);
     }
-    const uint32_t* keys = &c.keys[0][0];
     for (uint32_t k = 1; k < 256; ++k) {
-        if (keys[k] == caliper_gfx::cmap::kSentinel) continue;
-        for (int d = -1; d <= 1; ++d) in.push_back(bits_of((keys[k] + uint32_t(d)) ^ c.flip));
+        const uint32_t key = caliper_gfx::cmap::key_at(c, k);
+        if (key == caliper_gfx::cmap::kSentinel) continue;
+        for (int d = -1; d <= 1; ++d) in.push_back(bits_of((key + uint32_t(d)) ^ c.flip));
     }
     uint64_t s = seed;
     for (int i = 0; i < 65536; ++i) {   // xorshift64*

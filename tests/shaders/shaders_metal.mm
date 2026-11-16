@@ -189,7 +189,7 @@ TEST_CASE("the colormap by keys matches map_f32_to_rgba8 byte for byte through t
                                         << ": got 0x" << got[first] << ", want 0x" << want[first]);
             total += in.size();
             if (fast == 0)
-                for (int k = 1; k < 256; ++k) keys_seen += (&block.keys[0][0])[k] != 0xffffffffu;
+                for (uint32_t k = 1; k < 256; ++k) keys_seen += caliper_gfx::cmap::key_at(block, k) != 0xffffffffu;
         }
     }
     MESSAGE(total << " inputs compared over " << ranges.size() << " ranges, twice; "

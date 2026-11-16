@@ -4,8 +4,10 @@
 // each range, the Cmap block from the shared derivation (src/host/gfx/colormap_keys.h), the
 // inputs, and the RGBA that the reference map_f32_to_rgba8 gives each, with the test table.
 //
-// The file, little-endian: "CMAPCAS2", u32 ranges, then per range u32 name bytes, the name,
-// the 2,080-byte block, u32 inputs, the inputs (u32 bits) and the expected (u32 packed RGBA).
+// The file, little-endian: "CMAPCAS3", u32 ranges, u32 bytes of a block, then per range u32 name
+// bytes, the name, the block (the generated Cmap struct: the range, the flip and one 16-byte entry
+// per level, its first key, the next level's first key and its colour), u32 inputs, the inputs
+// (u32 bits) and the expected (u32 packed RGBA).
 //
 // Plain C++17 with no GPU. Outside CMake (the web workflow) it builds with one command:
 //   c++ -std=c++17 -O2 -Isrc/host -Isdk/include -Itests tests/shaders/colormap_cases_tool.cpp \
@@ -27,9 +29,10 @@ int main(int argc, char** argv) {
     }
     const auto rs = colormap_cases::ranges();
     const std::vector<uint32_t> table = colormap_cases::lut();
-    const uint32_t n = uint32_t(rs.size());
-    std::fwrite("CMAPCAS2", 1, 8, out);
+    const uint32_t n = uint32_t(rs.size()), block_bytes = uint32_t(sizeof(caliper_gfx::shaders::Cmap));
+    std::fwrite("CMAPCAS3", 1, 8, out);
     std::fwrite(&n, 4, 1, out);
+    std::fwrite(&block_bytes, 4, 1, out);
     size_t total = 0;
     for (size_t i = 0; i < rs.size(); ++i) {
         const auto& r = rs[i];
