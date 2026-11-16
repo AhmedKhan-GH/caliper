@@ -51,8 +51,12 @@ if(BUILD_TESTS)
         tests/test_resources.cpp
         tests/test_server.cpp)
     if(NOT WIN32)
-        # The loopback client and the fake server are POSIX only for now.
-        list(APPEND _mcp_test_sources tests/fake_http.cpp tests/test_http.cpp)
+        # The loopback client, the fake API and the child process are POSIX
+        # only for now.
+        list(APPEND _mcp_test_sources tests/fake_http.cpp tests/test_http.cpp tests/test_process.cpp)
     endif()
-    caliper_builder_add_tests(mcp SOURCES ${_mcp_test_sources} LIBS caliper_builder_mcp)
+    caliper_builder_add_tests(mcp SOURCES ${_mcp_test_sources} LIBS caliper_builder_mcp caliper_builder_acp)
+    add_dependencies(caliper_builder_mcp_tests caliper-mcp)
+    target_compile_definitions(caliper_builder_mcp_tests PRIVATE
+        CALIPER_MCP_EXE="$<TARGET_FILE:caliper-mcp>")
 endif()
