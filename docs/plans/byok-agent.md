@@ -219,20 +219,35 @@ The sidecar asks with `session/request_permission` before:
 
 - **every destructive command** (`loader.update`, `loader.run`, `loader.delete`, `applet.save` in the current
   table), with the options Allow (`allow_once`) and Deny (`reject_once`);
-- **every command that edits the open spec** (a mutating command of the groups `source`, `panel` and `layout`, and
-  `spec.set_text`), while the session's `review` option is `spec_changes`. The options are Allow, Allow spec changes
-  for this session (`allow_always`, which sets `review` to `destructive_only`) and Deny. Commands that replace the
-  open spec rather than edit it (`spec.new`, `spec.open`, `applet.open`) are not reviewed.
+- **every command that can preview its change**, while the session's `review` option is `spec_changes`. A command
+  can preview when its arguments schema has a boolean `dry_run`; the sidecar reads that from the table, which today
+  gives every edit of the open spec (`spec.set_text`, `source.add`, `source.patch`, `source.remove`, `panel.create`,
+  `panel.patch`, `panel.remove`, `layout.place` and `layout.set`). The options are Allow, Allow spec changes for this
+  session (`allow_always`, which sets `review` to `destructive_only`) and Deny. Commands that replace the open spec
+  rather than edit it (`spec.new`, `spec.open`, `applet.open`) take no `dry_run` and are not reviewed.
 
-The request carries the tool call with its arguments as `rawInput` and as readable text. For `spec.set_text` it also
-carries the change as a `diff`: the old text is the open spec's canonical TOML from `spec.get`, the new text is the
-argument, and the path is the spec's file under the session's folder (`applets/<id>/<id>.spec.toml` when the spec
-has not been saved). For the other spec edits the command layer offers no preview, so the request shows the arguments,
-and the tool call's final update carries the diff of what changed, from `spec.get` before and after the call. When a
-later command layer returns a preview, the request will carry that instead.
+**A diff before every spec change.** Before a reviewed edit runs, the sidecar sends the same command with
+`dry_run: true`. The session checks the change and returns it as a unified diff of the spec's canonical TOML, without
+applying it and without any effect on the undo history or the journal (see the builder session page). Then:
+
+- a preview that is refused (an unknown panel, a binding the validator rejects) is the call's result: nothing is
+  asked, the edit is never sent, and the model reads the error;
+- a preview whose diff is empty changes nothing, so the edit runs without asking;
+- otherwise the permission request carries the change as an ACP `diff`: the old text is the open spec's canonical TOML
+  from `spec.get`, the new text is that text with the command's diff applied, and the path is the spec's file under
+  the session's folder (`applets/<id>/<id>.spec.toml` when the spec has not been saved). The edit runs only after
+  Allow. If the diff cannot be applied to the text (the spec changed in between), the request shows the unified diff
+  as text instead.
+
+The preview and the edit carry the same group header. A call in which the model itself sets `dry_run: true` is a
+preview already and runs without asking. When `review` is `destructive_only`, edits run at once. Either way the tool
+call's final update carries the change as a `diff`, from the command's own result; with an app whose commands return
+no diff, the sidecar compares `spec.get` before and after the call. The request also carries the tool call's
+arguments as `rawInput` and as readable text.
 
 Deny gives the model an error result that tells it not to try the same thing in another form. A cancelled request
-cancels the turn.
+cancels the turn. `applet.save` is destructive in the table, so the sidecar asks before every save, while the session
+asks an agent only before a save that overwrites an applet.
 
 **Two approvals for one destructive command.** Caliper API holds a destructive command from the origin `agent` for the
 app's own approval (contracts section 15), so a destructive call is asked about twice: once by the sidecar and once
@@ -460,15 +475,18 @@ streams; they are written from the documented event shapes, since this stream co
 Caliper API runs on loopback in the test process.
 
 - `tests/test_loop.py`: a plain turn and the exact request it sends; a multi-tool turn with results returned together
-  and an append-only history; inputs that fail the schema or arrive cut off; `max_tokens`; a refusal; a rate limit and
+  and an append-only history; inputs that fail the schema or arrive cut off; `max_tokens`; a refusal at the start and
+  later in a turn; a rate limit and
   an overload followed by success; connection errors retried and then reported; a stream that breaks before and after
-  the pane saw it; cancellation in the middle of a stream; destructive approval allowed and denied; spec review with
-  diffs and allow-always; a capture and a rendered panel as images; a capture that the renderer cannot take; the
+  the pane saw it; cancellation in the middle of a stream; destructive approval allowed and denied; previews of spec
+  edits shown as diffs before the edits run, a preview that changes nothing, one that is refused and one the model
+  asked for, and allow-always; a capture and a rendered panel as images; a capture that the renderer cannot take; the
   cache fields across two turns; config options and the Haiku settings; a mid-reply fallback; no key and a malformed
   key; the key in no output; only the Claude API host; strict mode dropped on the first request; an app without a
   command layer; bad requests. After every test, the fixture checks that neither the key nor the session token reached
   the client or stderr.
-- `tests/test_units.py`: the tool derivation from the real table, the stripping rules, hostile tables, the validator
+- `tests/test_units.py`: the tool derivation from the real table (previewable commands included), the stripping rules,
+  hostile tables, the application of unified diffs, the validator
   and its bounds, the key's removal from the environment, the scrubber, the API file's checks, envelopes and images,
   and the echo rule after a fallback.
 - `tests/test_harness_e2e.py`: one turn through the real C++ client. `caliper-acp-harness` runs the sidecar with
@@ -543,7 +561,6 @@ Waiting for later work:
   config options, status lines from `_meta.caliper.status`, and the merged approval described above.
 - Spawning the sidecar from the app with the key store, and a packaged Python runtime with a lock file.
 - The Windows Credential Manager store.
-- Previews of spec edits from the command layer, so every spec change can be shown as a diff before it is applied.
 - Per-message effort and context editing for old captures, both betas.
 - Images and embedded resources in prompts, and `session/load`.
 - Other providers, each its own decision.
@@ -557,7 +574,8 @@ Waiting for later work:
 - **Statuses as thoughts with `_meta`**, so every ACP client shows them and Caliper's pane can style them.
 - **Tools read generically from the table**, strict where the schema allows, with the full schema checked locally.
 - **Approval before destructive commands always, and before spec edits by default**, with Allow for the session for
-  spec edits only. Diffs before the change for `spec.set_text`, after it for the other spec edits.
+  spec edits only. A dry run of each reviewed edit gives its diff before it runs; previewable commands are found in
+  the table's schemas, not in a list.
 - **A refusal takes the turn back**: the prompt and everything after it leave the history, as ACP's `refusal` means.
 - **Retry only while the pane saw nothing.**
 - **Summarized thinking and one default effort, `high`.**
@@ -575,10 +593,6 @@ Waiting for later work:
 - **The origin `agent` over Caliper API.** Section 8 says the origin is `api`, or `mcp` with `X-Caliper-Origin: mcp`;
   section 15 speaks of calls with the origin `agent`. The sidecar sends `X-Caliper-Origin: agent`, and the smallest
   fix is that the API accepts `agent` as well as `mcp` in that header.
-- **Spec diffs before every change.** Section 12 asks for the change as a diff before a spec change is applied. The
-  command layer has no preview of a command's effect, so the sidecar shows the diff before the change only for
-  `spec.set_text`, and after the change, as an undoable step, for the other spec edits; a preview command would close
-  the gap.
 - **Two approvals.** Sections 12 and 15 together ask about a destructive command from the sidecar twice; the pane
   should merge them as described above, without trusting the sidecar's answer.
 - **Fallbacks on Claude Haiku 5.5.** Section 12 turns server-side refusal fallbacks on by default; Claude Haiku 5.5 has

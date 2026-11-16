@@ -44,10 +44,9 @@ STRICT_UNSUPPORTED = frozenset({
     "minLength", "maxLength", "minItems", "maxItems", "pattern", "default",
 })
 
-# The command groups whose mutating commands edit the open spec in place.
-# spec.new, spec.open and applet.open replace the open spec rather than edit it.
-SPEC_EDIT_GROUPS = frozenset({"source", "panel", "layout"})
-SPEC_EDIT_COMMANDS = frozenset({"spec.set_text"})
+# The argument through which a command previews its change: with it set, the
+# command checks the change and returns its diff without applying it.
+PREVIEW_ARG = "dry_run"
 
 
 class TableError(Exception):
@@ -73,9 +72,16 @@ class Command:
         return self.name.split(".", 1)[1]
 
     @property
-    def edits_spec(self) -> bool:
-        """The command changes the open spec in place (and can be undone)."""
-        return self.mutates and (self.group in SPEC_EDIT_GROUPS or self.name in SPEC_EDIT_COMMANDS)
+    def previewable(self) -> bool:
+        """The command changes something and can preview the change: its args
+        schema has a boolean `dry_run`. Read from the schema, so the set of such
+        commands follows the table (today, every edit of the open spec)."""
+        props = self.args.get("properties")
+        arg = props.get(PREVIEW_ARG) if isinstance(props, dict) else None
+        if not self.mutates or not isinstance(arg, dict):
+            return False
+        types = arg.get("type")
+        return types == "boolean" or (isinstance(types, list) and "boolean" in types)
 
 
 @dataclass(frozen=True)

@@ -15,13 +15,15 @@ pane, then acts on how the reply ended:
   result (`cancelled` for those that did not finish) and the turn ends with
   `cancelled`.
 
-Approval: before a destructive command runs, and before a command that edits the
-open spec when the session reviews spec changes, the loop sends
-`session/request_permission` and acts on the answer. A request for
-`spec.set_text` carries the change as a diff, since its new text is known; for
-other spec edits the diff of what changed is sent once the command has run.
-Caliper itself may also hold a destructive command for the person's approval;
-the call then just takes longer.
+Approval: before a destructive command runs, and before a command that can
+preview its change (one that takes `dry_run`) when the session reviews spec
+changes, the loop sends `session/request_permission` and acts on the answer. For
+a previewable command it first sends the same command with `dry_run: true`: a
+preview that is refused is the call's result and nothing is asked; an empty diff
+runs the command without asking; otherwise the request carries the change as an
+ACP diff, and the command runs only when it is allowed. Caliper itself may also
+hold a destructive command for the person's approval; the call then just takes
+longer.
 """
 
 from __future__ import annotations
@@ -41,7 +43,8 @@ from .claude import tool_input_text
 from .keyguard import scrub
 from .provider import AgentError, Provider, RequestResult, Settings, ToolCall, ToolOutcome
 from .schema import validate
-from .tools import ToolSpec, acp_tool_kind
+from .tools import PREVIEW_ARG, ToolSpec, acp_tool_kind
+from .udiff import apply_unified_diff
 
 log = logging.getLogger("caliper_agent.loop")
 
@@ -274,12 +277,23 @@ class TurnRunner:
             sink.finish(call.id, "failed", [text_content(f"Not run: {problem}")])
             return ToolOutcome(call.id, text, is_error=True)
 
-        edits_spec = command.edits_spec
-        before = await self._api.spec_text() if edits_spec else None
+        previewable = command.previewable and args.get(PREVIEW_ARG) is not True
+        before = await self._api.spec_text() if previewable else None
 
-        ask = command.destructive or (edits_spec and self._s.review == REVIEW_SPEC_CHANGES)
+        preview_diff: str | None = None
+        if previewable and self._s.review == REVIEW_SPEC_CHANGES:
+            preview = await self._api.call(command.name, {**args, PREVIEW_ARG: True}, group)
+            if not preview.ok:
+                # The change itself is refused; the real call would be too.
+                sink.finish(call.id, "failed", [text_content(_pane_text(preview.text))],
+                            raw_output={"error": preview.error_code})
+                return ToolOutcome(call.id, scrub(preview.text), is_error=True)
+            diff = preview.result.get("diff") if isinstance(preview.result, dict) else None
+            preview_diff = diff if isinstance(diff, str) else None
+        # A preview that changes nothing needs no approval.
+        ask = command.destructive or (previewable and self._s.review == REVIEW_SPEC_CHANGES and preview_diff != "")
         if ask:
-            decision = await self._ask(call, command, args, before)
+            decision = await self._ask(call, command, args, before, preview_diff)
             if decision == "cancelled":
                 sink.finish(call.id, "failed", [text_content("Cancelled.")])
                 return ToolOutcome(call.id, "Cancelled by the user.", is_error=True, cancelled=True)
@@ -292,14 +306,26 @@ class TurnRunner:
 
         sink.update({"sessionUpdate": "tool_call_update", "toolCallId": call.id, "status": "in_progress"})
         out = await self._api.call(command.name, args, group)
-        return await self._report(call, command, out, before, edits_spec)
+        return await self._report(call, command, out, before, previewable)
 
-    async def _ask(self, call: ToolCall, command, args: dict, before: tuple[str, str] | None) -> str:
+    def _diff_content(self, before: tuple[str, str] | None, diff: str | None) -> dict | None:
+        """The change as an ACP diff (old and new text), else as the unified diff in a text block."""
+        if not isinstance(diff, str) or diff == "":
+            return None
+        if before is not None:
+            after = apply_unified_diff(before[0], diff)
+            if after is not None:
+                return {"type": "diff", "path": _diff_path(self._s.cwd, before[1]), "oldText": before[0],
+                        "newText": after}
+        return text_content(_pane_text("```diff\n" + diff.rstrip("\n") + "\n```"))
+
+    async def _ask(self, call: ToolCall, command, args: dict, before: tuple[str, str] | None,
+                   preview_diff: str | None) -> str:
         """Sends session/request_permission; returns allowed, rejected or cancelled."""
         content = [text_content(_describe_call(command.name, args))]
-        if command.name == "spec.set_text" and before is not None and isinstance(args.get("text"), str):
-            content.insert(0, {"type": "diff", "path": _diff_path(self._s.cwd, before[1]),
-                               "oldText": before[0], "newText": args["text"]})
+        shown = self._diff_content(before, preview_diff)
+        if shown is not None:
+            content.insert(0, shown)
         if command.destructive:
             options = [{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
                        {"optionId": "reject", "name": "Deny", "kind": "reject_once"}]
@@ -328,13 +354,19 @@ class TurnRunner:
             return "allowed"
         return "rejected"
 
-    async def _report(self, call: ToolCall, command, out: ToolOutput, before, edits_spec: bool) -> ToolOutcome:
+    async def _report(self, call: ToolCall, command, out: ToolOutput, before, previewable: bool) -> ToolOutcome:
         content: list[dict] = []
-        if out.ok and edits_spec and before is not None:
-            after = await self._api.spec_text()
-            if after is not None and after[0] != before[0]:
-                content.append({"type": "diff", "path": _diff_path(self._s.cwd, after[1]),
-                                "oldText": before[0], "newText": after[0]})
+        if out.ok and previewable and before is not None:
+            diff = out.result.get("diff") if isinstance(out.result, dict) else None
+            shown = self._diff_content(before, diff) if isinstance(diff, str) else None
+            if shown is None and not isinstance(diff, str):
+                # An app whose commands return no diff: compare the spec before and after.
+                after = await self._api.spec_text()
+                if after is not None and after[0] != before[0]:
+                    shown = {"type": "diff", "path": _diff_path(self._s.cwd, after[1]),
+                             "oldText": before[0], "newText": after[0]}
+            if shown is not None:
+                content.append(shown)
         content.append(text_content(_pane_text(out.text)))
         if out.png is not None:
             content.append({"type": "content", "content": {"type": "image", "mimeType": "image/png",

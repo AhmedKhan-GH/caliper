@@ -17,6 +17,7 @@ from caliper_agent.caliper_api import (ApiFileError, MAX_IMAGE_BYTES, default_ap
                                        parse_api_file, png_size)
 from caliper_agent.claude import NO_SERVER_FALLBACK, api_tool, echo_content, model_ids
 from caliper_agent.schema import MAX_DEPTH, validate
+from caliper_agent.udiff import apply_unified_diff
 from caliper_agent.tools import (STRICT_UNSUPPORTED, TableError, acp_tool_kind, command_name, derive_tools,
                                  is_strict_compatible, load_command_table, parse_command_table, strip_for_strict,
                                  tool_name)
@@ -49,8 +50,12 @@ def test_every_command_of_the_real_table_becomes_a_strict_tool():
     by_name = {t.name: t for t in tools}
     assert "Caliper asks the user" in by_name["applet_save"].description
     assert "Caliper asks the user" not in by_name["catalog_list"].description
-    assert by_name["panel_create"].command.edits_spec and not by_name["spec_new"].command.edits_spec
-    assert by_name["spec_set_text"].command.edits_spec and not by_name["catalog_list"].command.edits_spec
+    # Previewable commands come from the schema: a boolean dry_run on a mutating command.
+    previewable = sorted(t.command.name for t in tools if t.command.previewable)
+    assert previewable == sorted(c["name"] for c in json.loads(COMMAND_TABLE.read_text())["commands"]
+                                 if c["mutates"] and "dry_run" in c["args"].get("properties", {}))
+    assert "panel.create" in previewable and "spec.set_text" in previewable
+    assert "spec.new" not in previewable and "catalog.list" not in previewable
 
 
 def test_names_are_reversible_and_kinds_follow_the_flags():
@@ -309,3 +314,24 @@ def test_echo_after_a_mid_reply_fallback():
 def test_models():
     assert model_ids() == ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2")
     assert NO_SERVER_FALLBACK == {"claude-haiku-5-5"}
+
+
+# ---- applying a unified diff ------------------------------------------------------------------
+
+
+def test_unified_diffs_apply_and_mismatches_are_refused():
+    import difflib
+    old = "".join(f"line {i}\n" for i in range(30))
+    new = old.replace("line 3\n", "line three\n").replace("line 20\n", "").replace("line 29\n",
+                                                                                    "line 29\nline 30\n")
+    diff = "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), "before", "after"))
+    assert apply_unified_diff(old, diff) == new
+    assert apply_unified_diff(old, "") == old
+    assert apply_unified_diff("", "--- before\n+++ after\n@@ -0,0 +1,2 @@\n+a\n+b\n") == "a\nb\n"
+    # The marker of a last line without a line feed, as `diff -u` writes it.
+    assert apply_unified_diff("a\nb", "--- before\n+++ after\n@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n"
+                              "+c\n\\ No newline at end of file\n") == "a\nc"
+    assert apply_unified_diff("x\n" + old, diff) is None          # the context no longer matches
+    assert apply_unified_diff(old, "--- before\n+++ after\n@@ the diff could not be computed @@\n") is None
+    assert apply_unified_diff(old, "--- before\n+++ after\n") is None
+    assert apply_unified_diff(old, diff.replace("@@ -1,7", "@@ -1,9")) is None  # counts that disagree

@@ -298,27 +298,67 @@ def test_destructive_command_asks_and_acts_on_the_answer(run_agent, caliper):
     assert denied["is_error"] and "denied" in denied["content"][0]["text"]
 
 
-def test_spec_changes_are_reviewed_and_shown_as_diffs(run_agent, caliper):
-    new_text = caliper.spec_text + '\n[[source]]\nid = "loss"\nsql = "SELECT 1"\n'
-    steps = [message(tool_use("toolu_p", "panel_create", {"id": "heat", "primitive": "heatmap", "bind": {"values": "entropy"}}),
+def test_spec_edits_are_previewed_and_shown_as_diffs_before_they_run(run_agent, caliper):
+    before_text = caliper.spec_text
+    new_text = before_text + '\n[[source]]\nid = "loss"\nsql = "SELECT 1"\n'
+    panel = {"id": "heat", "primitive": "heatmap", "bind": {"values": "entropy"}}
+    steps = [message(tool_use("toolu_p", "panel_create", panel),
                      tool_use("toolu_t", "spec_set_text", {"text": new_text}), stop="tool_use"),
              message(text("Done."))]
     agent, _ = run_agent(steps)
     sid = agent.start_session("/tmp/ws")
     asked = []
-    response, updates = agent.prompt(sid, "Add a heatmap", on_permission=lambda p: asked.append(p) or allow(p))
+
+    def answer(params):
+        asked.append(params)
+        # When the person is asked, the change has not been applied yet.
+        assert len(caliper.commands(params["toolCall"]["rawInput"] and
+                                    {"toolu_p": "panel.create", "toolu_t": "spec.set_text"}[
+                                        params["toolCall"]["toolCallId"]])) == 0
+        return allow(params)
+
+    response, updates = agent.prompt(sid, "Add a heatmap", on_permission=answer)
     assert response["result"]["stopReason"] == "end_turn"
     assert [p["toolCall"]["toolCallId"] for p in asked] == ["toolu_p", "toolu_t"]
-    # The spec.set_text request shows the change before it is applied.
-    diff = asked[1]["toolCall"]["content"][0]
-    assert diff["type"] == "diff" and diff["path"] == "/tmp/ws/applets/demo/demo.spec.toml"
-    assert diff["newText"] == new_text and diff["oldText"].startswith("caliper_spec = 0")
-    # panel.create shows what changed once it has run.
+    # Each edit was previewed with dry_run and then run once, after the answer.
+    for name in ("panel.create", "spec.set_text"):
+        assert len(caliper.commands(name, dry=True)) == 1 and len(caliper.commands(name)) == 1
+        assert caliper.commands(name, dry=True)[0]["group"] == caliper.commands(name)[0]["group"]
+    panel_diff = asked[0]["toolCall"]["content"][0]
+    assert panel_diff["type"] == "diff" and panel_diff["path"] == "/tmp/ws/applets/demo/demo.spec.toml"
+    assert panel_diff["oldText"] == before_text and 'id = "heat"' in panel_diff["newText"]
+    text_diff = asked[1]["toolCall"]["content"][0]
+    assert text_diff["oldText"] == panel_diff["newText"] and text_diff["newText"] == new_text
+    # The completed call shows what changed, from the command's own diff.
     done = next(u for u in updates if u["sessionUpdate"] == "tool_call_update" and u["toolCallId"] == "toolu_p"
                 and u.get("status") == "completed")
-    after_diff = done["content"][0]
-    assert after_diff["type"] == "diff" and 'id = "heat"' in after_diff["newText"]
-    assert 'id = "heat"' not in after_diff["oldText"]
+    assert done["content"][0] == panel_diff
+
+
+def test_a_preview_without_change_or_refused_asks_nothing(run_agent, caliper):
+    caliper.spec_text += '\n[[panel]]\nid = "demo"\nprimitive = "text"\n'
+    same = caliper.spec_text
+    steps = [message(tool_use("t_same", "spec_set_text", {"text": same}),
+                     tool_use("t_dup", "panel_create", {"id": "demo", "primitive": "text"}),
+                     tool_use("t_own", "panel_create", {"id": "heat", "primitive": "heatmap",
+                                                        "bind": {"values": "x"}, "dry_run": True}),
+                     stop="tool_use"),
+             message(text("Nothing to do."))]
+    agent, record = run_agent(steps)
+    sid = agent.start_session()
+    asked = []
+    response, updates = agent.prompt(sid, "Tidy", on_permission=lambda p: asked.append(p) or allow(p))
+    assert response["result"]["stopReason"] == "end_turn"
+    assert asked == []
+    # An empty diff runs the edit, which changes nothing; a refused preview is
+    # the call's result and the edit never runs; the model's own dry run is
+    # sent once, as asked.
+    assert len(caliper.commands("spec.set_text")) == 1
+    assert len(caliper.commands("panel.create", dry=None)) == 2
+    assert len(caliper.commands("panel.create", dry=True)) == 2
+    results = {r["tool_use_id"]: r for r in read_requests(record)[1]["body"]["messages"][-1]["content"]}
+    assert results["t_dup"]["is_error"] and "panel.exists" in results["t_dup"]["content"][0]["text"]
+    assert "is_error" not in results["t_own"] and '"applied": false' in results["t_own"]["content"][0]["text"]
 
 
 def test_allow_always_stops_asking_for_spec_changes_but_not_for_destructive_ones(run_agent, caliper):
@@ -340,6 +380,8 @@ def test_allow_always_stops_asking_for_spec_changes_but_not_for_destructive_ones
     assert response["result"]["stopReason"] == "end_turn"
     assert asked == ["t1", "t3"]
     assert len(caliper.commands("panel.create")) == 2 and len(caliper.commands("loader.delete")) == 1
+    # Only the reviewed edit was previewed.
+    assert len(caliper.commands("panel.create", dry=True)) == 1
 
 
 def test_capture_comes_back_as_an_image(run_agent, caliper):

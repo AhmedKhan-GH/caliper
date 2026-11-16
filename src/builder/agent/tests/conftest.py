@@ -7,6 +7,7 @@ file a test writes is under pytest's tmp_path.
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import queue
@@ -126,6 +127,15 @@ class FakeCaliper:
                                "group": handler.headers.get("X-Caliper-Group"),
                                "host": handler.headers.get("Host")})
 
+    def _edit(self, args: dict, new_text: str, result: dict) -> dict:
+        """A spec edit as the session answers it: the diff, and no change on a dry run."""
+        diff = "".join(difflib.unified_diff(self.spec_text.splitlines(keepends=True),
+                                            new_text.splitlines(keepends=True), "before", "after"))
+        applied = not args.get("dry_run", False) and diff != ""
+        if applied:
+            self.spec_text = new_text
+        return {"ok": True, "result": {**result, "warnings": [], "diff": diff, "applied": applied}}
+
     def run(self, name: str, args: dict) -> dict:
         if name in self.handlers:
             return self.handlers[name](args)
@@ -133,8 +143,13 @@ class FakeCaliper:
             return {"ok": True, "result": {"id": "demo", "path": "applets/demo/demo.spec.toml", "dirty": True,
                                            "text": self.spec_text, "json": {}}}
         if name == "panel.create":
-            self.spec_text += f'\n[[panel]]\nid = "{args.get("id")}"\nprimitive = "{args.get("primitive")}"\n'
-            return {"ok": True, "result": {"id": args.get("id"), "warnings": []}}
+            if f'id = "{args.get("id")}"' in self.spec_text:
+                return {"ok": False, "error": {"code": "panel.exists", "message": "The panel exists.",
+                                               "where": "args.id"}}
+            new_text = self.spec_text + f'\n[[panel]]\nid = "{args.get("id")}"\nprimitive = "{args.get("primitive")}"\n'
+            return self._edit(args, new_text, {"id": args.get("id")})
+        if name == "spec.set_text":
+            return self._edit(args, args["text"], {"id": "demo"})
         if name == "panel.render":
             import base64
             return {"ok": True, "result": {"png_base64": base64.b64encode(tiny_png(8, 5)).decode(),
@@ -144,10 +159,14 @@ class FakeCaliper:
                                            "truncated": False, "warnings": []}}
         return {"ok": True, "result": {}}
 
-    def commands(self, name: str | None = None) -> list[dict]:
+    def commands(self, name: str | None = None, *, dry: bool | None = False) -> list[dict]:
+        """The command calls received; by default without the dry runs (dry=None: all)."""
         with self._lock:
             out = [c for c in self.calls if c["path"].startswith("/v0/commands/")]
-        return [c for c in out if name is None or c["path"] == f"/v0/commands/{name}"]
+        out = [c for c in out if name is None or c["path"] == f"/v0/commands/{name}"]
+        if dry is None:
+            return out
+        return [c for c in out if bool((c["args"] or {}).get("dry_run")) == dry]
 
     def close(self) -> None:
         self.server.shutdown()

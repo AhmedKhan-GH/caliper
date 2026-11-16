@@ -91,15 +91,18 @@ def test_a_turn_through_the_cpp_client(tmp_path):
 
     asked = [p["tool_call"]["id"] for p in by_type["permission_request"]]
     assert asked == ["toolu_panel", "toolu_save"]
+    # The panel's permission request shows the change before it is made.
+    preview = [c for c in by_type["permission_request"][0]["tool_call"]["content"] if c["type"] == "diff"]
+    assert preview and preview[0]["new_text"] == panel_diff[0]["new_text"]
     assert all(a["option_kind"] == "allow_once" for a in by_type["permission_answer"])
 
     result = by_type["result"][0]
     assert result["ok"] is True and result["stop_reason"] == "end_turn"
 
-    commands = [(c["path"], c["origin"]) for c in fake.calls if c["path"].startswith("/v0/commands/")
-                and c["path"] != "/v0/commands/spec.get"]
-    assert commands == [("/v0/commands/catalog.list", "agent"), ("/v0/commands/panel.create", "agent"),
-                        ("/v0/commands/applet.save", "agent")]
+    commands = [(c["path"], c["origin"], bool((c["args"] or {}).get("dry_run"))) for c in fake.calls
+                if c["path"].startswith("/v0/commands/") and c["path"] != "/v0/commands/spec.get"]
+    assert commands == [("/v0/commands/catalog.list", "agent", False), ("/v0/commands/panel.create", "agent", True),
+                        ("/v0/commands/panel.create", "agent", False), ("/v0/commands/applet.save", "agent", False)]
     assert fake.calls[-1]["path"] == "/v0/capture.png"
 
     requests = read_requests(record)
