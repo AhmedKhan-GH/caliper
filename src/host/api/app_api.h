@@ -97,6 +97,14 @@ public:
     // Revokes that file's token and removes the file.
     void revoke_agent_file(const std::string& path);
 
+    // The link of the browser viewer of the saved spec applet `applet` (its
+    // workspace id): spec_url + "&applet=<id>", with the viewer token, which
+    // opens the spec page and its reads only (api_server.h, THE SPEC PAGE).
+    // Never the person's session token nor the API file's: "" with the
+    // reason when the link would carry either, when the API is not running,
+    // when this build has no spec page, or when `applet` is not an id.
+    std::string viewer_link(const std::string& applet, std::string* why) const;
+
 private:
     std::string file_json(const std::string& token) const;
     std::unique_ptr<caliper_api::Server> server_;

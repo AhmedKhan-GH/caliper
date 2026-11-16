@@ -279,6 +279,53 @@ Error validate_node(const json& s, const json& v, const std::string& where, std:
     return {};
 }
 
+// Whether null passes the schema's type and enum; a schema without either admits it.
+bool admits_null(const json& s) {
+    if (s.is_boolean()) return s.get<bool>();
+    if (!s.is_object()) return true;
+    if (s.contains("type")) {
+        const json& t = s["type"];
+        bool null_type = false;
+        if (t.is_string()) null_type = t.get<std::string>() == "null";
+        else if (t.is_array())
+            for (const auto& one : t) null_type = null_type || (one.is_string() && one.get<std::string>() == "null");
+        if (!null_type) return false;
+    }
+    if (s.contains("enum") && s["enum"].is_array()) {
+        const json& e = s["enum"];
+        return std::find(e.begin(), e.end(), json(nullptr)) != e.end();
+    }
+    return true;
+}
+
+std::size_t drop_null_node(const json& s, json& v, std::size_t depth) {
+    if (depth > CommandSchemaLimits::max_schema_depth || !s.is_object()) return 0;
+    std::size_t dropped = 0;
+    if (v.is_object()) {
+        const json* props = s.contains("properties") && s["properties"].is_object() ? &s["properties"] : nullptr;
+        if (!props) return 0;
+        const json* required = s.contains("required") && s["required"].is_array() ? &s["required"] : nullptr;
+        for (auto it = v.begin(); it != v.end();) {
+            const auto p = props->find(it.key());
+            if (p == props->end()) {
+                ++it;
+                continue;
+            }
+            const bool is_required = required && std::find(required->begin(), required->end(), json(it.key())) != required->end();
+            if (it->is_null() && !is_required && !admits_null(*p)) {
+                it = v.erase(it);
+                ++dropped;
+                continue;
+            }
+            dropped += drop_null_node(*p, *it, depth + 1);
+            ++it;
+        }
+    } else if (v.is_array() && s.contains("items")) {
+        for (auto& item : v) dropped += drop_null_node(s["items"], item, depth + 1);
+    }
+    return dropped;
+}
+
 bool is_object_schema(const json& s) {
     if (!s.is_object()) return false;
     if (s.contains("properties")) return true;
@@ -369,6 +416,15 @@ Error validate_command_value(const json& schema, const json& value, std::string_
     } catch (const std::exception& e) {
         // Only a schema that check_command_schema() would refuse gets here.
         return bad_schema(std::string("The schema could not be applied: ") + e.what(), std::string(root));
+    }
+}
+
+std::size_t drop_null_optional_args(const json& schema, json* value) {
+    if (!value || !value->is_object()) return 0;
+    try {
+        return drop_null_node(schema, *value, 0);
+    } catch (const std::exception&) {
+        return 0;   // a schema that check_command_schema() would refuse
     }
 }
 

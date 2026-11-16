@@ -49,6 +49,10 @@ bool SessionBuilderPort::can_undo() const { return session_.registry().history_s
 
 bool SessionBuilderPort::can_redo() const { return session_.registry().history_state(1).can_redo; }
 
+std::vector<std::string> SessionBuilderPort::dim_names(const std::string& catalog_id) const {
+    return names_ ? names_(catalog_id) : std::vector<std::string>();
+}
+
 // ---- rows -------------------------------------------------------------------------------
 
 const char* pane_group_label(PaneSource::Group g) {
@@ -338,6 +342,7 @@ void BuilderPane::focus_panel(const std::string& id) {
 }
 
 void BuilderPane::focus_source(const std::string& key) {
+    if (key != focus_source_) transform_note_.clear();
     focus_source_ = key;
     if (!key.empty()) focus_panel_.clear();
     shapes_.reset();
@@ -885,6 +890,7 @@ std::vector<PaneShape> BuilderPane::transform_shapes() {
     std::vector<PaneShape> out;
     if (const spec::Source* s = spec_source()) {
         out = pane_transform_shapes(open_->spec, s->id, port_->resolver());
+        if (s->catalog) pane_name_dims(out, s->transforms, port_->dim_names(*s->catalog));
     } else if (const PaneSource* r = find_source(focus_source_)) {
         out.push_back(r->shape);
     }
@@ -931,7 +937,87 @@ bool BuilderPane::set_transform(size_t index, const json& transform) {
     for (size_t i = 0; i < s->transforms.size(); ++i) all.push_back(i == index ? transform : transform_json(s->transforms[i]));
     PanePlan plan = simulate({invocation("source.patch", {{"id", s->id}, {"patch", {{"transform", all}}}})});
     plan.focus_source = "spec:" + s->id;
+    transform_note_.clear();
     return run_plan(std::move(plan), "transform." + std::to_string(index));
+}
+
+std::vector<std::string> BuilderPane::transform_axes(size_t index) {
+    std::vector<std::string> out;
+    const std::vector<PaneShape> shapes = transform_shapes();
+    if (index >= shapes.size() || !shapes[index].known || shapes[index].tabular) return out;
+    const PaneShape& in = shapes[index];
+    for (size_t a = 0; a < in.dims.size(); ++a)
+        out.push_back(pane_axis_text((int64_t)a, in.dims[a], a < in.names.size() ? in.names[a] : std::string()));
+    return out;
+}
+
+namespace {
+
+// The size of a step's axis on its input, or -1 when not known.
+int64_t axis_size(const std::vector<PaneShape>& shapes, size_t index, int64_t axis) {
+    if (index >= shapes.size() || !shapes[index].known || shapes[index].tabular) return -1;
+    const auto rank = (int64_t)shapes[index].dims.size();
+    if (axis < -rank || axis >= rank) return -1;
+    return shapes[index].dims[(size_t)(axis < 0 ? axis + rank : axis)];
+}
+
+}  // namespace
+
+std::string BuilderPane::transform_index_range(size_t index) {
+    const spec::Source* s = spec_source();
+    if (!s || index >= s->transforms.size() || s->transforms[index].op != spec::TransformOp::slice ||
+        s->transforms[index].axis.empty())
+        return {};
+    return pane_index_range(axis_size(transform_shapes(), index, s->transforms[index].axis.front()));
+}
+
+bool BuilderPane::set_slice_index(size_t index, int64_t value) {
+    if (blocked()) return false;
+    const spec::Source* s = spec_source();
+    if (!s || index >= s->transforms.size() || s->transforms[index].op != spec::TransformOp::slice)
+        return refuse(Error("source.not_found", "No slice there.", ""));
+    const int64_t axis = s->transforms[index].axis.empty() ? 0 : s->transforms[index].axis.front();
+    const int64_t size = axis_size(transform_shapes(), index, axis);
+    bool clamped = false;
+    const int64_t kept = pane_clamp_index(value, size, &clamped);
+    json t = transform_json(s->transforms[index]);
+    t["index"] = kept;
+    t.erase("start");
+    t.erase("stop");
+    t.erase("step");
+    if (!set_transform(index, t)) return false;
+    if (clamped) {
+        transform_note_ = std::to_string(value) + " is outside " + pane_index_range(size);
+        transform_note_step_ = index;
+    }
+    return true;
+}
+
+bool BuilderPane::set_transform_axis(size_t index, int64_t axis) {
+    if (blocked()) return false;
+    const spec::Source* s = spec_source();
+    if (!s || index >= s->transforms.size()) return refuse(Error("source.not_found", "No transform there.", ""));
+    const spec::Transform& was = s->transforms[index];
+    json t = transform_json(was);
+    t["axis"] = axis;
+    bool clamped = false;
+    int64_t asked = 0;
+    const int64_t size = axis_size(transform_shapes(), index, axis);
+    if (was.op == spec::TransformOp::slice && was.index) {
+        asked = *was.index;
+        t["index"] = pane_clamp_index(asked, size, &clamped);
+    }
+    if (!set_transform(index, t)) return false;
+    if (clamped) {
+        transform_note_ = std::to_string(asked) + " is outside " + pane_index_range(size);
+        transform_note_step_ = index;
+    }
+    return true;
+}
+
+std::string BuilderPane::canvas_hint() const {
+    if (!build_ || !open_ || !open_->spec.panels.empty()) return {};
+    return "Drop a data file, or pick a source in Sources";
 }
 
 bool BuilderPane::remove_transform(size_t index) {

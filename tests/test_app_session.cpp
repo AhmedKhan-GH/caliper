@@ -646,6 +646,40 @@ TEST_CASE("app session: an agent's spec edit is held with its diff in the pendin
     CHECK(json::parse(gateway->approval_json(id))["state"] == "decided");
 }
 
+// The app shows the spec page for every applet.open that succeeds, from any
+// origin, and for a new or opened spec of an agent (the origins agent and
+// mcp), since the person reviews an agent's edits on that page and would
+// otherwise not see the spec the side chat's agent builds from the live page.
+// The person's own spec.new (F3, a drop) shows the page by its own path, in
+// build mode, and a program with the person's token (api) leaves the page alone.
+TEST_CASE("app session: the spec page shows for every applet.open and for an agent's new or opened spec") {
+    TempDir t("specs-opened");
+    FrameLoop loop;
+    loop.run(options(t.str("ws")));
+    cb::Session& s = loop.open();
+    auto opened = [&](uint64_t want) {
+        const auto until = std::chrono::steady_clock::now() + 5s;
+        while (loop.session.specs_opened() != want && std::chrono::steady_clock::now() < until)
+            std::this_thread::sleep_for(2ms);
+        return loop.session.specs_opened();
+    };
+    REQUIRE(call(s, inv("spec.new", {{"id", "mine"}, {"title", "Mine"}})).ok);   // ui
+    CHECK(opened(0) == 0);
+    REQUIRE(call(s, inv("applet.save")).ok);
+    REQUIRE(call(s, inv("spec.new", {{"id", "theirs"}, {"title", "Theirs"}}, cb::CommandOrigin::agent)).ok);
+    CHECK(opened(1) == 1);
+    REQUIRE(call(s, inv("applet.save")).ok);
+    REQUIRE(call(s, inv("spec.open", {{"path", "applets/mine/mine.spec.toml"}}, cb::CommandOrigin::mcp)).ok);
+    CHECK(opened(2) == 2);
+    REQUIRE(call(s, inv("spec.new", {{"id", "program"}, {"title", "Program"}}, cb::CommandOrigin::api)).ok);
+    CHECK(opened(2) == 2);
+    CHECK_FALSE(call(s, inv("spec.new", {{"id", "Bad Id"}}, cb::CommandOrigin::agent)).ok);
+    CHECK(opened(2) == 2);
+    REQUIRE(call(s, inv("applet.save")).ok);
+    REQUIRE(call(s, inv("applet.open", {{"id", "theirs"}})).ok);   // ui
+    CHECK(opened(3) == 3);
+}
+
 TEST_CASE("spec page: Command K and Escape have one meaning each, by whether a panel has the focus") {
     using caliper_host::spec_key_action;
     using A = caliper_host::SpecKeyAction;

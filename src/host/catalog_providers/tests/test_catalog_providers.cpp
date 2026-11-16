@@ -511,6 +511,33 @@ TEST_CASE("catalog/live: views list with their kinds; a view before its first sn
     CHECK(catalog.sample("live:loss", {}).error.code == "catalog.no_data");
 }
 
+// The names of a view's dims, for the builder's Properties: one per dim of
+// its shape, as the stream's payload axes give them, or none.
+TEST_CASE("catalog/live: a view's dim names, when its axes give one per dim") {
+    FakeClock clock;
+    LiveCatalog::Options options;
+    options.clock = clock.fn();
+    LiveCatalog cat(options);
+    const std::vector<float> heat(2 * 3, 1.0f);
+    LiveCatalog::ViewFrame named = f32_frame("attn.entropy", CALIPER_LIVE_KIND_HEATMAP, 1, {2, 3}, heat);
+    named.dims = {"layer", "head"};
+    LiveCatalog::ViewFrame odd = f32_frame("odd", CALIPER_LIVE_KIND_HEATMAP, 1, {2, 3}, heat);
+    odd.dims = {"layer"};   // not one per dim
+    LiveCatalog::ViewFrame waiting;
+    waiting.name = "loss";
+    waiting.kind = CALIPER_LIVE_KIND_SERIES;
+    waiting.dims = {"step"};   // no payload yet
+    cat.apply(true, "clp-1", {named, odd, waiting, f32_frame("plain", CALIPER_LIVE_KIND_HEATMAP, 1, {2, 3}, heat)});
+    CHECK(cat.dim_names("live:attn.entropy") == std::vector<std::string>{"layer", "head"});
+    CHECK(cat.dim_names("live:odd").empty());
+    CHECK(cat.dim_names("live:loss").empty());
+    CHECK(cat.dim_names("live:plain").empty());
+    CHECK(cat.dim_names("live:none").empty());
+    CHECK(cat.dim_names("tensor:attn.entropy").empty());
+    cat.apply(false, {}, {});
+    CHECK(cat.dim_names("live:attn.entropy").empty());
+}
+
 TEST_CASE("catalog/live: a wanted view is copied at every snapshot, an idle one once a second; the rate") {
     FakeClock clock;
     LiveCatalog::Options options;
@@ -726,9 +753,13 @@ TEST_CASE("catalog/live: update() reads the typed live views of a core, as the a
     map.axes = {{"layer", 0, 1, 3, 3}, {"q", 0, 1, 2, 2}, {"k", 0, 1, 3, 3}};
     map.tile_rows = 2;
     map.tile_cols = 2;
+    CHECK(cat.dim_names("live:attn").empty());   // the identity map names nothing
     REQUIRE(caliper_live_views::set_payload_map(c.core, "attn", map));
     cat.update(c.core, "clp-test");
     CHECK(cat.describe("live:attn").entry->shape == std::vector<std::int64_t>{3, 2, 3});
+    // Its dims are named by the payload's axes.
+    CHECK(cat.dim_names("live:attn") == std::vector<std::string>{"layer", "q", "k"});
+    CHECK(cat.dim_names("live:loss").empty());
     heat[1] = 8.0f;   // a new snapshot, so that the cells are copied
     REQUIRE(c.apply("attn", CALIPER_LIVE_KIND_HEATMAP, heat, {4, 6}, 3));
     REQUIRE(caliper_live_views::set_payload_map(c.core, "attn", map));

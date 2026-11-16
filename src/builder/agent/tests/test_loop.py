@@ -306,6 +306,23 @@ def test_strict_mode_is_dropped_when_the_api_refuses_it_on_the_first_request(run
 # ---- the loop (function route) ------------------------------------------------------------------
 
 
+def test_null_optional_arguments_are_left_out_as_the_command_layer_reads_them(run_agent, caliper):
+    # A local model sent source.add with every optional argument null; the call
+    # goes to Caliper without them, as the command layer would read it.
+    caliper.handlers["review.status"] = lambda args: {"ok": True, "result": {
+        "origin": "agent", "spec_edits": True, "destructive": True}}
+    call = {"id": "layer0", "catalog": "live:entropy.l0", "sql": None, "from": None, "transform": None,
+            "dry_run": False}
+    steps = [message(tool_use("t_add", "source_add", call), stop="tool_use"), message(text("Added."))]
+    agent, record = run_agent(steps)
+    sid = agent.start_session()
+    response, updates = agent.prompt(sid, "Add the first layer")
+    assert response["result"]["stopReason"] == "end_turn"
+    [sent] = caliper.commands("source.add")
+    assert sent["args"] == {"id": "layer0", "catalog": "live:entropy.l0", "dry_run": False}
+    assert tool_results(read_requests(record)[1]["messages"])["t_add"]["outcome"] == "success"
+
+
 def test_input_that_fails_its_schema_is_not_run(run_agent, caliper):
     steps = [
         message(tool_use("toolu_bad", "panel_create", {"id": "Bad Id!", "primitive": "heatmap", "bind": {"values": "entropy"}}), stop="tool_use"),

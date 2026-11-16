@@ -109,6 +109,12 @@ public:
     // The undo and redo stacks are not empty.
     virtual bool can_undo() const { return true; }
     virtual bool can_redo() const { return true; }
+    // The names of a catalog source's dims, one per dim, where the source
+    // carries them (a live view's); empty for one that carries none.
+    virtual std::vector<std::string> dim_names(const std::string& catalog_id) const {
+        (void)catalog_id;
+        return {};
+    }
 
 private:
     mutable uint64_t calls_ = 0;
@@ -131,12 +137,17 @@ public:
     uint64_t version() const override;
     bool can_undo() const override;
     bool can_redo() const override;
+    std::vector<std::string> dim_names(const std::string& catalog_id) const override;
+    // Where dim_names() reads the names: the app's live views
+    // (AppProviders::dim_names()); none without it.
+    void set_dim_names(std::function<std::vector<std::string>(const std::string&)> names) { names_ = std::move(names); }
     caliper_builder::Session& session() { return session_; }
 
 private:
     caliper_builder::Session& session_;
     std::function<bool()> busy_;
     std::function<uint64_t()> version_;
+    std::function<std::vector<std::string>(const std::string&)> names_;
 };
 
 // ---- what the pane shows ----------------------------------------------------------------
@@ -310,6 +321,26 @@ public:
     bool add_transform(caliper_builder::spec::TransformOp op);
     bool set_transform(size_t index, const nlohmann::json& transform);   // the whole transform, as in source.add
     bool remove_transform(size_t index);
+    // A slice's or a reduce's axis in Properties: every axis of the step's
+    // input as pane_axis_text() writes it ("axis 1 · 0–3", with the dim's
+    // name where the source carries one), one choice each; empty when the
+    // input's shape is not known, and Properties then shows the number.
+    std::vector<std::string> transform_axes(size_t index);
+    // A slice's index range on its axis ("0–3"), "" when not known.
+    std::string transform_index_range(size_t index);
+    // A slice's index; one outside its axis's range is set to the nearer end
+    // of it, and transform_note() says so until the next transform edit.
+    bool set_slice_index(size_t index, int64_t value);
+    // A slice's or a reduce's axis; a slice's index is kept within the new
+    // axis's range the same way.
+    bool set_transform_axis(size_t index, int64_t axis);
+    // "7 is outside 0–3", after an index was set to the end of its range;
+    // "" otherwise. transform_note_step() is the step it is about.
+    const std::string& transform_note() const { return transform_note_; }
+    size_t transform_note_step() const { return transform_note_step_; }
+    // What an empty canvas says in build mode under "No panels": how to
+    // start. "" outside build mode and once the open spec has a panel.
+    std::string canvas_hint() const;
     // The spec's own applet id, title and description (no focus), sent as
     // spec.set_text.
     bool set_spec_id(const std::string& id);
@@ -499,6 +530,8 @@ private:
     std::map<std::string, PanePlan> primitive_plans_;
     std::map<std::string, std::vector<PaneBindingChoice>> choices_;
     std::optional<std::vector<PaneShape>> shapes_;
+    std::string transform_note_;
+    size_t transform_note_step_ = 0;
     std::map<std::string, PaneShape> spec_shapes_;
 
     DragPayload drag_;

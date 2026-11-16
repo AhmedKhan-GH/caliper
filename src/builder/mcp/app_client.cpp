@@ -205,7 +205,10 @@ std::shared_ptr<const ToolTable> AppClient::table(bool* changed) {
     return chosen;
 }
 
-json AppClient::call(const CommandDescriptor& d, const json& args, const std::atomic<bool>* cancel) {
+json AppClient::call(const CommandDescriptor& d, const json& sent, const std::atomic<bool>* cancel) {
+    // As the command layer reads it: a null on an optional argument is the argument left out.
+    json args = sent;
+    drop_null_optional_args(d.args, &args);
     if (Error err = validate_command_value(d.args, args, "args")) return tool_error_result(err);
     const std::string body = dump(args);
     if (body.size() > (1u << 20))

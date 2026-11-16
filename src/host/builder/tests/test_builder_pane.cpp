@@ -577,6 +577,103 @@ TEST_CASE("builder pane: a primitive that does not fit says what it takes") {
     REQUIRE(p.add_primitive(spec::Primitive::heatmap));
 }
 
+// A slice's and a reduce's axis in Properties: each axis of the step's
+// input with its index range, and with its name where the source carries
+// names (a live view's dims; a safetensors tensor has none); a slice's index
+// outside its axis's range is set to the nearer end, and the pane says so.
+TEST_CASE("builder pane: a transform's axes with their ranges and names, and an index kept in its range") {
+    const std::string dot = "\xc2\xb7", dash = "\xe2\x80\x93";
+    const auto ax = [&](int a, int last, const std::string& name = {}) {
+        return "axis " + std::to_string(a) + (name.empty() ? "" : " " + name) + " " + dot + " 0" + dash +
+               std::to_string(last);
+    };
+    // The helpers.
+    CHECK(pane_index_range(4) == "0" + dash + "3");
+    CHECK(pane_index_range(1) == "0");
+    CHECK(pane_index_range(0).empty());
+    CHECK(pane_index_range(-1).empty());
+    CHECK(pane_axis_text(1, 4) == ax(1, 3));
+    CHECK(pane_axis_text(0, 4, "layer") == ax(0, 3, "layer"));
+    CHECK(pane_axis_text(2, -1) == "axis 2");
+    bool clamped = true;
+    CHECK(pane_clamp_index(2, 4, &clamped) == 2);
+    CHECK_FALSE(clamped);
+    CHECK(pane_clamp_index(-1, 4, &clamped) == -1);   // from the end
+    CHECK_FALSE(clamped);
+    CHECK(pane_clamp_index(7, 4, &clamped) == 3);
+    CHECK(clamped);
+    CHECK(pane_clamp_index(-9, 4, &clamped) == 0);
+    CHECK(clamped);
+    CHECK(pane_clamp_index(7, -1, &clamped) == 7);   // a size not known
+    CHECK_FALSE(clamped);
+
+    Rig r = rig("pane-axes");
+    BuilderPane& p = *r.pane;
+    const auto index_of = [&](size_t step) {
+        const spec::Source* src = p.open_spec()->spec.find_source("attn_weights");
+        REQUIRE(src);
+        REQUIRE(step < src->transforms.size());
+        return src->transforms[step].index.value_or(-100);
+    };
+    // The tensor is [2, 3, 8, 8], from a safetensors file: no names.
+    p.select("tensor:attn_weights");
+    REQUIRE(p.add_transform(spec::TransformOp::slice));
+    CHECK(p.transform_axes(0) == std::vector<std::string>{ax(0, 1), ax(1, 2), ax(2, 7), ax(3, 7)});
+    CHECK(p.transform_index_range(0) == "0" + dash + "1");
+    // An index past the axis's end is set to its last index, and said.
+    REQUIRE(p.set_slice_index(0, 7));
+    CHECK(index_of(0) == 1);
+    CHECK(p.transform_note() == "7 is outside 0" + dash + "1");
+    CHECK(p.transform_note_step() == 0);
+    // One within it is taken as it is, and the note goes.
+    REQUIRE(p.set_slice_index(0, 0));
+    CHECK(index_of(0) == 0);
+    CHECK(p.transform_note().empty());
+    // Another axis: its range, and the index kept within it.
+    REQUIRE(p.set_transform_axis(0, 1));
+    CHECK(p.transform_index_range(0) == "0" + dash + "2");
+    REQUIRE(p.set_slice_index(0, 2));
+    REQUIRE(p.set_transform_axis(0, 0));
+    CHECK(index_of(0) == 1);
+    CHECK(p.transform_note() == "2 is outside 0" + dash + "1");
+    // A reduce after the slice sees the slice's result, [3, 8, 8].
+    REQUIRE(p.add_transform(spec::TransformOp::reduce));
+    CHECK(p.transform_axes(1) == std::vector<std::string>{ax(0, 2), ax(1, 7), ax(2, 7)});
+
+    // A source that carries names, as a live view does: each axis is named,
+    // and a slice's index takes its axis's name away.
+    r.port->set_dim_names([](const std::string& id) {
+        return id == "tensor:attn_weights" ? std::vector<std::string>{"layer", "head", "query", "key"}
+                                           : std::vector<std::string>{};
+    });
+    p.focus_source("spec:attn_weights");
+    CHECK(p.transform_axes(0) ==
+          std::vector<std::string>{ax(0, 1, "layer"), ax(1, 2, "head"), ax(2, 7, "query"), ax(3, 7, "key")});
+    CHECK(p.transform_axes(1) == std::vector<std::string>{ax(0, 2, "head"), ax(1, 7, "query"), ax(2, 7, "key")});
+    const std::vector<PaneShape> shapes = p.transform_shapes();
+    REQUIRE(shapes.size() == 3);
+    CHECK(shapes[2].names == std::vector<std::string>{"query", "key"});   // the reduce took head away
+    // Names that do not match the rank are not used.
+    std::vector<PaneShape> odd = shapes;
+    for (auto& sh : odd) sh.names.clear();
+    pane_name_dims(odd, p.open_spec()->spec.find_source("attn_weights")->transforms, {"a", "b"});
+    CHECK(odd[0].names.empty());
+}
+
+// A new dashboard's empty canvas says how to start in build mode, and
+// nothing more once it has a panel or outside build mode.
+TEST_CASE("builder pane: an empty canvas says how to start") {
+    Rig r = rig("pane-empty");
+    BuilderPane& p = *r.pane;
+    CHECK(p.canvas_hint() == "Drop a data file, or pick a source in Sources");
+    p.set_build_mode(false);
+    CHECK(p.canvas_hint().empty());
+    p.set_build_mode(true);
+    p.select("table:run42_metrics");
+    REQUIRE(p.add_primitive(spec::Primitive::series));
+    CHECK(p.canvas_hint().empty());
+}
+
 TEST_CASE("builder pane: renames reach every reference, and the spec's own title") {
     Rig r = rig("pane-rename");
     BuilderPane& p = *r.pane;

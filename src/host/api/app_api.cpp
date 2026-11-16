@@ -7,6 +7,7 @@
 #include "negotiation.h"
 #include "net/json.h"
 
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -134,6 +135,29 @@ void AppApi::revoke_agent_file(const std::string& path) {
         agent_files_.erase(it);
         return;
     }
+}
+
+std::string AppApi::viewer_link(const std::string& applet, std::string* why) const {
+    auto refuse = [&](const char* reason) {
+        if (why) *why = reason;
+        return std::string();
+    };
+    if (!server_) return refuse("Caliper API is not running");
+    if (caliper_api::spec_page_html().empty()) return refuse("this build has no browser viewer");
+    // A workspace id, as applet.save names the folder: nothing to escape.
+    if (applet.empty() || applet.size() > 128) return refuse("the dashboard has no workspace id");
+    for (const char c : applet)
+        if (!std::isalnum((unsigned char)c) && c != '-' && c != '_' && c != '.') return refuse("the dashboard's id cannot be a link");
+    const std::string base = server_->spec_url();
+    const std::string mark = std::string("?") + CALIPER_NET_TOKEN_PARAM + "=";
+    const size_t at = base.find(mark);
+    if (base.empty() || at == std::string::npos) return refuse("Caliper API has no viewer token");
+    const std::string token = base.substr(at + mark.size());
+    // The link is easily copied and kept in a browser's history: it carries
+    // the viewer token alone.
+    if (token.empty() || token == server_->token() || token == server_->mcp_token())
+        return refuse("the link would carry a token that opens more than the viewer");
+    return base + "&applet=" + applet;
 }
 
 void AppApi::stop() {

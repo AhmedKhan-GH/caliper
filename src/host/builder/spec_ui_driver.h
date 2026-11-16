@@ -45,9 +45,13 @@
 //   chat local on|off    marks the chosen agent as running on a local model,
 //                        or clears it, as the picker's Local model row does
 //   chat picker          opens the agent picker
-//   click <item> [fx fy] a click on a builder pane's named rectangle
-//                        (BuilderPane::item_rect: "source:table:metrics",
-//                        "primitive:series", "prop:title", "bar:save", ...),
+//   cards <n>            wait until the approval cards' strip shows at least n
+//                        waiting cards at its full height (approval_cards.h)
+//   click <item> [fx fy] a click on a named rectangle of the spec page
+//                        (SpecPage::item_rect: "page:browser") or of the
+//                        builder pane (BuilderPane::item_rect:
+//                        "source:table:metrics", "primitive:series",
+//                        "prop:title", "bar:save", ...),
 //                        at the fractions fx, fy of it (0.5 0.5 by default); a
 //                        negative fraction counts pixels from its right or
 //                        bottom edge
@@ -73,6 +77,12 @@
 //   command-line <text>|none
 //                        wait until the landing's command line holds that
 //                        text, or nothing
+//   landing selected <applet id>
+//                        wait until the landing's selected row is the applet
+//                        with that manifest id
+//   landing projects <applet id>,...|none
+//                        wait until Projects lists exactly those dashboards
+//                        (manifest ids, in their order), or none
 //   widget <label>       presses the inline surface's action of that label
 //                        ("Setup", "Ask in chat", ...) once the surface offers it,
 //                        through the surface's own act(), as its button does
@@ -93,9 +103,14 @@
 //                        names begin with <prefix> (the API's agent files)
 //   touch <path>         creates an empty file (a stub agent's gate)
 //   append <path> <line> appends a line to a file (a test's approval decision)
+//   patience <seconds>   the steps after it wait for their target up to that
+//                        many seconds instead of kPatience frames, such as a
+//                        real agent's turn on a local model; 0 goes back to
+//                        kPatience
 //   quit                 close the app
-// A step whose target is not there yet waits for it, up to kPatience frames,
-// then the script stops with an error.
+// A step whose target is not there yet waits for it, up to kPatience frames
+// (or the seconds of the last `patience`), then the script stops with an
+// error.
 //
 // Header-only; frame thread. Call feed() once per frame BEFORE ImGui::NewFrame.
 // ============================================================================
@@ -120,6 +135,7 @@
 #include <optional>
 
 #include <cfloat>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -181,7 +197,15 @@ public:
     void set_page(std::string page) { page_ = std::move(page); }
     // The landing's command line, for the `command-line` step; the app sets it.
     void set_command_line(std::string text) { command_line_ = std::move(text); }
+    // The landing's selected row (its manifest id, "" for none) and the
+    // dashboards Projects lists, for the `landing` steps; the app sets them.
+    void set_landing(std::string selected, std::vector<std::string> projects) {
+        landing_selected_ = std::move(selected);
+        landing_projects_ = std::move(projects);
+    }
     void set_drop(std::function<void(std::vector<std::string>)> drop) { drop_ = std::move(drop); }
+    // The waiting cards the approval strip shows (ApprovalTray::shown_waiting()), for `cards`.
+    void set_cards(std::function<int()> cards) { cards_ = std::move(cards); }
 #if CALIPER_WITH_BUILDER
     // The widget agent's settings, for the `settings` steps; the app sets them.
     void set_agent_settings(AgentSettings* settings) { settings_ = settings; }
@@ -393,6 +417,24 @@ public:
             next("the command line holds " + (want.empty() ? std::string("nothing") : "\"" + want + "\""));
             return;
         }
+        if (s.verb == "landing") {
+            std::stringstream words(s.arg);
+            std::string what, want;
+            words >> what >> want;
+            auto shown = [](const std::string& t) { return t.empty() ? std::string("none") : t; };
+            if (what == "selected") {
+                if (landing_selected_ != want) return patience("the landing's selection is " + shown(landing_selected_));
+                next("the landing's selection is " + want);
+            } else if (what == "projects") {
+                std::string listed;
+                for (const auto& id : landing_projects_) listed += (listed.empty() ? "" : ",") + id;
+                if (shown(listed) != want) return patience("Projects lists " + shown(listed));
+                next("Projects lists " + want);
+            } else {
+                error_ = "landing takes selected <applet id> or projects <applet id>,...|none";
+            }
+            return;
+        }
         if (s.verb == "pane") {
 #if CALIPER_WITH_BUILDER
             std::stringstream words(s.arg);
@@ -521,6 +563,20 @@ public:
             if (s.verb == "append") out << line << "\n";
             if (!out) return void(error_ = s.verb + ": cannot write " + file);
             next(s.verb + " " + std::filesystem::path(file).filename().string());
+        } else if (s.verb == "cards") {
+            if (!cards_) return void(error_ = "cards: the app gave no approval cards");
+            const int want = std::atoi(s.arg.c_str());
+            if (want < 1) return void(error_ = "cards takes a number of cards from 1");
+            const int shown = cards_();
+            if (shown < want) return patience("the approval strip shows " + std::to_string(shown) + " waiting cards");
+            next("the approval strip shows " + std::to_string(shown) + (shown == 1 ? " waiting card" : " waiting cards"));
+        } else if (s.verb == "patience") {
+            char* end = nullptr;
+            const double seconds = std::strtod(s.arg.c_str(), &end);
+            if (s.arg.empty() || !end || *end != '\0' || !(seconds >= 0.0) || seconds > 86400.0)
+                return void(error_ = "patience takes a number of seconds from 0 to 86400");
+            patience_s_ = seconds;
+            next(seconds > 0.0 ? "patience " + s.arg + " s" : "patience " + std::to_string(kPatience) + " frames");
         } else if (s.verb == "quit") {
             quit_ = true;
             next("quit");
@@ -546,10 +602,15 @@ private:
         started_.reset();
         armed_ = false;
         drag_frame_ = 0;
+        step_start_ = std::chrono::steady_clock::now();
     }
 
     void patience(const std::string& why) {
-        if (frames_ > kPatience) error_ = steps_[at_].verb + " " + steps_[at_].arg + ": " + why;
+        const bool over =
+            patience_s_ > 0.0
+                ? std::chrono::duration<double>(std::chrono::steady_clock::now() - step_start_).count() > patience_s_
+                : frames_ > kPatience;
+        if (over) error_ = steps_[at_].verb + " " + steps_[at_].arg + ": " + why;
     }
 
     // As patience(), for at most `seconds` of wall time since the step began
@@ -620,7 +681,9 @@ private:
 #if CALIPER_WITH_BUILDER
         BuilderPane* b = page.builder();
         SpecRect r;
-        if (!b || !b->item_rect(name, &r)) return false;
+        float pr[4];
+        if (page.item_rect(name, pr)) r = SpecRect{pr[0], pr[1], pr[2], pr[3]};
+        else if (!b || !b->item_rect(name, &r)) return false;
         *x = std::round(fx < 0.0f ? r.right() + fx : fx > 1.0f ? r.x + fx : r.x + r.w * fx);
         *y = std::round(fy < 0.0f ? r.bottom() + fy : fy > 1.0f ? r.y + fy : r.y + r.h * fy);
         return true;
@@ -643,6 +706,9 @@ private:
     std::string shots_;
     size_t at_ = 0;
     int frames_ = 0;
+    // When the current step began, and the seconds a step may wait (0: kPatience frames).
+    std::chrono::steady_clock::time_point step_start_ = std::chrono::steady_clock::now();
+    double patience_s_ = 0.0;
     bool armed_ = false, shot_requested_ = false, quit_ = false, mouse_down_ = false;
     std::vector<ImGuiKey> held_keys_;
     std::vector<std::string> log_;
@@ -650,8 +716,10 @@ private:
 #if CALIPER_WITH_BUILDER
     AgentSettings* settings_ = nullptr;
 #endif
-    std::string page_, command_line_;
+    std::string page_, command_line_, landing_selected_;
+    std::vector<std::string> landing_projects_;
     std::function<void(std::vector<std::string>)> drop_;
+    std::function<int()> cards_;
     float drag_a_[2] = {0, 0}, drag_b_[2] = {0, 0};
     int drag_frame_ = 0;   // the frame of a drag in progress, 0 before its press
     std::optional<std::chrono::steady_clock::time_point> started_;   // a step's first frame, for a wait in seconds

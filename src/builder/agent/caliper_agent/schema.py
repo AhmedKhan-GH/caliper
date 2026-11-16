@@ -184,3 +184,55 @@ def validate(value: Any, schema: dict, where: str = "args") -> str | None:
     if count > MAX_VALUES:
         return f"{where}: holds more than {MAX_VALUES} values"
     return _check(value, schema, where, 0)
+
+
+def _admits_null(schema: Any) -> bool:
+    """Whether null passes the schema's type and enum; a schema without either admits it."""
+    if isinstance(schema, bool):
+        return schema
+    if not isinstance(schema, dict):
+        return True
+    types = schema.get("type")
+    if types is not None:
+        names = [types] if isinstance(types, str) else list(types) if isinstance(types, list) else []
+        if "null" not in names:
+            return False
+    if isinstance(schema.get("enum"), list):
+        return any(v is None for v in schema["enum"])
+    return True
+
+
+def drop_null_optionals(value: Any, schema: Any) -> tuple[Any, int]:
+    """The arguments as the command layer reads them, and how many properties went:
+    a null on an optional property whose schema does not admit null counts as the
+    property left out (the command layer's drop_null_optional_args()). Required
+    properties, a null the schema admits and the values of additionalProperties
+    stay. The value given is not changed."""
+    count = 0
+
+    def walk(v: Any, s: Any, depth: int) -> Any:
+        nonlocal count
+        if depth > MAX_SCHEMA_DEPTH or not isinstance(s, dict):
+            return v
+        if isinstance(v, dict):
+            props = s.get("properties") if isinstance(s.get("properties"), dict) else None
+            if props is None:
+                return v
+            required = set(s.get("required", [])) if isinstance(s.get("required"), list) else set()
+            out = {}
+            for key, item in v.items():
+                if key in props:
+                    if item is None and key not in required and not _admits_null(props[key]):
+                        count += 1
+                        continue
+                    out[key] = walk(item, props[key], depth + 1)
+                else:
+                    out[key] = item
+            return out
+        if isinstance(v, list) and "items" in s:
+            return [walk(item, s["items"], depth + 1) for item in v]
+        return v
+
+    if not isinstance(value, dict):
+        return value, 0
+    return walk(value, schema, 0), count

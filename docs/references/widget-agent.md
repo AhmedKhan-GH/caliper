@@ -23,7 +23,7 @@ Caliper starts the agent as a child process and speaks ACP version 1 on its stan
 
 | Option | Meaning |
 |---|---|
-| `--api-file <path>` | Caliper API's file, which gives the loopback address and a token; the app gives its sidecar a file of its own, whose token has the origin `agent` |
+| `--api-file <path>` | Caliper API's file, which gives the loopback address and a token; the app gives its sidecar a file of its own, whose token has the origin `agent`. A session that `session/new` hands Caliper's MCP server uses that server's file instead ([In the side chat](#in-the-side-chat)) |
 | `--command-table <path>` | The command table as JSON |
 | `--widget-scopes <path>` | The scope rule below; by default `widget_scopes.json` beside the command table. Without it, widget sessions are refused |
 | `--preset <id>` | A provider preset, which fills the provider and the base URL (below) |
@@ -286,6 +286,20 @@ finished, which edits the preview holds and that Accept applies them or Refine l
 change is not finished: the agent stopped at its limit of 6 model requests after 2 edits (source.add, panel.create).
 Accept applies the edits shown, or Refine lets it finish." Caliper shows the reply in full on the card, under LIMIT and
 the count of edits.
+
+## In the side chat
+
+`caliper-agent` can be the [side chat](side-chat.md)'s custom agent, in the general role, for example on a local model
+through the Ollama preset, with no account or key. The side chat sends `session/new` with one MCP server, `caliper`:
+`caliper-mcp` with `--api-file <the session's own API file>`, whose token has the origin `agent`. The agent starts no
+MCP server; it calls Caliper API itself with that file, so its commands run as the origin `agent` and its edits of the
+open spec wait on the approval cards, which the chat mirrors as rows. A session whose Caliper server names no usable
+`--api-file` (an absolute path) is refused with -32602 and `data.code` `agent.no_session_api_file`, rather than run
+with `api.json`, whose token is the origin `mcp`. Without a Caliper server, a session uses `--api-file`.
+
+Each call of a Caliper command carries the command in `_meta.caliper.command` of its `tool_call` update, such as
+`{"caliper": {"command": "panel.create"}}`, so that the side chat shows it as that command and folds its approval into
+its row.
 
 ## Closing
 

@@ -86,7 +86,7 @@ from .caliper_api import CaliperApi, ToolOutput
 from .keyguard import scrub
 from .openai_compat import refusal_kind
 from .provider import AgentError, Provider, Retry, Settings, TurnUsage
-from .schema import validate
+from .schema import drop_null_optionals, validate
 from .tools import PREVIEW_ARG, ToolSpec, acp_tool_kind
 from .toolset import CaliperToolset, invalid_json
 from .udiff import apply_unified_diff
@@ -291,14 +291,20 @@ class AcpSink:
                      "content": {"type": "text", "text": scrub(text)},
                      "_meta": {"caliper": {"status": kind, **meta}}})
 
-    def tool_started(self, call_id: str, name: str) -> None:
+    def tool_started(self, call_id: str, name: str, command: str = "") -> None:
+        """A tool call as the pane first sees it. A call of a Caliper command names
+        the command in `_meta.caliper.command`, so that a client such as the side
+        chat shows it as one, whatever its title."""
         if call_id in self.started_calls:
             return
         self.shown = True
         self.started_calls[call_id] = name
         self.open_calls.add(call_id)
-        self.update({"sessionUpdate": "tool_call", "toolCallId": call_id, "title": name, "name": name,
-                     "kind": "other", "status": "pending"})
+        update = {"sessionUpdate": "tool_call", "toolCallId": call_id, "title": name, "name": name,
+                  "kind": "other", "status": "pending"}
+        if command:
+            update["_meta"] = {"caliper": {"command": command}}
+        self.update(update)
 
     def finish(self, call_id: str, status: str, content: list[dict] | None = None,
                raw_output: Any = None) -> None:
@@ -708,7 +714,8 @@ class TurnRunner:
                 if part.content:
                     sink.thought(part.content)
             elif isinstance(part, ToolCallPart):
-                sink.tool_started(part.tool_call_id, part.tool_name)
+                spec = self._tools.get(part.tool_name)
+                sink.tool_started(part.tool_call_id, part.tool_name, spec.command.name if spec is not None else "")
             elif isinstance(part, CompactionPart):
                 sink.status("compaction", "The earlier conversation was summarized to make room.")
         elif isinstance(event, PartDeltaEvent):
@@ -822,7 +829,9 @@ class TurnRunner:
         call_id = ctx.tool_call_id or ""
         group = self._group
         command = spec.command
-        sink.tool_started(call_id, spec.name)
+        sink.tool_started(call_id, spec.name, command.name)
+        # As the command layer reads it: a null on an optional argument is the argument left out.
+        args, _ = drop_null_optionals(args, command.args)
         problem = validate(args, command.args)
         sink.update({"sessionUpdate": "tool_call_update", "toolCallId": call_id,
                      "title": _title(command.name, args), "kind": acp_tool_kind(command), "rawInput": args})
