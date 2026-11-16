@@ -178,7 +178,10 @@ struct ControlsLook {
 // What does not fit goes into a "+N more" popup.
 void draw_run_bar(RunControls& rc, const ControlsLook& look, float width);
 
-// The run state as the bar writes it.
+// The run state as the bar writes it: "no checkpoint yet", "running",
+// "pausing", "paused at step N" or "stepping, N left". The step in CONTROLS
+// is the one at which the state last changed, so only a paused run, which
+// stands at it, names it.
 std::string run_state_text(const Controls& c);
 
 // The selection's details as a table, one row per item with the script's

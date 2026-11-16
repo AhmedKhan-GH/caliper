@@ -248,7 +248,7 @@ The run bar sits under the page bar, above the views:
 
 | Part | Shows and does |
 |---|---|
-| Run state | `running`, `pausing`, `paused`, `stepping, N left` or `no checkpoint yet`, with the step at which the state last changed |
+| Run state | `running`, `pausing`, `paused at step N`, `stepping, N left` or `no checkpoint yet`. Only a paused run names a step, the one at which the loop waits: the script sends its run state when the state changes, not at every step, so the bar does not know the current step of a running loop |
 | Pause, Resume | Pause holds the training loop at its next checkpoint; Resume releases it |
 | Step | Runs one step and pauses again |
 | Parameters | One control per registered parameter, by its type: a slider for a number or an integer with a range (on a log scale when the script asks for one) with a field beside it that shows and takes the exact value, a field for one without a range, a box for a boolean, a menu for a choice |

@@ -220,14 +220,16 @@ void draw_action(RunControls& rc, const ControlsLook& look, const ControlAction&
 
 }  // namespace
 
+// The run object's `step` is the step at which the state last changed (wire
+// protocol 3.1), not the script's current step: a running loop sends no
+// CONTROLS from one step to the next. Only a paused run stands at that step,
+// so only "paused" names it, as the browser's header does.
 std::string run_state_text(const Controls& c) {
-    std::string s;
     const std::string& st = c.run_state;
-    if (st == CALIPER_NET_RUN_NONE) s = "no checkpoint yet";
-    else if (st == CALIPER_NET_RUN_STEPPING) s = "stepping, " + std::to_string(c.steps_left) + " left";
-    else s = st;
-    if (c.has_step && st != CALIPER_NET_RUN_NONE) s += " at step " + std::to_string(c.step);
-    return s;
+    if (st == CALIPER_NET_RUN_NONE) return "no checkpoint yet";
+    if (st == CALIPER_NET_RUN_STEPPING) return "stepping, " + std::to_string(c.steps_left) + " left";
+    if (st == CALIPER_NET_RUN_PAUSED && c.has_step) return "paused at step " + std::to_string(c.step);
+    return st;
 }
 
 // ---- RunControls ------------------------------------------------------------------------------
@@ -312,11 +314,7 @@ void RunControls::update(Source* src, uint64_t now_ns) {
 }
 
 void RunControls::on_controls(const Controls& before) {
-    if (before.run_state != controls_.run_state) {
-        std::string line = "run " + controls_.run_state;
-        if (controls_.has_step) line += " at step " + std::to_string(controls_.step);
-        log_.push_back(line);
-    }
+    if (before.run_state != controls_.run_state) log_.push_back("run " + run_state_text(controls_));
     for (const ControlParam& p : controls_.params) {
         const ControlParam* old = nullptr;
         for (const ControlParam& o : before.params)
