@@ -857,14 +857,9 @@ private:
         if (page_ != AppPage::Spec) landing_.log("open", spec_page_.title(), "spec");
         page_ = AppPage::Spec;
         glfwSetWindowTitle(window_, ("Caliper - " + spec_page_.title()).c_str());
-        // The workspace's spec applet that the page shows is ACTIVE.
-        int shown = -1;
-        for (int i = 0; i < loader_.count() && shown < 0; i++)
-            if (loader_.at(i).manifest.kind == caliper_host::AppletKind::Spec &&
-                loader_.at(i).status == caliper_host::AppletStatus::Ready &&
-                workspace_applet_id(loader_.at(i)) == spec_page_.applet_id())
-                shown = i;
-        mark_spec_entry(shown);
+        // The workspace's spec applet that the page shows is ACTIVE, also
+        // when it already was (an agent's open of the dashboard on screen).
+        mark_spec_entry(workspace_spec_entry(spec_page_.applet_id()));
     }
 
     // Home from the spec page, after the frame that drew it. An attached

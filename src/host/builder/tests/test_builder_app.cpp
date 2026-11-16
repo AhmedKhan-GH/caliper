@@ -616,4 +616,61 @@ TEST_CASE("builder app: Open in browser stops the API it started when no link is
     CHECK_FALSE(std::filesystem::exists(root + "/data/api.json"));
 }
 
+// An agent that opens the dashboard the spec page already shows keeps its row
+// ACTIVE: the page matches the shown applet's entry whether it is READY or
+// already ACTIVE.
+TEST_CASE("builder app: an agent's applet.open of the dashboard on screen keeps its row ACTIVE" *
+          doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const std::string root = app_root(exe, "builder-app-active");
+    if (root.empty()) return;
+    saved_dashboard(root);
+    const std::string ready = root + "/ready", done = root + "/done";
+    caliper_builder::acp::RunResult run;
+    std::atomic<bool> ended{false};
+    std::thread app([&] {
+        run = run_app(exe, root, "wait 60; page spec; wait 30; touch " + ready + "; wait-file " + done + "; quit",
+                      {{"CALIPER_COMMAND_SCRIPT", root + "/build.jsonl"}}, {"--api", "--api-port", "0"});
+        ended = true;
+    });
+    for (int i = 0; i < 1800 && !ended && !std::filesystem::exists(ready); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::string before, after;
+    bool opened = false;
+    if (std::filesystem::exists(ready)) {
+        const json api = json::parse(read_text(root + "/data/api.json"), nullptr, false);
+        const int port = api.is_object() ? api.value("port", 0) : 0;
+        const std::string auth = "Authorization: Bearer " + (api.is_object() ? api.value("token", std::string()) : "") + "\r\n";
+        const auto status_of = [&] {
+            const Answer a = http(port, "GET", "/v0/applets", auth);
+            const json j = json::parse(a.body, nullptr, false);
+            if (j.is_object() && j.contains("applets"))
+                for (const auto& e : j["applets"])
+                    if (e.value("id", std::string()) == "local.run42-dashboard") return e.value("status", std::string());
+            return std::string("missing");
+        };
+        before = status_of();
+        const std::string body = R"({"id":"run42-dashboard"})";
+        const Answer open = http(port, "POST", "/v0/commands/applet.open",
+                                 auth + "Content-Type: application/json\r\nContent-Length: " +
+                                     std::to_string(body.size()) + "\r\n",
+                                 body);
+        opened = open.status == 200 && open.body.find("\"ok\":true") != std::string::npos;
+        after = status_of();   // a later frame than the one that ran the open
+    }
+    std::ofstream(done).close();
+    app.join();
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
+    REQUIRE(run.error.ok());
+    if (run.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(before == "ACTIVE");
+    CHECK(opened);
+    CHECK(after == "ACTIVE");
+    CHECK(run.status.success());
+    CHECK(run.err.find("[ui] done") != std::string::npos);
+}
+
 #endif
