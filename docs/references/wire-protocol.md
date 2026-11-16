@@ -674,6 +674,14 @@ The producer keeps a waiting checkpoint interruptible, so that the person runnin
 
 `pause` makes a running or stepping run `pausing`, and `paused` at its next checkpoint. `resume` makes the run `running` and releases a waiting checkpoint. `step` with `count` n lets the loop run n steps and pause at the n-th checkpoint after the one it waits in, or, from `running`, after n more checkpoints. A `pause` of a run that is already pausing or paused, and a `resume` of a running one, change nothing. All three are answered `ok` at once, and the new state reaches every viewer in CONTROLS.
 
+#### What a viewer may rely on when a run pauses
+
+The CONTROLS that says a run is `paused`, after a `pause` or after the steps of a `step`, follows the data of the step at which the run stopped. Through `caliper.serve()`, and on a producer's connection to a hub, a run state follows the data sent before it on the same connection: before its checkpoint waits, the producer sends the snapshots and series values that the run's view calls took, and it sends that CONTROLS once none of its connections has such data left to send, or after `CALIPER_NET_ORDER_WAIT_MS` (2 seconds). So when a viewer reads `paused` on a connection, every SERIES message of the step at which the run stopped has already arrived on it, and so has the last SNAPSHOT of each view that it subscribes to there.
+
+- A series view then holds every value up to that step. A snapshot view holds the last snapshot the view took, which its rate limit (60 per second by default) can place a few steps before the one the run stopped at.
+- Separate connections have no order between them. A viewer that draws a view from one connection and shows the run state from another, as the WebAssembly views of the element do, can read `paused` a moment before that view has drawn its last data; it holds the same data once that has arrived.
+- A view that a viewer subscribes to while the run is paused receives the retained series values at once, but the snapshot of another kind of view only when the run takes one again, after it resumes. The producer computes snapshots in the script's view calls, which do not run while it waits.
+
 ### Parameters
 
 A parameter is a named value that the script registered with a type and, for a number, a range. The script reads it, and a viewer shows it as a slider or a field (`number`, `integer`), a toggle (`boolean`) or a menu (`choice`). On `set` the producer:
@@ -804,6 +812,7 @@ Nothing in the protocol lets a slow viewer block a producer, and training is nev
 | `CALIPER_NET_DETAILS_TIMEOUT_MS` | 2,000 | The time the script's details function has (3.1) |
 | `CALIPER_NET_REPLY_WAIT_MS` | 60,000 | A hub answers a CONTROL `timeout` when the producer has not answered it by then (3.1) |
 | `CALIPER_NET_RELEASE_GRACE_MS` | 10,000 | A paused run resumes when no connection that may control it has been open this long (3.1) |
+| `CALIPER_NET_ORDER_WAIT_MS` | 2,000 | The longest the run state of a pause waits for the data of its step to be sent (3.1) |
 
 With the defaults, a heatmap snapshot is at most 1 MiB, an image snapshot 1 MiB, and a 2-D points snapshot with values 1.2 MB.
 

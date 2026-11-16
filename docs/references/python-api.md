@@ -626,7 +626,9 @@ control has been open for 10 seconds, which a page reload stays well within.
 While it waits, it still sets values and runs actions as they arrive. Ctrl-C,
 or a notebook's interrupt, ends the wait with `KeyboardInterrupt`, and the run
 is no longer paused afterwards. Right before it waits, it sends the snapshots
-and series values of the step it paused at, so the viewers show that step.
+and series values of the step it paused at, and the run state goes to each
+viewer after them, so a view that reads `paused` already shows that step
+([What a viewer may rely on](wire-protocol.md#what-a-viewer-may-rely-on-when-a-run-pauses)).
 With nothing waiting, a call costs about 22 ns on an Apple silicon Mac, with a
 viewer attached or not: it counts the step and reads one flag.
 
