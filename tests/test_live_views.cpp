@@ -1377,8 +1377,9 @@ TEST_CASE("live_views/frame stats: CALIPER_METAL_STATS records frame and GPU tim
             c.frames(1);
         }
         CHECK(wait_read_done(c, "hm"));
-        // GPU times arrive on Metal's completion threads: give them a moment.
-        for (int i = 0; i < 200; ++i) {
+        // GPU times arrive on Metal's completion threads: wait for the counts they publish, for
+        // up to 10 s, which only a failure reaches.
+        for (int i = 0; i < 2000; ++i) {
             REQUIRE(caliper_stats::frame_stats(c.core, &fs, false));
             if (fs.update_gpu_n >= 5 && fs.draw_gpu_n >= 1 && fs.frame_gpu_n >= 4) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
