@@ -622,7 +622,10 @@ claims the right column with `layout_chat_column()`, and calls `draw()` with tha
   the pane opens quietly; the message waits for the session. `start()` and `session/new` run on a worker thread, and
   shutting a client down runs on another, so the frame thread never waits for an agent.
 - **The conversation.** The person's messages with the chips of a draft; the agent's text, streamed into one message;
-  its thoughts as one line, which a click opens; its tool calls as rows with a status mark, the command's name for a
+  its thoughts as one line, which a click opens (the agent's text with a small subset of Markdown rendered by
+  `chat_markdown.h`: bold, inline code, fenced code blocks, bulleted and numbered lists and paragraphs, everything
+  else, such as headings, links and tables, as plain text with its marks taken out, and the text kept as it came);
+  its tool calls as rows with a status mark, the command's name for a
   Caliper tool (recognised from the names the agents give MCP tools, such as `mcp__caliper__panel_create`, or from
   `_meta.caliper.command`, which `caliper-agent` sets since it calls Caliper API itself), the title
   and the status in a word; its plan as rows; its permission requests as cards with the file, the compact diff for a

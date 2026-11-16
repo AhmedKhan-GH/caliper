@@ -736,3 +736,16 @@ TEST_CASE("side chat: caliper-agent's turn that does not fit its context ends wi
     REQUIRE(stop);
     CHECK(stop->text == "DONE");
 }
+
+// The chat renders an agent's Markdown (chat_markdown.h) as display only: the
+// conversation keeps the text as the agent sent it, marks and all.
+TEST_CASE("side chat: the agent's text is kept as it was sent, Markdown and all") {
+    Fixture f("chat-markdown-kept");
+    SideChat chat(f.options());
+    say(chat, "**Spec** `attention-entropy` and [a link](https://example.org)");
+    REQUIRE(pump_until(chat, [&] { return turn_over(chat); }));
+    const ChatItem* reply = find(chat, K::agent, 1);
+    REQUIRE(reply);
+    CHECK(reply->text == "You said: **Spec** `attention-entropy` and [a link](https://example.org)");
+    CHECK(chat_markdown_plain(reply->text) == "You said: Spec attention-entropy and a link");
+}

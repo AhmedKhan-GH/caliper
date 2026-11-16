@@ -80,6 +80,7 @@
 //
 // Built only with CALIPER_WITH_BUILDER.
 // ============================================================================
+#include "builder/chat_markdown.h"
 #include "builder/widget_surface.h"
 
 #include <caliper_builder/acp/acp_client.h>
@@ -452,6 +453,14 @@ private:
     caliper_builder::Error custom_error_;
     bool diagnostics_open_ = false;
     std::map<std::string, bool> group_open_;   // groups the person opened or closed
+    // The agent's text as it is drawn (chat_markdown.h), by item, laid out
+    // again only when the text, the width or the text scale changed.
+    struct MarkdownCache {
+        std::string text;
+        float width = -1.0f, scale = 0.0f;
+        MdLayout layout;
+    };
+    std::map<size_t, MarkdownCache> markdown_;
     size_t drawn_items_ = 0;
     bool follow_ = true;
 };

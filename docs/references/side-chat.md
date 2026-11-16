@@ -103,6 +103,12 @@ The conversation holds your messages, the agent's text, its thoughts as one line
 command's name for a Caliper tool, the title, and the status: pending, running, done, failed or stopped), its plan, and
 the end of each turn in a word: DONE, STOPPED, DECLINED, LIMIT or FAILED.
 
+**The agent's text** shows a small part of Markdown: **bold**, `inline code` in the mono face, fenced code blocks on a
+plate, bulleted and numbered lists, and paragraphs. Everything else shows as plain text with its marks taken out:
+headings, emphasis, a link's or an image's text (its address is dropped, and nothing in the text can be clicked or
+loads anything), HTML tags, quotes and table rows. A mark that is not closed yet, as the text streams in, is left out
+until its pair arrives. The conversation keeps the text as the agent sent it.
+
 **The agent's permission requests** are cards: the file, the change, and one button per option the agent offers.
 For a `*.spec.toml` the change is the compact diff that the inline surface and the approval cards show (a new panel's
 primitive and title first, then its other keys and every other change), with Diff for the full diff; for any other
