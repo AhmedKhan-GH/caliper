@@ -520,6 +520,108 @@ TEST_CASE("gfx/Metal scene view: an update of one batch reuses its buffers and r
     CHECK(v.counts().buffers_created == created + 1);
 }
 
+TEST_CASE("gfx/Metal scene view: a frame dropped after the index clamp was emitted clamps again in the next frame") {
+    // A mesh of 8 vertices is drawn; then one of 4 vertices with the same indices arrives, and the
+    // frame that emitted its clamp is dropped (its compile fails on a camera that is not finite).
+    // The next frame must clamp again, so that every index the draw reads is below 4, rather than
+    // reuse the indices clamped against 8.
+    ViewRig rig;
+    if (!rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    SceneView& v = *rig.view;
+    Wire w;
+    const int32_t tri[6] = {5, 6, 7, 4, 5, 6};
+    auto mesh = [&](uint64_t seq, const std::vector<float>& pos) {
+        wire::SceneUpdate u = update("surface", CALIPER_NET_PART_MESH, seq, false);
+        u.params.set("color", rgba_json(0xff3080c0u));
+        u.arrays.push_back(wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {int64_t(pos.size() / 3), 3},
+                                               pos.data(), pos.size() * 4));
+        u.arrays.push_back(wire::Section::make("indices", CALIPER_NET_DTYPE_I32, {2, 3}, tri, sizeof tri));
+        return w.roundtrip(u);
+    };
+    std::vector<float> eight, four;
+    for (int i = 0; i < 8; ++i) {
+        const float p[3] = {float(i & 1), float((i >> 1) & 1), float(i >> 2)};
+        eight.insert(eight.end(), p, p + 3);
+        if (i < 4) four.insert(four.end(), p, p + 3);
+    }
+    std::string why;
+    REQUIRE_MESSAGE(feed(v, mesh(1, eight), &why), why);
+    v.keep_draws(true);
+    REQUIRE_MESSAGE(v.render(64, 64, 1.0f, 0xff000000u, &why), why);
+    REQUIRE(v.backend().wait(v.backend().last_use(v.color())));
+
+    // The smaller mesh, and a frame whose compile fails after prepare emitted the clamp.
+    REQUIRE_MESSAGE(feed(v, mesh(2, four), &why), why);
+    std::get<caliper_scene::Orbit>(v.camera()).distance = NAN;
+    CHECK_FALSE(v.render(64, 64, 1.0f, 0xff000000u, &why));
+    CHECK(why.find("not finite") != std::string::npos);
+
+    // A good frame: the clamp runs again in it.
+    v.fit();
+    v.backend().take_stats();
+    REQUIRE_MESSAGE(v.render(64, 64, 1.0f, 0xff000000u, &why), why);
+    CHECK(v.backend().take_stats().dispatches == 1);
+    REQUIRE(v.last_draws().records().size == 1);
+    const DrawRecord& r = v.last_draws().records()[0];
+    REQUIRE(bool(r.index_buffer));
+    REQUIRE(r.count == 6);
+
+    // The indices the draw reads, copied out of the layer's index buffer by a small dispatch.
+    static const char* kCopyMsl = R"metal(
+#include <metal_stdlib>
+using namespace metal;
+kernel void cs_copy(device const uint* src [[buffer(0)]], device uint* dst [[buffer(1)]],
+                    uint i [[thread_position_in_grid]]) { dst[i] = src[i]; }
+)metal";
+    static const EntryDesc kCopyEntries[] = {{"cs_copy", kStageCompute, {1, 1, 1}}};
+    static const BindingDesc kCopyBindings[] = {
+        {0, 0, BindingType::Storage, kStageCompute, false, 4, Format::RGBA8Unorm, 0},
+        {0, 1, BindingType::StorageReadWrite, kStageCompute, false, 4, Format::RGBA8Unorm, 1},
+    };
+    Backend& gfx = v.backend();
+    ProgramDesc pd;
+    pd.label = "copy indices";
+    pd.entries = kCopyEntries;
+    pd.entry_count = 1;
+    pd.bindings = kCopyBindings;
+    pd.binding_count = 2;
+    pd.msl = kCopyMsl;
+    const Program copy = gfx.create_program(pd);
+    REQUIRE_MESSAGE(bool(copy), gfx.last_error());
+    ComputePipelineDesc cd;
+    cd.program = copy;
+    cd.entry = "cs_copy";
+    const Pipeline pipe = gfx.create_compute_pipeline(cd);
+    const Buffer out = gfx.create_buffer({r.count * 4, kStorage, true, "indices read back"});
+    REQUIRE_MESSAGE((pipe && out), gfx.last_error());
+    BindGroupDesc bd;
+    bd.program = copy;
+    bd.entry_count = 2;
+    bd.entries[0].binding = 0;
+    bd.entries[0].buffer = r.index_buffer;
+    bd.entries[0].offset = r.index_offset;
+    bd.entries[0].size = r.count * 4;
+    bd.entries[1].binding = 1;
+    bd.entries[1].buffer = out;
+    const BindGroup g = gfx.create_bind_group(bd);
+    REQUIRE_MESSAGE(bool(g), gfx.last_error());
+    Frame f;
+    const BindGroup groups[1] = {g};
+    f.dispatch(pipe, groups, {}, r.count, 1, 1);
+    const Serial s = gfx.submit(std::move(f));
+    REQUIRE_MESSAGE(s != 0, gfx.last_error());
+    REQUIRE(gfx.wait(s));
+    const uint32_t* got = static_cast<const uint32_t*>(gfx.mapped(out));
+    REQUIRE(got != nullptr);
+    std::string seen;
+    for (uint32_t i = 0; i < r.count; ++i) seen += (i ? " " : "") + std::to_string(got[i]);
+    for (uint32_t i = 0; i < r.count; ++i) CHECK_MESSAGE(got[i] < 4, "the draw reads indices ", seen);
+    gfx.release(g);
+    gfx.release(out);
+    gfx.release(pipe);
+    gfx.release(copy);
+}
+
 TEST_CASE("gfx/Metal scene view: timing — the demo scene's cost per frame and of applying one mesh update") {
     const char* on = std::getenv("CALIPER_GFX_SCENE_VIEW_BENCH");
     if (!on || std::string(on) != "1") return;   // opt-in, like the other timing rows

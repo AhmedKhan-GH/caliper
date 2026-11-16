@@ -536,6 +536,7 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     cost_.compile_ms = ms_since(t0);
     if (!r.ok) {
         if (why) *why = r.notes.empty() ? std::string("the scene did not compile") : r.notes[0];
+        compiler_.discard_prepared();   // the frame with its clamps is dropped
         dirty_ = false;   // not retried every frame; the next change tries again
         return false;
     }
@@ -552,6 +553,7 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     drawn_revision_ = tree_.revision();
     drawn_pose_ = tree_.pose_revision();
     if (s == 0) {
+        compiler_.discard_prepared();
         if (why) *why = "the layer refused the frame: " + gfx_.last_error();
         return false;
     }

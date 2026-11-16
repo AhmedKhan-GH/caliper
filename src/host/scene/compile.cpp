@@ -198,6 +198,7 @@ bool SceneCompiler::is_prepared(uint64_t k, const BatchArray& a, uint64_t seq) c
 }
 
 void SceneCompiler::prepare(const SceneTree& tree, Resources& res, Frame& frame) {
+    fresh_.clear();
     for (uint32_t i = 0; i < tree.entity_count(); ++i) {
         const EntityId e = tree.entity_at(i);
         // The index clamp of a mesh: 3T indices, each clamped to the last vertex.
@@ -218,6 +219,7 @@ void SceneCompiler::prepare(const SceneTree& tree, Resources& res, Frame& frame)
                 frame.dispatch(res.compute_pipeline(ProgramId::index_clamp, "cs_clamp_indices"), groups, offsets,
                                uint32_t(std::min<uint64_t>((n + 63) / 64, 65535)), 1, 1);
                 prepared_[k] = {m->seq, idx->buffer.id, idx->offset, idx->count};
+                fresh_.push_back(k);
             }
         }
         // The edge gather of index-pair edges: both ends' positions and per-vertex colour sources.
@@ -250,9 +252,15 @@ void SceneCompiler::prepare(const SceneTree& tree, Resources& res, Frame& frame)
                 frame.dispatch(res.compute_pipeline(ProgramId::edge_gather, "cs_gather_edges"), groups, offsets,
                                uint32_t(std::min<uint64_t>((E + 63) / 64, 65535)), 1, 1);
                 prepared_[k] = {l->seq, pairs->buffer.id, pairs->offset, pairs->count};
+                fresh_.push_back(k);
             }
         }
     }
+}
+
+void SceneCompiler::discard_prepared() {
+    for (const uint64_t k : fresh_) prepared_.erase(k);
+    fresh_.clear();
 }
 
 CompileResult SceneCompiler::compile(const SceneTree& tree, const ViewCamera& camera, const CompileOptions& options,
