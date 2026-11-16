@@ -20,6 +20,7 @@ import time
 
 from pydantic_ai.models._anthropic_schema_limits import exceeded_limit
 
+from caliper_agent.loop import REFUSAL_TEXT
 from conftest import (FAKE_KEY, allow, deny, message, message_text, prompts, read_requests, statuses, text,
                       thinking, tool_results, tool_use)
 
@@ -54,10 +55,11 @@ def test_plain_turn_streams_and_sends_the_documented_request(run_agent):
     assert body["tool_choice"] == {"type": "auto"}
     assert body["cache_control"]["type"] == "ephemeral"
     assert body["system"][-1]["cache_control"]["type"] == "ephemeral"
-    assert body["fallbacks"] == "default"
     assert body["context_management"] == {"edits": [{"type": "compact_20260112"}]}
     betas = req["headers"]["anthropic-beta"].split(",")
-    assert "server-side-fallback-2026-07-01" in betas and "compact-2026-01-12" in betas
+    assert "compact-2026-01-12" in betas
+    # Server-side refusal fallbacks are off: neither the setting nor its beta is sent.
+    assert "fallbacks" not in body and not any(b.startswith("server-side-fallback") for b in betas)
     for forbidden in ("temperature", "top_p", "top_k", "thread"):
         assert forbidden not in body
     # Tools: one per command, named with _ for ., eagerly streamed, and strict
@@ -159,7 +161,7 @@ def test_cache_fields_across_two_turns(run_agent, tmp_path):
     assert r2["messages"][: len(r1["messages"])] == r1["messages"]
 
 
-def test_model_and_effort_are_config_options_and_haiku_has_no_fallback(run_agent):
+def test_model_and_effort_are_config_options(run_agent):
     agent, record = run_agent([message(text("Fast.")), message(text("Fable."))], route="anthropic")
     sid = agent.start_session()
     response, _ = agent.request("session/set_config_option",
@@ -174,44 +176,12 @@ def test_model_and_effort_are_config_options_and_haiku_has_no_fallback(run_agent
     agent.prompt(sid, "Deep")
     haiku, fable = (r for r in read_requests(record))
     assert haiku["body"]["model"] == "claude-haiku-5-5" and haiku["body"]["output_config"] == {"effort": "low"}
-    assert "fallbacks" not in haiku["body"]
-    assert "server-side-fallback" not in haiku["headers"].get("anthropic-beta", "")
-    assert fable["body"]["model"] == "claude-fable-5-2" and fable["body"]["fallbacks"] == "default"
+    assert fable["body"]["model"] == "claude-fable-5-2" and fable["body"]["output_config"] == {"effort": "low"}
+    for request in (haiku, fable):
+        assert "fallbacks" not in request["body"]
+        assert "server-side-fallback" not in request["headers"].get("anthropic-beta", "")
     bad, _ = agent.request("session/set_config_option", {"sessionId": sid, "configId": "model", "value": "gpt-x"})
     assert bad["error"]["code"] == -32602
-
-
-def test_fallback_mid_reply_drops_the_declined_blocks_and_their_tool_calls(run_agent, caliper):
-    # Pydantic AI drops a `fallback` block; CaliperAnthropicModel keeps it and sends it back in place.
-    fallback = {"type": "fallback", "from": {"model": "claude-opus-5-5"}, "to": {"model": "claude-opus-5"},
-                "trigger": {"type": "refusal", "category": "cyber"}}
-    steps = [message(thinking("Plan."), text("Let me "), tool_use("toolu_declined", "loader_delete", {"id": "x"}),
-                     fallback, thinking("Again."), text("Here is the answer."),
-                     tool_use("toolu_kept", "catalog_list", {}),
-                     stop="tool_use", model="claude-opus-5",
-                     iterations=[{"type": "message", "input_tokens": 5, "output_tokens": 2,
-                                  "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
-                                 {"type": "fallback_message", "input_tokens": 5, "output_tokens": 9,
-                                  "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}]),
-             message(text("Done."))]
-    agent, record = run_agent(steps, route="anthropic")
-    sid = agent.start_session()
-    response, updates = agent.prompt(sid, "Go", on_permission=allow)
-    assert response["result"]["stopReason"] == "end_turn"
-    assert caliper.commands("loader.delete") == [] and len(caliper.commands("catalog.list")) == 1
-    found = [s for s in statuses(updates)]
-    [fb] = [s for s in found if s["status"] == "fallback"]
-    assert fb["from_model"] == "claude-opus-5-5" and fb["to_model"] == "claude-opus-5" and fb["category"] == "cyber"
-    assert "served_by" in [s["status"] for s in found]
-    echoed = read_requests(record)[1]["body"]["messages"][1]["content"]
-    assert [b["type"] for b in echoed] == ["text", "fallback", "thinking", "text", "tool_use"]
-    assert echoed[1] == fallback
-    assert echoed[4]["id"] == "toolu_kept"
-    # Only the kept call has a result.
-    results = read_requests(record)[1]["body"]["messages"][2]["content"]
-    assert [r["tool_use_id"] for r in results] == ["toolu_kept"]
-    assert any(u["sessionUpdate"] == "tool_call_update" and u["toolCallId"] == "toolu_declined"
-               and u["status"] == "failed" for u in updates)
 
 
 def test_compaction_is_shown_and_sent_back(run_agent):
@@ -242,7 +212,9 @@ def test_refusal_and_cut_offs_on_the_wire(run_agent, caliper):
     response, updates = agent.prompt(sid, "Declined prompt")
     assert response["result"]["stopReason"] == "refusal"
     [status] = [s for s in statuses(updates) if s["status"] == "refusal"]
+    # The provider's category and explanation are kept in `_meta`, out of the text.
     assert status["category"] == "cyber" and status["explanation"] == "Declined."
+    assert status["text"] == REFUSAL_TEXT
     response, _ = agent.prompt(sid, "Cut")
     assert response["result"]["stopReason"] == "max_tokens"
     response, _ = agent.prompt(sid, "Full")
@@ -401,11 +373,24 @@ def test_refusal_is_surfaced_and_the_turn_is_taken_back(run_agent, caliper):
     assert response["result"]["stopReason"] == "refusal"
     [status] = [s for s in statuses(updates) if s["status"] == "refusal"]
     assert status["category"] == "cyber" and status["turn_removed"] is True
+    assert status["text"] == REFUSAL_TEXT and "cyber" not in status["text"]
     response, _ = agent.prompt(sid, "Plan a loss dashboard")
     assert response["result"]["stopReason"] == "end_turn"
     # The declined prompt and its partial reply are not in the next request.
     history = read_requests(record)[1]["messages"]
     assert prompts(history) == ["Plan a loss dashboard"] and len(history) == 1
+
+
+def test_the_refusal_text_is_neutral_and_offers_three_ways_forward():
+    # A refusal can be a false positive, so the text blames no one and names
+    # the three ways forward: rephrase, retry, or another model or provider.
+    text = REFUSAL_TEXT.lower()
+    assert text.startswith("the model declined this request.")
+    assert "rephrase" in text and "try it again" in text
+    assert "another model or provider" in text and "local model" in text
+    for word in ("policy", "violat", "harm", "unsafe", "not allowed", "inappropriate", "you asked", "your request"):
+        assert word not in text
+    assert len(REFUSAL_TEXT) < 160
 
 
 def test_a_refusal_later_in_a_turn_removes_the_whole_turn(run_agent, caliper):

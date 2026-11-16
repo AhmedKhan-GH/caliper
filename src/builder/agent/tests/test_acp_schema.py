@@ -4,7 +4,8 @@ The models come from the official ACP Python SDK (`agent-client-protocol`,
 generated from the protocol's schema), installed as a test dependency only:
 the sidecar keeps its own JSON-RPC layer (acp.py). Scenarios cover a tool turn
 with a capture, spec diffs in permission requests, statuses, a refusal, a cut-off
-reply, exhausted retries, a missing key and a mid-reply fallback. Skipped when
+reply, exhausted retries, a missing key and a refusal on the Claude API's wire
+format. Skipped when
 the SDK is not installed.
 """
 
@@ -115,16 +116,15 @@ def test_the_models_reject_wrong_shapes():
              "options": [{"optionId": "a", "name": "A", "kind": "allow_sometimes"}]})
 
 
-def test_the_messages_without_a_key_and_after_a_fallback_follow_the_protocol(tracked, caliper):
+def test_the_messages_without_a_key_and_of_a_wire_refusal_follow_the_protocol(tracked, caliper):
     agent, _ = tracked([message(text("never"))], key=None)
     sid = agent.start_session()
     agent.prompt(sid, "Hello")
     assert _validate_all(agent) == 3
 
-    fallback = {"type": "fallback", "from": {"model": "claude-opus-5-5"}, "to": {"model": "claude-opus-5"},
-                "trigger": {"type": "refusal", "category": "cyber"}}
-    agent, _ = tracked([message(text("Let me "), tool_use("d1", "loader_delete", {"id": "x"}), fallback,
-                                text("Here."), stop="end_turn", model="claude-opus-5")], route="anthropic")
+    agent, _ = tracked([message(text("Let me "), tool_use("d1", "loader_delete", {"id": "x"}), stop="refusal",
+                                stop_details={"type": "refusal", "category": "cyber"})], route="anthropic")
     sid = agent.start_session()
-    agent.prompt(sid, "Go", on_permission=allow)
+    response, _ = agent.prompt(sid, "Go", on_permission=allow)
+    assert response["result"]["stopReason"] == "refusal"
     assert _validate_all(agent) > 5

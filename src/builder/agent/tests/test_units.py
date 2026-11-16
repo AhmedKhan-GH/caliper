@@ -16,10 +16,10 @@ from caliper_agent import keyguard
 from caliper_agent.caliper_api import (ApiFileError, MAX_IMAGE_BYTES, default_api_file, output_from_envelope,
                                        parse_api_file, png_size)
 from pydantic_ai.exceptions import ModelHTTPError, ModelRateLimitError, ToolFailed
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ThinkingPart, ToolCallPart, ToolReturnPart
+from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
 from pydantic_ai.models._anthropic_schema_limits import exceeded_limit
 
-from caliper_agent.claude import FALLBACK_KEY, NO_SERVER_FALLBACK, echo_after_fallback, model_ids
+from caliper_agent.claude import (NO_SERVER_FALLBACK, SERVER_SIDE_FALLBACKS, claude_settings, model_ids)
 from caliper_agent.loop import classify, close_tool_calls
 from caliper_agent.openai_compat import BaseUrlError, check_base_url, refusal_kind
 from caliper_agent.provider import AgentError
@@ -311,39 +311,12 @@ def test_envelopes_and_images():
 # ---- the Claude provider's pure parts --------------------------------------------------------
 
 
-def _marker(model_from: str, model_to: str) -> TextPart:
-    return TextPart(content="", provider_details={FALLBACK_KEY: {"type": "fallback", "from": {"model": model_from},
-                                                                 "to": {"model": model_to}}})
-
-
-def test_echo_after_a_mid_reply_fallback():
-    parts = [ThinkingPart(content="x", signature="s"), TextPart(content="partial"),
-             ToolCallPart(tool_name="n", args="{}", tool_call_id="t1"), _marker("a", "b"),
-             ThinkingPart(content="y", signature="t"), TextPart(content="answer"),
-             ToolCallPart(tool_name="n", args="{}", tool_call_id="t2")]
-    out = echo_after_fallback(ModelResponse(parts=list(parts)))
-    kinds = [type(p).__name__ for p in out.parts]
-    assert kinds == ["TextPart", "TextPart", "ThinkingPart", "TextPart", "ToolCallPart"]
-    assert out.parts[1].provider_details[FALLBACK_KEY]["to"] == {"model": "b"}
-    assert out.parts[-1].tool_call_id == "t2"
-    # Two hops: everything before the last boundary but text and boundaries goes.
-    two = echo_after_fallback(ModelResponse(parts=[_marker("a", "b"), ThinkingPart(content="z", signature="u"),
-                                                   _marker("b", "c"), TextPart(content="end")]))
-    assert [type(p).__name__ for p in two.parts] == ["TextPart", "TextPart", "TextPart"]
-    plain = [ThinkingPart(content="x", signature="s"), TextPart(content="t")]
-    assert echo_after_fallback(ModelResponse(parts=list(plain))).parts == plain
-
-
-def test_the_private_hooks_the_fallback_workaround_overrides_still_exist():
-    # CaliperAnthropicModel overrides two private methods of Pydantic AI; if a
-    # new version renames them, this fails instead of fallbacks breaking quietly.
-    import inspect
-    from pydantic_ai.models.anthropic import AnthropicModel
-    from pydantic_ai.models.anthropic._streaming import AnthropicStreamedResponse
-    assert list(inspect.signature(AnthropicModel._map_text_part).parameters) == [
-        "self", "message", "part", "assistant_content_params"]
-    assert list(inspect.signature(AnthropicStreamedResponse._map_content_block_start).parameters) == ["self", "event"]
-    assert inspect.iscoroutinefunction(AnthropicModel._process_streamed_response)
+def test_server_side_fallbacks_are_off():
+    # Pydantic AI drops the reply's `fallback` block, so the setting stays off.
+    assert SERVER_SIDE_FALLBACKS is False
+    for model in model_ids():
+        settings = claude_settings(model, "high")
+        assert "extra_body" not in settings and "anthropic_betas" not in settings
 
 
 def test_models():

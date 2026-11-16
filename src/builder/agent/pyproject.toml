@@ -14,14 +14,17 @@ readme = { text = "See design/byok-agent.md in the Caliper repository.", content
 requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = [
-    # The agent loop and the model layer. The slim distribution with only the
-    # two extras used: anthropic (the official Claude API SDK underneath) and
-    # openai (for OpenAI-compatible servers). The full `pydantic-ai` package
-    # would pull every provider's SDK. Pinned to the minor version, because
-    # claude.py overrides two private methods (a test checks they still exist).
-    "pydantic-ai-slim[anthropic,openai]~=2.68.0",
+    # The agent loop and the provider layer: the slim distribution with the
+    # anthropic extra (the official Claude API SDK underneath). The full
+    # `pydantic-ai` package would pull every provider's SDK. Tested with 2.68.
+    "pydantic-ai-slim[anthropic]>=2.68,<3",
     # The official Claude API SDK. 2.x sends API version 2026-10-21.
     "anthropic>=2.8,<3",
+    # The OpenAI SDK, for OpenAI-compatible servers, installed directly rather
+    # than through Pydantic AI's openai extra, which also pulls tiktoken (and
+    # with it requests, certifi, regex and more) for features the sidecar does
+    # not use. Tested with 3.51.
+    "openai>=3.51,<4",
 ]
 
 [project.optional-dependencies]

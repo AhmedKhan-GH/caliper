@@ -17,19 +17,15 @@ through Pydantic AI's documented `AnthropicModelSettings`:
 
 Strict tools are Pydantic AI's `ToolDefinition.strict`, chosen by tools.py.
 
-Server-side refusal fallbacks are not part of Pydantic AI's settings, so the
-request carries them in `extra_body` (`fallbacks: "default"`) with the beta in
-`anthropic_betas`. Pydantic AI drops the `fallback` block from a streamed reply
-(its `AnthropicStreamedResponse` has no case for it) and has no part that maps
-back to one, so after a mid-reply fallback it would echo the turn without the
-boundary the API needs and would run the declining model's tool calls. The
-workaround is `CaliperAnthropicModel` below: it keeps each `fallback` block as an
-empty text part that carries the block in `provider_details`, maps that part
-back to the block when the history is sent, and `echo_after_fallback()` (run by
-the loop's `after_model_request` hook) leaves out what the API says to leave out.
-It overrides two private methods of Pydantic AI 2.68, `_map_content_block_start`
-of the streamed response and `_map_text_part` of the model, and a test pins
-both. Claude Haiku 5.5 has no server-side fallback, so its requests carry none.
+Server-side refusal fallbacks are off (`SERVER_SIDE_FALLBACKS`). Pydantic AI
+drops the `fallback` block from a streamed reply and has no part that maps back
+to one, so after a fallback in the middle of a reply the next request would
+lose the boundary the Claude API needs to check the turn, and the tool calls of
+the model that declined would run. A refusal therefore ends the turn with ACP's
+`refusal` stop reason (loop.py). The switch can be turned on once Pydantic AI
+keeps the block; the request would then carry `fallbacks: "default"` in
+`extra_body` and its beta in `anthropic_betas`, except on Claude Haiku 5.5,
+which has no server-side fallback.
 
 The client gets the key as an explicit argument, so the SDK never looks for
 another credential, the base URL is fixed to the Claude API's, and the SDK's own
@@ -43,9 +39,7 @@ from typing import Any
 
 import anthropic
 from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
-from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
-from pydantic_ai.models.anthropic._streaming import AnthropicStreamedResponse
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from .keyguard import Secret
@@ -64,15 +58,16 @@ DEFAULT_MODEL = "claude-opus-5-5"
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 DEFAULT_EFFORT = "high"
 
+# Server-side refusal fallbacks. Off: Pydantic AI drops the reply's `fallback`
+# block, which the next request needs after a fallback in the middle of a
+# reply. Turn this on once Pydantic AI keeps the block.
+SERVER_SIDE_FALLBACKS = False
 # Models without server-side refusal fallbacks: the parameter is left out.
 NO_SERVER_FALLBACK = frozenset({"claude-haiku-5-5"})
+BETA_FALLBACK = "server-side-fallback-2026-07-01"
 
 MAX_TOKENS = 64000
-BETA_FALLBACK = "server-side-fallback-2026-07-01"
 COMPACTION = {"edits": [{"type": "compact_20260112"}]}
-
-# The key under which a kept `fallback` block rides in a text part's provider_details.
-FALLBACK_KEY = "caliper_fallback_block"
 
 
 def model_ids() -> tuple[str, ...]:
@@ -89,80 +84,12 @@ def claude_settings(model_id: str, effort: str, *, compaction: bool = True) -> A
         anthropic_cache_instructions=True,
         anthropic_cache=True,
     )
-    if model_id not in NO_SERVER_FALLBACK:
+    if SERVER_SIDE_FALLBACKS and model_id not in NO_SERVER_FALLBACK:
         settings["extra_body"] = {"fallbacks": "default"}
         settings["anthropic_betas"] = [BETA_FALLBACK]
     if compaction:
         settings["anthropic_context_management"] = COMPACTION  # type: ignore[typeddict-item]
     return settings
-
-
-def fallback_block(part: Any) -> dict | None:
-    """The `fallback` block a text part stands for, or None."""
-    if isinstance(part, TextPart) and not part.content and isinstance(part.provider_details, dict):
-        block = part.provider_details.get(FALLBACK_KEY)
-        if isinstance(block, dict):
-            return block
-    return None
-
-
-def echo_after_fallback(response: ModelResponse) -> ModelResponse:
-    """The response as it may be sent back after a mid-reply fallback.
-
-    Before the last `fallback` block, only text and the fallback blocks
-    themselves are kept: the declining model's thinking and tool calls are left
-    out, as the API requires, and so are never run. The sidecar sends no server
-    tools, so there are no paired server-tool blocks to keep.
-    """
-    last = -1
-    for i, part in enumerate(response.parts):
-        if fallback_block(part) is not None:
-            last = i
-    if last < 0:
-        return response
-    kept = [part for i, part in enumerate(response.parts)
-            if i >= last or (isinstance(part, TextPart) and (part.content or fallback_block(part) is not None))]
-    if len(kept) == len(response.parts):
-        return response
-    response.parts = kept
-    return response
-
-
-def declined_tool_calls(before: ModelResponse, after: ModelResponse) -> list[str]:
-    """The ids of the tool calls `echo_after_fallback` left out."""
-    kept = {p.tool_call_id for p in after.parts if isinstance(p, ToolCallPart)}
-    return [p.tool_call_id for p in before.parts if isinstance(p, ToolCallPart) and p.tool_call_id not in kept]
-
-
-class _FallbackKeepingStream(AnthropicStreamedResponse):
-    """Keeps a `fallback` block as an empty text part instead of dropping it."""
-
-    def _map_content_block_start(self, event):  # type: ignore[override]
-        block = event.content_block
-        if getattr(block, "type", None) == "fallback":
-            self._current_block = block
-            yield self._parts_manager.handle_part(
-                vendor_part_id=event.index,
-                part=TextPart(content="", provider_name=self.provider_name,
-                              provider_details={FALLBACK_KEY: block.to_dict(mode="json")}))
-            return
-        yield from super()._map_content_block_start(event)
-
-
-class CaliperAnthropicModel(AnthropicModel):
-    """Pydantic AI's Anthropic model, plus the round trip of `fallback` blocks."""
-
-    async def _process_streamed_response(self, *args: Any, **kwargs: Any) -> AnthropicStreamedResponse:
-        streamed = await super()._process_streamed_response(*args, **kwargs)
-        streamed.__class__ = _FallbackKeepingStream
-        return streamed
-
-    def _map_text_part(self, message, part, assistant_content_params) -> None:  # type: ignore[override]
-        block = fallback_block(part)
-        if block is not None:
-            assistant_content_params.append(block)  # back where it appeared
-            return
-        super()._map_text_part(message, part, assistant_content_params)
 
 
 class ClaudeProvider:
@@ -184,14 +111,14 @@ class ClaudeProvider:
             http_client=http_client,
         )
         self._provider = AnthropicProvider(anthropic_client=self._client)
-        self._models: dict[str, CaliperAnthropicModel] = {}
+        self._models: dict[str, AnthropicModel] = {}
         self._compaction = compaction
         self.backoff_scale = max(0.0, backoff_scale)
         self.extra: dict[str, Any] = {}
 
-    def model(self, model_id: str) -> CaliperAnthropicModel:
+    def model(self, model_id: str) -> AnthropicModel:
         if model_id not in self._models:
-            self._models[model_id] = CaliperAnthropicModel(model_id, provider=self._provider)
+            self._models[model_id] = AnthropicModel(model_id, provider=self._provider)
         return self._models[model_id]
 
     def model_settings(self, settings: Settings, *, strict: bool) -> dict:

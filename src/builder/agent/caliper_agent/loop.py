@@ -13,15 +13,18 @@ there, before any tool runs:
 - `length` (`max_tokens` or a full context window): the node does not run, so
   no tool of a cut-off reply runs; each call gets an error result in the
   history, and the turn ends with `max_tokens`.
-- `content_filter` (a refusal, after any server-side fallback): the node does
-  not run, the history goes back to what it was before the prompt, as ACP's
-  `refusal` means, and the turn ends with `refusal`.
+- `content_filter` (the model declined): the node does not run, the history
+  goes back to what it was before the prompt, as ACP's `refusal` means, and the
+  turn ends with `refusal`. The pane gets `REFUSAL_TEXT`: neutral, since a
+  refusal can be a false positive, with three ways forward. Server-side
+  fallbacks to another model are off (claude.py says why).
 
 `CaliperHooks`, a Pydantic AI capability, sits in the model request: its
 `on_model_request_error` hook sees every failed attempt that reached the pane
 with nothing yet, tells the pane what it waits for and raises
-`RetryModelRequest`, or ends the turn with an error; its `after_model_request`
-hook applies the echo rule after a mid-reply fallback (claude.py).
+`RetryModelRequest`, or ends the turn with an error; its
+`prepare_model_request` hook sends the tools without `strict` once the API has
+refused strict mode for the session.
 
 Cancellation uses `AgentRun.cancel()`: Pydantic AI closes the stream or
 cancels the running tool, and raises `RunCancelled` with everything that
@@ -54,7 +57,6 @@ from pydantic_ai.messages import (CompactionPart, FunctionToolResultEvent, Model
 
 from .acp import Connection, PeerClosed, RpcError
 from .caliper_api import CaliperApi, ToolOutput
-from .claude import echo_after_fallback, fallback_block
 from .keyguard import scrub
 from .openai_compat import refusal_kind
 from .provider import AgentError, Provider, Retry, Settings, TurnUsage
@@ -71,6 +73,13 @@ MAX_ATTEMPTS = 5
 MAX_RETRY_AFTER_S = 60.0
 MAX_BACKOFF_S = 30.0
 MAX_ERROR_TEXT = 500
+
+# What the pane shows when the model declines a request. A refusal can be a
+# false positive (machine learning in the physical sciences touches chemistry,
+# biology and security data), so it is neutral and offers three ways forward.
+REFUSAL_TEXT = ("The model declined this request. You can rephrase it, try it again, or switch to another "
+                "model or provider, such as a local model.")
+REFUSAL_CHANGES_STAY = " Changes this turn already made in Caliper stay; you can undo them in the app."
 
 REVIEW_SPEC_CHANGES = "spec_changes"
 REVIEW_DESTRUCTIVE_ONLY = "destructive_only"
@@ -128,9 +137,6 @@ class CaliperHooks(AbstractCapability[TurnDeps]):
 
     async def on_model_request_error(self, ctx, *, request_context, error):
         return await ctx.deps.runner.on_request_error(request_context, error)
-
-    async def after_model_request(self, ctx, *, request_context, response):
-        return echo_after_fallback(response)
 
 
 def build_agent(tools: list[ToolSpec], system_prompt: str) -> Agent:
@@ -494,14 +500,7 @@ class TurnRunner:
         if isinstance(event, PartStartEvent):
             part = event.part
             if isinstance(part, TextPart):
-                block = fallback_block(part)
-                if block is not None:
-                    trigger = block.get("trigger") if isinstance(block.get("trigger"), dict) else {}
-                    from_model = (block.get("from") or {}).get("model")
-                    to_model = (block.get("to") or {}).get("model")
-                    sink.status("fallback", f"{from_model} declined this request; {to_model} continued it.",
-                                from_model=from_model, to_model=to_model, category=trigger.get("category"))
-                elif part.content:
+                if part.content:
                     sink.message(part.content)
             elif isinstance(part, ThinkingPart):
                 if part.content:
@@ -521,29 +520,15 @@ class TurnRunner:
         """Accounts for a finished reply and says whether the turn stops before its tools."""
         counts = usage_counts(response)
         self._add_usage(counts, response.model_name or model_id)
-        if self._provider.name == "Claude API" and response.model_name and response.model_name != model_id:
-            # The Claude API names the model that served the reply; another one
-            # means a server-side fallback answered.
-            self._sink.status("served_by", f"{response.model_name} answered this request.",
-                              model=response.model_name)
         details = response.provider_details or {}
         if response.finish_reason == "content_filter":
             self._sink.fail_open_calls("Not run: the model declined the request.")
-            category = details.get("refusal_category")
-            text = "The model declined this request."
-            if category:
-                text += f" Category: {category}."
-            text += " The prompt and what followed it are left out of the conversation, so you can rephrase it."
-            if self.usage.requests > 1:
-                text += " Changes this turn already made in Caliper stay; undo them in the app if needed."
-            self._sink.status("refusal", text, category=category, explanation=details.get("refusal"),
-                              turn_removed=True)
+            text = REFUSAL_TEXT + (REFUSAL_CHANGES_STAY if self.usage.requests > 1 else "")
+            # The provider's category and explanation travel in `_meta` for the
+            # record; the text names neither.
+            self._sink.status("refusal", text, category=details.get("refusal_category"),
+                              explanation=details.get("refusal"), turn_removed=True)
             return "refusal"
-        # Calls the pane saw that are not in the reply any more (a fallback
-        # replaced the reply that proposed them) never run.
-        kept = {p.tool_call_id for p in response.parts if isinstance(p, ToolCallPart)}
-        self._sink.fail_open_calls("Not run: the model that proposed this call declined, and another model "
-                                   "continued.", keep=kept)
         if response.finish_reason == "length":
             self._sink.fail_open_calls("Not run: the reply was cut off at the output limit.")
             return "max_tokens"
