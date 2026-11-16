@@ -16,7 +16,7 @@ executable to its agent.
 
 1. The app with Caliper API on: `caliper --api`, or the app with its side chat's agent started, which starts the API
    itself ([Started by the side chat](api.md#started-by-the-side-chat)).
-2. `caliper-mcp`, which ships beside the `caliper` executable and is in the build folder of a development build.
+2. `caliper-mcp`, which ships beside the `caliper` executable; a development build puts it at `src/builder/mcp/caliper-mcp` in the build folder.
 
 While the API is on, the app writes the **API file**, `api.json` in the app-data folder ([Folders and environment
 variables](environment.md#the-app-data-folder)), for example `~/Library/Application Support/Caliper/api.json` on macOS,
@@ -95,12 +95,12 @@ Revision 2026-07-28, which has no handshake, is served too. `examples/build_a_da
 Python with the standard library only:
 
 ```sh
-python3 examples/build_a_dashboard/outside_agent.py --mcp <build>/caliper-mcp
+python3 examples/build_a_dashboard/outside_agent.py --mcp /path/to/caliper-mcp
 ```
 
 It lists the tools, lists the catalog, reads the open spec and adds a series panel of the learning rate beside the
-first panel; the call answers once you have approved the card in the app. With `--model <name>`, a model on a local
-OpenAI-compatible server, such as Ollama on `http://127.0.0.1:11434/v1`, chooses the calls instead.
+first panel; the call answers once you have approved the card in the app. With `--model <name>`, a model that Ollama
+serves on this machine chooses the calls instead, through Ollama's own chat API with a capped context.
 
 ## Tools
 
