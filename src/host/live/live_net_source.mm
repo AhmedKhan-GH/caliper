@@ -6,6 +6,7 @@
 
 #include "live/live_net_source.h"
 #include "live/live_series_ring.h"
+#include "live/scene_queue.h"
 
 #include "host_version.h"
 #include "live/live_shm.h"   // now_ns
@@ -200,6 +201,7 @@ struct NetView {
     std::deque<SeriesDelta> pending;
     uint64_t pending_end = 0;   // the largest end among the queued deltas
     uint64_t series_stamp = 0;  // stamp_ns of the newest SERIES message
+    std::deque<SceneItem> scene;   // a scene view's messages, for take_scene (scene_queue.h)
 
     // Frame thread only (series).
     id<MTLBuffer> ring = nil;
@@ -392,6 +394,19 @@ public:
         std::lock_guard<std::mutex> g(mu_);
         if (resolved) *resolved = v->resolved;
         if (offer) *offer = v->offer;
+        return true;
+    }
+
+    bool take_scene(uint64_t key, std::vector<SceneItem>* out) override {
+        NetView* v = find(key);
+        if (!v || v->kind != CALIPER_NET_KIND_SCENE) return false;
+        std::deque<SceneItem> got;
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            if (v->scene.empty()) return false;
+            got.swap(v->scene);
+        }
+        for (auto& it : got) out->push_back(std::move(it));
         return true;
     }
 
@@ -590,10 +605,11 @@ private:
                 switch (e.type) {
                     case caliper_net::Event::Type::Open: {
                         open = true;
-                        // 3.1: it shows controls and draws linked selections.
+                        // 3.1: it shows controls and draws linked selections; 3.2 draft:
+                        // it draws scenes.
                         wire::Hello h;
                         h.role = CALIPER_NET_ROLE_VIEWER;
-                        h.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION};
+                        h.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_SCENES};
                         Json sw = Json::object();
                         sw.set("name", "caliper-app");
                         sw.set("version", caliper_host::kHostVersionStr);
@@ -610,7 +626,7 @@ private:
                             client_->close(CALIPER_NET_CLOSE_UNSUPPORTED_DATA, "a text message");
                             break;
                         }
-                        on_frame(e.data);
+                        on_frame(std::make_shared<const Bytes>(std::move(e.data)));
                         break;
                     case caliper_net::Event::Type::Closed: {
                         const bool attached = session_seen_on_connection_;
@@ -706,7 +722,8 @@ private:
         return views_;
     }
 
-    void on_frame(const Bytes& data) {
+    void on_frame(std::shared_ptr<const Bytes> keep) {
+        const Bytes& data = *keep;
         wire::Message m;
         const wire::DecodeResult r = wire::decode(data.data(), data.size(), &m);
         if (r.status == wire::DecodeResult::Status::BadFrame) {
@@ -720,6 +737,9 @@ private:
             e.message = r.message;
             e.in_reply_to = r.type;
             send(e);
+            // A scene message this viewer does not build is ignored, and its view says so.
+            if (r.type == CALIPER_NET_MSG_SCENE_UPDATE && r.error_code == CALIPER_NET_ERR_UNSUPPORTED)
+                scene_note(r.frame.meta, "ignored: " + r.message);
             return;
         }
         const uint16_t type = wire::message_type(m);
@@ -743,7 +763,47 @@ private:
         else if (auto* c = std::get_if<wire::Controls>(&m)) on_controls(*c);
         else if (auto* cr = std::get_if<wire::ControlReply>(&m)) on_control_reply(*cr);
         else if (auto* sel = std::get_if<wire::Selection>(&m)) on_selection(*sel);
+        else if (auto* su = std::get_if<wire::SceneUpdate>(&m)) on_scene(keep, r.frame, std::move(*su));
+        else if (auto* sc = std::get_if<wire::SceneClear>(&m)) on_scene(keep, r.frame, std::move(*sc));
         else protocol_error(std::string("'") + wire::type_name(type) + "' sent to a viewer");
+    }
+
+    // ---- 3.2 draft: scenes -------------------------------------------------------------
+    // A scene message goes to its view's queue as it arrived, with the frame its sections
+    // point into; the frame thread applies it (take_scene).
+    void on_scene(const std::shared_ptr<const Bytes>& keep, const wire::Frame& frame,
+                  std::variant<wire::SceneUpdate, wire::SceneClear> msg) {
+        const uint32_t sub = std::visit([](const auto& x) { return x.sub; }, msg);
+        const auto it = by_sub_.find(sub);
+        if (it == by_sub_.end() || it->second->kind != CALIPER_NET_KIND_SCENE) return;
+        NetView& v = *it->second;
+        std::string ignored;
+        if (const auto* u = std::get_if<wire::SceneUpdate>(&msg)) {
+            // Sections this viewer does not build (stamp, normals, class ids, ...) are ignored.
+            for (const wire::Section& s : frame.sections)
+                if (!u->array(s.name)) ignored += (ignored.empty() ? "" : ", ") + s.name;
+            if (!ignored.empty())
+                ignored = "ignored in " + (u->path.empty() ? std::string("the root") : u->path) + " " + u->part +
+                          ": " + ignored;
+        }
+        std::lock_guard<std::mutex> g(mu_);
+        if (!ignored.empty()) scene_queue_push(v.scene, SceneItem{nullptr, ignored});
+        SceneItem item;
+        item.keep = keep;
+        if (auto* u = std::get_if<wire::SceneUpdate>(&msg)) item.msg = std::move(*u);
+        else item.msg = std::move(std::get<wire::SceneClear>(msg));
+        scene_queue_push(v.scene, std::move(item));
+        ++v.seq;
+    }
+
+    void scene_note(const Json& meta, const std::string& text) {
+        const Json* sub = meta.find("sub");
+        uint64_t s = 0;
+        if (!sub || !sub->get_u64(&s)) return;
+        const auto it = by_sub_.find((uint32_t)s);
+        if (it == by_sub_.end() || it->second->kind != CALIPER_NET_KIND_SCENE) return;
+        std::lock_guard<std::mutex> g(mu_);
+        scene_queue_push(it->second->scene, SceneItem{nullptr, text});
     }
 
     void on_welcome(const wire::Welcome& w) {
@@ -1051,7 +1111,9 @@ private:
         views_session_ = session_id_;
         std::vector<std::shared_ptr<NetView>> next;
         for (const wire::ViewInfo& vi : v.list) {
-            if (vi.kind < CALIPER_LIVE_KIND_HEATMAP || vi.kind > CALIPER_LIVE_KIND_HISTOGRAM) continue;
+            if ((vi.kind < CALIPER_LIVE_KIND_HEATMAP || vi.kind > CALIPER_LIVE_KIND_HISTOGRAM) &&
+                vi.kind != CALIPER_NET_KIND_SCENE)
+                continue;
             std::shared_ptr<NetView> keep;
             if (same_session)
                 for (const auto& o : old)

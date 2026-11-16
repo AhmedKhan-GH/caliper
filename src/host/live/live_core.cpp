@@ -35,6 +35,7 @@
 #include "live/live_net_source.h"
 #include "live/live_shm.h"
 #include "live/live_source.h"
+#include "live/live_views_scene.h"   // scene views (kind 6) and their messages
 #include "live/live_views_state.h"   // the event sink and the payload maps of a stream's views
 
 #include <imgui.h>
@@ -355,6 +356,61 @@ bool read_done(CaliperCore* core, View& v) {
     return true;
 }
 
+// ---- scenes (wire protocol 3.2 draft) ---------------------------------------------
+// A scene view takes no snapshots: it opens with the scene's description from
+// its VIEWS entry and applies the source's decoded messages in order. While the
+// display is paused the source holds them (it keeps only what still matters), so
+// a scene resumes whole.
+int poll_scene(CaliperCore* core, CaliperLiveState* L, View& v) {
+    if (!v.shown) {
+        if (!v.error.empty()) return 0;   // refused once (the name is taken): not every frame
+        caliper_net::wire::SceneView info{CALIPER_NET_SPACE_3D, "+y", "m"};
+        caliper_net::Json offer;
+        if (L->source->data_view_of(v.key, nullptr, &offer)) {
+            std::string err;
+            if (!caliper_net::wire::scene_view_info(offer, &info, &err))
+                core->log(1, "live: scene '" + v.name + "': " + err + "; the defaults apply");
+        }
+        std::string why;
+        if (!caliper_live_views::scene_open(core, v.name, info, &why)) {
+            v.error = why;
+            ++L->errors;
+            core->log(2, "live: scene '" + v.name + "': " + why);
+            return 0;
+        }
+        v.shown = true;
+        v.typed = true;
+    }
+    if (caliper_core_live_paused(core)) return 0;
+    std::vector<caliper_live::SceneItem> items;
+    if (!L->source->take_scene(v.key, &items)) return 0;
+    caliper_live_views::scene_begin_round(core, v.name);
+    int applied = 0;
+    for (const caliper_live::SceneItem& it : items) {
+        std::string why;
+        bool ok = true;
+        if (const auto* u = std::get_if<caliper_net::wire::SceneUpdate>(&it.msg)) {
+            ok = caliper_live_views::scene_apply(core, v.name, *u, &why);
+            v.seq = u->seq;
+            ++applied;
+        } else if (const auto* c = std::get_if<caliper_net::wire::SceneClear>(&it.msg)) {
+            ok = caliper_live_views::scene_apply(core, v.name, *c, &why);
+            ++applied;
+        } else {
+            caliper_live_views::scene_note(core, v.name, std::get<std::string>(it.msg));
+        }
+        if (!ok) {
+            ++L->errors;
+            v.error = why;
+        }
+    }
+    v.updates += (uint64_t)applied;
+    v.window_updates += (uint64_t)applied;
+    L->updates += (uint64_t)applied;
+    L->window_updates += (uint64_t)applied;
+    return applied;
+}
+
 // ---- attach -----------------------------------------------------------------
 
 // A session file under the root naming `token` (alive or not), if any.
@@ -565,6 +621,10 @@ int poll_attached(CaliperCore* core, CaliperLiveState* L) {
 
     int applied = 0;
     for (auto& v : L->views) {
+        if (v.kind == (uint32_t)caliper_live_views::kKindScene) {
+            applied += poll_scene(core, L, v);
+            continue;
+        }
         const bool series = v.kind == CALIPER_LIVE_KIND_SERIES;
         const bool points = v.kind == CALIPER_LIVE_KIND_POINTS;
         if (points) {
@@ -625,6 +685,7 @@ const char* kind_name(uint32_t k) {
         case CALIPER_LIVE_KIND_POINTS: return "points";
         case CALIPER_LIVE_KIND_SERIES: return "series";
         case CALIPER_LIVE_KIND_HISTOGRAM: return "histogram";
+        case (uint32_t)caliper_live_views::kKindScene: return "scene";
         default: return "?";
     }
 }

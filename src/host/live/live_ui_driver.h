@@ -13,6 +13,8 @@
 //   set <param> <text>    ctrl+click the parameter's slider or field, type <text>, Enter
 //   toggle <param>        a click on a boolean parameter's box
 //   select <view>         a shift-drag across the top quarter of the view's image or plot area
+//   where <view>          logs the view's data area (x y w h in points), the framebuffer's
+//                         pixels per point and the view's own geometry text (a scene's camera)
 //   leave                 the pointer leaves the window (no hover is left behind)
 //   wait <frames>         nothing for that many frames
 //   state <run state>     wait until the run state is <run state> (paused, running, ...)
@@ -123,6 +125,19 @@ public:
                     next("set " + s.a + " to " + s.b + " at " + where());
                     break;
             }
+            return;
+        }
+        if (s.verb == "where") {
+            const std::string view = s.a + (s.b.empty() ? "" : " " + s.b);
+            const caliper_live_views::View* v = core ? caliper_live_views::find(core, view.c_str()) : nullptr;
+            if (!v || !v->geo_valid || v->updates == 0) {
+                if (frames_ > kPatience) fail("view '" + view + "' was never drawn");
+                return;
+            }
+            char buf[160];
+            std::snprintf(buf, sizeof buf, "where %s area %.2f %.2f %.2f %.2f scale %.3f", view.c_str(), v->geo_area[0],
+                          v->geo_area[1], v->geo_area[2], v->geo_area[3], io.DisplayFramebufferScale.x);
+            next(std::string(buf) + (v->geo_text.empty() ? "" : " " + v->geo_text));
             return;
         }
         if (s.verb == "select") {
