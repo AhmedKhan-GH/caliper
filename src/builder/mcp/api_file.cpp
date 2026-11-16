@@ -7,8 +7,15 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <thread>
+
+#if defined(__APPLE__)
+#include <crt_externs.h>
+#elif !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 namespace caliper_builder::mcp {
 
@@ -17,6 +24,24 @@ namespace {
 std::string env(const char* name) {
     const char* v = std::getenv(name);
     return v ? std::string(v) : std::string();
+}
+
+// A test or hidden run by the app's rule (src/app_paths.h, THE GUARD):
+// CALIPER_HIDDEN=1, or a CALIPER_TEST_* variable that is set and not empty.
+bool test_or_hidden_run() {
+    if (env("CALIPER_HIDDEN") == "1") return true;
+#if defined(_WIN32)
+    char** e = _environ;
+#elif defined(__APPLE__)
+    char** e = *_NSGetEnviron();
+#else
+    char** e = environ;
+#endif
+    for (; e && *e; ++e) {
+        const char* eq = std::strchr(*e, '=');
+        if (std::strncmp(*e, "CALIPER_TEST_", 13) == 0 && eq && eq[1] != '\0') return true;
+    }
+    return false;
 }
 
 bool token_char(char c) {
@@ -29,6 +54,9 @@ std::string default_api_file_path() {
     namespace fs = std::filesystem;
     const std::string data_dir = env("CALIPER_DATA_DIR");
     if (!data_dir.empty()) return (fs::path(data_dir) / "api.json").string();
+    // A test or hidden run never reads your own app's API file, so it never
+    // drives the app you are using.
+    if (test_or_hidden_run()) return {};
 #if defined(_WIN32)
     const std::string appdata = env("APPDATA");
     if (appdata.empty()) return {};
@@ -96,7 +124,11 @@ ApiFileRead read_api_file(const std::string& path) {
     ApiFileRead out;
     if (path.empty()) {
         out.error = {"mcp.no_api_file",
-                     "No API file path is known: set CALIPER_DATA_DIR or pass --api-file.", ""};
+                     test_or_hidden_run()
+                         ? "No API file path is known: a test or hidden run reads no API file of your own app; set "
+                           "CALIPER_DATA_DIR or pass --api-file."
+                         : "No API file path is known: set CALIPER_DATA_DIR or pass --api-file.",
+                     ""};
         return out;
     }
     // The app may be writing the file at this moment; a file that does not

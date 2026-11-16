@@ -40,7 +40,9 @@ struct ApiFileRead {
 // The API file the app writes: $CALIPER_DATA_DIR/api.json, or api.json in the
 // app-data folder of the OS (macOS: ~/Library/Application Support/Caliper;
 // Windows: %APPDATA%\Caliper; Linux: $XDG_DATA_HOME/caliper or
-// ~/.local/share/caliper). Empty when no folder can be found.
+// ~/.local/share/caliper). Empty when no folder can be found, and in a test or
+// hidden run (CALIPER_HIDDEN=1 or a CALIPER_TEST_* variable set) without
+// CALIPER_DATA_DIR, which never reads the API file of your own app.
 std::string default_api_file_path();
 
 // Parses the text of an API file. `where` names the file in errors.
