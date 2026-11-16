@@ -48,7 +48,9 @@
 //
 // PORTABILITY. BSD sockets; the few Winsock differences (closesocket,
 // WSAGetLastError, WSAPoll, ioctlsocket, WSAStartup) sit behind macros in
-// ws.cpp. The Windows branch is written but has not been compiled yet.
+// ws.cpp. The Windows branch has been checked against the documented Winsock
+// declarations but not yet compiled with MSVC; WSAPoll gets no entry for a
+// connection that asks for no event.
 #include <cstddef>
 #include <cstdint>
 #include <map>

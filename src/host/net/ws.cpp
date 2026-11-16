@@ -1188,6 +1188,13 @@ std::vector<short> wait_round(Waker* waker, intptr_t listen_fd, bool listen_read
     fds.reserve(conns.size() + 2);
     auto add = [&](sock_t fd, short events) {
         pollfd_t p{};
+#ifdef _WIN32
+        // WSAPoll asks for one or more requested events in every entry, so a
+        // connection that asks for none (a request waiting for its answer)
+        // is left out of the round there; poll(2) takes it and reports a
+        // hang-up.
+        if (events == 0) fd = CNET_BAD_SOCKET;
+#endif
         p.fd = fd;
         p.events = events;
         fds.push_back(p);
