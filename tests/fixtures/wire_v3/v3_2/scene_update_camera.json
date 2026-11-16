@@ -1,0 +1,34 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 219,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 195,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 112
+  },
+  "meta": {
+    "convention": "rdf",
+    "cx": 319.5,
+    "cy": 239.5,
+    "fx": 525.0,
+    "fy": 525.0,
+    "height": 480,
+    "part": "camera",
+    "path": "rig/left",
+    "seq": 29,
+    "stamp_ns": 81234567893833,
+    "static": true,
+    "sub": 2,
+    "view": "world",
+    "width": 640
+  },
+  "meta_offset": 24,
+  "name": "v3_2/scene_update_camera",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "scene_update"
+}

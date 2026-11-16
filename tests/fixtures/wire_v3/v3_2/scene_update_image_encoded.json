@@ -1,0 +1,145 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 360,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 236,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 2,
+    "type": 112
+  },
+  "meta": {
+    "form": "encoded",
+    "format": "png",
+    "opacity": 1.0,
+    "part": "image",
+    "path": "rig/right/rgb",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "pixels",
+        "shape": [
+          70
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 28,
+    "stamp_ns": 81234567893823,
+    "sub": 2,
+    "view": "world"
+  },
+  "meta_offset": 32,
+  "name": "v3_2/scene_update_image_encoded",
+  "section_lengths": [
+    70,
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 70,
+      "name": "pixels",
+      "offset": 272,
+      "shape": [
+        70
+      ],
+      "values": [
+        137,
+        80,
+        78,
+        71,
+        13,
+        10,
+        26,
+        10,
+        0,
+        0,
+        0,
+        13,
+        73,
+        72,
+        68,
+        82,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        8,
+        6,
+        0,
+        0,
+        0,
+        31,
+        21,
+        196,
+        137,
+        0,
+        0,
+        0,
+        13,
+        73,
+        68,
+        65,
+        84,
+        120,
+        218,
+        99,
+        248,
+        223,
+        192,
+        240,
+        31,
+        0,
+        6,
+        128,
+        2,
+        127,
+        207,
+        18,
+        9,
+        241,
+        0,
+        0,
+        0,
+        0,
+        73,
+        69,
+        78,
+        68,
+        174,
+        66,
+        96,
+        130
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 344,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

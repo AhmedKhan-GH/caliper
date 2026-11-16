@@ -1,0 +1,57 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 261,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 237,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 115
+  },
+  "meta": {
+    "classes": [
+      {
+        "color": [
+          128,
+          128,
+          128,
+          255
+        ],
+        "id": 0,
+        "label": "floor"
+      },
+      {
+        "color": [
+          230,
+          80,
+          60,
+          255
+        ],
+        "id": 1,
+        "label": "obstacle"
+      },
+      {
+        "color": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "id": 65535,
+        "label": "unknown"
+      }
+    ],
+    "seq": 34,
+    "stamp_ns": 81234567893883,
+    "static": true,
+    "sub": 2,
+    "view": "world"
+  },
+  "meta_offset": 24,
+  "name": "v3_2/scene_classes",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "scene_classes"
+}

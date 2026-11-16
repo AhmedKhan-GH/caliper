@@ -1,11 +1,12 @@
-// The scenes subset of the 3.2 draft in the C++ codec (src/host/net/wire.h)
-// against the golden frames of tests/fixtures/wire_v3/v3_2, which
-// python/caliper/_wire.py wrote: every frame decodes to what its .json says
-// and encodes back to the same bytes at minor 2 (except the two that carry
-// sections the subset ignores), every invalid frame is refused as
-// v3_2/invalid/expect.json says, the batch limits hold, the scene view helpers
-// follow python/tests/test_wire_32.py, a forwarder can rewrite `sub` and keep
-// the sections, and truncations and bit flips never crash.
+// The scenes of the 3.2 draft in the C++ codec (src/host/net/wire.h) against
+// the golden frames of tests/fixtures/wire_v3/v3_2, which python/caliper/
+// _wire.py wrote: every frame decodes to what its .json says and encodes back
+// to the same bytes at minor 2 (except the one that carries a section no part
+// has), every invalid frame is refused as v3_2/invalid/expect.json says, every
+// part, stamps, entity transforms and class tables carry their golden values,
+// the limits hold, the scene view helpers follow python/tests/test_wire_32.py,
+// a forwarder can rewrite `sub` and keep the sections, and truncations and bit
+// flips never crash.
 #include <doctest/doctest.h>
 
 #include "net/json.h"
@@ -52,7 +53,7 @@ std::vector<std::string> v32_names() {
     return out;
 }
 
-bool decode_only(const std::string& n) { return n == "scene_update_points_stamped" || n == "scene_update_mesh_normals"; }
+bool decode_only(const std::string& n) { return n == "scene_update_points_future"; }
 
 uint64_t ju(const Json& j, const char* key) {
     uint64_t v = 0;
@@ -87,7 +88,7 @@ const char* kBase = "\"sub\":1,\"view\":\"v\",\"seq\":1,\"stamp_ns\":1,\"path\":
 
 TEST_CASE("net/wire 3.2: every golden frame decodes as described and encodes back to the same bytes") {
     const std::vector<std::string> names = v32_names();
-    REQUIRE(names.size() >= 16);
+    REQUIRE(names.size() >= 39);
     for (const std::string& name : names) {
         CAPTURE(name);
         const std::vector<uint8_t> bin = read_bytes(v32_dir() / (name + ".bin"));
@@ -121,6 +122,12 @@ TEST_CASE("net/wire 3.2: every golden frame decodes as described and encodes bac
                 if (s.dtype == CALIPER_NET_DTYPE_F32) CHECK(at<float>(s, k) == (float)vals.at(k).as_double());
                 else if (s.dtype == CALIPER_NET_DTYPE_U8) CHECK(at<uint8_t>(s, k) == (uint8_t)vals.at(k).as_double());
                 else if (s.dtype == CALIPER_NET_DTYPE_I32) CHECK(at<int32_t>(s, k) == (int32_t)vals.at(k).as_double());
+                else if (s.dtype == CALIPER_NET_DTYPE_U16) CHECK(at<uint16_t>(s, k) == (uint16_t)vals.at(k).as_double());
+                else if (s.dtype == CALIPER_NET_DTYPE_I64) {
+                    int64_t want = 0;
+                    REQUIRE(vals.at(k).get_i64(&want));
+                    CHECK(at<int64_t>(s, k) == want);
+                }
             }
         }
 
@@ -131,11 +138,13 @@ TEST_CASE("net/wire 3.2: every golden frame decodes as described and encodes bac
         CHECK(std::string(type_name(f.type)) == want.find("type_name")->as_string());
         if (f.type == CALIPER_NET_MSG_SCENE_UPDATE) CHECK(std::holds_alternative<SceneUpdate>(m));
         if (f.type == CALIPER_NET_MSG_SCENE_CLEAR) CHECK(std::holds_alternative<SceneClear>(m));
+        if (f.type == CALIPER_NET_MSG_SCENE_TRANSFORMS) CHECK(std::holds_alternative<SceneTransforms>(m));
+        if (f.type == CALIPER_NET_MSG_SCENE_CLASSES) CHECK(std::holds_alternative<SceneClasses>(m));
 
         std::vector<uint8_t> again;
         std::string err;
         REQUIRE_MESSAGE(encode(m, &again, &err, CALIPER_NET_MINOR_3_2), err);
-        if (decode_only(name)) CHECK(again != bin);   // the sections the subset ignores are not written
+        if (decode_only(name)) CHECK(again != bin);   // a section no part has is not written
         else CHECK(again == bin);
     }
 }
@@ -215,16 +224,13 @@ TEST_CASE("net/wire 3.2: decoded scene messages carry the golden values") {
         CHECK_FALSE(c.reset);
         CHECK_FALSE(c.path.empty());
     }
-    {   // the decode-only frames: the sections the subset ignores are left out
-        const std::vector<uint8_t> bin = read_bytes(v32_dir() / "scene_update_points_stamped.bin");
+    {   // the decode-only frame: a section no part has is left out
+        const std::vector<uint8_t> bin = read_bytes(v32_dir() / "scene_update_points_future.bin");
         Message m;
         REQUIRE(decode_bytes(bin, &m).ok());
         const SceneUpdate& u = std::get<SceneUpdate>(m);
-        REQUIRE(u.arrays.size() == 2);
-        CHECK(u.array("stamp") == nullptr);
-        const std::vector<uint8_t> bin2 = read_bytes(v32_dir() / "scene_update_mesh_normals.bin");
-        REQUIRE(decode_bytes(bin2, &m).ok());
-        CHECK(std::get<SceneUpdate>(m).array("normals") == nullptr);
+        REQUIRE(u.arrays.size() == 1);
+        CHECK(u.array("future") == nullptr);
     }
     {   // a null stat decodes to NaN and encodes back to null
         std::vector<float> pos = {0, 0, 1, 1};
@@ -248,9 +254,92 @@ TEST_CASE("net/wire 3.2: decoded scene messages carry the golden values") {
     }
 }
 
+TEST_CASE("net/wire 3.2: the other parts, stamps, entity transforms and class tables carry their golden values") {
+    auto load = [](const char* name, Message* m, std::vector<uint8_t>* keep) {
+        *keep = read_bytes(v32_dir() / (std::string(name) + ".bin"));
+        const DecodeResult r = decode_bytes(*keep, m);
+        REQUIRE_MESSAGE(r.ok(), name << ": " << r.error_code << ": " << r.message);
+    };
+    std::vector<uint8_t> b;
+    Message m;
+    load("scene_update_points_stamped", &m, &b);
+    {
+        const SceneUpdate& u = std::get<SceneUpdate>(m);
+        REQUIRE(u.stamp.has_value());
+        CHECK(u.stamp->shape == std::vector<int64_t>{2});
+        CHECK(at<int64_t>(*u.stamp, 0) == 1200);
+        CHECK(at<int64_t>(*u.stamp, 1) == 1763200000123456789LL);
+        CHECK(u.array("stamp") == nullptr);   // the stamp is not one of the part's arrays
+    }
+    load("scene_update_lines_edges", &m, &b);
+    {
+        const SceneUpdate& u = std::get<SceneUpdate>(m);
+        CHECK(u.params.find("mode")->as_string() == "edges");
+        REQUIRE(u.array("indices") != nullptr);
+        CHECK(u.array("indices")->shape == std::vector<int64_t>{3, 2});
+        CHECK(u.array("values")->shape == std::vector<int64_t>{3});
+    }
+    load("scene_update_boxes", &m, &b);
+    {
+        const SceneUpdate& u = std::get<SceneUpdate>(m);
+        CHECK(u.is_static);
+        CHECK_FALSE(u.stamp.has_value());
+        CHECK(u.array("rotations") != nullptr);
+        CHECK(u.params.find("labels")->size() == 1);
+    }
+    load("scene_update_image_depth", &m, &b);
+    {
+        const SceneUpdate& u = std::get<SceneUpdate>(m);
+        const Section* p = u.array("pixels");
+        REQUIRE(p != nullptr);
+        CHECK(p->dtype == CALIPER_NET_DTYPE_U16);
+        CHECK(at<uint16_t>(*p, 5) == 2500);
+        CHECK(u.params.find("scale")->as_double() == 0.001);
+        CHECK(u.params.find("cloud")->as_bool());
+    }
+    load("scene_update_camera", &m, &b);
+    {
+        const SceneUpdate& u = std::get<SceneUpdate>(m);
+        CHECK(u.arrays.empty());
+        CHECK(u.params.find("width")->is_int());
+        CHECK(u.params.find("fx")->as_double() == 525.0);
+        CHECK(u.params.find("convention")->as_string() == "rdf");
+    }
+    load("scene_transforms_stamps", &m, &b);
+    {
+        const SceneTransforms& t = std::get<SceneTransforms>(m);
+        CHECK(t.paths == std::vector<std::string>{"a", "b"});
+        CHECK(t.matrices.shape == std::vector<int64_t>{2, 16});
+        CHECK(at<float>(t.matrices, 12) == 1.0f);   // column-major: the translation is in elements 12 to 14
+        REQUIRE(t.stamps.has_value());
+        CHECK_FALSE(t.stamp.has_value());
+        CHECK(at<int64_t>(*t.stamps, 2) == 1201);
+    }
+    load("scene_transforms_static", &m, &b);
+    CHECK(std::get<SceneTransforms>(m).is_static);
+    CHECK(std::get<SceneTransforms>(m).state);
+    load("scene_classes", &m, &b);
+    {
+        const SceneClasses& k = std::get<SceneClasses>(m);
+        REQUIRE(k.classes.size() == 3);
+        CHECK(k.classes.at(2).find("id")->as_double() == 65535);
+        CHECK(k.is_static);
+    }
+    load("scene_clear_stamped", &m, &b);
+    {
+        const SceneClear& c = std::get<SceneClear>(m);
+        REQUIRE(c.stamp.has_value());
+        REQUIRE(c.parts.has_value());
+        CHECK((*c.parts)[0] == "transform");
+    }
+    CHECK(scene_part_index("camera") == 6);
+    CHECK(scene_part_index("blob") == -1);
+    CHECK(std::string(scene_part_sections(scene_part_index("mesh"))[6]) == "texture");
+}
+
 TEST_CASE("net/wire 3.2: every invalid golden frame is refused as expect.json says") {
     const Json expect = read_json(v32_dir() / "invalid" / "expect.json");
-    REQUIRE(expect.size() >= 18);
+    REQUIRE(expect.size() >= 58);
     size_t frames = 0, messages = 0;
     for (const auto& kv : expect.members()) {
         CAPTURE(kv.first);
@@ -269,8 +358,8 @@ TEST_CASE("net/wire 3.2: every invalid golden frame is refused as expect.json sa
             CHECK(r.reason == kv.second.find("reason")->as_string());
         }
     }
-    CHECK(frames == 2);
-    CHECK(messages >= 16);
+    CHECK(frames == 3);
+    CHECK(messages >= 55);
 }
 
 TEST_CASE("net/wire 3.2: every truncation of a scene_update frame is refused") {
@@ -373,8 +462,27 @@ TEST_CASE("net/wire 3.2: scene view info and the scene data view") {
     CHECK(v.units == "m");
     REQUIRE(scene_view_info(parse("{\"kind\":6,\"scene\":{\"space\":\"2d\"}}"), &v, &err));
     CHECK(v.up == "-y");
+    CHECK(v.view_camera.is_null());
     REQUIRE(scene_view_info(parse("{\"kind\":6,\"scene\":{\"view_camera\":{\"azimuth\":30}}}"), &v, &err));
     CHECK(v.up == "+y");
+    CHECK(v.view_camera == parse("{\"azimuth\":30}"));
+    // the starting camera: kept when a viewer can read it, else null, and never in 2-D
+    for (const char* vc : {"{}", "{\"target\":[0,1,2.5]}", "{\"distance\":3}", "{\"elevation\":-89}",
+                           "{\"elevation\":89,\"azimuth\":-720.5,\"target\":[0,0,0],\"distance\":0.5}", "\"rig/left\""}) {
+        CAPTURE(vc);
+        REQUIRE(scene_view_info(parse((std::string("{\"kind\":6,\"scene\":{\"view_camera\":") + vc + "}}").c_str()),
+                                &v, &err));
+        CHECK(v.view_camera == parse(vc));
+    }
+    for (const char* vc : {"{\"target\":[0,1]}", "{\"distance\":0}", "{\"elevation\":90}", "{\"azimuth\":\"x\"}",
+                           "{\"fov\":45}", "\"\"", "\"a/../b\"", "3", "[1,2,3]"}) {
+        CAPTURE(vc);
+        REQUIRE(scene_view_info(parse((std::string("{\"kind\":6,\"scene\":{\"view_camera\":") + vc + "}}").c_str()),
+                                &v, &err));
+        CHECK(v.view_camera.is_null());
+    }
+    REQUIRE(scene_view_info(parse("{\"kind\":6,\"scene\":{\"space\":\"2d\",\"view_camera\":{}}}"), &v, &err));
+    CHECK(v.view_camera.is_null());
     REQUIRE(scene_view_info(parse("{\"kind\":6,\"scene\":{\"up\":\"+z\",\"units\":\"\"}}"), &v, &err));
     CHECK(v.up == "+z");
     CHECK(v.units.empty());
@@ -384,6 +492,19 @@ TEST_CASE("net/wire 3.2: scene view info and the scene data view") {
         err.clear();
         CHECK_FALSE(scene_view_info(parse((std::string("{\"kind\":6,\"scene\":") + sc + "}").c_str()), &v, &err));
         CHECK_FALSE(err.empty());
+    }
+    // the golden VIEWS with a starting camera and a 2-D scene
+    {
+        const std::vector<uint8_t> bin = read_bytes(v32_dir() / "views_scene_camera.bin");
+        Message m;
+        REQUIRE(decode_bytes(bin, &m).ok());
+        const Views& vs = std::get<Views>(m);
+        REQUIRE(scene_view_info(vs.views.at(0), &v, &err));
+        CHECK(v.view_camera == parse("{\"target\":[0.0,0.0,0.5],\"azimuth\":30.0,\"elevation\":25.0}"));
+        REQUIRE(scene_view_info(vs.views.at(1), &v, &err));
+        CHECK(v.space == "2d");
+        CHECK(v.units == "px");
+        CHECK(v.view_camera.is_null());
     }
     // the views entries of the golden VIEWS frame
     {
@@ -449,6 +570,7 @@ TEST_CASE("net/wire 3.2: a forwarder rewrites sub and keeps the original section
         Frame f;
         FrameError fe;
         REQUIRE(decode_frame(bin.data(), bin.size(), &f, &fe));
+        if (f.sections.empty()) continue;   // a camera: no tail to share
         for (uint64_t sub : {uint64_t(0), uint64_t(7), uint64_t(4294967295u)}) {
             Json meta = f.meta;
             meta.set("sub", sub);

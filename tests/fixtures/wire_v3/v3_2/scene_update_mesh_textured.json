@@ -1,0 +1,163 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 448,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 287,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 4,
+    "type": 112
+  },
+  "meta": {
+    "part": "mesh",
+    "path": "floor",
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "positions",
+        "shape": [
+          4,
+          3
+        ]
+      },
+      {
+        "dtype": 4,
+        "name": "indices",
+        "shape": [
+          2,
+          3
+        ]
+      },
+      {
+        "dtype": 0,
+        "name": "uvs",
+        "shape": [
+          4,
+          2
+        ]
+      },
+      {
+        "dtype": 5,
+        "name": "texture",
+        "shape": [
+          2,
+          2,
+          4
+        ]
+      }
+    ],
+    "seq": 24,
+    "stamp_ns": 81234567893673,
+    "static": true,
+    "sub": 2,
+    "view": "world"
+  },
+  "meta_offset": 40,
+  "name": "v3_2/scene_update_mesh_textured",
+  "section_lengths": [
+    48,
+    24,
+    32,
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 48,
+      "name": "positions",
+      "offset": 328,
+      "shape": [
+        4,
+        3
+      ],
+      "values": [
+        -1.0,
+        -1.0,
+        -0.75,
+        1.0,
+        -1.0,
+        -0.25,
+        -1.0,
+        1.0,
+        0.125,
+        1.0,
+        1.0,
+        0.5
+      ]
+    },
+    {
+      "dtype": 4,
+      "encoding": 0,
+      "length": 24,
+      "name": "indices",
+      "offset": 376,
+      "shape": [
+        2,
+        3
+      ],
+      "values": [
+        0,
+        1,
+        2,
+        1,
+        3,
+        2
+      ]
+    },
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 32,
+      "name": "uvs",
+      "offset": 400,
+      "shape": [
+        4,
+        2
+      ],
+      "values": [
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 16,
+      "name": "texture",
+      "offset": 432,
+      "shape": [
+        2,
+        2,
+        4
+      ],
+      "values": [
+        255,
+        0,
+        0,
+        255,
+        0,
+        255,
+        0,
+        255,
+        0,
+        0,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

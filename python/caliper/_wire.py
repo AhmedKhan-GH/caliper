@@ -72,7 +72,9 @@ class MsgType(enum.IntEnum):
     CONTROL_REPLY = 0x0052
     SELECTION = 0x0060             # 3.1, capability "selection"
     SCENE_UPDATE = 0x0070          # 3.2 draft, capability "scenes" (see the 3.2 block)
+    SCENE_TRANSFORMS = 0x0071      # 3.2 draft
     SCENE_CLEAR = 0x0072           # 3.2 draft
+    SCENE_CLASSES = 0x0073         # 3.2 draft
 
 
 class Kind(enum.IntEnum):          # CaliperLiveKind
@@ -91,6 +93,7 @@ class DType(enum.IntEnum):         # CaliperDType
     I64 = 3
     I32 = 4
     U8 = 5
+    U16 = 6                        # 3.2 draft (see the 3.2 block)
 
 
 class Encoding(enum.IntEnum):
@@ -99,13 +102,13 @@ class Encoding(enum.IntEnum):
 
 
 DTYPE_SIZE = {DType.F32: 4, DType.F16: 2, DType.BF16: 2, DType.I64: 8, DType.I32: 4,
-              DType.U8: 1}
+              DType.U8: 1, DType.U16: 2}
 # numpy views of a section; bf16 has no numpy type and is viewed as raw uint16.
 _NP_DTYPE = {DType.F32: "<f4", DType.F16: "<f2", DType.BF16: "<u2", DType.I64: "<i8",
-             DType.I32: "<i4", DType.U8: "u1"}
+             DType.I32: "<i4", DType.U8: "u1", DType.U16: "<u2"}
 _FROM_NP = {np.dtype("float32"): DType.F32, np.dtype("float16"): DType.F16,
             np.dtype("int64"): DType.I64, np.dtype("int32"): DType.I32,
-            np.dtype("uint8"): DType.U8}
+            np.dtype("uint8"): DType.U8, np.dtype("uint16"): DType.U16}
 
 COLORMAP_VIRIDIS, COLORMAP_MAGMA, COLORMAP_RDBU = 0, 1, 2
 SNAP_AUTO_VMIN = 0x1
@@ -255,7 +258,8 @@ class Section:
         if dt is None:
             raise TypeError(f"section {name!r}: no wire dtype for numpy {a.dtype}")
         a = np.ascontiguousarray(a, dtype=_NP_DTYPE[dt])
-        return cls(name, int(dt), tuple(int(s) for s in a.shape), memoryview(a).cast("B"))
+        data = memoryview(a).cast("B") if a.size else memoryview(b"")   # an empty array: no bytes
+        return cls(name, int(dt), tuple(int(s) for s in a.shape), data)
 
     def descriptor(self) -> dict:
         d = {"name": self.name, "dtype": int(self.dtype), "shape": list(self.shape)}
@@ -1510,27 +1514,30 @@ def payload_layout(view: dict, resolved: dict) -> dict:
 # PROTOCOL 3.2 DRAFT: THE SCENES SUBSET
 #
 # Proposals of the 3.2 draft that sprint 2 has not confirmed: the minor 2,
-# the capability "scenes", the kind scene (6), SCENE_UPDATE (0x0070) and
-# SCENE_CLEAR (0x0072), and the limits below; each is one line, here and in
-# the 3.2 block of include/caliper/live_net.h. MsgType.SCENE_UPDATE,
-# MsgType.SCENE_CLEAR and Kind.SCENE are the only lines outside this block.
-# docs/references/wire-protocol-3-2.md states what is built: the parts
-# points, lines (segments and strips) and mesh, SCENE_CLEAR, the VIEWS key
-# "scene" and the default scene data view. Senders keep writing MINOR (1)
-# until 3.2 is confirmed; the 3.2 golden frames carry MINOR_3_2.
+# the capability "scenes", the kind scene (6), the scene messages (0x0070 to
+# 0x0073), the dtype u16 (6) and the limits below; each is one line, here and
+# in the 3.2 block of include/caliper/live_net.h. The MsgType, Kind and DType
+# members are the only lines outside this block.
+# docs/references/wire-protocol-3-2.md states what is built. Senders keep
+# writing MINOR (1) until 3.2 is confirmed; the 3.2 golden frames carry
+# MINOR_3_2.
 #
-# What this subset does with the rest of the draft, by its versioning rules:
-# a part that is drafted but not built (arrows, boxes, image, camera), a
-# split piece and lines of mode "edges" are answered ERROR "unsupported" and
-# ignored, since reading them as something else would draw the wrong thing;
-# sections and keys it does not build (stamp, class_ids, labels, normals,
-# uvs, texture) are ignored, as every unknown section and key is.
+# The checks of each message run in the order written here, and the C++ codec
+# (src/host/net/wire.cpp) and the TypeScript one (web/src/protocol/codec.ts)
+# run them in the same order, so all three refuse a frame with the same code.
+# Where the draft is silent this block takes the smallest reading, and the
+# reference page lists each such reading under "Readings of the draft".
 # ===========================================================================
 MINOR_3_2 = 2
 CAP_SCENES = "scenes"
-PART_POINTS, PART_LINES, PART_MESH = "points", "lines", "mesh"
-LINES_SEGMENTS, LINES_STRIPS = "segments", "strips"
-COLOR_PER_VERTEX, COLOR_PER_STRIP = "vertex", "strip"
+PART_POINTS, PART_LINES, PART_ARROWS, PART_BOXES = "points", "lines", "arrows", "boxes"
+PART_MESH, PART_IMAGE, PART_CAMERA = "mesh", "image", "camera"
+PART_TRANSFORM = "transform"
+LINES_SEGMENTS, LINES_STRIPS, LINES_EDGES = "segments", "strips", "edges"
+COLOR_PER_VERTEX, COLOR_PER_STRIP, COLOR_PER_EDGE = "vertex", "strip", "edge"
+FORM_COLOR, FORM_DEPTH, FORM_SEGMENTATION, FORM_ENCODED = "color", "depth", "segmentation", "encoded"
+FORMAT_JPEG, FORMAT_PNG = "jpeg", "png"
+CONVENTION_RDF, CONVENTION_RUB = "rdf", "rub"
 SPACE_3D, SPACE_2D = "3d", "2d"
 PATH_MAX = 255
 PATH_SEGMENTS_MAX = 16
@@ -1539,6 +1546,14 @@ MAX_ENTITIES = 1024
 MAX_BATCHES = 2048
 MAX_BATCH_POINTS = 4_194_304
 MAX_BATCH_ITEMS = 1_048_576
+MAX_LABELS = 4096
+MAX_CLASSES = 4096
+MAX_CLASS_ID = 65535
+MAX_IMAGE_SIDE = 8192
+MAX_ENCODED_BYTES = 16_777_216
+MAX_TRANSFORMS = 1024
+MAX_TIMELINES = 8
+STAMP_ABSENT = -(1 << 63)            # a stamp value: absent on that timeline
 SCENE_DEFAULT_MAX_ITEMS = 100_000
 SCENE_LIMIT_MAX_ITEMS = 1_048_576
 SCENE_DEFAULT_MAX_VERTICES = 1_000_000
@@ -1546,28 +1561,45 @@ SCENE_LIMIT_MAX_VERTICES = 4_194_304
 SCENE_DEFAULT_MAX_EXTENT = 1024
 SCENE_LIMIT_MAX_EXTENT = 8192
 
-PARTS = (PART_POINTS, PART_LINES, PART_MESH)
-DRAFTED_PARTS = ("arrows", "boxes", "image", "camera")      # in the draft, not built
+PARTS = (PART_POINTS, PART_LINES, PART_ARROWS, PART_BOXES, PART_MESH, PART_IMAGE, PART_CAMERA)
+FORMS = (FORM_COLOR, FORM_DEPTH, FORM_SEGMENTATION, FORM_ENCODED)
 UP_AXES_3D = ("+x", "-x", "+y", "-y", "+z", "-z")
 UP_AXES_2D = ("-y", "+y")
-# The sections of each part, in the order a sender writes them.
+# The array sections of each part, in the order a sender writes them; the
+# section "stamp" follows them.
 PART_SECTIONS = {
-    PART_POINTS: ("positions", "colors", "values", "radii"),
-    PART_LINES: ("positions", "strip_lengths", "colors", "values"),
-    PART_MESH: ("positions", "indices", "colors", "values"),
+    PART_POINTS: ("positions", "colors", "values", "class_ids", "radii"),
+    PART_LINES: ("positions", "strip_lengths", "indices", "colors", "values"),
+    PART_ARROWS: ("origins", "vectors", "colors", "values"),
+    PART_BOXES: ("centers", "half_sizes", "rotations", "colors", "class_ids"),
+    PART_MESH: ("positions", "indices", "normals", "colors", "values", "uvs", "texture"),
+    PART_IMAGE: ("pixels",),
+    PART_CAMERA: (),
 }
-# The keys of each part (SCENE_UPDATE metadata beside the common ones).
+# The keys of each part (SCENE_UPDATE metadata beside the common ones), in the
+# order their types are checked.
 PART_KEYS = {
-    PART_POINTS: ("color", "radius", "colormap", "flags", "vmin", "vmax", "stats"),
+    PART_POINTS: ("color", "radius", "labels", "colormap", "flags", "vmin", "vmax", "stats"),
     PART_LINES: ("mode", "color_per", "color", "width", "colormap", "flags", "vmin", "vmax",
                  "stats"),
+    PART_ARROWS: ("color", "width", "colormap", "flags", "vmin", "vmax", "stats"),
+    PART_BOXES: ("color", "labels", "fill", "width", "stats"),
     PART_MESH: ("color", "colormap", "flags", "vmin", "vmax", "stats"),
+    PART_IMAGE: ("form", "opacity", "scale", "cloud", "colormap", "flags", "vmin", "vmax",
+                 "format", "stats"),
+    PART_CAMERA: ("fx", "fy", "cx", "cy", "width", "height", "convention", "plane_distance"),
 }
+# The keys a sender writes as floats (a JSON number with a fraction or ".0").
+_FLOAT_KEYS = ("vmin", "vmax", "radius", "width", "opacity", "scale", "fx", "fy", "cx", "cy",
+               "plane_distance")
+CAMERA_REQUIRED = ("fx", "fy", "cx", "cy", "width", "height", "convention")
+CLEAR_PARTS = PARTS + (PART_TRANSFORM,)
 SCENE_DATA_VIEW = {"entities": {"include": ["**"], "exclude": []},
                    "budget": {"max_points": DEFAULT_MAX_POINTS,
                               "max_items": SCENE_DEFAULT_MAX_ITEMS,
                               "max_vertices": SCENE_DEFAULT_MAX_VERTICES,
                               "max_extent": SCENE_DEFAULT_MAX_EXTENT}}
+VIEW_CAMERA_KEYS = ("target", "distance", "azimuth", "elevation")
 
 _PATH_SEGMENT = re.compile(r"[A-Za-z0-9_.\-]{1,63}")
 
@@ -1602,20 +1634,45 @@ def _stats_list(v) -> bool:
     return isinstance(v, list) and len(v) <= MAX_STATS and all(_stat(x) for x in v)
 
 
+def _labels(v) -> bool:
+    return (isinstance(v, list) and 1 <= len(v) <= MAX_LABELS
+            and all(isinstance(x, str) and len(x.encode("utf-8")) <= NAME_MAX for x in v))
+
+
+def _side(v) -> bool:
+    return _is_int(v) and 1 <= v <= MAX_IMAGE_SIDE
+
+
 _KEY_CHECKS = {
     "color": (_rgba, "[r, g, b, a] of integers from 0 to 255"),
     "radius": (_positive, "a positive number"),
     "width": (_positive, "a positive number"),
+    "labels": (_labels, f"a list of 1 to {MAX_LABELS} strings of at most {NAME_MAX} bytes"),
     "colormap": (_is_int, "an integer"),
     "flags": (_uint, "an unsigned integer"),
     "vmin": (_is_num, "a number"),
     "vmax": (_is_num, "a number"),
     "stats": (_stats_list, f"at most {MAX_STATS} numbers or nulls"),
-    "mode": (lambda v: v in (LINES_SEGMENTS, LINES_STRIPS, "edges"), "segments or strips"),
-    "color_per": (lambda v: v in (COLOR_PER_VERTEX, COLOR_PER_STRIP, "edge"), "vertex or strip"),
+    "mode": (lambda v: v in (LINES_SEGMENTS, LINES_STRIPS, LINES_EDGES), "segments, strips or edges"),
+    "color_per": (lambda v: v in (COLOR_PER_VERTEX, COLOR_PER_STRIP, COLOR_PER_EDGE),
+                  "vertex, strip or edge"),
+    "fill": (_bool, "a boolean"),
+    "form": (lambda v: v in FORMS, "color, depth, segmentation or encoded"),
+    "opacity": (lambda v: _finite(v) and 0 <= v <= 1, "a number from 0 to 1"),
+    "scale": (_positive, "a positive number"),
+    "cloud": (_bool, "a boolean"),
+    "format": (lambda v: v in (FORMAT_JPEG, FORMAT_PNG), "jpeg or png"),
+    "fx": (_positive, "a positive number"),
+    "fy": (_positive, "a positive number"),
+    "cx": (_finite, "a finite number"),
+    "cy": (_finite, "a finite number"),
+    "height": (_side, f"an integer from 1 to {MAX_IMAGE_SIDE}"),
+    "convention": (lambda v: v in (CONVENTION_RDF, CONVENTION_RUB), "rdf or rub"),
+    "plane_distance": (_positive, "a positive number"),
 }
+_CAMERA_WIDTH = (_side, f"an integer from 1 to {MAX_IMAGE_SIDE}")
 _DTYPE_NAME = {DType.F32: "f32", DType.F16: "f16", DType.BF16: "bf16", DType.I64: "i64",
-               DType.I32: "i32", DType.U8: "u8"}
+               DType.I32: "i32", DType.U8: "u8", DType.U16: "u16"}
 
 
 def _part_section(f: Frame, name: str, dtype: int, shape: tuple):
@@ -1632,17 +1689,21 @@ def _part_section(f: Frame, name: str, dtype: int, shape: tuple):
     return s
 
 
-def _part_positions(f: Frame, part: str):
-    pos = f.section("positions")
-    if pos is None:
-        _bad(f"a {part} part needs a 'positions' section")
-    _part_section(f, "positions", DType.F32, (None, None))
-    n, d = pos.shape
-    if d not in (2, 3):
-        _bad(f"'positions' is (N, 2) or (N, 3), got {list(pos.shape)}")
-    if n > MAX_BATCH_POINTS:
-        _bad(f"{n} positions, more than {MAX_BATCH_POINTS} in a batch")
-    return pos, n
+def _required(f: Frame, part: str, name: str) -> None:
+    if f.section(name) is None:
+        _bad(f"a {part} part needs a {name!r} section")
+
+
+def _rows_section(f: Frame, part: str, name: str, limit: int, what: str, dims=None):
+    """A required f32 (N, D) section of a part, D 2 or 3 (or ``dims``); (section, N, D)."""
+    _required(f, part, name)
+    s = _part_section(f, name, DType.F32, (None, dims))
+    n, d = s.shape
+    if dims is None and d not in (2, 3):
+        _bad(f"{name!r} is (N, 2) or (N, 3), got {list(s.shape)}")
+    if n > limit:
+        _bad(f"{n} {what}, more than {limit} in a batch")
+    return s, n, d
 
 
 def _colours(f: Frame, rows: int, arrays: dict) -> None:
@@ -1656,22 +1717,38 @@ def _colours(f: Frame, rows: int, arrays: dict) -> None:
         arrays["values"] = v
 
 
-def _decode_points(f: Frame) -> dict:
-    pos, n = _part_positions(f, PART_POINTS)
+def _label_count(params: dict, n: int) -> None:
+    labels = params.get("labels")
+    if labels is not None and len(labels) not in (1, n):
+        _bad(f"{len(labels)} labels for {n} items: give one label for all or one per item")
+
+
+def _class_ids(f: Frame, n: int, arrays: dict) -> None:
+    s = _part_section(f, "class_ids", DType.I32, (n,))
+    if s is not None:
+        arrays["class_ids"] = s
+
+
+def _decode_points(f: Frame, params: dict) -> dict:
+    pos, n, _ = _rows_section(f, PART_POINTS, "positions", MAX_BATCH_POINTS, "positions")
     arrays = {"positions": pos}
     _colours(f, n, arrays)
+    _class_ids(f, n, arrays)
     r = _part_section(f, "radii", DType.F32, (n,))
     if r is not None:
         arrays["radii"] = r
+    _label_count(params, n)
     return arrays
 
 
-def _decode_lines(f: Frame, mode: str, color_per: str | None) -> dict:
-    if mode == "edges":
-        _unsupported("lines of mode 'edges' (index-pair edges) are not built yet")
-    pos, v = _part_positions(f, PART_LINES)
+def _decode_lines(f: Frame, params: dict) -> dict:
+    mode = params.get("mode")
+    if mode is None:
+        _bad("a lines part needs 'mode'")
+    color_per = params.get("color_per")
+    pos, v, _ = _rows_section(f, PART_LINES, "positions", MAX_BATCH_POINTS, "positions")
     arrays = {"positions": pos}
-    if f.section("indices") is not None:
+    if mode != LINES_EDGES and f.section("indices") is not None:
         _bad(f"lines of mode {mode!r} take no 'indices'")
     rows = v
     if mode == LINES_SEGMENTS:
@@ -1681,7 +1758,7 @@ def _decode_lines(f: Frame, mode: str, color_per: str | None) -> dict:
             _bad("segments take no 'strip_lengths'")
         if color_per not in (None, COLOR_PER_VERTEX):
             _bad(f"segments take color_per 'vertex', got {color_per!r}")
-    else:
+    elif mode == LINES_STRIPS:
         sl = _part_section(f, "strip_lengths", DType.I32, (None,))
         if sl is None:
             _bad("strips need a 'strip_lengths' section")
@@ -1694,16 +1771,56 @@ def _decode_lines(f: Frame, mode: str, color_per: str | None) -> dict:
         if total != v:
             _bad(f"the strip lengths add up to {total}, not to the {v} vertices")
         arrays["strip_lengths"] = sl
-        if color_per == "edge":
+        if color_per == COLOR_PER_EDGE:
             _bad("strips take color_per 'vertex' or 'strip'")
         if color_per == COLOR_PER_STRIP:
             rows = lens.shape[0]
+    else:
+        if f.section("strip_lengths") is not None:
+            _bad("edges take no 'strip_lengths'")
+        idx = _part_section(f, "indices", DType.I32, (None, 2))
+        if idx is None:
+            _bad("edges need an 'indices' section, (E, 2) i32")
+        if idx.shape[0] > MAX_BATCH_POINTS:
+            _bad(f"{idx.shape[0]} edges, more than {MAX_BATCH_POINTS} in a batch")
+        arrays["indices"] = idx
+        if color_per == COLOR_PER_STRIP:
+            _bad("edges take color_per 'vertex' or 'edge'")
+        if color_per == COLOR_PER_EDGE:
+            rows = idx.shape[0]
     _colours(f, rows, arrays)
     return arrays
 
 
-def _decode_mesh(f: Frame) -> dict:
-    pos, v = _part_positions(f, PART_MESH)
+def _decode_arrows(f: Frame, params: dict) -> dict:
+    o, n, d = _rows_section(f, PART_ARROWS, "origins", MAX_BATCH_ITEMS, "arrows")
+    _required(f, PART_ARROWS, "vectors")
+    vec = _part_section(f, "vectors", DType.F32, (n, d))
+    arrays = {"origins": o, "vectors": vec}
+    _colours(f, n, arrays)
+    return arrays
+
+
+def _decode_boxes(f: Frame, params: dict) -> dict:
+    c, n, d = _rows_section(f, PART_BOXES, "centers", MAX_BATCH_ITEMS, "boxes")
+    _required(f, PART_BOXES, "half_sizes")
+    h = _part_section(f, "half_sizes", DType.F32, (n, d))
+    arrays = {"centers": c, "half_sizes": h}
+    r = _part_section(f, "rotations", DType.F32, (n, 4))
+    if r is not None:
+        if d != 3:
+            _bad("'rotations' are for 3-D boxes only")
+        arrays["rotations"] = r
+    col = _part_section(f, "colors", DType.U8, (n, 4))
+    if col is not None:
+        arrays["colors"] = col
+    _class_ids(f, n, arrays)
+    _label_count(params, n)
+    return arrays
+
+
+def _decode_mesh(f: Frame, params: dict) -> dict:
+    pos, v, _ = _rows_section(f, PART_MESH, "positions", MAX_BATCH_POINTS, "positions")
     arrays = {"positions": pos}
     idx = _part_section(f, "indices", DType.I32, (None, 3))
     if idx is not None:
@@ -1712,8 +1829,63 @@ def _decode_mesh(f: Frame) -> dict:
         arrays["indices"] = idx
     elif v % 3:
         _bad(f"a mesh without 'indices' needs a multiple of 3 vertices, got {v}")
+    nrm = _part_section(f, "normals", DType.F32, (v, 3))
+    if nrm is not None:
+        arrays["normals"] = nrm
     _colours(f, v, arrays)
+    uv = _part_section(f, "uvs", DType.F32, (v, 2))
+    tex = _part_section(f, "texture", DType.U8, (None, None, 4))
+    if uv is not None and ("colors" in arrays or "values" in arrays):
+        _bad("'uvs' and 'colors' or 'values' together")
+    if (uv is None) != (tex is None):
+        _bad("'uvs' and 'texture' go together")
+    if tex is not None:
+        if not (1 <= tex.shape[0] <= MAX_IMAGE_SIDE and 1 <= tex.shape[1] <= MAX_IMAGE_SIDE):
+            _bad(f"a texture is 1 to {MAX_IMAGE_SIDE} pixels on a side, got {list(tex.shape)}")
+        arrays["uvs"] = uv
+        arrays["texture"] = tex
     return arrays
+
+
+# The pixels each image form takes: (dtype, rank) pairs.
+_FORM_PIXELS = {
+    FORM_COLOR: ((DType.U8, 3), (DType.U8, 2)),
+    FORM_DEPTH: ((DType.F32, 2), (DType.U16, 2)),
+    FORM_SEGMENTATION: ((DType.U16, 2), (DType.U8, 2)),
+    FORM_ENCODED: ((DType.U8, 1),),
+}
+
+
+def _decode_image(f: Frame, params: dict) -> dict:
+    form = params.get("form")
+    if form is None:
+        _bad("an image part needs 'form'")
+    _required(f, PART_IMAGE, "pixels")
+    p = f.section("pixels")
+    if p.encoding != Encoding.RAW or (p.dtype, len(p.shape)) not in _FORM_PIXELS[form]:
+        _bad(f"the pixels of a {form} image cannot be dtype {p.dtype} shape {list(p.shape)}")
+    if form == FORM_COLOR and len(p.shape) == 3 and p.shape[2] != 4:
+        _bad(f"colour pixels are (H, W, 4) or (H, W), got {list(p.shape)}")
+    if form == FORM_ENCODED:
+        if p.shape[0] > MAX_ENCODED_BYTES:
+            _bad(f"an encoded frame of {p.shape[0]} bytes, more than {MAX_ENCODED_BYTES}")
+        if params.get("format") is None:
+            _bad("an encoded image needs 'format'")
+    elif p.shape[0] > MAX_IMAGE_SIDE or p.shape[1] > MAX_IMAGE_SIDE:
+        _bad(f"an image is at most {MAX_IMAGE_SIDE} pixels on a side, got {list(p.shape)}")
+    return {"pixels": p}
+
+
+def _decode_camera(f: Frame, params: dict) -> dict:
+    for key in CAMERA_REQUIRED:
+        if key not in params:
+            _bad(f"a camera part needs {key!r}")
+    return {}
+
+
+_DECODERS = {PART_POINTS: _decode_points, PART_LINES: _decode_lines,
+             PART_ARROWS: _decode_arrows, PART_BOXES: _decode_boxes, PART_MESH: _decode_mesh,
+             PART_IMAGE: _decode_image, PART_CAMERA: _decode_camera}
 
 
 def _part_keys(m: dict, part: str) -> dict:
@@ -1722,11 +1894,61 @@ def _part_keys(m: dict, part: str) -> dict:
         v = m.get(key)
         if v is None:
             continue
-        check, what = _KEY_CHECKS[key]
+        check, what = _CAMERA_WIDTH if (part == PART_CAMERA and key == "width") else \
+            _KEY_CHECKS[key]
         if not check(v):
             _bad(f"{key!r} must be {what}, got {v!r}")
         out[key] = v
     return out
+
+
+def _stamp(f: Frame, static: bool, rows: int | None = None):
+    """The stamp sections of a message: ``stamp`` i64 (T,), and where ``rows``
+    is given ``stamps`` i64 (rows, T), T from 1 to MAX_TIMELINES. A static
+    item carries neither. Returns (stamp, stamps), each a Section or None."""
+    s = f.section("stamp")
+    ss = f.section("stamps") if rows is not None else None
+    if s is not None and ss is not None:
+        _bad("'stamp' and 'stamps' together")
+    if static and (s is not None or ss is not None):
+        _bad("a static item carries no stamp")
+    if s is not None and (s.encoding != Encoding.RAW or s.dtype != DType.I64 or len(s.shape) != 1
+                          or not 1 <= s.shape[0] <= MAX_TIMELINES):
+        _bad(f"'stamp' must be i64 (T,) with T from 1 to {MAX_TIMELINES}, got dtype {s.dtype} "
+             f"shape {list(s.shape)}")
+    if ss is not None and (ss.encoding != Encoding.RAW or ss.dtype != DType.I64
+                           or len(ss.shape) != 2 or ss.shape[0] != rows
+                           or not 1 <= ss.shape[1] <= MAX_TIMELINES):
+        _bad(f"'stamps' must be i64 ({rows}, T) with T from 1 to {MAX_TIMELINES}, got dtype "
+             f"{ss.dtype} shape {list(ss.shape)}")
+    return s, ss
+
+
+def _section(name: str, a) -> Section:
+    return a if isinstance(a, Section) else Section.from_array(name, a)
+
+
+def _common(m: dict) -> tuple:
+    """The keys every scene message starts with: sub, view, seq, stamp_ns."""
+    return (_req(m, "sub", _u32, "a uint32"), _req(m, "view", _name, "a view name"),
+            _req(m, "seq", _uint, "an unsigned integer"),
+            _req(m, "stamp_ns", _uint, "an unsigned integer"))
+
+
+def _flags(m: dict) -> tuple:
+    """static, state and cursor, in that order."""
+    return (_opt(m, "static", _bool, "a boolean", False),
+            _opt(m, "state", _bool, "a boolean", False),
+            _opt(m, "cursor", _u32, "a uint32"))
+
+
+def _write_flags(meta: dict, msg) -> None:
+    if msg.static:
+        meta["static"] = True
+    if msg.state:
+        meta["state"] = True
+    if msg.cursor is not None:
+        meta["cursor"] = msg.cursor
 
 
 @dataclass
@@ -1734,7 +1956,9 @@ class SceneUpdate(_Msg):
     """3.2 draft: one part of one entity of a scene. ``arrays`` maps section
     names to arrays (numpy, or :class:`Section` when decoded), written in the
     part's order (PART_SECTIONS); ``params`` holds the part's keys
-    (PART_KEYS), ``stats`` entries may be None (a non-finite value)."""
+    (PART_KEYS), ``stats`` entries may be None (a non-finite value). ``stamp``
+    is the i64 (T,) stamp section; ``cursor`` the generation of the
+    TIME_STATE a recorded message answers."""
     TYPE: ClassVar[MsgType] = MsgType.SCENE_UPDATE
     sub: int
     view: str
@@ -1748,24 +1972,28 @@ class SceneUpdate(_Msg):
     state: bool = False
     axes: list | None = None
     items: str | None = None
+    stamp: Any = None
+    cursor: int | None = None
 
     def to_meta(self):
         meta = {"sub": self.sub, "view": self.view, "seq": self.seq, "stamp_ns": self.stamp_ns,
                 "path": self.path, "part": self.part}
+        camera = self.part == PART_CAMERA
         for key, v in self.params.items():
             if v is None:
                 continue
             if key == "stats":
                 v = [_json_float(x) for x in v]
-            elif key in ("vmin", "vmax", "radius", "width"):
+            elif camera and key in ("width", "height"):
+                v = int(v)
+            elif key in _FLOAT_KEYS:
                 v = float(v)
             elif key == "color":
                 v = [int(x) for x in v]
+            elif key == "labels":
+                v = list(v)
             meta[key] = v
-        if self.static:
-            meta["static"] = True
-        if self.state:
-            meta["state"] = True
+        _write_flags(meta, self)
         if self.axes is not None:
             meta["axes"] = list(self.axes)
         if self.items is not None:
@@ -1773,47 +2001,83 @@ class SceneUpdate(_Msg):
         return meta
 
     def to_sections(self):
-        out = []
-        for name in PART_SECTIONS.get(self.part, ()):
-            a = self.arrays.get(name)
-            if a is not None:
-                out.append(a if isinstance(a, Section) else Section.from_array(name, a))
+        out = [_section(name, self.arrays[name]) for name in PART_SECTIONS.get(self.part, ())
+               if self.arrays.get(name) is not None]
+        if self.stamp is not None:
+            out.append(_section("stamp", self.stamp))
         return out
 
     @classmethod
     def from_frame(cls, f):
         m = f.meta
-        sub = _req(m, "sub", _u32, "a uint32")
-        view = _req(m, "view", _name, "a view name")
-        seq = _req(m, "seq", _uint, "an unsigned integer")
-        stamp_ns = _req(m, "stamp_ns", _uint, "an unsigned integer")
+        sub, view, seq, stamp_ns = _common(m)
         path = _req(m, "path", entity_path_ok, "an entity path")
         part = _req(m, "part", _str, "a string")
-        if part in DRAFTED_PARTS:
-            _unsupported(f"the part {part!r} is not built yet")
         if part not in PARTS:
             _bad(f"unknown part {part!r}")
+        static, state, cursor = _flags(m)
+        axes = _opt(m, "axes", lambda v: isinstance(v, list), "a list")
+        items = _opt(m, "items", _name, "an item space name")
         if m.get("split") is not None:
             _unsupported("split updates are not built yet")
         params = _part_keys(m, part)
-        if part == PART_POINTS:
-            arrays = _decode_points(f)
-        elif part == PART_LINES:
-            if "mode" not in params:
-                _bad("a lines part needs 'mode'")
-            arrays = _decode_lines(f, params["mode"], params.get("color_per"))
-        else:
-            arrays = _decode_mesh(f)
+        arrays = _DECODERS[part](f, params)
+        stamp, _ = _stamp(f, static)
         if "stats" in params:
             params["stats"] = [math.nan if x is None else float(x) for x in params["stats"]]
-        return cls(sub, view, seq, stamp_ns, path, part, arrays, params,
-                   _opt(m, "static", _bool, "a boolean", False),
-                   _opt(m, "state", _bool, "a boolean", False),
-                   _opt(m, "axes", lambda v: isinstance(v, list), "a list"),
-                   _opt(m, "items", _name, "an item space name"))
+        return cls(sub, view, seq, stamp_ns, path, part, arrays, params, static, state, axes,
+                   items, stamp, cursor)
 
 
-_CLEAR_PARTS = PARTS + DRAFTED_PARTS + ("transform",)
+@dataclass
+class SceneTransforms(_Msg):
+    """3.2 draft: the entity transforms of up to MAX_TRANSFORMS entities of a
+    scene, each a 4 x 4 matrix stored column-major (row k of ``matrices``,
+    (K, 16) f32, belongs to ``paths[k]``), with one ``stamp`` (T,) for all or
+    ``stamps`` (K, T), one each."""
+    TYPE: ClassVar[MsgType] = MsgType.SCENE_TRANSFORMS
+    sub: int
+    view: str
+    seq: int
+    stamp_ns: int
+    paths: list
+    matrices: Any
+    static: bool = False
+    state: bool = False
+    stamp: Any = None
+    stamps: Any = None
+    cursor: int | None = None
+
+    def to_meta(self):
+        meta = {"sub": self.sub, "view": self.view, "seq": self.seq, "stamp_ns": self.stamp_ns,
+                "paths": list(self.paths)}
+        _write_flags(meta, self)
+        return meta
+
+    def to_sections(self):
+        out = [_section("matrices", np.asarray(self.matrices, dtype=np.float32)
+                        if not isinstance(self.matrices, Section) else self.matrices)]
+        if self.stamps is not None:
+            out.append(_section("stamps", self.stamps))
+        elif self.stamp is not None:
+            out.append(_section("stamp", self.stamp))
+        return out
+
+    @classmethod
+    def from_frame(cls, f):
+        m = f.meta
+        sub, view, seq, stamp_ns = _common(m)
+        static, state, cursor = _flags(m)
+        paths = _req(m, "paths", lambda v: isinstance(v, list) and 1 <= len(v) <= MAX_TRANSFORMS
+                     and all(isinstance(p, str) and p != "" and entity_path_ok(p) for p in v),
+                     f"a list of 1 to {MAX_TRANSFORMS} entity paths other than the root")
+        if len(set(paths)) != len(paths):
+            _bad("'paths' names an entity twice")
+        if f.section("matrices") is None:
+            _bad("a scene_transforms needs a 'matrices' section")
+        mat = _part_section(f, "matrices", DType.F32, (len(paths), 16))
+        stamp, stamps = _stamp(f, static, len(paths))
+        return cls(sub, view, seq, stamp_ns, paths, mat, static, state, stamp, stamps, cursor)
 
 
 @dataclass
@@ -1832,45 +2096,121 @@ class SceneClear(_Msg):
     reset: bool = False
     static: bool = False
     state: bool = False
+    stamp: Any = None
+    cursor: int | None = None
 
     def to_meta(self):
         meta = {"sub": self.sub, "view": self.view, "seq": self.seq, "stamp_ns": self.stamp_ns,
                 "path": self.path}
-        for key in ("recursive", "reset", "static", "state"):
+        for key in ("recursive", "reset"):
             if getattr(self, key):
                 meta[key] = True
+        _write_flags(meta, self)
         if self.parts is not None:
             meta["parts"] = list(self.parts)
         return meta
 
+    def to_sections(self):
+        return [] if self.stamp is None else [_section("stamp", self.stamp)]
+
     @classmethod
     def from_frame(cls, f):
         m = f.meta
-        c = cls(_req(m, "sub", _u32, "a uint32"), _req(m, "view", _name, "a view name"),
-                _req(m, "seq", _uint, "an unsigned integer"),
-                _req(m, "stamp_ns", _uint, "an unsigned integer"),
-                _req(m, "path", entity_path_ok, "an entity path"),
-                _opt(m, "recursive", _bool, "a boolean", False),
-                _opt(m, "parts", lambda v: isinstance(v, list) and len(v) > 0
-                     and all(x in _CLEAR_PARTS for x in v), "a list of parts"),
-                _opt(m, "reset", _bool, "a boolean", False),
-                _opt(m, "static", _bool, "a boolean", False),
-                _opt(m, "state", _bool, "a boolean", False))
-        if c.reset and c.path != "":
+        sub, view, seq, stamp_ns = _common(m)
+        path = _req(m, "path", entity_path_ok, "an entity path")
+        recursive = _opt(m, "recursive", _bool, "a boolean", False)
+        parts = _opt(m, "parts", lambda v: isinstance(v, list) and len(v) > 0
+                     and all(x in CLEAR_PARTS for x in v), "a list of parts")
+        reset = _opt(m, "reset", _bool, "a boolean", False)
+        static, state, cursor = _flags(m)
+        if reset and path != "":
             _bad("a reset clears the root: its 'path' is \"\"")
-        return c
+        stamp, _ = _stamp(f, static)
+        return cls(sub, view, seq, stamp_ns, path, recursive, parts, reset, static, state, stamp,
+                   cursor)
+
+
+def _class_entry(e) -> bool:
+    return (_obj(e) and _is_int(e.get("id")) and 0 <= e["id"] <= MAX_CLASS_ID
+            and isinstance(e.get("label"), str) and len(e["label"].encode("utf-8")) <= NAME_MAX
+            and _rgba(e.get("color")))
+
+
+@dataclass
+class SceneClasses(_Msg):
+    """3.2 draft: a scene's class table, which replaces the previous one
+    whole: ``classes`` is a list of ``{"id", "label", "color"}`` in ascending
+    id order."""
+    TYPE: ClassVar[MsgType] = MsgType.SCENE_CLASSES
+    sub: int
+    view: str
+    seq: int
+    stamp_ns: int
+    classes: list
+    static: bool = False
+    state: bool = False
+    stamp: Any = None
+    cursor: int | None = None
+
+    def to_meta(self):
+        meta = {"sub": self.sub, "view": self.view, "seq": self.seq, "stamp_ns": self.stamp_ns,
+                "classes": list(self.classes)}
+        _write_flags(meta, self)
+        return meta
+
+    def to_sections(self):
+        return [] if self.stamp is None else [_section("stamp", self.stamp)]
+
+    @classmethod
+    def from_frame(cls, f):
+        m = f.meta
+        sub, view, seq, stamp_ns = _common(m)
+        static, state, cursor = _flags(m)
+        classes = _req(m, "classes", lambda v: isinstance(v, list) and len(v) <= MAX_CLASSES
+                       and all(_class_entry(e) for e in v),
+                       f"a list of at most {MAX_CLASSES} {{id, label, color}} entries")
+        if not _ascending([e["id"] for e in classes]):
+            _bad("'classes' must be in ascending id order without repeats")
+        stamp, _ = _stamp(f, static)
+        return cls(sub, view, seq, stamp_ns, classes, static, state, stamp, cursor)
 
 
 MESSAGES[SceneUpdate.TYPE] = SceneUpdate
+MESSAGES[SceneTransforms.TYPE] = SceneTransforms
 MESSAGES[SceneClear.TYPE] = SceneClear
-__all__ += ["SceneUpdate", "SceneClear", "entity_path_ok", "scene_view_info",
-            "resolve_scene_data_view"]
+MESSAGES[SceneClasses.TYPE] = SceneClasses
+__all__ += ["SceneUpdate", "SceneTransforms", "SceneClear", "SceneClasses", "entity_path_ok",
+            "scene_view_info", "resolve_scene_data_view"]
+
+
+def _view_camera(sc: dict, space: str):
+    """A VIEWS scene's "view_camera" as a viewer reads it: the dict of the
+    orbit keys or the entity path of a camera, or None for none, for a 2-D
+    scene, and for a value it cannot read (it then opens on the fit)."""
+    vc = sc.get("view_camera")
+    if vc is None or space != SPACE_3D:
+        return None
+    if isinstance(vc, str):
+        return vc if vc != "" and entity_path_ok(vc) else None
+    if not _obj(vc) or not set(vc) <= set(VIEW_CAMERA_KEYS):
+        return None
+    t = vc.get("target")
+    if t is not None and not (isinstance(t, list) and len(t) == 3 and all(_finite(x) for x in t)):
+        return None
+    if vc.get("distance") is not None and not _positive(vc["distance"]):
+        return None
+    if vc.get("azimuth") is not None and not _finite(vc["azimuth"]):
+        return None
+    e = vc.get("elevation")
+    if e is not None and not (_finite(e) and -89 <= e <= 89):
+        return None
+    return {k: v for k, v in vc.items() if v is not None}
 
 
 def scene_view_info(entry: dict) -> dict:
     """The key "scene" of a VIEWS entry of kind scene, checked, with its
-    defaults filled in: {"space", "up", "units"}. A "view_camera" is not
-    built yet and is left out. Raises :class:`MessageError` (bad_request)."""
+    defaults filled in: {"space", "up", "units", "view_camera"}, the last None
+    when absent or unreadable. Raises :class:`MessageError` (bad_request)."""
     sc = entry.get("scene")
     if sc is None:
         sc = {}
@@ -1892,7 +2232,7 @@ def scene_view_info(entry: dict) -> dict:
         units = "m"
     if not isinstance(units, str) or len(units.encode("utf-8")) > UNITS_MAX:
         _bad(f"scene units must be a string of at most {UNITS_MAX} bytes, got {units!r}")
-    return {"space": space, "up": up, "units": units}
+    return {"space": space, "up": up, "units": units, "view_camera": _view_camera(sc, space)}
 
 
 def resolve_scene_data_view(view: dict, request: dict | None) -> dict:

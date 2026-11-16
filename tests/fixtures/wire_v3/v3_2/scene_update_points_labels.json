@@ -1,0 +1,111 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 368,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 259,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 3,
+    "type": 112
+  },
+  "meta": {
+    "labels": [
+      "a",
+      "b",
+      "c"
+    ],
+    "part": "points",
+    "path": "graph/nodes",
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "positions",
+        "shape": [
+          3,
+          3
+        ]
+      },
+      {
+        "dtype": 4,
+        "name": "class_ids",
+        "shape": [
+          3
+        ]
+      },
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 20,
+    "stamp_ns": 81234567893273,
+    "sub": 2,
+    "view": "world"
+  },
+  "meta_offset": 36,
+  "name": "v3_2/scene_update_points_labels",
+  "section_lengths": [
+    36,
+    12,
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 36,
+      "name": "positions",
+      "offset": 296,
+      "shape": [
+        3,
+        3
+      ],
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.5,
+        0.0,
+        2.0,
+        0.25
+      ]
+    },
+    {
+      "dtype": 4,
+      "encoding": 0,
+      "length": 12,
+      "name": "class_ids",
+      "offset": 336,
+      "shape": [
+        3
+      ],
+      "values": [
+        0,
+        1,
+        1
+      ]
+    },
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 352,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

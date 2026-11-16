@@ -363,6 +363,7 @@ static inline uint32_t caliper_net_dtype_size(int32_t dtype) {
         case CALIPER_NET_DTYPE_I64:  return 8u;
         case CALIPER_NET_DTYPE_I32:  return 4u;
         case CALIPER_NET_DTYPE_U8:   return 1u;
+        case 6:                      return 2u;   /* CALIPER_NET_DTYPE_U16, the 3.2 block */
         default:                     return 0u;
     }
 }
@@ -376,32 +377,56 @@ static inline uint32_t caliper_net_align(uint32_t n) {
  * PROTOCOL 3.2 DRAFT: THE SCENES SUBSET
  *
  * Proposals that sprint 2 has not confirmed: the minor version 2, the
- * capability "scenes", the kind scene (6), SCENE_UPDATE (0x0070) and
- * SCENE_CLEAR (0x0072), and the limits below. Each is one line here, so a
- * renumbering changes one line. docs/references/wire-protocol-3-2.md states
- * what is built of them: the parts points, lines (segments and strips) and
- * mesh, SCENE_CLEAR, the VIEWS key "scene" and the default scene data view.
- * Senders keep writing CALIPER_NET_PROTOCOL_MINOR in their frames until 3.2 is
- * confirmed; the 3.2 golden frames (tests/fixtures/wire_v3/v3_2) carry
- * CALIPER_NET_MINOR_3_2. A peer decides by the capability, never the minor.
- * Every 3.1 message keeps its meaning and encoding.
+ * capability "scenes", the kind scene (6), the scene messages (0x0070 to
+ * 0x0073), the dtype u16 (6) and the limits below. Each is one line here, so
+ * a renumbering changes one line (the dtype also has one line in
+ * caliper_net_dtype_size above). docs/references/wire-protocol-3-2.md states
+ * what is built of them: every part of SCENE_UPDATE, SCENE_TRANSFORMS,
+ * SCENE_CLEAR, SCENE_CLASSES, the stamp sections of the scene messages, the
+ * VIEWS key "scene" and the default scene data view. Senders keep writing
+ * CALIPER_NET_PROTOCOL_MINOR in their frames until 3.2 is confirmed; the 3.2
+ * golden frames (tests/fixtures/wire_v3/v3_2) carry CALIPER_NET_MINOR_3_2. A
+ * peer decides by the capability, never the minor. Every 3.1 message keeps
+ * its meaning and encoding. CaliperDType (sdk/include/caliper/tensor.h) has
+ * no CALIPER_DT_U16 yet: the SDK owns it, and the draft asks sprint 2 for it.
  * ===========================================================================*/
 #define CALIPER_NET_MINOR_3_2            2u
 #define CALIPER_NET_CAP_SCENES           "scenes"     /* kind scene and its messages      */
-#define CALIPER_NET_KIND_SCENE           6            /* SCENE_UPDATE and SCENE_CLEAR      */
+#define CALIPER_NET_KIND_SCENE           6            /* the scene messages                */
 #define CALIPER_NET_MSG_SCENE_UPDATE     0x0070u      /* P -> V/H, H -> V   one part of one entity */
+#define CALIPER_NET_MSG_SCENE_TRANSFORMS 0x0071u      /* P -> V/H, H -> V   entity transforms    */
 #define CALIPER_NET_MSG_SCENE_CLEAR      0x0072u      /* P -> V/H, H -> V   clear an entity or reset */
+#define CALIPER_NET_MSG_SCENE_CLASSES    0x0073u      /* P -> V/H, H -> V   the class table      */
+#define CALIPER_NET_DTYPE_U16            6            /* 2 bytes: depth and segmentation images */
 
-/* SCENE_UPDATE "part"; arrows, boxes, image and camera are drafted, not built */
+/* SCENE_UPDATE "part" */
 #define CALIPER_NET_PART_POINTS          "points"
 #define CALIPER_NET_PART_LINES           "lines"
+#define CALIPER_NET_PART_ARROWS          "arrows"
+#define CALIPER_NET_PART_BOXES           "boxes"
 #define CALIPER_NET_PART_MESH            "mesh"
-/* lines "mode" ("edges" is drafted, not built) and "color_per" */
+#define CALIPER_NET_PART_IMAGE           "image"
+#define CALIPER_NET_PART_CAMERA          "camera"
+/* lines "mode" and "color_per" */
 #define CALIPER_NET_LINES_SEGMENTS       "segments"   /* vertices 2k and 2k + 1: segment k  */
 #define CALIPER_NET_LINES_STRIPS         "strips"     /* section strip_lengths i32 (S,)     */
+#define CALIPER_NET_LINES_EDGES          "edges"      /* section indices i32 (E, 2)         */
 #define CALIPER_NET_COLOR_PER_VERTEX     "vertex"
 #define CALIPER_NET_COLOR_PER_STRIP      "strip"
-/* VIEWS "scene" {"space", "up", "units"} */
+#define CALIPER_NET_COLOR_PER_EDGE       "edge"
+/* image "form" and "format" */
+#define CALIPER_NET_FORM_COLOR           "color"        /* pixels u8 (H, W, 4) or (H, W)  */
+#define CALIPER_NET_FORM_DEPTH           "depth"        /* pixels f32 or u16 (H, W)       */
+#define CALIPER_NET_FORM_SEGMENTATION    "segmentation" /* pixels u16 or u8 (H, W)        */
+#define CALIPER_NET_FORM_ENCODED         "encoded"      /* pixels u8 (B,): one JPEG or PNG */
+#define CALIPER_NET_FORMAT_JPEG          "jpeg"
+#define CALIPER_NET_FORMAT_PNG           "png"
+/* camera "convention" */
+#define CALIPER_NET_CONVENTION_RDF       "rdf"        /* x right, y down, z forward         */
+#define CALIPER_NET_CONVENTION_RUB       "rub"        /* x right, y up, looking along -z    */
+/* SCENE_CLEAR "parts" also takes "transform" */
+#define CALIPER_NET_PART_TRANSFORM       "transform"
+/* VIEWS "scene" {"space", "up", "units", "view_camera"} */
 #define CALIPER_NET_SPACE_3D             "3d"
 #define CALIPER_NET_SPACE_2D             "2d"
 
@@ -410,8 +435,16 @@ static inline uint32_t caliper_net_align(uint32_t n) {
 #define CALIPER_NET_UNITS_MAX            15u          /* bytes of a scene's unit note       */
 #define CALIPER_NET_MAX_ENTITIES         1024u        /* entities of a scene                */
 #define CALIPER_NET_MAX_BATCHES          2048u        /* batches of a scene                 */
-#define CALIPER_NET_MAX_BATCH_POINTS     4194304u     /* points, line or mesh vertices, triangles */
-#define CALIPER_NET_MAX_BATCH_ITEMS      1048576u     /* line strips of a batch             */
+#define CALIPER_NET_MAX_BATCH_POINTS     4194304u     /* points, line or mesh vertices, edges, triangles */
+#define CALIPER_NET_MAX_BATCH_ITEMS      1048576u     /* boxes, arrows or line strips of a batch */
+#define CALIPER_NET_MAX_LABELS           4096u        /* labels of a batch, of NAME_MAX bytes */
+#define CALIPER_NET_MAX_CLASSES          4096u        /* entries of a class table           */
+#define CALIPER_NET_MAX_CLASS_ID         65535u       /* the largest class id               */
+#define CALIPER_NET_MAX_IMAGE_SIDE       8192u        /* pixels on a side of an image or texture */
+#define CALIPER_NET_MAX_ENCODED_BYTES    16777216u    /* bytes of an encoded frame          */
+#define CALIPER_NET_MAX_TRANSFORMS       1024u        /* entity transforms in one SCENE_TRANSFORMS */
+#define CALIPER_NET_MAX_TIMELINES        8u           /* timelines of a session: values of a stamp */
+#define CALIPER_NET_STAMP_ABSENT         (-0x7fffffffffffffffLL - 1)   /* a stamp value: absent on that timeline */
 /* the scene data view's budget: default and largest value of each key
  * (max_points shares CALIPER_NET_DEFAULT_MAX_POINTS and _LIMIT_MAX_POINTS) */
 #define CALIPER_NET_SCENE_DEFAULT_MAX_ITEMS    100000u

@@ -177,7 +177,8 @@ def test_mesh_lines_and_points_reach_a_viewer(server, device):
             r = await v.subscribe(1, "landscape")
             assert r.data_view == w.SCENE_DATA_VIEW
             assert v.views["landscape"]["kind"] == w.Kind.SCENE
-            assert w.scene_view_info(v.views["landscape"]) == {"space": "3d", "up": "+z", "units": ""}
+            assert w.scene_view_info(v.views["landscape"]) == {"space": "3d", "up": "+z", "units": "",
+                                                                  "view_camera": None}
             await v.state(1, 0)
             assert sc.mesh("surface", pos, tri, values=vals, cmap="viridis", vmin=-4.0, vmax=2.0)
             assert sc.lines("path", path, strip_lengths=[7], colors=(235, 235, 235), rate=10)

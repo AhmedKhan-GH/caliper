@@ -1,0 +1,60 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 304,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 254,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 112
+  },
+  "meta": {
+    "convention": "rub",
+    "cx": 160.0,
+    "cy": 120.0,
+    "fx": 300.0,
+    "fy": 300.0,
+    "height": 240,
+    "part": "camera",
+    "path": "sim/eye",
+    "plane_distance": 0.25,
+    "sections": [
+      {
+        "dtype": 3,
+        "name": "stamp",
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "seq": 30,
+    "stamp_ns": 81234567893843,
+    "sub": 2,
+    "view": "world",
+    "width": 320
+  },
+  "meta_offset": 28,
+  "name": "v3_2/scene_update_camera_rub",
+  "section_lengths": [
+    16
+  ],
+  "sections": [
+    {
+      "dtype": 3,
+      "encoding": 0,
+      "length": 16,
+      "name": "stamp",
+      "offset": 288,
+      "shape": [
+        2
+      ],
+      "values": [
+        1200,
+        1763200000123456789
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

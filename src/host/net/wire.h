@@ -324,25 +324,41 @@ struct Unknown {   // a type this version does not know; receivers ignore it
     std::vector<Section> sections;
 };
 
-// ---- protocol 3.2 draft: the scenes subset (proposals: minor 2, capability "scenes", kind 6, 0x0070, 0x0072; the 3.2 block of caliper/live_net.h) ----
-// The rules of the block at the end of _wire.py. A SceneUpdate's `arrays` hold
-// the sections of its part in the part's order (PART_SECTIONS); decoded, only
-// the known ones, pointing into the frame like every decoded Section.
+// ---- protocol 3.2 draft: the scenes subset (proposals: minor 2, capability "scenes", kind 6, 0x0070 to 0x0073, dtype u16 6; the 3.2 block of caliper/live_net.h) ----
+// The rules of the block at the end of _wire.py, checked in the same order. A
+// SceneUpdate's `arrays` hold the sections of its part in the part's order
+// (PART_SECTIONS); decoded, only the known ones, pointing into the frame like
+// every decoded Section. Every scene message may carry a stamp section, i64
+// (T,) with T from 1 to CALIPER_NET_MAX_TIMELINES, and the key `cursor`.
 struct SceneUpdate {                 // 3.2 draft: one part of one entity of a scene
     static constexpr uint16_t kType = CALIPER_NET_MSG_SCENE_UPDATE;
     uint32_t sub = 0;
     std::string view;
     uint64_t seq = 0, stamp_ns = 0;
     std::string path;                // an entity path ("" is the root)
-    std::string part;                // CALIPER_NET_PART_POINTS, _LINES or _MESH
+    std::string part;                // CALIPER_NET_PART_*: points, lines, arrows, boxes, mesh, image, camera
     std::vector<Section> arrays;     // the part's sections, in the part's order (decoded: only the known ones)
-    Json params = Json::object();    // the part's keys as given: mode, color_per, color, radius, width,
-                                     // colormap, flags, vmin, vmax, stats (a null stat decodes to NaN)
+    Json params = Json::object();    // the part's keys as given (a null stat decodes to NaN); a camera's
+                                     // fx, fy, cx, cy, width, height, convention, plane_distance
     bool is_static = false;          // "static"
     bool state = false;
     Json axes;                       // null when absent
     std::optional<std::string> items;
+    std::optional<Section> stamp;    // i64 (T,)
+    std::optional<uint32_t> cursor;  // the TIME_STATE generation a recorded message answers
     const Section* array(const std::string& name) const;
+};
+struct SceneTransforms {             // 3.2 draft: entity transforms, (K, 16) f32 column-major matrices
+    static constexpr uint16_t kType = CALIPER_NET_MSG_SCENE_TRANSFORMS;
+    uint32_t sub = 0;
+    std::string view;
+    uint64_t seq = 0, stamp_ns = 0;
+    std::vector<std::string> paths;  // K distinct entity paths, never the root
+    Section matrices;                // (K, 16) f32; row k belongs to paths[k]
+    bool is_static = false, state = false;
+    std::optional<Section> stamp;    // (T,): one stamp for all
+    std::optional<Section> stamps;   // (K, T): a stamp each
+    std::optional<uint32_t> cursor;
 };
 struct SceneClear {
     static constexpr uint16_t kType = CALIPER_NET_MSG_SCENE_CLEAR;
@@ -353,10 +369,28 @@ struct SceneClear {
     bool recursive = false;
     std::optional<std::vector<std::string>> parts;
     bool reset = false, is_static = false, state = false;
+    std::optional<Section> stamp;
+    std::optional<uint32_t> cursor;
 };
-struct SceneView { std::string space, up, units; };
+struct SceneClasses {                // 3.2 draft: the class table, replaced whole
+    static constexpr uint16_t kType = CALIPER_NET_MSG_SCENE_CLASSES;
+    uint32_t sub = 0;
+    std::string view;
+    uint64_t seq = 0, stamp_ns = 0;
+    Json classes = Json::array();    // [{"id", "label", "color"}] in ascending id order
+    bool is_static = false, state = false;
+    std::optional<Section> stamp;
+    std::optional<uint32_t> cursor;
+};
+// The key "scene" of a VIEWS entry. view_camera: null when absent, unreadable or in a 2-D scene; else the
+// orbit object (target, distance, azimuth, elevation) or the entity path of a camera.
+struct SceneView { std::string space, up, units; Json view_camera; };
 // An entity path: 0 to 16 segments of [A-Za-z0-9_.-]{1,63} joined by '/', at most 255 bytes, never "." or "..".
 bool entity_path_ok(const std::string& path);
+// A part's index in the order points, lines, arrows, boxes, mesh, image, camera (-1: unknown), and its
+// array sections in the order a sender writes them (null-terminated).
+int scene_part_index(const std::string& part);
+const char* const* scene_part_sections(int part);
 // The key "scene" of a VIEWS entry of kind scene with its defaults filled in (bad_request on false).
 bool scene_view_info(const Json& entry, SceneView* out, std::string* err);
 // The resolved default scene data view.
@@ -368,7 +402,8 @@ bool resolve_scene_data_view(const Json& view, const Json& request, Json* out, s
 
 using Message = std::variant<Hello, Welcome, Bye, Error, Ping, Pong, Sessions, Attach, Views, Subscribe,
                              Unsubscribe, ViewRequest, ViewReply, Snapshot, Series, Event, Controls, Control,
-                             ControlReply, Selection, SceneUpdate, SceneClear, Unknown>;
+                             ControlReply, Selection, SceneUpdate, SceneTransforms, SceneClear, SceneClasses,
+                             Unknown>;
 
 struct DecodeResult {
     enum class Status { Ok, BadFrame, BadMessage };

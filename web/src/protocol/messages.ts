@@ -31,7 +31,9 @@ export const MSG = {
   control_reply: 0x0052,
   selection: 0x0060,
   scene_update: 0x0070, // 3.2 draft
+  scene_transforms: 0x0071, // 3.2 draft
   scene_clear: 0x0072, // 3.2 draft
+  scene_classes: 0x0073, // 3.2 draft
 } as const;
 export type MessageType = keyof typeof MSG;
 
@@ -46,8 +48,8 @@ export function kindName(id: number): Kind | null {
 export type ColormapName = 'viridis' | 'magma' | 'rdbu';
 export const COLORMAPS: readonly ColormapName[] = ['viridis', 'magma', 'rdbu'];
 
-export const DTYPE = { f32: 0, f16: 1, bf16: 2, i64: 3, i32: 4, u8: 5 } as const;
-export const DTYPE_SIZE: Record<number, number> = { 0: 4, 1: 2, 2: 2, 3: 8, 4: 4, 5: 1 };
+export const DTYPE = { f32: 0, f16: 1, bf16: 2, i64: 3, i32: 4, u8: 5, u16: 6 } as const;
+export const DTYPE_SIZE: Record<number, number> = { 0: 4, 1: 2, 2: 2, 3: 8, 4: 4, 5: 1, 6: 2 };
 
 /** Snapshot flags: take vmin from stats[0], vmax from stats[1], draw 1:1. */
 export const SNAP_AUTO_VMIN = 0x1;
@@ -311,7 +313,7 @@ export type Message =
   | HelloMsg | WelcomeMsg | ByeMsg | ErrorMsg | PingMsg | PongMsg | SessionsMsg | AttachMsg
   | ViewsMsg | SubscribeMsg | UnsubscribeMsg | ViewRequestMsg | ViewReplyMsg | SnapshotMsg
   | SeriesMsg | EventMsg | ControlsMsg | ControlMsg | ControlReplyMsg | SelectionMsg
-  | SceneUpdateMsg | SceneClearMsg;
+  | SceneUpdateMsg | SceneTransformsMsg | SceneClearMsg | SceneClassesMsg;
 
 /** Effective colour range of a snapshot: AUTO flags read stats[0] and stats[1]. */
 export function snapshotRange(s: SnapshotMsg): [number, number] {
@@ -321,7 +323,7 @@ export function snapshotRange(s: SnapshotMsg): [number, number] {
   return [lo, hi];
 }
 
-// --- protocol 3.2 draft: the scenes subset (proposals: minor 2, capability "scenes", kind 6, 0x0070, 0x0072; see the 3.2 block of include/caliper/live_net.h) ---
+// --- protocol 3.2 draft: the scenes subset (proposals: minor 2, capability "scenes", kind 6, 0x0070 to 0x0073, dtype u16; see the 3.2 block of include/caliper/live_net.h) ---
 
 export const PROTOCOL_MINOR_3_2 = 2;
 export const KIND_SCENE = 6;
@@ -329,19 +331,44 @@ export const CAP_SCENES = 'scenes';
 
 export const PART_POINTS = 'points';
 export const PART_LINES = 'lines';
+export const PART_ARROWS = 'arrows';
+export const PART_BOXES = 'boxes';
 export const PART_MESH = 'mesh';
-export type ScenePart = 'points' | 'lines' | 'mesh';
-export const SCENE_PARTS: readonly ScenePart[] = [PART_POINTS, PART_LINES, PART_MESH];
-/** In the draft, not built: answered `unsupported`. */
-export const DRAFTED_PARTS: readonly string[] = ['arrows', 'boxes', 'image', 'camera'];
+export const PART_IMAGE = 'image';
+export const PART_CAMERA = 'camera';
+export const PART_TRANSFORM = 'transform';
+export type ScenePart = 'points' | 'lines' | 'arrows' | 'boxes' | 'mesh' | 'image' | 'camera';
+export const SCENE_PARTS: readonly ScenePart[] = [PART_POINTS, PART_LINES, PART_ARROWS, PART_BOXES, PART_MESH, PART_IMAGE, PART_CAMERA];
+/** The parts a SCENE_CLEAR may name: the scene parts and the entity transform. */
+export const CLEAR_PARTS: readonly string[] = [...SCENE_PARTS, PART_TRANSFORM];
 export const LINES_SEGMENTS = 'segments';
 export const LINES_STRIPS = 'strips';
+export const LINES_EDGES = 'edges';
 export const COLOR_PER_VERTEX = 'vertex';
 export const COLOR_PER_STRIP = 'strip';
+export const COLOR_PER_EDGE = 'edge';
+export const FORM_COLOR = 'color';
+export const FORM_DEPTH = 'depth';
+export const FORM_SEGMENTATION = 'segmentation';
+export const FORM_ENCODED = 'encoded';
+export const FORMAT_JPEG = 'jpeg';
+export const FORMAT_PNG = 'png';
+export const CONVENTION_RDF = 'rdf';
+export const CONVENTION_RUB = 'rub';
 export const SPACE_3D = '3d';
 export const SPACE_2D = '2d';
 export const UP_AXES_3D: readonly string[] = ['+x', '-x', '+y', '-y', '+z', '-z'];
 export const UP_AXES_2D: readonly string[] = ['-y', '+y'];
+
+export const MAX_LABELS = 4096;
+export const MAX_CLASSES = 4096;
+export const MAX_CLASS_ID = 65535;
+export const MAX_IMAGE_SIDE = 8192;
+export const MAX_ENCODED_BYTES = 16777216;
+export const MAX_TRANSFORMS = 1024;
+export const MAX_TIMELINES = 8;
+/** A stamp value: absent on that timeline. */
+export const STAMP_ABSENT = -(1n << 63n);
 
 export const LIMITS_32 = {
   pathMax: 255,
@@ -351,20 +378,37 @@ export const LIMITS_32 = {
   maxBatches: 2048,
   maxBatchPoints: 4194304,
   maxBatchItems: 1048576,
+  maxLabels: MAX_LABELS,
+  maxClasses: MAX_CLASSES,
+  maxClassId: MAX_CLASS_ID,
+  maxImageSide: MAX_IMAGE_SIDE,
+  maxEncodedBytes: MAX_ENCODED_BYTES,
+  maxTransforms: MAX_TRANSFORMS,
+  maxTimelines: MAX_TIMELINES,
 } as const;
 
-/** The sections of each part, in the order a sender writes them. */
+/** The sections of each part, in the order a sender writes them; the section "stamp" follows them. */
 export const PART_SECTIONS: Record<ScenePart, readonly string[]> = {
-  points: ['positions', 'colors', 'values', 'radii'],
-  lines: ['positions', 'strip_lengths', 'colors', 'values'],
-  mesh: ['positions', 'indices', 'colors', 'values'],
+  points: ['positions', 'colors', 'values', 'class_ids', 'radii'],
+  lines: ['positions', 'strip_lengths', 'indices', 'colors', 'values'],
+  arrows: ['origins', 'vectors', 'colors', 'values'],
+  boxes: ['centers', 'half_sizes', 'rotations', 'colors', 'class_ids'],
+  mesh: ['positions', 'indices', 'normals', 'colors', 'values', 'uvs', 'texture'],
+  image: ['pixels'],
+  camera: [],
 };
-/** The keys of each part, beside the common ones. */
+/** The keys of each part, beside the common ones, in the order their types are checked. */
 export const PART_KEYS: Record<ScenePart, readonly string[]> = {
-  points: ['color', 'radius', 'colormap', 'flags', 'vmin', 'vmax', 'stats'],
+  points: ['color', 'radius', 'labels', 'colormap', 'flags', 'vmin', 'vmax', 'stats'],
   lines: ['mode', 'color_per', 'color', 'width', 'colormap', 'flags', 'vmin', 'vmax', 'stats'],
+  arrows: ['color', 'width', 'colormap', 'flags', 'vmin', 'vmax', 'stats'],
+  boxes: ['color', 'labels', 'fill', 'width', 'stats'],
   mesh: ['color', 'colormap', 'flags', 'vmin', 'vmax', 'stats'],
+  image: ['form', 'opacity', 'scale', 'cloud', 'colormap', 'flags', 'vmin', 'vmax', 'format', 'stats'],
+  camera: ['fx', 'fy', 'cx', 'cy', 'width', 'height', 'convention', 'plane_distance'],
 };
+/** The keys a camera part must carry. */
+export const CAMERA_REQUIRED: readonly string[] = ['fx', 'fy', 'cx', 'cy', 'width', 'height', 'convention'];
 
 /** The resolved default scene data view (SCENE_DATA_VIEW of _wire.py). */
 export const SCENE_DATA_VIEW = {
@@ -372,8 +416,8 @@ export const SCENE_DATA_VIEW = {
   budget: { max_points: 100000, max_items: 100000, max_vertices: 1000000, max_extent: 1024 },
 };
 
-/** One section of a scene part; dtype 0 f32, 4 i32, 5 u8. */
-export interface SceneArray { dtype: number; shape: number[]; data: Float32Array | Int32Array | Uint8Array }
+/** One section of a scene part; dtype 0 f32, 4 i32, 5 u8, 6 u16. */
+export interface SceneArray { dtype: number; shape: number[]; data: Float32Array | Int32Array | Uint8Array | Uint16Array }
 
 /** One part of one entity of a scene. */
 export interface SceneUpdateMsg {
@@ -383,26 +427,65 @@ export interface SceneUpdateMsg {
   seq: number;
   stamp_ns: number;
   path: string;
-  part: 'points' | 'lines' | 'mesh';
-  /** Only the part's known sections, e.g. positions, colors, values, radii, strip_lengths, indices. */
+  part: ScenePart;
+  /** Only the part's known sections, e.g. positions, colors, values, class_ids, radii, indices, pixels. */
   arrays: Record<string, SceneArray>;
   params: {
-    mode?: 'segments' | 'strips';
-    color_per?: 'vertex' | 'strip';
+    mode?: 'segments' | 'strips' | 'edges';
+    color_per?: 'vertex' | 'strip' | 'edge';
     color?: number[];
     radius?: number;
+    labels?: string[];
     width?: number;
+    fill?: boolean;
     colormap?: number;
     flags?: number;
     vmin?: number;
     vmax?: number;
+    form?: 'color' | 'depth' | 'segmentation' | 'encoded';
+    opacity?: number;
+    scale?: number;
+    cloud?: boolean;
+    format?: 'jpeg' | 'png';
+    fx?: number;
+    fy?: number;
+    cx?: number;
+    cy?: number;
+    /** An integer for a camera. */
+    height?: number;
+    convention?: 'rdf' | 'rub';
+    plane_distance?: number;
     /** NaN where the producer sent null. */
     stats?: number[];
   };
   static?: boolean;
   state?: boolean;
+  /** The generation of the TIME_STATE a recorded message answers. */
+  cursor?: number;
   axes?: PayloadAxis[];
   items?: string;
+  /** The i64 (T,) stamp section. */
+  stamp?: BigInt64Array;
+}
+
+/** The entity transforms of up to 1024 entities: 4 x 4 matrices, column-major, row k of `matrices` for paths[k]. */
+export interface SceneTransformsMsg {
+  type: 'scene_transforms';
+  sub: number;
+  view: string;
+  seq: number;
+  stamp_ns: number;
+  paths: string[];
+  /** (K, 16) f32, K * 16 values. */
+  matrices: Float32Array;
+  static?: boolean;
+  state?: boolean;
+  /** One i64 (T,) stamp for all the transforms. */
+  stamp?: BigInt64Array;
+  /** i64 (K, T), K * T values, one stamp each; `stamps_t` is T (decoded: always set). */
+  stamps?: BigInt64Array;
+  stamps_t?: number;
+  cursor?: number;
 }
 
 /** Clears an entity, its subtree, some of its parts, or with reset the whole scene. */
@@ -418,7 +501,34 @@ export interface SceneClearMsg {
   reset?: boolean;
   static?: boolean;
   state?: boolean;
+  stamp?: BigInt64Array;
+  cursor?: number;
 }
 
+export interface SceneClass { id: number; label: string; color: number[] }
+
+/** A scene's class table, which replaces the previous one whole. */
+export interface SceneClassesMsg {
+  type: 'scene_classes';
+  sub: number;
+  view: string;
+  seq: number;
+  stamp_ns: number;
+  classes: SceneClass[];
+  static?: boolean;
+  state?: boolean;
+  stamp?: BigInt64Array;
+  cursor?: number;
+}
+
+/** The orbit camera a scene view opens on; null-valued keys are dropped. */
+export interface ViewCameraOrbit { target?: number[]; distance?: number; azimuth?: number; elevation?: number }
+
 /** The key "scene" of a VIEWS entry of kind 6, with its defaults filled in. */
-export interface SceneViewInfo { space: '3d' | '2d'; up: string; units: string }
+export interface SceneViewInfo {
+  space: '3d' | '2d';
+  up: string;
+  units: string;
+  /** The orbit keys or the entity path of a camera; undefined when absent, unreadable, or for a 2-D scene. */
+  view_camera: ViewCameraOrbit | string | undefined;
+}
