@@ -1340,3 +1340,32 @@ def test_late_view_resumes_after_a_pause(server, device):
             return (ring.views["late"].seq - n0) / (time.perf_counter() - t0)
     rate = run(go())
     assert rate >= 45, rate
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_calls_spread_in_a_step_share_a_tick(server, device):
+    """View calls made far apart in one step (longer than a tick), with a
+    series call between them, still share that step's tick."""
+    W = torch.randn(64, 64, device=device)
+    Z = torch.randn(500, 2, device=device)
+    loss = torch.zeros((), device=device)
+
+    def step():
+        caliper.show(W, name="w")
+        time.sleep(0.02)                                 # the forward and backward pass
+        caliper.series(loss + 1, name="loss")
+        time.sleep(0.005)
+        caliper.points(Z, name="z")
+
+    async def go():
+        async with Client(server) as c:
+            for i, v in enumerate(("w", "z", "loss")):
+                await c.subscribe(i + 1, v, pump=step)
+            await c.expect(w.Snapshot, pump=step, pred=lambda m: m.view == "z")
+            ring = server.ring
+            n0, k0 = ring.counters["taken"], ring.counters["ticks"]
+            for _ in range(30):
+                step()
+            return ring.counters["taken"] - n0, ring.counters["ticks"] - k0
+    taken, ticks = run(go())
+    assert ticks >= 25 and taken >= 2 * ticks - 2, (taken, ticks)

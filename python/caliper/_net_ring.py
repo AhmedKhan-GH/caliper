@@ -22,8 +22,10 @@ QUEUES device work:
   copies, which go to the network thread in one batch. A tick closes as soon as
   every due group that was called in the last second has its snapshot (right
   after the step's last view call, so the last step of a run is not held back),
-  when a group already served in it is called again (the next step began), when
-  it is older than a tick, or at flush and close.
+  when a group already served in it is called again (the next step began), at
+  the first call after it has been open for TICK_MAX_AGE_S (the calls stopped),
+  or at flush and close. A tick has no shorter age limit, so that the view calls
+  of one step share it however far apart in the step they are made.
 * a series value is retained whether or not anyone subscribes (the protocol's
   backfill rule): floats go to the network thread as they are, tensors are
   gathered (detached) and moved in chunks the same way as snapshots.
@@ -55,6 +57,7 @@ STAGE_SETS = 3                 # pinned staging sets per group: in flight, pendi
 SERIES_CHUNK = 64              # tensor values gathered before a chunk is moved to the host
 SERIES_IDLE_FLUSH_S = 1.0      # chunk cadence of a series nobody watches
 SERIES_CAPACITY = 4096         # values kept of one huge tensor call (as caliper.series)
+TICK_MAX_AGE_S = 1.0           # a tick still open after this closes at the next call
 
 
 _TORCH = None
@@ -268,8 +271,8 @@ class NetRing:
             self._idle_due(now)
             return False
         t = self.tick
-        if t is not None and now - t.t0 > self.tick_interval:
-            self._close_tick()              # its step's calls are over
+        if t is not None and now - t.t0 > TICK_MAX_AGE_S:
+            self._close_tick()              # its step's calls stopped
             t = None
         if t is None:
             if now < self.tick_next:
@@ -512,8 +515,8 @@ class NetRing:
         """A watched series moves its gathered values in the tick, with the
         snapshots; past SERIES_CAPACITY values it moves them on its own."""
         t = self.tick
-        if t is not None and (now - t.t0 > self.tick_interval or s in t.served):
-            self._close_tick()              # too old, or the next step began
+        if t is not None and (now - t.t0 > TICK_MAX_AGE_S or s in t.served):
+            self._close_tick()              # its step's calls stopped, or the next step began
             t = None
         if t is None:
             if now < self.tick_next:
