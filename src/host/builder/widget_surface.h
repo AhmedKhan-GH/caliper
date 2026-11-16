@@ -323,7 +323,7 @@ struct WidgetLayoutMetrics {
     float button_pad = 8;    // inside a button, left and right
     float key_gap = 6;       // between a button's key and its label
     float mark = 26;         // the ⌘K mark at the row's left
-    float live = 13;         // the live diamond before the progress, and its gap
+    float live = 16;         // the live diamond before the progress, and its gap
     float min_input = 96;    // the narrowest input before the status collapses
     float min_content = 48;  // the content kept under the band before the band gives way
     float min_width = 240;   // the narrowest panel the surface lays out in full

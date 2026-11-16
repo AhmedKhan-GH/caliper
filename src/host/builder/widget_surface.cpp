@@ -728,7 +728,7 @@ WidgetLayoutMetrics WidgetLayoutMetrics::for_text_scale(float s) {
     m.button_pad = r(8);
     m.key_gap = r(6);
     m.mark = r(28);
-    m.live = r(13);
+    m.live = r(16);
     m.min_input = r(96);
     m.min_content = r(48);
     m.min_width = r(240);
