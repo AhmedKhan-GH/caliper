@@ -4,6 +4,7 @@ nav:
   - embed-caliper.md
   - attach-to-a-running-script.md
   - run-a-hub.md
+  - control-a-running-script.md
   - verify-on-windows.md
   - ci.md
   - glob: "*"
