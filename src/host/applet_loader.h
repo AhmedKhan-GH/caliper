@@ -211,6 +211,16 @@ public:
     int scan(const std::string& dir);
     // Scans each folder in order (applet_search_dirs gives the host's order).
     int scan(const std::vector<std::string>& dirs);
+    // Lists the workspace's applets/ folder again, so that a spec applet saved
+    // since the last scan (applet.save) appears and one deleted goes: the
+    // entries found there are replaced by what the folder holds now, at the
+    // folder's position in the search order, or at the next position when
+    // it was not scanned before. Entries move, so indices taken before are
+    // stale. Like scan(), it reallocates what a running compiled applet
+    // holds, so it does nothing and returns -1 while one is Active; a spec
+    // applet marked Active by the app is listed again as Ready. Returns the
+    // entries listed from the folder.
+    int rescan_workspace();
     int count() const { return (int)entries_.size(); }
     // The entry to launch for `id`: the chosen copy when one is Ready (or
     // running), otherwise the first copy that is not Shadowed; -1 when the
@@ -287,6 +297,8 @@ private:
     std::vector<AppletEntry> entries_;
     std::vector<CaliperHost> host_blocks_;  // stable storage per entry
     int next_rank_ = 0;                      // search position of the next scan
+    int workspace_rank_ = -1;                // the workspace folder's position, once scanned
+    int scan_at(const std::string& dir, int rank);
 };
 
 } // namespace caliper_host

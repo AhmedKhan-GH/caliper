@@ -115,3 +115,61 @@ TEST_CASE("applet.save writes what the loader lists, validates and reads back") 
     CHECK(L.at(i).status == AppletStatus::Ready);
     CHECK(L.at(i).status_text == kSpecPageUnavailable);
 }
+
+TEST_CASE("rescan_workspace lists an applet saved after the scan, at the workspace's place, and drops a deleted one") {
+    TempDir t("rescan");
+    const fs::path ws = t.path / "workspace";
+    const fs::path user = t.path / "user";
+    fs::create_directories(user);
+    auto opened = caliper_builder::Session::open(ws.string());
+    REQUIRE_MESSAGE(opened.error.ok(), opened.error.message);
+    caliper_builder::Session& s = *opened.session;
+    run(s, "spec.new", {{"id", "first"}, {"title", "First"}});
+    run(s, "panel.create", {{"id", "t"}, {"primitive", "text"}, {"options", {{"text", "one"}}}});
+    run(s, "applet.save");
+
+    AppletLoader L(host_caps(), (t.path / "data").string());
+    // Without a workspace there is nothing to list again.
+    CHECK(L.rescan_workspace() == 0);
+    L.set_workspace(ws.string());
+    L.scan(applet_search_dirs({}, nullptr, user.string(), "", ws.string()));
+    REQUIRE(L.count() == 1);
+    // A spec applet the app marked Active is listed again as Ready.
+    L.at(0).status = AppletStatus::Active;
+
+    // A second applet saved during the session appears without a new scan;
+    // the first is not listed twice.
+    run(s, "spec.new", {{"id", "second"}, {"title", "Second"}});
+    run(s, "panel.create", {{"id", "t"}, {"primitive", "text"}, {"options", {{"text", "two"}}}});
+    run(s, "applet.save");
+    CHECK(L.rescan_workspace() == 2);
+    REQUIRE(L.count() == 2);
+    REQUIRE(entry_of(L, "local.first") >= 0);
+    REQUIRE(entry_of(L, "local.second") >= 0);
+    CHECK(L.at(entry_of(L, "local.first")).status == AppletStatus::Ready);
+    CHECK(L.at(entry_of(L, "local.second")).status == AppletStatus::Ready);
+
+    // A copy of the same id in the user folder, which comes after the
+    // workspace in the search order, stays shadowed after a rescan.
+    fs::create_directories(user / "second");
+    fs::copy_file(ws / "applets" / "second" / "second.spec.toml", user / "second" / "second.spec.toml");
+    fs::copy_file(ws / "applets" / "second" / "second.caliper.toml", user / "second" / "second.caliper.toml");
+    AppletLoader M(host_caps(), (t.path / "data").string());
+    M.set_workspace(ws.string());
+    M.scan(applet_search_dirs({}, nullptr, user.string(), "", ws.string()));
+    REQUIRE(M.count() == 3);
+    CHECK(M.rescan_workspace() == 2);
+    REQUIRE(M.count() == 3);
+    const int chosen = M.find("local.second");
+    REQUIRE(chosen >= 0);
+    CHECK(fs::path(M.at(chosen).folder).parent_path() == ws / "applets");
+    int shadowed = 0;
+    for (int i = 0; i < M.count(); i++) shadowed += M.at(i).status == AppletStatus::Shadowed;
+    CHECK(shadowed == 1);
+
+    // A deleted applet goes.
+    fs::remove_all(ws / "applets" / "first");
+    CHECK(L.rescan_workspace() == 1);
+    CHECK(L.count() == 1);
+    CHECK(entry_of(L, "local.first") < 0);
+}

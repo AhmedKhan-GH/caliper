@@ -587,6 +587,32 @@ int AppletLoader::scan(const std::vector<std::string>& dirs) {
 
 int AppletLoader::scan(const std::string& dir) {
     const int rank = next_rank_++;
+    if (is_workspace_folder(dir)) workspace_rank_ = rank;
+    return scan_at(dir, rank);
+}
+
+int AppletLoader::rescan_workspace() {
+    if (workspace_key_.empty()) return 0;
+    for (const AppletEntry& a : entries_)
+        if (a.status == AppletStatus::Active && a.manifest.kind != AppletKind::Spec) return -1;
+    // What the workspace's folder gave: a manifest in it, or in one of its
+    // subfolders.
+    entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
+                                  [&](const AppletEntry& a) {
+                                      const fs::path folder(a.folder);
+                                      return is_workspace_folder(folder.string()) ||
+                                             is_workspace_folder(folder.parent_path().string());
+                                  }),
+                   entries_.end());
+    if (workspace_rank_ < 0) workspace_rank_ = next_rank_++;
+    const int added = scan_at(workspace_applets_dir(workspace_dir_), workspace_rank_);
+    // scan_at() chooses copies again only when the folder exists.
+    resolve_duplicates();
+    host_blocks_.assign(entries_.size(), CaliperHost{});
+    return added;
+}
+
+int AppletLoader::scan_at(const std::string& dir, int rank) {
     std::error_code ec;
     if (!fs::is_directory(dir, ec)) return 0;
     const bool workspace = is_workspace_folder(dir);
