@@ -832,22 +832,30 @@ def test_capture_browser(notebook, tmp_path):
             assert time.monotonic() < end, f"waited {timeout} s for {what}"
             time.sleep(0.02)
 
+    # A link's id in the server's stats: the native sender's connection, or the
+    # Python sender's link. Scene frames are counted on the link either way
+    # (caliper._net_scene), but only the Python sender's stats list them.
+    def stats_id(ln):
+        return getattr(ln, "conn", ln.id)
+
     def frames_out(lid):
         return next(c for c in server.stats()["connections"] if c["id"] == lid)["frames_out"]
 
     def sent_when_idle(lid):
         """The frames sent on connection ``lid`` once nothing waits to go on it:
         no scene batch in flight from the device, and on the connection no
-        control message and no scene batch queued, at two reads in a row with
-        the same count."""
+        control message and no scene batch queued, nor with the native sender
+        a frame handed to it and not yet sent, at two reads in a row with the
+        same count."""
         from caliper import _net_scene
         route = _net_scene.route_of(server.ring)
-        link = next(ln for ln in server.producer.links if ln.id == lid)
+        link = next(ln for ln in server.producer.links if stats_id(ln) == lid)
 
         def idle():
             try:
                 return not route.busy() and not link.control and (link.scenes is None or all(
-                    not q.state and not q.pending for q in list(link.scenes.subs.values())))
+                    not q.state and not q.pending for q in list(link.scenes.subs.values()))) and (
+                    not hasattr(link, "conn") or link.p.nio.queued(link.conn) == 0)
             except RuntimeError:                                 # changed while read
                 return False
         prev = None
@@ -867,19 +875,24 @@ def test_capture_browser(notebook, tmp_path):
         if first.startswith("SKIP"):
             pytest.skip(first[5:])
         assert first == "READY", first
-        scene = [c["id"] for c in server.stats()["connections"] if c.get("scenes_sent", 0) > 0]
+        links = [ln for ln in list(server.producer.links) if ln.stats.get("scenes_sent", 0) > 0]
+        scene = [stats_id(ln) for ln in links]
         assert len(scene) == 1, server.stats()["connections"]   # the scene's module, one connection
         ns["train"](300)
         ns["show_surface"]()                                      # a surface forced at step 299
         assert land.refits[-1] == (299, "path")
         n = sent_when_idle(scene[0])                              # the run is idle now
+        scenes_at = links[0].stats["scenes_sent"]
         png = tmp_path / "browser-step299.png"
         page.stdin.write(f"shot {n} {png}\n")
         page.stdin.flush()
         wait(lambda: any(x.startswith("SHOT ") for x in lines), "the capture")
         shot = json.loads(next(x for x in lines if x.startswith("SHOT "))[5:])
         assert "error" not in shot or not shot["error"], shot
-        assert frames_out(scene[0]) == n                          # nothing was sent after the count
+        # No scene message was sent after the count. The module PINGs after 10 s
+        # without a message (CALIPER_NET_PING_INTERVAL_MS), which a slow capture
+        # can reach, and the PONG it gets is a frame of the connection too.
+        assert links[0].stats["scenes_sent"] == scenes_at, (scenes_at, links[0].stats["scenes_sent"])
         assert shot["drawer"] == "wasm" and not shot["gfxErrors"], shot
         assert shot["info"].startswith("4 entities"), shot["info"]
         area = np.asarray(Image.open(png).convert("RGB"))
