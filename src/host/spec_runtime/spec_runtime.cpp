@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cctype>
 #include <cstring>
+#include <limits>
 
 // The live views' categorical palette and point sizes (live_views_draw.cpp),
 // so a spec panel and a live view share them.
@@ -210,6 +211,78 @@ ImPlotFlags plot_flags(bool legend) {
            (legend ? 0 : ImPlotFlags_NoLegend);
 }
 
+// ---- the selection --------------------------------------------------------------
+
+// Whether a shift-drag may start or runs on this panel's plot: the plot then
+// takes no input of its own, so the drag selects instead of panning.
+bool selection_input(const SpecPanelView& v, const ImRect& c) {
+    if (!v.selection) return false;
+    return v.selecting || (ImGui::GetIO().KeyShift && ImGui::IsMouseHoveringRect(c.Min, c.Max, false));
+}
+
+// Inside BeginPlot, after the data: the shift-drag that makes a selection
+// (`rect`: a rectangle of points; otherwise a range of x), and the
+// selection drawn in bronze when it is this panel's.
+void selection_gesture(SpecPanelView& v, const SpecLook& L, bool rect) {
+    if (!v.selection) return;
+    SpecSelection& sel = *v.selection;
+    const ImVec2 pp = ImPlot::GetPlotPos(), ps = ImPlot::GetPlotSize();
+    const bool over = ImGui::IsMouseHoveringRect(pp, ImVec2(pp.x + ps.x, pp.y + ps.y), false);
+    const ImPlotPoint m = ImPlot::GetPlotMousePos();
+    if (!v.selecting && over && ImGui::GetIO().KeyShift && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        v.selecting = true;
+        v.select_from[0] = m.x;
+        v.select_from[1] = m.y;
+    }
+    const ImPlotRect lim = ImPlot::GetPlotLimits();
+    double x0, x1, y0, y1;
+    bool show = false;
+    if (v.selecting) {
+        x0 = std::min(v.select_from[0], m.x);
+        x1 = std::max(v.select_from[0], m.x);
+        y0 = rect ? std::min(v.select_from[1], m.y) : lim.Y.Min;
+        y1 = rect ? std::max(v.select_from[1], m.y) : lim.Y.Max;
+        show = true;
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            v.selecting = false;
+            const ImVec2 a = ImPlot::PlotToPixels(v.select_from[0], v.select_from[1]);
+            const ImVec2 b = ImPlot::PlotToPixels(m.x, m.y);
+            if (std::fabs(a.x - b.x) < 3.0f && (!rect || std::fabs(a.y - b.y) < 3.0f)) {
+                if (sel.panel == v.data.id) sel = {};   // a shift-click clears it
+                show = false;
+            } else {
+                sel = {};
+                sel.kind = rect ? SpecSelection::Kind::points : SpecSelection::Kind::range;
+                sel.panel = v.data.id;
+                sel.x0 = x0;
+                sel.x1 = x1;
+                sel.y0 = rect ? y0 : 0.0;
+                sel.y1 = rect ? y1 : 0.0;
+            }
+        }
+    } else if (!sel.empty() && sel.panel == v.data.id) {
+        x0 = sel.x0;
+        x1 = sel.x1;
+        y0 = sel.kind == SpecSelection::Kind::points ? sel.y0 : lim.Y.Min;
+        y1 = sel.kind == SpecSelection::Kind::points ? sel.y1 : lim.Y.Max;
+        show = true;
+    }
+    if (!show) return;
+    ImPlot::PushPlotClipRect();
+    ImDrawList* dl = ImPlot::GetPlotDrawList();
+    ImVec2 a = ImPlot::PlotToPixels(x0, y1), b = ImPlot::PlotToPixels(x1, y0);
+    a = ImVec2(std::round(a.x), std::round(a.y));
+    b = ImVec2(std::round(b.x), std::round(b.y));
+    dl->AddRectFilled(a, b, sternbild::with_alpha(L.accent, 46));
+    if (rect) {
+        dl->AddRect(a, b, L.accent, 0.0f, 0, 1.0f);
+    } else {
+        dl->AddRectFilled(ImVec2(a.x, a.y), ImVec2(a.x + 1.0f, b.y), L.accent);
+        dl->AddRectFilled(ImVec2(b.x - 1.0f, a.y), ImVec2(b.x, b.y), L.accent);
+    }
+    ImPlot::PopPlotClipRect();
+}
+
 // ---- the primitives ------------------------------------------------------------
 
 void draw_series(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
@@ -217,7 +290,8 @@ void draw_series(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
     const PreparedSeries& S = p.series;
     const bool legend = S.lines.size() > 1;
     push_plot_style(L);
-    if (ImPlot::BeginPlot("##spec.series", c.GetSize(), plot_flags(legend))) {
+    const ImPlotFlags flags = plot_flags(legend) | (selection_input(v, c) ? ImPlotFlags_NoInputs : 0);
+    if (ImPlot::BeginPlot("##spec.series", c.GetSize(), flags)) {
         ImPlot::SetupAxes(label_or_null(p.x_label), label_or_null(p.y_label));
         if (p.x_log) ImPlot::SetupAxisScale(ImAxis_X1, ImPlotScale_Log10);
         if (p.y_log) ImPlot::SetupAxisScale(ImAxis_Y1, ImPlotScale_Log10);
@@ -280,6 +354,7 @@ void draw_series(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
             }
             if (!tip.empty()) ImGui::SetTooltip("%s", tip.c_str());
         }
+        selection_gesture(v, L, false);
         ImPlot::EndPlot();
     }
     pop_plot_style();
@@ -523,7 +598,8 @@ void draw_points2d(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
     const float key = points_key_width(P, L);
     const ImRect plot(c.Min, ImVec2(c.Max.x - key, c.Max.y));
     push_plot_style(L);
-    if (ImPlot::BeginPlot("##spec.points", plot.GetSize(), plot_flags(false))) {
+    const ImPlotFlags flags = plot_flags(false) | (selection_input(v, plot) ? ImPlotFlags_NoInputs : 0);
+    if (ImPlot::BeginPlot("##spec.points", plot.GetSize(), flags)) {
         ImPlot::SetupAxes(label_or_null(p.x_label), label_or_null(p.y_label));
         if (v.fit_frames > 0) {
             double x0, x1, y0, y1;
@@ -546,6 +622,7 @@ void draw_points2d(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
         ImPlotSpec none;
         none.Flags = ImPlotItemFlags_NoLegend | ImPlotItemFlags_NoFit;
         ImPlot::PlotDummy("##points", none);
+        selection_gesture(v, L, true);
         ImPlot::EndPlot();
     }
     pop_plot_style();
@@ -949,6 +1026,7 @@ SpecRuntime::SpecRuntime(SpecTextures& textures) : textures_(textures) {}
 SpecRuntime::~SpecRuntime() {
     for (auto& e : entries_) textures_.release(e.second.view.texture);
     for (auto& e : previews_) textures_.release(e.second.view.texture);
+    for (auto& e : spec_preview_entries_) textures_.release(e.second.view.texture);
 }
 
 void SpecRuntime::set_spec(const spec::Spec& s) {
@@ -1109,6 +1187,65 @@ void SpecRuntime::draw_tabs(const SpecLayoutTabs& t, const SpecLook& L) {
     }
 }
 
+// ---- the selection's rows and the spec's preview ----------------------------------------
+
+SpecSelectionRows spec_selection_rows(const PreparedPanel& p, const SpecSelection& sel, size_t max_rows) {
+    SpecSelectionRows out;
+    if (sel.empty() || sel.panel != p.id) return out;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    if (sel.kind == SpecSelection::Kind::range && p.primitive == spec::Primitive::series && !p.series.lines.empty()) {
+        const PreparedSeries& S = p.series;
+        out.columns.push_back(S.x_name.empty() ? "x" : S.x_name);
+        for (const auto& l : S.lines) out.columns.push_back(l.name);
+        const SeriesLine& first = S.lines.front();
+        for (size_t i = 0; i < first.x.size(); ++i) {
+            const double x = first.x[i];
+            if (x < sel.x0 || x > sel.x1) continue;
+            ++out.total;
+            if (out.rows.size() >= max_rows) continue;
+            std::vector<double> row{x};
+            for (const auto& l : S.lines) {
+                double y = nan;
+                if (l.x.size() == first.x.size() && i < l.y.size() && l.x[i] == x) {
+                    y = l.y[i];
+                } else {
+                    const auto it = std::lower_bound(l.x.begin(), l.x.end(), x);
+                    if (it != l.x.end() && *it == x) y = l.y[(size_t)(it - l.x.begin())];
+                }
+                row.push_back(y);
+            }
+            out.rows.push_back(std::move(row));
+        }
+    } else if (sel.kind == SpecSelection::Kind::points && p.primitive == spec::Primitive::points && !p.points.three_d) {
+        const PreparedPoints& P = p.points;
+        out.columns = {p.x_label.empty() ? "x" : p.x_label, p.y_label.empty() ? "y" : p.y_label};
+        for (size_t i = 0; i < P.x.size() && i < P.y.size(); ++i) {
+            if (P.x[i] < sel.x0 || P.x[i] > sel.x1 || P.y[i] < sel.y0 || P.y[i] > sel.y1) continue;
+            ++out.total;
+            if (out.rows.size() < max_rows) out.rows.push_back({(double)P.x[i], (double)P.y[i]});
+        }
+    }
+    return out;
+}
+
+void SpecRuntime::set_spec_preview(const spec::Spec& s, std::set<std::string> added) {
+    if (spec_preview_ && *spec_preview_ == s && spec_preview_added_ == added) return;
+    spec_preview_ = s;
+    spec_preview_added_ = std::move(added);
+    for (auto& e : spec_preview_entries_) {
+        e.second.stale = true;
+        const spec::Panel* p = s.find_panel(e.first);
+        if (p) e.second.panel = *p;
+    }
+}
+
+void SpecRuntime::clear_spec_preview() {
+    for (auto& e : spec_preview_entries_) textures_.release(e.second.view.texture);
+    spec_preview_entries_.clear();
+    spec_preview_.reset();
+    spec_preview_added_.clear();
+}
+
 void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
     textures_.collect();
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1117,14 +1254,16 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
     dl->AddRectFilled(area.Min, area.Max, L.rule);
     layout_ = {};
     if (!spec_) return;
-    const std::optional<spec::LayoutNode> root = caliper_builder::effective_layout(*spec_);
+    // The spec shown: the open one, or a preview of the whole spec.
+    const spec::Spec& shown = spec_preview_ ? *spec_preview_ : *spec_;
+    const std::optional<spec::LayoutNode> root = caliper_builder::effective_layout(shown);
     if (!root) {
         dl->AddRectFilled(area.Min, area.Max, L.ground);
-        draw_state({PanelStateKind::empty, "No panels", spec_->applet.id}, area, L);
+        draw_state({PanelStateKind::empty, "No panels", shown.applet.id}, area, L);
         return;
     }
     const SpecLayoutMetrics m = SpecLayoutMetrics::for_text_scale(L.text_scale);
-    layout_ = compute_spec_layout(*root, *spec_, {area.Min.x, area.Min.y, area.GetWidth(), area.GetHeight()}, m, tabs_);
+    layout_ = compute_spec_layout(*root, shown, {area.Min.x, area.Min.y, area.GetWidth(), area.GetHeight()}, m, tabs_);
     // Only the panels shown are resolved; a panel in a hidden tab is resolved
     // when its tab is chosen.
     update_only(&layout_);
@@ -1133,11 +1272,38 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
         auto pv = previews_.find(lp.id);
         const bool preview = pv != previews_.end();
         auto it = entries_.find(lp.id);
-        if (!preview && it == entries_.end()) continue;
-        Entry& e = preview ? pv->second : it->second;
+        // A panel the spec's preview adds or changes: from the preview.
+        Entry* whole = nullptr;
+        bool added = false;
+        if (spec_preview_ && !preview) {
+            const spec::Panel* pp = spec_preview_->find_panel(lp.id);
+            added = spec_preview_added_.count(lp.id) != 0;
+            if (pp && (added || it == entries_.end() || it->second.panel != *pp)) {
+                Entry& e = spec_preview_entries_[lp.id];
+                if (e.panel != *pp) {
+                    e.panel = *pp;
+                    e.stale = true;
+                }
+                if (e.stale) {
+                    PanelData data;
+                    if (source_) {
+                        data = source_->resolve(*spec_preview_, lp.id);
+                    } else {
+                        data.panel = lp.id;
+                        data.error = caliper_builder::Error("resolve.unavailable", "No source of data is attached.", "");
+                    }
+                    prepare(e, data, &*spec_preview_);
+                }
+                whole = &e;
+            }
+        }
+        if (!preview && !whole && it == entries_.end()) continue;
+        Entry& e = preview ? pv->second : whole ? *whole : it->second;
         e.view.key = &key_;
         e.view.show_title = !lp.tab;
-        e.view.preview = preview;
+        e.view.preview = preview || whole != nullptr;
+        e.view.added = added;
+        e.view.selection = &selection_;
         const ImRect r(ImVec2(lp.rect.x, lp.rect.y), ImVec2(lp.rect.right(), lp.rect.bottom()));
         if (r.GetWidth() < 1.0f || r.GetHeight() < 1.0f) continue;
         // The band an overlay keeps under the strip, asked before the content.
@@ -1162,6 +1328,22 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
                                   ImGuiWindowFlags_NoBackground)) {
             ImGui::PopStyleVar(2);
             SpecPanelFrame f = draw_spec_panel(e.view, r, L, textures_, band);
+            if (e.view.added) {
+                // A panel the preview adds: a dashed bronze frame inside its rectangle.
+                ImDrawList* pdl = ImGui::GetWindowDrawList();
+                const float dash = std::round(6.0f * L.text_scale), gap = std::round(4.0f * L.text_scale);
+                const float x0 = r.Min.x + 0.5f, y0 = r.Min.y + 0.5f, x1 = r.Max.x - 0.5f, y1 = r.Max.y - 0.5f;
+                for (float x = x0; x < x1; x += dash + gap) {
+                    const float xe = std::min(x + dash, x1);
+                    pdl->AddLine(ImVec2(x, y0), ImVec2(xe, y0), L.accent);
+                    pdl->AddLine(ImVec2(x, y1), ImVec2(xe, y1), L.accent);
+                }
+                for (float y = y0; y < y1; y += dash + gap) {
+                    const float ye = std::min(y + dash, y1);
+                    pdl->AddLine(ImVec2(x0, y), ImVec2(x0, ye), L.accent);
+                    pdl->AddLine(ImVec2(x1, y), ImVec2(x1, ye), L.accent);
+                }
+            }
             if (overlay_) overlay_(f);
         } else {
             ImGui::PopStyleVar(2);
