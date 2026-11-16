@@ -33,8 +33,9 @@ public:
 
     // Creates the constant streams, the sampler, the placeholder images and the class table.
     bool init(std::string* error);
-    // Uploads the scene's class table when it changed since the last call.
-    void update_class_table(const SceneTree& tree);
+    // Uploads the scene's class table when it changed since the last call; true when it did
+    // (65,536 texels, 256 KiB, one copy from the host).
+    bool update_class_table(const SceneTree& tree);
     const std::string& error() const { return error_; }
 
     caliper_gfx::Pipeline render_pipeline(ProgramId program, const caliper_gfx::RenderPipelineDesc& desc) override;
@@ -57,6 +58,9 @@ private:
     std::map<uint32_t, caliper_gfx::Program> program_;
     std::map<std::string, caliper_gfx::Pipeline> pipelines_;
     std::map<std::string, caliper_gfx::BindGroup> groups_;
+    // The image of each group 2 by its key: a group whose image the view released goes back to
+    // the layer at the next retain_owned, so that images replaced at a new size leave nothing.
+    std::map<std::string, caliper_gfx::Texture> group_images_;
     struct Compute { caliper_gfx::BindGroup group; std::vector<caliper_gfx::Buffer> buffers; };
     std::map<std::string, Compute> compute_;   // compute groups, with the buffers they refer to
     struct Owned { caliper_gfx::Buffer buffer; uint64_t bytes; uint32_t usage; };

@@ -585,7 +585,7 @@ bool SceneTree::set_batch(EntityId e, const Batch& b, bool static_item, std::str
     return true;
 }
 
-void SceneTree::clear(EntityId e, bool subtree, bool static_clear) {
+void SceneTree::clear(EntityId e, bool subtree, bool static_clear, uint32_t parts) {
     if (!valid(e)) return;
     const std::string base = ents_[e.index].path;
     bool changed = false;
@@ -596,10 +596,12 @@ void SceneTree::clear(EntityId e, bool subtree, bool static_clear) {
                                                        pj.compare(0, base.size(), base) == 0 && pj[base.size()] == '/')));
         if (!hit) continue;
         Entity& ent = ents_[j];
-        bool pose = ent.transform.clear(static_clear);
-        pose = ent.camera.clear(static_clear) || pose;
+        bool pose = (parts & kClearTransform) && ent.transform.clear(static_clear);
+        pose = ((parts & kClearCamera) && ent.camera.clear(static_clear)) || pose;
         bool batches = false;
-        for (auto& part : ent.batches) batches = part.clear(static_clear) || batches;
+        for (int k = 1; k <= kPrimitiveCount; ++k)
+            if (parts & clear_bit(Primitive(k)))
+                batches = ent.batches[primitive_slot(Primitive(k))].clear(static_clear) || batches;
         if (pose) touch_pose(j);
         if (batches) ent.bounds_dirty = true;
         changed = changed || pose || batches;

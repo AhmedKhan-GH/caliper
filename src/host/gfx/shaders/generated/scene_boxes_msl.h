@@ -89,6 +89,7 @@ struct BoxIn {
 struct type_13 {
     uint inner[3];
 };
+constant float kFaceAlpha = 0.25;
 
 bool in_level(
     uint key,
@@ -452,9 +453,9 @@ vertex vs_box_wireOutput vs_box_wire(
     uint _e5 = p.pick_id;
     uint _e8 = p.item_base;
     o.pick = metal::uint2(_e5, _e8 + in_2.iid);
-    metal::float4 _e14 = item_color(in_2.color_src, frame, class_table, p, m);
 )msl"
-R"msl(    o.color = _e14;
+R"msl(    metal::float4 _e14 = item_color(in_2.color_src, frame, class_table, p, m);
+    o.color = _e14;
     uint e_3 = naga_div(in_2.vid, 6u);
     axis = naga_div(naga_mod(e_3, 4u), 2u);
     s = ((e_3 & 1u) != 0u) ? 1.0 : -1.0;
@@ -534,9 +535,10 @@ vertex vs_box_solidOutput vs_box_solid(
         c = _e65;
     }
     metal::float4 _e67 = c;
-    o_1.color = _e67;
-    VOut _e68 = o_1;
-    const auto _tmp_1 = _e68;
+    float _e70 = c.w;
+    o_1.color = metal::float4(_e67.xyz, _e70 * kFaceAlpha);
+    VOut _e74 = o_1;
+    const auto _tmp_1 = _e74;
     return vs_box_solidOutput { _tmp_1.pos, _tmp_1.color, _tmp_1.uv, _tmp_1.pick, _tmp_1.obj };
 }
 )msl";

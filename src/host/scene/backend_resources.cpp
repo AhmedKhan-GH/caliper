@@ -96,12 +96,13 @@ bool BackendResources::init(std::string* error) {
     return true;
 }
 
-void BackendResources::update_class_table(const SceneTree& tree) {
-    if (!class_table_ || (class_revision_ != 0 && tree.classes_revision() == class_revision_)) return;
+bool BackendResources::update_class_table(const SceneTree& tree) {
+    if (!class_table_ || (class_revision_ != 0 && tree.classes_revision() == class_revision_)) return false;
     std::vector<uint32_t> texels(65536);
     tree.class_texels(texels.data());
     backend_.write_texture(class_table_, texels.data(), kClassTableSide * 4);
     class_revision_ = tree.classes_revision();
+    return true;
 }
 
 Program BackendResources::program(ProgramId id) {
@@ -171,6 +172,7 @@ BindGroup BackendResources::bind_group(ProgramId id, uint32_t group, Texture ima
     const BindGroup g = backend_.create_bind_group(d);
     if (!g) error_ = backend_.last_error();
     groups_[k] = g;
+    if (group == 2 && image) group_images_[k] = image;
     return g;
 }
 
@@ -227,6 +229,18 @@ void BackendResources::retain_owned(View<uint64_t> keys) {
         }
         backend_.release(it->second.buffer);   // deferred by the layer until its last use completed
         it = owned_.erase(it);
+    }
+    for (auto it = group_images_.begin(); it != group_images_.end();) {
+        if (backend_.alive(it->second)) {
+            ++it;
+            continue;
+        }
+        const auto g = groups_.find(it->first);
+        if (g != groups_.end()) {
+            if (g->second) backend_.release(g->second);
+            groups_.erase(g);
+        }
+        it = group_images_.erase(it);
     }
     for (auto it = compute_.begin(); it != compute_.end();) {
         const bool gone = std::any_of(it->second.buffers.begin(), it->second.buffers.end(),

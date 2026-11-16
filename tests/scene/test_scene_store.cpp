@@ -271,6 +271,39 @@ TEST_CASE("clears remove stamped parts, static items stay unless the clear is st
     CHECK(t.entity_count() == 4);   // the root, room and its two children stay, empty
 }
 
+TEST_CASE("a clear of named parts removes only those parts, by layer, over the subtree") {
+    SceneTree t;
+    std::string err;
+    const EntityId cam = t.ensure("rig/left");
+    const EntityId img = t.ensure("rig/left/rgb");
+    const EntityId cloud = t.ensure("room/cloud");
+    REQUIRE(t.set_transform(cam, translation({0, 0, 1}), false, &err));
+    REQUIRE(t.set_transform(cam, translation({0, 0, 2}), true, &err));
+    REQUIRE(t.set_camera(cam, pinhole(), false, &err));
+    REQUIRE(t.set_batch(img, points2(3), false, &err));
+    REQUIRE(t.set_batch(cloud, points3(4), false, &err));
+    REQUIRE(t.set_batch(cloud, mesh3(3, 0), false, &err));
+
+    // The transform alone: the stamped one goes, the static one stays; the camera stays.
+    t.clear(cam, false, false, kClearTransform);
+    REQUIRE(t.transform(cam));
+    CHECK(t.transform(cam)->at(2, 3) == 2.0);
+    CHECK(t.camera(cam));
+    // The camera alone.
+    t.clear(cam, false, false, kClearCamera);
+    CHECK_FALSE(t.camera(cam));
+    CHECK(t.transform(cam));
+    // Points over the whole scene: the mesh stays, and so do the transforms.
+    t.clear(t.root(), true, false, clear_bit(Primitive::Points));
+    CHECK_FALSE(t.batch(img, Primitive::Points));
+    CHECK_FALSE(t.batch(cloud, Primitive::Points));
+    CHECK(t.batch(cloud, Primitive::Mesh));
+    // A static clear of the transform removes both layers.
+    t.clear(cam, false, true, kClearTransform);
+    CHECK_FALSE(t.transform(cam));
+    CHECK(t.batch(cloud, Primitive::Mesh));
+}
+
 TEST_CASE("the class table: entries, the palette rule and its limits") {
     SceneTree t;
     std::string err;

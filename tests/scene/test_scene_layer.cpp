@@ -325,3 +325,58 @@ TEST_CASE("repeated resets keep the layer's live buffers and bind groups flat") 
         CHECK_MESSAGE(groups[i] == groups[0], "live bind groups after reset ", i, ": ", groups[i], ", after the first: ", groups[0]);
     }
 }
+
+TEST_CASE("images replaced at a new size keep the layer's live textures and bind groups flat") {
+    // A scene view gives an image a new texture when its size changes and releases the old one;
+    // the image's bind group of group 2 must go with it at the next prepare.
+    Layer L;
+    SceneTree t(Space::k2D);
+    SceneCompiler compiler;
+    using Op = RecordingBackend::OpKind;
+    auto live = [&](HandleKind k) { return L.backend.count(Op::Create, k) - L.backend.count(Op::Destroy, k); };
+    Texture image;
+    std::vector<size_t> textures, groups;
+    for (int round = 0; round < 6; ++round) {
+        CAPTURE(round);
+        if (image) L.backend.release(image);
+        TextureDesc d;
+        d.width = 8 + uint32_t(round);
+        d.height = 4;
+        d.format = Format::RGBA8Unorm;
+        d.usage = kSampled | kCopyDstTex;
+        image = L.backend.create_texture(d);
+        REQUIRE(image);
+        Batch b;
+        b.primitive = Primitive::Image;
+        b.texture = image;
+        b.image_width = d.width;
+        b.image_height = d.height;
+        REQUIRE(t.set_batch(t.ensure("photo"), b));
+        t.update();
+        Frame frame;
+        compiler.prepare(t, L.res, frame);
+        RenderTarget rt;
+        rt.color = L.color;
+        DrawList list(rt);
+        CompileOptions o;
+        o.width = 400;
+        o.height = 300;
+        PanZoom cam;
+        cam.center[0] = 8;
+        cam.center[1] = 2;
+        cam.half_height = 10;
+        cam.y_down = true;
+        DrawMap map;
+        const CompileResult r = compiler.compile(t, ViewCamera(cam), o, L.res, list, &map);
+        REQUIRE_MESSAGE(r.ok, (r.notes.empty() ? std::string() : r.notes[0]));
+        CHECK(list.records().size == 1);
+        frame.render(std::move(list));
+        REQUIRE_MESSAGE(L.backend.submit(std::move(frame)) != 0, L.backend.last_error());
+        textures.push_back(live(HandleKind::Texture));
+        groups.push_back(live(HandleKind::BindGroup));
+    }
+    for (size_t i = 1; i < groups.size(); ++i) {
+        CHECK_MESSAGE(textures[i] == textures[0], "live textures in round ", i, ": ", textures[i]);
+        CHECK_MESSAGE(groups[i] == groups[0], "live bind groups in round ", i, ": ", groups[i], ", in the first: ", groups[0]);
+    }
+}
