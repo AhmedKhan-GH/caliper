@@ -398,11 +398,11 @@ TEST_CASE("chat app: the Shared GPU note while a live run is attached and the ag
     }
     REQUIRE_MESSAGE(!link.empty(), out);
 
-    // Attached, the note waits for the mark; marked, it shows; detached (esc
-    // Home on the live page), it goes.
+    // Attached, the note waits for the mark; marked, it shows; detached (⌘D
+    // Detach on the live page; esc Home keeps the stream attached), it goes.
     const std::string ui =
         "page live; chat open; chat until idle; chat note none; chat local on; chat note Shared GPU; wait 5; shot gpu; "
-        "key escape; page landing; chat note none; quit";
+        "key cmd+d; page landing; chat note none; quit";
     acp::SpawnOptions o;
     o.argv = {exe, "--hidden", "--applets", applets, "--url", link, "--workspace", ws.string()};
     o.env = {{"CALIPER_DATA_DIR", data.string()},
