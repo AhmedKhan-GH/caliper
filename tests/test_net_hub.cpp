@@ -375,6 +375,20 @@ public:
             s.data = wire::Section::make("data", CALIPER_NET_DTYPE_F32, {H, W}, data.data(), data.size() * 4);
             s.flags = CALIPER_NET_SNAP_AUTO_VMIN | CALIPER_NET_SNAP_AUTO_VMAX;
             s.stats = {fill, fill};
+            if (std::find(caps.begin(), caps.end(), CALIPER_NET_CAP_SELECTION) != caps.end()) {
+                // 3.1 viewers map a selection onto the source: the 64 x 64
+                // source pooled into the H x W payload.
+                s.axes = Json::array();
+                for (auto [dim, n] : {std::pair<const char*, int>{"rows", H}, {"cols", W}}) {
+                    Json a = Json::object();
+                    a.set("dim", dim);
+                    a.set("start", 0);
+                    a.set("step", 1);
+                    a.set("count", 64);
+                    a.set("size", n);
+                    s.axes.push(a);
+                }
+            }
             send(s);
             ++n;
         }
@@ -1622,3 +1636,174 @@ TEST_CASE("net/hub: relay latency and throughput, 512 x 512 heatmap at 60 Hz to 
                                   << lat[lat.size() / 2] << " ms, p99 " << lat[lat.size() * 99 / 100] << " ms, max "
                                   << lat.back() << " ms");
 }
+
+// ============================================================================
+// The Caliper app as a 3.1 viewer through the hub: the real app, its window
+// never shown (--hidden), attached at start with --url, its live page's run
+// bar clicked and a view shift-dragged by scripted ImGui input (CALIPER_TEST_UI,
+// live/live_ui_driver.h). The fake script answers like one that calls a
+// checkpoint. With --allow-control the clicks pause it, set "lr" and run
+// "save", and the page logs the state the script echoes; without it the bar
+// is off and nothing reaches the script, while a selection still does.
+#if defined(__APPLE__)
+#include "test_proc.h"
+
+namespace {
+
+namespace fs = std::filesystem;
+
+struct AppRun {
+    bool ran = false;                 // false: no GPU, skipped
+    std::string text;                 // the app's output
+    std::vector<wire::Control> controls;
+    std::vector<wire::Event> events;
+};
+
+AppRun run_hidden_app(const char* exe, bool allow_control, const std::string& ui) {
+    AppRun out;
+    HubOptions o;
+    o.allow_control = allow_control;
+    HubRunner h(o);
+    World w;
+    auto p = producer(w, h, "clp-app", 4242, 1763200000000ull,
+                      {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION}, true);
+    const fs::path dir = fs::temp_directory_path() / (std::string("caliper-app-live-") + (allow_control ? "a" : "b"));
+    fs::remove_all(dir);
+    fs::create_directories(dir / "data");
+    fs::create_directories(dir / "user");
+    Proc app;
+    REQUIRE(app.start(exe, {"--hidden", "--url", h.url(), "--api", "--api-port", "0"},
+                      {"CALIPER_DATA_DIR=" + (dir / "data").string(), "CALIPER_USER_APPLETS_DIR=" + (dir / "user").string(),
+                       "CALIPER_WINDOW_SIZE=1280x800", "CALIPER_TEST_UI=" + ui}));
+    std::string state = CALIPER_NET_RUN_RUNNING;
+    double lr = 0.001;
+    size_t controls_seen = 0, events_seen = 0;
+    float fill = 0.0f;
+    auto last_snap = std::chrono::steady_clock::now();
+    const auto deadline = last_snap + std::chrono::seconds(90);
+    while (std::chrono::steady_clock::now() < deadline) {
+        w.once();
+        app.read_some(2);
+        if (app.text.find("[ui] done") != std::string::npos || app.text.find("[ui] stopped") != std::string::npos)
+            break;
+        // A renderer other than Metal (its whole line read): the run is skipped.
+        if (const size_t r = app.text.find("[renderer] "); r != std::string::npos &&
+            app.text.find('\n', r) != std::string::npos && app.text.find("[renderer] metal") == std::string::npos)
+            break;
+        if (::waitpid(app.pid, &app.status, WNOHANG) == app.pid) {
+            app.pid = -1;
+            break;
+        }
+        if (std::chrono::steady_clock::now() - last_snap > std::chrono::milliseconds(50)) {
+            p->snapshot(fill += 0.01f);
+            p->append({fill});
+            last_snap = std::chrono::steady_clock::now();
+        }
+        // As a script at its checkpoint: apply what was accepted, say so in CONTROLS.
+        for (; controls_seen < p->controls_in.size(); ++controls_seen) {
+            const wire::Control& c = p->controls_in[controls_seen];
+            if (c.op == CALIPER_NET_OP_PAUSE || c.op == CALIPER_NET_OP_STEP) state = CALIPER_NET_RUN_PAUSED;
+            else if (c.op == CALIPER_NET_OP_RESUME) state = CALIPER_NET_RUN_RUNNING;
+            else if (c.op == CALIPER_NET_OP_SET) lr = std::min(0.1, c.value.as_double());
+            else if (c.op == CALIPER_NET_OP_RUN) {
+                p->queued_runs.clear();
+                p->finish_run(c.request_id, "saved at step 7");
+            }
+            p->send_controls(state.c_str(), lr);
+        }
+        // A selection made in a view: every viewer gets it, with details.
+        for (; events_seen < p->events.size(); ++events_seen) {
+            const wire::Event& e = p->events[events_seen];
+            const Json* space = e.detail.find("space");
+            if (e.type != "select" || !space) continue;
+            wire::Selection sel;
+            sel.space = space->as_string();
+            sel.view = e.view;
+            Json ids = Json::array(), rows = Json::array();
+            for (const Json& x : e.detail.find("items")->items()) {
+                sel.items.push(x);
+                if (ids.size() < CALIPER_NET_MAX_DETAIL_ITEMS) {
+                    ids.push(x);
+                    Json row = Json::array();
+                    row.push(x.as_double() * 0.25);
+                    rows.push(row);
+                }
+            }
+            Json fields = Json::array();
+            fields.push("score");
+            sel.details = obj({{"fields", fields}, {"items", ids}, {"values", rows}});
+            p->send(sel);
+        }
+    }
+    out.ran = app.text.find("[renderer] metal") != std::string::npos;
+    if (app.pid > 0) {
+        ::kill(app.pid, SIGTERM);
+        const int code = app.wait(20000);
+        CHECK_MESSAGE(code == 0, "exit " << code << ", signal " << (WIFSIGNALED(app.status) ? WTERMSIG(app.status) : 0)
+                                         << "\n" << app.text);
+    }
+    out.text = app.text;
+    out.controls = p->controls_in;
+    out.events = p->events;
+    fs::remove_all(dir);
+    return out;
+}
+
+bool has(const std::string& text, const std::string& needle) { return text.find(needle) != std::string::npos; }
+
+}  // namespace
+
+TEST_CASE("app: the hidden app's run bar controls a script through a hub with --allow-control; without it only "
+          "selections go") {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    if (!exe || !*exe) {
+        MESSAGE("CALIPER_TEST_CALIPER_EXE is not set: run the ctest entry caliper_app_live_controls");
+        return;
+    }
+    AppRun a = run_hidden_app(exe, true,
+                              "state running; click pause; state paused; set lr 0.02; wait 10; "
+                              "click action:save; wait 30; select heat; wait 30");
+    if (!a.ran) {
+        const char* require = std::getenv("CALIPER_REQUIRE_GPU");
+        REQUIRE_MESSAGE(!(require && std::string(require) == "1"), a.text);
+        MESSAGE("caliper --hidden --url: run skipped: no GPU (no Metal device)");
+        return;
+    }
+    INFO(a.text);
+    CHECK(has(a.text, "[hidden] the window is not shown (visible 0, focused 0, background policy 1"));
+    CHECK(has(a.text, "[ui] done"));
+    REQUIRE(a.controls.size() == 3);
+    CHECK(a.controls[0].op == "pause");
+    CHECK(a.controls[1].op == "set");
+    CHECK(a.controls[1].value.as_double() == doctest::Approx(0.02));
+    CHECK(a.controls[2].op == "run");
+    CHECK(*a.controls[2].name == "save");
+    // The page shows what the script echoed.
+    CHECK(has(a.text, "[live] controls on"));
+    CHECK(has(a.text, "[live] run paused"));
+    CHECK(has(a.text, "[live] param lr = 0.02"));
+    CHECK(has(a.text, "[live] save: saved at step 7"));
+    CHECK(has(a.text, "[live] selection samples: "));
+    CHECK(has(a.text, "with details"));
+    const wire::Event* sel = nullptr;
+    for (const auto& e : a.events)
+        if (e.type == "select" && e.view == "heat") sel = &e;
+    REQUIRE(sel != nullptr);
+    CHECK(sel->detail.find("space")->as_string() == "samples");
+    CHECK(sel->detail.find("items")->size() >= 1);
+
+    AppRun b = run_hidden_app(exe, false,
+                              "state running; click pause; wait 20; click step; wait 20; click action:save; "
+                              "wait 20; select heat; wait 30");
+    INFO(b.text);
+    REQUIRE(b.ran);
+    CHECK(has(b.text, "[ui] done"));
+    CHECK(b.controls.empty());
+    CHECK(has(b.text, "[live] controls off: the server does not let this viewer control"));
+    CHECK_FALSE(has(b.text, "[live] run paused"));
+    CHECK(has(b.text, "[live] selection samples: "));
+    bool selected = false;
+    for (const auto& e : b.events) selected = selected || (e.type == "select" && e.detail.find("space"));
+    CHECK(selected);
+}
+#endif

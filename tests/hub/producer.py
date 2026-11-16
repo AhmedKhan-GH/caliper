@@ -22,8 +22,15 @@ the parameter "lr" (the optimiser's learning rate) and the action "save", and
 pauses, resumes and steps at its checkpoint. A parameter value it accepts is
 set, and a queued action runs, at the next checkpoint, on the training thread.
 
+With --selection it takes the linked selection of protocol 3.1: it announces
+`selection`, declares the item space "units" (the hidden units: the rows of
+"fc1.weight" and the columns of "fc2.weight") and "step" (the loss series),
+keeps the selection a viewer makes in each space and sends it to every viewer
+in SELECTION, with the details of the selected units (the norms of their
+input and output weights) computed off the network thread.
+
 When it exits it prints one JSON line: {"id", "steps", "loss_values",
-"snapshots_sent", "events", "lr", "saves"}.
+"snapshots_sent", "events", "lr", "saves", "selects", "selection"}.
 """
 from __future__ import annotations
 
@@ -46,10 +53,15 @@ def hub_address(hub_file: str) -> str:
     return f"{h['stream_url']}?{W.TOKEN_PARAM}={h['token']}"
 
 
-def heat_view(vid: int, name: str, rows: int, cols: int) -> dict:
+def heat_view(vid: int, name: str, rows: int, cols: int, row_items: str = "", col_items: str = "") -> dict:
+    out = {"name": "out", "size": rows}
+    inn = {"name": "in", "size": cols}
+    if row_items:
+        out["items"] = row_items
+    if col_items:
+        inn["items"] = col_items
     return {"id": vid, "name": name, "kind": int(W.Kind.HEATMAP), "default": {},
-            "sources": [{"name": name, "dtype": "f32",
-                         "dims": [{"name": "out", "size": rows}, {"name": "in", "size": cols}]}]}
+            "sources": [{"name": name, "dtype": "f32", "dims": [out, inn]}]}
 
 
 def pool(a: np.ndarray, rows: int, cols: int) -> np.ndarray:
@@ -173,8 +185,12 @@ class ScriptControls:
 class Stream:
     """The producer side of one connection to a hub (network thread)."""
 
-    def __init__(self, url: str, identity: dict, views: list, controls: bool = False):
+    def __init__(self, url: str, identity: dict, views: list, controls: bool = False,
+                 selection: bool = False):
         self.url = url
+        self.selection = selection
+        self.selected: dict[str, list] = {}   # item space -> the current selection
+        self.selects = 0                       # select events that changed a selection
         self.identity = identity
         self.views = {v["name"]: v for v in views}
         self.controls = ScriptControls(self) if controls else None
@@ -241,7 +257,8 @@ class Stream:
         self.wake = asyncio.Event()
         async with websockets.connect(self.url, compression=None, max_size=W.MAX_FRAME_BYTES,
                                       ping_interval=None) as ws:
-            caps = [W.CAP_EVENTS] + ([W.CAP_CONTROLS] if self.controls else [])
+            caps = [W.CAP_EVENTS] + ([W.CAP_CONTROLS] if self.controls else []) + \
+                ([W.CAP_SELECTION] if self.selection else [])
             await ws.send(W.encode(W.Hello(W.ROLE_PRODUCER, caps,
                                            {"name": "hub-e2e-producer", "version": "1"},
                                            self.identity)))
@@ -282,6 +299,8 @@ class Stream:
                 await ws.send(W.encode(reply))
             elif isinstance(msg, W.Event):
                 self.events += 1
+                if self.selection and msg.type == "select" and "space" in msg.detail:
+                    await self._select(ws, msg)
             elif isinstance(msg, W.Control) and self.controls is not None:
                 await ws.send(W.encode(self.controls.handle(msg)))
                 await ws.send(W.encode(self.controls.message()))
@@ -293,6 +312,36 @@ class Stream:
                 return
         self.done = True
         self.wake.set()
+
+    async def _select(self, ws, msg: W.Event) -> None:
+        """A viewer selected in an item space: keep it and tell every viewer,
+        first at once, then again with the details of the selected units."""
+        space = msg.detail["space"]
+        ids, cut = W.selection_items(msg.detail.get("items", []))
+        cut = cut or bool(msg.detail.get("truncated"))
+        self.selected[space] = ids
+        self.selects += 1
+        await ws.send(W.encode(W.Selection(space, ids, view=msg.view, truncated=cut)))
+        if space != "units" or not ids:
+            return
+        details = await asyncio.get_running_loop().run_in_executor(None, self._unit_details, ids)
+        if self.selected.get(space) == ids:
+            await ws.send(W.encode(W.Selection(space, ids, view=msg.view, truncated=cut, details=details)))
+
+    def _unit_details(self, ids: list) -> dict:
+        """The norms of each selected unit's input weights (a row of fc1) and
+        output weights (a column of fc2), for the first selected units."""
+        with self.lock:
+            fc1 = self.latest.get("fc1.weight", (0, None))[1]
+            fc2 = self.latest.get("fc2.weight", (0, None))[1]
+        first = ids[:W.MAX_DETAIL_ITEMS]
+        rows = []
+        for u in first:
+            w_in = float(np.linalg.norm(fc1[u])) if fc1 is not None and u < fc1.shape[0] else None
+            w_out = float(np.linalg.norm(fc2[:, u])) if fc2 is not None and u < fc2.shape[1] else None
+            rows.append([round(w_in, 4) if w_in is not None else None,
+                         round(w_out, 4) if w_out is not None else None])
+        return {"fields": ["in_norm", "out_norm"], "items": first, "values": rows}
 
     def _subscribe(self, msg: W.Subscribe, ws) -> None:
         v = self.views.get(msg.view)
@@ -413,15 +462,20 @@ def main() -> int:
     ap.add_argument("--bench", action="store_true")
     ap.add_argument("--rate", type=float, default=60)
     ap.add_argument("--controls", action="store_true", help="take the controls of protocol 3.1")
+    ap.add_argument("--selection", action="store_true", help="take the linked selection of protocol 3.1")
     a = ap.parse_args()
     identity = {"id": a.id, "script": os.path.basename(__file__), "pid": os.getpid(),
                 "start_unix_ms": int(time.time() * 1000)}
     if a.bench:
         views = [heat_view(1, "bench", 512, 512)]
     else:
-        views = [heat_view(1, "fc1.weight", 64, 32), heat_view(2, "fc2.weight", 2, 64),
+        units = "units" if a.selection else ""
+        views = [heat_view(1, "fc1.weight", 64, 32, row_items=units),
+                 heat_view(2, "fc2.weight", 2, 64, col_items=units),
                  {"id": 3, "name": "loss", "kind": int(W.Kind.SERIES), "sources": []}]
-    stream = Stream(hub_address(a.hub_file), identity, views, controls=a.controls)
+        if a.selection:
+            views[2]["items"] = "step"
+    stream = Stream(hub_address(a.hub_file), identity, views, controls=a.controls, selection=a.selection)
     if a.bench:
         stream.start()
         steps = bench(stream, a.seconds, a.rate)
@@ -434,7 +488,9 @@ def main() -> int:
     print(json.dumps({"id": a.id, "steps": steps, "loss_values": len(stream.loss),
                       "snapshots_sent": stream.snapshots_sent, "events": stream.events,
                       "lr": stream.controls.lr["value"] if stream.controls else None,
-                      "saves": stream.controls.saves if stream.controls else 0}), flush=True)
+                      "saves": stream.controls.saves if stream.controls else 0,
+                      "selects": stream.selects,
+                      "selection": {k: v[:16] for k, v in stream.selected.items()}}), flush=True)
     return 0
 
 

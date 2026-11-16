@@ -276,6 +276,16 @@ if(TARGET caliper)
         set_tests_properties(caliper_cli_app_hidden PROPERTIES LABELS "cli;api" TIMEOUT 180
             ENVIRONMENT "${_api_env}"
             SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+        # The app's live page as a 3.1 viewer (tests/test_net_hub.cpp): the
+        # hidden app attached with --url through an in-process hub, its run bar
+        # clicked by scripted ImGui input, with and without --allow-control.
+        if(APPLE)
+            add_test(NAME caliper_app_live_controls
+                     COMMAND caliper_tests "--test-case=app: the hidden app's run bar*")
+            set_tests_properties(caliper_app_live_controls PROPERTIES LABELS "cli;live" TIMEOUT 240
+                ENVIRONMENT "${_api_env}"
+                SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+        endif()
     endif()
 endif()
 
