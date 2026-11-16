@@ -134,6 +134,29 @@ public:
     // The source index of item `index` of the batch (path, primitive), through its payload axes.
     int64_t row_id(const std::string& path, caliper_scene::Primitive p, int64_t index) const;
 
+    // ---- selections ------------------------------------------------------------------------------
+    // Selects the points, and the boxes by their centres, whose projection at the view's camera lies
+    // inside the polygon `poly` (x, y pairs in physical pixels of the target, by the even-odd rule),
+    // from the CPU copies of their arrays, as the points view selects; occluded items are selected
+    // too. It replaces the view's selection and returns the select event's detail: `entities`, each
+    // an entity, its primitive, `indices` and `row_ids` (at most 32,768 indices in all, `truncated`
+    // when cut), and `space` and `items` when the selected batches map an item space (the first one's,
+    // when they map several). "{}" when nothing is inside.
+    std::string select_polygon(const std::vector<float>& poly);
+    // Clears the view's own selection; true when there was one.
+    bool clear_selection();
+    // A selection of item space `space` (linked selection, wire protocol 3.1): the items of every
+    // batch whose rows are items of that space are highlighted. Empty items clear it.
+    void set_linked(const std::string& space, std::vector<int64_t> items);
+    // Every linked selection at once (item space to items): spaces absent from `by_space` are cleared.
+    void set_all_linked(const std::map<std::string, std::vector<int64_t>>& by_space);
+    // The view's own selection: the items selected, in all.
+    uint64_t selected_count() const;
+    // While anything is selected or linked, the scene is drawn dimmed towards the background (as the
+    // points view dims) and the selected points and boxes over it in their own colours. The number of
+    // items drawn so now.
+    uint64_t highlighted() const { return highlighted_; }
+
     // Compiles and submits when something changed since the last frame, into a target of
     // width x height physical pixels. False with *why when the layer refused the frame.
     bool render(uint32_t width, uint32_t height, float pixel_scale, uint32_t clear_rgba, std::string* why);
@@ -175,6 +198,7 @@ private:
         uint32_t tex_w = 0, tex_h = 0;
         caliper_gfx::Format tex_format = caliper_gfx::Format::RGBA8Unorm;
         std::vector<uint8_t> cpu_rows, cpu_ids;   // CPU views for the labels: positions or centres, class ids
+        std::map<int, std::vector<uint8_t>> cpu;    // points and boxes: every array as it arrived, by role
         // The payload axis of the batch's item dim, when the producer sampled it (the update's `axes`),
         // and the item space its rows are (`items`).
         int64_t ax_start = 0, ax_step = 1, ax_count = 0, ax_size = 0;
@@ -213,6 +237,19 @@ private:
     std::string through_;              // the camera entity looked through, or ""
     std::unique_ptr<caliper_scene::PickPass> pick_;
     uint64_t generation_ = 0;          // colour frames submitted
+
+    // Selections and their highlight: the view's own (entity path and primitive to sorted indices),
+    // the linked ones (item space to sorted items), and what draws them: a 2-D scene of one quad that
+    // dims the picture, and a scene of the selected items alone with the same poses and camera.
+    std::map<std::pair<std::string, int>, std::vector<int64_t>> selected_;
+    std::map<std::string, std::vector<int64_t>> linked_;
+    uint64_t highlighted_ = 0;
+    caliper_gfx::Texture dim_texture_;
+    uint32_t dim_rgba_ = 0;
+    std::vector<caliper_gfx::Buffer> hl_buffers_;
+    caliper_scene::SceneCompiler hl_compiler_, dim_compiler_;
+    bool build_highlight(caliper_scene::SceneTree* hl, caliper_scene::ViewCamera* cam, std::string* why);
+    bool highlight_wanted() const { return !selected_.empty() || !linked_.empty(); }
     std::map<Key, Slot> slots_;
     std::vector<uint8_t> scratch_;
     std::vector<std::string> notes_;

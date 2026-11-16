@@ -190,6 +190,11 @@ void scene_note(CaliperCore* core, const std::string& name, const std::string& t
     if (SceneView* sv = v ? scene_view(*v) : nullptr) sv->note(text);
 }
 
+void scene_link(CaliperCore* core, const std::string& name, const std::map<std::string, std::vector<int64_t>>& by_space) {
+    View* v = core ? find_scene(core, name) : nullptr;
+    if (SceneView* sv = v ? scene_view(*v) : nullptr) sv->set_all_linked(by_space);
+}
+
 void scene_begin_round(CaliperCore* core, const std::string& name) {
     View* v = core ? find_scene(core, name) : nullptr;
     if (SceneView* sv = v ? scene_view(*v) : nullptr) sv->begin_round();

@@ -816,6 +816,74 @@ TEST_CASE("gfx/Metal scene view: the pick pass finds every primitive, through tr
         CHECK_MESSAGE(kinds.count(k) == 1, "no pick of ", k);
 }
 
+// Rectangle and lasso selections project the CPU copies of the points and the boxes' centres; a
+// selection dims the picture towards the background, as the points view dims, and draws the selected
+// items over it in their own colours; clearing it restores the picture byte for byte.
+TEST_CASE("gfx/Metal scene view: a selection picks points and boxes by projection, dims the rest and draws them over it") {
+    ViewRig rig;
+    if (!rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    SceneView& v = *rig.view;
+    primitive_rows::Row row;
+    row.fixture = primitive_fixtures::boxes();
+    REQUIRE_MESSAGE(row.draw(v), row.error);
+    const std::vector<uint8_t> plain = pixels(v);
+    const float S = float(primitive_fixtures::kSize);
+    // A rectangle over the whole picture: every box, by its centre.
+    const std::string all = v.select_polygon({0, 0, S, 0, S, S, 0, S});
+    caliper_net::Json d;
+    REQUIRE(caliper_net::Json::parse(all.data(), all.size(), &d, nullptr));
+    const caliper_net::Json& ents = *d.find("entities");
+    std::vector<std::string> paths;
+    size_t items = 0;
+    for (const caliper_net::Json& e : ents.items()) {
+        paths.push_back(e.find("entity")->as_string());
+        CHECK(e.find("primitive")->as_string() == "boxes");
+        CHECK(e.find("indices")->size() == e.find("row_ids")->size());
+        items += e.find("indices")->size();
+    }
+    CHECK(paths == std::vector<std::string>{"arm/link0", "arm/link0/link1", "crates", "zone"});
+    CHECK(items == 6);
+    CHECK(d.find("space") == nullptr);   // no batch maps an item space
+    std::string why;
+    REQUIRE(v.render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, &why));
+    CHECK(v.highlighted() == 6);
+    const std::vector<uint8_t> lit = pixels(v);
+    capture_png("scene-boxes-selected.png", lit, int(S), int(S));
+    // The background stays the background (0.28 of it over 0.72 of it), the boxes keep their colours
+    // where they are drawn over the dim, and the dim shows where only the translucent faces were.
+    size_t same = 0, changed = 0, red = 0;
+    for (size_t k = 0; k < plain.size(); k += 4) {
+        uint32_t a, b;
+        std::memcpy(&a, &plain[k], 4);
+        std::memcpy(&b, &lit[k], 4);
+        if (a == b) ++same;
+        else ++changed;
+        if (b == primitive_fixtures::RGBA(230, 60, 50)) ++red;   // class 1's colour, the first crate's edges
+    }
+    MESSAGE("selection: ", same, " pixels unchanged, ", changed, " dimmed or redrawn, ", red, " in class 1's colour");
+    CHECK(red > 50);
+    CHECK(changed > 0);
+    // A smaller rectangle around the first crate's centre: that crate alone.
+    caliper_scene::CameraMatrices cm = caliper_scene::camera_matrices(v.effective_camera(), v.tree(), v.width(), v.height());
+    double h[4];
+    caliper_scene::transform_h(cm.proj * cm.view * v.tree().world(v.tree().find("crates")), {-0.7, 0, 0.3}, h);
+    const float cx = float((h[0] / h[3] + 1) * 0.5 * S), cy = float((1 - h[1] / h[3]) * 0.5 * S);
+    const std::string one = v.select_polygon({cx - 4, cy - 4, cx + 4, cy - 4, cx + 4, cy + 4, cx - 4, cy + 4});
+    REQUIRE(caliper_net::Json::parse(one.data(), one.size(), &d, nullptr));
+    REQUIRE(d.find("entities")->size() == 1);
+    CHECK(d.find("entities")->at(0).find("entity")->as_string() == "crates");
+    CHECK(d.find("entities")->at(0).find("indices")->size() == 1);
+    CHECK(d.find("entities")->at(0).find("indices")->at(0).as_double() == 0.0);
+    REQUIRE(v.render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, &why));
+    CHECK(v.highlighted() == 1);
+    capture_png("scene-boxes-one-selected.png", pixels(v), int(S), int(S));
+    // Nothing inside: an empty detail, and no highlight.
+    CHECK(v.select_polygon({1, 1, 2, 1, 2, 2}) == "{}");
+    REQUIRE(v.render(primitive_fixtures::kSize, primitive_fixtures::kSize, 1.0f, primitive_fixtures::kClear, &why));
+    CHECK(v.highlighted() == 0);
+    CHECK(pixels(v) == plain);
+}
+
 TEST_CASE("gfx/Metal scene view: a late attach receives a reset and the state; clears keep static items") {
     ViewRig rig;
     if (!rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");

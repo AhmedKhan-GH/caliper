@@ -1923,6 +1923,121 @@ TEST_CASE("live/app: clicks on the run bar and a shift-drag in a view reach the 
     a.detach();
 }
 
+// A scene view picks, hovers and selects through ImGui's input queue: a click on the point at the
+// picture's centre reaches the script as a pick with its entity, index, row id through the batch's
+// payload axes and world position; resting the pointer there sends a hover; a shift+alt drag around it
+// selects it, with the batch's item space; the producer shares that selection back, and a selection of
+// the same space from elsewhere highlights the batch's matching points.
+TEST_CASE("live/app: a scene view's picks, hovers and selections reach the script, and linked selections highlight") {
+    HostFrame host;
+    if (!host.ok) CALIPER_SKIP_NO_GPU("no Metal device for the host's offscreen canvas");
+    FakeProducer p;
+    p.welcome_caps = {CALIPER_NET_CAP_SELECTION};
+    p.script31 = true;
+    p.add_scene();
+    p.start();
+    caliper_live::Attachment a;
+    std::string err;
+    REQUIRE_MESSAGE(a.attach_url(host.renderer.get(), p.url(), &err), err);
+    auto frames_until = [&](const std::function<bool()>& done, caliper_live::UiDriver* d = nullptr) {
+        for (int i = 0; i < 3000; ++i) {
+            host.frame(a, d);
+            if (done()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return false;
+    };
+    REQUIRE(frames_until([&] { return p.call([](FakeProducer& f) { return f.sub_of.count("world"); }) == 1; }));
+    // Three points on the x axis, a tenth of a unit wide, the middle one at the bounds' centre, which
+    // the fitted orbit puts at the picture's centre; the producer sampled them, every tenth of 30 units.
+    const std::vector<float> pos = {-1, 0, 0, 0, 0, 0, 1, 0, 0};
+    p.call([&](FakeProducer& f) {
+        wire::SceneClear reset;
+        reset.sub = f.sub_of.at("world");
+        reset.view = "world";
+        reset.seq = ++f.seq;
+        reset.reset = true;
+        reset.state = true;
+        f.send(reset);
+        wire::SceneUpdate u = f.scene_update("cloud", CALIPER_NET_PART_POINTS, pos, false);
+        u.params.set("radius", Json(0.12));
+        u.items = std::string("units");
+        Json ax = Json::object();
+        ax.set("dim", "unit");
+        ax.set("start", 0);
+        ax.set("step", 1);
+        ax.set("count", 30);
+        ax.set("size", 3);
+        Json axes = Json::array();
+        axes.push(ax);
+        u.axes = axes;
+        f.send(u);
+        return 0;
+    });
+    caliper_live_views::SceneView* sv = nullptr;
+    REQUIRE(frames_until([&] {
+        sv = caliper_live_views::scene_view(a.core(), "world");
+        return sv && sv->counts().batches == 1 && sv->has_target();
+    }));
+    caliper_live::UiDriver driver("hover world 0.5 0.5; wait 10; pick world 0.5 0.5; wait 10; rect world 0.4 0.4 0.6 0.6; wait 10");
+    std::vector<std::string> steps;
+    REQUIRE(frames_until([&] {
+        for (auto& line : driver.take_log()) steps.push_back(line);
+        return driver.done();
+    }, &driver));
+    for (const auto& st : steps) INFO(st);
+    REQUIRE(driver.error().empty());
+    auto event = [&](const char* type) {
+        const auto ev = p.call([](FakeProducer& f) { return f.events; });
+        for (const auto& e : ev)
+            if (e.type == type && e.view == "world") return std::optional<wire::Event>(e);
+        return std::optional<wire::Event>();
+    };
+    REQUIRE(frames_until([&] { return event("hover") && event("pick") && event("select"); }));
+    // The hover and the pick: the middle point, index 1, source row 10 through the axes.
+    for (const char* type : {"hover", "pick"}) {
+        CAPTURE(type);
+        const wire::Event e = *event(type);
+        CHECK(e.detail.find("entity")->as_string() == "cloud");
+        CHECK(e.detail.find("primitive")->as_string() == "points");
+        CHECK(e.detail.find("index")->as_double() == 1.0);
+        CHECK(e.detail.find("row_id")->as_double() == 10.0);
+        REQUIRE(e.detail.find("position"));
+        const Json& at = *e.detail.find("position");
+        // The disc's centre is at the origin; the hit lies on the disc, facing the camera.
+        CHECK(std::hypot(at.at(0).as_double(), at.at(1).as_double(), at.at(2).as_double()) < 0.12);
+    }
+    // The rectangle selected the middle point alone, with the batch's item space.
+    const wire::Event sel = *event("select");
+    const Json& ents = *sel.detail.find("entities");
+    REQUIRE(ents.size() == 1);
+    CHECK(ents.at(0).find("entity")->as_string() == "cloud");
+    CHECK(ents.at(0).find("indices")->size() == 1);
+    CHECK(ents.at(0).find("indices")->at(0).as_double() == 1.0);
+    CHECK(ents.at(0).find("row_ids")->at(0).as_double() == 10.0);
+    CHECK(sel.detail.find("space")->as_string() == "units");
+    CHECK(sel.detail.find("items")->at(0).as_double() == 10.0);
+    CHECK(sv->selected_count() == 1);
+    REQUIRE(frames_until([&] { return sv->highlighted() == 1; }));
+    // A selection of the same space from another view: units 0 and 20, the outer points, highlight
+    // beside the view's own.
+    p.call([&](FakeProducer& f) {
+        wire::Selection other;
+        other.space = "units";
+        other.view = "table";
+        other.items.push(Json(0));
+        other.items.push(Json(20));
+        f.send(other);
+        return 0;
+    });
+    REQUIRE(frames_until([&] { return sv->highlighted() == 3; }));
+    // The pointer at rest asks nothing more of the pick pass.
+    const uint64_t submits = sv->pick_pass()->submits();
+    for (int i = 0; i < 20; ++i) host.frame(a, nullptr);
+    CHECK(sv->pick_pass()->submits() == submits);
+    a.detach();
+}
+
 TEST_CASE("live/app: against a server that refuses controls the bar's clicks send nothing; a selection still goes") {
     HostFrame host;
     if (!host.ok) CALIPER_SKIP_NO_GPU("no Metal device for the host's offscreen canvas");

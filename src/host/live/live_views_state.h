@@ -256,6 +256,12 @@ struct View {
     // The item last hovered, for tests: a point's index, a series step, a
     // histogram bin, or a cell row * columns + column; -1 for none.
     int64_t hover_item = -1;
+    // SCENE: whether the pick in flight answers a click (else a hover), when and where the pointer
+    // last asked for a hover, and the hovered item's text for the tooltip.
+    bool    scene_click = false;
+    double  scene_hover_ms = -1e9;
+    float   scene_hx = -1.0f, scene_hy = -1.0f;
+    std::string scene_hover;
     // POINTS: one flag per point of the current sample (empty: no selection),
     // and the selected points' copy that is drawn over the dimmed rest.
     std::vector<uint8_t> selected;

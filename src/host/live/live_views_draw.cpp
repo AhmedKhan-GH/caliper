@@ -1441,7 +1441,15 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     const bool hovered = ImGui::IsItemHovered();
     ImGuiIO& io = ImGui::GetIO();
     Gesture& g = v.gesture;
-    const bool released = track_gesture(v, io.MousePos, false);
+    // The points view's gestures: a shift-drag draws a lasso, with alt a rectangle; a shift-click
+    // clears the selection; a click picks; a drag without shift orbits or pans.
+    const bool released = track_gesture(v, io.MousePos, true);
+    if (g.down && g.selecting) {
+        if (g.rect) g.lasso = {g.x0, g.y0, io.MousePos.x, io.MousePos.y};
+        else if (g.lasso.empty()) g.lasso = {g.x0, g.y0};
+        else if (g.moved && (io.MousePos.x != g.lasso[g.lasso.size() - 2] || io.MousePos.y != g.lasso.back()))
+            g.lasso.insert(g.lasso.end(), {io.MousePos.x, io.MousePos.y});
+    }
     const bool valid = ImGui::IsMousePosValid();
     const float dx = valid ? io.MousePos.x - g.lx : 0.0f, dy = valid ? io.MousePos.y - g.ly : 0.0f;
     if (valid) {
@@ -1454,7 +1462,6 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         if (pan) sc->pan(dx, dy, avail.y);
         else sc->orbit(dx, dy);
     }
-    if (released) g.selecting = false;
     if (hovered && io.MouseWheel != 0.0f) {
         const float mx = (io.MousePos.x - p0.x) / avail.x * 2.0f - 1.0f;
         const float my = 1.0f - (io.MousePos.y - p0.y) / avail.y * 2.0f;
@@ -1478,6 +1485,88 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (const uint64_t id = sc->imgui_texture())
         dl->AddImage((ImTextureID)id, p0, ImVec2(p0.x + avail.x, p0.y + avail.y));
+
+    // ---- picks, hovers and selections (design/scenes.md, "Picking, hover and selection"). Picks run
+    // the scene core's pick pass, asked only when the pointer moved or clicked; selections project
+    // the CPU copies of the points and boxes. What people do leaves through the event sink.
+    const float kx = sc->width() ? float(sc->width()) / avail.x : 1.0f, ky = sc->height() ? float(sc->height()) / avail.y : 1.0f;
+    auto target_px = [&](float x, float y) { return ImVec2((x - p0.x) * kx, (y - p0.y) * ky); };
+    if (released) {
+        if (g.selecting && g.moved && g.lasso.size() >= 4) {
+            std::vector<float> poly = g.lasso;
+            if (g.rect) poly = {poly[0], poly[1], poly[2], poly[1], poly[2], poly[3], poly[0], poly[3]};
+            for (size_t k = 0; k + 1 < poly.size(); k += 2) {
+                const ImVec2 t = target_px(poly[k], poly[k + 1]);
+                poly[k] = t.x;
+                poly[k + 1] = t.y;
+            }
+            emit(S, v, "select", sc->select_polygon(poly));
+        } else if (!g.moved && g.button == 0) {
+            if (g.selecting && sc->clear_selection()) emit(S, v, "select", "{}");
+            if (!g.selecting) {
+                const ImVec2 t = target_px(io.MousePos.x, io.MousePos.y);
+                std::string why;
+                v.scene_click = sc->request_pick(t.x, t.y, &why);
+            }
+        }
+        g.lasso.clear();
+        g.selecting = false;
+    }
+    // A hover asks for a pick when the pointer moved over the picture, at most 30 times a second,
+    // unless a click's pick is in flight; a still pointer asks nothing.
+    const double t_ms = now_ms();
+    if (hovered && valid && !g.down && !v.scene_click && (io.MousePos.x != v.scene_hx || io.MousePos.y != v.scene_hy) &&
+        t_ms - v.scene_hover_ms >= kHoverMs) {
+        v.scene_hx = io.MousePos.x;
+        v.scene_hy = io.MousePos.y;
+        v.scene_hover_ms = t_ms;
+        const ImVec2 t = target_px(io.MousePos.x, io.MousePos.y);
+        std::string why;
+        sc->request_pick(t.x, t.y, &why);
+    }
+    if (!hovered && !v.scene_hover.empty()) v.scene_hover.clear();
+    caliper_scene::Hit hit;
+    const caliper_scene::PickPass::Result pr = sc->poll_pick(&hit);
+    if (pr == caliper_scene::PickPass::Result::Hit || pr == caliper_scene::PickPass::Result::Miss ||
+        pr == caliper_scene::PickPass::Result::Dropped) {
+        const bool click = v.scene_click;
+        v.scene_click = false;
+        const std::string detail = pr == caliper_scene::PickPass::Result::Hit ? sc->pick_detail(hit) : std::string();
+        if (click) {
+            if (!detail.empty()) emit(S, v, "pick", detail);
+        } else if (pr != caliper_scene::PickPass::Result::Dropped) {
+            const int64_t key = detail.empty() ? -1
+                                               : (int64_t(hit.entity.index) << 40) ^ (int64_t(hit.primitive) << 36) ^
+                                                     (int64_t(hit.part) << 33) ^ int64_t(hit.item);
+            v.hover_item = detail.empty() ? -1 : int64_t(hit.item);
+            v.scene_hover = detail.empty() ? std::string()
+                                           : sc->tree().path(hit.entity) + "  " + caliper_scene::primitive_name(hit.primitive) +
+                                                 " " + std::to_string(hit.item);
+            emit_hover(S, v, key, [&] { return detail; });
+        }
+    }
+    if (hovered && !v.scene_hover.empty() && !g.down) ImGui::SetTooltip("%s", v.scene_hover.c_str());
+    // The lasso or rectangle being drawn, and how many items the highlight shows.
+    if (g.down && g.selecting && g.lasso.size() >= 4) {
+        dl->PushClipRect(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), true);
+        if (g.rect) {
+            const ImVec2 a(std::min(g.lasso[0], g.lasso[2]), std::min(g.lasso[1], g.lasso[3]));
+            const ImVec2 b(std::max(g.lasso[0], g.lasso[2]), std::max(g.lasso[1], g.lasso[3]));
+            dl->AddRectFilled(a, b, kSelFill);
+            dl->AddRect(a, b, kSelLine, 0.0f, 0, 1.0f);
+        } else {
+            std::vector<ImVec2> pts;
+            for (size_t k = 0; k + 1 < g.lasso.size(); k += 2) pts.emplace_back(g.lasso[k], g.lasso[k + 1]);
+            dl->AddPolyline(pts.data(), (int)pts.size(), kSelLine, ImDrawFlags_Closed, 1.0f);
+        }
+        dl->PopClipRect();
+    }
+    if (sc->highlighted()) {
+        char t[48];
+        std::snprintf(t, sizeof t, "%llu selected", (unsigned long long)sc->highlighted());
+        const ImVec2 ts = ImGui::CalcTextSize(t);
+        dl->AddText(ImVec2(p0.x + avail.x - ts.x - 10.0f, p0.y + 8.0f), kSelText, t);
+    }
 
     // Labels: text over the picture at anchors the scene core projects, nearest first, at most 512.
     if (sc->width() && sc->height()) {

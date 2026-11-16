@@ -87,6 +87,9 @@ SceneView::SceneView(caliper_gfx::Backend& backend, const caliper_gfx::ProgramDe
 SceneView::~SceneView() {
     for (auto& kv : slots_) release(kv.second);
     slots_.clear();
+    for (const Buffer b : hl_buffers_) gfx_.release(b);
+    hl_buffers_.clear();
+    if (dim_texture_) gfx_.release(dim_texture_);
     pick_.reset();
     res_.reset();
     if (color_) gfx_.release(color_);
@@ -214,6 +217,7 @@ void SceneView::release(Slot& s) {
     release_texture(s);
     s.cpu_rows.clear();
     s.cpu_ids.clear();
+    s.cpu.clear();
     s.present = false;
 }
 
@@ -381,10 +385,13 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
     }
 
     std::string problem;
+    std::map<int, std::vector<uint8_t>> cpu;   // points and boxes: every array, for selections
     auto add = [&](Role role, const void* bytes, uint64_t rows, uint32_t stride, VertexFormat fmt) {
         Buffer buf;
-        if (!upload(slot, role, bytes, rows * (stride ? stride : vertex_format_bytes(fmt)), &buf, &problem))
-            return false;
+        const uint64_t size = rows * (stride ? stride : vertex_format_bytes(fmt));
+        if (!upload(slot, role, bytes, size, &buf, &problem)) return false;
+        if (prim == Primitive::Points || prim == Primitive::Boxes)
+            cpu[int(role)].assign(static_cast<const uint8_t*>(bytes), static_cast<const uint8_t*>(bytes) + size);
         BatchArray a;
         a.role = role;
         a.buffer = buf;
@@ -638,6 +645,7 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
     }
     slot.cpu_rows = std::move(cpu_rows);   // the batch's CPU views point into these buffers
     slot.cpu_ids = std::move(cpu_ids);
+    slot.cpu = std::move(cpu);
     slot.present = true;
     // Buffers of roles this batch no longer has, and a texture it no longer has, go back to the layer.
     for (auto it = slot.buffers.begin(); it != slot.buffers.end();) {
@@ -838,6 +846,247 @@ std::string SceneView::pick_detail(const Hit& h) const {
     return d.dump();
 }
 
+// ---- selections --------------------------------------------------------------------------------------
+
+std::string SceneView::select_polygon(const std::vector<float>& poly) {
+    selected_.clear();
+    const size_t m = poly.size() / 2;
+    if (m >= 3 && width_ && height_) {
+        float xmin = INFINITY, xmax = -INFINITY, ymin = INFINITY, ymax = -INFINITY;
+        for (size_t k = 0; k < m; ++k) {
+            xmin = std::min(xmin, poly[2 * k]);
+            xmax = std::max(xmax, poly[2 * k]);
+            ymin = std::min(ymin, poly[2 * k + 1]);
+            ymax = std::max(ymax, poly[2 * k + 1]);
+        }
+        auto inside = [&](double px, double py) {
+            if (!(px >= xmin && px <= xmax && py >= ymin && py <= ymax)) return false;
+            bool in = false;
+            for (size_t a = 0, b = m - 1; a < m; b = a++) {
+                const double ax = poly[2 * a], ay = poly[2 * a + 1], bx = poly[2 * b], by = poly[2 * b + 1];
+                if ((ay > py) != (by > py) && px < (bx - ax) * (py - ay) / (by - ay) + ax) in = !in;
+            }
+            return in;
+        };
+        tree_.update();
+        const CameraMatrices cm = camera_matrices(effective_camera(), tree_, width_, height_);
+        if (cm.ok)
+            for (uint32_t idx : tree_.path_order()) {
+                const EntityId e = tree_.entity_at(idx);
+                if (!tree_.drawable(e)) continue;
+                const EntityId pcam = tree_.pixel_space_of(e);
+                const bool overlay = pcam && pcam == cm.through;
+                const Mat4 mvp = overlay ? cm.pixel_to_clip * tree_.pixel_local(e) : cm.proj * cm.view * tree_.world(e);
+                for (const Primitive p : {Primitive::Points, Primitive::Boxes}) {
+                    const Batch* b = tree_.batch(e, p);
+                    if (!b) continue;
+                    const auto it = slots_.find(Key{tree_.path(e), int(p), tree_.batch_static(e, p)});
+                    if (it == slots_.end()) continue;
+                    const auto rows = it->second.cpu.find(int(p == Primitive::Points ? Role::Positions : Role::Centers));
+                    if (rows == it->second.cpu.end()) continue;
+                    const uint32_t comps = b->dims();
+                    const uint64_t n = b->count();
+                    const float* f = reinterpret_cast<const float*>(rows->second.data());
+                    std::vector<int64_t> idxs;
+                    for (uint64_t i = 0; i < n; ++i) {
+                        const Vec3 q{f[i * comps], f[i * comps + 1], comps == 3 ? f[i * comps + 2] : 0.0};
+                        double h[4];
+                        transform_h(mvp, q, h);
+                        if (!(h[3] > 0)) continue;
+                        const double z = h[2] / h[3];
+                        if (!(z >= 0 && z <= 1)) continue;
+                        if (inside((h[0] / h[3] + 1) * 0.5 * width_, (1 - h[1] / h[3]) * 0.5 * height_)) idxs.push_back(int64_t(i));
+                    }
+                    if (!idxs.empty()) selected_[{tree_.path(e), int(p)}] = std::move(idxs);
+                }
+            }
+    }
+    changed();
+    if (selected_.empty()) return "{}";
+    // The detail: at most 32,768 indices in all, in path order.
+    caliper_net::Json ents = caliper_net::Json::array();
+    size_t total = 0;
+    bool truncated = false;
+    std::string space;
+    std::vector<int64_t> items;
+    for (const auto& kv : selected_) {
+        const Primitive p = Primitive(kv.first.second);
+        caliper_net::Json ent = caliper_net::Json::object();
+        caliper_net::Json idx = caliper_net::Json::array(), rows = caliper_net::Json::array();
+        const auto it = slots_.find(Key{kv.first.first, kv.first.second, tree_.batch_static(tree_.find(kv.first.first), p)});
+        const std::string items_space = it != slots_.end() ? it->second.items : std::string();
+        for (const int64_t i : kv.second) {
+            if (total >= CALIPER_NET_MAX_EVENT_INDICES) {
+                truncated = true;
+                break;
+            }
+            const int64_t r = row_id(kv.first.first, p, i);
+            idx.push(caliper_net::Json(i));
+            rows.push(caliper_net::Json(r));
+            ++total;
+            if (!items_space.empty() && (space.empty() || space == items_space)) {
+                space = items_space;
+                items.push_back(r);
+            }
+        }
+        ent.set("entity", caliper_net::Json(kv.first.first));
+        ent.set("primitive", caliper_net::Json(primitive_name(p)));
+        ent.set("indices", idx);
+        ent.set("row_ids", rows);
+        ents.push(ent);
+        if (truncated) break;
+    }
+    caliper_net::Json d = caliper_net::Json::object();
+    d.set("entities", ents);
+    if (truncated) d.set("truncated", caliper_net::Json(true));
+    if (!space.empty()) {
+        std::sort(items.begin(), items.end());
+        items.erase(std::unique(items.begin(), items.end()), items.end());
+        caliper_net::Json it = caliper_net::Json::array();
+        for (const int64_t x : items) it.push(caliper_net::Json(x));
+        d.set("space", caliper_net::Json(space));
+        d.set("items", it);
+    }
+    return d.dump();
+}
+
+bool SceneView::clear_selection() {
+    const bool had = !selected_.empty();
+    selected_.clear();
+    if (had) changed();
+    return had;
+}
+
+void SceneView::set_linked(const std::string& space, std::vector<int64_t> items) {
+    std::sort(items.begin(), items.end());
+    items.erase(std::unique(items.begin(), items.end()), items.end());
+    const auto it = linked_.find(space);
+    if (items.empty()) {
+        if (it == linked_.end()) return;
+        linked_.erase(it);
+    } else {
+        if (it != linked_.end() && it->second == items) return;
+        linked_[space] = std::move(items);
+    }
+    changed();
+}
+
+void SceneView::set_all_linked(const std::map<std::string, std::vector<int64_t>>& by_space) {
+    std::vector<std::string> gone;
+    for (const auto& kv : linked_)
+        if (!by_space.count(kv.first)) gone.push_back(kv.first);
+    for (const std::string& sp : gone) set_linked(sp, {});
+    for (const auto& kv : by_space) set_linked(kv.first, kv.second);
+}
+
+uint64_t SceneView::selected_count() const {
+    uint64_t n = 0;
+    for (const auto& kv : selected_) n += kv.second.size();
+    return n;
+}
+
+// The highlight: a scene of the selected points and boxes alone, each entity with the poses and
+// cameras of its path in the view's scene, so that the view's camera draws them where they are. Their
+// arrays are the selected rows of the CPU copies, uploaded into buffers the view owns (copies, counted).
+bool SceneView::build_highlight(SceneTree* hl, ViewCamera* cam, std::string* why) {
+    for (const Buffer b : hl_buffers_) gfx_.release(b);
+    hl_buffers_.clear();
+    highlighted_ = 0;
+    *hl = SceneTree(tree_.space(), tree_.up(), tree_.units());
+    *cam = camera_;
+    // The entity and the poses and cameras of its ancestors, copied.
+    auto chain = [&](EntityId e) {
+        std::vector<EntityId> up;
+        for (EntityId a = e; a && a.index != 0; a = tree_.parent(a)) up.push_back(a);
+        EntityId out;
+        for (auto it = up.rbegin(); it != up.rend(); ++it) {
+            out = hl->ensure(tree_.path(*it));
+            if (const Mat4* m = tree_.transform(*it)) hl->set_transform(out, *m);
+            if (const Pinhole* c = tree_.camera(*it)) {
+                Pinhole pin = *c;
+                pin.plane_distance = tree_.plane_distance(*it);   // the view's, which follows its bounds
+                hl->set_camera(out, pin);
+            }
+        }
+        return e.index == 0 ? hl->root() : out;
+    };
+    if (!through_.empty()) {
+        const EntityId c = tree_.find(through_);
+        if (c && tree_.camera(c)) {
+            ThroughPinhole t;
+            t.camera = chain(c);
+            *cam = t;
+        }
+    }
+    for (uint32_t idx : tree_.path_order()) {
+        const EntityId e = tree_.entity_at(idx);
+        if (!tree_.drawable(e)) continue;
+        for (const Primitive p : {Primitive::Points, Primitive::Boxes}) {
+            const Batch* b = tree_.batch(e, p);
+            if (!b) continue;
+            const std::string& path = tree_.path(e);
+            const auto it = slots_.find(Key{path, int(p), tree_.batch_static(e, p)});
+            if (it == slots_.end()) continue;
+            const Slot& slot = it->second;
+            const uint64_t n = b->count();
+            std::vector<int64_t> pick;
+            if (const auto sel = selected_.find({path, int(p)}); sel != selected_.end()) pick = sel->second;
+            if (const auto lk = linked_.find(slot.items); !slot.items.empty() && lk != linked_.end())
+                for (uint64_t i = 0; i < n; ++i)
+                    if (std::binary_search(lk->second.begin(), lk->second.end(), row_id(path, p, int64_t(i))))
+                        pick.push_back(int64_t(i));
+            std::sort(pick.begin(), pick.end());
+            pick.erase(std::unique(pick.begin(), pick.end()), pick.end());
+            while (!pick.empty() && pick.back() >= int64_t(n)) pick.pop_back();
+            if (pick.empty()) continue;
+            Batch h = *b;
+            h.labels.clear();
+            for (BatchArray& a : h.arrays) {
+                const auto src = slot.cpu.find(int(a.role));
+                if (src == slot.cpu.end()) {
+                    if (why) *why = path + ": no CPU copy of its " + role_name(a.role);
+                    return false;
+                }
+                const uint32_t row = a.stride ? a.stride : vertex_format_bytes(a.format);
+                std::vector<uint8_t> bytes;
+                if (a.count == 1) {
+                    bytes = src->second;   // one value for all
+                } else {
+                    bytes.resize(pick.size() * row);
+                    for (size_t k = 0; k < pick.size(); ++k)
+                        std::memcpy(bytes.data() + k * row, src->second.data() + size_t(pick[k]) * row, row);
+                    a.count = pick.size();
+                }
+                caliper_gfx::BufferDesc d;
+                d.size = (bytes.size() + 3) / 4 * 4;
+                d.usage = caliper_gfx::kVertex | caliper_gfx::kCopyDst;
+                d.label = "scene highlight";
+                const Buffer buf = gfx_.create_buffer(d);
+                if (!buf || !gfx_.write_buffer(buf, 0, bytes.data(), bytes.size())) {
+                    if (why) *why = "the highlight: " + gfx_.last_error();
+                    if (buf) gfx_.release(buf);
+                    return false;
+                }
+                hl_buffers_.push_back(buf);
+                counts_.bytes_last += bytes.size();
+                counts_.bytes_total += bytes.size();
+                ++counts_.copies_total;
+                a.buffer = buf;
+                a.offset = 0;
+                a.cpu = nullptr;
+            }
+            std::string err;
+            if (!hl->set_batch(chain(e), h, false, &err)) {
+                if (why) *why = path + ": the highlight: " + err;
+                return false;
+            }
+            highlighted_ += pick.size();
+        }
+    }
+    hl->update();
+    return true;
+}
+
 bool SceneView::in_pixel_space(EntityId e) const {
     for (EntityId p = tree_.parent(e); p; p = tree_.parent(p))
         if (tree_.camera(p)) return true;
@@ -991,6 +1240,49 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     }
     cost_.draws = r.draws;
     frame.render(std::move(list));
+    // A selection: the picture dimmed towards the background, as the points view dims, then the
+    // selected items over it in their own colours, without depth so that none is hidden.
+    highlighted_ = 0;
+    if (highlight_wanted()) {
+        SceneTree hl(tree_.space());
+        ViewCamera hl_cam;
+        std::string err;
+        if (!build_highlight(&hl, &hl_cam, &err)) {
+            note(err);
+        } else if (highlighted_ > 0) {
+            if (!dim_texture_ || dim_rgba_ != clear_) {
+                if (!dim_texture_)
+                    dim_texture_ = gfx_.create_texture({1, 1, caliper_gfx::Format::RGBA8Unorm,
+                                                        caliper_gfx::kSampled | caliper_gfx::kCopyDstTex, "scene dim"});
+                const uint32_t ground = clear_ | 0xff000000u;
+                if (dim_texture_ && gfx_.write_texture(dim_texture_, &ground, 4)) dim_rgba_ = clear_;
+            }
+            caliper_gfx::RenderTarget over;
+            over.color = color_;
+            over.clear = false;
+            SceneTree dim(Space::k2D);
+            Batch q;
+            q.primitive = Primitive::Image;
+            q.texture = dim_texture_;
+            q.image_width = width_;
+            q.image_height = height_;
+            q.opacity = 0.72f;   // the points view's dimming: 0.28 of the colour, 0.72 of the ground
+            PanZoom pz;
+            pz.center[0] = width_ * 0.5;
+            pz.center[1] = height_ * 0.5;
+            pz.half_height = height_ * 0.5;
+            pz.y_down = true;
+            caliper_gfx::DrawList dl(over), hll(over);
+            if (dim_texture_ && dim.set_batch(dim.root(), q, false, &err)) {
+                dim.update();
+                CompileOptions dopt = opt;
+                if (dim_compiler_.compile(dim, pz, dopt, *res_, dl, nullptr).ok) frame.render(std::move(dl));
+            }
+            const CompileResult hr = hl_compiler_.compile(hl, hl_cam, opt, *res_, hll, nullptr);
+            if (hr.ok) frame.render(std::move(hll));
+            else if (!hr.notes.empty()) note("the highlight: " + hr.notes[0]);
+        }
+    }
     const auto t1 = std::chrono::steady_clock::now();
     const caliper_gfx::Serial s = gfx_.submit(std::move(frame));
     cost_.submit_ms = ms_since(t1);
