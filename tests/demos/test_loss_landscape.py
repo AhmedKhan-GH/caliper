@@ -239,6 +239,15 @@ class Viewer:
         self.wait(lambda: len(replies()) >= (2 if done else 1), what=f"the reply to {op}")
         return replies()[-1]
 
+    def params(self) -> dict:
+        """The values of the three landscape parameters in the newest CONTROLS
+        with nothing pending."""
+        states = [m for m in self.all() if isinstance(m, w.Controls)]
+        if not states:
+            return {}
+        return {p["name"]: p["value"] for p in states[-1].params
+                if p["name"] in ("span", "directions", "every") and "pending" not in p}
+
     def run_state(self):
         states = [m for m in self.all() if isinstance(m, w.Controls)]
         return states[-1].run if states else None
@@ -424,7 +433,8 @@ def test_controls(notebook):
         paused_at = land.step
         for name, value in (("span", 2.0), ("directions", "random"), ("every", 20)):
             assert v.control("set", name=name, value=value).status == "ok"
-        time.sleep(0.3)
+        want = {"span": 2.0, "directions": "random", "every": 20}
+        v.wait(lambda: v.params() == want, what="the values taken while paused")
         assert len(v.updates("surface", "mesh")) == 1 and land.mode == "path" and land.span == 1.0
         reply = v.control("run", done=True, name="surface now")
         assert reply.status == "ok" and reply.message == f"refitted at step {paused_at}"
