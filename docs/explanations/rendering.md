@@ -339,13 +339,13 @@ is the float guess compiled with fast math, one 16-byte entry per level in the 4
 workgroup for `colormap_texture`: 128 invocations, the most that a compatibility-mode WebGPU device allows in a
 workgroup by default, so that one program serves every device. The decision rested on its cost on Metal, measured on
 an M-series Max in quiet moments (`python/bench/results/step6-colormap-keys.txt`). As first built, with keys packed
-four to a vector, the layer's safe math and an 8 x 8 workgroup, the compute form took 31.0 µs on a 1,024 x 1,024 heatmap and 79.2 µs on a 2,048 x 2,048
-one, against 9.5 µs and 25.8 µs for the Metal renderer's float pass (load 3.49). Most of the difference was the
-precise division of the float guess, which the decision does not need, and the rest the vector-packed reads. The
-cheaper exact form then measured 14.7 µs and 36.3 µs in the same window. As built now, with one entry per level,
-fast math and a 16 by 8 workgroup, it takes, per pass over a heatmap, 9.5 µs against 7.7 µs for the float pass at
-1,024 by 1,024 and 32.4 µs against 25.8 µs at 2,048 by 2,048, at a 1-minute load of 3.93: within the 20 µs that a
-step may add to an update's GPU time.
+four to a vector, the layer's safe math and an 8 x 8 workgroup, the compute form took 31.0 µs on a 1,024 x 1,024
+heatmap and 79.2 µs on a 2,048 x 2,048 one, against 9.5 µs and 25.8 µs for the Metal renderer's float pass (load
+3.49). Most of the difference was the precise division of the float guess, which the decision does not need, and the
+rest the vector-packed reads. The cheaper exact form then measured 14.7 µs and 36.3 µs in the same window. As built
+now, with one entry per level, fast math and a 16 by 8 workgroup, it takes, per pass over a heatmap, 9.5 µs against
+7.7 µs for the float pass at 1,024 by 1,024 and 32.4 µs against 25.8 µs at 2,048 by 2,048, at a 1-minute load of
+3.93: within the 20 µs that a step may add to an update's GPU time.
 
 Fast math is a per-program option. The Metal backend compiles every program with fast math off, so that float
 results follow IEEE rules as the CPU references do, and `colormap_texture` alone sets `fast_math` in the shader
@@ -464,7 +464,8 @@ static and stamped batches apart, so a clear that is not static leaves a static 
 - **Colormaps.** A colormapped batch takes the colormap block of its colormap and range from the shared cache of key
   blocks: the view owns a `KeyBlockCache` of `src/host/gfx/colormap_keys.h` and hands the scene core
   `colormap_source` over it, so each range's keys are derived from the CPU reference once and the app's and the
-  browser's scene views decide colours exactly as the other generated programs do ([The colormap by keys](#the-colormap-by-keys)).
+  browser's scene views decide colours exactly as the other generated programs do
+  ([The colormap by keys](#the-colormap-by-keys)).
 - **Drawing.** When the scene, the camera, the size or the clear colour changed, the view compiles the scene and submits
   it, with the index clamp of changed meshes, to an offscreen colour target with a depth target in 3-D, which its
   window shows as an image; otherwise it submits nothing. On Metal each scene view has a backend of the layer of its
