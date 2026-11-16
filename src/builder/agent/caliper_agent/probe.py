@@ -359,6 +359,11 @@ async def _probe_tools(client: Any, result: ProbeResult) -> None:
                 result.quirks["streamed_arguments"] = "whole" if chunks <= 1 else "pieces"
             elif reply.calls:
                 result.tools = Capability(False, "probe", "The model called a tool, but not as asked.")
+            elif reply.finish == "length":
+                # A thinking model can spend the output limit before it calls the
+                # tool; that says nothing about tool calling.
+                result.error("tools", "probe.cut_off", "The reply reached the probe's output limit before it "
+                                                       "called the tool.")
             else:
                 result.tools = Capability(False, "probe", "The model answered in text instead of calling the tool.")
             break
@@ -386,6 +391,9 @@ async def _probe_vision(client: Any, result: ProbeResult, colour: str) -> None:
     if reply.reasoning_field and "reasoning_field" not in result.quirks:
         result.quirks["reasoning_field"] = reply.reasoning_field
     words = "".join(c if c.isalpha() else " " for c in _visible_text(reply.text).lower()).split()
+    if colour not in words and reply.finish == "length":
+        result.error("vision", "probe.cut_off", "The reply reached the probe's output limit before it named a colour.")
+        return
     if colour in words:
         result.vision = Capability(True, "probe", f"The model named the colour of a {colour} image.")
     else:

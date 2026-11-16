@@ -79,6 +79,11 @@ def test_a_model_without_tool_calling(fake):
     assert r.tools.value is False and "text" in r.tools.detail
 
 
+def test_a_reply_cut_off_at_the_limit_leaves_tool_calling_unknown(fake):
+    r = probe(fake(tool_mode="cutoff"), vision=False)
+    assert r.tools.value is None and r.errors[-1]["code"] == "probe.cut_off"
+
+
 def test_a_model_without_vision(fake):
     r = probe(fake(refuse_images=True))
     assert r.vision.value is False and "refused a request with an image" in r.vision.detail

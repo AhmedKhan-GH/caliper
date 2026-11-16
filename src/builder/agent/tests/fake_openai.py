@@ -172,6 +172,8 @@ class FakeOpenAI:
         if PROBE_TOOL in self._tool_names(body):
             if self.tool_mode == "text":
                 return {"text": "The number is 7."}
+            if self.tool_mode == "cutoff":
+                return {"text": "Let me think about which tool", "finish": "length"}
             return {"tool_calls": [{"id": "call_probe", "name": PROBE_TOOL, "arguments": json.dumps({"number": 7})}]}
         images = self._images(body)
         if images and not body.get("tools"):
