@@ -55,6 +55,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -68,6 +69,46 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 REQUEST = "Plot attention entropy per layer while it trains"
 APPROVAL = re.compile(r"^\[approval\] (\S+) (\S+) \((\w+)\) (.*)$")
+
+
+# ---- the processes this script starts ---------------------------------------------------------
+# Every child is registered when it starts and stopped by its pid when the
+# script ends, however it ends: normally, on an error, or on SIGINT or SIGTERM.
+# The hidden app also has CALIPER_EXIT_AFTER as a backstop.
+CHILDREN: list[subprocess.Popen] = []
+
+
+def spawn(argv: list[str], **kwargs) -> subprocess.Popen:
+    proc = subprocess.Popen(argv, **kwargs)
+    CHILDREN.append(proc)
+    return proc
+
+
+def stop_children() -> None:
+    for proc in reversed(CHILDREN):
+        if proc.poll() is None:
+            proc.terminate()
+    deadline = time.monotonic() + 15
+    for proc in reversed(CHILDREN):
+        try:
+            proc.wait(timeout=max(0.1, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def on_signal(signum, frame) -> None:
+    stop_children()
+    sys.exit(128 + signum)
+
+
+def new_folder(parent: str | None, prefix: str) -> Path:
+    """A new, empty folder of this script's own: inside `parent` when given (the
+    caller's folder, whose contents are left alone), else a temporary one."""
+    if parent:
+        Path(parent).mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+    return Path(tempfile.mkdtemp(prefix="caliper-" + prefix))
 
 
 def loopback(url: str) -> bool:
@@ -124,7 +165,7 @@ def start_stream(args, folder: Path) -> tuple[subprocess.Popen, str]:
                 "--tokens", "64", "--hz", "8"]
         want = re.compile(r"\[producer\] hub (\S+)")
     log = (folder / "stream.log").open("w")
-    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env_for_children())
+    proc = spawn(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env_for_children())
     link = ""
     deadline = time.monotonic() + 120
     while not link and time.monotonic() < deadline:
@@ -225,8 +266,7 @@ def copy_shots(raw: Path, out: Path, size: str) -> list[str]:
 
 
 def one_run(args, n: int, work: Path) -> dict:
-    folder = work / f"run-{n}"
-    shutil.rmtree(folder, ignore_errors=True)
+    folder = Path(tempfile.mkdtemp(prefix=f"run-{n}-", dir=work))   # new and empty, made here
     ws, data, apps, raw = folder / "ws", folder / "data", folder / "apps", folder / "raw"
     for d in (ws, data, apps, raw):
         d.mkdir(parents=True)
@@ -250,7 +290,7 @@ def one_run(args, n: int, work: Path) -> dict:
                 "CALIPER_TEST_APPROVALS": str(decisions), "CALIPER_TEST_SPEC_UI": ui_script(args, gate),
                 "CALIPER_TEST_SPEC_UI_SHOTS": str(raw), "CALIPER_EXIT_AFTER": str(args.minutes * 60 + 600)})
     start = time.monotonic()
-    app = subprocess.Popen([str(build / "caliper"), "--hidden", "--applets", str(build / "applets"), "--url", link,
+    app = spawn([str(build / "caliper"), "--hidden", "--applets", str(build / "applets"), "--url", link,
                             "--workspace", str(ws)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env)
     log = Log(folder / "app.log")
     reader = threading.Thread(target=log.follow, args=(app.stderr, start), daemon=True)
@@ -307,7 +347,8 @@ def main() -> int:
     p.add_argument("--agent-python", help="the Python chat-agent.sh runs caliper-agent with (CALIPER_AGENT_PYTHON); "
                                           "by default the repository's .venv/bin/python, else python3")
     p.add_argument("--out", required=True)
-    p.add_argument("--work", help="where each run's files go (default: a new temporary folder)")
+    p.add_argument("--work", help="a folder in which the script makes a new folder of its own for the runs' files "
+                                  "(default: a new temporary folder); nothing in it is removed")
     p.add_argument("--model", default="qwen3.8:27b")
     p.add_argument("--base-url", default="http://127.0.0.1:11434/v1")
     p.add_argument("--context-length", type=int,
@@ -328,17 +369,22 @@ def main() -> int:
     if why:
         print(f"step4: {why}", file=sys.stderr)
         return 2
-    work = Path(args.work) if args.work else Path(tempfile.mkdtemp(prefix="caliper-step4-"))
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
+    work = new_folder(args.work, "step4-")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     os.environ["CALIPER_AGENT_OFFLINE"] = "1"
     captured = False
-    for n in range(1, args.runs + 1):
-        report = one_run(args, n, work)
-        if not captured and report.get("outcome") == "built a dashboard":
-            report["captures"] = copy_shots(work / f"run-{n}" / "raw", out, args.size)
-            captured = True
-        print(json.dumps(report), flush=True)
+    try:
+        for n in range(1, args.runs + 1):
+            report = one_run(args, n, work)
+            if not captured and report.get("outcome") == "built a dashboard":
+                report["captures"] = copy_shots(Path(report["folder"]) / "raw", out, args.size)
+                captured = True
+            print(json.dumps(report), flush=True)
+    finally:
+        stop_children()
     return 0 if captured else 1
 
 

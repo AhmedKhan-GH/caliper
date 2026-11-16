@@ -21,7 +21,8 @@ the panel lands in the dashboard.
 
 The person's part is played through the hidden app's input script
 (CALIPER_TEST_SPEC_UI): it waits for the spec page and captures the dashboard,
-waits until the agent's edit is held, captures the card, approves it through the
+waits until the agent's edit is held and the approval strip shows its card,
+captures the card, approves it through the
 hidden app's test-only decisions file (CALIPER_TEST_APPROVALS, the same path as
 the card's Approve button), and captures the dashboard with the new panel. With
 `--model` the agent may send other edits first, so a thread here approves each
@@ -40,6 +41,7 @@ import math
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -49,6 +51,46 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 APPROVAL = re.compile(r"^\[approval\] (\S+) (\S+) \((\w+)\) (.*)$")
+
+
+# ---- the processes this script starts ---------------------------------------------------------
+# Every child is registered when it starts and stopped by its pid when the
+# script ends, however it ends: normally, on an error, or on SIGINT or SIGTERM.
+# The hidden app also has CALIPER_EXIT_AFTER as a backstop.
+CHILDREN: list[subprocess.Popen] = []
+
+
+def spawn(argv: list[str], **kwargs) -> subprocess.Popen:
+    proc = subprocess.Popen(argv, **kwargs)
+    CHILDREN.append(proc)
+    return proc
+
+
+def stop_children() -> None:
+    for proc in reversed(CHILDREN):
+        if proc.poll() is None:
+            proc.terminate()
+    deadline = time.monotonic() + 15
+    for proc in reversed(CHILDREN):
+        try:
+            proc.wait(timeout=max(0.1, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def on_signal(signum, frame) -> None:
+    stop_children()
+    sys.exit(128 + signum)
+
+
+def new_folder(parent: str | None, prefix: str) -> Path:
+    """A new, empty folder of this script's own: inside `parent` when given (the
+    caller's folder, whose contents are left alone), else a temporary one."""
+    if parent:
+        Path(parent).mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+    return Path(tempfile.mkdtemp(prefix="caliper-" + prefix))
 
 
 def find_mcp(build: Path) -> Path:
@@ -132,15 +174,24 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--build", required=True)
     p.add_argument("--out", required=True)
-    p.add_argument("--work", help="where the run's files go (default: a new temporary folder)")
+    p.add_argument("--work", help="a folder in which the run makes a new folder of its own for its files "
+                                  "(default: a new temporary folder); nothing in it is removed")
     p.add_argument("--size", default="1440x900")
     p.add_argument("--model", help="a model that Ollama serves on this machine chooses the agent's calls")
     p.add_argument("--ollama", default="http://127.0.0.1:11434", help="with --model: Ollama on this machine")
     p.add_argument("--minutes", type=int, default=10, help="how long the agent may take")
     args = p.parse_args()
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
+    try:
+        return run(args)
+    finally:
+        stop_children()
+
+
+def run(args) -> int:
     build, out = Path(args.build), Path(args.out)
-    work = Path(args.work) if args.work else Path(tempfile.mkdtemp(prefix="caliper-step5-"))
-    shutil.rmtree(work, ignore_errors=True)
+    work = new_folder(args.work, "step5-")
     ws, data, apps, raw = work / "ws", work / "data", work / "apps", work / "raw"
     for d in (ws, data, apps, raw, out):
         d.mkdir(parents=True, exist_ok=True)
@@ -152,18 +203,18 @@ def main() -> int:
     # input script approves itself; with a model, the thread below approves.
     approve = (f"append {decisions} approve panel.create mcp" if not args.model else f"touch {work / 'card-captured'}")
     ui = "; ".join(["page spec", "wait 60", "shot dashboard", f"patience {args.minutes * 60}", f"wait-file {held}",
-                    "wait 30", "shot card", approve, f"wait-file {client_done}", "wait 60", "shot landed", "quit"])
+                    "cards 1", "shot card", approve, f"wait-file {client_done}", "wait 60", "shot landed", "quit"])
     env = env_for_children()
     env.update({"CALIPER_DATA_DIR": str(data), "CALIPER_USER_APPLETS_DIR": str(apps), "CALIPER_WINDOW_SIZE": args.size,
                 "CALIPER_COMMAND_SCRIPT": str(work / "build.jsonl"),
                 "CALIPER_COMMAND_RESULTS": str(work / "build-results.jsonl"),
                 "CALIPER_TEST_APPROVALS": str(decisions), "CALIPER_TEST_SPEC_UI": ui,
                 "CALIPER_TEST_SPEC_UI_SHOTS": str(raw), "CALIPER_EXIT_AFTER": str(args.minutes * 60 + 300)})
-    app = subprocess.Popen([str(build / "caliper"), "--hidden", "--api", "--api-port", "0", "--workspace", str(ws)],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env)
+    app = spawn([str(build / "caliper"), "--hidden", "--api", "--api-port", "0", "--workspace", str(ws)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env)
     log = Log(work / "app.log")
     threading.Thread(target=log.follow, args=(app.stderr,), daemon=True).start()
-    report: dict = {"agent": "model " + args.model if args.model else "scripted"}
+    report: dict = {"agent": "model " + args.model if args.model else "scripted", "folder": str(work)}
     agent_lines: list[str] = []
     agent_code = None
     try:
@@ -196,7 +247,7 @@ def main() -> int:
                 "--api-file", str(data / "api.json")]
         if args.model:
             argv += ["--model", args.model, "--ollama", args.ollama]
-        agent = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env_for_children())
+        agent = spawn(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env_for_children())
         for raw_line in agent.stdout:
             line = raw_line.decode("utf-8", "replace").rstrip("\n")
             agent_lines.append(line)
