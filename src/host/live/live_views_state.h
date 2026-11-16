@@ -198,6 +198,10 @@ struct View {
     bool        hover_dirty = true;
     uint64_t    hover_stride = 1;             // >1: hover searched a sample
     bool        draw_failed = false;          // last render-target draw was refused
+    // The CPU time of the view's last redraw of its render target (encode and submit), and how
+    // many redraws it made: the step's timing row and the benchmarks read them.
+    double      draw_cpu_ms = 0.0;
+    uint64_t    redraws = 0;
 
     // SCENE: its scene view and the layer it draws through (live_views_scene.h).
     std::shared_ptr<SceneHolder> scene;
@@ -352,6 +356,8 @@ void  fit_points(View& v, float aspect);          // camera from bbox (stats or 
 
 // live_views_draw.cpp
 void draw_view(CaliperCore* core, CaliperLiveViewsState* S, View& v);
+// The text of a view's header after its name ("1,000 points  3-D  10 classes"), as the header draws it.
+std::string info_text(const CaliperCore* core, const View& v);
 // Column-major matrices for the current camera (also used by hover).
 void camera_matrices(const View& v, float aspect, float view16[16], float proj16[16]);
 // The fixed 16-colour categorical palette (r | g<<8 | b<<16 | a<<24).

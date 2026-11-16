@@ -1,0 +1,38 @@
+# The graphics suite's references (tests/gfx/gfx_reference.h): one line per case, the readback's
+# FNV-1a hash, what else the row keeps, and the view's header text.
+2d-classes 768x549 fnv1a64=d8e61f8c2db9c4f3 path=points-imported imported=1 copies=0 bytes=0 count=400 cpu_ref_differs=none info=400 points  2-D  20 classes
+2d-classes-selection 768x549 fnv1a64=205e4977637bd334 path=points-imported imported=1 copies=2 bytes=2144 count=400 cpu_ref_differs=none info=400 points  2-D  20 classes
+2d-flat-selection 768x549 fnv1a64=543f7523b841411b path=points-imported imported=1 copies=1 bytes=12000 count=3000 cpu_ref_differs=none info=3000 points  2-D
+2d-magma-auto-cpu 768x549 fnv1a64=61ff65a1c91500f4 path=points-cpu-staged imported=0 copies=2 bytes=48000 count=3000 cpu_ref_differs=none info=3000 points  2-D  values
+2d-rdbu-auto-nan-private 768x549 fnv1a64=d2bd5e7ee41ed730 path=points-imported imported=1 copies=0 bytes=0 count=3000 cpu_ref_differs=none info=3000 points  2-D  values
+2d-single 768x549 fnv1a64=f2e8c9c258440506 path=points-imported imported=1 copies=0 bytes=0 count=1 cpu_ref_differs=none info=1 points  2-D
+2d-viridis-auto-1000000 768x549 fnv1a64=b0a20f1f4a565eac path=points-imported imported=1 copies=0 bytes=0 count=1000000 cpu_ref_differs=none info=1000000 points  2-D  values
+2d-viridis-fixed-nan 768x549 fnv1a64=4c4d3cd05bed84f0 path=points-imported imported=1 copies=0 bytes=0 count=3000 cpu_ref_differs=none info=3000 points  2-D  values
+2d-viridis-selection-cpu 768x549 fnv1a64=f93f25ec190fb9eb path=points-cpu-staged imported=0 copies=4 bytes=64000 count=3000 cpu_ref_differs=none info=3000 points  2-D  values
+3d-classes-1000 768x549 fnv1a64=44dae383d1195900 path=points-imported imported=1 copies=0 bytes=0 count=1000 cpu_ref_differs=none info=1000 points  3-D  10 classes
+3d-classes-1000-cpu 768x549 fnv1a64=44dae383d1195900 path=points-cpu-staged imported=0 copies=2 bytes=16000 count=1000 cpu_ref_differs=none info=1000 points  3-D  10 classes
+3d-classes-selection-3000 768x549 fnv1a64=64f83b3b1885ca81 path=points-imported imported=1 copies=2 bytes=16000 count=3000 cpu_ref_differs=none info=3000 points  3-D  10 classes
+3d-flat-400-cpu-scan 768x549 fnv1a64=94226861bd4ee05c path=points-cpu-staged imported=0 copies=1 bytes=4800 count=400 cpu_ref_differs=none info=400 points  3-D
+3d-magma-fixed-nan-20000-cpu 768x549 fnv1a64=77d8f4971d0db7ac path=points-cpu-staged imported=0 copies=2 bytes=320000 count=20000 cpu_ref_differs=none info=20000 points  3-D  values
+3d-rdbu-auto-60000 768x549 fnv1a64=61258157e5702efb path=points-imported imported=1 copies=0 bytes=0 count=60000 cpu_ref_differs=none info=60000 points  3-D  values
+3d-single 768x549 fnv1a64=38f21ad2fd0a8adb path=points-imported imported=1 copies=0 bytes=0 count=1 cpu_ref_differs=none info=1 points  3-D
+3d-viridis-auto-1000000 768x549 fnv1a64=1e76da91eb525dd2 path=points-imported imported=1 copies=0 bytes=0 count=1000000 cpu_ref_differs=none info=1000000 points  3-D  values
+3d-viridis-auto-3000-private 768x549 fnv1a64=1d7e82ff48f3c5a5 path=points-imported imported=1 copies=0 bytes=0 count=3000 cpu_ref_differs=none info=3000 points  3-D  values
+3d-viridis-auto-4000000 768x549 fnv1a64=b0c5049824e32529 path=points-imported imported=1 copies=0 bytes=0 count=4000000 cpu_ref_differs=none info=4000000 points  3-D  values
+3d-viridis-auto-nan-100000 768x549 fnv1a64=c7ccaeb2e68415f0 path=points-imported imported=1 copies=0 bytes=0 count=100000 cpu_ref_differs=none info=100000 points  3-D  values
+lattice-3px-p0 768x549 fnv1a64=42a242c4468a6996 path=points-imported imported=1 copies=0 bytes=0 count=60000 cpu_ref_differs=none info=60000 points  2-D
+lattice-3px-p12 768x549 fnv1a64=d2e9bf5a6e108306 path=points-imported imported=1 copies=0 bytes=0 count=60000 cpu_ref_differs=none info=60000 points  2-D
+lattice-3px-p25 768x549 fnv1a64=d2e9bf5a6e108306 path=points-imported imported=1 copies=0 bytes=0 count=60000 cpu_ref_differs=none info=60000 points  2-D
+lattice-3px-p50 768x549 fnv1a64=d2e9bf5a6e108306 path=points-imported imported=1 copies=0 bytes=0 count=60000 cpu_ref_differs=none info=60000 points  2-D
+lattice-4px-p0 768x549 fnv1a64=419ee89f15aaf9da path=points-imported imported=1 copies=0 bytes=0 count=20000 cpu_ref_differs=none info=20000 points  2-D
+lattice-4px-p12 768x549 fnv1a64=419ee89f15aaf9da path=points-imported imported=1 copies=0 bytes=0 count=20000 cpu_ref_differs=none info=20000 points  2-D
+lattice-4px-p25 768x549 fnv1a64=419ee89f15aaf9da path=points-imported imported=1 copies=0 bytes=0 count=20000 cpu_ref_differs=none info=20000 points  2-D
+lattice-4px-p50 768x549 fnv1a64=419ee89f15aaf9da path=points-imported imported=1 copies=0 bytes=0 count=20000 cpu_ref_differs=none info=20000 points  2-D
+lattice-5.5px-p0 768x549 fnv1a64=7aaa9f70e6359a8d path=points-imported imported=1 copies=0 bytes=0 count=3000 cpu_ref_differs=none info=3000 points  2-D
+lattice-5.5px-p12 768x549 fnv1a64=7aaa9f70e6359a8d path=points-imported imported=1 copies=0 bytes=0 count=3000 cpu_ref_differs=none info=3000 points  2-D
+lattice-5.5px-p25 768x549 fnv1a64=7aaa9f70e6359a8d path=points-imported imported=1 copies=0 bytes=0 count=3000 cpu_ref_differs=none info=3000 points  2-D
+lattice-5.5px-p50 768x549 fnv1a64=face8d5e4cd26396 path=points-imported imported=1 copies=0 bytes=0 count=3000 cpu_ref_differs=none info=3000 points  2-D
+lattice-7px-p0 768x549 fnv1a64=f8589feecb279229 path=points-imported imported=1 copies=0 bytes=0 count=400 cpu_ref_differs=none info=400 points  2-D
+lattice-7px-p12 768x549 fnv1a64=ab8d93a10905b1f9 path=points-imported imported=1 copies=0 bytes=0 count=400 cpu_ref_differs=none info=400 points  2-D
+lattice-7px-p25 768x549 fnv1a64=ab8d93a10905b1f9 path=points-imported imported=1 copies=0 bytes=0 count=400 cpu_ref_differs=none info=400 points  2-D
+lattice-7px-p50 768x549 fnv1a64=ab8d93a10905b1f9 path=points-imported imported=1 copies=0 bytes=0 count=400 cpu_ref_differs=none info=400 points  2-D

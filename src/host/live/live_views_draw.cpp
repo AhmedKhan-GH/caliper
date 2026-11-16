@@ -57,6 +57,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <cstdio>
@@ -367,50 +368,6 @@ std::string fmt4(double v) {
 
 const char* const kTimes = "\xC3\x97";      // U+00D7
 const char* const kEllipsis = "\xE2\x80\xA6";   // U+2026
-
-std::string info_text(const CaliperCore* core, const View& v) {
-    char b[200];
-    switch (v.kind) {
-        case CALIPER_LIVE_KIND_HEATMAP:
-        case CALIPER_LIVE_KIND_IMAGE:
-            for (const auto& tv : core->views)
-                if (tv.name == v.name && tv.tex) {
-                    if (v.kind == CALIPER_LIVE_KIND_IMAGE) {
-                        std::snprintf(b, sizeof b, "%d%s%d RGBA", tv.h, kTimes, tv.w);
-                    } else {
-                        std::snprintf(b, sizeof b, "%d%s%d  %s %s %s", tv.h, kTimes, tv.w, fmt4(tv.vmin).c_str(),
-                                      kEllipsis, fmt4(tv.vmax).c_str());
-                    }
-                    return b;
-                }
-            return {};
-        case CALIPER_LIVE_KIND_POINTS: {
-            std::string label = v.label_count ? std::to_string(v.label_count) + " classes"
-                                : v.cur.aux       ? std::string("values")
-                                                  : std::string();
-            std::snprintf(b, sizeof b, "%lld points  %d-D%s%s", (long long)v.count, v.dims, label.empty() ? "" : "  ",
-                          label.c_str());
-            return b;
-        }
-        case CALIPER_LIVE_KIND_SERIES:
-            if (v.values.empty()) return {};
-            std::snprintf(b, sizeof b, "%llu steps  last %s", (unsigned long long)(v.first + v.values.size()),
-                          fmt4(v.values.back()).c_str());
-            return b;
-        case kKindScene:
-            if (const SceneView* sv = scene_view(v)) return sv->info();
-            return {};
-        case CALIPER_LIVE_KIND_HISTOGRAM: {
-            double total = 0.0;
-            for (float c : v.values) total += c;
-            std::snprintf(b, sizeof b, "%zu bins  %s %s %s  n %s", v.values.size(), fmt4(v.lo).c_str(), kEllipsis,
-                          fmt4(v.hi).c_str(), fmt4(total).c_str());
-            return b;
-        }
-        default:
-            return {};
-    }
-}
 
 // `s` cut to `w` with an ellipsis, "" when not even that fits.
 std::string fit_text(const std::string& s, float w) {
@@ -1245,7 +1202,10 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                 }
                 count = 2;
             }
+            const auto t0 = std::chrono::steady_clock::now();
             ok = r->geom_draw_primitives(v.view_rid, V, P, d, count, ground);
+            v.draw_cpu_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            ++v.redraws;
             if (ok) {
                 void* h = r->geom_draw_retain_last();
                 if (v.cur.last_draw) r->device_update_release(v.cur.last_draw);
@@ -2313,6 +2273,50 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
 }
 
 }  // namespace
+
+std::string info_text(const CaliperCore* core, const View& v) {
+    char b[200];
+    switch (v.kind) {
+        case CALIPER_LIVE_KIND_HEATMAP:
+        case CALIPER_LIVE_KIND_IMAGE:
+            for (const auto& tv : core->views)
+                if (tv.name == v.name && tv.tex) {
+                    if (v.kind == CALIPER_LIVE_KIND_IMAGE) {
+                        std::snprintf(b, sizeof b, "%d%s%d RGBA", tv.h, kTimes, tv.w);
+                    } else {
+                        std::snprintf(b, sizeof b, "%d%s%d  %s %s %s", tv.h, kTimes, tv.w, fmt4(tv.vmin).c_str(),
+                                      kEllipsis, fmt4(tv.vmax).c_str());
+                    }
+                    return b;
+                }
+            return {};
+        case CALIPER_LIVE_KIND_POINTS: {
+            std::string label = v.label_count ? std::to_string(v.label_count) + " classes"
+                                : v.cur.aux       ? std::string("values")
+                                                  : std::string();
+            std::snprintf(b, sizeof b, "%lld points  %d-D%s%s", (long long)v.count, v.dims, label.empty() ? "" : "  ",
+                          label.c_str());
+            return b;
+        }
+        case CALIPER_LIVE_KIND_SERIES:
+            if (v.values.empty()) return {};
+            std::snprintf(b, sizeof b, "%llu steps  last %s", (unsigned long long)(v.first + v.values.size()),
+                          fmt4(v.values.back()).c_str());
+            return b;
+        case kKindScene:
+            if (const SceneView* sv = scene_view(v)) return sv->info();
+            return {};
+        case CALIPER_LIVE_KIND_HISTOGRAM: {
+            double total = 0.0;
+            for (float c : v.values) total += c;
+            std::snprintf(b, sizeof b, "%zu bins  %s %s %s  n %s", v.values.size(), fmt4(v.lo).c_str(), kEllipsis,
+                          fmt4(v.hi).c_str(), fmt4(total).c_str());
+            return b;
+        }
+        default:
+            return {};
+    }
+}
 
 // The browser's points view's sizes (web/src/views/points.ts, radius()):
 // the side of a point in logical px, from 7 for a few hundred points down to

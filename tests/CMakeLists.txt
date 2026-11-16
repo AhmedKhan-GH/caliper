@@ -697,6 +697,20 @@ add_test(NAME caliper_live_views_tests COMMAND caliper_live_views_tests)
 set_tests_properties(caliper_live_views_tests PROPERTIES ENVIRONMENT
     "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_live_views_tests")
 set_tests_properties(caliper_live_views_tests PROPERTIES SKIP_RETURN_CODE 77)
+
+# caliper_gfx_views_tests — the graphics suite's rows of the live views drawn by an offscreen core
+# (tests/gfx/gfx_points_view.mm), with the suite's reference mode (tests/gfx/gfx_reference.h) and
+# its committed references (tests/gfx/references/). Labelled gfx with caliper_gfx_tests.
+add_executable(caliper_gfx_views_tests gfx/gfx_points_view.mm)
+target_link_libraries(caliper_gfx_views_tests PRIVATE doctest::doctest libcaliper caliper::sdk)
+target_include_directories(caliper_gfx_views_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host
+    ${CMAKE_SOURCE_DIR}/third_party/stb)
+target_compile_definitions(caliper_gfx_views_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+set_target_properties(caliper_gfx_views_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+set_source_files_properties(gfx/gfx_points_view.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+add_test(NAME caliper_gfx_views_tests COMMAND caliper_gfx_views_tests)
+set_tests_properties(caliper_gfx_views_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77 ENVIRONMENT
+    "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_gfx_views_tests")
 endif()  # APPLE (live tests)
 
 # ---------------------------------------------------------------------------
