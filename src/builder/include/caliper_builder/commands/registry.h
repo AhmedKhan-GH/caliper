@@ -6,7 +6,8 @@
 //      frame_thread command, the thread (command.invalid_invocation,
 //      command.unknown, command.invalid_args, command.not_bound,
 //      command.wrong_thread);
-//   2. asks the approval policy, and on ask parks the invocation and answers
+//   2. asks the approval policy, and on ask parks the invocation with what
+//      the approval review gives (a spec edit's diff) and answers
 //      command.needs_approval with an approval id;
 //   3. runs the handler; an exception that escapes it becomes
 //      command.handler_failed, and a handler that invokes a command gets
@@ -120,6 +121,7 @@ public:
     bool is_bound(std::string_view name) const;
 
     void set_approval_policy(ApprovalPolicy policy);  // empty: the default policy
+    void set_approval_review(ApprovalReview review);  // empty: no review is kept
     void set_journal(CommandJournal* journal);        // not owned; may be null
     void set_frame_thread(std::optional<std::thread::id> id);
 
@@ -155,6 +157,7 @@ private:
         CommandInvocation invocation;
         std::string requested_at;
         std::vector<std::uint64_t> steps;  // for history.undo and history.redo: the steps it would touch
+        nlohmann::json review;             // what the ApprovalReview gave
     };
 
     CommandResult run(const CommandInvocation& inv, const Entry& entry, const std::vector<std::uint64_t>& steps);
@@ -185,6 +188,7 @@ private:
     CommandHistory history_;
     CommandJournal* journal_ = nullptr;
     ApprovalPolicy policy_;
+    ApprovalReview review_;
     std::optional<std::thread::id> frame_thread_;
     std::uint64_t next_invocation_ = 1;
     std::uint64_t next_approval_ = 1;

@@ -90,7 +90,8 @@ json pending_approval_to_json(const PendingApproval& p) {
     return json{{"approval", p.approval},
                 {"invocation", command_invocation_to_json(p.invocation)},
                 {"summary", p.summary},
-                {"requested_at", p.requested_at}};
+                {"requested_at", p.requested_at},
+                {"review", p.review}};
 }
 
 CommandOutput CommandOutput::ok(json result, UndoRecord undo) {
@@ -222,6 +223,11 @@ void CommandRegistry::set_approval_policy(ApprovalPolicy policy) {
     policy_ = std::move(policy);
 }
 
+void CommandRegistry::set_approval_review(ApprovalReview review) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    review_ = std::move(review);
+}
+
 void CommandRegistry::set_journal(CommandJournal* journal) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     journal_ = journal;
@@ -244,7 +250,7 @@ std::vector<PendingApproval> CommandRegistry::pending_approvals() const {
         const auto it = commands_.find(p.invocation.name);
         out.push_back(PendingApproval{p.approval, p.invocation,
                                       it != commands_.end() ? it->second.descriptor.summary : std::string(),
-                                      p.requested_at});
+                                      p.requested_at, p.review});
     }
     return out;
 }
@@ -371,11 +377,19 @@ CommandResult CommandRegistry::invoke(CommandInvocation inv) {
         parked.invocation = inv;
         parked.requested_at = now_text();
         parked.steps = steps;
-        CommandResult r = CommandResult::failure(
-            inv.id, Error("command.needs_approval",
-                          inv.name + " needs the person's approval in Caliper, because it deletes or overwrites saved "
-                                     "data or runs a Python loader. It runs once they approve it.",
-                          ""));
+        if (review_) {
+            try {
+                parked.review = review_(entry.descriptor, inv);
+            } catch (...) {
+                parked.review = nullptr;  // the card shows no review rather than nothing at all
+            }
+        }
+        const std::string why = parked.review.is_null()
+                                    ? " needs the person's approval in Caliper, because it deletes or overwrites saved "
+                                      "data or runs a Python loader. It runs once they approve it."
+                                    : " changes the open spec, and the person reviews such changes in Caliper before "
+                                      "they apply. It runs once they approve it.";
+        CommandResult r = CommandResult::failure(inv.id, Error("command.needs_approval", inv.name + why, ""));
         r.approval = parked.approval;
         pending_.push_back(std::move(parked));
         return r;

@@ -652,3 +652,32 @@ TEST_CASE("a handler's follow-ups run as one new step, journaled after it, and r
     CHECK_FALSE(read.events[7].ok);
     CHECK(read.events[7].error == "toy.nope");
 }
+
+TEST_CASE("the approval review is kept with each parked invocation and shown in its JSON") {
+    CommandRegistry r;
+    Store s;
+    add_toy(r, s, true);
+    int reviews = 0;
+    r.set_approval_review([&](const CommandDescriptor& d, const CommandInvocation& i) -> json {
+        ++reviews;
+        if (i.args.value("value", 0) == 13) throw std::runtime_error("no review");
+        return {{"command", d.name}, {"value", i.args.value("value", 0)}};
+    });
+    REQUIRE(r.invoke(inv("toy.set", {{"key", "a"}, {"value", 1}})).ok);  // ui: allowed, no review asked
+    CHECK(reviews == 0);
+    const CommandResult asked = r.invoke(inv("toy.set", {{"key", "a"}, {"value", 2}}, CommandOrigin::agent));
+    REQUIRE(asked.error.code == "command.needs_approval");
+    CHECK(asked.error.message.find("reviews") != std::string::npos);
+    const CommandResult thrown = r.invoke(inv("toy.set", {{"key", "a"}, {"value", 13}}, CommandOrigin::mcp));
+    REQUIRE(thrown.error.code == "command.needs_approval");
+    CHECK(thrown.error.message.find("deletes or overwrites") != std::string::npos);
+    CHECK(reviews == 2);
+    const auto pending = r.pending_approvals();
+    REQUIRE(pending.size() == 2);
+    CHECK(pending[0].review == json{{"command", "toy.set"}, {"value", 2}});
+    CHECK(pending[1].review.is_null());
+    CHECK(cb::pending_approval_to_json(pending[0])["review"]["value"] == 2);
+    CHECK(cb::pending_approval_to_json(pending[1])["review"].is_null());
+    REQUIRE(r.approve(asked.approval).ok);
+    CHECK(s.values["a"] == 2);
+}
