@@ -3,8 +3,8 @@ name: Deploy Pages
 on:
   push:
     branches: [main]
-    # The docs, their theme, and the sources the docs embed as snippets.
-    paths: ['site/**', 'docs/**', 'docs-theme/**', 'mkdocs.yml',
+    # The docs, the design pages, their theme, and the sources the docs embed as snippets.
+    paths: ['site/**', 'docs/**', 'design/**', 'docs-theme/**', 'mkdocs.yml',
             'sdk/include/**', 'include/caliper/**', 'examples/**',
             '.github/workflows/pages.yml']
   workflow_dispatch:
@@ -31,6 +31,9 @@ jobs:
       # awesome-nav builds the navigation from the docs/ folders and their .nav.yml files.
       - run: pip install mkdocs-material mkdocs-awesome-nav
       - run: mkdocs build --strict
+      # The design pages are checked, not published: they build into
+      # build/design-site, which the Pages artifact below leaves out.
+      - run: mkdocs build --strict -f design/mkdocs.yml
       # Assemble the Pages artifact: landing page at /, wiki at /docs/.
       - run: |
           mkdir -p _pages

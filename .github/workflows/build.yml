@@ -3,10 +3,10 @@ name: Build
 on:
   push:
     branches: [main]
-    paths-ignore: ['site/**', 'docs/**', 'mkdocs.yml', '**.md',
+    paths-ignore: ['site/**', 'docs/**', 'design/**', 'mkdocs.yml', '**.md',
                    '.github/workflows/pages.yml']
   pull_request:
-    paths-ignore: ['site/**', 'docs/**', 'mkdocs.yml', '**.md',
+    paths-ignore: ['site/**', 'docs/**', 'design/**', 'mkdocs.yml', '**.md',
                    '.github/workflows/pages.yml']
   workflow_dispatch:
 permissions:
