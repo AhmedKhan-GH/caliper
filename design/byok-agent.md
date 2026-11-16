@@ -3,20 +3,22 @@
 Caliper's agents have two roles. The side chat runs the person's own agent on its own login, as the
 [ACP integration](acp-integration.md) page describes. The widget agent works inline on one target, a panel, a
 selection, a dropped file or a property, as the [Widget agent](widget-agent.md) page designs it. This page describes
-the widget agent's process as it is built: a Python sidecar named `caliper-agent` that runs Caliper's own agent loop
-against the Claude API with the person's key and speaks the agent side of ACP, so the app drives both roles with the
-same `AcpClient`, and a small key store on the C++ side that keeps the key in the operating system's credential store.
+the widget agent's process as it is built: a Python sidecar named `caliper-agent` that runs Caliper's agent loop on
+Pydantic AI, against the Claude API with the person's key or against any OpenAI-compatible model server, hosted or
+local, and speaks the agent side of ACP, so the app drives both roles with the same `AcpClient`; and a small key store
+on the C++ side that keeps the key in the operating system's credential store.
 It elaborates section 12 of the sprint 3 contracts, which named it the BYOK agent (bring your own key).
 
 The person's side is in [Agent roles](../docs/explanations/agent-roles.md) and
 [Set up the widget agent](../docs/guides/set-up-the-widget-agent.md).
 
-**Built on this branch:** the sidecar `caliper-agent` (the Python package `caliper_agent` in `src/builder/agent/`),
-its tests (pytest, run by ctest as `builder_agent_py`, with one end-to-end test through the real C++ client), and the
+**Built on this branch:** the sidecar `caliper-agent` (the Python package `caliper_agent` in `src/builder/agent/`)
+with its provider layer on Pydantic AI, its tests (pytest, run by ctest as `builder_agent_py`, with one end-to-end
+test through the real C++ client, and `builder_agent_e2e` on the real command layer), and the
 key store `caliper_builder_agent` with its doctest suite (`builder_agent`). What is built runs in one mode, unscoped:
 a session gets every command of the table, which the tests and the manual check use. **Planned:** the widget role on
 top of it (the context bundle, the tool scope, the previews and the inline surface, on the
-[Widget agent](widget-agent.md) page), the provider layer, the settings and their wiring to the app, a packaged Python
+[Widget agent](widget-agent.md) page), the settings and their wiring to the app, a packaged Python
 runtime for the sidecar, and the items under [what waits](#what-is-built-and-what-waits).
 
 ## The shape
@@ -28,14 +30,16 @@ the app ──── AcpClient ── stdin/stdout (ACP v1) ──►  caliper-a
     │                                                    ├─ ACP agent side: sessions, prompts, cancel
     │ KeyStore (Keychain)                                ├─ the loop: model requests, tool calls, approval
     │   └─ place_key_in_environment() at spawn ───────►  │    env ANTHROPIC_API_KEY, never argv
-    │                                                    ├─ Claude provider ── HTTPS ──► api.anthropic.com
+    │                                                    ├─ providers (Pydantic AI)
+    │                                                    │    ├─ Claude ── HTTPS ──► api.anthropic.com
+    │                                                    │    └─ OpenAI-compatible ──► the base URL given
     ▼                                                    └─ Caliper API client ── loopback ──┐
 command layer ◄── Caliper API (/v0/commands, v0 endpoints) ◄─────────────────────────────────┘
 ```
 
 - **One session model.** The sidecar is an ACP agent like the side chat's agents, so messages, thoughts, tool calls,
   spec diffs, permission requests and cancellation reach the app in the same shapes for both roles.
-- **No model-driven code in the app.** The loop, the SDK and every response from the model live in the sidecar. The
+- **No model-driven code in the app.** The loop, the SDKs and every response from the model live in the sidecar. The
   app starts it as a child process with `caliper_builder::acp::AcpClient` and sees only ACP messages.
 - **The command layer is the only way in.** A tool call becomes a call to Caliper API on loopback with the origin
   `agent`, so it is validated, journaled, undoable and subject to the app's own approval policy, exactly as a call
@@ -52,8 +56,12 @@ path, so a file such as `json.py` in a workspace would run as code.
 |---|---|
 | `--api-file <path>` | Caliper API's file; default `api.json` in `CALIPER_DATA_DIR`, else in the app-data folder of the OS |
 | `--command-table <path>` | The descriptor table as JSON; default a copy beside the package, else the repository's `src/builder/commands/command_table.json` |
-| `--model <id>` | The model of new sessions; default `claude-opus-5-5` |
-| `--effort <level>` | The effort of new sessions; default `high` |
+| `--provider <name>` | `claude` (the default), the Claude API, or `openai-compatible`, a server at `--base-url` |
+| `--base-url <url>` | The OpenAI-compatible server, such as `http://127.0.0.1:11434/v1` for Ollama |
+| `--model <id>` | The model of new sessions; default `claude-opus-5-5` on the Claude API, required for an OpenAI-compatible server |
+| `--effort <level>` | The effort of new sessions on the Claude API; default `high` |
+| `--model-tools yes\|no`, `--model-vision yes\|no` | What an OpenAI-compatible model can do, when it is known in advance; default `yes` until the server says otherwise ([Providers](#providers)) |
+| `--tools <list>` | Only these commands, as a comma-separated list of names and groups; the seam for the widget agent's tool scope |
 | `--no-compaction` | Turns server-side compaction off |
 | `--usage-log <path>` | Appends the token counts of each request to a file, for the manual check; no content is written |
 
@@ -62,7 +70,8 @@ the reasons on the [Widget agent](widget-agent.md#the-turn-budget-the-model-and-
 
 At start the sidecar keeps the real stdout for the protocol and points file descriptor 1 at stderr, so a stray print
 from a library cannot corrupt the stream. It then routes uncaught exceptions and log records through the scrubber,
-takes the key from the environment, reads the command table and serves ACP until the client closes stdin. It exits
+takes the key from the environment, reads the command table and serves ACP until the client closes stdin. It turns
+Pydantic AI's first-run banner off, since stderr is the app's log. It exits
 with 0 then, and with 2 for bad usage or an unreadable table, which the app sees as an agent that could not start,
 with the reason in the agent's stderr.
 
@@ -87,8 +96,8 @@ most 16 sessions, a prompt holds at most 200,000 characters of text, and a line 
 
 | Id | Category | Values | Default |
 |---|---|---|---|
-| `model` | `model` | `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-fable-5-2` | `claude-opus-5-5` |
-| `effort` | `thought_level` | `low`, `medium`, `high`, `xhigh`, `max` | `high` |
+| `model` | `model` | `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-fable-5-2`, or the one model of an OpenAI-compatible server | `claude-opus-5-5` |
+| `effort` | `thought_level` | `low`, `medium`, `high`, `xhigh`, `max`; offered on the Claude API only | `high` |
 | `review` | none | `spec_changes` (ask before each spec change), `destructive_only` | `spec_changes` |
 
 **Decision: config options, not modes.** The protocol pages say that modes are being replaced by config options, and
@@ -113,8 +122,8 @@ the schema reserves for exactly these selectors; `review` has none, which the sc
 
 A status travels as a thought so that any ACP client shows it, and Caliper's UI can show it as a status line by
 reading `_meta.caliper.status`: `retry` (with `reason`, `http_status`, `attempt`, `max_attempts` and `delay_s`),
-`fallback` (with `from_model`, `to_model` and `category`), `served_by`, `refusal` (with `category`, `explanation` and
-`turn_removed`), `compaction`, `strict_off` and `limit`. The sidecar sends no `plan` updates in this phase, since its
+`refusal` (with `category`, `explanation` and `turn_removed`; [Refusals](#refusals)), `compaction`, `strict_off`,
+`limit`, `no_tools` and `no_vision` (an OpenAI-compatible model without tool calling or without vision). The sidecar sends no `plan` updates in this phase, since its
 turns are short sequences of commands that the tool calls already show.
 
 The ACP kind of a tool call follows the descriptor's flags: `read` for a command that does not mutate, `delete` for a
@@ -127,8 +136,8 @@ verb `remove` or `delete`, `execute` for `run`, and `edit` for every other mutat
 | `end_turn`, `stop_sequence` | `end_turn` |
 | `tool_use` | none yet: the tools run and the loop goes on |
 | `max_tokens`, `model_context_window_exceeded` | `max_tokens` |
-| `refusal`, after any server-side fallback | `refusal` |
-| `pause_turn` | none: the conversation is sent again |
+| `refusal`, or `content_filter` from an OpenAI-compatible server | `refusal` |
+| `pause_turn` | none: Pydantic AI sends the conversation again within the same request step |
 | 50 model requests in one prompt | `max_turn_requests` |
 | `session/cancel` | `cancelled` |
 
@@ -151,10 +160,21 @@ particular command's schema, so the schemas can change under it.
   (`minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems`, `pattern`, `default` and their kin). Only
   schema positions are touched, so a property called `pattern` keeps its name. The full schema is kept, and the sidecar
   checks every input against it before the call; the command layer checks it again.
-- **Strict.** A tool is sent with `strict: true` when every object of its schema is closed and lists `required`, which
-  the table's own test enforces today. A tool whose schema is open is sent without `strict`, so one open schema cannot
-  make every request fail. Every tool carries `eager_input_streaming: true`.
+- **Type lists.** A schema that allows several types (`"type": ["string", "null"]`) is sent as an `anyOf` of one
+  schema per type, with the keywords that belong to each. The meaning is the same; the Claude SDK's `transform_schema()`,
+  which Pydantic AI runs on every strict tool, accepts only one type per schema.
+- **Strict, within the limits of one request.** A tool can be strict when every object of its schema is closed and
+  lists `required`, which the table's own test enforces today. The Claude API compiles all the strict schemas of a
+  request together and refuses a request that has more than 20 strict tools, 24 optional parameters or 16 parameters
+  with union types in all; Pydantic AI checks these limits before it sends and refuses such a request itself
+  (`pydantic_ai/models/_anthropic_schema_limits.py`). So the sidecar chooses the strict tools once, at start: the
+  commands that change something first, in table order, as long as the totals stay within the limits. With the
+  current table that is 20 of the 35 tools; `panel.create` alone has 27 optional parameters and can never be strict.
+  The others are sent without `strict`. Every input is checked against the full schema either way. Every tool carries
+  `eager_input_streaming: true`.
 - **Order.** The tools keep the table's order and never change within a sidecar, so the cached prefix stays the same.
+- **Scope.** A session may use a subset of the table (`--tools`, a filter over it); the widget agent's tool scope will
+  use this seam.
 
 A tool runs by calling Caliper API (contracts sections 8 and 15):
 
@@ -180,24 +200,29 @@ A tool runs by calling Caliper API (contracts sections 8 and 15):
 
 ## The loop
 
-**Decision: the sidecar runs its own loop rather than the SDK's tool runner.** The tool runner
-(`client.beta.messages.tool_runner`) can express the approval gate, by asking inside a tool's function. It was not
-chosen because the app needs things the runner keeps inside: the state of each retry (the runner's requests retry
-inside the SDK, and a runner that raised cannot be iterated again), cancellation in the middle of a stream with a
-history that stays valid, one history that lasts across the prompts of an ACP session, and the stop-reason rules
-below. The runner also sends message threads by default on the first-party client, which keep the conversation on
-the server for a while; the sidecar does not want that. The loop is about 350 lines, and every rule of it is tested.
+**Decision: the loop runs on Pydantic AI's agent graph, driven step by step.** One Pydantic AI `Agent` per sidecar
+holds the system prompt, the tools and the hooks, which never change, so the cached prefix stays the same; each prompt
+runs `agent.iter()` with the session's history, model and settings, and the turn drives the graph node by node. The
+SDK's own tool runner was not chosen before, because the app needs the state of each retry, cancellation in the
+middle of a stream with a valid history, one history across the prompts of a session and the stop-reason rules;
+Pydantic AI's step-by-step API gives each of these, as the [checks](#providers) show.
 
-For each prompt the loop appends the prompt to the session's history and then repeats:
+The tools are a Pydantic AI toolset generated at run time from the command table (`caliper_agent/toolset.py`): each
+tool's definition is the command's name, summary and stripped schema, strict as chosen above, and `sequential`, so the
+calls of one reply run one at a time and in order, as the approval of spec edits needs. The toolset's argument
+validator only turns the JSON text into an object; everything else happens when the call runs. For each prompt the
+turn appends the prompt to the session's history and then repeats:
 
-1. **Stream a request.** The provider streams the reply to the app and returns how it ended, the tool calls and the
-   token counts.
-2. **Check how it ended** before running anything (the table above). After `max_tokens` or a refusal no tool of that
-   reply runs, because a cut-off or declined reply can hold a tool input that is truncated yet parses.
+1. **Stream a request.** The model request node streams the reply; its text, thoughts, tool calls and compaction
+   become ACP updates as they arrive.
+2. **Check how it ended** at the tool-call node, before any tool runs (the table above). After `max_tokens` or a
+   refusal the node does not run, because a cut-off or declined reply can hold a tool input that is truncated yet
+   parses; Pydantic AI on its own would run such a call when its JSON parses.
 3. **Run the tool calls in order**, one at a time. Each input is first checked against the command's full schema,
-   because eager input streaming leaves validation to the client and the SDK's parser is tolerant; an input that
-   fails is not run, and the model receives `{"INVALID_JSON": <what it sent>, "problem": <the first error>}` as an
-   error result. An unknown tool name is an error result too. Then comes approval (below), then the call.
+   because eager input streaming leaves validation to the client; an input that fails is not run, and the model
+   receives `{"INVALID_JSON": <what it sent>, "problem": <the first error>}` as a failed result (Pydantic AI's
+   `ToolFailed`, which uses no retry). An unknown tool name gets Pydantic AI's own retry result, which lists the tools.
+   Then comes approval (below), then the call.
 4. **Send all results back in one message**, in the order of the calls, and go on.
 
 The history is append-only. The full content of each response goes back unchanged (thinking blocks with their
@@ -208,16 +233,15 @@ always stays valid:
 - **Not run** (cut off, declined, unknown, invalid): an error result that says why.
 - **Cancelled**: a result that says the user cancelled it, and the turn ends with `cancelled`.
 - **A refusal** takes the prompt and everything after it out of the history, since ACP's `refusal` stop reason means
-  that they are left out of the next request; the status says so, and when tools of that turn already ran, it says
-  that their changes stay in Caliper. What remains is a prefix of what was sent before, so the cache and every thinking
-  block in it stay valid. A declined reply is never added to the history.
-- **A mid-reply fallback**: the blocks of the declining model before the last `fallback` block are left out, except
-  text, the fallback blocks and paired server-tool blocks, as the API requires. Tool calls of the declining model are
-  never run, and the app marks them failed.
+  that they are left out of the next request ([Refusals](#refusals)). What remains is a prefix of what was sent before,
+  so the cache and every thinking block in it stay valid. A declined reply is never added to the history.
 
-**Cancellation** stops whatever runs: the stream (its connection is closed), a call to Caliper API, a permission
-request or a retry delay. A call that Caliper had already started may still finish in the app; its result is not given
-to the model, and the journal records it. The turn answers with `cancelled` and never with an error, as ACP asks.
+**Cancellation** uses Pydantic AI's `AgentRun.cancel()`, which stops whatever runs: the stream (its connection is
+closed), a call to Caliper API, a permission request or a retry delay. Pydantic AI then raises `RunCancelled` with
+everything that finished; the turn keeps it, leaves out a reply whose stream did not finish, and gives every tool call
+without a result one that says the person cancelled it. A call that Caliper had already started may still finish in
+the app; its result is not given to the model, and the journal records it. The turn answers with `cancelled` and
+never with an error, as ACP asks.
 
 ## Approval and spec diffs
 
@@ -290,24 +314,26 @@ use a second, shorter fixed prompt ([Widget agent](widget-agent.md#how-it-stays-
 
 ## Claude API settings and why
 
-All of these come from the `claude-api` skill and the installed `anthropic` package's source (2.8.0, which sends API
-version `2026-10-21`); they are in `caliper_agent/claude.py`, the one module with Claude-specific code.
+The Claude provider is Pydantic AI's Anthropic model on the official `anthropic` SDK (2.8.0, which sends API version
+`2026-10-21`), with the client the sidecar builds itself. The settings come from the `claude-api` skill and are set
+through Pydantic AI's `AnthropicModelSettings`; they are in `caliper_agent/claude.py`, the one module with
+Claude-specific code. A test captures the request body through a stubbed transport and checks each of them.
 
 | Setting | Value | Why |
 |---|---|---|
-| SDK call | `client.beta.messages.stream(...)`, iterated, then `get_final_message()` | Every request is streamed; the beta namespace carries the fallback and compaction betas |
+| Model | Pydantic AI's `AnthropicModel` with an `AnthropicProvider` around the client below | Pydantic AI always streams the request and maps the stream to its parts and events |
 | Client | `AsyncAnthropic(api_key=..., base_url="https://api.anthropic.com", max_retries=0, open_telemetry=False)` | An explicit key stops the SDK from looking for other credentials; a fixed base URL ignores `ANTHROPIC_BASE_URL`; the loop retries itself; no tracing |
 | `model` | `claude-opus-5-5` by default; the picker offers `claude-sonnet-5-5`, `claude-haiku-5-5` and `claude-fable-5-2` | The user's choice of models, exact ids without dates |
-| `max_tokens` | 64000 | The skill's starting point for streamed agentic turns, with room for thinking |
-| `thinking` | `{"type": "adaptive", "display": "summarized"}` | Adaptive thinking on every model; summaries give the app thoughts to show |
-| `output_config.effort` | `high` by default, set on every request | Claude Opus 5.5 defaults to `medium` when it is left out; building a spec from data is work where the skill advises at least `high` |
-| `tools` | strict, `eager_input_streaming: true` | Schema-valid inputs, streamed as they are written; the client validates them |
-| `tool_choice` | `{"type": "auto"}` | Forced tool use is refused by these models; the prompt steers |
+| `max_tokens` | 64000 (`max_tokens`) | The skill's starting point for streamed agentic turns, with room for thinking |
+| `thinking` | `{"type": "adaptive", "display": "summarized"}` (`anthropic_thinking`) | Adaptive thinking on every model; summaries give the app thoughts to show |
+| `output_config.effort` | `high` by default, set on every request (`anthropic_effort`) | Claude Opus 5.5 defaults to `medium` when it is left out; building a spec from data is work where the skill advises at least `high` |
+| `tools` | 20 strict as chosen [above](#tools), `eager_input_streaming: true` on all (`ToolDefinition.strict`, `anthropic_eager_input_streaming`) | Schema-valid inputs, streamed as they are written; the client validates them |
+| `tool_choice` | `{"type": "auto"}`, which Pydantic AI sends | Forced tool use is refused by these models; the prompt steers |
 | Prefill | none | Refused by these models |
-| `system` | one text block with `cache_control` | Caches the tools and the system prompt together |
-| `cache_control` (top level) | `{"type": "ephemeral"}` | Caches the conversation up to its last block on each request |
-| `fallbacks` and beta `server-side-fallback-2026-07-01` | `"default"`, except on Claude Haiku 5.5 | Server-side refusal fallbacks, routed by category; Claude Haiku 5.5 has none, and a list there is a 400 |
-| `context_management` and beta `compact-2026-01-12` | `{"edits": [{"type": "compact_20260112"}]}` | Server-side compaction at the default trigger of 150,000 input tokens |
+| `system` | one text block with `cache_control` (`anthropic_cache_instructions`) | Caches the tools and the system prompt together |
+| `cache_control` (top level) | `{"type": "ephemeral", "ttl": "5m"}` (`anthropic_cache`) | Caches the conversation up to its last block on each request |
+| `context_management` and beta `compact-2026-01-12` | `{"edits": [{"type": "compact_20260112"}]}` (`anthropic_context_management`; Pydantic AI adds the beta) | Server-side compaction at the default trigger of 150,000 input tokens |
+| Not sent | `fallbacks` and its beta | Server-side refusal fallbacks are off ([Refusals](#refusals)) |
 | Not sent | `temperature`, `top_p`, `top_k`, `thread` | Refused by the API version; message threads are not used |
 
 **Decision: summarized thinking rather than `display: "updates"`.** The updates display shows only the notes between
@@ -332,40 +358,62 @@ and is not a history edit; per-message effort (a beta) could avoid even that cos
 
 Verification:
 
-- **In tests**, the scripted transport returns usage with cache writes on the first request and cache reads on the
+- **In tests**, the stubbed Claude transport returns usage with cache writes on the first request and cache reads on the
   second, and a test checks that both reach the app in `_meta.caliper.usage` and in the usage log, and that the tools
   and the system prompt are byte-identical across the two requests and the second history starts with the first.
 - **For real**, the manual check below runs a prompt that needs a tool, so the turn makes at least two requests, and
   checks that the usage log shows `cache_read_input_tokens` above zero on the second.
 
-## Refusals and errors
+## Refusals
 
-**Refusals.** With fallbacks on, a declined request is run again on the model Anthropic recommends for its category,
-within the same request; the app sees a `fallback` status and, when the fallback served the turn, a `served_by`
-status. When the whole chain declines, or the model has no fallback, the turn ends with the stop reason `refusal` and a
-`refusal` status with the category and the explanation. The prompt and everything after it leave the history, as ACP's
-`refusal` means, so the person can rephrase it; commands that the turn already ran stay in Caliper and in its undo
-history.
+A model can decline a request, and a refusal can be a false positive: machine learning in the physical sciences
+touches chemistry, biology and security data. When the model declines (the Claude API's `refusal` stop reason, or
+`content_filter` from an OpenAI-compatible server):
 
-**Errors.** The sidecar catches the SDK's typed errors in the order of their chain: rate limits first, then the other
-status errors, then the connection errors.
+- **The turn ends** with ACP's `refusal` stop reason. No tool of the declined reply runs.
+- **The turn leaves the history**: the prompt and everything after it, as ACP's `refusal` means, so the next request
+  is sent as if the prompt had not been made. Commands that the turn already ran stay in Caliper and in its undo
+  history.
+- **What a person sees.** The pane shows a `refusal` status whose text is neutral and offers three ways forward: "The
+  model declined this request. You can rephrase it, try it again, or switch to another model or provider, such as a
+  local model." When commands of the turn already ran, it adds that their changes stay and can be undone in the app.
+  The text names no category and quotes no explanation; the provider's category and explanation travel only in
+  `_meta.caliper.status` for the record. A test pins the three ways forward and checks that the text blames no one.
+
+**Server-side refusal fallbacks are off.** The Claude API can run a declined request again on another model within the
+same request and mark the switch with a `fallback` block in the reply. Pydantic AI drops that block from a streamed
+reply and has no part that maps back to one, so after a fallback in the middle of a reply the next request would lose
+the boundary that the API needs to check the turn, and the request would be rejected; the declining model's tool calls
+would also run. The Claude provider therefore sends neither the `fallbacks` setting nor its beta, behind one switch,
+`SERVER_SIDE_FALLBACKS` in `caliper_agent/claude.py`, which can be turned on once Pydantic AI keeps the block.
+
+## Errors and retries
+
+Pydantic AI turns each provider's errors into its own categories (`pydantic_ai.exceptions`), and the loop sorts them in
+this order: authentication, quota, the statuses that retrying cannot fix, then rate limits, unavailable and server
+errors, and connection errors.
 
 | Error | What happens |
 |---|---|
-| 429 rate limit | Retried after `retry-after-ms` or `retry-after`, else after a backoff |
+| 429 rate limit (`ModelRateLimitError`) | Retried after the time the server asked for (`retry-after-ms` or `retry-after`), else after a backoff |
 | 408, 409, 5xx, 529 overloaded, an `overloaded_error` or `api_error` event in the stream | Retried with backoff |
-| A connection error or a timeout | Retried with backoff |
-| Tool input the SDK could not parse at all | The request is sent again |
-| 401 | The turn fails with -32000 and `agent.key_rejected`: the app offers to replace the key |
-| 400, 402, 403, 404, 413 | The turn fails with the API's message (`agent.bad_request`, `agent.billing`, `agent.forbidden`, `agent.model_unavailable`, `agent.request_too_large`) |
+| A connection error or a timeout (`ModelConnectionError`) | Retried with backoff |
+| 401 (`ModelAuthenticationError`) | The turn fails with -32000 and `agent.key_rejected`: the app offers to replace the key |
+| 400, 402, 403, 404, 413 | The turn fails with the provider's message (`agent.bad_request`, `agent.billing`, `agent.forbidden`, `agent.model_unavailable`, `agent.request_too_large`) |
 
-A retry is announced to the app with a `retry` status that says what happened, how long the sidecar waits and which
-attempt follows. There are at most five attempts; delays are capped at 60 seconds and backoff at 30 seconds. A request
-is retried only while nothing of it has reached the app: once text or a tool call has been shown, a broken stream ends
-the turn with `agent.stream_interrupted` and a message that says to send the prompt again, because a retried reply
-would repeat what the app already shows. A 400 that mentions strict tools on the first request of a session turns
-strict mode off for that session and goes on (`strict_off` status); later in a session it would change the tools under
-existing thinking blocks, so it is not done then.
+**Retries happen in Pydantic AI's `on_model_request_error` hook.** The SDKs' own retries are off. When an attempt fails
+before anything of it reached the pane, Pydantic AI calls the hook with the error and the attempt's number; the hook
+tells the pane with a `retry` status what happened, how long the sidecar waits and which attempt follows, waits (a
+cancel stops the wait), and raises `RetryModelRequest`. There are at most five attempts; delays are capped at 60
+seconds and backoff at 30 seconds. Pydantic AI opens each stream and reads its first event before it hands the stream
+on whenever such a hook exists, so an error the provider reports before any output still reaches the hook
+(`_agent_graph.py`, `_open_stream`). Once text or a tool call has been shown, a broken stream ends the turn with
+`agent.stream_interrupted` and a message that says to send the prompt again, because a retried reply would repeat what
+the app already shows. A 400 that mentions strict tools on the first request of a session turns strict mode off for
+that session and goes on (`strict_off` status), through the hook's `prepare_model_request` counterpart; later in a
+session it would change the tools under existing thinking blocks, so it is not done then. Pydantic AI's own retry
+utilities (`pydantic_ai.retries`) were not used: they wrap the HTTP transport, need the `httpx` and `tenacity` packages,
+and give the loop no view of the attempts.
 
 ## Compaction and long sessions
 
@@ -404,6 +452,11 @@ could later clear them without editing the history. `--no-compaction` turns comp
    a command line.
 9. **At the end.** The key goes with the sidecar's process. The C++ store overwrites the strings it held when a key
    is replaced or removed.
+
+An OpenAI-compatible server that needs a key gets it the same way, in `CALIPER_MODEL_API_KEY`: read once, removed from
+the environment, registered with the scrubber and handed to the `openai` SDK's client as an explicit argument.
+`OPENAI_API_KEY`, `OPENAI_BASE_URL` and the SDK's other variables are removed at start, so an OpenAI key is never sent
+to another server. A local server needs no key, and none is sent.
 
 ## The key store
 
@@ -446,32 +499,113 @@ HTTP client), against the [ACP integration](acp-integration.md) page and against
   items (`content`, `diff` with `path`, `oldText` and `newText`), image blocks (`data`, `mimeType`), `_meta` on every
   update, and -32000 as "authentication required". `AcpClient` reads the fields it needs from these shapes and keeps
   `configOptions` raw.
+- **The check is now a test.** `tests/test_acp_schema.py` validates every message the sidecar sends, in scenarios with
+  a tool turn and a capture, spec diffs in permission requests, a retry, a refusal, a cut-off reply, exhausted retries,
+  a missing key and a refusal on the Claude API's wire format, against the Pydantic models of the official ACP Python
+  SDK, which are generated from the protocol's schema (version 1.23.0 of the schema in the SDK 1.0.0). Those models drop
+  an optional enum value they do not know instead of refusing it, so the test also checks the tool call statuses and
+  kinds against the schema's lists.
 
 ## Providers
 
-The widget agent is model-agnostic. Today the sidecar has one provider, Claude through the official `anthropic` SDK,
-with the settings above. The loop talks to it through the small interface in `caliper_agent/provider.py` (a
-conversation it owns, one streamed request at a time, provider-neutral events and results), and all Claude-specific
-code is in `caliper_agent/claude.py`.
+The provider layer is Pydantic AI (`pydantic-ai-slim`, tested with 2.68), as the person decided after a spike that
+rebuilt the loop on it. Claude runs on its native Anthropic support, so that its features are kept (`claude.py`), and
+every other model, hosted or local, runs through its OpenAI-compatible support against the base URL given
+(`openai_compat.py`). Caliper's own provider modules are gone; what stays Caliper's own is what is specific to
+Caliper: the tools generated from the command table and their full-schema check, the preview and the approval
+through ACP, the ACP agent side, the key handling and the scrubbing, the Caliper API client and the images of a
+capture. The [Widget agent](widget-agent.md#providers) page gives the presets with their base URLs and the capability
+checks that the settings will run.
 
-The planned provider layer is Pydantic AI, with Claude on its native Anthropic support and every other model, hosted
-or local, through its OpenAI-compatible support against a configurable base URL. A spike on another branch is checking
-cancellation, retry visibility, the Claude features (adaptive thinking, prompt caching, compaction and refusal
-fallbacks), stop reasons, capability differences and the dependency footprint, and this page will be updated with its
-result. Claude runs on its native API, so that its features are kept; other models run through an OpenAI-compatible
-API. The [Widget agent](widget-agent.md#providers) page gives the reasons, the presets with their base URLs, and the
-capability checks and degradations that do not depend on the library.
+### The six checks
+
+The spike checked six things before the provider layer was adopted. No check called a paid API or used a real key;
+each is pinned by a test, with Pydantic AI's own test models (`FunctionModel`, `TestModel`), a stubbed Claude
+transport that records each request body, or a fake OpenAI-compatible server in the test process.
+
+| Check | Result | Evidence |
+|---|---|---|
+| Cancellation in the middle of a stream, with every pending tool call given a result | Yes: `AgentRun.cancel()` stops the stream, a tool or a wait, and `RunCancelled` carries everything that finished; the turn closes the calls without a result | `test_cancel_in_the_middle_of_a_stream`, `test_cancel_while_a_tool_runs_gives_every_call_a_result`, `test_a_cancelled_permission_request_cancels_the_turn` |
+| Retry state visible to the loop | Yes: the `on_model_request_error` hook gets each failed attempt with its number, its status and the wait the server asked for, before anything reached the pane | `test_rate_limit_then_success_reports_the_retry`, `test_a_rate_limit_from_the_wire_reaches_the_retry_hook`, `test_connection_errors_are_retried_then_reported` |
+| Claude features | Native through `AnthropicModelSettings`: adaptive thinking with summarized thoughts, `output_config.effort`, prompt caching of the tools and the system prompt with `cache_read_input_tokens` in the usage, server-side compaction, strict tools (`ToolDefinition.strict`) and eager input streaming. Lost: server-side refusal fallbacks, which are off ([Refusals](#refusals)) | `test_plain_turn_streams_and_sends_the_documented_request`, `test_cache_fields_across_two_turns`, `test_compaction_is_shown_and_sent_back`, `test_server_side_fallbacks_are_off` |
+| Stop reasons mapped to ACP's, a refused turn cut from the history | Yes: the turn reads Pydantic AI's finish reason at the tool-call node and stops before any tool of a cut-off or declined reply runs | `test_refusal_and_cut_offs_on_the_wire`, `test_refusal_is_surfaced_and_the_turn_is_taken_back`, `test_a_refusal_later_in_a_turn_removes_the_whole_turn`, `test_max_tokens_runs_no_tool_and_keeps_the_history_valid` |
+| Other models through an OpenAI-compatible base URL, with a model without tool calling, without vision, and a lenient server | Yes: without tool calling the agent says it cannot drive Caliper; without vision a capture reaches the model as a line of text; malformed or schema-breaking arguments become error results the model corrects | `tests/test_openai_compat.py`, four tests |
+| Footprint | 22 packages and 57 MiB installed, against 16 packages and 27 MiB for `anthropic` alone | Measured in clean environments, below |
+
+**Two adjustments the checks needed.** Strict tools are capped at 20 per request, as [Tools](#tools) says; the design
+before the spike sent all 35, which the Claude API would refuse. And schemas that allow several types are sent as
+`anyOf`, because the Claude SDK's converter, which Pydantic AI runs on strict tools, rejects them.
+
+**The footprint.** Measured in clean Python 3.12 environments on macOS: `anthropic` 2.8 alone installs 16 packages in
+27 MiB; with `pydantic-ai-slim[anthropic]` 2.68, `openai` 3.51 and their dependencies the sidecar installs 22 packages
+in 57 MiB. The new packages are `pydantic-ai-slim`, `pydantic-graph`, `genai-prices`, `logfire-api` (MIT),
+`griffelib` (ISC) and `openai` (Apache 2.0). The `openai` SDK is installed directly rather than through Pydantic AI's
+`openai` extra, which also pulls `tiktoken` and with it `requests`, `certifi`, `regex`, `urllib3` and
+`charset-normalizer`, 6 MiB in all, for features the sidecar does not use. The full `pydantic-ai` package would pull every provider's SDK, about 80
+more packages than `anthropic` alone. Neither `genai-prices` nor `logfire-api` makes a network request: prices come from a snapshot in the
+package, and the telemetry API does nothing without a configured backend.
+
+### What other models can do
+
+An OpenAI-compatible server says what its model cannot do by refusing a request, and the sidecar lowers what it
+assumes for the rest of its life:
+
+- **Tool calling.** A 400 that names tools marks the model as without tools. The turn ends with `end_turn` and a
+  `no_tools` status and message that say the model cannot drive Caliper; later prompts say the same without a request.
+  `--model-tools no` says so in advance.
+- **Vision.** A 400 that names images or vision marks the model as without vision, with a `no_vision` status, and the
+  request is sent again at once with each image replaced by a line of text, which Pydantic AI writes when the model's
+  profile has `supports_image_input` off. The pane still gets the image. `--model-vision no` says so in advance.
+- **Lenient servers.** A server that ignores `strict`, sends malformed arguments or never makes parallel calls needs
+  nothing more: every input is checked against the full schema, and the calls of a reply run one at a time anyway.
+
+The capability probe that the settings run when a model is chosen, with its cache, is planned on the
+[Widget agent](widget-agent.md#capabilities-and-degradations) page; it will set the same two switches.
+
+### One run on a local model
+
+During the spike the dashboard prompt of the acceptance test ran once against a local model, as a manual check:
+`tests/manual_local_model.py` starts `caliper-builder-host` on a fresh workspace with the two data files and runs
+`caliper-acp-harness` with the sidecar on the OpenAI-compatible route. The model was Qwen 3.8 27B (Q4_K_M) on Ollama,
+which reports tool support; it was already running, and nothing was installed or downloaded for the check. In 135
+seconds the model imported both files, looked up the two catalog entries, created the spec, added the two sources
+with the three transforms and the three panels, set the layout, validated the spec and saved the applet, over fifteen
+tool calls and seven permission requests (six spec edits shown as diffs, and the save); its three calls to
+`panel.render` failed because the stand-in host has no renderer. The
+saved spec had the requested sources, transforms, panels, bindings and layout, with titles and options of its own
+where the prompt gave none. This was one run of one model, not a guarantee for that model or any other; the provider
+conformance suite of the Widget agent page is where models will be compared.
+
+### The ACP Python SDK
+
+The official ACP Python SDK, [`agent-client-protocol`](https://pypi.org/project/agent-client-protocol/) 1.0.0
+(Apache 2.0, from the protocol's [python-sdk](https://github.com/agentclientprotocol/python-sdk) repository), was
+evaluated for the agent side and read from its installed source on 15 November 2026. It is used in tests only, to
+validate every message the sidecar sends, and the hand-written `acp.py` stays, because adopting the SDK would mean
+replacing most of what it would take over:
+
+- its stdio transport reads a line with no bound on its length (`acp/_transport.py`, `NdjsonTransport._read_line`, which
+  keeps reading after the stream's limit is passed), while the sidecar drops a line over 8 MiB and reports it;
+- it binds `sys.stdin` and `sys.stdout` itself (`acp/stdio.py`), while the sidecar keeps a private copy of the real
+  stdout and points file descriptor 1 at stderr, so that a stray print cannot corrupt the protocol;
+- it has no point where a message can be scrubbed before it is written: its observers see a copy after the write
+  (`acp/connection.py`), and an unhandled exception's text goes into the error response's `data`.
+
+With a transport of its own to meet those three needs, what the SDK would add is its routing and its typed models; the
+models are used, in the test above, and the routing is a few lines of `agent.py`.
 
 ## Security notes for the later security pass
 
-- **Network.** The sidecar's model requests go only to `https://api.anthropic.com`: the base URL is fixed in code,
-  the variables that could change the host or the credential are removed twice (at spawn and at start), and a test
-  checks that the scripted transport saw no other host. Its only other connection is Caliper API on loopback, and an
-  API file that names another address is refused. The Claude client honours the system's HTTPS proxy settings, as any
-  application does, so a user behind a proxy can work; TLS stays end to end. The Caliper API client ignores proxies.
-- **The test switch.** `CALIPER_AGENT_TEST_SCRIPT` replaces the Claude API with a scripted file. It cannot send data
-  anywhere, but it would let whoever sets the environment script the model's replies, so the key store removes it at
-  spawn.
+- **Network.** On the Claude provider the sidecar's model requests go only to `https://api.anthropic.com`: the base
+  URL is fixed in code, the variables that could change the host or the credential are removed twice (at spawn and at
+  start), and a test checks that the stubbed transport saw no other host. On the OpenAI-compatible provider they go
+  only to the base URL given, which must be an http or https address without a user name or password. Its only other
+  connection is Caliper API on loopback, and an API file that names another address is refused. The model clients
+  honour the system's HTTPS proxy settings, as any application does, so a user behind a proxy can work; TLS stays end
+  to end. The Caliper API client ignores proxies. Pydantic AI's price snapshot and telemetry API make no request.
+- **The test switch.** `CALIPER_AGENT_TEST_SCRIPT` replaces the model with a scripted file, answered by Pydantic AI's
+  `FunctionModel` or, for the wire tests, by a stubbed Claude transport. It cannot send data anywhere, but it would let
+  whoever sets the environment script the model's replies, so the key store removes it at spawn.
 - **The import path.** The sidecar must be started with `-I` (or `-P`) so the workspace folder is never on its import
   path.
 - **Prompt injection.** Everything a tool returns is workspace data. The system prompt says so, destructive commands
@@ -483,60 +617,86 @@ capability checks and degradations that do not depend on the library.
   [Agent roles](../docs/explanations/agent-roles.md).
 - **The key in memory.** The key lives in the sidecar's memory and, until the process ends, in the initial environment
   block of the process, which processes of the same user can read on macOS. Other users cannot.
-- **Logging.** The SDK and HTTP loggers are kept at warning level, `ANTHROPIC_LOG` is removed, and OpenTelemetry is
-  off.
-- **Supply chain.** The sidecar depends on `anthropic` 2.x (Apache 2.0) and what it pulls in (`httpx2`, `pydantic`,
-  `jiter`, `anyio` and others). A lock file and a packaged runtime come with the wiring into the app.
+- **Logging.** The SDK, Pydantic AI and HTTP loggers are kept at warning level, `ANTHROPIC_LOG` and `OPENAI_LOG` are
+  removed, OpenTelemetry is off, and Pydantic AI's first-run banner is turned off.
+- **Supply chain.** The sidecar depends on `pydantic-ai-slim` 2.x (MIT), `anthropic` 2.x and `openai` 3.x (Apache 2.0)
+  and what they pull in, 22 packages in all (`httpx2`, `pydantic`, `jiter`, `anyio`, `genai-prices`, `griffelib`,
+  `logfire-api` and others). A lock file and a packaged runtime come with the wiring into the app.
 - **Limits.** Protocol lines of at most 8 MiB, 16 sessions, 50 model requests per prompt, a command table of at most
   8 MiB and 512 commands, an API file of at most 64 KiB, responses from Caliper API of at most 32 MiB, images of at
   most 3.75 MB, and the validator's bounds of 64 levels and 1,048,576 values.
 
 ## Tests
 
-Automated tests never call the real Claude API and need no key. The sidecar runs as a child process with a fake key,
-and `caliper_agent/stub_transport.py` answers its requests with scripted streams in the shape the Messages API
-streams; they are written from the documented event shapes, since this stream could not record real ones. A fake
-Caliper API runs on loopback in the test process.
+Automated tests never call a real model and need no key. The sidecar runs as a child process with a fake key and a
+script (`caliper_agent/scripted.py`), which is answered in one of two ways:
 
-- `tests/test_loop.py`: a plain turn and the exact request it sends; a multi-tool turn with results returned together
-  and an append-only history; inputs that fail the schema or arrive cut off; `max_tokens`; a refusal at the start and
-  later in a turn; a rate limit and
-  an overload followed by success; connection errors retried and then reported; a stream that breaks before and after
-  the client saw it; cancellation in the middle of a stream; destructive approval allowed and denied; previews of spec
-  edits shown as diffs before the edits run, a preview that changes nothing, one that is refused and one the model
-  asked for, and allow-always; a capture and a rendered panel as images; a capture that the renderer cannot take; the
-  cache fields across two turns; config options and the Haiku settings; a mid-reply fallback; no key and a malformed
-  key; the key in no output; only the Claude API host; strict mode dropped on the first request; an app without a
-  command layer; bad requests. After every test, the fixture checks that neither the key nor the session token reached
-  the client or stderr.
-- `tests/test_units.py`: the tool derivation from the real table (previewable commands included), the stripping rules,
-  hostile tables, the application of unified diffs, the validator
-  and its bounds, the key's removal from the environment, the scrubber, the API file's checks, envelopes and images,
-  and the echo rule after a fallback.
-- `tests/test_harness_e2e.py`: one turn through the real C++ client. `caliper-acp-harness` runs the sidecar with
-  `--env` for a fake key and the script, against the fake Caliper API, with permissions allowed; the test checks the
-  transcript (initialisation, thoughts, messages, four tool calls, two permission requests, a spec diff, an image, the
-  end of the turn), the calls that reached Caliper API with the origin `agent`, the hosts the transport saw, and that
-  the key appears nowhere.
-- `tests/test_dashboard_e2e.cpp` (doctest): the sidecar on the real command layer. `caliper-acp-harness` drives the
-  sidecar, still with the scripted model and a fake key, and its tools call a running `caliper-builder-host` over a
-  fresh workspace holding a Parquet file (written through DuckDB) and a safetensors file. The scripted conversation
-  imports both files, runs their loaders, creates the spec, adds the sources and the three panels of the fixture
-  `dashboard.spec.toml`, sets the layout and saves the applet, and the harness allows every permission request. The
-  test checks that each spec edit was asked about with a diff before it ran, that the diffs chain from the new spec to
-  the fixture's canonical text and match what each edit did, that the loader runs and the save were asked about too,
-  that the applet saved on disk equals the fixture, that every journal line comes from the origin `agent` and that no
-  dry run was journaled, and that the key appears nowhere.
+- **The function route**, the default: Pydantic AI's `FunctionModel` streams each step of the script as text,
+  thoughts and tool calls, ends it with the step's stop reason and usage, or raises the error Pydantic AI's adapters
+  raise for an HTTP status, a broken connection or a stream that breaks. The record holds what the model was handed:
+  the messages as Pydantic AI serializes them, the settings and the tools. It tests the loop, the tools, approvals,
+  cancellation, retries and stop reasons without any wire format.
+- **The anthropic route**: the real Claude provider, Pydantic AI's Anthropic model on the official SDK, with
+  `caliper_agent/stub_transport.py` under the SDK's HTTP client. It answers with the streamed events of the Messages
+  API, written from the documented event shapes, and records each request's headers (credentials left out) and body.
+  It tests what is sent on the wire.
+
+A fake Caliper API runs on loopback in the test process, and a fake OpenAI-compatible server for the other provider.
+
+- `tests/test_loop.py`: on the anthropic route, the exact request of a plain turn, a multi-tool turn with results
+  returned together and an append-only history, a capture and a rendered panel as images inside the tool result, the
+  cache fields and the byte-identical prefix across two turns, config options and no fallback setting on any model,
+  compaction shown and sent back, a refusal, a cut-off call and a full context window, a rate limit and a
+  broken stream reaching the retry hook, a stream that broke after the pane saw it, the key in no output, only the
+  Claude API host, and strict mode dropped on the first request. On the function route: inputs that fail the schema
+  or arrive cut off, an unknown tool, `max_tokens`, a refusal at the start and later in a turn, the neutral refusal
+  text and its three ways forward, a rate limit and an overload followed by success, connection errors retried and
+  then reported, a stream that breaks before and after the pane saw it, cancellation in a stream, while a tool runs and
+  from a permission request, destructive approval allowed and denied, previews of spec edits shown as diffs before the
+  edits run, a preview that changes nothing, one that is refused and one the model asked for, allow-always, a capture
+  that the renderer cannot take, no key and a malformed key, an app without a command layer, the tool filter, and bad
+  requests. After every test, the fixture checks that neither the key nor the session token reached the client or
+  stderr.
+- `tests/test_openai_compat.py`: the OpenAI-compatible provider against a fake server: a tool turn, a model without
+  tool calling (and `--model-tools no`), a model without vision, and a lenient server.
+- `tests/test_inprocess.py`: the turn in process with Pydantic AI's `TestModel`, which calls tools with arguments made
+  from their schemas, and with `FunctionModel`, which checks that a context block goes with the prompt and never into
+  the system prompt.
+- `tests/test_acp_schema.py`: every message validated against the official ACP Python SDK's models (above).
+- `tests/test_units.py`: the tool derivation from the real table (previewable commands included) and the strict tools
+  within the limits, by Pydantic AI's own count, the stripping rules, type lists turned into `anyOf`, hostile tables,
+  the tool filter, the application of unified diffs, the validator and its bounds, the key's removal from the
+  environment, the scrubber, the API file's checks, envelopes and images, the closing of tool calls without a result,
+  the sorting of errors, the OpenAI-compatible refusals and base URLs, the args validator, and the fallback switch
+  that is off.
+- `tests/test_harness_e2e.py`: one turn through the real C++ client, on the anthropic route. `caliper-acp-harness` runs
+  the sidecar with `--env` for a fake key and the script, against the fake Caliper API, with permissions allowed; the
+  test checks the transcript (initialisation, thoughts, messages, four tool calls, two permission requests, a spec
+  diff, an image, the end of the turn), the calls that reached Caliper API with the origin `agent`, the hosts the
+  transport saw, and that the key appears nowhere.
+- `tests/test_dashboard_e2e.cpp` (doctest): the sidecar on the real command layer, on the function route.
+  `caliper-acp-harness` drives the sidecar with the scripted model and a fake key, and its tools call a running
+  `caliper-builder-host` over a fresh workspace holding a Parquet file (written through DuckDB) and a safetensors file.
+  The scripted conversation imports both files, runs their loaders, creates the spec, adds the sources and the three
+  panels of the fixture `dashboard.spec.toml`, sets the layout and saves the applet, and the harness allows every
+  permission request. The test checks that each spec edit was asked about with a diff before it ran, that the diffs
+  chain from the new spec to the fixture's canonical text and match what each edit did, that the loader runs and the
+  save were asked about too, that the applet saved on disk equals the fixture, that every journal line comes from the
+  origin `agent` and that no dry run was journaled, that each step was one model request, and that the key appears
+  nowhere.
 - `tests/test_key_store.cpp` (doctest): the memory store, the checks of providers and keys, the placement in a
   child's environment, and that no error quotes a key.
+- `tests/manual_local_model.py`: not a test of the suite, but the manual run against a local model server described
+  [above](#one-run-on-a-local-model); it starts no server and pulls no model.
 
 ctest runs the pytest suite as `builder_agent_py`, and the test on the real command layer as `builder_agent_e2e`,
-when the CMake variable `CALIPER_BUILDER_TEST_PYTHON` names an interpreter with `anthropic` and `pytest` (the
-loaders module's tests of the same variable also need `numpy`), and otherwise reports them as skipped:
+when the CMake variable `CALIPER_BUILDER_TEST_PYTHON` names an interpreter that has the package with its test extras
+(the loaders module's tests of the same variable also need `numpy` and `pyarrow`), and otherwise reports them as
+skipped:
 
 ```sh
 uv venv --python 3.12 src/builder/agent/.venv
-uv pip install --python src/builder/agent/.venv/bin/python anthropic pytest numpy
+uv pip install --python src/builder/agent/.venv/bin/python -e "src/builder/agent[test]" numpy pyarrow
 cmake -S src/builder -B <build> -G Ninja -DCALIPER_BUILDER_DUCKDB_DIR=<duckdb> \
       -DCALIPER_BUILDER_TEST_PYTHON=$PWD/src/builder/agent/.venv/bin/python
 cmake --build <build> && ctest --test-dir <build> -R builder_agent
@@ -545,7 +705,9 @@ cmake --build <build> && ctest --test-dir <build> -R builder_agent
 ## The manual check
 
 This check is for the user, with their own key. It was not run on this branch, since it calls the Claude API and
-spends money (a few cents). It uses `caliper-acp-harness`, which opens no window.
+spends money (a few cents). It uses `caliper-acp-harness`, which opens no window. The same steps work with an
+OpenAI-compatible server by adding `--provider openai-compatible --base-url <url> --model <model>` to the sidecar's
+command; a local server needs no key, and `tests/manual_local_model.py` runs the dashboard prompt that way.
 
 1. Build the builder project as above, so that `caliper-acp-harness` is in the build's `acp` folder.
 2. Install the sidecar into its environment: `uv pip install --python src/builder/agent/.venv/bin/python -e src/builder/agent`.
@@ -582,12 +744,16 @@ spends money (a few cents). It uses `caliper-acp-harness`, which opens no window
 
 Built on this branch:
 
-- `src/builder/agent/caliper_agent/`: the ACP agent side (`acp.py`, `agent.py`), the turn loop and the approval gate
-  (`loop.py`), the provider interface (`provider.py`) and the Claude provider (`claude.py`), the tool derivation
-  (`tools.py`) and the schema check (`schema.py`), the Caliper API client (`caliper_api.py`), the key handling and the
-  scrubber (`keyguard.py`), the system prompt (`prompt.py`), the command line (`cli.py`) and the scripted transport
-  for tests (`stub_transport.py`).
-- `src/builder/agent/pyproject.toml`: the package `caliper-agent` with its console script, Python 3.12 or later.
+- `src/builder/agent/caliper_agent/`: the ACP agent side (`acp.py`, `agent.py`), the turn on Pydantic AI's agent
+  graph with its hooks and the approval gate (`loop.py`), the command table as a Pydantic AI toolset (`toolset.py`),
+  the shapes shared with the providers (`provider.py`), the Claude provider (`claude.py`) and the OpenAI-compatible
+  provider (`openai_compat.py`), the tool derivation with the choice of strict tools (`tools.py`) and the schema check
+  (`schema.py`), the Caliper API client (`caliper_api.py`), the key handling and the scrubber (`keyguard.py`), the
+  system prompt (`prompt.py`), the command line (`cli.py`), and for tests the scripted model (`scripted.py`) and the
+  stubbed Claude transport (`stub_transport.py`).
+- `src/builder/agent/pyproject.toml`: the package `caliper-agent` with its console script, Python 3.12 or later,
+  depending on `pydantic-ai-slim[anthropic]` (2.68 up to the next major), `anthropic` 2.x and `openai` 3.x, with
+  `pytest` and `agent-client-protocol` as test extras.
 - The key store: `src/builder/include/caliper_builder/agent/key_store.h`, `src/builder/agent/key_store.cpp` and
   `keychain_store_macos.cpp`.
 - The tests listed above, and the ctest entries `builder_agent`, `builder_agent_py` and `builder_agent_e2e`.
@@ -599,21 +765,9 @@ Waiting for later work:
   design, as the [work items](widget-agent.md#work-items) of the Widget agent page list them with their sizes.
 - The settings: the presets, the key field for each provider and its remove control, the model and effort pickers
   from the config options, and status lines from `_meta.caliper.status`.
-- Adopting Pydantic AI as the provider layer, after its spike; the capability probe and its cache; one key per
-  provider in `KeyStore`.
-- **The evaluation of the ACP Python SDK.** The sidecar's agent side is hand-written: `acp.py` holds the JSON-RPC
-  transport and `agent.py` the methods and message shapes. The official SDK,
-  [`agent-client-protocol`](https://pypi.org/project/agent-client-protocol/) on PyPI (1.0.0 of 9 November 2026,
-  Apache-2.0, Python 3.10 to 3.15, from the protocol's
-  [python-sdk](https://github.com/agentclientprotocol/python-sdk) repository, read on 15 November 2026), offers
-  Pydantic models generated from the schema, async base classes and stdio JSON-RPC. The evaluation checks that every
-  line still leaves through one write point where the scrubber runs; that malformed and oversized lines (over 8 MiB)
-  are dropped and reported rather than fatal; that `session/cancel` and `$/cancel_request` stop a running prompt as the
-  loop needs; that `_meta` passes through `session/new`, prompts and updates; that the messages still validate against
-  the version 1 schema in the seven scenarios of [the schema check](#checked-against-the-protocols-schema); what the
-  dependency adds (Pydantic already comes with `anthropic`); and how its releases follow the schema's weekly releases.
-  If it passes, it replaces `acp.py` and the message shapes of `agent.py`; otherwise the hand-written side stays and
-  the reasons are recorded here.
+- On top of the provider layer: passing the chosen provider, base URL and key from the app when it starts the
+  sidecar; the capability probe and its cache; one key per provider in `KeyStore`.
+- Server-side refusal fallbacks, once Pydantic AI keeps the reply's `fallback` block ([Refusals](#refusals)).
 - Spawning the sidecar from the app with the key store, and a packaged Python runtime with a lock file.
 - The Windows Credential Manager store, with one entry per provider.
 - Per-message effort and context editing for old captures, both betas.
@@ -623,26 +777,35 @@ Waiting for later work:
 
 - **A Python sidecar speaking ACP**, so the app drives both roles with one session model and no model-driven code
   runs in the app.
-- **The sidecar's own loop** rather than the SDK's tool runner, for retry reporting, cancellation, a session-long
-  history and the stop-reason rules.
+- **The loop on Pydantic AI's agent graph, driven step by step**, rather than the SDK's tool runner or a loop of
+  Caliper's own, for retry reporting, cancellation, a session-long history and the stop-reason rules, which its
+  hooks and nodes give.
+- **Pydantic AI as the provider layer**: Claude on its native Anthropic support, every other model through its
+  OpenAI-compatible support, replacing Caliper's own provider modules.
+- **The tools as a toolset generated from the table at run time**, sequential, with the full schema checked by the
+  turn and Pydantic AI's validator only parsing the JSON.
 - **Config options for model, effort and review**, not modes.
 - **Statuses as thoughts with `_meta`**, so every ACP client shows them and Caliper's UI can style them.
-- **Tools read generically from the table**, strict where the schema allows, with the full schema checked locally.
+- **Tools read generically from the table**, strict where the schema allows and within the 20 strict tools of one
+  request, with the full schema checked locally.
 - **Approval before destructive commands always, and before spec edits by default**, with Allow for the session for
   spec edits only. A dry run of each reviewed edit gives its diff before it runs; previewable commands are found in
   the table's schemas, not in a list.
-- **A refusal takes the turn back**: the prompt and everything after it leave the history, as ACP's `refusal` means.
+- **A refusal takes the turn back**: the prompt and everything after it leave the history, as ACP's `refusal` means,
+  and the pane's text is neutral, with three ways forward.
 - **Retry only while the client saw nothing.**
 - **Summarized thinking and one default effort, `high`.**
-- **Fallbacks on by default, except on Claude Haiku 5.5**, which has none.
+- **Server-side refusal fallbacks off**, behind one switch, until Pydantic AI keeps the reply's `fallback` block.
 - **Compaction on by default.**
 - **The key read once and removed from the environment, and handed to the SDK explicitly** with a fixed base URL.
 - **Scrubbing at every exit**, including tool output given to the model.
 - **The API file's address must be loopback.**
 - **A usage log of token counts only**, for checking the cache with a real key.
 - **`-I` at launch**, so the workspace is never on the import path.
-- **Claude on its native API**, so that its features are kept, and other models through an OpenAI-compatible API,
-  with Pydantic AI as the planned provider layer once its spike holds up.
+- **Claude on its native API**, so that its features are kept, and other models through an OpenAI-compatible API.
+- **`openai` installed directly**, not through Pydantic AI's extra, which would add `tiktoken`, `requests`, `certifi`
+  and others that the sidecar does not use.
+- **The hand-written ACP agent side kept**, with the official ACP Python SDK used in tests to validate every message.
 
 ## Notes on the contracts
 
@@ -651,5 +814,8 @@ Waiting for later work:
   fix is that the API accepts `agent` as well as `mcp` in that header.
 - **Two approvals.** Sections 12 and 15 together ask about a destructive command from the sidecar twice; the app
   should merge them as described above, without trusting the sidecar's answer.
-- **Fallbacks on Claude Haiku 5.5.** Section 12 turns server-side refusal fallbacks on by default; Claude Haiku 5.5 has
-  none, so its requests leave the parameter out.
+- **Fallbacks.** Section 12 turns server-side refusal fallbacks on by default. They are off, because Pydantic AI drops
+  the reply's `fallback` block ([Refusals](#refusals)).
+- **Other providers.** Section 12 says that other providers come later, each through its own official SDK and never
+  through a compatibility shim. The person decided otherwise after the spike: every model other than Claude goes
+  through Pydantic AI's OpenAI-compatible support, while Claude keeps its native API.

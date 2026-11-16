@@ -35,7 +35,7 @@ This page is the map of the builder: the work that lets someone drop data into C
 | `caliper-mcp` | A stdio MCP server that an outside agent launches; its tools mirror the commands | [MCP server](mcp-server.md) |
 | Side chat | The general chat pane: Caliper runs the person's own ACP agent as a subprocess, hands it `caliper-mcp`, and shows its messages, diffs and permission requests | [ACP integration](acp-integration.md) |
 | Widget agent | An inline agent on one target: Caliper gives it a context bundle and a tool scope, and it proposes a change that is drawn in place as a preview | [Widget agent](widget-agent.md) |
-| `caliper-agent` | The widget agent's process: a sidecar that runs an agent loop with Claude through the person's API key today, and other models through the planned provider layer | [Widget agent sidecar](byok-agent.md) |
+| `caliper-agent` | The widget agent's process: a sidecar whose agent loop runs on Pydantic AI, with Claude through the person's API key on its native API and every other model, hosted or local, through an OpenAI-compatible API | [Widget agent sidecar](byok-agent.md) |
 
 The side chat and the widget agent are two roles, not two interchangeable backends, and [Agent roles](../docs/explanations/agent-roles.md) explains when to use each. Both are ACP agents that the app drives with one `AcpClient`, so messages, diffs, approvals and cancellation work the same for both, and "Ask in chat" hands a widget request to the side chat with its context.
 
@@ -49,7 +49,7 @@ The parts above are built as libraries and tools under `src/builder/`, each with
 - The session binds every command that needs no window. A headless test drops a Parquet file and a safetensors file, runs their loaders, builds a three-panel dashboard command by command, undoes and redoes, saves it as a spec applet, reopens it and replays the journal.
 - `caliper-mcp` works against Caliper API v0 of the running app for the app's information, its applets, a launch and a capture, and against the command endpoints of the stand-in host for everything else.
 - The ACP client drives a session against a stub agent, and `caliper-acp-harness` runs one session headless.
-- `caliper-agent` runs its loop against a stubbed transport in tests, and against the real command layer through the stand-in host; no test calls the Claude API. It runs unscoped today, with every command of the table; the widget role is planned.
+- `caliper-agent` runs its loop on Pydantic AI, with Claude on its native API and other models through an OpenAI-compatible API. Its tests use Pydantic AI's test models, a stubbed Claude transport and a fake OpenAI-compatible server, and run it against the real command layer through the stand-in host; no test calls a real model. It runs unscoped today, with every command of the table; the widget role is planned. Server-side refusal fallbacks are off, since Pydantic AI drops the reply's `fallback` block; a refusal ends the turn with a neutral message that offers to rephrase, retry, or switch the model or provider.
 
 ## The integration order after sprint 2
 
@@ -67,11 +67,11 @@ These items need the app's main loop, its window or its API server, or build the
 | 8 | **The side chat**: its approval cards and diagnostics, the four detected agents with `opencode` added to `known_agents()`, the custom agent command, the setting that marks an agent as running on a local model, and the packaging of `caliper-mcp` with the app | L, 6 days |
 | 9 | **Stacked previews in the session**, so that edits that build on each other can be previewed together and committed as one step ([Widget agent](widget-agent.md#preview-and-apply-on-the-command-layer)) | M, 4 days |
 | 10 | **An optional `_meta` argument on `AcpClient::new_session()`**, for the widget session's target, tool scope and preview | S, 1 day |
-| 11 | **The evaluation of the ACP Python SDK** for the sidecar's agent side ([Widget agent sidecar](byok-agent.md#what-is-built-and-what-waits)) | S, 2 days |
+| 11 | **Done: the evaluation of the ACP Python SDK** for the sidecar's agent side. The hand-written agent side stays, and the SDK's models validate every message in the tests ([Widget agent sidecar](byok-agent.md#the-acp-python-sdk)) | None left |
 | 12 | **Widget sessions in the sidecar**: the scoped tools, the widget system prompt, images and embedded context in prompts, the preview header, the turn budget and `session/close` | M, 5 days |
 | 13 | **The context bundle**, built in the app from the session | M, 3 days |
 | 14 | **The widget agent's inline surface**: ⌘K on a panel, a selection, a dropped file and a property, the preview drawn in place, Accept, Reject and Refine, and Ask in chat; with the packaging of `caliper-agent` and a Python runtime | L, 8 days |
-| 15 | **Adopt Pydantic AI as the provider layer** (spike in progress) | M, about 4 days after the spike, to be sized again by its result |
+| 15 | **Pydantic AI as the provider layer: adopted**, with the Claude and OpenAI-compatible providers built in the sidecar. What remains is passing the chosen provider, base URL and key from the app when it starts the sidecar; widget sessions (12) and the capability probe (16) build on it | S, 1 day |
 | 16 | **The capability probe and its cache**, with the person's override | S, 2 days |
 | 17 | **The presets and one key per provider** in the widget agent's settings | M, 3 days |
 | 18 | **The provider conformance suite**, with stubs by default and real runs on demand | M, 4 days |
@@ -130,7 +130,7 @@ The work is accepted when all of these hold:
 - The dashboard is saved as a spec applet and reopened.
 - It opens in the browser viewer.
 - "Plot attention entropy per layer while it trains" works from the side chat on a live stream.
-- Both roles work locally: the side chat with an ACP agent on a local model (opencode on Ollama, the worked example), and the widget agent on a local model server once the provider layer has landed, with the GPU contention note shown while a run is live.
+- Both roles work locally: the side chat with an ACP agent on a local model (opencode on Ollama, the worked example), and the widget agent on a local model server through its OpenAI-compatible provider, with the GPU contention note shown while a run is live.
 
 The checks with a real agent, a real key or a real model server are manual, and each is written as steps on its page; no automated test uses a person's agent login, key or server.
 
@@ -144,7 +144,7 @@ Each page records its own decisions. These hold across the parts:
 - **Two roles.** The side chat is for conversations and bigger jobs with the person's own agent; the widget agent is for one target in seconds, with every change a preview. They share one journal, one undo history and one queue.
 - **One session model for agents.** Both roles are ACP agents, so the app has one client for both.
 - **Approvals and previews in the command layer.** Destructive commands and, with review on, spec edits are approved in the app, whichever agent sends them; no agent can approve its own request or accept its own preview.
-- **Claude on its native API, other models through an OpenAI-compatible API.** Claude keeps its features, such as prompt caching and adaptive thinking, which Anthropic's compatibility layer drops; every other model, hosted or local, is reached through the planned provider layer, Pydantic AI, once its spike holds up.
+- **Claude on its native API, other models through an OpenAI-compatible API.** Claude keeps its features, such as prompt caching and adaptive thinking, which Anthropic's compatibility layer drops; every other model, hosted or local, is reached through the provider layer, Pydantic AI, adopted after a spike ([Widget agent sidecar](byok-agent.md#providers)). Server-side refusal fallbacks are off until Pydantic AI keeps the reply's `fallback` block.
 - **Local models in both roles.** The side chat runs any ACP agent on any model it supports, with no Caliper code for it; the widget agent gains local model servers as presets.
 - **Keys.** With the side chat, the agent uses its own login and Caliper never handles a key. The widget agent's keys live only in the OS credential store, one per provider, and reach the sidecar through its environment; a local server needs none.
 - **Nothing bundled.** Caliper bundles no model, no model server and no agent; the person installs their own, so there is no bundle size to check.

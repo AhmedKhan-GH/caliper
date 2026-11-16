@@ -153,9 +153,10 @@ When no spec is open, a dropped file's preview starts from an empty spec, and Ac
   the fastest and the cheapest, it takes adaptive thinking, and it takes the effort `low`; its default effort is
   `medium`, and the provider sets the effort explicitly on every request, as it already does. A widget request is a
   small, bounded edit with its context given in full, and low effort makes fewer and more consolidated tool calls, which
-  suits it. Claude Haiku 5.5 has no server-side refusal fallback, so a refusal ends the prompt, and the card says so and
-  offers Ask in chat. The person can choose any of the four models and any effort in the widget agent's settings.
-- **Other models**, once the provider layer below exists, have no default: the person picks a model for each preset.
+  suits it. Server-side refusal fallbacks are off for every model ([Refusals](#refusals)), so a refusal ends the
+  prompt, and the card says that the model declined the request, with the three ways forward, and offers Ask in chat.
+  The person can choose any of the four models and any effort in the widget agent's settings.
+- **Other models**, through the provider layer below, have no default: the person picks a model for each preset.
   The same budget applies, and an effort is sent only where the server takes one.
 
 ## Preview and apply on the command layer
@@ -268,13 +269,44 @@ from one prompt to the next while the cache lasts; the bundle comes after the ca
 
 ## Providers
 
-The widget agent is model-agnostic. Today `caliper-agent` has one provider: Claude through the official `anthropic`
-SDK, with the settings of [Claude API settings and why](byok-agent.md#claude-api-settings-and-why). The planned
-provider layer is Pydantic AI, with Claude on its native Anthropic support and every other model, hosted or local,
-through its OpenAI-compatible support against a configurable base URL. A spike on another branch is checking
-cancellation, retry visibility, the Claude features (adaptive thinking, prompt caching, compaction and refusal
-fallbacks), stop reasons, capability differences and the dependency footprint. This page will be updated with its
-result, and until then it describes none of the library's internals.
+The widget agent is model-agnostic, and its provider layer is Pydantic AI, adopted after a spike that rebuilt
+`caliper-agent`'s loop on it: Claude runs on Pydantic AI's native Anthropic support, with the settings of
+[Claude API settings and why](byok-agent.md#claude-api-settings-and-why), and every other model, hosted or local, runs
+through its OpenAI-compatible support against a configurable base URL. Both are built in the sidecar; the settings that
+offer the presets are planned. The [Widget agent sidecar](byok-agent.md#providers) page gives the evidence for each
+check, the footprint and the reasons the ACP Python SDK is used in tests only.
+
+| Check | Result |
+|---|---|
+| Cancellation in the middle of a stream, with every pending tool call given a result | Yes, through Pydantic AI's `AgentRun.cancel()` |
+| Retry state (the reason, the attempt and the wait) visible to the loop, so the app can show it | Yes, through Pydantic AI's `on_model_request_error` hook |
+| Claude's features: adaptive thinking, effort, prompt caching, compaction, strict tools, eager input streaming | Yes, all native; server-side refusal fallbacks are off ([Refusals](#refusals)) |
+| Stop reasons mapped to ACP's, with a refused turn cut from the history | Yes |
+| Other models: no tool calling, no vision, lenient servers | Yes, against a fake OpenAI-compatible server in the tests |
+| Footprint | 22 packages and 57 MiB, against 16 packages and 27 MiB for the Claude SDK alone |
+
+- **At most 20 strict tools in one request.** The Claude API compiles a request's strict tool schemas together and
+  refuses more than 20 strict tools, 24 optional parameters or 16 union-typed parameters in all, so the sidecar picks
+  the strict tools within those limits; the others are checked against their full schema like every call. A widget
+  scope is small, so its tools will usually all be strict.
+- **One run on a local model.** During the spike the dashboard prompt of the acceptance test ran once, on the
+  OpenAI-compatible route, against Qwen 3.8 27B on Ollama, which was already running, and built and saved the
+  dashboard in 135 seconds. It is one manual run of one model, not a guarantee; the conformance suite below is where
+  models are compared.
+
+### Refusals
+
+A model can decline a request, and a refusal can be a false positive: machine learning in the physical sciences
+touches chemistry, biology and security data.
+
+- **Server-side fallbacks are off.** The Claude API can run a declined request again on another model and mark the
+  switch with a `fallback` block in the reply. Pydantic AI drops that block, and after a fallback in the middle of a
+  reply the next request needs it, so it would be rejected. The sidecar therefore does not ask for fallbacks.
+- **What the person sees.** The prompt ends, nothing of the declined reply is applied, and the card says plainly that
+  the model declined the request and offers three ways forward: rephrase it, try it again, or switch to another model
+  or provider, such as a local one; Ask in chat stays available. The text names no category and blames no one. The
+  declined prompt leaves the conversation, as ACP's `refusal` stop reason means.
+- Fallbacks can be switched on, with one switch in the sidecar's Claude provider, once Pydantic AI keeps the block.
 
 **Claude runs on its native API, so that its features are kept; other models run through an OpenAI-compatible API.**
 Anthropic's page on its
@@ -288,7 +320,8 @@ through it could not be confirmed.
 ### Presets
 
 The widget agent's settings offer presets, each of which fills the base URL; the person then picks the model and,
-where needed, enters a key. Only the Claude preset works today; the others come with the provider layer.
+where needed, enters a key. The sidecar reaches every preset today, from its command line; the settings that offer
+them are planned.
 
 | Preset | Base URL | Key |
 |---|---|---|
@@ -340,6 +373,12 @@ which tests vision. The result is cached in the app's settings for each base URL
 can override either answer, and can run the probe again. The context length comes from the server where it reports
 one, else from the person's setting, else 8,192 tokens are assumed. The Claude preset needs no probe, since every model
 it offers takes tools and images.
+
+The probe is planned. What the sidecar does today is learn the same from the server: a request refused with a 400 that
+names tools marks the model as without tool calling, and one that names images marks it as without vision, after which
+the request is sent again with each image replaced by a line of text. The sidecar's options `--model-tools` and
+`--model-vision` set either answer in advance, which is how the probe's result and the person's override will reach
+it.
 
 | Capability | When the model lacks it |
 |---|---|
@@ -458,6 +497,10 @@ For a local server:
   first.
 - **Ctrl+K on Windows** in place of ⌘K.
 - **Claude on its native API** and other models through an OpenAI-compatible API, so that Claude's features are kept.
+- **Pydantic AI as the provider layer**, after a spike that checked cancellation, retries, Claude's features, stop
+  reasons, other models and the footprint.
+- **Server-side refusal fallbacks off**, since Pydantic AI drops the reply's `fallback` block, with a neutral refusal
+  text that offers three ways forward.
 - **One credential entry per provider**, and none for a local server.
 - **Real conformance runs only on demand**, by a person with their own key or server.
 
@@ -472,11 +515,11 @@ and L six to ten; each figure is rough.
 |---|---|---|
 | 9 | Stacked previews in the session: the preview id, the scratch copy, dry runs and `panel.render` against it, `commit_preview` and `drop_preview`, `preview.stale` | M, 4 days |
 | 10 | An optional `_meta` argument on `AcpClient::new_session()` | S, 1 day |
-| 11 | The evaluation of the ACP Python SDK for the sidecar's agent side ([Widget agent sidecar](byok-agent.md#what-is-built-and-what-waits)) | S, 2 days |
+| 11 | Done: the evaluation of the ACP Python SDK for the sidecar's agent side. The hand-written agent side stays, and the SDK validates every message in the tests ([Widget agent sidecar](byok-agent.md#the-acp-python-sdk)) | None left |
 | 12 | Widget sessions in the sidecar: `_meta.caliper.widget`, the scoped tools and their check, the widget system prompt, images and embedded context in prompts, the preview header, the turn budget and `session/close` | M, 5 days |
 | 13 | The context bundle, built in the app from the session, with its bounds and cuts | M, 3 days |
 | 14 | The inline surface: the four entry points, the inline prompt, the preview drawn in place, Accept, Reject and Refine, and Ask in chat; with the packaging of `caliper-agent` and a Python runtime | L, 8 days |
-| 15 | Adopt Pydantic AI as the provider layer (spike in progress) | M, about 4 days after the spike, to be sized again by its result |
+| 15 | Adopted: Pydantic AI as the provider layer, with the Claude and OpenAI-compatible providers built in the sidecar. What remains is passing the chosen provider, base URL and key from the app when it starts the sidecar; widget sessions (12) and the probe (16) build on it | S, 1 day |
 | 16 | The capability probe and its cache, with the override | S, 2 days |
 | 17 | The presets and one key per provider in the settings, with `KeyStore` knowing the presets' ids | M, 3 days |
 | 18 | The provider conformance suite, its stubs and its reference page | M, 4 days |

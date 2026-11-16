@@ -9,14 +9,15 @@ again. [Agent roles](../explanations/agent-roles.md) explains how the widget age
 !!! note "Status"
     The widget agent's prompt and its settings are not built yet, so the steps that use them describe how they are
     planned to work, and the names of their controls may change. What exists today is the agent itself
-    (`caliper-agent`) with Claude as its one provider, and the store that keeps the key;
+    (`caliper-agent`), which works with Claude and with any server that has an OpenAI-compatible API, one on your own
+    machine included, and the store that keeps the key;
     Widget agent sidecar (`design/byok-agent.md`) describes them, and its manual check shows how to try the agent with
     your key from the terminal.
 
 ## Choose a provider
 
-The widget agent's settings offer presets, each of which fills in the address of the model's API. Only Claude works
-today; the others are planned.
+The widget agent's settings offer presets, each of which fills in the address of the model's API. Only Claude can be
+chosen in the settings today; the agent itself already works with the others, and the settings for them are planned.
 
 | Preset | Key | Status |
 |---|---|---|
@@ -83,14 +84,18 @@ If something goes wrong, the prompt says so in plain words:
 - **The Claude API is rate limited.** The agent waits and tries again on its own, and says how long it waits. If it
   gives up, try again later or raise your account's limits in the Console.
 - **The model is not available to this key.** Pick another model, or ask the account's owner for access.
-- **The model declined this request.** Rephrase it, or choose Ask in chat.
+- **The model declined this request.** The request ends, nothing is changed, and the prompt says that the model
+  declined it. This can happen with ordinary work too, for example with chemistry or biology data, so you can rephrase
+  the request, try it again, or switch to another model or provider, such as a local model. Automatic fallback to
+  another model is off for now.
 - **The preview is out of date.** The spec changed while the preview was open, for example through the side chat.
   Choose Refine to start again from the current spec.
 
 ## Use a local model
 
-This part is planned. A local model costs nothing per request and keeps your data on your machine, but it uses your
-computer's GPU and memory, and small models do this work less reliably than large ones.
+Choosing a local model in the settings is planned; the agent itself already works with a local model server. A local
+model costs nothing per request and keeps your data on your machine, but it uses your computer's GPU and memory, and
+small models do this work less reliably than large ones.
 
 1. Install a model server, such as Ollama or LM Studio, and download a model that supports tool calling.
 2. In the widget agent's settings, choose the Ollama preset, which uses `http://localhost:11434/v1`, or the LM Studio
