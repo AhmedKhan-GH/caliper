@@ -2858,7 +2858,10 @@ def split_update(u: SceneUpdate, update: int, max_frame: int = MAX_FRAME_BYTES) 
     the part's keys and ``rows``, every piece the stamp. Raises ValueError
     for an update over MAX_UPDATE_BYTES or one that needs more than MAX_PIECES
     pieces."""
-    parts, size = frame_parts(u.TYPE, u.to_meta(), u.to_sections())
+    try:
+        _, size = frame_parts(u.TYPE, u.to_meta(), u.to_sections())
+    except WireError:                                # over MAX_FRAME_BYTES: it does not fit
+        size = max_frame + 1
     if size <= max_frame:
         return [u]
     arrays = []

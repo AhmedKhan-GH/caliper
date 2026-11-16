@@ -11,7 +11,8 @@ caliper._netio is built) and on the CPU and, where there is one, MPS:
   max_rate holds each entity part to one batch per interval, the newest
   waiting;
 * every refusal raises, attached or not, and the arguments that are not
-  built yet raise NotImplementedError;
+  built yet (data_view, items, blend and the instance arrays) raise
+  NotImplementedError;
 * a viewer without the capability "scenes" sees no scene;
 * the calls of demo 0 (the loss landscape) run in their order;
 * a call with nothing attached takes no snapshot."""
@@ -514,10 +515,9 @@ def test_scene_refusals():
     caliper.scene("s")
     with pytest.raises(ValueError, match="keeps its space"):
         caliper.scene("s", space="2d")
-    for kw in ("data_view", "view_camera"):
-        msg = f"caliper.scene({kw}=...) is not built yet"
-        with pytest.raises(NotImplementedError, match=re.escape(msg)):
-            caliper.scene("s", **{kw: {}})
+    with pytest.raises(NotImplementedError, match=re.escape("caliper.scene(data_view=...) is "
+                                                            "not built yet")):
+        caliper.scene("s", data_view={})
     assert caliper.scene("s", up="+z").up == "+z"                     # a second call updates up
 
 
@@ -560,29 +560,18 @@ def test_call_refusals():
         (ValueError, lambda: sc.mesh("m", p3, torch.zeros(2, 2, dtype=torch.int64))),
         (ValueError, lambda: sc.mesh("m", p3[:3], values=torch.zeros(4))),
         (ValueError, lambda: sc.points("p", torch.zeros(1, 3).expand(w.MAX_BATCH_POINTS + 1, 3))),
-        (ValueError, lambda: sc.mesh("m", torch.zeros(1, 3).expand(w.MAX_BATCH_POINTS, 3),
-                                     torch.zeros(1, 3, dtype=torch.int32).expand(
-                                         w.MAX_BATCH_POINTS, 3))),                  # > 64 MiB
     ]
     for exc, call in bad:
         with pytest.raises(exc):
             call()
     later = [
-        (lambda: sc.points("p", p3, class_ids=torch.zeros(4)), "scene.points(class_ids=...)"),
-        (lambda: sc.points("p", p3, labels=["a"] * 4), "scene.points(labels=...)"),
-        (lambda: sc.points("p", p3, items="test"), "scene.points(items=...)"),
-        (lambda: sc.lines("l", p3, indices=torch.zeros(2, 2)), "scene.lines(indices=...)"),
-        (lambda: sc.lines("l", p3, color_per="edge"), "scene.lines(color_per='edge')"),
-        (lambda: sc.mesh("m", p3[:3], normals=torch.zeros(3, 3)), "scene.mesh(normals=...)"),
-        (lambda: sc.mesh("m", p3[:3], uvs=torch.zeros(3, 2)), "scene.mesh(uvs=..., texture=...)"),
-        (lambda: sc.mesh("m", p3[:3], texture=torch.zeros(2, 2, 3)), "scene.mesh(uvs=..., texture=...)"),
-        (lambda: sc.arrows("a", p3, p3), "scene.arrows()"),
-        (lambda: sc.boxes("b"), "scene.boxes()"),
-        (lambda: sc.image("i", torch.zeros(2, 2, 3)), "scene.image()"),
-        (lambda: sc.camera("c", width=2, height=2), "scene.camera()"),
-        (lambda: sc.transform("t"), "scene.transform()"),
-        (lambda: sc.classes({}), "scene.classes()"),
-        (lambda: sc.clear(""), "scene.clear()"),
+        (lambda: sc.points("p", p3, items="test"), "items="),
+        (lambda: sc.points("p", p3, blend="additive"), "blend="),
+        (lambda: sc.lines("l", p3, blend="additive"), "blend="),
+        (lambda: sc.boxes("b", p3, p3, items="test"), "items="),
+        (lambda: sc.mesh("m", p3[:3], instance_poses=torch.zeros(2, 4, 4)), "instance_poses="),
+        (lambda: sc.mesh("m", p3[:3], instance_colors=torch.zeros(2, 4)), "instance_colors="),
+        (lambda: sc.mesh("m", p3[:3], instance_values=torch.zeros(2)), "instance_values="),
     ]
     for call, what in later:
         with pytest.raises(NotImplementedError, match="^" + re.escape(what + " is not built yet (")):

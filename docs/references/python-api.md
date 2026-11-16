@@ -603,24 +603,30 @@ caliper.set_data_view("attention", {"index": {"layer": 0, "sequence": 2, "head":
 ## Scenes
 
 A scene is a live view of 3-D or 2-D geometry: a tree of entities, named by
-entity paths such as `"world/cloud"`, each holding a batch of points, lines
-and a mesh. Scenes travel on the network route only, over `caliper.serve()`
-and a hub that it connects to, with the scenes subset of the
-[Wire protocol 3.2 draft](wire-protocol-3-2.md). With only the live session
-or the in-process window open, the first scene call warns once and scene
-calls do nothing there. The Caliper app and `caliper-viewer` attached to the
-stream ([Attach to a running script](../guides/attach-to-a-running-script.md#scenes)),
-the notebook widget and the viewer page draw a scene with the same scene
-view on the GPU; in a browser it needs WebGPU and Caliper's WebAssembly
-views, and without them the scene's plate shows a notice in its place.
+entity paths such as `"world/cloud"`, each holding batches of points, lines,
+arrows, boxes, a mesh or an image, or a pinhole camera, and each placed by an
+entity transform. Scenes travel on the network route only, over
+`caliper.serve()` and a hub that it connects to, with the
+[Wire protocol 3.2 draft](wire-protocol-3-2.md). With only the live session or
+the in-process window open, the first scene call warns once and scene calls
+do nothing there. The Caliper app and `caliper-viewer` attached to the stream
+([Attach to a running script](../guides/attach-to-a-running-script.md#scenes)),
+the notebook widget and the viewer page draw a scene with the same scene view
+on the GPU; in a browser it needs WebGPU and Caliper's WebAssembly views, and
+without them the scene's plate shows a notice in its place. The scene view
+draws points, lines (segments and strips) and meshes so far; for the other
+parts and arguments it says what it does not draw yet
+([Versioning](wire-protocol-3-2.md#versioning)).
 
 ```python
-scene = caliper.scene("landscape", up="+z", units="")
-scene.lines("", frame, static=True)                     # the box and the floor grid, once
-scene.mesh("surface", positions, triangles, values=log_loss, vmin=-4.0, vmax=2.0)
-scene.lines("path", path, strip_lengths=[len(path)], colors=(235, 235, 235), rate=10)
-scene.points("current", point[None], colors=(255, 80, 80), rate=10)
-caliper.widget("landscape", "scene", height=480)
+scene = caliper.scene("world", up="+z", view_camera={"target": (0, 0, 0.5), "azimuth": 30.0})
+scene.classes({0: "floor", 1: "obstacle"})
+scene.points("room/cloud", xyz, class_ids=(xyz[:, 2] > 0.05).int(), static=True)
+scene.transform("rig/left", translation=(-0.06, -2.5, 1.2), rotation=forward_y, static=True)
+scene.camera("rig/left", width=640, height=480, focal=525.0, static=True)
+scene.image("rig/left/rgb", frame)                      # in the camera's pixel space
+scene.lines("graph/edges", pos, indices=edge_index.T, values=weight, cmap="magma")
+caliper.widget("world", "scene", height=480)
 ```
 
 ### scene
@@ -640,24 +646,43 @@ first call of a script opens the live session when no route is open.
 | `up` | `str` or `None` | `None` | The axis a 3-D view keeps upright when it opens, `"+x"` to `"-z"`; the person can switch a view between Y up and Z up. In 2-D the direction of y on screen, `"-y"` or `"+y"`. `None` is `"+y"` in 3-D and `"-y"` in 2-D |
 | `units` | `str` | `"m"` | A unit note of at most 15 bytes, shown on the view's scale bar, with an SI prefix for m, s and g; nothing is converted. `""` shows the number alone |
 | `rate` | `float` or `None` | `None` | The default rate limit of each batch: `None` is 60 per second, 0 every call |
+| `view_camera` | `dict`, `str` or `None` | `None` | The camera a 3-D view opens on: a dict of any of `target` (3 numbers), `distance` (above 0), `azimuth` and `elevation` (degrees, the elevation from −89 to 89), read against `up`, keys left out filled from the fit; or the entity path of a camera to look through |
 
 A second call with the same name returns the same scene and updates `up`,
-`units` and `rate`. A bad name, space, axis, unit note or rate raises
-`ValueError` (`TypeError` for a rate that is not a number), and so does a
-`space` that differs from the scene's. `data_view` and `view_camera` are not
-built yet and raise `NotImplementedError`. `caliper.remove(name)` removes the
-scene and what it retains, and `caliper.widget(name, "scene")` shows it in a
-notebook.
+`units`, `rate` and `view_camera`; `view_camera=None` leaves the starting
+camera as it is and `view_camera={}` returns it to the fit. The starting camera
+travels in the scene's entry in VIEWS, and a view moves to a new one only
+until a person moves its camera. A bad name, space, axis, unit note or rate
+raises `ValueError` (`TypeError` for a rate that is not a number), and so does
+a `space` that differs from the scene's. `view_camera` raises `TypeError` for
+a value that is neither a dict nor a string and for a key of the wrong type,
+and `ValueError` for an unknown key, a number that is not finite, a distance
+not above 0, an elevation outside −89 to 89, a path outside the grammar, and
+any `view_camera` in a 2-D scene. `data_view` is not built yet and raises
+`NotImplementedError`. `caliper.remove(name)` removes the scene and what it
+retains, and `caliper.widget(name, "scene")` shows it in a notebook.
 
-### scene.points, scene.lines and scene.mesh
+### The primitives
 
 ```python
 scene.points(path, positions, *, colors=None, values=None, cmap="viridis", vmin=None,
-             vmax=None, radii=None, static=False, rate=None)
-scene.lines(path, positions, *, strip_lengths=None, colors=None, values=None, cmap="viridis",
-            vmin=None, vmax=None, color_per=None, width=2.0, static=False, rate=None)
-scene.mesh(path, positions, indices=None, *, colors=None, values=None, cmap="viridis",
-           vmin=None, vmax=None, static=False, rate=None)
+             vmax=None, class_ids=None, radii=None, labels=None, items=None, blend="normal",
+             static=False, rate=None)
+scene.lines(path, positions, *, indices=None, strip_lengths=None, colors=None, values=None,
+            cmap="viridis", vmin=None, vmax=None, color_per=None, width=2.0, blend="normal",
+            static=False, rate=None)
+scene.arrows(path, origins, vectors, *, colors=None, values=None, cmap="viridis", vmin=None,
+             vmax=None, width=2.0, static=False, rate=None)
+scene.boxes(path, centers=None, half_sizes=None, *, corners=None, rotations=None, colors=None,
+            class_ids=None, labels=None, fill=False, width=2.0, items=None, static=False,
+            rate=None)
+scene.mesh(path, positions, indices=None, *, normals=None, colors=None, values=None,
+           cmap="viridis", vmin=None, vmax=None, uvs=None, texture=None, instance_poses=None,
+           instance_colors=None, instance_values=None, static=False, rate=None)
+scene.image(path, image, *, opacity=1.0, static=False, rate=None)
+scene.depth(path, depth, *, scale=None, cmap="viridis", vmin=None, vmax=None, cloud=None,
+            static=False, rate=None)
+scene.segmentation(path, class_ids, *, opacity=0.5, static=False, rate=None)
 ```
 
 Each call logs one part of the entity at `path` and replaces the batch that
@@ -668,40 +693,62 @@ no viewer of the scene is attached, or the batch's rate limit dropped it.
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
 | `path` | `str` | | An entity path: 0 to 16 segments of `[A-Za-z0-9_.-]{1,63}` joined by `/`, at most 255 bytes, no `.` or `..` |
-| `positions` | tensor (N, D) | | D is 3 in a 3-D scene and 2 in a 2-D one; any float dtype, cast to float32 on its device |
+| `positions`, `origins`, `vectors`, `centers`, `half_sizes` | tensor (N, D) | | D is 3 in a 3-D scene and 2 in a 2-D one and under a camera; any float dtype, cast to float32 on its device |
 | `colors` | tensor (rows, 3 or 4), or one colour | `None` | uint8, or floats in [0, 1] converted on the device; one colour for all is a tuple of 3 or 4 integers from 0 to 255 or floats from 0 to 1. A missing alpha is 255 |
 | `values`, `cmap`, `vmin`, `vmax` | tensor (rows,), `str`, numbers | `None`, `"viridis"` | Values through a colormap (`viridis`, `magma` or `rdbu`); an open end of the range is computed on the device |
+| `class_ids` | integer tensor (N,) | `None` | Points and boxes: class ids, coloured by the class table where no colour or value is given |
+| `labels` | `str` or list of `str` | `None` | Points and boxes: one label for all, or one per item, of at most 63 bytes, at most 4,096 |
 | `radii` | tensor (N,) or a number | `None` | Points: radii in scene units; without them, points are discs of a few pixels |
-| `strip_lengths` | list of `int` or integer tensor (S,) | `None` | Lines: the vertices of each strip, at least 1 each, adding up to V. Without it, vertices 2k and 2k + 1 form segment k |
-| `color_per` | `str` or `None` | `None` | Lines: `"vertex"` or `"strip"`, what the rows of `colors` and `values` belong to; `None` reads it from their count, and a count that fits both raises `ValueError` |
-| `width` | `float` | 2.0 | Lines: the width in pixels |
-| `indices` | integer tensor (T, 3) | `None` | Mesh: the triangles, any integer dtype, cast to int32 on the device. Without them each three vertices form a triangle. An index out of range draws as the last vertex |
+| `indices` | integer tensor | `None` | Lines: (E, 2) index pairs, each an edge between two vertices of `positions`, as PyTorch Geometric's `edge_index.T`; a (2, E) array raises `ValueError` naming the fix. Mesh: (T, 3) triangles; without them each three vertices form a triangle. Cast to int32 on the device; an index out of range draws as the last vertex |
+| `strip_lengths` | list of `int` or integer tensor (S,) | `None` | Lines: the vertices of each strip, at least 1 each, adding up to V. Without it and `indices`, vertices 2k and 2k + 1 form segment k |
+| `color_per` | `str` or `None` | `None` | Lines: `"vertex"`, `"strip"` or `"edge"`, what the rows of `colors` and `values` belong to; `None` reads it from their count, and a count that fits two raises `ValueError` |
+| `width` | `float` | 2.0 | Lines, arrows and box edges: the width in pixels |
+| `corners` | tensor (N, 4) | `None` | 2-D boxes as (x0, y0, x1, y1), turned into centres and half sizes on the device |
+| `rotations` | tensor (N, 4) | `None` | 3-D boxes: unit quaternions x y z w |
+| `fill` | `bool` | `False` | Boxes: also translucent faces |
+| `normals` | tensor (V, 3) | `None` | Mesh: per-vertex normals for smooth shading; without them faces are flat |
+| `uvs`, `texture` | tensor (V, 2), tensor (H, W, 3 or 4) | `None` | Mesh: texture coordinates and the texture, uint8 or floats in [0, 1], at most 8,192 pixels on a side; they replace `colors` and `values` |
+| `image` | tensor (H, W, 3 or 4) or (H, W), or `bytes` | | A colour image, uint8 or floats in [0, 1], or the bytes of one JPEG or PNG frame, recognised by its signature, at most 16 MiB |
+| `depth` | tensor (H, W) | | A depth image, float or uint16 |
+| `scale` | `float` or `None` | `None` | Depth: scene units per stored unit; `None` is 1 for floats and 0.001 for uint16, millimetres as metres. `vmin` and `vmax` of a depth image are in scene units |
+| `cloud` | `bool` or `None` | `None` | Depth: also the back-projected point cloud; `None` draws it under a camera |
+| `class_ids` of `segmentation` | integer tensor (H, W) | | A segmentation image, coloured by the class table; it travels as uint8 when it is uint8 and as uint16 otherwise, an id outside 0 to 65,535 clamped |
+| `opacity` | `float` | 1.0, 0.5 | Images: from 0 to 1 |
 | `static` | `bool` | `False` | A static item: the scene's setup. See below |
 | `rate` | `float` or `None` | `None` | This batch's rate limit; `None` takes the scene's |
 
-The rows of `colors` and `values` are N for points, V or S for lines and V
-for a mesh; faces of a mesh are shaded flat. `colors` and `values` together
-raise `ValueError`, and so do a shape, dtype or row count that does not fit, a
-bad path, an odd number of segment vertices, strip lengths that do not add
-up (when they are host data), a mesh without indices whose vertex count is not
-a multiple of 3, a batch over the limits (4,194,304 points, vertices or
-triangles, 1,048,576 strips, 1,024 entities and 2,048 batches in a scene) and a
-batch whose arrays would pass one frame of 64 MiB. These checks read host
-metadata only, so they run on every call, attached or not. An argument of
-the wrong type raises `TypeError`. Strip lengths in a device tensor are
-checked once their copy reaches host memory, on the network thread: a batch
-whose lengths do not add up to V, or hold a length below 1, is dropped there
-with a warning, and the call has already returned `True`.
+The rows of `colors` and `values` are N for points and arrows, V, S or E for
+lines, and V for a mesh. `colors` and `values` together raise `ValueError`,
+and so do a shape, dtype or row count that does not fit, a bad path, an odd
+number of segment vertices, strip lengths that do not add up (when they are
+host data), `indices` with `strip_lengths`, `uvs` without `texture`, rotations
+of 2-D boxes, a mesh without indices whose vertex count is not a multiple of 3,
+a batch over the limits (4,194,304 points, vertices, edges or triangles,
+1,048,576 arrows, boxes or strips, images of 8,192 pixels on a side, 1,024
+entities and 2,048 batches in a scene), and a part the entity cannot hold: a
+primitive at an entity that holds a camera, 3-D data under a camera, whose
+children live in its 2-D pixel space, and in a 3-D scene an image that is not
+under a camera logged before it. These checks read host metadata only, so
+they run on every call, attached or not. An argument of the wrong type raises
+`TypeError`. Strip lengths in a device tensor are checked once their copy
+reaches host memory, on the network thread: a batch whose lengths do not add
+up to V, or hold a length below 1, is dropped there with a warning, and the
+call has already returned `True`. `items=`, `blend=` and the instance arrays of
+a mesh are not built yet and raise `NotImplementedError`, for example
+`items= is not built yet (picking and linked selection)`.
 
 **What a call costs.** With no viewer of the scene attached, a call costs its
 checks and a dictionary update and does no device work, unless the batch is
 static. With a viewer attached and the batch due, the snapshot is built once
-on the arrays' own device: the casts, the per-axis bounds and the value range
-(sent as `stats`), and the budget of the default data view, which samples
-more than 100,000 points or segments by stride. Each array is then copied
-into pinned host memory without waiting, one `torch.mps.Event` is recorded,
-and the network thread reads the copies once the event has completed. Nothing
-reads the device on the training thread.
+on the arrays' own device: the casts, colours as RGBA, 2-D box corners turned
+into centres, the per-axis bounds and the value range (sent as `stats`; a
+depth image's range leaves out zeros and non-finite depths), and the budget
+of the default data view, which samples more than 100,000 points or segments
+by stride. Each array is then copied into pinned host memory without waiting,
+one `torch.mps.Event` is recorded, and the network thread reads the copies
+once the event has completed. Nothing reads the device on the training
+thread. A batch whose arrays pass one frame of 64 MiB travels as a split
+update of up to 16 pieces; a batch over 512 MiB raises `ValueError`.
 
 **Static items.** A batch logged with `static=True` is copied once at the call,
 even with nothing attached, and the producer retains it, a newer static batch
@@ -709,29 +756,52 @@ of the same entity part replacing it. The rate limit never drops one. A
 batch logged without `static` is snapshotted only while a viewer watches the
 scene; the producer keeps the newest one it sent of each entity part.
 
-**A late viewer.** When a viewer subscribes to a scene, it first receives the
-scene's state: a reset, then every static batch and the newest batch of every
-other entity part, in the byte order of their paths. It draws an entity whose
-batch was not kept from its next call.
-
 **Rate limits.** Each batch, an entity path and part, has its own rate limit
 (`rate`, else the scene's, else 60 per second), and a viewer's `max_rate`
 applies to each entity part of its subscription, the newest batch replacing
 one still waiting.
 
-The calls `points`, `lines` and `mesh` are built with the arguments in the
-table above. The calls and arguments below belong to the scene API but are
-not built yet. Each raises `NotImplementedError` with a message that says so,
-for example `scene.lines(indices=...) is not built yet (index-pair edges)`:
+### Cameras, entity transforms, the class table and clears
 
-| Call or argument | What it is for |
-|---|---|
-| `scene.points(class_ids=..., labels=...)` | The class table and labels |
-| `scene.points(items=...)` | Picking and linked selection |
-| `scene.lines(indices=...)`, `color_per="edge"` | Index-pair edges |
-| `scene.mesh(normals=..., uvs=..., texture=...)` | Smooth shading and textures |
-| `caliper.scene(data_view=..., view_camera=...)` | Scene data views and the starting camera |
-| `scene.arrows`, `boxes`, `image`, `depth`, `segmentation`, `camera`, `transform`, `classes`, `clear` | The other primitives, cameras, entity transforms, the class table and clears |
+```python
+scene.camera(path, *, width, height, focal=None, fov=None, principal=None, convention="rdf",
+             plane_distance=None, static=False)
+scene.transform(path, *, translation=None, rotation=None, scale=None, matrix=None, static=False)
+scene.classes(table, *, static=True)
+scene.clear(path="", *, recursive=False, static=False)
+```
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `width`, `height` | `int` | | The camera's image size, 1 to 8,192 pixels |
+| `focal` | `float` or pair | `None` | `fx` and `fy` in pixels, or one value for both; exactly one of `focal` and `fov` |
+| `fov` | `float` | `None` | The vertical field of view in degrees, which sets `fx = fy` |
+| `principal` | pair | `None` | `(cx, cy)`; `None` is the image centre |
+| `convention` | `str` | `"rdf"` | `"rdf"` (x right, y down, z forward) or `"rub"` (x right, y up, looking along −z) |
+| `plane_distance` | `float` | `None` | How far in front of the camera its image plane is drawn, in scene units |
+| `translation`, `rotation`, `scale` | numbers, array or tensor | `None` | The parts of an entity transform, applied as T R S: 3 numbers, a unit quaternion x y z w and 1 or 3 numbers in 3-D; 2 numbers, one angle in radians and 1 or 2 numbers in 2-D and under a camera |
+| `matrix` | (4, 4) array or tensor | `None` | In the usual row and column sense; it excludes the parts. A call with none of them resets the transform to the identity |
+| `table` | `dict` | | Class id (0 to 65,535) to a label, or to `(label, colour)`; at most 4,096 entries. An id without a colour takes colour id mod 16 of the categorical palette |
+| `recursive` | `bool` | `False` | Clear the subtree too |
+
+A camera sits at an entity of its own, posed by that entity's transform; the
+entity holds no primitive, the root holds no camera, and a camera is never
+under another. Its children live in its pixel space, where images, 2-D points,
+lines, arrows and boxes sit. An entity transform of tensors is composed on
+their device and copied without waiting, as an array is; one of numbers is
+composed on the host. A clear removes the entity's primitives, camera and
+transform, and its subtree's with `recursive`; static parts stay unless the
+clear is static too, and `clear("", recursive=True)` empties the scene's live
+data. These four calls are small: the producer keeps them whether or not a
+viewer is attached, the rate limit never drops them, a clear applies at once
+to what it keeps, and each returns `True`. A viewer's pending entity
+transforms merge into one message, the newest of each entity.
+
+**A late viewer.** When a viewer subscribes to a scene, it first receives the
+scene's state: a reset, the class table, the static and then the other entity
+transforms, then every camera, every static batch and the newest batch of
+every other entity part, in the byte order of their paths. It draws an entity
+whose batch was not kept from its next call.
 
 ## Controls
 

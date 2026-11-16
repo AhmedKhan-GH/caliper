@@ -4,18 +4,25 @@ Each NetRing (one per ``caliper.serve()`` producer) has one :class:`SceneRoute`
 (``route_of(ring)``), which holds
 
 * the scene views in the ring's registry, so that VIEWS lists them (kind 6
-  with the key "scene"), to a peer that announced the capability "scenes";
+  with the key "scene", and its "view_camera" when the script set one), to a
+  peer that announced the capability "scenes";
 * the subscriptions to each scene, which the training thread reads to decide
   whether a call takes a snapshot (``watched``);
-* the batches whose device copies are still in flight (``queue``), which the
-  pump finishes once their event has completed (``pump``), keeping the newest
-  stamped batch of each entity part for a later subscription, and offers to
-  every subscriber of their scene;
+* the items whose device copies are still in flight (``queue``): batches,
+  cameras, entity transforms, class tables and clears. The pump finishes them
+  in the order of the calls of each scene (``pump``), keeps the newest stamped
+  batch of each entity part for a later subscription, applies a clear to what
+  it keeps, and offers each to every subscriber of its scene;
 * per subscription a :class:`SubQueue`: the scene's state for a new
-  subscription (SCENE_CLEAR with reset, then every batch held, each with
-  ``state`` true), sent first and in order, then at most one pending batch
-  per entity part, which a newer one replaces, each entity part at the
-  subscription's ``max_rate``.
+  subscription (SCENE_CLEAR with reset, the class table, the entity
+  transforms, then every camera and batch held, each with ``state`` true),
+  and the clears, sent first and in order; then the newest class table, the
+  pending entity transforms merged into SCENE_TRANSFORMS (the newest per path,
+  the static ones apart), and at most one pending batch per entity part,
+  which a newer one replaces, each entity part at the subscription's
+  ``max_rate`` (cameras unlimited). A clear drops the pending batches and
+  transforms it clears. A batch over one frame travels as a split update, its
+  pieces sent one after another before anything else of the subscription.
 
 The Python sender asks a link's :class:`LinkScenes` for its next frame
 between series and snapshots; the native sender's links get their frames
@@ -32,13 +39,16 @@ import warnings
 
 from . import _wire
 from ._net_ring import ViewState
-from ._scene import KIND_SCENE, PART_ORDER, SCENES, Batch, SceneState
+from ._scene import (KIND_SCENE, PART_ORDER, SCENES, Batch, Classes, Clear, SceneState,
+                     Transform)
 
 __all__ = ["route_of", "SceneRoute", "LinkScenes", "SubQueue"]
 
 _routes_lock = threading.Lock()
 NATIVE_BACKLOG = 2                       # scene frames a native link may have waiting at once
                                          # (caliper._netio.MAX_SCENE_BYTES is this many frames)
+FRAME_ROOM = _wire.MAX_FRAME_BYTES - 64 * 1024   # array bytes a batch sends whole, at most
+PIECE_BYTES = _wire.MAX_FRAME_BYTES              # the frame of a piece of a split update, at most
 
 
 def route_of(ring) -> "SceneRoute":
@@ -66,17 +76,27 @@ class SceneViewState(ViewState):
                 "scene": self.scene.info()}
 
 
-def finish(b: Batch) -> bool:
-    """Read a completed batch out of host memory (network thread). False for a
+def finish(item) -> bool:
+    """Read a completed item out of host memory (network thread). False for a
     batch that every receiver would refuse: strip lengths from a device tensor,
     which the call could not read, that do not add up to the vertices or hold a
     length below 1. Such a batch is dropped with a warning (once per entity, by
     the default warning filter)."""
+    if isinstance(item, Transform):
+        if item.values is None:
+            m = item.matrix
+            item.values = m.numpy().astype("<f4") if hasattr(m, "numpy") else m
+        return True
+    if not isinstance(item, Batch):
+        return True
+    b = item
     if b.arrays is not None:
         return True
     if b.refused:
         return False
     arrays = {name: t.numpy() for name, t in b.tensors.items()}
+    for name, dt in b.cast.items():
+        arrays[name] = arrays[name].astype(dt)
     sl = arrays.get("strip_lengths")
     if sl is not None and ((sl.size and int(sl.min()) < 1) or
                            int(sl.sum(dtype="int64")) != arrays["positions"].shape[0]):
@@ -85,15 +105,19 @@ def finish(b: Batch) -> bool:
                       f"{b.path or 'the root'!r} do not add up to their vertices, or one is "
                       "below 1; such a batch is dropped", stacklevel=2)
         return False
-    vrange, bounds, dims = b.stats
-    stats = vrange.tolist() if vrange is not None else [0.0, 0.0]
-    if bounds is not None:
-        stats += bounds.tolist()
-        if dims == 2:
-            stats += [0.0, 0.0]
-    else:
-        stats += [math.nan] * 6
-    b.params["stats"] = stats
+    if b.stats is not None:
+        vrange, bounds, dims = b.stats
+        if dims == 0:                                 # a depth image: its range in scene units
+            b.params["stats"] = vrange.tolist() if vrange is not None else [math.nan, math.nan]
+        else:
+            stats = vrange.tolist() if vrange is not None else [0.0, 0.0]
+            if bounds is not None:
+                stats += bounds.tolist()
+                if dims == 2:
+                    stats += [0.0, 0.0]
+            else:
+                stats += [math.nan] * 6
+            b.params["stats"] = stats
     b.arrays = arrays
     return True
 
@@ -102,9 +126,24 @@ def _key(path: str, part: str):
     return path.encode("utf-8"), PART_ORDER[part]
 
 
+def _transforms(sub: int, view: str, items, static: bool, state: bool) -> list:
+    """SCENE_TRANSFORMS of finished transforms, at most MAX_TRANSFORMS each."""
+    import numpy as np
+    items = sorted(items, key=lambda t: t.path.encode("utf-8"))
+    out = []
+    for k in range(0, len(items), _wire.MAX_TRANSFORMS):
+        chunk = items[k:k + _wire.MAX_TRANSFORMS]
+        out.append(_wire.SceneTransforms(
+            sub, view, max(t.seq for t in chunk), max(t.stamp_ns for t in chunk),
+            [t.path for t in chunk], np.stack([t.values for t in chunk]).astype("<f4"),
+            static=static, state=state))
+    return out
+
+
 class SubQueue:
     """What one subscription to a scene still has to send."""
-    __slots__ = ("sub", "view", "interval", "state", "pending", "last")
+    __slots__ = ("sub", "view", "interval", "state", "pending", "last", "transforms", "classes",
+                 "pieces", "splits")
 
     def __init__(self, sub: int, view: str, interval: float):
         self.sub = sub
@@ -113,29 +152,81 @@ class SubQueue:
         self.state: collections.deque = collections.deque()   # sent first, in order, never dropped
         self.pending: dict = {}           # (path, part) -> Batch, the newest wins
         self.last: dict = {}              # (path, part) -> monotonic time of its last send
+        self.transforms: dict = {}        # path -> Transform, the newest wins
+        self.classes: Classes | None = None
+        self.pieces: collections.deque = collections.deque()  # the rest of a split update
+        self.splits = 0                   # this subscription's split updates so far
 
-    def offer(self, b: Batch) -> bool:
-        replaced = (b.path, b.part) in self.pending
-        self.pending[(b.path, b.part)] = b
+    def offer(self, item) -> bool:
+        """Queue an item; True when it replaced a pending one."""
+        if isinstance(item, Clear):
+            for key in [k for k, b in self.pending.items() if item.removes(k[0], b.static)]:
+                del self.pending[key]
+            for path in [p for p, t in self.transforms.items() if item.removes(p, t.static)]:
+                del self.transforms[path]
+            self.state.append(self.clear(item, False))
+            return False
+        if isinstance(item, Transform):
+            replaced = item.path in self.transforms
+            self.transforms[item.path] = item
+            return replaced
+        if isinstance(item, Classes):
+            replaced = self.classes is not None
+            self.classes = item
+            return replaced
+        replaced = (item.path, item.part) in self.pending
+        self.pending[(item.path, item.part)] = item
         return replaced
 
     def next_item(self, now: float):
         """(message, None) for the next frame, else (None, seconds until one is due)."""
+        if self.pieces:
+            return self.pieces.popleft(), None
         if self.state:
             return self.state.popleft(), None
+        if self.classes is not None:
+            k, self.classes = self.classes, None
+            return self.table(k, False), None
+        if self.transforms:
+            static = any(t.static for t in self.transforms.values())
+            group = [t for t in self.transforms.values() if t.static == static]
+            group = sorted(group, key=lambda t: t.path.encode("utf-8"))[:_wire.MAX_TRANSFORMS]
+            for t in group:
+                del self.transforms[t.path]
+            return _transforms(self.sub, self.view, group, static, False)[0], None
         wait = None
         for key, b in self.pending.items():
-            due = self.last.get(key, -math.inf) + self.interval - now
+            interval = 0.0 if b.part == _wire.PART_CAMERA else self.interval
+            due = self.last.get(key, -math.inf) + interval - now
             if due <= 0:
                 del self.pending[key]
                 self.last[key] = now
-                return self.update(b, False), None
+                return self.whole_or_pieces(self.update(b, False)), None
             wait = due if wait is None else min(wait, due)
         return None, wait
+
+    def whole_or_pieces(self, msg: _wire.SceneUpdate):
+        """The update, or its first piece when its arrays pass one frame (the
+        other pieces wait in ``pieces``)."""
+        size = sum(getattr(a, "nbytes", 0) for a in msg.arrays.values())
+        if size <= FRAME_ROOM:
+            return msg
+        self.splits += 1
+        pieces = _wire.split_update(msg, self.splits, max_frame=PIECE_BYTES)
+        self.pieces.extend(pieces[1:])
+        return pieces[0]
 
     def update(self, b: Batch, state: bool) -> _wire.SceneUpdate:
         return _wire.SceneUpdate(self.sub, self.view, b.seq, b.stamp_ns, b.path, b.part,
                                  b.arrays, b.params, static=b.static, state=state, axes=b.axes)
+
+    def table(self, k: Classes, state: bool) -> _wire.SceneClasses:
+        return _wire.SceneClasses(self.sub, self.view, k.seq, k.stamp_ns, k.classes,
+                                  static=k.static, state=state)
+
+    def clear(self, c: Clear, state: bool) -> _wire.SceneClear:
+        return _wire.SceneClear(self.sub, self.view, c.seq, c.stamp_ns, c.path,
+                                recursive=c.recursive, static=c.static, state=state)
 
 
 class LinkScenes:
@@ -170,7 +261,7 @@ class SceneRoute:
         self.lock = threading.Lock()
         self.watch: dict[str, int] = {}               # scene -> open subscriptions
         self.subs: dict[str, dict] = {}               # scene -> {(link, sub): SubQueue}
-        self.pending: list[Batch] = []                # copies in flight (under lock)
+        self.pending: list = []                       # items in flight, in call order (under lock)
         self.held: dict[str, dict] = {}               # scene -> {(path, part): newest stamped Batch}
         self.counters = collections.Counter()
         self.native_wait = None                       # native sender: a scene frame is waiting
@@ -197,9 +288,9 @@ class SceneRoute:
     def watched(self, name: str) -> bool:
         return name in self.watch
 
-    def queue(self, b: Batch) -> None:
+    def queue(self, item) -> None:
         with self.lock:
-            self.pending.append(b)
+            self.pending.append(item)
         self.counters["queued"] += 1
         self.ring._wake()
 
@@ -208,32 +299,46 @@ class SceneRoute:
         return bool(self.pending)
 
     def pump(self) -> bool:
-        """Finish the batches whose copies completed and offer them. Returns
-        True while copies are still in flight."""
+        """Finish the items whose copies completed and offer them, in the order
+        of the calls of each scene: an item waits for the earlier ones of its
+        scene. Returns True while copies are still in flight."""
         if not self.pending:
             self._drop_gone()
             return False
         with self.lock:
-            done, left = [], []
-            for b in self.pending:
-                (done if b.ready() else left).append(b)
+            done, left, blocked = [], [], set()
+            for item in self.pending:
+                if item.scene in blocked or not item.ready():
+                    blocked.add(item.scene)
+                    left.append(item)
+                else:
+                    done.append(item)
             self.pending = left
-        for b in done:
-            if not finish(b):
+        for item in done:
+            if not finish(item):
                 self.counters["refused"] += 1
                 continue
-            st = SCENES.get(b.scene)
+            st = SCENES.get(item.scene)
             if st is None:
                 continue                              # removed meanwhile
-            if not b.static:
-                h = self.held.setdefault(b.scene, {})
-                old = h.get((b.path, b.part))
-                if old is None or old.seq < b.seq:
-                    h[(b.path, b.part)] = b
-            elif st.static.get((b.path, b.part)) is not b:
-                continue                              # a newer static batch replaced it
-            for (link, _sub), q in list(self.subs.get(b.scene, {}).items()):
-                if q.offer(b):
+            if isinstance(item, Clear):
+                h = self.held.get(item.scene, {})
+                for key in [k for k in h if item.removes(k[0], False)]:
+                    del h[key]
+            elif isinstance(item, Batch):
+                key = (item.path, item.part)
+                if item.part == _wire.PART_CAMERA:
+                    if st.cameras.get(item.path) is not item:
+                        continue                      # a newer camera replaced it, or a clear
+                elif not item.static:
+                    h = self.held.setdefault(item.scene, {})
+                    old = h.get(key)
+                    if old is None or old.seq < item.seq:
+                        h[key] = item
+                elif st.static.get(key) is not item:
+                    continue                          # a newer static batch replaced it, or a clear
+            for (link, _sub), q in list(self.subs.get(item.scene, {}).items()):
+                if q.offer(item):
                     link.stats["scene_superseded"] += 1
                 link.wake.set()
             self.counters["published"] += 1
@@ -252,11 +357,24 @@ class SceneRoute:
         q = SubQueue(s.sub, s.view, s.interval)
         q.state.append(_wire.SceneClear(s.sub, s.view, st.seq, time.monotonic_ns(), "",
                                         reset=True, state=True))
+        late = []
+        if st.classes is not None:
+            q.state.append(q.table(st.classes, True))
+        transforms = list(st.transforms.values())
+        ready = [t for t in transforms if t.ready()]
+        late += [t for t in transforms if not t.ready()]
+        for t in ready:
+            finish(t)
+        for static in (True, False):
+            group = [t for t in ready if t.static == static]
+            if group:
+                q.state.extend(_transforms(s.sub, s.view, group, static, True))
         items = dict(st.static)
         for key, b in self.held.get(s.view, {}).items():
             if key not in items or items[key].seq < b.seq:
                 items[key] = b
-        late = []
+        for path, b in list(st.cameras.items()):
+            items[(path, _wire.PART_CAMERA)] = b
         for key in sorted(items, key=lambda k: _key(*k)):
             b = items[key]
             if b.arrays is None and b.ready() and not finish(b):

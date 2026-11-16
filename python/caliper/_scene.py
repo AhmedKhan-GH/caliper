@@ -1,34 +1,41 @@
-"""caliper.scene: scenes of points, lines and meshes on the network route.
+"""caliper.scene: scenes on the network route.
 
-This is the part of the scene calls that is built, on
-the scenes subset of the protocol 3.2 draft (docs/references/wire-protocol-3-2.md):
-``caliper.scene(name, space=, up=, units=, rate=)`` and, on the scene it
-returns, ``points``, ``lines`` (segments or strips) and ``mesh``, each with
-``static=`` and ``rate=``. Only ``caliper.serve()`` and a hub that it connects
+The scene calls of Caliper LIB on the scenes of the protocol 3.2 draft
+(docs/references/wire-protocol-3-2.md): ``caliper.scene(name, space=, up=,
+units=, rate=, view_camera=)`` and, on the scene it returns, ``points``,
+``lines`` (segments, strips and index-pair edges), ``arrows``, ``boxes``,
+``mesh``, ``image``, ``depth``, ``segmentation``, ``camera``, ``transform``,
+``classes`` and ``clear``. Only ``caliper.serve()`` and a hub that it connects
 to carry scenes so far; with only the shared-memory session or the
 in-process window open, a scene call warns once and does nothing there.
 
 A call, on the thread that makes it:
 
-* checks every argument from host metadata only (shapes, dtypes, devices and
-  the scene's limits), so a bad call raises at once, attached or not;
-* with no viewer of the scene attached, returns False after those checks,
-  unless the batch is static: a static batch is the scene's setup, so it is
-  snapshotted once at the call even with nothing attached, and the producer
-  retains it for every viewer that subscribes later;
+* checks every argument from host metadata only (shapes, dtypes, devices, the
+  scene's limits and what the entity can hold), so a bad call raises at once,
+  attached or not;
+* for a primitive with no viewer of the scene attached, returns False after
+  those checks, unless the batch is static: a static batch is the scene's
+  setup, so it is snapshotted once at the call even with nothing attached, and
+  the producer retains it for every viewer that subscribes later;
 * otherwise, within the batch's rate limit, builds the snapshot once: the
-  casts (positions, values and radii to f32, indices and strip lengths to
-  i32, colours to RGBA u8) and the per-axis bounds and value range run on the
-  arrays' own device, the default data view's budget samples points and
-  segments by stride, and each array is copied with ``non_blocking=True`` into
-  pinned host memory, after which one ``torch.mps.Event`` is recorded. The
-  network thread (caliper/_net_scene.py) reads the copies once the event has
-  completed. Nothing here waits for the device: there is no ``.item()``,
-  ``.cpu()`` of a device tensor, ``.numpy()``, ``.tolist()`` or
-  ``synchronize()``.
+  casts (floats to f32, integers to i32, colours and colour images to RGBA
+  u8), the per-axis bounds and value range, the composition of an entity
+  transform given as tensors, all on the arrays' own device; the default
+  data view's budget samples points and segments by stride; and each array is
+  copied with ``non_blocking=True`` into pinned host memory, after which one
+  ``torch.mps.Event`` is recorded. The network thread (caliper/_net_scene.py)
+  reads the copies once the event has completed. Nothing here waits for the
+  device: there is no ``.item()``, ``.cpu()`` of a device tensor, ``.numpy()``,
+  ``.tolist()`` or ``synchronize()``.
 
-The arguments and calls of the full scene API that are not built yet raise
-NotImplementedError with a message that says so.
+Cameras, entity transforms, the class table and clears are small: the
+producer keeps them whether or not anything is attached, and a later viewer
+receives them in the scene's state. They are never dropped by a rate limit.
+A clear applies at once to what the producer keeps.
+
+``data_view=``, ``items=``, ``blend=`` and the instance arrays of a mesh are not
+built yet and raise NotImplementedError.
 """
 from __future__ import annotations
 
@@ -42,22 +49,31 @@ from typing import Any
 from . import _wire
 from ._convert import check_range, cmap_index
 
-__all__ = ["scene", "Scene", "SceneState", "Batch", "SCENES", "forget"]
+__all__ = ["scene", "Scene", "SceneState", "Batch", "Transform", "Classes", "Clear", "SCENES",
+           "forget"]
 
 KIND_SCENE = int(_wire.Kind.SCENE)
 _CMAPS = {"viridis": 0, "magma": 1, "rdbu": 2}
 DEFAULT_RATE_HZ = 60.0
 META_MARGIN = 4096                       # bytes of metadata a batch frame may need, at most
-PART_ORDER = {_wire.PART_POINTS: 0, _wire.PART_LINES: 1, _wire.PART_MESH: 2}
+PART_ORDER = {p: i for i, p in enumerate(_wire.PARTS)}
+PRIMITIVES = tuple(p for p in _wire.PARTS if p != _wire.PART_CAMERA)
+IMAGE_FORMS = {b"\x89PNG\r\n\x1a\n": _wire.FORMAT_PNG, b"\xff\xd8\xff": _wire.FORMAT_JPEG}
+# The 16 colours that categorical points draw with (src/host/live/live_views_draw.cpp,
+# kPalette): a class id without a colour of its own takes colour id mod 16.
+PALETTE = ((31, 119, 180), (255, 127, 14), (44, 160, 44), (214, 39, 40), (148, 103, 189),
+           (140, 86, 75), (227, 119, 194), (127, 127, 127), (188, 189, 34), (23, 190, 207),
+           (174, 199, 232), (255, 187, 120), (152, 223, 138), (255, 152, 150), (197, 176, 213),
+           (196, 156, 148))
 
 
 def _not_built(call: str, what: str) -> NotImplementedError:
-    """The error of an argument or call of the scene API that is not built yet."""
+    """The error of an argument of the scene API that is not built yet."""
     return NotImplementedError(f"{call} is not built yet ({what})")
 
 
 SCENES: dict[str, "SceneState"] = {}     # name -> the scene (training thread writes; the network
-                                         # thread reads its static batches)
+                                         # thread reads what it retains)
 _lock = threading.Lock()
 _warned = False
 _TORCH = None
@@ -72,13 +88,16 @@ def _torch():
 
 
 # ---------------------------------------------------------------------------
-# a snapshot on its way to the network
+# what a call hands to the network
 # ---------------------------------------------------------------------------
 @dataclass(eq=False)
 class Batch:
-    """One snapshot of one part of one entity. ``tensors`` holds the wire
-    arrays in host memory (pinned for a device source, written by queued
-    copies); ``stats`` the device-computed pieces of the stats array; the
+    """One SCENE_UPDATE: a snapshot of one primitive of one entity, or a
+    camera (no arrays). ``tensors`` holds the wire arrays in host memory
+    (pinned for a device source, written by queued copies); ``stats`` the
+    device-computed pieces of the stats array ([values (2,) or None, bounds
+    (2 * D,) or None, D], or [range (2,), None, 0] for a depth image, or None);
+    ``cast`` the numpy dtypes some arrays take on the host once copied. The
     network thread reads them once ``ready()`` and fills ``arrays``."""
     scene: str
     path: str
@@ -88,15 +107,72 @@ class Batch:
     static: bool
     params: dict
     tensors: dict
-    stats: list                           # [values (2,) or None, bounds (2 * D,) or None, D]
+    stats: list | None
     axes: list | None = None
     event: Any = None
     nbytes: int = 0
+    cast: dict = field(default_factory=dict)
     arrays: dict | None = None            # name -> numpy, once finished (network thread)
     refused: bool = False                 # finished and found invalid: never sent
 
     def ready(self) -> bool:
         return self.event is None or self.event.query()
+
+
+@dataclass(eq=False)
+class Transform:
+    """One entity transform: ``matrix`` is the 4 x 4 matrix stored
+    column-major, (16,) f32 in host memory (pinned and written by a queued
+    copy when it was composed on a device); ``values`` the numpy copy once
+    finished."""
+    scene: str
+    path: str
+    seq: int
+    stamp_ns: int
+    static: bool
+    matrix: Any
+    event: Any = None
+    values: Any = None
+
+    def ready(self) -> bool:
+        return self.event is None or self.event.query()
+
+
+@dataclass(eq=False)
+class Classes:
+    """A scene's class table: ``classes`` are {id, label, color}, ascending."""
+    scene: str
+    seq: int
+    stamp_ns: int
+    static: bool
+    classes: list
+
+    def ready(self) -> bool:
+        return True
+
+
+@dataclass(eq=False)
+class Clear:
+    """A clear of entity ``path``, its subtree too with ``recursive``."""
+    scene: str
+    seq: int
+    stamp_ns: int
+    path: str
+    recursive: bool
+    static: bool
+
+    def ready(self) -> bool:
+        return True
+
+    def reaches(self, path: str) -> bool:
+        if path == self.path:
+            return True
+        return self.recursive and (self.path == "" or path.startswith(self.path + "/"))
+
+    def removes(self, path: str, static: bool) -> bool:
+        """Whether this clear removes a part at ``path``: static parts only when
+        the clear is static too."""
+        return self.reaches(path) and (self.static or not static)
 
 
 # ---------------------------------------------------------------------------
@@ -105,27 +181,50 @@ class Batch:
 class SceneState:
     """Everything the producer holds of one scene."""
 
-    def __init__(self, name: str, space: str, up: str, units: str, rate):
+    def __init__(self, name: str, space: str, up: str, units: str, rate, view_camera=None):
         self.name = name
         self.space = space
         self.dims = 3 if space == _wire.SPACE_3D else 2
         self.up = up
         self.units = units
         self.rate = rate
+        self.view_camera = view_camera
         self.interval = _interval(rate if rate is not None else DEFAULT_RATE_HZ)
-        self.version = 0                  # grows when up, units or rate change
-        self.seq = 0                      # the scene's batch counter
+        self.version = 0                  # grows when up, units, rate or view_camera change
+        self.seq = 0                      # the scene's message counter
         self.static: dict = {}            # (path, part) -> Batch, the retained static batches
+        self.cameras: dict = {}           # path -> Batch of the camera part, retained
+        self.transforms: dict = {}        # path -> Transform, retained
+        self.classes: Classes | None = None
+        self.kinds: dict = {}             # path -> the parts it holds (a camera excludes primitives)
         self.last: dict = {}              # (path, part) -> perf_counter of its last snapshot
         self.batches: set = set()         # (path, part) logged so far
         self.entities: set = set()        # paths logged so far
         self.counters: dict = {}
 
     def info(self) -> dict:
-        return {"space": self.space, "up": self.up, "units": self.units}
+        out = {"space": self.space, "up": self.up, "units": self.units}
+        if self.view_camera is not None:
+            out["view_camera"] = self.view_camera
+        return out
 
     def count(self, key: str) -> None:
         self.counters[key] = self.counters.get(key, 0) + 1
+
+    def next_seq(self) -> int:
+        self.seq += 1
+        return self.seq
+
+    def under_camera(self, path: str) -> bool:
+        """Whether a proper ancestor of ``path`` holds a camera: its children
+        live in the camera's 2-D pixel space."""
+        if not self.cameras or not path:
+            return False
+        segs = path.split("/")
+        return any("/".join(segs[:k]) in self.cameras for k in range(1, len(segs)))
+
+    def dims_at(self, path: str) -> int:
+        return 2 if self.dims == 2 or self.under_camera(path) else 3
 
 
 def _interval(rate) -> float:
@@ -143,14 +242,58 @@ def _check_name(name) -> None:
         raise ValueError(f"invalid scene name {name!r} (1 to {_wire.NAME_MAX} bytes, no '##')")
 
 
+def _real(x) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def _check_view_camera(vc, space: str):
+    """The starting camera of a scene, as scenes.md defines it: an orbit dict
+    of target, distance, azimuth and elevation (degrees), or the entity path
+    of a camera. Returns the value as VIEWS carries it."""
+    if isinstance(vc, str):
+        if space != _wire.SPACE_3D:
+            raise ValueError("a 2-D scene takes no view_camera: its fit frames it whole")
+        if vc == "" or not _wire.entity_path_ok(vc):
+            raise ValueError(f"view_camera {vc!r} is not the entity path of a camera")
+        return vc
+    if not isinstance(vc, dict):
+        raise TypeError(f"view_camera must be a dict or an entity path, got {type(vc).__name__}")
+    if space != _wire.SPACE_3D:
+        raise ValueError("a 2-D scene takes no view_camera: its fit frames it whole")
+    out = {}
+    for key, v in vc.items():
+        if key not in _wire.VIEW_CAMERA_KEYS:
+            raise ValueError(f"unknown view_camera key {key!r}; the keys are "
+                             f"{list(_wire.VIEW_CAMERA_KEYS)}")
+        if key == "target":
+            try:
+                vals = list(v)
+            except TypeError:
+                raise TypeError(f"view_camera target must be 3 numbers, got {v!r}") from None
+            if len(vals) != 3 or not all(_real(x) for x in vals):
+                raise TypeError(f"view_camera target must be 3 numbers, got {v!r}")
+            if not all(math.isfinite(x) for x in vals):
+                raise ValueError(f"view_camera target must be finite, got {v!r}")
+            out[key] = [float(x) for x in vals]
+            continue
+        if not _real(v):
+            raise TypeError(f"view_camera {key} must be a number, got {v!r}")
+        if not math.isfinite(v):
+            raise ValueError(f"view_camera {key} must be finite, got {v!r}")
+        if key == "distance" and not v > 0:
+            raise ValueError(f"view_camera distance must be above 0, got {v!r}")
+        if key == "elevation" and not -89 <= v <= 89:
+            raise ValueError(f"view_camera elevation is from -89 to 89 degrees, got {v!r}")
+        out[key] = float(v)
+    return out
+
+
 def scene(name: str = "scene", *, space: str = "3d", up=None, units: str = "m", rate=None,
           data_view=None, view_camera=None) -> "Scene":
     """See caliper.scene."""
     _check_name(name)
     if data_view is not None:
         raise _not_built("caliper.scene(data_view=...)", "scene data views")
-    if view_camera is not None:
-        raise _not_built("caliper.scene(view_camera=...)", "the starting camera")
     if space not in (_wire.SPACE_3D, _wire.SPACE_2D):
         raise ValueError(f"space must be '3d' or '2d', got {space!r}")
     axes = _wire.UP_AXES_3D if space == _wire.SPACE_3D else _wire.UP_AXES_2D
@@ -162,17 +305,19 @@ def scene(name: str = "scene", *, space: str = "3d", up=None, units: str = "m", 
         raise ValueError(f"units must be a str of at most {_wire.UNITS_MAX} bytes, got {units!r}")
     if rate is not None:
         _interval(rate)
+    vc = None if view_camera is None else _check_view_camera(view_camera, space)
     import caliper
     routes = caliper._routes or caliper._auto_routes()
     with _lock:
         st = SCENES.get(name)
         if st is None:
-            st = SCENES[name] = SceneState(name, space, up, units, rate)
+            st = SCENES[name] = SceneState(name, space, up, units, rate, vc)
         else:
             if st.space != space:
                 raise ValueError(f"scene {name!r} is {st.space}; a scene keeps its space")
-            if (st.up, st.units, st.rate) != (up, units, rate):
-                st.up, st.units, st.rate = up, units, rate
+            new_vc = st.view_camera if view_camera is None else vc
+            if (st.up, st.units, st.rate, st.view_camera) != (up, units, rate, new_vc):
+                st.up, st.units, st.rate, st.view_camera = up, units, rate, new_vc
                 st.interval = _interval(rate if rate is not None else DEFAULT_RATE_HZ)
                 st.version += 1
     for sr in _scene_routes(routes):
@@ -187,6 +332,7 @@ def forget(name: str) -> None:
         st = SCENES.pop(name, None)
         if st is not None:
             st.static, st.last, st.batches, st.entities = {}, {}, set(), set()
+            st.cameras, st.transforms, st.classes, st.kinds = {}, {}, None, {}
 
 
 def attach_ring(ring) -> None:
@@ -239,6 +385,25 @@ def _scene_routes(routes) -> tuple:
     return srs
 
 
+def _live(st: SceneState) -> None:
+    """A call on a scene that caliper.remove dropped makes it again."""
+    if SCENES.get(st.name) is not st:
+        with _lock:
+            if SCENES.setdefault(st.name, st) is not st:
+                raise ValueError(f"scene {st.name!r} was removed and made again; log to the "
+                                 "Scene object that caliper.scene returns now")
+
+
+def _watching(st: SceneState) -> list:
+    caliper = _CALIPER or _caliper()
+    out = []
+    for sr in _scene_routes(caliper._routes or caliper._auto_routes()):
+        sr.ensure(st)
+        if sr.watched(st.name):
+            out.append(sr)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # argument checks (host metadata only)
 # ---------------------------------------------------------------------------
@@ -256,7 +421,7 @@ def _float_dtypes():
 def _array(x, what: str, kind: str):
     """A tensor from ``x`` without touching a device's data: a tensor
     (detached), a numpy array or a nested sequence (host data). ``kind`` is
-    "float" or "int": what the array must hold."""
+    "float", "int", "color" or "any": what the array must hold."""
     torch = _TORCH or _torch()
     if isinstance(x, torch.Tensor):
         t = x.detach() if x.requires_grad else x
@@ -302,13 +467,38 @@ def _check_path(path) -> None:
                          "bytes, no '.' or '..'")
 
 
-def _check_positions(st: SceneState, positions, what="positions"):
-    t = _array(positions, what, "float")
-    if t.ndim != 2 or t.shape[1] != st.dims:
-        raise ValueError(f"{what} must be (N, {st.dims}) in a {st.space} scene, got "
-                         f"{tuple(t.shape)}")
-    if t.shape[0] > _wire.MAX_BATCH_POINTS:
-        raise ValueError(f"{t.shape[0]} {what}, more than {_wire.MAX_BATCH_POINTS} in a batch")
+def _check_holds(st: SceneState, path: str, part: str) -> None:
+    """What an entity can hold: a camera excludes primitives, the root holds no
+    camera, a camera is never under another, and in a 3-D scene an image sits
+    under a camera."""
+    held = st.kinds.get(path, ())
+    if part == _wire.PART_CAMERA:
+        if path == "":
+            raise ValueError("the root holds no camera: give the camera an entity path")
+        if any(p != _wire.PART_CAMERA for p in held):
+            raise ValueError(f"{path!r} holds primitives; an entity that holds a camera holds no "
+                             "primitive, so put the camera beside them")
+        if st.under_camera(path):
+            raise ValueError(f"{path!r} lies under a camera, in its 2-D pixel space; a camera "
+                             "cannot be placed there")
+        return
+    if _wire.PART_CAMERA in held:
+        raise ValueError(f"{path!r} holds a camera; an entity that holds a camera holds no "
+                         "primitive: log to a child, which lives in the camera's pixel space")
+    if part == _wire.PART_IMAGE and st.dims == 3 and not st.under_camera(path):
+        raise ValueError(f"an image in a 3-D scene sits under a camera, its place coming from the "
+                         f"intrinsics; log a camera at a parent of {path!r} first")
+
+
+def _check_rows(st: SceneState, path: str, x, what: str, limit: int, kind: str = "float"):
+    """A required (N, D) array, D the dims of the entity's space."""
+    d = st.dims_at(path)
+    t = _array(x, what, kind)
+    if t.ndim != 2 or t.shape[1] != d:
+        where = "under a camera" if d == 2 and st.dims == 3 else f"in a {st.space} scene"
+        raise ValueError(f"{what} must be (N, {d}) {where}, got {tuple(t.shape)}")
+    if t.shape[0] > limit:
+        raise ValueError(f"{t.shape[0]} {what}, more than {limit} in a batch")
     return t
 
 
@@ -380,15 +570,70 @@ def _check_static_rate(static, rate):
     return None if rate is None else _interval(rate)
 
 
+def _check_static(static) -> None:
+    if not isinstance(static, bool):
+        raise TypeError(f"static must be True or False, got {static!r}")
+
+
+def _check_width(width) -> float:
+    if isinstance(width, bool) or not isinstance(width, (int, float)) or \
+            not (math.isfinite(width) and width > 0):
+        raise ValueError(f"width must be a number above 0 (pixels), got {width!r}")
+    return float(width)
+
+
+def _check_labels(labels, n: int):
+    """One label for all items (a str) or one per item (a list of n str), at
+    most MAX_LABELS of NAME_MAX bytes each. Returns the wire list."""
+    if isinstance(labels, str):
+        out = [labels]
+    elif isinstance(labels, (list, tuple)) and all(isinstance(x, str) for x in labels):
+        out = list(labels)
+        if len(out) != n:
+            raise ValueError(f"{len(out)} labels for {n} items: give one label (a str) for all "
+                             "or one per item")
+    else:
+        raise TypeError(f"labels must be a str or a list of str, got {type(labels).__name__}")
+    if len(out) > _wire.MAX_LABELS:
+        raise ValueError(f"{len(out)} labels, more than {_wire.MAX_LABELS} in a batch")
+    for x in out:
+        if len(x.encode("utf-8")) > _wire.NAME_MAX:
+            raise ValueError(f"a label is at most {_wire.NAME_MAX} bytes, got {x!r}")
+    return out
+
+
+def _check_opacity(opacity) -> float:
+    if isinstance(opacity, bool) or not isinstance(opacity, (int, float)) or \
+            not (math.isfinite(opacity) and 0 <= opacity <= 1):
+        raise ValueError(f"opacity is a number from 0 to 1, got {opacity!r}")
+    return float(opacity)
+
+
+def _check_side(t, what: str, rank_ok) -> None:
+    if not rank_ok(t):
+        raise ValueError(f"{what} has the shape {tuple(t.shape)}")
+    if t.shape[0] > _wire.MAX_IMAGE_SIDE or t.shape[1] > _wire.MAX_IMAGE_SIDE:
+        raise ValueError(f"{what} is at most {_wire.MAX_IMAGE_SIDE} pixels on a side, got "
+                         f"{tuple(t.shape)}")
+
+
+def _no(**kw) -> None:
+    """Arguments of the scene API that are not built yet: refused when given."""
+    for name, (value, default, what) in kw.items():
+        if value is not default and value != default:
+            raise _not_built(f"{name}=", what)
+
+
 # ---------------------------------------------------------------------------
 # the scene object
 # ---------------------------------------------------------------------------
 class Scene:
-    """A scene of entities, each holding batches of points, lines and a mesh,
-    drawn in one 3-D or 2-D space. What :func:`caliper.scene` returns. Every
-    call logs one part of one entity and returns True if a route took a
-    snapshot, False when every route skipped it (nothing attached, the rate
-    limit)."""
+    """A scene of entities, each holding batches of primitives, a camera or an
+    entity transform, drawn in one 3-D or 2-D space. What :func:`caliper.scene`
+    returns. Every primitive call logs one part of one entity and returns True
+    if a route took a snapshot, False when every route skipped it (nothing
+    attached, the rate limit); ``camera``, ``transform``, ``classes`` and
+    ``clear`` are kept whether or not anything is attached and return True."""
     __slots__ = ("_s",)
 
     def __init__(self, state: SceneState):
@@ -399,35 +644,34 @@ class Scene:
     up = property(lambda self: self._s.up)
     units = property(lambda self: self._s.units)
     rate = property(lambda self: self._s.rate)
+    view_camera = property(lambda self: self._s.view_camera)
 
     def __repr__(self) -> str:
         s = self._s
         return f"<caliper.Scene {s.name!r} {s.space} up={s.up} units={s.units!r}>"
 
-    # -- the calls that are built ----------------------------------------------
+    # -- primitives ------------------------------------------------------------
     def points(self, path, positions, *, colors=None, values=None, cmap="viridis", vmin=None,
-               vmax=None, class_ids=None, radii=None, labels=None, items=None, static=False,
-               rate=None) -> bool:
+               vmax=None, class_ids=None, radii=None, labels=None, items=None, blend="normal",
+               static=False, rate=None) -> bool:
         """Points at ``positions`` (N, D), coloured by ``colors`` (N, 3 or 4),
-        one colour (a tuple), or ``values`` (N,) through ``cmap`` over
-        [vmin, vmax] (an open end is computed on the device); ``radii`` (N,)
-        or one number, in scene units (default: discs of a few pixels)."""
-        if class_ids is not None:
-            raise _not_built("scene.points(class_ids=...)", "the class table")
-        if labels is not None:
-            raise _not_built("scene.points(labels=...)", "labels")
-        if items is not None:
-            raise _not_built("scene.points(items=...)", "picking and linked selection")
+        one colour (a tuple), ``values`` (N,) through ``cmap`` over [vmin,
+        vmax] (an open end is computed on the device), or ``class_ids`` (N,)
+        through the class table; ``radii`` (N,) or one number, in scene units
+        (default: discs of a few pixels); ``labels`` one str or one per point."""
+        _no(items=(items, None, "picking and linked selection"),
+            blend=(blend, "normal", "additive blending"))
         st = self._s
         _check_path(path)
         iv = _check_static_rate(static, rate)
-        pos = _check_positions(st, positions)
+        _check_holds(st, path, _wire.PART_POINTS)
+        pos = _check_rows(st, path, positions, "positions", _wire.MAX_BATCH_POINTS)
         n = pos.shape[0]
         color, ct, vt = _check_colors(colors, values, lambda r: r == n, "N")
         cm = _check_range_args(cmap, vmin, vmax)
-        params, rt = {}, None
+        params, extra = {}, {}
         if radii is not None:
-            if isinstance(radii, (int, float)) and not isinstance(radii, bool):
+            if _real(radii):
                 if not (math.isfinite(radii) and radii > 0):
                     raise ValueError(f"radii must be above 0, got {radii!r}")
                 params["radius"] = float(radii)
@@ -435,45 +679,78 @@ class Scene:
                 rt = _array(radii, "radii", "float")
                 if rt.ndim != 1 or rt.shape[0] != n:
                     raise ValueError(f"radii must be (N,) or one number, got {tuple(rt.shape)}")
+                extra["radii"] = rt
+        if class_ids is not None:
+            extra["class_ids"] = _check_ids(class_ids, n, "N")
+        if labels is not None:
+            params["labels"] = _check_labels(labels, n)
         if color is not None:
             params["color"] = color
-        spec = _Spec(_wire.PART_POINTS, pos, ct, vt, cm, vmin, vmax, params,
-                     extra={"radii": rt} if rt is not None else {})
+        spec = _Spec(_wire.PART_POINTS, pos, ct, vt, cm, vmin, vmax, params, extra=extra)
         return _log(st, path, spec, static, iv)
 
     def lines(self, path, positions, *, indices=None, strip_lengths=None, colors=None,
               values=None, cmap="viridis", vmin=None, vmax=None, color_per=None, width=2.0,
-              static=False, rate=None) -> bool:
+              blend="normal", static=False, rate=None) -> bool:
         """Lines through ``positions`` (V, D): segments (vertices 2k and
-        2k + 1), or strips with ``strip_lengths`` (S,) (a list or an integer
-        tensor); coloured per vertex or per strip (``color_per``, read from
-        the row count when None), or with one colour, or by ``values``
-        through ``cmap``; ``width`` in pixels."""
-        if indices is not None:
-            raise _not_built("scene.lines(indices=...)", "index-pair edges")
-        if color_per == "edge":
-            raise _not_built("scene.lines(color_per='edge')", "index-pair edges")
-        if color_per not in (None, _wire.COLOR_PER_VERTEX, _wire.COLOR_PER_STRIP):
-            raise ValueError(f"color_per must be 'vertex', 'strip' or None, got {color_per!r}")
+        2k + 1), strips with ``strip_lengths`` (S,), or index-pair edges with
+        ``indices`` (E, 2), PyTorch Geometric's ``edge_index.T``; coloured per
+        vertex, per strip or per edge (``color_per``, read from the row count
+        when None), with one colour, or by ``values`` through ``cmap``;
+        ``width`` in pixels."""
+        _no(blend=(blend, "normal", "additive blending"))
+        if color_per not in (None, _wire.COLOR_PER_VERTEX, _wire.COLOR_PER_STRIP,
+                             _wire.COLOR_PER_EDGE):
+            raise ValueError(f"color_per must be 'vertex', 'strip', 'edge' or None, got "
+                             f"{color_per!r}")
+        if indices is not None and strip_lengths is not None:
+            raise ValueError("indices and strip_lengths together: a batch holds segments, strips "
+                             "or edges")
         st = self._s
         _check_path(path)
         iv = _check_static_rate(static, rate)
-        pos = _check_positions(st, positions)
+        _check_holds(st, path, _wire.PART_LINES)
+        pos = _check_rows(st, path, positions, "positions", _wire.MAX_BATCH_POINTS)
         v = pos.shape[0]
-        if isinstance(width, bool) or not isinstance(width, (int, float)) or \
-                not (math.isfinite(width) and width > 0):
-            raise ValueError(f"width must be a number above 0 (pixels), got {width!r}")
-        params = {"width": float(width)}
+        params = {"width": _check_width(width)}
         extra = {}
-        if strip_lengths is None:
-            if v % 2:
-                raise ValueError(f"segments need an even number of vertices, got {v}")
+        colored = values is not None or (colors is not None and not _flat(colors))
+        if indices is not None:
+            it = _array(indices, "indices", "int")
+            if it.ndim != 2 or it.shape[1] != 2:
+                fix = (f"; pass edge_index.T, an (E, 2) array" if it.ndim == 2 and it.shape[0] == 2
+                       else "")
+                raise ValueError(f"indices has shape {tuple(it.shape)}{fix}" if fix else
+                                 f"indices must be (E, 2), got {tuple(it.shape)}")
+            e = it.shape[0]
+            if e > _wire.MAX_BATCH_POINTS:
+                raise ValueError(f"{e} edges, more than {_wire.MAX_BATCH_POINTS} in a batch")
             if color_per == _wire.COLOR_PER_STRIP:
                 raise ValueError("color_per='strip' needs strip_lengths")
+            if color_per is None and colored:
+                r = _rows(colors if colors is not None else values)
+                if r == v and r == e:
+                    raise ValueError(f"{r} colour rows fit both the vertices and the edges; "
+                                     "pass color_per='vertex' or 'edge'")
+                color_per = _wire.COLOR_PER_EDGE if r == e else _wire.COLOR_PER_VERTEX
+            params["mode"] = _wire.LINES_EDGES
+            extra["indices"] = it
+            if color_per == _wire.COLOR_PER_EDGE:
+                params["color_per"] = _wire.COLOR_PER_EDGE
+                rows_ok, rows = (lambda r: r == e), "E"
+            else:
+                rows_ok, rows = (lambda r: r == v), "V"
+        elif strip_lengths is None:
+            if v % 2:
+                raise ValueError(f"segments need an even number of vertices, got {v}")
+            if color_per in (_wire.COLOR_PER_STRIP, _wire.COLOR_PER_EDGE):
+                raise ValueError(f"color_per={color_per!r} needs "
+                                 f"{'strip_lengths' if color_per == 'strip' else 'indices'}")
             params["mode"] = _wire.LINES_SEGMENTS
-            s_count = None
             rows_ok, rows = (lambda r: r == v), "V"
         else:
+            if color_per == _wire.COLOR_PER_EDGE:
+                raise ValueError("color_per='edge' needs indices")
             if isinstance(strip_lengths, (list, tuple)) and all(
                     x.__class__ is int for x in strip_lengths):
                 sl = strip_lengths                   # host ints: checked here
@@ -499,8 +776,7 @@ class Scene:
                                      "vertices of positions")
             params["mode"] = _wire.LINES_STRIPS
             extra["strip_lengths"] = sl
-            if color_per is None and (values is not None or
-                                      (colors is not None and not _flat(colors))):
+            if color_per is None and colored:
                 r = _rows(colors if colors is not None else values)
                 if r == v and r == s_count:
                     raise ValueError(f"{r} colour rows fit both the vertices and the strips; "
@@ -515,25 +791,114 @@ class Scene:
         cm = _check_range_args(cmap, vmin, vmax)
         if color is not None:
             params["color"] = color
-        spec = _Spec(_wire.PART_LINES, pos, ct, vt, cm, vmin, vmax, params, extra=extra)
+        spec = _Spec(_wire.PART_LINES, pos, ct, vt, cm, vmin, vmax, params, extra=extra,
+                     per_item=params.get("color_per") in (_wire.COLOR_PER_STRIP,
+                                                           _wire.COLOR_PER_EDGE))
         return _log(st, path, spec, static, iv)
 
-    def mesh(self, path, positions, indices=None, *, normals=None, colors=None, values=None,
-             cmap="viridis", vmin=None, vmax=None, uvs=None, texture=None, static=False,
-             rate=None) -> bool:
-        """A triangle mesh of ``positions`` (V, D) and ``indices`` (T, 3), any
-        integer dtype (without indices each three vertices form a triangle),
-        coloured per vertex by ``colors`` (V, 3 or 4), one colour, or
-        ``values`` (V,) through ``cmap``; faces are shaded flat. An index out
-        of range draws as the last vertex."""
-        if normals is not None:
-            raise _not_built("scene.mesh(normals=...)", "smooth shading")
-        if uvs is not None or texture is not None:
-            raise _not_built("scene.mesh(uvs=..., texture=...)", "textured meshes")
+    def arrows(self, path, origins, vectors, *, colors=None, values=None, cmap="viridis",
+               vmin=None, vmax=None, width=2.0, static=False, rate=None) -> bool:
+        """Arrows from ``origins`` (N, D) along ``vectors`` (N, D), coloured as
+        points are; ``width`` in pixels; the head is a fifth of the length."""
         st = self._s
         _check_path(path)
         iv = _check_static_rate(static, rate)
-        pos = _check_positions(st, positions)
+        _check_holds(st, path, _wire.PART_ARROWS)
+        o = _check_rows(st, path, origins, "origins", _wire.MAX_BATCH_ITEMS)
+        vec = _check_rows(st, path, vectors, "vectors", _wire.MAX_BATCH_ITEMS)
+        n = o.shape[0]
+        if vec.shape[0] != n:
+            raise ValueError(f"vectors must be ({n}, {o.shape[1]}), like origins, got "
+                             f"{tuple(vec.shape)}")
+        color, ct, vt = _check_colors(colors, values, lambda r: r == n, "N")
+        cm = _check_range_args(cmap, vmin, vmax)
+        params = {"width": _check_width(width)}
+        if color is not None:
+            params["color"] = color
+        spec = _Spec(_wire.PART_ARROWS, o, ct, vt, cm, vmin, vmax, params,
+                     extra={"vectors": vec}, first="origins")
+        return _log(st, path, spec, static, iv)
+
+    def boxes(self, path, centers=None, half_sizes=None, *, corners=None, rotations=None,
+              colors=None, class_ids=None, labels=None, fill=False, width=2.0, items=None,
+              static=False, rate=None) -> bool:
+        """Boxes at ``centers`` (N, D) with ``half_sizes`` (N, D), or in 2-D
+        ``corners`` (N, 4) as (x0, y0, x1, y1), converted on the device;
+        ``rotations`` (N, 4) quaternions x y z w, 3-D only; coloured by
+        ``colors``, one colour or ``class_ids``; ``fill`` adds translucent
+        faces; ``width`` of the edges in pixels."""
+        _no(items=(items, None, "picking and linked selection"))
+        st = self._s
+        _check_path(path)
+        iv = _check_static_rate(static, rate)
+        _check_holds(st, path, _wire.PART_BOXES)
+        d = st.dims_at(path)
+        if corners is not None:
+            if centers is not None or half_sizes is not None:
+                raise ValueError("corners replace centers and half_sizes: give one or the other")
+            if d != 2:
+                raise ValueError("corners give 2-D boxes; a 3-D box takes centers and half_sizes")
+            ct4 = _array(corners, "corners", "float")
+            if ct4.ndim != 2 or ct4.shape[1] != 4:
+                raise ValueError(f"corners must be (N, 4) as (x0, y0, x1, y1), got "
+                                 f"{tuple(ct4.shape)}")
+            if ct4.shape[0] > _wire.MAX_BATCH_ITEMS:
+                raise ValueError(f"{ct4.shape[0]} boxes, more than {_wire.MAX_BATCH_ITEMS} in a "
+                                 "batch")
+            c, h = None, None
+            n = ct4.shape[0]
+        else:
+            if centers is None or half_sizes is None:
+                raise TypeError("boxes takes centers and half_sizes, or corners")
+            c = _check_rows(st, path, centers, "centers", _wire.MAX_BATCH_ITEMS)
+            h = _check_rows(st, path, half_sizes, "half_sizes", _wire.MAX_BATCH_ITEMS)
+            n = c.shape[0]
+            if h.shape[0] != n:
+                raise ValueError(f"half_sizes must be ({n}, {d}), like centers, got "
+                                 f"{tuple(h.shape)}")
+            ct4 = None
+        extra = {}
+        if rotations is not None:
+            if d != 3:
+                raise ValueError("rotations are for 3-D boxes only")
+            rt = _array(rotations, "rotations", "float")
+            if rt.ndim != 2 or rt.shape != (n, 4):
+                raise ValueError(f"rotations must be ({n}, 4) quaternions x y z w, got "
+                                 f"{tuple(rt.shape)}")
+            extra["rotations"] = rt
+        color, cc, _ = _check_colors(colors, None, lambda r: r == n, "N")
+        if class_ids is not None:
+            extra["class_ids"] = _check_ids(class_ids, n, "N")
+        params = {"width": _check_width(width)}
+        if not isinstance(fill, bool):
+            raise TypeError(f"fill must be True or False, got {fill!r}")
+        if fill:
+            params["fill"] = True
+        if labels is not None:
+            params["labels"] = _check_labels(labels, n)
+        if color is not None:
+            params["color"] = color
+        spec = _Spec(_wire.PART_BOXES, c, cc, None, 0, None, None, params, extra=extra,
+                     first="centers", half_sizes=h, corners=ct4)
+        return _log(st, path, spec, static, iv)
+
+    def mesh(self, path, positions, indices=None, *, normals=None, colors=None, values=None,
+             cmap="viridis", vmin=None, vmax=None, uvs=None, texture=None, instance_poses=None,
+             instance_colors=None, instance_values=None, static=False, rate=None) -> bool:
+        """A triangle mesh of ``positions`` (V, D) and ``indices`` (T, 3), any
+        integer dtype (without indices each three vertices form a triangle),
+        with ``normals`` (V, 3) for smooth shading (faces are flat without),
+        coloured per vertex by ``colors`` (V, 3 or 4), one colour, ``values``
+        (V,) through ``cmap``, or ``uvs`` (V, 2) into a ``texture`` (H, W, 3 or
+        4). An index out of range draws as the last vertex."""
+        _no(instance_poses=(instance_poses, None, "instanced meshes"),
+            instance_colors=(instance_colors, None, "instanced meshes"),
+            instance_values=(instance_values, None, "instanced meshes"))
+        st = self._s
+        _check_path(path)
+        iv = _check_static_rate(static, rate)
+        _check_holds(st, path, _wire.PART_MESH)
+        pos = _check_rows(st, path, positions, "positions", _wire.MAX_BATCH_POINTS)
         v = pos.shape[0]
         extra = {}
         if indices is None:
@@ -547,47 +912,398 @@ class Scene:
                 raise ValueError(f"{it.shape[0]} triangles, more than {_wire.MAX_BATCH_POINTS} "
                                  "in a batch")
             extra["indices"] = it
+        if normals is not None:
+            nt = _array(normals, "normals", "float")
+            if nt.ndim != 2 or nt.shape != (v, 3):
+                raise ValueError(f"normals must be ({v}, 3), got {tuple(nt.shape)}")
+            extra["normals"] = nt
+        if (uvs is None) != (texture is None):
+            raise ValueError("uvs and texture go together")
+        if uvs is not None:
+            if colors is not None or values is not None:
+                raise ValueError("a mesh takes one of colors, values and uvs with a texture")
+            ut = _array(uvs, "uvs", "float")
+            if ut.ndim != 2 or ut.shape != (v, 2):
+                raise ValueError(f"uvs must be ({v}, 2), got {tuple(ut.shape)}")
+            tt = _check_color_image(texture, "texture", gray=False)
+            extra["uvs"] = ut
+            extra["texture"] = tt
         color, ct, vt = _check_colors(colors, values, lambda r: r == v, "V")
         cm = _check_range_args(cmap, vmin, vmax)
         params = {"color": color} if color is not None else {}
         spec = _Spec(_wire.PART_MESH, pos, ct, vt, cm, vmin, vmax, params, extra=extra)
         return _log(st, path, spec, static, iv)
 
-    # -- the calls that are not built yet --------------------------------------
-    def _later(self, call: str, what: str):
-        raise _not_built(f"scene.{call}()", what)
+    # -- images ------------------------------------------------------------------
+    def image(self, path, image, *, opacity=1.0, static=False, rate=None) -> bool:
+        """A colour image: a tensor u8 (H, W, 3 or 4) or (H, W), floats in [0, 1]
+        converted on the device, or the bytes of one JPEG or PNG frame,
+        recognised by its signature. In a 3-D scene it sits under a camera."""
+        st = self._s
+        _check_path(path)
+        iv = _check_static_rate(static, rate)
+        _check_holds(st, path, _wire.PART_IMAGE)
+        params = {"opacity": _check_opacity(opacity)}
+        if isinstance(image, (bytes, bytearray, memoryview)):
+            data = bytes(image)
+            form = next((f for sig, f in IMAGE_FORMS.items() if data.startswith(sig)), None)
+            if form is None:
+                raise ValueError("encoded image bytes must be one JPEG or PNG frame")
+            if len(data) > _wire.MAX_ENCODED_BYTES:
+                raise ValueError(f"an encoded frame of {len(data)} bytes, more than "
+                                 f"{_wire.MAX_ENCODED_BYTES}")
+            params.update(form=_wire.FORM_ENCODED, format=form)
+            spec = _Spec(_wire.PART_IMAGE, None, None, None, 0, None, None, params,
+                         encoded=data)
+            return _log(st, path, spec, static, iv)
+        t = _check_color_image(image, "image", gray=True)
+        params["form"] = _wire.FORM_COLOR
+        spec = _Spec(_wire.PART_IMAGE, None, None, None, 0, None, None, params,
+                     extra={"pixels": t})
+        return _log(st, path, spec, static, iv)
 
-    def arrows(self, *a, **kw):
-        self._later("arrows", "arrows")
+    def depth(self, path, depth, *, scale=None, cmap="viridis", vmin=None, vmax=None, cloud=None,
+              static=False, rate=None) -> bool:
+        """A depth image (H, W), f32 or u16 (any float is cast to f32 on the
+        device). ``scale`` is scene units per stored unit (None: 1 for floats,
+        0.001 for u16, millimetres to metres); ``vmin`` and ``vmax`` in scene
+        units, an open end computed on the device; ``cloud`` also draws the
+        back-projected point cloud (None: under a camera)."""
+        st = self._s
+        _check_path(path)
+        iv = _check_static_rate(static, rate)
+        _check_holds(st, path, _wire.PART_IMAGE)
+        torch = _TORCH or _torch()
+        t = _array(depth, "depth", "any")
+        u16 = t.dtype == torch.uint16
+        if not u16 and t.dtype not in _float_dtypes():
+            raise ValueError(f"depth must hold floats or uint16, got {t.dtype}")
+        _check_side(t, "depth", lambda x: x.ndim == 2)
+        if scale is None:
+            scale = 0.001 if u16 else 1.0
+        if isinstance(scale, bool) or not isinstance(scale, (int, float)) or \
+                not (math.isfinite(scale) and scale > 0):
+            raise ValueError(f"scale must be a number above 0, got {scale!r}")
+        if cloud is None:
+            cloud = st.under_camera(path)
+        if not isinstance(cloud, bool):
+            raise TypeError(f"cloud must be True, False or None, got {cloud!r}")
+        cm = _check_range_args(cmap, vmin, vmax)
+        params = {"form": _wire.FORM_DEPTH, "scale": float(scale), "cloud": cloud}
+        spec = _Spec(_wire.PART_IMAGE, None, None, None, cm, vmin, vmax, params,
+                     extra={"pixels": t}, depth=True)
+        return _log(st, path, spec, static, iv)
 
-    def boxes(self, *a, **kw):
-        self._later("boxes", "boxes")
+    def segmentation(self, path, class_ids, *, opacity=0.5, static=False, rate=None) -> bool:
+        """A segmentation image of integer class ids (H, W), coloured by the
+        class table; ids travel as u8 when the image is u8 and as u16
+        otherwise (an id outside 0 to 65,535 is clamped)."""
+        st = self._s
+        _check_path(path)
+        iv = _check_static_rate(static, rate)
+        _check_holds(st, path, _wire.PART_IMAGE)
+        torch = _TORCH or _torch()
+        t = _array(class_ids, "class_ids", "any")
+        if t.dtype.is_floating_point or t.dtype.is_complex or t.dtype == torch.bool:
+            raise ValueError(f"class_ids must hold integers, got {t.dtype}")
+        _check_side(t, "class_ids", lambda x: x.ndim == 2)
+        params = {"form": _wire.FORM_SEGMENTATION, "opacity": _check_opacity(opacity)}
+        spec = _Spec(_wire.PART_IMAGE, None, None, None, 0, None, None, params,
+                     extra={"pixels": t}, segmentation=True)
+        return _log(st, path, spec, static, iv)
 
-    def image(self, *a, **kw):
-        self._later("image", "images")
+    # -- cameras, entity transforms, the class table, clears ----------------------
+    def camera(self, path, *, width, height, focal=None, fov=None, principal=None,
+               convention="rdf", plane_distance=None, static=False) -> bool:
+        """A pinhole camera at entity ``path``, posed by the entity's own
+        transform: the image size ``width`` x ``height`` in pixels, ``focal``
+        (fx, fy, or one value for both) or ``fov``, the vertical field of view
+        in degrees; ``principal`` (cx, cy), the image centre by default;
+        ``convention`` "rdf" (x right, y down, z forward) or "rub"."""
+        st = self._s
+        _check_path(path)
+        _check_static(static)
+        _check_holds(st, path, _wire.PART_CAMERA)
+        for name, v in (("width", width), ("height", height)):
+            if isinstance(v, bool) or not isinstance(v, int):
+                raise TypeError(f"{name} must be an int, got {v!r}")
+            if not 1 <= v <= _wire.MAX_IMAGE_SIDE:
+                raise ValueError(f"{name} is 1 to {_wire.MAX_IMAGE_SIDE} pixels, got {v}")
+        if (focal is None) == (fov is None):
+            raise ValueError("give exactly one of focal and fov")
+        if fov is not None:
+            if not _real(fov) or not (math.isfinite(fov) and 0 < fov < 180):
+                raise ValueError(f"fov is the vertical field of view, between 0 and 180 degrees, "
+                                 f"got {fov!r}")
+            fx = fy = (height / 2.0) / math.tan(math.radians(fov) / 2.0)
+        else:
+            pair = (focal, focal) if _real(focal) else tuple(focal) if isinstance(
+                focal, (list, tuple)) else None
+            if pair is None or len(pair) != 2 or not all(_real(x) for x in pair):
+                raise TypeError(f"focal is one number or a pair (fx, fy), got {focal!r}")
+            if not all(math.isfinite(x) and x > 0 for x in pair):
+                raise ValueError(f"focal lengths are above 0, got {focal!r}")
+            fx, fy = (float(x) for x in pair)
+        if principal is None:
+            cx, cy = width / 2.0, height / 2.0
+        else:
+            if not isinstance(principal, (list, tuple)) or len(principal) != 2 or \
+                    not all(_real(x) for x in principal):
+                raise TypeError(f"principal is a pair (cx, cy), got {principal!r}")
+            if not all(math.isfinite(x) for x in principal):
+                raise ValueError(f"principal must be finite, got {principal!r}")
+            cx, cy = (float(x) for x in principal)
+        if convention not in (_wire.CONVENTION_RDF, _wire.CONVENTION_RUB):
+            raise ValueError(f"convention is 'rdf' or 'rub', got {convention!r}")
+        params = {"fx": float(fx), "fy": float(fy), "cx": cx, "cy": cy, "width": width,
+                  "height": height, "convention": convention}
+        if plane_distance is not None:
+            if not _real(plane_distance) or not (math.isfinite(plane_distance) and
+                                                  plane_distance > 0):
+                raise ValueError(f"plane_distance must be above 0, got {plane_distance!r}")
+            params["plane_distance"] = float(plane_distance)
+        _live(st)
+        _admit(st, path, _wire.PART_CAMERA)
+        b = Batch(st.name, path, _wire.PART_CAMERA, st.next_seq(), time.monotonic_ns(), static,
+                  params, {}, None)
+        b.arrays = {}
+        st.cameras[path] = b
+        for sr in _watching(st):
+            sr.queue(b)
+        st.count("cameras")
+        return True
 
-    def depth(self, *a, **kw):
-        self._later("depth", "depth images")
+    def transform(self, path, *, translation=None, rotation=None, scale=None, matrix=None,
+                  static=False) -> bool:
+        """The entity transform of ``path``, mapping its space into its
+        parent's: ``translation``, ``rotation`` (a quaternion x y z w, or one
+        angle in radians in 2-D and under a camera) and ``scale`` (1 or D
+        numbers), applied as T R S, or ``matrix`` (4, 4) in the usual row and
+        column sense. Numbers, arrays or tensors on any device; a tensor's
+        matrix is composed on its device. A call with none of them resets the
+        transform to the identity."""
+        st = self._s
+        _check_path(path)
+        _check_static(static)
+        if path == "":
+            raise ValueError("the root holds no entity transform: it is the scene's own space")
+        d = st.dims_at(path)
+        if matrix is not None and (translation is not None or rotation is not None or
+                                   scale is not None):
+            raise ValueError("matrix excludes translation, rotation and scale")
+        m, event = _compose(d, translation, rotation, scale, matrix)
+        _live(st)
+        if path not in st.entities and len(st.entities) >= _wire.MAX_ENTITIES:
+            raise ValueError(f"scene {st.name!r} holds {_wire.MAX_ENTITIES} entities, its limit")
+        st.entities.add(path)
+        tr = Transform(st.name, path, st.next_seq(), time.monotonic_ns(), static, m, event)
+        st.transforms[path] = tr
+        for sr in _watching(st):
+            sr.queue(tr)
+        st.count("transforms")
+        return True
 
-    def segmentation(self, *a, **kw):
-        self._later("segmentation", "segmentation images")
+    def classes(self, table, *, static=True) -> bool:
+        """The scene's class table, replaced whole: ``table`` maps a class id
+        (0 to 65,535) to a label, or to (label, colour); an id without a colour
+        takes colour id mod 16 of the categorical palette. Points and boxes
+        with ``class_ids`` and segmentation images use it."""
+        st = self._s
+        _check_static(static)
+        if not isinstance(table, dict):
+            raise TypeError(f"table must be a dict of class id to a label or (label, colour), "
+                            f"got {type(table).__name__}")
+        if len(table) > _wire.MAX_CLASSES:
+            raise ValueError(f"{len(table)} classes, more than {_wire.MAX_CLASSES}")
+        out = []
+        for cid, v in table.items():
+            if isinstance(cid, bool) or not isinstance(cid, int):
+                raise TypeError(f"a class id is an int, got {cid!r}")
+            if not 0 <= cid <= _wire.MAX_CLASS_ID:
+                raise ValueError(f"a class id is 0 to {_wire.MAX_CLASS_ID}, got {cid}")
+            if isinstance(v, str):
+                label, color = v, None
+            elif isinstance(v, (tuple, list)) and len(v) == 2 and isinstance(v[0], str):
+                label, color = v[0], _one_colour(v[1])
+            else:
+                raise TypeError(f"class {cid}: a label or (label, colour), got {v!r}")
+            if len(label.encode("utf-8")) > _wire.NAME_MAX:
+                raise ValueError(f"class {cid}: a label is at most {_wire.NAME_MAX} bytes")
+            if color is None:
+                color = list(PALETTE[cid % 16]) + [255]
+            out.append({"id": cid, "label": label, "color": color})
+        out.sort(key=lambda e: e["id"])
+        _live(st)
+        k = Classes(st.name, st.next_seq(), time.monotonic_ns(), static, out)
+        st.classes = k
+        for sr in _watching(st):
+            sr.queue(k)
+        st.count("classes")
+        return True
 
-    def camera(self, *a, **kw):
-        self._later("camera", "pinhole cameras")
+    def clear(self, path="", *, recursive=False, static=False) -> bool:
+        """Clear entity ``path`` (its subtree too with ``recursive``): its
+        primitives, camera and transform. Static parts stay unless the clear
+        is static too; ``clear("", recursive=True)`` empties the scene's live
+        data. A later log at the path brings a part back."""
+        st = self._s
+        _check_path(path)
+        _check_static(static)
+        if not isinstance(recursive, bool):
+            raise TypeError(f"recursive must be True or False, got {recursive!r}")
+        _live(st)
+        c = Clear(st.name, st.next_seq(), time.monotonic_ns(), path, recursive, static)
+        _apply_clear(st, c)
+        for sr in _watching(st):
+            sr.queue(c)
+        st.count("clears")
+        return True
 
-    def transform(self, *a, **kw):
-        self._later("transform", "entity transforms")
 
-    def classes(self, *a, **kw):
-        self._later("classes", "the class table")
+def _check_ids(ids, n: int, what: str):
+    t = _array(ids, "class_ids", "int")
+    if t.ndim != 1 or t.shape[0] != n:
+        raise ValueError(f"class_ids must be ({what},), got {tuple(t.shape)}")
+    return t
 
-    def clear(self, *a, **kw):
-        self._later("clear", "clearing entities")
+
+def _check_color_image(x, what: str, gray: bool):
+    """A colour image (H, W, 3 or 4), or (H, W) when ``gray``: u8, or floats
+    in [0, 1]."""
+    torch = _TORCH or _torch()
+    t = _array(x, what, "any")
+    if t.dtype != torch.uint8 and t.dtype not in _float_dtypes():
+        raise ValueError(f"{what} must be uint8 or floats in [0, 1], got {t.dtype}")
+    _check_side(t, what, lambda u: (u.ndim == 3 and u.shape[2] in (3, 4)) or
+                (gray and u.ndim == 2))
+    return t
+
+
+def _apply_clear(st: SceneState, c: Clear) -> None:
+    """A clear removes what the producer keeps of the entities it reaches:
+    stamped parts always, static ones only when the clear is static."""
+    for key in [k for k, b in st.static.items() if c.removes(k[0], True)]:
+        del st.static[key]
+    for path in [p for p, b in st.cameras.items() if c.removes(p, b.static)]:
+        del st.cameras[path]
+    for path in [p for p, t in st.transforms.items() if c.removes(p, t.static)]:
+        del st.transforms[path]
+    for path in [p for p in st.kinds if c.reaches(p)]:
+        parts = st.kinds[path]
+        keep = {part for part in parts if (path, part) in st.static or
+                (part == _wire.PART_CAMERA and path in st.cameras)}
+        if keep:
+            st.kinds[path] = keep
+        else:
+            del st.kinds[path]
+    for key in [k for k in st.batches if c.reaches(k[0]) and k not in st.static and
+                not (k[1] == _wire.PART_CAMERA and k[0] in st.cameras)]:
+        st.batches.discard(key)
+
+
+def _admit(st: SceneState, path: str, part: str) -> None:
+    """Count a new entity part against the scene's limits."""
+    key = (path, part)
+    if key not in st.batches:
+        if path not in st.entities and len(st.entities) >= _wire.MAX_ENTITIES:
+            raise ValueError(f"scene {st.name!r} holds {_wire.MAX_ENTITIES} entities, its limit")
+        if len(st.batches) >= _wire.MAX_BATCHES:
+            raise ValueError(f"scene {st.name!r} holds {_wire.MAX_BATCHES} batches, its limit")
+        st.entities.add(path)
+        st.batches.add(key)
+    st.kinds.setdefault(path, set()).add(part)
+
+
+def _compose(d: int, translation, rotation, scale, matrix):
+    """The column-major 4 x 4 matrix of an entity transform as (16,) f32, on
+    the host for numbers and arrays, on the device for a tensor (a pinned copy
+    and an event). Returns (matrix, event or None)."""
+    torch = _TORCH or _torch()
+    given = [x for x in (translation, rotation, scale, matrix) if x is not None]
+    dev = next((x.device for x in given if isinstance(x, torch.Tensor) and
+                x.device.type != "cpu"), None)
+    if dev is not None and dev.type != "mps":
+        dev = None                                   # macOS: other devices go through the host
+    target = dev if dev is not None else torch.device("cpu")
+
+    def vec(x, what, sizes):
+        if isinstance(x, torch.Tensor):
+            t = (x.detach() if x.requires_grad else x)
+            if t.dtype not in _float_dtypes() and (t.dtype.is_complex or t.dtype == torch.bool):
+                raise ValueError(f"{what} must hold numbers, got {t.dtype}")
+            t = t.to(device=target, dtype=torch.float32)
+        else:
+            if _real(x):
+                x = [x]
+            try:
+                t = torch.as_tensor(x, dtype=torch.float32, device=target)
+            except (TypeError, ValueError, RuntimeError) as e:
+                raise TypeError(f"{what} must be numbers, an array or a tensor: {e}") from None
+        if t.ndim > 1:
+            t = t.reshape(-1) if t.numel() in sizes and t.ndim == 2 and 1 in t.shape else t
+        if t.ndim != 1 or t.shape[0] not in sizes:
+            raise ValueError(f"{what} must be {' or '.join(map(str, sizes))} numbers, got shape "
+                             f"{tuple(t.shape)}")
+        return t
+
+    if matrix is not None:
+        if isinstance(matrix, torch.Tensor):
+            m = matrix.detach() if matrix.requires_grad else matrix
+            m = m.to(device=target, dtype=torch.float32)
+        else:
+            try:
+                m = torch.as_tensor(matrix, dtype=torch.float32)
+            except (TypeError, ValueError, RuntimeError) as e:
+                raise TypeError(f"matrix must be a (4, 4) array or tensor: {e}") from None
+        if tuple(m.shape) != (4, 4):
+            raise ValueError(f"matrix must be (4, 4), got {tuple(m.shape)}")
+        out = m.t().reshape(16)
+    else:
+        out = torch.eye(4, dtype=torch.float32, device=target)
+        if d == 3:
+            t = vec(translation, "translation", (3,)) if translation is not None else None
+            q = vec(rotation, "rotation", (4,)) if rotation is not None else None
+            s = vec(scale, "scale", (1, 3)) if scale is not None else None
+        else:
+            t = vec(translation, "translation", (2,)) if translation is not None else None
+            q = vec(rotation, "rotation", (1,)) if rotation is not None else None
+            s = vec(scale, "scale", (1, 2)) if scale is not None else None
+        r = torch.eye(3, dtype=torch.float32, device=target)
+        if q is not None and d == 3:
+            q = q / torch.linalg.vector_norm(q).clamp_min(1e-30)
+            x, y, z, w = q[0], q[1], q[2], q[3]
+            r = torch.stack([
+                torch.stack([1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)]),
+                torch.stack([2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)]),
+                torch.stack([2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)])])
+        elif q is not None:
+            c, sn = torch.cos(q[0]), torch.sin(q[0])
+            zero, one = torch.zeros_like(c), torch.ones_like(c)
+            r = torch.stack([torch.stack([c, -sn, zero]), torch.stack([sn, c, zero]),
+                             torch.stack([zero, zero, one])])
+        if s is not None:
+            sv = s.expand(d) if s.shape[0] == 1 else s
+            if d == 2:
+                sv = torch.cat([sv, torch.ones(1, dtype=torch.float32, device=target)])
+            r = r * sv.reshape(1, 3)
+        out[:3, :3] = r
+        if t is not None:
+            out[:d, 3] = t
+        out = out.t().reshape(16)
+    if out.device.type == "cpu":
+        return out.contiguous().clone(), None
+    host = torch.empty(16, dtype=torch.float32, pin_memory=True)
+    host.copy_(out, non_blocking=True)
+    event = torch.mps.Event()
+    event.record()
+    return host, event
 
 
 @dataclass(eq=False)
 class _Spec:
-    """A checked call: what the snapshot needs, all host metadata."""
+    """A checked primitive call: what the snapshot needs, all host metadata.
+    ``positions`` is the first array of the part (``first`` names it on the
+    wire); ``extra`` the part's other arrays."""
     part: str
     positions: Any
     colors: Any
@@ -596,7 +1312,14 @@ class _Spec:
     vmin: Any
     vmax: Any
     params: dict
-    extra: dict = field(default_factory=dict)   # radii, strip_lengths or indices
+    extra: dict = field(default_factory=dict)
+    first: str = "positions"
+    per_item: bool = False                # lines: colours per strip or per edge
+    half_sizes: Any = None                # boxes
+    corners: Any = None                   # 2-D boxes given as corners
+    encoded: bytes | None = None          # an encoded image
+    depth: bool = False
+    segmentation: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -605,48 +1328,48 @@ class _Spec:
 def _frame_bytes(spec: _Spec) -> int:
     """The bytes of the batch's arrays on the wire, from their shapes, after
     the default data view's budget."""
-    n, d = spec.positions.shape
-    rows = n
-    if spec.part == _wire.PART_POINTS:
-        rows = min(n, _wire.DEFAULT_MAX_POINTS)
-    elif spec.part == _wire.PART_LINES and spec.params["mode"] == _wire.LINES_SEGMENTS:
-        rows = 2 * min(n // 2, _wire.SCENE_DEFAULT_MAX_ITEMS)
-    strip = spec.params.get("color_per") == _wire.COLOR_PER_STRIP
-    out = rows * d * 4
-    for name, t in (("colors", spec.colors), ("values", spec.values)):
+    if spec.encoded is not None:
+        return len(spec.encoded)
+    out = 0
+    if spec.positions is not None:
+        n, d = spec.positions.shape
+        rows = n
+        if spec.part == _wire.PART_POINTS:
+            rows = min(n, _wire.DEFAULT_MAX_POINTS)
+        elif spec.part == _wire.PART_LINES and spec.params["mode"] == _wire.LINES_SEGMENTS:
+            rows = 2 * min(n // 2, _wire.SCENE_DEFAULT_MAX_ITEMS)
+        out += rows * d * 4
+    else:
+        rows = (spec.corners.shape[0] if spec.corners is not None else 0)
+        out += rows * 16
+    for t in (spec.colors, spec.values):
         if t is not None:
-            out += (t.shape[0] if strip else rows) * 4       # RGBA u8 or f32
+            out += (t.shape[0] if spec.per_item else rows) * 4       # RGBA u8 or f32
+    if spec.half_sizes is not None:
+        out += spec.half_sizes.numel() * 4
     for name, t in spec.extra.items():
-        out += (rows if name == "radii" else len(t) if isinstance(t, (list, tuple))
-                else t.numel()) * 4
+        if isinstance(t, (list, tuple)):
+            out += len(t) * 4
+        elif name == "radii":
+            out += rows * 4
+        elif name in ("pixels", "texture"):
+            h, w = t.shape[0], t.shape[1]
+            out += h * w * (4 if t.ndim == 3 else 2)
+        else:
+            out += t.numel() * 4
     return out
 
 
 def _log(st: SceneState, path: str, spec: _Spec, static: bool, iv) -> bool:
-    caliper = _CALIPER or _caliper()
-    if SCENES.get(st.name) is not st:               # removed: a call makes it again
-        with _lock:
-            if SCENES.setdefault(st.name, st) is not st:
-                raise ValueError(f"scene {st.name!r} was removed and made again; log to the "
-                                 "Scene object that caliper.scene returns now")
+    _live(st)
     nbytes = _frame_bytes(spec)
     if nbytes + META_MARGIN > _wire.MAX_FRAME_BYTES:
-        raise ValueError(f"this batch needs {nbytes} bytes, more than one frame of "
-                         f"{_wire.MAX_FRAME_BYTES >> 20} MiB; split updates are not built yet")
+        if nbytes > _wire.MAX_UPDATE_BYTES:
+            raise ValueError(f"this batch needs {nbytes} bytes, more than the "
+                             f"{_wire.MAX_UPDATE_BYTES >> 20} MiB of a split update")
     key = (path, spec.part)
-    if key not in st.batches:
-        if path not in st.entities and len(st.entities) >= _wire.MAX_ENTITIES:
-            raise ValueError(f"scene {st.name!r} holds {_wire.MAX_ENTITIES} entities, its limit")
-        if len(st.batches) >= _wire.MAX_BATCHES:
-            raise ValueError(f"scene {st.name!r} holds {_wire.MAX_BATCHES} batches, its limit")
-        st.entities.add(path)
-        st.batches.add(key)
-    srs = _scene_routes(caliper._routes or caliper._auto_routes())
-    watching = []
-    for sr in srs:
-        sr.ensure(st)
-        if sr.watched(st.name):
-            watching.append(sr)
+    _admit(st, path, spec.part)
+    watching = _watching(st)
     if not static:
         if not watching:
             st.count("unwatched")
@@ -670,24 +1393,48 @@ def _stride(count: int, size: int, device):
     return stride(count, size, device)
 
 
+def _rgba(t, torch, image: bool = False):
+    """Colours (N, 3 or 4) or a colour image (H, W, 3 or 4) as RGBA u8, on its
+    device: floats in [0, 1] scaled, a missing alpha 255. A grey image (H, W)
+    stays as it is."""
+    f32, u8 = torch.float32, torch.uint8
+    if t.dtype != u8:
+        t = (t.to(f32).clamp(0.0, 1.0) * 255.0 + 0.5).to(u8)
+    if t.shape[-1] == 3 and t.ndim == (3 if image else 2):
+        pad = torch.full(tuple(t.shape[:-1]) + (1,), 255, dtype=u8, device=t.device)
+        t = torch.cat([t, pad], -1)
+    return t
+
+
 def _snapshot(st: SceneState, path: str, spec: _Spec, static: bool) -> Batch:
     """Build the batch on the arrays' devices and queue its copies into host
     memory. Never waits for a device."""
     torch = _TORCH or _torch()
     f32, i32, u8 = torch.float32, torch.int32, torch.uint8
-    pos = spec.positions
-    n = pos.shape[0]
     params = dict(spec.params)
     arrays: dict = {}
+    cast: dict = {}
     axes = None
+    stats = None
+    if spec.encoded is not None:                     # host bytes: no device work
+        import numpy as np
+        st.seq += 1
+        b = Batch(st.name, path, spec.part, st.seq, time.monotonic_ns(), static, params,
+                  {}, None, nbytes=len(spec.encoded))
+        b.arrays = {"pixels": np.frombuffer(spec.encoded, np.uint8)}
+        return b
+    pos = spec.positions
     sample = None                       # the default budget's stride: (count, size, per segment)
-    if spec.part == _wire.PART_POINTS and n > _wire.DEFAULT_MAX_POINTS:
-        sample = (n, _wire.DEFAULT_MAX_POINTS, False)
-        axes = [{"dim": "point", "start": 0, "step": 1, "count": n, "size": sample[1]}]
-    elif spec.part == _wire.PART_LINES and params["mode"] == _wire.LINES_SEGMENTS and \
-            n // 2 > _wire.SCENE_DEFAULT_MAX_ITEMS:
-        sample = (n // 2, _wire.SCENE_DEFAULT_MAX_ITEMS, True)
-        axes = [{"dim": "segment", "start": 0, "step": 1, "count": n // 2, "size": sample[1]}]
+    if pos is not None:
+        n = pos.shape[0]
+        if spec.part == _wire.PART_POINTS and n > _wire.DEFAULT_MAX_POINTS:
+            sample = (n, _wire.DEFAULT_MAX_POINTS, False)
+            axes = [{"dim": "point", "start": 0, "step": 1, "count": n, "size": sample[1]}]
+        elif spec.part == _wire.PART_LINES and params["mode"] == _wire.LINES_SEGMENTS and \
+                n // 2 > _wire.SCENE_DEFAULT_MAX_ITEMS:
+            sample = (n // 2, _wire.SCENE_DEFAULT_MAX_ITEMS, True)
+            axes = [{"dim": "segment", "start": 0, "step": 1, "count": n // 2,
+                     "size": sample[1]}]
 
     def rows(t):
         """The rows of ``t`` the budget keeps, gathered on t's own device."""
@@ -698,40 +1445,87 @@ def _snapshot(st: SceneState, path: str, spec: _Spec, static: bool) -> Batch:
             idx = (idx[:, None] * 2 + torch.arange(2, device=t.device)).reshape(-1)
         return t.index_select(0, idx)
 
-    arrays["positions"] = rows(pos if pos.dtype == f32 else pos.to(f32))
-    per_vertex = params.get("color_per") != _wire.COLOR_PER_STRIP
+    def flt(t):
+        return t if t.dtype == f32 else t.to(f32)
+
+    def intg(t):
+        if isinstance(t, (list, tuple)):
+            return torch.tensor(t, dtype=i32)
+        return t if t.dtype == i32 else t.to(i32)
+
+    bounds_src = []
+    if spec.part == _wire.PART_BOXES:
+        if spec.corners is not None:                 # 2-D corners to centres and half sizes
+            c4 = flt(spec.corners)
+            lo = torch.minimum(c4[:, :2], c4[:, 2:])
+            hi = torch.maximum(c4[:, :2], c4[:, 2:])
+            centers, half = (lo + hi) * 0.5, (hi - lo) * 0.5
+        else:
+            centers, half = flt(spec.positions), flt(spec.half_sizes)
+        arrays["centers"], arrays["half_sizes"] = centers, half
+        reach = half.abs()
+        if "rotations" in spec.extra:               # a rotated box: its bounding sphere
+            reach = torch.linalg.vector_norm(half, dim=1, keepdim=True).expand_as(half)
+        bounds_src = [centers - reach, centers + reach]
+    elif pos is not None:
+        arrays[spec.first] = rows(flt(pos))
+        bounds_src = [arrays[spec.first]]
     if spec.colors is not None:
-        c = spec.colors
-        if c.dtype != u8:
-            c = (c.to(f32).clamp(0.0, 1.0) * 255.0 + 0.5).to(u8)
-        if c.shape[1] == 3:
-            c = torch.cat([c, torch.full((c.shape[0], 1), 255, dtype=u8, device=c.device)], 1)
-        arrays["colors"] = rows(c) if per_vertex else c
+        c = _rgba(spec.colors, torch)
+        arrays["colors"] = c if spec.per_item else rows(c)
     vals = None
     if spec.values is not None:
-        vals = spec.values if spec.values.dtype == f32 else spec.values.to(f32)
-        vals = rows(vals) if per_vertex else vals
+        vals = flt(spec.values)
+        vals = vals if spec.per_item else rows(vals)
         arrays["values"] = vals
+    if spec.values is not None or spec.depth:
         params["colormap"] = spec.cmap
         params["flags"] = (_wire.SNAP_AUTO_VMIN if spec.vmin is None else 0) | \
                           (_wire.SNAP_AUTO_VMAX if spec.vmax is None else 0)
         params["vmin"] = 0.0 if spec.vmin is None else float(spec.vmin)
         params["vmax"] = 1.0 if spec.vmax is None else float(spec.vmax)
     for name, t in spec.extra.items():
-        if name == "radii":
-            arrays["radii"] = rows(t if t.dtype == f32 else t.to(f32))
+        if name in ("radii", "rotations"):
+            arrays[name] = rows(flt(t)) if name == "radii" else flt(t)
+        elif name == "vectors":
+            arrays[name] = flt(t)
+            bounds_src.append(arrays["origins"] + arrays[name])
+        elif name in ("normals", "uvs"):
+            arrays[name] = flt(t)
+        elif name == "class_ids":
+            arrays[name] = rows(intg(t))
         elif name in ("strip_lengths", "indices"):
-            if isinstance(t, (list, tuple)):
-                t = torch.tensor(t, dtype=i32)
-            arrays[name] = t if t.dtype == i32 else t.to(i32)
+            arrays[name] = intg(t)
+        elif name == "texture":
+            arrays[name] = _rgba(t, torch, image=True)
+        elif name == "pixels":
+            if spec.depth:
+                arrays[name] = t if t.dtype == torch.uint16 else flt(t)
+            elif spec.segmentation:
+                if t.dtype == u8:
+                    arrays[name] = t
+                else:                                # u16 on the wire, cast on the host once copied
+                    arrays[name] = t.to(torch.int64).clamp(0, _wire.MAX_CLASS_ID).to(i32)
+                    cast[name] = "<u2"
+            else:
+                arrays[name] = _rgba(t, torch, image=True)
     # The stats: value range and per-axis bounds, on the arrays' devices.
-    sent = arrays["positions"]
-    bounds = None
-    if sent.shape[0]:
-        bounds = torch.stack([sent.amin(0), sent.amax(0)], 1).reshape(-1)
-    vrange = None
+    bounds = vrange = None
+    if bounds_src and bounds_src[0].shape[0]:
+        allp = torch.cat(bounds_src, 0) if len(bounds_src) > 1 else bounds_src[0]
+        bounds = torch.stack([allp.amin(0), allp.amax(0)], 1).reshape(-1)
     if vals is not None and vals.shape[0]:
         vrange = torch.stack(torch.aminmax(vals))
+    if spec.depth:                                   # the depths in scene units, zeros and
+        v = arrays["pixels"].to(f32) * params["scale"]          # non-finite values left out
+        ok = torch.isfinite(v) & (v != 0)
+        inf = torch.tensor(math.inf, dtype=f32, device=v.device)
+        vrange = torch.stack([torch.where(ok, v, inf).amin(), torch.where(ok, v, -inf).amax()])
+        stats = [None, None, 0]
+    elif spec.part in (_wire.PART_IMAGE,):
+        stats = None
+    else:
+        stats = [None, None, st.dims_at(path)]
     nbytes = sum(t.numel() * t.element_size() for t in arrays.values())
     # The copies into host memory: pinned and non-blocking from a device.
     host = {}
@@ -748,7 +1542,9 @@ def _snapshot(st: SceneState, path: str, spec: _Spec, static: bool) -> Batch:
     if mps:
         event = torch.mps.Event()
         event.record()
+    if stats is not None:
+        stats[0], stats[1] = host.get("_vrange"), host.get("_bounds")
     st.seq += 1
     return Batch(st.name, path, spec.part, st.seq, time.monotonic_ns(), static, params,
-                 {k: v for k, v in host.items() if not k.startswith("_")},
-                 [host.get("_vrange"), host.get("_bounds"), st.dims], axes, event, nbytes)
+                 {k: v for k, v in host.items() if not k.startswith("_")}, stats, axes, event,
+                 nbytes, cast)

@@ -1015,20 +1015,26 @@ __all__ += ["scene", "Scene"]
 def scene(name: str = "scene", *, space: str = "3d", up=None, units: str = "m", rate=None,
           data_view=None, view_camera=None) -> "Scene":
     """The scene ``name``, made on the first call: a tree of entities, named
-    by entity paths such as "world/cloud", each holding a batch of points,
-    lines and a mesh, in one 3-D (``space="3d"``) or 2-D space. ``up`` is the
+    by entity paths such as "world/cloud", each holding batches of points,
+    lines, arrows, boxes, a mesh or an image, or a pinhole camera, placed by
+    entity transforms, in one 3-D (``space="3d"``) or 2-D space. ``up`` is the
     axis a 3-D view keeps upright when it opens ("+x" to "-z", default "+y"),
     or in 2-D the direction of y on screen ("-y" default, "+y"); ``units`` a
     note of at most 15 bytes shown with the view (default "m"); ``rate`` the
-    default rate limit of each batch (default 60 per second, 0 every call).
-    A second call returns the same scene and updates ``up``, ``units`` and
-    ``rate``; a different ``space`` raises ValueError. Log to it with
-    ``scene.points``, ``scene.lines`` and ``scene.mesh``. Scenes travel over
-    :func:`serve` (the notebook widget with ``kind="scene"``, the browser page
-    and a hub); with only the shared-memory session or the in-process window
-    open, a scene call warns once and does nothing there. ``data_view`` and
-    ``view_camera`` are not built yet and raise NotImplementedError. Scene
-    is imported on first use, so importing caliper stays light."""
+    default rate limit of each batch (default 60 per second, 0 every call);
+    ``view_camera`` the camera a 3-D view opens on, a dict of target,
+    distance, azimuth and elevation (degrees) or the entity path of a camera.
+    A second call returns the same scene and updates ``up``, ``units``,
+    ``rate`` and ``view_camera`` (None leaves it, {} returns to the fit); a
+    different ``space`` raises ValueError. Log to it with ``scene.points``,
+    ``lines``, ``arrows``, ``boxes``, ``mesh``, ``image``, ``depth``,
+    ``segmentation``, ``camera``, ``transform``, ``classes`` and ``clear``.
+    Scenes travel over :func:`serve` (the notebook widget with
+    ``kind="scene"``, the browser page and a hub); with only the shared-memory
+    session or the in-process window open, a scene call warns once and does
+    nothing there. ``data_view`` is not built yet and raises
+    NotImplementedError. Scene is imported on first use, so importing caliper
+    stays light."""
     from . import _scene
     return _scene.scene(name, space=space, up=up, units=units, rate=rate, data_view=data_view,
                         view_camera=view_camera)
