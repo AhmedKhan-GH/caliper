@@ -791,6 +791,20 @@ private:
         }
     }
 
+    // The pong still waiting in the queue, if any: control frames queue ahead
+    // of unsent data, behind at most one partly written frame.
+    void drop_unsent_pong() {
+        for (auto it = out_.begin(); it != out_.end(); ++it) {
+            if (it->sent > 0) continue;
+            if (it->data) return;
+            if (it->body && !it->head.empty() && it->head[0] == (0x80 | 0xA)) {   // a frame, not raw HTTP
+                out_bytes_ -= it->head.size() + (it->end - it->begin);
+                out_.erase(it);
+                return;
+            }
+        }
+    }
+
     // A failing close: unsent data frames go (nothing may follow a close).
     void drop_unsent_data() {
         for (auto it = out_.begin(); it != out_.end();) {
@@ -1093,7 +1107,16 @@ private:
 
     void on_control(uint8_t op, const Bytes& payload, std::vector<Event>& ev) {
         if (op == 0x9) {   // ping: pong with the same payload, ahead of queued data
-            if (phase_ == Phase::Open) send_control(0xA, std::string(payload.begin(), payload.end()), true);
+            if (phase_ != Phase::Open) return;
+            // At most one pong waits unsent: a newer ping's replaces it (RFC 6455
+            // 5.5.3). It counts against max_queued_bytes; past it the connection
+            // closes with 1008, as the hub closes a full send queue.
+            drop_unsent_pong();
+            if (out_bytes_ + payload.size() + 14 > opt_.max_queued_bytes) {
+                fail(kClosePolicy, "send queue full", ev);
+                return;
+            }
+            send_control(0xA, std::string(payload.begin(), payload.end()), true);
             return;
         }
         if (op == 0xA) {   // pong: reported, so a sender can measure the round trip

@@ -703,6 +703,72 @@ TEST_CASE("net/ws: a slow reader never blocks the sender; back-pressure is visib
     CHECK(Pump::find(p.sev, Type::Writable, slow_id) != nullptr);
 }
 
+// A raw peer upgraded on `s`, and the server's id for it.
+static ConnId upgrade_raw(Server& s, Pump& p, Raw& r) {
+    REQUIRE(r.fd != RAW_BAD);
+    r.send_all(raw_upgrade(s.port()));
+    size_t handled = 0;
+    REQUIRE(p.until([&] {
+        accept_all(s, p, &handled);
+        return Pump::find(p.sev, Type::Open) != nullptr;
+    }));
+    return Pump::find(p.sev, Type::Open)->conn;
+}
+
+TEST_CASE("net/ws: a peer that sends pings and never reads keeps at most one pong queued") {
+    Server s;
+    std::string err;
+    REQUIRE(s.listen(0, &err));
+    Pump p{&s};
+    Raw r(s.port());
+    const ConnId c = upgrade_raw(s, p, r);
+    // 40,000 pings of 125 bytes, about 5 MiB of pongs if each were queued,
+    // then one binary message: once the server reports it, it has read every
+    // ping before it.
+    const std::string ping = client_frame(0x89, std::string(125, 'p'));
+    std::string flood;
+    for (int i = 0; i < 40000; ++i) flood += ping;
+    flood += client_frame(0x82, "end");
+    std::thread writer([&] { r.send_all(flood); });
+    size_t peak = 0;
+    const bool read_all = p.until([&] {
+        peak = std::max(peak, s.queued_bytes(c));
+        return Pump::find(p.sev, Type::Message, c) != nullptr;
+    }, 60000);
+    writer.join();
+    MESSAGE("after 40,000 pings the server's queue holds " << s.queued_bytes(c) << " bytes; at most " << peak);
+    REQUIRE(read_all);
+    // A pong partly written to the full socket, and the newest one behind it.
+    CHECK(s.queued_bytes(c) <= 2 * (2 + 125));
+    CHECK(peak <= 2 * (2 + 125));
+    CHECK(Pump::find(p.sev, Type::Closed, c) == nullptr);
+}
+
+TEST_CASE("net/ws: a ping that would take the send queue past its limit closes the connection with 1008") {
+    Options so;
+    so.max_queued_bytes = size_t(64) << 10;
+    so.close_timeout_ms = 200;
+    Server s(so);
+    std::string err;
+    REQUIRE(s.listen(0, &err));
+    Pump p{&s};
+    Raw r(s.port());
+    const ConnId c = upgrade_raw(s, p, r);
+    // The peer never reads: fill the socket, then the queue, to within a
+    // few bytes of its limit.
+    for (size_t n : {size_t(16) << 10, size_t(1) << 10, size_t(64), size_t(1)}) {
+        auto b = std::make_shared<const Bytes>(n, uint8_t(7));
+        while (s.send(c, b)) p.once();
+    }
+    CHECK(s.queued_bytes(c) + 15 > so.max_queued_bytes);
+    r.send_all(client_frame(0x89, std::string(125, 'x')));
+    REQUIRE(p.until([&] { return Pump::find(p.sev, Type::Closed, c) != nullptr; }, 10000));
+    const Event* e = Pump::find(p.sev, Type::Closed, c);
+    CHECK(e->code == kClosePolicy);
+    CHECK(e->reason == "send queue full");
+    CHECK(e->initiated_here);
+}
+
 TEST_CASE("net/ws: connect failures, header timeout, wake from another thread") {
     // Nothing listens on a port the server just gave back.
     uint16_t dead_port = 0;
