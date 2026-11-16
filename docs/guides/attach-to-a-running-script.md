@@ -121,7 +121,7 @@ the script's terminal does not close it and it outlives the script.
 | `--data-dir <root>` | Session-file root (default `$CALIPER_DATA_DIR`, else the app-data folder) |
 | `--exit-after <s>` | Close the window after `s` seconds |
 | `--size <w>x<h>` | Window size in points (default 1280x800) |
-| `--stats` | Print a stats line to stderr every 2 s: fps, updates, step-to-screen median/p95/max, skipped and client-dropped counts, each view's renderer path, RSS and footprint |
+| `--stats` | Print a stats line to stderr every 2 s: fps, updates, step-to-screen median/p95/max, skipped and client-dropped counts, each view's renderer path and copies, RSS and footprint, and the renderer's copies per frame, frame times and GPU times ([Copy counters and frame statistics](../explanations/rendering.md#copy-counters-and-frame-statistics)) |
 | `--latency-log <file>` | Write every latency sample (`t_ns lat_ms` per line); implies `--stats` |
 | `--headless` | No window, an offscreen canvas (CI, tests). Needs `--session` or `--url`, and prints one `received` line per view when it exits |
 | `--dump-dir <dir>` | With `--headless`: write each view's pixels or values to `<dir>` whenever its sequence number changes |

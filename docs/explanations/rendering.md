@@ -136,6 +136,65 @@ and a ring of per-draw parameter blocks. The Metal backend keeps the equivalent 
 Metal compiles its shaders at run time, and Vulkan embeds SPIR-V built at compile time
 ([Build-time SPIR-V](vulkan-cuda.md#build-time-spir-v)).
 
+## Copy counters and frame statistics
+
+The host counts every copy it makes of tensor or geometry data on the way to pixels, so that each route's copies can
+be read and compared, and the Metal renderer can record frame times and GPU times. Both exist to measure the
+renderer: a change to it must leave a zero-copy route at zero copies and keep the times within bounds.
+
+**What counts as a copy.** An upload of host bytes into GPU memory (a CPU tensor's staged upload; in the browser, the
+host colormap's upload of the values and the host import of a points payload), a host copy into a staging buffer
+(a CPU points payload staged into a shared `MTLBuffer`), a copy inside the GPU (the Vulkan buffer path's copy into
+the shared buffer), a network snapshot received into its slot, the values of a series or histogram copied into the
+view at apply, and a readback of a payload (the Metal geometry rigidity check reading private instance matrices).
+The pass that turns a payload into a view's pixels, such as a colormap dispatch, the blit of an RGBA8 image into the
+view's texture or a draw, is the update itself and not a copy, as [Zero-copy tensor visualization](zero-copy.md#what-the-words-mean)
+defines the words. The colormap's 256-entry table is not tensor data and is not counted.
+
+**What the counters read.** The renderer keeps the total, and the core keeps one count per view name and one per
+frame. A view reports its copies since it appeared and those of its last update; the core reports the copies made
+between the ends of consecutive frames and over a window that a reader resets. They are always on and cost two
+additions per copy, none on a zero-copy route. The counters belong to the process that draws. A Caliper LIB producer
+first takes a snapshot of the tensor into its slot ([Live streaming](live-streaming.md#snapshots)), one copy on the
+GPU for an MPS tensor and one on the host for a CPU tensor, and the viewer then reads the slot in place, so a
+heatmap reached through the shared-memory session or the in-process window counts 0 in the viewer for both.
+
+| Route | Copies per update | Bytes |
+|---|---|---|
+| MPS tensor, imported allocation, shared-memory slot, in-process window slot | 0 | 0 |
+| Points from an `MTLBuffer` (also while the view redraws every frame) | 0 | 0 |
+| CPU tensor to a heatmap or image view (an embedder's `caliper_core_view_tensor`, an applet's bridge texture) | 1 | width x height x 4 |
+| CPU points payload (Metal staging, or the browser's host import) | 1 per buffer | N x 12, and N x 4 for the values |
+| Browser heatmap (`tex_update_mapped_from_host`) | 1 | width x height x 4 |
+| Network snapshot (`caliper_core_live_attach_url`) | 1, into its slot | the payload and its values |
+| Series and histogram values | 1 at apply (a network series adds its received values) | the values |
+| Vulkan buffer path | 1, inside VRAM | the tensor's bytes |
+
+**Frame statistics.** With `CALIPER_METAL_STATS` set, the Metal renderer records the interval between the ends of
+consecutive frames, the GPU time of every texture update, of every view draw (a geometry render target) and of the
+frame's own pass, taken from each command buffer's `GPUStartTime` and `GPUEndTime`, and the updates by path, such as
+`compute-imported`. Without the variable nothing is recorded and no completion handler is added. At shutdown it
+prints one line for the whole run, beside the renderer's copy count, in the form of `CALIPER_VULKAN_STATS`:
+
+```text
+[metal] stats: 364 frames, ms p50 20.10 p99 21.21 max 348.49; updates compute 2 compute-imported 478
+primitives-imported 239; gpu ms update p50 0.014 p99 0.114 max 0.270 (480), view draw p50 0.119 p99 0.390
+max 0.528 (239), frame p50 0.116 p99 0.472 max 0.924 (364); copies 224 (344024 bytes)
+```
+
+Percentiles are nearest-rank, as on Vulkan. The worst frame of a run is usually the first, which compiles the
+pipelines.
+
+**Where to read them.** `caliper-viewer --stats` turns the statistics on and adds them to its line every 2 s: the
+window's `copies`, `copy_bytes` and the `copy_frames` they spread over, `frame_ms_p50`, `frame_ms_p99` and
+`frame_ms_max`, the GPU percentiles and counts (`gpu_update_ms_p50`, `gpu_draw_ms_p50`, `gpu_frame_ms_p50` and their
+`p99` and `_n`), one `upd_<path>` count per path, `now_ns`, the window's end in the clock a producer stamps with, and
+for each view `copies` and `copy_bytes` beside its `path`. In Caliper LIB, `view_info` and `live_view_info` return
+`copies`, `copy_bytes`, `last_copies` and `last_copy_bytes`, and an in-process window's core has `frame_stats(reset)`
+with the core's copies per frame and, when `CALIPER_METAL_STATS` is set, the frame and GPU times. Copies divided by
+frames over the same window give the copies per frame. The benchmarks in `python/bench/` report all of them for
+every row (`python/bench/README.md`).
+
 ## Why Metal pipelines by queue commit order
 
 The Metal renderer submits tensor operations and the frame's drawing to one `MTLCommandQueue`, and Metal starts the

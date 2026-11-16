@@ -782,11 +782,11 @@ These read the in-process core and raise `RuntimeError` without a `window()` or
 | `frame()` | Render one frame now; its wall time in ms. Main thread for a real window |
 | `render()` | `(H, W, 4)` uint8 of a freshly composited frame (offscreen canvases) |
 | `read_pixels()` | `(H, W, 4)` uint8 copy of the last composited frame |
-| `view_info(name)` | Heatmap/image view: `path`, `width`, `height`, `device` (`"metal"`, `"cpu"`), `updates`, `last_update_ms`, `imported`, `creates` |
+| `view_info(name)` | Heatmap/image view: `path`, `width`, `height`, `device` (`"metal"`, `"cpu"`), `updates`, `last_update_ms`, `imported`, `creates`, and the copy counters `copies`, `copy_bytes`, `last_copies`, `last_copy_bytes` ([Copy counters and frame statistics](../explanations/rendering.md#copy-counters-and-frame-statistics)) |
 | `view_readback(name)` | `(H, W, 4)` uint8 of a heatmap/image view's texture |
 | `view_remove(name)` | Same as `remove(name)` |
 | `view_count()` | Number of heatmap/image views; 0 without a core |
-| `live_view_info(name)` | Any typed view: `kind` (1 heatmap, 2 image, 3 points, 4 series, 5 histogram), `path`, `width`, `height`, `updates`, `creates`, `dropped`, `seq`, `stamp_ns`, `last_apply_ms`, `latency_ms`, `imported`, `read_done`, `count` |
+| `live_view_info(name)` | Any typed view: `kind` (1 heatmap, 2 image, 3 points, 4 series, 5 histogram), `path`, `width`, `height`, `updates`, `creates`, `dropped`, `seq`, `stamp_ns`, `last_apply_ms`, `latency_ms`, `imported`, `read_done`, `count`, and the copy counters as in `view_info` |
 | `live_view_values(name)` | float32 array: series values oldest first, or histogram counts |
 | `live_view_readback(name)` | `(H, W, 4)` uint8 of a heatmap, image or points view |
 | `live_pause(paused=True)` | Freeze the display of every typed view; snapshots keep flowing and are dropped |
