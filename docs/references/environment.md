@@ -103,6 +103,9 @@ The metrics, data, loader, embed and live tests also set `CALIPER_DUCKDB_*`, `CA
 | `CALIPER_PY_LOG` | Any value other than `0` echoes the host's diagnostic lines from the in-process core to stderr. | `python/src/_native.mm` |
 | `CALIPER_PY_LIVE_APPLY=0` | Sends heatmap and image snapshots through the embed view route instead of `caliper_core_live_apply`. | `python/src/_native.mm` |
 | `CALIPER_TEST_NO_WINDOW=1` | Skips the Python tests that open a real window. | `python/tests/test_window_real.py` |
+| `CALIPER_WEB_DIR` | The folder of the browser files that `serve()` and the widgets hand out, in place of the package's `caliper/_web/`. | `python/caliper/_assets.py` |
+| `CALIPER_REQUIRE_WEB_VIEWS` | `1` makes a missing set of the WebAssembly views an error where it is otherwise a warning or a skip: in a wheel build and in `python/tests/test_assets.py`. A wheel build treats `CI=true` as `1` unless this is `0`. | `python/check_web_views.cmake`, `python/tests/test_assets.py` |
+| `GITHUB_TOKEN`, `GH_TOKEN` | A token that `scripts/fetch_wasm.py` sends to the GitHub API, and only there, to download CI's build of the WebAssembly views. Without one it can use only a release's build. | `scripts/fetch_wasm.py` |
 
 See [Caliper LIB](python-api.md) for the calls themselves.
 

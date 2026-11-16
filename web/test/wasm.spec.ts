@@ -1,7 +1,9 @@
 // The element with Caliper's real WebAssembly views (not the stub): the
 // producer, mock_server.py, also serves the three files of web/wasm's build,
 // as caliper.serve() does from the Python package. The files come from
-// CALIPER_WASM_DIR, else from python/caliper/_web (the checked-in copies).
+// CALIPER_WASM_DIR, else from python/caliper/_web, where scripts/build_wasm.py
+// and scripts/fetch_wasm.py put them; without them these tests are skipped,
+// and fallback.spec.ts checks the element without them.
 
 import { test as base, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';

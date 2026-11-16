@@ -9,14 +9,13 @@ package needs no Node. The script uses only the standard library and needs
 Node.js with npm on PATH. Files that are no longer in the build are removed
 from the copy; --check never changes the copy.
 
-Caliper's own views compiled to WebAssembly (web/wasm) ship beside them as
-three files: caliper-views-loader.js, caliper-views.js and caliper-views.wasm.
-Building those needs the Emscripten SDK, which most checkouts do not have, so
-this script does not build them: it copies them from web/wasm's build folder
-(--wasm-build, default web/wasm/build, as written by
-`python scripts/build_wasm.py`) when all three are there, and otherwise
-leaves the checked-in copies alone. --check compares them only when they are
-there to compare with.
+Caliper's own views compiled to WebAssembly (web/wasm) live in the same
+folder as three files, caliper-views-loader.js, caliper-views.js and
+caliper-views.wasm, which are build outputs and not checked in. This script
+leaves them alone, and --check does not compare them:
+`python scripts/build_wasm.py` builds them with Emscripten and
+`python scripts/fetch_wasm.py` downloads CI's build. The script says when
+they are missing.
 """
 from __future__ import annotations
 
@@ -30,7 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_WEB = ROOT / "web"
 DEFAULT_OUT = ROOT / "python" / "caliper" / "_web"
 REQUIRED = ("caliper-view.js", "caliper-widget.js", "caliper-controls-widget.js", "index.html")
-DEFAULT_WASM = ROOT / "web" / "wasm" / "build"
+# Not this script's to build, copy, remove or compare (build_wasm.py, fetch_wasm.py).
 WASM_FILES = ("caliper-views-loader.js", "caliper-views.js", "caliper-views.wasm")
 # Compared with line endings normalised, so a checkout that converts them
 # (git's autocrlf on Windows) does not fail --check.
@@ -82,23 +81,16 @@ def contents(p: Path) -> bytes:
     return data.replace(b"\r\n", b"\n") if p.suffix.lower() in TEXT_SUFFIXES else data
 
 
-def wasm_files(build: Path | None) -> dict[str, Path]:
-    """The WebAssembly views' three files in their build folder, or {} unless all three are there."""
-    if build is None:
-        return {}
-    found = {name: build / name for name in WASM_FILES}
-    return found if all(p.is_file() for p in found.values()) else {}
+def built_files(dist: Path) -> dict[str, Path]:
+    return {n: p for n, p in files(dist).items() if n not in WASM_FILES}
 
 
-def built_files(dist: Path, wasm: dict[str, Path]) -> dict[str, Path]:
-    return {**files(dist), **wasm}
+def copied_files(out: Path) -> dict[str, Path]:
+    return {n: p for n, p in files(out).items() if n not in WASM_FILES}
 
 
-def differences(dist: Path, out: Path, wasm: dict[str, Path] | None = None) -> list[str]:
-    wasm = wasm or {}
-    built, copied = built_files(dist, wasm), files(out)
-    if not wasm:   # nothing to compare the checked-in WebAssembly views with
-        copied = {n: p for n, p in copied.items() if n not in WASM_FILES}
+def differences(dist: Path, out: Path) -> list[str]:
+    built, copied = built_files(dist), copied_files(out)
     diffs = []
     for name in sorted(built.keys() | copied.keys()):
         if name not in copied:
@@ -110,16 +102,14 @@ def differences(dist: Path, out: Path, wasm: dict[str, Path] | None = None) -> l
     return diffs
 
 
-def copy(dist: Path, out: Path, wasm: dict[str, Path] | None = None) -> None:
-    wasm = wasm or {}
-    built = built_files(dist, wasm)
+def copy(dist: Path, out: Path) -> None:
+    built = built_files(dist)
     # The copy removes stale files, so refuse a folder that holds anything else.
     if (out / ".git").exists() or any(out.rglob("*.py")):
         fail(f"{out} holds Python files or a repository; it is not an asset folder")
     out.mkdir(parents=True, exist_ok=True)
-    for name, p in files(out).items():
-        # Without a WebAssembly build, the checked-in views stay as they are.
-        if name not in built and (wasm or name not in WASM_FILES):
+    for name, p in copied_files(out).items():
+        if name not in built:
             p.unlink()
     for d in sorted((p for p in out.rglob("*") if p.is_dir()), reverse=True):
         if not any(d.iterdir()):
@@ -129,6 +119,14 @@ def copy(dist: Path, out: Path, wasm: dict[str, Path] | None = None) -> None:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, dst)
     print(f"build_web: copied {len(built)} files into {out}")
+
+
+def note_wasm(out: Path) -> None:
+    missing = [n for n in WASM_FILES if not (out / n).is_file()]
+    if missing:
+        print(f"build_web: the WebAssembly views are not in {out}, so browsers will draw with the "
+              "TypeScript views; build them with `python scripts/build_wasm.py` or download CI's "
+              "build with `python scripts/fetch_wasm.py`")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -141,23 +139,15 @@ def main(argv: list[str] | None = None) -> int:
                     help="build, then exit 1 if the copies in --out differ from the build")
     ap.add_argument("--no-install", action="store_true",
                     help="skip `npm ci` (dependencies already installed)")
-    ap.add_argument("--wasm-build", type=Path, default=DEFAULT_WASM,
-                    help="web/wasm's build folder, whose three files are copied when all are there "
-                         "(default: web/wasm/build)")
     args = ap.parse_args(argv)
     web, out = args.web.resolve(), args.out.resolve()
-    wasm = wasm_files(args.wasm_build.resolve())
-    if wasm:
-        print(f"build_web: the WebAssembly views come from {args.wasm_build}")
-    else:
-        print(f"build_web: no WebAssembly build in {args.wasm_build}; the checked-in views are kept")
 
     try:
         dist = build(web, install=not args.no_install)
     except subprocess.CalledProcessError as e:
         fail(f"`{' '.join([Path(e.cmd[0]).name, *e.cmd[1:]])}` failed with exit code {e.returncode}")
     if args.check:
-        diffs = differences(dist, out, wasm)
+        diffs = differences(dist, out)
         if diffs:
             print(f"build_web: {out} does not match a fresh build of {web}:", file=sys.stderr)
             for d in diffs:
@@ -166,8 +156,10 @@ def main(argv: list[str] | None = None) -> int:
                   file=sys.stderr)
             return 1
         print(f"build_web: {out} matches the build")
+        note_wasm(out)
         return 0
-    copy(dist, out, wasm)
+    copy(dist, out)
+    note_wasm(out)
     return 0
 
 

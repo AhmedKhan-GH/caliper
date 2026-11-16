@@ -15,7 +15,9 @@ predictions widget, shows their details, and reaches
 from Python reaches the widget. Run
 in the "metal" mode, where Caliper's WebAssembly views draw all three widgets
 on WebGPU and make the selection, and the "canvas2d" mode, where the
-element's own TypeScript views do.
+element's own TypeScript views do. Without the WebAssembly views in the
+package (scripts/build_wasm.py and scripts/fetch_wasm.py put them there), the
+"metal" mode checks the TypeScript views on WebGPU instead and says so.
 
     CALIPER_HEADLESS_DIR=<scratch> CALIPER_TEST_ARTIFACTS=<shots> \\
     PYTHONPATH=python .venv/bin/python -m pytest --noconftest \\
@@ -114,11 +116,18 @@ def test_live_training_notebook(tmp_path, mode):
             f"(({STATE})('{n}') || {{}}).status === 'connected'" for n in names), timeout=150)
         assert not cell_done(nb, train_cell), "training ended before the checks; raise the steps"
         renderers = {n: nb.page.evaluate(STATE, n)["renderer"] for n in names}
+        from caliper import _assets
+        views = mode == "metal" and not _assets.missing_views()
         if mode == "canvas2d":
             assert set(renderers.values()) == {"canvas2d"}, renderers
-        else:
+        elif views:
             # The WebAssembly views draw every kind the demo shows.
             assert set(renderers.values()) == {"wasm"}, renderers
+        else:
+            print(f"the WebAssembly views are not in {_assets.asset_dir()}: the metal mode checks "
+                  "the TypeScript views on WebGPU")
+            # The TypeScript views: the heatmap and the points on WebGPU, the series with Canvas 2D.
+            assert renderers == {"loss": "canvas2d", "attention": "webgpu", "embedding": "webgpu"}, renderers
 
         # Each widget draws, and updates while the cell trains. The embedding
         # barely moves during the loss plateau, so for it the view's own count
@@ -135,7 +144,7 @@ def test_live_training_notebook(tmp_path, mode):
             least = 0.001 if n == "embedding" else 0.005          # 256 small points
             assert png_stats(first).nonblank(least), (n, png_stats(first).to_dict())
             if n == "embedding":
-                key = "updates" if mode == "metal" else "frames"
+                key = "updates" if views else "frames"
                 assert after[key] > before[key], (before, after)
             else:
                 assert changed(first, second), f"{n} did not change while training"

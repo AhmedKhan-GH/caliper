@@ -187,21 +187,9 @@ def test_missing_asset_names_the_build_command(tmp_path, monkeypatch):
     assert _assets.asset_names() == []
 
 
-def run_build_web(*args, cwd=None, wasm=None):
-    # Without a WebAssembly build unless one is given: a checkout's own
-    # web/wasm/build must not change what these tests see.
-    wasm_args = ["--wasm-build", wasm if wasm is not None else REPO / "web" / "wasm" / "no-such-build"]
-    return subprocess.run([sys.executable, str(BUILD_WEB), *map(str, args), *map(str, wasm_args)], cwd=cwd,
+def run_build_web(*args, cwd=None):
+    return subprocess.run([sys.executable, str(BUILD_WEB), *map(str, args)], cwd=cwd,
                           capture_output=True, text=True)
-
-
-def fake_wasm_build(root: Path) -> Path:
-    build = root / "wasm-build"
-    build.mkdir()
-    for name in _assets.WASM_VIEWS:
-        (build / name).write_bytes(b"\0asm\1\0\0\0" if name.endswith(".wasm") else f"// {name}\n".encode())
-    (build / "demo.html").write_text("<!doctype html>")   # not one of the three: not copied
-    return build
 
 
 @requires_npm
@@ -264,37 +252,48 @@ def test_wasm_views_content_types():
 
 
 @requires_npm
-def test_build_web_copies_the_wasm_views_from_their_build(tmp_path):
+def test_build_web_leaves_the_wasm_views_alone(tmp_path):
+    # They are build_wasm.py's and fetch_wasm.py's: build_web.py neither
+    # copies, removes nor compares them, and says when they are missing.
     web = tmp_path / "web"
     shutil.copytree(FIXTURE, web, ignore=shutil.ignore_patterns("dist", "node_modules"))
     out = tmp_path / "out"
-    wasm = fake_wasm_build(tmp_path)
-    r = run_build_web("--web", web, "--out", out, wasm=wasm)
-    assert r.returncode == 0, r.stderr
-    assert sorted(p.name for p in out.iterdir()) == sorted(_assets.REQUIRED + _assets.WASM_VIEWS)
-    for name in _assets.WASM_VIEWS:
-        assert (out / name).read_bytes() == (wasm / name).read_bytes()
-    r = run_build_web("--web", web, "--out", out, "--check", "--no-install", wasm=wasm)
-    assert r.returncode == 0, r.stderr
-    (out / "caliper-views.wasm").write_bytes(b"\0asm\2\0\0\0")
-    r = run_build_web("--web", web, "--out", out, "--check", "--no-install", wasm=wasm)
-    assert r.returncode == 1
-    assert "differs from the build: caliper-views.wasm" in r.stderr
-
-
-@requires_npm
-def test_build_web_keeps_the_checked_in_wasm_views_without_a_build(tmp_path):
-    web = tmp_path / "web"
-    shutil.copytree(FIXTURE, web, ignore=shutil.ignore_patterns("dist", "node_modules"))
-    out = tmp_path / "out"
-    out.mkdir()
-    for name in _assets.WASM_VIEWS:
-        (out / name).write_bytes(b"checked in")
     r = run_build_web("--web", web, "--out", out)
     assert r.returncode == 0, r.stderr
-    assert "the checked-in views are kept" in r.stdout
+    assert "scripts/build_wasm.py" in r.stdout and "scripts/fetch_wasm.py" in r.stdout
     for name in _assets.WASM_VIEWS:
-        assert (out / name).read_bytes() == b"checked in"
-    # Nothing to compare them with: --check compares the rest only.
+        (out / name).write_bytes(b"built elsewhere")
+    r = run_build_web("--web", web, "--out", out, "--no-install")
+    assert r.returncode == 0, r.stderr
+    assert "WebAssembly views are not in" not in r.stdout
+    assert sorted(p.name for p in out.iterdir()) == sorted(_assets.REQUIRED + _assets.WASM_VIEWS)
+    for name in _assets.WASM_VIEWS:
+        assert (out / name).read_bytes() == b"built elsewhere"
     r = run_build_web("--web", web, "--out", out, "--check", "--no-install")
     assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not on PATH")
+def test_a_wheel_build_warns_without_the_wasm_views_and_fails_in_ci(tmp_path):
+    # python/check_web_views.cmake, which python/CMakeLists.txt runs for wheels.
+    check = REPO / "python" / "check_web_views.cmake"
+    web = placeholder_web(tmp_path)
+
+    def run(**env):
+        e = {k: v for k, v in os.environ.items() if k not in ("CI", "CALIPER_REQUIRE_WEB_VIEWS")}
+        e.update(env)
+        return subprocess.run(["cmake", f"-DCALIPER_WEB_DIR={web}", "-P", str(check)],
+                              capture_output=True, text=True, env=e)
+
+    r = run()
+    assert r.returncode == 0 and "CMake Warning" in r.stderr, r.stderr
+    assert "scripts/build_wasm.py" in r.stderr and "scripts/fetch_wasm.py" in r.stderr
+    for env in ({"CI": "true"}, {"CALIPER_REQUIRE_WEB_VIEWS": "1"}):
+        r = run(**env)
+        assert r.returncode != 0 and "CMake Error" in r.stderr, (env, r.stderr)
+    r = run(CI="true", CALIPER_REQUIRE_WEB_VIEWS="0")
+    assert r.returncode == 0 and "CMake Warning" in r.stderr
+    for name in _assets.WASM_VIEWS:
+        (web / name).write_text("x")
+    r = run(CI="true")
+    assert r.returncode == 0 and "ships the browser's WebAssembly views" in r.stdout, r.stdout + r.stderr

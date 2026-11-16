@@ -30,7 +30,10 @@ cmake.build-type = "Release"
 build.targets = ["_native", "_live", "_netio", "caliper_viewer"]
 install.components = ["python"]
 wheel.packages = ["python/caliper"]
-sdist.include = ["python", "pyproject.toml"]
+# The browser's WebAssembly views (python/caliper/_web/caliper-views*) are git-ignored
+# build outputs; naming them includes them in the sdist and the wheel whenever they are
+# there (python/check_web_views.cmake warns, or fails in CI, when a wheel lacks them).
+sdist.include = ["python", "pyproject.toml", "python/caliper/_web/caliper-views*"]
 sdist.exclude = ["build", "dist", ".venv", "cmake-build-*", "site", "dump"]
 
 [tool.scikit-build.cmake.define]

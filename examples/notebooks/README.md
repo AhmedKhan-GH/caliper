@@ -29,6 +29,13 @@ Without it, `serve()` uses a slower sender written in Python and says so once.
 Reinstalling the wheel removes the module, so run the script again after a
 reinstall.
 
+The widgets draw with Caliper's own views compiled to WebAssembly, which the
+repository does not hold. `python scripts/fetch_wasm.py` downloads CI's build
+and `python scripts/build_wasm.py` builds them with Emscripten; both copy them
+into `python/caliper/_web/`, from where a wheel built afterwards ships them,
+and into the installed package. Without them the widgets draw with views
+written in TypeScript, and `caliper.serve()` says so once.
+
 Run the cells from top to bottom. In VS Code, open the notebook and choose the
 `.venv` interpreter as its kernel.
 

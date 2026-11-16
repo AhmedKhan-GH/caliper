@@ -55,6 +55,19 @@ The output is `caliper-views.wasm` and its JavaScript glue `caliper-views.js`, a
 
 The WebGPU binding is that port (`--use-port=emdawnwebgpu`), whose Dawn package each Emscripten release pins; this SDK no longer has the older `-sUSE_WEBGPU` binding. The port provides the standard `webgpu.h`, which Dawn also offers natively, so the same renderer can later serve the native Dawn fallback that the roadmap plans. A browser hands out a WebGPU device only through promises, so `src/main.cpp` requests the adapter and the device with callbacks and starts the frame loop from the device's callback; the module needs neither Asyncify nor JSPI. The Release link runs Closure over the glue, has no file system (`-sFILESYSTEM=0`; the views never open a file) and caps the heap, as [Memory](#memory) describes.
 
+## Where the files come from
+
+The three files are build outputs and are not checked in; git ignores them in `python/caliper/_web/`. CI builds them for every change to their sources and uploads them as the artifact `caliper-views` ([In CI](#in-ci)), and a wheel built in CI ships them. In a checkout, either command puts them into `python/caliper/_web/` and into the caliper package that the running Python has installed, if any:
+
+```sh
+python scripts/build_wasm.py      # builds them; needs the pinned Emscripten, CMake and Ninja
+python scripts/fetch_wasm.py      # downloads CI's build; needs only the standard library
+```
+
+`fetch_wasm.py` takes CI's build of the checkout's commit, or of the newest earlier commit whose sources of the module are the same, and otherwise the asset `caliper-views.zip` of the latest release. GitHub hands out CI's builds only to signed-in clients, so the first source needs a token in `GITHUB_TOKEN` or `GH_TOKEN`, which the script sends only to the GitHub API; a release needs none. It checks the files before it copies them, and it says plainly when it is offline or when no build exists yet. A wheel built locally without the files warns, and one built in CI fails (`python/check_web_views.cmake`).
+
+Without the files, nothing breaks: the `<caliper-view>` element, the notebook widgets and the viewer page draw every view with the views written in TypeScript, and `caliper.serve()` prints one line, once, naming the two commands.
+
 ## Mounting the views on a page
 
 `caliper-views-loader.js` is the one entry point for a page, the `<caliper-view>` element and the notebook widget:
@@ -222,7 +235,7 @@ export CALIPER_PYTHON="$RUNNER_TEMP/py/bin/python"
 # The element with these views (the web package's tests), and the packaged copies
 (cd web && npm ci && npx playwright install chromium-headless-shell &&
   CALIPER_WASM_DIR=../web/wasm/build npx playwright test --project=swiftshader --project=canvas2d)
-"$RUNNER_TEMP/py/bin/python" scripts/build_web.py --check --wasm-build web/wasm/build
+"$RUNNER_TEMP/py/bin/python" scripts/build_web.py --check
 ```
 
-Each `check.mjs` run exits with 1 when the module reports an error or a check finds a differing texel or point; the `webgpu` project of the web package's tests and the 100,000-point measurement need a GPU and are left out. `build_web.py --check` fails when the module checked into `python/caliper/_web` is not the one just built; a job that should not depend on the exact compiler output can leave that line out.
+Each `check.mjs` run exits with 1 when the module reports an error or a check finds a differing texel or point; the `webgpu` project of the web package's tests and the 100,000-point measurement need a GPU and are left out. `build_web.py --check` fails when the TypeScript bundle checked into `python/caliper/_web` is not a fresh build of `web/`.

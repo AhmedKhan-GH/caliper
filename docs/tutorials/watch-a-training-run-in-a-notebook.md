@@ -45,6 +45,16 @@ uses a slower sender written in Python and says so once when it starts; the
 [cost of streaming](../explanations/network-streaming.md#cost-of-streaming)
 compares the two.
 
+The widgets draw with Caliper's own views compiled to WebAssembly. They are
+build outputs that the repository does not hold: CI builds them, and a wheel
+ships them when they are in `python/caliper/_web/` before it is built. In a
+checkout, `python scripts/fetch_wasm.py` downloads CI's build and
+`python scripts/build_wasm.py` builds them with Emscripten. Both put them
+there and into the installed package, so either one works before or after
+you install the wheel, and the module's README, `web/wasm/README.md`, gives
+what each needs. Without them the widgets draw with views written in
+TypeScript, and the server says so once when it starts.
+
 The server needs nothing beyond Caliper LIB, which
 depends on `websockets`. In
 VS Code, open the notebook and choose `.venv/bin/python` as its kernel.

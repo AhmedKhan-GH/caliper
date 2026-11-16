@@ -6,6 +6,12 @@
 # into the wheel.
 find_package(Python 3.12 COMPONENTS Interpreter Development.Module REQUIRED)
 
+# A wheel ships the browser's WebAssembly views only when they are in
+# caliper/_web/ before it is built; this warns without them, or fails in CI.
+if(SKBUILD)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/check_web_views.cmake)
+endif()
+
 execute_process(
     COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
     OUTPUT_STRIP_TRAILING_WHITESPACE

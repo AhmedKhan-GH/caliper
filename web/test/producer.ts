@@ -10,6 +10,8 @@ import readline from 'node:readline';
 import { REPO, WEB, wireModule } from './util.js';
 
 export const PYTHON = process.env.CALIPER_PYTHON ?? path.join(REPO, '.venv', 'bin', 'python');
+// The WebAssembly views' three files: CALIPER_WASM_DIR, else the package's
+// _web folder, where scripts/build_wasm.py and scripts/fetch_wasm.py put them.
 export const WASM = process.env.CALIPER_WASM_DIR ?? path.join(REPO, 'python', 'caliper', '_web');
 export const HAVE_PYTHON = fs.existsSync(PYTHON);
 
@@ -22,8 +24,9 @@ export interface Producer {
   stop(): void;
 }
 
-export async function startProducer(args: string[] = []): Promise<Producer> {
-  const proc = spawn(PYTHON, [path.join(WEB, 'test', 'mock_server.py'), '--wire', wireModule(), '--wasm', WASM, ...args],
+/** Starts mock_server.py with these options, serving the WebAssembly views from wasm. */
+export async function startProducer(args: string[] = [], wasm: string = WASM): Promise<Producer> {
+  const proc = spawn(PYTHON, [path.join(WEB, 'test', 'mock_server.py'), '--wire', wireModule(), '--wasm', wasm, ...args],
                      { stdio: ['ignore', 'pipe', 'inherit'] });
   const lines = readline.createInterface({ input: proc.stdout! });
   const events: ProducerEvent[] = [];

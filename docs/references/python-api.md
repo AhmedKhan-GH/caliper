@@ -319,6 +319,17 @@ Without it, `serve()` uses a sender written in Python and says so once on
 stderr, and `connect()` raises `RuntimeError`. `CALIPER_NETIO=0` chooses the
 sender written in Python.
 
+The browser files that the server and the widgets hand out live in the
+package's `caliper/_web/` folder. The viewer page and the modules of the
+element and the widgets are always there. Caliper's own views compiled to
+WebAssembly, `caliper-views-loader.js`, `caliper-views.js` and
+`caliper-views.wasm`, are optional: a wheel built in CI ships them, and in a
+checkout `python scripts/build_wasm.py` builds them and
+`python scripts/fetch_wasm.py` downloads CI's build. Without them every view
+draws with the views written in TypeScript, and `serve()` says so once on
+stderr, naming those two commands. `CALIPER_WEB_DIR` points the package at
+another folder of these files.
+
 ### serve
 
 ```python
