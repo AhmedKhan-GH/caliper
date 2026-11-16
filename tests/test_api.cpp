@@ -27,7 +27,10 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -144,13 +147,14 @@ std::string read_all(api_sock fd) {
     return out;
 }
 
-// One request; `host` replaces the Host header, `extra` ends with "\r\n" per line.
+// One request; `host` replaces the Host header, `extra` ends with "\r\n" per
+// line, and `body` follows the head as it is.
 Response http(uint16_t port, const std::string& method, const std::string& target,
-              const std::string& extra = {}, const std::string& host = {}) {
+              const std::string& extra = {}, const std::string& host = {}, const std::string& body = {}) {
     const api_sock fd = open_socket(port);
     if (fd == (api_sock)-1) return {};
     const std::string h = host.empty() ? "127.0.0.1:" + std::to_string(port) : host;
-    const std::string request = method + " " + target + " HTTP/1.1\r\nHost: " + h + "\r\n" + extra + "\r\n";
+    const std::string request = method + " " + target + " HTTP/1.1\r\nHost: " + h + "\r\n" + extra + "\r\n" + body;
     ::send(fd, request.data(), (int)request.size(), 0);
     const std::string raw = read_all(fd);
     api_close(fd);
@@ -597,6 +601,365 @@ TEST_CASE("api: the server refuses a token that is not a session token, and a po
     same.token = kToken;
     caliper_api::Server second(same);
     CHECK_FALSE(second.start(&err));
+}
+
+// ---- the command layer's endpoints, with a gateway of the test's own ----------------------
+
+namespace {
+
+// A command the test lets finish: ready() once `release` is set.
+struct FakePending final : caliper_api::PendingCommand {
+    std::shared_ptr<std::atomic<bool>> release;
+    std::string text;
+    bool ready() override { return release->load(); }
+    std::string envelope() override { return text; }
+};
+
+// Records what reaches the command layer and answers each command with its
+// own fields: {"id", "ok": true, "result": {"name", "origin", "group", "args"}}.
+struct FakeGateway final : caliper_api::CommandGateway {
+    std::mutex mu;
+    std::vector<caliper_api::CommandRequest> requests;
+    std::vector<std::string> lookups;
+    std::vector<std::thread::id> threads;   // where submit() and approval_json() ran
+    std::shared_ptr<std::atomic<bool>> release = std::make_shared<std::atomic<bool>>(true);
+
+    std::string table_json() const override { return "{\"commands\":[],\"version\":0}"; }
+    std::unique_ptr<caliper_api::PendingCommand> submit(caliper_api::CommandRequest r) override {
+        auto p = std::make_unique<FakePending>();
+        p->release = release;
+        Json result = Json::object(), env = Json::object();
+        result.set("name", r.name);
+        result.set("origin", r.origin);
+        result.set("group", r.group);
+        result.set("args", r.args);
+        env.set("id", r.id);
+        env.set("ok", true);
+        env.set("result", result);
+        p->text = env.dump();
+        std::lock_guard<std::mutex> g(mu);
+        requests.push_back(std::move(r));
+        threads.push_back(std::this_thread::get_id());
+        return p;
+    }
+    std::string approval_json(const std::string& id) override {
+        std::lock_guard<std::mutex> g(mu);
+        lookups.push_back(id);
+        threads.push_back(std::this_thread::get_id());
+        return "{\"approval\":\"" + id + "\",\"result\":null,\"state\":\"unknown\"}";
+    }
+    size_t submitted() {
+        std::lock_guard<std::mutex> g(mu);
+        return requests.size();
+    }
+};
+
+std::string json_head(size_t n, const std::string& extra = {}) {
+    return bearer() + "Content-Type: application/json\r\nContent-Length: " + std::to_string(n) + "\r\n" + extra;
+}
+
+// POST /v0/commands/<name> with a JSON body.
+Response post_command(uint16_t port, const std::string& name, const std::string& body,
+                      const std::string& extra = {}) {
+    return http(port, "POST", "/v0/commands/" + name, json_head(body.size(), extra), {}, body);
+}
+
+// Sends a command on a socket of its own and returns the socket, to read later.
+api_sock send_command(uint16_t port, const std::string& name, const std::string& body, const std::string& extra) {
+    const api_sock fd = open_socket(port);
+    const std::string r = "POST /v0/commands/" + name + " HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(port) +
+                          "\r\n" + json_head(body.size(), extra) + "\r\n" + body;
+    ::send(fd, r.data(), (int)r.size(), 0);
+    return fd;
+}
+
+bool wait_for(const std::function<bool()>& done, int ms = 3000) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (std::chrono::steady_clock::now() < end) {
+        if (done()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return done();
+}
+
+}  // namespace
+
+TEST_CASE("api: the command layer's routes and the methods they take") {
+    const auto table = caliper_api::route("GET", "/v0/commands");
+    CHECK(table.route == Route::Commands);
+    CHECK(table.method_ok);
+    const auto cmd = caliper_api::route("POST", "/v0/commands/spec.new");
+    CHECK(cmd.route == Route::Command);
+    CHECK(cmd.method_ok);
+    CHECK(cmd.name == "spec.new");
+    CHECK_FALSE(caliper_api::route("GET", "/v0/commands/spec.new").method_ok);
+    CHECK(std::string(caliper_api::route("GET", "/v0/commands/spec.new").allow) == "POST");
+    CHECK_FALSE(caliper_api::route("POST", "/v0/commands").method_ok);
+    const auto ap = caliper_api::route("GET", "/v0/approvals/ap-3");
+    CHECK(ap.route == Route::Approval);
+    CHECK(ap.method_ok);
+    CHECK(ap.name == "ap-3");
+    CHECK_FALSE(caliper_api::route("POST", "/v0/approvals/ap-3").method_ok);
+    // An unknown name is routed: the command layer answers command.unknown.
+    CHECK(caliper_api::route("POST", "/v0/commands/no.such").route == Route::Command);
+    for (const std::string none : {std::string("/v0/commands/"), std::string("/v0/commands/a/b"),
+                                   std::string("/v0/commands/x/"), "/v0/commands/" + std::string(129, 'a'),
+                                   std::string("/v0/approvals/"), std::string("/v0/approvals/a/b"),
+                                   std::string("/v0/approvals"), std::string("/v0/command/x")}) {
+        CAPTURE(none);
+        CHECK(caliper_api::route("POST", none).route == Route::None);
+        CHECK(caliper_api::route("GET", none).route == Route::None);
+    }
+    CHECK(caliper_api::plausible_approval_id("ap-12"));
+    CHECK(caliper_api::plausible_approval_id("a.b_c:d-1"));
+    CHECK_FALSE(caliper_api::plausible_approval_id(""));
+    CHECK_FALSE(caliper_api::plausible_approval_id(std::string(129, 'a')));
+    CHECK_FALSE(caliper_api::plausible_approval_id("ap%2D1"));
+}
+
+TEST_CASE("api: a command request is checked for its headers and its body's length and type, in order") {
+    using caliper_api::check;
+    const auto auth = std::make_pair(std::string("authorization"), "Bearer " + kToken);
+    const auto json = std::make_pair(std::string("content-type"), std::string("application/json"));
+    const auto len = std::make_pair(std::string("content-length"), std::string("2"));
+    const std::string path = "/v0/commands/spec.get";
+    // Without a command layer the three endpoints are 404, before the token.
+    CHECK(check(req("POST", path, {auth, json, len}), kToken).status == 404);
+    CHECK(check(req("GET", "/v0/commands", {auth}), kToken).status == 404);
+    CHECK(check(req("GET", "/v0/approvals/ap-1", {auth}), kToken).status == 404);
+    CHECK(check(req("GET", "/v0/commands"), kToken, true).status == 401);
+    CHECK(check(req("GET", "/v0/commands", {auth}), kToken, true).status == 0);
+    CHECK(check(req("GET", "/v0/commands", {auth, {"content-length", "3"}}), kToken, true).status == 413);
+    CHECK(check(req("GET", "/v0/approvals/ap-1", {auth}), kToken, true).status == 0);
+    CHECK(check(req("GET", "/v0/approvals/a%2Fb", {auth}), kToken, true).status == 400);
+
+    const caliper_api::Verdict ok = check(req("POST", path, {auth, json, len}), kToken, true);
+    CHECK(ok.status == 0);
+    CHECK(ok.origin == "api");
+    CHECK(ok.routed.name == "spec.get");
+    CHECK(check(req("POST", path, {{"origin", "https://evil.example"}, auth, json, len}), kToken, true).status == 403);
+    CHECK(check(req("GET", path, {auth, json, len}), kToken, true).status == 405);
+    CHECK(check(req("POST", path, {json, len}), kToken, true).status == 401);
+    CHECK(check(req("POST", path + "?token=" + kToken, {json, len}), kToken, true).status == 401);
+    CHECK(check(req("POST", path, {auth, json, len, len}), kToken, true).status == 400);
+    CHECK(check(req("POST", path, {auth, json, json, len}), kToken, true).status == 400);
+    CHECK(check(req("POST", path, {auth, json, len, {"x-caliper-origin", "mcp"}, {"x-caliper-origin", "mcp"}}),
+                kToken, true).status == 400);
+    CHECK(check(req("POST", path, {auth, json, len, {"transfer-encoding", "chunked"}}), kToken, true).status == 501);
+    CHECK(check(req("POST", path, {auth, json}), kToken, true).status == 411);
+    CHECK(check(req("POST", path, {auth, json, {"content-length", "1e3"}}), kToken, true).status == 400);
+    CHECK(check(req("POST", path, {auth, json, {"content-length", "1048577"}}), kToken, true).status == 413);
+    CHECK(check(req("POST", path, {auth, json, {"content-length", "1048576"}}), kToken, true).status == 0);
+    CHECK(check(req("POST", path, {auth, json, {"content-length", std::string(30, '9')}}), kToken, true).status == 413);
+    CHECK(check(req("POST", path, {auth, len}), kToken, true).status == 415);
+    CHECK(check(req("POST", path, {auth, len, {"content-type", "text/plain"}}), kToken, true).status == 415);
+    CHECK(check(req("POST", path, {auth, len, {"content-type", "Application/JSON; charset=utf-8"}}), kToken, true)
+              .status == 0);
+    for (const char* bad : {"ui", "builder", "MCP", "", "mcp, agent"}) {
+        CAPTURE(bad);
+        CHECK(check(req("POST", path, {auth, json, len, {"x-caliper-origin", bad}}), kToken, true).status == 400);
+    }
+    for (const char* good : {"api", "mcp", "agent"}) {
+        CAPTURE(good);
+        const caliper_api::Verdict v = check(req("POST", path, {auth, json, len, {"x-caliper-origin", good}}), kToken, true);
+        CHECK(v.status == 0);
+        CHECK(v.origin == good);
+    }
+}
+
+TEST_CASE("api: a command's body is a JSON object, checked without building it") {
+    using caliper_api::BodyShape;
+    using caliper_api::body_shape;
+    for (const char* obj : {"{}", " { } ", "{\"a\":1}", "{\"a\":[1,-2.5e+3,true,false,null,\"x\\u00e9\\n\"]}",
+                            "{\"emoji\":\"\\ud83d\\ude00\"}", "{\"a\":{\"b\":{}}}", "\t{\"k\":0}\r\n"}) {
+        CAPTURE(obj);
+        CHECK(body_shape(obj) == BodyShape::Object);
+    }
+    for (const char* other : {"[]", "1", "\"s\"", "null", "true", "[{}]"}) {
+        CAPTURE(other);
+        CHECK(body_shape(other) == BodyShape::NotObject);
+    }
+    for (const char* bad : {"", " ", "{", "{\"a\"}", "{\"a\":}", "{\"a\":1,}", "{'a':1}", "{\"a\":01}", "{\"a\":1.}",
+                            "{\"a\":.5}", "{\"a\":+1}", "{\"a\":NaN}", "{\"a\":tru}", "{} {}", "{\"a\":\"\\x\"}",
+                            "{\"a\":\"\\ud800\"}", "{\"a\":\"\\udc00\"}", "{\"a\":\"\\u12g4\"}", "{a:1}",
+                            "{\"a\":[1 2]}"}) {
+        CAPTURE(bad);
+        CHECK(body_shape(bad) == BodyShape::NotJson);
+    }
+    CHECK(body_shape(std::string("{\"a\":\"\x01\"}")) == BodyShape::NotJson);    // a raw control character
+    CHECK(body_shape(std::string("{\"a\":\"\xff\"}")) == BodyShape::NotJson);    // not UTF-8
+    std::string deep(64, '[');
+    deep += std::string(64, ']');
+    CHECK(body_shape("{\"a\":" + std::string(63, '[') + std::string(63, ']') + "}") == BodyShape::Object);
+    CHECK(body_shape("{\"a\":" + deep + "}") == BodyShape::TooDeep);
+}
+
+TEST_CASE("api: the command endpoints hand requests to the gateway on the frame thread, with every refusal") {
+    caliper_api::Options o;
+    o.command_approval_wait_ms = 4321;
+    FakeApp app(o);
+    const uint16_t port = app.port();
+    // No gateway: 404, as for any path the API does not serve.
+    CHECK(http(port, "GET", "/v0/commands", bearer()).status == 404);
+    CHECK(post_command(port, "spec.get", "{}").status == 404);
+    CHECK(http(port, "GET", "/v0/approvals/ap-1", bearer()).status == 404);
+
+    auto gw = std::make_shared<FakeGateway>();
+    app.server->set_command_gateway(gw);
+    Response table = http(port, "GET", "/v0/commands", bearer());
+    CHECK(table.status == 200);
+    CHECK(table.body == "{\"commands\":[],\"version\":0}");
+    CHECK(http(port, "GET", "/v0/commands?token=" + kToken).status == 200);
+
+    const std::string args = "{\"id\": \"heat\", \"patch\": {\"title\": \"Entropy\"}}";
+    Response r = post_command(port, "panel.patch", args, "X-Caliper-Origin: mcp\r\nX-Caliper-Group: turn-7\r\n");
+    CHECK(r.status == 200);
+    CHECK(r.headers["content-type"] == "application/json");
+    Json env = parse_json(r.body);
+    CHECK(env.find("ok")->as_bool());
+    CHECK(env.find("id")->as_string().rfind("api-", 0) == 0);
+    CHECK(env.find("result")->find("name")->as_string() == "panel.patch");
+    CHECK(env.find("result")->find("origin")->as_string() == "mcp");
+    CHECK(env.find("result")->find("group")->as_string() == "turn-7");
+    CHECK(env.find("result")->find("args")->as_string() == args);
+    REQUIRE(gw->submitted() == 1);
+    CHECK(gw->requests[0].approval_wait_ms == 4321);
+    CHECK(gw->threads[0] == app.frame.get_id());
+    // From api the command answers at once when it needs approval; agent waits as mcp does.
+    CHECK(post_command(port, "spec.get", "{}").status == 200);
+    CHECK(post_command(port, "spec.get", "{}", "X-Caliper-Origin: agent\r\n").status == 200);
+    REQUIRE(gw->submitted() == 3);
+    CHECK(gw->requests[1].origin == "api");
+    CHECK(gw->requests[1].approval_wait_ms == 0);
+    CHECK(gw->requests[1].group.empty());
+    CHECK(gw->requests[2].origin == "agent");
+    CHECK(gw->requests[2].approval_wait_ms == 4321);
+    // A body that is JSON but not an object, or too deep, is the command layer's
+    // invalid_args with 200; the gateway never sees it.
+    for (const std::string& body : {std::string("[1,2]"), "{\"a\":" + std::string(70, '[') + std::string(70, ']') + "}"}) {
+        Response bad = post_command(port, "spec.get", body);
+        CHECK(bad.status == 200);
+        Json e = parse_json(bad.body);
+        CHECK_FALSE(e.find("ok")->as_bool());
+        CHECK(e.find("error")->find("code")->as_string() == "command.invalid_args");
+        CHECK(e.find("error")->find("where")->as_string() == "args");
+    }
+    // The approval of an api call.
+    Response look = http(port, "GET", "/v0/approvals/ap-9", bearer());
+    CHECK(look.status == 200);
+    CHECK(look.body == "{\"approval\":\"ap-9\",\"result\":null,\"state\":\"unknown\"}");
+    CHECK(gw->lookups.size() == 1);
+    CHECK(http(port, "GET", "/v0/approvals/a%2Fb", bearer()).status == 400);
+
+    // Refusals; none reaches the command layer. A request with the token and
+    // a length within 1 MiB has its body read before it is refused; the others
+    // are refused from the head, and these tests send no body with them.
+    const std::string body = "{}";
+    CHECK(post_command(port, "spec.get", body, "X-Caliper-Origin: ui\r\n").status == 400);
+    CHECK(post_command(port, "spec.get", body, "X-Caliper-Origin: builder\r\n").status == 400);
+    CHECK(http(port, "POST", "/v0/commands/spec.get", bearer() + "Content-Type: text/plain\r\nContent-Length: 2\r\n",
+               {}, body).status == 415);
+    CHECK(http(port, "POST", "/v0/commands/spec.get", "Content-Type: application/json\r\nContent-Length: 2\r\n")
+              .status == 401);
+    CHECK(http(port, "POST", "/v0/commands/spec.get", bearer() + "Content-Type: application/json\r\n", {}, "").status ==
+          411);
+    CHECK(http(port, "POST", "/v0/commands/spec.get",
+               bearer() + "Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n", {}, "").status == 501);
+    // Over 1 MiB: refused from the head, without reading the body.
+    Response big = http(port, "POST", "/v0/commands/spec.get", json_head(size_t(1) << 21));
+    CHECK(big.status == 413);
+    CHECK(parse_json(big.body).find("error")->as_string().find("1 MiB") != std::string::npos);
+    CHECK(post_command(port, "spec.get", "{\"a\":").status == 400);
+    CHECK(post_command(port, "spec.get", "").status == 400);
+    CHECK(http(port, "POST", "/v0/commands/spec.get", json_head(2), "evil.example:1").status == 403);
+    CHECK(http(port, "POST", "/v0/commands/spec.get", json_head(2, "Origin: https://evil.example\r\n")).status == 403);
+    CHECK(http(port, "GET", "/v0/commands/spec.get", bearer()).status == 405);
+    CHECK(gw->submitted() == 3);
+    // A body of exactly 1 MiB is read and handed over.
+    std::string mib = "{\"text\":\"" + std::string((size_t(1) << 20) - 11, 'x') + "\"}";
+    REQUIRE(mib.size() == size_t(1) << 20);
+    CHECK(post_command(port, "spec.set_text", mib).status == 200);
+    REQUIRE(gw->submitted() == 4);
+    CHECK(gw->requests[3].args == mib);
+    // Other endpoints still refuse a body.
+    CHECK(http(port, "POST", "/v0/applets/dev.caliper.hello/launch", bearer() + "Content-Length: 2\r\n", {}, body)
+              .status == 413);
+
+    // Clearing the gateway makes the endpoints 404 again.
+    app.server->set_command_gateway(nullptr);
+    CHECK(post_command(port, "spec.get", body).status == 404);
+}
+
+TEST_CASE("api: a held command blocks neither the stream nor API v0, and held commands are bounded") {
+    caliper_api::Options o;
+    o.max_commands = 2;
+    o.command_timeout_ms = 600;
+    FakeApp app(o);
+    const uint16_t port = app.port();
+    auto gw = std::make_shared<FakeGateway>();
+    gw->release->store(false);
+    app.server->set_command_gateway(gw);
+
+    const api_sock a = send_command(port, "loader.delete", "{\"id\":\"x\"}", "X-Caliper-Origin: mcp\r\n");
+    const api_sock b = send_command(port, "loader.delete", "{\"id\":\"y\"}", "X-Caliper-Origin: agent\r\n");
+    REQUIRE(wait_for([&] { return app.server->stats().commands_held == 2; }));
+    // Everything else is served meanwhile.
+    CHECK(http(port, "GET", "/v0/info", bearer()).status == 200);
+    CHECK(http(port, "GET", "/v0/applets", bearer()).status == 200);
+    CHECK(http(port, "GET", "/v0/commands", bearer()).status == 200);
+    CHECK(http(port, "GET", "/v0/approvals/ap-1", bearer()).status == 200);
+    std::string role, why;
+    CHECK_MESSAGE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + kToken, &role, &why),
+                  why);
+    // A third command is refused while two are held.
+    Response busy = post_command(port, "spec.get", "{}");
+    CHECK(busy.status == 503);
+    CHECK(busy.headers["retry-after"] == "1");
+    // Released, both are answered.
+    gw->release->store(true);
+    const Response ra = parse_response(read_all(a)), rb = parse_response(read_all(b));
+    api_close(a);
+    api_close(b);
+    CHECK(ra.status == 200);
+    CHECK(rb.status == 200);
+    CHECK(parse_json(ra.body).find("result")->find("args")->as_string() == "{\"id\":\"x\"}");
+    CHECK(app.server->stats().commands_held == 0);
+
+    // A held command with no answer within command_timeout_ms gets 504.
+    gw->release = std::make_shared<std::atomic<bool>>(false);
+    const auto t0 = std::chrono::steady_clock::now();
+    Response late = post_command(port, "spec.get", "{}", "X-Caliper-Origin: mcp\r\n");
+    const double waited = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(late.status == 504);
+    CHECK(parse_json(late.body).find("error")->as_string().find("may still complete") != std::string::npos);
+    CHECK(waited < 3.0);
+    CHECK(app.server->stats().commands_held == 0);
+}
+
+TEST_CASE("api: a command waits for the frame thread like every call, and stopping answers held commands") {
+    caliper_api::Options o;
+    o.frame_timeout_ms = 300;
+    auto app = std::make_unique<FakeApp>(o);
+    const uint16_t port = app->port();
+    auto gw = std::make_shared<FakeGateway>();
+    gw->release->store(false);
+    app->server->set_command_gateway(gw);
+    // The frame thread takes nothing: 504 after frame_timeout_ms, never submitted.
+    app->frames_on.store(false);
+    CHECK(post_command(port, "spec.get", "{}").status == 504);
+    CHECK(http(port, "GET", "/v0/approvals/ap-1", bearer()).status == 504);
+    CHECK(gw->submitted() == 0);
+    // Taken and held past frame_timeout_ms; the server's stop answers it with 503.
+    app->frames_on.store(true);
+    const api_sock a = send_command(port, "loader.delete", "{\"id\":\"x\"}", "X-Caliper-Origin: mcp\r\n");
+    REQUIRE(wait_for([&] { return app->server->stats().commands_held == 1; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    CHECK(app->server->stats().commands_held == 1);
+    app.reset();
+    const Response r = parse_response(read_all(a));
+    api_close(a);
+    CHECK(r.status == 503);
+    CHECK(r.body.find("closing") != std::string::npos);
 }
 
 // ---- the window's captures (api/window_captures.h) --------------------------------------

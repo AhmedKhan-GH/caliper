@@ -90,6 +90,23 @@ if(NOT WIN32)
     target_link_libraries(caliper_tests PRIVATE caliper_api)
     target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
 endif()
+# Caliper API's command endpoints over a real builder session
+# (src/host/api/session_gateway.h): the server in this process with a session
+# over a temporary workspace and a fake frame thread, driven over HTTP, and the
+# built caliper-mcp as a child against it. caliper_api_session and the builder
+# targets are defined after this folder (CMakeLists.txt, CALIPER_WITH_BUILDER).
+if(CALIPER_WITH_BUILDER AND NOT WIN32)
+    add_executable(caliper_api_commands_tests test_main.cpp test_api_commands.cpp)
+    target_link_libraries(caliper_api_commands_tests PRIVATE doctest::doctest caliper_api_session
+        caliper_builder_acp caliper_builder_duckdb)
+    target_include_directories(caliper_api_commands_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/builder/mcp/tests)
+    set_target_properties(caliper_api_commands_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    add_dependencies(caliper_api_commands_tests caliper-mcp)
+    target_compile_definitions(caliper_api_commands_tests PRIVATE CALIPER_MCP_EXE="$<TARGET_FILE:caliper-mcp>")
+    add_test(NAME caliper_api_commands COMMAND caliper_api_commands_tests)
+    set_tests_properties(caliper_api_commands PROPERTIES ENVIRONMENT
+        "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_api_commands")
+endif()
 # On Windows the socket cases of the WebSocket layer, the hub and Caliper API
 # are not built or run: every feature built on them is refused there
 # (windows_unavailable in src/host/host_cli.h), and their socket and timer
