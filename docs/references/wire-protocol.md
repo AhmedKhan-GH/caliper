@@ -599,7 +599,7 @@ The producer resolves a requested data view as follows.
 3. An integer index must lie inside its dim, and a range must select at least one position.
 4. A dim indexed by an integer cannot be reduced, and the tile dim must be kept.
 5. The dims that remain, the **kept dims**, must fit the kind: 2 for a heatmap (3 with `tile`), 2 for an image, 1 for points, any number for a histogram. A series takes no `index`, `reduce` or `tile`.
-6. The payload must not exceed 4096 rows or columns.
+6. The payload must not exceed 4096 rows or columns. Since a SNAPSHOT is one frame of at most `CALIPER_NET_MAX_FRAME_BYTES`, the payload must also fit one with room for the largest head a frame may have (the header, 8 section entries with their alignment, and 1 MiB of metadata): at most 66,060,176 bytes. Only a heatmap or image, at 4 bytes a cell, can exceed it, above 16,515,044 cells: 4096 by 4096 does, 4096 by 4031 does not.
 
 The resolved data view has the same members as a request, with every default filled in: `source`; `index` with integers made non-negative and every range written as `[start, stop, step]` with non-negative clamped bounds; `reduce`; `budget` with the keys of its kind (heatmap `max_extent` and `pool`, image `max_extent`, points `max_points`, histogram none); and `tile` when the heatmap tiles. A series resolves to `{"budget": {"max_backfill": n}}`. A data view that breaks a rule is answered with the error `bad_data_view` and a message that names the rule.
 
@@ -772,7 +772,7 @@ Nothing in the protocol lets a slow viewer block a producer, and training is nev
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `CALIPER_NET_MAX_FRAME_BYTES` | 67,108,864 (64 MiB) | The largest frame, header, metadata and sections together; so a SNAPSHOT's payload must be smaller than 64 MiB, which a heatmap or image of 4096 by 4096 at 4 bytes a cell is not |
+| `CALIPER_NET_MAX_FRAME_BYTES` | 67,108,864 (64 MiB) | The largest frame |
 | `CALIPER_NET_MAX_META_BYTES` | 1,048,576 (1 MiB) | The largest metadata |
 | `CALIPER_NET_MAX_SECTIONS` | 8 | Sections in a frame |
 | `CALIPER_NET_MAX_JSON_DEPTH` | 16 | Nesting of the metadata |

@@ -299,17 +299,40 @@ def test_huge_mosaic_is_refused():
         dv.resolve(o, {"tile": "cell"})
 
 
+@pytest.mark.parametrize("kind", [1, 2])
+def test_frame_limit_agrees_with_the_protocol_reference(kind):
+    """A heatmap or image of 4096 by 4031 fits one frame and 4096 by 4096 does
+    not: the protocol's reference resolver and this one agree on both."""
+    wire = pytest.importorskip("caliper._wire")
+    for rows, ok in ((4031, True), (4096, False)):
+        view = {"name": "v", "kind": kind, "sources": [
+            {"name": "s", "dims": [{"name": "r", "size": rows}, {"name": "c", "size": 4096}]}]}
+        req = {"budget": {"max_extent": 4096}}
+        if ok:
+            assert wire.resolve_data_view(view, req) == dv.resolve(view, req)
+            continue
+        with pytest.raises(wire.MessageError) as e1:
+            wire.resolve_data_view(view, req)
+        with pytest.raises(DataViewError) as e2:
+            dv.resolve(view, req)
+        assert e1.value.code == wire.ERR_BAD_DATA_VIEW
+        assert e1.value.message == str(e2.value)
+        assert "ask for a smaller max_extent, at most 4063 here" in str(e2.value)
+
+
 def test_resolve_agrees_with_the_protocol_reference():
     """When the wire module is present (sprint 2 integration): random views and
     requests resolve identically, or are refused by both."""
     wire = pytest.importorskip("caliper._wire")
     rng = random.Random(3)
     dims = ["a", "b", "c", "d"]
-    agree = 0
-    for _ in range(3000):
+    agree = too_large = 0
+    for i in range(3000):
         kind = rng.choice([1, 1, 2, 3, 3, 5])
+        # one view in four has sources near the frame limit of a heatmap or image
+        sizes = [3990, 4031, 4063, 4064, 4096] if i % 4 == 0 else [1, 3, 64, 600]
         view = {"name": "v", "kind": kind, "sources": [
-            {"name": f"s{k}", "dims": [{"name": n, "size": rng.choice([1, 3, 64, 600])}
+            {"name": f"s{k}", "dims": [{"name": n, "size": rng.choice(sizes)}
                                        for n in rng.sample(dims, rng.randint(1, 4))]}
             for k in range(rng.randint(1, 3))]}
         names = dims + ["zz"]
@@ -318,13 +341,15 @@ def test_resolve_agrees_with_the_protocol_reference():
                          for d in rng.sample(names, rng.randint(0, 3))},
                "reduce": {d: rng.choice(["mean", "sum", "norm", "bad"])
                           for d in rng.sample(names, rng.randint(0, 2))},
-               "budget": {"max_extent": rng.choice([1, 64, 5000]), "max_points": rng.choice([1, 50])}}
+               "budget": {"max_extent": rng.choice([1, 64, 4031, 4063, 4064, 5000]),
+                          "max_points": rng.choice([1, 50])}}
         if rng.random() < 0.3:
             req["tile"] = rng.choice(names)
         try:
             r1 = wire.resolve_data_view(view, req)
-        except wire.MessageError:
+        except wire.MessageError as e:
             r1 = None
+            too_large += "too large to send in one frame" in e.message
         try:
             r2 = dv.resolve(view, req)
         except DataViewError:
@@ -333,7 +358,31 @@ def test_resolve_agrees_with_the_protocol_reference():
         if r1 is not None:
             assert wire.payload_layout(view, r1) == dv.layout(view, r2)
             agree += 1
-    assert agree > 100
+    # requests that break no other rule, with payloads around the frame limit
+    for i in range(600):
+        kind = rng.choice([1, 2])
+        tiled = kind == 1 and rng.random() < 0.3
+        near = [3990, 4031, 4063, 4064, 4096]
+        dims_ = [{"name": "r", "size": rng.choice(near)}, {"name": "c", "size": rng.choice(near)}]
+        if tiled:
+            dims_.insert(0, {"name": "t", "size": rng.choice([2, 4])})
+        view = {"name": "v", "kind": kind, "sources": [{"name": "s", "dims": dims_}]}
+        req = {"budget": {"max_extent": rng.choice([4000, 4031, 4063, 4064, 4096, 5000])}}
+        if rng.random() < 0.3:
+            req["index"] = {"c": [0, rng.choice(near), 1]}
+        if tiled:
+            req["tile"] = "t"
+        try:
+            r1, m1 = wire.resolve_data_view(view, req), None
+        except wire.MessageError as e:
+            r1, m1 = None, e.message
+            too_large += "too large to send in one frame" in e.message
+        try:
+            r2, m2 = dv.resolve(view, req), None
+        except DataViewError as e:
+            r2, m2 = None, str(e)
+        assert (r1, m1) == (r2, m2), (view, req)
+    assert agree > 100 and too_large > 30, (agree, too_large)
 
 
 # ---------------------------------------------------------------------------

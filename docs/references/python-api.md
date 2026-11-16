@@ -370,11 +370,12 @@ subscriptions, data view requests and viewer events, and never host commands.
 The server keeps the last 1,048,576 values of each series whether or not a
 viewer watches it, and sends them first to a viewer that subscribes late.
 
-Each connection's replies and other control messages wait in a queue of at most
-65,536 messages and 16 MiB, and a flood of PINGs leaves one PONG waiting, to the
-latest. Only a viewer that keeps sending requests while it reads nothing can
-fill the queue; this server then closes its connection with code 1008, as the
-hub does with a send queue that overflows. The training loop is not affected.
+This implementation limits the replies and other control messages waiting to be
+sent on one connection to 65,536 messages and 16 MiB, and keeps one PONG
+waiting, to the latest PING. Only a viewer that keeps sending requests while it
+reads nothing reaches the limit; the server then closes its connection with code
+1008, as the hub does with a send queue that overflows. The training loop is not
+affected. These are limits of Caliper LIB's server, not rules of the protocol.
 
 | Member | Meaning |
 |---|---|
@@ -542,10 +543,8 @@ sample stays the same while the size does. A pooled or tiled heatmap reports
 the range of its data before pooling, the empty cells left out, for autoscale.
 A data view that breaks a rule is refused with the error `bad_data_view`
 (`DataViewError` in Python), and the view keeps the data view it had. So is one
-whose payload would not fit one frame of the protocol with up to 1 MiB of
-metadata: a heatmap or image of more than 16,515,042 cells, 4 bytes each, such
-as 4096 by 4096 (4096 by 4031 fits). Points up to the limit of 1,000,000 with
-labels, and histograms up to 65,536 bins, always fit.
+whose payload would not fit one frame of the protocol, such as a heatmap or image
+of 4096 by 4096; its message names the largest `max_extent` that fits.
 
 **Default and subscriptions.** The view's default data view is what the window
 and the live session draw, and what a viewer's subscription starts from. Each

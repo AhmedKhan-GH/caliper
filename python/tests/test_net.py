@@ -1466,7 +1466,7 @@ def test_largest_views_fit_one_frame():
     and a histogram at MAX_BINS; one cell more than the heatmap does not."""
     from caliper import _dataview as dv
     names = {"index": {"layer" * 12 + str(i): [0, 4096, 1] for i in range(6)}}  # metadata of some size
-    rows = dv.MAX_PAYLOAD_BYTES // 4 // 4096
+    rows = w.MAX_PAYLOAD_BYTES // 4 // 4096
     cases = [(w.Kind.HEATMAP, np.zeros((rows, 4096), np.float32), None),
              (w.Kind.POINTS, np.zeros((w.LIMIT_MAX_POINTS, 3), np.float32),
               np.zeros(w.LIMIT_MAX_POINTS, np.float32)),
@@ -1478,7 +1478,7 @@ def test_largest_views_fit_one_frame():
     view = {"id": 1, "name": "w", "kind": 1, "default": {},
             "sources": [{"name": "data", "dtype": "f32",
                          "dims": [{"name": "row", "size": 4096}, {"name": "col", "size": 4096}]}]}
-    with pytest.raises(dv.DataViewError, match="does not fit one frame"):
+    with pytest.raises(dv.DataViewError, match="ask for a smaller max_extent, at most 4063 here"):
         dv.resolve(view, {"budget": {"max_extent": 4096}})
     assert dv.resolve(view, {"budget": {"max_extent": 4031}})["budget"]["max_extent"] == 4031
 
@@ -1494,7 +1494,7 @@ def test_a_view_too_large_for_a_frame_is_refused(server):
         async with Client(server) as c:
             r = await c.subscribe(1, "w", {"budget": {"max_extent": 4096}}, pump=show)
             assert r.error is not None and r.error["code"] == w.ERR_BAD_DATA_VIEW, r.error
-            assert "does not fit one frame" in r.error["message"]
+            assert "ask for a smaller max_extent, at most 4063 here" in r.error["message"]
             r = await c.subscribe(1, "w", {"budget": {"max_extent": 1024}}, pump=show)
             assert r.error is None
             s = await c.expect(w.Snapshot, pump=show, pred=lambda m: m.sub == 1)

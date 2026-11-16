@@ -79,16 +79,6 @@ LIMIT_MAX_EXTENT = 4096
 DEFAULT_MAX_POINTS = 100_000
 LIMIT_MAX_POINTS = 1_000_000
 SERIES_RETAIN_MIN = 4096
-# A snapshot is one frame of at most MAX_FRAME_BYTES (64 MiB), whose head (the
-# fixed header, the section table, the metadata of up to MAX_META_BYTES and the
-# sections' alignment) takes part of it: a payload larger than this cannot be
-# sent, so a data view that would make one is refused. Only a heatmap or an
-# image near LIMIT_MAX_EXTENT on both sides reaches it (4 bytes per cell);
-# points at LIMIT_MAX_POINTS with labels take at most 16 MB and a histogram at
-# MAX_BINS 256 KiB.
-MAX_FRAME_BYTES = 64 << 20
-MAX_META_BYTES = 1 << 20
-MAX_PAYLOAD_BYTES = MAX_FRAME_BYTES - MAX_META_BYTES - 24 - 8 * (4 + 8)
 NAME_MAX = 63                      # bytes of a view, source or dim name
 MAX_SOURCES = 64
 MAX_DIMS = 8
@@ -394,12 +384,13 @@ def _resolve(off: Offer, req: dict, kind: str, retain: int = SERIES_RETAIN_MIN) 
     out = {"source": src.name, "index": rindex, "reduce": dict(reduce), "budget": rbudget}
     if tile is not None:
         out["tile"] = tile
-    lay = _layout(src, kind, out)                # the payload must fit the hard limit
-    if kind in ("heatmap", "image"):             # 4 bytes a cell: float32, or RGBA8
-        n = 4 * math.prod(lay["extent"])
-        if n > MAX_PAYLOAD_BYTES:
-            raise DataViewError(f"a payload of {lay['extent'][0]} by {lay['extent'][1]} "
-                                f"({n} bytes) does not fit one frame; lower max_extent")
+    _layout(src, kind, out)                      # the payload must fit the hard limits
+    if "max_extent" in rbudget:                  # and one frame (caliper/_wire.py)
+        from ._wire import payload_frame_error
+        err = payload_frame_error(kind, rbudget["max_extent"], lambda m: _layout(
+            src, kind, dict(out, budget=dict(rbudget, max_extent=m)))["extent"])
+        if err is not None:
+            raise DataViewError(err)
     return out
 
 
