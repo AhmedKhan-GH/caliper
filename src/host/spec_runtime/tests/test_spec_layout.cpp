@@ -167,6 +167,7 @@ TEST_CASE("layout: tabs show one child under a strip of labels") {
         CHECK(same(l.find("h")->rect, 480, tab, 480, 900 - tab));
         CHECK(same(l.find("p3")->rect, 961, tab, 479, 900 - tab));
         CHECK(l.find("img") == nullptr);
+        CHECK_FALSE(l.find("s")->tab);
         check_tiling(l, 1440, 900);
     }
     {
@@ -174,7 +175,7 @@ TEST_CASE("layout: tabs show one child under a strip of labels") {
         const SpecLayout l = lay(s, 2560, 1440, 1.0f, {{"", 1}});
         REQUIRE(l.tabs.size() == 2);
         CHECK(l.tabs[1].path == "1.1");
-        CHECK(l.tabs[1].labels == std::vector<std::string>{"img", "t", "gpu"});
+        CHECK(l.tabs[1].labels == std::vector<std::string>{"sample_png", "run42_metrics", "gpu"});
         REQUIRE(l.panels.size() == 2);
         const SpecLayoutPanel* p2 = l.find("p2");
         const SpecLayoutPanel* img = l.find("img");
@@ -185,6 +186,8 @@ TEST_CASE("layout: tabs show one child under a strip of labels") {
         CHECK(l.tabs[1].bar.y == p2->rect.bottom() + 1);
         CHECK(img->rect.y == l.tabs[1].bar.bottom());
         CHECK(img->rect.bottom() == 1440);
+        CHECK(img->tab);
+        CHECK_FALSE(p2->tab);
         check_tiling(l, 2560, 1440);
     }
     {
@@ -203,7 +206,7 @@ TEST_CASE("layout: tabs show one child under a strip of labels") {
         const SpecLayout l = lay(s, 1440, 900, 1.0f, {{"", 2}});
         CHECK(l.find("note") != nullptr);
         CHECK(l.tabs.size() == 2);
-        CHECK(l.tabs[1].labels == std::vector<std::string>{"note", "Last value"});
+        CHECK(l.tabs[1].labels == std::vector<std::string>{"Text", "Last value"});
     }
 }
 
@@ -221,4 +224,20 @@ TEST_CASE("layout: a spec without a layout stacks its panels") {
     const SpecLayout one = lay(s, 640, 480);
     REQUIRE(one.panels.size() == 1);
     CHECK(same(one.panels[0].rect, 0, 0, 640, 480));
+}
+
+TEST_CASE("layout: a panel without a title goes by what it draws, never its id") {
+    const spec::Spec d = fixture("dashboard.spec.toml");
+    CHECK(spec_panel_title(d, *d.find_panel("curves")) == "Loss and accuracy");
+    CHECK(spec_panel_title(d, *d.find_panel("rows")) == "run42_metrics");
+    const spec::Spec e = fixture("every-primitive.spec.toml");
+    CHECK(spec_panel_title(e, *e.find_panel("h")) == "acts");
+    CHECK(spec_panel_title(e, *e.find_panel("p3")) == "embedding");
+    CHECK(spec_panel_title(e, *e.find_panel("p2")) == "value by step");
+    CHECK(spec_panel_title(e, *e.find_panel("img")) == "sample_png");
+    CHECK(spec_panel_title(e, *e.find_panel("t")) == "run42_metrics");   // the table its query reads
+    CHECK(spec_panel_title(e, *e.find_panel("gpu")) == "gpu");
+    CHECK(spec_panel_title(e, *e.find_panel("note")) == "Text");
+    CHECK(spec_binding_name(e, "probs") == "probs");                    // a derived source by its id
+    CHECK(spec_binding_name(e, "metrics.value") == "value");
 }
