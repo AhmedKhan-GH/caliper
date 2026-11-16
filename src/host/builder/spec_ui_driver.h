@@ -58,6 +58,9 @@
 //                        import runs
 //   pane focus <panel>   wait until the builder's focused panel is <panel>
 //   page <name>          wait until the app shows that page (landing, spec, live)
+//   command-line <text>|none
+//                        wait until the landing's command line holds that
+//                        text, or nothing
 //   widget <label>       presses the inline surface's action of that label
 //                        ("Setup", "Ask in chat", ...) once the surface offers it,
 //                        through the surface's own act(), as its button does
@@ -156,6 +159,8 @@ public:
     // The page the app shows ("landing", "spec", "live"), and the function
     // a dropped file reaches; the app sets both before each feed().
     void set_page(std::string page) { page_ = std::move(page); }
+    // The landing's command line, for the `command-line` step; the app sets it.
+    void set_command_line(std::string text) { command_line_ = std::move(text); }
     void set_drop(std::function<void(std::vector<std::string>)> drop) { drop_ = std::move(drop); }
 #if CALIPER_WITH_BUILDER
     // The widget agent's settings, for the `settings` steps; the app sets them.
@@ -347,6 +352,13 @@ public:
         if (s.verb == "page") {
             if (page_ != s.arg) return patience("the app shows " + page_ + ", not " + s.arg);
             next("page " + s.arg);
+            return;
+        }
+        if (s.verb == "command-line") {
+            const std::string want = s.arg == "none" ? std::string() : s.arg;
+            if (command_line_ != want)
+                return patience("the command line holds " + (command_line_.empty() ? std::string("nothing") : "\"" + command_line_ + "\""));
+            next("the command line holds " + (want.empty() ? std::string("nothing") : "\"" + want + "\""));
             return;
         }
         if (s.verb == "pane") {
@@ -552,7 +564,7 @@ private:
 #if CALIPER_WITH_BUILDER
     AgentSettings* settings_ = nullptr;
 #endif
-    std::string page_;
+    std::string page_, command_line_;
     std::function<void(std::vector<std::string>)> drop_;
     float drag_a_[2] = {0, 0}, drag_b_[2] = {0, 0};
     int drag_frame_ = 0;   // the frame of a drag in progress, 0 before its press

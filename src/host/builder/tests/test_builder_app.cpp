@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 using namespace spec_test;
 using nlohmann::json;
@@ -170,6 +171,54 @@ TEST_CASE("builder app: the dashboard built by hand in the hidden app, saved and
         if (px) stbi_image_free(px);
         CHECK(((iw == 1440 && ih == 900) || (iw == 2880 && ih == 1800)));
     }
+}
+
+// New dashboard takes the landing's command line as its title, so the line is
+// empty when the person comes back Home: with F3, and with "new <title>" and
+// Enter. The line used to keep the title while it had the keyboard, since the
+// line's own text won over the cleared buffer, and the instruments came back
+// filtered by it.
+TEST_CASE("builder app: New dashboard leaves the landing's command line empty" * doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    if (!exe || !*exe) {
+        std::printf("caliper_builder_app skipped: needs CALIPER_TEST_CALIPER_EXE\n");
+        return;
+    }
+    const char* offline = std::getenv("CALIPER_AGENT_OFFLINE");
+    REQUIRE_MESSAGE((offline && std::string(offline) == "1"), "run this test through ctest, which sets the switch");
+    const std::string root = fresh_dir("builder-app-new");
+    for (const auto& d : {root + "/data", root + "/apps"}) std::filesystem::create_directories(d);
+    const std::string script =
+        "wait 60; page landing; "
+        "key cmd+k; type Run 42; key f3; page spec; wait 10; key escape; page landing; wait 10; command-line none; "
+        "key cmd+k; type new Run 43; key enter; page spec; wait 10; key escape; page landing; wait 10; command-line none; "
+        "quit";
+    caliper_builder::acp::SpawnOptions o;
+    o.argv = {exe, "--hidden", "--workspace", root + "/ws"};
+    o.env = {{"CALIPER_DATA_DIR", root + "/data"},
+             {"CALIPER_USER_APPLETS_DIR", root + "/apps"},
+             {"CALIPER_WINDOW_SIZE", "1440x900"},
+             {"CALIPER_AGENT_OFFLINE", "1"},
+             {"CALIPER_TEST_SPEC_UI", script},
+             {"CALIPER_EXIT_AFTER", "120"}};
+    caliper_builder::acp::RunLimits lim;
+    lim.timeout_ms = 180000;
+    lim.max_output_bytes = 16u << 20;
+    const auto run = caliper_builder::acp::run_process(o, lim);
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
+    REQUIRE(run.error.ok());
+    if (run.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(run.status.success());
+    CHECK(run.err.find("[ui] done") != std::string::npos);
+    // Both dashboards were made from the person's origin, with their titles.
+    std::vector<std::string> titles;
+    for (const auto& e : caliper_builder::read_journal(root + "/ws/journal/commands.jsonl").events)
+        if (e.name == "spec.new" && e.ok && e.origin == caliper_builder::CommandOrigin::ui)
+            titles.push_back(e.args.value("title", std::string()));
+    CHECK(titles == std::vector<std::string>{"Run 42", "Run 43"});
 }
 
 #endif

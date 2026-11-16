@@ -17,8 +17,9 @@ There are three ways to the pane:
 
 - **A new dashboard.** On the landing screen, F3 New dashboard, the Projects way in, makes a new spec and opens it in
   build mode. Type `new <title>` in the command line and press Enter to give it a title; F3 takes the command line's
-  text as the title too, and a dashboard without one is called Untitled. The spec's applet id is made from the title:
-  its letters and digits in lower case, with one `-` for every other run of characters, such as `run-42` for "Run 42".
+  text as the title too, and a dashboard without one is called Untitled. The command line is empty again afterwards.
+  The spec's applet id is made from the title: its letters and digits in lower case, with one `-` for every other run
+  of characters, such as `run-42` for "Run 42".
 - **Files dropped on the window.** Dropping files from the Finder or a file manager imports them into the workspace.
   On the spec page the pane opens in build mode with the new sources selected; on the landing screen the open spec's
   page opens in build mode first, or a new Untitled dashboard when no spec is open. Other pages keep their windows and

@@ -109,6 +109,10 @@ public:
     void log(std::string event, std::string object = {},
              std::string detail = {});
 
+    // The command line's text, as the line holds it (the hidden input
+    // driver's `command-line` step reads it).
+    const std::string& command_text() const { return command_; }
+
     // Index into the loader of the selected row, or -1. Survives launches so
     // Home returns to the same row.
     int selected_index() const { return selected_; }
@@ -143,6 +147,7 @@ private:
     int selected_ = -1;
     std::function<void()> agent_settings_;   // Context::agent_settings, for the command bar
     std::string command_;            // command-line text (filters instruments)
+    unsigned int command_id_ = 0;    // the command line's ImGuiID, for its edit state
     bool focus_command_ = false;     // ⌘K / Ctrl+K: focus the command line
     bool layout_built_ = false;      // first-run DockBuilder layout attempted
     std::vector<LogLine> log_;
