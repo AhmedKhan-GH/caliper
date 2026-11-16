@@ -37,6 +37,7 @@ PRESETS_FILE = Path(__file__).resolve().with_name("presets.json")
 MAX_PRESETS_BYTES = 64 << 10
 KEY_NEEDS = ("required", "optional", "none")
 APIS = ("claude", "openai-compatible")
+CHAT_APIS = ("openai", "ollama")
 CUSTOM_ACCOUNT_PREFIX = "custom-"
 
 
@@ -84,6 +85,12 @@ class Preset:
     key: str               # required, optional, none
     key_env: str | None
     local: bool
+    # "ollama": chat requests go to Ollama's own /api/chat, with the context
+    # length below as options.num_ctx (ollama_native.py); "openai" otherwise.
+    chat_api: str = "openai"
+    # The context length the preset asks the server to load the model with,
+    # unless the person sets another; None leaves it to the server.
+    context_length: int | None = None
 
 
 def load_presets(path: str | Path | None = None) -> dict[str, Preset]:
@@ -99,11 +106,17 @@ def load_presets(path: str | Path | None = None) -> dict[str, Preset]:
     for raw in doc["presets"]:
         try:
             preset = Preset(id=raw["id"], name=raw["name"], api=raw["api"], base_url=raw["base_url"],
-                            key=raw["key"], key_env=raw["key_env"], local=raw["local"])
-        except (KeyError, TypeError):
+                            key=raw["key"], key_env=raw["key_env"], local=raw["local"],
+                            chat_api=raw.get("chat_api", "openai"), context_length=raw.get("context_length"))
+        except (KeyError, TypeError, AttributeError):
             raise PresetError("A preset of the presets file lacks a field.") from None
+        context = preset.context_length
         if (not isinstance(preset.id, str) or preset.api not in APIS or preset.key not in KEY_NEEDS
                 or not isinstance(preset.local, bool) or (preset.key == "none") != (preset.key_env is None)
+                or preset.chat_api not in CHAT_APIS
+                or (preset.chat_api == "ollama" and preset.api != "openai-compatible")
+                or not (context is None or (isinstance(context, int) and not isinstance(context, bool)
+                                            and 0 < context <= 100_000_000))
                 or preset.id in out):
             raise PresetError(f"The preset {str(preset.id)[:32]} of the presets file is malformed.")
         out[preset.id] = preset

@@ -32,6 +32,11 @@ the model in `Capabilities` and lowers it when the server says no:
   without it, and one that refuses `max_completion_tokens` gets `max_tokens`.
   When the context length is known, a request asks for at most half of it as
   output, so that a small model's context is not taken by the output budget.
+- **Ollama's own chat API.** For the Ollama preset (`native`), the client's
+  chat requests go to Ollama's `/api/chat` through `OllamaNativeTransport`
+  (ollama_native.py), with the context length as `options.num_ctx` and a
+  `keep_alive`, since the OpenAI-compatible endpoint ignores `num_ctx` and the
+  server would load the model at its full context.
 """
 
 from __future__ import annotations
@@ -47,6 +52,7 @@ from pydantic_ai.providers.openai_compatible import OpenAICompatibleProvider
 
 from .keyguard import Secret
 from .offline import check_provider, trust_env
+from .ollama_native import DEFAULT_KEEP_ALIVE, OllamaNativeTransport
 from .presets import MAX_BASE_URL, BaseUrlError, check_base_url  # noqa: F401  (re-exported)
 from .provider import Capabilities, ModelInfo, Settings
 
@@ -61,7 +67,7 @@ class OpenAICompatProvider:
     def __init__(self, base_url: str, model_id: str, key: Secret | None, *, tools: bool = True,
                  vision: bool = True, transport: Any = None, backoff_scale: float = 1.0,
                  max_tokens: int = MAX_TOKENS, context_length: int | None = None,
-                 sources: dict | None = None, quirks: dict | None = None) -> None:
+                 sources: dict | None = None, quirks: dict | None = None, native: dict | None = None) -> None:
         self.base_url = check_base_url(base_url)
         # With CALIPER_AGENT_OFFLINE set, only a server on loopback.
         check_provider("openai-compatible", base_url=self.base_url, transport=transport)
@@ -69,6 +75,12 @@ class OpenAICompatProvider:
         self.name = f"The model server at {host}"
         self.models = (ModelInfo(model_id, model_id, f"{model_id} on {host}"),)
         self.default_model = model_id
+        self.native = dict(native) if native else None
+        if self.native is not None:
+            # Ollama: chat requests to /api/chat, each with num_ctx and keep_alive.
+            transport = OllamaNativeTransport(self.base_url, num_ctx=self.native["num_ctx"],
+                                              keep_alive=self.native.get("keep_alive", DEFAULT_KEEP_ALIVE),
+                                              inner=transport)
         self._client = AsyncOpenAI(
             base_url=self.base_url,
             api_key=key.reveal() if key is not None else "not-needed",
