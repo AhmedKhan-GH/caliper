@@ -6,9 +6,9 @@
 // starting it, so it never shows a window. `shot` draws the app's applet page
 // into an offscreen canvas (shot.h) and opens no window either.
 //
-//   caliper [--applets <dir>]... [--api [--api-port <n>]] [--hidden]
+//   caliper [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]
 //                                             start the app
-//   caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>]] [--hidden]
+//   caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]
 //                                             start the app, <folder> searched first
 //   caliper list [--applets <dir>]...         list the applets in search order
 //   caliper check <folder>                    run the pre-load checks on <folder>
@@ -17,7 +17,7 @@
 //   caliper build <folder>                    configure and build it, then check it
 //   caliper info                              print versions and served services
 //   caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
-//                [--frames <N>] --out <file.png> [--api [--api-port <n>]]
+//                [--frames <N>] --out <file.png> [--api [--api-port <n>] [--allow-control]]
 //                                             write the applet page as a PNG
 //   caliper serve [--port <n>] [--token-file <file>] [--assets <dir>]
 //                                             run the hub of wire protocol v3
@@ -104,8 +104,8 @@ struct CommandLine {
 };
 
 inline const char* usage_text() {
-    return "usage: caliper [--applets <dir>]... [--api [--api-port <n>]] [--hidden]\n"
-           "       caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>]] [--hidden]\n"
+    return "usage: caliper [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]\n"
+           "       caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]\n"
            "       caliper list [--applets <dir>]...\n"
            "       caliper check <folder>\n"
            "       caliper install <folder>\n"
@@ -113,7 +113,7 @@ inline const char* usage_text() {
            "       caliper build <folder>\n"
            "       caliper info\n"
            "       caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]\n"
-           "                    [--frames <N>] --out <file.png> [--api [--api-port <n>]]\n"
+           "                    [--frames <N>] --out <file.png> [--api [--api-port <n>] [--allow-control]]\n"
            "       caliper serve [--port <n>] [--token-file <file>] [--assets <dir>] [--allow-control]\n"
            "       caliper --help\n";
 }

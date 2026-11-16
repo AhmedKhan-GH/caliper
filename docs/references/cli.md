@@ -3,8 +3,8 @@
 The `caliper` executable starts the app and also takes subcommands. It reads its command line before anything opens a window. Every subcommand except `dev` runs without opening a window: `list`, `check`, `install`, `new`, `build`, `info`, `shot`, `serve` and `--help` never start the app, so they are safe in scripts and CI. `serve` runs until it is stopped; the others exit when they are done. Only `caliper` with no subcommand and `caliper dev` start the app. `shot` draws the app's applet page into an offscreen canvas and writes it as a PNG, and shows nothing on screen. The parser and the subcommands are in `src/host/host_cli.h`, and `src/main.cpp` dispatches to them.
 
 ```text
-usage: caliper [--applets <dir>]... [--api [--api-port <n>]] [--hidden]
-       caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>]] [--hidden]
+usage: caliper [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]
+       caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]
        caliper list [--applets <dir>]...
        caliper check <folder>
        caliper install <folder>
@@ -12,8 +12,8 @@ usage: caliper [--applets <dir>]... [--api [--api-port <n>]] [--hidden]
        caliper build <folder>
        caliper info
        caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
-                    [--frames <N>] --out <file.png> [--api [--api-port <n>]]
-       caliper serve [--port <n>] [--token-file <file>] [--assets <dir>]
+                    [--frames <N>] --out <file.png> [--api [--api-port <n>] [--allow-control]]
+       caliper serve [--port <n>] [--token-file <file>] [--assets <dir>] [--allow-control]
        caliper --help
 ```
 
@@ -33,6 +33,7 @@ Results go to standard output, and errors go to standard error, each starting wi
 |---|---|
 | `--api` | Serve Caliper API. The process prints the address and the session token, and writes them in `api.json` in the app-data folder, readable by its owner only, until it exits. |
 | `--api-port <n>` | The port, from 0 to 65535. The default is 7341, and 0 takes any free port. It needs `--api`, and may be given once. |
+| `--allow-control` | The API's stream, which is a hub, forwards viewers' controls to the scripts, as `caliper serve --allow-control` does. It needs `--api`. Off by default. `CALIPER_API=1` alone never turns it on. |
 
 `--api-port` also takes the form `--api-port=<n>`. `--api` takes no value. When the port is taken, the app starts without the API and says why on standard error and in the Activity pane, and `shot` exits with 1. With `--api`, SIGINT and SIGTERM end the frames of `shot` early, and it then writes its image as usual.
 
@@ -249,14 +250,16 @@ Runs the hub of [wire protocol v3](wire-protocol.md): producers, such as trainin
 | `--port <n>` | The port to listen on, 0 to 65535. The default is 7340. 0 takes any free port. |
 | `--token-file <file>` | Read the session token from the first line of `<file>` instead of making a random one. The token must be 22 to 128 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`. On macOS and Linux, the file must not be readable or writable by other users (`chmod 600`). |
 | `--assets <dir>` | Serve the viewer page and its files from `<dir>`, such as the `caliper/_web/` folder of Caliper LIB. Without it, `/` answers with a short note that says where the page is. |
+| `--allow-control` | Forward viewers' controls, of [wire protocol 3.1](wire-protocol.md#controls-through-a-hub), to the script of each viewer's own session: pause, resume, step, setting a registered parameter and running a registered action. Off by default: without it the hub answers every control with `forbidden`, and viewers show the controls without letting them be changed. |
 
-The options also take the form `--port=<n>`, and they apply only to `serve`. The token is never given on the command line, where other users could read it from the process list. Without `--token-file`, the hub makes a random token of 32 characters (24 random bytes) for this run.
+The options with a value also take the form `--port=<n>`. They apply only to `serve`, except `--allow-control`, which also applies with `--api` (see [Caliper API](#caliper-api)), and takes no value. The token is never given on the command line, where other users could read it from the process list. Without `--token-file`, the hub makes a random token of 32 characters (24 random bytes) for this run.
 
 `serve` prints the viewer link and the producer address, then one line for each session that starts, resumes, ends or is forgotten:
 
 ```text
 viewers   http://127.0.0.1:7340/?token=<token>
 producers ws://127.0.0.1:7340/v3/stream (address and token in <hub file>)
+controls are not forwarded; start with --allow-control to allow them
 stop with Ctrl-C
 session clp-41222-9f03ab started (train.py, pid 41222)
 ```
@@ -284,7 +287,7 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 |---|---|
 | 0 | Success. |
 | 1 | A check failed, nothing was found, or a file operation failed. `build` also exits with 1 when CMake, a compiler or the SDK is missing or the build fails, `dev` when its folder is not a folder, `shot` when its applet cannot be launched or is quarantined, when the renderer cannot draw offscreen, or when Caliper API cannot listen, and `serve` when it cannot listen or cannot use its token file or assets folder. |
-| 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets`, `--api`, `--api-port` or `--hidden` with a subcommand that does not take it, `--api-port` without `--api`, an option of `shot` or `serve` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a port out of range, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
+| 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets`, `--api`, `--api-port` or `--hidden` with a subcommand that does not take it, `--api-port` or `--allow-control` without `--api` when starting the app, `dev` or `shot`, an option of `shot` or `serve` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a port out of range, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
 
 ## Environment variables
 

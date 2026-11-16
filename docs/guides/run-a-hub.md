@@ -85,6 +85,7 @@ The hub keeps data so that a viewer that arrives late sees something at once, an
 
 - **The latest snapshot of every producer subscription.** Viewers that ask for the same view under equal resolved data views share one subscription at the script and one stored snapshot. When the last viewer of a data view leaves, the hub ends the subscription at the script, so the script does no more work for it, but keeps the last snapshot. At most 64 such idle data views are kept per session, the least recently used going first.
 - **The values of every series view.** The hub subscribes to each series view as soon as the script lists it, whether a viewer watches it or not, so the whole curve is there for a late viewer. It keeps the newest 1,048,576 values of each series view (4 MiB).
+- **The controls and selections of every session.** The latest CONTROLS of each session, which holds the run state, the parameters and the actions its script registered, and the latest SELECTION of each item space, at most 16 spaces per session. They are kept after the session ends, so a viewer still sees how the run stood. See [Controls and selections](#controls-and-selections).
 - **Nothing else.** It decodes the metadata of each message to route it, never copies a payload per viewer, and never interprets the data beyond what forwarding, the stored snapshots and series backfill need.
 
 All of this together is bounded by a budget of 1 GiB. Over it, the hub forgets the oldest ended sessions first, then the stored snapshots of the data views nobody watches, least recently used first. If live sessions alone fill the budget, series stop growing and keep their newest values, at least 4,096 per series view.
@@ -104,6 +105,22 @@ The hub applies the protocol's [flow control](../references/wire-protocol.md#flo
 
 On an Apple silicon Mac, a 512 × 512 heatmap at 60 Hz reaches four viewers through the hub with a median latency of about 1.4 ms and a 99th percentile under 3 ms, from the script's send to the viewer's receive, at 240 MiB/s in total. The hub's tests measure it with `caliper_tests -tc="net/hub: relay*" --no-skip`.
 
+## Controls and selections
+
+From [protocol 3.1](../references/wire-protocol.md#controls-through-a-hub), a viewer can pause, resume and step a script's training loop, change the parameters the script registered and run its actions, and a selection in one view highlights the same items in the session's other views. The hub announces both capabilities, `controls` and `selection`, to viewers and to scripts.
+
+**Controls are off unless you allow them.** Without `--allow-control` the hub forwards no control: it tells every viewer in its WELCOME that it may not control, and answers every CONTROL itself with the error `forbidden`. Viewers still show the run state, the parameters and the actions, without letting them be changed. Start the hub with the option to forward controls:
+
+```sh
+caliper serve --allow-control
+```
+
+Then the hub forwards a viewer's CONTROL only to the script of the session that viewer is attached to. It numbers the request itself at the script, so two viewers that use the same request id never get each other's answers, and it routes each CONTROL_REPLY back to the viewer that asked, the two answers of a queued action included. It answers a CONTROL itself with `not_attached` when the viewer is not attached, and with `unsupported` when the session has ended or its script does not take controls. When a script disconnects with requests still waiting, the hub answers them `unsupported`, and a request the script never answers is answered `timeout` after a minute, or after the protocol's ten minutes for a queued action. At most 64 requests of one viewer, and 1,024 of one session, wait at once; one more is answered `limit`.
+
+**Selections need no permission.** Selecting is not a control: a viewer's select events reach the script whether or not the hub allows control, and the script's SELECTION reaches every viewer of the session that announced `selection`. A viewer that attaches late gets the session's latest CONTROLS and every item space's selection that is not empty right after its VIEWS. A viewer that did not announce a capability gets none of its messages, and VIEWS reach it without the item spaces; a script that did not announce `selection` gets select events without them. So viewers and scripts of protocol 3.0 work with this hub unchanged.
+
+An ended session keeps its last controls and selections, which a viewer shows with the controls disabled, and the hub answers its controls `unsupported`.
+
 ## Limits
 
 | Limit | Value | Beyond it |
@@ -116,7 +133,10 @@ On an Apple silicon Mac, a 512 × 512 heatmap at 60 Hz reaches four viewers thro
 | Ended sessions | 32, for 24 hours each | The oldest is forgotten |
 | Idle data views per session | 64 | The least recently used is forgotten |
 | Series values per series view | 1,048,576 | The oldest values go |
-| Stored snapshots and series values | 1 GiB | See [What the hub keeps](#what-the-hub-keeps) |
+| Stored snapshots, series values, controls and selections | 1 GiB | See [What the hub keeps](#what-the-hub-keeps) |
+| Item spaces whose selection is kept, per session | 16 | A new space's SELECTION is dropped |
+| Controls waiting for a script, per viewer connection | 64 | CONTROL_REPLY with the error `limit` |
+| Controls waiting for a script, per session | 1,024 | CONTROL_REPLY with the error `limit` |
 | Send queue per connection | 160 MiB | Closed with code 1008 |
 
 The timers are the protocol's: a connection that sends no HELLO within 10 seconds is closed with 4003, a peer silent for 10 seconds gets PING, and one silent for 30 seconds is closed with 4004.
@@ -125,7 +145,7 @@ The timers are the protocol's: a connection that sends no HELLO within 10 second
 
 The hub follows the protocol's [security](../references/wire-protocol.md#security) rules. It listens on 127.0.0.1 only. Every request must name 127.0.0.1 or localhost with the hub's port in its Host header, and a stream connection must come from no origin, a loopback origin or a VS Code webview, and must carry the session token. The viewer page and its files need no token: they are public code and hold no data.
 
-The hub forwards data and viewer events. It never runs anything a message names, and the stream never carries host commands. The token appears in the viewer link, so it can reach a browser's history; the hub file that holds it can be read by its owner only.
+The hub forwards data, viewer events and, only when it was started with `--allow-control`, controls that name a parameter or an action the script registered, to the script of the viewer's own session. It never runs anything a message names, and the stream never carries host commands. Whoever holds the session token of a hub started with `--allow-control` can pause the scripts connected to it, change their registered parameters and run their registered actions, so give that option only to a hub whose token you keep to yourself. The token appears in the viewer link, so it can reach a browser's history; the hub file that holds it can be read by its owner only.
 
 ## Stop the hub
 

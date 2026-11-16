@@ -112,7 +112,7 @@ The WebSocket of [wire protocol v3](wire-protocol.md), with the app in the hub r
 ws://127.0.0.1:7341/v3/stream?token=<token>
 ```
 
-`GET /v0/stream` is an alias of it, with the same checks, for clients that keep every address under the API's prefix. The stream carries data and viewer events only, never host commands.
+`GET /v0/stream` is an alias of it, with the same checks, for clients that keep every address under the API's prefix. The stream carries data, viewer events and, from protocol 3.1, controls, never host commands. As for `caliper serve`, the hub forwards no control unless the app was started with `--allow-control` next to `--api`; without it every control is answered `forbidden` ([Controls and selections](../guides/run-a-hub.md#controls-and-selections)).
 
 ## Threads and limits
 
