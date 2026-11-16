@@ -1,9 +1,9 @@
 # Caliper API
 
-Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](wire-protocol.md), and returns a capture of the frame the app draws. It listens on 127.0.0.1 only, behind a session token, and it is off unless the app starts with `--api`. The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
+Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](wire-protocol.md), returns a capture of the frame the app draws, and runs the commands of the command layer, through which specs, loaders and sources are built with undo, a journal and approvals. It listens on 127.0.0.1 only, behind a session token, and it is off unless the app starts with `--api`. The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
 
 !!! note "Status"
-    Version 0, built and tested on macOS. A capture works in the app's window on Metal and in the windowless mode, `caliper shot --api`; on the GL and Vulkan renderers the app in its window answers a capture with 501. Driving the app's state from outside, beyond launching an applet, is planned with a command layer that has undo. The Windows build refuses `--api` for now, as [Caliper CLI](cli.md#on-windows) describes.
+    Version 0, built and tested on macOS. A capture works in the app's window on Metal and in the windowless mode, `caliper shot --api`; on the GL and Vulkan renderers the app in its window answers a capture with 501. The command endpoints are served while the app has a command layer, which comes from its builder session (`src/host/api/session_gateway.h`, in builds with `CALIPER_WITH_BUILDER`); an app without one answers 404 on them, and `caliper-mcp` reads that as an app with no command layer. The Windows build refuses `--api` for now, as [Caliper CLI](cli.md#on-windows) describes.
 
 | Method and path | What it does |
 |---|---|
@@ -13,6 +13,9 @@ Caliper API is an HTTP interface to the running app. Version 0 lists the applets
 | `GET /v0/capture.png` | The frame the app draws, as a PNG |
 | `GET /v3/stream` | The WebSocket of wire protocol v3, with the app as the hub, at the protocol's own path |
 | `GET /v0/stream` | The same WebSocket, under the API's prefix |
+| `GET /v0/commands` | The command layer's descriptor table |
+| `POST /v0/commands/{name}` | Runs one command, with its arguments as a JSON body, and answers its result |
+| `GET /v0/approvals/{id}` | What became of a command that needed the person's approval |
 
 ## Starting it
 
@@ -58,7 +61,7 @@ Every request gets the checks of the stream ([The upgrade request](wire-protocol
 - An `Origin` header, when the request has one, must be one that the protocol accepts: `null`, an `http` or `https` origin on `127.0.0.1`, `localhost` or `[::1]`, or `vscode-webview://`. Any other origin is refused with 403.
 - The session token must come with the request. A request carries it in an `Authorization: Bearer <token>` header. A GET may carry it as the query parameter `token` instead, which is how the WebSocket and a link opened in a browser carry it. A POST takes the header only, so a state-changing request never has the token in its address. The token is compared in constant time. A missing or wrong token is refused with 401 and `WWW-Authenticate: Bearer`, and on the stream with 403, as the protocol says.
 
-The API serves nothing beyond its endpoints: no files, no command layer and no way to run code. A request with a body is refused with 413, and launch takes only an applet id in its path that the app's loader lists. Every response carries `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and the connection closes after it.
+The API serves nothing beyond its endpoints: no files and no way to run code. The commands of the command layer change specs, loaders and sources, which are data; a command that deletes or overwrites saved data, or runs a Python loader, waits for the person's approval in the app, and no endpoint approves or denies. Only `POST /v0/commands/{name}` takes a body, and only after its head passed the checks above; any other request with a body is refused with 413, and launch takes only an applet id in its path that the app's loader lists. A command request is built from its path, its body and the headers `X-Caliper-Origin`, `X-Caliper-Group` and `X-Caliper-Preview` only, so no other header value reaches the command layer or its journal, and the token is never logged. Every response carries `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and the connection closes after it.
 
 ## Endpoints
 
@@ -114,15 +117,68 @@ ws://127.0.0.1:7341/v3/stream?token=<token>
 
 `GET /v0/stream` is an alias of it, with the same checks, for clients that keep every address under the API's prefix. The stream carries data, viewer events and, from protocol 3.1, controls, never host commands. As for `caliper serve`, the hub forwards no control unless the app was started with `--allow-control` next to `--api`; without it every control is answered `forbidden` ([Controls and selections](../guides/run-a-hub.md#controls-and-selections)). The app's live page is itself a viewer of protocol 3.1: attached to this stream, or to any other, it shows the session's run bar and selections, and its controls follow the same rule ([Control the run and share a selection](../guides/attach-to-a-running-script.md#control-the-run-and-share-a-selection)).
 
+### GET /v0/commands
+
+The command layer's descriptor table: every command with its summary, the JSON Schema of its arguments and of its result, examples, and whether it mutates, is destructive or runs on the frame thread. It is the table that `caliper-mcp` and `caliper-agent` turn into tools.
+
+```json
+{"commands":[{"args":{"additionalProperties":false,"properties":{},"required":[],"type":"object"},"destructive":false,"examples":[{}],"frame_thread":false,"mutates":false,"name":"applet.list","result":{"...":"..."},"summary":"..."}],"version":0}
+```
+
+The list is shortened here.
+
+### POST /v0/commands/{name}
+
+Runs the command `{name}`, such as `spec.new` or `panel.patch`. The body is the command's arguments, a JSON object of at most 1 MiB, with `Content-Type: application/json` and a `Content-Length`. Three headers shape the invocation:
+
+| Header | Meaning |
+|---|---|
+| `X-Caliper-Origin` | Who sends the command: `api` (a program, and the default), `mcp` (an outside agent through `caliper-mcp`) or `agent` (the app's own agents). Any other value is refused with 400, so a request never claims the app's own UI. |
+| `X-Caliper-Group` | Optional. Commands that share a group undo as one step. |
+| `X-Caliper-Preview` | Optional. The id of a stacked preview, from `preview.begin`: an edit of the open spec applies to the preview instead, and `spec.get` reads it. |
+
+The answer is the command layer's result envelope, with 200 whether the command succeeded or not. The server gives each invocation an id, `api-<n>`.
+
+```json
+{"id":"api-7","ok":true,"result":{"applied":true,"diff":"...","id":"note","warnings":[]}}
+{"id":"api-8","ok":false,"error":{"code":"spec.no_open_spec","message":"...","where":""}}
+```
+
+Everything the command layer refuses comes this way: a name that is not a command (`command.unknown`, so that a 404 always means that the app has no command layer), arguments that fail the command's schema or a body that is JSON but not an object or nests deeper than 64 levels (`command.invalid_args`), a malformed group or preview (`command.invalid_invocation`), and every error of the command itself. Faults of the request keep their HTTP status, as the table under [Errors](#errors) lists: a body that is not JSON is 400, for example.
+
+**Approval.** A command that deletes or overwrites saved data, or runs a Python loader, needs the person's approval in the app when an agent or a program sends it. For the origins `mcp` and `agent`, the request is held while the person decides, for up to 120 seconds, and then answers with the command's result when it was approved, with `command.denied` when it was denied, and with `command.approval_timeout` when nobody decided in time, after which the approval is withdrawn. A client allows at least 130 seconds for such a call; `caliper-mcp` does. For the origin `api`, the request answers at once with `command.needs_approval`, whose error carries the approval id in `approval`, and the program reads the outcome later from `GET /v0/approvals/{id}`:
+
+```json
+{"id":"api-9","ok":false,"error":{"approval":"ap-3","code":"command.needs_approval","message":"...","where":""}}
+```
+
+A held request waits without blocking anything else: the stream, the other endpoints and other commands are served meanwhile.
+
+### GET /v0/approvals/{id}
+
+What became of the command that waits, or waited, under approval `{id}`. `state` is `pending` while the person has not decided, `decided` with the command's result envelope in `result` once they have (the last 64 decisions are kept), and `unknown` for an id the command layer does not know or no longer keeps.
+
+```json
+{"approval":"ap-3","result":null,"state":"pending"}
+{"approval":"ap-3","result":{"id":"api-9","ok":true,"result":{"id":"dash","manifest":"...","spec":"..."}},"state":"decided"}
+```
+
+An id is 1 to 128 characters of `A-Z`, `a-z`, `0-9`, `.`, `_`, `:` and `-`; anything else is refused with 400. Approval ids are not secret: reading one changes nothing, and only the person decides.
+
 ## Threads and limits
 
-One thread runs the hub's loop and answers every request; it never waits for the app. A request that reads or changes the app's state, which is the list of applets, a launch or a capture, waits for the app's frame thread, which takes it at the start of a frame, between two frames. A launch runs there, as `CALIPER_AUTOLAUNCH` runs before the first frame.
+One thread runs the hub's loop and answers every request; it never waits for the app. A request that reads or changes the app's state, which is the list of applets, a launch, a capture, a command or an approval's state, waits for the app's frame thread, which takes it at the start of a frame, between two frames. A launch runs there, as `CALIPER_AUTOLAUNCH` runs before the first frame. A command is handed to the command layer there, and runs when the frame thread drains the command layer's queue; from then on the request is held, without a thread of its own, until the command layer answers it, which the frame thread and the hub's thread both look for without waiting. The 5-second limit therefore applies to the wait before the frame thread takes a command; once taken, the request waits for its result, and one held for approval waits as [above](#post-v0commandsname).
 
 | Limit | Value | Answer beyond it |
 |---|---|---|
 | Time a request waits for the frame thread | 5 s | 504; a launch that is slower than that may still complete |
 | Requests waiting for the frame thread at once | 8 | 503 with `Retry-After: 1` |
 | Size of a request head | 16 KiB | 431 |
+| Size of a command's body | 1 MiB | 413, from the head, without reading the body |
+| Time for a command's body to arrive after its head | 10 s | 408 |
+| Commands held at once (running, waiting for approval, or waiting for the frame thread) | 32 | 503 with `Retry-After: 1` |
+| Time a command from `mcp` or `agent` waits for approval | 120 s | 200 with `command.approval_timeout` |
+| Time a held command waits for its result | 600 s | 504; the command may still complete |
 | TCP connections, the stream included | 512 | The connection is closed |
 
 The stream's own bounds are those of the hub; see [Run a hub](../guides/run-a-hub.md). When the app exits, requests still waiting get 503.
@@ -133,17 +189,20 @@ An error is answered with a JSON object `{"error": "<what went wrong>"}`.
 
 | Status | When |
 |---|---|
-| 400 | A launch names something that cannot be an applet id. |
+| 400 | A launch names something that cannot be an applet id, or an approval lookup something that cannot be an approval id. For a command: `X-Caliper-Origin` is not `api`, `mcp` or `agent`, a header that the checks read (`Authorization`, `Content-Length`, `Content-Type`, `X-Caliper-Origin`, `X-Caliper-Group`, `X-Caliper-Preview`) is repeated, `Content-Length` is not a number, or the body is not JSON. |
 | 401 | The session token is missing or wrong. |
 | 403 | The `Host` or the `Origin` header is refused. |
-| 404 | No such endpoint, or no applet with that id. |
+| 404 | No such endpoint, no applet with that id, or a command endpoint in an app that has no command layer. |
 | 405 | The endpoint takes another method; `Allow` names it. |
+| 408 | A command's body did not arrive within 10 s of its head. |
 | 409 | The applet cannot be launched, or failed to launch. |
-| 413 | The request has a body. |
+| 411 | A command came without `Content-Length`. |
+| 413 | A request other than a command has a body, or a command's body is over 1 MiB. |
+| 415 | A command's body is not `application/json`. |
 | 426 | A GET of `/v3/stream` or `/v0/stream` that is not a WebSocket upgrade. |
-| 501 | A capture in the app's window on the GL or Vulkan renderer, which cannot read the window's frame back. |
-| 503 | Too many requests wait for the app, or the app is closing. |
-| 504 | The app did not take the request within 5 s. |
+| 501 | A capture in the app's window on the GL or Vulkan renderer, which cannot read the window's frame back, or a command sent with `Transfer-Encoding`. |
+| 503 | Too many requests wait for the app, 32 commands are held, or the app is closing. |
+| 504 | The app did not take the request within 5 s, or a held command had no result within 600 s. |
 
 ## Examples
 
@@ -155,6 +214,23 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7341/v0/applets
 curl -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7341/v0/applets/com.example.my-viewer/launch
 curl -o frame.png -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7341/v0/capture.png
 ```
+
+The command layer, from a program and as an outside agent would call it:
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7341/v0/commands
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"id": "dash", "title": "Dashboard"}' http://127.0.0.1:7341/v0/commands/spec.new
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -H "X-Caliper-Origin: mcp" -H "X-Caliper-Group: turn-1" \
+     -d '{"id": "note", "primitive": "text", "options": {"text": "Loss per step"}}' \
+     http://127.0.0.1:7341/v0/commands/panel.create
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"overwrite": true}' http://127.0.0.1:7341/v0/commands/applet.save
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7341/v0/approvals/ap-1
+```
+
+The third call answers `command.needs_approval` with its approval id, `ap-1` here, when the applet is saved already; the last one reads what the person decided.
 
 In Python, the token can be read from the API file:
 
