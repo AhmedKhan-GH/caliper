@@ -1,8 +1,8 @@
 // caliper-acp-harness: runs one ACP session headless and prints its transcript
 // as JSON Lines on stdout. It starts the agent, sends initialize and
-// session/new (with the MCP servers given), sends one prompt, answers every
-// permission request with a fixed policy and stops when the turn ends. It
-// opens no window and never prints an environment value.
+// session/new (with the MCP servers and the _meta given), sends one prompt,
+// answers every permission request with a fixed policy and stops when the
+// turn ends. It opens no window and never prints an environment value.
 //
 // Exit codes: 0 the turn ended with a stop reason; 2 bad usage; 3 the agent
 // could not be started, initialised or given a session; 4 the turn failed
@@ -54,6 +54,7 @@ const char* kUsage =
     "  --preset <id>              a known agent: claude, codex or gemini\n"
     "  --cwd <folder>             the session's working folder (default: the current folder)\n"
     "  --mcp <name>=<command>     an MCP server for the agent to start; repeatable\n"
+    "  --meta <json>              a JSON object sent as the _meta of session/new\n"
     "  --env NAME=VALUE | NAME    a variable for the agent's environment; NAME alone copies\n"
     "                             this process's value; repeatable; values are never printed\n"
     "  --prompt <text>            the prompt to send (required)\n"
@@ -100,6 +101,7 @@ int main(int argc, char** argv) {
     double stall_s = 120;
     std::vector<McpServer> mcp;
     std::vector<EnvVar> env;
+    json meta;
     bool have_prompt = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -134,6 +136,10 @@ int main(int argc, char** argv) {
             if (end == v.c_str() || *end != '\0' || !(d > 0) || d > 86400)
                 return usage_error(arg + " takes a number of seconds between 0 and 86400.");
             (arg == "--timeout" ? timeout_s : stall_s) = d;
+        } else if (arg == "--meta") {
+            if (!value(&v)) return usage_error("--meta needs a JSON object.");
+            meta = json::parse(v, nullptr, false);
+            if (meta.is_discarded() || !meta.is_object()) return usage_error("--meta takes a JSON object.");
         } else if (arg == "--mcp") {
             if (!value(&v)) return usage_error("--mcp needs name=command.");
             const auto eq = v.find('=');
@@ -221,14 +227,16 @@ int main(int argc, char** argv) {
           {"auth_methods", info.auth_methods}});
 
     SessionInfo session;
-    e = client.new_session(folder.string(), mcp, &session);
+    e = client.new_session(folder.string(), mcp, &session, meta);
     if (e) {
         emit({{"type", "error"}, {"stage", "session/new"}, {"error", error_json(e)}});
         print_stderr_tail(client);
         client.shutdown();
         return 3;
     }
-    emit({{"type", "session"}, {"session_id", session.id}, {"modes", session.modes}});
+    json session_line = {{"type", "session"}, {"session_id", session.id}, {"modes", session.modes}};
+    if (!session.meta.is_null()) session_line["meta"] = session.meta;
+    emit(session_line);
 
     e = client.prompt(prompt);
     if (e) {

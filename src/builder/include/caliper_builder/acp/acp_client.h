@@ -8,8 +8,10 @@
 // The life of a client:
 //   start()        spawns the agent and sends `initialize`, offering version 1
 //                  and declining the file-system and terminal capabilities;
-//   new_session()  sends `session/new` with an absolute working folder and the
-//                  stdio MCP servers the agent should connect to;
+//   new_session()  sends `session/new` with an absolute working folder, the
+//                  stdio MCP servers the agent should connect to and, when
+//                  given, a `_meta` object passed through unchanged (the widget
+//                  session's target, tool scope and preview);
 //   prompt()       starts a turn and returns at once; the agent's
 //                  `session/update` notifications, its permission requests and
 //                  the end of the turn arrive as AcpEvents;
@@ -57,6 +59,12 @@ namespace caliper_builder::acp {
 // design/acp-integration.md); it is added beside version 1 when it is
 // stable, never in place of it.
 constexpr int kAcpProtocolVersion = 1;
+
+// The bounds of the `_meta` object that new_session() passes through: its
+// compact JSON text, its nesting and its number of values.
+constexpr std::size_t kMaxSessionMetaBytes = 64u << 10;
+constexpr int kMaxSessionMetaDepth = 32;
+constexpr std::size_t kMaxSessionMetaValues = 16384;
 
 // A stdio MCP server handed to the agent in `session/new`. A command without a
 // slash is resolved on PATH before it is sent, since ACP asks for an absolute
@@ -107,6 +115,7 @@ struct SessionInfo {
     std::string id;
     nlohmann::json modes;           // the modes object, or null
     nlohmann::json config_options;  // the configOptions array, or null
+    nlohmann::json meta;            // the answer's `_meta` object, or null
 };
 
 // One item of a tool call's content.
@@ -215,8 +224,11 @@ public:
     // Asks the agent to run its own login flow for an advertised method of
     // type "agent". No key is ever sent.
     Error authenticate(const std::string& method_id, int timeout_ms);
+    // `meta`, when it is not null, is sent as the request's `_meta` exactly as
+    // given. It must be an object within kMaxSessionMetaBytes,
+    // kMaxSessionMetaDepth and kMaxSessionMetaValues (acp.bad_argument).
     Error new_session(const std::string& cwd, const std::vector<McpServer>& mcp_servers,
-                      SessionInfo* session = nullptr);
+                      SessionInfo* session = nullptr, const nlohmann::json& meta = nlohmann::json());
 
     Error prompt(const std::string& text);
     Error prompt_blocks(const nlohmann::json& content_blocks);

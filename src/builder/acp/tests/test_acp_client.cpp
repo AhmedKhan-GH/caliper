@@ -160,6 +160,39 @@ TEST_CASE("session/new hands the agent its folder and the MCP servers") {
     const json& s1 = report["mcpServers"][1];
     CHECK(s1["command"].get<std::string>().front() == '/');
     CHECK(s1["env"] == json::array());
+    CHECK(report["_meta"].is_null());  // no _meta given, none sent
+}
+
+TEST_CASE("session/new passes the widget session's _meta through unchanged and bounds it") {
+    const json meta = {{"caliper",
+                        {{"widget",
+                          {{"target", {{"kind", "panel"}, {"panel", "curves"}}},
+                           {"scope", {"spec.get", "panel.patch", "layout.place"}},
+                           {"preview", "widget-7f3a"},
+                           {"note", "caf\u00e9 \u2713"},
+                           {"ratio", 0.25},
+                           {"empty", json::object()}}}}}};
+    AcpClient c(stub_options());
+    REQUIRE(c.start().ok());
+    // Refused before anything is sent: not an object, too large, too deep, too many values.
+    CHECK(c.new_session(workspace(), {}, nullptr, json::array({1})).code == "acp.bad_argument");
+    CHECK(c.new_session(workspace(), {}, nullptr, json{{"big", std::string(kMaxSessionMetaBytes, 'x')}}).where ==
+          "_meta");
+    json deep = json::object();
+    json* at = &deep;
+    for (int i = 0; i < kMaxSessionMetaDepth; ++i) at = &((*at)["d"] = json::object());
+    CHECK(c.new_session(workspace(), {}, nullptr, deep).code == "acp.bad_argument");
+    CHECK(c.new_session(workspace(), {}, nullptr, json{{"many", json(std::vector<int>(kMaxSessionMetaValues, 1))}})
+              .code == "acp.bad_argument");
+    CHECK(c.session_id().empty());
+
+    SessionInfo info;
+    Error e = c.new_session(workspace(), {}, &info, meta);
+    REQUIRE_MESSAGE(e.ok(), e.code << ": " << e.message);
+    CHECK(info.meta == json{{"echo", meta}});
+    REQUIRE(c.prompt("mcp").ok());
+    const json report = json::parse(message_text(run_turn(c)));
+    CHECK(report["_meta"] == meta);
 }
 
 TEST_CASE("session/new refuses bad folders and servers") {

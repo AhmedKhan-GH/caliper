@@ -7,7 +7,8 @@
 //                  change and an update kind no client knows yet
 //   edit           a tool call with a diff, then a permission request; it
 //                  applies, refuses or stops according to the answer
-//   mcp            reports the cwd and MCP servers of session/new as JSON
+//   mcp            reports the cwd, the MCP servers and the _meta of
+//                  session/new as JSON (_meta is null when there was none)
 //   caps           reports the clientCapabilities and clientInfo of initialize
 //   slow           streams a chunk every 20 ms for 4 s, honouring session/cancel
 //   probe          calls fs/read_text_file and terminal/create and reports the
@@ -23,6 +24,9 @@
 //   error          answers session/prompt with a JSON-RPC error
 //   nostop         ends the turn without a stop reason
 //   anything else  echoes the prompt and ends the turn
+//
+// session/new answers with the request's _meta echoed in its own _meta, when
+// the request had one.
 //
 // Options: --version-reply <n> answers initialize with protocol version n;
 // --auth-required makes session/new fail with -32000.
@@ -178,7 +182,8 @@ void run_turn(json id, std::string text) {
         {
             std::lock_guard<std::mutex> lock(g_state_mutex);
             report = {{"cwd", g_session_params.value("cwd", "")},
-                      {"mcpServers", g_session_params.value("mcpServers", json::array())}};
+                      {"mcpServers", g_session_params.value("mcpServers", json::array())},
+                      {"_meta", g_session_params.value("_meta", json())}};
         }
         chunk(report.dump());
         end_turn(id);
@@ -313,10 +318,12 @@ int main(int argc, char** argv) {
                     std::lock_guard<std::mutex> lock(g_state_mutex);
                     g_session_params = params;
                 }
-                respond(id, {{"sessionId", g_session_id},
-                             {"modes", {{"currentModeId", "default"},
-                                        {"availableModes", json::array({{{"id", "default"}, {"name", "Default"}},
-                                                                        {{"id", "plan"}, {"name", "Plan"}}})}}}});
+                json answer = {{"sessionId", g_session_id},
+                               {"modes", {{"currentModeId", "default"},
+                                          {"availableModes", json::array({{{"id", "default"}, {"name", "Default"}},
+                                                                          {{"id", "plan"}, {"name", "Plan"}}})}}}};
+                if (params.contains("_meta")) answer["_meta"] = {{"echo", params["_meta"]}};
+                respond(id, answer);
             } else if (method == "session/prompt") {
                 if (turn.joinable()) turn.join();
                 g_cancelled = false;

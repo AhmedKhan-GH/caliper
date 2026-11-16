@@ -169,3 +169,15 @@ TEST_CASE("the harness refuses bad usage") {
     CHECK(usage({"--prompt", "x", "--cwd", "/nonexistent/folder", "--", kStub}) == 2);
     CHECK(usage({"--help"}) == 0);
 }
+
+TEST_CASE("the harness passes --meta through as the _meta of session/new") {
+    Transcript t = run_harness({"--cwd", workspace(), "--meta", R"({"caliper": {"widget": {"preview": "widget-1"}}})",
+                                "--prompt", "mcp", "--timeout", "30", "--", kStub});
+    REQUIRE(t.run.error.ok());
+    CHECK(t.run.status.code == 0);
+    const json* session = t.first("session");
+    REQUIRE(session != nullptr);
+    CHECK((*session)["meta"]["echo"]["caliper"]["widget"]["preview"] == "widget-1");
+    CHECK(json::parse(t.message())["_meta"]["caliper"]["widget"]["preview"] == "widget-1");
+    CHECK(run_harness({"--meta", "[1]", "--prompt", "x", "--", kStub}, false).run.status.code == 2);
+}

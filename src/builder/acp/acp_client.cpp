@@ -728,7 +728,37 @@ Error AcpClient::authenticate(const std::string& method_id, int timeout_ms) {
     return {};
 }
 
-Error AcpClient::new_session(const std::string& cwd, const std::vector<McpServer>& mcp_servers, SessionInfo* session) {
+namespace {
+
+// Checks the `_meta` of session/new without recursion, so that a deep value
+// is refused before anything walks it recursively, then measures its text.
+Error check_session_meta(const json& meta) {
+    if (meta.is_null()) return {};
+    if (!meta.is_object()) return {"acp.bad_argument", "The session's _meta is a JSON object.", "_meta"};
+    std::vector<std::pair<const json*, int>> todo{{&meta, 1}};
+    std::size_t values = 0;
+    while (!todo.empty()) {
+        const auto [v, depth] = todo.back();
+        todo.pop_back();
+        if (++values > kMaxSessionMetaValues)
+            return {"acp.bad_argument",
+                    "The session's _meta holds more than " + std::to_string(kMaxSessionMetaValues) + " values.", "_meta"};
+        if (depth > kMaxSessionMetaDepth)
+            return {"acp.bad_argument",
+                    "The session's _meta nests deeper than " + std::to_string(kMaxSessionMetaDepth) + " levels.", "_meta"};
+        if (v->is_structured())
+            for (const auto& child : *v) todo.emplace_back(&child, depth + 1);
+    }
+    if (meta.dump(-1, ' ', false, json::error_handler_t::replace).size() > kMaxSessionMetaBytes)
+        return {"acp.bad_argument",
+                "The session's _meta is larger than " + std::to_string(kMaxSessionMetaBytes >> 10) + " KiB.", "_meta"};
+    return {};
+}
+
+}  // namespace
+
+Error AcpClient::new_session(const std::string& cwd, const std::vector<McpServer>& mcp_servers, SessionInfo* session,
+                             const json& meta) {
     State& s = *state_;
     if (!s.peer || !s.started) return {"acp.not_started", "The agent has not been started."};
     {
@@ -765,8 +795,10 @@ Error AcpClient::new_session(const std::string& cwd, const std::vector<McpServer
         servers.push_back({{"name", m.name}, {"command", command}, {"args", m.args}, {"env", env}});
     }
 
-    RpcResult r = s.peer->call_sync("session/new", json{{"cwd", cwd}, {"mcpServers", servers}},
-                                    s.options.request_timeout_ms);
+    if (Error e = check_session_meta(meta)) return e;
+    json params{{"cwd", cwd}, {"mcpServers", servers}};
+    if (!meta.is_null()) params["_meta"] = meta;
+    RpcResult r = s.peer->call_sync("session/new", params, s.options.request_timeout_ms);
     if (!r.ok()) {
         if (r.error.code == "rpc.remote_error" && r.rpc_code == rpc_code::auth_required) {
             std::string methods;
@@ -797,6 +829,8 @@ Error AcpClient::new_session(const std::string& cwd, const std::vector<McpServer
         session->modes = (modes != r.result.end() && modes->is_object()) ? *modes : json();
         auto co = r.result.find("configOptions");
         session->config_options = (co != r.result.end() && co->is_array()) ? *co : json();
+        auto m = r.result.find("_meta");
+        session->meta = (m != r.result.end() && m->is_object()) ? *m : json();
     }
     return {};
 }
