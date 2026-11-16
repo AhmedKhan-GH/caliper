@@ -279,9 +279,14 @@ TEST_CASE("colormap keys: timing — one derivation and one cache hit") {
         uintptr_t acc = 0;
         for (int i = 0; i < kHits; ++i) acc += uintptr_t(cache.block(CALIPER_CMAP_VIRIDIS, lo[i & 3], lo[i & 3] + 1.0f));
         const auto t1 = clock::now();
-        for (int i = 0; i < kHits; ++i) cache.fill(CALIPER_CMAP_VIRIDIS, lo[i & 3], lo[i & 3] + 1.0f, &out);
+        uint32_t seen = 0;   // reads each copy, so that the copies are not elided
+        for (int i = 0; i < kHits; ++i) {
+            cache.fill(CALIPER_CMAP_VIRIDIS, lo[i & 3], lo[i & 3] + 1.0f, &out);
+            seen += out.keys[(i * 7) & 63][i & 3] + out.lut[(i * 13) & 63][(i >> 2) & 3];
+        }
         const auto t2 = clock::now();
         CHECK(acc != 0);
+        CHECK(seen != 1);
         ns_block.push_back(std::chrono::duration<double, std::nano>(t1 - t0).count() / kHits);
         ns_fill.push_back(std::chrono::duration<double, std::nano>(t2 - t1).count() / kHits);
     }
