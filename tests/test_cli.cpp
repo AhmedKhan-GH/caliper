@@ -462,22 +462,30 @@ TEST_CASE("cli: build finds the SDK prefix in its order") {
     const fs::path exe_dir = t.path / "prefix-a" / "bin";
     fs::create_directories(exe_dir);
     const std::string home = t.str("home");
+    // Paths compare as paths: the same file when both exist, else equal once
+    // normalised, so the separator and its spelling do not matter.
+    auto same = [](const std::string& got, const fs::path& want) {
+        std::error_code ec;
+        if (fs::exists(got, ec) && fs::exists(want, ec)) return fs::equivalent(got, want, ec);
+        return fs::path(got).lexically_normal() == want.lexically_normal();
+    };
 
     // Nothing anywhere: every candidate is tried, none is chosen.
     SdkSearch none = find_sdk_prefix(nullptr, exe_dir.string(), home.c_str());
     CHECK(none.prefix.empty());
     CHECK(none.error.empty());
-    CHECK(none.tried == std::vector<std::string>{t.str("prefix-a"), exe_dir.string(),
-                                                 (fs::path(home) / "caliper-sdk").string()});
+    REQUIRE(none.tried.size() == 3);
+    CHECK(same(none.tried[0], t.path / "prefix-a"));
+    CHECK(same(none.tried[1], exe_dir));
+    CHECK(same(none.tried[2], fs::path(home) / "caliper-sdk"));
     // The home folder's caliper-sdk, then the executable's prefix before it.
     make_sdk(fs::path(home) / "caliper-sdk");
-    CHECK(find_sdk_prefix(nullptr, exe_dir.string(), home.c_str()).prefix ==
-          (fs::path(home) / "caliper-sdk").string());
+    CHECK(same(find_sdk_prefix(nullptr, exe_dir.string(), home.c_str()).prefix, fs::path(home) / "caliper-sdk"));
     make_sdk(t.path / "prefix-a");
-    CHECK(find_sdk_prefix("", exe_dir.string(), home.c_str()).prefix == t.str("prefix-a"));
+    CHECK(same(find_sdk_prefix("", exe_dir.string(), home.c_str()).prefix, t.path / "prefix-a"));
     // CALIPER_SDK_DIR wins, and must hold the SDK.
     make_sdk(t.path / "named");
-    CHECK(find_sdk_prefix(t.str("named").c_str(), exe_dir.string(), home.c_str()).prefix == t.str("named"));
+    CHECK(same(find_sdk_prefix(t.str("named").c_str(), exe_dir.string(), home.c_str()).prefix, t.path / "named"));
     SdkSearch wrong = find_sdk_prefix(t.str("empty").c_str(), exe_dir.string(), home.c_str());
     CHECK(wrong.prefix.empty());
     CHECK(wrong.error.find("CALIPER_SDK_DIR is " + t.str("empty") + ", which holds no Caliper SDK") == 0);
