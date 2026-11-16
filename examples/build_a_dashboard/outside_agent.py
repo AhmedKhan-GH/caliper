@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -55,11 +56,20 @@ class McpClient:
         self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.next_id = 1
         self.stderr: list[str] = []
+        # Standard output is read by a thread into a queue, so that a wait for an answer ends at its
+        # deadline even when caliper-mcp writes nothing; None marks its end.
+        self.messages: queue.Queue = queue.Queue()
         threading.Thread(target=self._drain, daemon=True).start()
+        threading.Thread(target=self._read, daemon=True).start()
 
     def _drain(self) -> None:
         for raw in self.proc.stderr:
             self.stderr.append(raw.decode("utf-8", "replace").rstrip())
+
+    def _read(self) -> None:
+        for raw in self.proc.stdout:
+            self.messages.put(raw)
+        self.messages.put(None)
 
     def _send(self, message: dict) -> None:
         self.proc.stdin.write((json.dumps(message) + "\n").encode())
@@ -70,11 +80,20 @@ class McpClient:
         self.next_id += 1
         self._send({"jsonrpc": "2.0", "id": rpc_id, "method": method, "params": params})
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            line = self.proc.stdout.readline()
-            if not line:
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            try:
+                line = self.messages.get(timeout=left)
+            except queue.Empty:
+                break
+            if line is None:
                 raise RuntimeError("caliper-mcp ended: " + " | ".join(self.stderr[-3:]))
-            message = json.loads(line)
+            try:
+                message = json.loads(line)
+            except ValueError:
+                continue                            # not a JSON-RPC message
             if message.get("id") == rpc_id:
                 if "error" in message:
                     raise RuntimeError(f"{method}: {message['error']}")

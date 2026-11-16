@@ -10,7 +10,8 @@
 #   CALIPER_AGENT_PYTHON  the Python that has caliper-agent's dependencies
 #                         (src/builder/agent/pyproject.toml); by default the
 #                         repository's .venv/bin/python when there is one,
-#                         else python3 on PATH
+#                         else python3 on PATH, unless that is the stub of a
+#                         Mac without the Command Line Tools
 #   CALIPER_CHAT_MODEL    the model (default qwen3.8:27b)
 #   CALIPER_CHAT_CONTEXT  the context length in tokens (default: the Ollama
 #                         preset's own for the chat, 32,768)
@@ -34,7 +35,18 @@ fi
 
 python=${CALIPER_AGENT_PYTHON:-}
 if [ -z "$python" ]; then
-    if [ -x "$repo/.venv/bin/python" ]; then python="$repo/.venv/bin/python"; else python=python3; fi
+    if [ -x "$repo/.venv/bin/python" ]; then
+        python="$repo/.venv/bin/python"
+    else
+        python=$(command -v python3 2> /dev/null)
+        # On a Mac without the Command Line Tools, /usr/bin/python3 is a stub that opens an install
+        # dialog; say what to do instead of starting it.
+        if [ "$(uname)" = Darwin ] && [ "$python" = /usr/bin/python3 ] && ! /usr/bin/xcode-select -p > /dev/null 2>&1; then
+            echo "chat-agent.sh: no Python for caliper-agent; set CALIPER_AGENT_PYTHON to one with its dependencies" >&2
+            exit 2
+        fi
+        python=${python:-python3}
+    fi
 fi
 if ! command -v "$python" > /dev/null 2>&1; then
     echo "chat-agent.sh: no Python at $python; set CALIPER_AGENT_PYTHON to one with caliper-agent's dependencies" >&2
