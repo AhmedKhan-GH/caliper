@@ -326,6 +326,10 @@ NOT_A_CALL_AFTER = {".", "->", ">", "*", "&", "~"}
 # Sites read and found harmless: file, identifier and a piece of the source line.
 REVIEWED = {
     ("src/host/net/ws.cpp", "poll", "ev = poll((int)"),   # Server::poll, called inside the class
+    # caliper_gfx::Backend::poll(), with no arguments, called inside the class
+    # (src/host/gfx/gfx.h); POSIX poll takes three.
+    ("src/host/gfx/core.cpp", "poll", "poll();"),
+    ("src/host/gfx/recording_backend.cpp", "poll", "poll();"),
 }
 
 
