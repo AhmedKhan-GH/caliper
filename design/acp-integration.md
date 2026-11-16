@@ -109,6 +109,12 @@ by MCP. The session-setup page asks agents to start the command without a shell,
 server taken from workspace files or agent output until the user has approved its command, arguments and variable
 names.
 
+`session/new` may also carry `_meta`, the protocol's extension point. `AcpClient::new_session()` takes an optional
+`_meta` object and sends it unchanged, refused before sending when it is not an object, is larger than 64 KiB, nests
+deeper than 32 levels or holds more than 16,384 values; the answer's `_meta` comes back in `SessionInfo::meta`. The
+widget session puts its target, tool scope and preview there, under `caliper.widget`
+([Widget agent](widget-agent.md#how-it-stays-an-acp-agent)); the side chat sends none.
+
 ### Tool calls, diffs and permission
 
 A tool call's content is a list of items of type `content` (a content block), `diff` or `terminal`. A diff has the
@@ -345,7 +351,7 @@ tools whatever the client declares.
 ### Approvals and diffs for every agent
 
 Approvals and diff previews are enforced in the command layer, so they hold for every agent, in either role, whether
-or not the agent asks on its own. Two parts exist:
+or not the agent asks on its own. Three parts are built:
 
 - **Approval of destructive commands.** The default policy asks for a destructive command from the origins `agent`,
   `mcp` and `api`; Caliper API holds a call from `agent` or `mcp` for up to 120 seconds while the person decides; no
@@ -354,18 +360,31 @@ or not the agent asks on its own. Two parts exist:
   ([Command layer](command-layer.md)).
 - **Diff previews of spec edits.** Every edit of the open spec takes `dry_run` and returns its change as a diff of the
   canonical TOML without any effect ([Builder session](builder-session.md)).
+- **Review of spec edits.** With review on for an origin, a session setting that is on by default for `agent` and
+  `mcp`, an edit of the open spec that would change it does not run at once: the session computes the dry run itself,
+  parks the invocation with its review (the unified diff of the canonical TOML before and after, and the validator's
+  warnings), and the call is held or answered `command.needs_approval` as a destructive command's is. Approve applies
+  it, deny answers `command.denied`, and an edit with an empty diff or a failing validation needs no approval. An edit
+  approved after the open spec changed runs only when its change is still the one shown, and otherwise answers
+  `history.conflict`. Each edit of a turn is reviewed on its own; a stacked review of several edits is a preview
+  ([Command layer](command-layer.md#approval)).
+
+**One card for one change.** `caliper-agent` used to run the dry run and send `session/request_permission` before each
+spec edit and each destructive command, which was the agent being polite and, against an app that also holds the call,
+a second prompt for the same change. It now reads `review.status` once per turn and asks through ACP only for what
+Caliper does not ask itself: with the app reviewing its spec edits and holding its destructive commands, it sends no
+permission request and no dry run for them, and the call waits in Caliper until the person decides there. Against an
+app without `review.status`, it asks as before. The side chat follows the same rule: command approvals come from the
+command layer and permission requests from the agent's own tools, and the pane, which is not built yet, will show both
+as one kind of card. An agent that asks before a Caliper command it is about to send would make two cards for one
+change, so the side chat's opening prompt, planned with the pane, will ask it not to.
 
 What remains, so that no agent can skip them:
 
 1. **The held approval in the app.** The app's API server serves the command endpoints and holds approvals as the
    stand-in host does; this comes with the wiring after sprint 2.
-2. **Review of spec edits in the command layer.** Today only `caliper-agent` shows a diff before each spec edit,
-   because it runs the dry run and asks on its own; an agent that calls `caliper-mcp` is never asked about an edit that
-   is not destructive. When "review changes" is on, the app's policy for the origins `agent` and `mcp` answers `ask`
-   for every edit that takes `dry_run`, and the session runs that dry run when it parks the invocation and attaches the
-   diff to the pending approval, so the card shows the change whatever the agent does.
-3. **The cards.** The side chat shows each pending approval with its diff and the validator's result, as the previous
-   section describes.
+2. **The cards.** The side chat shows each pending approval with its review and the validator's warnings, as the
+   previous section describes, and its settings set the review per origin.
 
 What the command layer cannot enforce is an agent's own file and shell tools, which act outside Caliper. The agent's
 own permission settings govern them (Claude Code's and Codex's modes, Gemini CLI's modes, opencode's `permissions`
@@ -526,16 +545,19 @@ Built on this branch, in `src/builder/acp/` and `src/builder/include/caliper_bui
 - `acp_client.h`: `AcpClient`, version 1 with the capabilities declined, typed events in a thread-safe queue, permission
   requests, cancellation, stall detection and shutdown.
 - `agents.h`: the presets and the command-line splitter.
-- `caliper-acp-harness` and, for tests only, `caliper_acp_stub_agent` (every script and misbehaviour of the client
-  tests) and `caliper_acp_test_child`.
+- `caliper-acp-harness`, with `--meta` for the `_meta` of `session/new`, and, for tests only,
+  `caliper_acp_stub_agent` (every script and misbehaviour of the client tests; it records the `_meta` of
+  `session/new`, reports it and echoes it in its answer) and `caliper_acp_test_child`.
+- The optional `_meta` of `AcpClient::new_session()`, bounded and passed through unchanged.
+- In the command layer, the review of spec edits for the origins `agent` and `mcp`, with the diff on each pending
+  approval, and `review.status`, which `caliper-agent` reads so that it does not ask twice.
 - Tests: the peer over in-process pipes, the subprocess helper, the client against every stub script, and the harness
   end to end (ctest `builder_acp` and `builder_acp_harness`).
 
 Waiting for later work:
 
 - The side chat itself, its cards and diagnostics, after sprint 2 merges.
-- The approval policy for the origins `agent` and `mcp`, with the review of spec edits and the dry-run diff attached
-  to each pending approval ([above](#approvals-and-diffs-for-every-agent)), the spec diff cards and the opening prompt.
+- The spec diff cards in the side chat, the review setting per origin in its settings, and the opening prompt.
 - `opencode` in `known_agents()`, the setting that marks an agent as running on a local model, and the warning when a
   workspace holds an opencode configuration.
 - Receiving a handoff from the widget agent, with the bundle shaped by the agent's prompt capabilities.
@@ -569,6 +591,10 @@ Waiting for later work:
   agent is added by its command.
 - **Review of spec edits in the command layer,** with the diff attached to the pending approval, so that no agent can
   skip it.
+- **No second prompt for one change.** An agent that knows Caliper reviews a call, as `caliper-agent` learns from
+  `review.status`, does not ask the person again; the command layer's card is the one that counts.
+- **`_meta` passed through, not interpreted.** The client bounds it and sends it as given, so the widget session's
+  fields can change with the sidecar without a change to the client.
 - **A warning, not a refusal, when a workspace configures opencode,** since the configuration may be the person's own.
 
 ## Risks

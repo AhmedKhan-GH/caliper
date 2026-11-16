@@ -11,8 +11,10 @@ loop, the Claude settings, the key handling and the tests on that page are built
 on top of them. The person's side is in Agent roles (`docs/explanations/agent-roles.md`) and
 Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`).
 
-**Built on this branch:** nothing beyond the sidecar, its tests and the key store, which that page lists. **Planned:**
-everything on this page. The [work items](#work-items) give the sizes and the order.
+**Built on this branch:** the sidecar, its tests and the key store, which that page lists; stacked previews in the
+session ([below](#preview-and-apply-on-the-command-layer)); and the `_meta` argument of `AcpClient::new_session()` that
+carries the widget session's fields. **Planned:** everything else on this page. The [work items](#work-items) give the
+sizes and the order.
 
 ## The role
 
@@ -139,8 +141,8 @@ call to one is answered as a call to an unknown tool, which the loop already doe
 `session/new`, a scope that names a destructive command or a mutating command without `dry_run`, so a mistake in the
 app cannot widen what the widget agent may do.
 
-When no spec is open, a dropped file's preview starts from an empty spec, and Accept first runs `spec.new` from the
-`ui` origin, with the file's name as the title, before the proposed edits.
+When no spec is open, the app runs `spec.new` from the `ui` origin, with the file's name as the title, before it
+begins the preview, since a preview needs an open spec; on Reject it undoes that `spec.new` as well.
 
 ## The turn budget, the model and the effort
 
@@ -162,38 +164,53 @@ When no spec is open, a dropped file's preview starts from an empty spec, and Ac
 ## Preview and apply on the command layer
 
 A request often needs edits that build on each other, such as a derived source and then a panel that binds it. A dry
-run today checks one edit against the open spec, so the dry run of the second edit would fail. The session therefore
-gains **stacked previews**:
+run checks one edit against the open spec, so the dry run of the second edit would fail. The session therefore has
+**stacked previews**, built in the session and its command table
+([Command layer](command-layer.md#preview), [Builder session](builder-session.md#stacked-previews)):
 
-- **A preview** has an id, which the app chooses when it opens the widget session, and a scratch copy of the open spec
-  that starts equal to it.
-- **A dry run that names the preview**, through the header `X-Caliper-Preview: <id>`, applies to the scratch copy
-  instead of the open spec, and returns its diff against the scratch copy as it was before the edit. As for every dry
-  run, the handler reports `no_effect`, so the history and the journal are untouched. The sidecar sets the header and
-  `dry_run` on every edit in a widget session; the model never sets either.
-- **`panel.render` with the preview's id** draws the panel of the scratch copy, so the model can check its work, and the
-  app draws the same scratch spec in the panel's frame for the person.
-- **The session records** the invocations that changed the scratch copy, in order, at most 64 for one preview.
+- **A preview** has an id and a copy of the open spec that starts equal to it. The app begins it with `preview.begin`
+  from the `ui` origin when it opens the widget session, scoped to the target's panel or source, and puts its id in the
+  session's `_meta`. When no spec is open, as for a dropped file, the app first runs `spec.new` from the `ui` origin.
+- **An edit that names the preview**, through the header `X-Caliper-Preview: <id>`, applies to the copy instead of the
+  open spec, validated as a real edit, and returns its diff against the copy as it was before the edit. Its handler
+  reports `no_effect`, so the history and the journal are untouched, and the command layer's review does not ask about
+  it. The sidecar sets the header on every call in a widget session; the model never sets it and is never offered the
+  preview commands.
+- **`spec.get`, `spec.validate` and `panel.render` with the preview's id** read the copy, so the model can check its
+  work, and the app draws the same copy in the panel's frame for the person with `Session::resolve(panel, preview)`
+  and `Session::preview(id)`.
+- **The session records** the edits that changed the copy, in order, at most 64 for one preview and 4 MiB of their
+  arguments. A scoped preview takes new sources and panels and edits only of its target, of the sources a target panel
+  binds and of what it added (`preview.out_of_scope` otherwise), which backs the sidecar's tool scope in the session.
+- **The open spec may change meanwhile**, through the side chat or the person. The preview stays the open spec with
+  its edits applied: they are applied again to the new open spec before the preview is read, and when one no longer
+  applies the preview answers `history.conflict`.
 
 The three answers of the card map onto the session:
 
-- **Accept.** The app's own UI calls `Session::commit_preview(id)`. The session checks that the open spec is still the
-  scratch copy's starting point, and otherwise refuses with `preview.stale`, after which the card offers Refine, which
-  starts again from the current spec. It then submits the recorded invocations without `dry_run` through the queue,
-  with the origin `agent` and the preview's id as their group. They are validated and journaled like any agent's
-  commands, and they undo as one step. As with approvals, no command and no endpoint commits a preview, so an agent
-  cannot accept its own proposal. The app's approval policy counts the commit as the person's approval of those
-  invocations.
-- **Reject.** `Session::drop_preview(id)` discards the scratch copy. Dry runs write no journal line and file no undo
-  step, so the spec, the history and the journal are as they were. Only the conversation remains, in the sidecar's
-  memory, until the session closes.
+- **Accept.** The app's own UI sends `preview.commit` from the `ui` origin. The session applies the recorded edits
+  again to the open spec and refuses with `history.conflict` when one no longer applies, after which the card offers
+  Refine on a new preview, begun from the current spec. Otherwise the edits run as the registry's follow-ups, each
+  with the origin that sent it, `agent`, and with the preview's id as their group. They are validated and journaled
+  like any agent's commands, after the commit's own line from the person, and they undo as one step. Only `ui` and
+  `builder` may commit; `preview.commit` from any other origin answers `preview.not_allowed`, so an agent cannot
+  accept its own proposal, and no approval policy is asked for the edits, because the commit is the person's approval.
+- **Reject.** `preview.discard` drops the copy. The edits wrote no journal line and filed no undo step, so the spec, the
+  history and the journal are as they were. Only the conversation remains, in the sidecar's memory, until the session
+  closes.
 - **Refine.** The person's follow-up is a new `session/prompt` in the same ACP session, so the model keeps the
   conversation, and the preview keeps its id, so the new edits stack on the current proposal. The model can take back
   part of it with another edit, for example `panel.remove` of a panel it proposed.
 
-A preview ends with Accept, Reject, a handoff, the prompt closing, or 30 minutes without use. In a widget session the
-sidecar sends no `session/request_permission` for edits, because the preview card is the review, and no destructive
-command can be in the scope.
+**How the sidecar asks for Accept, and how the app answers.** The sidecar never commits. It ends its turn with
+`end_turn` and its one-sentence summary as the last message; the app, which began the preview and knows its id, reads
+`preview.diff` and draws the card with the summary and the diff. Accept, Reject and Refine are the person's clicks: the
+app sends `preview.commit` or `preview.discard` itself, from the `ui` origin, and Refine is the next prompt. The
+outcome reaches the sidecar as the next prompt's text, or as `session/close` when the prompt closes.
+
+A preview ends with Accept, Reject, a handoff, the prompt closing, or 30 minutes without use, after which a call names
+it as `preview.expired`. In a widget session the sidecar sends no `session/request_permission` for edits, because the
+preview card is the review, and no destructive command can be in the scope.
 
 ## Handoff to the side chat
 
@@ -230,13 +247,14 @@ started.
 - **One queue.** Both roles reach the command layer through Caliper API with the origin `agent`, the side chat through
   `caliper-mcp --origin agent` and the widget agent through the sidecar's own client. The app drains one command queue
   on its frame thread, so the commands of both roles, the builder's and the person's run in one order.
-- **One journal.** Every accepted widget change is journaled under the origin `agent`, with a group that starts with
-  `widget-`, so its lines can be told apart from the side chat's.
+- **One journal.** Every accepted widget change is journaled under the origin `agent`, with the preview's id as its
+  group, which the app makes start with `widget-`, so its lines can be told apart from the side chat's.
 - **One undo history.** An accepted change is one step on the same stack as the side chat's changes and the person's
   own, so undo from anywhere takes back the newest step first.
-- **Both at once.** A widget prompt works while the side chat's agent runs a turn, because its dry runs touch only its
-  scratch copy. If the side chat changes the open spec in the meantime, Accept answers `preview.stale` and Refine starts
-  again from the new spec.
+- **Both at once.** A widget prompt works while the side chat's agent runs a turn, because its edits touch only its
+  preview. If the side chat changes the open spec in the meantime, the preview's edits are applied again to the new
+  spec; Accept answers `history.conflict` only when one of them no longer applies, and Refine then starts a new preview
+  from the new spec.
 
 ## How it stays an ACP agent
 
@@ -257,8 +275,9 @@ the session model that the chat pane did not:
 and `session/new` is where a session is made. One sidecar process serves up to 16 sessions; a launch option would need
 a process for each target and would pay the interpreter's and the SDK's start at every ⌘K, which the budget of a few
 seconds cannot afford. `_meta` is the protocol's extension point on every request, so a strict ACP peer accepts it.
-`AcpClient::new_session()` gains an optional `_meta` argument for it. A session without the field keeps today's
-unscoped behaviour, which the tests and the manual check use and the app does not.
+`AcpClient::new_session()` takes an optional `_meta` argument for it, built and bounded at 64 KiB, and passes it
+through unchanged. A session without the field keeps today's unscoped behaviour, which the tests and the manual check
+use and the app does not.
 
 The sidecar also implements `session/close`, behind the `close` session capability, so the app can end a widget
 session when its prompt closes; until it does, the sidecar ends the oldest idle session when a seventeenth is asked
@@ -487,9 +506,13 @@ For a local server:
 - **The tool scope is derived from the command table**, with reads and previewable edits only, so it follows the table
   as commands are added and can never hold a destructive command.
 - **Stacked previews in the session**, so that edits that build on each other can be previewed together, and Reject
-  leaves no trace because nothing but dry runs ever ran.
-- **Accept is a call of the app's UI**, not a command, so an agent cannot accept its own proposal; the commit's
-  invocations carry the origin `agent` and one group, so they are journaled as the agent's work and undo as one step.
+  leaves no trace because no edit of a preview reaches the journal or the history.
+- **Accept is `preview.commit`, which only the `ui` and `builder` origins may send**, so an agent cannot accept its own
+  proposal, and the commit goes through the queue, the journal and the history like every change; the committed edits
+  carry the origin `agent` and one group, so they are journaled as the agent's work and undo as one step.
+- **A preview follows the open spec.** Its edits are applied again when the open spec changes, so a commit applies
+  what the card shows or refuses with `history.conflict`, in place of the `preview.stale` planned earlier, which
+  refused any change of the open spec.
 - **A `_meta` field of `session/new`** for the target, the scope and the preview, for the reasons given above.
 - **Claude Haiku 5.5 at effort `low`** as the Claude default, for speed on small bounded edits.
 - **The preview card replaces per-edit review** in a widget session.
@@ -513,10 +536,10 @@ and L six to ten; each figure is rough.
 
 | Order | Item | Size |
 |---|---|---|
-| 9 | Stacked previews in the session: the preview id, the scratch copy, dry runs and `panel.render` against it, `commit_preview` and `drop_preview`, `preview.stale` | M, 4 days |
-| 10 | An optional `_meta` argument on `AcpClient::new_session()` | S, 1 day |
+| 9 | Done: stacked previews in the session, with `preview.begin`, `preview.diff`, `preview.commit` and `preview.discard`, edits and reads that name a preview, and `Session::resolve()` of a preview's panel | None left |
+| 10 | Done: an optional `_meta` argument on `AcpClient::new_session()` | None left |
 | 11 | Done: the evaluation of the ACP Python SDK for the sidecar's agent side. The hand-written agent side stays, and the SDK validates every message in the tests ([Widget agent sidecar](byok-agent.md#the-acp-python-sdk)) | None left |
-| 12 | Widget sessions in the sidecar: `_meta.caliper.widget`, the scoped tools and their check, the widget system prompt, images and embedded context in prompts, the preview header, the turn budget and `session/close` | M, 5 days |
+| 12 | Widget sessions in the sidecar: `_meta.caliper.widget`, the scoped tools and their check, the widget system prompt, images and embedded context in prompts, `X-Caliper-Preview` on every call, the turn budget and `session/close` | M, 5 days |
 | 13 | The context bundle, built in the app from the session, with its bounds and cuts | M, 3 days |
 | 14 | The inline surface: the four entry points, the inline prompt, the preview drawn in place, Accept, Reject and Refine, and Ask in chat; with the packaging of `caliper-agent` and a Python runtime | L, 8 days |
 | 15 | Adopted: Pydantic AI as the provider layer, with the Claude and OpenAI-compatible providers built in the sidecar. What remains is passing the chosen provider, base URL and key from the app when it starts the sidecar; widget sessions (12) and the probe (16) build on it | S, 1 day |

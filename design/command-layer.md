@@ -10,11 +10,14 @@ Built on this branch, in the library `caliper_builder_commands` (`src/builder/co
 - the registry and the built-in schema validator;
 - the undo history, with groups, merging, the redo rule and its bounds;
 - the journal, its reader and its replay;
-- the approval policy and the pending-approval flow;
+- the approval policy and the pending-approval flow, with a review that a pending approval carries (the diff of a spec edit);
+- follow-up invocations, which a handler returns and the registry runs as one undo step (the commit of a stacked preview);
 - the queue, with `submit()` from any thread and `drain()` on the caller's thread;
 - the descriptor table of every command of v0, as data, and its checked-in JSON form `src/builder/commands/command_table.json`.
 
 Built in the host, in `src/host/api/`: the command endpoints of Caliper API described [below](#caliper-api), served by the app's own API server through a small interface, `CommandGateway` (`command_gateway.h`), and the gateway over the builder session, `caliper_api_session` (`session_gateway.h`, built with `CALIPER_WITH_BUILDER`). They are tested with a real session behind the server and with `caliper-mcp` against it. The app serves them once it sets the gateway on its server, which is one call when the session is in the app; until then they answer 404. The reference page is `docs/references/api.md`.
+
+The [builder session](builder-session.md) builds two things on these: the review of spec edits for the origins `agent` and `mcp` ([Approval](#approval)) and stacked previews ([preview](#preview)).
 
 Planned:
 
@@ -85,8 +88,9 @@ An invocation asks for one command to run. Its JSON form:
 | `origin` | `ui` (the app's own UI), `builder` (the WYSIWYG builder), `agent` (the side chat or the widget agent), `mcp` (an outside agent through `caliper-mcp`) or `api` (a program through Caliper API). |
 | `group` | Optional. Invocations that share a group undo as one step. |
 | `merge_key` | Optional. Consecutive invocations with the same merge key merge into one step. |
+| `preview` | Optional. The id of a stacked preview: an edit of the open spec applies to the preview instead, and `spec.get`, `spec.validate` and `panel.render` read it ([preview](#preview)). Commands that neither read nor edit the open spec ignore it, and any other command that mutates is refused with `preview.not_previewable`. Over Caliper API it is the header `X-Caliper-Preview`. |
 
-`group` and `merge_key` match `[A-Za-z0-9._:/-]{1,128}`. An invocation with an unknown field is refused with `command.invalid_invocation`, so a typo does not pass silently.
+`group`, `merge_key` and `preview` match `[A-Za-z0-9._:/-]{1,128}`. An invocation with an unknown field is refused with `command.invalid_invocation`, so a typo does not pass silently.
 
 ### Results
 
@@ -109,7 +113,7 @@ The registry checks an invocation in this order and answers the first fault: the
 | `command.needs_approval` | The approval policy asked; the error carries the approval id. |
 | `command.denied` | The approval policy or the person denied the invocation. |
 | `command.too_many_pending` | 64 invocations already wait for approval. |
-| `command.handler_failed` | The handler threw. |
+| `command.handler_failed` | The handler threw, or returned a follow-up invocation that cannot run (see [Follow-ups](#follow-ups)). |
 | `command.invalid_result` | The handler's result failed the result schema. The registry checks results only when it is asked to, which the tests do. |
 | `command.queue_full` | 1024 invocations already wait in the queue. |
 | `command.shutdown` | The queue shut down before the invocation ran or before its approval was decided. |
@@ -143,11 +147,14 @@ The flags of each command, and what undo does for the ones that mutate:
 | `applet.save` | yes | yes | yes | Cannot be undone. |
 | `applet.open` | yes | | yes | Restores the spec that was open before. |
 | `applet.list` | | | | |
+| `preview.begin`, `preview.diff`, `preview.discard` | | | yes | |
+| `preview.commit` | yes | | yes | One step reverts every edit of the preview. |
+| `review.status` | | | | |
 | `capture.frame` | | | yes | |
 | `history.undo`, `history.redo` | yes | | yes | Each reverses the other. |
 | `history.list` | | | yes | |
 
-`app.launch` changes the page the app shows, not the workspace, so it does not mutate in this sense and is not journaled; Caliper API v0 already offers it without approval. `history.undo` and `history.redo` mutate but are special: they are not journaled as `do` events and do not become steps of their own.
+The table holds 40 commands. `app.launch` changes the page the app shows, not the workspace, so it does not mutate in this sense and is not journaled; Caliper API v0 already offers it without approval. `history.undo` and `history.redo` mutate but are special: they are not journaled as `do` events and do not become steps of their own.
 
 A "diagnostic" below is an object `{"code", "message", "where"}`, as the spec validator gives them. Every edit of the open spec validates the result and refuses an edit that leaves the spec with an error, with the validator's own code (for example `spec.unknown_primitive`), so the open spec is valid after every command and the preview can always draw it. Warnings, such as `spec.not_portable`, come back in the result.
 
@@ -223,6 +230,33 @@ These commands edit the open spec, the one spec the builder shows. There is at m
 
 The layout in `layout.set` and in the results is a flat list of nodes, because tool schemas cannot be recursive: `{"root": "<id>", "nodes": [{"id": "n1", "split": "horizontal", "ratio": 0.6, "children": ["heat", "n2"]}, ...]}`. `split` is `horizontal`, `vertical` or `tabs`; `ratio` is the share of the first child, or null for tabs. A child is a node id or a panel id; node ids must not be panel ids, and a node is used once. `root` names a node, or the one panel when the layout is a single panel. The handler turns this into the spec's nested `[layout]` table and back.
 
+### preview
+
+A stacked preview is a scratch copy of the open spec on which edits stack without changing the open spec, the history or the journal, so that edits that build on each other, such as a derived source and a panel that binds it, can be shown together and committed as one step. The widget agent proposes every change this way ([Widget agent](widget-agent.md#preview-and-apply-on-the-command-layer)).
+
+| Command | Arguments | Result | Errors |
+|---|---|---|---|
+| `preview.begin` | `id` (optional; `preview-<n>` is made when absent), `panel` or `source` (optional, the scope) | `id`, `panel`, `source` | `spec.no_open_spec`, `preview.exists`, `preview.too_many`, `preview.bad_scope`, `panel.not_found`, `source.not_found` |
+| `preview.diff` | `id` | `id`, `edits`, `diff`, `warnings`, `panel`, `source` | `preview.not_found`, `preview.expired`, `history.conflict` |
+| `preview.commit` | `id` | `id`, `edits`, `diff`, `warnings` | `preview.not_allowed`, `preview.not_found`, `preview.expired`, `history.conflict` |
+| `preview.discard` | `id` | `id`, `edits` | `preview.not_found`, `preview.expired` |
+
+- **Edits.** An edit of the open spec whose invocation names the preview applies to the preview's copy, validated as a real edit, and returns its diff against the copy as it was before the edit, with `applied` true. Its handler reports `no_effect`, so it writes no journal line and files no step. With `dry_run` it is only checked against the copy. The preview records the edits that changed its copy, in order, without `dry_run`; consecutive edits with one merge key keep only the newest.
+- **Reads.** `spec.get`, `spec.validate` without `text`, `panel.render` and `Session::resolve()` read the preview's copy when they name it, so the agent can check its work and the app can draw the preview in place.
+- **The open spec changing underneath.** A preview is always the open spec with its edits applied. When the open spec changed since the copy was computed, the edits are applied again to it before the preview is read, edited or committed; when one no longer applies, or the preview was begun on a spec that is no longer open, the call answers `history.conflict`.
+- **Commit.** `preview.commit` is the person's Accept, so only the origins `ui` and `builder` may send it; any other origin gets `preview.not_allowed`, journaled as a failure, and the preview stays. The handler applies the edits again to the open spec, refuses with `history.conflict` if one no longer applies, and otherwise returns them as [follow-ups](#follow-ups) with the preview's id as their group, so they run as one step that one undo reverts. The journal holds the commit's own line from the person and then each edit, under the origin that sent it and the preview's group. A preview with no edits commits nothing and files no step.
+- **Discard.** `preview.discard` drops the preview. Nothing was journaled or filed, so nothing remains.
+- **Scope.** A preview begun with `panel` or `source` takes new sources and panels, and edits only of its target, of the sources a target panel binds (following `from`) and of the items it added; `spec.set_text` and `layout.set` are refused. Anything else is `preview.out_of_scope`.
+- **Bounds.** At most 16 previews are open in a session (`preview.too_many`), each holds at most 64 edits (`preview.too_many_edits`) and 4 MiB of their arguments (`preview.too_large`), and a preview unused for 30 minutes is dropped; a later call names it as `preview.expired`.
+
+### review
+
+| Command | Arguments | Result | Errors |
+|---|---|---|---|
+| `review.status` | none | `origin`, `spec_edits`, `destructive` | |
+
+`review.status` tells the caller which of its commands wait for the person: `spec_edits` when review of spec edits is on for its origin ([Approval](#approval)), and `destructive` for every origin but `ui` and `builder`. `caliper-agent` reads it so that it does not ask the person again for what Caliper already asks.
+
 ### applet, capture and history
 
 | Command | Arguments | Result | Errors |
@@ -254,6 +288,10 @@ Undoing a step runs its records' `undo` in reverse order; redoing it runs their 
 ### Groups
 
 An invocation with a group joins the step on top of the undo stack when that step has the same group; otherwise it begins a new step that carries the group. An agent's proposal of several edits, sent with one group, is therefore one step. The history stays a stack: if another command lands between two invocations of a group, the rest of the group begins a second step, because joining a step that is not on top would undo changes out of order.
+
+### Follow-ups
+
+A handler may return follow-up invocations with its result (`CommandOutput::follow_ups`); `preview.commit` returns the edits of the preview it commits. The registry checks every follow-up before any runs: they share one non-empty group, and each names a bound command that mutates, is not destructive and is not a history command, with arguments that pass its schema; otherwise the invocation answers `command.handler_failed`. They then run in order, with the ids `<id>.1`, `<id>.2` and so on, without asking the approval policy, because the handler's own invocation was the approval. When one fails, those that ran are undone, newest first, and the invocation fails with that error. When all succeed, the handler's own invocation is journaled, then each follow-up that changed something, and their records form one new step, even when the step on top has the same group, because the history seals its top step first.
 
 ### Merging
 
@@ -315,7 +353,7 @@ The journal is append-only JSON Lines at `journal/commands.jsonl` in the workspa
 - A failed event carries `"ok": false` and `"error": "<code>"`.
 - An `undo` or `redo` event is written for each step that `history.undo` or `history.redo` undid or redid. Its `name` is that command, its `args` are `{}`, its `group` is the step's group, and `seqs` lists the `seq` of every `do` event of the step. A failed undo or redo is written with `ok: false` and the error code.
 
-The journal records every invocation of a mutating command that passed argument validation: the ones that succeeded, the ones whose handler failed, and the ones that were denied, by the policy or by the person. An invocation whose handler reports no effect is a read and is not recorded. An invocation refused earlier (unknown command, invalid arguments, not bound, wrong thread) ran nothing and is not written, since its arguments may be malformed. An invocation waiting for approval is written once, when it is decided or withdrawn. Read-only commands are written only when the journal is opened with `include_read_only`, as `do` events. Results are never written.
+The journal records every invocation of a mutating command that passed argument validation, and the follow-ups of a handler after its own line: the ones that succeeded, the ones whose handler failed, and the ones that were denied, by the policy or by the person. An invocation whose handler reports no effect is a read and is not recorded. An invocation refused earlier (unknown command, invalid arguments, not bound, wrong thread) ran nothing and is not written, since its arguments may be malformed. An invocation waiting for approval is written once, when it is decided or withdrawn. Read-only commands are written only when the journal is opened with `include_read_only`, as `do` events. Results are never written.
 
 Each line is written and flushed before the command's result is returned, so a crash loses no line that a client saw acknowledged, apart from what the operating system had not yet written to disk; the journal does not call `fsync`. A journal that cannot be written does not fail the command: the registry keeps the error and reports it to the app through `journal_error()`.
 
@@ -344,14 +382,21 @@ Commands that cannot be undone changed things outside the state that a replay re
 
 An `ApprovalPolicy` is a function that is given a descriptor and an invocation and answers `allow`, `deny` or `ask`. The default policy allows every invocation from `ui` and `builder`, allows every command that is not destructive, and asks for a destructive command from `agent`, `mcp` and `api`.
 
-On `ask`, the registry parks the invocation under a new approval id and answers `command.needs_approval` with that id in `error.approval`. The app shows the pending approvals (`pending_approvals()` lists them with the descriptor's summary and the arguments) and calls `approve(id)` or `deny(id)`. `approve` runs the parked invocation as if the policy had allowed it and returns its result; `deny` completes it with `command.denied`. Both are journaled then. At most 64 invocations wait at once; more are refused with `command.too_many_pending`. The registry sets no time limit of its own, because the person may be away; a caller that cannot wait for ever gives the queue a limit (below), after which the approval is withdrawn with `command.approval_timeout` and journaled like a denial. Pending approvals also end, with `command.shutdown`, when the queue shuts down.
+On `ask`, the registry parks the invocation under a new approval id and answers `command.needs_approval` with that id in `error.approval`. When the registry has an approval review (`set_approval_review()`), it asks it once for the invocation it parks and keeps what it returns. The app shows the pending approvals (`pending_approvals()` lists them with the descriptor's summary, the arguments and the review; their JSON form is `{"approval", "invocation", "summary", "requested_at", "review"}`) and calls `approve(id)` or `deny(id)`. `approve` runs the parked invocation as if the policy had allowed it and returns its result; `deny` completes it with `command.denied`. Both are journaled then. At most 64 invocations wait at once; more are refused with `command.too_many_pending`. The registry sets no time limit of its own, because the person may be away; a caller that cannot wait for ever gives the queue a limit (below), after which the approval is withdrawn with `command.approval_timeout` and journaled like a denial. Pending approvals also end, with `command.shutdown`, when the queue shuts down.
 
 The builder session installs a policy that adds two rules, decided per invocation because a descriptor's flags are fixed per command:
 
 - `loader.run` of a Python loader, and `loader.create` or `loader.update` of one with `run` set, ask every origin except `ui` and `builder`, each time, because running a Python loader runs the user's code. The handler passes the store's permission to run the script (`RunOptions::allow_python`) only for `ui` and `builder`, or for an invocation that the policy asked about and the person approved, so an app policy that allowed everything would still get `loader.python_needs_approval`. A redo never runs a script.
 - `applet.save` from `agent`, `mcp` or `api` asks only when it would overwrite a saved applet; writing a new one destroys nothing.
+- **Review of spec edits.** When review is on for an origin (a session setting, `ReviewSettings`, on by default for `agent` and `mcp` and off for `ui`, `builder` and `api`, which the app sets per origin), an edit of the open spec from that origin that would change it asks. The session computes the dry run itself and the pending approval carries its review, `{"diff", "warnings"}`: the unified diff of the canonical TOML before and after, and the validator's warnings. The call is then held or answered `command.needs_approval` exactly as a destructive command's is. A dry run, an edit that names a preview, an edit that would fail validation and one that would change nothing run at once, so an agent's own `dry_run` still works and has no effect.
 
-There is no command and no endpoint that approves or denies. Only the app's own UI calls `approve` and `deny`, so an agent cannot approve its own request, and approval ids need not be secret.
+**When the open spec changed between the parking and the approval**, the approved edit is made again on the open spec as it is then. It runs only when the change it makes now is the change that was shown, compared as the lines it removes and adds without line numbers or context, so a change elsewhere in the spec does not stop it. When the change differs, the edit no longer applies, or another spec was opened, it answers `history.conflict`, is journaled as a failure and files no step.
+
+**A group of edits from one agent turn** is reviewed edit by edit. A held call answers before the agent sends its next edit, so each diff is against the spec that the earlier approvals left, and the pending approvals carry their group, so the pane can stack the cards of one turn. A review of several edits as one stacked diff is a [preview](#preview), which the widget agent uses and the person accepts with one Accept.
+
+`history.undo` and `history.redo` are not reviewed, since they take back or restore changes that were already reviewed or made by the person, and neither are `spec.new`, `spec.open` and `applet.open`, which replace the whole document, take no `dry_run` and keep the previous spec in the history.
+
+There is no command and no endpoint that approves or denies, and only the `ui` and `builder` origins commit a preview. Only the app's own UI calls `approve` and `deny`, so an agent cannot approve its own request or accept its own preview, and approval ids need not be secret.
 
 ## Threads and the queue
 
@@ -368,7 +413,7 @@ Caliper API serves these endpoints, under the same loopback, `Host`, `Origin` an
 - **`GET /v0/commands`** returns the descriptor table, the output of `command_table_to_json()`: `{"version": 0, "commands": [{"name", "summary", "args", "result", "examples", "mutates", "destructive", "frame_thread"}]}`, in the table's order.
 - **`POST /v0/commands/{name}`** takes the `args` object as a JSON body of at most 1 MiB with `Content-Type: application/json`, and returns the result envelope with HTTP 200 whether `ok` is true or false. The server assigns the invocation id. The origin is `api`, or `mcp` or `agent` when the request carries `X-Caliper-Origin: mcp` or `X-Caliper-Origin: agent`; any other value is refused with 400, so a request never claims `ui` or `builder`. An optional `X-Caliper-Group` header gives the group, and an optional `X-Caliper-Preview` header the stacked preview that the call's edits apply to; the registry checks both. A PNG result is base64 in `result.png_base64`, with `result.width` and `result.height`.
 - **Approval over the API** follows contracts section 15. A call with the origin `mcp` or `agent` that needs approval is held while the person decides in the app, for up to 120 seconds: the gateway submits it with `approval_timeout` set to 120 seconds, and the server holds the request until the future completes. Approved, the call answers with the command's result; denied, with `command.denied`; after the time limit, with `command.approval_timeout`, and the approval is withdrawn. `caliper-mcp` and `caliper-agent` allow at least 130 seconds for a call. A call with the origin `api` submits with `wait_for_approval = false` and gets `command.needs_approval` with the approval id at once.
-- **`GET /v0/approvals/{id}`** returns `{"approval": "<id>", "state": "pending" | "decided" | "unknown", "result": <envelope or null>}`, from `approval_outcome(id)` and the registry's pending list, so that an `api` client can learn the outcome of a request that needed approval. This endpoint is an elaboration of this page, not of the contracts.
+- **`GET /v0/approvals/{id}`** returns `{"approval": "<id>", "state": "pending" | "decided" | "unknown", "result": <envelope or null>}`, with the pending approval's `review` while it waits, from `approval_outcome(id)` and the registry's pending list, so that an `api` client can learn the outcome of a request that needed approval. This endpoint is an elaboration of this page, not of the contracts.
 
 Transport faults keep their HTTP status: 401 and 403 from the checks, 411 without `Content-Length`, 413 for a body over 1 MiB, 415 for another content type, 400 for a body that is not JSON, a repeated header or another origin, 501 for `Transfer-Encoding`, 408 for a body that does not arrive within 10 seconds, and 503 and 504 as in API v0. A body that is JSON but not an object, or nests deeper than 64 levels, is answered 200 with `command.invalid_args`. A command name that does not exist is answered 200 with `command.unknown`, not 404, so that a 404 means only that the app has no command layer, which is how `caliper-mcp` tells an older app apart. The server never logs a request's token, and it builds the invocation from the path, the body and the three headers only, so no other header value reaches the journal.
 
@@ -383,7 +428,7 @@ cmake --build <build> --target caliper_builder_command_table
 <build>/commands/caliper_builder_command_table --write src/builder/commands/command_table.json
 ```
 
-Both clients name a tool after its command, with `_` for `.`: `panel_create` for `panel.create`, `spec_set_text` for `spec.set_text`. Since a group has no underscore, the first underscore of a tool name marks the dot, and the mapping is reversible. A tool's description is the command's summary; its input schema is the command's `args`. `caliper-mcp` may mark a tool read-only when `mutates` is false and destructive when `destructive` is true. For strict tools, the sidecar removes the keywords that the Claude API does not take in a strict schema (`minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems`, `pattern`, `default`) from what it sends; nothing is lost, because the command layer checks every argument against the full schema.
+`caliper-agent` offers its model neither the `preview` commands nor `review.status`, which belong to the app and to the sidecar itself. Both clients name a tool after its command, with `_` for `.`: `panel_create` for `panel.create`, `spec_set_text` for `spec.set_text`. Since a group has no underscore, the first underscore of a tool name marks the dot, and the mapping is reversible. A tool's description is the command's summary; its input schema is the command's `args`. `caliper-mcp` may mark a tool read-only when `mutates` is false and destructive when `destructive` is true. For strict tools, the sidecar removes the keywords that the Claude API does not take in a strict schema (`minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems`, `pattern`, `default`) from what it sends; nothing is lost, because the command layer checks every argument against the full schema.
 
 ## Changes to the contracts
 
@@ -395,6 +440,7 @@ These are additions to, or fixes of, sprint 3 contracts section 7, each the smal
 - **`examples` on the descriptor**, kept outside the schema, so that strict schemas stay plain and clients can show sample calls.
 - **`minItems` and `maxItems`** join the schema subset, so that the schemas state the bounds of their lists.
 - **The flat layout** of `layout.set`, and the one open result object, `spec.get`'s `json`, follow from closed, non-recursive tool schemas.
+- **`preview` on the invocation**, with the header `X-Caliper-Preview`, so that the sidecar can send a widget session's edits into its preview without the model setting anything, and `review` on the pending approval.
 
 ## Decisions
 
@@ -407,6 +453,11 @@ These are additions to, or fixes of, sprint 3 contracts section 7, each the smal
 - **Journaled invocations are those that passed validation.** A refused invocation ran nothing, and its arguments may be malformed or hostile.
 - **One lock for the registry in this phase.** It makes ordering and the history simple; running long read-only commands off the frame thread is left for the wiring.
 - **No approval through commands or endpoints.** Only the app's UI decides, so an agent cannot approve itself.
+- **Review in the command layer, not in each agent.** An agent that asks before an edit is polite; one that does not, such as an outside agent over MCP, is still reviewed, because the session computes the diff itself and the policy parks the edit.
+- **An approved edit runs only as it was shown.** Recomputing it and comparing the lines it removes and adds lets an unrelated change pass and refuses one that would make the approved change mean something else.
+- **Edits are reviewed one at a time; a stacked review is a preview.** A held call makes an agent's edits sequential, so each card shows a change against the spec the person has seen.
+- **A preview commit is a command that only `ui` and `builder` may send**, so the queue, the journal and the history treat it like every other change, and no agent can accept its own proposal.
+- **Follow-ups for a commit, not a handler that calls commands.** Handlers never invoke commands, and a commit journaled as one opaque line could not be replayed; follow-ups give each edit its own journal line and still one undo step.
 - **Paths outside the workspace only from `ui` and `builder`.** Loaders would otherwise let an agent read any file the app can read.
 - **The table's summaries are written for an agent that has never seen Caliper**: each says what the command does, what its ids are and which command gives them.
 - **Caliper API reaches the command layer through an interface of JSON text.** The server builds without the builder, and the app wires the session in with one call. The interface's submit and approval lookup run on the frame thread inside `take()`, so the bound of API v0 still means "the frame thread took the request".

@@ -249,6 +249,13 @@ This section describes the unscoped mode as it is built. In a widget session the
 sidecar sends no permission request for edits, and no destructive command can be in the scope
 ([Widget agent](widget-agent.md#preview-and-apply-on-the-command-layer)).
 
+**What Caliper reviews itself is not asked again.** At the first call of a turn that changes something, the sidecar
+reads `review.status` from Caliper API. When it says that Caliper reviews the sidecar's spec edits (`spec_edits`) or
+holds its destructive commands (`destructive`), the sidecar sends no permission request for those, and no dry run for
+an edit: Caliper holds the call while the person decides in the app, with the diff on its card, so one change gets one
+card. The app reviews the origin `agent` by default, and then the session's `review` option no longer matters. Against
+an app without `review.status`, or one that answers without those fields, the sidecar asks as follows.
+
 The sidecar asks with `session/request_permission` before:
 
 - **every destructive command** (`loader.update`, `loader.run`, `loader.delete`, `applet.save` in the current
@@ -283,13 +290,10 @@ Deny gives the model an error result that tells it not to try the same thing in 
 cancels the turn. `applet.save` is destructive in the table, so the sidecar asks before every save, while the session
 asks an agent only before a save that overwrites an applet.
 
-**Two approvals for one destructive command.** Caliper API holds a destructive command from the origin `agent` for the
-app's own approval (contracts section 15), so a destructive call is asked about twice: once by the sidecar and once
-by the app. The app must not take the sidecar's word for the person's answer, because the sidecar runs code that a
-model drives. The app can still show one decision: when it answers a permission request of the sidecar with
-Allow, it can record the command and a hash of its arguments, and approve the matching command approval of the origin
-`agent` that arrives within a few seconds, since the record is the app's own. That is for the app's approval cards
-to decide.
+**One approval for one command.** Caliper API holds a destructive command from the origin `agent` for the app's own
+approval (contracts section 15), and with review on it holds each spec edit too, so the sidecar used to ask a second
+time for the same call. It no longer does, as described above: the app's card is the one that counts, because the app
+must not take the word of a sidecar that a model drives for the person's answer.
 
 ## The system prompt
 
@@ -653,7 +657,8 @@ A fake Caliper API runs on loopback in the test process, and a fake OpenAI-compa
   text and its three ways forward, a rate limit and an overload followed by success, connection errors retried and
   then reported, a stream that breaks before and after the pane saw it, cancellation in a stream, while a tool runs and
   from a permission request, destructive approval allowed and denied, previews of spec edits shown as diffs before the
-  edits run, a preview that changes nothing, one that is refused and one the model asked for, allow-always, a capture
+  edits run, a preview that changes nothing, one that is refused and one the model asked for, allow-always, no
+  permission request or dry run for what `review.status` says Caliper reviews itself, read once per turn, a capture
   that the renderer cannot take, no key and a malformed key, an app without a command layer, the tool filter, and bad
   requests. After every test, the fixture checks that neither the key nor the session token reached the client or
   stderr.
@@ -678,12 +683,12 @@ A fake Caliper API runs on loopback in the test process, and a fake OpenAI-compa
   `caliper-acp-harness` drives the sidecar with the scripted model and a fake key, and its tools call a running
   `caliper-builder-host` over a fresh workspace holding a Parquet file (written through DuckDB) and a safetensors file.
   The scripted conversation imports both files, runs their loaders, creates the spec, adds the sources and the three
-  panels of the fixture `dashboard.spec.toml`, sets the layout and saves the applet, and the harness allows every
-  permission request. The test checks that each spec edit was asked about with a diff before it ran, that the diffs
-  chain from the new spec to the fixture's canonical text and match what each edit did, that the loader runs and the
-  save were asked about too, that the applet saved on disk equals the fixture, that every journal line comes from the
-  origin `agent` and that no dry run was journaled, that each step was one model request, and that the key appears
-  nowhere.
+  panels of the fixture `dashboard.spec.toml`, sets the layout and saves the applet. The host runs with
+  `--review agent,mcp --approve allow`, as the app reviews by default, and prints each approval. The test checks that
+  the host held each spec edit once with its diff and each loader run, and approved them, that the sidecar sent no
+  permission request of its own, that the completed edits' diffs chain from the new spec to the fixture's canonical
+  text, that the applet saved on disk equals the fixture, that every journal line comes from the origin `agent` and
+  that no dry run was journaled, that each step was one model request, and that the key appears nowhere.
 - `tests/test_key_store.cpp` (doctest): the memory store, the checks of providers and keys, the placement in a
   child's environment, and that no error quotes a key.
 - `tests/manual_local_model.py`: not a test of the suite, but the manual run against a local model server described
@@ -789,8 +794,9 @@ Waiting for later work:
 - **Tools read generically from the table**, strict where the schema allows and within the 20 strict tools of one
   request, with the full schema checked locally.
 - **Approval before destructive commands always, and before spec edits by default**, with Allow for the session for
-  spec edits only. A dry run of each reviewed edit gives its diff before it runs; previewable commands are found in
-  the table's schemas, not in a list.
+  spec edits only, asked by the sidecar only for what Caliper does not review itself (`review.status`). A dry run of
+  each edit the sidecar reviews gives its diff before it runs; previewable commands are found in the table's schemas,
+  not in a list.
 - **A refusal takes the turn back**: the prompt and everything after it leave the history, as ACP's `refusal` means,
   and the pane's text is neutral, with three ways forward.
 - **Retry only while the client saw nothing.**

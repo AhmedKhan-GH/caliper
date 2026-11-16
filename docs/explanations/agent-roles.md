@@ -20,7 +20,9 @@ reasoning and each tool call in the same way, and a Stop control cancels either 
 
 Both act on Caliper through its command layer. A change to a spec is a command, so it is checked against the spec
 format, recorded in the workspace's journal and undoable from the app. Commands that delete or overwrite saved data,
-such as saving an applet or running a loader, need your approval in the app, whichever role sent them. The two roles
+such as saving an applet or running a loader, need your approval in the app, whichever role sent them. A change that an
+agent makes to the open spec waits for your review, with its diff, unless you turn review off; the command layer asks,
+so it holds for every agent, including one that would not ask on its own. The two roles
 share one journal and one undo history, and their commands run one at a time in one order. What an agent builds is
 data (specs and loaders), never code that runs in Caliper's process; the [trust model](trust-model.md) explains why
 that matters.
@@ -110,8 +112,8 @@ that your data will leave this one.
 ## What each may do
 
 The side chat's agent can do more than Caliper's tools: write a loader script, fix a file, look something up. Its
-changes through Caliper's tools are commands, checked, journaled and undoable, and anything that deletes or overwrites
-saved data waits for your approval. Its own tools act outside Caliper: an edit it makes to a file with them does not
+changes through Caliper's tools are commands, checked, journaled and undoable; each change to the open spec waits for
+your review with its diff, and anything that deletes or overwrites saved data waits for your approval. Its own tools act outside Caliper: an edit it makes to a file with them does not
 pass through Caliper's journal or undo, and an agent in a mode that skips permission edits files without asking. You
 keep control through its permission prompts, which Caliper shows, and through its settings and modes.
 
