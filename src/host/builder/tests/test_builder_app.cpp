@@ -15,16 +15,30 @@
 
 #include "spec_test_workspace.h"
 
+#include "open_url.h"
+
 #include <caliper_builder/acp/subprocess.h>
 #include <caliper_builder/commands/journal.h>
 #include <caliper_builder/spec/format.h>
 
 #include <doctest/doctest.h>
 
+#include <atomic>
+#include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
+
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 using namespace spec_test;
 using nlohmann::json;
@@ -89,6 +103,88 @@ std::string acceptance_script(const std::string& data) {
     std::string out;
     for (const auto& s : steps) out += (out.empty() ? "" : "; ") + s;
     return out;
+}
+
+// One HTTP request to 127.0.0.1:<port>; the status and the body, 0 when
+// nothing answered.
+struct Answer {
+    int status = 0;
+    std::string body;
+};
+Answer http(int port, const std::string& method, const std::string& target, const std::string& extra = {},
+            const std::string& body = {}) {
+    Answer a;
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return a;
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+    timeval tv{10, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    if (::connect(fd, (sockaddr*)&addr, sizeof addr) != 0) {
+        ::close(fd);
+        return a;
+    }
+    const std::string req = method + " " + target + " HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(port) +
+                            "\r\nConnection: close\r\n" + extra + "\r\n" + body;
+    (void)::send(fd, req.data(), req.size(), 0);
+    std::string raw;
+    char buf[65536];
+    for (;;) {
+        const ssize_t n = ::recv(fd, buf, sizeof buf, 0);
+        if (n <= 0) break;
+        raw.append(buf, (size_t)n);
+    }
+    ::close(fd);
+    const size_t end = raw.find("\r\n\r\n");
+    if (raw.size() < 12 || end == std::string::npos) return a;
+    a.status = std::atoi(raw.substr(9, 3).c_str());
+    a.body = raw.substr(end + 4);
+    return a;
+}
+
+// The value of `key` in a URL's query, "" when it has none.
+std::string query_value(const std::string& url, const std::string& key) {
+    const size_t q = url.find('?');
+    if (q == std::string::npos) return {};
+    std::string rest = url.substr(q + 1);
+    while (!rest.empty()) {
+        const size_t amp = rest.find('&');
+        const std::string part = rest.substr(0, amp);
+        if (part.rfind(key + "=", 0) == 0) return part.substr(key.size() + 1);
+        if (amp == std::string::npos) break;
+        rest = rest.substr(amp + 1);
+    }
+    return {};
+}
+
+// The token after `mark` in `text`, as the API's start line prints it.
+std::string token_after(const std::string& text, const std::string& mark) {
+    const size_t at = text.find(mark);
+    if (at == std::string::npos) return {};
+    size_t e = at + mark.size();
+    while (e < text.size() && (std::isalnum((unsigned char)text[e]) || text[e] == '_' || text[e] == '-')) ++e;
+    return text.substr(at + mark.size(), e - at - mark.size());
+}
+
+// A workspace with a saved dashboard, run42-dashboard, of one series panel
+// over a CSV table, built by a command script that opens it at the start.
+void saved_dashboard(const std::string& root) {
+    std::filesystem::create_directories(root + "/ws/data");
+    {
+        std::ofstream csv(root + "/ws/data/run42_metrics.csv");
+        csv << "step,loss,accuracy\n";
+        for (int i = 0; i < 100; ++i) csv << i << "," << 2.0 / (1 + i) << "," << i / 100.0 << "\n";
+    }
+    std::ofstream f(root + "/build.jsonl");
+    f << R"({"name":"data.import","args":{"paths":["data/run42_metrics.csv"],"run":true}})" << "\n"
+      << R"({"name":"spec.new","args":{"id":"run42-dashboard","title":"Run 42"}})" << "\n"
+      << R"({"name":"source.add","args":{"id":"metrics","catalog":"table:run42_metrics"}})" << "\n"
+      << R"({"name":"panel.create","args":{"id":"curves","primitive":"series","bind":{"x":"metrics.step","y":["metrics.loss"]}}})"
+      << "\n"
+      << R"({"name":"applet.save","args":{"overwrite":true}})" << "\n"
+      << R"({"name":"applet.open","args":{"id":"run42-dashboard"}})" << "\n";
 }
 
 }  // namespace
@@ -221,6 +317,23 @@ TEST_CASE("builder app: New dashboard leaves the landing's command line empty" *
     CHECK(titles == std::vector<std::string>{"Run 42", "Run 43"});
 }
 
+// Open in browser hands the browser only a link of the viewer on this
+// machine's loopback API, in the characters such a link holds.
+TEST_CASE("builder app: only a link of the browser viewer on loopback goes to the browser") {
+    using caliper_host::viewer_link_openable;
+    CHECK(viewer_link_openable("http://127.0.0.1:7341/v0/spec?token=abc_DEF-123&applet=training-run"));
+    CHECK_FALSE(viewer_link_openable("http://127.0.0.1:7341/v0/info?token=abc"));
+    CHECK_FALSE(viewer_link_openable("http://localhost:7341/v0/spec?token=abc"));
+    CHECK_FALSE(viewer_link_openable("https://127.0.0.1:7341/v0/spec?token=abc"));
+    CHECK_FALSE(viewer_link_openable("http://127.0.0.1:/v0/spec?token=abc"));
+    CHECK_FALSE(viewer_link_openable("http://127.0.0.1:123456/v0/spec?token=abc"));
+    CHECK_FALSE(viewer_link_openable("http://127.0.0.1:7341/v0/spec?token=abc&applet=x;rm"));
+    CHECK_FALSE(viewer_link_openable("http://127.0.0.1:7341/v0/spec?token=a b"));
+    std::string why;
+    CHECK_FALSE(caliper_host::open_in_default_browser("file:///etc/hosts", &why));
+    CHECK(why == "not a link of the browser viewer");
+}
+
 // Home from a dashboard just made and saved: the landing selects that
 // dashboard, not the first instrument, and Projects lists it, the
 // workspace's own dashboard, while Instruments keeps the installed applets.
@@ -269,6 +382,127 @@ TEST_CASE("builder app: Home from a new dashboard selects it and lists it under 
     CHECK(run.err.find("[ui] Projects lists local.training-run") != std::string::npos);
     CHECK(run.err.find("[ui] done") != std::string::npos);
     CHECK(std::filesystem::is_regular_file(shots + "/home.png"));
+}
+
+// ⌘O Open in browser on a saved dashboard, in an app started without --api:
+// the app starts Caliper API on loopback as the side chat does, and gives the
+// link of the viewer to the test hook in place of the browser. The link
+// carries the viewer token, never the person's session token or the API
+// file's: it opens the spec page and reads the dashboard, and nothing else.
+// Without the hook, a hidden app refuses, says so, and starts nothing.
+TEST_CASE("builder app: Open in browser gives the viewer's link, with the API it starts, to the test hook" *
+          doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    if (!exe || !*exe) {
+        std::printf("caliper_builder_app skipped: needs CALIPER_TEST_CALIPER_EXE\n");
+        return;
+    }
+    const char* offline = std::getenv("CALIPER_AGENT_OFFLINE");
+    REQUIRE_MESSAGE((offline && std::string(offline) == "1"), "run this test through ctest, which sets the switch");
+    const std::string root = fresh_dir("builder-app-browser");
+    const std::string shots = root + "/shots", link_file = root + "/link.txt", done = root + "/done";
+    for (const auto& d : {shots, root + "/data", root + "/apps"}) std::filesystem::create_directories(d);
+    saved_dashboard(root);
+    auto spawn = [&](bool hook, const std::string& script) {
+        caliper_builder::acp::SpawnOptions o;
+        o.argv = {exe, "--hidden", "--workspace", root + "/ws"};
+        o.env = {{"CALIPER_DATA_DIR", root + "/data"},
+                 {"CALIPER_USER_APPLETS_DIR", root + "/apps"},
+                 {"CALIPER_WINDOW_SIZE", "1440x900"},
+                 {"CALIPER_AGENT_OFFLINE", "1"},
+                 {"CALIPER_COMMAND_SCRIPT", root + "/build.jsonl"},
+                 {"CALIPER_TEST_SPEC_UI", script},
+                 {"CALIPER_TEST_SPEC_UI_SHOTS", shots},
+                 {"CALIPER_EXIT_AFTER", "150"}};
+        if (hook) o.env.push_back({"CALIPER_TEST_OPEN_URL", link_file});
+        o.env_remove = {"CALIPER_API"};
+        caliper_builder::acp::RunLimits lim;
+        lim.timeout_ms = 200000;
+        lim.max_output_bytes = 16u << 20;
+        return caliper_builder::acp::run_process(o, lim);
+    };
+
+    // With the hook: the app runs on while the test opens the link.
+    caliper_builder::acp::RunResult run;
+    std::atomic<bool> ended{false};
+    std::thread app([&] {
+        run = spawn(true, "wait 60; page spec; wait 20; click page:browser; wait 20; leave; wait 5; shot browser; "
+                          "wait-file " + done + "; quit");
+        ended = true;
+    });
+    std::string url;
+    for (int i = 0; i < 1800 && url.empty() && !ended; ++i) {
+        std::ifstream in(link_file);
+        std::string line;
+        if (std::getline(in, line) && line.find("applet=") != std::string::npos) url = line;
+        else std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    // The link: the viewer's page on loopback, for this dashboard.
+    const std::string base = "http://127.0.0.1:";
+    int port = 0;
+    std::string token;
+    if (!url.empty()) {
+        CHECK(url.rfind(base, 0) == 0);
+        port = std::atoi(url.c_str() + base.size());
+        CHECK(url.find("/v0/spec?") != std::string::npos);
+        CHECK(query_value(url, "applet") == "run42-dashboard");
+        token = query_value(url, "token");
+        CHECK(token.size() >= 22);
+        // It opens the page, and reads the dashboard's spec from the viewer origin.
+        const std::string target = url.substr(url.find("/v0/spec"));
+        const Answer page = http(port, "GET", target);
+        CHECK(page.status == 200);
+        CHECK(page.body.find("<html") != std::string::npos);
+        const std::string body = R"({"applet":"run42-dashboard"})";
+        const Answer spec = http(port, "POST", "/v0/commands/spec.get",
+                                 "Authorization: Bearer " + token + "\r\nContent-Type: application/json\r\nContent-Length: " +
+                                     std::to_string(body.size()) + "\r\n",
+                                 body);
+        CHECK(spec.status == 200);
+        CHECK(spec.body.find("\"ok\":true") != std::string::npos);
+        CHECK(spec.body.find("curves") != std::string::npos);
+        // Nothing else: the API's other endpoints refuse it.
+        CHECK(http(port, "GET", "/v0/info?token=" + token).status == 403);
+        CHECK(http(port, "GET", "/v0/applets?token=" + token).status == 403);
+        // It is not the API file's token, which outside agents use; the
+        // file's spec_url is this same viewer link.
+        const json api_file = json::parse(read_text(root + "/data/api.json"), nullptr, false);
+        REQUIRE(api_file.is_object());
+        CHECK(api_file.value("port", 0) == port);
+        CHECK(api_file.value("token", std::string()) != token);
+        CHECK(api_file.value("spec_url", std::string()).find("token=" + token) != std::string::npos);
+    }
+    std::ofstream(done).close();
+    app.join();
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
+    REQUIRE(run.error.ok());
+    if (run.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    REQUIRE_FALSE(url.empty());
+    CHECK(run.status.success());
+    CHECK(run.err.find("[ui] done") != std::string::npos);
+    // The API was started for the browser, on loopback, with the line --api
+    // prints; the person's session token is on that line and not in the link.
+    CHECK(run.err.find("[browser] Caliper API started on 127.0.0.1:" + std::to_string(port)) != std::string::npos);
+    const std::string person = token_after(run.out, "with the session token ");
+    CHECK(person.size() >= 22);
+    CHECK(person != token);
+    CHECK(url.find(person) == std::string::npos);
+    // The token is never written to standard error or into Activity's lines.
+    CHECK(run.err.find(token) == std::string::npos);
+    CHECK(std::filesystem::is_regular_file(shots + "/browser.png"));
+
+    // Without the hook a hidden app opens nothing, says so, and starts no API.
+    std::filesystem::remove(link_file);
+    const auto refused = spawn(false, "wait 60; page spec; wait 20; click page:browser; wait 20; quit");
+    INFO("stderr tail: " << refused.err.substr(refused.err.size() > 4000 ? refused.err.size() - 4000 : 0));
+    CHECK(refused.status.success());
+    CHECK(refused.err.find("[ui] done") != std::string::npos);
+    CHECK(refused.err.find("[browser] not opened: the app runs hidden") != std::string::npos);
+    CHECK(refused.out.find("[api] Caliper API on") == std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(link_file));
 }
 
 #endif

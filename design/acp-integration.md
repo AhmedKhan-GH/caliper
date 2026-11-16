@@ -668,15 +668,18 @@ claims the right column with `layout_chat_column()`, and calls `draw()` with tha
   line, whether "always allow" options are offered, the agents marked as running on a local model
   (`local_model_agents`, a list of ids), and whether the chat is open. Never a key, and no address.
 - **Caliper API.** `caliper-mcp` needs the API. **Decision, the user's:** when the app was started without `--api`, the
-  chat starts the API when its agent starts, the one case in which the API starts without `--api`: on 127.0.0.1 at a
-  free port, with new tokens and the API file, as `--api` does, and no setting can change the address. Each agent
+  chat starts the API when its agent starts, one of the two cases in which the API starts without `--api` (the other is
+  the spec page's ⌘O Open in browser, Builder pane, `design/builder-pane.md`): on 127.0.0.1 at a free port, with new
+  tokens and the API file, as `--api` does, and no setting can change the address. Each agent
   session gets an API file of its own with an `agent` token (above, under approvals), so the agent is given neither
   `api.json` nor the person's token. It is
   visible in three places: a line in the conversation ("Caliper API started on 127.0.0.1:<port> for this chat"), an
   Activity line with the address and never the token, and every page's status bar, which shows the API's address
   whenever it runs. It is tied to the chat: when the chat's agent ends (it exits, cannot start, or another agent is
-  chosen), the app stops the API that the chat started and removes the API file; a restart replaces the agent without
-  stopping it. An API started with `--api` is left alone in both directions.
+  chosen), the app stops the API that the chat started and removes the API file, unless Open in browser has given out
+  a link of it since, which keeps it until the app quits (the app counts the API's users, `api_for()` in
+  `src/main.cpp`); a restart replaces the agent without stopping it. An API started with `--api` is left alone in both
+  directions.
 - **Approvals.** The chat reads the session's pending approvals each frame while no long command holds the registry,
   and a click on an approval's row outlines its card on the strip in bronze for two seconds (`ApprovalTray::point_to()`).
 - **Ask in chat.** The inline surface's Ask in chat opens the chat with the handoff draft. The bundle is built in the
@@ -750,7 +753,9 @@ Waiting for later work:
 - Open items of the side chat's Caliper API, found in review and left for a later round:
   - its life cycle at the edges: a launch that fails after `retire(ending=false)` leaves the API that the chat started
     running; the ⌘K widget agent's sidecar loses the API when the chat stops the API it started, since the sidecar's
-    token goes with the server; and what closing the pane does to the agent and to the API it started;
+    token goes with the server; and what closing the pane does to the agent and to the API it started. An API whose
+    viewer link Open in browser gave out is no longer stopped by the chat's end, so a browser's page keeps working;
+    it stays until the app quits, since nothing tells the app when the page closes;
   - a second app on the same app-data folder overwrites `api.json`, and the first app's exit then removes the second
     app's file;
   - what Accept on the inline surface expects of `preview.commit` when the preview's edits came from another origin;

@@ -5,8 +5,9 @@
 //   node browser_capture.mjs capture <url> <WxH> <browser.png> <state.json>
 //   node browser_capture.mjs compare <app.png> <browser.png> <state.json> <side.png> <panels.png>
 //
-// <url> is the link the app prints with --api ("Spec applets in a browser at
-// ..."), with &applet=<id> added. The capture is the window's size in points
+// <url> is the link that the app's Open in browser gives for a saved dashboard
+// (in the hidden app through the CALIPER_TEST_OPEN_URL file), with the viewer
+// token and &applet=<id>. The capture is the window's size in points
 // times 2, as the app's captures are on a Retina display, and the state is the
 // page's own account of its panels: title, info line, rectangle and state. The
 // comparison puts the app left and the browser right, at half size, and cuts

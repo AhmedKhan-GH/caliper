@@ -38,9 +38,11 @@
 //   chat local on|off    marks the chosen agent as running on a local model,
 //                        or clears it, as the picker's Local model row does
 //   chat picker          opens the agent picker
-//   click <item> [fx fy] a click on a builder pane's named rectangle
-//                        (BuilderPane::item_rect: "source:table:metrics",
-//                        "primitive:series", "prop:title", "bar:save", ...),
+//   click <item> [fx fy] a click on a named rectangle of the spec page
+//                        (SpecPage::item_rect: "page:browser") or of the
+//                        builder pane (BuilderPane::item_rect:
+//                        "source:table:metrics", "primitive:series",
+//                        "prop:title", "bar:save", ...),
 //                        at the fractions fx, fy of it (0.5 0.5 by default); a
 //                        negative fraction counts pixels from its right or
 //                        bottom edge
@@ -584,7 +586,9 @@ private:
 #if CALIPER_WITH_BUILDER
         BuilderPane* b = page.builder();
         SpecRect r;
-        if (!b || !b->item_rect(name, &r)) return false;
+        float pr[4];
+        if (page.item_rect(name, pr)) r = SpecRect{pr[0], pr[1], pr[2], pr[3]};
+        else if (!b || !b->item_rect(name, &r)) return false;
         *x = std::round(fx < 0.0f ? r.right() + fx : fx > 1.0f ? r.x + fx : r.x + r.w * fx);
         *y = std::round(fy < 0.0f ? r.bottom() + fy : fy > 1.0f ? r.y + fy : r.y + r.h * fy);
         return true;

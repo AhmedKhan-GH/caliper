@@ -3,27 +3,29 @@ from the landing screen, and open it in a browser.
 
     python examples/build_a_dashboard/dry_run/step6_save_reopen_browser.py [--out DIR] [--sizes 1440x900,2560x1440]
 
-The app runs with Caliper API (--api on a free port). The dashboard is built by
-hand as in step 2, then ⌘S saves it as the applet training-run in the
-workspace, ⌘B leaves build mode, esc gives up the focus and esc again goes Home,
-where the landing lists the dashboard. ⌘K, its title and Enter open it again.
-The saved and the reopened dashboards are compared pixel by pixel, and the
-saved spec with expected.spec.toml beside this script.
+The app runs without --api. The dashboard is built by hand as in step 2, then
+⌘S saves it as the applet training-run in the workspace, ⌘B leaves build mode,
+esc gives up the focus, and ⌘O Open in browser in the page bar is clicked: the
+app starts Caliper API on a free loopback port, as it does for the side chat,
+and gives the link of its browser viewer for the saved dashboard,
+http://127.0.0.1:<port>/v0/spec?token=<viewer token>&applet=training-run, to
+the browser. Then esc goes Home, where Projects lists the dashboard and the
+landing selects it; ⌘K, its title and Enter open it again. The saved and the
+reopened dashboards are compared pixel by pixel, and the saved spec with
+expected.spec.toml beside this script.
 
-Meanwhile the browser part: the app prints the link of its browser viewer on
-standard error, "Spec applets in a browser at http://127.0.0.1:<port>/v0/spec
-?token=<viewer token>&applet=<id>"; with applet=training-run, headless
-Chromium (Playwright, from the web package) opens it once the applet is saved,
-and the page is captured at the window's size and laid beside the reopened
-app's capture, whole and panel by panel.
+Meanwhile the browser part: headless Chromium (Playwright, from the web
+package) opens the link once the app has given it, and the page is captured at
+the window's size and laid beside the reopened app's capture, whole and panel
+by panel.
 
 The captures are step6-<n>-<what>-<W>x<H>.png in DIR/shots. Needs node, and
 Playwright from `cd web && npm ci` (or NODE_PATH naming a node_modules that has
 @playwright/test).
 
-What a person does differently: they read the link from the terminal that
-started the app, since the app shows it nowhere in its window, and open it in
-their own browser.
+What a person does differently: the hidden app opens no browser, so the link
+goes to the file that CALIPER_TEST_OPEN_URL names, the test hook in place of
+the person's default browser, and this script hands it to headless Chromium.
 """
 
 import argparse
@@ -87,33 +89,40 @@ def run(size, out):
     root = out / size
     shots = out / "shots"
     done = root / "browser-done"
+    link_file = root / "browser-link.txt"
     steps = build_steps() + [
-        "key cmd+s", "wait 20", "key cmd+b", "key escape", *settle_and_shot("saved"),
-        "key escape", "page landing", "wait 30", *settle_and_shot("landing"),
+        "key cmd+s", "wait 20", "key cmd+b", "key escape",
+        # ⌘O Open in browser: the link goes to the test hook's file.
+        "click page:browser", f"wait-file {link_file}", "wait 10", *settle_and_shot("saved"),
+        "key escape", "page landing", "wait 30", f"landing selected local.{APPLET}",
+        f"landing projects local.{APPLET}", *settle_and_shot("landing"),
         "key cmd+k", f"type {TITLE}", "key enter", "page spec", "wait 40", *settle_and_shot("reopened"),
         f"wait-file {done}", "quit"]
-    link = {}
 
-    def on_line(line):
-        m = re.search(r"Spec applets in a browser at (http://127\.0\.0\.1:\d+/v0/spec\?token=[A-Za-z0-9_-]+)", line)
-        if m:
-            link["url"] = m.group(1)
+    def read_link():
+        try:
+            lines = link_file.read_text().splitlines()
+        except OSError:
+            return None
+        return lines[0] if lines and re.fullmatch(r"http://127\.0\.0\.1:\d+/v0/spec\?token=[A-Za-z0-9_-]+&applet=[a-z0-9-]+",
+                                                  lines[0]) else None
 
-    app = HiddenApp(root, size, steps, shots, api=True)
-    app.listeners.append(on_line)
+    app = HiddenApp(root, size, steps, shots, extra_env={"CALIPER_TEST_OPEN_URL": str(link_file)})
     ok = True
     browser_png = shots / f"step6-4-browser-{size}.png"
     state = root / "browser-state.json"
-    # The browser opens the applet once it is saved, while the app goes Home and reopens it.
+    # The browser opens the link once the app has given it, while the app goes Home and reopens the dashboard.
     deadline = time.time() + 300
-    while app.proc.poll() is None and time.time() < deadline and not app.raw_shot("saved").is_file():
+    url = None
+    while app.proc.poll() is None and time.time() < deadline and not url:
+        url = read_link()
         time.sleep(0.2)
-    if "url" not in link or not app.raw_shot("saved").is_file():
-        print(f"  no link or no saved capture: link {'found' if 'url' in link else 'missing'}")
+    if not url:
+        print("  no link from Open in browser")
         ok = False
     else:
-        print(f"  link: {link['url'].split('?')[0]}?token=<viewer token>&applet={APPLET}")
-        ok = node_capture("capture", f"{link['url']}&applet={APPLET}", size, browser_png, state)
+        print(f"  link: {url.split('?')[0]}?token=<viewer token>&applet={url.rsplit('=', 1)[1]}")
+        ok = url.endswith(f"&applet={APPLET}") and node_capture("capture", url, size, browser_png, state)
     while app.proc.poll() is None and time.time() < deadline and not app.raw_shot("reopened").is_file():
         time.sleep(0.2)
     done.touch()

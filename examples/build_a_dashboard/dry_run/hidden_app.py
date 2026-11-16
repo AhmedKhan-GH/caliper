@@ -96,7 +96,7 @@ def settle_and_shot(name):
 class HiddenApp:
     """One run of `caliper --hidden` on a new workspace under `root`."""
 
-    def __init__(self, root, size, steps, shots, api=False, exit_after=300):
+    def __init__(self, root, size, steps, shots, api=False, exit_after=300, extra_env=None):
         self.root = Path(root)
         self.size = size
         self.shots = Path(shots)
@@ -120,6 +120,8 @@ class HiddenApp:
             "CALIPER_TEST_SPEC_UI_SHOTS": str(self.root / "raw"),
             "CALIPER_EXIT_AFTER": str(exit_after),
         })
+        env.pop("CALIPER_API", None)   # the app starts Caliper API only when asked
+        env.update(extra_env or {})
         argv = [str(caliper_bin()), "--hidden", "--workspace", str(self.root / "workspace")]
         if api:
             argv += ["--api", "--api-port", "0"]

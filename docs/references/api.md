@@ -1,6 +1,6 @@
 # Caliper API
 
-Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](wire-protocol.md), returns a capture of the frame the app draws, runs the commands of the command layer, through which specs, loaders and sources are built with undo, a journal and approvals, and serves the browser viewer of spec applets. It listens on 127.0.0.1 only, behind tokens that also say who sends each command, and it is off unless the app starts with `--api`, or the [side chat starts it](#started-by-the-side-chat). The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
+Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](wire-protocol.md), returns a capture of the frame the app draws, runs the commands of the command layer, through which specs, loaders and sources are built with undo, a journal and approvals, and serves the browser viewer of spec applets. It listens on 127.0.0.1 only, behind tokens that also say who sends each command, and it is off unless the app starts with `--api`, or the [side chat or Open in browser starts it](#started-by-the-app). The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
 
 !!! note "Status"
     Version 0, built and tested on macOS. A capture works in the app's window on Metal and in the windowless mode, `caliper shot --api`; on the GL and Vulkan renderers the app in its window answers a capture with 501. The command endpoints serve the command layer of the app's builder session, in the app, `caliper dev` and `caliper shot` built with `CALIPER_WITH_BUILDER` (`src/host/builder/app_session.h`, over `src/host/api/session_gateway.h`); a build without the builder answers 404 on them, and `caliper-mcp` reads that as an app with no command layer. The Windows build refuses `--api` for now, as [Caliper CLI](cli.md#on-windows) describes.
@@ -55,13 +55,25 @@ Every token is new for each run: your session token, the API file's token, the v
 
 While the API runs, every page's status bar shows its address, such as `api 127.0.0.1:7341`.
 
-### Started by the side chat
+### Started by the app
 
-The [side chat](side-chat.md) is the one case in which the API starts without `--api`. The side chat's agent drives Caliper through `caliper-mcp`, which needs the API, so when the app was started without `--api`, the side chat starts the API when its agent starts, at the person's first message. That API follows the same rules as with `--api`: it listens on 127.0.0.1 only, at a free port, behind new tokens, and it writes the API file. No setting can make it listen on another address or a chosen port.
+Two things in the app start the API when the app was started without `--api`: the [side chat](side-chat.md), whose agent drives Caliper through `caliper-mcp`, and ⌘O Open in browser on the spec page ([Builder pane](builder-pane.md#open-in-browser)), which opens a saved dashboard in the browser viewer. Either way the API follows the same rules as with `--api`: it listens on 127.0.0.1 only, at a free port, behind new tokens, and it writes the API file. No setting can make it listen on another address or a chosen port. The start is said in Activity, with the address and never a token, and on standard error, and the status bar shows the address. An API that the person started with `--api` is left alone in both directions: neither starts a second one nor stops it.
 
-The side chat's agent does not read `api.json`. Each agent session gets an API file of its own, `api-agent-<pid>-<n>.json` in the app-data folder, with the same keys and mode 0600, whose token runs commands as the origin `agent`, so the agent's changes to the open spec wait for your review. The app revokes that token and removes the file when the agent's session ends, and a restarted agent gets a new one. The widget agent's sidecar gets its own file in the same way, for as long as its target is open.
+**For the side chat.** The side chat starts the API when its agent starts, at the person's first message. The side chat's agent does not read `api.json`. Each agent session gets an API file of its own, `api-agent-<pid>-<n>.json` in the app-data folder, with the same keys and mode 0600, whose token runs commands as the origin `agent`, so the agent's changes to the open spec wait for your review. The app revokes that token and removes the file when the agent's session ends, and a restarted agent gets a new one. The widget agent's sidecar gets its own file in the same way, for as long as its target is open.
 
-The start is visible in three places: a line in the conversation, "Caliper API started on 127.0.0.1:<port> for this chat"; an Activity line with the address and never the token; and the status bar. The API is tied to the chat: when the chat's agent ends (it exits, it cannot start, or the person chooses another agent), the side chat stops the API it started, and the app removes the API file. An API that the person started with `--api` is left alone in both directions: the side chat neither starts a second one nor stops it.
+The start is visible in three places: a line in the conversation, "Caliper API started on 127.0.0.1:<port> for this chat"; an Activity line; and the status bar. The API is tied to the chat: when the chat's agent ends (it exits, it cannot start, or the person chooses another agent), the side chat stops the API it started, and the app removes the API file, unless Open in browser has given out a link of that API since, which keeps it running until the app quits.
+
+**For Open in browser.** ⌘O starts the API if it does not run, then opens the dashboard's link in the default browser:
+
+```text
+http://127.0.0.1:<port>/v0/spec?token=<viewer token>&applet=<id>
+```
+
+The link carries the viewer token, never your session token or the API file's token; the app checks that before it opens the link, and refuses otherwise. Anyone who has the link can read, from the origin `viewer`, what the [spec page](#get-v0spec) reads: the list of applets (`applet.list`), the saved spec of every spec applet of the open workspace (`spec.get`), not only the one opened, and the data of their panels as the panels show it (`panel.data`, within the bounds listed there). The link opens nothing else: no other endpoint, no command that changes anything and not the stream. Since the API listens on loopback, the link works only on this machine, but there any program or person that has it can read those, and a browser may keep it in its history.
+
+The viewer token ends when the API that made it stops. An API started for Open in browser runs until the app quits, since a page open in a browser keeps reading; an API started with `--api` also stops when the app quits, and one started for the side chat when the chat's agent ends, unless a link was given out. The next start makes a new viewer token, so an old link is then answered with 401.
+
+A hidden app opens no browser. A test gives it `CALIPER_TEST_OPEN_URL`, a file to which the app appends the link instead ([Host variables](environment.md#host-variables)); without it, the hidden app refuses, says so on standard error and in Activity, and starts no API.
 
 ## The windowless mode
 

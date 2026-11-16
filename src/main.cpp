@@ -25,6 +25,7 @@
 #include "host/live/live_views_state.h"   // the views' header look
 #include "host/api/app_api.h"
 #include "host/api/window_captures.h"
+#include "host/open_url.h"
 #include "host/builder/app_hooks.h"
 #include "host/builder/app_providers.h"
 #include "host/builder/approval_cards.h"
@@ -46,6 +47,7 @@
 #include <cmath>
 #include <csignal>
 #include <cstdlib>
+#include <fstream>
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -570,23 +572,13 @@ public:
         co.settings_path = caliper::app_data_path("side-chat.json");
         co.exe_dir = caliper::executable_dir();
         caliper_host::ChatPane::Hooks chh;
-        // The one case where the API starts without --api: the side chat
-        // starts it for its agent's caliper-mcp, on 127.0.0.1 at a free port
-        // (the server binds loopback only, and no setting chooses another
-        // address), and stops it when the chat's agent ends.
+        // One of the two cases where the API starts without --api: the side
+        // chat starts it for its agent's caliper-mcp, on 127.0.0.1 at a free
+        // port (the server binds loopback only, and no setting chooses
+        // another address), and stops it when the chat's agent ends, unless
+        // Open in browser uses it too (api_for()).
         chh.start_api = [this](std::string* why, std::string* started) -> std::string {
-            if (!api_.running()) {
-                caliper_host::CommandLine c = cl_;
-                c.api_port = 0;
-                start_api(c);
-                if (api_.running()) {
-                    api_for_chat_ = true;
-                    *started = api_address();
-                    landing_.log("api started", *started, "for the side chat");
-                    std::cerr << "[chat] Caliper API started on " << *started << " for the side chat" << std::endl;
-                }
-            }
-            if (!api_.running()) {
+            if (!api_for(ApiUser::chat, started)) {
                 *why = "see Activity";
                 return {};
             }
@@ -596,10 +588,11 @@ public:
         };
         chh.end_api_file = [this](const std::string& file) { api_.revoke_agent_file(file); };
         chh.agent_ended = [this] {
-            if (!api_for_chat_ || !api_.running()) return;
+            api_for_chat_ = false;
+            if (!api_started_here_ || api_for_browser_ || !api_.running()) return;
             const std::string address = api_address();
             api_.stop();
-            api_for_chat_ = false;
+            api_started_here_ = false;
             landing_.log("api stopped", address, "the side chat's agent ended");
             std::cerr << "[chat] Caliper API stopped on " << address << ": the side chat's agent ended" << std::endl;
         };
@@ -611,6 +604,9 @@ public:
         // Every page's status bar shows the API's address while it runs.
         set_host_status_note([this] { return api_.running() ? "api " + api_address() : std::string(); });
         spec_page_.set_chat(&chat_);
+        // ⌘O Open in browser on the spec page, and the names of a live view's
+        // dims for the builder's Properties.
+        spec_page_.set_open_in_browser([this](const std::string& applet) { return open_in_browser(applet); });
         spec_page_.set_dim_names([this](const std::string& id) { return providers_.dim_names(id); });
         // ⌘K's sidecar gets an API file of its own, with an agent token.
         caliper_host::SpecPage::ApiFiles af;
@@ -638,6 +634,79 @@ public:
             spec_page_.set_agent_settings(&agent_settings_);
         }
 #endif
+    }
+
+    // Who uses a Caliper API that the app started without --api: the side
+    // chat's agent, or Open in browser.
+    enum class ApiUser { chat, browser };
+
+    // Starts the API for `user` when it does not run, on a free port of
+    // 127.0.0.1 with new tokens and the API file, as --api does, and says so
+    // in Activity and on standard error; `started` gets its address then.
+    // An API the app started is the users' (api_for_chat_, api_for_browser_);
+    // one started with --api is left alone. False when it does not run.
+    bool api_for(ApiUser user, std::string* started) {
+        if (!api_.running()) {
+            caliper_host::CommandLine c = cl_;
+            c.api_port = 0;
+            start_api(c);
+            if (api_.running()) {
+                api_started_here_ = true;
+                *started = api_address();
+                const bool chat = user == ApiUser::chat;
+                landing_.log("api started", *started, chat ? "for the side chat" : "for the browser");
+                std::cerr << (chat ? "[chat]" : "[browser]") << " Caliper API started on " << *started
+                          << (chat ? " for the side chat" : " for the browser") << std::endl;
+            }
+        }
+        if (!api_.running()) return false;
+        if (api_started_here_) (user == ApiUser::chat ? api_for_chat_ : api_for_browser_) = true;
+        return true;
+    }
+
+    // ⌘O Open in browser on the spec page: the saved dashboard `applet` (its
+    // workspace id) in the person's default browser, at the spec page of
+    // Caliper API with the viewer token. Without --api the API starts for
+    // it as for the side chat, and stays until the app quits, since a page
+    // open in a browser keeps reading. A hidden app opens no browser: it
+    // writes the link to the file CALIPER_TEST_OPEN_URL names, and without
+    // that refuses. "" when the link went out, or why not. The token is
+    // never written to Activity or standard error.
+    std::string open_in_browser(const std::string& applet) {
+        const char* hook = hidden_ ? std::getenv("CALIPER_TEST_OPEN_URL") : nullptr;
+        if (hidden_ && (!hook || !*hook)) {
+            std::cerr << "[browser] not opened: the app runs hidden, and CALIPER_TEST_OPEN_URL names no file for the link"
+                      << std::endl;
+            landing_.log("browser refused", applet, "the app runs hidden");
+            return "the app runs hidden";
+        }
+        std::string started, why;
+        if (!api_for(ApiUser::browser, &started)) return "Caliper API did not start; see Activity";
+        const std::string url = api_.viewer_link(applet, &why);
+        if (url.empty()) {
+            landing_.log("browser refused", applet, why);
+            return why;
+        }
+        if (hook) {
+            std::ofstream out(hook, std::ios::app);
+            out << url << "\n";
+            out.close();
+            if (!out) {
+                landing_.log("browser refused", applet, "the test hook's file cannot be written");
+                return "the test hook's file cannot be written";
+            }
+            landing_.log("browser", applet, api_address() + " (test hook)");
+            std::cerr << "[browser] the link of " << applet << " on " << api_address() << " went to CALIPER_TEST_OPEN_URL"
+                      << std::endl;
+            return {};
+        }
+        if (!caliper_host::open_in_default_browser(url, &why)) {
+            landing_.log("browser refused", applet, why);
+            return why;
+        }
+        landing_.log("browser", applet, api_address());
+        std::cerr << "[browser] opened " << applet << " on " << api_address() << std::endl;
+        return {};
     }
 
     void cleanup() {
@@ -1488,7 +1557,9 @@ private:
     caliper_host::AgentSettings agent_settings_;   // the widget agent's settings, a popup over any page
 #endif
     caliper_host::CommandLine cl_;          // for starting Caliper API later, for the chat
-    bool api_for_chat_ = false;             // the API runs because the side chat started it
+    bool api_started_here_ = false;         // the app started the API without --api (api_for())
+    bool api_for_chat_ = false;             // ... and the side chat's agent uses it
+    bool api_for_browser_ = false;          // ... and Open in browser gave its link out
 
     // The API's address as the status bar and Activity show it: 127.0.0.1:<port>.
     std::string api_address() const {
