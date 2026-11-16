@@ -26,7 +26,8 @@ It speaks the chat completions API (streamed, as Server-Sent Events) and
   ids when `native_ids` is False), a 400 `{"error": ...}` for a refusal, and
   `done_reason` and the token counts in the last line. Its requests are kept
   in `requests` as sent, and `native_requests` too. `show`, Ollama's
-  `model_info`, answers `POST /api/show`.
+  `model_info`, answers `POST /api/show`; `prompt_tokens` gives the
+  `prompt_eval_count` of each reply in turn.
 
 Replies to other requests are taken in order from `replies`, or made by
 `responder(body)` when it is given.
@@ -78,7 +79,8 @@ class FakeOpenAI:
                  refuse_max_completion_tokens: bool = False, args_style: str = "split", reasoning: str | None = None,
                  models: list[dict] | None = None, lmstudio: int | None = None, require_key: str | None = None,
                  responder: Callable[[dict], dict] | None = None, record: str | None = None,
-                 native_ids: bool = True, show: dict | None = None) -> None:
+                 native_ids: bool = True, show: dict | None = None,
+                 prompt_tokens: list[int] | None = None) -> None:
         self.replies = list(replies or [])
         self.refuse_tools = refuse_tools
         self.refuse_images = refuse_images
@@ -95,6 +97,7 @@ class FakeOpenAI:
         self.record = record  # a file that gets one JSON line per request: method, path, Authorization
         self.native_ids = native_ids
         self.show = show   # Ollama's model_info for POST /api/show; None answers 404
+        self.prompt_tokens = list(prompt_tokens or [])   # prompt_eval_count of each native reply, else 11
         self.requests: list[dict] = []
         self.native_requests: list[dict] = []
         self.headers: list[dict] = []
@@ -308,7 +311,7 @@ class FakeOpenAI:
         out.append({"model": model, "created_at": "2026-01-01T00:00:00Z",
                     "message": {"role": "assistant", "content": ""}, "done": True,
                     "done_reason": "length" if reply.get("finish") == "length" else "stop",
-                    "prompt_eval_count": 11, "eval_count": 3})
+                    "prompt_eval_count": self.prompt_tokens.pop(0) if self.prompt_tokens else 11, "eval_count": 3})
         return out
 
     @staticmethod

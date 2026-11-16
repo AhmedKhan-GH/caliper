@@ -19,8 +19,15 @@
 //                        "cmd+shift+z"
 //   type <text>          the text as the keyboard's characters; "\n" is a
 //                        line break
-//   until <state>        wait until the inline surface's state is <state>
-//                        (prompt, running, preview, applied, ...)
+//   until <state> [<seconds>]
+//                        wait until the inline surface's state is <state>
+//                        (prompt, running, preview, applied, ...), for at
+//                        most that many seconds of wall time when given (a
+//                        real model's turn), else kPatience frames; a state
+//                        that does not change by itself (failed, declined,
+//                        handoff, conflict, unavailable) stops the script at
+//                        once when it is not the one waited for. The log line
+//                        adds what the surface shows (SpecPage::widget_facts())
 //   shot <name>          read the next frame back into <name>.png
 //   chat open|close      the side chat's toggle (chat_pane.h)
 //   chat focus           puts the keyboard into the chat's input
@@ -65,9 +72,14 @@
 //   settings preset <id> | model <name>
 //                        chooses a preset, or sets the model, as a click on its
 //                        button or Enter in its field does
-//   settings until open | note <text>|none | state <text>|none
+//   settings list | probe
+//                        lists the server's models, or probes the model, as
+//                        List and Probe do
+//   settings until open | note <text>|none | state <text>|none | done [<seconds>]
 //                        wait until the settings are open, show that GPU note,
-//                        or that plain state
+//                        or that plain state, or until no list or probe runs
+//                        (for at most that many seconds of wall time when
+//                        given); `done` logs the capabilities the settings show
 //   files <folder> <prefix> <count>
 //                        wait until the folder holds that many files whose
 //                        names begin with <prefix> (the API's agent files)
@@ -98,8 +110,10 @@
 #include <caliper_builder/session/session.h>
 #endif
 
+#include <chrono>
 #include <cmath>
 #include <functional>
+#include <optional>
 
 #include <cfloat>
 #include <chrono>
@@ -210,6 +224,18 @@ public:
             } else if (what == "model" && !which.empty()) {
                 settings_->set_model(which);
                 next("settings model " + which);
+            } else if (what == "list" || what == "probe") {
+                if (settings_->busy()) return patience("a list or a probe runs");
+                if (what == "list") settings_->list_models();
+                else settings_->probe(true);
+                next("settings " + what);
+            } else if (what == "until" && which == "done") {
+                if (!started_) started_ = std::chrono::steady_clock::now();
+                // A few frames without a list or a probe running, so the
+                // settings have taken the last answer (AgentSettings::frame()).
+                idle_frames_ = settings_->busy() ? 0 : idle_frames_ + 1;
+                if (idle_frames_ < 3) return patience_for(rest, "a list or a probe runs");
+                next("the settings are done: " + settings_facts());
             } else if (what == "until" && which == "open") {
                 if (!settings_->is_open()) return patience("the settings are closed");
                 next("the settings are open");
@@ -220,7 +246,7 @@ public:
                 if (settings_->state() != want) return patience("the settings' state is " + shown(settings_->state()));
                 next("the settings' state is " + shown(want));
             } else {
-                error_ = "settings takes open, close, preset, model or until open|note|state";
+                error_ = "settings takes open, close, preset, model, list, probe or until open|note|state|done";
             }
 #else
             error_ = "settings: the builder is not in this build";
@@ -406,8 +432,21 @@ public:
             io.AddInputCharactersUTF8(text.c_str());
             next("typed " + s.arg);
         } else if (s.verb == "until") {
-            if (page.widget_state() != s.arg) return patience("the surface is " + page.widget_state() + ", not " + s.arg);
-            next("the surface is " + s.arg);
+            std::stringstream words(s.arg);
+            std::string want, seconds;
+            words >> want >> seconds;
+            if (!started_) started_ = std::chrono::steady_clock::now();
+            const std::string now = page.widget_state();
+            const std::string facts = page.widget_facts();
+            if (now != want) {
+                const std::string why = "the surface is " + now + ", not " + want + (facts.empty() ? "" : " (" + facts + ")");
+                // A state that does not change by itself ends the wait.
+                if (now == "failed" || now == "declined" || now == "handoff" || now == "conflict" ||
+                    now == "unavailable")
+                    return void(error_ = "until " + s.arg + ": " + why);
+                return patience_for(seconds, why);
+            }
+            next("the surface is " + want + (facts.empty() ? "" : " (" + facts + ")"));
         } else if (s.verb == "shot") {
             if (!armed_) {
                 facts_ = "surface " + page.widget_state() + ", focus " +
@@ -484,6 +523,8 @@ private:
         log_.push_back(what);
         ++at_;
         frames_ = 0;
+        idle_frames_ = 0;
+        started_.reset();
         armed_ = false;
         drag_frame_ = 0;
         step_start_ = std::chrono::steady_clock::now();
@@ -496,6 +537,31 @@ private:
                 : frames_ > kPatience;
         if (over) error_ = steps_[at_].verb + " " + steps_[at_].arg + ": " + why;
     }
+
+    // As patience(), for at most `seconds` of wall time since the step began
+    // when it is a number, else kPatience frames.
+    void patience_for(const std::string& seconds, const std::string& why) {
+        const double limit = seconds.empty() ? 0.0 : std::atof(seconds.c_str());
+        if (limit <= 0.0) return patience(why);
+        const double spent = std::chrono::duration<double>(std::chrono::steady_clock::now() - *started_).count();
+        if (spent > limit) error_ = steps_[at_].verb + " " + steps_[at_].arg + ": " + why;
+    }
+
+#if CALIPER_WITH_BUILDER
+    // The capabilities and the state the settings show, for the log.
+    std::string settings_facts() const {
+        const AgentCapabilities c = settings_->capabilities();
+        auto yes_no = [](const std::optional<bool>& v) { return !v ? std::string("unknown") : *v ? "yes" : "no"; };
+        const AgentProbeAnswer& a = settings_->probe_answer();
+        std::string out = "tools " + yes_no(c.tools) + " (" + c.tools_source + "), vision " + yes_no(c.vision) + " (" +
+                          c.vision_source + "), context " + (c.context ? std::to_string(*c.context) : "unknown") +
+                          " (" + c.context_source + "), " + std::to_string(settings_->model_choices().size()) +
+                          " models, state " + (settings_->state().empty() ? std::string("none") : settings_->state());
+        if (!a.failure.empty()) out += ", failure " + a.failure;
+        for (const auto& p : a.problems) out += ", " + p;
+        return out;
+    }
+#endif
 
     // A chord of "cmd", "shift" and one key, joined by '+'.
     void press(const std::string& chord) {
@@ -577,6 +643,8 @@ private:
     std::function<void(std::vector<std::string>)> drop_;
     float drag_a_[2] = {0, 0}, drag_b_[2] = {0, 0};
     int drag_frame_ = 0;   // the frame of a drag in progress, 0 before its press
+    std::optional<std::chrono::steady_clock::time_point> started_;   // a step's first frame, for a wait in seconds
+    int idle_frames_ = 0;   // frames in a row without a list or a probe running
     static constexpr int kSettle = 3;   // frames after a step of input
     int settle_ = 0;
 };

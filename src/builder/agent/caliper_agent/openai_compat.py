@@ -78,7 +78,7 @@ class OpenAICompatProvider:
         self.native = dict(native) if native else None
         if self.native is not None:
             # Ollama: chat requests to /api/chat, each with num_ctx and keep_alive.
-            transport = OllamaNativeTransport(self.base_url, num_ctx=self.native["num_ctx"],
+            transport = OllamaNativeTransport(self.base_url, num_ctx=self.native["num_ctx"]["widget"],
                                               keep_alive=self.native.get("keep_alive", DEFAULT_KEEP_ALIVE),
                                               inner=transport)
         self._client = AsyncOpenAI(
@@ -123,15 +123,30 @@ class OpenAICompatProvider:
             self._models[model_id] = OpenAIChatModel(model_id, provider=provider)
         return self._models[model_id]
 
-    def output_budget(self, model_id: str) -> int:
+    def context_length(self, model_id: str, role: str = "widget") -> int | None:
+        """The context length the server runs the model with for a role, when the sidecar chose it (Ollama's
+        num_ctx); None when the server decides."""
+        if self.native is None:
+            return None
+        return self.native["num_ctx"].get(role) or self.native["num_ctx"].get("widget")
+
+    def output_budget(self, model_id: str, role: str = "widget") -> int:
         """The most output tokens a request asks for: at most half a known context length."""
+        chosen = self.context_length(model_id, role)
+        if chosen:
+            return max(256, min(self._max_tokens, chosen // 2))
         caps = self.capabilities(model_id)
         if caps.context_length and caps.sources.get("context_length") not in (None, "default", "unknown"):
             return max(256, min(self._max_tokens, caps.context_length // 2))
         return self._max_tokens
 
-    def model_settings(self, settings: Settings, *, strict: bool) -> dict:
-        return {"max_tokens": self.output_budget(settings.model)}
+    def model_settings(self, settings: Settings, *, strict: bool, role: str = "general") -> dict:
+        out: dict = {"max_tokens": self.output_budget(settings.model, role)}
+        chosen = self.context_length(settings.model, role)
+        if chosen:
+            # The transport sends it as num_ctx (ollama_native.py).
+            out["extra_body"] = {"options": {"num_ctx": chosen}}
+        return out
 
     async def aclose(self) -> None:
         await self._client.close()

@@ -35,6 +35,18 @@ finished. The turn then keeps that history, leaves out a reply the stream did
 not finish, and gives every tool call that has no result one that says the
 person cancelled it, so the next request is valid.
 
+**The context length.** Where the sidecar chose the context length the server
+runs the model with (the Ollama preset's num_ctx, per role), it never lets the
+server cut the front of a request silently: before each model request
+`CaliperHooks.prepare_model_request` estimates the request's tokens (the last
+reply's prompt tokens, as the server counted them, plus a token for every three
+characters added since; the first request of a session at a token for every
+four characters of the instructions, the tools and the messages) and, when it
+would leave less than `CONTEXT_RESERVE` tokens for the reply, sends nothing:
+the turn ends normally with a plain message (and the status `context_full`)
+that says the conversation no longer fits and what the person can do. For a
+server whose context length the sidecar does not know, nothing changes.
+
 A widget session (widget.py) runs the same turn with its own agent (the widget
 system prompt, its scoped tools and `handoff`) and three differences: every
 call carries the session's preview in `X-Caliper-Preview` and every edit runs
@@ -95,6 +107,13 @@ REFUSAL_TEXT = ("The model declined this request. You can rephrase it, try it ag
                 "model or provider, such as a local model.")
 REFUSAL_CHANGES_STAY = " Changes this turn already made in Caliper stay; you can undo them in the app."
 
+# The context check (see the module docstring): the room a request must leave
+# for the reply, and the characters a token is taken to be.
+CONTEXT_RESERVE_MAX = 4096
+CHARS_PER_TOKEN_ADDED = 3
+CHARS_PER_TOKEN_FIRST = 4
+IMAGE_TOKENS = 1500
+
 REVIEW_SPEC_CHANGES = "spec_changes"
 REVIEW_DESTRUCTIVE_ONLY = "destructive_only"
 
@@ -117,6 +136,11 @@ class SessionState:
     # The target, the scope and the preview of a widget session; None for the
     # general role.
     widget: WidgetSpec | None = None
+    # The context check: the prompt tokens of the last reply as the server
+    # counted them, and the characters of the request they were for.
+    last_prompt_tokens: int | None = None
+    last_request_chars: int = 0
+    pending_request_chars: int = 0
 
 
 @dataclass
@@ -132,6 +156,49 @@ class TurnDeps:
 
 class _NoTools(Exception):
     """The model server cannot call tools."""
+
+
+class _ContextFull(Exception):
+    """The next request would not fit the context length the server runs the model with."""
+
+    def __init__(self, estimate: int, limit: int) -> None:
+        super().__init__(f"{estimate} of {limit} tokens")
+        self.estimate = estimate
+        self.limit = limit
+
+
+def _part_chars(part: Any) -> int:
+    if isinstance(part, ToolCallPart):
+        return len(part.tool_name) + len(part.args_as_json_str())
+    content = getattr(part, "content", None)
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        total = 0
+        for item in content:
+            if isinstance(item, str):
+                total += len(item)
+            elif isinstance(item, BinaryContent):
+                total += IMAGE_TOKENS * CHARS_PER_TOKEN_ADDED
+            else:
+                total += len(str(item))
+        return total
+    if content is not None:
+        try:
+            return len(json.dumps(content, default=str))
+        except (TypeError, ValueError):
+            return len(str(content))
+    return 0
+
+
+def message_chars(messages: list) -> int:
+    """The characters of a request's messages and their instructions, a stand-in for their tokens."""
+    total = 0
+    for m in messages:
+        total += len(getattr(m, "instructions", None) or "")
+        for part in getattr(m, "parts", []):
+            total += _part_chars(part)
+    return total
 
 
 # ---- the agent ---------------------------------------------------------------------------------
@@ -150,6 +217,7 @@ class CaliperHooks(AbstractCapability[TurnDeps]):
             params = request_context.model_request_parameters
             request_context.model_request_parameters = replace(
                 params, function_tools=[replace(t, strict=False) for t in params.function_tools])
+        ctx.deps.runner.check_context(request_context)
         return request_context
 
     async def on_model_request_error(self, ctx, *, request_context, error):
@@ -445,7 +513,7 @@ class TurnRunner:
         else:
             user_prompt = prompt
         messages: list[ModelMessage] = before
-        settings = self._provider.model_settings(s.settings, strict=s.strict)
+        settings = self._provider.model_settings(s.settings, strict=s.strict, role=self.role)
         if s.widget is not None:
             limits = UsageLimits(request_limit=WIDGET_MAX_REQUESTS, tool_calls_limit=WIDGET_MAX_TOOL_CALLS)
             settings = {**settings, "max_tokens": min(int(settings.get("max_tokens") or WIDGET_MAX_TOKENS),
@@ -516,6 +584,15 @@ class TurnRunner:
             self._sink.fail_open_calls("Not run.")
             self._say_no_tools(model_id)
             return "end_turn"
+        except _ContextFull as exc:
+            # Nothing was sent: the turn keeps what ran, with every open call closed.
+            sent = self._run.all_messages() if self._run is not None else before
+            s.history = close_tool_calls(_without_unfinished_reply(sent),
+                                         "Not run: the conversation no longer fits the model's context.")
+            self._sink.fail_open_calls("Not run: the conversation no longer fits the model's context.")
+            self.limit_reached = s.widget is not None and self.widget_edits > 0
+            self._say_context_full(model_id, exc)
+            return "end_turn"
         except AgentError:
             self._keep_failed_turn()
             raise
@@ -540,6 +617,42 @@ class TurnRunner:
             self.session.history = close_tool_calls(_without_unfinished_reply(self._run.all_messages()),
                                                     "Not run: the turn failed.")
         self._sink.fail_open_calls("Not run: the turn failed.")
+
+    @property
+    def role(self) -> str:
+        return "widget" if self.session.widget is not None else "general"
+
+    def check_context(self, request_context: Any) -> None:
+        """Raises _ContextFull when the request would not fit the context length the server was asked for."""
+        s = self.session
+        limit_of = getattr(self._provider, "context_length", None)
+        limit = limit_of(s.settings.model, self.role) if callable(limit_of) else None
+        chars = message_chars(request_context.messages)
+        s.pending_request_chars = chars
+        if not limit:
+            return
+        if s.last_prompt_tokens is not None and chars >= s.last_request_chars:
+            estimate = s.last_prompt_tokens + (chars - s.last_request_chars) // CHARS_PER_TOKEN_ADDED
+        else:
+            tools = request_context.model_request_parameters.function_tools
+            tool_chars = sum(len(t.name) + len(t.description or "") + len(json.dumps(t.parameters_json_schema))
+                             for t in tools)
+            estimate = (chars + tool_chars) // CHARS_PER_TOKEN_FIRST
+        if estimate + min(CONTEXT_RESERVE_MAX, limit // 8) > limit:
+            raise _ContextFull(estimate, limit)
+
+    def _say_context_full(self, model_id: str, exc: _ContextFull) -> None:
+        limit = exc.limit
+        where = ("the widget agent's settings" if self.role == "widget"
+                 else "caliper-agent's command line (--context-length)")
+        kv = (getattr(self._provider, "native", None) or {}).get("kv_bytes_per_token")
+        cost = (f"; {2 * limit:,} tokens would take about {limit * kv / 1e9:.1f} GB more memory for this model"
+                if isinstance(kv, int) and kv > 0 else ", which takes more memory")
+        start = "Close the prompt and ask again" if self.role == "widget" else "Start a new chat"
+        text = (f"The conversation no longer fits the model's context of {limit:,} tokens, so the next request "
+                f"was not sent. {start}, or raise the context length in {where}{cost}.")
+        self._sink.status("context_full", text, model=model_id, context_length=limit, estimate=exc.estimate)
+        self._sink.message(text)
 
     def _say_no_tools(self, model_id: str) -> None:
         text = (f"The model {model_id} cannot call tools, so it cannot drive Caliper. "
@@ -575,6 +688,10 @@ class TurnRunner:
         """Accounts for a finished reply and says whether the turn stops before its tools."""
         counts = usage_counts(response)
         self._add_usage(counts, response.model_name or model_id)
+        if counts["input_tokens"] > 0:
+            # What the server counted for the request this reply answers.
+            self.session.last_prompt_tokens = counts["input_tokens"]
+            self.session.last_request_chars = self.session.pending_request_chars
         details = response.provider_details or {}
         if response.finish_reason == "content_filter":
             self._sink.fail_open_calls("Not run: the model declined the request.")

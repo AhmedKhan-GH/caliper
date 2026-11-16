@@ -629,6 +629,42 @@ refuses `session/new` with `agent.no_tools`, a model without vision gets no imag
 `_meta.caliper.model` for the app's context bundle. The [Widget agent](widget-agent.md#capabilities-and-degradations)
 page has the details and the decisions.
 
+### Ollama's own chat API and the context length
+
+**Built.** Ollama's OpenAI-compatible endpoint ignores `options.num_ctx`, so a request through it loads the model at
+the context length Ollama chooses; for `qwen3.8:27b` on a 64 GB Mac that was its whole 262,144 tokens, which grew
+Ollama's server from 20 GB to 34 GB and left 12 percent of memory free for one short request. The Ollama preset
+(`chat_api: ollama` in `presets.json`) keeps the OpenAI client and Pydantic AI's OpenAI chat model, and puts
+`OllamaNativeTransport` (`ollama_native.py`) under the client: each chat request goes to `/api/chat`, translated, with
+`options.num_ctx` and `keep_alive: 60s`, and the streamed reply comes back as chat completion chunks (thinking as
+`reasoning`, tool calls with an id made when Ollama sends none, the finish reason and the usage from
+`prompt_eval_count` and `eval_count`). The probe's test calls take the same route, so the probe loads the model as the
+agent will. With it, the same probe left `/api/ps` at a context of 16,384 tokens and 16.5 GB, and 47 percent free.
+
+- **A context length per role.** `presets.json` gives the Ollama preset 16,384 tokens for the widget role and 32,768
+  for the general role. The widget role's first request (ten tools, the bundle and the render) is about 7,000 tokens
+  and the general role's (34 tools) about 11,000, growing with each tool result; the side chat builder measured one
+  general turn growing from 10,820 to 20,341 prompt tokens over five requests. The provider sends the role's length
+  in each request (`extra_body.options.num_ctx`, which the transport takes). The person's setting replaces it: the
+  widget agent's Context length in the app (an override in the cache, read for the widget role only) and
+  `--context-length` (both roles).
+- **No silent truncation.** Ollama cuts the oldest messages, the person's own request first, when a request is longer
+  than `num_ctx`. Where the sidecar chose the context length, the turn estimates each request before it is sent, from
+  the prompt tokens the server counted for the last one plus a token for every three characters added since (the
+  first request of a session at four characters a token, tools and instructions included), and when it would leave
+  less than an eighth of the context (at most 4,096 tokens) for the reply, it sends nothing: the turn ends with
+  `end_turn`, a `context_full` status and a message that names the context length and what the person can do. For a
+  server whose context length the sidecar did not choose (LM Studio, Custom, hosted presets), nothing is checked, as
+  before: the sidecar knows only the length it assumes, not the one the server loaded.
+- **The cache note.** For a server on loopback the probe also reads Ollama's `/api/show`, which loads nothing, and
+  keeps the context cache one token takes (`kv_bytes_per_token`: attention layers, key and value heads and their
+  sizes, at 16 bits). The settings tag Context cache about N GB when the context length times that reaches 4 GB. With
+  the preset's own lengths the note covers a person who raises the context length, and an Ollama server reached as
+  Custom, which loads the model at its full context.
+- **Open: compaction for a full context.** Instead of ending the turn when the conversation no longer fits, the
+  sidecar could summarize the earlier conversation and go on, as the Claude API's server-side compaction does. Not
+  built; the person starts again or raises the context length.
+
 ### One run on a local model
 
 During the spike the dashboard prompt of the acceptance test ran once against a local model, as a manual check:
@@ -901,8 +937,8 @@ test's workspace>`. Do not set `CALIPER_AGENT_OFFLINE`, which would refuse the C
 2. In the settings, choose Ollama. The base URL is `http://localhost:11434/v1` in a field, there is no Key row, and
    there is no Remote address tag.
 3. Choose List: the server's models appear as choices. Choose one, then Probe: tool calling and vision say Yes or No
-   (probe), and the context length says 8,192 tokens (assumed), since Ollama reports none. Type the context length
-   you run the model with into its field.
+   (probe), and the context length says 16,384 tokens (preset). Check with `ollama ps` that the model is loaded with
+   that context length.
 4. Change the address to another machine's, such as `http://192.0.2.10:11434/v1`: the tags Remote address and
    Unencrypted appear. Change it back.
 5. Choose a model without tool calling, if you have one, and Probe: the tag says No tool calling, and ⌘K offers only
@@ -947,6 +983,8 @@ Waiting for later work:
 - A packaged Python runtime with a lock file, so that the app finds the sidecar without `CALIPER_AGENT_PYTHON`.
 - The Windows Credential Manager store, with one entry per provider.
 - Per-message effort and context editing for old captures, both betas.
+- Compaction of a conversation that no longer fits a local model's context length
+  ([Ollama's own chat API and the context length](#ollamas-own-chat-api-and-the-context-length)).
 - `session/load`.
 
 ## Decisions

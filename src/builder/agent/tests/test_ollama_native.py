@@ -15,14 +15,15 @@ import json
 
 import pytest
 
-from conftest import AgentProcess, message_text, statuses
+from conftest import AgentProcess, message_text, statuses, widget_meta
 from fake_openai import HYBRID_27B_INFO, FakeOpenAI
 from test_probe import run_probe_cli
 
 from caliper_agent.ollama_native import native_chat_url, native_context, native_request
 from caliper_agent.presets import PRESETS
 
-OLLAMA_CONTEXT = PRESETS["ollama"].context_length
+OLLAMA_CONTEXT = PRESETS["ollama"].context_length["widget"]
+GENERAL_CONTEXT = PRESETS["ollama"].context_length["general"]
 
 
 @pytest.fixture
@@ -48,9 +49,10 @@ def _call(call_id: str, name: str, arguments: str) -> dict:
 
 
 def test_the_ollama_preset_carries_a_context_length_of_its_own():
-    assert PRESETS["ollama"].chat_api == "ollama" and OLLAMA_CONTEXT == 16384
+    assert PRESETS["ollama"].chat_api == "ollama" and (OLLAMA_CONTEXT, GENERAL_CONTEXT) == (16384, 32768)
     assert all(p.chat_api == "openai" for p in PRESETS.values() if p.id != "ollama")
     assert native_context(PRESETS["ollama"], None, "default") == OLLAMA_CONTEXT
+    assert native_context(PRESETS["ollama"], None, "default", "general") == GENERAL_CONTEXT
     assert native_context(PRESETS["ollama"], 262144, "probe") == OLLAMA_CONTEXT   # never the model's maximum
     assert native_context(PRESETS["ollama"], 8192, "override") == 8192            # the person's setting
     assert native_context(PRESETS["lmstudio"], 8192, "override") is None
@@ -98,8 +100,8 @@ def test_a_turn_runs_on_the_native_api_with_the_context_length(ollama_agent, cal
     # Every chat request went to /api/chat, none to the OpenAI-compatible endpoint.
     assert "/v1/chat/completions" not in server.paths and server.paths.count("/api/chat") == 2
     first, second = server.native_requests
-    for request in (first, second):
-        assert request["options"]["num_ctx"] == OLLAMA_CONTEXT and request["keep_alive"] == "60s"
+    for request in (first, second):   # a general session: the general role's context length
+        assert request["options"]["num_ctx"] == GENERAL_CONTEXT and request["keep_alive"] == "60s"
         assert request["stream"] is True and request["model"] == "qwen-test"
     assert "catalog_list" in [t["function"]["name"] for t in first["tools"]]
     call = next(m for m in second["messages"] if m["role"] == "assistant")["tool_calls"][0]
@@ -114,15 +116,66 @@ def test_a_turn_runs_on_the_native_api_with_the_context_length(ollama_agent, cal
     assert usage["requests"] == 2 and usage["input_tokens"] == 22 and usage["output_tokens"] == 6
 
 
+def test_each_role_has_its_own_context_length(ollama_agent):
+    agent, server = ollama_agent([{"text": "A linear axis."}, {"text": "Hello."}])
+    widget = agent.start_session(meta=widget_meta())
+    response, _ = agent.prompt(widget, "Use a linear y axis")
+    assert response["result"]["stopReason"] == "end_turn"
+    general = agent.start_session()
+    response, _ = agent.prompt(general, "Say hello")
+    assert response["result"]["stopReason"] == "end_turn"
+    assert [r["options"]["num_ctx"] for r in server.native_requests] == [OLLAMA_CONTEXT, GENERAL_CONTEXT]
+    # At most half of it is asked for as output, within the widget agent's own budget.
+    assert server.native_requests[0]["options"]["num_predict"] <= OLLAMA_CONTEXT // 2
+    assert server.native_requests[1]["options"]["num_predict"] == GENERAL_CONTEXT // 2
+
+
+def test_a_request_that_would_not_fit_is_not_sent(ollama_agent, caliper):
+    # The first reply's prompt took 15,900 of 16,384 tokens: the tool's result would
+    # leave no room for the reply, so the second request is never sent.
+    agent, server = ollama_agent([{"tool_calls": [_call("call_1", "catalog_list", '{"kind": "table"}')]},
+                                  {"text": "never"}], "--context-length", "16384", prompt_tokens=[15900])
+    sid = agent.start_session()
+    response, updates = agent.prompt(sid, "What data do I have?")
+    assert response["result"]["stopReason"] == "end_turn"
+    assert len(server.native_requests) == 1
+    assert [c["origin"] for c in caliper.commands("catalog.list")] == ["agent"]   # what ran stays
+    text = message_text(updates)
+    assert "no longer fits the model's context of 16,384 tokens" in text
+    assert "Start a new chat, or raise the context length" in text and "--context-length" in text
+    full = [s for s in statuses(updates) if s["status"] == "context_full"]
+    assert full and full[0]["context_length"] == 16384
+    # The session stays usable, and the next prompt is checked the same way.
+    response, updates = agent.prompt(sid, "And now?")
+    assert len(server.native_requests) == 1 and "no longer fits" in message_text(updates)
+
+
+def test_a_widget_request_that_would_not_fit_names_the_settings(ollama_agent):
+    agent, server = ollama_agent([{"text": "never"}], "--context-length", "1024")
+    sid = agent.start_session(meta=widget_meta())
+    response, updates = agent.prompt(sid, "Use a linear y axis")
+    assert response["result"]["stopReason"] == "end_turn"
+    assert server.native_requests == []   # the tools alone take more than 1,024 tokens
+    text = message_text(updates)
+    assert "context of 1,024 tokens" in text and "Close the prompt and ask again" in text
+    assert "widget agent's settings" in text
+
+
 def test_the_persons_context_length_replaces_the_presets(ollama_agent):
-    agent, server = ollama_agent([{"text": "Hello."}], "--context-length", "8192")
+    agent, server = ollama_agent([{"text": "Hello."}], "--context-length", "20000")
     sid = agent.start_session()
     response, _ = agent.prompt(sid, "Say hello")
     assert response["result"]["stopReason"] == "end_turn"
     request = server.native_requests[0]
-    assert request["options"]["num_ctx"] == 8192
+    assert request["options"]["num_ctx"] == 20000
     # At most half of the context length is asked for as output.
-    assert request["options"]["num_predict"] <= 4096
+    assert request["options"]["num_predict"] == 10000
+
+    # A general session's first request with the 34 tools does not fit 8,192 tokens: nothing is sent.
+    agent, server = ollama_agent([{"text": "never"}], "--context-length", "8192")
+    sid = agent.start_session()
+    response, updates = agent.prompt(sid, "Say hello")
+    assert server.native_requests == [] and "context of 8,192 tokens" in message_text(updates)
 
 
 def test_a_refusal_of_tools_and_a_cut_off_reply_keep_their_meaning(ollama_agent):

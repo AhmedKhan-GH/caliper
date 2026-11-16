@@ -26,6 +26,14 @@
 //     "No tool calling", and ⌘K then offers only Ask in chat.
 //   - The GPU note: "Shared GPU" while a live run is attached and the
 //     provider is a server on this machine (a loopback base URL).
+//   - The cache note, under Probe: "Context cache about 18 GB" when a server
+//     on this machine would hold a context cache of 4 GB or more for the
+//     model, from the context length and the bytes of cache a token takes,
+//     which the probe reads from an Ollama server's model metadata. The
+//     Ollama preset loads the model with a context length of its own (16,384
+//     tokens, about 1 GB for a 27B model), so the note covers a person who
+//     raises it, and an Ollama server reached as Custom or LM Studio's
+//     address, which loads the model at its full context.
 //
 // Where it opens: a popup over the page, a share of the window, from the ⌘K
 // prompt's Setup and Model actions and from the landing screen's ⌘, Agent.
@@ -113,11 +121,17 @@ std::string agent_gpu_note(bool live_attached, const AgentChoice& choice);
 struct AgentCapabilities {
     std::optional<bool> tools, vision;
     std::optional<long long> context;
+    std::optional<long long> kv_bytes_per_token;   // the context cache one token takes, where the probe read it
     std::string tools_source = "unknown", vision_source = "unknown", context_source = "unknown";
     nlohmann::json overrides = nlohmann::json::object();
 };
 AgentCapabilities read_cached_capabilities(const std::string& cache_dir, const std::string& base_url,
                                            const std::string& model, double now_seconds);
+// "Context cache about <N> GB" when the provider is a server on this machine
+// and the model's context length times the cache a token takes reaches
+// kLargeCacheBytes; "" otherwise, and when either is unknown.
+constexpr long long kLargeCacheBytes = 4000000000LL;
+std::string agent_cache_note(const AgentChoice& choice, const AgentCapabilities& caps);
 
 // ---- the sidecar's start ----------------------------------------------------------------
 
@@ -186,6 +200,7 @@ struct AgentSettingsLayoutInput {
     bool note = false;                     // the GPU note
     int problems = 0;                      // the probe's tags
     bool state = false;                    // the plain state tag ("No tool calling")
+    std::string cache_note;                // "Context cache about 18 GB", or ""
 };
 
 struct AgentSettingsLayout {
@@ -209,6 +224,7 @@ struct AgentSettingsLayout {
     WidgetRect probe;
     std::vector<WidgetRect> problems;
     WidgetRect state;
+    WidgetRect cache_note;
     bool two_columns = false;
 };
 
@@ -261,6 +277,7 @@ public:
     void set_effort(std::string effort);
     std::vector<std::string> warnings() const { return agent_base_url_warnings(choice()); }
     std::string gpu_note() const;
+    std::string cache_note() const;   // agent_cache_note() of the current choice
 
     // ---- the key: write only
     enum class KeyStatus { none, set, not_set, unknown };   // none: no key row (a local server, no preset)

@@ -234,7 +234,7 @@ class ScriptedProvider:
             self._models[model_id] = ScriptedModel(self._state, model_id)
         return self._models[model_id]
 
-    def model_settings(self, settings: Settings, *, strict: bool) -> dict:
+    def model_settings(self, settings: Settings, *, strict: bool, role: str = "general") -> dict:
         return dict(claude_settings(settings.model, settings.effort, compaction=self._compaction))
 
     def capabilities(self, model_id: str) -> Capabilities:
