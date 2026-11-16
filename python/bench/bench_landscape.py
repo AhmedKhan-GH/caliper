@@ -23,7 +23,8 @@ Each training run is a fresh process that runs the notebook's own code cells
 (all but the training run, the random-directions cell and the close) with a
 viewer attached in a process of its own, which subscribes to the scene and
 the series and discards what it receives, as a notebook widget would read
-them. The arms alternate. Without the landscape the loop is the same, with
+them; a run starts only once the server holds the viewer's subscription to
+the scene, and fails if the viewer ends early or fails. The arms alternate. Without the landscape the loop is the same, with
 land.point and land.due made no-ops. Each run's clock stops after
 torch.mps.synchronize(), so it includes every kernel the loop queued. The
 budget of design/demos.md is at most 1.5 times as long with the landscape.
@@ -71,9 +72,29 @@ def viewer(url: str) -> subprocess.Popen:
                             env={**os.environ, "PYTHONPATH": str(REPO / "python")})
 
 
+def wait_subscribed(server, view: subprocess.Popen, scene: str = "landscape",
+                    timeout: float = 60.0) -> None:
+    """Waits until the server holds the viewer's subscription to the scene,
+    so that a run measures the landscape with a subscriber. Raises SystemExit
+    when the viewer process ends first, or after ``timeout`` seconds."""
+    from caliper._net_scene import route_of
+    route = route_of(server.ring)
+    end = time.monotonic() + timeout
+    while not route.watched(scene):
+        if view.poll() is not None:
+            raise SystemExit(f"the viewer ended with exit status {view.returncode} before it subscribed "
+                             f"to {scene!r}")
+        if time.monotonic() > end:
+            raise SystemExit(f"the viewer did not subscribe to {scene!r} within {timeout:.0f} s")
+        time.sleep(0.01)
+
+
 def drain(url: str) -> None:
-    """A viewer that subscribes to every view and discards what it receives."""
+    """A viewer that subscribes to every view and discards what it receives.
+    It ends quietly when the server closes the connection; any other error
+    ends the process with a traceback and exit status 1, which run() sees."""
     from websockets.asyncio.client import connect
+    from websockets.exceptions import ConnectionClosed
 
     from caliper import _wire as w
 
@@ -92,7 +113,7 @@ def drain(url: str) -> None:
                             await ws.send(w.encode(w.Subscribe(sub, v["name"], sub, None, None)))
     try:
         asyncio.run(go())
-    except Exception:  # noqa: BLE001  the server closed
+    except ConnectionClosed:                                # the server closed
         pass
 
 
@@ -115,7 +136,7 @@ def run(variant: str, steps: int, mode: str = "plain") -> dict:
     assert ns["device"].type == "mps", "the cost row runs on MPS"
     land = ns["land"]
     view = viewer(ns["server"].stream_url)
-    time.sleep(1.0)                                         # the viewer subscribes
+    wait_subscribed(ns["server"], view)
     calls, stamps, events, surfaces = [], [], [], []
     timing = mode == "events"
     point = land.point if variant == "with" else (lambda model, step: None)
@@ -219,7 +240,8 @@ def run(variant: str, steps: int, mode: str = "plain") -> dict:
             out["device_step_ms_in_backlog"] = busy
             out["lag_elsewhere_ms_median"] = statistics.median(far) * 1e3 if far else None
     ns["server"].close()
-    view.wait(10)
+    if view.wait(10) != 0:
+        raise SystemExit(f"the viewer failed during the run (exit status {view.returncode})")
     print(json.dumps(out), flush=True)
     return out
 
