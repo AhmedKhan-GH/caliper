@@ -137,6 +137,8 @@ int poll_scene(CaliperCore* core, caliper_live::Source& src, PollState& st, Poll
         if (!ok) {
             ++st.errors;
             v.error = why;
+        } else if (!std::holds_alternative<std::string>(it.msg)) {
+            v.error.clear();   // the last update succeeded, as for the other kinds
         }
     }
     v.updates += (uint64_t)applied;
