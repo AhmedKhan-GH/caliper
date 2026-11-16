@@ -39,6 +39,17 @@ A custom agent is a name and one command line. The line is split into words as a
 quotes, double quotes and backslashes and nothing else (no variables, globbing or redirection), and the program is run
 without a shell. The chosen agent and the custom command belong to the app's own settings, never to a workspace.
 
+`caliper-agent`, the agent behind ⌘K ([Widget agent](widget-agent.md#in-the-side-chat)), can be the custom agent too,
+which runs the chat on a local model with no account. It runs from the repository's source with a Python that has its
+dependencies (`src/builder/agent/pyproject.toml`), and with Ollama serving a model that calls tools the command line
+is:
+
+```text
+/usr/bin/env PYTHONPATH=/path/to/caliper/src/builder/agent /path/to/python -P -m caliper_agent --preset ollama --base-url http://127.0.0.1:11434/v1 --model <model>
+```
+
+It reaches Caliper with the session's own API file, so its edits wait on the approval cards like any other agent's.
+
 The agent uses its own login. When it answers that it needs one, the pane shows LOGIN with the login methods the agent
 names and the command its maker documents; Caliper never asks for a key and runs no login flow. Log in in your own
 terminal and choose Restart.

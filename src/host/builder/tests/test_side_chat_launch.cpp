@@ -249,6 +249,14 @@ TEST_CASE("side chat: a Caliper tool's call names its command, as each agent nam
     CHECK(caliper_command_of(call("panel_create")).empty());
     CHECK(caliper_command_of(call("Edit demo.spec.toml")).empty());
     CHECK(caliper_command_of(call("MCP", {{"server", "other"}, {"tool", "spec_get"}})).empty());
+    // caliper-agent names the command in the call's _meta, whatever the title.
+    acp::ToolCallInfo own = call("panel_create");
+    own.caliper_command = "panel.create";
+    CHECK(caliper_command_of(own) == "panel.create");
+    own.title = "panel.create heads";
+    CHECK(caliper_command_of(own) == "panel.create");
+    own.caliper_command = "panel.no_such";
+    CHECK(caliper_command_of(own).empty());
 }
 
 TEST_CASE("side chat: this build's caliper-mcp is found beside the executable, else in the build tree") {

@@ -185,7 +185,10 @@ std::string find_caliper_mcp(const std::string& exe_dir);
 // "caliper.panel_create", "caliper/panel_create", "caliper_panel_create",
 // "panel_create (caliper MCP Server)", or rawInput {"server": "caliper",
 // "tool": ...}; the tool name maps back to a command of the table
-// ("panel.create"). "" for any other tool.
+// ("panel.create"). An agent that calls Caliper API itself rather than through
+// caliper-mcp (caliper-agent) names the command in the call's
+// _meta.caliper.command (ToolCallInfo::caliper_command), which counts when the
+// table has it. "" for any other tool.
 std::string caliper_command_of(const caliper_builder::acp::ToolCallInfo& call,
                                const std::string& server = kChatMcpServerName);
 

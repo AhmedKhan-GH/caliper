@@ -92,7 +92,8 @@ def main(argv: list[str] | None = None) -> int:
         return probe_main(argv[1:])
     parser = argparse.ArgumentParser(prog="caliper-agent",
                                      description="The widget agent of Caliper, an ACP agent on stdio.")
-    parser.add_argument("--api-file", help="Caliper API's file (default: api.json in the app-data folder)")
+    parser.add_argument("--api-file", help="Caliper API's file (default: api.json in the app-data folder); a session "
+                                           "whose session/new hands Caliper's MCP server uses that server's --api-file")
     parser.add_argument("--command-table", help="the command descriptor table as JSON")
     parser.add_argument("--widget-scopes", help="the widget agent's scope rule (default: widget_scopes.json beside "
                                                 "the command table)")

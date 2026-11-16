@@ -188,7 +188,10 @@ same advice holds. The side chat runs your own agent, so it shows no such note.
 ## Local models in the side chat
 
 The side chat runs your own agent, so it uses whatever model your agent is set up for, local models included.
-ACP integration (`design/acp-integration.md`) sets up opencode with a model served by Ollama as a worked example.
+`caliper-agent` itself can be that agent: give the side chat the custom command that
+[Side chat](../references/side-chat.md#the-agents) shows, with the Ollama preset and your model, and the chat runs on
+the local model with no account. ACP integration (`design/acp-integration.md`) sets up opencode with a model served by
+Ollama as another worked example.
 
 ## Remove the key
 

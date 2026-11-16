@@ -245,6 +245,11 @@ std::string caliper_command_of(const acp::ToolCallInfo& call, const std::string&
         }
         return {};
     };
+    // An agent that calls Caliper API itself (caliper-agent) names the command
+    // in the call's _meta; it counts when the table has it.
+    if (!call.caliper_command.empty())
+        for (const auto& d : caliper_builder::command_table())
+            if (d.name == call.caliper_command) return d.name;
     if (std::string c = from_text(call.title); !c.empty()) return c;
     const json& raw = call.raw_input;
     if (raw.is_object()) {
@@ -774,6 +779,7 @@ void merge_tool(acp::ToolCallInfo* into, const acp::ToolCallInfo& from) {
     if (from.has_locations) into->locations = from.locations;
     if (!from.raw_input.is_null()) into->raw_input = from.raw_input;
     if (!from.raw_output.is_null()) into->raw_output = from.raw_output;
+    if (!from.caliper_command.empty()) into->caliper_command = from.caliper_command;
     into->has_title = into->has_title || from.has_title;
     into->has_kind = into->has_kind || from.has_kind;
     into->has_status = into->has_status || from.has_status;

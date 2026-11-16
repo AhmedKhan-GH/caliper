@@ -20,6 +20,7 @@ using clock_type = std::chrono::steady_clock;
 namespace {
 
 constexpr std::size_t kMaxIdBytes = 1024;
+constexpr std::size_t kMaxCaliperCommandBytes = 128;   // a command name of the table is far shorter
 constexpr std::size_t kMaxOptions = 64;
 
 const char* const kDeclinedMethods[] = {
@@ -97,6 +98,10 @@ bool parse_tool_call(const json& obj, bool is_update, ToolCallInfo* out) {
     }
     if (obj.contains("rawInput")) out->raw_input = obj["rawInput"];
     if (obj.contains("rawOutput")) out->raw_output = obj["rawOutput"];
+    std::string command;
+    if (get_string(get_object(get_object(obj, "_meta"), "caliper"), "command", &command) && !command.empty() &&
+        command.size() <= kMaxCaliperCommandBytes)
+        out->caliper_command = command;
     return true;
 }
 
@@ -134,6 +139,7 @@ json tool_call_to_json(const ToolCallInfo& t) {
     }
     if (!t.raw_input.is_null()) j["raw_input"] = t.raw_input;
     if (!t.raw_output.is_null()) j["raw_output"] = t.raw_output;
+    if (!t.caliper_command.empty()) j["caliper_command"] = t.caliper_command;
     return j;
 }
 
