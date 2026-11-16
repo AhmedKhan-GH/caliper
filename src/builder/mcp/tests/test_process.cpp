@@ -5,6 +5,7 @@
 // POSIX only.
 #include "../codec.h"
 #include "fake_http.h"
+#include "mcp_child.h"
 #include "schema_sample.h"
 
 #include <caliper_builder/acp/subprocess.h>
@@ -37,13 +38,14 @@ using caliper_builder::mcp::test::FakeConnection;
 using caliper_builder::mcp::test::FakeHttpServer;
 using caliper_builder::mcp::test::FakeRequest;
 using caliper_builder::mcp::test::http_response;
+using caliper_builder::mcp::test::McpChild;
+using caliper_builder::mcp::test::modern_meta;
 using nlohmann::json;
 namespace fs = std::filesystem;
 using Clock = std::chrono::steady_clock;
 
 namespace {
 
-const std::string kExe = CALIPER_MCP_EXE;
 const char* const kV0Commands[] = {"app.info", "app.applets", "app.launch", "capture.frame"};
 
 std::string tiny_png() {
@@ -104,6 +106,7 @@ public:
     std::atomic<int> hold_ms{1500};
     std::atomic<bool> held_peer_closed{false};
     std::string hold_command;
+    std::string expected_origin = "mcp";
 
     std::string api_file() const { return (dir / "api.json").string(); }
 
@@ -212,7 +215,8 @@ private:
         if (r.method == "POST" && p.rfind("/v0/commands/", 0) == 0) {
             if (!command_layer) return answer(404, {{"error", "no such endpoint in Caliper API v0"}});
             if (r.header("content-type") != "application/json") return answer(415, {{"error", "JSON only"}});
-            if (r.header("x-caliper-origin") != "mcp") return answer(400, {{"error", "the test expects origin mcp"}});
+            if (r.header("x-caliper-origin") != expected_origin)
+                return answer(400, {{"error", "the test expects another origin"}});
             const std::string name = p.substr(13);
             const json args = json::parse(r.body, nullptr, false);
             if (!args.is_object())
@@ -245,136 +249,6 @@ private:
     std::vector<std::string> tokens_;
     json table_ = command_table_to_json();
     std::vector<FakeRequest> log_;
-};
-
-json modern_meta() {
-    return {{"io.modelcontextprotocol/protocolVersion", "2026-07-28"},
-            {"io.modelcontextprotocol/clientCapabilities", json::object()},
-            {"io.modelcontextprotocol/clientInfo", {{"name", "process-test"}, {"version", "1"}}}};
-}
-
-// caliper-mcp as a child, with its stdout read line by line and its stderr
-// collected on a thread.
-class McpChild {
-public:
-    explicit McpChild(const std::vector<std::string>& args, const std::vector<EnvVar>& env = {}) {
-        SpawnOptions so;
-        so.argv = {kExe};
-        so.argv.insert(so.argv.end(), args.begin(), args.end());
-        so.env_remove = {"CALIPER_DATA_DIR"};
-        so.env = env;
-        Error e;
-        proc_ = Process::spawn(so, &e);
-        REQUIRE_MESSAGE(proc_, e.message);
-        err_thread_ = std::thread([this] {
-            char b[4096];
-            for (;;) {
-                std::size_t got = 0;
-                const IoStatus st = proc_->read_stderr(b, sizeof b, &got, 100);
-                if (st == IoStatus::ok) {
-                    std::lock_guard<std::mutex> g(mu_);
-                    err_.append(b, got);
-                } else if (st != IoStatus::timeout || stop_) {
-                    break;
-                }
-            }
-        });
-    }
-    ~McpChild() {
-        if (proc_) proc_->terminate(2000);
-        stop_ = true;
-        if (err_thread_.joinable()) err_thread_.join();
-    }
-
-    void send_raw(const std::string& bytes) {
-        REQUIRE(proc_->write_stdin_all(bytes.data(), bytes.size(), 10000) == IoStatus::ok);
-    }
-    void send(const json& j) { send_raw(j.dump() + "\n"); }
-
-    // The next message, or null when none comes in time or stdout ends.
-    json next(int timeout_ms) {
-        const auto end = Clock::now() + std::chrono::milliseconds(timeout_ms);
-        for (;;) {
-            const auto nl = buf_.find('\n');
-            if (nl != std::string::npos) {
-                const std::string line = buf_.substr(0, nl);
-                buf_.erase(0, nl + 1);
-                out_ += line + "\n";
-                json j = json::parse(line, nullptr, false);
-                REQUIRE_MESSAGE(!j.is_discarded(), "stdout carried a line that is not JSON: " << line);
-                REQUIRE(j.is_object());
-                CHECK(j["jsonrpc"] == "2.0");
-                return j;
-            }
-            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(end - Clock::now()).count();
-            if (left <= 0) return nullptr;
-            char b[65536];
-            std::size_t got = 0;
-            const IoStatus st = proc_->read_stdout(b, sizeof b, &got, int(std::min<long long>(left, 100)));
-            if (st == IoStatus::ok) buf_.append(b, got);
-            else if (st == IoStatus::eof || st == IoStatus::error) return nullptr;
-        }
-    }
-
-    // The response with this id; other messages are kept in `notes`.
-    json await(const json& id, int timeout_ms = 20000) {
-        const auto end = Clock::now() + std::chrono::milliseconds(timeout_ms);
-        for (;;) {
-            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(end - Clock::now()).count();
-            REQUIRE_MESSAGE(left > 0, "no response with id " << id.dump());
-            json m = next(int(left));
-            REQUIRE_MESSAGE(!m.is_null(), "stdout ended before the response with id " << id.dump());
-            if (m.contains("id") && m["id"] == id && !m.contains("method")) return m;
-            notes.push_back(std::move(m));
-        }
-    }
-
-    json request(const json& id, const std::string& method, json params, bool modern = true) {
-        if (modern) params["_meta"] = modern_meta();
-        send({{"jsonrpc", "2.0"}, {"id", id}, {"method", method}, {"params", params}});
-        return await(id);
-    }
-
-    json call(const json& id, const std::string& tool, const json& args, bool modern = true) {
-        const json r = request(id, "tools/call", {{"name", tool}, {"arguments", args}}, modern);
-        REQUIRE_MESSAGE(r.contains("result"), r.dump());
-        return r["result"];
-    }
-
-    // Closes stdin, reads what is left on stdout and waits for the exit.
-    ExitStatus finish(int timeout_ms = 10000) {
-        proc_->close_stdin();
-        const auto end = Clock::now() + std::chrono::milliseconds(timeout_ms);
-        for (;;) {
-            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(end - Clock::now()).count();
-            if (left <= 0) break;
-            json m = next(int(left));
-            if (m.is_null()) break;
-            notes.push_back(std::move(m));
-        }
-        ExitStatus st;
-        REQUIRE(proc_->wait_for(timeout_ms, &st));
-        stop_ = true;
-        if (err_thread_.joinable()) err_thread_.join();
-        return st;
-    }
-
-    std::string all_out() const { return out_ + buf_; }
-    std::string all_err() const {
-        std::lock_guard<std::mutex> g(mu_);
-        return err_;
-    }
-
-    std::vector<json> notes;
-
-private:
-    std::unique_ptr<Process> proc_;
-    std::thread err_thread_;
-    std::atomic<bool> stop_{false};
-    mutable std::mutex mu_;
-    std::string err_;
-    std::string buf_;
-    std::string out_;
 };
 
 json error_of(const json& tool_result) {
@@ -619,6 +493,30 @@ TEST_CASE("the app restarting, a stale token, a changed table and an app without
             CHECK(m["result"]["resultType"] == "complete");
         }
     CHECK(closed);
+    check_no_token(child, api);
+}
+
+TEST_CASE("--origin is mcp or agent, and agent is sent as X-Caliper-Origin") {
+    SpawnOptions so;
+    so.argv = {CALIPER_MCP_EXE, "--origin", "ui"};
+    acp::RunLimits limits;
+    limits.timeout_ms = 10000;
+    const acp::RunResult bad = acp::run_process(so, limits);
+    REQUIRE(bad.error.ok());
+    CHECK(bad.status.exited);
+    CHECK(bad.status.code == 2);
+    CHECK(bad.err.find("--origin is mcp or agent") != std::string::npos);
+    CHECK(bad.out.empty());
+
+    FakeApi api("origin-agent");
+    api.expected_origin = "agent";
+    api.start();
+    const CommandDescriptor* plain = pick([](const CommandDescriptor& c) { return !c.mutates; });
+    REQUIRE(plain);
+    McpChild child({"--api-file", api.api_file(), "--origin", "agent"});
+    CHECK(child.call(1, command_tool_name(plain->name), plain->examples[0])["isError"] == false);
+    CHECK(api.log().back().header("x-caliper-origin") == "agent");
+    CHECK(child.finish().success());
     check_no_token(child, api);
 }
 

@@ -374,8 +374,10 @@ the variable is set and not empty, otherwise `api.json` in the app-data folder o
 ([Folders and environment variables](../references/environment.md)). It reads the file strictly: at most 64 KiB,
 `version` 1, `port` 1 to 65535, `url` exactly `http://127.0.0.1:<port>/v0`, and `token` 16 to 256 characters of
 `A-Z a-z 0-9 _ -`, so that it cannot carry anything into a header. Unknown keys are ignored. A file that does not
-parse is read once more after 100 ms, in case the app was writing it. `caliper-mcp` takes the stream's address from
-the file's `stream_url` when it needs one and never builds it; it offers no tool for the stream in this phase.
+parse is read once more after 100 ms, in case the app was writing it. `pid` and `stream_url` are optional: the
+stand-in host of the [builder session](builder-session.md) serves no stream and writes no `stream_url`. `caliper-mcp`
+takes the stream's address from the file's `stream_url` when it needs one and never builds it; it offers no tool for
+the stream in this phase.
 
 The file is read at every call. When a request is refused with 401 or its connection is refused, the file is read
 once more and the request is sent again if the file now names another port or token. Neither fault means that the
@@ -490,9 +492,12 @@ declarations. `caliper-mcp` passes the schemas through unchanged; see [Open ques
 
 - **The origin `agent`.** Contracts section 8 names only the origins `api` and `mcp` for the command endpoints, but
   the [ACP integration](acp-integration.md) page says that commands from the app's own agent arrive with the origin
-  `agent`, and that agent reaches the app through `caliper-mcp`. The smallest fix is the option `--origin agent`,
-  which sets `X-Caliper-Origin: agent`; the endpoint should then accept `agent` as well as `mcp`. The default
-  approval policy treats both alike.
+  `agent`, and that agent reaches the app through `caliper-mcp`. The smallest fix is the option `--origin agent`
+  (the default is `mcp`), which sets `X-Caliper-Origin: agent`, so the agent pane hands an ACP agent the same server
+  with that origin. The stand-in `caliper-builder-host` accepts `agent` already, and the app's API server should
+  accept it as well as `mcp` when the command endpoints are wired. The default approval policy treats both alike, and
+  a request can never claim `ui` or `builder`; `caliper-mcp` refuses any other value of `--origin` at start, with
+  exit code 2.
 - **The MCP revision.** The contracts name none. `caliper-mcp` serves 2026-07-28 and, through `initialize`,
   2025-11-25 and 2025-06-18, since the agents in use speak one or the other.
 - **The 501 of a capture** becomes the command layer's own code for `capture.frame`, `capture.unavailable`, so a
