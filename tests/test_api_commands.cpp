@@ -367,7 +367,8 @@ TEST_CASE("api commands: a destructive command from mcp or agent is held while t
     CHECK(get(port, "/v0/commands").status == 200);
     const Response look = get(port, "/v0/approvals/" + id);
     REQUIRE(look.status == 200);
-    CHECK(look.value() == json{{"approval", id}, {"state", "pending"}, {"result", nullptr}});
+    CHECK(look.value() == json{{"approval", id}, {"state", "pending"}, {"result", nullptr}, {"name", "applet.save"},
+                               {"origin", "mcp"}, {"review", nullptr}});
     std::string why;
     CHECK_MESSAGE(viewer_handshake(port, &why), why);
     CHECK(command(port, "applet.list", json::object(), "mcp")["result"]["applets"].size() == 1);
@@ -403,6 +404,16 @@ TEST_CASE("api commands: with review on, an agent's spec edit is held with its d
                                   {{"id", "note"}, {"primitive", "text"}, {"options", {{"text", "Hi"}}}}, "mcp");
     const std::string id = app.pending_approval("panel.create", "mcp");
     REQUIRE_FALSE(id.empty());
+    // The approval's state carries the change for the person's card: the
+    // command, its origin and the diff of the spec's canonical text.
+    const json look = get(port, "/v0/approvals/" + id).value();
+    INFO(look.dump());
+    CHECK(look["state"] == "pending");
+    CHECK(look["name"] == "panel.create");
+    CHECK(look["origin"] == "mcp");
+    REQUIRE(look["review"].is_object());
+    CHECK(look["review"]["diff"].get<std::string>().find("+id = \"note\"") != std::string::npos);
+    CHECK(look["review"]["warnings"].is_array());
     // The open spec is unchanged while the edit waits.
     CHECK(command(port, "spec.get", json::object(), "api")["result"]["json"].value("panel", json::array()).empty());
     CHECK(app.session->queue().approve(id).get().ok);
@@ -437,7 +448,9 @@ TEST_CASE("api commands: an api call gets command.needs_approval at once and rea
     const std::string id = asked["error"]["approval"].get<std::string>();
     REQUIRE_FALSE(id.empty());
     CHECK(app.server->stats().commands_held == 0);
-    CHECK(get(port, "/v0/approvals/" + id).value() == json{{"approval", id}, {"state", "pending"}, {"result", nullptr}});
+    CHECK(get(port, "/v0/approvals/" + id).value() == json{{"approval", id}, {"state", "pending"}, {"result", nullptr},
+                                                           {"name", "applet.save"}, {"origin", "api"},
+                                                           {"review", nullptr}});
 
     CHECK(app.session->queue().approve(id).get().ok);
     const json decided = get(port, "/v0/approvals/" + id).value();
