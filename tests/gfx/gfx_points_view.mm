@@ -978,7 +978,7 @@ TEST_CASE("gfx/Metal points view: each case against the old path's images") {
                 const size_t i = (size_t)y * w + x;
                 if (!differs[i]) continue;
                 char t[64];
-                std::snprintf(t, sizeof t, " (%d,%d)", x, y);
+                std::snprintf(t, sizeof t, " (%d,%d) old %08x new %08x", x, y, at(old, i), at(r.rgba, i));
                 if (outside[i]) {
                     ++beyond;
                     far += t;
@@ -989,7 +989,8 @@ TEST_CASE("gfx/Metal points view: each case against the old path's images") {
         MESSAGE(c.name, ": ", differ, " of ", (size_t)w * h, " pixels differ from the old path: ", differ - beyond,
                 " within ", kSpriteSlack, " px of an edge of a point drawn at or in front of them, where the old path's "
                 "sprite of a fractional size and the exact square may differ, and ", beyond, " otherwise",
-                (differ ? ";" : ""), near.empty() ? "" : " within:", near, far.empty() ? "" : " otherwise:", far);
+                std::string(differ ? ";" : ""), std::string(near.empty() ? "" : " within the bound:"), near,
+                std::string(far.empty() ? "" : "; otherwise:"), far);
         if (sprites)
             CHECK_MESSAGE(beyond == 0, c.name, ": ", beyond, " pixels differ from the old path farther than ",
                           kSpriteSlack, " px from a point's edge");
