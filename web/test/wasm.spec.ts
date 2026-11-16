@@ -279,8 +279,11 @@ test('the graphics layer draws an indexed quad and instanced draws, dispatches a
 
 // The fixed views' pictures. Each run saves them (fixed-<view>-<project>.png under the shots
 // folder); with CALIPER_VIEWS_REFERENCE naming a folder of the same files, saved from an earlier
-// build, every byte of each decoded picture must equal it. The migration steps of the renderer
-// core use it to show that a view's pixels did not move.
+// build, every byte of each view's data area (the heatmap's cells, the points' render target, as
+// the module reports the area) must equal it. The whole canvas is compared too and its count
+// printed: the dimension names "row" and "col" are drawn at unrounded positions, and their edges
+// move by a level or two between runs of the same build. The migration steps of the renderer core
+// use this to show that a view's pixels did not move.
 test('the fixed heatmaps and points draw the same pixels as the reference set', async ({ page }, info) => {
   test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
   const srv = await fixedPage(page);
@@ -297,10 +300,22 @@ test('the fixed heatmaps and points draw the same pixels as the reference set', 
       if (!ref) continue;
       const a = decodePng(fs.readFileSync(path.join(ref, path.basename(file)))), b = decodePng(shot);
       expect([b.width, b.height], `view ${v}`).toEqual([a.width, a.height]);
-      let diff = 0;
-      for (let i = 0; i < a.data.length; i++) diff += a.data[i] !== b.data[i] ? 1 : 0;
-      console.log(`${info.project.name} ${v}: ${a.width}x${a.height}, ${diff} of ${a.data.length} bytes differ from the reference`);
-      expect(diff, `view ${v}`).toBe(0);
+      const [ax, ay, aw, ah] = (await geometry(page, v)).geo.area;
+      let all = 0, inside = 0, compared = 0;
+      for (let y = 0; y < a.height; y++)
+        for (let x = 0; x < a.width; x++) {
+          const i = (y * a.width + x) * 4;
+          const d = (a.data[i] !== b.data[i] ? 1 : 0) + (a.data[i + 1] !== b.data[i + 1] ? 1 : 0) +
+            (a.data[i + 2] !== b.data[i + 2] ? 1 : 0) + (a.data[i + 3] !== b.data[i + 3] ? 1 : 0);
+          all += d;
+          if (x >= Math.ceil(ax) && x < Math.floor(ax + aw) && y >= Math.ceil(ay) && y < Math.floor(ay + ah)) {
+            inside += d;
+            compared += 4;
+          }
+        }
+      console.log(`${info.project.name} ${v}: ${inside} of ${compared} bytes of the data area and ${all} of ${a.data.length} of the canvas differ from the reference`);
+      expect(compared, `view ${v}`).toBeGreaterThan(100_000);
+      expect(inside, `view ${v}`).toBe(0);
     }
   } finally {
     srv.proc.kill();
