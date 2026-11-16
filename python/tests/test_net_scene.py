@@ -760,3 +760,30 @@ def test_a_viewer_without_scenes_gets_unknown_view_whatever_its_data_view(server
             r = await v.subscribe(1, "hidden", data_view={"entities": {"include": ["a/**"], "exclude": []}})
             assert r.error["code"] == w.ERR_UNKNOWN_VIEW
     run(body())
+
+
+def test_a_hello_without_capabilities_is_a_3_1_viewer(server):
+    """A HELLO that omits the optional key "capabilities" completes the handshake, and its
+    peer is a 3.1 viewer: no scene in VIEWS, unknown_view for a SUBSCRIBE to one."""
+    caliper.scene("hidden")
+    caliper.series(1.0, name="loss")
+
+    async def body():
+        async with connect(server.stream_url, max_size=None, compression=None, ping_interval=None,
+                           close_timeout=1) as ws:
+            await ws.send(w.encode_frame(w.MsgType.HELLO, {"role": w.ROLE_VIEWER}))
+            welcome = w.decode(await asyncio.wait_for(ws.recv(), 10))
+            assert isinstance(welcome, w.Welcome) and welcome.role == w.ROLE_PRODUCER
+            names: set = set()
+            while "loss" not in names:
+                m = w.decode(await asyncio.wait_for(ws.recv(), 10))
+                if isinstance(m, w.Views):
+                    names = {x["name"] for x in m.views}
+            assert "hidden" not in names
+            await ws.send(w.encode(w.Subscribe(1, "hidden", 101, None, None)))
+            while True:
+                m = w.decode(await asyncio.wait_for(ws.recv(), 10))
+                if isinstance(m, w.ViewReply) and m.request_id == 101:
+                    break
+            assert m.error["code"] == w.ERR_UNKNOWN_VIEW
+    run(body())
