@@ -326,11 +326,11 @@ A spec has one canonical TOML text and one canonical JSON form. Both are a deter
 
 The canonical TOML writer:
 
-- writes `caliper_spec`, then, when they are present, a root `layout` that is a panel id and the root `x`, then the tables `[applet]`, each `[[source]]` with its `[[source.transform]]` tables indented by two spaces, each `[[panel]]` and `[layout]`, separated by blank lines;
-- writes the keys of each table in the order of this page's tables: `id`, then the other keys in the order of their table, then `x`;
-- writes `bind`, `options`, `x` and nested layout nodes as inline tables, with the keys of `bind`, `options` and `x` in byte order and the keys of a layout node in the order `split` or `tabs`, `ratio`, `title`, `children`, `x`;
+- writes `caliper_spec`, then, when they are present, a root `layout` that is a panel id and the root `x`, then the tables `[applet]`, each `[[source]]` followed directly by its `[[source.transform]]` tables indented by two spaces, each `[[panel]]` and `[layout]`, with a blank line before each table except the transforms;
+- writes the keys of each table in a fixed order: `id`, `title`, `description`, `x` in `[applet]`; `id`, `catalog`, `sql`, `from`, `x` in a source; `op`, `axis`, `index`, `start`, `stop`, `step`, `fn`, `keepdims`, `mode`, `x` in a transform; `id`, `primitive`, `title`, `bind`, `options`, `x` in a panel; and `split` or `tabs`, `ratio`, `title`, `children`, `x` in a layout node;
+- writes `bind`, `options`, `x` and nested layout nodes as inline tables on one line, with the keys of `bind`, `options` and `x` in byte order;
 - writes a key only when the `Spec` value holds it, so an explicit default such as `keepdims = false` stays as written;
-- writes strings as basic strings with escapes, or as multi-line basic strings when they hold a line feed, integers in decimal and floating-point numbers in their shortest form that reads back to the same value;
+- writes strings as basic strings with escapes, or as multi-line basic strings when they hold a line feed; integers in decimal; and floating-point numbers in a form that reads back to the same value, with `.0` when the value is whole, so a range written `[0, 255]` is written back as `[0.0, 255.0]`;
 - writes `series.y` as a single string or as a list, as it was given.
 
 The writer does not keep comments, blank lines or the author's key order. That is a recorded limit of version 0: `description` is the place for prose.

@@ -1,0 +1,43 @@
+caliper_spec = 0                       # the format version
+
+[applet]
+id = "attention-entropy"
+title = "Attention entropy"
+description = "Entropy of each attention head while the model trains."
+
+[[source]]
+id = "attn"
+catalog = "live:attn.weights"          # a catalog source, shape [layers, heads, tokens, tokens]
+
+[[source]]
+id = "entropy"
+from = "attn"                          # derived from another source of this spec
+  [[source.transform]]
+  op = "reduce"
+  axis = 3
+  fn = "entropy"
+  [[source.transform]]
+  op = "reduce"
+  axis = 2
+  fn = "mean"                          # now [layers, heads]
+
+[[source]]
+id = "loss"
+sql = "SELECT step, loss FROM run42_metrics ORDER BY step"   # DuckDB SQL over catalog tables
+
+[[panel]]
+id = "heat"
+primitive = "heatmap"
+title = "Entropy per layer and head"
+bind = { values = "entropy" }
+options = { colormap = "viridis", x_label = "Head", y_label = "Layer" }
+
+[[panel]]
+id = "loss"
+primitive = "series"
+bind = { x = "loss.step", y = ["loss.loss"] }
+
+[layout]
+split = "horizontal"
+ratio = 0.6
+children = ["heat", "loss"]            # a panel id, or a nested table with split and children, or { tabs = [...] }
