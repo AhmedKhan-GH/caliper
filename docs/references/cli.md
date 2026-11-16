@@ -4,8 +4,9 @@ The `caliper` executable starts the app and also takes subcommands, which make u
 
 ```text
 usage: caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] [--hidden]
+               [--workspace <dir>]
        caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]
-                   [--hidden]
+                   [--hidden] [--workspace <dir>]
        caliper list [--applets <dir>]...
        caliper check <folder>
        caliper install <folder>
@@ -14,6 +15,7 @@ usage: caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--al
        caliper info
        caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
                     [--frames <N>] --out <file.png> [--api [--api-port <n>] [--allow-control]]
+                    [--workspace <dir>]
        caliper serve [--port <n>] [--token-file <file>] [--assets <dir>] [--allow-control]
        caliper --help
 ```
@@ -39,6 +41,22 @@ Results go to standard output, and errors go to standard error, each starting wi
 | `--allow-control` | The API's stream, which is a hub, forwards viewers' controls to the scripts, as `caliper serve --allow-control` does. It needs `--api`. Off by default. `CALIPER_API=1` alone never turns it on. |
 
 `--api-port` also takes the form `--api-port=<n>`. `--api` takes no value. When the port is taken, the app starts without the API and says why on standard error and in the Activity pane, and `shot` exits with 1. With `--api`, SIGINT and SIGTERM end the frames of `shot` early, and it then writes its image as usual.
+
+### The workspace
+
+The app, `caliper dev` and `caliper shot` hold one builder session for a workspace: a folder of loaders, specs, saved spec applets, the command journal and the workspace's database, which the builder's commands act on. `--workspace <dir>`, or `--workspace=<dir>`, names the folder, and `CALIPER_WORKSPACE`, when it is set and not empty, names it when the option is not given. Without either, the workspace is `workspace/` in the app-data folder, which `CALIPER_DATA_DIR` moves with the rest ([Folders and environment variables](environment.md#the-app-data-folder)). A relative path is taken from the working directory. The option is accepted when starting the app and with `dev` and `shot`, may be given once and needs a value; with any other subcommand it is a usage error. The code is in `src/host/builder/app_session.h`.
+
+The session costs nothing at start-up. A workspace named by `--workspace` or `CALIPER_WORKSPACE` is opened on a worker thread once the app has drawn its first frame, and the folder and its layout are created when they are missing. The default workspace is opened only when something first needs it, so the app started without either creates nothing there. Once the workspace is open, standard error says so with the time it took, and the Activity pane shows a `workspace` line:
+
+```text
+[session] workspace /home/me/work/ws (--workspace) opened in 6 ms
+```
+
+A workspace that cannot be opened, such as a path that names a file, leaves the app running without the builder: standard error and the Activity pane say why, in a `workspace not opened` line. Each command that changes the workspace adds a line to the Activity pane, with the command's origin in the event column (`ui command`, `agent command`, `mcp command` or `api command`), its name as the object and, when it failed or was denied, its error code as the detail, and a `[session] command <name> (<origin>)` line to standard error. When the app closes, the session answers the commands still waiting with `command.shutdown`, waits for a running loader to finish, and closes the journal and the workspace's database before the process exits.
+
+In a build without the builder (`CALIPER_WITH_BUILDER` off, the default on Windows), the option is still accepted, and a workspace that it or `CALIPER_WORKSPACE` names is reported as not opened, because the builder is not in the build.
+
+A testing and demo aid drives the session without Caliper API: `CALIPER_COMMAND_SCRIPT` names a file of JSON lines, one command each, such as `{"name": "spec.new", "args": {"id": "board", "title": "Board"}}`. The origin is `ui` unless a line gives another, and empty lines and lines that start with `#` are skipped. Once the workspace is open, the commands run one after another through the command queue, as a client's do, and when `CALIPER_COMMAND_RESULTS` names a file, each result is written there as one JSON line, `{"line", "name", "id", "ok", "result"}` or with `error` in place of `result`, followed by `{"done": true, "commands", "failed"}`. Standard error ends with `[session] script done: <n> commands, <m> failed`. A command that asks for approval waits for it, so a script uses the `ui` origin for anything destructive. With a script, the workspace opens after the first frame even when it is the default, and `shot` keeps drawing frames until the script is done. The variables are read only when the app, `dev` or `shot` start.
 
 ### The hidden window
 
@@ -230,7 +248,7 @@ Nothing appears on screen. `shot` draws into the renderer's offscreen canvas, th
 - When `CALIPER_DATA_DIR` is set and not empty, the stores and the applet's data folder `data/<id>/` are in that folder, as they are for the app, so an image can show data that the applet saved there.
 - When it is not set, `shot` creates a temporary folder under the system's temporary folder (`TMPDIR` on macOS and Linux, `TMP` or `TEMP` on Windows), uses it as the app-data folder, and removes it before it exits. The applet starts with an empty data folder, and nothing is written in the app-data folder.
 
-In both cases `shot` searches the user applets folder, as the app does, and only reads it. The display face, which only the landing screen's wordmark uses, is loaded only when `CALIPER_DISPLAY_FONT` names it.
+In both cases `shot` searches the user applets folder, as the app does, and only reads it. `--workspace` and `CALIPER_WORKSPACE` name the builder's workspace as they do for the app ([The workspace](#the-workspace)); without them the workspace is `workspace/` in the folder above, the temporary one when `CALIPER_DATA_DIR` is not set, and it opens only when a command script needs it. The session's `capture.frame` reads the canvas back at the end of the frame drawn next. The display face, which only the landing screen's wordmark uses, is loaded only when `CALIPER_DISPLAY_FONT` names it.
 
 The applet runs as it runs in the app: its `on_init`, its frames and any jobs it starts. Its own variables, such as `CALIPER_EMBED_AUTOTRAIN`, apply as usual, so leave them unset for an image of the applet's first state.
 
@@ -291,7 +309,7 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 |---|---|
 | 0 | Success. |
 | 1 | A check failed, nothing was found, or a file operation failed. `build` also exits with 1 when CMake, a compiler or the SDK is missing or the build fails, `dev` when its folder is not a folder, `shot` when its applet cannot be launched or is quarantined, when the renderer cannot draw offscreen, or when Caliper API cannot listen, and `serve` when it cannot listen or cannot use its token file or assets folder. On Windows, `serve`, `build`, `--api` and `--url` exit with 1 before anything starts ([On Windows](#on-windows)). |
-| 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets`, `--url`, `--api`, `--api-port` or `--hidden` with a subcommand that does not take it, `--url` without a link or given twice, `--api-port` or `--allow-control` without `--api` when starting the app, `dev` or `shot`, an option of `shot` or `serve` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a port out of range, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
+| 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets`, `--url`, `--api`, `--api-port`, `--hidden` or `--workspace` with a subcommand that does not take it, `--url` without a link or given twice, `--workspace` without a folder or given twice, `--api-port` or `--allow-control` without `--api` when starting the app, `dev` or `shot`, an option of `shot` or `serve` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a port out of range, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
 
 ## On Windows
 
@@ -308,6 +326,8 @@ The Windows build refuses `caliper serve`, `caliper build`, `--api` (when starti
 | `CALIPER_HUB_FILE` | Replaces the path of the hub file that `serve` writes, `hub.json` in the app-data folder, when it is set and not empty. |
 | `CALIPER_API` | `1` serves [Caliper API](api.md) as `--api` does, when starting the app and with `dev` and `shot`. Ignored on Windows ([On Windows](#on-windows)). |
 | `CALIPER_HIDDEN` | `1` runs the app with its window never shown, as `--hidden` does: a testing aid (see [The hidden window](#the-hidden-window)). |
+| `CALIPER_WORKSPACE` | The builder's workspace folder, when it is set and not empty and `--workspace` is not given, for the app, `dev` and `shot` (see [The workspace](#the-workspace)). |
+| `CALIPER_COMMAND_SCRIPT`, `CALIPER_COMMAND_RESULTS` | A file of commands that the app, `dev` or `shot` runs through the builder session once its workspace is open, and the file that receives their results: a testing and demo aid (see [The workspace](#the-workspace)). |
 | `CALIPER_SDK_DIR` | The prefix of the installed SDK that `build` uses, when it is set and not empty. |
 | `CALIPER_CMAKE` | The cmake that `build` runs, when it is set and not empty. |
 

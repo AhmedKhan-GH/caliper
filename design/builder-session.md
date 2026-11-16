@@ -1,6 +1,6 @@
 # Builder session
 
-The builder session is the headless object that binds the four builder libraries for one workspace: the [spec format](spec-format.md), the [catalog](catalog.md), the [command layer](command-layer.md) and the [loaders](loaders.md). It owns everything a person or an agent changes while building a visual, and it answers every command that needs no window. The app will own one session per open workspace once the libraries are wired in; until then, a small stand-in tool serves the session's commands over HTTP so that `caliper-mcp` and `caliper-agent` can be tested end to end. This page describes the session, what it binds, what it leaves to the app, how it resolves the data of a panel, and the stand-in.
+The builder session is the headless object that binds the four builder libraries for one workspace: the [spec format](spec-format.md), the [catalog](catalog.md), the [command layer](command-layer.md) and the [loaders](loaders.md). It owns everything a person or an agent changes while building a visual, and it answers every command that needs no window. The app owns one session for its workspace and drains its commands between two frames; until the app's API server serves the command endpoints, a small stand-in tool serves the session's commands over HTTP so that `caliper-mcp` and `caliper-agent` can be tested end to end. This page describes the session, what it binds, what it leaves to the app, the session in the app, how it resolves the data of a panel, and the stand-in.
 
 ## What is built and what is planned
 
@@ -10,13 +10,14 @@ Built on this branch, in `src/builder/session/` with headers in `src/builder/inc
 - the library `caliper_builder_session_host`: a strict HTTP/1.1 server for the two command endpoints of Caliper API, with the API file and token helpers;
 - the tool `caliper-builder-host`, the development stand-in for the app's command endpoints;
 - the command table brought in line with the spec format, with a test that keeps it so;
-- the tests in `src/builder/session/tests/`, including the two acceptance tests of this phase.
+- the tests in `src/builder/session/tests/`, including the two acceptance tests of this phase;
+- the session in the app, in `src/host/builder/` ([below](#the-session-in-the-app)): the app, `caliper dev` and `caliper shot` own one session for the workspace of `--workspace`, `CALIPER_WORKSPACE` or `workspace/` under the app-data folder, drain its queue on the frame thread within a time budget, run the long commands on the host's job system, implement `SessionHost`, show each journaled command in the Activity pane, and close the session before the host's stores; with the command script, a testing and demo aid, and the tests `caliper_app_session` and `caliper_app_session_hidden`.
 
-Planned, at the wiring after sprint 2 merges:
+Planned:
 
-- the app owns a `Session`, calls `drain()` on its frame thread, implements `SessionHost`, and adds the live, feed and metric catalog providers;
-- the app's own API server serves `GET /v0/commands` and `POST /v0/commands/{name}` and replaces `caliper-builder-host`;
-- the spec runtime draws a panel from the data `Session::resolve()` gives.
+- the app's own API server serves `GET /v0/commands` and `POST /v0/commands/{name}` through the app's session and replaces `caliper-builder-host` (the API's side is built beside this; the two are connected when both land);
+- the live, feed and metric catalog providers;
+- the spec runtime draws a panel from the data `Session::resolve()` gives, and implements the seam of `panel.render`.
 
 ## The session
 
@@ -136,6 +137,57 @@ The `source.*`, `panel.*` and `layout.*` schemas of the command table now accept
 
 The test `test_table_conformance.cpp` keeps them in line: every source, panel and layout of every valid spec fixture, turned into the arguments of `source.add`, `panel.create`, `panel.patch`, `source.patch` and `layout.set`, passes the table's schemas and decodes back to the same item; the result forms pass the result schemas; and values that the spec refuses and the subset can express (a fifth colormap, 65,537 bins, a range of three numbers, an axis of 8, 17 transforms) are refused by the table too. What the subset cannot express, such as `index` together with a range in a slice or the slots a primitive takes, the spec validator refuses after the arguments pass.
 
+## The session in the app
+
+The app holds an `AppSession` (`src/host/builder/app_session.h`), and so do `caliper dev` and `caliper shot`. It owns the `Session` of one workspace, drains its queue on the frame thread and implements `SessionHost`. It is built with `CALIPER_WITH_BUILDER`; without it a stub of the same interface opens nothing and says, for a workspace named on the command line, that the builder is not in the build. `main.cpp` and `shot.cpp` gain a few lines: they start the session, call `frame()` where they take Caliper API's calls, hand it the read-back of a capture, and close it.
+
+### The workspace
+
+The workspace is the folder of `--workspace <dir>`, else of `CALIPER_WORKSPACE` when it is set and not empty, else `workspace/` under the app-data folder, which `CALIPER_DATA_DIR` moves with the rest (`workspace_choice()` in `src/host/host_cli.h`, `caliper::default_workspace_dir()` in `src/app_paths.h`). For `caliper shot` without `CALIPER_DATA_DIR` the default is under its temporary data folder, so a shot still writes nothing in the app-data folder. The reference pages Caliper CLI (`docs/references/cli.md`, "The workspace") and Folders and environment variables (`docs/references/environment.md`) describe them.
+
+### Opening
+
+`start()` opens nothing. A workspace that the command line chose is opened on a worker once the first frame has been drawn; the default workspace is opened only when something first needs it, through `ensure_open()` or `wait_open()` (which the API's command endpoints will call) or a command script. So the app without `--workspace` starts as before and creates no folder. The frame thread adopts the opened session at its next `frame()`: it names itself to the registry as the frame thread and binds the host. A workspace that cannot be opened, such as a path that names a file, leaves the app without the builder; standard error and the Activity pane say why, `wait_open()` returns null and `open_error()` gives the reason.
+
+### The frame loop
+
+`frame()` runs once per frame where the app takes Caliper API's calls, between two frames. It first withdraws the approvals whose wait ran out (`drain(0)`), then drains one item at a time while the frame's budget lasts, 4 ms by default, and at least one item a frame, so a long queue is spread over frames instead of holding one. Before each item it looks at it with `CommandQueue::peek()`:
+
+- `data.import`, `data.query`, `loader.run`, `loader.create` or `loader.update` with `run`, and the approval of one of them, run on a worker, a job of the host's job system labelled with the command and its loader, which the jobs tray shows. The worker calls `drain(1)`, so the command runs through the registry as every command does and its result reaches its caller through the queue's future.
+- `capture.frame` asks the app for a read-back of the frame drawn next and drains nothing further until the app hands the pixels over or says it could not; then the command runs and answers at once.
+- Every other command runs on the frame thread, where the spec, source, panel, layout, applet and history commands must run.
+
+### Long commands and the registry's lock
+
+The registry runs every command under one lock, and the store under another. A loader that runs on a worker holds both, so a frame that called the registry, the store or the catalog would wait for it. The app keeps the one lock and keeps the frame thread off it instead: while the worker runs, `frame()` does not touch the queue, the registry or the store, and later commands wait in the queue, in their order, until the worker is done. `worker_busy()` says so to other code of the frame thread, such as the spec runtime, which must not read the store then either. Splitting the registry's lock would let short commands pass a running loader, but it would also let them run against a workspace that the loader is changing, and it would change a library that the other builders use; the queue's order is what agents and the journal rely on.
+
+### SessionHost
+
+- `app.info` and `app.applets` answer what `GET /v0/info` and `GET /v0/applets` answer, from the same functions (`info_json()` and `applets_json()` in `host_cli.h`).
+- `app.launch` goes through the app's navigation, which `POST /v0/applets/{id}/launch` now shares (`launch_by_id()` in `main.cpp`): the page shown goes first and the applet's page opens. A 404 is `app.applet_not_found`, an applet that is not ready `app.launch_refused`, and one that fails to launch `app.launch_failed`, each with the API's message.
+- `capture.frame` reads back the frame the window presents next, on Metal, through the app's `WindowCaptures` under a ticket of its own beside the API's; in `caliper shot` the offscreen canvas at the end of the next frame. Where the app cannot read its window back, it answers `capture.unavailable` with the reason Caliper API gives with its 501. A read-back that does not arrive within 5 seconds also answers `capture.unavailable`. The result is `png_base64`, `width` and `height` at the framebuffer's size.
+- `panel.render` needs the spec runtime. Until the runtime gives `AppSession::set_panel_renderer()` an implementation of `PanelRenderer` (`src/host/builder/panel_renderer.h`), which has the signature of `SessionHost::render_panel()`, it answers `command.not_available`. The session finds the panel and resolves its data before it asks.
+
+### Activity
+
+The session's journal has an observer (`JournalOptions::on_append`). Every command it records, that is every mutating command that ran, failed or was denied, but no dry run and no read, becomes one Activity line at the next frame: the event `<origin> command` (`ui`, `builder`, `agent`, `mcp` or `api`), the command's name as the object, and its error code as the detail when it failed. The origin leads because the object column is as wide as its widest path. Each line is also written to standard error as `[session] command <name> (<origin>)`. The workspace's opening is a `workspace` line, or `workspace not opened` with the reason.
+
+### Shutdown
+
+`close()` runs in the app's teardown after the API stops and before the host's job system and stores. It shuts the queue down, so waiting calls and approvals get `command.shutdown`; waits for a command running on the worker, which holds the registry, and for the command script; then unbinds the host and closes the journal and the workspace's database, all before `main()` returns, since DuckDB aborts when it is left to static destructors.
+
+### The command script
+
+`CALIPER_COMMAND_SCRIPT` names a file of JSON lines, each an invocation (`origin` defaults to `ui`; empty lines and lines starting with `#` are skipped). Once the workspace is open, a thread of its own submits them one at a time through the queue, as an outside client does, and writes each result to `CALIPER_COMMAND_RESULTS` as a JSON line, then `{"done": true, "commands", "failed"}`. It is the test-only path of the hidden app's process test until the API's command endpoints are connected, and it serves demos and screenshots later: `caliper shot` keeps drawing frames until the script is done.
+
+### The start-up cost
+
+Nothing of the session runs before the first frame: `start()` only stores its options, and the workspace opens on a worker afterwards. Measured on an Apple M5 Max with `caliper --hidden` and `CALIPER_EXIT_AFTER=1`, ten runs each, medians, while two other builds ran on the machine (load average 7.3 before, 7.3 to 11.3 during), so the figures are rough: the time to the end of initialisation was 92 ms without a workspace, 73 ms with a new one and 75 ms with an existing one, all before any session code runs; a whole run with its teardown took 1132, 1120 and 1127 ms; and opening the workspace took 6 ms for a new folder and 5 ms for an existing one, on the worker. The session adds no cost that these runs can tell apart from noise.
+
+### Tests
+
+`caliper_app_session` (`tests/test_app_session.cpp`) drives `AppSession` with a fake frame loop on a thread of its own and a job system of its own: commands from another thread run on the frame thread in order, at most two of 3 ms each within a budget of 4 ms; a loader that runs 600 ms on the job system lets frames go on, none longer than 100 ms, and the command after it waits; closing while a loader runs answers the waiting commands with `command.shutdown`, finishes the loader, and leaves a journal and a database that open again; the host's commands, the capture and its refusal, and `panel.render` with and without a renderer; the Activity lines; the lazy opening of the default and of a chosen workspace; a workspace that cannot be opened; and the command script. `caliper_app_session_hidden` starts `caliper --hidden --workspace` with its own `CALIPER_DATA_DIR` and a command script that imports a CSV file, runs its loader, builds a two-panel spec, saves the applet, captures the frame and asks for `panel.render`; it stops the app with SIGTERM and checks the results, the workspace's files, the journal, a replay of it and the saved applet.
+
 ## The stand-in host
 
 `caliper-builder-host` is a development tool, not part of the product. It stands in for the command endpoints of the app's Caliper API until the wiring, and the app's own API server replaces it then.
@@ -160,7 +212,7 @@ It serves `GET /v0/commands` and `POST /v0/commands/{name}` exactly as contracts
 
 ### How the wiring replaces it
 
-After sprint 2 merges, the app opens a `Session` for its workspace, names its frame thread to the registry, calls `queue().drain()` between frames, implements `SessionHost` on its own window, and gives the session the live, feed and metric catalog providers. Its API server, which already holds the loopback, `Host`, `Origin` and token checks of API v0, gains the two command routes; each submits to the session's queue as `CommandServer::handle()` does here, with the same origins, approval waits and envelope, and the approvals come from the app's own approval UI rather than from standard input. `caliper-builder-host` and `caliper_builder_session_host` are then removed, and the tests of `caliper-mcp` and `caliper-agent` move to `caliper --hidden --api`.
+The app now opens a `Session` for its workspace, names its frame thread to the registry, drains the queue between frames and implements `SessionHost` on its own window ([above](#the-session-in-the-app)); the live, feed and metric catalog providers come next. Its API server, which already holds the loopback, `Host`, `Origin` and token checks of API v0, gains the two command routes; each submits to the session's queue as `CommandServer::handle()` does here, with the same origins, approval waits and envelope, and the approvals come from the app's own approval UI rather than from standard input. `caliper-builder-host` and `caliper_builder_session_host` are then removed, and the tests of `caliper-mcp` and `caliper-agent` move to `caliper --hidden --api`.
 
 ## The acceptance tests
 
@@ -185,6 +237,11 @@ Both run headless in `test_acceptance.cpp`.
 - **A preview needs an open spec.** For a dropped file with no open spec, the app runs `spec.new` from the `ui` origin before `preview.begin`.
 - **The stand-in reviews no origin unless asked.** The app's default is `agent` and `mcp`, which the stand-in takes with `--review agent,mcp`; its own default keeps the flows of the tests that came before the review.
 - **`loader.describe` reports `last_run.elapsed_ms` as null when it is not known.** The store does not record a run's duration, so the session knows it only for the runs it made since it opened.
+- **The default workspace is `workspace/` under the app-data folder and opens on first use.** `CALIPER_DATA_DIR` then moves it with everything else, and the app without `--workspace` starts as before and creates nothing until the builder is used. A workspace that the command line chose opens after the first frame, on a worker, so a wrong path is reported at once without delaying the window.
+- **Long commands run on a worker, and the frame thread waits for them by not draining.** The registry keeps its one lock and the queue its order. The app looks at the next item with `CommandQueue::peek()`, a small addition to the queue, and runs `data.import`, `data.query` and the commands that run a loader with `drain(1)` on the host's job system. Every `data.import` goes there, whatever the size of its files, because a size check would read the files on the frame thread.
+- **`capture.frame` holds the queue until the next frame is read back.** A command answers on the thread that runs it, and the read-back of a presented frame completes a frame or two later; holding the queue keeps the order of the commands and never waits on the frame thread.
+- **The Activity pane takes the journal's events.** An observer on the journal (`JournalOptions::on_append`) sees exactly the commands that changed the workspace or were denied, and none of the dry runs and reads, from whatever thread ran them.
+- **The test path of the app's session is a command script.** Until the API's command endpoints are connected, `CALIPER_COMMAND_SCRIPT` drives the real queue from a thread of its own, as a client does, and its results file is what a process test reads; it also serves demos and screenshots.
 
 ## Changes to the contracts and to the earlier pages
 
@@ -201,3 +258,7 @@ Both run headless in `test_acceptance.cpp`.
 - Undo does not reach files outside the session: a saved applet stays saved, and a loader run's tables stay as the run made them.
 - Replay rebuilds the open spec, not the loaders; `spec.open` and `applet.open` read their files as they are when the journal is replayed.
 - The stand-in serves no stream, no `/v0/info`, `/v0/applets` or capture, and runs on macOS and Linux only; on Windows it says so and exits.
+- In the app, every command waits while a loader runs on the worker, reads included, because they all pass through the one queue in order.
+- `history.redo` of an import runs its loaders again on the frame thread, since the history commands must run there.
+- Going Home from an applet joins every job of the host's job system, so it waits for a running loader, up to the job system's 5-second limit.
+- The app has no approval UI yet: a command from `agent` or `mcp` that needs approval waits until its caller's time limit, and the command script should use the `ui` origin for destructive commands.

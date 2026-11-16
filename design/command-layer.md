@@ -12,7 +12,8 @@ Built on this branch, in the library `caliper_builder_commands` (`src/builder/co
 - the journal, its reader and its replay;
 - the approval policy and the pending-approval flow, with a review that a pending approval carries (the diff of a spec edit);
 - follow-up invocations, which a handler returns and the registry runs as one undo step (the commit of a stacked preview);
-- the queue, with `submit()` from any thread and `drain()` on the caller's thread;
+- the queue, with `submit()` from any thread, `drain()` on the caller's thread and `peek()`, which tells the draining side what runs next;
+- an observer on the journal (`JournalOptions::on_append`), through which the app shows each journaled command in its Activity pane;
 - the descriptor table of every command of v0, as data, and its checked-in JSON form `src/builder/commands/command_table.json`.
 
 Built in the host, in `src/host/api/`: the command endpoints of Caliper API described [below](#caliper-api), served by the app's own API server through a small interface, `CommandGateway` (`command_gateway.h`), and the gateway over the builder session, `caliper_api_session` (`session_gateway.h`, built with `CALIPER_WITH_BUILDER`). They are tested with a real session behind the server and with `caliper-mcp` against it. The app serves them once it sets the gateway on its server, which is one call when the session is in the app; until then they answer 404. The reference page is `docs/references/api.md`.
@@ -21,8 +22,8 @@ The [builder session](builder-session.md) builds two things on these: the review
 
 Planned:
 
-- The handlers of the catalog, data, loader, spec, source, panel, layout and applet commands are bound by the [builder session](builder-session.md), which is built and tested but not yet wired into the app. Until a handler is bound, its command answers `command.not_bound`.
-- The handlers that need the running app (`app.info`, `app.applets`, `app.launch`, `capture.frame`, `panel.render` and the live catalog provider) are bound when the libraries are wired into the app, after sprint 2 merges.
+- The handlers of the catalog, data, loader, spec, source, panel, layout and applet commands are bound by the [builder session](builder-session.md), which the app now holds for its workspace. Until a handler is bound, its command answers `command.not_bound`.
+- The app binds `app.info`, `app.applets`, `app.launch` and `capture.frame`, and binds `panel.render` to `command.not_available` until the spec runtime draws panels ([Builder session](builder-session.md#the-session-in-the-app)). The live catalog providers come later.
 - The app sets the command gateway on its API server when it owns a session: `api.set_command_gateway(caliper_api::make_session_gateway(session))`, and `nullptr` before the session closes.
 
 ## The command model
@@ -108,6 +109,7 @@ The registry checks an invocation in this order and answers the first fault: the
 | `command.unknown` | No command has that name. |
 | `command.invalid_args` | The arguments fail the schema, or are nested too deeply or hold too many values. `where` names the value. |
 | `command.not_bound` | The command is in the table but no handler is bound yet. |
+| `command.not_available` | The handler is bound but what it needs is not in this app yet, such as `panel.render` before the spec runtime, or the app's information outside the app. |
 | `command.wrong_thread` | A `frame_thread` command was invoked directly on a thread other than the frame thread. |
 | `command.reentrant` | A handler invoked a command. Handlers call library functions, never commands. |
 | `command.needs_approval` | The approval policy asked; the error carries the approval id. |
@@ -404,7 +406,7 @@ There is no command and no endpoint that approves or denies, and only the `ui` a
 - `drain()` runs the waiting invocations in submission order on the calling thread, optionally at most a given number per call. The app calls it on the frame thread between two frames.
 - When the policy asks, the future does not complete with `command.needs_approval` by default: it waits for the decision. The queue's `approve(id)` and `deny(id)` may be called from any thread; the decision runs at the next `drain()` and completes both the waiting future and the future that `approve` or `deny` returned. A submit may set `approval_timeout`; when the person has not decided by then, the next `drain()` withdraws the approval and completes the future with `command.approval_timeout`. A caller that must answer at once submits with `wait_for_approval = false`, gets `command.needs_approval` straight away, and later reads the outcome with `approval_outcome(id)`, which the queue keeps for the last 64 decisions.
 - `shutdown()` completes every waiting future, and every future waiting for an approval, with `command.shutdown`. A later `submit()` returns a future that is already complete with that error. The destructor shuts down.
-- The registry runs one invocation at a time, under one lock that also covers the history, the journal and the approvals. When the app names its frame thread to the registry, a `frame_thread` command invoked directly on another thread is refused with `command.wrong_thread`. In this phase every command runs in `drain()`; a later phase may drain the commands that do not need the frame thread on a worker, so that a long `loader.run` does not hold a frame.
+- The registry runs one invocation at a time, under one lock that also covers the history, the journal and the approvals. When the app names its frame thread to the registry, a `frame_thread` command invoked directly on another thread is refused with `command.wrong_thread`. The app keeps that one lock and still never holds a frame on a loader: before it drains, it looks at the next item with `peek()`, and runs `data.import`, `data.query`, `loader.run`, a `loader.create` or `loader.update` with `run`, or the approval of one of them, with `drain(1)` on a worker, while its frame thread leaves the queue, the registry and the store alone until the worker is done ([Builder session](builder-session.md#long-commands-and-the-registrys-lock)).
 
 ## Caliper API
 
@@ -451,7 +453,7 @@ These are additions to, or fixes of, sprint 3 contracts section 7, each the smal
 - **Replay applies the steps in effect instead of running undo records.** It needs nothing but the journal and the apply function, and it is exact because the history is a stack.
 - **A command meant to merge checks only what a whole run leaves unchanged.** The history keeps the first undo of a merged run, so a check against the value the first command set would report a conflict after any drag.
 - **Journaled invocations are those that passed validation.** A refused invocation ran nothing, and its arguments may be malformed or hostile.
-- **One lock for the registry in this phase.** It makes ordering and the history simple; running long read-only commands off the frame thread is left for the wiring.
+- **One lock for the registry.** It makes ordering and the history simple. The app runs the long commands on a worker and does not drain while one runs, so a frame never waits on the lock and the order of the queue holds.
 - **No approval through commands or endpoints.** Only the app's UI decides, so an agent cannot approve itself.
 - **Review in the command layer, not in each agent.** An agent that asks before an edit is polite; one that does not, such as an outside agent over MCP, is still reviewed, because the session computes the diff itself and the policy parks the edit.
 - **An approved edit runs only as it was shown.** Recomputing it and comparing the lines it removes and adds lets an unrelated change pass and refuses one that would make the approved change mean something else.
@@ -467,5 +469,5 @@ These are additions to, or fixes of, sprint 3 contracts section 7, each the smal
 
 ## Open questions
 
-- Whether a later phase runs the commands that do not need the frame thread on a worker, and how the registry's lock is split then.
+- Whether a later phase splits the registry's lock, so that short commands can run on the frame thread while a loader runs on the worker; the app holds them in the queue until then.
 - Whether the history should be saved with the workspace, so that undo survives a restart; in this phase it lives in memory and the journal is the lasting record.
