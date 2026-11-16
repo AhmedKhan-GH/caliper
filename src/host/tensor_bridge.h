@@ -38,7 +38,8 @@ const uint32_t* colormap_lut(int32_t colormap);
 // Colormap a row-major (h,w) f32 buffer through lut256 into a tightly-packed
 // RGBA8 dst (w*h*4 bytes). Index rule, byte-identical to the Metal shader:
 //   idx = clamp((v - vmin)/(vmax - vmin), 0, 1) * 255 + 0.5   (truncated)
-// with vmax==vmin -> t=0, and NaN -> index 0 (never a misinterpreted texel).
+// with vmax==vmin -> t=0, and NaN -> index 0 (never a misinterpreted texel);
+// a NaN t, from an infinite end or span, is index 0 as well.
 void map_f32_to_rgba8(const float* src, int w, int h,
                       const uint32_t* lut256, float vmin, float vmax,
                       uint8_t* dst);

@@ -180,7 +180,9 @@ void map_f32_to_rgba8(const float* src, int w, int h, const uint32_t* lut,
             idx = 0;   // NaN -> index 0, never a misinterpreted texel
         } else {
             float t = (denom != 0.0f) ? (v - vmin) / denom : 0.0f;
-            if (t < 0.0f) t = 0.0f;
+            // A NaN t (an infinite end or span: inf / inf, or inf - inf) is index 0 too;
+            // converting it to int below would be undefined.
+            if (!(t >= 0.0f)) t = 0.0f;
             else if (t > 1.0f) t = 1.0f;
             idx = (int)(t * 255.0f + 0.5f);
             if (idx < 0) idx = 0;
