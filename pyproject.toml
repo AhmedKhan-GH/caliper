@@ -50,8 +50,6 @@ CALIPER_WITH_LLAMA = "OFF"
 # scikit-build-core also takes the wheel's platform tag from this define, so
 # the tag is macosx_14_0_arm64 on any build machine (it is ignored elsewhere).
 CMAKE_OSX_DEPLOYMENT_TARGET = "14.0"
-# The builder (src/builder) is not part of Caliper LIB; OFF keeps its targets
-# and its nlohmann/json download out of the wheel's configure.
 # The builder (src/builder) is not part of Caliper LIB; OFF keeps its targets,
 # its nlohmann/json download and DuckDB's json extension out of the wheel.
 CALIPER_WITH_BUILDER = "OFF"
