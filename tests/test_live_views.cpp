@@ -22,6 +22,9 @@
 #include "live/live_views_state.h"   // kPalette (white-box: the exact categorical colours)
 #include "tensor_bridge.h"           // map_f32_to_rgba8 / colormap_lut (CPU reference)
 
+#include <imgui.h>
+#include <imgui_internal.h>          // ImGui::FindWindowByName: where a view's window is
+
 #import <Metal/Metal.h>
 
 #include <time.h>
@@ -709,6 +712,123 @@ TEST_CASE("live_views/windows: every kind draws windowed with hover and drag inp
     // Live points: the current payload is drawn every redraw, still read_done
     // (nothing superseded).
     CHECK(caliper_core_live_view_read_done(c.core, "pts") == 1);
+}
+
+// ---------------------------------------------------------------------------
+TEST_CASE("live_views/interaction: a drag in the plot pans the view and leaves its window; "
+          "the title bar moves the window; the wheel zooms; a double click fits and follows") {
+    Core c(960, 720);
+    if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
+    std::vector<float> hm = ramp(32, 24);
+    CaliperTensor th = tensor(hm.data(), CALIPER_DT_F32, {24, 32}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot sh = snap("heat", CALIPER_LIVE_KIND_HEATMAP, &th);
+    REQUIRE(caliper_core_live_apply(c.core, &sh) == 1);
+    std::vector<float> ring(4096);
+    for (size_t i = 0; i < ring.size(); ++i) ring[i] = std::sin((float)i * 0.05f);
+    CaliperTensor tr = tensor(ring.data(), CALIPER_DT_F32, {(int64_t)ring.size()}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot sr = snap("loss", CALIPER_LIVE_KIND_SERIES, &tr);
+    sr.series_total = 500;
+    REQUIRE(caliper_core_live_apply(c.core, &sr) == 1);
+    c.frames(4);
+
+    auto move = [&](float x, float y) {
+        CaliperInputEvent e{};
+        e.struct_size = sizeof e;
+        e.type = CALIPER_EVENT_MOUSE_MOVE;
+        e.x = x;
+        e.y = y;
+        caliper_core_event(c.core, &e);
+        c.frames(1);
+    };
+    auto button = [&](bool down) {
+        CaliperInputEvent e{};
+        e.struct_size = sizeof e;
+        e.type = CALIPER_EVENT_MOUSE_BUTTON;
+        e.button = 0;
+        e.down = down ? 1 : 0;
+        caliper_core_event(c.core, &e);
+        c.frames(1);
+    };
+    auto wheel = [&](float dy) {
+        CaliperInputEvent e{};
+        e.struct_size = sizeof e;
+        e.type = CALIPER_EVENT_MOUSE_SCROLL;
+        e.dy = dy;
+        caliper_core_event(c.core, &e);
+        c.frames(1);
+    };
+    auto drag = [&](float x, float y, float dx, float dy) {
+        move(x, y);
+        button(true);
+        for (int k = 1; k <= 4; ++k) move(x + dx * k / 4, y + dy * k / 4);
+        button(false);
+    };
+    auto window = [](const char* label) { return ImGui::FindWindowByName(label); };
+    auto window_of = [](const caliper_live_views::View* v) {
+        return std::vector<double>(v->geo_window, v->geo_window + 4);
+    };
+
+    // The heatmap: a drag inside the image pans it; its window stays put.
+    caliper_live_views::View* hv = caliper_live_views::find(c.core, "heat");
+    REQUIRE(hv != nullptr);
+    REQUIRE(hv->geo_valid);
+    ImGuiWindow* hw = window("heat###caliper.view.heat");
+    REQUIRE(hw != nullptr);
+    const ImVec2 hpos = hw->Pos;
+    const std::vector<double> fit = window_of(hv);
+    const float cx = hv->geo_area[0] + hv->geo_area[2] * 0.5f, cy = hv->geo_area[1] + hv->geo_area[3] * 0.5f;
+    drag(cx, cy, 60.0f, 20.0f);
+    CHECK(hv->geo_window[0] < fit[0] - 0.5);      // the content followed the pointer right: the window of cells moved left
+    CHECK(hv->geo_window[2] < fit[2] - 0.1);
+    CHECK(hw->Pos.x == hpos.x);
+    CHECK(hw->Pos.y == hpos.y);
+    // The wheel zooms about the pointer, and a double click fits again.
+    move(cx, cy);
+    const double span = hv->geo_window[1] - hv->geo_window[0];
+    wheel(2.0f);
+    CHECK(hv->geo_window[1] - hv->geo_window[0] < span * 0.9);
+    button(true);
+    button(false);
+    button(true);
+    button(false);
+    CHECK(window_of(hv) == fit);
+    CHECK(hw->Pos.x == hpos.x);
+    // A drag on the title bar still moves the window.
+    const float tx = hw->Pos.x + 40.0f, ty = hw->Pos.y + hw->TitleBarHeight * 0.5f;
+    drag(tx, ty, 50.0f, 30.0f);
+    CHECK(hw->Pos.x == doctest::Approx(hpos.x + 50.0f).epsilon(0.01));
+    CHECK(hw->Pos.y == doctest::Approx(hpos.y + 30.0f).epsilon(0.01));
+
+    // The series follows its data until a drag in the plot, which holds the
+    // view while values arrive; a double click follows again.
+    caliper_live_views::View* lv = caliper_live_views::find(c.core, "loss");
+    REQUIRE(lv != nullptr);
+    REQUIRE(lv->geo_valid);
+    CHECK(lv->follow);
+    ImGuiWindow* lw = window("loss###caliper.view.loss");
+    REQUIRE(lw != nullptr);
+    const ImVec2 lpos = lw->Pos;
+    const std::vector<double> lfit = window_of(lv);
+    const float lx = lv->geo_area[0] + lv->geo_area[2] * 0.5f, ly = lv->geo_area[1] + lv->geo_area[3] * 0.5f;
+    drag(lx, ly, -80.0f, 0.0f);
+    c.frames(2);
+    CHECK_FALSE(lv->follow);
+    CHECK(lv->geo_window[0] > lfit[0]);           // panned toward later steps
+    CHECK(lw->Pos.x == lpos.x);
+    CHECK(lw->Pos.y == lpos.y);
+    const std::vector<double> held = window_of(lv);
+    sr.series_total = 1500;                       // more values: the held view does not move
+    REQUIRE(caliper_core_live_apply(c.core, &sr) == 1);
+    c.frames(3);
+    CHECK(window_of(lv) == held);
+    move(lx, ly);
+    button(true);
+    button(false);
+    button(true);
+    button(false);
+    c.frames(2);
+    CHECK(lv->follow);
+    CHECK(lv->geo_window[1] > held[1] + 500.0);   // following again: the window reaches step 1499
 }
 
 TEST_CASE("live_views/gates: every refusal is specific; nothing is created") {
