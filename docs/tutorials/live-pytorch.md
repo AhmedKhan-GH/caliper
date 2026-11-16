@@ -11,7 +11,7 @@ tell which quadrant of a 28x28 image holds a Gaussian blob, on synthetic data
 (no downloads). The excerpts below are shortened from it; run the file itself
 for the full version.
 
-Prereqs: Apple Silicon, macOS 14 or later, Python 3.12, PyTorch with MPS, and
+Prereqs: Apple Silicon, macOS 14 (Sonoma) or later, Python 3.12, PyTorch with MPS, and
 CMake plus Ninja on `PATH`. [Live streaming](../explanations/live-streaming.md)
 explains the design; this page only uses it.
 

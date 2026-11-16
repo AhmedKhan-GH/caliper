@@ -15,7 +15,7 @@ A newer push to the same branch cancels a Build run still in progress.
 
 ## The two lanes
 
-**macOS** runs on `macos-15` (Apple Silicon). It uses the arm64 libtorch archive and is the lane where the Metal backend and the MPS test cases are exercised.
+**macOS** runs on `macos-15` (Apple Silicon). It uses the arm64 libtorch archive and is the lane where the Metal backend and the MPS test cases are exercised. `scripts/check_macos_min.py` fails the lane unless the `caliper` executable, the viewer, the embed library and everything built against the installed packages say macOS 14.0 as their minimum, and the Browser views workflow checks the wheel's platform tag and the extensions in it the same way.
 
 **Windows** runs on `windows-latest` with MSVC. The setup is CPU only:
 - libtorch is the CPU archive, and GLEW the prebuilt zip;

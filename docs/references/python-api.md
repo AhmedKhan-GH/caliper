@@ -2,7 +2,8 @@
 
 Caliper LIB is the `caliper` Python package: `import caliper` gives a PyTorch script live views of its tensors. This page
 lists every public call of the `caliper` package (version 0.1.0, Python 3.12,
-macOS arm64) and of `caliper.live`. The source of truth is
+macOS arm64) and of `caliper.live`. The package needs macOS 14 (Sonoma) or
+later on Apple silicon, and its wheel is tagged `macosx_14_0_arm64`. The source of truth is
 `python/caliper/__init__.py`; the design is in
 [Live streaming](../explanations/live-streaming.md), and
 [Watch a PyTorch training run live](../tutorials/live-pytorch.md) walks through

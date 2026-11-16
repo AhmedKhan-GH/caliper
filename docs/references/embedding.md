@@ -392,7 +392,10 @@ macOS/Metal only today; the design is in
 
 `find_package(caliper-embed CONFIG)` gives one imported target,
 `caliper::embed`, which carries the library and the include root
-`include/caliper-embed`. The package version is the interface version
+`include/caliper-embed`. On macOS the library needs macOS 14 (Sonoma) or
+later. The package sets `CALIPER_MACOS_MIN` to its minimum, `14.0` by default,
+and makes it `CMAKE_OSX_DEPLOYMENT_TARGET` unless the project,
+`-DCMAKE_OSX_DEPLOYMENT_TARGET` or `MACOSX_DEPLOYMENT_TARGET` chose one. The package version is the interface version
 ([Versions](#versions)), 1.4.0, with CMake's `SameMajorVersion` rule: a request
 for 1.2 accepts 1.4, and a request for 2 refuses it. In the core build
 `caliper::embed` is an alias of the `caliper_embed` target, so one
