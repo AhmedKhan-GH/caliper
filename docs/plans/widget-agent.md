@@ -8,7 +8,8 @@ coding-agent session. This page designs the widget agent.
 
 The widget agent's process is `caliper-agent`, the sidecar that [Widget agent sidecar](byok-agent.md) describes. The
 loop, the Claude settings, the key handling and the tests on that page are built, and this page adds the inline role
-on top of them.
+on top of them. The person's side is in [Agent roles](../explanations/agent-roles.md) and
+[Set up the widget agent](../guides/set-up-the-widget-agent.md).
 
 **Built on this branch:** nothing beyond the sidecar, its tests and the key store, which that page lists. **Planned:**
 everything on this page. The [work items](#work-items) give the sizes and the order.
@@ -219,7 +220,8 @@ setup steps instead.
 
 The widget agent needs a provider: a Claude API key today, and later any configured preset, where a local server needs
 no key. When none is set up, ⌘K still opens the inline prompt, but its only action is Ask in chat, with the same
-handoff, and one line says that the widget agent needs a provider and links to the setup guide. The sidecar is not
+handoff, and one line says that the widget agent needs a provider and links to
+[Set up the widget agent](../guides/set-up-the-widget-agent.md). The sidecar is not
 started.
 
 ## One journal, one history, one queue
@@ -396,7 +398,8 @@ swapping. On a machine with a discrete GPU, the model's weights take video memor
   widget agent's base URL is a loopback address, and the side chat's header shows the same note when the person has
   marked the side chat's agent as running on a local model. The app cannot tell where an outside agent's model runs,
   so the side chat relies on that setting.
-- **The advice**, in the setup guide: during a run, use a smaller or more quantized model; keep its context length
+- **The advice**, in [Set up the widget agent](../guides/set-up-the-widget-agent.md#share-the-gpu-with-a-training-run):
+  during a run, use a smaller or more quantized model; keep its context length
   modest, since the context takes memory too; unload the model when done; use a hosted preset while a long run trains;
   and watch the system's memory pressure. With Ollama, `ollama ps` shows whether a model sits on the GPU or the CPU and
   with which context, `ollama stop` unloads it, and a model stays loaded for five minutes after its last request

@@ -37,7 +37,7 @@ This page is the map of the builder: the work that lets someone drop data into C
 | ACP client | How Caliper runs the user's own agent as a subprocess and shows its messages, diffs and permission requests | [ACP integration](acp-integration.md) |
 | `caliper-agent` | The BYOK backend of the agent pane: a sidecar that runs an agent loop against the Claude API with the user's key | [BYOK agent](byok-agent.md) |
 
-The agent pane has two backends behind one chat interface, and [The agent pane's two backends](../explanations/agent-pane-backends.md) explains when to use each. Both speak the Agent Client Protocol to the app, so messages, diffs, approvals and cancellation are the same for both.
+The agent pane has two backends behind one chat interface, and [Agent roles](../explanations/agent-roles.md) explains when to use each. Both speak the Agent Client Protocol to the app, so messages, diffs, approvals and cancellation are the same for both.
 
 ## What is built
 
