@@ -183,9 +183,9 @@ struct PrimParams {
     uint inst_base;           // 168 — instance_offset / 4
     uint use_instance_attr;   // 172 — 0/1
     uint inst_attr_base;      // 176 — instance_attr_offset / 4
-    uint pad0;                // 180
-    uint pad1;                // 184
-    uint pad2;                // 188  (192)
+    float att_ref;            // 180 — the live points view's depth cues
+    float fade_w0;            // 184   (HostGeomDraw; zero for every
+    float fade_w1;            // 188   service draw)  (192)
 };
 
 /* Metal validates [[point_size]] against the pipeline's topology class: a
@@ -331,6 +331,15 @@ vertex VOutPoint geom_vs_point(uint vid [[vertex_id]],
     o.size  = p.size_px;
     o.color = b.color;
     o.uv    = b.uv;
+    // The depth cues of the live points view (HostGeomDraw, kPointAtten* and
+    // kPointFadeFloor): nearer points larger within a clamp, farther points
+    // dimmer with their hue kept. Both off (zero) for every service draw.
+    if (p.att_ref > 0.0f)
+        o.size = min(p.size_px * clamp(p.att_ref / max(b.pos.w, 1e-6f), 0.5f, 2.0f), 511.0f);
+    if (p.fade_w1 > p.fade_w0) {
+        float f = clamp((b.pos.w - p.fade_w0) / (p.fade_w1 - p.fade_w0), 0.0f, 1.0f);
+        o.color = float4(b.color.rgb * (1.0f - 0.5f * f), b.color.a);
+    }
     return o;
 }
 
@@ -360,7 +369,8 @@ struct PrimParams {
     uint32_t flat_rgba;
     float    vmin, vmax, size_px;
     uint32_t uv_base, use_instance, inst_base, use_instance_attr;   // v1.3 tail
-    uint32_t inst_attr_base, pad0, pad1, pad2;
+    uint32_t inst_attr_base;
+    float    att_ref, fade_w0, fade_w1;   // the live points view's depth cues
 };
 static_assert(sizeof(PrimParams) == 192, "MSL primitive params layout");
 
@@ -1395,6 +1405,11 @@ public:
                 e.params.inst_base = (uint32_t)(d.instance_offset / 4u);
                 e.params.use_instance_attr = use_instance_attr ? 1u : 0u;
                 e.params.inst_attr_base = (uint32_t)(d.instance_attr_offset / 4u);
+                if (d.topology == CALIPER_GEOM_TOPO_POINTS) {
+                    e.params.att_ref = d.att_ref;
+                    e.params.fade_w0 = d.fade_w0;
+                    e.params.fade_w1 = d.fade_w1;
+                }
                 encs.push_back(e);
             }
 

@@ -482,8 +482,8 @@ const char* kPointsWgsl = R"wgsl(
 struct Params {
     mvp: mat4x4<f32>,
     pos_base: u32, attr_base: u32, color_mode: u32, flat_rgba: u32,
-    vmin: f32, vmax: f32, size_px: f32, pad0: u32,
-    viewport: vec2<f32>, pad1: vec2<f32>,
+    vmin: f32, vmax: f32, size_px: f32, att_ref: f32,
+    viewport: vec2<f32>, fade_w: vec2<f32>,
 };
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage, read> pos: array<f32>;
@@ -511,8 +511,11 @@ fn vs(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VOu
                                       vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0));
     let b = p.pos_base + 3u * iid;
     var c = p.mvp * vec4<f32>(pos[b], pos[b + 1u], pos[b + 2u], 1.0);
+    // The depth cues (HostGeomDraw, kPointAtten*): nearer points larger, within a clamp.
+    var size = p.size_px;
+    if (p.att_ref > 0.0) { size = size * clamp(p.att_ref / max(c.w, 1e-6), 0.5, 2.0); }
     // Half the size in NDC is (size_px / 2) / (viewport / 2); times w in clip space.
-    let k = corners[vid] * (p.size_px / p.viewport) * c.w;
+    let k = corners[vid] * (size / p.viewport) * c.w;
     c = vec4<f32>(c.x + k.x, c.y + k.y, c.z, c.w);
     var col = unpack(p.flat_rgba);
     if (p.color_mode == 1u) {
@@ -520,6 +523,12 @@ fn vs(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VOu
         var t = 0.0;
         if (!is_nan_bits(v) && p.vmax > p.vmin) { t = clamp((v - p.vmin) / (p.vmax - p.vmin), 0.0, 1.0); }
         col = unpack(lut[u32(t * 255.0 + 0.5)]);
+    }
+    // Farther points dimmer with their hue kept (kPointFadeFloor): the colour
+    // scaled from 1 at w = fade_w.x to 0.5 at w = fade_w.y.
+    if (p.fade_w.y > p.fade_w.x) {
+        let f = clamp((c.w - p.fade_w.x) / (p.fade_w.y - p.fade_w.x), 0.0, 1.0);
+        col = vec4<f32>(col.rgb * (1.0 - 0.5 * f), col.a);
     }
     return VOut(c, col);
 }
@@ -532,9 +541,9 @@ struct PointParams {   // matches the WGSL struct (112 bytes)
     float mvp[16];
     uint32_t pos_base, attr_base, color_mode, flat_rgba;
     float vmin, vmax, size_px;
-    uint32_t pad0;
+    float att_ref;
     float viewport[2];
-    float pad1[2];
+    float fade_w[2];
 };
 static_assert(sizeof(PointParams) == 112, "WGSL uniform layout");
 
@@ -761,6 +770,9 @@ bool WebGpuRenderer::geom_draw_primitives(uint64_t view_tex, const float* view16
         pp.size_px = d.size_px > 0.0f ? d.size_px : 1.0f;
         pp.viewport[0] = (float)t.w;
         pp.viewport[1] = (float)t.h;
+        pp.att_ref = d.att_ref;
+        pp.fade_w[0] = d.fade_w0;
+        pp.fade_w[1] = d.fade_w1;
         wgpuQueueWriteBuffer(queue_, sl.params, 0, &pp, sizeof pp);
         static const uint32_t kZeroLut[256] = {};
         wgpuQueueWriteBuffer(queue_, sl.lut, 0, cmap ? d.lut256 : kZeroLut, 1024);

@@ -1469,6 +1469,13 @@ public:
             e.params.vmax = d.vmax;
             e.params.size_px = d.size_px < 1.f ? 1.f
                              : (d.size_px > point_size_max_ ? point_size_max_ : d.size_px);
+            // d.att_ref and d.fade_w0/w1, the live points view's depth cues, are
+            // not drawn here yet: points keep a constant size and colour. Drawing
+            // them needs three floats in this block and in geom.vert (the Metal
+            // shader uses its last three padding words) and, in the point path,
+            // gl_PointSize = size_px * clamp(att_ref / gl_Position.w, 0.5, 2)
+            // and the colour scaled by 1 - 0.5 * clamp((w - fade_w0) /
+            // (fade_w1 - fade_w0), 0, 1), as the Metal renderer does.
             e.params.uv_base = (uint32_t)(d.uv_offset / 4);
             // v1.3 instance tail (§6.3): 0/1 flags + element bases (byte offset / 4).
             e.params.use_instance = use_instance ? 1u : 0u;

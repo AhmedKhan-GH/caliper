@@ -47,7 +47,25 @@ struct HostGeomDraw {
     uint64_t instance_count = 0;       // N; 0 -> non-instanced
     uint64_t instance_attr_alloc = 0;  // resolved (N,) f32 tint alloc; 0 -> none
     uint64_t instance_attr_offset = 0;
+    // The depth cues of the 3-D live points view (host-internal: no service
+    // draw sets them). With att_ref > 0 a point is size_px * clamp(att_ref / w,
+    // kPointAttenMin, kPointAttenMax) wide, w being its clip-space w, the
+    // distance along the view; nearer points are larger. With fade_w1 > fade_w0
+    // its colour is scaled by 1 up to w = fade_w0, falling linearly to
+    // kPointFadeFloor at w = fade_w1 and beyond, so farther points are dimmer
+    // and keep their hue. Zero: neither, the draw exactly as without them. The
+    // Metal and WebGPU backends draw them; the Vulkan and GL backends ignore
+    // them (constant size, no fade).
+    float att_ref = 0.0f;
+    float fade_w0 = 0.0f;
+    float fade_w1 = 0.0f;
 };
+
+// The constants of the depth cues above, written out in each backend's shader
+// and in the TypeScript points view (web/src/render/points-gpu.ts).
+constexpr float kPointAttenMin = 0.5f;
+constexpr float kPointAttenMax = 2.0f;
+constexpr float kPointFadeFloor = 0.5f;
 
 // Host-internal renderer seam (docs/explanations/rendering.md). The ABI never sees this;
 // backends are swappable forever because applets only see ImGui + bridge ids.
