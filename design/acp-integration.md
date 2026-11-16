@@ -604,8 +604,11 @@ claims the right column with `layout_chat_column()`, and calls `draw()` with tha
   and the status in a word; its plan as rows; its permission requests as cards with the file, the compact diff for a
   `*.spec.toml` (a new panel's primitive and title first, then its other keys and every other change) or the unified
   diff for any other file, Diff for the full diff, and one button per option, `allow_always` only when the setting
-  allows it; a row for each command approval of the turn; and the stop reason in a word (DONE, STOPPED, DECLINED,
-  LIMIT, FAILED).
+  allows it; a row for each command approval of the turn while it waits; and the stop reason in a word (DONE,
+  STOPPED, DECLINED, LIMIT, FAILED). Consecutive calls of one command, with their decided approvals, fold into one
+  row that says the count, the approvals' outcome and the status ("source.add ×9 · approved · done") and opens on a
+  click; a group with a failure or a refused approval is open from the start (`chat_rows()`). **Decision:** folded
+  after a review of the live capture, in which about thirty rows of one request hid the person's message and the plan.
 - **Login.** When `session/new` answers that the agent needs a login, the pane shows LOGIN with the agent's own login
   methods and the commands of the preset's hint, and Restart; it never asks for a key and runs no login flow.
 - **No agent.** The four agents by name, each marked NOT FOUND, and one action, Custom command.

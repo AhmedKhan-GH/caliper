@@ -86,8 +86,14 @@ primitive and title first, then its other keys and every other change), with Dif
 file it is the unified diff. An agent's "always allow" option is offered only when the setting allows it.
 
 **Command approvals.** A command of the agent that needs your approval, such as an edit of the open spec while review
-is on, is decided on the approval cards at the bottom of the window. The conversation shows one row for it, the
-command and "waiting", and then "decided"; a click on the row outlines its card in bronze for a moment.
+is on, is decided on the approval cards at the bottom of the window. While it waits, the conversation shows one row
+for it, APPROVAL with the command and "waiting"; a click on the row outlines its card in bronze for a moment. Once it
+is decided, the row folds into its call's group.
+
+**Groups.** Consecutive calls of the same command fold into one row with the count, the approvals' outcome and the
+status, such as "source.add ×9 · approved · done"; a click opens it to show each call and its approval. A group with a
+failed call or an approval that was denied, timed out or failed says so in bronze and is open from the start. A lone
+call without an approval is a plain row.
 
 **The input** is one line that grows to six with Shift+Enter or Command+Enter; Enter sends. The agent picker beside it
 lists the agents by name, with NOT FOUND for those not on `PATH`, and Custom command.
