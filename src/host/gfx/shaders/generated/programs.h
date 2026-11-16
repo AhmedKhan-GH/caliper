@@ -21,8 +21,11 @@ enum class ProgramId : uint32_t {
     scene_mesh = 2,
     index_clamp = 3,
     edge_gather = 4,
+    scene_boxes = 5,
+    scene_image = 6,
+    colormap_probe = 7,  // test only
 };
-inline constexpr uint32_t kProgramCount = 5;
+inline constexpr uint32_t kProgramCount = 8;
 
 // Naga's MSL gives every entry that uses a Storage or StorageReadWrite binding one more
 // argument: a buffer at this Metal index holding one u32 per such binding of the program,
@@ -144,6 +147,72 @@ inline constexpr BindingDesc kEdgeGatherBindings[] = {
     {0, 5, BindingType::StorageReadWrite, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 5},  // seg_src
 };
 
+// ---- scene_boxes
+inline constexpr EntryDesc kSceneBoxesEntries[] = {
+    {"fs_color", kStageFragment, {1, 1, 1}},
+    {"fs_pick", kStageFragment, {1, 1, 1}},
+    {"vs_box_wire", kStageVertex, {1, 1, 1}},
+    {"vs_box_solid", kStageVertex, {1, 1, 1}},
+};
+inline constexpr BindingDesc kSceneBoxesBindings[] = {
+    {0, 0, BindingType::Uniform, uint8_t(kStageVertex), true, 48, Format::RGBA8Unorm, 0},  // frame
+    {0, 1, BindingType::Texture, uint8_t(kStageVertex), false, 0, Format::RGBA8Unorm, 0},  // class_table
+    {1, 0, BindingType::Uniform, uint8_t(kStageVertex), true, 192, Format::RGBA8Unorm, 1},  // p
+    {1, 1, BindingType::Uniform, uint8_t(kStageVertex), true, 2080, Format::RGBA8Unorm, 2},  // m
+};
+inline constexpr VertexInputDesc kSceneBoxesVertexInputs[] = {
+    {"vs_box_wire", 0, VertexFormat::F32x3},  // vec3<f32>
+    {"vs_box_wire", 1, VertexFormat::F32x3},  // vec3<f32>
+    {"vs_box_wire", 2, VertexFormat::F32x4},  // vec4<f32>
+    {"vs_box_wire", 3, VertexFormat::U32},  // u32
+    {"vs_box_solid", 0, VertexFormat::F32x3},  // vec3<f32>
+    {"vs_box_solid", 1, VertexFormat::F32x3},  // vec3<f32>
+    {"vs_box_solid", 2, VertexFormat::F32x4},  // vec4<f32>
+    {"vs_box_solid", 3, VertexFormat::U32},  // u32
+};
+inline constexpr PairDesc kSceneBoxesPairs[] = {
+    {"vs_box_wire", "fs_color"},
+    {"vs_box_wire", "fs_pick"},
+    {"vs_box_solid", "fs_color"},
+    {"vs_box_solid", "fs_pick"},
+};
+
+// ---- scene_image
+inline constexpr EntryDesc kSceneImageEntries[] = {
+    {"fs_color", kStageFragment, {1, 1, 1}},
+    {"fs_pick", kStageFragment, {1, 1, 1}},
+    {"vs_image", kStageVertex, {1, 1, 1}},
+    {"fs_image_rgba", kStageFragment, {1, 1, 1}},
+    {"fs_image_class", kStageFragment, {1, 1, 1}},
+    {"fs_image_value", kStageFragment, {1, 1, 1}},
+};
+inline constexpr BindingDesc kSceneImageBindings[] = {
+    {0, 0, BindingType::Uniform, uint8_t(kStageVertex | kStageFragment), true, 48, Format::RGBA8Unorm, 0},  // frame
+    {0, 1, BindingType::Texture, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 0},  // class_table
+    {1, 0, BindingType::Uniform, uint8_t(kStageVertex | kStageFragment), true, 192, Format::RGBA8Unorm, 1},  // p
+    {1, 1, BindingType::Uniform, uint8_t(kStageFragment), true, 2080, Format::RGBA8Unorm, 2},  // m
+    {2, 0, BindingType::Texture, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 1},  // img_rgba
+    {2, 1, BindingType::Sampler, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 0},  // img_sampler
+    {2, 2, BindingType::UintTexture, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 2},  // img_class
+    {2, 3, BindingType::UintTexture, uint8_t(kStageFragment), false, 0, Format::RGBA8Unorm, 3},  // img_value
+};
+inline constexpr PairDesc kSceneImagePairs[] = {
+    {"vs_image", "fs_image_rgba"},
+    {"vs_image", "fs_image_value"},
+    {"vs_image", "fs_image_class"},
+    {"vs_image", "fs_pick"},
+};
+
+// ---- colormap_probe
+inline constexpr EntryDesc kColormapProbeEntries[] = {
+    {"cs_colormap_probe", kStageCompute, {64, 1, 1}},
+};
+inline constexpr BindingDesc kColormapProbeBindings[] = {
+    {1, 1, BindingType::Uniform, uint8_t(kStageCompute), true, 2080, Format::RGBA8Unorm, 0},  // m
+    {3, 0, BindingType::Storage, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 1},  // probe_in
+    {3, 1, BindingType::StorageReadWrite, uint8_t(kStageCompute), false, 4, Format::RGBA8Unorm, 2},  // probe_out
+};
+
 // The descriptions by program id, with no sources, for code that needs no backend.
 struct ProgramDescription {
     const char* name; const EntryDesc* entries; uint8_t entry_count;
@@ -157,6 +226,9 @@ inline constexpr ProgramDescription kProgramDescriptions[kProgramCount] = {
     {"scene_mesh", kSceneMeshEntries, 5, kSceneMeshBindings, 6, kSceneMeshVertexInputs, 9, kSceneMeshPairs, 4, false},
     {"index_clamp", kIndexClampEntries, 1, kIndexClampBindings, 3, nullptr, 0, nullptr, 0, false},
     {"edge_gather", kEdgeGatherEntries, 1, kEdgeGatherBindings, 6, nullptr, 0, nullptr, 0, false},
+    {"scene_boxes", kSceneBoxesEntries, 4, kSceneBoxesBindings, 4, kSceneBoxesVertexInputs, 8, kSceneBoxesPairs, 4, false},
+    {"scene_image", kSceneImageEntries, 6, kSceneImageBindings, 8, nullptr, 0, kSceneImagePairs, 4, false},
+    {"colormap_probe", kColormapProbeEntries, 1, kColormapProbeBindings, 3, nullptr, 0, nullptr, 0, true},
 };
 
 }  // namespace caliper_gfx::shaders

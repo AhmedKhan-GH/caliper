@@ -12,6 +12,9 @@
 #include "gfx/shaders/generated/scene_mesh_msl.h"
 #include "gfx/shaders/generated/index_clamp_msl.h"
 #include "gfx/shaders/generated/edge_gather_msl.h"
+#include "gfx/shaders/generated/scene_boxes_msl.h"
+#include "gfx/shaders/generated/scene_image_msl.h"
+#include "gfx/shaders/generated/colormap_probe_msl.h"
 
 namespace caliper_gfx::shaders {
 
@@ -26,6 +29,12 @@ inline constexpr ProgramDesc kMetalPrograms[kProgramCount] = {
      kProgramDescriptions[3].bindings, kProgramDescriptions[3].binding_count, nullptr, kIndexClampMsl, nullptr, 0},
     {"edge_gather", kProgramDescriptions[4].entries, kProgramDescriptions[4].entry_count,
      kProgramDescriptions[4].bindings, kProgramDescriptions[4].binding_count, nullptr, kEdgeGatherMsl, nullptr, 0},
+    {"scene_boxes", kProgramDescriptions[5].entries, kProgramDescriptions[5].entry_count,
+     kProgramDescriptions[5].bindings, kProgramDescriptions[5].binding_count, nullptr, kSceneBoxesMsl, nullptr, 0},
+    {"scene_image", kProgramDescriptions[6].entries, kProgramDescriptions[6].entry_count,
+     kProgramDescriptions[6].bindings, kProgramDescriptions[6].binding_count, nullptr, kSceneImageMsl, nullptr, 0},
+    {"colormap_probe", kProgramDescriptions[7].entries, kProgramDescriptions[7].entry_count,
+     kProgramDescriptions[7].bindings, kProgramDescriptions[7].binding_count, nullptr, kColormapProbeMsl, nullptr, 0},
 };
 
 }  // namespace caliper_gfx::shaders
