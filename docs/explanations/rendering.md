@@ -39,28 +39,44 @@ rows, which run when the paired CUDA device is the only one in the machine).
 ## The WebGPU backend
 
 The browser views are the native view layer compiled to WebAssembly, and `src/host/renderer/webgpu_renderer.cpp`
-draws them behind the same `HostRenderer` seam, on the browser's own WebGPU through the standard `webgpu.h`. It
-covers what the live views use:
+draws them behind the same `HostRenderer` seam, on the browser's own WebGPU through the standard `webgpu.h`. The
+renderer itself keeps only the canvas's surface, the frame loop and ImGui, which it records through
+`imgui_impl_wgpu`, with nearest sampling for magnified heatmap cells. Every resource and draw of the live views goes
+through the graphics layer of the renderer core, whose WebGPU backend (`src/host/renderer/webgpu_backend.cpp`) the
+renderer makes on its own device and queue:
 
-- **The frame.** The renderer draws on the canvas's WebGPU surface and records ImGui's draw data through
-  `imgui_impl_wgpu`, with nearest sampling for magnified heatmap cells.
-- **Textures.** RGBA8 textures for images and heatmaps. Every snapshot arrives as host memory, so the bridge asks the
-  renderer to colormap it through `tex_update_mapped_from_host`, an additive hook that native backends leave at its
-  default `false`. A WGSL compute pass then gives exactly the bytes of the CPU reference `map_f32_to_rgba8`: the CPU
-  derives, from that function itself, the value at which each of the 255 colour steps begins, and the shader only
-  compares values with those thresholds, so the GPU's rounding cannot change a colour.
-- **Points.** A points payload is copied into a GPU buffer through `HostRenderer::import_host_allocation`, and each
-  point is drawn as an instanced quad of the native point size, with the native colour rule and depth test, because
-  WebGPU draws a point as one pixel. Released buffers are reused for the next snapshot of the same size.
-- **Lifetimes.** A released texture is destroyed at once, and its view is released at the end of the frame, after
-  ImGui's backend has dropped the bind groups it made while recording that frame.
+- **Textures.** RGBA8 textures for images and heatmaps are layer textures, and an image's upload is a texture write.
+  Every snapshot arrives as host memory, so the bridge asks the renderer to colormap it through
+  `tex_update_mapped_from_host`, an additive hook that native backends leave at its default `false`. The renderer
+  writes the values into a layer buffer and submits one compute dispatch, whose parameters are a uniform in the
+  frame's arena. The pass gives exactly the bytes of the CPU reference `map_f32_to_rgba8`: the CPU derives, from that
+  function itself, the value at which each of the 255 colour steps begins, and the shader only compares values with
+  those thresholds, so the GPU's rounding cannot change a colour.
+- **Points.** A points payload is imported into the layer through `HostRenderer::import_host_allocation`. A browser
+  cannot wrap host memory, so the layer copies it and reports the route `copied-from-host` with the bytes copied. Each
+  point is an instanced quad of the native point size, with the native colour rule and depth test, because WebGPU
+  draws a point as one pixel. The positions and values are instance-step vertex buffers bound at the draw's byte
+  offsets and the colour table is part of the draw's uniform block, so no storage buffer is read in a vertex stage,
+  which a WebGPU device in compatibility mode would refuse. Released buffers are kept by the layer and reused for
+  the next snapshot of the same capacity.
+- **Lifetimes.** The layer destroys a released texture once the last submit that used it has completed, and keeps
+  its view to the end of the frame, after ImGui's backend has dropped the bind groups it made while recording that
+  frame. Readbacks for the module's own checks go through the layer's asynchronous readback.
 
-It refuses the rest of the interface: device tensors and imported GPU memory (a browser has neither), geometry other
-than points, and the embed canvas. Its two shaders are written by hand in WGSL, because WebGPU has no push constants,
-draws points one pixel wide and limits the storage buffers of a vertex stage, which changes the native shaders' design
-and not only their syntax. `web/wasm/README.md` gives the module's build, its size and its checks. The same renderer
-is planned as the native fallback through Dawn, chosen only when the Metal or Vulkan renderer is unavailable, and
-the OpenGL fallback is to be retired once it covers that case.
+The backend implements every hook of the graphics layer on `webgpu.h`: buffers whose capacity is a power of two with
+a spare pool of at most 64 MiB, textures and samplers, programs with explicit bind group layouts from their
+`ProgramDesc`, render and compute pipelines, bind groups, the uniform arena written once per submit, draw lists with
+vertex and instance-step buffers (a stride of 0 makes a stream constant), indexed draws with 32-bit indices, depth,
+the three blend modes, the RG32Uint ID target, completion through the queue's callback and readback through the
+buffer's asynchronous map. It keeps to WebGPU's default limits, and on a compatibility-mode device to that level's
+limits. Shader modules and pipelines are validated by WebGPU asynchronously, so their errors are collected afterwards
+rather than refused at once. The two programs the live views draw are the hand-written WGSL in
+`src/host/renderer/webgpu_programs.h`, to be replaced by the shader generator's table.
+
+The renderer refuses the rest of the interface: device tensors and imported GPU memory (a browser has neither),
+geometry other than points, and the embed canvas. `web/wasm/README.md` gives the module's build, its size and its
+checks. The same backend is planned as the native fallback through Dawn, chosen only when the Metal or Vulkan
+renderer is unavailable, and the OpenGL fallback is to be retired once it covers that case.
 
 The host's own screens carry no raw OpenGL either. The landing screen, the launch flow and the dashboards are drawn
 with ImGui, so they look the same on every backend.
@@ -218,8 +234,9 @@ is what the stream-ordered handoff removes; [Zero-copy tensor visualization](zer
 ## The graphics layer
 
 The renderer core's graphics layer is in `src/host/gfx/`, in the namespace `caliper_gfx`. It is an internal C++17
-layer shaped to WebGPU's model and default limits, and nothing of it crosses the ABI. No view or service draws through
-it yet: the renderers above keep their own paths, and their clients are to move onto the layer one at a time.
+layer shaped to WebGPU's model and default limits, and nothing of it crosses the ABI. The browser views draw through
+it ([the WebGPU backend](#the-webgpu-backend)); the native renderers keep their own paths, and their clients are to
+move onto the layer one at a time.
 
 The layer offers these pieces:
 
@@ -242,7 +259,7 @@ The layer offers these pieces:
   on the GPU, copied from the host, or refused. `take_stats()` counts the imports, copies and bytes copied, so an info
   line can say what ran.
 
-Two backends exist. The Metal backend runs on the Metal renderer's own device and queue (`HostRenderer::native_device`
+Three backends exist. The Metal backend runs on the Metal renderer's own device and queue (`HostRenderer::native_device`
 and `native_queue`), so the layer creates no second device, and its work is ordered with the renderer's by commit
 order. It imports an `MTLBuffer` of that device, and page-aligned host memory, in place, and it copies other host
 memory. It runs the programs of the shader generator ([Write a shader](../guides/write-a-shader.md)), and it binds the
@@ -254,9 +271,11 @@ buffer of storage sizes that their MSL reads. It keeps Metal's fast paths:
 - command buffers do not retain their resources, because the layer defers every release.
 
 The recording backend has no GPU. It records each frame and each resource operation, and it keeps buffer and texture
-contents in host memory for headless tests. A WebGPU backend for the browser and a Vulkan backend are planned.
+contents in host memory for headless tests. The WebGPU backend, `src/host/renderer/webgpu_backend.cpp`, runs in the
+browser on the WebGPU renderer's device and queue, as [the WebGPU backend](#the-webgpu-backend) describes; it copies
+every import, because a browser cannot wrap host memory. A Vulkan backend is planned.
 
-The layer's tests run in two suites:
+The layer's tests run in three suites:
 
 - `caliper_tests --test-case="gfx layer*"` runs the core on the recording backend. It covers the handles, the
   limits, the arena, deferred release, readback, the routes of import, and the refusal of bad frames.
@@ -333,3 +352,5 @@ Its tests run in two suites:
   item that the picker decodes. `CALIPER_GFX_CAPTURE_DIR` writes the captures `first-scene-points.png` and
   `first-scene-surface.png`, and `CALIPER_GFX_SCENE_BENCH=1` runs a row that reports the compile time and the
   layer's encode time of the surface scene and of a scene of 1,000 entities.
+- `web/test/wasm.spec.ts` runs the WebGPU backend in headless Chromium, on SwiftShader and on the machine's GPU, each
+  with a default and a compatibility-mode device ([Testing](testing.md)).
