@@ -878,16 +878,18 @@ _server = None                      # the running caliper._net.NetServer (read b
 _series_tap = None                  # its series tap while it runs
 
 
-def serve(port: int = 0):
+def serve(port: int = 0, *, control: bool = True):
     """Stream every view of this process to viewers on this machine: the
     browser page at the URL this prints (``http://127.0.0.1:<port>/?token=<token>``),
     the notebook widget and the Caliper app. ``port=0`` picks a free port.
+    ``control=False`` makes every viewer read-only: none may pause the run,
+    change a parameter or run an action (see :func:`step`).
     Returns the server (``url``, ``port``, ``token``, ``stream_url``,
-    ``session``, ``stats()``, ``on_event(fn)``, ``events()``, ``close()``; also a
-    context manager); a second call returns the running server. Loopback only,
-    with a session token. :func:`close` stops it."""
+    ``session``, ``control``, ``stats()``, ``on_event(fn)``, ``events()``,
+    ``close()``; also a context manager); a second call returns the running
+    server. Loopback only, with a session token. :func:`close` stops it."""
     from ._net import serve as _serve
-    return _serve(port)
+    return _serve(port, control=control)
 
 
 __all__ += ["connect"]

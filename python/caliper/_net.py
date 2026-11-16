@@ -250,6 +250,8 @@ class Link:
     ``(buffers, frame_len)`` of ``_wire.encode_parts``, or ``(None, wait)``
     with the seconds until a rate-limited frame is due (None: nothing pending). ``wake`` is set when something new
     may be sendable. Network thread only."""
+    caps: frozenset = frozenset()            # 3.1: "controls", "selection" if the peer announced them
+    may_control = False                      # 3.1: a CONTROL from it is accepted
 
     def __init__(self, producer: "_Producer", peer: str = ""):
         self.p = producer
@@ -302,6 +304,8 @@ class Link:
         if self.attached != was:
             self.p.attached_changed(+1 if self.attached else -1)
         self.queue_views()
+        if self.attached and self.p.controls is not None:
+            self.p.controls.on_attach(self)
 
     # -- incoming -------------------------------------------------------------
     def handle(self, frame) -> None:
@@ -329,6 +333,8 @@ class Link:
         elif t is _wire.Attach:
             self.follows_default = False
             self.attach(msg.session)
+        elif t is _wire.Control and self.p.controls is not None:
+            self.p.controls.on_control(self, msg)
         elif t is _wire.Bye:
             raise _Fatal(_wire.CLOSE_NORMAL, "bye")
         elif t is _wire.Error:
@@ -419,7 +425,7 @@ class Link:
         if self.control:
             item = self.control.popleft()
             if item is _VIEWS:
-                msg = self.p.views_msg() if self.attached else _wire.Views([], None)
+                msg = self.p.views_msg(self) if self.attached else _wire.Views([], None)
                 return _wire.encode(msg), None
             return item, None
         wait = None
@@ -483,6 +489,8 @@ class Link:
 # the session: views, groups, publishing (network thread)
 # ===========================================================================
 class _Producer:
+    controls = None                            # 3.1: the server's caliper._net_controls.ControlsPort
+
     def __init__(self, ring: NetRing, identity: dict, transport: "NetTransport"):
         self.ring = ring
         self.identity = identity
@@ -500,12 +508,18 @@ class _Producer:
         with self.ring.lock:
             n = len(self.ring.views)
         return _wire.Sessions([dict(self.identity, state=_wire.SESSION_LIVE, views=n,
-                                    capabilities=[_wire.CAP_EVENTS])])
+                                    capabilities=self.capabilities())])
 
-    def views_msg(self) -> _wire.Views:
+    def capabilities(self) -> list:
+        from ._net_controls import capabilities
+        return capabilities(self.controls is not None)
+
+    def views_msg(self, link: Link | None = None) -> _wire.Views:
         with self.ring.lock:
-            entries = [v.entry() for v in self.ring.views.values()]
-        return _wire.Views(entries[:_wire.MAX_VIEWS], self.identity["id"])
+            entries = [v.entry() for v in self.ring.views.values()][:_wire.MAX_VIEWS]
+        if link is not None and self.controls is not None and _wire.CAP_SELECTION in link.caps:
+            entries = self.controls.annotate(entries)
+        return _wire.Views(entries, self.identity["id"])
 
     def attached_changed(self, delta: int) -> None:
         self.transport.n_attached = max(0, self.transport.n_attached + delta)
@@ -589,6 +603,8 @@ class _Producer:
         q = self._event_q
         if q is not None:
             q.put(ev)
+        if msg.type == _wire.EVENT_SELECT and self.controls is not None:
+            self.controls.on_select(link, msg)
 
     # -- the pump -----------------------------------------------------------------
     def pump_once(self) -> bool:
@@ -891,8 +907,16 @@ class _Listener:
                 return
             link = Link(s.producer, peer=str(ws.remote_address))
             link.software = hello.software
+            ctl = s.producer.controls
+            control = None
+            if ctl is not None:
+                from ._net_controls import peer_caps
+                link.caps = peer_caps(hello.capabilities)
+                if _wire.CAP_CONTROLS in link.caps:
+                    control = link.may_control = ctl.allow
             await ws.send(_wire.encode(_wire.Welcome(
-                _wire.ROLE_PRODUCER, [_wire.CAP_EVENTS], s.software, s.identity)))
+                _wire.ROLE_PRODUCER, s.producer.capabilities(), s.software, s.identity,
+                control=control)))
             s.producer.links.add(link)
             s.counters["connections"] += 1
             link.start()
@@ -1014,7 +1038,7 @@ class NetServer:
     ``close()`` ends every connection with BYE and stops the server; it also
     runs at ``caliper.close()`` and at interpreter exit."""
 
-    def __init__(self, port: int = 0, *, engine=None):
+    def __init__(self, port: int = 0, *, engine=None, control: bool = True):
         port = int(port)
         if not 0 <= port <= 65535:
             raise ValueError(f"port must be in 0..65535, got {port}")
@@ -1051,6 +1075,14 @@ class NetServer:
         self.port = self._listener.port
         self.url = f"http://127.0.0.1:{self.port}/?token={self.token}"
         self.stream_url = f"ws://127.0.0.1:{self.port}{_wire.PATH}?{_wire.TOKEN_PARAM}={self.token}"
+        from ._net_controls import ControlsPort
+        self.producer.controls = ControlsPort(self, control, native=False)
+
+    @property
+    def control(self) -> bool:
+        """Whether viewers may control the script (``serve(control=...)``)."""
+        c = self.producer.controls
+        return c is not None and c.allow
 
     @property
     def session(self) -> str:
@@ -1275,7 +1307,7 @@ def current_server() -> NetServer | None:
 _said_python_sender = False
 
 
-def _make_server(port: int) -> NetServer:
+def _make_server(port: int, control: bool = True) -> NetServer:
     """The native sender (caliper._netio) when it is built, else the Python
     sender, which says once what that costs. ``CALIPER_NETIO=0`` forces the
     Python sender."""
@@ -1287,14 +1319,14 @@ def _make_server(port: int) -> NetServer:
             pass
         else:
             from ._net_native import NativeServer
-            return NativeServer(port)
+            return NativeServer(port, control=control)
         if not _said_python_sender:
             _said_python_sender = True
             print("caliper: the native network sender (caliper._netio) is not built, so serve() "
                   "sends from Python, which costs a training loop about 5 to 9 % of its steps "
                   "while a viewer watches; build it with `python scripts/build_netio.py`.",
                   file=sys.stderr, flush=True)
-    return NetServer(port)
+    return NetServer(port, control=control)
 
 
 def _add_route(s) -> None:
@@ -1312,7 +1344,7 @@ def _add_route(s) -> None:
 _producer = None                     # the route's server: serve()'s, or connect()'s without a listener
 
 
-def serve(port: int = 0) -> NetServer:
+def serve(port: int = 0, control: bool = True) -> NetServer:
     """Start (or return) the stream server of this process. See caliper.serve."""
     import caliper
     with caliper.LOCK:
@@ -1321,10 +1353,10 @@ def serve(port: int = 0) -> NetServer:
             return s
         p = _producer
         if p is not None and not p.closed and not getattr(p, "listening", True):
-            p.listen(port)               # connect() came first: one producer, now listening too
+            p.listen(port, control=control)   # connect() came first: one producer, now listening too
             s = p
         else:
-            s = _make_server(port)
+            s = _make_server(port, control)
             _add_route(s)
         caliper._server = s
     print(s.url, flush=True)
@@ -1406,6 +1438,9 @@ def connect(url: str | None = None):
 def _unroute(server: NetServer) -> None:
     import caliper
     global _producer
+    ctl = server.producer.controls
+    if ctl is not None:
+        ctl.detach()                     # a paused run with no other route goes on
     with caliper.LOCK:
         if _producer is server:
             _producer = None

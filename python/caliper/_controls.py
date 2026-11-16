@@ -80,6 +80,11 @@ The route gives the transport, callable from any thread:
     route.detach()
         The transport stops: a paused run is released if no route remains.
 
+A transport may also append a function to ``CONTROLS.wait_hooks``: it runs on
+the training thread, in the checkpoint, right before a pause starts to wait
+(the network route closes its open tick there, so that the views show the
+step the run paused at).
+
 ``CAPABILITIES`` are the strings a transport announces for this module.
 """
 from __future__ import annotations
@@ -657,6 +662,8 @@ class Controls:
         self._resolved: dict[str, dict] = {}     # view -> {dim or None: space}, from VIEWS
         self.routes: list[Route] = []
         self._npending = 0
+        self.wait_hooks: list = []               # called on the training thread before a pause
+                                                 # waits (a route sends its last snapshots)
         self._timers = _Timers()
         self._details_worker = _DetailsWorker()
         self.counters = collections.Counter()
@@ -759,6 +766,11 @@ class Controls:
                 return
             self.state = RUN_PAUSED
             self.state_step = self.n
+        for hook in list(self.wait_hooks):
+            try:
+                hook()
+            except Exception:
+                _log.debug("a wait hook failed", exc_info=True)
         self._publish()
         absent_since = None
         try:

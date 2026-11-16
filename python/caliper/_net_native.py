@@ -16,10 +16,12 @@ encoding and the sends, all without the GIL. Python keeps three jobs:
   the native side with one ``publish()`` call, which copies the bytes with the
   GIL released before it returns: from then on the native side owns them, so
   the pinned memory is reused at once;
-* SUBSCRIBE, UNSUBSCRIBE, VIEW_REQUEST and EVENT, which need the data view
-  engine or Python code, arrive as frames through a queue the native side
-  bounds (256 per connection) and are answered by the same :class:`Link` logic
-  as in the Python sender.
+* SUBSCRIBE, UNSUBSCRIBE, VIEW_REQUEST, EVENT and (wire protocol 3.1)
+  CONTROL, which need the data view engine or Python code, arrive as frames
+  through a queue the native side bounds (256 per connection) and are answered
+  by the same :class:`Link` logic as in the Python sender. The controls'
+  messages (caliper/_net_controls.py) go out with ``send()`` from the pump
+  thread.
 """
 from __future__ import annotations
 
@@ -124,7 +126,10 @@ class _NativeProducer(_Producer):
                 views = dict(ring.views)
                 entries = [v.entry() for v in ring.views.values()][:_wire.MAX_VIEWS]
                 live = set(ring.series)
-            self.nio.set_views(json.dumps(entries, sort_keys=True))
+            items = ""
+            if self.controls is not None and self.controls.route.ctl.view_items:
+                items = json.dumps(self.controls.annotate(entries), sort_keys=True)
+            self.nio.set_views(json.dumps(entries, sort_keys=True), items)
             for name in self._series_seen - live:
                 self.nio.series_drop(name)
             self._series_seen = live
@@ -196,9 +201,10 @@ class NativeServer(NetServer):
     :class:`caliper._net.NetServer` (url, port, token, stream_url, session,
     closed, stats(), on_event(), events(), close())."""
 
-    def __init__(self, port: int | None = 0, *, engine=None):
+    def __init__(self, port: int | None = 0, *, engine=None, control: bool = True):
         """``port=None`` starts a producer without a listener (caliper.connect()
-        before caliper.serve()); :meth:`listen` adds one later."""
+        before caliper.serve()); :meth:`listen` adds one later. ``control``:
+        whether viewers may control the script."""
         from . import _netio
         import secrets
         if port is not None:
@@ -225,6 +231,9 @@ class NativeServer(NetServer):
                                  int(_wire.PING_INTERVAL_MS), int(_wire.IDLE_TIMEOUT_MS))
         self.producer = _NativeProducer(self.ring, self.identity, self.transport, self.nio)
         self.transport.producer = self.producer
+        from ._net_controls import ControlsPort
+        self.nio.enable_controls(bool(control))
+        self.producer.controls = ControlsPort(self, control, native=True)
         self._events_thread = None
         self.port = 0
         self.url = self.stream_url = None
@@ -243,8 +252,10 @@ class NativeServer(NetServer):
     def listening(self) -> bool:
         return self.nio.listening
 
-    def listen(self, port: int = 0) -> None:
+    def listen(self, port: int = 0, control: bool = True) -> None:
         """Start listening for viewers (a producer that connect() started)."""
+        self.producer.controls.allow = bool(control)
+        self.nio.enable_controls(bool(control))
         if not self.nio.listening:
             self.nio.listen(int(port))
         self._set_urls()
@@ -277,6 +288,7 @@ class NativeServer(NetServer):
                 for kind, conn, frame in msgs:
                     self._on_control(kind, conn, frame)
                 p.pump_once()
+                p.controls.flush()
             except Exception:                         # a bug: count it, keep serving
                 self.counters["pump_errors"] += 1
                 if self.closed:
@@ -286,6 +298,11 @@ class NativeServer(NetServer):
         p = self.producer
         if kind == "opened":
             link = _NativeLink(p, conn)
+            if frame:                                 # what the peer announced (3.1)
+                info = json.loads(frame)
+                link.caps = frozenset(c for c in (_wire.CAP_CONTROLS, _wire.CAP_SELECTION)
+                                      if info.get(c))
+                link.may_control = bool(info.get("control"))
             p.by_conn[conn] = link
             p.links.add(link)
             self.counters["connections"] += 1
@@ -297,6 +314,7 @@ class NativeServer(NetServer):
             if not link.attached:
                 link.attached = True
                 p.attached_changed(+1)
+                p.controls.on_attach(link)
         elif kind == "detached":
             link.drop_all()
             if link.attached:
