@@ -26,7 +26,8 @@ option(CALIPER_WEB_CLOSURE "Run the Closure compiler over the JavaScript glue (R
 # The live views, the embed v1.2 views and the hosted core (embed_views.cpp,
 # split out of embed_core.cpp so the applet loader, the service registry, the
 # job system and the app paths stay out), the tensor bridge, the WebGPU
-# renderer, Dear ImGui and ImPlot. live_unsupported.cpp is the existing
+# renderer with the graphics layer's core and WebGPU backend, Dear ImGui and
+# ImPlot. live_unsupported.cpp is the existing
 # stand-in for the shared-memory attach, which a browser does not have.
 add_library(caliper_view_layer STATIC
     ${CALIPER_ROOT}/src/host/live/live_views.cpp
@@ -35,6 +36,8 @@ add_library(caliper_view_layer STATIC
     ${CALIPER_ROOT}/src/host/embed/embed_views.cpp
     ${CALIPER_ROOT}/src/host/tensor_bridge.cpp
     ${CALIPER_ROOT}/src/host/renderer/webgpu_renderer.cpp
+    ${CALIPER_ROOT}/src/host/renderer/webgpu_backend.cpp
+    ${CALIPER_ROOT}/src/host/gfx/core.cpp
     ${CALIPER_ROOT}/src/host/ui/sternbild_fonts.cpp
     ${CALIPER_ROOT}/src/host/ui/sternbild_theme.cpp
     ${TP}/imgui/imgui.cpp
