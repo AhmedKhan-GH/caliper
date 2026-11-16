@@ -442,8 +442,8 @@ def test_heatmap_pooled_to_budget(server, device):
             assert np.allclose(a, ref, atol=1e-5)
             assert s.axes == [{"dim": "row", "start": 0, "step": 1, "count": 700, "size": 512},
                               {"dim": "col", "start": 0, "step": 1, "count": 1000, "size": 512}]
-            lo, hi = s.stats                     # [min, max] of the payload as sent
-            assert lo == pytest.approx(float(a.min())) and hi == pytest.approx(float(a.max()))
+            lo, hi = s.stats                     # the range of the data before pooling (v2's rule)
+            assert lo == pytest.approx(W.min().cpu().item()) and hi == pytest.approx(W.max().cpu().item())
             assert s.flags == w.SNAP_AUTO_VMIN | w.SNAP_AUTO_VMAX and s.data_view == r.data_view
             # a new budget through VIEW_REQUEST
             await c.send(w.ViewRequest(9, 1, "w", {"budget": {"max_extent": 100, "pool": "max"}}))
@@ -1210,3 +1210,57 @@ def test_serve_and_connect_share_one_producer(hub):
     caliper.close()
     assert _wait(lambda: w.CLOSE_GOING_AWAY in hub.closes)
     assert any(isinstance(m, w.Bye) and m.reason == w.BYE_SHUTDOWN for m in hub.msgs)
+
+
+# ---------------------------------------------------------------------------
+# ticks: the views of a step share one event
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("device", DEVICES)
+def test_views_share_one_tick(server, device):
+    W = torch.randn(256, 256, device=device)
+    Z = torch.randn(2000, 2, device=device)
+    loss = torch.zeros((), device=device)
+    events = []
+    if device == "mps":
+        real = torch.mps.Event
+
+        class Counted(real):
+            def record(self, *a, **k):
+                events.append(time.perf_counter())
+                return super().record(*a, **k)
+
+    def step():
+        W.add_(1e-3)
+        time.sleep(0.0005)                               # a training step's length, about
+        caliper.show(W, name="w")
+        caliper.series(loss + 1, name="loss")
+        caliper.points(Z, name="z")
+
+    async def go():
+        async with Client(server) as c:
+            for i, v in enumerate(("w", "z", "loss")):
+                await c.subscribe(i + 1, v, pump=step)
+            await c.expect(w.Snapshot, pump=step, pred=lambda m: m.view == "z")
+            ring = server.ring
+            t0, n0, k0 = time.perf_counter(), ring.counters["taken"], ring.counters["ticks"]
+            if device == "mps":
+                import caliper._net_ring as R
+                R._torch().mps.Event = Counted
+            try:
+                end = t0 + 1.0
+                while time.perf_counter() < end:
+                    step()
+            finally:
+                if device == "mps":
+                    R._torch().mps.Event = real
+            el = time.perf_counter() - t0
+            taken, ticks = ring.counters["taken"] - n0, ring.counters["ticks"] - k0
+            assert ring.tick is None                    # the last step's tick closed itself
+            seq = server.stats()["views"]["w"]["seq"]
+            got = await c.expect(w.Snapshot, pred=lambda m: m.view == "w" and m.seq == seq)
+            return taken, ticks, el, got
+    taken, ticks, el, got = run(go())
+    assert taken == 2 * ticks                            # w and z in every tick
+    assert ticks <= 60 * el + 2
+    if device == "mps":
+        assert len(events) <= ticks + 2                  # one event per tick (the series rides in it)

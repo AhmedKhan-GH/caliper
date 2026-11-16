@@ -7,12 +7,23 @@ routes. Everything here runs on the thread that made the view call and only
 QUEUES device work:
 
 * a snapshot of a subscribed view is reduced to each subscription group's data
-  view by the engine (caliper/_net_dataview.py), copied with
-  ``copy_(non_blocking=True)`` into pinned host memory, and followed by a
-  ``torch.mps.Event``. The network thread reads the pinned memory only once the
-  event has completed, so nothing waits for the GPU. (Reading a device tensor
-  with ``.cpu()`` on another thread instead drains torch's queue and stalls
+  view by the engine (caliper/_net_dataview.py) and copied with
+  ``copy_(non_blocking=True)`` into pinned host memory. The network thread reads
+  the pinned memory only once a ``torch.mps.Event`` recorded after the copy has
+  completed, so nothing waits for the GPU. (Reading a device tensor with
+  ``.cpu()`` on another thread instead drains torch's queue and stalls
   training: measured at 64 to 70 % of the commit-matched control.)
+* THE TICK. Recording an event commits torch's command buffer, and commits
+  beyond the commit-matched control's 60 a second cost the loop by themselves
+  (events at 300 Hz: 3 %). So the views take their snapshots together, in a
+  tick at the session's rate (60 Hz): the first call after the tick is due
+  opens it, every due subscription group and watched series called in the same
+  step joins it, and ONE event recorded when it closes covers all of their
+  copies, which go to the network thread in one batch. A tick closes as soon as
+  every due group that was called in the last second has its snapshot (right
+  after the step's last view call, so the last step of a run is not held back),
+  when a group already served in it is called again (the next step began), when
+  it is older than a tick, or at flush and close.
 * a series value is retained whether or not anyone subscribes (the protocol's
   backfill rule): floats go to the network thread as they are, tensors are
   gathered (detached) and moved in chunks the same way as snapshots.
@@ -42,7 +53,6 @@ from ._ring import DEFAULT_RATE_HZ, KIND_SERIES, rate_interval
 OFFER_REFRESH_S = 1.0          # an unsubscribed view's offer is rechecked this often
 STAGE_SETS = 3                 # pinned staging sets per group: in flight, pending, free
 SERIES_CHUNK = 64              # tensor values gathered before a chunk is moved to the host
-SERIES_WATCHED_S = 1.0 / 30    # chunk cadence of a series a viewer watches
 SERIES_IDLE_FLUSH_S = 1.0      # chunk cadence of a series nobody watches
 SERIES_CAPACITY = 4096         # values kept of one huge tensor call (as caliper.series)
 
@@ -101,7 +111,7 @@ class ViewState:
     last: float = -math.inf
     seq: int = 0
     seen: float = -math.inf                     # perf_counter of its last call through due()
-    cand: float = 0.0                           # when it may next have work (see next_due)
+    iv: float = 0.0                             # the call's own interval (rate=)
 
     def entry(self) -> dict:
         e = {"id": self.id, "name": self.name, "kind": int(self.kind),
@@ -123,6 +133,7 @@ class Pending:
     red: Reduced
     kind: int
     event: Any = None
+    mps: bool = False                           # its copies are on torch's MPS stream
 
     def ready(self) -> bool:
         return self.event is None or self.event.query()
@@ -135,6 +146,7 @@ class Chunk:
     n: int
     stamp_ns: int
     event: Any = None
+    mps: bool = False
 
     def ready(self) -> bool:
         return self.event is None or self.event.query()
@@ -153,6 +165,20 @@ class SeriesState:
     flush_t: float = -math.inf
     watched: bool = False                        # some subscription (read on the training thread)
     pool: list = field(default_factory=list)     # pinned chunk buffers the pump has finished with
+    held: bool = False                           # a chunk of it waits in the open tick
+    scalars: bool = False                        # refs are all 0-d tensors
+    seen: float = -math.inf                      # perf_counter of its last tensor value
+
+
+@dataclass(eq=False)
+class Tick:
+    """The snapshots and series chunks taken together, sharing one event."""
+    t0: float
+    thread: int
+    served: set = field(default_factory=set)     # Groups and SeriesStates served in it
+    pending: list = field(default_factory=list)  # Pendings, no event yet
+    chunks: list = field(default_factory=list)   # (SeriesState, Chunk), no event yet
+    mps: bool = False
 
 
 class NetRing:
@@ -172,6 +198,9 @@ class NetRing:
         # returns after that check, as with no viewer. 0 forces calls through
         # (a new view, a subscription change).
         self.next_due = 0.0
+        self.tick: Tick | None = None
+        self.tick_interval = rate_interval(DEFAULT_RATE_HZ)
+        self.tick_next = 0.0                    # perf_counter when the next tick may open
         self._next_id = 1
         self._wake = wake or (lambda: None)
         self.closed = False
@@ -227,35 +256,105 @@ class NetRing:
 
     def due(self, name: str, interval: float, now: float) -> bool:
         v = self.views.get(name)
+        if v is not None:
+            v.seen = now
+            v.iv = interval
         if v is None or now - v.offer_t >= OFFER_REFRESH_S or self._stale(v):
             self.next_due = 0.0
             return True                     # register or refresh the offer; no device work
-        v.seen = now
         if not v.groups:
             self.counters["unsubscribed"] += 1
-            v.cand = v.offer_t + OFFER_REFRESH_S
-            self._next(now)
+            self._idle_due(now)
             return False
-        if now - v.last < interval:
+        t = self.tick
+        if t is not None and now - t.t0 > self.tick_interval:
+            self._close_tick()              # its step's calls are over
+            t = None
+        if t is None and now < self.tick_next:
             self.counters["skipped"] += 1
-            v.cand = v.last + interval
-            self._next(now)
+            self.next_due = self.tick_next
             return False
-        v.cand = now + interval             # take_call follows
-        return True
+        return True                         # take_call opens or joins the tick
 
-    def _next(self, now: float) -> None:
-        """next_due from the views called within the last second (a view not
-        called for longer waits at most for the next due time when it is)."""
+    def _idle_due(self, now: float) -> None:
+        """next_due while this view has no subscription: the next tick if some
+        view has one, else the next offer refresh of a view called lately."""
+        if self.tick is not None:
+            return
+        if any(v.groups for v in list(self.views.values())):
+            self.next_due = self.tick_next
+            return
         nd = math.inf
         for v in list(self.views.values()):
-            if now - v.seen < 1.0 and v.cand < nd:
-                nd = v.cand
+            if now - v.seen < OFFER_REFRESH_S:
+                nd = min(nd, v.offer_t + OFFER_REFRESH_S)
         self.next_due = 0.0 if nd == math.inf else nd
 
     def changed(self) -> None:
         """A subscription opened or closed (network thread): recheck at once."""
         self.next_due = 0.0
+
+    def _group_due(self, g: Group, v: ViewState, now: float) -> bool:
+        """The group may take a snapshot: its subscription's rate and the
+        call's own rate allow it (half a tick of slack: ticks set the pace)."""
+        iv = max(g.interval, v.iv)
+        return now - g.last >= iv - self.tick_interval / 2
+
+    def _complete(self, t: Tick, now: float) -> bool:
+        """Every due group of a view called lately, and every watched series
+        with values gathered, has been served in tick ``t``."""
+        for v in list(self.views.values()):
+            if v.kind == KIND_SERIES or not v.groups or now - v.seen > OFFER_REFRESH_S:
+                continue                    # a view not called for a second does not hold ticks
+            for g in list(v.groups.values()):
+                if g not in t.served and self._group_due(g, v, now):
+                    return False
+        for st in list(self.series.values()):
+            if st.watched and st.refs and st not in t.served and now - st.seen <= OFFER_REFRESH_S:
+                return False
+        return True
+
+    def _open_tick(self, now: float) -> Tick:
+        t = self.tick = Tick(now, threading.get_ident())
+        self.next_due = 0.0                 # calls pass while it is open
+        return t
+
+    def _close_tick(self) -> None:
+        """One event for everything the tick queued, then one batch to the
+        network thread. The event is recorded on the calling thread, which is
+        one of the threads that queue torch work (the training thread, or
+        autograd's worker thread on MPS, where backward hooks run); never on
+        one of caliper's own threads (pump, network, events), which do no
+        device work: there the tick's snapshots are dropped."""
+        t, self.tick = self.tick, None
+        if t is None:
+            return
+        self.tick_next = max(t.t0 + self.tick_interval, time.perf_counter() + 1e-4)
+        self.next_due = self.tick_next
+        if threading.current_thread().name.startswith("caliper."):
+            for p in t.pending:
+                p.stage.busy = False
+            for st, _ in t.chunks:
+                st.held = False
+            return
+        ev = None
+        if t.mps:
+            torch = _torch()
+            ev = torch.mps.Event()
+            ev.record()
+        for p in t.pending:
+            if p.mps:
+                p.event = ev
+        for st, c in t.chunks:
+            if c.mps:
+                c.event = ev
+            st.q.append(c)
+            st.held = False
+        if t.pending:
+            with self.lock:
+                self.pending.extend(t.pending)
+        self.counters["ticks"] += 1
+        self._wake()
 
     def take(self, name: str, plan, now: float) -> bool:
         return self.take_call(name, plan, now, None)
@@ -265,36 +364,47 @@ class NetRing:
         copies to pinned memory. Returns True if a snapshot was queued."""
         call = Call(plan.kind, name, plan, args)
         v = self._register(call, now)
+        v.seen = now
         if not v.groups:
             return False
         with self.lock:
             groups = list(v.groups.values())
+        t = self.tick
         stamp = time.monotonic_ns()
         taken = 0
         serves = getattr(self.engine, "serves", None)
         for g in groups:
             if serves is not None and not serves(call, g.resolved):
                 continue                    # another source's group, or a data view that no longer fits
-            if now - g.last < g.interval:
+            if t is not None and g in t.served:
+                self._close_tick()          # served in this tick: the next step began
+                return bool(taken)
+            if not self._group_due(g, v, now):
                 self.counters["rate_limited"] += 1
                 continue
             stage_free = any(not s.busy for s in g.stages) or len(g.stages) < STAGE_SETS
             if not stage_free:
                 self.counters["ring_full"] += 1
                 continue
+            if t is None:
+                if now < self.tick_next:
+                    return False
+                t = self._open_tick(now)
             red = self.engine.apply(call, g.resolved)
             p = self._stage(g, v, red, stamp)
             if p is None:
                 self.counters["ring_full"] += 1
                 continue
             g.last = now
+            t.served.add(g)
+            t.pending.append(p)
+            t.mps = t.mps or p.mps
             taken += 1
-            with self.lock:
-                self.pending.append(p)
         if taken:
             v.last = now
             self.counters["taken"] += taken
-            self._wake()
+        if t is not None and self._complete(t, now):
+            self._close_tick()
         return bool(taken)
 
     def _stage(self, g: Group, v: ViewState, red: Reduced, stamp: int) -> Pending | None:
@@ -322,13 +432,10 @@ class NetRing:
             stage.aux.copy_(aux, non_blocking=nb)
         if red.stats is not None and red.stats_count:
             stage.stats[:red.stats_count].copy_(red.stats[:red.stats_count], non_blocking=nb)
-        ev = None
-        if data.device.type == "mps":
-            ev = torch.mps.Event()
-            ev.record()
         stage.busy = True
         v.seq += 1
-        return Pending(g, v.name, v.id, v.seq, stamp, stage, red, v.kind, ev)
+        return Pending(g, v.name, v.id, v.seq, stamp, stage, red, v.kind, None,
+                       data.device.type == "mps")
 
     def append(self, name, sp, now, interval) -> bool:
         return False                         # series come through tap()
@@ -351,15 +458,17 @@ class NetRing:
                 v.sig = KIND_SERIES
                 s = self.series[name] = SeriesState(name, v)
         cls = value.__class__
-        if (cls is float or cls is int) and not s.refs:
+        if (cls is float or cls is int) and not s.refs and not s.held:
             s.q.append((float(value), time.monotonic_ns()))
             if s.watched:
                 self._wake()
             return s.watched
-        torch = _torch()
+        torch = _TORCH or _torch()
+        scalar = False
         if cls is torch.Tensor and value.ndim == 0:   # the common case: loss.detach()
-            t = value.detach()
+            t = value.detach() if value.requires_grad else value
             n = 1
+            scalar = True
         elif cls is float or cls is int or cls is bool:
             t = float(value)
             n = 1
@@ -374,25 +483,55 @@ class NetRing:
                 n = SERIES_CAPACITY
         if not s.refs:
             s.thread = threading.get_ident()
+            s.scalars = scalar
+        elif not scalar:
+            s.scalars = False
         s.refs.append(t)
         s.nref += n
         now = time.perf_counter()
-        cadence = SERIES_WATCHED_S if s.watched else SERIES_IDLE_FLUSH_S
-        if s.nref >= SERIES_CHUNK or now - s.flush_t >= cadence:
+        s.seen = now
+        if s.watched:
+            if self.tick is None and now < self.tick_next and s.nref < SERIES_CAPACITY:
+                return True                  # the common step: until the next tick
+            self._tick_series(s, now)
+        elif s.nref >= SERIES_CHUNK or now - s.flush_t >= SERIES_IDLE_FLUSH_S:
             self._flush_series(s, now)
         return s.watched
 
-    def _flush_series(self, s: SeriesState, now: float) -> None:
+    def _tick_series(self, s: SeriesState, now: float) -> None:
+        """A watched series moves its gathered values in the tick, with the
+        snapshots; past SERIES_CAPACITY values it moves them on its own."""
+        t = self.tick
+        if t is not None and (now - t.t0 > self.tick_interval or s in t.served):
+            self._close_tick()              # too old, or the next step began
+            t = None
+        if t is None:
+            if now < self.tick_next:
+                if s.nref >= SERIES_CAPACITY:
+                    self._flush_series(s, now)
+                return
+            t = self._open_tick(now)
+        self._flush_series(s, now, t)
+        t.served.add(s)
+        if self._complete(t, now):
+            self._close_tick()
+
+    def _flush_series(self, s: SeriesState, now: float, tick: Tick | None = None) -> None:
         import torch
         refs, s.refs, n = s.refs, [], s.nref
         s.nref = 0
         s.flush_t = now
         if not refs:
             return
+        if s.scalars:                        # the common case: loss.detach() at every step
+            try:
+                chunk = torch.stack(refs)
+            except RuntimeError:             # on several devices
+                chunk = None
+            if chunk is not None:
+                self._move(s, chunk, n, chunk.device, tick)
+                return
         dev = next((r.device for r in refs if isinstance(r, torch.Tensor)), torch.device("cpu"))
-        if all(isinstance(r, torch.Tensor) and r.ndim == 0 and r.device == dev for r in refs):
-            self._move(s, torch.stack(refs), n, dev)          # the common case: loss.detach()
-            return
         parts = []
         floats = []
         for r in refs:
@@ -406,11 +545,12 @@ class NetRing:
                 floats.append(r)
         if floats:
             parts.append(torch.tensor(floats, dtype=torch.float32).to(dev))
-        self._move(s, parts[0] if len(parts) == 1 else torch.cat(parts), n, dev)
+        self._move(s, parts[0] if len(parts) == 1 else torch.cat(parts), n, dev, tick)
 
-    def _move(self, s: SeriesState, chunk, n: int, dev) -> None:
+    def _move(self, s: SeriesState, chunk, n: int, dev, tick: Tick | None = None) -> None:
         """Queue chunk's n values to pinned host memory (a buffer the pump has
-        finished with when there is one) and record an event."""
+        finished with when there is one): into ``tick``, whose event covers it,
+        or with an event of its own."""
         import torch
         pin = dev.type != "cpu"
         buf = None
@@ -422,12 +562,18 @@ class NetRing:
         if buf is None:
             buf = torch.empty(max(n, SERIES_CHUNK), dtype=torch.float32, pin_memory=pin)
         buf[:n].copy_(chunk, non_blocking=pin)                # casts to float32 if needed
-        ev = None
-        if dev.type == "mps":
-            ev = torch.mps.Event()
-            ev.record()
-        s.q.append(Chunk(buf, n, time.monotonic_ns(), ev))
+        mps = dev.type == "mps"
         self.counters["series_chunks"] += 1
+        c = Chunk(buf, n, time.monotonic_ns(), None, mps)
+        if tick is not None:
+            tick.chunks.append((s, c))
+            tick.mps = tick.mps or mps
+            s.held = True
+            return
+        if mps:
+            c.event = torch.mps.Event()
+            c.event.record()
+        s.q.append(c)
         if s.watched:
             self._wake()
 
@@ -438,6 +584,8 @@ class NetRing:
         many are still in flight. Not for the training loop."""
         now = time.perf_counter()
         me = threading.get_ident()
+        if self.tick is not None:
+            self._close_tick()
         for s in list(self.series.values()):
             if (name is None or s.name == name) and s.refs and s.thread == me:
                 self._flush_series(s, now)       # on another thread they wait for the next call
@@ -453,6 +601,8 @@ class NetRing:
             time.sleep(0.001)
 
     def forget(self, name: str) -> None:
+        if self.tick is not None:
+            self._close_tick()
         with self.lock:
             if self.views.pop(name, None) is not None:
                 self.views_version += 1

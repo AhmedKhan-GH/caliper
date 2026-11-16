@@ -83,9 +83,11 @@ class Reduced:
     """The payload of one snapshot under one resolved data view, still on the
     call's device (or CPU tensors for a CPU call)."""
     data: Any                    # heatmap (H, W) f32, image (H, W, 4) u8, points (N, D) f32,
-                                 # histogram (B,) f32; contiguous
-    aux: Any = None              # points: (N,) f32 labels or values
-    stats: Any = None            # 1-D f32 tensor of stats_count entries, or None
+                                 # histogram (B,) f32
+    aux: Any = None              # points: (N,) labels or values (cast to f32 when staged)
+    stats: Any = None            # 1-D f32 tensor of stats_count entries; None for a heatmap or
+                                 # points whose stats are those of the payload as sent: the
+                                 # transport computes them on the host, with no device work
     stats_count: int = 0
     colormap: int = 0
     flags: int = 0               # CALIPER_NET_SNAP_* (== caliper._ring FLAG_* >> 1, see _snap_flags)
@@ -140,6 +142,8 @@ class DataViewEngine:
         self._scratch: dict = {}           # (view name, plan key) -> RingSlot
         self._programs: OrderedDict = OrderedDict()   # (name, signature, resolved) -> Program
         self._stats: dict = {}             # (view name, key) -> f32[8] stats of a point sample
+        self._canon: dict = {}             # id(resolved) -> (resolved, its canonical JSON)
+        self._last = None                  # (call, resolved, program) of the last lookup
 
     def forget(self, name: str) -> None:
         """View ``name`` was removed: drop its scratch buffers and programs."""
@@ -199,7 +203,20 @@ class DataViewEngine:
     def _program(self, call: Call, resolved: dict):
         """The compiled data view of a subscription group for this call's
         source sizes, or None when it does not fit them (any more)."""
-        key = (call.name, self.signature(call), _canonical(resolved))
+        last = self._last
+        if last is not None and last[0] is call and last[1] is resolved:
+            return last[2]                 # serves() then apply() for the same group
+        p = self._lookup(call, resolved)
+        self._last = (call, resolved, p)
+        return p
+
+    def _lookup(self, call: Call, resolved: dict):
+        e = self._canon.get(id(resolved))
+        if e is None or e[0] is not resolved:   # the entry holds resolved: its id stays its own
+            if len(self._canon) >= _PROGRAMS:
+                self._canon.clear()
+            e = self._canon[id(resolved)] = (resolved, _canonical(resolved))
+        key = (call.name, self.signature(call), e[1])
         p = self._programs.get(key)
         if p is not None:
             self._programs.move_to_end(key)
@@ -251,6 +268,7 @@ class DataViewEngine:
 
     def apply(self, call: Call, resolved: dict) -> Reduced:
         p = self._program(call, resolved)
+        self._last = None                  # do not keep the call's tensors
         if p is None:                      # NetRing asks serves() first; this is a guard
             raise _bad(dv.DataViewError("the data view does not fit the view's data any more"))
         c = self._dv(call)
@@ -260,7 +278,55 @@ class DataViewEngine:
             slot = self._scratch_slot(call.name, plan)
             dv.finish(slot, p, pre, plan)
             return self._reduced(plan, slot, p, slot.payload, slot.aux, slot.stats)
+        fast = self._fast(call, p)
+        if fast is not None:
+            return fast
         return self._apply_plain(call, p)
+
+    def _fast(self, call: Call, p) -> Reduced | None:
+        """A view without dims whose plan would only copy the call's tensor (a
+        float32 2-D heatmap, float32 (N, 2|3) points): the data view is applied
+        to that tensor itself, with no scratch copy. Stats: a pooled or tiled
+        heatmap reports the range of its data before pooling (protocol v2's
+        rule, as dv.finish), one aminmax; otherwise they are the payload's,
+        which the transport computes on the host."""
+        import torch
+        plan = call.plan
+        common = dict(colormap=plan.colormap, flags=snap_flags(plan.flags), vmin=plan.vmin,
+                      vmax=plan.vmax, axes=p.axes, tile=p.tile)
+        if call.kind == KIND_HEATMAP:
+            src = _plain_source(call)
+            if src is None:
+                return None
+            y, pre = dv._apply(src, p, pre=True)
+            stats = None
+            if (p.tile is not None or (p.pool and p.pool[1])) and \
+                    plan.flags & (FLAG_AUTO_VMIN | FLAG_AUTO_VMAX):
+                key = (call.name, "range")
+                r = self._stats.get(key)
+                if r is None or r[0].device != src.device:
+                    stats = torch.zeros(2, dtype=torch.float32, device=src.device)
+                    r = self._stats[key] = (stats, (stats[0], stats[1]))
+                stats = r[0]
+                torch.aminmax(pre, out=r[1])
+            if not y.is_contiguous():            # a strided zoom: MPS copies to the host need it
+                y = y.contiguous()
+            return Reduced(y, stats=stats, stats_count=2, **common)
+        if call.kind == KIND_POINTS:
+            fast = _points_source(call)
+            if fast is None:
+                return None
+            z, lab, _, d = fast
+            y = dv._apply(z, p)
+            if not y.is_contiguous():
+                y = y.contiguous()
+            if lab is not None and (p.sample is not None or p.row_slice is not None):
+                lab = dv.take_rows(lab, p)
+            if lab is not None and not lab.is_contiguous():
+                lab = lab.contiguous()
+            return Reduced(y, aux=lab, stats=None, stats_count=STATS_FLOATS, points_dims=d,
+                           label_count=plan.label_count, **common)
+        return None
 
     def _reduced(self, plan, slot, p, data, aux, stats) -> Reduced:
         common = dict(colormap=plan.colormap, flags=snap_flags(plan.flags), vmin=plan.vmin,
@@ -312,6 +378,39 @@ class DataViewEngine:
         if aux is not None and plan.label_count == 0 and plan.flags & (FLAG_AUTO_VMIN | FLAG_AUTO_VMAX):
             torch.aminmax(aux, out=(stats[0], stats[1]))
         return self._reduced(plan, slot, p, y.contiguous(), aux, stats)
+
+
+def _plain_source(call: Call):
+    """The call's own tensor when the plan would only copy it: a 2-D float32
+    heatmap on the plan's device (no cast, no mosaic). None otherwise."""
+    if call.args is None or call.plan.key[3] != "plain":
+        return None
+    t = call.args[0]
+    import torch
+    if (isinstance(t, torch.Tensor) and t.ndim == 2 and t.dtype == torch.float32
+            and t.device == call.plan.device):
+        return t.detach()
+    return None
+
+
+def _points_source(call: Call):
+    """(z, labels, N, D) straight from the call when they need no cast or move:
+    float32 (N, 2|3) points with labels (if any) of N values on the same device."""
+    if call.args is None:
+        return None
+    import torch
+    z, labels = call.args[0], call.args[1]
+    p = call.plan
+    if not (isinstance(z, torch.Tensor) and z.ndim == 2 and z.shape[1] in (2, 3)
+            and z.dtype == torch.float32 and z.device == p.device):
+        return None
+    lab = None
+    if labels is not None:
+        if not (isinstance(labels, torch.Tensor) and labels.device == z.device
+                and labels.numel() == z.shape[0]):
+            return None
+        lab = labels.detach().reshape(-1)
+    return z.detach(), lab, int(z.shape[0]), int(z.shape[1])
 
 
 def make_engine() -> Engine:
