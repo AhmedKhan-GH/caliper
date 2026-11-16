@@ -178,12 +178,11 @@ void BuilderPane::update() {
             for (const auto& l : r.result.value("loaders", json::array()))
                 for (const auto& o : l.value("outputs", json::array()))
                     if (o.is_string()) fresh_.push_back(o.get<std::string>());
-            if (!r.result.value("refused", json::array()).empty()) {
-                const json& first = r.result["refused"][0];
-                error_ = Error(first.value("code", "loader.refused"), first.value("message", ""), first.value("path", ""));
-            } else {
-                error_ = {};
-            }
+            refused_.clear();
+            for (const auto& f : r.result.value("refused", json::array()))
+                refused_.push_back({f.value("path", ""), f.value("code", "loader.refused"), f.value("message", "")});
+            if (!refused_.empty()) error_ = Error(refused_[0].code, refused_[0].message, refused_[0].path);
+            else error_ = {};
             refresh_catalog();
             if (!fresh_.empty()) select(fresh_.front());
         }
@@ -919,6 +918,14 @@ bool BuilderPane::remove_transform(size_t index) {
     return run_plan(std::move(plan));
 }
 
+bool BuilderPane::set_spec_id(const std::string& id) {
+    if (blocked()) return false;
+    if (id == open_->spec.applet.id) return true;
+    spec::Spec s = open_->spec;
+    s.applet.id = id;
+    return run_plan(plan_spec_text(s));
+}
+
 bool BuilderPane::set_spec_title(const std::string& title) {
     if (blocked()) return false;
     spec::Spec s = open_->spec;
@@ -1071,13 +1078,15 @@ bool BuilderPane::save() {
 
 // ---- files ------------------------------------------------------------------------------
 
-bool BuilderPane::drop_files(const std::vector<std::string>& paths) {
+bool BuilderPane::drop_files(const std::vector<std::string>& paths, CommandOrigin origin) {
     if (paths.empty()) return refuse(Error("builder.nothing", "No files.", ""));
     if (import_) return refuse(Error("builder.busy", "An import is running.", ""));
     json list = json::array();
     for (const auto& p : paths) list.push_back(p);
     CommandInvocation inv = invocation("data.import", {{"paths", list}, {"run", true}});
+    inv.origin = origin;
     inv.group = next_group();
+    refused_.clear();
     sent_.push_back(inv);
     import_ = port_->submit(std::move(inv));
     error_ = {};

@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <random>
 
 namespace caliper_host {
@@ -156,7 +157,14 @@ BuilderPaneLayout BuilderPane::layout(const ImRect& area, float text_scale) cons
     in.area = sr(area);
     in.build = build_;
     in.text_open = text_open_;
+    in.chat = chat_open_ && chat_draw_;
+    if (layout_rule_) return layout_rule_(in, text_scale);
     return compute_builder_pane_layout(in, BuilderPaneMetrics::for_text_scale(text_scale));
+}
+
+void BuilderPane::set_chat(bool open, std::function<void(const SpecRect&)> draw) {
+    chat_open_ = open;
+    chat_draw_ = std::move(draw);
 }
 
 // ---- small widgets in the house style -----------------------------------------------------
@@ -705,6 +713,10 @@ void BuilderPane::draw_body(const ImRect& area, SpecRuntime& runtime, const Spec
         draw_primitives(L.primitives);
     }
     if (L.right) draw_properties(L.properties, runtime);
+    if (L.chat && chat_draw_) {
+        d.item("chat", rr(L.chat_rect));
+        chat_draw_(L.chat_rect);
+    }
     if (L.strip) draw_text_strip(L.strip_rect);
 
     // ---- what is dragged, by the pointer.
@@ -776,6 +788,36 @@ void BuilderPane::draw_sources(const SpecRect& rect) {
             int last_group = -1;
             const ImGuiIO& io = ImGui::GetIO();
             bool want_add = false;   // run after the rows: an add rebuilds them
+            // The files the last drop refused: the file's name and the loader
+            // store's code, its reason in the tooltip, until the next drop.
+            if (!refused_.empty()) {
+                const ImVec2 p = ImGui::GetCursorScreenPos();
+                caps(L, ldl, v2(p.x + pad, p.y + std::round(row * 0.45f) - 1.0f), L.faint, "Refused");
+                ImGui::Dummy(v2(w, std::round(row * 1.15f)));
+                for (size_t i = 0; i < refused_.size(); ++i) {
+                    const Refused& f = refused_[i];
+                    const ImVec2 rp = ImGui::GetCursorScreenPos();
+                    const ImRect rr_(rp, v2(rp.x + w, rp.y + row));
+                    ImGui::PushID((int)i);
+                    ImGui::InvisibleButton("##refused", rr_.GetSize());
+                    const bool hovered = ImGui::IsItemHovered();
+                    ImGui::PopID();
+                    d.item("refused:" + std::filesystem::path(f.path).filename().string(), rr_);
+                    if (hovered) ldl->AddRectFilled(rr_.Min, rr_.Max, L.plate_hover);
+                    std::string code = f.code;
+                    if (code.rfind("loader.", 0) == 0) code = code.substr(7);
+                    const float cw = std::min(extent(L.mono, L.mono_size, code).x, w * 0.5f);
+                    const float x = rr_.Min.x + pad + std::round(18.0f * s);
+                    put(ldl, L.ui, L.ui_size, v2(x, rr_.Min.y + (row - d.ui_h()) * 0.5f), L.secondary,
+                        fit(L.ui, L.ui_size, std::filesystem::path(f.path).filename().string(),
+                            rr_.Max.x - pad - cw - std::round(10.0f * s) - x));
+                    const std::string shown = fit(L.mono, L.mono_size, code, cw + 1.0f);
+                    put(ldl, L.mono, L.mono_size,
+                        v2(rr_.Max.x - pad - extent(L.mono, L.mono_size, shown).x, rr_.Min.y + (row - d.mono_h()) * 0.5f),
+                        L.faint, shown);
+                    if (hovered && !f.message.empty()) ImGui::SetTooltip("%s", f.message.c_str());
+                }
+            }
             for (const PaneSource* r : visible) {
                 if ((int)r->group != last_group) {
                     last_group = (int)r->group;
@@ -1557,10 +1599,12 @@ void BuilderPane::draw_spec_properties(Rows& rows) {
     const spec::Spec s = open_->spec;   // a copy: the fields below change the open spec
     const std::optional<std::string> path = open_->path;
     rows.section("Spec");
-    {
+    {   // The applet's id: a rename of the whole spec on Enter or when left.
         const ImRect r = rows.next();
         const ImRect v = rows.label(r, "Id");
-        put(rows.dl, L.mono, L.mono_size, v2(v.Min.x, v.Min.y + (v.GetHeight() - d.mono_h()) * 0.5f), L.text, s.applet.id);
+        const Field f = text_field(d.bufs, L, "##spec.id", v, s.applet.id, "", true, false, ImGuiInputTextFlags_AutoSelectAll);
+        if ((f.entered || f.deactivated) && f.value != s.applet.id && !f.value.empty()) set_spec_id(f.value);
+        d.item("prop:spec.id", v);
     }
     {
         const ImRect r = rows.next();

@@ -7,6 +7,8 @@
 // the whole layout; the spec text both ways, an invalid draft included;
 // undo, redo and save; a busy session; renames.
 #include "builder/builder_pane.h"
+#include "builder/widget_agent.h"
+#include "builder/widget_surface.h"
 
 #include "spec_test_workspace.h"
 
@@ -14,6 +16,7 @@
 
 #include <doctest/doctest.h>
 
+#include <chrono>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -244,7 +247,7 @@ TEST_CASE("builder pane: dropped files are imported from the builder origin and 
     CHECK(p.focused_source() == "table:run42_metrics");
     REQUIRE(p.sent().size() == 1);
     CHECK(p.sent()[0].name == "data.import");
-    CHECK(p.sent()[0].origin == cb::CommandOrigin::builder);
+    CHECK(p.sent()[0].origin == cb::CommandOrigin::ui);   // a file the person dropped
     const PaneSource* t = p.find_source("table:run42_metrics");
     REQUIRE(t);
     CHECK(t->group == PaneSource::Group::table);
@@ -252,12 +255,12 @@ TEST_CASE("builder pane: dropped files are imported from the builder origin and 
     const PaneSource* x = p.find_source("tensor:attn_weights");
     REQUIRE(x);
     CHECK(x->shape_text == "f32 2\xc3\x97" "3\xc3\x97" "8\xc3\x97" "8");
-    // The import is one step from the builder origin in the journal.
+    // The import is one step from the ui origin in the journal.
     bool found = false;
     for (const auto& e : r.journal())
         if (e["name"] == "data.import") {
             found = true;
-            CHECK(e["origin"] == "builder");
+            CHECK(e["origin"] == "ui");
         }
     CHECK(found);
     // The filter.
@@ -267,13 +270,23 @@ TEST_CASE("builder pane: dropped files are imported from the builder origin and 
     r.pane->set_filter("accur");   // a column's name
     CHECK(p.visible_sources().size() == 1);
 
-    // A file that cannot be read: the import answers it, nothing is selected anew.
-    REQUIRE(r.pane->drop_files({r.data + "/missing.parquet"}));
+    // A file that cannot be read and a pickle: the import refuses each with
+    // its code and reason, which the pane keeps for the palette, and selects
+    // nothing anew.
+    { std::ofstream(r.data + "/model.pkl") << "not a model"; }
+    REQUIRE(r.pane->drop_files({r.data + "/missing.parquet", r.data + "/model.pkl"}));
     CHECK_FALSE(r.pane->drop_files({r.data + "/run42_metrics.parquet"}));   // one import at a time
     r.s->queue().drain();
     r.pane->update();
     CHECK(r.pane->error().code.rfind("loader.", 0) == 0);
     CHECK(p.fresh().empty());
+    REQUIRE(p.refused().size() == 2);
+    bool pickle = false;
+    for (const auto& f : p.refused()) {
+        CHECK_FALSE(f.message.empty());
+        if (f.path.find("model.pkl") != std::string::npos) pickle = f.code == "loader.pickle_refused";
+    }
+    CHECK(pickle);
 }
 
 TEST_CASE("builder pane: the dashboard by hand, one undo step per gesture, equal to the fixture") {
@@ -284,9 +297,11 @@ TEST_CASE("builder pane: the dashboard by hand, one undo step per gesture, equal
     REQUIRE(open);
     CHECK(open->spec == d);
     CHECK(r.pane->text() == spec::to_toml(d));
-    // Every command the pane sent, and every line of the journal, is the builder's.
-    for (const auto& c : r.pane->sent()) CHECK(c.origin == cb::CommandOrigin::builder);
-    for (const auto& e : r.journal()) CHECK(e["origin"] == "builder");
+    // Every command the pane sent, and every line of the journal, is the
+    // builder's, but the import of the files the person dropped, the ui's.
+    for (const auto& c : r.pane->sent())
+        CHECK(c.origin == (c.name == "data.import" ? cb::CommandOrigin::ui : cb::CommandOrigin::builder));
+    for (const auto& e : r.journal()) CHECK(e["origin"] == (e["name"] == "data.import" ? "ui" : "builder"));
 
     // Two undos take back the divider and the columns, two redos bring them back.
     const size_t steps = r.steps();
@@ -508,4 +523,114 @@ TEST_CASE("builder pane: a busy session sends nothing") {
     CHECK(p.sent().size() == sent);
     r.port->busy = false;
     CHECK(p.add_primitive(spec::Primitive::series));
+}
+
+TEST_CASE("builder pane: an approved agent edit, a ⌘K Accept and a hand edit share one history") {
+    Rig r = rig("pane-history");
+    BuilderPane& p = *r.pane;
+    p.select("table:run42_metrics");
+    REQUIRE(p.add_primitive(spec::Primitive::series));   // the hand's first step
+    auto title = [&] {
+        const spec::Panel* x = p.open_spec()->spec.find_panel("series");
+        return x && x->title ? *x->title : std::string();
+    };
+    auto top_origin = [&] { return r.s->registry().history_state(1).undo.front().origin; };
+
+    // An agent's edit, held for review and approved on the cards: through the
+    // session's queue, as Caliper API submits it, and the queue's approve().
+    cb::CommandInvocation agent;
+    agent.name = "panel.patch";
+    agent.args = {{"id", "series"}, {"patch", {{"title", "Agent"}}}};
+    agent.origin = cb::CommandOrigin::agent;
+    auto held = r.s->queue().submit(agent);
+    r.s->queue().drain();
+    const auto pending = r.s->registry().pending_approvals();
+    REQUIRE(pending.size() == 1);
+    auto decided = r.s->queue().approve(pending[0].approval);
+    r.s->queue().drain();
+    REQUIRE(held.get().ok);
+    REQUIRE(decided.get().ok);
+    p.update();
+    CHECK(title() == "Agent");
+    CHECK(top_origin() == cb::CommandOrigin::agent);
+    // Undo in the page bar takes back the agent's edit, the last one.
+    REQUIRE(p.undo());
+    CHECK(title().empty());
+    REQUIRE(p.redo());
+    CHECK(title() == "Agent");
+
+    // ⌘K on the panel: the inline surface's preview, accepted as one step.
+    auto clock = std::chrono::steady_clock::now();
+    auto now = [&clock] { return clock; };
+    WidgetScript script;
+    WidgetScriptTurn turn;
+    WidgetScriptStep edit;
+    edit.at = std::chrono::milliseconds(100);
+    edit.kind = WidgetScriptStep::Kind::edit;
+    edit.edit.name = "panel.patch";
+    edit.edit.args = {{"id", "series"}, {"patch", {{"options", {{"y_log", true}}}}}};
+    WidgetScriptStep reply;
+    reply.at = std::chrono::milliseconds(200);
+    reply.kind = WidgetScriptStep::Kind::message;
+    reply.text = "A log y axis.";
+    turn.steps = {edit, reply};
+    turn.end_at = std::chrono::milliseconds(300);
+    script.turns = {turn};
+    ScriptedWidgetAgent widget_agent(
+        script, [&](cb::CommandInvocation inv) { return r.s->invoke(std::move(inv)); }, now,
+        [&](const std::string& id) { return (int)r.s->preview(id).edits; });
+    SessionWidgetSession host(*r.s);
+    WidgetSurface::Hooks hooks;
+    hooks.now = now;
+    WidgetSurface surface(host, widget_agent, hooks);
+    REQUIRE(surface.open(WidgetTarget::for_panel("series")));
+    surface.set_text("Use a log y axis");
+    surface.submit();
+    for (int i = 0; i < 20 && surface.state() != WidgetState::preview; ++i) {
+        clock += std::chrono::milliseconds(50);
+        surface.update();
+    }
+    REQUIRE(surface.state() == WidgetState::preview);
+    surface.accept();
+    REQUIRE(surface.state() == WidgetState::applied);
+    p.update();
+    auto y_log = [&] { return p.open_spec()->spec.find_panel("series")->options.y_log.value_or(false); };
+    CHECK(y_log());
+    // The Accept's step holds the agent's edit under the preview's group.
+    CHECK(top_origin() == cb::CommandOrigin::agent);
+    CHECK(r.s->registry().history_state(1).undo.front().group.rfind("widget-", 0) == 0);
+    REQUIRE(p.undo());   // the Accept, as one step
+    CHECK_FALSE(y_log());
+    CHECK(title() == "Agent");
+    REQUIRE(p.redo());
+    CHECK(y_log());
+
+    // A hand edit after both: Undo takes back the hand's, then the Accept,
+    // then the agent's.
+    REQUIRE(p.set_title("Hand"));
+    CHECK(top_origin() == cb::CommandOrigin::builder);
+    REQUIRE(p.undo());
+    CHECK(title() == "Agent");
+    CHECK(y_log());
+    REQUIRE(p.undo());
+    CHECK_FALSE(y_log());
+    REQUIRE(p.undo());
+    CHECK(title().empty());
+}
+
+TEST_CASE("builder pane: a new spec's id from its title") {
+    auto none = [](const std::string&) { return false; };
+    CHECK(pane_new_spec_id("Run 42", none) == "run-42");
+    CHECK(pane_new_spec_id("  Loss & accuracy!  ", none) == "loss-accuracy");
+    CHECK(pane_new_spec_id("", none) == "dashboard");
+    CHECK(pane_new_spec_id("42 runs", none) == "d-42-runs");
+    CHECK(pane_new_spec_id("Untitled", [](const std::string& id) { return id == "untitled"; }) == "untitled-2");
+    CHECK(pane_valid_id(pane_new_spec_id(std::string(200, 'x'), none)));
+    // The spec's own id, renamed through its text.
+    Rig r = rig("pane-spec-id");
+    REQUIRE(r.pane->set_spec_id("run42-board"));
+    CHECK(r.pane->open_spec()->spec.applet.id == "run42-board");
+    CHECK(r.pane->sent().back().name == "spec.set_text");
+    CHECK_FALSE(r.pane->set_spec_id("Run 42"));
+    CHECK(r.pane->error().code == "spec.bad_id");
 }

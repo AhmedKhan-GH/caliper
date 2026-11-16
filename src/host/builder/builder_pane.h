@@ -289,7 +289,9 @@ public:
     bool add_transform(caliper_builder::spec::TransformOp op);
     bool set_transform(size_t index, const nlohmann::json& transform);   // the whole transform, as in source.add
     bool remove_transform(size_t index);
-    // The spec's own title and description (no focus), sent as spec.set_text.
+    // The spec's own applet id, title and description (no focus), sent as
+    // spec.set_text.
+    bool set_spec_id(const std::string& id);
     bool set_spec_title(const std::string& title);
     bool set_spec_description(const std::string& description);
     // Removes the focused panel, or the focused spec source.
@@ -322,11 +324,20 @@ public:
     bool can_undo() const;
     bool can_redo() const;
 
-    // ---- files dropped on the window: data.import of the paths from the
-    // builder origin through the session's queue, which runs their loaders;
-    // the sources they make are selected in the palette once it answers.
-    bool drop_files(const std::vector<std::string>& paths);
+    // ---- files dropped on the window: data.import of the paths, from the
+    // ui origin (a file the person dropped), through the session's queue,
+    // which the app runs on its worker with their loaders; the sources they
+    // make are selected in the palette once it answers.
+    bool drop_files(const std::vector<std::string>& paths,
+                    caliper_builder::CommandOrigin origin = caliper_builder::CommandOrigin::ui);
     bool importing() const { return import_.has_value(); }
+    // The files the last import refused, each with its path, the loader
+    // store's code (loader.pickle_refused, loader.no_reader, ...) and its
+    // reason; the Sources palette lists them until the next drop.
+    struct Refused {
+        std::string path, code, message;
+    };
+    const std::vector<Refused>& refused() const { return refused_; }
 
     // The last gesture's error: refused before anything was sent, or the
     // command's own; empty after one that succeeded.
@@ -345,8 +356,12 @@ public:
     // ⌫ on the focused panel, Escape (a drag, a draft, the focus). True when
     // the pane took Escape.
     bool keys(bool escape);
-    // The regions of `area` this frame.
+    // The regions of `area` this frame: the layout rule's, which is
+    // compute_builder_pane_layout() unless the page gives its own
+    // (layout_spec_page(), which sizes the columns as the side chat does).
     BuilderPaneLayout layout(const ImRect& area, float text_scale) const;
+    using LayoutRule = std::function<BuilderPaneLayout(const BuilderPaneLayoutInput& in, float text_scale)>;
+    void set_layout_rule(LayoutRule rule) { layout_rule_ = std::move(rule); }
     // In build mode, inside a window over the work area: lays the regions
     // out, draws the runtime on the canvas, then the columns, the strip and
     // the canvas's overlays, and turns the mouse into gestures. Outside build
@@ -354,6 +369,11 @@ public:
     // focused panel, is taken when the page changed it since the last call
     // and holds the pane's focused panel after it.
     void draw(const ImRect& area, SpecRuntime& runtime, const SpecLook& look, std::string* focus = nullptr);
+    // The side chat in the right column's lower part while it is open in
+    // build mode: `draw` is called with its rectangle inside the page's
+    // window (ChatPane::draw_in()). Closed, or without `draw`, Properties
+    // takes the whole column.
+    void set_chat(bool open, std::function<void(const SpecRect&)> draw = {});
     // Named rectangles of the last draw ("source:table:run42_metrics",
     // "primitive:series", "prop:title", "panel:curves", "divider:", ...), for
     // drivers and tests; false when the name was not drawn.
@@ -407,6 +427,9 @@ private:
     Options options_;
     bool build_ = false;
     bool text_open_ = false;
+    bool chat_open_ = false;
+    std::function<void(const SpecRect&)> chat_draw_;
+    LayoutRule layout_rule_;
 
     std::optional<caliper_builder::OpenSpec> open_;
     uint64_t seen_version_ = ~uint64_t(0);
@@ -431,6 +454,7 @@ private:
     std::vector<caliper_builder::spec::Diagnostic> diagnostics_;
 
     std::optional<std::future<caliper_builder::CommandResult>> import_;
+    std::vector<Refused> refused_;
 
     caliper_builder::Error error_;
     std::vector<caliper_builder::CommandInvocation> sent_;

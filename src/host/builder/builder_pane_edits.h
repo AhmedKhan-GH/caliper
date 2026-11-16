@@ -26,6 +26,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -132,6 +133,11 @@ bool pane_valid_id(const std::string& id);
 // A spec id from a catalog name ("run42_metrics", "attn.weights" ->
 // "attn_weights"), unique among the spec's sources.
 std::string pane_source_id(const std::string& catalog_name, const caliper_builder::spec::Spec& spec);
+// The applet id of a new spec titled `title`: its letters and digits in
+// lower case, every other run of characters one '-', "dashboard" when
+// nothing is left, "d-" before an id that does not begin with a letter, and
+// then "-2", "-3", ... while `taken` says the id is used.
+std::string pane_new_spec_id(const std::string& title, const std::function<bool(const std::string&)>& taken);
 // The id of a new panel of `p`: its primitive's name, then "-2", "-3", ...
 std::string pane_panel_id(caliper_builder::spec::Primitive p, const caliper_builder::spec::Spec& spec);
 

@@ -407,6 +407,26 @@ std::string pane_source_id(const std::string& name, const spec::Spec& s) {
     return unique_id(id, [&](const std::string& c) { return s.find_source(c) != nullptr; });
 }
 
+std::string pane_new_spec_id(const std::string& title, const std::function<bool(const std::string&)>& taken) {
+    std::string id;
+    bool dash = false;
+    for (char c : title) {
+        const char l = (char)std::tolower((unsigned char)c);
+        if ((l >= 'a' && l <= 'z') || (l >= '0' && l <= '9')) {
+            if (dash && !id.empty()) id += '-';
+            dash = false;
+            id += l;
+        } else {
+            dash = true;
+        }
+    }
+    if (id.empty()) id = "dashboard";
+    if (id[0] < 'a' || id[0] > 'z') id = "d-" + id;
+    if (id.size() > 56) id.resize(56);
+    while (!id.empty() && id.back() == '-') id.pop_back();
+    return unique_id(id, taken ? taken : [](const std::string&) { return false; });
+}
+
 std::string pane_panel_id(Primitive p, const spec::Spec& s) {
     return unique_id(spec::to_string(p), [&](const std::string& c) { return s.find_panel(c) != nullptr; });
 }
