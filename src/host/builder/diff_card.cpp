@@ -226,6 +226,22 @@ void draw_compact_diff(ImDrawList* dl, const SpecLook& L, const ImRect& d, const
                        card_fit_text(L.mono, L.mono_size, line.key, key_w - 8.0f * s));
         x += key_w;
         const std::string arrow = "\xE2\x86\x92";   // →
+        // A whole panel or source added or removed ("panel rows"), or the
+        // layout changed: a word for what happened, no values.
+        auto ends_with_id = [&](const std::string& id) {
+            return !id.empty() && line.key.size() > id.size() + 1 &&
+                   line.key.compare(line.key.size() - id.size() - 1, std::string::npos, " " + id) == 0;
+        };
+        if ((line.kind == WidgetDiffLine::Kind::added && ends_with_id(line.after)) ||
+            (line.kind == WidgetDiffLine::Kind::removed && ends_with_id(line.before)) ||
+            (line.kind == WidgetDiffLine::Kind::changed && line.before.empty() && line.after.empty())) {
+            const char* word = line.kind == WidgetDiffLine::Kind::added   ? "added"
+                               : line.kind == WidgetDiffLine::Kind::removed ? "removed"
+                                                                            : "changed";
+            card_draw_text(dl, L.mono, L.mono_size, ImVec2(x, ty),
+                           line.kind == WidgetDiffLine::Kind::added ? L.text : L.faint, word);
+            continue;
+        }
         if (line.kind != WidgetDiffLine::Kind::added && !line.before.empty()) {
             const std::string b = card_fit_text(L.mono, L.mono_size, line.before, (d.Max.x - x) * 0.45f);
             const float bw = card_text_extent(L.mono, L.mono_size, b).x;

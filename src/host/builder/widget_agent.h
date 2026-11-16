@@ -51,11 +51,21 @@ struct WidgetTarget {
     std::string path;                   // property: such as options.colormap
     std::string loader;                 // dropped_file
     std::vector<std::string> catalog;   // dropped_file: the loader's outputs
+    // selection: the selected rows, which the context bundle carries.
+    std::optional<caliper_builder::WidgetSelection> selection;
+    // Where the prompt is drawn: "" in the target panel, under its title
+    // strip (a panel, a selection); otherwise the name of a row of the
+    // builder pane's columns, under which the pane draws it ("source:<key>"
+    // for a dropped file's source, "prop:<path>" for a property).
+    std::string anchor;
 
     static WidgetTarget for_panel(std::string id);
-    // The panel whose frame the surface draws in, or "" (a dropped file, a
-    // property of a source).
-    const std::string& frame_panel() const { return panel; }
+    static WidgetTarget for_selection(std::string panel, caliper_builder::WidgetSelection selection);
+    static WidgetTarget for_dropped_file(std::string loader, std::vector<std::string> catalog, std::string anchor);
+    // A property of a panel (`panel` set) or of a source (`source` set), at `path`.
+    static WidgetTarget for_property(std::string panel, std::string source, std::string path);
+    // The panel whose frame the surface draws in, or "" when it is drawn at a row.
+    std::string frame_panel() const { return anchor.empty() ? panel : std::string(); }
     // The same target as the session library's context bundle takes it.
     caliper_builder::WidgetTarget to_builder() const;
     // {"kind", ...} as session/new's _meta.caliper.widget.target takes it

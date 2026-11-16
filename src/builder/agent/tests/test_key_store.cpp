@@ -315,6 +315,33 @@ TEST_CASE("the offline switch passes through to the child and cannot be stripped
     }
 }
 
+TEST_CASE("a child that must see no key gets none of the key and override variables") {
+    acp::SpawnOptions spawn;
+    spawn.argv = {"caliper-agent", "probe"};
+    spawn.env = {{"KEEP", "1"},
+                 {"ANTHROPIC_API_KEY", "inherited-0123456789"},
+                 {"CALIPER_MODEL_API_KEY", "inherited-0123456789"},
+                 {"ANTHROPIC_BASE_URL", "http://elsewhere.example"},
+                 {"CALIPER_AGENT_OFFLINE", "0"}};
+    spawn.env_remove = {"ANTHROPIC_LOG"};
+    const char* had = std::getenv("CALIPER_AGENT_OFFLINE");
+    const std::string before = had ? had : "";
+    set_parent_env("CALIPER_AGENT_OFFLINE", "1");
+    strip_key_environment(&spawn);
+    set_parent_env("CALIPER_AGENT_OFFLINE", had ? before.c_str() : nullptr);
+    for (const char* name : {"ANTHROPIC_API_KEY", "CALIPER_MODEL_API_KEY", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY",
+                             "OPENAI_BASE_URL", "CALIPER_AGENT_TEST_SCRIPT", "ANTHROPIC_LOG"}) {
+        CAPTURE(name);
+        CHECK(find_var(spawn, name) == nullptr);
+        CHECK(std::count(spawn.env_remove.begin(), spawn.env_remove.end(), std::string(name)) == 1);
+    }
+    CHECK(find_var(spawn, "KEEP") != nullptr);
+    REQUIRE(find_var(spawn, "CALIPER_AGENT_OFFLINE") != nullptr);
+    CHECK(find_var(spawn, "CALIPER_AGENT_OFFLINE")->value == "1");
+    CHECK(spawn.argv == std::vector<std::string>{"caliper-agent", "probe"});
+    strip_key_environment(nullptr);   // no options: nothing to do
+}
+
 TEST_CASE("wipe clears a string") {
     std::string s = kKey;
     wipe(&s);

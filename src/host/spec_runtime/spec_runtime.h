@@ -48,6 +48,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -173,11 +174,43 @@ private:
 };
 
 // One panel ready to draw: its data and the texture of a heatmap or image.
+// A selection on one panel (design/widget-agent.md, On a selection): a range
+// of x, such as steps, on a series panel, or a rectangle of a 2-D points
+// panel, whose points are the selection. Plain state: the runtime holds one,
+// draws it in bronze on its panel, and a shift-drag across the panel's plot
+// makes it (a shift-click without a drag clears it).
+struct SpecSelection {
+    enum class Kind { none, range, points };
+    Kind kind = Kind::none;
+    std::string panel;
+    double x0 = 0, x1 = 0;   // range: the x interval; points: the rectangle's x interval
+    double y0 = 0, y1 = 0;   // points: the rectangle's y interval
+    bool empty() const { return kind == Kind::none || panel.empty(); }
+};
+
+// The rows of a selection, from a prepared panel: for a range of a series,
+// x and each line's value at every drawn step inside the range (the drawn
+// steps, after the decimation of long series); for points on a 2-D panel, x
+// and y of every drawn point inside the rectangle (a 3-D points panel gives
+// no rows). At most `max_rows`; `total` counts them all. NaN for a value a
+// line lacks at that step.
+struct SpecSelectionRows {
+    std::vector<std::string> columns;
+    std::vector<std::vector<double>> rows;
+    size_t total = 0;
+};
+SpecSelectionRows spec_selection_rows(const PreparedPanel& panel, const SpecSelection& selection,
+                                      size_t max_rows = 1000);
+
 struct SpecPanelView {
     PreparedPanel data;
     SpecColorKey* key = nullptr;    // the spec's colour key; null: colours by position
     bool show_title = true;         // false for a tab, whose label carries it
     bool preview = false;           // drawn from a preview: the strip says so
+    bool added = false;             // a panel the previewed spec adds: a dashed bronze frame
+    SpecSelection* selection = nullptr;   // the runtime's selection, which a shift-drag sets
+    bool selecting = false;         // a shift-drag in progress
+    double select_from[2] = {0, 0}; // where it started, in plot units
     ImTextureData* texture = nullptr;
     int fit_frames = 2;          // frames that fit the axes to the data
     double x_extent[2] = {0, 0}, y_extent[2] = {0, 0};   // the data's, for log ticks
@@ -224,6 +257,18 @@ public:
                      const caliper_builder::spec::Spec* spec = nullptr);
     void clear_preview(const std::string& panel_id);
     bool has_preview(const std::string& panel_id) const { return previews_.count(panel_id) != 0; }
+    // A preview of the whole spec, for a change that adds or removes panels
+    // or moves them: drawn in place of the spec, with its layout, until
+    // clear_spec_preview(). The panels of `added`, and any whose fragment
+    // differs from the spec's, are resolved and drawn from the preview, the
+    // added ones in a dashed bronze frame; the others keep their data.
+    void set_spec_preview(const caliper_builder::spec::Spec& spec, std::set<std::string> added);
+    void clear_spec_preview();
+    bool has_spec_preview() const { return spec_preview_.has_value(); }
+    // The selection: one at a time, on one panel shown.
+    const SpecSelection& selection() const { return selection_; }
+    void set_selection(SpecSelection selection) { selection_ = std::move(selection); }
+    void clear_selection() { selection_ = {}; }
     void set_reserve(std::function<float(const SpecPanelFrame&)> reserve) { reserve_ = std::move(reserve); }
     void set_overlay(std::function<void(const SpecPanelFrame&)> overlay) { overlay_ = std::move(overlay); }
 
@@ -260,6 +305,10 @@ private:
     PrepareLimits limits_;
     std::map<std::string, Entry> entries_;
     std::map<std::string, Entry> previews_;
+    std::optional<caliper_builder::spec::Spec> spec_preview_;
+    std::set<std::string> spec_preview_added_;
+    std::map<std::string, Entry> spec_preview_entries_;
+    SpecSelection selection_;
     SpecTabChoice tabs_;
     SpecColorKey key_;
     SpecLayout layout_;

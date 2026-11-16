@@ -123,6 +123,183 @@ TEST_CASE("widget app: ⌘K on the hidden app's spec page, through the sidecar, 
 
 namespace {
 
+// One hidden app run of a ⌘K target: the dashboard saved as a spec applet,
+// the sidecar on `steps`, the input `ui`. Returns false when it cannot run
+// here (no caliper executable, no Python, no Metal), after saying so.
+struct AppRun {
+    std::string root, ws, shots, record, err;
+    bool ran = false;
+    int code = -1;
+};
+
+json tool_step(json tools) {
+    return {{"message", {{"content", std::move(tools)}, {"stop_reason", "tool_use"},
+                         {"usage", {{"input_tokens", 30}, {"output_tokens", 12}}}}}};
+}
+
+json text_step(const std::string& text) {
+    return {{"message", {{"content", json::array({{{"type", "text"}, {"text", text}}})}, {"stop_reason", "end_turn"},
+                         {"usage", {{"input_tokens", 30}, {"output_tokens", 12}}}}}};
+}
+
+json tool_use(const std::string& id, const std::string& name, json input) {
+    return {{"type", "tool_use"}, {"id", id}, {"name", name}, {"input", std::move(input)}};
+}
+
+AppRun run_target(const std::string& name, const json& steps, const std::string& ui) {
+    AppRun out;
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    if (!exe || !*exe || std::string(CALIPER_BUILDER_TEST_PYTHON).empty()) {
+        std::printf("caliper_widget_app skipped: needs CALIPER_TEST_CALIPER_EXE and CALIPER_BUILDER_TEST_PYTHON\n");
+        return out;
+    }
+    const char* offline = std::getenv("CALIPER_AGENT_OFFLINE");
+    REQUIRE_MESSAGE((offline && std::string(offline) == "1"), "run this test through ctest, which sets the switch");
+    out.root = fresh_dir("widget-app-" + name);
+    out.ws = out.root + "/ws";
+    {
+        auto s = dashboard_workspace(out.ws, out.root + "/data-files");
+        ok(*s, "applet.save", {{"overwrite", true}});
+        s->close();
+    }
+    out.shots = out.root + "/shots";
+    out.record = out.root + "/requests.jsonl";
+    const std::string script = out.root + "/script.json";
+    std::filesystem::create_directories(out.shots);
+    std::filesystem::create_directories(out.root + "/data");
+    std::filesystem::create_directories(out.root + "/apps");
+    std::ofstream(script) << json{{"steps", steps}, {"record", out.record}, {"backoff_scale", 0}}.dump();
+    caliper_builder::acp::SpawnOptions o;
+    o.argv = {exe, "--hidden", "--api", "--api-port", "0", "--workspace", out.ws};
+    o.env = {{"CALIPER_DATA_DIR", out.root + "/data"},
+             {"CALIPER_USER_APPLETS_DIR", out.root + "/apps"},
+             {"CALIPER_WINDOW_SIZE", "1280x800"},
+             {"CALIPER_AUTOLAUNCH", "local.run42-dashboard"},
+             {"CALIPER_AGENT_OFFLINE", "1"},
+             {"CALIPER_AGENT_PYTHON", CALIPER_BUILDER_TEST_PYTHON},
+             {"CALIPER_AGENT_TEST_SCRIPT", script},
+             {"ANTHROPIC_API_KEY", "sk-ant-api03-TESTONLY-inline-app-0123456789abcdef-fakeAA"},
+             {"CALIPER_TEST_SPEC_UI", ui},
+             {"CALIPER_TEST_SPEC_UI_SHOTS", out.shots},
+             {"CALIPER_EXIT_AFTER", "100"}};
+    o.env_remove = {"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"};
+    caliper_builder::acp::RunLimits lim;
+    lim.timeout_ms = 150000;
+    const auto run = caliper_builder::acp::run_process(o, lim);
+    REQUIRE(run.error.ok());
+    out.err = run.err;
+    out.code = run.status.exited ? run.status.code : -1;
+    if (run.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_widget_app skipped: no Metal device\n");
+        return out;
+    }
+    out.ran = true;
+    return out;
+}
+
+// The journal's agent edits in a widget preview's group, and the person's commit.
+struct Committed {
+    std::vector<std::string> edits;
+    bool commit = false;
+};
+
+Committed committed(const std::string& ws) {
+    Committed c;
+    for (const auto& e : caliper_builder::read_journal(ws + "/journal/commands.jsonl").events) {
+        if (e.name == "preview.commit") c.commit = c.commit || e.origin == caliper_builder::CommandOrigin::ui;
+        if (e.origin == caliper_builder::CommandOrigin::agent && e.group.rfind("widget-", 0) == 0) c.edits.push_back(e.name);
+    }
+    return c;
+}
+
+}  // namespace
+
+TEST_CASE("widget app: a selection's table, through the sidecar, previewed beside the panel and committed" *
+          doctest::test_suite("app")) {
+    const json steps = json::array(
+        {tool_step(json::array(
+             {tool_use("toolu_1", "source_add",
+                       {{"id", "selected_steps"},
+                        {"sql", "SELECT step, loss, accuracy FROM run42_metrics WHERE step BETWEEN 60 AND 120"}}),
+              tool_use("toolu_2", "panel_create",
+                       {{"id", "selected_rows"}, {"primitive", "table"}, {"bind", {{"rows", "selected_steps"}}}}),
+              tool_use("toolu_3", "layout_place", {{"panel", "selected_rows"}, {"target", "curves"}, {"where", "beside"}})})),
+         text_step("A table of the selected steps beside the curves.")});
+    const AppRun r = run_target("selection", steps,
+                                "wait 60; select curves 0.35 0.6; wait 10; leave; key cmd+k; until prompt; wait 3; "
+                                "type Make a table of these points; wait 5; key enter; until preview; wait 10; "
+                                "shot preview; key enter; until applied; wait 5; quit");
+    if (!r.ran) return;
+    INFO("stderr tail: " << r.err.substr(r.err.size() > 6000 ? r.err.size() - 6000 : 0));
+    CHECK(r.code == 0);
+    CHECK(r.err.find("[ui] done") != std::string::npos);
+    CHECK(r.err.find("selected on curves") != std::string::npos);
+    CHECK(r.err.find("surface preview, focus curves, undo 1") != std::string::npos);
+    CHECK(std::filesystem::is_regular_file(r.shots + "/preview.png"));
+    // The selection's rows reached the model, with the selection's tools.
+    REQUIRE(std::filesystem::is_regular_file(r.record));
+    const std::string requests = read_text(r.record);
+    CHECK(requests.find("selection") != std::string::npos);
+    CHECK(requests.find("\"panel_create\"") != std::string::npos);
+    CHECK(requests.find("\"panel_patch\"") == std::string::npos);
+    const Committed c = committed(r.ws);
+    CHECK(c.commit);
+    CHECK(c.edits == std::vector<std::string>{"source.add", "panel.create", "layout.place"});
+}
+
+TEST_CASE("widget app: a dropped file's question, through the sidecar, answered in its row's card" *
+          doctest::test_suite("app")) {
+    const json steps = json::array({text_step("A table of 50 rows with two columns, step and val_loss.")});
+    // The file to drop, written before the app starts.
+    const std::string files = fresh_dir("widget-app-file-input");
+    write_parquet(files + "/validation.parquet",
+                  "SELECT range AS step, 0.5 + 0.1 * cos(range / 7.0) AS val_loss FROM range(50)");
+    const AppRun r = run_target("file", steps,
+                                "wait 60; drop " + files + "/validation.parquet; pane source table:validation; wait 10; "
+                                "click cmdk:source:table:validation; until prompt; wait 3; type What's in this?; wait 5; "
+                                "key enter; until preview; wait 10; shot answer; quit");
+    if (!r.ran) return;
+    INFO("stderr tail: " << r.err.substr(r.err.size() > 6000 ? r.err.size() - 6000 : 0));
+    CHECK(r.code == 0);
+    CHECK(r.err.find("[ui] done") != std::string::npos);
+    CHECK(r.err.find("shot answer") != std::string::npos);
+    CHECK(r.err.find("surface preview") != std::string::npos);
+    REQUIRE(std::filesystem::is_regular_file(r.record));
+    const std::string requests = read_text(r.record);
+    CHECK(requests.find("validation") != std::string::npos);
+    CHECK(requests.find("\"loader_describe\"") != std::string::npos);   // the dropped file's scope
+    CHECK(committed(r.ws).edits.empty());   // an answer, no change
+}
+
+TEST_CASE("widget app: a property's edit, through the sidecar, previewed in its panel from Properties" *
+          doctest::test_suite("app")) {
+    const json steps = json::array(
+        {tool_step(json::array({tool_use("toolu_1", "panel_patch",
+                                         {{"id", "attention"}, {"patch", {{"options", {{"colormap", "rdbu"}}}}}})})),
+         text_step("The attention uses the diverging colormap.")});
+    const AppRun r = run_target("property", steps,
+                                "wait 60; key cmd+b; wait 20; click panel:attention 0.5 0.7; pane focus attention; "
+                                "wait 10; click cmdk:prop:options.colormap; until prompt; wait 3; "
+                                "type Use the diverging colormap; wait 5; key enter; until preview; wait 10; "
+                                "shot preview; key enter; until applied; wait 5; quit");
+    if (!r.ran) return;
+    INFO("stderr tail: " << r.err.substr(r.err.size() > 6000 ? r.err.size() - 6000 : 0));
+    CHECK(r.code == 0);
+    CHECK(r.err.find("[ui] done") != std::string::npos);
+    CHECK(r.err.find("surface preview, focus attention") != std::string::npos);
+    REQUIRE(std::filesystem::is_regular_file(r.record));
+    const std::string requests = read_text(r.record);
+    CHECK(requests.find("options.colormap") != std::string::npos);
+    CHECK(requests.find("\"panel_patch\"") != std::string::npos);
+    CHECK(requests.find("\"panel_create\"") == std::string::npos);   // one property: panel.patch only
+    const Committed c = committed(r.ws);
+    CHECK(c.commit);
+    CHECK(c.edits == std::vector<std::string>{"panel.patch"});
+}
+
+
+namespace {
+
 // The crash reports of the caliper executable in the system's folder for
 // them, on macOS; empty elsewhere.
 std::set<std::string> crash_reports() {

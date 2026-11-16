@@ -58,16 +58,22 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
+
+struct ImRect;
 
 namespace caliper_host {
 
 class SpecRuntime;
 struct SpecPanelFrame;
+struct WidgetRect;
+struct WidgetLayout;
 struct SpecLook;
 
 // ---- what the surface needs of the app ---------------------------------------------------
@@ -120,6 +126,13 @@ public:
     virtual void show(const caliper_builder::spec::Panel& panel, const caliper_builder::PanelData& data,
                       const caliper_builder::spec::Spec& spec) = 0;
     virtual void clear(const std::string& panel) = 0;
+    // The whole spec of a preview that adds, removes or moves panels, the
+    // added ones marked; cleared by clear_spec().
+    virtual void show_spec(const caliper_builder::spec::Spec& spec, const std::set<std::string>& added) {
+        (void)spec;
+        (void)added;
+    }
+    virtual void clear_spec() {}
 };
 
 // ---- the compact diff -------------------------------------------------------------------
@@ -133,7 +146,7 @@ enum class WidgetState { idle, prompt, running, preview, applied, declined, hand
 const char* widget_state_name(WidgetState state);
 
 // The actions a state offers, in their order on the surface.
-enum class WidgetAction { accept, reject, refine, diff, ask_in_chat, cancel, retry, rephrase, model, setup, close };
+enum class WidgetAction { accept, reject, refine, diff, ask_in_chat, cancel, retry, rephrase, model, setup, close, text };
 const char* widget_action_label(WidgetAction action);   // the noun on the surface
 const char* widget_action_key(WidgetAction action);     // its key ("⏎", "esc") or ""
 
@@ -249,6 +262,12 @@ public:
     // Draws the surface inside the target panel's band; for any panel,
     // notes a click as its focus.
     void overlay(const SpecPanelFrame& frame);
+    // A target drawn under a row of the builder pane (WidgetTarget::anchor):
+    // whether it is open there, the height it needs under that row at
+    // `width` (0 when it is not open there), and its drawing in `rect`.
+    bool open_at(const std::string& anchor) const;
+    float row_height(const std::string& anchor, float width) const;
+    void draw_row(const std::string& anchor, const ImRect& rect);
     // Puts the keyboard into the prompt's input on its next draw.
     void focus_input() { focus_input_ = true; }
 
@@ -259,7 +278,15 @@ private:
     void finish_turn(const WidgetAgentEvent& e);
     bool read_preview();
     void show_preview();
+    void clear_shown();
+    std::string reply_body() const;
+    int reply_lines(float card_width, bool row) const;
+    std::string elided_reply(float width, int lines) const;
+    WidgetLayout layout_in(const WidgetRect& panel, float strip, bool row) const;
+    void draw_block(const WidgetRect& panel, float strip, const ImRect& band, bool row);
     void drop_preview();
+    std::uint64_t top_undo_step(std::string* label);
+    void undo_own_step(std::uint64_t step);
     void end_session();
     void reset_turn();
     void enter(WidgetState s);
@@ -299,6 +326,13 @@ private:
     std::string focused_;
     bool focus_input_ = false;
     std::string shown_panel_;       // the panel the sink shows a preview in
+    bool shown_spec_ = false;       // the sink shows the whole spec's preview
+    // The undo step of the spec.new the preview needed (history.list's id
+    // right after it), which a discard undoes while it is the top step; 0 for
+    // none. pending_undo_: that step, once the session is free again.
+    std::uint64_t created_step_ = 0;
+    std::uint64_t pending_undo_ = 0;
+    mutable bool reply_overflow_ = false;   // an answer longer than its card's lines: Text shows it all
     struct Sink;
     std::unique_ptr<WidgetPreviewSink> runtime_sink_;
 };
@@ -385,6 +419,7 @@ struct WidgetLayoutInput {
     std::string tag;        // the card's tag, or ""
     bool reply = false;     // a reply line to show
     int diff_lines = 0;     // compact diff lines
+    int reply_lines = 1;    // the reply's lines: an answer without a change wraps
     bool full_diff = false;
     int full_diff_lines = 0;
     std::vector<WidgetAction> card_actions;
@@ -419,6 +454,7 @@ WidgetLayout layout_widget_surface(const WidgetLayoutInput& in, const WidgetLayo
                                    const WidgetMeasure& measure);
 
 // The layout input of a surface's state for a panel.
-WidgetLayoutInput widget_layout_input(const WidgetSurface& surface, const WidgetRect& panel, float strip);
+WidgetLayoutInput widget_layout_input(const WidgetSurface& surface, const WidgetRect& panel, float strip,
+                                     int reply_lines = 1);
 
 }  // namespace caliper_host

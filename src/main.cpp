@@ -30,6 +30,11 @@
 #include "host/builder/approval_cards.h"
 #include "host/builder/chat_pane.h"
 #include "host/builder/spec_page.h"
+#if CALIPER_WITH_BUILDER
+#include "host/builder/agent_settings.h"
+#include "host/builder/widget_app.h"
+#include "host/spec_runtime/spec_runtime.h"
+#endif
 #include "host/builder/spec_ui_driver.h"
 #include "app_paths.h"
 
@@ -369,6 +374,9 @@ public:
                 ctx.shown_path = [this](const std::string& p) { return workspace_relative(p); };
                 if (caliper_host::SpecPage::built())
                     ctx.new_spec = [this](const std::string& title) { new_spec(title); };
+#if CALIPER_WITH_BUILDER
+                ctx.agent_settings = [this] { agent_settings_.set_open(true); };
+#endif
                 landing_.draw(ctx);
             } else if (page_ == AppPage::Live) {
                 draw_live_page();
@@ -434,6 +442,18 @@ public:
                 // drawing valid textures through this frame's render.
                 if (go_back) pending_home_ = active_applet_;
             }
+
+#if CALIPER_WITH_BUILDER
+            // The widget agent's settings, over whatever page is shown, in the
+            // work area; ⌘, opens them anywhere.
+            agent_settings_.read_keys();
+            agent_settings_.frame();
+            if (agent_settings_.is_open()) {
+                const ImGuiViewport* vp = ImGui::GetMainViewport();
+                agent_settings_.draw(vp->WorkPos.x, vp->WorkPos.y, vp->WorkSize.x, vp->WorkSize.y,
+                                     caliper_host::house_spec_look());
+            }
+#endif
 
             // The session's catalog providers: registered once the session is
             // open, and the live views handed over after the live poll and
@@ -597,6 +617,24 @@ public:
         };
         af.revoke = [this](const std::string& file) { api_.revoke_agent_file(file); };
         spec_page_.set_api_files(std::move(af));
+#if CALIPER_WITH_BUILDER
+        // The widget agent's settings (host/builder/agent_settings.h): a popup
+        // from ⌘K's Setup and the landing's ⌘, Agent, kept in widget-agent.json
+        // in the app-data folder. A hidden app's key store is an in-memory one.
+        {
+            caliper_host::AgentSettings::Options ao;
+            ao.settings_path = caliper::app_data_path("widget-agent.json");
+            ao.cache_dir = caliper::app_data_dir();
+            const caliper_host::AppWidgetEnv we = caliper_host::app_widget_env(hidden_, std::string());
+            ao.python = we.python;
+            ao.source = we.source;
+            ao.keys = caliper_host::app_key_store(hidden_);
+            ao.live_attached = [this] { return live_.attached(); };
+            ao.log = [this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); };
+            agent_settings_.start(std::move(ao));
+            spec_page_.set_agent_settings(&agent_settings_);
+        }
+#endif
     }
 
     void cleanup() {
@@ -605,6 +643,9 @@ public:
         // builder session: its worker, its journal and its database close
         // here, before the host's own stores.
         chat_.shutdown();
+#if CALIPER_WITH_BUILDER
+        agent_settings_.shutdown();
+#endif
         api_.stop();
         api_.set_command_gateway(nullptr);
         session_.set_panel_renderer(nullptr);
@@ -1010,9 +1051,18 @@ private:
     // previous frame on purpose: WantTextInput is computed from last frame's
     // active field, and ImGui closes a popup on Esc inside NewFrame(), before
     // this code can see it open.
+    // The widget agent's settings take Escape while they are open.
+    bool agent_settings_open() const {
+#if CALIPER_WITH_BUILDER
+        return agent_settings_.is_open();
+#else
+        return false;
+#endif
+    }
+
     bool esc_home_pressed() const {
         const bool esc_free =
-            !ImGui::GetIO().WantTextInput && !popup_open_prev_ &&
+            !ImGui::GetIO().WantTextInput && !popup_open_prev_ && !agent_settings_open() &&
             !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId |
                                              ImGuiPopupFlags_AnyPopupLevel);
         return ImGui::IsKeyPressed(ImGuiKey_Escape, false) && esc_free;
@@ -1075,6 +1125,9 @@ private:
     void feed_spec_ui() {
         spec_ui_->set_page(page_ == AppPage::Spec ? "spec" : page_ == AppPage::Landing ? "landing" : "live");
         spec_ui_->set_drop([this](std::vector<std::string> paths) { on_drop(std::move(paths)); });
+#if CALIPER_WITH_BUILDER
+        spec_ui_->set_agent_settings(&agent_settings_);
+#endif
         spec_ui_->feed(spec_page_, session_, &chat_);
         if (spec_ui_->take_shot_request()) captures_.add(caliper_host::SpecUiDriver::kShotTicket);
         for (const std::string& line : spec_ui_->take_log()) std::cerr << "[ui] " << line << std::endl;
@@ -1399,6 +1452,9 @@ private:
     caliper_host::AppProviders providers_;  // live views, feed channels and metrics as catalog sources
     caliper_host::ApprovalTray approvals_;  // the agents' requests that wait for the person
     caliper_host::ChatPane chat_;           // the side chat, on the spec and live pages
+#if CALIPER_WITH_BUILDER
+    caliper_host::AgentSettings agent_settings_;   // the widget agent's settings, a popup over any page
+#endif
     caliper_host::CommandLine cl_;          // for starting Caliper API later, for the chat
     bool api_for_chat_ = false;             // the API runs because the side chat started it
 

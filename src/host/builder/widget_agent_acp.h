@@ -66,6 +66,9 @@ struct AcpWidgetAgentOptions {
     // "Scripted" when the sidecar plays a test script, so that no capture
     // credits a model that did not run.
     std::string label;
+    // A short note after the model in the prompt row, such as "Shared GPU"
+    // (agent_settings.h); "" for none. Asked on the frame thread.
+    std::function<std::string()> note;
 };
 
 class AcpWidgetAgent : public WidgetAgent {

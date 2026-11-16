@@ -6,6 +6,7 @@
 #include "builder/chat_pane.h"
 
 #if CALIPER_WITH_BUILDER
+#include "builder/agent_settings.h"
 #include "builder/builder_pane.h"
 #include "builder/panel_renderer.h"
 #include "builder/spec_page_layout.h"
@@ -28,6 +29,7 @@
 #include <imgui_internal.h>
 
 #include <cctype>
+#include <cmath>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -164,25 +166,77 @@ struct SpecPage::Impl {
         if (!widget_api_file.empty() && api_files.revoke) api_files.revoke(widget_api_file);
         widget_api_file.clear();
     }
+    AgentSettings* settings = nullptr;   // the widget agent's settings, when the app has them
+    int widget_revision = -1;            // the settings' revision the widget's agent was made with
+    AppSession* app = nullptr;           // the app's session, from the last bind()
+
+    // A changed setting applies at once: the inline prompt closes as Close
+    // closes it (a running turn is cancelled, a preview discarded) while its
+    // session is the app's, and is forgotten without a command otherwise; then
+    // the agent goes, so its sidecar ends with the key in its environment and
+    // its token is revoked. The next ⌘K makes the agent from the settings.
+    void retire_widget() {
+        if (!widget) return;
+        if (bound && app && app->session() == bound) widget->surface().close();
+        else widget->surface().abandon();
+        drop_widget();
+        if (runtime) install_overlay();
+    }
 
     // The builder pane over the bound session (builder_pane.h), made with it;
     // build mode is its own.
     std::unique_ptr<BuilderPane> builder;
     bool building() const { return builder && builder->build_mode() && !from_file; }
 
+    // ⌘K on a panel: the prompt for the panel, or for its selection when it
+    // has one (spec_runtime.h, SpecSelection), with the selected rows.
     void open_widget(AppSession& app, const std::string& panel) {
+        const SpecSelection& sel = runtime->selection();
+        if (!sel.empty() && sel.panel == panel) {
+            if (const PreparedPanel* p = runtime->prepared(panel)) {
+                const SpecSelectionRows rows = spec_selection_rows(*p, sel, 1000);
+                cb::WidgetSelection ws;
+                ws.kind = sel.kind == SpecSelection::Kind::points ? "points" : "range";
+                ws.columns = rows.columns;
+                ws.rows = nlohmann::json::array();
+                for (const auto& row : rows.rows) {
+                    nlohmann::json cells = nlohmann::json::array();
+                    for (double v : row) cells.push_back(std::isfinite(v) ? nlohmann::json(v) : nlohmann::json(nullptr));
+                    ws.rows.push_back(std::move(cells));
+                }
+                const std::string x = rows.columns.empty() ? "x" : rows.columns.front();
+                ws.range = {{x, {sel.x0, sel.x1}}};
+                if (sel.kind == SpecSelection::Kind::points && rows.columns.size() > 1)
+                    ws.range[rows.columns[1]] = {sel.y0, sel.y1};
+                open_widget_target(app, WidgetTarget::for_selection(panel, std::move(ws)));
+                return;
+            }
+        }
+        open_widget_target(app, WidgetTarget::for_panel(panel));
+    }
+
+    void open_widget_target(AppSession& app, const WidgetTarget& target) {
         if (!bound || from_file) return;
+        // Settings changed since the agent was made (set_agent_settings()
+        // retires it at each change; this catches a change it did not see).
+        if (widget && settings && settings->revision() != widget_revision) retire_widget();
         if (!widget) {
             InlineWidget::Options o;
             o.session = bound;
             o.busy = [&app] { return app.worker_busy(); };
             widget_api_file = api_files.issue ? api_files.issue() : std::string();
             std::string none;
-            o.agent = make_app_widget_agent(app_widget_env(hidden, app.workspace(), widget_api_file), &none);
+            AppWidgetEnv env = app_widget_env(hidden, app.workspace(), widget_api_file);
+            if (settings) env.live_attached = settings->options().live_attached;
+            o.agent = make_app_widget_agent(env, &none);
             if (!none.empty() && !widget_api_file.empty()) {   // no sidecar runs: its token ends now
                 if (api_files.revoke) api_files.revoke(widget_api_file);
                 widget_api_file.clear();
             }
+            widget_revision = settings ? settings->revision() : -1;
+            o.hooks.open_settings = [this] {
+                if (settings) settings->set_open(true);
+            };
             // Ask in chat: the side chat opens with the request and its context
             // as a draft. The bundle is built here, inside the frame, so it
             // leaves the panel's render out (no offscreen draw mid-frame).
@@ -198,7 +252,7 @@ struct SpecPage::Impl {
             widget->attach(*runtime);
             install_overlay();   // the page's, which calls the widget's
         }
-        widget->surface().open(WidgetTarget::for_panel(panel));
+        widget->surface().open(target);
     }
 
     // The page's command input, which ⌘K opens when no panel is focused:
@@ -246,6 +300,7 @@ struct SpecPage::Impl {
     // The session the page reads: a new one (the workspace opened, or the
     // session closed) gets a new source.
     void bind(AppSession& app) {
+        this->app = &app;
         if (workspace.empty()) workspace = folder_name(app.workspace());
         cb::Session* s = app.session();
         if (s == bound) return;
@@ -267,6 +322,23 @@ struct SpecPage::Impl {
                 *s, [a] { return a->worker_busy(); }, [a] { return a->journaled(); });
             builder = std::make_unique<BuilderPane>(std::move(port));
             builder->set_layout_rule(spec_page_layout_rule);
+            // ⌘K in the builder: a dropped file's row and a property's row
+            // open the inline prompt there, and it is drawn under that row.
+            BuilderPane::WidgetHooks hooks;
+            hooks.open_file = [this, a](const std::string& loader, const std::vector<std::string>& catalog,
+                                        const std::string& anchor) {
+                open_widget_target(*a, WidgetTarget::for_dropped_file(loader, catalog, anchor));
+            };
+            hooks.open_property = [this, a](const std::string& panel, const std::string& path) {
+                open_widget_target(*a, WidgetTarget::for_property(panel, "", path));
+            };
+            hooks.height = [this](const std::string& anchor, float w) {
+                return widget ? widget->surface().row_height(anchor, w) : 0.0f;
+            };
+            hooks.draw = [this](const std::string& anchor, const SpecRect& r) {
+                if (widget) widget->surface().draw_row(anchor, ImRect(ImVec2(r.x, r.y), ImVec2(r.right(), r.bottom())));
+            };
+            builder->set_widget_hooks(std::move(hooks));
         }
     }
 
@@ -586,6 +658,9 @@ SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, 
         im.command_open = false;
         im.command.clear();
         escape = false;
+    } else if (escape && !im.runtime->selection().empty()) {
+        im.runtime->clear_selection();   // the selection goes before the focus
+        escape = false;
     }
     // The builder's keys (⌘B, and in build mode ⌘T, ⌘Z, ⇧⌘Z, ⌘S, ⌫), and
     // its Escape (a drag, the text editor, a source's focus) before the
@@ -610,6 +685,8 @@ SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, 
         case SpecKeyAction::page_command:
             if (im.seams.page_command) {
                 im.seams.page_command();
+            } else if (im.building() && im.builder->open_file_prompt()) {
+                // ⌘K on the row of a file just dropped, selected in Sources.
             } else {
                 im.command_open = true;
                 im.command_focus = true;
@@ -658,6 +735,26 @@ void SpecPage::set_api_files(ApiFiles files) { impl_->api_files = std::move(file
 
 void SpecPage::set_chat(ChatPane* chat) { impl_->chat = chat; }
 
+void SpecPage::set_agent_settings(AgentSettings* settings) {
+    Impl& im = *impl_;
+    if (im.settings) im.settings->set_on_change(nullptr);
+    im.settings = settings;
+    if (settings) settings->set_on_change([&im] { im.retire_widget(); });
+}
+
+bool SpecPage::widget_action(const std::string& label) {
+    if (!impl_->widget) return false;
+    WidgetSurface& s = impl_->widget->surface();
+    std::vector<WidgetAction> offered = s.row_actions();
+    for (WidgetAction a : s.card_actions()) offered.push_back(a);
+    for (WidgetAction a : offered) {
+        if (label != widget_action_label(a)) continue;
+        s.act(a);
+        return true;
+    }
+    return false;
+}
+
 bool SpecPage::panel_rect(const std::string& panel_id, float rect[4]) const {
     for (const auto& lp : impl_->runtime->layout().panels)
         if (lp.id == panel_id) {
@@ -672,6 +769,18 @@ bool SpecPage::panel_rect(const std::string& panel_id, float rect[4]) const {
 
 std::string SpecPage::widget_state() const {
     return impl_->widget ? widget_state_name(impl_->widget->surface().state()) : "idle";
+}
+
+std::string SpecPage::selection_json() const {
+    const SpecSelection& sel = impl_->runtime->selection();
+    if (sel.empty()) return {};
+    return nlohmann::json{{"panel", sel.panel},
+                          {"kind", sel.kind == SpecSelection::Kind::points ? "points" : "range"},
+                          {"x0", sel.x0},
+                          {"x1", sel.x1},
+                          {"y0", sel.y0},
+                          {"y1", sel.y1}}
+        .dump();
 }
 
 void SpecPage::set_panel_overlay(PanelOverlay overlay) { impl_->panel_overlay = std::move(overlay); }
@@ -734,6 +843,8 @@ void SpecPage::shutdown() {
     // with a prompt open; then it goes, before the runtime it is attached to.
     if (impl_->widget) impl_->widget->surface().abandon();
     impl_->drop_widget();
+    if (impl_->settings) impl_->settings->set_on_change(nullptr);
+    impl_->settings = nullptr;
     impl_->builder.reset();
     impl_->runtime.reset();
     impl_->source.reset();
@@ -776,8 +887,11 @@ BuilderPane* SpecPage::builder() { return nullptr; }
 void SpecPage::set_hidden(bool) {}
 void SpecPage::set_api_files(ApiFiles) {}
 void SpecPage::set_chat(ChatPane*) {}
+void SpecPage::set_agent_settings(AgentSettings*) {}
+bool SpecPage::widget_action(const std::string&) { return false; }
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
 std::string SpecPage::widget_state() const { return "idle"; }
+std::string SpecPage::selection_json() const { return {}; }
 void SpecPage::set_panel_overlay(PanelOverlay) {}
 const std::string& SpecPage::focused_panel() const { return impl_->focused; }
 void SpecPage::focus_panel(const std::string&) {}

@@ -17,22 +17,30 @@
 //     sidecar's own that the app gives it, with a token of the origin agent
 //     issued for it (AppApi::issue_agent_file()), which the sidecar reads to
 //     reach the session's commands; without it no agent is set up;
-//   - the provider's key, from the operating system's key store, placed
+//   - the widget agent's settings (agent_settings.h): widget-agent.json in the
+//     app-data folder names the preset, the base URL, the model and the
+//     effort, which reach the sidecar as --preset, --base-url, --model,
+//     --effort and --cache-dir (the probe's cache in the app-data folder). No
+//     provider until a preset is chosen, the required key is set and the
+//     model is not known to lack tool calling (agent_launch());
+//   - the provider's key, from the app's key store (app_key_store()), placed
 //     only in the sidecar's environment at spawn (place_key_in_environment(),
 //     which also passes CALIPER_AGENT_OFFLINE through when the app has it and
-//     removes the test switch).
+//     removes the test switch); a local server gets none.
 //
-// Tests and screenshots. A hidden app (--hidden) never touches the key
-// store. When its environment holds CALIPER_AGENT_TEST_SCRIPT, which only a
-// test sets, the sidecar inherits it with the rest of the app's environment
-// and plays that script instead of a model, and the prompt row names the
-// agent "Scripted"; a hidden app without it has no provider. A normal run
-// ignores the switch.
+// Tests and screenshots. A hidden app (--hidden) never touches the system's
+// key store: its store is an in-memory one. When its settings choose no preset
+// and its environment holds CALIPER_AGENT_TEST_SCRIPT, which only a test
+// sets, the sidecar inherits the switch with the rest of the app's
+// environment and plays that script instead of a model, and the prompt row
+// names the agent "Scripted"; a hidden app with neither has no provider. A
+// normal run ignores the switch.
 //
 // Built only with CALIPER_WITH_BUILDER.
 // ============================================================================
 #include "builder/widget_agent.h"
 
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -45,7 +53,16 @@ struct AppWidgetEnv {
     std::string python;        // CALIPER_AGENT_PYTHON
     std::string source;        // the folder with caliper_agent/ and commands/ (CALIPER_AGENT_SOURCE or the build's)
     std::string test_script;   // CALIPER_AGENT_TEST_SCRIPT, read only when hidden
+    std::string settings_path; // widget-agent.json in the app-data folder; "" chooses no provider
+    std::string cache_dir;     // the probe's cache (model-capabilities.json): the app-data folder
+    std::function<bool()> live_attached;   // a live run is attached: the GPU note's condition
 };
+
+struct AcpWidgetAgentOptions;
+
+// The sidecar's options for that environment, without starting it: false,
+// with `why`, when no agent is set up.
+bool app_widget_agent_options(const AppWidgetEnv& env, AcpWidgetAgentOptions* out, std::string* why);
 
 // The environment of this process: the variables above, and the sidecar's
 // API file, which the app issued for it ("" when the API is not running).

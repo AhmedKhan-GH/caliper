@@ -175,9 +175,13 @@ void BuilderPane::update() {
             error_ = r.error;
         } else {
             fresh_.clear();
+            fresh_loaders_.clear();
             for (const auto& l : r.result.value("loaders", json::array()))
                 for (const auto& o : l.value("outputs", json::array()))
-                    if (o.is_string()) fresh_.push_back(o.get<std::string>());
+                    if (o.is_string()) {
+                        fresh_.push_back(o.get<std::string>());
+                        fresh_loaders_[o.get<std::string>()] = l.value("id", std::string());
+                    }
             refused_.clear();
             for (const auto& f : r.result.value("refused", json::array()))
                 refused_.push_back({f.value("path", ""), f.value("code", "loader.refused"), f.value("message", "")});
@@ -197,6 +201,22 @@ void BuilderPane::update() {
         seen_version_ = v;
         reread();
     }
+}
+
+std::string BuilderPane::fresh_loader(const std::string& catalog) const {
+    const auto it = fresh_loaders_.find(catalog);
+    return it == fresh_loaders_.end() ? std::string() : it->second;
+}
+
+bool BuilderPane::open_file_prompt() {
+    if (!widget_.open_file || !selected_column_.empty()) return false;
+    const std::string loader = fresh_loader(selected_);
+    if (loader.empty()) return false;
+    std::vector<std::string> catalog;
+    for (const auto& [c, l] : fresh_loaders_)
+        if (l == loader) catalog.push_back(c);
+    widget_.open_file(loader, catalog, "source:" + selected_);
+    return true;
 }
 
 void BuilderPane::refresh_catalog() {

@@ -9,10 +9,9 @@ session is opened, which commands it may use, what a prompt may hold, and what e
 
 !!! note "Status"
     The agent and its widget sessions are built and tested in `src/builder/agent/`. The inline surface that opens them
-    on a panel is built in `src/host/builder/` and works on the app's spec page
-    ([The inline surface](#the-inline-surface)). The entry points on a selection, a dropped file and a property are
-    not built yet, and `caliper-agent` is not yet packaged with a Python runtime, so the app finds it through
-    `CALIPER_AGENT_PYTHON` ([Environment variables](environment.md)).
+    on a panel, a selection, a dropped file and a property is built in `src/host/builder/` and works on the app's spec
+    page ([The inline surface](#the-inline-surface)). `caliper-agent` is not yet packaged with a Python runtime, so
+    the app finds it through `CALIPER_AGENT_PYTHON` ([Environment variables](environment.md)).
 
 ## Starting the agent
 
@@ -268,6 +267,25 @@ below the prompt, so the prompt covers nothing. With no panel focused, ⌘K open
 bar instead: typing a panel's title focuses it, and Enter opens its prompt. Escape leaves the prompt's innermost state
 first, then the command input, then the panel's focus, and last goes Home.
 
+**The other targets.**
+
+- **A selection.** A shift-drag across a series panel's plot selects a range of x, such as steps, and across a 2-D
+  points panel a rectangle of points; the selection is drawn in bronze, a shift-click clears it, and so does Escape.
+  ⌘K on that panel opens the prompt for the selection: its context bundle carries the selected rows (the drawn steps
+  or points, at most 1,000) and the range. A change that adds a panel, such as a table of the selection, is drawn as
+  the preview of the whole spec: the new panel stands where the layout puts it, in a dashed bronze frame with PREVIEW
+  in its strip.
+- **A dropped file.** After files are dropped on the spec page, each source the import made shows ⌘K at the end of its
+  row in the builder's Sources palette (and ⌘K with that row selected and no panel focused does the same). The prompt
+  opens under the row, for the file's loader and its catalog ids. An answer without a change is shown in the card,
+  over up to four lines, with Text for the whole of a longer one; a proposed panel is previewed as above. With no spec
+  open, the preview first runs `spec.new` from the `ui` origin. A discard, or the surface going, undoes that step again
+  while it is still the top of the undo stack, known by the step's id from `history.list`; when another step was
+  committed after it, the new spec stays. Accept leaves two undo steps: the new spec, then the change.
+- **A property.** In build mode, ⌘K shows beside the focused panel's title and each of its options in Properties while
+  the row is under the pointer. It opens the prompt under that row for that one property, such as
+  `options.colormap`, and the edit is previewed in the panel.
+
 The prompt row shows the model and effort the session reports; a click on them lists the models the session offers,
 and the choice goes to the session with `session/set_config_option` and to every later session. While the agent
 works, the row shows its latest step: the command it calls, or the last line of its summarized thinking.
@@ -286,7 +304,8 @@ works, the row shows its latest step: the command it calls, or the last line of 
 6. Closing the prompt ends the session with `session/close`.
 
 One `caliper-agent` process serves every ⌘K. It is started at the first ⌘K with the provider's key placed only in its
-environment, and it is kept running.
+environment, and it is kept running until the settings change: a change ends it at once, with its API file and token,
+and the next ⌘K starts it again from the new settings.
 
 **States and actions.** Each state shows a tag and its actions:
 
@@ -322,3 +341,68 @@ caliper-widget-shot --workspace <dir> --applet <id> --panel <id> --prompt <text>
 It opens the applet as the workspace's open spec, so give it a copy of a workspace. It prints a JSON summary: the
 files and their states, the panel's rectangle, the undo steps before and after Accept, and whether the open spec
 changed before Accept.
+
+## The settings in the app
+
+The widget agent's settings are a popup over any page (`src/host/builder/agent_settings.h`). It opens from the
+landing screen's **⌘, Agent**, from the key ⌘, (Ctrl+, on Windows) on any page, and from the inline surface's
+**Setup** (no provider) and **Model** (after a refusal). Its width is 62 percent of the work area, its top is 12 percent
+of the work area's height below the work area's top, and its height is its content's; Escape or esc Close closes it.
+
+| Row | What it holds |
+|---|---|
+| Provider | The presets of `presets.json`, one chosen |
+| Base URL | Fixed text for Claude, OpenAI, Gemini and OpenRouter; a field for Ollama, LM Studio and Custom, with the tags Remote address, Unencrypted and Invalid address |
+| Model | A field, and as choices the Claude preset's four models or the server's list after **List** (`caliper-agent probe --list-models`) |
+| Effort | Claude only: low, medium, high, xhigh and max, which each of its four models takes |
+| Key | Set or Not set; a password field with Save, or Replace and Remove; no row for Ollama and LM Studio, nor for Custom before its address is valid |
+| Capabilities | Tool calling, vision and the context length with where each came from (probe, server, known, override, assumed), Yes, No and Auto for the person's override (`caliper-agent probe --set`), and **Probe** (`--refresh`) |
+| Note | Shared GPU, while a live run is attached and the base URL is a loopback address |
+
+The settings never show a key or read one back for themselves. They call `KeyStore::set()`, `has()` and `remove()`,
+and wipe the field's text when it is saved or cancelled. A hidden app's key store is an in-memory one, so it never
+touches the Keychain. The one place a key leaves the store is the probe's start: **Probe**, **List** and the
+overrides run `caliper-agent probe` as a child process, and `place_key_in_environment()` copies the chosen provider's
+key into that child's environment, as it does for the sidecar, in `ANTHROPIC_API_KEY` or `CALIPER_MODEL_API_KEY`. It
+also removes from the child's environment every other key variable and every variable that could redirect it, such as
+`ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL`, so no key or endpoint of the app's own environment reaches the provider,
+and passes `CALIPER_AGENT_OFFLINE` through when the app has it. When the store cannot place the key, or the provider
+requires one and there is no store, the probe does not run, and its tag says why: No key, Malformed key or Unreadable
+key. A provider that needs no key is probed with no key variable at all. When the app quits or the settings go while a
+probe runs, its child is ended at once (SIGKILL to its process group) and reaped on the probe's own thread, so the
+frame never waits for it; an answer that comes after the model or the address changed is dropped.
+
+**`widget-agent.json`**, in the app-data folder beside `side-chat.json`, holds the choice and never a key:
+
+```json
+{"version": 1, "preset": "ollama",
+ "providers": {"ollama": {"base_url": "http://localhost:11434/v1", "model": "qwen3.8:27b"},
+               "anthropic": {"model": "claude-haiku-5-5", "effort": "low"}}}
+```
+
+A file that does not parse counts as no choice, and an unknown preset is dropped. The probe's answers and the
+person's overrides are kept apart, in `model-capabilities.json` in the same folder, which the agent reads with
+`--cache-dir`.
+
+**The agent's start.** The inline surface's agent is made from the settings at the first ⌘K after they change. A
+change (a preset, an address, a model, an effort, a key saved or removed, or a probe's answer for the current model)
+applies at once, on any page: an open prompt closes as Close closes it, so a running turn is cancelled and its preview
+discarded, and the agent goes with its sidecar, whose API file and token are revoked; a removed key so leaves the
+sidecar's environment at once. It starts `caliper-agent` with `--preset`, `--base-url` (Ollama, LM Studio and Custom), `--model`, `--effort`
+(Claude) and `--cache-dir`, and `place_key_in_environment()` puts the provider's key in its environment: in
+`ANTHROPIC_API_KEY` for Claude, in `CALIPER_MODEL_API_KEY` for the others, and none for a local server. ⌘K has no
+provider, and offers Setup and Ask in chat, when no preset is chosen, the address is not valid, an OpenAI-compatible
+preset has no model, a required key is not set, or the model is known to lack tool calling (the person's override, or
+a probe answer younger than 30 days). The settings name that state in a tag: No provider, Invalid address, No model,
+No key or No tool calling. While the GPU note applies, the prompt row shows it after the model the session reports.
+
+**caliper-agent-settings-shot** is a development tool, not installed, that draws the settings offscreen in a named
+state, with an in-memory key store and, for the local scenarios, a fake model server on loopback that it starts with
+the given interpreter:
+
+```
+caliper-agent-settings-shot --scenario claude|key-set|local|no-tools|gpu-note --out <file.png> --data-dir <dir>
+                            [--size WxH] [--python <interpreter>] [--agent-dir <src/builder/agent>] [--frames N]
+```
+
+It prints a JSON summary: the state, whether a key is set, the GPU note, the model choices and every text shown.

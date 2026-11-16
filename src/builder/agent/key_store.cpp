@@ -220,6 +220,27 @@ Error place_key_in_environment(KeyStore& store, const std::string& provider, acp
     return {};
 }
 
+void strip_key_environment(acp::SpawnOptions* spawn) {
+    if (!spawn) return;
+    auto stripped = [](const std::string& name) {
+        for (const char* o : kOverrideVariables)
+            if (name == o) return true;
+        for (const char* k : kKeyVariables)
+            if (name == k) return true;
+        return false;
+    };
+    auto& env = spawn->env;
+    env.erase(std::remove_if(env.begin(), env.end(), [&](const acp::EnvVar& v) { return stripped(v.name); }),
+              env.end());
+    auto add_removed = [&](const char* name) {
+        if (std::find(spawn->env_remove.begin(), spawn->env_remove.end(), name) == spawn->env_remove.end())
+            spawn->env_remove.emplace_back(name);
+    };
+    for (const char* o : kOverrideVariables) add_removed(o);
+    for (const char* k : kKeyVariables) add_removed(k);
+    pass_offline_switch(spawn);
+}
+
 void pass_offline_switch(acp::SpawnOptions* spawn) {
     if (!spawn) return;
     const char* value = std::getenv(kOfflineVariable);

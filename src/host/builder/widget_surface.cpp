@@ -6,6 +6,7 @@
 #include "spec_runtime/spec_runtime.h"
 #include "ui/sternbild_theme.h"
 
+#include <caliper_builder/session/spec_edit.h>
 #include <caliper_builder/spec/format.h>
 
 #include <imgui.h>
@@ -54,6 +55,7 @@ caliper_builder::ContextBundle SessionWidgetSession::bundle(const WidgetTarget& 
     caliper_builder::ContextBundleOptions o = bundle_options;
     o.preview = preview;
     o.origin = caliper_builder::CommandOrigin::ui;
+    o.selection = target.kind == WidgetTarget::Kind::selection ? target.selection : std::nullopt;
     return caliper_builder::build_context_bundle(session_, target.to_builder(), o);
 }
 
@@ -88,6 +90,7 @@ const char* widget_action_label(WidgetAction action) {
         case WidgetAction::model: return "Model";
         case WidgetAction::setup: return "Setup";
         case WidgetAction::close: return "Close";
+        case WidgetAction::text: return "Text";
     }
     return "";
 }
@@ -138,6 +141,10 @@ struct WidgetSurface::Sink : WidgetPreviewSink {
         runtime.set_preview(panel, data, &s);
     }
     void clear(const std::string& panel) override { runtime.clear_preview(panel); }
+    void show_spec(const spec::Spec& s, const std::set<std::string>& added) override {
+        runtime.set_spec_preview(s, added);
+    }
+    void clear_spec() override { runtime.clear_spec_preview(); }
     SpecRuntime& runtime;
 };
 
@@ -150,10 +157,17 @@ WidgetSurface::WidgetSurface(WidgetSession& session, WidgetAgent& agent, Hooks h
 }
 
 WidgetSurface::~WidgetSurface() {
-    // A preview left open would be dropped by the session's idle time; drop
-    // it now, and end the agent's session.
+    // As a discard does: the preview goes, with the spec.new it needed while
+    // that is still the top step, and the agent's session ends. With the
+    // session busy, the frame thread leaves it alone: the session's idle time
+    // drops the preview, and the new spec stays.
     if (state_ == WidgetState::running) agent_.cancel();
-    if (!preview_.empty()) session_.run("preview.discard", {{"id", preview_}});
+    const std::uint64_t own = created_step_ ? created_step_ : pending_undo_;
+    if ((!preview_.empty() || !pending_discards_.empty() || own) && session_.ready()) {
+        for (const std::string& id : pending_discards_) session_.run("preview.discard", {{"id", id}});
+        if (!preview_.empty()) session_.run("preview.discard", {{"id", preview_}});
+        undo_own_step(own);
+    }
     if (session_open_) agent_.close();
     if (runtime_) detach();
 }
@@ -224,7 +238,26 @@ bool WidgetSurface::ensure_preview() {
     const std::string id = next_preview_id();
     json args = target_.preview_scope();
     args["id"] = id;
-    const CommandResult r = session_.run("preview.begin", args);
+    CommandResult r = session_.run("preview.begin", args);
+    if (!r.ok && r.error.code == "spec.no_open_spec" && target_.kind == WidgetTarget::Kind::dropped_file) {
+        // A preview needs an open spec: a new one named after the loader,
+        // from the ui origin, which Reject undoes again.
+        std::string sid;
+        for (char c : target_.loader) {
+            const char l = (char)std::tolower((unsigned char)c);
+            sid += (std::isalnum((unsigned char)l) || l == '-' || l == '_') ? l : '-';
+        }
+        if (sid.empty() || !std::isalpha((unsigned char)sid[0])) sid = "spec-" + sid;
+        if (sid.size() > 64) sid.resize(64);
+        const CommandResult n = session_.run("spec.new", {{"id", sid}, {"title", target_.loader}});
+        if (n.ok) {
+            // Its step, by the id history.list gives the top step now.
+            std::string label;
+            const std::uint64_t step = top_undo_step(&label);
+            created_step_ = label == "spec.new" ? step : 0;
+            r = session_.run("preview.begin", args);
+        }
+    }
     if (!r.ok) {
         error_ = r.error;
         return false;
@@ -362,15 +395,45 @@ bool WidgetSurface::read_preview() {
     return true;
 }
 
+void WidgetSurface::clear_shown() {
+    if (sink_ && !shown_panel_.empty()) sink_->clear(shown_panel_);
+    if (sink_ && shown_spec_) sink_->clear_spec();
+    shown_panel_.clear();
+    shown_spec_ = false;
+}
+
 void WidgetSurface::show_preview() {
-    if (!sink_ || target_.panel.empty()) return;
+    if (!sink_) return;
     if (edits_ <= 0) {
-        if (!shown_panel_.empty()) sink_->clear(shown_panel_);
-        shown_panel_.clear();
+        clear_shown();
         return;
     }
     const caliper_builder::PreviewState ps = session_.preview(preview_);
-    if (ps.error) return;
+    const auto open = session_.open_spec();
+    if (ps.error || !open) return;
+    // A change that adds, removes or moves panels is drawn as the whole
+    // spec's preview, the added panels in a dashed frame; a change inside
+    // the target panel is drawn in that panel.
+    std::set<std::string> added;
+    bool whole = false;
+    for (const auto& p : ps.spec.spec.panels)
+        if (!open->spec.find_panel(p.id)) added.insert(p.id);
+    for (const auto& p : open->spec.panels)
+        if (!ps.spec.spec.find_panel(p.id)) whole = true;
+    if (!added.empty()) whole = true;
+    if (caliper_builder::effective_layout(ps.spec.spec) != caliper_builder::effective_layout(open->spec)) whole = true;
+    if (whole) {
+        if (!shown_panel_.empty()) sink_->clear(shown_panel_);
+        shown_panel_.clear();
+        sink_->show_spec(ps.spec.spec, added);
+        shown_spec_ = true;
+        return;
+    }
+    if (shown_spec_) {
+        sink_->clear_spec();
+        shown_spec_ = false;
+    }
+    if (target_.panel.empty()) return;
     const spec::Panel* p = ps.spec.spec.find_panel(target_.panel);
     if (!p) {
         if (!shown_panel_.empty()) sink_->clear(shown_panel_);
@@ -391,8 +454,33 @@ void WidgetSurface::drop_preview() {
     diff_.clear();
     full_diff_.clear();
     show_full_diff_ = false;
-    if (sink_ && !shown_panel_.empty()) sink_->clear(shown_panel_);
-    shown_panel_.clear();
+    clear_shown();
+    if (created_step_) {   // the spec.new it made
+        if (session_.ready()) undo_own_step(created_step_);
+        else pending_undo_ = created_step_;
+    }
+    created_step_ = 0;
+}
+
+// The top undo step's id and label (its first command), from history.list;
+// 0 when there is none.
+std::uint64_t WidgetSurface::top_undo_step(std::string* label) {
+    const CommandResult r = session_.run("history.list", {{"limit", 1}});
+    if (!r.ok || !r.result.contains("undo") || !r.result["undo"].is_array() || r.result["undo"].empty()) return 0;
+    const json& top = r.result["undo"][0];
+    if (label) *label = top.value("label", std::string());
+    return top.value("id", std::uint64_t(0));
+}
+
+// Undoes the preview's own spec.new only while its step is the top one: a
+// step committed after it (the person, the side chat, a program over Caliper
+// API) is never undone in its place, and the new spec then stays. The list
+// and the undo run on the frame thread with the session free, and every
+// other origin's commands reach the session through the queue, which the app
+// drains between two frames, so nothing commits between them.
+void WidgetSurface::undo_own_step(std::uint64_t step) {
+    if (step == 0) return;
+    if (top_undo_step(nullptr) == step) session_.run("history.undo", json::object());
 }
 
 void WidgetSurface::end_session() {
@@ -423,8 +511,8 @@ void WidgetSurface::accept() {
     // The preview ended with the commit; the panel draws the open spec again.
     preview_.clear();
     edits_ = 0;
-    if (sink_ && !shown_panel_.empty()) sink_->clear(shown_panel_);
-    shown_panel_.clear();
+    created_step_ = 0;   // the new spec stays, a step of its own before the change
+    clear_shown();
     end_session();
     enter(WidgetState::applied);
 }
@@ -537,8 +625,9 @@ void WidgetSurface::abandon() {
     diff_.clear();
     full_diff_.clear();
     show_full_diff_ = false;
-    if (sink_ && !shown_panel_.empty()) sink_->clear(shown_panel_);
-    shown_panel_.clear();
+    created_step_ = 0;
+    pending_undo_ = 0;
+    clear_shown();
     end_session();
     text_.clear();
     conversation_.clear();
@@ -560,6 +649,7 @@ void WidgetSurface::act(WidgetAction action) {
         case WidgetAction::model:
         case WidgetAction::setup: open_model(); break;
         case WidgetAction::close: close(); break;
+        case WidgetAction::text: toggle_diff(); break;
     }
 }
 
@@ -567,6 +657,8 @@ void WidgetSurface::update() {
     if (session_.ready()) {
         for (const std::string& id : pending_discards_) session_.run("preview.discard", {{"id", id}});
         pending_discards_.clear();
+        undo_own_step(pending_undo_);
+        pending_undo_ = 0;
         if (!pending_turn_.empty() && state_ == WidgetState::running) {
             const std::string t = pending_turn_;
             pending_turn_.clear();
@@ -594,7 +686,7 @@ std::string WidgetSurface::tag() const {
         case WidgetState::handoff: return handoff_ ? handoff_tag(handoff_->kind) : "OUTSIDE SCOPE";
         case WidgetState::conflict: return "CONFLICT";
         case WidgetState::failed: return error_.code == "acp.agent_exited" ? "STOPPED" : "FAILED";
-        case WidgetState::preview: return limit_ ? "LIMIT" : (edits_ <= 0 ? "NO CHANGE" : "");
+        case WidgetState::preview: return limit_ ? "LIMIT" : (edits_ <= 0 && reply_.empty() ? "NO CHANGE" : "");
         default: return "";
     }
 }
@@ -604,6 +696,8 @@ std::vector<WidgetAction> WidgetSurface::card_actions() const {
     switch (state_) {
         case WidgetState::preview:
             if (edits_ > 0) return {A::accept, A::reject, A::refine, A::diff};
+            // An answer: Text shows the whole of one longer than its card.
+            if (reply_overflow_) return {A::refine, A::text, A::close};
             return {A::refine, A::close};
         case WidgetState::declined: return {A::rephrase, A::retry, A::model};
         case WidgetState::handoff: return {A::ask_in_chat, A::rephrase, A::close};
@@ -732,7 +826,7 @@ WidgetLayout layout_widget_surface(const WidgetLayoutInput& in, const WidgetLayo
         if (!any_card) return 0.0f;
         float h = m.gap;
         if (!in.tag.empty()) h += m.line;
-        if (with_reply) h += m.line;
+        if (with_reply) h += m.line * (float)std::max(1, in.reply_lines);
         h += m.line * (float)(lines + (folded ? 1 : 0));
         if (!in.card_actions.empty()) h += m.gap + m.button;
         return h + m.gap;
@@ -763,8 +857,9 @@ WidgetLayout layout_widget_surface(const WidgetLayoutInput& in, const WidgetLayo
             y += m.line;
         }
         if (reply) {
-            L.reply = {x0 + m.pad, y, std::max(0.0f, w - 2.0f * m.pad), m.line};
-            y += m.line;
+            const float rh = m.line * (float)std::max(1, in.reply_lines);
+            L.reply = {x0 + m.pad, y, std::max(0.0f, w - 2.0f * m.pad), rh};
+            y += rh;
         }
         L.diff_shown = in.full_diff ? 0 : diff_lines;
         L.diff_folded = folded_for(diff_lines);
@@ -822,10 +917,11 @@ WidgetLayout layout_widget_surface(const WidgetLayoutInput& in, const WidgetLayo
     return L;
 }
 
-WidgetLayoutInput widget_layout_input(const WidgetSurface& s, const WidgetRect& panel, float strip) {
+WidgetLayoutInput widget_layout_input(const WidgetSurface& s, const WidgetRect& panel, float strip, int reply_lines) {
     WidgetLayoutInput in;
     in.panel = panel;
     in.strip = strip;
+    in.reply_lines = reply_lines;
     in.state = s.state();
     in.refining = s.refining();
     in.status = s.state() == WidgetState::running && !s.progress().empty() ? s.progress() : s.model_label();
@@ -899,12 +995,10 @@ int resize_callback(ImGuiInputTextCallbackData* data) {
 
 }  // namespace
 
-float WidgetSurface::reserve(const SpecPanelFrame& f) const {
-    if (!look_ || state_ == WidgetState::idle || state_ == WidgetState::applied) return 0.0f;
-    if (target_.panel.empty() || f.id != target_.panel) return 0.0f;
-    const SpecLook& L = *look_;
-    const WidgetRect panel{f.rect.Min.x, f.rect.Min.y, f.rect.GetWidth(), f.rect.GetHeight()};
-    const WidgetMeasure measure = [&L](const std::string& s, WidgetFont font) {
+namespace {
+
+WidgetMeasure look_measure(const SpecLook& L) {
+    return [&L](const std::string& s, WidgetFont font) {
         switch (font) {
             case WidgetFont::label: return text_extent(L.ui, L.ui_size, s).x;
             case WidgetFont::key:
@@ -914,9 +1008,84 @@ float WidgetSurface::reserve(const SpecPanelFrame& f) const {
         }
         return 0.0f;
     };
-    return layout_widget_surface(widget_layout_input(*this, panel, f.header.GetHeight()),
-                                 WidgetLayoutMetrics::for_text_scale(L.text_scale), measure)
-        .band;
+}
+
+}  // namespace
+
+bool WidgetSurface::open_at(const std::string& anchor) const {
+    if (!look_ || state_ == WidgetState::idle || state_ == WidgetState::applied) return false;
+    return target_.anchor == anchor;
+}
+
+std::string WidgetSurface::reply_body() const {
+    if (state_ == WidgetState::handoff && handoff_) return handoff_->reason;
+    if (state_ == WidgetState::failed) return error_.message;
+    return reply_;
+}
+
+int WidgetSurface::reply_lines(float card_width, bool row) const {
+    // An answer without a change is the card's content: its reply wraps over
+    // up to six lines in a panel and four under a row, elided past them, with
+    // Text for the whole of it. Otherwise the reply is one elided line.
+    reply_overflow_ = false;
+    if (!look_ || state_ != WidgetState::preview || edits_ > 0 || reply_.empty()) return 1;
+    const SpecLook& L = *look_;
+    const float w = std::max(40.0f, card_width);
+    ImFont* f = L.ui ? L.ui : ImGui::GetFont();
+    const float h = f->CalcTextSizeA(L.small_size, FLT_MAX, w, reply_.c_str(), reply_.c_str() + reply_.size()).y;
+    const float lh = f->CalcTextSizeA(L.small_size, FLT_MAX, 0.0f, "Ag").y;
+    const int need = std::max(1, (int)std::ceil(h / std::max(1.0f, lh) - 0.01f));
+    const int most = row ? 4 : 6;
+    reply_overflow_ = need > most;
+    return std::min(need, most);
+}
+
+// The reply cut to `lines` lines of `width`, ending with an ellipsis.
+std::string WidgetSurface::elided_reply(float width, int lines) const {
+    const SpecLook& L = *look_;
+    ImFont* f = L.ui ? L.ui : ImGui::GetFont();
+    const float lh = f->CalcTextSizeA(L.small_size, FLT_MAX, 0.0f, "Ag").y;
+    auto fits = [&](const std::string& t) {
+        return f->CalcTextSizeA(L.small_size, FLT_MAX, width, t.c_str(), t.c_str() + t.size()).y <= lh * (float)lines + 0.5f;
+    };
+    if (fits(reply_)) return reply_;
+    static const std::string kDots = "\xE2\x80\xA6";
+    size_t lo = 0, hi = reply_.size();
+    while (lo < hi) {   // the longest prefix that fits with the ellipsis
+        size_t mid = (lo + hi + 1) / 2;
+        while (mid > 0 && ((unsigned char)reply_[mid] & 0xC0) == 0x80) --mid;
+        if (mid <= lo) break;
+        if (fits(trimmed(reply_.substr(0, mid)) + kDots)) lo = mid;
+        else hi = mid - 1;
+    }
+    return trimmed(reply_.substr(0, lo)) + kDots;
+}
+
+WidgetLayout WidgetSurface::layout_in(const WidgetRect& panel, float strip, bool row) const {
+    const SpecLook& L = *look_;
+    WidgetLayoutMetrics m = WidgetLayoutMetrics::for_text_scale(L.text_scale);
+    if (row) m.min_content = 0.0f;   // under a row nothing else shares the space
+    const float card_w = panel.w - 4.0f * m.pad;
+    const int lines = reply_lines(card_w, row);
+    return layout_widget_surface(widget_layout_input(*this, panel, strip, lines), m, look_measure(L));
+}
+
+float WidgetSurface::reserve(const SpecPanelFrame& f) const {
+    if (!look_ || state_ == WidgetState::idle || state_ == WidgetState::applied) return 0.0f;
+    const std::string fp = target_.frame_panel();
+    if (fp.empty() || f.id != fp) return 0.0f;
+    const WidgetRect panel{f.rect.Min.x, f.rect.Min.y, f.rect.GetWidth(), f.rect.GetHeight()};
+    return layout_in(panel, f.header.GetHeight(), false).band;
+}
+
+float WidgetSurface::row_height(const std::string& anchor, float width) const {
+    if (!open_at(anchor) || anchor.empty()) return 0.0f;
+    return layout_in(WidgetRect{0.0f, 0.0f, width, 100000.0f}, 0.0f, true).band;
+}
+
+void WidgetSurface::draw_row(const std::string& anchor, const ImRect& rect) {
+    if (!open_at(anchor) || anchor.empty() || rect.GetHeight() < 1.0f) return;
+    draw_block(WidgetRect{rect.Min.x, rect.Min.y, rect.GetWidth(), rect.GetHeight()}, 0.0f, rect, true);
 }
 
 void WidgetSurface::frame(const SpecLook& look, const std::string& focused, bool keys) {
@@ -941,29 +1110,25 @@ void WidgetSurface::overlay(const SpecPanelFrame& f) {
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsMouseHoveringRect(f.rect.Min, f.rect.Max, false))
         focused_ = f.id;
     if (!look_ || state_ == WidgetState::idle || state_ == WidgetState::applied) return;
-    if (target_.panel.empty() || f.id != target_.panel || f.band.GetHeight() < 1.0f) return;
+    const std::string fp = target_.frame_panel();
+    if (fp.empty() || f.id != fp || f.band.GetHeight() < 1.0f) return;
+    draw_block(WidgetRect{f.rect.Min.x, f.rect.Min.y, f.rect.GetWidth(), f.rect.GetHeight()}, f.header.GetHeight(),
+               f.band, false);
+}
+
+void WidgetSurface::draw_block(const WidgetRect& panel, float strip, const ImRect& band, bool at_row) {
     const SpecLook& L = *look_;
     const float s = L.text_scale;
-    const WidgetRect panel{f.rect.Min.x, f.rect.Min.y, f.rect.GetWidth(), f.rect.GetHeight()};
-    const WidgetMeasure measure = [&L](const std::string& t, WidgetFont font) {
-        switch (font) {
-            case WidgetFont::label: return text_extent(L.ui, L.ui_size, t).x;
-            case WidgetFont::key:
-            case WidgetFont::mono: return text_extent(L.mono, L.mono_size, t).x;
-            case WidgetFont::tag:
-                return sternbild::text_tracked_width(L.ui, L.small_size, t.c_str(), std::round(L.small_size * 0.08f));
-        }
-        return 0.0f;
-    };
-    const WidgetLayoutInput in = widget_layout_input(*this, panel, f.header.GetHeight());
-    const WidgetLayout lay = layout_widget_surface(in, WidgetLayoutMetrics::for_text_scale(s), measure);
+    const WidgetLayoutMetrics metrics = WidgetLayoutMetrics::for_text_scale(s);
+    WidgetLayoutInput in = widget_layout_input(*this, panel, strip, reply_lines(panel.w - 4.0f * metrics.pad, at_row));
+    const WidgetLayout lay = layout_in(panel, strip, at_row);
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImGui::PushClipRect(f.band.Min, f.band.Max, true);
+    ImGui::PushClipRect(band.Min, band.Max, true);
     ImGui::PushID("##widget.surface");
 
     // The band: the panel's ground, closed by a rule over the content.
-    dl->AddRectFilled(f.band.Min, f.band.Max, L.ground);
-    if (!lay.content_hidden) dl->AddRectFilled(v2(f.band.Min.x, f.band.Max.y - 1.0f), f.band.Max, L.rule_faint);
+    dl->AddRectFilled(band.Min, band.Max, L.ground);
+    if (!lay.content_hidden || at_row) dl->AddRectFilled(v2(band.Min.x, band.Max.y - 1.0f), band.Max, L.rule_faint);
 
     auto rr = [](const WidgetRect& r) { return ImRect(v2(r.x, r.y), v2(r.right(), r.bottom())); };
     const float ui_h = text_extent(L.ui, L.ui_size, "Ag").y;
@@ -987,7 +1152,7 @@ void WidgetSurface::overlay(const SpecPanelFrame& f) {
             fill = L.plate_hover;
             key_ink = L.accent;
         }
-        if (a == WidgetAction::diff && show_full_diff_) outline = L.accent;
+        if ((a == WidgetAction::diff || a == WidgetAction::text) && show_full_diff_) outline = L.accent;
         if (primary) sternbild::cut_plate(dl, b.Min, b.Max, outline, fill, std::round(4.0f * s));
         else {
             if (fill) dl->AddRectFilled(b.Min, b.Max, fill);
@@ -1107,11 +1272,20 @@ void WidgetSurface::overlay(const SpecPanelFrame& f) {
         }
         if (!lay.reply.empty()) {
             const ImRect r = rr(lay.reply);
-            const std::string body = state_ == WidgetState::handoff && handoff_ ? handoff_->reason
-                                     : state_ == WidgetState::failed          ? error_.message
-                                                                              : reply_;
-            draw_text(dl, L.ui, L.small_size, v2(r.Min.x, r.Min.y + (r.GetHeight() - small_h) * 0.5f), L.secondary,
-                 fit(L.ui, L.small_size, body, r.GetWidth()));
+            const std::string body = reply_body();
+            if (in.reply_lines > 1) {
+                // An answer: wrapped over its lines, clipped to them.
+                const float lh = r.GetHeight() / (float)in.reply_lines;
+                ImGui::PushClipRect(r.Min, r.Max, true);
+                ImFont* f = L.ui ? L.ui : ImGui::GetFont();
+                const std::string shown = reply_overflow_ ? elided_reply(r.GetWidth(), in.reply_lines) : body;
+                dl->AddText(f, L.small_size, v2(r.Min.x, std::round(r.Min.y + (lh - small_h) * 0.5f)), L.secondary,
+                            shown.c_str(), shown.c_str() + shown.size(), r.GetWidth());
+                ImGui::PopClipRect();
+            } else {
+                draw_text(dl, L.ui, L.small_size, v2(r.Min.x, r.Min.y + (r.GetHeight() - small_h) * 0.5f), L.secondary,
+                          fit(L.ui, L.small_size, body, r.GetWidth()));
+            }
         }
         if (!lay.diff.empty()) {
             const ImRect d = rr(lay.diff);

@@ -526,8 +526,9 @@ item of its own: the presets `anthropic`, `openai`, `gemini` and `openrouter`, a
 (`custom_key_account()`). The ids come from `caliper_agent/presets.json`, embedded at build time, which the sidecar
 reads too. `ollama` and `lmstudio` take no key (`keystore.no_key_needed`), and `place_key_in_environment()` places none
 for them; it puts the Claude key in `ANTHROPIC_API_KEY` and any other in `CALIPER_MODEL_API_KEY`, and removes the other
-variable and every redirecting one ([Widget agent](widget-agent.md#presets)). Error codes add
-`keystore.no_key_needed`.
+variable and every redirecting one ([Widget agent](widget-agent.md#presets)). `strip_key_environment()` removes
+them all and places nothing, for a child that must not see a key of the app's own environment when no store is asked
+for one (the settings' probe without a store). Error codes add `keystore.no_key_needed`.
 
 ## Checked against the protocol's schema
 
@@ -865,9 +866,50 @@ command; a local server needs no key, and `tests/manual_local_model.py` runs the
    on GL and Vulkan.
 10. Check the effort: add `--effort medium` and then `--effort high` to the sidecar's command in `--agent`, on a
     prompt that builds something once the command layer is wired, and compare the replies and the usage logs.
-11. Once the inline surface exists, enter the key in the widget agent's settings, check that they show that a key is
-    set and never the key, make an edit by ⌘K on a panel of the acceptance test's dashboard and accept it, check that
-    one undo takes it back, then remove the key and check that ⌘K offers only Ask in chat.
+
+### The manual check in the app
+
+These steps use the app's settings (`src/host/builder/agent_settings.h`) and the macOS Keychain, which no automated
+test touches. They were not run on this branch: the first part spends money and stores a real key, and the second
+needs a model server of your own. Run the app as a person does, not hidden: `CALIPER_AGENT_PYTHON` names the
+interpreter of step 2 above, and `--api` runs Caliper API, for example
+`CALIPER_AGENT_PYTHON=<repo>/src/builder/agent/.venv/bin/python caliper --api --workspace <a copy of the acceptance
+test's workspace>`. Do not set `CALIPER_AGENT_OFFLINE`, which would refuse the Claude API.
+
+**With a real key (Claude).**
+
+1. On the landing screen, choose ⌘, Agent. The settings open over the landing, with no provider chosen and the tag No
+   provider.
+2. Choose Claude. The base URL is `https://api.anthropic.com` as text, the four models are offered with Claude Haiku
+   5.5 lit, the effort is low, the Key row says Not set, and the tag says No key.
+3. Paste the key into the Key field and choose Save. The row says Set, with Replace and Remove; the field is empty.
+4. Open Keychain Access and find the item of the service `caliper.agent-keys` with the account `anthropic`. Check
+   that `widget-agent.json` in the app-data folder holds `"preset": "anthropic"` and no key:
+   `grep -c sk-ant <app-data>/widget-agent.json` prints 0.
+5. Choose Probe. Tool calling and vision say Yes (known or server), and the context length comes from the Models API
+   (server). No message request is made, so no tokens are spent.
+6. Open the acceptance test's dashboard, focus the curves panel, press ⌘K, and ask "Use a linear y axis". The prompt
+   row shows Claude Haiku 5.5 and low; the panel shows the preview; Accept applies it, and one undo takes it back.
+7. Choose ⌘, again, then Remove. The row says Not set, the Keychain item is gone, and the next ⌘K offers only Setup and
+   Ask in chat; Setup opens the settings.
+8. Enter a key that is not valid, such as `sk-ant-invalid-0000000000`, and try ⌘K once more: the prompt says that the
+   API did not accept the key, and quotes no key. Remove it.
+
+**With a local model (Ollama).**
+
+1. Start Ollama with a model that supports tool calling already pulled.
+2. In the settings, choose Ollama. The base URL is `http://localhost:11434/v1` in a field, there is no Key row, and
+   there is no Remote address tag.
+3. Choose List: the server's models appear as choices. Choose one, then Probe: tool calling and vision say Yes or No
+   (probe), and the context length says 8,192 tokens (assumed), since Ollama reports none. Type the context length
+   you run the model with into its field.
+4. Change the address to another machine's, such as `http://192.0.2.10:11434/v1`: the tags Remote address and
+   Unencrypted appear. Change it back.
+5. Choose a model without tool calling, if you have one, and Probe: the tag says No tool calling, and ⌘K offers only
+   Setup and Ask in chat.
+6. Attach a training run (F4 Attach to process, or `--url` with a stream's link): the settings show Shared GPU under
+   the presets, and the ⌘K prompt row shows it after the model. Detach: both go.
+7. Use ⌘K on a panel as in the first part, and check with `ollama ps` that the model is loaded while it answers.
 
 ## What is built and what waits
 
@@ -896,14 +938,13 @@ Built on this branch:
 
 Waiting for later work:
 
-- The rest of the widget role: the inline surface, the probe and the presets, as the
-  [work items](widget-agent.md#work-items) of the Widget agent page list them with their sizes.
-- The settings: the presets, the key field for each provider and its remove control, the model and effort pickers
-  from the config options, and status lines from `_meta.caliper.status`.
-- On top of the provider layer: passing the chosen provider, base URL and key from the app when it starts the
-  sidecar, and running `caliper-agent probe` from the settings.
+- The rest of the widget role, as the [work items](widget-agent.md#work-items) of the Widget agent page list them.
+  The settings in the app are built (`src/host/builder/agent_settings.h`): the app starts the sidecar with the chosen
+  preset, base URL, model and effort, the key placed by the key store for that provider only, and runs
+  `caliper-agent probe` from them ([Widget agent](widget-agent.md#presets)). Status lines from
+  `_meta.caliper.status` wait.
 - Server-side refusal fallbacks, once Pydantic AI keeps the reply's `fallback` block ([Refusals](#refusals)).
-- Spawning the sidecar from the app with the key store, and a packaged Python runtime with a lock file.
+- A packaged Python runtime with a lock file, so that the app finds the sidecar without `CALIPER_AGENT_PYTHON`.
 - The Windows Credential Manager store, with one entry per provider.
 - Per-message effort and context editing for old captures, both betas.
 - `session/load`.

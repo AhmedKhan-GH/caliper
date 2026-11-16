@@ -93,6 +93,10 @@ public:
         // for a file in it, else with the home folder written "~", as the
         // Activity pane writes paths. Null shows the path as it is.
         std::function<std::string(const std::string&)> shown_path;
+        // ⌘, Agent (Ctrl+, elsewhere): the widget agent's settings
+        // (builder/agent_settings.h), at the command bar's right end. Null
+        // leaves the button out.
+        std::function<void()> agent_settings;
     };
 
     // Draws one frame of the landing page. Owns its windows and dock space;
@@ -137,6 +141,7 @@ private:
     void rebuild_rows(const caliper_host::AppletLoader& loader);
 
     int selected_ = -1;
+    std::function<void()> agent_settings_;   // Context::agent_settings, for the command bar
     std::string command_;            // command-line text (filters instruments)
     bool focus_command_ = false;     // ⌘K / Ctrl+K: focus the command line
     bool layout_built_ = false;      // first-run DockBuilder layout attempted

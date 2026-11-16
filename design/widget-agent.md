@@ -20,8 +20,10 @@ budget, the handoff and `session/close` ([How it stays an ACP agent](#how-it-sta
 bundle (item 13), built from the session with its bounds and cuts ([The context bundle](#the-context-bundle)); and the
 capability probe with its cache and the person's overrides (item 16,
 [Capabilities and degradations](#capabilities-and-degradations)); and the provider conformance suite (item 18,
-[below](#the-provider-conformance-suite)). The inline surface on a panel (item 14, in part), with the agent over `AcpClient`, is built too
-([The inline prompt and the preview](#the-inline-prompt-and-the-preview)). **Planned:** everything else on this page. The [work items](#work-items) give the
+[below](#the-provider-conformance-suite)); the widget agent's settings in the app with one key per provider (item 17,
+[Presets](#presets)) and the GPU note (item 19, [GPU contention](#gpu-contention)). The inline surface (item 14), on a
+panel, a selection, a dropped file and a property, with the agent over `AcpClient`, is built too
+([The inline prompt and the preview](#the-inline-prompt-and-the-preview)); what is left of it is in the work items. **Planned:** everything else on this page. The [work items](#work-items) give the
 sizes and the order.
 
 ## The role
@@ -101,9 +103,13 @@ a bronze PREVIEW tag and rule, and a compact diff under the row lists the change
 - **A small panel.** The surface lays itself out as plain rectangles in the panel. As the panel shrinks, the reply
   line goes first, then the diff lines past the first, then the model label of the row, then the keys of the buttons;
   below the minimum height (the rows and 48 px of content at text scale 1) the surface takes the whole panel.
-- A change that adds a panel, such as a table of a selection, will draw the new panel in a dashed frame where the
-  layout would place it; this is not built yet.
-- The agent's summarized thinking is kept by the surface but not shown yet.
+- **A change that adds, removes or moves panels**, such as a table of a selection beside the panel, is drawn as the
+  preview of the whole spec in place of the spec, with its layout: the panels it adds stand where the layout puts them,
+  in a dashed bronze frame with PREVIEW in their strip, and the others keep their data. The compact diff names them as
+  "panel selected_rows added" and "layout changed". A change inside the target panel is still drawn in that panel.
+- **An answer without a change**, such as what a dropped file holds, is the card's content: it wraps over up to six
+  lines in a panel and four under a row, elided past them with Text, which shows the whole of it.
+- The agent's summarized thinking shows as the running row's progress line.
 
 **Built.** `src/host/builder/widget_surface.h` holds the surface, `widget_agent.h` the `WidgetAgent` interface with a
 scripted agent for tests and screenshots, and `widget_agent_acp.h` the agent over `AcpClient`, which starts
@@ -124,8 +130,20 @@ Escape leaves the prompt first, then the command input, then the focus, then goe
 `CALIPER_AGENT_PYTHON` until it is packaged, when Caliper API runs; a hidden app never touches the key store and runs
 the sidecar only on a test's script. The model is chosen from the prompt row's label through
 `session/set_config_option`, and the agent's thoughts show as the progress line. A hidden-only input script,
-`CALIPER_TEST_SPEC_UI`, drives the page for tests and screenshots. Not built yet: the selection, dropped-file and
-property entry points, the dashed frame of a new panel, and the packaging of `caliper-agent` with a Python runtime.
+`CALIPER_TEST_SPEC_UI`, drives the page for tests and screenshots.
+
+The other three entry points are built too. **A selection**: the spec runtime holds one selection
+(`SpecSelection`), a range of x on a series panel or a rectangle of a 2-D points panel, made by a shift-drag across
+the plot and drawn in bronze; ⌘K on a panel with a selection opens the prompt for the selection target, whose context
+bundle carries the selected rows (the drawn steps or points inside it, at most 1,000) and the range, and Escape clears
+the selection before the focus. **A dropped file**: after a drop, the row of each source the import made shows ⌘K in
+the builder pane's Sources palette, and the prompt opens under that row for the target of the file's loader and its
+catalog ids; with no spec open, the preview's `spec.new` from the `ui` origin is undone again by a discard while
+its step is still the top of the undo stack, and Accept leaves it as a step of its own before the change. **A
+property**: ⌘K beside the focused panel's title and each of its options in Properties opens the prompt under that
+row for that one property (`options.colormap`), and the edit is previewed in the panel. Each session's scope is the
+scope rule's for its kind of target. Not built yet: the ⌘K of a source's properties, and the packaging of
+`caliper-agent` with a Python runtime.
 
 ## The context bundle
 
@@ -223,7 +241,13 @@ app sends must be a subset of what the rule gives for the target, or `session/ne
 and without a scope the sidecar uses the rule's whole scope.
 
 When no spec is open, the app runs `spec.new` from the `ui` origin, with the file's name as the title, before it
-begins the preview, since a preview needs an open spec; on Reject it undoes that `spec.new` as well.
+begins the preview, since a preview needs an open spec; on Reject it undoes that `spec.new` as well. The surface
+knows the step by its id, which `history.list` gives right after the `spec.new`, and undoes it only while it is still
+the top of the undo stack: when the person, the side chat or a program over Caliper API committed a step after it, the
+new spec stays rather than that step being undone in its place. The list and the undo run on the frame thread while
+the session is free, and every other origin reaches the session through the queue, which the app drains between two
+frames, so nothing can commit between them. Dropping the surface (a settings change, a new session) does what a
+discard does. Accept leaves two undo steps for such a file: the new spec, then the change.
 
 ## The turn budget, the model and the effort
 
@@ -328,11 +352,17 @@ setup steps instead.
 
 ## With no provider set up
 
-The widget agent needs a provider: a Claude API key today, and later any configured preset, where a local server needs
-no key. When none is set up, ⌘K still opens the inline prompt, but its only action is Ask in chat, with the same
-handoff: Enter sends the request to the side chat. The row shows the tag NO PROVIDER and a Setup action, which opens
-the widget agent's settings, where Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`) is linked; the
-surface writes no sentence of its own. The sidecar is not started.
+The widget agent needs a provider: a preset chosen in its settings, with its key where the preset needs one; a local
+server needs none. When none is set up, ⌘K still opens the inline prompt, but its only action is Ask in chat, with the
+same handoff: Enter sends the request to the side chat. The row shows the tag NO PROVIDER and a Setup action, which
+opens the widget agent's settings; the surface writes no sentence of its own. The sidecar is not started.
+
+**As built**, "no provider" is exactly `agent_launch()`'s refusal (`src/host/builder/agent_settings.h`): no preset
+chosen, an address that is not valid, an OpenAI-compatible preset without a model, a required key that is not set, or
+a model known to lack tool calling (the person's override, or a probe answer younger than 30 days). The settings name
+the case in a tag: No provider, Invalid address, No model, No key or No tool calling. A model that the sidecar learns
+lacks tool calling only at run time still refuses `session/new` with `agent.no_tools`, which the surface shows as a
+failure.
 
 ## One journal, one history, one queue
 
@@ -441,8 +471,46 @@ through it could not be confirmed.
 ### Presets
 
 The widget agent's settings offer presets, each of which fills the base URL; the person then picks the model and,
-where needed, enters a key. The sidecar reaches every preset today, from its command line; the settings that offer
-them are planned.
+where needed, enters a key. The sidecar reaches every preset from its command line, and the settings in the app offer
+them.
+
+**Built: the settings in the app** (`src/host/builder/agent_settings.h`, the reference Widget agent,
+`docs/references/widget-agent.md`, under The settings in the app). Decisions made while building them:
+
+- **Where they open.** A popup over any page, from the landing screen's ⌘, Agent, from the key ⌘, on any page, and from
+  the inline surface's Setup (no provider) and Model (after a refusal). One placement rule at every size: 62 percent
+  of the work area's width, centred, the top at 12 percent of the work area's height, and the content's height. A pane
+  of its own was not chosen: the settings are visited rarely, and a popup reaches them from the landing and from ⌘K on
+  the spec page without a change of page.
+- **What is stored.** `widget-agent.json` in the app-data folder, beside the side chat's `side-chat.json`: the chosen
+  preset and, for each preset, its base URL, model and effort. Never a key, never in the workspace. The probe's
+  answers and the overrides stay in the probe's own cache, `model-capabilities.json` in the same folder, which the
+  sidecar reads with `--cache-dir`, so each answer has one place.
+- **No provider until a preset is chosen.** A key already in the Keychain does not choose Claude by itself; the person
+  chooses the preset once.
+- **The Claude preset's models and efforts** come from `presets.json` (`models`, `efforts`), which a test keeps equal
+  to the sidecar's `claude.py`. Each of the four models takes all five efforts, as the `claude-api` skill's table and
+  the installed `anthropic` SDK 2.8.0 (`OutputConfigParam.effort`, and `EffortCapability` of the Models API) give.
+- **The key row only writes**, through `KeyStore::set()`, `has()` and `remove()`; a test with a counting store checks
+  that nothing reached `do_read()`. A hidden app's store is an in-memory one (`app_key_store()`).
+- **Tests and captures** use an in-memory store, the offline switch and a fake model server on loopback
+  (`src/builder/agent/tests/fake_openai_serve.py`, whose `--record` writes the credential each request carried); the
+  hidden app's input driver gained `widget <action>`, `settings open|close|preset|model|until` and `files`.
+- **A change applies at once.** Every change of the settings (a preset, an address, a model, an effort, a key saved or
+  removed, a probe's answer for the current model) ends the inline surface's agent on any page: an open prompt closes
+  as Close closes it, so a running turn is cancelled and a preview discarded, and the agent goes with its sidecar and
+  its API file and token. A removed key so leaves the sidecar's environment at once. The next ⌘K makes the agent from
+  the settings. Reopening the prompt by itself was not chosen: the settings popup has the keyboard while it is open,
+  and a prompt that took it back would surprise the person.
+- **The probe's environment is the sidecar's.** `place_key_in_environment()` places the chosen provider's key and
+  removes every other key variable and every variable that could redirect the child, so no key or endpoint of the
+  app's own environment reaches the provider. When the store cannot place the key, or a provider requires one and
+  there is no store, the probe does not run and its tag says why (No key, Malformed key, Unreadable key), as the
+  sidecar's start refuses; a provider that needs no key is probed with no key variable (`strip_key_environment()`).
+- **The probe's child does not outlive the settings.** The probe reads its child on a thread of its own; when the app
+  quits or the settings go, the child gets SIGKILL with its process group at once and the thread reaps it, so the
+  frame thread never waits. An answer that arrives after the model or the address changed is dropped, and does not
+  count as a change.
 
 **Built: the presets as data.** The table below is one file, `src/builder/agent/caliper_agent/presets.json`, which the
 sidecar reads (`caliper_agent/presets.py`, `--preset <id>`) and the key store embeds at build time, so both know the
@@ -661,6 +729,12 @@ swapping. On a machine with a discrete GPU, the model's weights take video memor
   widget agent's base URL is a loopback address, and the side chat's header shows the same note when the person has
   marked the side chat's agent as running on a local model. The app cannot tell where an outside agent's model runs,
   so the side chat relies on that setting.
+- **Built: the widget agent's note.** The note is the noun phrase "Shared GPU" (`agent_gpu_note()`): shown under the
+  presets in the settings and after the model in the ⌘K prompt row (the agent's label), while the app's live session
+  is attached (`caliper_live::Attachment::attached()`, true while the app holds a training script's stream, until it
+  detaches) and the chosen base URL is a loopback address, for Ollama, LM Studio or Custom alike. A test in the hidden app
+  attaches to the stream of the producer of the live acceptance test with the Ollama preset chosen and sees the note,
+  then detaches and sees it gone. The side chat's setting and note are not built.
 - **The advice**, in Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`):
   during a run, use a smaller or more quantized model; keep its context length
   modest, since the context takes memory too; unload the model when done; use a hosted preset while a long run trains;
@@ -745,6 +819,14 @@ For a local server:
 - **One sidecar for every ⌘K**, started at the first and kept; each ⌘K opens a session and closes it with
   `session/close` when its prompt closes.
 - **A scripted agent names itself "Scripted"**, so that no screenshot credits a model that did not run.
+- **A preview that adds a panel is the whole spec's preview**, drawn in place of the spec with the added panels in a
+  dashed bronze frame, since the surface's card stays in the target panel and the new panel must stand where the
+  layout puts it to be judged.
+- **A selection is plain state of the spec runtime**, one at a time, made by a shift-drag (a plain drag pans the
+  plot), since the spec panels had none; its rows are the drawn steps or points, after the decimation of long series,
+  and the range goes with them so that the agent can query the source for all of them.
+- **The prompt of a dropped file or a property sits under its row** in the builder pane, where the person asked,
+  and not in a panel.
 - **⌘K Command means one thing on every page:** it opens the command input of where the focus is. On the landing
   screen that is the command line; on the spec page it is the focused panel's inline prompt, or with no panel focused
   the page bar's command input, which finds a panel by its title, so that Enter then opens that panel's prompt.
@@ -775,11 +857,24 @@ and L six to ten; each figure is rough.
 | 11 | Done: the evaluation of the ACP Python SDK for the sidecar's agent side. The hand-written agent side stays, and the SDK validates every message in the tests ([Widget agent sidecar](byok-agent.md#the-acp-python-sdk)) | None left |
 | 12 | Done: widget sessions in the sidecar: `_meta.caliper.widget`, the scoped tools and their check, the widget system prompt, images and embedded context in prompts, `X-Caliper-Preview` on every call, the turn budget, the handoff and `session/close` | None left |
 | 13 | Done: the context bundle, built from the session with its bounds and cuts, as ACP content blocks with the tool scope and `session/new`'s `_meta` (`build_context_bundle()`); calling it from the inline surface comes with item 14 | None left |
-| 14 | In part: the inline surface on a panel, the prompt, the preview drawn in place, Accept, Reject and Refine, Ask in chat handed to the page, and the agent over `AcpClient`. Left: the selection, dropped-file and property entry points, connecting the surface in the app's page, and the packaging of `caliper-agent` and a Python runtime | M, 4 days |
-| 15 | Adopted: Pydantic AI as the provider layer, with the Claude and OpenAI-compatible providers built in the sidecar. What remains is passing the chosen provider, base URL and key from the app when it starts the sidecar; widget sessions (12) and the probe (16) build on it | S, 1 day |
+| 14 | Built: the inline surface on a panel, a selection, a dropped file and a property, the preview drawn in place (a panel or the whole spec), Accept, Reject and Refine, Ask in chat, and the agent over `AcpClient`. Left: the packaging of `caliper-agent` with a Python runtime, and ⌘K on a source's properties | S, 2 days |
+| 15 | Adopted: Pydantic AI as the provider layer, with the Claude and OpenAI-compatible providers built in the sidecar. The app passes the chosen preset, base URL, model and effort from the widget agent's settings when it starts the sidecar, and places the key only in the sidecar's environment; widget sessions (12) and the probe (16) build on it | None left |
 | 16 | Done: the capability probe and its cache, with the override (`caliper-agent probe`) | None left |
-| 17 | The presets and one key per provider in the settings. Done: the presets as data, `KeyStore` with one key per provider, the sidecar's `--preset` and its checks and warnings, and the scrubbing of every documented key shape. Left: the settings pane | S, 1 day |
+| 17 | Done: the presets as data, `KeyStore` with one key per provider, the sidecar's `--preset` with its checks and warnings, the scrubbing of every documented key shape, and the settings in the app (`agent_settings.h`) with the agent made from them | None left |
 | 18 | Done: the provider conformance suite (`caliper-agent-conformance`), its scripted and fake-server modes and its reference page | None left |
-| 19 | The GPU contention note | S, 1 day |
+| 19 | Done: the GPU contention note of the widget agent ("Shared GPU" in the settings and the ⌘K prompt row). Left: the side chat's setting and note | S, half a day |
 
 The Windows Credential Manager store, with one entry per provider, is on the [Windows parity](windows-parity.md) page.
+
+## Open items
+
+These were found in the review of sprint 3's second pull request and left for a later round:
+
+- **Escape and ⌘K pass through the settings.** While the widget agent's settings are open over the spec page, the page
+  still reads Escape and ⌘K from the raw keys, so Escape also reaches an inline prompt or the page under the popup,
+  and ⌘K opens a prompt there. While the settings are open, neither key should reach the page or the prompt.
+- **A property's prompt anchor lacks its panel.** A prompt opened on a property is anchored to `prop:` and the
+  property's path, so after the focus moves to another panel it can draw under that panel's row of the same path. The
+  anchor should name the panel too.
+- **A selection outlives its spec.** `SpecRuntime::set_spec()` never clears the selection, so it stays when the spec
+  changes or its panel goes. To check with it: the `selecting` flag of a panel entry that a preview replaces.

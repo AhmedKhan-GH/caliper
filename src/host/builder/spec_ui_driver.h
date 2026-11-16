@@ -15,7 +15,7 @@
 //   leave                the pointer leaves the window (no hover is left behind)
 //   key <chord>          a press and release of a chord: cmd, shift and one
 //                        key (a letter, a digit, enter, escape, backspace,
-//                        f3), such as "cmd+k" (Ctrl+K off macOS) or
+//                        f3, comma), such as "cmd+k" (Ctrl+K off macOS) or
 //                        "cmd+shift+z"
 //   type <text>          the text as the keyboard's characters; "\n" is a
 //                        line break
@@ -43,6 +43,14 @@
 //                        a press on the first, a move in steps to the second
 //                        and a release there, or none with `hold`
 //   release              lets go of a held drag
+//   selection <path>     writes the page's selection as JSON to <path>
+//                        (SpecPage::selection_json()), once there is one
+//   wait-file <path>     wait until <path> exists (a file a test writes)
+//   select <panel> <fx0> <fx1> [<fy0> <fy1>]
+//                        a shift-drag across a shown panel from the fractions
+//                        (fx0, fy0) to (fx1, fy1) of its rectangle (fy 0.5
+//                        when not given): a range on a series panel, a
+//                        rectangle of points on a points panel
 //   drop <path> ...      files dropped on the window, through the app's drop
 //                        callback's own function (a hidden window receives no
 //                        real drop)
@@ -50,6 +58,19 @@
 //                        import runs
 //   pane focus <panel>   wait until the builder's focused panel is <panel>
 //   page <name>          wait until the app shows that page (landing, spec, live)
+//   widget <label>       presses the inline surface's action of that label
+//                        ("Setup", "Ask in chat", ...) once the surface offers it,
+//                        through the surface's own act(), as its button does
+//   settings open|close  the widget agent's settings (agent_settings.h)
+//   settings preset <id> | model <name>
+//                        chooses a preset, or sets the model, as a click on its
+//                        button or Enter in its field does
+//   settings until open | note <text>|none | state <text>|none
+//                        wait until the settings are open, show that GPU note,
+//                        or that plain state
+//   files <folder> <prefix> <count>
+//                        wait until the folder holds that many files whose
+//                        names begin with <prefix> (the API's agent files)
 //   touch <path>         creates an empty file (a stub agent's gate)
 //   append <path> <line> appends a line to a file (a test's approval decision)
 //   quit                 close the app
@@ -66,6 +87,7 @@
 #include <imgui.h>
 
 #if CALIPER_WITH_BUILDER
+#include "builder/agent_settings.h"
 #include "builder/builder_pane.h"
 
 #include <caliper_builder/session/session.h>
@@ -135,6 +157,10 @@ public:
     // a dropped file reaches; the app sets both before each feed().
     void set_page(std::string page) { page_ = std::move(page); }
     void set_drop(std::function<void(std::vector<std::string>)> drop) { drop_ = std::move(drop); }
+#if CALIPER_WITH_BUILDER
+    // The widget agent's settings, for the `settings` steps; the app sets them.
+    void set_agent_settings(AgentSettings* settings) { settings_ = settings; }
+#endif
 
     void feed(SpecPage& page, AppSession& app, ChatPane* chat = nullptr) {
         if (done()) return;
@@ -154,6 +180,47 @@ public:
         }
         const Step& s = steps_[at_];
         ++frames_;
+        if (s.verb == "widget") {
+            if (!page.widget_action(s.arg)) return patience("the surface offers no " + s.arg);
+            next("pressed " + s.arg);
+            return;
+        }
+        if (s.verb == "settings") {
+#if CALIPER_WITH_BUILDER
+            if (!settings_) return void(error_ = "settings: the app has no widget agent settings");
+            std::stringstream words(s.arg);
+            std::string what, which, rest;
+            words >> what >> which;
+            std::getline(words, rest);
+            while (!rest.empty() && rest.front() == ' ') rest.erase(rest.begin());
+            const std::string want = rest == "none" ? std::string() : rest;
+            auto shown = [](const std::string& t) { return t.empty() ? std::string("none") : t; };
+            if (what == "open" || what == "close") {
+                settings_->set_open(what == "open");
+                next("settings " + what);
+            } else if (what == "preset" && !which.empty()) {
+                settings_->choose_preset(which);
+                next("settings preset " + which);
+            } else if (what == "model" && !which.empty()) {
+                settings_->set_model(which);
+                next("settings model " + which);
+            } else if (what == "until" && which == "open") {
+                if (!settings_->is_open()) return patience("the settings are closed");
+                next("the settings are open");
+            } else if (what == "until" && which == "note") {
+                if (settings_->gpu_note() != want) return patience("the settings' note is " + shown(settings_->gpu_note()));
+                next("the settings' note is " + shown(want));
+            } else if (what == "until" && which == "state") {
+                if (settings_->state() != want) return patience("the settings' state is " + shown(settings_->state()));
+                next("the settings' state is " + shown(want));
+            } else {
+                error_ = "settings takes open, close, preset, model or until open|note|state";
+            }
+#else
+            error_ = "settings: the builder is not in this build";
+#endif
+            return;
+        }
         if (s.verb == "click") {
             std::stringstream words(s.arg);
             std::string name;
@@ -199,6 +266,68 @@ public:
                 if (!hold) io.AddMouseButtonEvent(0, false);
                 next(std::string(hold ? "dragged and held " : "dragged ") + w[0] + " to " + w[b]);
             }
+            return;
+        }
+        if (s.verb == "select") {
+            std::stringstream words(s.arg);
+            std::string panel;
+            float fx0 = 0.3f, fx1 = 0.6f, fy0 = 0.5f, fy1 = 0.5f;
+            words >> panel >> fx0 >> fx1;
+            if (!(words >> fy0 >> fy1)) fy0 = fy1 = 0.5f;
+            constexpr int kSteps = 12;
+            if (drag_frame_ == 0) {
+                float r[4];
+                if (!page.panel_rect(panel, r)) return patience("panel " + panel + " is not shown");
+                drag_a_[0] = std::round(r[0] + r[2] * fx0);
+                drag_a_[1] = std::round(r[1] + r[3] * fy0);
+                drag_b_[0] = std::round(r[0] + r[2] * fx1);
+                drag_b_[1] = std::round(r[1] + r[3] * fy1);
+                io.AddKeyEvent(ImGuiMod_Shift, true);
+                io.AddMousePosEvent(drag_a_[0], drag_a_[1]);
+                drag_frame_ = 1;
+            } else if (drag_frame_ == 1) {
+                io.AddMouseButtonEvent(0, true);
+                drag_frame_ = 2;
+            } else if (drag_frame_ < kSteps + 2) {
+                const float t = (float)(drag_frame_ - 1) / (float)kSteps;
+                io.AddMousePosEvent(std::round(drag_a_[0] + (drag_b_[0] - drag_a_[0]) * t),
+                                    std::round(drag_a_[1] + (drag_b_[1] - drag_a_[1]) * t));
+                ++drag_frame_;
+            } else if (drag_frame_ == kSteps + 2) {
+                io.AddMouseButtonEvent(0, false);
+                ++drag_frame_;
+            } else {
+                io.AddKeyEvent(ImGuiMod_Shift, false);
+                next("selected on " + panel);
+            }
+            return;
+        }
+        if (s.verb == "selection") {
+            const std::string sel = page.selection_json();
+            if (sel.empty()) return patience("no selection");
+            std::ofstream(s.arg) << sel << "\n";
+            next("wrote the selection to " + std::filesystem::path(s.arg).filename().string());
+            return;
+        }
+        if (s.verb == "files") {
+            std::stringstream words(s.arg);
+            std::string folder, prefix;
+            int want = -1;
+            words >> folder >> prefix >> want;
+            if (folder.empty() || prefix.empty() || want < 0) return void(error_ = "files takes <folder> <prefix> <count>");
+            int n = 0;
+            std::error_code ec;
+            for (std::filesystem::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
+                if (it->path().filename().string().rfind(prefix, 0) == 0) ++n;
+            const std::string what = std::to_string(n) + (n == 1 ? " file " : " files ") + prefix + "*";
+            if (n != want) return patience(what);
+            next(what);
+            return;
+        }
+        if (s.verb == "wait-file") {
+            std::error_code ec;
+            if (!std::filesystem::exists(s.arg, ec)) return patience("no file " + s.arg);
+            next("found " + std::filesystem::path(s.arg).filename().string());
             return;
         }
         if (s.verb == "release") {
@@ -278,6 +407,9 @@ public:
                 facts_ = "surface " + page.widget_state() + ", focus " +
                          (page.focused_panel().empty() ? std::string("none") : page.focused_panel()) + ", undo " +
                          std::to_string(undo_steps(app)) + (chat ? ", chat " + chat->state() : std::string());
+#if CALIPER_WITH_BUILDER
+                if (settings_) facts_ += std::string(", settings ") + (settings_->is_open() ? "open" : "closed");
+#endif
                 shot_requested_ = true;
                 armed_ = true;
             } else if (frames_ > kPatience) {
@@ -334,7 +466,7 @@ private:
     void next(const std::string& what) {
         const std::string& verb = steps_[at_].verb;
         if (verb == "click" || verb == "key" || verb == "type" || verb == "drag" || verb == "release" ||
-            verb == "drop")
+            verb == "drop" || verb == "select")
             settle_ = kSettle;
         log_.push_back(what);
         ++at_;
@@ -368,6 +500,8 @@ private:
                 keys.push_back(ImGuiKey_Backspace);
             } else if (p == "f3") {
                 keys.push_back(ImGuiKey_F3);
+            } else if (p == "comma") {
+                keys.push_back(ImGuiKey_Comma);
             } else if (p.size() == 1 && p[0] >= 'a' && p[0] <= 'z') {
                 keys.push_back((ImGuiKey)(ImGuiKey_A + (p[0] - 'a')));
             } else if (p.size() == 1 && p[0] >= '0' && p[0] <= '9') {
@@ -415,6 +549,9 @@ private:
     std::vector<ImGuiKey> held_keys_;
     std::vector<std::string> log_;
     std::string error_, facts_;
+#if CALIPER_WITH_BUILDER
+    AgentSettings* settings_ = nullptr;
+#endif
     std::string page_;
     std::function<void(std::vector<std::string>)> drop_;
     float drag_a_[2] = {0, 0}, drag_b_[2] = {0, 0};

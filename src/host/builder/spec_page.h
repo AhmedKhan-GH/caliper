@@ -59,6 +59,7 @@ struct SpecAppletFacts;   // ui/landing_screen.h
 
 namespace caliper_host {
 
+class AgentSettings;
 class AppSession;
 class BuilderPane;
 class ChatPane;
@@ -157,11 +158,25 @@ public:
     // touches the key store, and runs the sidecar only on a test's script
     // (builder/widget_app.h).
     void set_hidden(bool hidden);
+    // The widget agent's settings (agent_settings.h): the inline surface's
+    // Setup and Model open them, and its agent is made from them. A change
+    // applies at once, on any page: the open prompt closes (a running turn is
+    // cancelled, a preview discarded) and the agent goes with its sidecar and
+    // its API token; the next ⌘K makes it again from the settings. The page
+    // listens until shutdown(). Null: no settings.
+    void set_agent_settings(AgentSettings* settings);
     // For the hidden app's input driver (builder/spec_ui_driver.h): a shown
     // panel's rectangle in window points, and the inline surface's state
     // ("idle" before any ⌘K).
     bool panel_rect(const std::string& panel_id, float rect[4]) const;
     std::string widget_state() const;
+    // Presses the inline surface's action of that label ("Setup", "Accept",
+    // ...) when the surface offers it now, as a click on its button does;
+    // false otherwise. For the hidden app's input driver.
+    bool widget_action(const std::string& label);
+    // The spec runtime's selection as {"panel", "kind", "x0", "x1", "y0",
+    // "y1"}, or "" when there is none.
+    std::string selection_json() const;
     // Draws over each shown panel in the panel's own window after its
     // content, as the page's overlay does the focus frame, with the panel's
     // id, the title its strip shows, its rectangle and its title strip's

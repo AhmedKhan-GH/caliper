@@ -72,8 +72,14 @@ bool AcpWidgetAgent::running() const {
 }
 
 std::string AcpWidgetAgent::model_label() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return label_.empty() ? options_.label : label_;
+    std::string label;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        label = label_.empty() ? options_.label : label_;
+    }
+    const std::string note = options_.note ? options_.note() : std::string();
+    if (note.empty()) return label;
+    return label.empty() ? note : label + " \xC2\xB7 " + note;   // ·
 }
 
 json AcpWidgetAgent::session_meta(const WidgetTarget& target, const std::string& preview,
@@ -201,12 +207,15 @@ void AcpWidgetAgent::start(const WidgetTarget& target, const std::string& previe
             spawn.argv = options_.argv;
             spawn.env = options_.env;
             spawn.env_remove = options_.env_remove;
-            if (options_.key_required) {
-                if (!options_.keys) return failed({"keystore.not_found", "No key store is set up.", ""});
-                // The key reaches the child only through its environment.
+            if (options_.keys) {
+                // The key reaches the child only through its environment; for a
+                // provider that takes none (a local server) nothing is placed and
+                // every key variable is removed.
                 if (caliper_builder::Error e = caliper_builder::agent::place_key_in_environment(
                         *options_.keys, options_.provider, &spawn))
                     return failed(e);
+            } else if (options_.key_required) {
+                return failed({"keystore.not_found", "No key store is set up.", ""});
             }
             acp::AcpClientOptions o;
             o.agent_argv = spawn.argv;
