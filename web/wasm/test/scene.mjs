@@ -9,9 +9,11 @@
 // <caliper-view> of the scene has mounted the WebAssembly views and they have
 // applied scene messages and drawn frames. It saves a screenshot to <shot.png>
 // and checks it: the plate is not blank and shows the marker's red. It then
-// asks the script to recolour the surface, saves <shot>-update.png and checks
-// that the plate changed. It prints the element's state and the module's
-// report and exits with 1 when a check failed. Headless only.
+// asks the script to recolour the surface, waits until the plate shows it,
+// saves <shot>-update.png and checks that the plate changed. Every wait is on
+// the module's frames and updates or on the plate's pixels, never a fixed
+// time. It prints the element's state and the module's report and exits with
+// 1 when a check failed. Headless only.
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -91,15 +93,29 @@ try {
   } catch (e) {
     error = String(e);
   }
-  await page.waitForTimeout(500);
+  // Thirty more frames after that, so the plate shows what was applied.
+  const frames = async () => (await state())?.wasmStats?.frames ?? 0;
+  const moreFrames = async (n) => {
+    const f0 = await frames();
+    await page.waitForFunction((want) => {
+      const w = document.querySelector('caliper-view')?.debugState?.()?.wasmStats;
+      return !!w && w.frames >= want;
+    }, f0 + n, { timeout: 60000, polling: 'raf' });
+  };
+  await moreFrames(30);
   const shot = await page.screenshot({ path: opt.out });
   const before = await plate(page, shot);
   const st = await state();
-  // The surface recoloured: the script shifts its values, the plate changes.
+  // The surface recoloured: the script shifts its values, and the plate changes once the
+  // module applied a newer surface; each try waits on frames, at most 200 tries.
   server.stdin.write('update\n');
-  await page.waitForTimeout(2000);
-  const shot2 = await page.screenshot({ path: opt.out.replace(/\.png$/, '') + '-update.png' });
-  const after = await plate(page, shot2);
+  let shot2 = shot, after = before;
+  for (let tries = 0; tries < 200 && after.hash === before.hash; ++tries) {
+    await moreFrames(10);
+    shot2 = await page.screenshot();
+    after = await plate(page, shot2);
+  }
+  await page.screenshot({ path: opt.out.replace(/\.png$/, '') + '-update.png' });
   console.log('element:', JSON.stringify({ ...st, wasmStats: undefined }, null, 2));
   console.log('module:', JSON.stringify(st?.wasmStats ?? null, null, 2));
   console.log('plate:', JSON.stringify({ before, after }));
