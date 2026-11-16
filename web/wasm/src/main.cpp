@@ -8,7 +8,8 @@
 //
 // One module instance draws on one canvas (Module.canvas) and shows one view,
 // or every view of the session when no view is named. The instance reads its
-// settings from Module.caliperConfig: {src, view, kind, header}.
+// settings from Module.caliperConfig: {src, view, kind, header, compat};
+// compat "true" asks for a WebGPU device in compatibility mode.
 //
 // What a person does in a view (a selection, a pick, a hover) comes out of
 // the view layer's event sink: it goes to the producer as an EVENT through
@@ -22,6 +23,7 @@
 // the device, and the device callback builds everything, connects and starts
 // the frame loop. No Asyncify is needed.
 #include "fonts.h"
+#include "gfx_selftest.h"
 #include "net_source.h"
 #include "net/json.h"
 #include "page_style.h"
@@ -68,6 +70,7 @@ struct Config {
     std::string view;   // "" = every view
     int32_t kind = 0;   // 0 = any
     bool header = true; // false: the page draws the view's header (no title bars)
+    bool compat = false;// a compatibility-mode device
 };
 
 struct Page {
@@ -105,6 +108,8 @@ struct Page {
     std::string check_view;
     int check_kind = 0;
     uint64_t check_next = 90;             // the frame of the next check
+
+    std::string selftest;                 // the graphics layer's self-test: "" or its report
 
     bool ready = false;                   // the first snapshot was applied
     bool destroyed = false;
@@ -172,6 +177,18 @@ void publish() {
     put("retiredViews", g.renderer ? (double)g.renderer->retired_view_count() : 0.0);
     put("dispatches", g.renderer ? (double)g.renderer->colormap_dispatches() : 0.0);
     put("rendererPath", g.renderer ? g.renderer->last_device_path() : "");
+    // The graphics layer: the device's feature level, what the backend holds
+    // and the errors WebGPU reported to it.
+    caliper_gfx::WebGpuBackend* gb = g.renderer ? g.renderer->gfx() : nullptr;
+    put("gfxReady", gb ? 1.0 : 0.0);
+    put("featureLevel", !gb ? "" : gb->compatibility() ? "compatibility" : "core");
+    put("gfxBuffers", gb ? (double)gb->live_buffer_count() : 0.0);
+    put("gfxSpare", gb ? (double)gb->spare_buffer_count() : 0.0);
+    std::string gerr;
+    if (gb)
+        for (const auto& m : gb->device_errors()) gerr += (gerr.empty() ? "" : " | ") + m;
+    put("gfxErrors", gerr.c_str());
+    put("gfxSelftest", g.selftest.c_str());
     put("state", g.net ? g.net->state_text().c_str() : "starting");
     put("messages", g.net ? (double)g.net->messages() : 0.0);
     put("bytes", g.net ? (double)g.net->bytes() : 0.0);
@@ -549,8 +566,23 @@ void on_event(const caliper_live_views::LiveEvent& e) {
     if (std::strcmp(e.type, "hover") != 0) g.publish_soon = true;
 }
 
+// The self-test's pictures, for the browser tests' captures:
+// Module.caliperGfxImages = {name: {w, h, data: Uint8Array}}.
+void publish_selftest_images() {
+    for (const auto& im : caliper_web::gfx_selftest_images())
+        EM_ASM({
+            var m = Module["caliperGfxImages"] = Module["caliperGfxImages"] || {};
+            m[UTF8ToString($0)] = ({"w": $1, "h": $2, "data": HEAPU8.slice($3, $3 + $4)});
+        }, im.name.c_str(), im.w, im.h, im.rgba.data(), (int)im.rgba.size());
+}
+
 void frame() {
     const double t0 = emscripten_get_now();
+    if (caliper_web::gfx_selftest_running() && g.renderer && g.renderer->gfx() &&
+        caliper_web::gfx_selftest_poll(*g.renderer->gfx(), &g.selftest)) {
+        publish_selftest_images();
+        publish();
+    }
 
     if (g.net && caliper_web::poll_source(g.core, *g.net, g.poll) > 0 && !g.ready) {
         g.ready = true;   // the first snapshot is drawn this frame
@@ -740,6 +772,25 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_set_link(const char* axis, const char* it
     return n > 0 ? 1 : 0;
 }
 
+// Starts the graphics layer's self-test (gfx_selftest.h); its report comes in
+// caliperStats.gfxSelftest. 1 when it started.
+EMSCRIPTEN_KEEPALIVE int caliper_views_gfx_selftest() {
+    if (!g.renderer || !g.renderer->gfx()) {
+        g.selftest = "fail not started: the renderer is not up";
+        publish();
+        return 0;
+    }
+    std::string why;
+    if (!caliper_web::gfx_selftest_start(*g.renderer->gfx(), &why)) {
+        g.selftest = "fail not started: " + why;
+        publish();
+        return 0;
+    }
+    g.selftest.clear();
+    publish();
+    return 1;
+}
+
 // Ends this instance: BYE to the producer, no more frames, every view, GPU
 // resource and context released, the input listeners removed. The page drops
 // the canvas and the module afterwards; an instance is not reused.
@@ -781,6 +832,7 @@ int main() {
     g.cfg.view = config_string("view");
     g.cfg.kind = kind_of(config_string("kind"));
     g.cfg.header = config_string("header") != "false";
+    g.cfg.compat = config_string("compat") == "true";
 
     g.instance = wgpuCreateInstance(nullptr);
     if (!g.instance) {
@@ -788,6 +840,9 @@ int main() {
         return 0;
     }
     WGPURequestAdapterOptions opts = WGPU_REQUEST_ADAPTER_OPTIONS_INIT;
+    // A compatibility-mode adapter gives a compatibility-mode device as long as
+    // the device does not ask for core-features-and-limits, which it does not.
+    if (g.cfg.compat) opts.featureLevel = WGPUFeatureLevel_Compatibility;
     WGPURequestAdapterCallbackInfo cb = WGPU_REQUEST_ADAPTER_CALLBACK_INFO_INIT;
     cb.mode = WGPUCallbackMode_AllowSpontaneous;
     cb.callback = on_adapter;

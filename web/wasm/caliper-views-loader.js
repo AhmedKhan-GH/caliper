@@ -16,6 +16,7 @@
 //     onToggle,     // (name, on, view) => {}, a view changed a header toggle itself ('follow')
 //     augment,      // (detail, view) => detail, adds to a selection's detail before it is sent (3.1 item space)
 //     onDataView,   // (dataView) => {}, every data view the producer resolved
+//     compat,       // true: a WebGPU device in compatibility mode; default globalThis.caliperViewsCompat
 //   });
 //   handle.setDataView({ index: { layer: 2 } });   // a VIEW_REQUEST
 //   handle.setToggle('follow', false);             // a header toggle of the view
@@ -71,7 +72,8 @@ export function preloadCaliperViews(assetBase) {
 }
 
 export async function mountCaliperViews(container, options = {}) {
-  const { src = '', view = '', kind = '', height, header = true, assetBase, onSelect, onEvent, onInfo, onToggle, augment, onDataView } = options;
+  const { src = '', view = '', kind = '', height, header = true, assetBase, onSelect, onEvent, onInfo, onToggle, augment, onDataView,
+          compat = globalThis.caliperViewsCompat ?? false } = options;
   if (!container) throw new Error('caliper-views: no container element');
   if (!navigator.gpu) throw new Error('caliper-views: this browser has no WebGPU');
 
@@ -89,7 +91,7 @@ export async function mountCaliperViews(container, options = {}) {
   try {
     module = await factory({
       canvas,
-      caliperConfig: { src, view, kind, header: header ? 'true' : 'false' },
+      caliperConfig: { src, view, kind, header: header ? 'true' : 'false', compat: compat ? 'true' : 'false' },
       instantiateWasm: (imports, receive) => {
         WebAssembly.instantiate(wasm, imports).then((instance) => receive(instance, wasm));
         return {};

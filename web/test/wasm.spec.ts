@@ -4,6 +4,9 @@
 // CALIPER_WASM_DIR, else from python/caliper/_web, where scripts/build_wasm.py
 // and scripts/fetch_wasm.py put them; without them these tests are skipped,
 // and fallback.spec.ts checks the element without them.
+//
+// CALIPER_VIEWS_COMPAT=1 asks every mount for a compatibility-mode WebGPU
+// device (the loader's default, set before the page loads).
 
 import { test as base, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -11,11 +14,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { colormapLut, lutIndex } from '../src/render/colormap.js';
-import { decodePng, expect, REPO, shotPath, WEB, wireModule } from './util.js';
+import { decodePng, expect, REPO, serve, shotPath, WEB, wireModule } from './util.js';
 
 const PYTHON = process.env.CALIPER_PYTHON ?? path.join(REPO, '.venv', 'bin', 'python');
 const WASM = process.env.CALIPER_WASM_DIR ?? path.join(REPO, 'python', 'caliper', '_web');
 const FILES = ['caliper-views-loader.js', 'caliper-views.js', 'caliper-views.wasm'];
+const COMPAT = process.env.CALIPER_VIEWS_COMPAT === '1';
 
 /** A producer; events holds every EVENT a viewer sent it, as mock_server.py prints them. */
 interface Server { url: string; ws: string; proc: ChildProcess; events: ProducerEvent[] }
@@ -39,6 +43,10 @@ async function startProducer(args: string[] = []): Promise<Server> {
 }
 
 const test = base.extend<{ producer: Server }>({
+  page: async ({ page }, use) => {
+    if (COMPAT) await page.addInitScript(() => Object.assign(window, { caliperViewsCompat: true }));
+    await use(page);
+  },
   producer: async ({}, use) => {
     const p = await startProducer();
     await use(p);
@@ -108,6 +116,11 @@ test('auto draws each view with the WebAssembly views when they list its kind, a
     expect([imageBad, imageMax]).toEqual([0, 0]);
     const [, , heatBad, heatMax] = (await checks('weights')).split(':').map(Number);
     expect([heatBad, heatMax]).toEqual([0, 0]);
+    // The graphics layer drew, on the device asked for, and WebGPU reported no error to it.
+    const st = (await state(page, 'weights')).wasmStats as { gfxReady?: number; featureLevel?: string; gfxErrors?: string };
+    expect(st.gfxReady).toBe(1);
+    expect(st.featureLevel).toBe(COMPAT ? 'compatibility' : 'core');
+    expect(st.gfxErrors).toBe('');
     // The histogram holds the producer's bins.
     const hist = (await state(page, 'weight_hist')).wasmStats as { viewInfo?: string };
     expect(hist.viewInfo).toMatch(/weight_hist:kind=5,updates=\d+,count=\d+/);
@@ -194,6 +207,103 @@ test('100,000 points orbit at an interactive rate on the GPU', async ({ page }, 
     await page.locator('caliper-view[view="embedding"]').screenshot({ path: shotPath(info, 'wasm-points-100k') });
   } finally {
     big.proc.kill();
+  }
+});
+
+// --- the graphics layer -------------------------------------------------------------
+
+test('the graphics layer draws an indexed quad and instanced draws, dispatches and copies, and reads every target back exactly', async ({ page }, info) => {
+  test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
+  // The module alone on a blank page: no stream, only the self-test (web/wasm/src/gfx_selftest.cpp).
+  const site = await serve(WEB, (name) => (FILES.includes(name.slice(1)) ? path.join(WASM, name.slice(1)) : null));
+  const consoleErrors: string[] = [];
+  page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') consoleErrors.push(m.text()); });
+  try {
+    await page.goto(`${site.origin}/test/blank.html`);
+    for (const compat of [false, true]) {
+      const got = await page.evaluate(async ({ base, compat }) => {
+        type M = { caliperStats?: Record<string, string>; caliperGfxImages?: Record<string, { w: number; h: number; data: Uint8Array }>;
+                   _caliper_views_gfx_selftest(): number; _caliper_views_destroy(): void };
+        const { preloadCaliperViews } = await import(base + 'caliper-views-loader.js');
+        const { factory, wasm } = await preloadCaliperViews(base);
+        const canvas = document.createElement('canvas');
+        canvas.style.width = '64px';
+        canvas.style.height = '64px';
+        document.body.append(canvas);
+        const m: M = await factory({
+          canvas, caliperConfig: { src: '', compat: compat ? 'true' : 'false' },
+          instantiateWasm: (imports: WebAssembly.Imports, receive: (i: WebAssembly.Instance, m: WebAssembly.Module) => void) => {
+            WebAssembly.instantiate(wasm as WebAssembly.Module, imports).then((i) => receive(i, wasm));
+            return {};
+          },
+          print: () => {}, printErr: () => {},
+        });
+        const until = async (f: () => boolean) => {
+          for (let i = 0; i < 400 && !f(); i++) await new Promise((ok) => setTimeout(ok, 25));
+          return f();
+        };
+        if (!(await until(() => Number(m.caliperStats?.gfxReady) === 1))) return { report: `no layer: ${JSON.stringify(m.caliperStats ?? {})}`, level: '', images: {} };
+        m._caliper_views_gfx_selftest();
+        await until(() => !!m.caliperStats?.gfxSelftest);
+        // Each picture as a PNG, four times its size, nearest.
+        const images: Record<string, string> = {};
+        for (const [name, im] of Object.entries(m.caliperGfxImages ?? {})) {
+          const c = document.createElement('canvas');
+          c.width = im.w * 4;
+          c.height = im.h * 4;
+          const small = document.createElement('canvas');
+          small.width = im.w;
+          small.height = im.h;
+          small.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(im.data), im.w, im.h), 0, 0);
+          const g = c.getContext('2d')!;
+          g.imageSmoothingEnabled = false;
+          g.drawImage(small, 0, 0, c.width, c.height);
+          images[name] = c.toDataURL('image/png');
+        }
+        const out = { report: m.caliperStats!.gfxSelftest, level: m.caliperStats!.featureLevel, images };
+        m._caliper_views_destroy();
+        canvas.remove();
+        return out;
+      }, { base: `${site.origin}/`, compat });
+      console.log(`${info.project.name} graphics layer self-test (${compat ? 'compatibility' : 'core'} device): ${got.report}`);
+      if (!got.report.startsWith('ok')) console.log(consoleErrors.join('\n'));
+      for (const [name, url] of Object.entries(got.images))
+        fs.writeFileSync(shotPath(info, `${name}-${compat ? 'compat' : 'core'}`), Buffer.from(url.split(',')[1], 'base64'));
+      expect(got.report).toBe(`ok color=0 id=0 depth=0 fill=0 copy=0 import=copied-from-host:24 level=${compat ? 'compatibility' : 'core'}`);
+      expect(Object.keys(got.images).sort()).toEqual(['layer-compute', 'layer-copy', 'layer-draws', 'layer-ids']);
+    }
+  } finally {
+    site.close();
+  }
+});
+
+// The fixed views' pictures. Each run saves them (fixed-<view>-<project>.png under the shots
+// folder); with CALIPER_VIEWS_REFERENCE naming a folder of the same files, saved from an earlier
+// build, every byte of each decoded picture must equal it. The migration steps of the renderer
+// core use it to show that a view's pixels did not move.
+test('the fixed heatmaps and points draw the same pixels as the reference set', async ({ page }, info) => {
+  test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
+  const srv = await fixedPage(page);
+  try {
+    for (const v of ['h', 'ha', 'p'])
+      await expect.poll(async () => String((await wasmStats(page, v)).checks ?? ''), { timeout: 20_000 }).toMatch(new RegExp(`^${v}:\\d+:0:\\d+$`));
+    await page.mouse.move(1, 1);
+    await page.waitForTimeout(600);
+    const ref = process.env.CALIPER_VIEWS_REFERENCE;
+    for (const v of ['h', 'ha', 'p']) {
+      const shot = await page.locator(`caliper-view[view="${v}"] .body .wasm canvas`).screenshot();
+      const file = shotPath(info, `fixed-${v}`);
+      fs.writeFileSync(file, shot);
+      if (!ref) continue;
+      const a = decodePng(fs.readFileSync(path.join(ref, path.basename(file)))), b = decodePng(shot);
+      expect([b.width, b.height], `view ${v}`).toEqual([a.width, a.height]);
+      let diff = 0;
+      for (let i = 0; i < a.data.length; i++) diff += a.data[i] !== b.data[i] ? 1 : 0;
+      console.log(`${info.project.name} ${v}: ${a.width}x${a.height}, ${diff} of ${a.data.length} bytes differ from the reference`);
+      expect(diff, `view ${v}`).toBe(0);
+    }
+  } finally {
+    srv.proc.kill();
   }
 });
 

@@ -5,7 +5,7 @@
 //                  [--viewport WxH] [--scale S] [--hover X,Y] [--page demo.html]
 //                  [--python PYTHON] [--seconds S] [--dataview JSON]
 //                  [--resize WxH] [--input X,Y] [--sample S] [--points N] [--dims 2|3]
-//                  [--orbit S] [--rate HZ]
+//                  [--orbit S] [--rate HZ] [--compat 1]
 //
 // Starts the synthetic producer (stream_server.py) on 127.0.0.1, which serves
 // the build directory over HTTP and the stream on /v3/stream on one port, as
@@ -25,6 +25,7 @@
 // that time (report.samples). With --orbit S it drags across the middle of
 // the canvas for S seconds (a points view orbits and redraws every frame) and
 // reports the frames the module drew per second meanwhile (report.orbit).
+// --compat 1 asks for a compatibility-mode WebGPU device.
 // Every
 // process it starts
 // is stopped before it exits. Headless only: it never opens a visible browser.
@@ -93,6 +94,7 @@ try {
   const q = new URLSearchParams({ token });
   if (opt.view) q.set('view', opt.view);
   if (opt.kind) q.set('kind', opt.kind);
+  if (opt.compat) q.set('compat', '1');
   await page.goto(`http://127.0.0.1:${port}/${opt.page}?${q}`);
   const wantFrames = Number(opt.frames);
   let error = null;
