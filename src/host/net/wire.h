@@ -33,6 +33,10 @@
 // writes the codec's minor (CALIPER_NET_PROTOCOL_MINOR, 1) unless told
 // otherwise; the 3.0 golden frames encode back to their bytes at minor 0.
 //
+// 3.2 draft. The scenes subset (SCENE_UPDATE, SCENE_CLEAR, the scene view
+// helpers) sits in one block before the Message variant; the rules are those of
+// the block at the end of _wire.py and of docs/references/wire-protocol-3-2.md.
+//
 // LIFETIME. A decoded Section points into the buffer given to decode(): keep
 // that buffer alive while the message is used.
 #include "caliper/live_net.h"
@@ -320,9 +324,51 @@ struct Unknown {   // a type this version does not know; receivers ignore it
     std::vector<Section> sections;
 };
 
+// ---- protocol 3.2 draft: the scenes subset (proposals: minor 2, capability "scenes", kind 6, 0x0070, 0x0072; the 3.2 block of caliper/live_net.h) ----
+// The rules of the block at the end of _wire.py. A SceneUpdate's `arrays` hold
+// the sections of its part in the part's order (PART_SECTIONS); decoded, only
+// the known ones, pointing into the frame like every decoded Section.
+struct SceneUpdate {                 // 3.2 draft: one part of one entity of a scene
+    static constexpr uint16_t kType = CALIPER_NET_MSG_SCENE_UPDATE;
+    uint32_t sub = 0;
+    std::string view;
+    uint64_t seq = 0, stamp_ns = 0;
+    std::string path;                // an entity path ("" is the root)
+    std::string part;                // CALIPER_NET_PART_POINTS, _LINES or _MESH
+    std::vector<Section> arrays;     // the part's sections, in the part's order (decoded: only the known ones)
+    Json params = Json::object();    // the part's keys as given: mode, color_per, color, radius, width,
+                                     // colormap, flags, vmin, vmax, stats (a null stat decodes to NaN)
+    bool is_static = false;          // "static"
+    bool state = false;
+    Json axes;                       // null when absent
+    std::optional<std::string> items;
+    const Section* array(const std::string& name) const;
+};
+struct SceneClear {
+    static constexpr uint16_t kType = CALIPER_NET_MSG_SCENE_CLEAR;
+    uint32_t sub = 0;
+    std::string view;
+    uint64_t seq = 0, stamp_ns = 0;
+    std::string path;
+    bool recursive = false;
+    std::optional<std::vector<std::string>> parts;
+    bool reset = false, is_static = false, state = false;
+};
+struct SceneView { std::string space, up, units; };
+// An entity path: 0 to 16 segments of [A-Za-z0-9_.-]{1,63} joined by '/', at most 255 bytes, never "." or "..".
+bool entity_path_ok(const std::string& path);
+// The key "scene" of a VIEWS entry of kind scene with its defaults filled in (bad_request on false).
+bool scene_view_info(const Json& entry, SceneView* out, std::string* err);
+// The resolved default scene data view.
+Json scene_data_view();
+// The resolved data view of a scene subscription: only the default is built (bad_data_view on false;
+// `request` null means none).
+bool resolve_scene_data_view(const Json& view, const Json& request, Json* out, std::string* err);
+// ---- end of the protocol 3.2 draft block ----
+
 using Message = std::variant<Hello, Welcome, Bye, Error, Ping, Pong, Sessions, Attach, Views, Subscribe,
                              Unsubscribe, ViewRequest, ViewReply, Snapshot, Series, Event, Controls, Control,
-                             ControlReply, Selection, Unknown>;
+                             ControlReply, Selection, SceneUpdate, SceneClear, Unknown>;
 
 struct DecodeResult {
     enum class Status { Ok, BadFrame, BadMessage };

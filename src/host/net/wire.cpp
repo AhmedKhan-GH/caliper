@@ -649,6 +649,358 @@ Section named(const Section& s, const char* name) {
     return o;
 }
 
+// ---- protocol 3.2 draft: the scenes subset (proposals: minor 2, capability "scenes", kind 6, 0x0070, 0x0072; the 3.2 block of caliper/live_net.h) ----
+// The checks and their order follow the block at the end of _wire.py. The
+// public functions come first; the decoders and encoders sit in the anonymous
+// namespace again, for decode(), to_meta() and encode().
+}  // namespace
+
+const Section* SceneUpdate::array(const std::string& name) const {
+    for (const Section& s : arrays)
+        if (s.name == name) return &s;
+    return nullptr;
+}
+
+bool entity_path_ok(const std::string& v) {
+    if (v.empty()) return true;
+    if (v.size() > CALIPER_NET_PATH_MAX) return false;
+    size_t segs = 1, len = 0, start = 0;
+    for (size_t i = 0; i <= v.size(); ++i) {
+        if (i == v.size() || v[i] == '/') {
+            const std::string seg = v.substr(start, i - start);
+            if (len < 1 || len > 63 || seg == "." || seg == "..") return false;
+            if (i < v.size()) ++segs;
+            start = i + 1;
+            len = 0;
+            continue;
+        }
+        const unsigned char c = (unsigned char)v[i];
+        if (!(std::isalnum(c) || c == '_' || c == '.' || c == '-') || c >= 0x80) return false;
+        ++len;
+    }
+    return segs <= CALIPER_NET_PATH_SEGMENTS_MAX;
+}
+
+bool scene_view_info(const Json& entry, SceneView* out, std::string* err) {
+    auto fail = [&](const std::string& m) {
+        if (err) *err = m;
+        return false;
+    };
+    const Json* sc = entry.find("scene");
+    const Json empty = Json::object();
+    if (!sc || sc->is_null()) sc = &empty;
+    if (!sc->is_object()) return fail("'scene' must be an object, got " + show(*sc));
+    SceneView v;
+    const Json* space = sc->find("space");
+    if (!space) v.space = CALIPER_NET_SPACE_3D;
+    else if (space->is_string() &&
+             (space->as_string() == CALIPER_NET_SPACE_3D || space->as_string() == CALIPER_NET_SPACE_2D))
+        v.space = space->as_string();
+    else return fail("scene space " + show(*space) + "; expected '3d' or '2d'");
+    const bool is3d = v.space == CALIPER_NET_SPACE_3D;
+    const Json* up = sc->find("up");
+    if (!up || up->is_null()) {
+        v.up = is3d ? "+y" : "-y";
+    } else {
+        bool ok = false;
+        if (up->is_string()) {
+            const std::string& u = up->as_string();
+            ok = u == "+y" || u == "-y" || (is3d && (u == "+x" || u == "-x" || u == "+z" || u == "-z"));
+        }
+        if (!ok) return fail("scene up " + show(*up) + " is not one of the axes of a " + v.space + " scene");
+        v.up = up->as_string();
+    }
+    const Json* units = sc->find("units");
+    if (!units) v.units = "m";
+    else if (units->is_string() && units->as_string().size() <= CALIPER_NET_UNITS_MAX) v.units = units->as_string();
+    else return fail("scene units must be a string of at most 15 bytes, got " + show(*units));
+    if (out) *out = std::move(v);
+    return true;
+}
+
+Json scene_data_view() {
+    Json inc = Json::array();
+    inc.push("**");
+    Json ent = Json::object();
+    ent.set("include", inc);
+    ent.set("exclude", Json::array());
+    Json b = Json::object();
+    b.set("max_points", (uint64_t)CALIPER_NET_DEFAULT_MAX_POINTS);
+    b.set("max_items", (uint64_t)CALIPER_NET_SCENE_DEFAULT_MAX_ITEMS);
+    b.set("max_vertices", (uint64_t)CALIPER_NET_SCENE_DEFAULT_MAX_VERTICES);
+    b.set("max_extent", (uint64_t)CALIPER_NET_SCENE_DEFAULT_MAX_EXTENT);
+    Json dv = Json::object();
+    dv.set("entities", ent);
+    dv.set("budget", b);
+    return dv;
+}
+
+bool resolve_scene_data_view(const Json& view, const Json& request, Json* out, std::string* err) {
+    auto fail = [&](const std::string& m) {
+        if (err) *err = m;
+        return false;
+    };
+    const Json dv = scene_data_view();
+    auto is_default = [&](const Json& v) { return v.is_null() || (v.is_object() && v.size() == 0) || v == dv; };
+    if (!request.is_null() && !request.is_object()) return fail("a data view is a JSON object");
+    const Json* def = view.find("default");
+    if (def && !is_default(*def)) return fail("a scene's own default data view is not built yet");
+    if (!is_default(request))
+        return fail("only the default data view of a scene is built yet: send {} or none; entity filters and "
+                    "budgets come in a later increment");
+    if (out) *out = dv;
+    return true;
+}
+
+namespace {
+
+const char* const kScenePartKeys[3][10] = {
+    {"color", "radius", "colormap", "flags", "vmin", "vmax", "stats", nullptr},
+    {"mode", "color_per", "color", "width", "colormap", "flags", "vmin", "vmax", "stats", nullptr},
+    {"color", "colormap", "flags", "vmin", "vmax", "stats", nullptr}};
+const char* const kScenePartSections[3][5] = {{"positions", "colors", "values", "radii", nullptr},
+                                              {"positions", "strip_lengths", "colors", "values", nullptr},
+                                              {"positions", "indices", "colors", "values", nullptr}};
+
+int scene_part_index(const std::string& p) {
+    if (p == CALIPER_NET_PART_POINTS) return 0;
+    if (p == CALIPER_NET_PART_LINES) return 1;
+    if (p == CALIPER_NET_PART_MESH) return 2;
+    return -1;
+}
+
+[[noreturn]] void unsupported(const std::string& msg) { throw MsgError{CALIPER_NET_ERR_UNSUPPORTED, msg}; }
+
+bool is_path(const Json& v) { return v.is_string() && entity_path_ok(v.as_string()); }
+bool is_rgba(const Json& v) {
+    if (!v.is_array() || v.size() != 4) return false;
+    for (const Json& x : v.items()) {
+        int64_t i = 0;
+        if (!x.get_i64(&i) || i < 0 || i > 255) return false;
+    }
+    return true;
+}
+bool is_positive(const Json& v) { return is_finite(v) && v.as_double() > 0; }
+bool is_stats(const Json& v) {
+    if (!v.is_array() || v.size() > CALIPER_NET_MAX_STATS) return false;
+    for (const Json& x : v.items())
+        if (!(x.is_null() || x.is_number())) return false;
+    return true;
+}
+
+// The check of a part key and what it expects, as _KEY_CHECKS.
+bool key_ok(const std::string& key, const Json& v, const char** what) {
+    if (key == "color") { *what = "[r, g, b, a] of integers from 0 to 255"; return is_rgba(v); }
+    if (key == "radius" || key == "width") { *what = "a positive number"; return is_positive(v); }
+    if (key == "colormap") { *what = "an integer"; return is_int(v); }
+    if (key == "flags") { *what = "an unsigned integer"; return is_uint(v); }
+    if (key == "vmin" || key == "vmax") { *what = "a number"; return is_num(v); }
+    if (key == "stats") { *what = "a list of numbers or nulls"; return is_stats(v); }
+    if (key == "mode") { *what = "segments or strips"; return one_of(v, {"segments", "strips", "edges"}); }
+    *what = "vertex or strip";   // color_per
+    return one_of(v, {"vertex", "strip", "edge"});
+}
+
+Json scene_part_keys(const Json& m, int part) {
+    Json out = Json::object();
+    for (const char* const* k = kScenePartKeys[part]; *k; ++k) {
+        const Json* v = m.find(*k);
+        if (!v || v->is_null()) continue;
+        const char* what = "";
+        if (!key_ok(*k, *v, &what)) bad(std::string("'") + *k + "' must be " + what + ", got " + show(*v));
+        if (std::string(*k) == "stats") {
+            Json a = Json::array();
+            for (const Json& x : v->items()) a.push(x.is_null() ? Json(std::nan("")) : Json(x.as_double()));
+            out.set(*k, a);
+        } else {
+            out.set(*k, *v);
+        }
+    }
+    return out;
+}
+
+// The section `name` of a part, or nullptr; `shape` holds the rows it must have (-1: any) and its rank.
+const Section* part_section(const Frame& f, const char* name, int64_t dtype, std::vector<int64_t> shape) {
+    const Section* s = f.section(name);
+    if (!s) return nullptr;
+    bool ok = s->encoding == CALIPER_NET_ENCODING_RAW && s->dtype == dtype && s->shape.size() == shape.size();
+    for (size_t i = 0; ok && i < shape.size(); ++i)
+        if (shape[i] >= 0 && shape[i] != s->shape[i]) ok = false;
+    if (!ok)
+        bad(std::string("'") + name + "' has the wrong dtype or shape (dtype " + std::to_string(s->dtype) + ", rank " +
+            std::to_string(s->shape.size()) + ")");
+    return s;
+}
+
+const Section* scene_positions(const Frame& f, const char* part, int64_t* n) {
+    const Section* pos = f.section("positions");
+    if (!pos) bad(std::string("a ") + part + " part needs a 'positions' section");
+    part_section(f, "positions", CALIPER_NET_DTYPE_F32, {-1, -1});
+    *n = pos->shape[0];
+    const int64_t d = pos->shape[1];
+    if (d != 2 && d != 3) bad("'positions' is (N, 2) or (N, 3)");
+    if (*n > (int64_t)CALIPER_NET_MAX_BATCH_POINTS)
+        bad(std::to_string(*n) + " positions, more than " + std::to_string(CALIPER_NET_MAX_BATCH_POINTS) +
+            " in a batch");
+    return pos;
+}
+
+void scene_colours(const Frame& f, int64_t rows, std::vector<Section>* arrays) {
+    const Section* c = part_section(f, "colors", CALIPER_NET_DTYPE_U8, {rows, 4});
+    const Section* v = part_section(f, "values", CALIPER_NET_DTYPE_F32, {rows});
+    if (c && v) bad("'colors' and 'values' together");
+    if (c) arrays->push_back(*c);
+    if (v) arrays->push_back(*v);
+}
+
+SceneUpdate scene_update(const Frame& f) {
+    const Json& m = f.meta;
+    SceneUpdate u;
+    u.sub = u32(req(m, "sub", is_u32, "a uint32"));
+    u.view = req(m, "view", is_name, "a view name").as_string();
+    u.seq = u64(req(m, "seq", is_uint, "an unsigned integer"));
+    u.stamp_ns = u64(req(m, "stamp_ns", is_uint, "an unsigned integer"));
+    u.path = req(m, "path", is_path, "an entity path").as_string();
+    u.part = req(m, "part", is_str, "a string").as_string();
+    if (u.part == "arrows" || u.part == "boxes" || u.part == "image" || u.part == "camera")
+        unsupported("the part '" + u.part + "' is not built yet");
+    const int part = scene_part_index(u.part);
+    if (part < 0) bad("unknown part '" + u.part + "'");
+    if (const Json* sp = m.find("split"); sp && !sp->is_null()) unsupported("split updates are not built yet");
+    u.params = scene_part_keys(m, part);
+    int64_t n = 0;
+    if (part == 0) {
+        u.arrays.push_back(*scene_positions(f, CALIPER_NET_PART_POINTS, &n));
+        scene_colours(f, n, &u.arrays);
+        if (const Section* r = part_section(f, "radii", CALIPER_NET_DTYPE_F32, {n})) u.arrays.push_back(*r);
+    } else if (part == 1) {
+        const Json* mode = u.params.find("mode");
+        if (!mode) bad("a lines part needs 'mode'");
+        const std::string md = mode->as_string();
+        const Json* cp = u.params.find("color_per");
+        const std::string color_per = cp ? cp->as_string() : std::string();
+        if (md == "edges") unsupported("lines of mode 'edges' (index-pair edges) are not built yet");
+        u.arrays.push_back(*scene_positions(f, CALIPER_NET_PART_LINES, &n));
+        if (f.section("indices")) bad("lines of mode '" + md + "' take no 'indices'");
+        int64_t rows = n;
+        if (md == CALIPER_NET_LINES_SEGMENTS) {
+            if (n % 2) bad("segments need an even number of vertices, got " + std::to_string(n));
+            if (f.section("strip_lengths")) bad("segments take no 'strip_lengths'");
+            if (cp && color_per != CALIPER_NET_COLOR_PER_VERTEX) bad("segments take color_per 'vertex'");
+        } else {
+            const Section* sl = part_section(f, "strip_lengths", CALIPER_NET_DTYPE_I32, {-1});
+            if (!sl) bad("strips need a 'strip_lengths' section");
+            const int64_t cnt = sl->shape[0];
+            if (cnt > (int64_t)CALIPER_NET_MAX_BATCH_ITEMS)
+                bad(std::to_string(cnt) + " strips, more than " + std::to_string(CALIPER_NET_MAX_BATCH_ITEMS) +
+                    " in a batch");
+            int64_t total = 0;
+            for (int64_t i = 0; i < cnt; ++i) {
+                int32_t len;
+                std::memcpy(&len, sl->data + 4 * i, 4);
+                if (len < 1) bad("every strip length is at least 1");
+                total += len;
+            }
+            if (total != n)
+                bad("the strip lengths add up to " + std::to_string(total) + ", not to the " + std::to_string(n) +
+                    " vertices");
+            u.arrays.push_back(*sl);
+            if (color_per == "edge") bad("strips take color_per 'vertex' or 'strip'");
+            if (color_per == CALIPER_NET_COLOR_PER_STRIP) rows = cnt;
+        }
+        scene_colours(f, rows, &u.arrays);
+    } else {
+        u.arrays.push_back(*scene_positions(f, CALIPER_NET_PART_MESH, &n));
+        if (const Section* idx = part_section(f, "indices", CALIPER_NET_DTYPE_I32, {-1, 3})) {
+            if (idx->shape[0] > (int64_t)CALIPER_NET_MAX_BATCH_POINTS)
+                bad(std::to_string(idx->shape[0]) + " triangles, more than " +
+                    std::to_string(CALIPER_NET_MAX_BATCH_POINTS) + " in a batch");
+            u.arrays.push_back(*idx);
+        } else if (n % 3) {
+            bad("a mesh without 'indices' needs a multiple of 3 vertices, got " + std::to_string(n));
+        }
+        scene_colours(f, n, &u.arrays);
+    }
+    if (const Json* v = opt(m, "static", is_bool, "a boolean")) u.is_static = v->as_bool();
+    if (const Json* v = opt(m, "state", is_bool, "a boolean")) u.state = v->as_bool();
+    if (const Json* v = opt(m, "axes", is_list, "a list")) u.axes = *v;
+    if (const Json* v = opt(m, "items", is_name, "an item space name")) u.items = v->as_string();
+    return u;
+}
+
+bool is_clear_part(const Json& v) {
+    return one_of(v, {"points", "lines", "mesh", "arrows", "boxes", "image", "camera", "transform"});
+}
+
+SceneClear scene_clear(const Frame& f) {
+    const Json& m = f.meta;
+    SceneClear c;
+    c.sub = u32(req(m, "sub", is_u32, "a uint32"));
+    c.view = req(m, "view", is_name, "a view name").as_string();
+    c.seq = u64(req(m, "seq", is_uint, "an unsigned integer"));
+    c.stamp_ns = u64(req(m, "stamp_ns", is_uint, "an unsigned integer"));
+    c.path = req(m, "path", is_path, "an entity path").as_string();
+    if (const Json* v = opt(m, "recursive", is_bool, "a boolean")) c.recursive = v->as_bool();
+    if (const Json* v = opt(m, "parts", [](const Json& x) {
+            if (!x.is_array() || x.size() == 0) return false;
+            for (const Json& e : x.items())
+                if (!is_clear_part(e)) return false;
+            return true;
+        }, "a list of parts"))
+        c.parts = strs(*v);
+    if (const Json* v = opt(m, "reset", is_bool, "a boolean")) c.reset = v->as_bool();
+    if (const Json* v = opt(m, "static", is_bool, "a boolean")) c.is_static = v->as_bool();
+    if (const Json* v = opt(m, "state", is_bool, "a boolean")) c.state = v->as_bool();
+    if (c.reset && !c.path.empty()) bad("a reset clears the root: its 'path' is \"\"");
+    return c;
+}
+
+// The metadata and sections that SceneUpdate.to_meta() and to_sections() write.
+void scene_update_to_meta(const SceneUpdate& u, Json& m, std::vector<Section>& sections) {
+    m.set("sub", u.sub);
+    m.set("view", u.view);
+    m.set("seq", u.seq);
+    m.set("stamp_ns", u.stamp_ns);
+    m.set("path", u.path);
+    m.set("part", u.part);
+    for (const auto& kv : u.params.members()) {
+        const Json& v = kv.second;
+        if (v.is_null()) continue;
+        if (kv.first == "stats") {
+            Json a = Json::array();
+            for (const Json& x : v.items())
+                a.push(x.is_number() && std::isfinite(x.as_double()) ? Json(x.as_double()) : Json());
+            m.set("stats", a);
+        } else if (kv.first == "vmin" || kv.first == "vmax" || kv.first == "radius" || kv.first == "width") {
+            m.set(kv.first, v.as_double());
+        } else {
+            m.set(kv.first, v);
+        }
+    }
+    if (u.is_static) m.set("static", true);
+    if (u.state) m.set("state", true);
+    if (!u.axes.is_null()) m.set("axes", u.axes);
+    if (u.items) m.set("items", *u.items);
+    const int part = scene_part_index(u.part);
+    if (part < 0) return;
+    for (const char* const* k = kScenePartSections[part]; *k; ++k)
+        if (const Section* s = u.array(*k)) sections.push_back(*s);
+}
+
+void scene_clear_to_meta(const SceneClear& c, Json& m) {
+    m.set("sub", c.sub);
+    m.set("view", c.view);
+    m.set("seq", c.seq);
+    m.set("stamp_ns", c.stamp_ns);
+    m.set("path", c.path);
+    if (c.recursive) m.set("recursive", true);
+    if (c.reset) m.set("reset", true);
+    if (c.is_static) m.set("static", true);
+    if (c.state) m.set("state", true);
+    if (c.parts) m.set("parts", str_list(*c.parts));
+}
+// ---- end of the protocol 3.2 draft block ----
+
 struct Encoded {
     uint16_t type = 0;
     Json meta = Json::object();
@@ -769,6 +1121,10 @@ Encoded to_meta(const Message& msg) {
         if (s->truncated) m.set("truncated", true);
         if (!s->details.is_null()) m.set("details", s->details);
         if (s->details_error) m.set("details_error", *s->details_error);
+    } else if (const auto* su = std::get_if<SceneUpdate>(&msg)) {
+        scene_update_to_meta(*su, m, e.sections);
+    } else if (const auto* sc = std::get_if<SceneClear>(&msg)) {
+        scene_clear_to_meta(*sc, m);
     } else if (const auto* u = std::get_if<Unknown>(&msg)) {
         m = u->meta.is_object() ? u->meta : Json::object();
         m.erase("sections");
@@ -1072,6 +1428,8 @@ DecodeResult decode(const uint8_t* buf, size_t n, Message* out) {
             case CALIPER_NET_MSG_CONTROL: *out = control(f); break;
             case CALIPER_NET_MSG_CONTROL_REPLY: *out = control_reply(f); break;
             case CALIPER_NET_MSG_SELECTION: *out = selection(f); break;
+            case CALIPER_NET_MSG_SCENE_UPDATE: *out = scene_update(f); break;
+            case CALIPER_NET_MSG_SCENE_CLEAR: *out = scene_clear(f); break;
             default: *out = Unknown{f.type, f.meta, f.sections}; break;
         }
     } catch (const MsgError& e) {
@@ -1122,6 +1480,8 @@ const char* type_name(uint16_t type) {
         case CALIPER_NET_MSG_CONTROL: return "control";
         case CALIPER_NET_MSG_CONTROL_REPLY: return "control_reply";
         case CALIPER_NET_MSG_SELECTION: return "selection";
+        case CALIPER_NET_MSG_SCENE_UPDATE: return "scene_update";
+        case CALIPER_NET_MSG_SCENE_CLEAR: return "scene_clear";
         default: return "?";
     }
 }

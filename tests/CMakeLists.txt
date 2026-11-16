@@ -45,6 +45,7 @@ target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk calipe
 # own server on 127.0.0.1 and the hub (src/host/net/hub.h) in-process with fake
 # producers and viewers, not on Windows yet (caliper_net_tests below).
 target_sources(caliper_tests PRIVATE test_net_wire.cpp)
+target_sources(caliper_tests PRIVATE test_net_wire_32.cpp)
 if(NOT WIN32)
     target_sources(caliper_tests PRIVATE test_net_ws.cpp test_net_hub.cpp)
 endif()
