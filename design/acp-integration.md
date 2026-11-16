@@ -745,8 +745,8 @@ and `caliper_side_chat_gpu`, the capture scenario as a process).
 
 Waiting for later work:
 
-- The side chat in the builder pane's right column, under Properties (`ChatPane::draw_in()`), which the pane's
-  integration connects; the landing page; and a Selection tab above the chat on the live page.
+- The side chat on the landing page, and a Selection tab above the chat on the live page. In the builder pane's
+  right column it is built: under Properties, drawn with `ChatPane::draw_in()`.
 - Open items of the side chat's Caliper API, found in review and left for a later round:
   - its life cycle at the edges: a launch that fails after `retire(ending=false)` leaves the API that the chat started
     running; the ⌘K widget agent's sidecar loses the API when the chat stops the API it started, since the sidecar's

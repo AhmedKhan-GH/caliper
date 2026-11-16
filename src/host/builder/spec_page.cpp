@@ -322,15 +322,16 @@ struct SpecPage::Impl {
                 *s, [a] { return a->worker_busy(); }, [a] { return a->journaled(); });
             builder = std::make_unique<BuilderPane>(std::move(port));
             builder->set_layout_rule(spec_page_layout_rule);
-            // ⌘K in the builder: a dropped file's row and a property's row
-            // open the inline prompt there, and it is drawn under that row.
+            // ⌘K in the builder: a dropped file's row and a property's row, a
+            // panel's or a spec source's, open the inline prompt there, and it
+            // is drawn under that row.
             BuilderPane::WidgetHooks hooks;
             hooks.open_file = [this, a](const std::string& loader, const std::vector<std::string>& catalog,
                                         const std::string& anchor) {
                 open_widget_target(*a, WidgetTarget::for_dropped_file(loader, catalog, anchor));
             };
-            hooks.open_property = [this, a](const std::string& panel, const std::string& path) {
-                open_widget_target(*a, WidgetTarget::for_property(panel, "", path));
+            hooks.open_property = [this, a](const std::string& panel, const std::string& source, const std::string& path) {
+                open_widget_target(*a, WidgetTarget::for_property(panel, source, path));
             };
             hooks.height = [this](const std::string& anchor, float w) {
                 return widget ? widget->surface().row_height(anchor, w) : 0.0f;

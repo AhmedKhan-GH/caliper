@@ -106,7 +106,9 @@ With a panel focused, Properties shows:
 
 With a source selected: its id, its catalog id, its shape, and for a tensor its transforms, each with its fields and
 the shape after it. Slice, Reduce and Normalise add one; × removes one. A catalog source that the spec does not read
-yet takes its id here before it is added; its first transform, or the first panel made from it, adds it.
+yet takes its id here before it is added; its first transform, or the first panel made from it, adds it. For a source
+of the open spec, ⌘K beside what it reads and beside its transforms opens the widget agent's prompt for that property
+([Widget agent](widget-agent.md)).
 
 With nothing focused (Esc gives a source's focus up): the spec's id, title and description, its numbers of panels and
 sources, and its file.

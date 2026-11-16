@@ -285,6 +285,13 @@ first, then the command input, then the panel's focus, and last goes Home.
 - **A property.** In build mode, ⌘K shows beside the focused panel's title and each of its options in Properties while
   the row is under the pointer. It opens the prompt under that row for that one property, such as
   `options.colormap`, and the edit is previewed in the panel.
+- **A property of a source.** With a source of the open spec selected in the builder's Sources palette, ⌘K shows in
+  Properties beside what it reads (its catalog id, the source it derives `from`, or its SQL) and beside its
+  transforms, which count as one property, `transform`. The prompt opens under that row; the context bundle carries
+  the source with its chain and catalog entry, the property's value and its part of `source.patch`'s schema, and the
+  session may read with `spec.get` and `catalog.describe` and edit with `source.patch` only. The change shows as its
+  compact diff under the row (such as the source's changed transform); the panels that read the source show it once
+  you accept.
 
 The prompt row shows the model and effort the session reports; a click on them lists the models the session offers,
 and the choice goes to the session with `session/set_config_option` and to every later session. While the agent
