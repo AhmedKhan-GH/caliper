@@ -29,6 +29,7 @@
 #include "caliper/live_views.h"
 
 #include "embed/embed_core.h"
+#include "embed/render_stats.h"   // copy counters
 #include "live/live_attach.h"   // the session-row text the picker shares with the app
 #include "live/live_controls.h"
 #include "live/live_net_source.h"
@@ -333,6 +334,9 @@ bool apply_snapshot(CaliperCore* core, View& v, const Snapshot& s) {
     if (v.shown && v.typed != typed) remove_view(core, v);
     const bool ok = typed ? apply_typed(core, v, s) : apply_v12(core, v, s);
     if (!ok) return false;
+    // A network snapshot was copied into its slot on arrival: one copy on the
+    // way to these pixels, counted now that it reached the view.
+    if (s.copied_bytes) caliper_stats::note_copy(core, v.name, s.copied_bytes);
     v.error.clear();
     v.shown = true;
     v.typed = typed;

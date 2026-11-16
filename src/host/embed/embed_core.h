@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "applet_loader.h"
@@ -126,6 +127,17 @@ struct CaliperCore {
     // The views' diagnostics under each header (caliper_live_views::views_debug):
     // also on with CALIPER_VIEWS_DEBUG=1.
     bool  views_debug = false;
+
+    // Copy counters per view name and per frame (embed/render_stats.h, which
+    // writes and reads them; the core-wide total is the renderer's).
+    struct CopyStats {
+        struct View {
+            caliper_host::HostRenderer::CopyCount total, last;
+        };
+        std::unordered_map<std::string, View> views;
+        caliper_host::HostRenderer::CopyCount at_frame_end, last_frame, window_start;
+        uint64_t frames = 0, window_frames = 0;
+    } copy_stats;
 
     void log(int level, const std::string& msg) {
         if (log_fn) log_fn(userdata, level, msg.c_str());

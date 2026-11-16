@@ -17,6 +17,7 @@
 #include "core_lifecycle.h"            // the app-like host of the Attachment case
 #include "host_services.h"
 #include "embed/embed_core.h"        // caliper_live_controls, the views' event sink
+#include "embed/render_stats.h"      // copy counters (white-box)
 #include "live/live_attach.h"
 #include "live/live_controls.h"
 #include "live/live_ui_driver.h"
@@ -38,6 +39,7 @@
 #include <fstream>
 #include <future>
 #include <map>
+#include <tuple>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -679,6 +681,20 @@ TEST_CASE("live/net: a producer streams a heatmap, an image, points, a series an
     CHECK(readback(core, "heat", 8, HH) == map_ref(heat, 8, HH, CALIPER_NET_COLORMAP_MAGMA, 0.0f, 1.0f));
     // Image: the bytes as sent.
     CHECK(readback(core, "img", 4, 4) == img);
+    // Copy counters (embed/render_stats.h): a network snapshot is copied once,
+    // into its slot as it arrives, and the view then reads the slot in place.
+    // A series and a histogram also copy their values at apply, as on every route.
+    for (const auto& [n, bytes, per] : std::vector<std::tuple<const char*, uint64_t, uint64_t>>{
+             {"heat", 8u * HH * 4u, 1}, {"img", 4u * 4u * 4u, 1}, {"pts", N * 12u + N * 4u, 1},
+             {"hist", 2u * 8u * 4u, 2}, {"loss", 2u * 10u * 4u, 2}}) {
+        CAPTURE(std::string(n));
+        caliper_stats::ViewCopies vc{};
+        REQUIRE(caliper_stats::view_copies(core, n, &vc));
+        const uint64_t upd = view_status(core, n).updates;
+        CHECK(upd == 1);
+        CHECK(vc.total.copies == per * upd);
+        CHECK(vc.total.bytes == bytes * upd);
+    }
     // Points: (N, 2) arrived as the (N, 3) the view draws, in palette colours.
     CaliperLiveViewStatus ps = view_status(core, "pts");
     CHECK(ps.points_dims == 2);

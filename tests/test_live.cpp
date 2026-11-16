@@ -27,6 +27,7 @@
 #include "live/live_attach.h"  // the Caliper app's session list and hosted attachment
 #include "core_lifecycle.h"    // the app-like host: UI contexts, renderer factory
 #include "host_services.h"     // ... and the renderer bound to the tensor bridge
+#include "embed/render_stats.h"  // copy counters (white-box)
 
 #include <imgui.h>
 
@@ -396,6 +397,12 @@ TEST_CASE("live/viewer: offscreen core attaches, heatmap byte-exact, second publ
     CHECK(vi.updates == 1);
     CHECK(vi.creates == 1);
     CHECK(readback(core, "ramp", W, H) == map_ref(ramp, W, H, 0, 0.0f, 1.0f));
+    // Copy counters (embed/render_stats.h): the slot is read where the producer
+    // wrote it, so the session's heatmap route counts no copy.
+    caliper_stats::ViewCopies vcp{};
+    REQUIRE(caliper_stats::view_copies(core, "ramp", &vcp));
+    CHECK(vcp.total.copies == 0);
+    CHECK(vcp.total.bytes == 0);
     // The viewer claimed the published slot; the client can no longer get it.
     CHECK(seg_info(seg).viewer_reading_slot == (uint32_t)s1);
     CHECK(seg_info(seg).viewer_seq == 1);
@@ -433,6 +440,14 @@ TEST_CASE("live/viewer: offscreen core attaches, heatmap byte-exact, second publ
     REQUIRE(poll_until(core, 1) == 1);
     std::vector<float> last((size_t)W * H, 0.75f);
     CHECK(readback(core, "ramp", W, H) == map_ref(last, W, H, 0, 0.0f, 1.0f));
+    caliper_core_frame(core);
+    REQUIRE(caliper_stats::view_copies(core, "ramp", &vcp));
+    CHECK(vcp.total.copies == 0);   // still none after four updates and their frames
+    caliper_stats::FrameCopies fcp{};
+    REQUIRE(caliper_stats::frame_copies(core, &fcp, false));
+    CHECK(fcp.frames >= 7);
+    CHECK(fcp.window.copies == 0);
+    CHECK(caliper_stats::renderer_total(core).copies == 0);
 
     CaliperLiveStatus st{};
     st.struct_size = sizeof st;

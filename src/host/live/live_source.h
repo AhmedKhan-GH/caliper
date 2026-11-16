@@ -59,6 +59,11 @@ struct Snapshot {
     uint64_t seq = 0;               // producer's publish counter for this view
     uint64_t stamp_ns = 0;          // producer CLOCK_UPTIME_RAW at show()
     const PayloadMap* map = nullptr; // borrowed until the next take() of the view; null = identity
+    // Bytes the source copied to make this payload: a network snapshot
+    // received into its slot, or series values appended to the ring; 0 when
+    // the producer wrote the slot in place (the shared-memory session). The
+    // viewer counts it as one copy (embed/render_stats.h).
+    uint64_t copied_bytes = 0;
 };
 
 struct SourceView {

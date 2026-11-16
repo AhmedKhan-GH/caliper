@@ -73,6 +73,7 @@ struct SlotMeta {
     uint64_t stats_offset = 0;
     uint64_t seq = 0;        // the local publish counter
     uint64_t stamp_ns = 0;
+    uint64_t copied = 0;     // bytes received into the slot (Snapshot::copied_bytes)
 };
 
 struct Slot {
@@ -481,6 +482,7 @@ private:
         out->seq = m.seq;
         out->stamp_ns = m.stamp_ns;
         out->map = s.map.axes.empty() ? nullptr : &s.map;
+        out->copied_bytes = m.copied;
     }
 
     // Applies the queued deltas to the view's ring (frame thread only) and hands
@@ -505,8 +507,12 @@ private:
         }
         float* ring = (float*)[v.ring contents];
         // Gaps read as NaN, overlaps replace values (live_series_ring.h).
-        for (const SeriesDelta& d : deltas)
+        uint64_t copied = 0;
+        for (const SeriesDelta& d : deltas) {
             series_ring_apply(ring, M, &v.ring_total, d.start, d.values.data(), d.values.size());
+            copied += d.values.size() * sizeof(float);
+        }
+        out->copied_bytes = copied;
         out->mtl_buffer = (__bridge void*)v.ring;
         out->host_base = ring;
         out->byte_offset = 0;
@@ -1230,6 +1236,7 @@ private:
         if (v.last_producer_seq && s.seq > v.last_producer_seq + 1) v.dropped += s.seq - v.last_producer_seq - 1;
         v.last_producer_seq = s.seq;
         m.seq = ++v.seq;
+        m.copied = payload + aux_bytes;   // received into the slot: one copy
         slot.meta = m;
         v.published = idx;
     }

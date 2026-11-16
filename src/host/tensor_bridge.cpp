@@ -933,10 +933,14 @@ bool TensorBridge::upload_into(Entry& e, const CaliperTensor* t) {
     // A backend that colormaps host memory on its GPU (the browser's WebGPU
     // renderer, web/wasm) takes the f32 bytes as they are; every other backend
     // returns false and keeps the CPU staging below.
+    // Either way the host bytes are copied once into GPU memory, an upload the
+    // renderer's copy counters count (HostRenderer::note_copy): the f32 values
+    // here, the converted RGBA8 texels below. The device path above makes none.
     if (e.mapped &&
         renderer_.tex_update_mapped_from_host(e.tex, (const float*)t->data, e.w, e.h,
                                               colormap_lut(e.colormap), e.vmin, e.vmax)) {
         last_upload_path_ = renderer_.last_device_path();
+        renderer_.note_copy((uint64_t)e.w * (uint64_t)e.h * sizeof(float));
         return true;
     }
     last_upload_path_ = "cpu-staged";
@@ -946,7 +950,9 @@ bool TensorBridge::upload_into(Entry& e, const CaliperTensor* t) {
                          colormap_lut(e.colormap), e.vmin, e.vmax, staging.data());
     else
         expand_u8_to_rgba8((const uint8_t*)t->data, e.w, e.h, e.channels, staging.data());
-    return renderer_.tex_upload_rgba8(e.tex, staging.data(), e.w, e.h);
+    if (!renderer_.tex_upload_rgba8(e.tex, staging.data(), e.w, e.h)) return false;
+    renderer_.note_copy(staging.size());
+    return true;
 }
 
 }  // namespace caliper_host

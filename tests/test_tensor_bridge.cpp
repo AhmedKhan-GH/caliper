@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 using namespace caliper_host;
@@ -278,6 +279,79 @@ TEST_CASE("device tensor is validated then forwarded to the device path") {
         CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_MAGMA, 0, 3, 0);
         CHECK(id == 0);
         CHECK(metal.upload_count == 0);
+    }
+}
+
+// Copy counters (HostRenderer::note_copy; docs/explanations/rendering.md): the
+// bridge counts the one upload of a CPU tensor, none for a device tensor, and
+// the upload of a renderer that colormaps host memory itself (the browser's
+// WebGPU renderer takes that route through tex_update_mapped_from_host).
+namespace {
+class HostMapStub : public StubRenderer {
+public:
+    HostMapStub() : StubRenderer("webgpu") {}
+    bool tex_update_mapped_from_host(uint64_t, const float*, int, int, const uint32_t*, float,
+                                     float) override {
+        ++mapped_count;
+        return true;
+    }
+    const char* last_device_path() const override { return "compute-host"; }
+    int mapped_count = 0;
+};
+}  // namespace
+
+TEST_CASE("copy counters: a CPU upload counts one copy, a device update none, a host colormap its upload") {
+    float f[6] = {0, 1, 2, 3, 4, 5};   // 2x3
+    SUBCASE("CPU tensor: one upload of the RGBA8 texels per create or update") {
+        StubRenderer gl("gl");
+        TensorBridge b(gl);
+        CaliperTensor t = f32_2d(f, 2, 3);
+        CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_VIRIDIS, 0, 5, 0);
+        REQUIRE(id != 0);
+        CHECK(gl.copy_count().copies == 1);
+        CHECK(gl.copy_count().bytes == 2 * 3 * 4);
+        REQUIRE(b.update_texture(id, &t));
+        CHECK(gl.copy_count().copies == 2);
+        CHECK(gl.copy_count().bytes == 2 * 2 * 3 * 4);
+        uint8_t g[2 * 2 * 3] = {};
+        CaliperTensor tu = u8_3d(g, 2, 2, 3);   // RGB expands to RGBA on the CPU, then uploads
+        REQUIRE(b.texture_from_tensor(&tu, 0) != 0);
+        CHECK(gl.copy_count().copies == 3);
+        CHECK(gl.copy_count().bytes == 2 * 2 * 3 * 4 + 2 * 2 * 4);
+    }
+    SUBCASE("device tensor: read in place, no copy") {
+        StubRenderer metal("metal");
+        TensorBridge b(metal);
+        CaliperTensor t = f32_2d(f, 2, 3);
+        t.device = CALIPER_DEV_METAL;
+        CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_MAGMA, 0, 5, 0);
+        REQUIRE(id != 0);
+        REQUIRE(b.update_texture(id, &t));
+        CHECK(metal.device_count == 2);
+        CHECK(metal.copy_count().copies == 0);
+        CHECK(metal.copy_count().bytes == 0);
+    }
+    SUBCASE("a renderer that colormaps host memory (the browser) counts its upload of the values") {
+        HostMapStub web;
+        TensorBridge b(web);
+        CaliperTensor t = f32_2d(f, 2, 3);
+        CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_VIRIDIS, 0, 5, 0);
+        REQUIRE(id != 0);
+        CHECK(web.mapped_count == 1);
+        CHECK(web.upload_count == 0);   // no CPU staging
+        CHECK(std::string(b.last_upload_path()) == "compute-host");
+        CHECK(web.copy_count().copies == 1);
+        CHECK(web.copy_count().bytes == 2 * 3 * sizeof(float));
+    }
+    SUBCASE("a refused upload counts nothing") {
+        StubRenderer gl("gl");
+        TensorBridge b(gl);
+        CaliperTensor t = f32_2d(f, 2, 3);
+        CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_VIRIDIS, 0, 5, 0);
+        REQUIRE(id != 0);
+        gl.tex_release(id);   // the stub's texture is gone: its upload refuses
+        CHECK_FALSE(b.update_texture(id, &t));
+        CHECK(gl.copy_count().copies == 1);
     }
 }
 

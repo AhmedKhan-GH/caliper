@@ -3630,6 +3630,7 @@ private:
         last_update_sem_ = io.timeline;
         last_update_value_ = io.timeline_value;
         ++stats_buffer_;
+        if (!shared_in_place) note_copy(bytes);   // the copy inside VRAM into the shared buffer
         dst.layout = dst.rest_layout;   // CB's end state
         last_device_path_ = is_cmap ? "compute" : "blit";
         return true;

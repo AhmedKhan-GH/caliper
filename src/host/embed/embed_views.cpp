@@ -28,6 +28,7 @@
 
 #include "embed_core.h"
 #include "host_services.h"   // services_bridge
+#include "render_stats.h"    // copy counters
 #include "renderer/host_renderer.h"
 #include "tensor_bridge.h"   // TensorBridge (views), colormap_lut, bridge_last_reject
 
@@ -402,6 +403,9 @@ int caliper_core_view_tensor(CaliperCore* core, const CaliperViewDesc* desc) {
     const bool need_create = !v || v->mapped != mapped || v->w != (int)W ||
                              v->h != (int)H;
     bridge_clear_last_reject();
+    // Copies the bridge makes for this update (a CPU tensor's staged upload)
+    // are the renderer's count from here to the commit (embed/render_stats.h).
+    const caliper_stats::CopyCount copies0 = caliper_stats::renderer_total(core);
 
     // ---- 1. METAL: import first, so the device path is proven before any
     // texture exists. Cached per view by buffer pointer (our strong retain keeps
@@ -511,6 +515,8 @@ int caliper_core_view_tensor(CaliperCore* core, const CaliperViewDesc* desc) {
     v->imported = imported;
     v->path = path;
     ++v->updates;
+    caliper_stats::begin_update(core, name);
+    caliper_stats::add_since(core, name, copies0);
     v->last_update_ms = std::chrono::duration<double, std::milli>(
                             std::chrono::steady_clock::now() - t0).count();
     core->last_error.clear();

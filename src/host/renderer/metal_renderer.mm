@@ -1454,12 +1454,14 @@ public:
                     }
                     id<MTLCommandBuffer> cb = [queue_ commandBuffer];
                     id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
-                    for (const RigidRead& r : priv_reads)
+                    for (const RigidRead& r : priv_reads) {
                         [blit copyFromBuffer:r.inst
                                 sourceOffset:r.src_off
                                     toBuffer:geom_prim_inst_staging_
                            destinationOffset:r.dst_off
                                         size:r.n * 64u];
+                        note_copy(r.n * 64u);   // a readback of the payload's instance matrices
+                    }
                     [blit endEncoding];
                     [cb commit];
                     [cb waitUntilCompleted];

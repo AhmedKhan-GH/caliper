@@ -56,6 +56,7 @@ using namespace caliper_host;
 // The CaliperCore struct and the v1.2 TensorView record live in embed_core.h
 // so the live-streaming module (src/host/live) shares them.
 #include "embed_core.h"
+#include "render_stats.h"
 
 namespace {
 
@@ -419,6 +420,7 @@ void caliper_core_frame(CaliperCore* core) {
     // reference bridge textures; releasing them before the pass consumes the
     // draw list is a use-after-free (main.cpp:370). Deferred teardown follows.
     core->renderer->canvas_render();
+    caliper_stats::end_frame(core);   // copies per frame (embed/render_stats.h)
 
     if (!alive) {
         // Applet faulted mid-frame and was quarantined by the loader's crash

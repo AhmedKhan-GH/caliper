@@ -25,6 +25,7 @@
 #include "caliper/live_views.h"
 
 #include "embed/embed_core.h"
+#include "embed/render_stats.h"   // copy counters
 #include "live/live_views_state.h"
 #include "renderer/host_renderer.h"
 #include "tensor_bridge.h"   // colormap_lut
@@ -328,6 +329,7 @@ bool bind_buffer(CaliperCore* core, View& v, const CaliperTensor& t, uint64_t of
     }
     // A renderer that copies host memory itself (the browser's WebGPU renderer).
     if (const uint64_t rid = r->import_host_allocation((const uint8_t*)t.data + off, bytes)) {
+        caliper_stats::note_copy(core, v.name, bytes);   // the upload into the renderer's buffer
         auto p = std::make_unique<Import>();
         p->rid = rid;
         p->bytes = bytes;
@@ -343,6 +345,7 @@ bool bind_buffer(CaliperCore* core, View& v, const CaliperTensor& t, uint64_t of
     if (!dev) { *why = std::string(what) + ": CPU payload needs a Metal renderer"; return false; }
     void* buf = metal_new_shared_buffer(dev, (const uint8_t*)t.data + off, bytes);
     if (!buf) { *why = std::string(what) + ": staging buffer allocation failed"; return false; }
+    caliper_stats::note_copy(core, v.name, bytes);   // the host copy into the staging buffer
     const uint64_t rid = r->import_external_allocation(buf, bytes, CALIPER_ALLOC_HANDLE_MTLBUFFER);
     if (!rid) {
         metal_release(buf);
@@ -913,6 +916,9 @@ extern "C" int caliper_core_live_apply(CaliperCore* core, const CaliperLiveSnaps
         v->kind = s.kind;   // heatmap <-> image
     }
 
+    // Copy counters (embed/render_stats.h): this apply's copies are the view's
+    // `last`; a heatmap or image counts in its v1.2 view_tensor call (same name).
+    caliper_stats::begin_update(core, name);
     bool ok = false;
     switch (s.kind) {
         case CALIPER_LIVE_KIND_HEATMAP:
@@ -921,6 +927,9 @@ extern "C" int caliper_core_live_apply(CaliperCore* core, const CaliperLiveSnaps
         case CALIPER_LIVE_KIND_SERIES:    ok = apply_series(*target, s, &why); break;
         case CALIPER_LIVE_KIND_HISTOGRAM: ok = apply_histogram(*target, s, &why); break;
     }
+    // Series and histogram values are copied into the view at apply (path "cpu-read").
+    if (ok && (s.kind == CALIPER_LIVE_KIND_SERIES || s.kind == CALIPER_LIVE_KIND_HISTOGRAM))
+        caliper_stats::note_copy(core, name, (uint64_t)target->values.size() * sizeof(float));
     if (!ok) {
         if (fresh) {
             // Don't let the fresh record's release remove a v1.2 view the old

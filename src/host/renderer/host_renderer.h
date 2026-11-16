@@ -276,6 +276,30 @@ public:
     // bit 0. Default false: a backend that ignores stream must never let an
     // adapter skip its drain.
     virtual bool honors_stream_ordered_handoff() const { return false; }
+
+    // ---- Measurement (docs/explanations/rendering.md, "Copy counters and
+    // frame statistics") ------------------------------------------------------
+    // Every copy the host makes of tensor or geometry data on the way to
+    // pixels is counted here, by whoever makes it: an upload of host bytes (a
+    // CPU tensor's staged upload, the browser's host import and host
+    // colormap), a host copy into a staging buffer, a copy inside the GPU, a
+    // network snapshot received into its slot, and a readback of a payload.
+    // The pass that turns a payload into a view's pixels (a colormap dispatch,
+    // the blit of an RGBA8 image into the view's texture, a draw) is the
+    // update itself, not a copy, so a zero-copy route counts 0. Always on: two
+    // additions per copy and none on a zero-copy route. Frame thread only.
+    struct CopyCount {
+        uint64_t copies = 0;
+        uint64_t bytes = 0;
+    };
+    void note_copy(uint64_t bytes) {
+        ++copy_count_.copies;
+        copy_count_.bytes += bytes;
+    }
+    CopyCount copy_count() const { return copy_count_; }
+
+private:
+    CopyCount copy_count_;
 };
 
 // GL factory (gl_renderer.cpp, C1). Any name -> GL; GL is the default backend

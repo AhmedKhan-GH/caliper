@@ -21,6 +21,7 @@
 #include "live/live_clock.h"         // StampClock (network stamps into the viewer's clock)
 #include "live/live_views_state.h"   // kPalette (white-box: the exact categorical colours)
 #include "tensor_bridge.h"           // map_f32_to_rgba8 / colormap_lut (CPU reference)
+#include "embed/render_stats.h"      // copy counters (white-box)
 
 #include <imgui.h>
 #include <imgui_internal.h>          // ImGui::FindWindowByName: where a view's window is
@@ -34,6 +35,7 @@
 #include <cstdint>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <thread>
@@ -1137,6 +1139,208 @@ TEST_CASE("live_views/hover: a CPU payload is copied at apply, so hover reads va
     REQUIRE(vi != nullptr);
     REQUIRE(vi->tex_cpu != nullptr);
     CHECK(std::memcmp(vi->tex_cpu, ref.data(), ref.size()) == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Copy counters (embed/render_stats.h; docs/explanations/rendering.md, "Copy
+// counters and frame statistics"): each route reads its known copies. A METAL
+// payload is read in place (0, also while a points view redraws it every
+// frame); a CPU heatmap or image is uploaded once per update; CPU points are
+// staged once per buffer; series and histogram values are copied at apply.
+namespace {
+caliper_stats::ViewCopies copies_of(CaliperCore* core, const char* name) {
+    caliper_stats::ViewCopies v{};
+    caliper_stats::view_copies(core, name, &v);
+    return v;
+}
+}  // namespace
+
+TEST_CASE("live_views/copies: each route counts its known copies; METAL payloads read 0") {
+    const int W = 32, H = 16;
+    Core c(320, 240);
+    if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
+    id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
+    caliper_stats::FrameCopies fc{};
+    caliper_stats::frame_copies(c.core, &fc, true);   // a fresh window
+
+    // METAL heatmap (what an MPS tensor is): in place, twice, with frames.
+    std::vector<float> r = ramp(W, H);
+    id<MTLBuffer> hb = shared_buffer(dev, 0, r.data(), r.size() * 4);
+    CaliperTensor th = tensor(ptr(hb), CALIPER_DT_F32, {H, W}, CALIPER_DEV_METAL);
+    CaliperLiveSnapshot sh = snap("hm_gpu", CALIPER_LIVE_KIND_HEATMAP, &th);
+    for (int i = 0; i < 2; ++i) {
+        REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &sh) == 1, c.err());
+        CHECK(wait_read_done(c, "hm_gpu"));
+    }
+    CHECK(std::string(info(c.core, "hm_gpu").path) == "compute-imported");
+    CHECK(copies_of(c.core, "hm_gpu").total.copies == 0);
+    CHECK(copies_of(c.core, "hm_gpu").total.bytes == 0);
+
+    // METAL RGBA8 image: the blit into the view's texture is the update itself.
+    std::vector<uint8_t> rgba((size_t)W * H * 4, 0x7F);
+    id<MTLBuffer> ib = shared_buffer(dev, 0, rgba.data(), rgba.size());
+    CaliperTensor ti = tensor(ptr(ib), CALIPER_DT_U8, {H, W, 4}, CALIPER_DEV_METAL);
+    CaliperLiveSnapshot si = snap("img_gpu", CALIPER_LIVE_KIND_IMAGE, &ti);
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &si) == 1, c.err());
+    CHECK(std::string(info(c.core, "img_gpu").path) == "blit-imported");
+    CHECK(copies_of(c.core, "img_gpu").total.copies == 0);
+
+    // METAL points with a per-point value: imported in place, redrawn each frame.
+    const int N = 200;
+    std::vector<float> pos(N * 3), val(N);
+    for (int i = 0; i < N; ++i) {
+        pos[3 * i + 0] = (float)i / N - 0.5f;
+        pos[3 * i + 1] = 0.25f;
+        pos[3 * i + 2] = 0.0f;
+        val[i] = (float)i;
+    }
+    id<MTLBuffer> pb = shared_buffer(dev, 0, pos.data(), pos.size() * 4);
+    id<MTLBuffer> vb = shared_buffer(dev, 0, val.data(), val.size() * 4);
+    CaliperTensor tp = tensor(ptr(pb), CALIPER_DT_F32, {N, 3}, CALIPER_DEV_METAL);
+    CaliperTensor tv = tensor(ptr(vb), CALIPER_DT_F32, {N}, CALIPER_DEV_METAL);
+    CaliperLiveSnapshot sp = snap("pts_gpu", CALIPER_LIVE_KIND_POINTS, &tp);
+    sp.aux = &tv;
+    sp.vmin = 0.0f;
+    sp.vmax = (float)(N - 1);
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &sp) == 1, c.err());
+    c.frames(3);
+    CHECK(std::string(info(c.core, "pts_gpu").path) == "points-imported");
+    CHECK(copies_of(c.core, "pts_gpu").total.copies == 0);
+
+    // Every view so far is zero-copy, and so is every frame that drew them.
+    c.frames(2);
+    REQUIRE(caliper_stats::frame_copies(c.core, &fc, true));
+    CHECK(fc.window_frames >= 5);
+    CHECK(fc.window.copies == 0);
+    CHECK(fc.window.bytes == 0);
+    CHECK(fc.last_frame.copies == 0);
+    CHECK(caliper_stats::renderer_total(c.core).copies == 0);
+
+    // CPU heatmap: one upload of the RGBA8 texels per update.
+    CaliperTensor tc = tensor(r.data(), CALIPER_DT_F32, {H, W}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot sc = snap("hm_cpu", CALIPER_LIVE_KIND_HEATMAP, &tc);
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &sc) == 1, c.err());
+    CHECK(copies_of(c.core, "hm_cpu").last.copies == 1);
+    CHECK(copies_of(c.core, "hm_cpu").last.bytes == (uint64_t)W * H * 4);
+    REQUIRE(caliper_core_live_apply(c.core, &sc) == 1);
+    CHECK(copies_of(c.core, "hm_cpu").last.copies == 1);
+    CHECK(copies_of(c.core, "hm_cpu").total.copies == 2);
+    CHECK(copies_of(c.core, "hm_cpu").total.bytes == 2ull * W * H * 4);
+    c.frames(1);
+    REQUIRE(caliper_stats::frame_copies(c.core, &fc, true));
+    CHECK(fc.window_frames == 1);
+    CHECK(fc.window.copies == 2);   // both updates land in the frame that follows them
+    CHECK(fc.last_frame.copies == 2);
+    c.frames(1);
+    REQUIRE(caliper_stats::frame_copies(c.core, &fc, true));
+    CHECK(fc.window.copies == 0);   // a frame with no update copies nothing
+    CHECK(fc.last_frame.copies == 0);
+
+    // CPU image: one upload.
+    CaliperTensor tci = tensor(rgba.data(), CALIPER_DT_U8, {H, W, 4}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot sci = snap("img_cpu", CALIPER_LIVE_KIND_IMAGE, &tci);
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &sci) == 1, c.err());
+    CHECK(copies_of(c.core, "img_cpu").total.copies == 1);
+    CHECK(copies_of(c.core, "img_cpu").total.bytes == (uint64_t)W * H * 4);
+
+    // CPU points: positions and values are each staged once; drawing copies nothing more.
+    CaliperTensor tpc = tensor(pos.data(), CALIPER_DT_F32, {N, 3}, CALIPER_DEV_CPU);
+    CaliperTensor tvc = tensor(val.data(), CALIPER_DT_F32, {N}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot spc = snap("pts_cpu", CALIPER_LIVE_KIND_POINTS, &tpc);
+    spc.aux = &tvc;
+    spc.vmin = 0.0f;
+    spc.vmax = (float)(N - 1);
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &spc) == 1, c.err());
+    c.frames(3);
+    CHECK(std::string(info(c.core, "pts_cpu").path) == "points-cpu-staged");
+    CHECK(copies_of(c.core, "pts_cpu").total.copies == 2);
+    CHECK(copies_of(c.core, "pts_cpu").total.bytes == (uint64_t)N * 12 + (uint64_t)N * 4);
+
+    // Series and histogram: the values are copied into the view at apply.
+    const int M = 16;
+    std::vector<float> ring(M, 1.0f);
+    CaliperTensor ts = tensor(ring.data(), CALIPER_DT_F32, {M}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot ss = snap("loss", CALIPER_LIVE_KIND_SERIES, &ts);
+    ss.series_total = 10;
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &ss) == 1, c.err());
+    CHECK(copies_of(c.core, "loss").total.copies == 1);
+    CHECK(copies_of(c.core, "loss").total.bytes == 10u * 4u);
+    CaliperLiveSnapshot sg = snap("grad", CALIPER_LIVE_KIND_HISTOGRAM, &ts);
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &sg) == 1, c.err());
+    CHECK(copies_of(c.core, "grad").total.copies == 1);
+    CHECK(copies_of(c.core, "grad").total.bytes == (uint64_t)M * 4);
+
+    // The zero-copy views still read 0, and the renderer's total is the sum.
+    CHECK(copies_of(c.core, "hm_gpu").total.copies == 0);
+    CHECK(copies_of(c.core, "pts_gpu").total.copies == 0);
+    CHECK(caliper_stats::renderer_total(c.core).copies == 2 + 1 + 2 + 1 + 1);
+}
+
+// The browser's route, headless: a renderer that copies host memory itself
+// (HostRenderer::import_host_allocation, which the WebGPU renderer implements)
+// takes a CPU points payload, and each buffer counts one copy. A fake core
+// around a renderer that only keeps the bytes stands in for the browser's.
+namespace {
+class HostImportRenderer : public caliper_host::HostRenderer {
+public:
+    bool init(GLFWwindow*) override { return true; }
+    void new_frame() override {}
+    void render(int, int) override {}
+    void shutdown() override {}
+    const char* name() const override { return "host-import"; }
+    void window_hints() override {}
+    uint64_t tex_create_rgba8(int, int) override { return 0; }
+    bool tex_upload_rgba8(uint64_t, const void*, int, int) override { return false; }
+    void tex_release(uint64_t) override {}
+    uint64_t tex_imtexture_id(uint64_t) override { return 0; }
+    bool tex_update_from_device(uint64_t, const CaliperTensor&, const uint32_t*, float, float) override {
+        return false;
+    }
+    bool supports_geometry_primitives() const override { return true; }
+    uint64_t import_host_allocation(const void* data, uint64_t bytes) override {
+        const uint64_t id = next_++;
+        allocs[id].assign((const uint8_t*)data, (const uint8_t*)data + bytes);
+        return id;
+    }
+    void release_external_allocation(uint64_t id) override { allocs.erase(id); }
+    std::map<uint64_t, std::vector<uint8_t>> allocs;
+
+private:
+    uint64_t next_ = 1;
+};
+}  // namespace
+
+TEST_CASE("live_views/copies: the browser's host import counts one copy per buffer (headless)") {
+    CaliperCore core;
+    auto owned = std::make_unique<HostImportRenderer>();
+    HostImportRenderer* r = owned.get();
+    core.renderer = std::move(owned);
+    core.canvas_ready = true;
+
+    const int N = 64;
+    std::vector<float> pos(N * 3, 0.5f), val(N, 2.0f);
+    CaliperTensor tp = tensor(pos.data(), CALIPER_DT_F32, {N, 3}, CALIPER_DEV_CPU);
+    CaliperTensor tv = tensor(val.data(), CALIPER_DT_F32, {N}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot s = snap("cloud", CALIPER_LIVE_KIND_POINTS, &tp);
+    s.aux = &tv;
+    s.vmin = 0.0f;
+    s.vmax = 4.0f;
+    REQUIRE_MESSAGE(caliper_core_live_apply(&core, &s) == 1, core.last_error);
+    CHECK(r->allocs.size() == 2);   // positions and values, both copied by the renderer
+    CHECK(r->copy_count().copies == 2);
+    CHECK(r->copy_count().bytes == (uint64_t)N * 12 + (uint64_t)N * 4);
+    caliper_stats::ViewCopies v = copies_of(&core, "cloud");
+    CHECK(v.total.copies == 2);
+    CHECK(v.last.copies == 2);
+    CHECK(v.total.bytes == (uint64_t)N * 12 + (uint64_t)N * 4);
+
+    // The next payload copies again; the superseded one is released on shutdown.
+    REQUIRE(caliper_core_live_apply(&core, &s) == 1);
+    v = copies_of(&core, "cloud");
+    CHECK(v.total.copies == 4);
+    CHECK(v.last.copies == 2);
+    caliper_live_views_shutdown(&core);
+    CHECK(r->allocs.empty());
 }
 
 TEST_CASE("live_clock: producer stamps map into the viewer's clock from the fastest message") {
