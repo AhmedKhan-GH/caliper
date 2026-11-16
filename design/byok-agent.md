@@ -64,11 +64,12 @@ path, so a file such as `json.py` in a workspace would run as code.
 | `--model <id>` | The model of new sessions; default `claude-opus-5-5` on the Claude API, required for an OpenAI-compatible server. When given, it is a widget session's model on the Claude API too |
 | `--effort <level>` | The effort of new sessions on the Claude API; default `high`. When given, it is a widget session's effort too |
 | `--model-tools yes\|no`, `--model-vision yes\|no` | What an OpenAI-compatible model can do, when the app knows it; default the cached probe, else `yes` until the server says otherwise ([Providers](#providers)) |
-| `--context-length <tokens>` | The model's context length, the person's setting; default the cached probe, else 8,192 for an OpenAI-compatible model and unknown for Claude |
+| `--context-length <tokens>` | The model's context length, the person's setting; default the cached probe, else 8,192 for an OpenAI-compatible model and unknown for Claude; for the Ollama preset the context length the model is loaded with in every session (default 16,384 for widget sessions and 32,768 for the general role) |
 | `--cache-dir <path>` | The folder of the capability cache, `model-capabilities.json`, which `caliper-agent probe` writes |
 | `--widget-scopes <path>` | The widget agent's scope rule; default `widget_scopes.json` beside the command table, else beside the package or in the repository's `src/builder/commands/`. Without one, widget sessions are refused |
 | `--tools <list>` | Only these commands of the general role, as a comma-separated list of names and groups; widget sessions take their scope from the rule |
 | `--no-compaction` | Turns server-side compaction off |
+| `--widget-requests <n>` | The model requests a widget prompt may make, from 1 to 20; default 6 ([The budget](#widget-sessions)) |
 | `--usage-log <path>` | Appends the token counts of each request to a file, for the manual check; no content is written |
 
 `caliper-agent probe` is the same program's second command: it checks a model's tool calling, vision and context
@@ -213,10 +214,17 @@ A widget session is the widget agent's role ([Widget agent](widget-agent.md)), a
   sidecar never begins, commits or discards a preview; `session/cancel` and `session/close` leave it as it is.
 - **The prompt and the defaults.** The widget system prompt (`WIDGET_SYSTEM_PROMPT` in `prompt.py`), fixed like the
   general one; Claude Haiku 5.5 at effort `low` on the Claude API; no `review` config option.
-- **The budget.** At most 3 model requests and 8 tool calls for each prompt, through Pydantic AI's `UsageLimits`
-  (`request_limit`, `tool_calls_limit`), and `max_tokens` of 8,000. A prompt that reaches a limit ends with
-  `max_turn_requests` and a `limit` status that names both limits; none of the calls of a reply that would pass the
-  tool-call limit runs.
+- **The budget.** At most 6 model requests (`--widget-requests` sets another, from 1 to 20) and 8 tool calls for each
+  prompt, through Pydantic AI's `UsageLimits` (`request_limit`, `tool_calls_limit`), and `max_tokens` of 8,000. A
+  prompt that reaches a limit ends with `max_turn_requests`, a `limit` status that names both limits, the edits made
+  and the command of the first call that did not run, and a reply that says the change is not finished: "The change
+  is not finished: the agent stopped at its limit of 6 model requests after 2 edits (source.add, panel.create).
+  Accept applies the edits shown, or Refine lets it finish." The command that was next is named only when the last
+  reply asked for a call that did not run (the tool-call limit); at the request limit every call of the last reply
+  ran and the next one is not known. None of the calls of a reply that would pass the tool-call limit runs. The budget
+  was 3 requests until a run on a local model that makes its edits one call at a time reached it on a selection's
+  table, which takes three edits and a closing sentence; the widget prompt now also asks for the edits of one change
+  in one reply.
 - **The handoff.** The tool `handoff` (`kind` and `reason`) ends the turn after its reply without another request, with a
   `handoff` status and the handoff in the answer ([Widget agent](widget-agent.md#handoff-to-the-side-chat)).
 - **The answer.** `_meta.caliper.widget` of each prompt's answer holds `preview`, `edits` (the edits of this prompt that

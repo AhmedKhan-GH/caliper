@@ -113,5 +113,5 @@ on one machine, not a guarantee for the model.
 
 The row above is one run of each task, not the default three, made once on a machine that other builds shared at
 the time, with the context length assumed at 8,192 tokens because Ollama reports none. Tasks 5 and 8 failed by
-reaching the widget agent's limit of three model requests: in task 5 the model made both edits and then rendered the
+reaching the widget agent's limit of three model requests, the budget at the time (it is six now): in task 5 the model made both edits and then rendered the
 panel to check them, and in task 8 it read the spec and added the source twice.

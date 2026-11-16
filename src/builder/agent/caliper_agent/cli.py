@@ -5,7 +5,7 @@
                   [--preset ID] [--provider claude|openai-compatible] [--base-url URL]
                   [--model ID] [--effort LEVEL] [--model-tools yes|no]
                   [--model-vision yes|no] [--context-length TOKENS]
-                  [--cache-dir PATH] [--no-compaction]
+                  [--cache-dir PATH] [--no-compaction] [--widget-requests N]
                   [--usage-log PATH] [--version]
     caliper-agent probe --model ID [--preset ID] [--provider ...] [--base-url URL] [--cache-dir PATH]
                   [--refresh] [--list-models] [--no-vision-probe] [--set NAME=VALUE ...]
@@ -82,6 +82,16 @@ def _context_length(text: str) -> int:
     return value
 
 
+def _widget_requests(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("the widget agent's budget is a whole number of requests") from None
+    if not 1 <= value <= 20:
+        raise argparse.ArgumentTypeError("the widget agent's budget is from 1 to 20 requests")
+    return value
+
+
 def _yes_no(value: str | None) -> bool | None:
     return None if value is None else value == "yes"
 
@@ -117,6 +127,8 @@ def main(argv: list[str] | None = None) -> int:
                              "for the general role)")
     parser.add_argument("--cache-dir", help="the folder of the capability cache (model-capabilities.json)")
     parser.add_argument("--no-compaction", action="store_true", help="turn server-side compaction off")
+    parser.add_argument("--widget-requests", type=_widget_requests,
+                        help="the model requests a widget prompt may make (default: 6)")
     parser.add_argument("--usage-log", help="append the token counts of each request to this file (JSON Lines)")
     parser.add_argument("--version", action="store_true", help="print the version and exit")
     args = parser.parse_args(argv)
@@ -257,7 +269,8 @@ def main(argv: list[str] | None = None) -> int:
         agent = Agent(conn, provider, key_status, tools, graph, api, default_model=default_model,
                       default_effort=args.effort or DEFAULT_EFFORT, usage_log=args.usage_log,
                       key_required=key_required, commands=commands, scope_rule=scope_rule, refusal=refusal,
-                      provider_meta=choice.as_meta(), widget_model=args.model, widget_effort=args.effort)
+                      provider_meta=choice.as_meta(), widget_model=args.model, widget_effort=args.effort,
+                      widget_requests=args.widget_requests)
         try:
             await conn.serve(agent.on_request, agent.on_notification)
         finally:

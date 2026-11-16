@@ -30,6 +30,7 @@ Caliper starts the agent as a child process and speaks ACP version 1 on its stan
 | `--provider claude\|openai-compatible`, `--base-url <url>`, `--model <id>`, `--effort <level>` | Where model requests go, and the defaults of a session in the general role |
 | `--cache-dir <path>` | The folder of the capability cache that `caliper-agent probe` writes; the agent reads its answer for the model at start |
 | `--model-tools yes\|no`, `--model-vision yes\|no`, `--context-length <tokens>` | What the model can do, when Caliper knows it; each wins over the cache |
+| `--widget-requests <n>` | The model requests a widget prompt may make, from 1 to 20; 6 by default (see Limits below) |
 
 The Claude API key reaches the agent in `ANTHROPIC_API_KEY`, and a key for an OpenAI-compatible server in
 `CALIPER_MODEL_API_KEY`, never in its arguments. `-I` keeps the workspace folder off Python's import path.
@@ -277,9 +278,14 @@ with a `kind` (`build_from_scratch`, `loader`, `project_code`, `explanation`, `a
 one sentence. The prompt ends at once with `end_turn`, the `handoff` field is set, and a thought with
 `_meta.caliper.status` `handoff` carries the same kind and sentence.
 
-**Limits.** A prompt makes at most 3 model requests and 8 tool calls, and each request asks for at most 8,000 output
-tokens. A prompt that reaches a limit ends with `max_turn_requests` and a thought whose `_meta.caliper.status` is
-`limit`.
+**Limits.** A prompt makes at most 6 model requests and 8 tool calls, and each request asks for at most 8,000 output
+tokens; `--widget-requests <n>` sets another number of requests, from 1 to 20. A prompt that reaches a limit ends with
+`max_turn_requests`, a thought whose `_meta.caliper.status` is `limit` (with `edits`, the commands of the edits made,
+and `next`, the command of the first call that did not run, or `null`), and a reply that says the change is not
+finished, which edits the preview holds and that Accept applies them or Refine lets the agent finish, such as "The
+change is not finished: the agent stopped at its limit of 6 model requests after 2 edits (source.add, panel.create).
+Accept applies the edits shown, or Refine lets it finish." Caliper shows the reply in full on the card, under LIMIT and
+the count of edits.
 
 ## Closing
 

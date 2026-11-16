@@ -116,6 +116,19 @@ CHARS_PER_TOKEN_ADDED = 3
 CHARS_PER_TOKEN_FIRST = 4
 IMAGE_TOKENS = 1500
 
+def widget_limit_text(max_requests: int, edits: list[str], pending: list[str]) -> str:
+    """The reply of a widget prompt that reached its limit: the change is not finished, what the preview holds, and
+    the edit that was next, where the last reply named one."""
+    before = f", before {pending[0]}" if pending else ""
+    limit = "1 model request" if max_requests == 1 else f"{max_requests} model requests"
+    if not edits:
+        return (f"The agent stopped at its limit of {limit}{before}, without a change. Refine the request to try "
+                "again, or ask in the side chat.")
+    count = "1 edit" if len(edits) == 1 else f"{len(edits)} edits"
+    return (f"The change is not finished: the agent stopped at its limit of {limit} after {count} "
+            f"({', '.join(edits)}){before}. Accept applies the edits shown, or Refine lets it finish.")
+
+
 REVIEW_SPEC_CHANGES = "spec_changes"
 REVIEW_DESTRUCTIVE_ONLY = "destructive_only"
 
@@ -143,6 +156,8 @@ class SessionState:
     last_prompt_tokens: int | None = None
     last_request_chars: int = 0
     pending_request_chars: int = 0
+    # The model requests a widget prompt may make (WIDGET_MAX_REQUESTS, or --widget-requests).
+    widget_max_requests: int = WIDGET_MAX_REQUESTS
 
 
 @dataclass
@@ -473,8 +488,10 @@ class TurnRunner:
         # A widget session's outcome: the edits that stacked on its preview this
         # turn, and the handoff the model asked for.
         self.widget_edits = 0
+        self.widget_edit_names: list[str] = []   # the commands of those edits, in order
         self.handoff_info: dict | None = None
         self.limit_reached = False
+        self._reply_text = False   # the turn sent the pane a reply's text
 
     # ---- cancellation ------------------------------------------------------------------------------
 
@@ -511,7 +528,7 @@ class TurnRunner:
         messages: list[ModelMessage] = before
         settings = self._provider.model_settings(s.settings, strict=s.strict, role=self.role)
         if s.widget is not None:
-            limits = UsageLimits(request_limit=WIDGET_MAX_REQUESTS, tool_calls_limit=WIDGET_MAX_TOOL_CALLS)
+            limits = UsageLimits(request_limit=s.widget_max_requests, tool_calls_limit=WIDGET_MAX_TOOL_CALLS)
             settings = {**settings, "max_tokens": min(int(settings.get("max_tokens") or WIDGET_MAX_TOKENS),
                                                       WIDGET_MAX_TOKENS)}
         else:
@@ -563,15 +580,19 @@ class TurnRunner:
             self._sink.fail_open_calls("Cancelled.")
             return "cancelled"
         except UsageLimitExceeded:
-            s.history = close_tool_calls(_without_unfinished_reply(self._run.all_messages()),
-                                         "Not run: the turn reached its limit of model requests.")
+            sent = _without_unfinished_reply(self._run.all_messages())
+            pending = self._unrun_commands(sent)
+            s.history = close_tool_calls(sent, "Not run: the turn reached its limit of model requests.")
             self._sink.fail_open_calls("Not run: the turn reached its limit.")
             self.limit_reached = True
             if s.widget is not None:
-                self._sink.status("limit", f"The request stopped at the widget agent's limit of {WIDGET_MAX_REQUESTS} "
-                                           f"model requests and {WIDGET_MAX_TOOL_CALLS} tool calls. Refine it, or ask "
-                                           "in the side chat.", max_requests=WIDGET_MAX_REQUESTS,
-                                  max_tool_calls=WIDGET_MAX_TOOL_CALLS)
+                # The card's reply says that the change is not finished, what it
+                # holds, and the edit that was next where the reply named one.
+                text = widget_limit_text(s.widget_max_requests, self.widget_edit_names, pending)
+                self._sink.status("limit", text, max_requests=s.widget_max_requests,
+                                  max_tool_calls=WIDGET_MAX_TOOL_CALLS, edits=list(self.widget_edit_names),
+                                  next=pending[0] if pending else None)
+                self._sink.message(("\n\n" if self._sink_has_text() else "") + text)
             else:
                 self._sink.status("limit", f"The turn stopped after {MAX_REQUESTS_PER_TURN} model requests.")
             return "max_turn_requests"
@@ -615,6 +636,21 @@ class TurnRunner:
             self.session.history = close_tool_calls(_without_unfinished_reply(self._run.all_messages()),
                                                     "Not run: the turn failed.")
         self._sink.fail_open_calls("Not run: the turn failed.")
+
+    def _sink_has_text(self) -> bool:
+        return self._reply_text
+
+    def _unrun_commands(self, messages: list) -> list[str]:
+        """The commands of the last reply's tool calls that have no result: what the model was about to run."""
+        answered = {getattr(p, "tool_call_id", None) for m in messages if isinstance(m, ModelRequest) for p in m.parts}
+        last = next((m for m in reversed(messages) if isinstance(m, ModelResponse)), None)
+        out = []
+        for part in (last.parts if last is not None else []):
+            if isinstance(part, ToolCallPart) and part.tool_call_id not in answered:
+                spec = self._tools.get(part.tool_name)
+                if spec is not None:
+                    out.append(spec.command.name)
+        return out
 
     @property
     def role(self) -> str:
@@ -666,6 +702,7 @@ class TurnRunner:
             part = event.part
             if isinstance(part, TextPart):
                 if part.content:
+                    self._reply_text = True
                     sink.message(part.content)
             elif isinstance(part, ThinkingPart):
                 if part.content:
@@ -677,6 +714,7 @@ class TurnRunner:
         elif isinstance(event, PartDeltaEvent):
             delta = event.delta
             if isinstance(delta, TextPartDelta) and delta.content_delta:
+                self._reply_text = True
                 sink.message(delta.content_delta)
             elif isinstance(delta, ThinkingPartDelta) and delta.content_delta:
                 sink.thought(delta.content_delta)
@@ -875,6 +913,7 @@ class TurnRunner:
         if out.ok and edit and isinstance(out.result, dict) and out.result.get("applied") is True \
                 and out.result.get("diff"):
             self.widget_edits += 1
+            self.widget_edit_names.append(command.name)
         await self._report(call_id, out, before, edit)
         text = scrub(out.text)
         if not out.ok:

@@ -253,9 +253,12 @@ discard does. Accept leaves two undo steps for such a file: the new spec, then t
 
 - **Two rounds.** In the first round the model reads the bundle and proposes its edits on the preview. In the second it
   sees their results and, with vision, a render of the preview, and either finishes with one sentence or corrects an
-  edit. A prompt makes at most 3 model requests and 8 tool calls, against 50 requests in the unscoped mode, and asks for
-  at most 8,000 output tokens. A prompt that reaches a limit ends with the stop reason `max_turn_requests`, and the
-  card offers Refine and Ask in chat.
+  edit. A prompt makes at most 6 model requests and 8 tool calls, against 50 requests in the unscoped mode, and asks for
+  at most 8,000 output tokens; the widget prompt asks for the several edits of one change in one reply. A prompt that
+  reaches a limit ends with the stop reason `max_turn_requests`; the card shows LIMIT with its edits and the agent's
+  reply that the change is not finished, Accept applies the edits it shows, and Refine lets the agent finish on the
+  same preview. The budget was 3 requests until a local model, which makes its edits one call at a time, reached it on
+  a selection's table.
 - **Claude: `claude-haiku-5-5` at effort `low`.** Of the four model ids that the sidecar offers, Claude Haiku 5.5 is
   the fastest and the cheapest, it takes adaptive thinking, and it takes the effort `low`; its default effort is
   `medium`, and the provider sets the effort explicitly on every request, as it already does. A widget request is a
@@ -720,7 +723,7 @@ page, Widget agent conformance (`docs/references/widget-agent-conformance.md`). 
   numbering of the sidecar.
 - **One run on a local model.** The suite ran once against Qwen 3.8 27B (Q4_K_M) on Ollama 0.40.16, which was already
   running, on loopback with the offline switch, one run of each task: 10 of 12 tasks passed ("partial"), with a median
-  of 16 seconds a task. Tasks 5 and 8 reached the limit of three model requests (the model rendered the panel to check
+  of 16 seconds a task. Tasks 5 and 8 reached the limit of three model requests the budget had then (the model rendered the panel to check
   its edits, or read the spec first and added the source twice), which suggests that a local model may need the
   budget's third request for its closing sentence more often than the design assumed. It is one run on one machine,
   not a guarantee.
@@ -775,7 +778,7 @@ For a local server:
 
 ## Limits
 
-- One target for each prompt, 3 model requests and 8 tool calls for each prompt, and 8,000 output tokens per request.
+- One target for each prompt, 6 model requests and 8 tool calls for each prompt, and 8,000 output tokens per request.
 - The bundle's bounds above, 64 recorded invocations per preview, 16 sessions per sidecar, and 30 minutes before an
   unused preview ends.
 - The widget agent cannot create or run loaders, save applets, undo, or replace the spec or its layout; those belong to
