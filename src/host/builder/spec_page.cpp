@@ -153,6 +153,13 @@ struct SpecPage::Impl {
     // it was never saved: what ⌘O Open in browser shows.
     std::string saved_id;
     float browser_rect[4] = {0, 0, 0, 0};   // the button, as the last frame drew it
+    // The page's named rectangles for the input driver (item_rect()), as the
+    // last frame drew them: "panel:<id>", "remove:<id>" (the × on a panel's
+    // strip) and "menu:remove" (Remove panel in a panel's menu).
+    std::map<std::string, ImRect> items;
+    std::string remove_request;   // the × clicked this frame, removed after drawing
+    std::string menu_request;     // a panel right-clicked this frame
+    std::string menu_panel;       // the panel whose menu is open
 
     std::optional<std::future<cb::CommandResult>> request;       // the last applet.open
     std::optional<std::future<cb::CommandResult>> request_new_f; // the last spec.new, apart, so an open never drops it
@@ -319,6 +326,103 @@ struct SpecPage::Impl {
         if (!widget) return false;
         const WidgetState st = widget->surface().state();
         return st != WidgetState::idle && st != WidgetState::applied;
+    }
+
+    // Whether the person can remove the panel `id` from the page (the × on
+    // its strip, its menu, ⌫): a panel of the open spec, not one drawn from
+    // a file, and nothing proposed on the page. While the inline prompt is
+    // open, or a ⌘K preview is shown, no panel is offered: the preview's
+    // panels are only proposed, and removing the panel a preview is on
+    // would leave the preview pointing at nothing; Accept or Reject first.
+    bool can_remove(const std::string& id) const {
+        if (!builder || !has_spec || from_file || widget_open() || !runtime) return false;
+        if (runtime->has_spec_preview() || runtime->has_preview(id)) return false;
+        const auto& shown = runtime->spec();   // the open spec as the page shows it
+        return shown && shown->find_panel(id) != nullptr;
+    }
+
+    // The × on a panel's strip, at its right end (a tab's panel, whose tab
+    // carries the title, at its top right corner), drawn while the pointer
+    // is over the panel; a click removes the panel after the frame is drawn,
+    // and a right click on the panel opens its menu. Inside the panel's own
+    // window, after its content.
+    void remove_control(const SpecPanelFrame& f) {
+        if (f.preview || !can_remove(f.id)) return;
+        const SpecLook L = house_spec_look();
+        const float s = L.text_scale;
+        const bool strip = f.header.GetHeight() >= 1.0f;
+        const float side = strip ? f.header.GetHeight() : std::round(22.0f * s);
+        const ImVec2 corner = strip ? ImVec2(f.header.Max.x, f.header.Min.y) : ImVec2(f.rect.Max.x, f.rect.Min.y);
+        const ImRect x(ImVec2(corner.x - side, corner.y), ImVec2(corner.x, corner.y + side));
+        items["remove:" + f.id] = x;
+        if (building()) builder->claim_canvas(SpecRect{x.Min.x, x.Min.y, x.GetWidth(), x.GetHeight()});
+        const ImVec2 back = ImGui::GetCursorScreenPos();
+        ImGui::SetCursorScreenPos(x.Min);
+        ImGui::PushID(f.id.c_str());
+        const bool clicked = ImGui::InvisibleButton("##panel.remove", x.GetSize());
+        const bool on_x = ImGui::IsItemHovered();
+        ImGui::PopID();
+        ImGui::SetCursorScreenPos(back);
+        const bool menu = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
+        const bool over = !menu && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                          ImGui::IsMouseHoveringRect(f.rect.Min, f.rect.Max);
+        if (over || on_x) {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(x.Min, x.Max, on_x ? L.plate_hover : L.plate);
+            const ImVec2 c = x.GetCenter();
+            const float a = std::round(4.0f * s);
+            const ImU32 ink = on_x ? L.accent : L.secondary;
+            dl->AddLine(ImVec2(c.x - a, c.y - a), ImVec2(c.x + a, c.y + a), ink, std::max(1.0f, std::round(1.5f * s)));
+            dl->AddLine(ImVec2(c.x - a, c.y + a), ImVec2(c.x + a, c.y - a), ink, std::max(1.0f, std::round(1.5f * s)));
+            if (on_x) ImGui::SetTooltip("Remove panel");
+        }
+        if (clicked) remove_request = f.id;
+        if (over && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) menu_request = f.id;
+    }
+
+    // A panel's menu, opened by a right click on it: Remove panel. In the
+    // page's window, after the panels, in the house style of the pane's menus.
+    void panel_menu() {
+        if (!menu_request.empty()) {
+            menu_panel = menu_request;
+            menu_request.clear();
+            ImGui::OpenPopup("##panel.menu");
+        }
+        const SpecLook L = house_spec_look();
+        const float s = L.text_scale;
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, L.deep);
+        ImGui::PushStyleColor(ImGuiCol_Border, L.rule);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, std::round(4.0f * s)));
+        if (ImGui::BeginPopup("##panel.menu")) {
+            const float row = std::round(26.0f * s), w = std::round(160.0f * s), pad = std::round(10.0f * s);
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            const ImRect r(at, ImVec2(at.x + w, at.y + row));
+            const bool ok = can_remove(menu_panel);
+            const bool click = ImGui::InvisibleButton("##panel.menu.remove", r.GetSize());
+            items["menu:remove"] = r;
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            if (ok && ImGui::IsItemHovered()) dl->AddRectFilled(r.Min, r.Max, L.plate_hover);
+            dl->AddText(L.ui, L.ui_size, ImVec2(r.Min.x + pad, r.Min.y + std::round((row - L.ui_size) * 0.5f)),
+                        ok ? L.text : L.faint, "Remove panel");
+            if (click && ok) {
+                remove_request = menu_panel;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        } else {
+            menu_panel.clear();
+            items.erase("menu:remove");
+        }
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(2);
+    }
+
+    // The panel the × or the menu asked to remove, now that nothing draws it.
+    void take_remove() {
+        if (remove_request.empty()) return;
+        const std::string id = remove_request;
+        remove_request.clear();
+        if (can_remove(id) && builder->remove_panel(id) && focused == id) focused.clear();
     }
 
     // The session the page reads: a new one (the workspace opened, or the
@@ -571,6 +675,8 @@ struct SpecPage::Impl {
                                        ImGuiWindowFlags_NoScrollWithMouse;
         const bool open = ImGui::Begin("##caliper_spec_page", nullptr, flags);
         ImGui::PopStyleVar(3);
+        for (auto it = items.begin(); it != items.end();)
+            it = it->first == "menu:remove" ? std::next(it) : items.erase(it);
         if (open) {
             const SpecLook look = house_spec_look();
             // The page routes ⌘K and Escape (spec_key_action); the surface
@@ -589,6 +695,10 @@ struct SpecPage::Impl {
                 runtime->draw(area, look);
                 focus_and_frame();
             }
+            for (const auto& lp : runtime->layout().panels)
+                items["panel:" + lp.id] = ImRect(ImVec2(lp.rect.x, lp.rect.y), ImVec2(lp.rect.right(), lp.rect.bottom()));
+            panel_menu();
+            take_remove();
         }
         ImGui::End();
     }
@@ -606,6 +716,7 @@ struct SpecPage::Impl {
                 panel_overlay(f.id, p ? p->title : std::string(), f.rect.Min.x, f.rect.Min.y, f.rect.GetWidth(),
                               f.rect.GetHeight(), f.header.GetHeight());
             }
+            remove_control(f);
             if (widget) widget->overlay(f);
         });
     }
@@ -786,6 +897,15 @@ SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, 
     // its Escape (a drag, the text editor, a source's focus) before the
     // page's (a panel's focus, then Home).
     if (im.builder && im.has_spec && !im.from_file && !im.widget_open() && im.builder->keys(escape)) escape = false;
+    // ⌫ or Delete on the focused panel of the dashboard page (in build mode
+    // the pane's keys take it), unless a text field, the command input or
+    // the inline prompt has the keyboard.
+    if (!im.building() && !im.focused.empty() && !im.command_open && !ImGui::GetIO().WantTextInput &&
+        (ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) &&
+        im.can_remove(im.focused)) {
+        im.remove_request = im.focused;
+        im.take_remove();
+    }
     if (im.command_entered) {
         // Enter on the command input: the found panel's inline prompt.
         im.command_entered = false;
@@ -874,6 +994,11 @@ std::string SpecPage::browser_note() const { return impl_->browser_note(); }
 
 bool SpecPage::item_rect(const std::string& name, float rect[4]) const {
     const Impl& im = *impl_;
+    if (const auto it = im.items.find(name); it != im.items.end()) {
+        rect[0] = it->second.Min.x, rect[1] = it->second.Min.y;
+        rect[2] = it->second.GetWidth(), rect[3] = it->second.GetHeight();
+        return true;
+    }
     if (name != "page:browser" || im.browser_rect[2] <= 0.0f) return false;
     for (int i = 0; i < 4; ++i) rect[i] = im.browser_rect[i];
     return true;

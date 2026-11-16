@@ -401,6 +401,79 @@ TEST_CASE("builder pane: metrics grouped by run, newest first, the last few unti
     r.s->catalog().remove_provider("metrics");
 }
 
+namespace {
+// The panel ids of a layout, and whether every split and tab group in it has
+// what it needs (two children, one tab): a removed panel leaves no gap.
+void layout_ids(const spec::LayoutNode& n, std::vector<std::string>& ids, bool& whole) {
+    if (n.kind == spec::LayoutNode::Kind::panel) {
+        ids.push_back(n.panel);
+        return;
+    }
+    if (n.children.size() < (n.kind == spec::LayoutNode::Kind::split ? 2u : 1u)) whole = false;
+    for (const auto& c : n.children) layout_ids(c, ids, whole);
+}
+std::vector<std::string> laid_out(const BuilderPane& p, bool* whole) {
+    std::vector<std::string> ids;
+    *whole = true;
+    if (p.open_spec() && p.open_spec()->spec.layout) layout_ids(*p.open_spec()->spec.layout, ids, *whole);
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+}  // namespace
+
+// The page's × on a panel, its menu's Remove panel and ⌫ all come to
+// remove_panel(): panel.remove as one undo step, from the ui origin on the
+// dashboard page and the builder origin in build mode, which closes the gap
+// in tabs and in a split, and ⌘Z brings the panel back where it was.
+TEST_CASE("builder pane: remove_panel closes the gap in tabs and in a split, one undo step") {
+    Rig r = rig("pane-remove-panel");
+    BuilderPane& p = *r.pane;
+    std::string text = read_text(std::string(CALIPER_SPEC_FIXTURES) + "/dashboard.spec.toml");
+    const std::string split = R"(children = [{ split = "horizontal", children = ["curves", "attention"] }, "rows"])";
+    const size_t at = text.find(split);
+    REQUIRE(at != std::string::npos);
+    text.replace(at, split.size(), R"(children = [{ tabs = ["curves", "attention"] }, "rows"])");
+    cb::CommandInvocation inv;
+    inv.name = "spec.set_text";
+    inv.args = {{"text", text}};
+    inv.origin = cb::CommandOrigin::builder;
+    REQUIRE_MESSAGE(r.s->invoke(inv).ok, "the fixture with tabs");
+    p.set_build_mode(false);
+    p.update();
+    const spec::Spec before = p.open_spec()->spec;
+    bool whole = false;
+    REQUIRE(laid_out(p, &whole) == std::vector<std::string>{"attention", "curves", "rows"});
+
+    // A tab, from the dashboard page: the ui origin, one step.
+    const size_t steps = r.steps();
+    REQUIRE(p.remove_panel("attention"));
+    CHECK_FALSE(p.open_spec()->spec.find_panel("attention"));
+    CHECK(laid_out(p, &whole) == std::vector<std::string>{"curves", "rows"});
+    CHECK(whole);
+    CHECK(r.steps() == steps + 1);
+    CHECK(r.journal().back()["name"] == "panel.remove");
+    CHECK(r.journal().back()["origin"] == "ui");
+    REQUIRE(p.undo());
+    CHECK(p.open_spec()->spec == before);
+
+    // A panel of the split: the tabs take its place.
+    REQUIRE(p.remove_panel("rows"));
+    CHECK(laid_out(p, &whole) == std::vector<std::string>{"attention", "curves"});
+    CHECK(whole);
+    REQUIRE(p.undo());
+    CHECK(p.open_spec()->spec == before);
+
+    // In build mode the same removal is the pane's gesture, from the builder
+    // origin; a panel that is not there is refused before anything is sent.
+    p.set_build_mode(true);
+    REQUIRE(p.remove_panel("curves"));
+    CHECK(r.journal().back()["origin"] == "builder");
+    CHECK_FALSE(p.remove_panel("curves"));
+    CHECK(p.error().code == "spec.unknown_panel");
+    REQUIRE(p.undo());
+    CHECK(p.open_spec()->spec == before);
+}
+
 TEST_CASE("builder pane: the dashboard by hand, one undo step per gesture, equal to the fixture") {
     Rig r = rig("pane-dashboard");
     build_dashboard(r);

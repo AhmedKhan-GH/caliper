@@ -485,7 +485,7 @@ bool BuilderPane::blocked() {
 }
 
 CommandResult BuilderPane::send(CommandInvocation inv, const std::string& group, const std::string& merge) {
-    inv.origin = CommandOrigin::builder;
+    inv.origin = origin_;
     inv.group = group;
     inv.merge_key = merge;
     sent_.push_back(inv);
@@ -1169,6 +1169,20 @@ bool BuilderPane::set_spec_description(const std::string& description) {
     if (description.empty()) s.applet.description.reset();
     else s.applet.description = description;
     return run_plan(plan_spec_text(s), "spec.description");
+}
+
+bool BuilderPane::remove_panel(const std::string& id) {
+    update();   // outside build mode the pane is not drawn, so read the open spec now
+    if (blocked()) return false;
+    if (!open_->spec.find_panel(id))
+        return refuse(Error("spec.unknown_panel", "The open spec has no panel " + id + ".", "id"));
+    if (!build_) end_gesture();
+    const cb::CommandOrigin before = origin_;
+    origin_ = build_ ? CommandOrigin::builder : CommandOrigin::ui;
+    const bool ok = run_plan(simulate({invocation("panel.remove", {{"id", id}})}));
+    origin_ = before;
+    if (ok && focus_panel_ == id) focus_panel_.clear();
+    return ok;
 }
 
 bool BuilderPane::remove_focused() {

@@ -115,6 +115,15 @@ start: "No panels", and under it "Drop a data file, or pick a source in Sources"
 | Dragging the rule between two panels | Changes their split's share, in hundredths, shown beside the pointer while it moves. A split of more than two panels shares its space equally and does not move. |
 | ⌫ | Removes the focused panel. |
 
+A panel can be removed in build mode and on the dashboard page outside it, in three ways: the × at the right end of
+its title strip, shown while the pointer is over the panel (at its top right corner for a panel in tabs); Remove panel
+in the menu that a right click on the panel opens; and ⌫ or Delete on the focused panel, unless a text field, the
+command input or the inline prompt has the keyboard. Each is one `panel.remove`, one undo step, from the `builder`
+origin in build mode, as Remove in Properties, and from the `ui` origin on the dashboard page; the layout closes the
+gap, and ⌘Z brings the panel back where it was, on the dashboard page too. None of them is offered while the inline
+prompt is open or a ⌘K preview is shown, since a preview's panels are only proposed: Accept or Reject it first. A
+dashboard drawn from a file outside the workspace offers none of them.
+
 While something is dragged, the rectangle where it would land is outlined in bronze; a drop that would not fit is
 outlined in grey with the reason in a tooltip, and nothing changes when it is released. A source held over a panel
 shows the panel's slots as rows in its centre, the ones it fits in parchment.
@@ -185,11 +194,11 @@ can use it is in [Caliper API](api.md#started-by-the-app).
 | ⌘B | Build mode on or off |
 | ⌘T | The spec text |
 | ⌘E, Esc | Edit the text, and back |
-| ⌘Z, ⇧⌘Z | Undo and redo, unless a text field has the keyboard |
+| ⌘Z, ⇧⌘Z | Undo and redo, unless a text field has the keyboard; on the dashboard page too |
 | ⌘S | Save |
 | ⌘O | Open the saved dashboard in a browser |
 | ⏎ | Add the selection, in Sources |
-| ⌫ | Remove the focused panel |
+| ⌫, Delete | Remove the focused panel; on the dashboard page too |
 | ⌘K | The inline prompt in the focused panel ([Widget agent](widget-agent.md)) |
 | ⌘L | The side chat ([Side chat](side-chat.md)) |
 | Esc | Cancels a drag, leaves the editor, gives up a source's focus, then a panel's, then goes Home |

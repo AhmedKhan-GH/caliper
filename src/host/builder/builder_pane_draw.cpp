@@ -407,8 +407,13 @@ void BuilderPane::page_bar(float max_width) {
 bool BuilderPane::keys(bool escape) {
     const ImGuiIO& io = ImGui::GetIO();
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_B)) set_build_mode(!build_);
-    if (!build_) return false;
     const bool typing = io.WantTextInput;
+    if (!build_) {
+        // The dashboard page: undo and redo, so a panel removed there comes back.
+        if (!typing && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z)) redo();
+        else if (!typing && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) undo();
+        return false;
+    }
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_T)) text_open_ = !text_open_;
     if (!typing && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z)) redo();
     else if (!typing && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) undo();
@@ -510,7 +515,9 @@ void BuilderPane::draw_body(const ImRect& area, SpecRuntime& runtime, const Spec
     ImGuiIO& io = ImGui::GetIO();
     const ImVec2 mouse = io.MousePos;
 
-    // ---- the canvas: the runtime's own drawing.
+    // ---- the canvas: the runtime's own drawing; the page's controls over
+    // its panels claim their rectangles while it draws (claim_canvas()).
+    claims_.clear();
     runtime.draw(rr(canvas), look);
     const SpecLayout& lay = runtime.layout();
     for (const auto& p : lay.panels) {
@@ -532,10 +539,12 @@ void BuilderPane::draw_body(const ImRect& area, SpecRuntime& runtime, const Spec
     const SpecLayoutSplit* grip = over_canvas && !d.dividing && drag_.kind == DragPayload::Kind::none
                                       ? hit_divider(lay, mouse.x, mouse.y, d.m)
                                       : nullptr;
-    const std::string header = over_canvas && !grip ? hit_header(lay, mouse.x, mouse.y, strip) : std::string();
+    bool claimed = false;
+    for (const auto& c : claims_) claimed |= spec_rect_contains(c, mouse.x, mouse.y);
+    const std::string header = over_canvas && !grip && !claimed ? hit_header(lay, mouse.x, mouse.y, strip) : std::string();
     if (grip) ImGui::SetMouseCursor(grip->horizontal ? ImGuiMouseCursor_ResizeEW : ImGuiMouseCursor_ResizeNS);
     else if (!header.empty() && drag_.kind == DragPayload::Kind::none) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
-    if (over_canvas && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    if (over_canvas && !claimed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         if (grip) {
             d.dividing = true;
             d.divider = grip->path;

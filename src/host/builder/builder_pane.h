@@ -390,6 +390,16 @@ public:
     bool set_spec_description(const std::string& description);
     // Removes the focused panel, or the focused spec source.
     bool remove_focused();
+    // Removes the panel `id` with panel.remove, one undo step: the page's ×
+    // on a panel's strip, its menu's Remove panel and ⌫ on the dashboard
+    // page. In build mode it is the pane's gesture, from the builder origin
+    // as Remove in Properties; on the dashboard page, outside build mode, it
+    // is the person's command from the ui origin.
+    bool remove_panel(const std::string& id);
+    // A rectangle of the canvas that a control of the page drew over a
+    // panel this frame (the × on its strip): a press there neither focuses
+    // nor drags the panel. Cleared as draw() begins.
+    void claim_canvas(const SpecRect& r) { claims_.push_back(r); }
     // The ratio of the split at `path` (SpecLayoutSplit::path).
     bool set_ratio(const std::string& path, double ratio);
 
@@ -452,8 +462,9 @@ public:
     void page_bar(float max_width = 0.0f);
     float page_bar_width() const;
     // The keys of build mode, before the page's own: ⌘B, ⌘T, ⌘Z, ⇧⌘Z, ⌘S,
-    // ⌫ on the focused panel, Escape (a drag, a draft, the focus). True when
-    // the pane took Escape.
+    // ⌫ on the focused panel, Escape (a drag, a draft, the focus); outside
+    // build mode only ⌘B, ⌘Z and ⇧⌘Z, so that a panel removed from the
+    // dashboard page comes back. True when the pane took Escape.
     bool keys(bool escape);
     // The regions of `area` this frame: the layout rule's, which is
     // compute_builder_pane_layout() unless the page gives its own
@@ -573,6 +584,8 @@ private:
 
     caliper_builder::Error error_;
     std::vector<caliper_builder::CommandInvocation> sent_;
+    caliper_builder::CommandOrigin origin_ = caliper_builder::CommandOrigin::builder;   // send()'s
+    std::vector<SpecRect> claims_;   // claim_canvas()
 
     // Caches, dropped whenever the open spec, the catalog or the selection change.
     std::map<std::string, PanePlan> primitive_plans_;
