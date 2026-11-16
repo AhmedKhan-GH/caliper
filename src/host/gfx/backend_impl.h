@@ -89,5 +89,6 @@ private:
 inline uint64_t align_up(uint64_t v, uint64_t a) { return (v + a - 1) / a * a; }
 bool is_integer_format(Format f);
 bool is_depth_format(Format f);
+bool is_buffer_binding(BindingType t);   // Uniform, Storage or StorageReadWrite
 
 }  // namespace caliper_gfx

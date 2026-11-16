@@ -25,8 +25,11 @@
 //     layout (WebGPU's group equivalence for explicit layouts). Group 0 can then be shared.
 //  5. The Metal binding map is part of the program's description: each binding names its MSL
 //     index ([[buffer(n)]], [[texture(n)]] or [[sampler(n)]], the same in every stage), buffer
-//     indices stay below kMetalVertexBufferBase, and vertex buffer slot i is Metal buffer index
-//     kMetalVertexBufferBase + i, read through [[stage_in]] with [[attribute(location)]].
+//     indices stay below kMetalSizesIndex, and vertex buffer slot i is Metal buffer index
+//     kMetalVertexBufferBase + i, read through [[stage_in]] with [[attribute(location)]]. Naga's
+//     MSL reads the byte size of each runtime-sized storage binding from a sizes buffer at
+//     kMetalSizesIndex: the Metal backend binds one uint per Storage or StorageReadWrite
+//     binding of the program, in (group, binding) order, to every stage that has one.
 //  6. The uniform arena is a pseudo-buffer, kArena. A dynamic uniform binding whose buffer is
 //     kArena binds the arena of the pass it is used in: a DrawList's own arena for its draws,
 //     the Frame's arena for its dispatches. DrawList::uniform copies into the list's CPU arena
@@ -52,8 +55,9 @@
 //     shape; their portable defaults need the colormap and fill programs of the shader
 //     generator, so until then the defaults refuse, except fill_texture_from_buffer when a
 //     plain copy does it (row pitch a multiple of 256).
-// 16. Override constants map to Metal function constants by id on Metal. Whether Naga's MSL
-//     output can declare them is for the generator's step to settle.
+// 16. Override constants are refused (constant_count must be 0): Naga's MSL cannot declare
+//     function constants, so a value that varies goes in a uniform block. The fields stay so
+//     that the descriptor keeps its layout.
 // 17. The layer is used from one thread. Only completion is reported from other threads.
 // 18. The header and src/host/gfx/ build as C++17, the host's standard: View<T>, a pointer
 //     and a count, stands in for the C++20 span.
@@ -137,6 +141,7 @@ inline constexpr uint32_t kMaxConstants = 8;
 inline constexpr uint32_t kUniformAlign = 256;         // arena slices and dynamic offsets
 inline constexpr uint32_t kCopyRowPitchAlign = 256;    // buffer-to-texture copies (WebGPU)
 inline constexpr uint32_t kMetalVertexBufferBase = 16; // decision 5
+inline constexpr uint32_t kMetalSizesIndex = 15;       // Naga's sizes buffer (decision 5)
 inline constexpr uint32_t kNoOffset = 0xffffffffu;     // DrawList::uniform refused
 
 // ---- Descriptors -----------------------------------------------------------------------------
@@ -193,7 +198,7 @@ struct RenderPipelineDesc {
     bool id_target = false;        // a second attachment, RG32Uint: pick id and item
     bool depth = false, depth_test = false, depth_write = false;   // D32 float, less-or-equal
     uint8_t constant_count = 0;
-    struct Constant { uint16_t id; float value; } constants[kMaxConstants];   // WGSL overrides
+    struct Constant { uint16_t id; float value; } constants[kMaxConstants];   // refused (decision 16)
     const char* label = nullptr;
 };
 struct ComputePipelineDesc { Program program; const char* entry = nullptr; const char* label = nullptr; };
@@ -201,7 +206,8 @@ struct ComputePipelineDesc { Program program; const char* entry = nullptr; const
 struct BindEntry {
     uint32_t binding = 0;
     Buffer buffer;                 // or kArena for a dynamic uniform binding
-    uint64_t offset = 0, size = 0; // a buffer range; size 0 is the program's declared size
+    uint64_t offset = 0, size = 0; // a buffer range; size 0: a uniform's declared block, or the
+                                   // rest of the buffer for a storage binding, as in WebGPU
     Texture texture;
     Sampler sampler;
 };

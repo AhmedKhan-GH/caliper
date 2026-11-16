@@ -5,6 +5,8 @@
 #include <doctest/doctest.h>
 
 #include "gfx/recording_backend.h"
+#include "gfx/shaders/generated/programs_metal.h"
+#include "gfx/generated_pipelines.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -646,4 +648,84 @@ TEST_CASE("gfx layer: waits on producer events need the capability") {
     Frame drained;
     drained.wait(ExternalSync{});
     CHECK(gfx.submit(std::move(drained)) == 1);
+}
+
+TEST_CASE("gfx layer: storage bindings, the sizes index and override constants follow the generated programs") {
+    RecordingBackend gfx;
+    // A read-write storage buffer is not visible to the vertex stage (WebGPU).
+    BindingDesc rw_vertex[] = {{3, 0, BindingType::StorageReadWrite, kStageVertex, false, 4, Format::RGBA8Unorm, 3}};
+    CHECK_FALSE(gfx.create_program(quad_program(rw_vertex, 1)));
+    CHECK(has(gfx.last_error(), "read-write storage"));
+    // Metal buffer 15 is Naga's sizes buffer.
+    BindingDesc at_sizes[] = {{1, 0, BindingType::Uniform, kStageVertex, true, 16, Format::RGBA8Unorm, 15}};
+    CHECK_FALSE(gfx.create_program(quad_program(at_sizes, 1)));
+    CHECK(has(gfx.last_error(), "sizes buffer"));
+    // Override constants are refused.
+    Program p = gfx.create_program(quad_program());
+    RenderPipelineDesc d = quad_pipeline(p);
+    d.constant_count = 1;
+    d.constants[0] = {0, 1.0f};
+    CHECK_FALSE(gfx.create_render_pipeline(d));
+    CHECK(has(gfx.last_error(), "override constants"));
+
+    // A storage binding of size 0 takes the rest of its buffer; a declared block that does
+    // not fit there is refused.
+    const EntryDesc cs[] = {{"cs_main", kStageCompute, {64, 1, 1}}};
+    BindingDesc storage[] = {{0, 0, BindingType::Storage, kStageCompute, false, 4, Format::RGBA8Unorm, 0},
+                             {0, 1, BindingType::StorageReadWrite, kStageCompute, false, 512, Format::RGBA8Unorm, 1}};
+    ProgramDesc pd;
+    pd.label = "storage";
+    pd.entries = cs;
+    pd.entry_count = 1;
+    pd.bindings = storage;
+    pd.binding_count = 2;
+    Program sp = gfx.create_program(pd);
+    REQUIRE(sp);
+    Buffer b = gfx.create_buffer({1024, kStorage});
+    BindGroupDesc bg;
+    bg.program = sp;
+    bg.entry_count = 2;
+    bg.entries[0].binding = 0;
+    bg.entries[0].buffer = b;
+    bg.entries[0].offset = 256;
+    bg.entries[1].binding = 1;
+    bg.entries[1].buffer = b;
+    bg.entries[1].offset = 512;                          // 512 bytes remain: the block fits
+    CHECK(gfx.create_bind_group(bg));
+    bg.entries[1].offset = 768;                          // 256 remain, the block needs 512
+    CHECK_FALSE(gfx.create_bind_group(bg));
+    bg.entries[1].offset = 300;                          // not a multiple of 256
+    CHECK_FALSE(gfx.create_bind_group(bg));
+    Buffer no_storage = gfx.create_buffer({1024, kVertex});
+    bg.entries[1].offset = 0;
+    bg.entries[1].buffer = no_storage;
+    CHECK_FALSE(gfx.create_bind_group(bg));
+}
+
+TEST_CASE("gfx layer: every generated program, pipeline pair and compute entry passes the layer's checks") {
+    using namespace caliper_gfx::shaders;
+    Caps compat = RecordingBackend::default_caps();     // and on a compatibility device
+    compat.limits.max_storage_buffers_in_vertex_stage = 0;
+    compat.limits.max_texture_dimension_2d = 4096;
+    compat.limits.max_color_attachments = 4;
+    for (const Caps& caps : {RecordingBackend::default_caps(), compat}) {
+        RecordingBackend gfx(caps);
+        for (uint32_t i = 0; i < kProgramCount; ++i) {
+            const ProgramDescription& desc = kProgramDescriptions[i];
+            Program p = gfx.create_program(kMetalPrograms[i]);
+            REQUIRE_MESSAGE(bool(p), (std::string(desc.name) + ": " + gfx.last_error()));
+            for (uint32_t k = 0; k < desc.pair_count; ++k) {
+                Pipeline pipe = gfx.create_render_pipeline(caliper_test::generated_pipeline(desc, p, desc.pairs[k]));
+                CHECK_MESSAGE(bool(pipe), (std::string(desc.name) + " " + desc.pairs[k].vertex + "+" +
+                                      desc.pairs[k].fragment + ": " + gfx.last_error()));
+            }
+            for (uint32_t k = 0; k < desc.entry_count; ++k) {
+                if (desc.entries[k].stage != kStageCompute) continue;
+                ComputePipelineDesc cd;
+                cd.program = p;
+                cd.entry = desc.entries[k].name;
+                CHECK_MESSAGE(bool(gfx.create_compute_pipeline(cd)), (std::string(desc.name) + ": " + gfx.last_error()));
+            }
+        }
+    }
 }

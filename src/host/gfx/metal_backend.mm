@@ -26,6 +26,7 @@
 #include <cstring>
 #include <deque>
 #include <string>
+#include <type_traits>
 #include <unistd.h>
 #include <vector>
 
@@ -87,7 +88,7 @@ struct MEntry {
     uint8_t stages = 0, msl = 0, rank = 0;   // rank: index among the group's dynamic bindings
     bool dynamic = false, arena = false;
     id<MTLBuffer> buffer = nil;
-    uint64_t offset = 0;
+    uint64_t offset = 0, size = 0;
     id<MTLTexture> texture = nil;
     id<MTLSamplerState> sampler = nil;
 };
@@ -102,6 +103,8 @@ struct MPipe {
     uint8_t group_mask = 0;
     uint8_t dynamic_base[kMaxBindGroups] = {};
     uint32_t vertex_layouts = 0;
+    std::vector<std::pair<uint8_t, uint8_t>> storage;   // (group, entry) of each storage binding
+    uint8_t storage_stages = 0;
     MTLSize workgroup = MTLSizeMake(1, 1, 1);
 };
 
@@ -262,27 +265,18 @@ protected:
         return true;
     }
 
-    id<MTLFunction> function(id<MTLLibrary> lib, const char* name, const RenderPipelineDesc* d, std::string* error) {
-        NSString* n = [NSString stringWithUTF8String:name];
-        if (d == nullptr || d->constant_count == 0) return [lib newFunctionWithName:n];
-        MTLFunctionConstantValues* cv = [MTLFunctionConstantValues new];
-        for (uint32_t i = 0; i < d->constant_count; ++i) {
-            const float v = d->constants[i].value;
-            [cv setConstantValue:&v type:MTLDataTypeFloat atIndex:d->constants[i].id];
-        }
-        NSError* err = nil;
-        id<MTLFunction> f = [lib newFunctionWithName:n constantValues:cv error:&err];
-        if (f == nil) *error = "function constants: " + ns_error(err);
-        return f;
+    // Override constants never reach a backend (decision 16 of gfx.h).
+    static id<MTLFunction> function(id<MTLLibrary> lib, const char* name) {
+        return [lib newFunctionWithName:[NSString stringWithUTF8String:name]];
     }
 
     bool on_create_render_pipeline(uint32_t slot, const RenderPipelineDesc& d, std::string* error) override {
         grow(pipes_, slot);
         id<MTLLibrary> lib = libraries_[handle_slot(d.program.id)];
-        id<MTLFunction> vs = function(lib, d.vertex_entry, &d, error);
-        id<MTLFunction> fs = function(lib, d.fragment_entry, &d, error);
+        id<MTLFunction> vs = function(lib, d.vertex_entry);
+        id<MTLFunction> fs = function(lib, d.fragment_entry);
         if (vs == nil || fs == nil) {
-            if (error->empty()) *error = "a function is missing from the program's MSL";
+            *error = "a function is missing from the program's MSL";
             return false;
         }
         MTLRenderPipelineDescriptor* pd = [MTLRenderPipelineDescriptor new];
@@ -356,6 +350,33 @@ protected:
         p.program = program.id;
         p.group_mask = info.group_mask;
         std::copy(std::begin(info.dynamic_base), std::end(info.dynamic_base), p.dynamic_base);
+        // Naga's sizes buffer: one uint per storage binding, in (group, binding) order.
+        uint8_t index_in_group[kMaxBindGroups] = {};
+        for (const BindingDesc& b : info.bindings) {
+            const uint8_t j = index_in_group[b.group]++;
+            if (b.type == BindingType::Storage || b.type == BindingType::StorageReadWrite) {
+                p.storage.push_back({b.group, j});
+                p.storage_stages |= b.stages;
+            }
+        }
+    }
+
+    // Binds the sizes buffer Naga's MSL reads for runtime-sized storage arrays.
+    template <class Enc, class GroupOf>
+    void bind_sizes(Enc enc, const MPipe& p, GroupOf group_of, bool compute) {
+        if (p.storage.empty()) return;
+        uint32_t sizes[kMaxBindGroups * kMaxBindingsPerGroup];
+        size_t n = 0;
+        for (const auto& s : p.storage)
+            sizes[n++] = uint32_t(std::min<uint64_t>(group_of(s.first).entries[s.second].size, 0xffffffffu));
+        const NSUInteger len = NSUInteger(n * sizeof(uint32_t));
+        if constexpr (std::is_same_v<Enc, id<MTLComputeCommandEncoder>>) {
+            (void)compute;
+            [enc setBytes:sizes length:len atIndex:kMetalSizesIndex];
+        } else {
+            if (p.storage_stages & kStageVertex) [enc setVertexBytes:sizes length:len atIndex:kMetalSizesIndex];
+            if (p.storage_stages & kStageFragment) [enc setFragmentBytes:sizes length:len atIndex:kMetalSizesIndex];
+        }
     }
 
     bool on_create_compute_pipeline(uint32_t slot, const ComputePipelineDesc& d, std::string* error) override {
@@ -391,10 +412,11 @@ protected:
             m.msl = b.msl_index;
             m.dynamic = b.dynamic;
             if (b.dynamic) m.rank = rank++;
-            if (b.type == BindingType::Uniform || b.type == BindingType::Storage) {
+            if (is_buffer_binding(b.type)) {
                 m.arena = e->buffer == kArena;
                 m.buffer = m.arena ? nil : buffers_[handle_slot(e->buffer.id)];
                 m.offset = e->offset;
+                m.size = e->size;   // resolved by the core
             } else if (b.type == BindingType::Sampler) {
                 m.sampler = samplers_[handle_slot(e->sampler.id)];
             } else {
@@ -520,7 +542,7 @@ protected:
                       uint64_t* applied) {
         for (size_t j = 0; j < g.entries.size(); ++j) {
             const MEntry& e = g.entries[j];
-            if (e.type == BindingType::Uniform || e.type == BindingType::Storage) {
+            if (is_buffer_binding(e.type)) {
                 id<MTLBuffer> buf = e.arena ? arena : e.buffer;
                 uint64_t off = e.arena ? arena_base : e.offset;
                 if (e.dynamic) off += dyn[p.dynamic_base[group] + e.rank];
@@ -581,7 +603,8 @@ protected:
         MTLScissorRect cur_sc = {0, 0, W, H};
         const MPipe* p = nullptr;
         for (const DrawRecord& r : list.records()) {
-            if (r.pipeline.id != cur_pipe) {
+            const bool pipeline_changed = r.pipeline.id != cur_pipe;
+            if (pipeline_changed) {
                 p = &pipes_[handle_slot(r.pipeline.id)];
                 [enc setRenderPipelineState:p->render];
                 if (p->depth) [enc setDepthStencilState:p->depth];
@@ -591,13 +614,18 @@ protected:
                 }
                 cur_pipe = r.pipeline.id;
             }
+            bool rebound = pipeline_changed;
             for (uint32_t g = 0; g < kMaxBindGroups; ++g) {
                 if (!(p->group_mask & (1u << g))) continue;
                 const bool rebind = r.groups[g].id != cur_group[g];
                 bind_entries(enc, groups_[handle_slot(r.groups[g].id)], *p, g, r.dynamic_offsets, arena, base,
                              rebind, applied[g]);
                 cur_group[g] = r.groups[g].id;
+                rebound = rebound || rebind;
             }
+            if (rebound)
+                bind_sizes(enc, *p, [&](uint8_t g) -> const MGroup& { return groups_[handle_slot(r.groups[g].id)]; },
+                           false);
             for (uint32_t i = 0; i < p->vertex_layouts; ++i) {
                 id<MTLBuffer> b = buffers_[handle_slot(r.vertex[i].buffer.id)];
                 const uint64_t off = r.vertex[i].offset;
@@ -645,7 +673,7 @@ protected:
         for (uint32_t g = 0; g < kMaxBindGroups; ++g) {
             if (!(p.group_mask & (1u << g))) continue;
             for (const MEntry& e : groups_[handle_slot(d.groups[g].id)].entries) {
-                if (e.type == BindingType::Uniform || e.type == BindingType::Storage) {
+                if (is_buffer_binding(e.type)) {
                     uint64_t off = e.arena ? base : e.offset;
                     if (e.dynamic) off += d.dynamic_offsets[p.dynamic_base[g] + e.rank];
                     [enc setBuffer:(e.arena ? arena : e.buffer) offset:(NSUInteger)off atIndex:e.msl];
@@ -656,6 +684,7 @@ protected:
                 }
             }
         }
+        bind_sizes(enc, p, [&](uint8_t g) -> const MGroup& { return groups_[handle_slot(d.groups[g].id)]; }, true);
         [enc dispatchThreadgroups:MTLSizeMake(d.x, d.y, d.z) threadsPerThreadgroup:p.workgroup];
         [enc endEncoding];
     }

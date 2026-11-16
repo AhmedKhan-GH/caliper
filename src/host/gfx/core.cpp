@@ -53,6 +53,9 @@ bool is_integer_format(Format f) {
     return f == Format::R16Uint || f == Format::R32Uint || f == Format::RG32Uint;
 }
 bool is_depth_format(Format f) { return f == Format::Depth32Float; }
+bool is_buffer_binding(BindingType t) {
+    return t == BindingType::Uniform || t == BindingType::Storage || t == BindingType::StorageReadWrite;
+}
 
 namespace {
 
@@ -619,7 +622,11 @@ Program Backend::create_program(const ProgramDesc& d) {
                        L.max_uniform_buffer_binding_size));
             return {};
         }
-        if (b.type == BindingType::Storage) {
+        if (b.type == BindingType::StorageReadWrite && (b.stages & kStageVertex)) {
+            c.fail(fmt("program %s: a read-write storage buffer is not visible to the vertex stage", name));
+            return {};
+        }
+        if (b.type == BindingType::Storage || b.type == BindingType::StorageReadWrite) {
             if (b.size == 0 || b.size % 4 != 0 || b.size > L.max_storage_buffer_binding_size) {
                 c.fail(fmt("program %s: a storage block of %u bytes is refused", name, b.size));
                 return {};
@@ -632,10 +639,9 @@ Program Backend::create_program(const ProgramDesc& d) {
             c.fail(fmt("program %s: a storage texture is not visible to the vertex stage and needs a storage format", name));
             return {};
         }
-        const bool buffer_binding = b.type == BindingType::Uniform || b.type == BindingType::Storage;
-        if (buffer_binding && b.msl_index >= kMetalVertexBufferBase) {
-            c.fail(fmt("program %s: a buffer's MSL index %u collides with the vertex buffers (16 and up)", name,
-                       b.msl_index));
+        if (is_buffer_binding(b.type) && b.msl_index >= kMetalSizesIndex) {
+            c.fail(fmt("program %s: a buffer's MSL index %u collides with the sizes buffer (15) or the vertex "
+                       "buffers (16 and up)", name, b.msl_index));
             return {};
         }
         info->bindings.push_back(b);
@@ -802,7 +808,11 @@ Pipeline Backend::create_render_pipeline(const RenderPipelineDesc& d) {
         c.fail("create_render_pipeline: a depth test or write needs depth");
         return {};
     }
-    if (d.constant_count > kMaxConstants) { c.fail("create_render_pipeline: at most 8 constants"); return {}; }
+    if (d.constant_count != 0) {   // decision 16
+        c.fail("create_render_pipeline: override constants are refused, because Naga's MSL cannot declare "
+               "function constants; a value that varies belongs in a uniform block");
+        return {};
+    }
 
     const uint64_t h = hash_pipeline(d);
     auto range = c.pipeline_cache.equal_range(h);
@@ -892,9 +902,12 @@ BindGroup Backend::create_bind_group(const BindGroupDesc& d) {
         }
         ++matched;
         BindEntry r = *e;
-        if (b.type == BindingType::Uniform || b.type == BindingType::Storage) {
+        if (is_buffer_binding(b.type)) {
             const bool uniform = b.type == BindingType::Uniform;
-            if (r.size == 0) r.size = b.size;
+            if (r.size == 0) {   // a uniform's block, or a storage binding's whole remaining buffer
+                auto* bs = r.buffer == kArena ? nullptr : c.buffers.get(r.buffer.id);
+                r.size = uniform || bs == nullptr || r.offset > bs->info.size ? b.size : bs->info.size - r.offset;
+            }
             if (r.size < b.size) {
                 c.fail(fmt("create_bind_group: binding %u's range of %llu bytes is smaller than its block of %u",
                            b.binding, (unsigned long long)r.size, b.size));
@@ -963,11 +976,15 @@ BindGroup Backend::create_bind_group(const BindGroupDesc& d) {
         c.fail(fmt("create_bind_group: an entry names a binding that group %u does not declare", d.group));
         return {};
     }
+    // The hook sees every range resolved, in the program's binding order.
+    BindGroupDesc resolved = d;
+    resolved.entry_count = uint8_t(info.entries.size());
+    for (size_t i = 0; i < info.entries.size(); ++i) resolved.entries[i] = info.entries[i];
     const uint64_t id = c.groups.alloc();
     if (id == 0) { c.fail("out of bind group slots"); return {}; }
     c.groups.get(id)->info = std::move(info);
     std::string err;
-    if (!on_create_bind_group(handle_slot(id), d, &err)) {
+    if (!on_create_bind_group(handle_slot(id), resolved, &err)) {
         c.groups.recycle(handle_slot(id));
         c.fail("create_bind_group: " + err);
         return {};
