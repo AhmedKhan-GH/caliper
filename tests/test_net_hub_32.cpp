@@ -587,3 +587,171 @@ TEST_CASE("net/hub 3.2: a reset drops what a viewer that stopped reading has que
     CHECK(std::vector<std::string>(log.begin() + (long)before, log.end()) ==
           std::vector<std::string>{"big:points", "reset", ":lines", "big:points"});
 }
+
+namespace {
+// Every scene message of `sub` in arrival order, the new ones included: "classes", "transforms
+// static|stamped p1,p2" and "path:part" (with "#k" for a piece of a split update).
+std::vector<std::string> scene_all(const Client& c, uint32_t sub) {
+    std::vector<std::string> out;
+    for (const auto& x : c.inbox) {
+        if (auto* u = std::get_if<wire::SceneUpdate>(&x.m)) {
+            if (u->sub != sub) continue;
+            std::string s = u->path + ":" + u->part;
+            if (!u->split.is_null()) s += "#" + std::to_string((int)u->split.find("piece")->as_double());
+            out.push_back(s);
+        } else if (auto* cl = std::get_if<wire::SceneClear>(&x.m)) {
+            if (cl->sub == sub) out.push_back(cl->reset ? "reset" : "clear " + cl->path);
+        } else if (auto* t = std::get_if<wire::SceneTransforms>(&x.m)) {
+            if (t->sub != sub) continue;
+            std::string s = std::string("transforms ") + (t->is_static ? "static " : "stamped ");
+            for (size_t i = 0; i < t->paths.size(); ++i) s += (i ? "," : "") + t->paths[i];
+            out.push_back(s);
+        } else if (auto* k = std::get_if<wire::SceneClasses>(&x.m)) {
+            if (k->sub == sub) out.push_back("classes");
+        }
+    }
+    return out;
+}
+
+float translation_x(const wire::SceneTransforms& t, size_t k) {
+    float x = 0;
+    std::memcpy(&x, t.matrices.data + 64 * k + 48, 4);   // column-major: element 12
+    return x;
+}
+}  // namespace
+
+TEST_CASE("net/hub 3.2: class tables, entity transforms, cameras and split updates are kept, merged and forwarded") {
+    Runner h;
+    World32 w;
+    auto p = std::make_unique<SceneProducer>();
+    REQUIRE(p->connect(h.url()));
+    w.peers.push_back(p.get());
+    REQUIRE(w.until([&] { return p->welcomed; }));
+    auto a = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    subscribe(*a, 5, "world");
+    REQUIRE(w.until([&] { return scene_all(*a, 5).size() == 2; }));   // reset, the static frame
+    const uint32_t up = p->scene_subs().at(0);
+
+    std::vector<float> eye(16, 0.f);
+    eye[0] = eye[5] = eye[10] = eye[15] = 1.f;
+    auto transforms = [&](std::vector<std::string> paths, float x, bool is_static) {
+        static std::vector<float> mats;
+        mats.clear();
+        for (size_t k = 0; k < paths.size(); ++k) {
+            std::vector<float> m = eye;
+            m[12] = x;
+            mats.insert(mats.end(), m.begin(), m.end());
+        }
+        wire::SceneTransforms t;
+        t.sub = up;
+        t.view = "world";
+        t.seq = ++p->seq;
+        t.stamp_ns = mono_ns32();
+        t.paths = std::move(paths);
+        t.is_static = is_static;
+        t.matrices = wire::Section::make("matrices", CALIPER_NET_DTYPE_F32, {(int64_t)t.paths.size(), 16}, mats.data(),
+                                         mats.size() * 4);
+        p->send(t);
+    };
+    wire::SceneClasses k;
+    k.sub = up;
+    k.view = "world";
+    k.seq = ++p->seq;
+    k.stamp_ns = mono_ns32();
+    k.is_static = true;
+    Json entry = Json::object();
+    entry.set("id", 1);
+    entry.set("label", "obstacle");
+    Json color = Json::array();
+    for (int c : {230, 80, 60, 255}) color.push(c);
+    entry.set("color", color);
+    k.classes.push(entry);
+    p->send(k);
+    transforms({"rig"}, 7.f, true);
+    transforms({"a", "b"}, 1.f, false);
+    transforms({"a"}, 2.f, false);
+    wire::SceneUpdate cam;
+    cam.sub = up;
+    cam.view = "world";
+    cam.seq = ++p->seq;
+    cam.stamp_ns = mono_ns32();
+    cam.path = "rig/cam";
+    cam.part = CALIPER_NET_PART_CAMERA;
+    for (const char* key : {"fx", "fy", "cx", "cy"}) cam.params.set(key, 2.0);
+    cam.params.set("width", 4);
+    cam.params.set("height", 4);
+    cam.params.set("convention", "rdf");
+    p->send(cam);
+    // A split update of four points in two pieces.
+    static const float big[12] = {0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3};
+    auto piece = [&](int num, uint64_t update) {
+        wire::SceneUpdate u;
+        u.sub = up;
+        u.view = "world";
+        u.seq = 99;
+        u.stamp_ns = 1;
+        u.path = "big";
+        u.part = CALIPER_NET_PART_POINTS;
+        Json sp = Json::object(), first = Json::object();
+        sp.set("update", update);
+        sp.set("piece", num);
+        sp.set("pieces", 2);
+        first.set("positions", (uint64_t)(2 * num));
+        sp.set("first", first);
+        if (num == 0) {
+            Json rows = Json::object();
+            rows.set("positions", (uint64_t)4);
+            sp.set("rows", rows);
+        }
+        u.split = sp;
+        u.arrays.push_back(wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {2, 3}, big + 6 * num, 24));
+        p->send(u);
+    };
+    piece(0, 1);
+    piece(1, 1);
+    piece(1, 7);   // a piece of an update whose piece 0 never came: dropped
+    REQUIRE(w.until([&] {
+        const auto log = scene_all(*a, 5);
+        return std::count(log.begin(), log.end(), "big:points#1") == 1 && log.size() >= 7;
+    }));
+    {
+        const auto log = scene_all(*a, 5);
+        CHECK(std::count(log.begin(), log.end(), "classes") == 1);
+        CHECK(std::count(log.begin(), log.end(), "rig/cam:camera") == 1);
+        // the pieces go together and in order
+        const auto p0 = std::find(log.begin(), log.end(), "big:points#0");
+        REQUIRE(p0 != log.end());
+        CHECK(*(p0 + 1) == "big:points#1");
+        // the transforms reached the viewer, merged where they waited: "a" at its newest
+        float ax = 0;
+        for (auto* t : a->all<wire::SceneTransforms>())
+            for (size_t i = 0; i < t->paths.size(); ++i)
+                if (t->paths[i] == "a") ax = translation_x(*t, i);
+        CHECK(ax == 2.f);
+    }
+    REQUIRE(w.until([&] { return h.hub->stats().scene_pieces_dropped == 1; }));
+
+    // A late viewer gets the hub's state in the draft's order.
+    auto b = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    subscribe(*b, 9, "world");
+    const std::vector<std::string> want = {"reset", "classes", "transforms static rig", "transforms stamped a,b",
+                                           ":lines", "big:points#0", "big:points#1", "rig/cam:camera"};
+    REQUIRE(w.until([&] { return scene_all(*b, 9).size() == want.size(); }));
+    CHECK(scene_all(*b, 9) == want);
+    for (auto* t : b->all<wire::SceneTransforms>()) {
+        CHECK(t->state);
+        if (t->paths.size() == 2) {
+            CHECK(translation_x(*t, 0) == 2.f);   // "a", the newest
+            CHECK(translation_x(*t, 1) == 1.f);
+        }
+    }
+
+    // A clear of "a" removes its transform from what the hub keeps; the static one stays.
+    p->clear("a");
+    REQUIRE(w.until([&] { return scene_all(*b, 9).back() == "clear a"; }));
+    auto c = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    subscribe(*c, 3, "world");
+    REQUIRE(w.until([&] { return scene_all(*c, 3).size() == want.size(); }));
+    CHECK(scene_all(*c, 3)[3] == "transforms stamped b");
+    CHECK(p->scene_subscribes == 1);
+}

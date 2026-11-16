@@ -160,6 +160,7 @@ struct HubStats {
     // 3.2 draft: scene messages in, out and replaced by a newer batch of the
     // same entity part while waiting, and the bytes of the batches kept
     uint64_t scenes_in = 0, scenes_out = 0, scenes_superseded = 0;
+    uint64_t scene_pieces_dropped = 0;   // pieces of a split update whose piece 0 the hub did not hold
     uint64_t retained_scene_bytes = 0;
     size_t controls_waiting = 0;            // CONTROLs waiting for the producer's answer
     uint64_t refused_host = 0, refused_origin = 0, refused_token = 0, refused_full = 0;

@@ -88,9 +88,21 @@ struct Snap {
 using SnapPtr = std::shared_ptr<const Snap>;
 
 // ---- 3.2 draft: scenes (capability "scenes"; docs/references/wire-protocol-3-2.md) ----
-// One scene message of a producer, SCENE_UPDATE or SCENE_CLEAR, shared by every
-// viewer connection that sends it. The reset that opens a late viewer's state
-// is the hub's own and has no frame.
+// One entity transform as the hub keeps it: the column-major matrix, and its stamp row (T values,
+// none for a producer without timelines).
+struct TransformRow {
+    float m[16] = {};
+    bool is_static = false;
+    uint64_t seq = 0, stamp_ns = 0;
+    std::vector<int64_t> stamp;
+};
+using TransformRows = std::map<std::string, TransformRow>;
+struct SceneMsg;
+using ScenePtr = std::shared_ptr<const SceneMsg>;
+// One scene message of a producer (SCENE_UPDATE, SCENE_TRANSFORMS, SCENE_CLEAR or SCENE_CLASSES),
+// shared by every viewer connection that sends it; or a message the hub makes: the reset that opens
+// a late viewer's state (no frame), the entity transforms it keeps (`rows`, sent as SCENE_TRANSFORMS
+// built at the time, the static ones apart), or a split update put together (`pieces`, sent in order).
 struct SceneMsg {
     uint16_t type = 0;
     SharedBytes frame;               // null for a message the hub makes
@@ -101,28 +113,96 @@ struct SceneMsg {
     std::string path, part;          // part: "" for a clear
     bool is_static = false, recursive = false, reset = false;
     std::vector<std::string> parts;  // a clear's parts; empty: all
-    size_t bytes() const { return frame ? frame->size() : 0; }
+    std::vector<ScenePtr> pieces;    // a split update: its pieces, in order
+    size_t pieces_expected = 0;      // a split update being put together: the pieces it has
+    std::shared_ptr<const TransformRows> rows;   // the entity transforms the hub keeps
+    size_t bytes() const {
+        size_t n = frame ? frame->size() : 0;
+        for (const ScenePtr& p : pieces) n += p->bytes();
+        if (rows) n += rows->size() * 160;
+        return n;
+    }
     size_t tail_len() const { return frame ? frame->size() - tail : 0; }
 };
-using ScenePtr = std::shared_ptr<const SceneMsg>;
 // The messages a viewer's scene subscription may have waiting in order (a state, a reset and at
 // most CALIPER_NET_MAX_BATCHES batches, and as many clears); past it the hub's own state replaces them.
 constexpr size_t kSceneFirstMax = 2 * CALIPER_NET_MAX_BATCHES;
-// (path, part): the byte order of the paths, then points, lines, mesh.
+// (path, part): the byte order of the paths, then the parts in the order points, lines, arrows,
+// boxes, mesh, image, camera. The class table is kept under ("", kClassesOrder) and the entity
+// transforms under ("", kTransformsOrder), so that a late viewer's state sends them first, in the
+// draft's order: the class table, the entity transforms, then the batches.
 using SceneKey = std::pair<std::string, int>;
+constexpr int kClassesOrder = -2, kTransformsOrder = -1, kCameraOrder = 6;
 int scene_part_order(const std::string& part) {
-    return part == CALIPER_NET_PART_POINTS ? 0 : part == CALIPER_NET_PART_LINES ? 1 : part == CALIPER_NET_PART_MESH ? 2 : 3;
+    const int i = wire::scene_part_index(part);
+    return i < 0 ? 7 : i;
+}
+bool scene_reaches(const SceneMsg& c, const std::string& p) {
+    return p == c.path || (c.recursive && (c.path.empty() || (p.size() > c.path.size() &&
+                                                              p.compare(0, c.path.size(), c.path) == 0 &&
+                                                              p[c.path.size()] == '/')));
 }
 // Whether clear `c` removes the batch of `part` at `path`: a reset removes
 // everything; otherwise static items stay unless the clear is static too.
+// Only a reset removes the class table, which belongs to no entity.
 bool scene_clears(const SceneMsg& c, const SceneMsg& b) {
     if (c.reset) return true;
+    if (b.type == CALIPER_NET_MSG_SCENE_CLASSES) return false;
     if (b.is_static && !c.is_static) return false;
-    const std::string& p = b.path;
-    const bool in = p == c.path || (c.recursive && (c.path.empty() || (p.size() > c.path.size() &&
-                                                                       p.compare(0, c.path.size(), c.path) == 0 &&
-                                                                       p[c.path.size()] == '/')));
-    return in && (c.parts.empty() || std::find(c.parts.begin(), c.parts.end(), b.part) != c.parts.end());
+    return scene_reaches(c, b.path) &&
+           (c.parts.empty() || std::find(c.parts.begin(), c.parts.end(), b.part) != c.parts.end());
+}
+// Whether clear `c` removes the entity transform of `path`.
+bool scene_clears_transform(const SceneMsg& c, const std::string& path, const TransformRow& t) {
+    if (c.reset) return true;
+    if (t.is_static && !c.is_static) return false;
+    return scene_reaches(c, path) && (c.parts.empty() || std::find(c.parts.begin(), c.parts.end(),
+                                                                    CALIPER_NET_PART_TRANSFORM) != c.parts.end());
+}
+// SCENE_TRANSFORMS frames of transform rows: the static ones first, then the others, grouped by the
+// length of their stamps, at most CALIPER_NET_MAX_TRANSFORMS in a message.
+std::vector<ScenePtr> transform_messages(const std::string& view, const TransformRows& rows) {
+    std::vector<ScenePtr> out;
+    std::map<std::pair<int, size_t>, std::vector<const std::pair<const std::string, TransformRow>*>> groups;
+    for (const auto& kv : rows) groups[{kv.second.is_static ? 0 : 1, kv.second.stamp.size()}].push_back(&kv);
+    for (const auto& g : groups) {
+        const auto& items = g.second;
+        for (size_t at = 0; at < items.size(); at += CALIPER_NET_MAX_TRANSFORMS) {
+            const size_t k = std::min<size_t>(CALIPER_NET_MAX_TRANSFORMS, items.size() - at);
+            wire::SceneTransforms t;
+            t.view = view;
+            t.is_static = g.first.first == 0;
+            std::vector<float> mats(k * 16);
+            std::vector<int64_t> stamps(k * g.first.second);
+            for (size_t i = 0; i < k; ++i) {
+                const auto& kv = *items[at + i];
+                t.paths.push_back(kv.first);
+                t.seq = std::max(t.seq, kv.second.seq);
+                t.stamp_ns = std::max(t.stamp_ns, kv.second.stamp_ns);
+                std::memcpy(mats.data() + 16 * i, kv.second.m, 64);
+                std::copy(kv.second.stamp.begin(), kv.second.stamp.end(), stamps.begin() + (ptrdiff_t)(i * g.first.second));
+            }
+            t.matrices = wire::Section::make("matrices", CALIPER_NET_DTYPE_F32, {(int64_t)k, 16}, mats.data(), mats.size() * 4);
+            if (g.first.second)
+                t.stamps = wire::Section::make("stamps", CALIPER_NET_DTYPE_I64, {(int64_t)k, (int64_t)g.first.second},
+                                               stamps.data(), stamps.size() * 8);
+            std::vector<uint8_t> bytes;
+            if (!wire::encode(wire::Message(t), &bytes)) continue;
+            auto msg = std::make_shared<SceneMsg>();
+            wire::Frame f;
+            wire::FrameError fe;
+            if (!wire::decode_frame(bytes.data(), bytes.size(), &f, &fe)) continue;
+            msg->type = CALIPER_NET_MSG_SCENE_TRANSFORMS;
+            msg->meta = std::move(f.meta);
+            msg->flags = f.flags;
+            for (const auto& sec : f.sections) msg->lens.push_back((uint32_t)sec.size);
+            msg->tail = f.sections.front().offset;
+            msg->is_static = t.is_static;
+            msg->frame = std::make_shared<const Bytes>(std::move(bytes));
+            out.push_back(std::move(msg));
+        }
+    }
+    return out;
 }
 
 struct History {
@@ -177,6 +257,8 @@ struct Channel {
     uint64_t scene_seq = 0;
     bool scene_seen = false;
     bool scene_forgotten = false;
+    // The split updates being put together, oldest first: their update counter and the pieces so far.
+    std::vector<std::pair<uint64_t, std::shared_ptr<SceneMsg>>> scene_building;
     bool idle() const { return members.empty() && waiters.empty() && !keeper; }
 };
 
@@ -252,6 +334,7 @@ struct VSub {
     std::deque<std::pair<ScenePtr, bool>> scene_first;
     std::map<SceneKey, ScenePtr> scene_pending;
     std::map<SceneKey, uint64_t> scene_last_us;
+    TransformRows transforms_pending;   // merged into SCENE_TRANSFORMS when sent, the newest per entity
 };
 
 struct Peer {
@@ -855,7 +938,7 @@ struct Hub::Impl {
         }
         if (ch.up_request) s.by_up_request.erase(ch.up_request);
         if (ch.latest) snap_bytes -= ch.latest->bytes();
-        for (const auto& kv : ch.scene_held) scene_bytes -= kv.second->bytes();
+        release_scene(ch);
         for (const SubKey& k : ch.members) {
             auto pt = peers.find(k.conn);
             if (pt == peers.end()) continue;
@@ -922,6 +1005,7 @@ struct Hub::Impl {
         v.pending.reset();
         v.scene_first.clear();
         v.scene_pending.clear();
+        v.transforms_pending.clear();
         Channel* ch = channel(s, v.channel);
         v.channel = 0;
         if (!ch) return;
@@ -1814,16 +1898,21 @@ struct Hub::Impl {
     }
 
     // ---- 3.2 draft: scenes ---------------------------------------------------------------
-    // A scene message of a producer: the hub keeps the newest batch of each
-    // entity part of the channel for a late viewer, applies a clear to what it
-    // keeps, and offers the message to the channel's viewers. Clears and the
-    // producer's state go to a viewer in order and are never dropped (a clear
-    // first drops the viewer's pending batches it clears); any other batch
-    // replaces the viewer's pending one of the same entity part.
+    // A scene message of a producer: the hub keeps, for a late viewer, the newest batch of each
+    // entity part of the channel (a camera is one), the class table and the newest entity transform
+    // of each entity, applies a clear to what it keeps, and offers the message to the channel's
+    // viewers. Clears and the producer's state go to a viewer in order and are never dropped (a clear
+    // first drops the viewer's pending batches and transforms it clears); any other batch replaces
+    // the viewer's pending one of the same entity part, a class table the pending one, and entity
+    // transforms merge into the viewer's pending ones, the newest per entity. The pieces of a split
+    // update are put together first and then go as one update, replaced only as a whole.
     void producer_scene(Session& s, wire::DecodeResult& r, const wire::Message& m, SharedBytes buf) {
         const auto* up = std::get_if<wire::SceneUpdate>(&m);
         const auto* cl = std::get_if<wire::SceneClear>(&m);
-        auto it = s.by_up_sub.find(up ? up->sub : cl->sub);
+        const auto* tr = std::get_if<wire::SceneTransforms>(&m);
+        const auto* kl = std::get_if<wire::SceneClasses>(&m);
+        const uint32_t sub = up ? up->sub : cl ? cl->sub : tr ? tr->sub : kl->sub;
+        auto it = s.by_up_sub.find(sub);
         if (it == s.by_up_sub.end()) return;
         Channel* ch = channel(s, it->second);
         if (!ch || ch->kind != CALIPER_NET_KIND_SCENE) return;
@@ -1842,7 +1931,7 @@ struct Hub::Impl {
             msg->is_static = up->is_static;
             state = up->state;
             ch->scene_seq = std::max(ch->scene_seq, up->seq);
-        } else {
+        } else if (cl) {
             msg->path = cl->path;
             msg->is_static = cl->is_static;
             msg->recursive = cl->recursive;
@@ -1854,12 +1943,58 @@ struct Hub::Impl {
                 ch->scene_seen = true;
                 ch->scene_forgotten = false;
             }
+        } else if (tr) {
+            msg->is_static = tr->is_static;
+            state = tr->state;
+            ch->scene_seq = std::max(ch->scene_seq, tr->seq);
+        } else {
+            msg->is_static = kl->is_static;
+            state = kl->state;
+            ch->scene_seq = std::max(ch->scene_seq, kl->seq);
         }
         ch->used_ms = monotonic_ms();
-        const SceneKey key{msg->path, scene_part_order(msg->part)};
+        if (up && !up->split.is_null()) {
+            std::shared_ptr<SceneMsg> group = scene_piece(*ch, *up, msg);
+            if (!group) return;   // more pieces to come, or a piece of an update not held
+            msg = group;
+            state = group->meta.find("state") && group->meta.find("state")->is_bool() &&
+                    group->meta.find("state")->as_bool();
+        }
+        // The entity transforms of the message, as rows.
+        TransformRows rows;
+        if (tr) {
+            const int64_t t = tr->stamps ? tr->stamps->shape[1] : tr->stamp ? tr->stamp->shape[0] : 0;
+            for (size_t k = 0; k < tr->paths.size(); ++k) {
+                TransformRow row;
+                std::memcpy(row.m, tr->matrices.data + 64 * k, 64);
+                row.is_static = tr->is_static;
+                row.seq = tr->seq;
+                row.stamp_ns = tr->stamp_ns;
+                row.stamp.resize((size_t)t);
+                if (tr->stamps) std::memcpy(row.stamp.data(), tr->stamps->data + 8 * t * k, 8 * (size_t)t);
+                else if (tr->stamp) std::memcpy(row.stamp.data(), tr->stamp->data, 8 * (size_t)t);
+                rows[tr->paths[k]] = std::move(row);
+            }
+        }
+        const SceneKey key = kl ? SceneKey{"", kClassesOrder} : SceneKey{msg->path, scene_part_order(msg->part)};
         if (cl) {
             for (auto h = ch->scene_held.begin(); h != ch->scene_held.end();) {
-                if (scene_clears(*msg, *h->second)) {
+                if (h->first.second == kTransformsOrder) {
+                    auto kept = std::make_shared<TransformRows>(*h->second->rows);
+                    for (auto q = kept->begin(); q != kept->end();)
+                        q = scene_clears_transform(*msg, q->first, q->second) ? kept->erase(q) : std::next(q);
+                    scene_bytes -= h->second->bytes();
+                    if (kept->empty()) {
+                        h = ch->scene_held.erase(h);
+                        continue;
+                    }
+                    auto set = std::make_shared<SceneMsg>();
+                    set->type = CALIPER_NET_MSG_SCENE_TRANSFORMS;
+                    set->rows = kept;
+                    scene_bytes += set->bytes();
+                    h->second = set;
+                    ++h;
+                } else if (scene_clears(*msg, *h->second)) {
                     scene_bytes -= h->second->bytes();
                     h = ch->scene_held.erase(h);
                 } else {
@@ -1867,11 +2002,23 @@ struct Hub::Impl {
                 }
             }
         } else if (!ch->scene_forgotten) {
-            auto h = ch->scene_held.find(key);
+            const SceneKey hold = tr ? SceneKey{"", kTransformsOrder} : key;
+            auto h = ch->scene_held.find(hold);
             if (h == ch->scene_held.end() && ch->scene_held.size() >= CALIPER_NET_MAX_BATCHES) {
                 forget_scene(*ch);   // more batches than a scene holds: the producer's state serves a late viewer
+            } else if (tr) {
+                auto kept = std::make_shared<TransformRows>(h == ch->scene_held.end() ? TransformRows()
+                                                                                       : *h->second->rows);
+                for (const auto& kv : rows) (*kept)[kv.first] = kv.second;
+                auto set = std::make_shared<SceneMsg>();
+                set->type = CALIPER_NET_MSG_SCENE_TRANSFORMS;
+                set->rows = kept;
+                ScenePtr& slot = ch->scene_held[hold];
+                if (slot) scene_bytes -= slot->bytes();
+                slot = set;
+                scene_bytes += set->bytes();
             } else {
-                ScenePtr& slot = ch->scene_held[key];
+                ScenePtr& slot = ch->scene_held[hold];
                 if (slot) scene_bytes -= slot->bytes();
                 slot = msg;
                 scene_bytes += msg->bytes();
@@ -1881,14 +2028,24 @@ struct Hub::Impl {
             VSub* v = vsub(k);
             if (!v || !v->scene) continue;
             if (cl) {
-                if (cl->reset) v->scene_first.clear();   // a new state: nothing queued before it matters
+                if (cl->reset) {   // a new state: nothing queued before it matters
+                    v->scene_first.clear();
+                    v->transforms_pending.clear();
+                }
                 for (auto q = v->scene_pending.begin(); q != v->scene_pending.end();)
                     q = scene_clears(*msg, *q->second) ? v->scene_pending.erase(q) : std::next(q);
+                for (auto q = v->transforms_pending.begin(); q != v->transforms_pending.end();)
+                    q = scene_clears_transform(*msg, q->first, q->second) ? v->transforms_pending.erase(q) : std::next(q);
                 v->scene_first.emplace_back(msg, false);
                 if (v->scene_first.size() > kSceneFirstMax) resync_scene(s, *ch, *v);
             } else if (state) {
                 v->scene_first.emplace_back(msg, false);
                 if (v->scene_first.size() > kSceneFirstMax) resync_scene(s, *ch, *v);
+            } else if (tr) {
+                for (const auto& kv : rows) {
+                    if (v->transforms_pending.count(kv.first)) ++c.scenes_superseded;
+                    v->transforms_pending[kv.first] = kv.second;
+                }
             } else {
                 ScenePtr& slot = v->scene_pending[key];
                 if (slot) ++c.scenes_superseded;
@@ -1899,14 +2056,70 @@ struct Hub::Impl {
         if (retained() > opt.max_retained_bytes) enforce_budget();
     }
 
+    // A piece of a split update (the draft's "Splitting a large update"): the channel puts the
+    // pieces of an update together, piece 0 first, and returns the whole update once its last piece
+    // has arrived, else null. A newer piece 0 of the same entity part discards an incomplete update,
+    // at most CALIPER_NET_MAX_INCOMPLETE_UPDATES are put together at once (the oldest goes), and a
+    // piece of an update not held is dropped. The viewers check the pieces as they put them together.
+    std::shared_ptr<SceneMsg> scene_piece(Channel& ch, const wire::SceneUpdate& up, const ScenePtr& piece) {
+        const Json& sp = up.split;
+        uint64_t update = 0, num = 0, pieces = 0;
+        sp.find("update")->get_u64(&update);
+        sp.find("piece")->get_u64(&num);
+        sp.find("pieces")->get_u64(&pieces);
+        auto& building = ch.scene_building;
+        if (num == 0) {
+            for (auto b = building.begin(); b != building.end();) {
+                if (b->first == update || (b->second->path == up.path && b->second->part == up.part)) {
+                    scene_bytes -= b->second->bytes();
+                    b = building.erase(b);
+                } else {
+                    ++b;
+                }
+            }
+            auto group = std::make_shared<SceneMsg>();
+            group->type = CALIPER_NET_MSG_SCENE_UPDATE;
+            group->path = up.path;
+            group->part = up.part;
+            group->is_static = up.is_static;
+            group->meta = Json::object();
+            if (up.state) group->meta.set("state", true);
+            group->pieces_expected = (size_t)pieces;
+            building.emplace_back(update, group);
+            while (building.size() > CALIPER_NET_MAX_INCOMPLETE_UPDATES) {
+                scene_bytes -= building.front().second->bytes();
+                building.erase(building.begin());
+            }
+        }
+        auto b = std::find_if(building.begin(), building.end(), [&](const auto& x) { return x.first == update; });
+        if (b == building.end()) {
+            ++c.scene_pieces_dropped;
+            return nullptr;
+        }
+        std::shared_ptr<SceneMsg> group = b->second;
+        group->pieces.push_back(piece);
+        scene_bytes += piece->bytes();
+        if (group->pieces.size() < group->pieces_expected) return nullptr;
+        scene_bytes -= group->bytes();   // counted again where it is kept
+        building.erase(b);
+        return group;
+    }
+
     // The hub forgets what it keeps of a scene. The viewers that watch it keep
     // receiving its messages; a later viewer makes the hub subscribe again (join),
     // and the producer's fresh state reaches it.
     void forget_scene(Channel& ch) {
-        for (const auto& kv : ch.scene_held) scene_bytes -= kv.second->bytes();
-        ch.scene_held.clear();
+        release_scene(ch);
         ch.scene_seen = false;
         ch.scene_forgotten = true;
+    }
+
+    // What a channel keeps of a scene, and the split updates it puts together, leave the budget.
+    void release_scene(Channel& ch) {
+        for (const auto& kv : ch.scene_held) scene_bytes -= kv.second->bytes();
+        ch.scene_held.clear();
+        for (const auto& b : ch.scene_building) scene_bytes -= b.second->bytes();
+        ch.scene_building.clear();
     }
 
     // A viewer joins a scene channel. Once the producer's state has passed on
@@ -1928,6 +2141,9 @@ struct Hub::Impl {
         meta.set("reset", true);
         reset->meta = std::move(meta);
         v.scene_first.emplace_back(reset, true);
+        v.transforms_pending.clear();
+        // In the order of the keys: the class table, the entity transforms, then every camera and
+        // batch in the byte order of their paths.
         for (const auto& kv : ch.scene_held) v.scene_first.emplace_back(kv.second, true);
     }
 
@@ -1949,6 +2165,16 @@ struct Hub::Impl {
     }
 
     bool send_scene(Peer& p, VSub& v, const ScenePtr& msg, bool state) {
+        if (msg->rows) {   // the entity transforms the hub keeps: SCENE_TRANSFORMS built now
+            for (const ScenePtr& t : transform_messages(v.view, *msg->rows))
+                if (!send_scene(p, v, t, state)) return false;
+            return true;
+        }
+        if (!msg->pieces.empty()) {   // a split update: its pieces in order
+            for (const ScenePtr& piece : msg->pieces)
+                if (!send_scene(p, v, piece, state)) return false;
+            return true;
+        }
         Json meta = msg->meta;
         meta.set("sub", v.sub);
         if (state) meta.set("state", true);
@@ -2006,8 +2232,7 @@ struct Hub::Impl {
                 continue;
             }
             set_latest(*lru, nullptr);
-            for (const auto& kv : lru->scene_held) scene_bytes -= kv.second->bytes();   // 3.2 draft
-            lru->scene_held.clear();
+            release_scene(*lru);   // 3.2 draft
             if (!lru->up_sub && lru->idle()) destroy_channel(*ls, lru->id);
         }
     }
@@ -2024,7 +2249,8 @@ struct Hub::Impl {
             producer_series(s, *x);
         } else if (auto* v = std::get_if<wire::Views>(&m)) {
             producer_views(s, *v);
-        } else if (std::holds_alternative<wire::SceneUpdate>(m) || std::holds_alternative<wire::SceneClear>(m)) {
+        } else if (std::holds_alternative<wire::SceneUpdate>(m) || std::holds_alternative<wire::SceneClear>(m) ||
+                   std::holds_alternative<wire::SceneTransforms>(m) || std::holds_alternative<wire::SceneClasses>(m)) {
             producer_scene(s, r, m, std::move(buf));                 // 3.2 draft
         } else if (auto* q = std::get_if<wire::ViewReply>(&m)) {
             producer_reply(s, *q);
@@ -2192,7 +2418,9 @@ struct Hub::Impl {
         for (auto& kv : p.subs) {
             VSub& v = kv.second;
             if (v.scene) {
-                if (!v.scene_first.empty()) {
+                // In-order messages and pending entity transforms go now; a pending batch at most
+                // at `rate` per entity part, a camera and a class table at once.
+                if (!v.scene_first.empty() || !v.transforms_pending.empty()) {
                     if (!scene_v || !scene_head || v.last_us < scene_v->last_us) {
                         scene_v = &v;
                         scene_head = true;
@@ -2201,7 +2429,8 @@ struct Hub::Impl {
                     const uint64_t iv = (uint64_t)(1e6 / v.rate);
                     for (const auto& q : v.scene_pending) {
                         auto lt = v.scene_last_us.find(q.first);
-                        const uint64_t due = lt == v.scene_last_us.end() ? 0 : lt->second + iv;
+                        const bool unlimited = q.first.second < 0 || q.first.second == kCameraOrder;
+                        const uint64_t due = lt == v.scene_last_us.end() || unlimited ? 0 : lt->second + iv;
                         if (due <= now) {
                             if (!scene_v || v.last_us < scene_v->last_us) {
                                 scene_v = &v;
@@ -2239,10 +2468,16 @@ struct Hub::Impl {
         p.due_us = due_min;
         if (scene_v && !(best && best->series)) {   // 3.2 draft: scenes after series, before snapshots
             bool ok;
-            if (scene_head) {
+            if (scene_head && !scene_v->scene_first.empty()) {
                 auto item = scene_v->scene_first.front();
                 scene_v->scene_first.pop_front();
                 ok = send_scene(p, *scene_v, item.first, item.second);
+            } else if (scene_head) {   // the pending entity transforms, merged
+                auto set = std::make_shared<SceneMsg>();
+                set->type = CALIPER_NET_MSG_SCENE_TRANSFORMS;
+                set->rows = std::make_shared<const TransformRows>(std::move(scene_v->transforms_pending));
+                scene_v->transforms_pending.clear();
+                ok = send_scene(p, *scene_v, set, false);
             } else {
                 auto q = scene_v->scene_pending.find(scene_key);
                 ScenePtr msg = q->second;
