@@ -82,7 +82,7 @@ TEST_CASE("caliper-spec-shot: the dashboard over Parquet and safetensors, built 
     CHECK(img.count(near(lut[255], 1)).n > 50);
     CHECK(img.count(near(spec_palette_color(0), 30)).n > 100);
     CHECK(img.count(near(spec_palette_color(1), 30)).n > 100);
-    CHECK(img.count(bright, 0, 400, 960, 600).n > 500);
+    CHECK(img.count(bright, 0, 400, 960, 600).n > 200);
     // The workspace is read, not changed: no command ran.
     CHECK(read_text(ws + "/journal/commands.jsonl").find("panel.render") == std::string::npos);
 

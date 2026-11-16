@@ -7,6 +7,7 @@
 #include "spec_runtime/spec_runtime.h"
 
 #include "export_service.h"
+#include "ui/sternbild_theme.h"
 
 #include "spec_test_canvas.h"
 #include "spec_test_data.h"
@@ -240,6 +241,24 @@ TEST_CASE("draw: a table shows the expected number of rows") {
         const Box b = content(d);
         // The lines of text under the title strip: the head, then one per row.
         CHECK(d.img.runs(bright, b.x0, b.x1, b.y0, b.y1) == n + 1);
+        // The columns sit together at the left; the rest of the width is empty.
+        const auto text = d.img.count(bright, b.x0, b.y0, b.x1, b.y1);
+        CHECK(d.img.count(bright, b.x0 + 260, b.y0, b.x1, b.y1).n == 0);
+        CHECK(text.n > 100);
+    }
+    // Many rows: the head and the rows that fit whole; the last row shown is
+    // not cut by the panel's edge.
+    json rows = json::array();
+    for (int i = 0; i < 100; ++i) rows.push_back(json::array({i, i * 0.5}));
+    for (int h : {400, 391}) {
+        const Drawn d = draw_one(s, data({table("rows", "m", {{"step", "BIGINT"}, {"loss", "DOUBLE"}}, rows)},
+                                         spec::Primitive::table),
+                                 640, h);
+        const Box b = content(d);
+        const float row = sternbild::metric::row;
+        const int fit = (int)std::floor((b.y1 - b.y0 - row) / row);
+        CAPTURE(h);
+        CHECK(d.img.runs(bright, b.x0, b.x1, b.y0, b.y1) == fit + 1);
     }
 }
 

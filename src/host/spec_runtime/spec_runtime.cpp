@@ -609,18 +609,33 @@ void draw_table(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
     const PreparedTable& T = v.data.table;
     const int ncols = (int)std::min<size_t>(T.columns.size(), 64);
     if (ncols <= 0) return;
+    // Each column as wide as its head and its widest cell among the first
+    // rows, the columns together at the left, and the width they leave empty
+    // on the right: a register's columns sit side by side.
+    const float pad = std::round(18.0f * L.text_scale);
+    const ImVec2 cell = ImGui::GetStyle().CellPadding;
+    std::vector<float> widths((size_t)ncols);
+    float total = 0.0f;
+    for (int i = 0; i < ncols; ++i) {
+        float w = text_size(L.ui, L.small_size, T.columns[(size_t)i]).x * 1.25f + 10.0f * L.text_scale;
+        for (size_t r = 0; r < std::min<size_t>(T.cells.size(), 200); ++r)
+            w = std::max(w, text_size(L.mono, L.mono_size, T.cells[r][(size_t)i]).x);
+        widths[(size_t)i] = std::round(w + pad);
+        total += widths[(size_t)i] + 2.0f * cell.x;
+    }
+    // Whole rows: the head and as many rows as fit, so the last row shown is
+    // never cut by the panel's edge.
+    const float row = sternbild::metric::row;
+    const float avail = c.GetHeight();
+    const int fit = std::max(0, (int)std::floor((avail - row) / row));
+    const bool scrolls = (size_t)fit < T.cells.size();
+    const float height = std::min(avail, row * (float)(1 + std::min<size_t>((size_t)fit, T.cells.size())) + 1.0f);
+    const float width = std::min(c.GetWidth(), total + (scrolls ? ImGui::GetStyle().ScrollbarSize : 0.0f));
     ImGui::SetCursorScreenPos(c.Min);
-    if (sternbild::begin_table("##spec.table", ncols, c.GetSize(), ImGuiTableFlags_SizingFixedFit)) {
-        // The columns share the panel's width in proportion to their widest
-        // cell among the first rows (or their head), so a narrow column of
-        // figures stays narrower than a column of names.
-        const float pad = std::round(24.0f * L.text_scale);
+    if (sternbild::begin_table("##spec.table", ncols, ImVec2(width, height), ImGuiTableFlags_SizingFixedFit)) {
         for (int i = 0; i < ncols; ++i) {
             const std::string head = (T.numeric[(size_t)i] ? ">" : "") + T.columns[(size_t)i];
-            float w = text_size(L.ui, L.small_size, T.columns[(size_t)i]).x * 1.25f;
-            for (size_t r = 0; r < std::min<size_t>(T.cells.size(), 200); ++r)
-                w = std::max(w, text_size(L.mono, L.mono_size, T.cells[r][(size_t)i]).x);
-            ImGui::TableSetupColumn(head.c_str(), ImGuiTableColumnFlags_WidthStretch, std::round(w + pad));
+            ImGui::TableSetupColumn(head.c_str(), ImGuiTableColumnFlags_WidthFixed, widths[(size_t)i]);
         }
         ImGui::TableSetupScrollFreeze(0, 1);
         sternbild::table_header_row();
@@ -646,10 +661,10 @@ void draw_table(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
         }
         ImGui::PushFont(L.mono, L.mono_size);
         ImGuiListClipper clip;
-        clip.Begin((int)T.cells.size());
+        clip.Begin((int)T.cells.size(), row);
         while (clip.Step()) {
             for (int r = clip.DisplayStart; r < clip.DisplayEnd; ++r) {
-                ImGui::TableNextRow();
+                ImGui::TableNextRow(ImGuiTableRowFlags_None, row);
                 const auto& row = T.cells[(size_t)r];
                 for (int i = 0; i < ncols; ++i) {
                     ImGui::TableNextColumn();
