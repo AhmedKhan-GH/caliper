@@ -203,6 +203,7 @@ struct NetView {
     uint64_t pending_end = 0;   // the largest end among the queued deltas
     uint64_t series_stamp = 0;  // stamp_ns of the newest SERIES message
     SceneQueue scene;              // a scene view's messages, for take_scene (scene_queue.h)
+    caliper_net::wire::SplitUpdates splits;   // a scene view's split updates being put together (network thread)
 
     // Frame thread only (series).
     id<MTLBuffer> ring = nil;
@@ -779,11 +780,15 @@ private:
         else if (auto* cr = std::get_if<wire::ControlReply>(&m)) on_control_reply(*cr);
         else if (auto* sel = std::get_if<wire::Selection>(&m)) on_selection(*sel);
         else if (auto* su = std::get_if<wire::SceneUpdate>(&m)) {
-            const std::string why = scene_not_drawn(*su);
-            if (why.empty()) on_scene(keep, r.frame, std::move(*su));
-            else refuse_scene(r.frame.meta, su->sub, su->view, r.type, why);
+            if (!su->split.is_null()) {
+                on_piece(r.frame.meta, r.type, *su);
+            } else {
+                const std::string why = scene_not_drawn(*su);
+                if (why.empty()) on_scene(keep, r.frame.sections, std::move(*su));
+                else refuse_scene(r.frame.meta, su->sub, su->view, r.type, why);
+            }
         }
-        else if (auto* sc = std::get_if<wire::SceneClear>(&m)) on_scene(keep, r.frame, std::move(*sc));
+        else if (auto* sc = std::get_if<wire::SceneClear>(&m)) on_scene(keep, r.frame.sections, std::move(*sc));
         // 3.2 draft: the scene view applies no entity transform or class table yet, so they are ignored
         // and the view says so (docs/references/wire-protocol-3-2.md, "Versioning").
         else if (std::holds_alternative<wire::SceneTransforms>(m))
@@ -796,14 +801,14 @@ private:
     // ---- 3.2 draft: scenes -------------------------------------------------------------
     // A scene message goes to its view's queue as it arrived, with the frame its sections
     // point into; the frame thread applies it (take_scene).
-    void on_scene(const std::shared_ptr<const Bytes>& keep, const wire::Frame& frame,
+    void on_scene(const std::shared_ptr<const void>& keep, const std::vector<wire::Section>& sections,
                   std::variant<wire::SceneUpdate, wire::SceneClear> msg) {
         const uint32_t sub = std::visit([](const auto& x) { return x.sub; }, msg);
         const auto it = by_sub_.find(sub);
         if (it == by_sub_.end() || it->second->kind != CALIPER_NET_KIND_SCENE) return;
         NetView& v = *it->second;
         std::string ignored;   // what this view does not use of an update (a stamp, class ids, normals, ...)
-        if (const auto* u = std::get_if<wire::SceneUpdate>(&msg)) ignored = scene_ignored(*u, frame);
+        if (const auto* u = std::get_if<wire::SceneUpdate>(&msg)) ignored = scene_ignored(*u, sections);
         bool again = false;
         {
             std::lock_guard<std::mutex> g(mu_);
@@ -827,6 +832,40 @@ private:
         s.view = v.name;
         s.request_id = next_request_++;
         send(s);
+    }
+
+    // A piece of a split update: the view's SplitUpdates keeps it until the update is whole, which is
+    // then queued as any update; a piece that contradicts its update is answered ERROR bad_request.
+    void on_piece(const Json& meta, uint16_t type, const wire::SceneUpdate& piece) {
+        const auto it = by_sub_.find(piece.sub);
+        if (it == by_sub_.end() || it->second->kind != CALIPER_NET_KIND_SCENE) return;
+        wire::WholeUpdate whole;
+        std::string err;
+        switch (it->second->splits.add(piece, &whole, &err)) {
+            case wire::SplitUpdates::Result::Pending: return;
+            case wire::SplitUpdates::Result::Dropped:
+                scene_note(meta, "ignored: a piece of a split update whose first piece is not held");
+                return;
+            case wire::SplitUpdates::Result::Refused: {
+                wire::Error e;
+                e.code = CALIPER_NET_ERR_BAD_REQUEST;
+                e.message = err;
+                e.in_reply_to = type;
+                e.sub = piece.sub;
+                e.view = piece.view;
+                send(e);
+                scene_note(meta, "ignored: " + err);
+                return;
+            }
+            case wire::SplitUpdates::Result::Whole: break;
+        }
+        const std::string why = scene_not_drawn(whole.update);
+        if (!why.empty()) {
+            refuse_scene(meta, piece.sub, piece.view, type, why);
+            return;
+        }
+        const std::vector<wire::Section> arrays = whole.update.arrays;
+        on_scene(whole.keep, arrays, std::move(whole.update));
     }
 
     // A scene update of a part this view does not draw yet: answered ERROR unsupported, not queued, and noted.

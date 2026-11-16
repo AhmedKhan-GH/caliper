@@ -136,6 +136,7 @@ private:
         // scene (kind 6)
         caliper_net::Json offer;      // its VIEWS entry
         caliper_live::SceneQueue scene;
+        caliper_net::wire::SplitUpdates splits;   // split scene updates being put together
     };
 
     View* by_sub(uint32_t sub);

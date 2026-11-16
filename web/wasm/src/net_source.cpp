@@ -372,7 +372,35 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
         } else if constexpr (std::is_same_v<T, wire::SceneUpdate> || std::is_same_v<T, wire::SceneClear>) {
             View* v = by_sub(m.sub);
             if (!v || v->kind != CALIPER_NET_KIND_SCENE) return;
+            std::shared_ptr<const void> hold = keep;
+            std::vector<wire::Section> sections = r.frame.sections;
             if constexpr (std::is_same_v<T, wire::SceneUpdate>) {
+                // A piece of a split update is kept until the update is whole, then queued as any update.
+                if (!m.split.is_null()) {
+                    wire::WholeUpdate whole;
+                    std::string err;
+                    const auto res = v->splits.add(m, &whole, &err);
+                    if (res == wire::SplitUpdates::Result::Pending) return;
+                    if (res != wire::SplitUpdates::Result::Whole) {
+                        if (res == wire::SplitUpdates::Result::Refused) {
+                            wire::Error e;
+                            e.code = CALIPER_NET_ERR_BAD_REQUEST;
+                            e.message = err;
+                            e.in_reply_to = r.type;
+                            e.sub = m.sub;
+                            e.view = m.view;
+                            send_msg(e);
+                        }
+                        const std::string note = res == wire::SplitUpdates::Result::Refused
+                                                     ? "ignored: " + err
+                                                     : std::string("ignored: a piece of a split update whose first piece is not held");
+                        if (caliper_live::scene_queue_push(v->scene, caliper_live::SceneItem{nullptr, note})) resubscribe(*v);
+                        return;
+                    }
+                    m = std::move(whole.update);
+                    hold = whole.keep;
+                    sections = m.arrays;
+                }
                 // A part the scene view does not draw yet is answered ERROR unsupported and noted, not
                 // queued; what the view does not use of a drawn part (a stamp, class ids, ...) is noted.
                 const std::string why = caliper_live::scene_not_drawn(m);
@@ -388,12 +416,12 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
                         resubscribe(*v);
                     return;
                 }
-                const std::string ignored = caliper_live::scene_ignored(m, r.frame);
+                const std::string ignored = caliper_live::scene_ignored(m, sections);
                 if (!ignored.empty() && caliper_live::scene_queue_push(v->scene, caliper_live::SceneItem{nullptr, ignored}))
                     resubscribe(*v);
             }
             caliper_live::SceneItem item;
-            item.keep = keep;
+            item.keep = hold;
             item.msg = std::move(m);
             if (caliper_live::scene_queue_push(v->scene, std::move(item))) resubscribe(*v);
         } else if constexpr (std::is_same_v<T, wire::SceneTransforms> || std::is_same_v<T, wire::SceneClasses>) {

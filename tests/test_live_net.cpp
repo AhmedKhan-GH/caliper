@@ -750,12 +750,36 @@ TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's message
         tr.paths = {"cloud"};
         tr.matrices = wire::Section::make("matrices", CALIPER_NET_DTYPE_F32, {1, 16}, eye, sizeof eye);
         f.send(tr);
+        // A points update in two pieces of a split update, which the source puts together.
+        static const float four[12] = {0, 0, 0, 1, 1, 1, 2, 0, 0, 0, 2, 0};
+        wire::SceneUpdate p0 = f.scene_update("split", CALIPER_NET_PART_POINTS, {}, false);
+        wire::SceneUpdate p1 = p0;
+        Json first0 = Json::object(), first1 = Json::object(), rows = Json::object();
+        first0.set("positions", (uint64_t)0);
+        first1.set("positions", (uint64_t)2);
+        rows.set("positions", (uint64_t)4);
+        Json sp0 = Json::object(), sp1 = Json::object();
+        sp0.set("update", (uint64_t)1);
+        sp0.set("piece", (uint64_t)0);
+        sp0.set("pieces", (uint64_t)2);
+        sp0.set("first", first0);
+        sp0.set("rows", rows);
+        sp1.set("update", (uint64_t)1);
+        sp1.set("piece", (uint64_t)1);
+        sp1.set("pieces", (uint64_t)2);
+        sp1.set("first", first1);
+        p0.split = sp0;
+        p1.split = sp1;
+        p0.arrays = {wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {2, 3}, four, 24)};
+        p1.arrays = {wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {2, 3}, four + 6, 24)};
+        f.send(p0);
+        f.send(p1);
         return 0;
     });
     caliper_live_views::SceneView* sv = nullptr;
     REQUIRE(poll_until(core, [&] {
         sv = caliper_live_views::scene_view(core, "world");
-        return sv && sv->counts().batches == 2 && !sv->notes().empty() && sv->has_target();
+        return sv && sv->counts().batches >= 2 && !sv->notes().empty() && sv->has_target();
     }));
     CHECK(sv->tree().up() == caliper_scene::Axis::PosZ);
     const caliper_scene::Batch* cloud = sv->tree().batch(sv->tree().find("cloud"), caliper_scene::Primitive::Points);
@@ -771,13 +795,18 @@ TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's message
     CHECK_MESSAGE(noted("'arrows' is not drawn yet"), sv->notes().front());
     CHECK_MESSAGE(noted("entity transforms are not applied yet"), sv->notes().back());
     REQUIRE(poll_until(core, [&] {
+        const caliper_scene::EntityId e = sv->tree().find("split");
+        const caliper_scene::Batch* b = e ? sv->tree().batch(e, caliper_scene::Primitive::Points) : nullptr;
+        return b && b->count() == 4;
+    }));
+    REQUIRE(poll_until(core, [&] {
         const auto errs = p.call([](FakeProducer& f) { return f.errors; });
         return std::find(errs.begin(), errs.end(), CALIPER_NET_ERR_UNSUPPORTED) != errs.end();
     }));
     // The view in the registry: kind 6, its items, its target and a readback of it.
     CaliperLiveViewInfo vi = view_info(core, "world");
     CHECK(vi.kind == CALIPER_NET_KIND_SCENE);
-    CHECK(vi.count == 3 + 1);
+    CHECK(vi.count == 3 + 1 + 4);
     CHECK(std::string(vi.path) == "copied-from-host");
     REQUIRE(vi.width > 0);
     std::vector<uint8_t> px((size_t)vi.width * vi.height * 4);

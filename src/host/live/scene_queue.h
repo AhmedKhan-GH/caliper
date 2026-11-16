@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <deque>
 #include <string>
+#include <vector>
 
 namespace caliper_live {
 
@@ -37,18 +38,23 @@ inline std::string scene_not_drawn(const caliper_net::wire::SceneUpdate& u) {
 }
 
 // The sections and keys of an update the view draws that it does not use (a stamp, class ids,
-// normals, a texture, labels or a section no part has), named for a note; "" when none.
-inline std::string scene_ignored(const caliper_net::wire::SceneUpdate& u, const caliper_net::wire::Frame& f) {
+// normals, a texture, labels or a section no part has), named for a note; "" when none. `sections`
+// are the frame's, or for an update put together from pieces its arrays.
+inline std::string scene_ignored(const caliper_net::wire::SceneUpdate& u,
+                                 const std::vector<caliper_net::wire::Section>& sections) {
     static const char* const points[] = {"positions", "colors", "values", "radii", nullptr};
     static const char* const lines[] = {"positions", "strip_lengths", "colors", "values", nullptr};
     static const char* const mesh[] = {"positions", "indices", "colors", "values", nullptr};
     const char* const* used = u.part == CALIPER_NET_PART_POINTS ? points : u.part == CALIPER_NET_PART_LINES ? lines : mesh;
     std::string out;
-    for (const caliper_net::wire::Section& s : f.sections) {
+    bool stamp = false;
+    for (const caliper_net::wire::Section& s : sections) {
         bool drawn = false;
         for (const char* const* k = used; *k && !drawn; ++k) drawn = s.name == *k;
         if (!drawn) out += (out.empty() ? "" : ", ") + s.name;
+        stamp = stamp || s.name == "stamp";
     }
+    if (u.stamp && !stamp) out += std::string(out.empty() ? "" : ", ") + "stamp";
     if (u.params.find("labels")) out += std::string(out.empty() ? "" : ", ") + "labels";
     if (out.empty()) return out;
     return "ignored in " + (u.path.empty() ? std::string("the root") : u.path) + " " + u.part + ": " + out;
