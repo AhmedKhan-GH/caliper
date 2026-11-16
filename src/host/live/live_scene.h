@@ -2,14 +2,20 @@
 // increment 1; design/scenes.md, "Drawing a scene natively").
 //
 // A scene view owns one scene of the scene core (src/host/scene) and applies to it the decoded
-// SCENE_UPDATE and SCENE_CLEAR messages of wire protocol 3.2 (docs/references/wire-protocol-3-2.md):
-// the parts points, lines (segments or strips) and mesh, static items, and the reset that opens a
-// scene's state for a new subscription. The arrays of a network message arrive as host bytes, so
-// every array is uploaded into a buffer of the graphics layer that the view owns, which is one
-// copy, reported as such: the info line says "copied" and the bytes, and each upload counts in the
-// view's copy counters (embed/render_stats.h). A batch replaced by one of the same or a smaller
-// size is written into the buffers it already has; a larger one gets new buffers, with a capacity
-// rounded up to a power of two of at least 4 KiB, as web geometry's "Uploads and reuse" sets out.
+// scene messages of wire protocol 3.2 (docs/references/wire-protocol-3-2.md): SCENE_UPDATE with the
+// parts points, lines (segments, strips and index-pair edges), arrows, boxes, mesh (with normals,
+// or UVs and a texture), image (colour, grey, depth and segmentation) and camera; SCENE_TRANSFORMS;
+// SCENE_CLASSES; SCENE_CLEAR of named parts or all, static items, and the reset that opens a scene's
+// state for a new subscription. The arrays of a network message arrive as host bytes, so every
+// array is uploaded into a buffer of the graphics layer that the view owns, and every image into a
+// texture it owns (a u16 depth scaled to f32 scene units and class ids widened to u32 on the way,
+// as the texture's format needs), which is one copy, reported as such: the info line says
+// "copied" and the bytes, and each upload counts in the view's copy counters
+// (embed/render_stats.h); so does the class table texture, 256 KiB each time the table changes. A
+// batch replaced by one of the same or a smaller size is written into the buffers it already has;
+// a larger one gets new buffers, with a capacity rounded up to a power of two of at least 4 KiB,
+// as web geometry's "Uploads and reuse" sets out, and an image keeps its texture while its size
+// and format stay. Encoded (JPEG or PNG) images are not drawn yet.
 //
 // When something changed, or the camera moved, the view compiles the scene into a draw list of the
 // graphics layer and submits it to an offscreen colour target with depth, which the view's window
@@ -59,6 +65,8 @@ struct SceneCounts {
     uint64_t bytes_total = 0, copies_total = 0;
     uint64_t buffers_created = 0, buffers_reused = 0;
     uint64_t buffers_live = 0;
+    uint64_t textures_created = 0, textures_reused = 0;   // images and textured meshes
+    uint64_t textures_live = 0;
 };
 
 class SceneView {
@@ -79,7 +87,9 @@ public:
     // One decoded message. False with *why when the scene store refused it; the view keeps what it
     // drew. A message's sections may be freed once the call returns.
     bool apply(const caliper_net::wire::SceneUpdate& u, std::string* why);
+    bool apply(const caliper_net::wire::SceneTransforms& t, std::string* why);
     bool apply(const caliper_net::wire::SceneClear& c, std::string* why);
+    bool apply(const caliper_net::wire::SceneClasses& c, std::string* why);
     // Something the view ignored, as the versioning rules of protocol 3.2 say (a part, a mode or a
     // section that this increment does not build), for the info line.
     void note(const std::string& text);
@@ -91,6 +101,18 @@ public:
     void pan(float dx, float dy, float view_height);
     void zoom(float wheel, float mx, float my, float view_w, float view_h);   // m: the pointer, -1 to 1
     void fit();
+    // Looks through the camera of entity `path` (its pose and intrinsics, its pixel space flat over
+    // the picture), or returns to the view's own camera with "". False when the entity holds no
+    // camera. The view keeps the path: while the entity holds no camera (a clear, a new state that
+    // has not sent it yet) it shows its own camera and says so. A fit returns to the orbit.
+    bool look_through(const std::string& path, std::string* why);
+    const std::string& looking_through() const { return through_; }
+    // The entities that hold a camera, in path order.
+    std::vector<std::string> cameras() const;
+    // The camera the view draws with: the pinhole looked through, or its own.
+    caliper_scene::ViewCamera effective_camera() const;
+    // The anchors of the labels at the view's size and camera, nearest first, at most 512.
+    std::vector<caliper_scene::LabelAnchor> labels() const;
 
     // Compiles and submits when something changed since the last frame, into a target of
     // width x height physical pixels. False with *why when the layer refused the frame.
@@ -129,6 +151,10 @@ private:
     struct Slot {
         caliper_scene::Batch batch;
         std::map<int, Upload> buffers;
+        caliper_gfx::Texture texture;   // an image's, or a textured mesh's
+        uint32_t tex_w = 0, tex_h = 0;
+        caliper_gfx::Format tex_format = caliper_gfx::Format::RGBA8Unorm;
+        std::vector<uint8_t> cpu_rows, cpu_ids;   // CPU views for the labels: positions or centres, class ids
         bool present = false;
     };
     struct Key {
@@ -144,7 +170,11 @@ private:
 
     bool upload(Slot& s, caliper_scene::Role role, const void* bytes, uint64_t size, caliper_gfx::Buffer* out,
                 std::string* why);
+    bool upload_texture(Slot& s, caliper_gfx::Format f, uint32_t w, uint32_t h, const void* data,
+                        uint32_t row_pitch, std::string* why);
+    void release_texture(Slot& s);
     void release(Slot& s);
+    bool in_pixel_space(caliper_scene::EntityId e) const;   // under a camera, from the parts now
     void rebuild(const std::string& path);    // the entity's batches again from the slots
     void reset_scene();
     void changed() { dirty_ = true; }
@@ -156,6 +186,7 @@ private:
     caliper_scene::SceneTree tree_;
     caliper_scene::SceneCompiler compiler_;
     caliper_scene::ViewCamera camera_ = caliper_scene::Orbit{};
+    std::string through_;              // the camera entity looked through, or ""
     std::map<Key, Slot> slots_;
     std::vector<uint8_t> scratch_;
     std::vector<std::string> notes_;

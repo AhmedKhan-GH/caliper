@@ -2,7 +2,7 @@
 //
 // A source of scene messages (the app's NetSource, the browser's) does not go through
 // caliper_core_live_apply, whose snapshots a scene does not have: it opens the view with the
-// scene's description from VIEWS and hands it each decoded SCENE_UPDATE and SCENE_CLEAR. The view
+// scene's description from VIEWS and hands it each decoded scene message. The view
 // then lives in the core's typed live views like any other: it is laid out on the grid, drawn by
 // caliper_live_views_frame with the other windows, removed with caliper_core_live_view_remove, and
 // caliper_core_live_view_info and _readback answer for it. Frame thread only.
@@ -18,6 +18,8 @@ namespace caliper_net::wire {
 struct SceneView;
 struct SceneUpdate;
 struct SceneClear;
+struct SceneTransforms;
+struct SceneClasses;
 }  // namespace caliper_net::wire
 
 namespace caliper_live_views {
@@ -44,6 +46,10 @@ bool scene_open(CaliperCore* core, const std::string& name, const caliper_net::w
 bool scene_apply(CaliperCore* core, const std::string& name, const caliper_net::wire::SceneUpdate& u,
                  std::string* why);
 bool scene_apply(CaliperCore* core, const std::string& name, const caliper_net::wire::SceneClear& c,
+                 std::string* why);
+bool scene_apply(CaliperCore* core, const std::string& name, const caliper_net::wire::SceneTransforms& t,
+                 std::string* why);
+bool scene_apply(CaliperCore* core, const std::string& name, const caliper_net::wire::SceneClasses& c,
                  std::string* why);
 // Something the source ignored for this view (a part, mode or section not built), for its info line.
 void scene_note(CaliperCore* core, const std::string& name, const std::string& text);

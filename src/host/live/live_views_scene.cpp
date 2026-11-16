@@ -156,6 +156,35 @@ bool scene_apply(CaliperCore* core, const std::string& name, const caliper_net::
     return ok;
 }
 
+namespace {
+
+// A message that changes no batch: entity transforms or a class table. A class table's texture is
+// uploaded at the next frame, which counts it (draw_scene).
+template <class M> bool apply_other(CaliperCore* core, const std::string& name, const M& m, std::string* why) {
+    View* v = core ? find_scene(core, name) : nullptr;
+    if (!v) {
+        if (why) *why = "no scene view named '" + name + "'";
+        return false;
+    }
+    SceneView* sv = scene_view(*v);
+    if (!sv) return true;
+    const bool ok = sv->apply(m, why);
+    v->seq = m.seq;
+    return ok;
+}
+
+}  // namespace
+
+bool scene_apply(CaliperCore* core, const std::string& name, const caliper_net::wire::SceneTransforms& t,
+                 std::string* why) {
+    return apply_other(core, name, t, why);
+}
+
+bool scene_apply(CaliperCore* core, const std::string& name, const caliper_net::wire::SceneClasses& c,
+                 std::string* why) {
+    return apply_other(core, name, c, why);
+}
+
 void scene_note(CaliperCore* core, const std::string& name, const std::string& text) {
     View* v = core ? find_scene(core, name) : nullptr;
     if (SceneView* sv = v ? scene_view(*v) : nullptr) sv->note(text);

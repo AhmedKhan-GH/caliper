@@ -46,6 +46,7 @@
 
 #include "live/live_scene.h"
 #include "live/live_views_scene.h"
+#include "embed/render_stats.h"   // copy counters
 #include "renderer/host_renderer.h"
 #include "tensor_bridge.h"   // colormap_lut
 
@@ -1467,13 +1468,41 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     // source holds its messages, so nothing changes but the camera)
     const uint32_t clear = ImGui::GetColorU32(ImGuiCol_WindowBg) | 0xff000000u;
     std::string why;
+    const uint64_t uploaded = sc->counts().bytes_total;
     if (!sc->render((uint32_t)want_w, (uint32_t)want_h, core->scale, clear, &why)) sc->note(why);
+    if (const uint64_t copied = sc->counts().bytes_total - uploaded)   // the class table's texture
+        caliper_stats::note_copy(core, v.name, copied);
     v.tex_w = (int)sc->width();
     v.tex_h = (int)sc->height();
     v.creates = sc->target_creates();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (const uint64_t id = sc->imgui_texture())
         dl->AddImage((ImTextureID)id, p0, ImVec2(p0.x + avail.x, p0.y + avail.y));
+
+    // Labels: text over the picture at anchors the scene core projects, nearest first, at most 512.
+    if (sc->width() && sc->height()) {
+        const float sx = avail.x / float(sc->width()), sy = avail.y / float(sc->height());
+        const ImU32 ink = ImGui::GetColorU32(ImGuiCol_Text), shade = IM_COL32(0, 0, 0, 160);
+        dl->PushClipRect(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), true);
+        for (const caliper_scene::LabelAnchor& a : sc->labels()) {
+            const ImVec2 at(p0.x + a.x * sx + 4.0f, p0.y + a.y * sy - ImGui::GetTextLineHeight() - 2.0f);
+            dl->AddText(ImVec2(at.x + 1.0f, at.y + 1.0f), shade, a.text.c_str());
+            dl->AddText(at, ink, a.text.c_str());
+        }
+        dl->PopClipRect();
+    }
+
+    // A right click that does not drag offers the scene's cameras to look through.
+    if (released && !g.moved && g.button == ImGuiMouseButton_Right && hovered) ImGui::OpenPopup("##caliper.scene.cameras");
+    if (ImGui::BeginPopup("##caliper.scene.cameras")) {
+        if (ImGui::MenuItem("Orbit", nullptr, sc->looking_through().empty())) sc->look_through("", nullptr);
+        const std::vector<std::string> cams = sc->cameras();
+        if (cams.empty()) ImGui::TextDisabled("No camera to look through");
+        for (const std::string& c : cams)
+            if (ImGui::MenuItem(("Look through " + c).c_str(), nullptr, sc->looking_through() == c))
+                sc->look_through(c, nullptr);
+        ImGui::EndPopup();
+    }
 
     v.geo_valid = true;
     v.geo_area[0] = p0.x; v.geo_area[1] = p0.y; v.geo_area[2] = avail.x; v.geo_area[3] = avail.y;

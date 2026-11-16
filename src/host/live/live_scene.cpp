@@ -34,12 +34,6 @@ uint64_t capacity_for(uint64_t bytes) {
     return c;
 }
 
-Primitive primitive_of(const std::string& part) {
-    if (part == CALIPER_NET_PART_POINTS) return Primitive::Points;
-    if (part == CALIPER_NET_PART_LINES) return Primitive::Lines;
-    return Primitive::Mesh;
-}
-
 double num(const caliper_net::Json& params, const char* key, double fallback) {
     const caliper_net::Json* v = params.find(key);
     return v && v->is_number() ? v->as_double() : fallback;
@@ -170,10 +164,54 @@ bool SceneView::upload(Slot& s, Role role, const void* bytes, uint64_t size, Buf
     return true;
 }
 
+// An image's or a textured mesh's pixels into the slot's texture, which is kept while the size
+// and format stay: one copy from the host, counted with the buffers' uploads.
+bool SceneView::upload_texture(Slot& s, caliper_gfx::Format f, uint32_t w, uint32_t h, const void* data,
+                               uint32_t row_pitch, std::string* why) {
+    if (!s.texture || s.tex_w != w || s.tex_h != h || s.tex_format != f) {
+        release_texture(s);
+        caliper_gfx::TextureDesc d;
+        d.width = w;
+        d.height = h;
+        d.format = f;
+        d.usage = caliper_gfx::kSampled | caliper_gfx::kCopyDstTex;
+        d.label = "scene image";
+        s.texture = gfx_.create_texture(d);
+        if (!s.texture) {
+            if (why) *why = "no texture of " + std::to_string(w) + " x " + std::to_string(h) + " (" + gfx_.last_error() + ")";
+            return false;
+        }
+        s.tex_w = w;
+        s.tex_h = h;
+        s.tex_format = f;
+        ++counts_.textures_created;
+    } else {
+        ++counts_.textures_reused;
+    }
+    if (!gfx_.write_texture(s.texture, data, row_pitch)) {
+        if (why) *why = "the image: " + gfx_.last_error();
+        return false;
+    }
+    const uint64_t bytes = uint64_t(w) * h * caliper_gfx::format_bytes(f);
+    counts_.bytes_last += bytes;
+    counts_.bytes_total += bytes;
+    ++counts_.copies_total;
+    return true;
+}
+
+void SceneView::release_texture(Slot& s) {
+    if (s.texture) gfx_.release(s.texture);   // the layer keeps it until its last frame completed
+    s.texture = {};
+    s.tex_w = s.tex_h = 0;
+}
+
 void SceneView::release(Slot& s) {
     for (auto& kv : s.buffers)
         if (kv.second.buffer) gfx_.release(kv.second.buffer);
     s.buffers.clear();
+    release_texture(s);
+    s.cpu_rows.clear();
+    s.cpu_ids.clear();
     s.present = false;
 }
 
@@ -184,12 +222,13 @@ void SceneView::reset_scene() {
     changed();
 }
 
-// The entity's batches from its slots: both layers of the entity are cleared in the store, then
-// the static layer of each part is set again, then the stamped one, which wins where both exist.
+// The entity's batches from its slots: both layers of the entity's batches are cleared in the
+// store, then the static layer of each part is set again, then the stamped one, which wins where
+// both exist. Its transform and camera live in the store's own layers and stay.
 void SceneView::rebuild(const std::string& path) {
     const EntityId e = tree_.find(path);
     if (!e) return;
-    tree_.clear(e, false, true);
+    tree_.clear(e, false, true, kClearBatches);
     for (const bool fixed : {true, false})
         for (int p = 1; p <= kPrimitiveCount; ++p) {
             const auto it = slots_.find(Key{path, p, fixed});
@@ -205,8 +244,7 @@ void SceneView::rebuild(const std::string& path) {
 bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
     ++counts_.messages;
     const caliper_net::Json& params = u.params;
-    const Primitive prim = primitive_of(u.part);
-    const wire::Section* pos = u.array("positions");
+    const int part = wire::scene_part_index(u.part);
     const std::string where = (u.path.empty() ? std::string("the root") : u.path) + " " + u.part;
     auto refuse = [&](const std::string& text) {
         const std::string t = where + ": " + text;
@@ -214,18 +252,50 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
         if (why) *why = t;
         return false;
     };
-    if (!pos || pos->shape.size() != 2) return refuse("no positions");
-    const uint64_t n = uint64_t(pos->shape[0]);
-    const uint32_t dims = uint32_t(pos->shape[1]);
-    const uint32_t want = tree_.space() == Space::k2D ? 2u : 3u;
-    if (dims != want)
-        return refuse(std::to_string(dims) + "-D positions in a " + std::to_string(want) + "-D scene");
-
+    if (part < 0) return refuse("an unknown part");
     std::string err;
     const EntityId e = tree_.ensure(u.path, &err);
     if (!e) return refuse(err);
+
+    // A camera is no batch: it goes to the store's camera layers, which a clear of the part
+    // "camera" empties.
+    if (u.part == CALIPER_NET_PART_CAMERA) {
+        Pinhole c;
+        c.fx = num(params, "fx", 0.0);
+        c.fy = num(params, "fy", 0.0);
+        c.cx = num(params, "cx", 0.0);
+        c.cy = num(params, "cy", 0.0);
+        c.width = uint32_t(std::clamp(num(params, "width", 0.0), 0.0, double(kMaxImageSide)));
+        c.height = uint32_t(std::clamp(num(params, "height", 0.0), 0.0, double(kMaxImageSide)));
+        const caliper_net::Json* conv = params.find("convention");
+        c.convention = conv && conv->is_string() && conv->as_string() == CALIPER_NET_CONVENTION_RUB ? Convention::Rub
+                                                                                                     : Convention::Rdf;
+        c.plane_distance = num(params, "plane_distance", 0.0);
+        if (!tree_.set_camera(e, c, u.is_static, &err)) return refuse(err);
+        changed();
+        return true;
+    }
+
+    const Primitive prim = Primitive(part + 1);   // points, lines, arrows, boxes, mesh, image
+    const char* first = u.part == CALIPER_NET_PART_ARROWS  ? "origins"
+                        : u.part == CALIPER_NET_PART_BOXES ? "centers"
+                        : u.part == CALIPER_NET_PART_IMAGE ? "pixels"
+                                                           : "positions";
+    const wire::Section* lead = u.array(first);
+    if (!lead || lead->shape.empty()) return refuse(std::string("no ") + first);
+    const bool image = prim == Primitive::Image;
+    // Rows and their dimension: 2 in a 2-D scene and under a camera, 3 elsewhere.
+    const uint64_t n = image ? 0 : uint64_t(lead->shape[0]);
+    const uint32_t dims = image ? 0 : (lead->shape.size() == 2 ? uint32_t(lead->shape[1]) : 0);
+    if (!image) {
+        const uint32_t want = (tree_.space() == Space::k2D || in_pixel_space(e)) ? 2u : 3u;
+        if (dims != want)
+            return refuse(std::to_string(dims) + "-D " + first + " where " + std::to_string(want) + "-D data is needed");
+    }
+
     Slot& slot = slots_[Key{u.path, int(prim), u.is_static}];
-    if (n == 0) {   // an empty batch removes the part
+    const bool empty = image ? lead->count() == 0 : n == 0;
+    if (empty) {   // an empty batch removes the part
         release(slot);
         rebuild(u.path);
         return true;
@@ -261,18 +331,50 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
     }
     b.vmin = float(vmin);
     b.vmax = float(vmax);
+    if (const caliper_net::Json* w = params.find("width"); w && w->is_number() && w->as_double() > 0)
+        b.width_px = float(w->as_double());
+    if (const caliper_net::Json* f = params.find("fill"); f && f->is_bool()) b.fill = f->as_bool();
+    if (const caliper_net::Json* l = params.find("labels"); l && l->is_array())
+        for (const caliper_net::Json& s : l->items()) b.labels.push_back(s.as_string());
 
-    // Bounds: the producer's, else a scan of the positions as they arrived.
-    bool have = stats.size() >= 8;
+    // Bounds: the producer's for points, lines and meshes, else a scan of the rows as they arrived;
+    // arrows add their tips and boxes their half sizes (the store's rule for its CPU views).
+    auto rows_of = [&](const char* name) -> const float* {
+        const wire::Section* s = u.array(name);
+        return s ? reinterpret_cast<const float*>(s->data) : nullptr;
+    };
+    auto add_row = [&](const float* p, uint64_t i, double k, const float* d, const float* h) {
+        double v[3] = {p[i * dims], p[i * dims + 1], dims == 3 ? p[i * dims + 2] : 0.0};
+        if (d)
+            for (uint32_t c = 0; c < dims; ++c) v[c] += k * d[i * dims + c];
+        if (h) {
+            double r[3] = {std::fabs(h[i * dims]), std::fabs(h[i * dims + 1]), dims == 3 ? std::fabs(h[i * dims + 2]) : 0.0};
+            if (u.array("rotations")) {
+                const double l = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+                r[0] = r[1] = l;
+                r[2] = dims == 3 ? l : 0.0;
+            }
+            for (int c = 0; c < 3; ++c) v[c] += k * r[c];
+        }
+        if (std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2])) b.bounds.add({v[0], v[1], v[2]});
+    };
+    bool have = !image && prim != Primitive::Arrows && prim != Primitive::Boxes && stats.size() >= 8;
     for (size_t k = 2; have && k < 8; ++k) have = std::isfinite(stats[k]);
     if (have) {
         b.bounds.add({stats[2], stats[4], dims == 3 ? stats[6] : 0.0});
         b.bounds.add({stats[3], stats[5], dims == 3 ? stats[7] : 0.0});
-    } else {
-        const float* p = reinterpret_cast<const float*>(pos->data);
+    } else if (!image) {
+        const float* p = rows_of(first);
+        const float* vec = prim == Primitive::Arrows ? rows_of("vectors") : nullptr;
+        const float* half = prim == Primitive::Boxes ? rows_of("half_sizes") : nullptr;
         for (uint64_t i = 0; i < n; ++i) {
-            const double x = p[i * dims], y = p[i * dims + 1], z = dims == 3 ? p[i * dims + 2] : 0.0;
-            if (std::isfinite(x) && std::isfinite(y) && std::isfinite(z)) b.bounds.add({x, y, z});
+            if (half) {
+                add_row(p, i, -1.0, nullptr, half);
+                add_row(p, i, 1.0, nullptr, half);
+            } else {
+                add_row(p, i, 0.0, nullptr, nullptr);
+                if (vec) add_row(p, i, 1.0, vec, nullptr);
+            }
         }
     }
 
@@ -290,6 +392,11 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
         b.arrays.push_back(a);
         return true;
     };
+    const VertexFormat rowf = dims == 2 ? VertexFormat::F32x2 : VertexFormat::F32x3;
+    auto add_rows = [&](Role role, const char* name) {
+        const wire::Section* s = u.array(name);
+        return !s || add(role, s->data, uint64_t(s->shape[0]), dims * 4, rowf);
+    };
     // A refusal after the first upload drops the part: its buffers no longer hold what the store's
     // batch describes.
     auto failed = [&]() {
@@ -299,84 +406,224 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
         rebuild(u.path);
         return false;
     };
+    // CPU copies for the labels: the rows the anchors are projected from and the class ids that
+    // name the items without a label of their own.
+    std::vector<uint8_t> cpu_rows, cpu_ids;
+    auto keep_cpu = [&](const char* rows_name) {
+        const bool ids = u.array("class_ids") != nullptr;
+        if (b.labels.empty() && !ids) return;
+        const wire::Section* s = u.array(rows_name);
+        cpu_rows.assign(s->data, s->data + s->size);
+        if (const wire::Section* c = u.array("class_ids")) cpu_ids.assign(c->data, c->data + c->size);
+    };
 
-    if (!add(Role::Positions, pos->data, n, dims * 4, dims == 2 ? VertexFormat::F32x2 : VertexFormat::F32x3))
-        return failed();
     const wire::Section* colors = u.array("colors");
     const wire::Section* values = u.array("values");
     bool translucent = has_flat && (rgba >> 24) < 255;
+    auto add_colours = [&]() {
+        if (colors) {
+            const uint32_t* rows = reinterpret_cast<const uint32_t*>(colors->data);
+            const uint64_t m = uint64_t(colors->shape[0]);
+            for (uint64_t i = 0; i < m && !translucent; ++i) translucent = (rows[i] >> 24) < 255;
+            return add(Role::Colors, colors->data, m, 4, VertexFormat::Unorm8x4);
+        }
+        if (values) return add(Role::Values, values->data, uint64_t(values->shape[0]), 4, VertexFormat::F32);
+        return true;
+    };
+    auto add_class_ids = [&]() {
+        const wire::Section* c = u.array("class_ids");
+        return !c || add(Role::ClassIds, c->data, uint64_t(c->shape[0]), 4, VertexFormat::S32);
+    };
 
-    if (prim == Primitive::Lines) {
-        const caliper_net::Json* mode = params.find("mode");
-        const bool strips = mode && mode->is_string() && mode->as_string() == CALIPER_NET_LINES_STRIPS;
-        b.line_mode = strips ? LineMode::Strips : LineMode::Segments;
-        b.width_px = float(num(params, "width", 2.0));
-        if (!(b.width_px > 0.0f)) b.width_px = 2.0f;
-        if (strips) {
-            // The break mask from the strip lengths, and per-strip colours or values expanded to
-            // their vertices: the scene core reads both per vertex.
-            const wire::Section* sl = u.array("strip_lengths");
-            if (!sl) {
-                problem = "strips without strip_lengths";
-                return failed();
+    switch (prim) {
+        case Primitive::Points: {
+            if (!add_rows(Role::Positions, "positions") || !add_colours() || !add_class_ids()) return failed();
+            if (const wire::Section* radii = u.array("radii")) {
+                if (!add(Role::Radii, radii->data, n, 4, VertexFormat::F32)) return failed();
+            } else if (const caliper_net::Json* r = params.find("radius"); r && r->is_number()) {
+                const float one = float(r->as_double());
+                if (!add(Role::Radii, &one, 1, 0, VertexFormat::F32)) return failed();
             }
-            const int32_t* len = reinterpret_cast<const int32_t*>(sl->data);
-            const uint64_t strips_n = uint64_t(sl->shape[0]);
+            keep_cpu("positions");
+            break;
+        }
+        case Primitive::Lines: {
+            if (!add_rows(Role::Positions, "positions")) return failed();
+            const caliper_net::Json* mode = params.find("mode");
+            const std::string md = mode && mode->is_string() ? mode->as_string() : std::string(CALIPER_NET_LINES_SEGMENTS);
             const caliper_net::Json* cp = params.find("color_per");
-            const bool per_strip = cp && cp->is_string() && cp->as_string() == CALIPER_NET_COLOR_PER_STRIP;
-            scratch_.assign(n * 4, 0);
-            uint32_t* mask = reinterpret_cast<uint32_t*>(scratch_.data());
-            std::vector<uint32_t> strip_of;
-            if (per_strip) strip_of.resize(n);
-            uint64_t v = 0;
-            for (uint64_t s = 0; s < strips_n && v < n; ++s) {
-                const uint64_t l = uint64_t(std::max(len[s], 0));
-                for (uint64_t k = 0; k < l && v < n; ++k, ++v) {
-                    mask[v] = k + 1 < l ? 1u : 0u;
-                    if (per_strip) strip_of[v] = uint32_t(s);
-                }
-            }
-            if (!add(Role::BreakMask, mask, n, 4, VertexFormat::U8)) return failed();
-            const wire::Section* src = colors ? colors : values;
-            if (src && per_strip) {
-                std::vector<uint32_t> expanded(n);
-                const uint32_t* rows = reinterpret_cast<const uint32_t*>(src->data);
-                for (uint64_t i = 0; i < n; ++i) expanded[i] = rows[strip_of[i]];
-                if (colors) {
-                    for (uint64_t s = 0; s < strips_n; ++s) translucent = translucent || (rows[s] >> 24) < 255;
-                    if (!add(Role::Colors, expanded.data(), n, 4, VertexFormat::Unorm8x4)) return failed();
-                } else if (!add(Role::Values, expanded.data(), n, 4, VertexFormat::F32)) {
+            const std::string per = cp && cp->is_string() ? cp->as_string() : std::string(CALIPER_NET_COLOR_PER_VERTEX);
+            if (md == CALIPER_NET_LINES_STRIPS) {
+                b.line_mode = LineMode::Strips;
+                // The break mask from the strip lengths, and per-strip colours or values expanded to
+                // their vertices: the scene core reads both per vertex.
+                const wire::Section* sl = u.array("strip_lengths");
+                if (!sl) {
+                    problem = "strips without strip_lengths";
                     return failed();
                 }
-                colors = values = nullptr;
+                const int32_t* len = reinterpret_cast<const int32_t*>(sl->data);
+                const uint64_t strips_n = uint64_t(sl->shape[0]);
+                const bool per_strip = per == CALIPER_NET_COLOR_PER_STRIP;
+                scratch_.assign(n * 4, 0);
+                uint32_t* mask = reinterpret_cast<uint32_t*>(scratch_.data());
+                std::vector<uint32_t> strip_of;
+                if (per_strip) strip_of.resize(n);
+                uint64_t v = 0;
+                for (uint64_t s = 0; s < strips_n && v < n; ++s) {
+                    const uint64_t l = uint64_t(std::max(len[s], 0));
+                    for (uint64_t k = 0; k < l && v < n; ++k, ++v) {
+                        mask[v] = k + 1 < l ? 1u : 0u;
+                        if (per_strip) strip_of[v] = uint32_t(s);
+                    }
+                }
+                if (!add(Role::BreakMask, mask, n, 4, VertexFormat::U8)) return failed();
+                const wire::Section* src = colors ? colors : values;
+                if (src && per_strip) {
+                    std::vector<uint32_t> expanded(n);
+                    const uint32_t* rows = reinterpret_cast<const uint32_t*>(src->data);
+                    for (uint64_t i = 0; i < n; ++i) expanded[i] = rows[strip_of[i]];
+                    if (colors) {
+                        for (uint64_t s = 0; s < strips_n; ++s) translucent = translucent || (rows[s] >> 24) < 255;
+                        if (!add(Role::Colors, expanded.data(), n, 4, VertexFormat::Unorm8x4)) return failed();
+                    } else if (!add(Role::Values, expanded.data(), n, 4, VertexFormat::F32)) {
+                        return failed();
+                    }
+                    colors = values = nullptr;
+                }
+            } else if (md == CALIPER_NET_LINES_EDGES) {
+                // Index-pair edges: the scene core's edge gather clamps each pair and gathers its two
+                // ends; colours and values belong to the vertices or, with color_per "edge", to the edges.
+                b.line_mode = LineMode::Edges;
+                b.per_edge = per == CALIPER_NET_COLOR_PER_EDGE;
+                const wire::Section* idx = u.array("indices");
+                if (!idx) {
+                    problem = "edges without indices";
+                    return failed();
+                }
+                if (!add(Role::Indices, idx->data, uint64_t(idx->shape[0]), 8, VertexFormat::S32)) return failed();
+            } else {
+                b.line_mode = LineMode::Segments;
             }
+            if (!add_colours()) return failed();
+            break;
         }
-    } else if (prim == Primitive::Mesh) {
-        if (const wire::Section* idx = u.array("indices"))
-            if (!add(Role::Indices, idx->data, uint64_t(idx->shape[0]), 12, VertexFormat::S32)) return failed();
-    } else {
-        if (const wire::Section* radii = u.array("radii")) {
-            if (!add(Role::Radii, radii->data, n, 4, VertexFormat::F32)) return failed();
-        } else if (const caliper_net::Json* r = params.find("radius"); r && r->is_number()) {
-            const float one = float(r->as_double());
-            if (!add(Role::Radii, &one, 1, 0, VertexFormat::F32)) return failed();
+        case Primitive::Arrows:
+            if (!add_rows(Role::Origins, "origins") || !add_rows(Role::Vectors, "vectors") || !add_colours())
+                return failed();
+            break;
+        case Primitive::Boxes: {
+            if (!add_rows(Role::Centers, "centers") || !add_rows(Role::HalfSizes, "half_sizes")) return failed();
+            if (const wire::Section* r = u.array("rotations"))
+                if (!add(Role::Rotations, r->data, n, 16, VertexFormat::F32x4)) return failed();
+            if (!add_colours() || !add_class_ids()) return failed();
+            keep_cpu("centers");
+            break;
+        }
+        case Primitive::Mesh: {
+            if (!add_rows(Role::Positions, "positions")) return failed();
+            if (const wire::Section* idx = u.array("indices"))
+                if (!add(Role::Indices, idx->data, uint64_t(idx->shape[0]), 12, VertexFormat::S32)) return failed();
+            if (const wire::Section* nrm = u.array("normals"))
+                if (!add(Role::Normals, nrm->data, n, 12, VertexFormat::F32x3)) return failed();
+            if (!add_colours()) return failed();
+            const wire::Section* uvs = u.array("uvs");
+            const wire::Section* tex = u.array("texture");
+            if (uvs && tex) {
+                if (!add(Role::Uvs, uvs->data, n, 8, VertexFormat::F32x2)) return failed();
+                const uint32_t tw = uint32_t(tex->shape[1]), th = uint32_t(tex->shape[0]);
+                if (!upload_texture(slot, caliper_gfx::Format::RGBA8Unorm, tw, th, tex->data, tw * 4, &problem))
+                    return failed();
+                b.texture = slot.texture;
+                b.image_width = tw;
+                b.image_height = th;
+                const uint32_t* px = reinterpret_cast<const uint32_t*>(tex->data);
+                for (uint64_t i = 0, m = uint64_t(tw) * th; i < m && !translucent; ++i) translucent = (px[i] >> 24) < 255;
+            }
+            break;
+        }
+        case Primitive::Image: {
+            const caliper_net::Json* fm = params.find("form");
+            const std::string form = fm && fm->is_string() ? fm->as_string() : std::string();
+            const uint32_t h = uint32_t(lead->shape[0]);
+            const uint32_t w = lead->shape.size() >= 2 ? uint32_t(lead->shape[1]) : 0;
+            const uint32_t side = gfx_.caps().limits.max_texture_dimension_2d;
+            if (form == CALIPER_NET_FORM_ENCODED) return refuse("encoded images are not drawn yet");
+            if (w == 0 || h == 0) return refuse("an image without pixels");
+            if (w > side || h > side)
+                return refuse(std::to_string(w) + " x " + std::to_string(h) + " pixels, past this device's " +
+                              std::to_string(side) + " on a side");
+            b.image_width = w;
+            b.image_height = h;
+            if (const caliper_net::Json* o = params.find("opacity"); o && o->is_number())
+                b.opacity = float(std::clamp(o->as_double(), 0.0, 1.0));
+            else
+                b.opacity = form == CALIPER_NET_FORM_SEGMENTATION ? 0.5f : 1.0f;
+            bool ok = false;
+            if (form == CALIPER_NET_FORM_COLOR) {
+                const bool grey = lead->shape.size() == 2;
+                b.image_form = grey ? ImageForm::Grey : ImageForm::Color;
+                ok = upload_texture(slot, grey ? caliper_gfx::Format::R8Unorm : caliper_gfx::Format::RGBA8Unorm, w, h,
+                                    lead->data, w * (grey ? 1 : 4), &problem);
+                if (!grey) {
+                    const uint32_t* px = reinterpret_cast<const uint32_t*>(lead->data);
+                    for (uint64_t i = 0, m = uint64_t(w) * h; i < m && !translucent; ++i) translucent = (px[i] >> 24) < 255;
+                }
+            } else if (form == CALIPER_NET_FORM_DEPTH || form == CALIPER_NET_FORM_SEGMENTATION) {
+                // Bits in an r32uint texture: f32 depths in scene units (a u16 depth scaled to them), or
+                // class ids, so that the colormap and the class table decide on the values as they are.
+                std::vector<uint32_t> bits(size_t(w) * h);
+                if (form == CALIPER_NET_FORM_DEPTH) {
+                    b.image_form = ImageForm::Depth;
+                    const bool u16 = lead->dtype == CALIPER_NET_DTYPE_U16;
+                    const float scale = float(num(params, "scale", u16 ? 0.001 : 1.0));
+                    if (u16) {
+                        const uint16_t* src = reinterpret_cast<const uint16_t*>(lead->data);
+                        for (size_t i = 0; i < bits.size(); ++i) {
+                            const float d = float(src[i]) * scale;
+                            std::memcpy(&bits[i], &d, 4);
+                        }
+                    } else {
+                        const float* src = reinterpret_cast<const float*>(lead->data);
+                        for (size_t i = 0; i < bits.size(); ++i) {
+                            const float d = scale == 1.0f ? src[i] : src[i] * scale;
+                            std::memcpy(&bits[i], &d, 4);
+                        }
+                    }
+                    const caliper_net::Json* cl = params.find("cloud");
+                    b.cloud = cl && cl->is_bool() ? cl->as_bool() : in_pixel_space(e);   // the model's default
+                } else {
+                    b.image_form = ImageForm::Segmentation;
+                    if (lead->dtype == CALIPER_NET_DTYPE_U16) {
+                        const uint16_t* src = reinterpret_cast<const uint16_t*>(lead->data);
+                        for (size_t i = 0; i < bits.size(); ++i) bits[i] = src[i];
+                    } else {
+                        for (size_t i = 0; i < bits.size(); ++i) bits[i] = lead->data[i];
+                    }
+                }
+                ok = upload_texture(slot, caliper_gfx::Format::R32Uint, w, h, bits.data(), w * 4, &problem);
+            } else {
+                return refuse("an image of form '" + form + "'");
+            }
+            if (!ok) return failed();
+            b.texture = slot.texture;
+            b.translucent = translucent;
+            break;
         }
     }
-    if (colors) {
-        const uint32_t* rows = reinterpret_cast<const uint32_t*>(colors->data);
-        const uint64_t m = uint64_t(colors->shape[0]);
-        for (uint64_t i = 0; i < m && !translucent; ++i) translucent = (rows[i] >> 24) < 255;
-        if (!add(Role::Colors, colors->data, m, 4, VertexFormat::Unorm8x4)) return failed();
-    } else if (values) {
-        if (!add(Role::Values, values->data, uint64_t(values->shape[0]), 4, VertexFormat::F32)) return failed();
+    b.translucent = b.translucent || translucent;
+    for (BatchArray& a : b.arrays) {   // the CPU views of the labels' rows and ids
+        if ((a.role == Role::Positions || a.role == Role::Centers) && !cpu_rows.empty()) a.cpu = cpu_rows.data();
+        if (a.role == Role::ClassIds && !cpu_ids.empty()) a.cpu = cpu_ids.data();
     }
-    b.translucent = translucent;
 
     // Every upload above is in the slot's buffers; the store takes the batch now.
     if (!tree_.set_batch(e, b, u.is_static, &problem)) return failed();
     slot.batch = b;
+    slot.cpu_rows = std::move(cpu_rows);   // the batch's CPU views point into these buffers
+    slot.cpu_ids = std::move(cpu_ids);
     slot.present = true;
-    // Buffers of roles this batch no longer has go back to the layer.
+    // Buffers of roles this batch no longer has, and a texture it no longer has, go back to the layer.
     for (auto it = slot.buffers.begin(); it != slot.buffers.end();) {
         if (!b.array(Role(it->first))) {
             if (it->second.buffer) gfx_.release(it->second.buffer);
@@ -384,6 +631,55 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
         } else {
             ++it;
         }
+    }
+    if (slot.texture && !b.texture) release_texture(slot);
+    changed();
+    return true;
+}
+
+bool SceneView::apply(const wire::SceneTransforms& t, std::string* why) {
+    ++counts_.messages;
+    const uint64_t k = t.paths.size();
+    if (t.matrices.size < k * 64) {
+        note("entity transforms: the matrices are short");
+        if (why) *why = "entity transforms: the matrices are short";
+        return false;
+    }
+    bool ok = true;
+    for (uint64_t i = 0; i < k; ++i) {
+        float m[16];
+        std::memcpy(m, t.matrices.data + i * 64, 64);
+        std::string err;
+        const EntityId e = tree_.ensure(t.paths[i], &err);
+        if (!e || !tree_.set_transform(e, m, t.is_static, &err)) {
+            const std::string text = t.paths[i] + " transform: " + err;
+            note(text);
+            if (why && ok) *why = text;
+            ok = false;
+        }
+    }
+    changed();
+    return ok;
+}
+
+bool SceneView::apply(const wire::SceneClasses& c, std::string* why) {
+    ++counts_.messages;
+    std::vector<ClassEntry> table;
+    for (const caliper_net::Json& x : c.classes.items()) {
+        ClassEntry ce;
+        const caliper_net::Json* id = x.find("id");
+        int64_t v = 0;
+        if (!id || !id->get_i64(&v) || v < 0 || v > int64_t(kMaxClassId)) continue;
+        ce.id = uint32_t(v);
+        if (const caliper_net::Json* l = x.find("label"); l && l->is_string()) ce.label = l->as_string();
+        if (!flat_color(x, &ce.rgba)) ce.rgba = kPalette[ce.id % 16];
+        table.push_back(std::move(ce));
+    }
+    std::string err;
+    if (!tree_.set_classes(table, c.is_static, &err)) {
+        note("class table: " + err);
+        if (why) *why = "class table: " + err;
+        return false;
     }
     changed();
     return true;
@@ -397,12 +693,16 @@ bool SceneView::apply(const wire::SceneClear& c, std::string* why) {
     }
     if (!tree_.find(c.path) && c.path != "") return true;   // nothing there
     std::vector<int> parts;
+    uint32_t pose = 0;   // the transform and camera bits, which the store's layers hold
     if (c.parts) {
-        for (const std::string& p : *c.parts)
-            if (p == CALIPER_NET_PART_POINTS || p == CALIPER_NET_PART_LINES || p == CALIPER_NET_PART_MESH)
-                parts.push_back(int(primitive_of(p)));
+        for (const std::string& p : *c.parts) {
+            if (p == CALIPER_NET_PART_TRANSFORM) pose |= kClearTransform;
+            else if (p == CALIPER_NET_PART_CAMERA) pose |= kClearCamera;
+            else if (const int k = wire::scene_part_index(p); k >= 0 && k < kPrimitiveCount) parts.push_back(k + 1);
+        }
     } else {
         for (int p = 1; p <= kPrimitiveCount; ++p) parts.push_back(p);
+        pose = kClearTransform | kClearCamera;
     }
     std::vector<std::string> touched;
     const std::string prefix = c.path.empty() ? std::string() : c.path + "/";
@@ -416,8 +716,60 @@ bool SceneView::apply(const wire::SceneClear& c, std::string* why) {
         if (std::find(touched.begin(), touched.end(), k.path) == touched.end()) touched.push_back(k.path);
     }
     for (const std::string& p : touched) rebuild(p);
+    if (pose) {
+        tree_.clear(c.path.empty() ? tree_.root() : tree_.find(c.path), c.recursive, c.is_static, pose);
+        changed();
+    }
     (void)why;
     return true;
+}
+
+bool SceneView::look_through(const std::string& path, std::string* why) {
+    if (path.empty()) {
+        if (!through_.empty()) changed();
+        through_.clear();
+        return true;
+    }
+    const EntityId e = tree_.find(path);
+    if (!e || !tree_.camera(e)) {
+        if (why) *why = path + " holds no camera";
+        return false;
+    }
+    through_ = path;
+    changed();
+    return true;
+}
+
+ViewCamera SceneView::effective_camera() const {
+    if (!through_.empty()) {
+        const EntityId c = tree_.find(through_);
+        if (c && tree_.camera(c)) {
+            ThroughPinhole t;
+            t.camera = c;
+            return t;
+        }
+    }
+    return camera_;
+}
+
+std::vector<std::string> SceneView::cameras() const {
+    std::vector<std::string> out;
+    for (uint32_t i : tree_.path_order()) {
+        const EntityId e = tree_.entity_at(i);
+        if (tree_.camera(e)) out.push_back(tree_.path(e));
+    }
+    return out;
+}
+
+std::vector<LabelAnchor> SceneView::labels() const {
+    if (!width_ || !height_) return {};
+    return project_labels(tree_, effective_camera(), width_, height_);
+}
+
+bool SceneView::in_pixel_space(EntityId e) const {
+    for (EntityId p = tree_.parent(e); p; p = tree_.parent(p))
+        if (tree_.camera(p)) return true;
+    return false;
 }
 
 // ---- camera --------------------------------------------------------------------------------------
@@ -472,6 +824,7 @@ void SceneView::zoom(float wheel, float mx, float my, float view_w, float view_h
 }
 
 void SceneView::fit() {
+    look_through("", nullptr);   // a fit leaves a pinhole for the orbit of the fit
     tree_.update();
     const double aspect = (width_ && height_) ? double(width_) / double(height_) : 1.0;
     caliper_scene::fit(camera_, tree_.scene_bounds(), aspect);
@@ -531,7 +884,11 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
         caliper_scene::fit(camera_, tree_.scene_bounds(), double(width_) / double(height_));
         fitted_ = true;
     }
-    res_->update_class_table(tree_);
+    if (res_->update_class_table(tree_)) {   // 65,536 texels from the host
+        counts_.bytes_last += 65536u * 4u;
+        counts_.bytes_total += 65536u * 4u;
+        ++counts_.copies_total;
+    }
     caliper_gfx::Frame frame;
     compiler_.prepare(tree_, *res_, frame);
     caliper_gfx::RenderTarget target;
@@ -545,7 +902,9 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     opt.pixel_scale = scale_;
     opt.clear_rgba = clear_;
     DrawMap map;
-    const CompileResult r = compiler_.compile(tree_, camera_, opt, *res_, list, &map);
+    if (!through_.empty() && !std::holds_alternative<ThroughPinhole>(effective_camera()))
+        note(through_ + " holds no camera now; the view shows the orbit");
+    const CompileResult r = compiler_.compile(tree_, effective_camera(), opt, *res_, list, &map);
     for (const std::string& n : r.notes) note(n);
     cost_.compile_ms = ms_since(t0);
     if (!r.ok) {
@@ -604,7 +963,11 @@ SceneCounts SceneView::counts() const {
     c.batches = 0;
     c.items = 0;
     c.buffers_live = 0;
-    for (const auto& kv : slots_) c.buffers_live += kv.second.buffers.size();
+    c.textures_live = 0;
+    for (const auto& kv : slots_) {
+        c.buffers_live += kv.second.buffers.size();
+        c.textures_live += kv.second.texture ? 1 : 0;
+    }
     for (size_t i = 0; i < tree_.entity_count(); ++i) {
         const EntityId e = tree_.entity_at(uint32_t(i));
         bool any = false;
@@ -617,10 +980,13 @@ SceneCounts SceneView::counts() const {
             switch (b->primitive) {
                 case Primitive::Lines: {
                     const uint64_t v = b->count();
-                    c.items += b->line_mode == LineMode::Strips ? (v ? v - 1 : 0) : v / 2;
+                    c.items += b->line_mode == LineMode::Edges ? (idx ? idx->count : 0)
+                               : b->line_mode == LineMode::Strips ? (v ? v - 1 : 0)
+                                                                  : v / 2;
                     break;
                 }
                 case Primitive::Mesh: c.items += idx ? idx->count : b->count() / 3; break;
+                case Primitive::Image: c.items += 1; break;
                 default: c.items += b->count(); break;
             }
         }
@@ -655,7 +1021,9 @@ std::string SceneView::camera_text() const {
     } else {
         std::snprintf(t, sizeof t, "pinhole");
     }
-    return std::string(t) + " target_px " + std::to_string(width_) + " " + std::to_string(height_);
+    std::string out = std::string(t) + " target_px " + std::to_string(width_) + " " + std::to_string(height_);
+    if (std::holds_alternative<ThroughPinhole>(effective_camera())) out += " through " + through_;
+    return out;
 }
 
 }  // namespace caliper_live_views

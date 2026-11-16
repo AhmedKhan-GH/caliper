@@ -397,6 +397,12 @@ int poll_scene(CaliperCore* core, CaliperLiveState* L, View& v) {
         } else if (const auto* c = std::get_if<caliper_net::wire::SceneClear>(&it.msg)) {
             ok = caliper_live_views::scene_apply(core, v.name, *c, &why);
             ++applied;
+        } else if (const auto* t = std::get_if<caliper_net::wire::SceneTransforms>(&it.msg)) {
+            ok = caliper_live_views::scene_apply(core, v.name, *t, &why);
+            ++applied;
+        } else if (const auto* k = std::get_if<caliper_net::wire::SceneClasses>(&it.msg)) {
+            ok = caliper_live_views::scene_apply(core, v.name, *k, &why);
+            ++applied;
         } else {
             caliper_live_views::scene_note(core, v.name, std::get<std::string>(it.msg));
         }

@@ -79,10 +79,11 @@ struct SourceView {
 // in their order, to the scene view (live_views_scene.h). A message's sections
 // point into `keep`, the received frame, which lives as long as the item. A note
 // is something the source ignored for the view, as the versioning rules of 3.2
-// say (a part, a mode or a section this viewer does not build).
+// say (a part, a form or a section this viewer does not build).
 struct SceneItem {
     std::shared_ptr<const void> keep;
-    std::variant<caliper_net::wire::SceneUpdate, caliper_net::wire::SceneClear, std::string> msg;
+    std::variant<caliper_net::wire::SceneUpdate, caliper_net::wire::SceneClear, std::string,
+                 caliper_net::wire::SceneTransforms, caliper_net::wire::SceneClasses> msg;
 };
 
 // ---- wire protocol 3.1: controls and linked selection --------------------------

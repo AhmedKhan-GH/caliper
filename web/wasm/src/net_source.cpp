@@ -369,12 +369,13 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
                                             (const float*)m.values.data, (uint64_t)m.values.count());
             v->series_stamp = m.stamp_ns;
             ++v->series_seq;
-        } else if constexpr (std::is_same_v<T, wire::SceneUpdate> || std::is_same_v<T, wire::SceneClear>) {
+        } else if constexpr (std::is_same_v<T, wire::SceneUpdate> || std::is_same_v<T, wire::SceneClear> ||
+                             std::is_same_v<T, wire::SceneTransforms> || std::is_same_v<T, wire::SceneClasses>) {
             View* v = by_sub(m.sub);
             if (!v || v->kind != CALIPER_NET_KIND_SCENE) return;
             if constexpr (std::is_same_v<T, wire::SceneUpdate>) {
-                // A part the scene view does not draw yet is answered ERROR unsupported and noted, not
-                // queued; what the view does not use of a drawn part (a stamp, class ids, ...) is noted.
+                // A form the scene view does not draw yet (an encoded image) is answered ERROR
+                // unsupported and noted, not queued; a section it does not use (a stamp) is noted.
                 const std::string why = caliper_live::scene_not_drawn(m);
                 if (!why.empty()) {
                     wire::Error e;
@@ -396,13 +397,6 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
             item.keep = keep;
             item.msg = std::move(m);
             if (caliper_live::scene_queue_push(v->scene, std::move(item))) resubscribe(*v);
-        } else if constexpr (std::is_same_v<T, wire::SceneTransforms> || std::is_same_v<T, wire::SceneClasses>) {
-            // 3.2 draft: the scene view applies no entity transform or class table yet; the view says so.
-            View* v = by_sub(m.sub);
-            if (!v || v->kind != CALIPER_NET_KIND_SCENE) return;
-            const char* what = std::is_same_v<T, wire::SceneTransforms> ? "ignored: entity transforms are not applied yet"
-                                                                         : "ignored: class tables are not applied yet";
-            if (caliper_live::scene_queue_push(v->scene, caliper_live::SceneItem{nullptr, what})) resubscribe(*v);
         } else if constexpr (std::is_same_v<T, wire::Ping>) {
             wire::Pong pong;
             pong.nonce = m.nonce;
