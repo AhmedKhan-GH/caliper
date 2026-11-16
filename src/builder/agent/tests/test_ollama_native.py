@@ -116,6 +116,22 @@ def test_a_turn_runs_on_the_native_api_with_the_context_length(ollama_agent, cal
     assert usage["requests"] == 2 and usage["input_tokens"] == 22 and usage["output_tokens"] == 6
 
 
+def test_several_calls_in_one_native_reply_run_in_order(ollama_agent, caliper):
+    agent, server = ollama_agent([{"tool_calls": [_call("call_a", "catalog_list", '{"kind": "table"}'),
+                                                  _call("call_b", "catalog_list", '{"kind": "tensor"}')]},
+                                  {"text": "One table and one tensor."}], native_ids=False)
+    sid = agent.start_session()
+    response, _ = agent.prompt(sid, "What data do I have?")
+    assert response["result"]["stopReason"] == "end_turn"
+    assert [c["args"] for c in caliper.commands("catalog.list")] == [{"kind": "table"}, {"kind": "tensor"}]
+    second = server.native_requests[1]
+    calls = next(m for m in second["messages"] if m["role"] == "assistant")["tool_calls"]
+    assert [c["function"]["arguments"] for c in calls] == [{"kind": "table"}, {"kind": "tensor"}]
+    assert len({c["id"] for c in calls}) == 2   # an id made for each call Ollama sent without one
+    results = [m for m in second["messages"] if m["role"] == "tool"]
+    assert [r["tool_call_id"] for r in results] == [c["id"] for c in calls]
+
+
 def test_each_role_has_its_own_context_length(ollama_agent):
     agent, server = ollama_agent([{"text": "A linear axis."}, {"text": "Hello."}])
     widget = agent.start_session(meta=widget_meta())
