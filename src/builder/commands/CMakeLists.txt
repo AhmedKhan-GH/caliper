@@ -1,6 +1,7 @@
 # caliper_builder_commands: the command layer of docs/plans/command-layer.md.
 add_library(caliper_builder_commands STATIC
     command.cpp
+    history.cpp
     schema.cpp
     sha256.cpp)
 target_include_directories(caliper_builder_commands PUBLIC "${CALIPER_BUILDER_INCLUDE_ROOT}")
@@ -11,4 +12,5 @@ caliper_builder_add_tests(commands
     SOURCES
         tests/test_schema.cpp
         tests/test_command.cpp
+        tests/test_history.cpp
     LIBS caliper_builder_commands)

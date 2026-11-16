@@ -230,10 +230,11 @@ Error validate_node(const json& s, const json& v, const std::string& where, std:
         }
     }
     if (v.is_array()) {
-        if (s.contains("minItems") && v.size() < s["minItems"].get<double>())
+        const auto size = static_cast<double>(v.size());
+        if (s.contains("minItems") && size < s["minItems"].get<double>())
             return bad_value(where + " must hold at least " + number_text(s["minItems"].get<double>()) + " items.",
                              where);
-        if (s.contains("maxItems") && v.size() > s["maxItems"].get<double>())
+        if (s.contains("maxItems") && size > s["maxItems"].get<double>())
             return bad_value(where + " must hold at most " + number_text(s["maxItems"].get<double>()) + " items.",
                              where);
         if (s.contains("items"))
@@ -243,7 +244,7 @@ Error validate_node(const json& s, const json& v, const std::string& where, std:
     }
     if (v.is_string()) {
         const std::string& text = v.get_ref<const std::string&>();
-        const std::size_t length = command_code_points(text);
+        const auto length = static_cast<double>(command_code_points(text));
         if (s.contains("minLength") && length < s["minLength"].get<double>())
             return bad_value(where + " must be at least " + number_text(s["minLength"].get<double>()) +
                                  " characters long.",
