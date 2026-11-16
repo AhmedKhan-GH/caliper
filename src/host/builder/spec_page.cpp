@@ -132,7 +132,7 @@ struct SpecPage::Impl {
     std::unique_ptr<PageSource> source;
     cb::Session* bound = nullptr;   // the session `source` reads
 
-    uint64_t opens_taken = 0;               // AppSession::applets_opened() at the last take_open()
+    uint64_t opens_taken = 0;               // AppSession::specs_opened() at the last take_open()
     std::optional<uint64_t> journal_read;   // AppSession::journaled() when the open spec was last read
 
     std::string title;
@@ -552,7 +552,7 @@ SpecPage::~SpecPage() = default;
 bool SpecPage::built() { return true; }
 
 bool SpecPage::take_open(const AppSession& session) {
-    const uint64_t n = session.applets_opened();
+    const uint64_t n = session.specs_opened();
     if (n == impl_->opens_taken) return false;
     impl_->opens_taken = n;
     return true;

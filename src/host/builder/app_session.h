@@ -184,9 +184,12 @@ public:
     // Every command the journal recorded: any of them may have changed the
     // open spec.
     uint64_t journaled() const;
-    // Every applet.open that succeeded, from any origin: the app shows the
-    // spec page for each.
-    uint64_t applets_opened() const;
+    // Every applet.open that succeeded, from any origin, and every spec.new
+    // or spec.open of an agent (the origins agent and mcp) that succeeded:
+    // the app shows the spec page for each, so that the person sees the spec
+    // whose edits they review. The person's own spec.new shows the page by
+    // its own path (SpecPage::take_new()), in build mode.
+    uint64_t specs_opened() const;
     // Every applet.save that succeeded: the app lists the workspace's
     // applets again for each.
     uint64_t applets_saved() const;

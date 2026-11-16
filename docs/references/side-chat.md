@@ -17,8 +17,9 @@ explains when to use the side chat and when the widget agent.
 page and on the live page; it is outlined in bronze while the chat is open. The chat is the right column of the window,
 28 % of its width and at least 300 points, a minimum that grows with the text scale. The page bar, a stream's run bar,
 the status bar, the jobs tray and the approval cards keep their places at the window's edges, and the page's panels or
-views fill what the column leaves. The chat stays open when the page changes, so a spec that the agent opens from the
-live page shows beside the same conversation.
+views fill what the column leaves. The chat stays open when the page changes, so a spec that the agent makes or opens
+from the live page shows beside the same conversation: the app shows the spec page for each `spec.new`, `spec.open` and
+`applet.open` of the agent, so that you see the spec whose edits you review.
 
 The chat's settings are kept in `side-chat.json` in the app-data folder ([Folders and environment
 variables](environment.md)): the chosen agent, the custom agent's name and command line, whether an agent's "always
