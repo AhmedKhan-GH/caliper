@@ -86,10 +86,12 @@ constexpr KeyCap kKeyPane[4] = {{"\xe2\x8c\x98" "1", "Cmd 1", 0x2318},         /
                                 {"\xe2\x8c\x98" "3", "Cmd 3", 0x2318},
                                 {"\xe2\x8c\x98" "4", "Cmd 4", 0x2318}};
 constexpr KeyCap kKeyRestart = {"\xe2\x8c\x98R", "Cmd R", 0x2318};             // ⌘R
+constexpr KeyCap kKeyAgent   = {"\xe2\x8c\x98,", "Cmd ,", 0x2318};             // ⌘,
 #else
 constexpr KeyCap kKeyEnter   = {"ENTER", "ENTER", 0};
 constexpr KeyCap kKeyCommand = {"Ctrl K", "Ctrl K", 0};
 constexpr KeyCap kKeyRestart = {"Ctrl R", "Ctrl R", 0};
+constexpr KeyCap kKeyAgent   = {"Ctrl ,", "Ctrl ,", 0};
 constexpr KeyCap kKeyPane[4] = {{"Ctrl 1", "Ctrl 1", 0}, {"Ctrl 2", "Ctrl 2", 0},
                                 {"Ctrl 3", "Ctrl 3", 0}, {"Ctrl 4", "Ctrl 4", 0}};
 #endif
@@ -374,6 +376,7 @@ void LandingScreen::draw(const Context& ctx) {
     // Chrome first: both bars, and the jobs tray's strip while it is open,
     // are viewport side bars, so they are submitted before the dock space
     // that fills the work area they leave.
+    agent_settings_ = ctx.agent_settings;
     draw_command_bar();
     draw_status_bar(ctx);
     if (ctx.after_bars) ctx.after_bars();
@@ -678,6 +681,11 @@ void LandingScreen::draw_command_bar() {
                               "no filter to clear")) {
         command_.clear();
         focus_instruments_ = std::max(focus_instruments_, 1);
+    }
+    // ⌘, Agent: the widget agent's settings, the landing's way in to them.
+    if (agent_settings_) {
+        ImGui::SameLine(0.0f, metric::pad);
+        if (sternbild::key_button(key(kKeyAgent), "Agent")) agent_settings_();
     }
     command_right_w_ = ImGui::GetItemRectMax().x - right_x0 -
                        (updown_drawn ? updown_w_ : 0.0f);

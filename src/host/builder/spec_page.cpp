@@ -6,6 +6,7 @@
 #include "builder/chat_pane.h"
 
 #if CALIPER_WITH_BUILDER
+#include "builder/agent_settings.h"
 #include "builder/builder_pane.h"
 #include "builder/panel_renderer.h"
 #include "builder/spec_page_layout.h"
@@ -164,6 +165,8 @@ struct SpecPage::Impl {
         if (!widget_api_file.empty() && api_files.revoke) api_files.revoke(widget_api_file);
         widget_api_file.clear();
     }
+    AgentSettings* settings = nullptr;   // the widget agent's settings, when the app has them
+    int widget_revision = -1;            // the settings' revision the widget's agent was made with
 
     // The builder pane over the bound session (builder_pane.h), made with it;
     // build mode is its own.
@@ -172,17 +175,25 @@ struct SpecPage::Impl {
 
     void open_widget(AppSession& app, const std::string& panel) {
         if (!bound || from_file) return;
+        // Settings changed since the agent was made: made again, while closed.
+        if (widget && settings && settings->revision() != widget_revision && !widget_open()) drop_widget();
         if (!widget) {
             InlineWidget::Options o;
             o.session = bound;
             o.busy = [&app] { return app.worker_busy(); };
             widget_api_file = api_files.issue ? api_files.issue() : std::string();
             std::string none;
-            o.agent = make_app_widget_agent(app_widget_env(hidden, app.workspace(), widget_api_file), &none);
+            AppWidgetEnv env = app_widget_env(hidden, app.workspace(), widget_api_file);
+            if (settings) env.live_attached = settings->options().live_attached;
+            o.agent = make_app_widget_agent(env, &none);
             if (!none.empty() && !widget_api_file.empty()) {   // no sidecar runs: its token ends now
                 if (api_files.revoke) api_files.revoke(widget_api_file);
                 widget_api_file.clear();
             }
+            widget_revision = settings ? settings->revision() : -1;
+            o.hooks.open_settings = [this] {
+                if (settings) settings->set_open(true);
+            };
             // Ask in chat: the side chat opens with the request and its context
             // as a draft. The bundle is built here, inside the frame, so it
             // leaves the panel's render out (no offscreen draw mid-frame).
@@ -658,6 +669,8 @@ void SpecPage::set_api_files(ApiFiles files) { impl_->api_files = std::move(file
 
 void SpecPage::set_chat(ChatPane* chat) { impl_->chat = chat; }
 
+void SpecPage::set_agent_settings(AgentSettings* settings) { impl_->settings = settings; }
+
 bool SpecPage::panel_rect(const std::string& panel_id, float rect[4]) const {
     for (const auto& lp : impl_->runtime->layout().panels)
         if (lp.id == panel_id) {
@@ -776,6 +789,7 @@ BuilderPane* SpecPage::builder() { return nullptr; }
 void SpecPage::set_hidden(bool) {}
 void SpecPage::set_api_files(ApiFiles) {}
 void SpecPage::set_chat(ChatPane*) {}
+void SpecPage::set_agent_settings(AgentSettings*) {}
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
 std::string SpecPage::widget_state() const { return "idle"; }
 void SpecPage::set_panel_overlay(PanelOverlay) {}

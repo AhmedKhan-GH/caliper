@@ -59,6 +59,7 @@ struct SpecAppletFacts;   // ui/landing_screen.h
 
 namespace caliper_host {
 
+class AgentSettings;
 class AppSession;
 class BuilderPane;
 class ChatPane;
@@ -157,6 +158,10 @@ public:
     // touches the key store, and runs the sidecar only on a test's script
     // (builder/widget_app.h).
     void set_hidden(bool hidden);
+    // The widget agent's settings (agent_settings.h): the inline surface's
+    // Setup and Model open them, its agent is made from them, and it is made
+    // again after they change while the surface is closed. Null: no settings.
+    void set_agent_settings(AgentSettings* settings);
     // For the hidden app's input driver (builder/spec_ui_driver.h): a shown
     // panel's rectangle in window points, and the inline surface's state
     // ("idle" before any ⌘K).
