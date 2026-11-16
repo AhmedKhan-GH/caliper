@@ -206,6 +206,12 @@ std::string find_caliper_mcp(const std::string& exe_dir) {
     return {};
 }
 
+std::string chat_permission_label(const ChatItem& item) {
+    if (!item.tool.title.empty()) return item.tool.title;
+    if (!item.diff_path.empty()) return item.diff_path;
+    return "Tool call";
+}
+
 std::string caliper_command_of(const acp::ToolCallInfo& call, const std::string& server) {
     // A tool name of the table: "panel_create" -> "panel.create".
     auto command_of_tool = [](const std::string& tool) -> std::string {
@@ -1674,7 +1680,7 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
                         // cards draw it (diff_card.h) or the unified diff on demand and
                         // for a file that is not a spec, and the agent's options.
                         const bool open = it.answer.empty();
-                        const std::string label = !it.command.empty() ? it.command : it.tool.title;
+                        const std::string label = chat_permission_label(it);
                         const bool compact = !it.compact.empty() && !it.expanded;
                         std::string full;
                         int full_lines = 0;

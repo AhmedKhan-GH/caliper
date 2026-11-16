@@ -247,6 +247,15 @@ nlohmann::json chat_opening_block();
 
 // ---- the conversation ---------------------------------------------------------------------
 
+struct ChatItem;
+// The label of an agent's permission request: the tool's title as the agent
+// gave it, else its file, else "Tool call"; never a Caliper command read from
+// the call's _meta or its name. What the person allows there is the agent's
+// own call, which the card's file and diff show, so a command name that the
+// agent chose must not stand in for it. Caliper's own commands are decided on
+// the approval cards, which name the command the command layer will run.
+std::string chat_permission_label(const ChatItem& item);
+
 enum class ChatState { no_agent, idle, starting, ready, running, cancelling, needs_login, exited, failed };
 const char* chat_state_name(ChatState state);
 
