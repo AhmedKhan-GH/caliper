@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { colormapLut, lutIndex } from '../src/render/colormap.js';
-import { decodePng, drawn, expect, REPO, shotPath, WEB, wireModule } from './util.js';
+import { decodePng, drawn, expect, REPO, roundTrip, shotPath, WEB, wireModule } from './util.js';
 
 const PYTHON = process.env.CALIPER_PYTHON ?? path.join(REPO, '.venv', 'bin', 'python');
 const WASM = process.env.CALIPER_WASM_DIR ?? path.join(REPO, 'python', 'caliper', '_web');
@@ -150,7 +150,7 @@ test('the header picker sets the WebAssembly view\'s data view, and the stream\'
     sel.dispatchEvent(new Event('change'));
   });
   // The module's VIEW_REQUEST is answered; the reply (not the request) sets the element's data view.
-  await expect.poll(async () => JSON.stringify((await state(page, 'attention')).dataView), { timeout: 10_000 }).toContain('"head":5');
+  await roundTrip.poll(async () => JSON.stringify((await state(page, 'attention')).dataView)).toContain('"head":5');
   expect(before).not.toContain('"head":5');
   await drawn(page, 'caliper-view[view="attention"]');
   await page.locator('caliper-view[view="attention"]').screenshot({ path: shotPath(info, 'wasm-picker') });
@@ -273,7 +273,7 @@ async function fixedPage(page: Page): Promise<Server> {
 const selects = (page: Page) => page.evaluate(() => (window as unknown as { selects: unknown[] }).selects);
 /** The producer's last event of a type for a view, once it has arrived. */
 async function received(srv: Server, view: string, type: string, count = 1) {
-  await expect.poll(() => srv.events.filter((e) => e.view === view && e.type === type).length, { timeout: 10_000 })
+  await roundTrip.poll(() => srv.events.filter((e) => e.view === view && e.type === type).length)
     .toBeGreaterThanOrEqual(count);
   return srv.events.filter((e) => e.view === view && e.type === type).at(-1)!;
 }

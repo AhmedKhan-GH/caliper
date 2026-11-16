@@ -64,6 +64,15 @@ export const test = base.extend<{ harness: Page }, { server: string }>({
 });
 export { expect };
 
+/**
+ * expect with a deadline for state that comes back from the producer over the
+ * socket: replies, broadcasts and the snapshots that follow a request. On a
+ * three-core CI runner a page stalls for seconds while its GPU views start
+ * (SwiftShader compiles their pipelines), so a round trip gets 30 s. It still
+ * waits on the state and ends as soon as it holds; the suite's default stays.
+ */
+export const roundTrip = expect.configure({ timeout: 30_000 });
+
 /** Saves a screenshot under SHOTS with the project's name. */
 export function shotPath(info: TestInfo, name: string): string {
   fs.mkdirSync(SHOTS, { recursive: true });

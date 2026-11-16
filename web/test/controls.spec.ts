@@ -8,7 +8,7 @@
 import { expect, test, type Browser, type Page } from '@playwright/test';
 import { MSG } from '../src/protocol/messages.js';
 import { HAVE_PYTHON, startProducer, type Producer } from './producer.js';
-import { drawn, shotPath, snapshotsPass } from './util.js';
+import { drawn, roundTrip, shotPath, snapshotsPass } from './util.js';
 
 test.skip(!HAVE_PYTHON, 'needs a Python with numpy and websockets (CALIPER_PYTHON)');
 
@@ -71,18 +71,18 @@ test.describe('run controls and the controls panel', () => {
     await open(page, prod.url, 6);
     const other = await second(browser, prod.url, ['embedding']);
     try {
-      await expect(panel(page)).toBeVisible();
-      await expect.poll(async () => (await state(page, 'loss')).run).toBe('running');
+      await roundTrip(panel(page)).toBeVisible();
+      await roundTrip.poll(async () => (await state(page, 'loss')).run).toBe('running');
       const run = panel(page).locator('.run');
-      await expect(run.locator('.badge')).toHaveText('running');
+      await roundTrip(run.locator('.badge')).toHaveText('running');
       await run.locator('.run-toggle').click();
-      await expect.poll(async () => (await panelState(page)).controls?.run.state).toBe('paused');
+      await roundTrip.poll(async () => (await panelState(page)).controls?.run.state).toBe('paused');
       const at = (await panelState(page)).controls!.run.step!;
-      await expect(run.locator('.badge')).toHaveText(`paused at ${at}`);
-      await expect(run.locator('.run-toggle')).toHaveText('Resume');
+      await roundTrip(run.locator('.badge')).toHaveText(`paused at ${at}`);
+      await roundTrip(run.locator('.run-toggle')).toHaveText('Resume');
       // The other page and every header agree.
-      await expect.poll(async () => (await state(other.page, 'embedding')).run).toBe(`paused at ${at}`);
-      await expect.poll(async () => (await state(page, 'attention')).run).toBe(`paused at ${at}`);
+      await roundTrip.poll(async () => (await state(other.page, 'embedding')).run).toBe(`paused at ${at}`);
+      await roundTrip.poll(async () => (await state(page, 'attention')).run).toBe(`paused at ${at}`);
       // Held: the step stays while the other page receives five more snapshots,
       // one each 50 ms, the time of a training step.
       await snapshotsPass(other.page, 'caliper-view[view="embedding"]', 5);
@@ -90,15 +90,15 @@ test.describe('run controls and the controls panel', () => {
       await drawn(page);
       await page.screenshot({ path: shotPath(info, 'controls-paused'), fullPage: false });
       await run.locator('.run-step').click();
-      await expect.poll(async () => (await panelState(page)).controls?.run.step).toBe(at + 1);
+      await roundTrip.poll(async () => (await panelState(page)).controls?.run.step).toBe(at + 1);
       expect((await panelState(page)).controls!.run.state).toBe('paused');
       // The element's methods do the same, and resolve with the reply.
       const reply = await page.evaluate(() => (document.querySelector('caliper-view[view="loss"]') as HTMLElement & { step(n: number): Promise<unknown> }).step(3));
       expect(reply).toMatchObject({ type: 'control_reply', op: 'step', status: 'ok' });
-      await expect.poll(async () => (await panelState(page)).controls?.run.step, { timeout: 10_000 }).toBe(at + 4);
+      await roundTrip.poll(async () => (await panelState(page)).controls?.run.step).toBe(at + 4);
       await other.page.locator('caliper-controls .run-toggle').click();
-      await expect.poll(async () => (await panelState(page)).controls?.run.state).toBe('running');
-      await expect.poll(async () => (await state(page, 'loss')).run).toBe('running');
+      await roundTrip.poll(async () => (await panelState(page)).controls?.run.state).toBe('running');
+      await roundTrip.poll(async () => (await state(page, 'loss')).run).toBe('running');
       expect(prod.controls.map((c) => c.op)).toEqual(['pause', 'step', 'step', 'resume']);
     } finally {
       await other.close();
@@ -111,12 +111,12 @@ test.describe('run controls and the controls panel', () => {
     const loss = page.locator('caliper-view[view="loss"]');
     await expect(loss.locator('.run-toggle')).toBeHidden();
     await loss.evaluate((el) => el.setAttribute('run-controls', ''));
-    await expect(loss.locator('.run-toggle')).toHaveText('Pause');
+    await roundTrip(loss.locator('.run-toggle')).toHaveText('Pause');
     await loss.locator('.run-toggle').click();
-    await expect.poll(async () => (await state(page, 'loss')).run ?? '').toMatch(/^paused at \d+$/);
-    await expect(loss.locator('.run-toggle')).toHaveText('Resume');
+    await roundTrip.poll(async () => (await state(page, 'loss')).run ?? '').toMatch(/^paused at \d+$/);
+    await roundTrip(loss.locator('.run-toggle')).toHaveText('Resume');
     await loss.locator('.run-toggle').click();
-    await expect.poll(async () => (await state(page, 'loss')).run).toBe('running');
+    await roundTrip.poll(async () => (await state(page, 'loss')).run).toBe('running');
   });
 
   test('parameters show as a slider, a field, a toggle and a menu; a change shows pending, then applied, on every page', async ({ page, browser }, info) => {
@@ -125,40 +125,40 @@ test.describe('run controls and the controls panel', () => {
     const other = await second(browser, prod.url, ['embedding']);
     try {
       const p = panel(page);
-      await expect(p.locator('input[type="range"][data-param="lr"]')).toBeVisible();
-      await expect(p.locator('input[type="number"][data-param="lr"]')).toHaveValue('0.001');
-      await expect(p.locator('input[type="range"][data-param="batch"]')).toBeVisible();
-      await expect(p.locator('button[data-param="augment"]')).toHaveText('on');
-      await expect(p.locator('select[data-param="optimizer"]')).toHaveValue('adam');
+      await roundTrip(p.locator('input[type="range"][data-param="lr"]')).toBeVisible();
+      await roundTrip(p.locator('input[type="number"][data-param="lr"]')).toHaveValue('0.001');
+      await roundTrip(p.locator('input[type="range"][data-param="batch"]')).toBeVisible();
+      await roundTrip(p.locator('button[data-param="augment"]')).toHaveText('on');
+      await roundTrip(p.locator('select[data-param="optimizer"]')).toHaveValue('adam');
       // Running, a change waits for the script's next checkpoint (a step takes
       // 3 s here): both pages show it pending. Set right after a step.
       const steps = (await state(page, 'loss')).info;
-      await expect.poll(async () => (await state(page, 'loss')).info, { timeout: 10_000 }).not.toBe(steps);
+      await roundTrip.poll(async () => (await state(page, 'loss')).info).not.toBe(steps);
       await p.locator('input[type="number"][data-param="lr"]').fill('0.02');
       await p.locator('input[type="number"][data-param="lr"]').press('Enter');
-      await expect.poll(async () => (await param(page, 'lr'))?.pending).toBe(0.02);
-      await expect.poll(async () => (await param(other.page, 'lr'))?.pending).toBe(0.02);
-      await expect(other.page.locator('caliper-controls input[type="number"][data-param="lr"]')).toHaveValue('0.02');
-      await expect(other.page.locator('caliper-controls .note').first()).toHaveText('at the next step');
+      await roundTrip.poll(async () => (await param(page, 'lr'))?.pending).toBe(0.02);
+      await roundTrip.poll(async () => (await param(other.page, 'lr'))?.pending).toBe(0.02);
+      await roundTrip(other.page.locator('caliper-controls input[type="number"][data-param="lr"]')).toHaveValue('0.02');
+      await roundTrip(other.page.locator('caliper-controls .note').first()).toHaveText('at the next step');
       await page.screenshot({ path: shotPath(info, 'controls-pending') });
       // The next checkpoint applies it.
-      await expect.poll(async () => (await param(other.page, 'lr'))?.value, { timeout: 10_000 }).toBe(0.02);
+      await roundTrip.poll(async () => (await param(other.page, 'lr'))?.value).toBe(0.02);
       expect((await param(other.page, 'lr'))?.pending).toBeUndefined();
-      await expect(other.page.locator('caliper-controls .note').first()).toHaveText('');
+      await roundTrip(other.page.locator('caliper-controls .note').first()).toHaveText('');
       // Paused, a change applies in the checkpoint the run waits in. The other
       // controls, from the other page; a value out of range is clamped.
       await p.locator('.run-toggle').click();
-      await expect.poll(async () => (await panelState(page)).controls?.run.state, { timeout: 10_000 }).toBe('paused');
+      await roundTrip.poll(async () => (await panelState(page)).controls?.run.state).toBe('paused');
       const op = panel(other.page);
       const reply = await other.page.evaluate(() => (document.querySelector('caliper-controls') as HTMLElement & { setParam(n: string, v: unknown): Promise<unknown> }).setParam('batch', 1000));
       expect(reply).toMatchObject({ status: 'ok', name: 'batch', value: 512 });
       await op.locator('button[data-param="augment"]').click();
       await op.locator('select[data-param="optimizer"]').selectOption('sgd');
-      await expect.poll(async () => [(await param(page, 'batch'))?.value, (await param(page, 'augment'))?.value, (await param(page, 'optimizer'))?.value])
+      await roundTrip.poll(async () => [(await param(page, 'batch'))?.value, (await param(page, 'augment'))?.value, (await param(page, 'optimizer'))?.value])
         .toEqual([512, false, 'sgd']);
-      await expect(p.locator('button[data-param="augment"]')).toHaveText('off');
-      await expect(p.locator('select[data-param="optimizer"]')).toHaveValue('sgd');
-      await expect(p.locator('input[type="number"][data-param="batch"]')).toHaveValue('512');
+      await roundTrip(p.locator('button[data-param="augment"]')).toHaveText('off');
+      await roundTrip(p.locator('select[data-param="optimizer"]')).toHaveValue('sgd');
+      await roundTrip(p.locator('input[type="number"][data-param="batch"]')).toHaveValue('512');
       // Dragging the slider sends at most 30 sets a second and ends with the value where it stops.
       const slider = p.locator('input[type="range"][data-param="lr"]');
       const box = (await slider.boundingBox())!;
@@ -167,7 +167,7 @@ test.describe('run controls and the controls panel', () => {
       await page.mouse.down();
       for (let k = 1; k <= 20; k++) await page.mouse.move(box.x + 4 + (box.width - 8) * k / 20, box.y + box.height / 2);
       await page.mouse.up();
-      await expect.poll(async () => (await param(page, 'lr'))?.value).toBeCloseTo(0.1, 6);
+      await roundTrip.poll(async () => (await param(page, 'lr'))?.value).toBeCloseTo(0.1, 6);
       const sets = prod.controls.slice(sent).filter((c) => c.op === 'set' && c.name === 'lr');
       expect(sets.at(-1)?.value).toBeCloseTo(0.1, 6);
       await page.screenshot({ path: shotPath(info, 'controls-applied') });
@@ -200,8 +200,8 @@ test.describe('run controls and the controls panel', () => {
     });
     const btn = panel(page).locator('button[data-action="save checkpoint"]');
     await btn.click();
-    await expect(panel(page).locator('.action .note')).toHaveText(/^saved step \d+$/, { timeout: 10_000 });
-    await expect(btn).toHaveAttribute('aria-busy', 'false');
+    await roundTrip(panel(page).locator('.action .note')).toHaveText(/^saved step \d+$/);
+    await roundTrip(btn).toHaveAttribute('aria-busy', 'false');
     const states = await seen.evaluate((r) => r.map((s) => s.replace(/\d+$/, 'N')));
     expect(states).toEqual(['false ', 'true queued', 'true running', 'false saved step N']);
     const got = await replies.evaluate((r) => r.map((x) => (x as { status: string }).status));
@@ -211,13 +211,13 @@ test.describe('run controls and the controls panel', () => {
   test('a viewer the producer refuses shows the controls but cannot use them', async ({ page }, info) => {
     prod = await startProducer(['--controls', '--read-only']);
     await open(page, prod.url, 6);
-    await expect(panel(page)).toBeVisible();
+    await roundTrip(panel(page)).toBeVisible();
     const s = await panelState(page);
     expect(s.access).toEqual({ shown: true, allowed: false, reason: 'This viewer may not control the run' });
     for (const sel of ['.run-toggle', '.run-step', 'input[data-param="lr"]', 'button[data-param="augment"]', 'select[data-param="optimizer"]', 'button[data-action="save checkpoint"]']) {
-      await expect(panel(page).locator(sel).first(), sel).toBeDisabled();
+      await roundTrip(panel(page).locator(sel).first(), sel).toBeDisabled();
     }
-    await expect(panel(page).locator('.run-toggle')).toHaveAttribute('title', 'This viewer may not control the run');
+    await roundTrip(panel(page).locator('.run-toggle')).toHaveAttribute('title', 'This viewer may not control the run');
     // The calls are refused in the page: they resolve with null and no CONTROL
     // frame leaves it (a frame's type is its bytes 8 and 9), so none reaches
     // the producer either.
@@ -246,13 +246,13 @@ test.describe('run controls and the controls panel', () => {
     prod = await startProducer(['--controls', '--no-checkpoint']);
     await open(page, prod.url, 6);
     const p = panel(page);
-    await expect(p.locator('.run-toggle')).toBeDisabled();
-    await expect(p.locator('.run-toggle')).toHaveAttribute('title', 'The script has no checkpoint');
+    await roundTrip(p.locator('.run-toggle')).toBeDisabled();
+    await roundTrip(p.locator('.run-toggle')).toHaveAttribute('title', 'The script has no checkpoint');
     expect((await state(page, 'loss')).run).toBeNull();   // no badge for the state none
     await p.locator('select[data-param="optimizer"]').selectOption('lion');
-    await expect.poll(async () => (await param(page, 'optimizer'))?.value).toBe('lion');
+    await roundTrip.poll(async () => (await param(page, 'optimizer'))?.value).toBe('lion');
     await p.locator('button[data-action="save checkpoint"]').click();
-    await expect(p.locator('.action .note')).toHaveText('waits for a checkpoint');
+    await roundTrip(p.locator('.action .note')).toHaveText('waits for a checkpoint');
   });
 
   test('a 3.0 producer still works and shows no controls', async ({ page }) => {
@@ -309,17 +309,17 @@ test.describe('linked selection', () => {
       });
       // A rectangle around the right-hand points (rows 3 and 9 of the space "test").
       await shiftDrag(page, await at(page, 'p', 0.8, -0.02), await at(page, 'p', 1.2, 1.02), true);
-      await expect.poll(() => prod.events.filter((e) => e.type === 'select').at(-1)?.detail ?? null)
+      await roundTrip.poll(() => prod.events.filter((e) => e.type === 'select').at(-1)?.detail ?? null)
         .toEqual({ indices: [1, 3], row_ids: [3, 9], space: 'test', items: [3, 9] });
       // The producer's SELECTION comes back to every view that maps the space, on both pages.
       const want = { space: 'test', axis: 'points', items: [3, 9] };
-      await expect.poll(async () => (await state(page, 'p')).linked).toEqual(want);
-      await expect.poll(async () => (await state(page, 'h')).linked).toEqual({ space: 'test', axis: 'rows', items: [3, 9] });
-      await expect.poll(async () => (await state(other.page, 'h')).linked).toEqual({ space: 'test', axis: 'rows', items: [3, 9] });
-      await expect.poll(async () => (await state(other.page, 'p')).selected).toBe(2);
+      await roundTrip.poll(async () => (await state(page, 'p')).linked).toEqual(want);
+      await roundTrip.poll(async () => (await state(page, 'h')).linked).toEqual({ space: 'test', axis: 'rows', items: [3, 9] });
+      await roundTrip.poll(async () => (await state(other.page, 'h')).linked).toEqual({ space: 'test', axis: 'rows', items: [3, 9] });
+      await roundTrip.poll(async () => (await state(other.page, 'p')).selected).toBe(2);
       expect((await state(page, 'ha')).linked).toBeNull();   // its rows are not in a space
       // The details of the items under the view the selection was made in.
-      await expect.poll(async () => (await state(page, 'p')).details).toBe('itemlabelscore330.005910.044');
+      await roundTrip.poll(async () => (await state(page, 'p')).details).toBe('itemlabelscore330.005910.044');
       expect((await state(page, 'h')).details).toBeNull();
       expect((await events.evaluate((r) => r.length))).toBeGreaterThanOrEqual(2);
       await drawn(page, 'caliper-view[view="p"], caliper-view[view="h"]');
@@ -328,8 +328,8 @@ test.describe('linked selection', () => {
       // A shift-click clears it everywhere.
       const c = await at(page, 'p', 0.5, 0.5);
       await shiftDrag(page, c, c);
-      await expect.poll(async () => (await state(other.page, 'h')).linked?.items ?? null).toEqual([]);
-      await expect.poll(async () => (await state(page, 'p')).details).toBeNull();
+      await roundTrip.poll(async () => (await state(other.page, 'h')).linked?.items ?? null).toEqual([]);
+      await roundTrip.poll(async () => (await state(page, 'p')).details).toBeNull();
     } finally {
       await other.close();
     }
@@ -342,7 +342,7 @@ test.describe('linked selection', () => {
     await expect.poll(async () => (await state(page, 's')).window?.x1 ?? null).not.toBeNull();
     const from = await at(page, 's', 300.2, 500), to = await at(page, 's', 340.8, 500);
     await shiftDrag(page, { x: Math.ceil(from.x), y: from.y }, { x: Math.floor(to.x), y: to.y });
-    await expect.poll(async () => (await state(page, 's')).linked?.axis ?? null).toBe('steps');
+    await roundTrip.poll(async () => (await state(page, 's')).linked?.axis ?? null).toBe('steps');
     const l = (await state(page, 's')).linked!;
     expect(l.space).toBe('step');
     expect(l.items[0]).toBeGreaterThanOrEqual(300);

@@ -8,7 +8,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import { drawn, expect, gpuPath, REPO, serve, shotPath, WEB, wireModule } from './util.js';
+import { drawn, expect, gpuPath, REPO, roundTrip, serve, shotPath, WEB, wireModule } from './util.js';
 
 const PYTHON = process.env.CALIPER_PYTHON ?? path.join(REPO, '.venv', 'bin', 'python');
 
@@ -51,8 +51,8 @@ test('the viewer page shows every view of the stream', async ({ page, producer }
   await page.goto(producer.url);
   await plates(page, 6);
   await expect(page.locator('.wordmark')).toHaveText('Caliper');
-  await expect(page.locator('#script')).toHaveText('train_mock.py');
-  await expect(page.locator('#state .text')).toHaveText('connected');
+  await roundTrip(page.locator('#script')).toHaveText('train_mock.py');
+  await roundTrip(page.locator('#state .text')).toHaveText('connected');
   const gpu = gpuPath(info);
   const got = await page.evaluate(() => [...document.querySelectorAll('caliper-view')].map((e) => {
     const s = (e as HTMLElement & { debugState(): Record<string, unknown> }).debugState();
@@ -64,7 +64,7 @@ test('the viewer page shows every view of the stream', async ({ page, producer }
   ]);
   // Data keeps arriving: the newest snapshot of a view advances.
   const seq0 = (await state(page, 'weights')).seq as number;
-  await expect.poll(async () => (await state(page, 'weights')).seq as number).toBeGreaterThan(seq0);
+  await roundTrip.poll(async () => (await state(page, 'weights')).seq as number).toBeGreaterThan(seq0);
   await drawn(page);
   await page.screenshot({ path: shotPath(info, 'page'), fullPage: true });
   expect(errors).toEqual([]);
@@ -80,16 +80,17 @@ test('a data view picked in the page travels over the socket and comes back reso
     sel.dispatchEvent(new Event('change'));
   }, { dim, value });
   await pick('head', 'i:3');
-  await expect.poll(async () => JSON.stringify((await state(page, 'attention')).dataView)).toContain('"head":3');
+  await roundTrip.poll(async () => JSON.stringify((await state(page, 'attention')).dataView)).toContain('"head":3');
   // All heads of a layer: the picker asks for a mosaic, and the producer sends 3 x 3 tiles of 32 x 32.
+  // The reply comes first; snapshots made under the old data view may still follow it.
   await pick('head', 'all');
-  await expect.poll(async () => {
+  await roundTrip.poll(async () => {
     const s = await state(page, 'attention');
     return [s.rows, s.cols, (s.dataView as { tile?: string }).tile];
   }).toEqual([96, 96, 'head']);
   // A request the producer refuses (four kept dims) is shown and leaves the data view as it was.
   await pick('layer', 'all');
-  await expect(page.locator('caliper-view[view="attention"] .msg.error')).toContainText('kept dims');
+  await roundTrip(page.locator('caliper-view[view="attention"] .msg.error')).toContainText('kept dims');
   expect(((await state(page, 'attention')).dataView as { tile?: string }).tile).toBe('head');
 });
 
@@ -109,7 +110,7 @@ test('a selection in the page reaches the producer as an event', async ({ page, 
   await page.mouse.move(x1, y1, { steps: 4 });
   await page.mouse.up();
   await page.keyboard.up('Shift');
-  await expect.poll(() => producer.events.filter((e) => e.type === 'select')).toEqual([
+  await roundTrip.poll(() => producer.events.filter((e) => e.type === 'select')).toEqual([
     expect.objectContaining({ view: 'weights', type: 'select', detail: { rows: [2, 6], cols: [4, 10] } }),
   ]);
   const ev = producer.events.find((e) => e.type === 'select')!;
@@ -149,7 +150,7 @@ test('the anywidget module draws a view from the stream and writes its traits ba
   })).toEqual(['weights', 'heatmap', '300']);
   // Python sets data_view: the element asks the producer for it.
   await page.evaluate(() => (window as unknown as { model: { set(k: string, v: unknown): void } }).model.set('data_view', { index: { out: [0, 24] } }));
-  await expect.poll(async () => (await state(page, 'weights')).rows).toBe(24);
+  await roundTrip.poll(async () => (await state(page, 'weights')).rows).toBe(24);
   // A selection in the element is written to the selection trait and saved.
   const s = await state(page, 'weights');
   const area = s.area as { x: number; y: number; w: number; h: number };
@@ -166,6 +167,6 @@ test('the anywidget module draws a view from the stream and writes its traits ba
   }));
   expect(t.selection).toMatchObject({ view: 'weights', type: 'select', detail: { rows: [0, 12], cols: [0, 32] } });
   expect(t.saved).toBeGreaterThan(0);
-  await expect.poll(() => producer.events.some((e) => e.type === 'select')).toBe(true);
+  await roundTrip.poll(() => producer.events.some((e) => e.type === 'select')).toBe(true);
   front.close();
 });
