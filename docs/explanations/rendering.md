@@ -307,9 +307,10 @@ only where the compiler happens to keep the reference's operations. The keys mak
   grows with the key. A degenerate range, an infinite end, an infinite span or a NaN end
   maps every value to level 0, so all its keys are the sentinel.
 - **The block.** The `Cmap` uniform block holds the range (for the guess), the flip, and one 16-byte entry per level:
-  the level's first key, the next level's first key and the level's packed colour, 4,112 bytes in all. A level test
-  and the level's colour are then one load of one entry. WGSL gives an array in a uniform a 16-byte stride, so flat
-  arrays of 32-bit keys are not possible there, and indexing into a vector of four keys costs more.
+  the level's first key, the next level's first key and the level's packed colour, 4,112 bytes in all, which the
+  layer's uniform arena pads to 4,352. A level test and the level's colour are then one load of one entry. The entries
+  are 16 bytes because WGSL gives every array in a uniform block a 16-byte stride, so flat arrays of 32-bit keys are
+  not possible there, and indexing into a vector of four keys costs more.
 - **The decision.** The shader tests NaN on the bits, guesses the level with the usual float formula, and accepts the
   guess only if its entry confirms it with two integer comparisons; it tries the two neighbouring levels next and a
   binary search of eight integer steps last. The guess only chooses which comparisons run. The colour is the entry's
@@ -330,16 +331,21 @@ The keys follow whatever the reference computes. Its index for a NaN quotient, w
 defined as 0, and fusing its `t * 255 + 0.5` into one multiply-add, which the compiler does on arm64, changes no
 level for any t in [0, 1], so the reference and its keys are the same on every platform.
 
-Keys decide the colour everywhere: in the app on every native backend, in the browser, on Dawn and in the CPU
-reference, which give bit-identical colours. The float formula is retired on the native path too, when the texture
-path moves onto the layer. The decision rested on its cost on Metal, measured on an M-series Max in quiet moments
-(`python/bench/results/step6-colormap-keys.txt`). As first built, with keys packed four to a vector, the layer's safe
-math and an 8 x 8 workgroup, the compute form took 31.0 µs on a 1,024 x 1,024 heatmap and 79.2 µs on a 2,048 x 2,048
+Integer keys decide the colormap on every path, in the cheaper exact form: in the app on every native backend, in
+the browser, on Dawn and in the CPU reference, which give bit-identical colours. Every generated program that colours
+by value takes them, and the scene views fill their blocks from the shared cache, natively and in the browser. The
+float formula is retired on the native path too, when the texture path moves onto the layer. The cheaper exact form
+is the float guess compiled with fast math, one 16-byte entry per level in the 4,112-byte block, and a 16 by 8
+workgroup for `colormap_texture`: 128 invocations, the most that a compatibility-mode WebGPU device allows in a
+workgroup by default, so that one program serves every device. The decision rested on its cost on Metal, measured on
+an M-series Max in quiet moments (`python/bench/results/step6-colormap-keys.txt`). As first built, with keys packed
+four to a vector, the layer's safe math and an 8 x 8 workgroup, the compute form took 31.0 µs on a 1,024 x 1,024 heatmap and 79.2 µs on a 2,048 x 2,048
 one, against 9.5 µs and 25.8 µs for the Metal renderer's float pass (load 3.49). Most of the difference was the
 precise division of the float guess, which the decision does not need, and the rest the vector-packed reads. The
 cheaper exact form then measured 14.7 µs and 36.3 µs in the same window. As built now, with one entry per level,
-fast math and a 16 x 8 workgroup, it takes 9.5 µs and 32.4 µs against 7.7 µs and 25.8 µs for the float pass (load
-3.93), within the 20 µs that a step may add to an update's GPU time.
+fast math and a 16 by 8 workgroup, it takes, per pass over a heatmap, 9.5 µs against 7.7 µs for the float pass at
+1,024 by 1,024 and 32.4 µs against 25.8 µs at 2,048 by 2,048, at a 1-minute load of 3.93: within the 20 µs that a
+step may add to an update's GPU time.
 
 Fast math is a per-program option. The Metal backend compiles every program with fast math off, so that float
 results follow IEEE rules as the CPU references do, and `colormap_texture` alone sets `fast_math` in the shader
@@ -348,10 +354,11 @@ chooses which integer comparisons run. The vertex-stage colormap of the scene pr
 those programs place points and lines on pixel centres.
 
 The renderers' own colormaps do not use the keys yet: the Metal renderer's compute pass `cmap_f32`, the Vulkan
-renderer's `colormap.comp`, the CUDA kernel, the WebGPU renderer's pass with its float thresholds and the TypeScript
-views' WGSL each repeat the float formula or the thresholds, and each is deleted by the migration step that moves its
-client onto the layer. The Canvas 2D fallback of the browser views keeps its TypeScript port of the reference, which
-is compared with the C++.
+renderer's `colormap.comp`, the CUDA kernel, the WebGPU renderer's heatmap pass with its float thresholds
+(`src/host/renderer/webgpu_programs.h`, which draws through the layer's WebGPU backend) and the TypeScript views'
+WGSL each repeat the float formula or the thresholds, and each is replaced by `colormap_texture` when the texture path
+of its client moves onto the layer. The Canvas 2D fallback of the browser views keeps its TypeScript port of the
+reference, which is compared with the C++.
 
 What proves it:
 
@@ -454,9 +461,10 @@ static and stamped batches apart, so a clear that is not static leaves a static 
   break mask, and per-strip colours or values are expanded to their vertices on the way. A batch replaced by one of the
   same or a smaller size is written into the buffers it has, and a larger one gets buffers with a capacity rounded up to
   a power of two of at least 4 KiB. In-place import from the shared-memory session's slots is not built yet.
-- **Colormaps.** A colormapped batch takes the colormap block of its colormap and range. Until migration step 6 puts the
-  key derivation in a shared header, the view derives the keys from the CPU reference in one temporary place
-  (`src/host/live/scene_colormap_keys.h`) and caches the blocks by colormap and range.
+- **Colormaps.** A colormapped batch takes the colormap block of its colormap and range from the shared cache of key
+  blocks: the view owns a `KeyBlockCache` of `src/host/gfx/colormap_keys.h` and hands the scene core
+  `colormap_source` over it, so each range's keys are derived from the CPU reference once and the app's and the
+  browser's scene views decide colours exactly as the other generated programs do ([The colormap by keys](#the-colormap-by-keys)).
 - **Drawing.** When the scene, the camera, the size or the clear colour changed, the view compiles the scene and submits
   it, with the index clamp of changed meshes, to an offscreen colour target with a depth target in 3-D, which its
   window shows as an image; otherwise it submits nothing. On Metal each scene view has a backend of the layer of its
