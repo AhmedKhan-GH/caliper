@@ -38,6 +38,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <future>
 #include <thread>
 #include <vector>
 
@@ -1411,6 +1412,28 @@ TEST_CASE("live/app: the session list shows a caliper.serve() stream from its st
     CHECK(access(killed.c_str(), F_OK) != 0);
     CHECK(access(reused.c_str(), F_OK) != 0);
     CHECK(list.find(session) >= 0);
+
+    // A FIFO named like a stream file must not block the listing (the frame
+    // thread) in open().
+    const std::string fifo = g_root.dir + "/streams/9006.json";
+    REQUIRE(mkfifo(fifo.c_str(), 0600) == 0);
+    {
+        auto done = std::make_shared<std::promise<void>>();
+        std::future<void> listed = done->get_future();
+        std::thread([done] {
+            caliper_live::SessionList l;
+            l.refresh(true);
+            done->set_value();
+        }).detach();
+        const bool returned = listed.wait_for(std::chrono::seconds(3)) == std::future_status::ready;
+        CHECK_MESSAGE(returned, "listing the streams blocked on a FIFO");
+        if (!returned) {   // let a blocked open() go: a writer at the other end
+            const int w = open(fifo.c_str(), O_WRONLY | O_NONBLOCK);
+            if (w >= 0) close(w);
+            listed.wait_for(std::chrono::seconds(3));
+        }
+    }
+    unlink(fifo.c_str());
 
     for (const std::string& f : {mine, open_mode, other_host, remote, wrong_port}) unlink(f.c_str());
     REQUIRE(list.refresh(true));

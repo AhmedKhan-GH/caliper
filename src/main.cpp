@@ -415,8 +415,9 @@ public:
                 // Home once, N sec after the spec page opened.
                 if (const char* ha = std::getenv("CALIPER_HOME_AFTER")) {
                     static double page_t0 = -1.0;
+                    static bool fired = false;   // once: a spec page opened later stays
                     if (page_t0 < 0) page_t0 = glfwGetTime();
-                    if (glfwGetTime() - page_t0 >= std::atof(ha)) go_back = true;
+                    if (!fired && glfwGetTime() - page_t0 >= std::atof(ha)) go_back = fired = true;
                 }
                 if (spec_page_.draw(session_, renderer_->name(), &jobs_tray_, esc_home_pressed()).home || go_back)
                     pending_spec_home_ = true;
@@ -428,8 +429,9 @@ public:
                 // training" headlessly (for the SIGSEGV repro).
                 if (const char* ha = std::getenv("CALIPER_HOME_AFTER")) {
                     static double page_t0 = -1.0;
+                    static bool fired = false;   // once: an applet page opened later stays
                     if (page_t0 < 0) page_t0 = glfwGetTime();
-                    if (glfwGetTime() - page_t0 >= std::atof(ha)) go_back = true;
+                    if (!fired && glfwGetTime() - page_t0 >= std::atof(ha)) go_back = fired = true;
                 }
 
                 double now = glfwGetTime();
@@ -918,36 +920,30 @@ private:
             launch_applet(idx);
             return;
         }
-        std::string open_id;
-        if (caliper_host::SavePrompt::unsaved(session_, &open_id) && open_id == ws_id) {
-            open_spec_page();
-            return;
-        }
-        save_prompt_.ask("open " + a.manifest.name, [this, id = a.manifest.id] {
-            const int i = loader_.find(id);
-            if (i >= 0) launch_applet(i);
-        });
+        save_prompt_.ask(
+            "open " + a.manifest.name,
+            [this, id = a.manifest.id] {
+                const int i = loader_.find(id);
+                if (i >= 0) launch_applet(i);
+            },
+            ws_id, [this] { open_spec_page(); });
     }
 
     // The window's close request (its close button, ⌘Q, the input driver's
     // `close`), which GLFW makes after it has set the close flag: with unsaved
     // changes in the open spec it asks first, and the window closes after
-    // Save or Don't Save. A hidden app's SIGTERM, CALIPER_EXIT_AFTER and the
-    // driver's `quit` set the flag without a request and never ask; nor does
-    // a close while the session's worker runs a command, so quitting never
-    // waits on it.
+    // Save or Don't Save. While the session's worker runs a command the open
+    // spec cannot be read, so the close waits for the command, saying so with
+    // Cancel, and then asks if there is anything to save (save_prompt.h,
+    // hold_close). A hidden app's SIGTERM, CALIPER_EXIT_AFTER and the
+    // driver's `quit` set the flag without a request and never ask.
     void on_close_request() {
         if (quit_confirmed_) return;
-        if (save_prompt_.waiting()) {   // the question already open stays
+        if (save_prompt_.hold_close(session_, [this] {
+                quit_confirmed_ = true;
+                glfwSetWindowShouldClose(window_, GLFW_TRUE);
+            }))
             glfwSetWindowShouldClose(window_, GLFW_FALSE);
-            return;
-        }
-        if (!caliper_host::SavePrompt::unsaved(session_)) return;
-        glfwSetWindowShouldClose(window_, GLFW_FALSE);
-        save_prompt_.ask("quit", [this] {
-            quit_confirmed_ = true;
-            glfwSetWindowShouldClose(window_, GLFW_TRUE);
-        });
     }
 
     // The workspace id of a spec applet found in the workspace's applets/
@@ -1019,9 +1015,14 @@ private:
             }
         }
         std::string error;
-        if (spec_page_.request_answered(&error)) {
-            if (!error.empty()) landing_.log(new_pending_ ? "new failed" : "launch failed", new_pending_ ? "spec.new" : "applet.open", error);
-            if (!error.empty()) new_pending_ = false;
+        bool was_new = false;
+        while (spec_page_.request_answered(&error, &was_new)) {
+            if (error.empty()) continue;
+            landing_.log(was_new ? "new failed" : "launch failed", was_new ? "spec.new" : "applet.open", error);
+            if (was_new) {
+                new_pending_ = false;
+                drop_new_error_ = error;   // a drop that asked for it says why it goes
+            }
         }
         if (spec_page_.take_open(session_)) {
             // An agent never ends the person's running applet: on a compiled
@@ -1034,6 +1035,7 @@ private:
             open_spec_page();
             spec_page_.set_build_mode(true);
             new_pending_ = false;
+            drop_new_asked_ = false;   // the drop's new spec is made: it goes into it, wherever the person is now
         }
         if (session_.applets_saved() != applets_saved_ && page_ != AppPage::Applet) {
             applets_saved_ = session_.applets_saved();
@@ -1156,9 +1158,11 @@ private:
             // One new spec per drop: when its spec.new failed (said in
             // Activity), the drop goes instead of asking again every frame.
             if (drop_new_asked_) {
-                landing_.log("drop refused", what, "no new spec was made");
+                landing_.log("drop refused", what,
+                             drop_new_error_.empty() ? std::string("no new spec was made") : drop_new_error_);
                 pending_drops_.clear();
                 drop_new_asked_ = false;
+                drop_new_error_.clear();
                 return;
             }
             const bool into_open = page_ == AppPage::Landing ? caliper_host::SpecPage::has_open_spec(session_)
@@ -1174,6 +1178,8 @@ private:
         }
         landing_.log("drop refused", what, "open a spec to import files");
         pending_drops_.clear();
+        drop_new_asked_ = false;
+        drop_new_error_.clear();
     }
 
     // Caliper API's calls of this frame (api/api_server.h). A capture waits
@@ -1355,15 +1361,48 @@ private:
     // An attach while a session is attached: the attached one again shows
     // its live page; another replaces it, the attached one detached first
     // (one attachment at a time). True when the attach should go on.
-    bool make_room_for(const std::string& session) {
+    // One hosted core per process, so the attached session is detached
+    // before another is tried; what it was is kept in `previous`, so that a
+    // failed attach (a stale row, a refusal) can attach it again
+    // (restore_previous), and nothing is lost.
+    struct Previous {
+        bool attached = false;
+        std::string session, url, script;
+        int32_t pid = 0;
+    };
+    bool make_room_for(const std::string& session, Previous* previous) {
         if (!live_.attached()) return true;
         if (!session.empty() && session == live_.status().session) {
             show_live_page();
             return false;
         }
+        previous->attached = true;
+        previous->session = live_.status().session;
+        previous->url = live_url_;
+        previous->script = live_script_;
+        previous->pid = live_pid_;
         live_.detach();
         note_live_events();   // "detached"
         return true;
+    }
+
+    // After a failed attach: the session that was attached before, attached
+    // again, on the page shown now.
+    void restore_previous(const Previous& p) {
+        if (!p.attached) return;
+        std::string err;
+        const bool ok = p.url.empty() ? live_.attach(renderer_.get(), p.session, &err)
+                                      : live_.attach_url(renderer_.get(), p.url, &err);
+        if (!ok) {
+            landing_.log("attach failed", p.script, err);
+            return;
+        }
+        caliper_live_views::set_look(live_.core(), house_view_look());
+        const auto& st = live_.status();
+        live_script_ = !st.script.empty() ? st.script : p.script;
+        live_pid_ = st.pid ? st.pid : p.pid;
+        live_url_ = p.url;
+        note_live_events();   // "attached"
     }
 
     // The landing's Attach (and CALIPER_AUTOATTACH): attach through a hosted
@@ -1371,13 +1410,16 @@ private:
     // session went, another viewer holds it, no Metal device) stays on the
     // landing and says why in Activity.
     void attach_session(const std::string& token) {
-        if (!make_room_for(token)) return;
+        Previous previous;
+        if (!make_room_for(token, &previous)) return;
         const int i = sessions_.find(token);
         const caliper_live::SessionEntry* e = i >= 0 ? &sessions_.sessions()[(size_t)i] : nullptr;
         std::string script = e && !e->script.empty() ? e->script : token;
         std::string err;
         if (!live_.attach(renderer_.get(), token, &err)) {
             landing_.log("attach failed", script, err);
+            std::cerr << "[live] attach failed: " << script << ": " << err << std::endl;
+            restore_previous(previous);
             return;
         }
         caliper_live_views::set_look(live_.core(), house_view_look());
@@ -1407,10 +1449,13 @@ private:
             show_live_page();
             return;
         }
-        if (!make_room_for(i >= 0 ? sessions_.sessions()[(size_t)i].session : std::string())) return;
+        Previous previous;
+        if (!make_room_for(i >= 0 ? sessions_.sessions()[(size_t)i].session : std::string(), &previous)) return;
         std::string err;
         if (!live_.attach_url(renderer_.get(), link, &err)) {
             landing_.log("attach failed", shown, err);
+            std::cerr << "[live] attach failed: " << shown << ": " << err << std::endl;
+            restore_previous(previous);
             return;
         }
         caliper_live_views::set_look(live_.core(), house_view_look());
@@ -1549,11 +1594,13 @@ private:
         bool go_back = esc_home_pressed();
         bool detach = ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_D) && !agent_settings_open();
         // Dev hook: CALIPER_HOME_AFTER=<sec>, as on the applet page: Home once,
-        // N sec after the live page opened (a headless detach).
+        // N sec after the live page first opened; the session stays attached,
+        // and the live page opened again (F5) stays.
         if (const char* ha = std::getenv("CALIPER_HOME_AFTER")) {
             static double page_t0 = -1.0;
+            static bool fired = false;
             if (page_t0 < 0) page_t0 = glfwGetTime();
-            if (glfwGetTime() - page_t0 >= std::atof(ha)) go_back = true;
+            if (!fired && glfwGetTime() - page_t0 >= std::atof(ha)) go_back = fired = true;
         }
 
         // Page bar: esc Home, ⌘D Detach, the script, then its state. The live
@@ -1832,6 +1879,7 @@ private:
     bool new_requested_ = false;      // a new spec waits for the session
     bool new_pending_ = false;        // its spec.new is in the queue
     bool drop_new_asked_ = false;     // the first pending drop asked for a new spec
+    std::string drop_new_error_;      // why that spec.new failed, for the drop's refusal
     std::string pending_new_title_;
     std::string spec_entry_;          // the manifest id of the spec applet the page shows, or ""
     uint64_t applets_saved_ = 0;      // AppSession::applets_saved() when last listed

@@ -119,6 +119,8 @@
 //   save save|dont-save|cancel
 //                        wait until it is open, then answer it as a click on
 //                        that button does
+//   worker busy|idle     wait until the session's worker runs a command, or
+//                        runs none (a long data.query from a test, say)
 //   close                a request to close the window, as its close button
 //                        and ⌘Q make, which asks first when the open spec
 //                        has unsaved changes
@@ -623,6 +625,10 @@ public:
             } else {
                 error_ = "save takes until, save, dont-save or cancel";
             }
+        } else if (s.verb == "worker") {
+            if (s.arg != "busy" && s.arg != "idle") return void(error_ = "worker takes busy or idle");
+            if (app.worker_busy() != (s.arg == "busy")) return patience("the worker is not " + s.arg);
+            next("the worker is " + s.arg);
         } else if (s.verb == "close") {
             if (!close_) return void(error_ = "close: the app gave no close request");
             close_();

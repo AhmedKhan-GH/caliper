@@ -324,7 +324,14 @@ TEST_CASE("caliper-mcp's app_launch over unsaved work says that the open waits f
     CHECK(text.find("PENDING_APPROVAL") != std::string::npos);
     CHECK(text.find("waits for the person's approval") != std::string::npos);
     MESSAGE("app_launch: " << text);
-    // Nothing has changed: Draft is still the open spec.
+    // Its applet.open has been sent and waits on a card; nothing has changed
+    // meanwhile: Draft is still the open spec.
+    bool carded = false;
+    for (const auto end = Clock::now() + std::chrono::seconds(30); !carded && Clock::now() < end;) {
+        carded = app_out.text().find("applet.open (mcp) waiting") != std::string::npos;
+        if (!carded) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    REQUIRE_MESSAGE(carded, app_out.text());
     CHECK(call("spec_get", json::object())["structuredContent"]["id"] == "draft");
     CHECK(call("spec_get", json::object())["structuredContent"]["open"] == true);
 

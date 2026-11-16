@@ -154,9 +154,9 @@ struct SpecPage::Impl {
     std::string saved_id;
     float browser_rect[4] = {0, 0, 0, 0};   // the button, as the last frame drew it
 
-    std::optional<std::future<cb::CommandResult>> request;
+    std::optional<std::future<cb::CommandResult>> request;       // the last applet.open
+    std::optional<std::future<cb::CommandResult>> request_new_f; // the last spec.new, apart, so an open never drops it
     std::string request_error;
-    bool request_is_new = false;   // the request is spec.new, not applet.open
     bool new_done = false;         // a spec.new succeeded since the last take_new()
 
     Seams seams;
@@ -665,7 +665,6 @@ bool SpecPage::request_open(AppSession& session, const std::string& id, const st
     // the person's.
     inv.origin = cb::command_origin_from_name(origin).value_or(cb::CommandOrigin::api);
     impl_->request = s->queue().submit(std::move(inv));
-    impl_->request_is_new = false;
     impl_->request_error.clear();
     return true;
 }
@@ -682,8 +681,7 @@ bool SpecPage::request_new(AppSession& session, const std::string& title) {
     inv.name = "spec.new";
     inv.args = {{"id", id}, {"title", title.empty() ? id : title}};
     inv.origin = cb::CommandOrigin::ui;
-    impl_->request = s->queue().submit(std::move(inv));
-    impl_->request_is_new = true;
+    impl_->request_new_f = s->queue().submit(std::move(inv));
     impl_->request_error.clear();
     return true;
 }
@@ -717,16 +715,19 @@ bool SpecPage::has_unsaved_spec(AppSession& session) {
 
 bool SpecPage::importing() const { return impl_->builder && impl_->builder->importing(); }
 
-bool SpecPage::request_answered(std::string* error) {
+bool SpecPage::request_answered(std::string* error, bool* was_new) {
     Impl& im = *impl_;
-    if (!im.request) return false;
-    if (im.request->wait_for(std::chrono::seconds(0)) != std::future_status::ready) return false;
-    const cb::CommandResult r = im.request->get();
-    im.request.reset();
-    if (im.request_is_new && r.ok) im.new_done = true;
-    im.request_is_new = false;
-    if (error) *error = r.ok ? std::string() : r.error.code + ": " + r.error.message;
-    return true;
+    for (const bool is_new : {true, false}) {
+        std::optional<std::future<cb::CommandResult>>& f = is_new ? im.request_new_f : im.request;
+        if (!f || f->wait_for(std::chrono::seconds(0)) != std::future_status::ready) continue;
+        const cb::CommandResult r = f->get();
+        f.reset();
+        if (is_new && r.ok) im.new_done = true;
+        if (error) *error = r.ok ? std::string() : r.error.code + ": " + r.error.message;
+        if (was_new) *was_new = is_new;
+        return true;
+    }
+    return false;
 }
 
 void SpecPage::enter(AppSession& session) {
@@ -1030,7 +1031,7 @@ bool SpecPage::opened_by_agent() const { return false; }
 std::string SpecPage::browser_note() const { return {}; }
 bool SpecPage::request_open(AppSession&, const std::string&, const std::string&) { return false; }
 SpecPage::OpenReview SpecPage::open_review(AppSession&, const std::string&) { return OpenReview::opens; }
-bool SpecPage::request_answered(std::string*) { return false; }
+bool SpecPage::request_answered(std::string*, bool*) { return false; }
 bool SpecPage::request_new(AppSession&, const std::string&) { return false; }
 bool SpecPage::take_new() { return false; }
 bool SpecPage::has_open_spec(AppSession&) { return false; }

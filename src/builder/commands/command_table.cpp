@@ -271,11 +271,12 @@ const Row kRows[] = {
             "version": {"type": "string", "description": "The applet's version."}}}}}})json",
      "{}"},
     {"app.launch", false, false, true,
-     "Opens the page of one applet, as a click on its row on the app's landing screen does. The page shown before "
-     "is closed first; an attached live session stays attached. The id is an applet's manifest id from "
-     "app.applets. A dashboard of the workspace opens with an applet.open from your origin, so when it would "
-     "replace the open spec's unsaved changes it waits for the person's approval: the status is then "
-     "PENDING_APPROVAL rather than ACTIVE, and its note says how to check whether it opened.",
+     "Opens the page of one applet, as a click on its row on the app's landing screen does; an attached live "
+     "session stays attached. The id is an applet's manifest id from app.applets. A compiled applet's page replaces "
+     "the page shown at once. A dashboard of the workspace opens with an applet.open from your origin, and the page "
+     "changes only when that has run: when it would replace the open spec's unsaved changes it waits for the "
+     "person's approval, the status is PENDING_APPROVAL rather than ACTIVE, its note says how to check whether it "
+     "opened, and if the person denies it nothing changes.",
      R"json({"type": "object", "additionalProperties": false, "required": ["id"],
       "properties": {"id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$", "minLength": 1, "maxLength": 128,
                             "description": "The applet's manifest id, such as com.example.my-viewer, from app.applets."}}})json",

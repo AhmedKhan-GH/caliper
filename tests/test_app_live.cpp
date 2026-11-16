@@ -46,6 +46,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <future>
 #include <thread>
 #include <vector>
 
@@ -410,7 +411,7 @@ TEST_CASE("app live: the stream stays attached across Home and the spec page unt
     CHECK(app.text.find("[live] detached") == std::string::npos);
     std::ofstream(t.str("detach")).put('\n');
     REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("detached")); }, 60000), app.text);
-    CHECK(app.text.find("[live] detached: attention_train.py") != std::string::npos);
+    CHECK(app_says(app, "[live] detached: attention_train.py", 10000));
     CHECK(eventually(app, [&] { return live_entries(port, token).empty(); }));
     CHECK(ok(port, token, "applet.open", {{"id", "entropy"}})["title"] == "Entropy");
     const Image offline = decode(ok(port, token, "panel.render", {{"id", "heads"}, {"width", 320}, {"height", 200}}));
@@ -493,6 +494,100 @@ TEST_CASE("app live: a second stream replaces the first; a stream that ends whil
                   app.text.substr(ended_at == std::string::npos ? 0 : ended_at));
     ::kill(first.pid, SIGTERM);
     CHECK(first.wait(10000) == 0);
+}
+
+TEST_CASE("app live: a second attach that fails leaves the attached stream attached") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("restore");
+    fs::create_directories(t.str("data/streams"));
+    fs::permissions(t.str("data/streams"), fs::perms::owner_all, fs::perm_options::replace);
+    fs::create_directories(t.str("user-applets"));
+    Proc producer;
+    const std::string link = start_producer(producer, env);
+    const std::string script = "page live;key escape;page landing;wait-file " + t.str("r0") +
+                               ";key f4;wait 10;key enter;wait 30;touch " + t.str("r1");
+    Proc app;
+    REQUIRE(app.start(env.exe,
+                      {"--hidden", "--applets", env.applets, "--url", link, "--api", "--api-port", "0", "--workspace",
+                       t.str("ws")},
+                      app_env(env, t, script, t.str(""))));
+    if (!has_metal(app)) {
+        ::kill(app.pid, SIGTERM);
+        app.wait(30000);
+        return;
+    }
+    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    const uint16_t port = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false)["port"].get<uint16_t>();
+    const std::string token = start_token(app);
+    REQUIRE(eventually(app, [&] { return live_entries(port, token).count("live:attn") == 1; }));
+    // A stale row: a stream file of a running process (this test) whose port
+    // nobody listens on any more.
+    uint16_t dead_port = 0;
+    {
+        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        REQUIRE(::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof addr) == 0);
+        socklen_t len = sizeof addr;
+        ::getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len);
+        dead_port = ntohs(addr.sin_port);
+        ::close(fd);
+    }
+    char host[256] = {0};
+    ::gethostname(host, sizeof host - 1);
+    const long now_ms = (long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+    const std::string stale = t.str("data/streams/" + std::to_string(::getpid()) + ".json");
+    {
+        std::ofstream f(stale);
+        f << json{{"version", 1}, {"pid", ::getpid()}, {"host", host}, {"session", "stale-1"}, {"script", "stale.py"},
+                  {"start_unix_ms", now_ms}, {"port", dead_port},
+                  {"stream_url", "ws://127.0.0.1:" + std::to_string(dead_port) + "/v3/stream?token=abcdefghijklmnopqrstuvwxyz0123"},
+                  {"control", false}, {"views", json::array()}}
+                 .dump();
+    }
+    fs::permissions(stale, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
+    std::ofstream(t.str("r0")).put('\n');
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("r1")); }, 60000), app.text);
+    CHECK(app_says(app, "attach failed", 10000));
+    // The first stream is still attached, and its sources still arrive.
+    CHECK(eventually(app, [&] { return live_entries(port, token).count("live:attn") == 1; }));
+    fs::remove(stale);
+    ::kill(app.pid, SIGTERM);
+    CHECK_MESSAGE(app.wait(30000) == 0, app.text);
+    ::kill(producer.pid, SIGTERM);
+    CHECK(producer.wait(10000) == 0);
+}
+
+TEST_CASE("app live: CALIPER_HOME_AFTER goes Home once, and the live page opened again with F5 stays") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("home-after");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    Proc producer;
+    const std::string link = start_producer(producer, env);
+    // The hook goes Home a second after the live page opened; F5 comes back,
+    // and the page stays for the 120 frames after.
+    std::vector<std::string> e = app_env(env, t, "page live;page landing;key f5;page live;wait 120;page live;touch " +
+                                                     t.str("stayed"), t.str(""));
+    e.push_back("CALIPER_HOME_AFTER=1");
+    Proc app;
+    REQUIRE(app.start(env.exe, {"--hidden", "--applets", env.applets, "--url", link, "--workspace", t.str("ws")}, e));
+    if (!has_metal(app)) {
+        ::kill(app.pid, SIGTERM);
+        app.wait(30000);
+        return;
+    }
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("stayed")); }, 90000), app.text);
+    CHECK(app.text.find("[ui] stopped") == std::string::npos);
+    ::kill(app.pid, SIGTERM);
+    CHECK_MESSAGE(app.wait(30000) == 0, app.text);
+    ::kill(producer.pid, SIGTERM);
+    CHECK(producer.wait(10000) == 0);
 }
 
 TEST_CASE("app live: files dropped on the live page start a new spec beside the live sources, or go into an open "
@@ -621,7 +716,7 @@ TEST_CASE("app save: F3 New dashboard over unsaved changes asks Save changes fir
         return "key cmd+k;wait 5;type new " + title + ";wait 5;key enter;";
     };
     const std::string script = "page landing;wait 60;" + new_spec("Alpha") + "page spec;touch " + t.str("a1") + ";" + home +
-                               new_spec("Beta") + "wait 30;touch " + t.str("a2") + ";save until;shot " + shot +
+                               new_spec("Beta") + "save until;touch " + t.str("a2") + ";shot " + shot +
                                ";save cancel;wait 10;touch " + t.str("a3") + ";" + new_spec("Beta") +
                                "save dont-save;page spec;touch " + t.str("a4") + ";" + home + new_spec("Gamma") +
                                "save save;page spec;touch " + t.str("a5");
@@ -634,7 +729,7 @@ TEST_CASE("app save: F3 New dashboard over unsaved changes asks Save changes fir
     // F3 again: the question holds the new spec back.
     a.reach(t, "a2");
     CHECK(a.spec()["id"] == "alpha");
-    CHECK(a.app.text.find("[save] Save changes to Alpha? waiting") != std::string::npos);
+    CHECK(app_says(a.app, "[save] Save changes to Alpha? waiting", 10000));
     // Cancel: nothing changed.
     a.reach(t, "a3");
     CHECK(a.spec()["id"] == "alpha");
@@ -667,7 +762,7 @@ TEST_CASE("app save: opening another dashboard from the landing over unsaved cha
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
     const std::string home = "key escape;wait 5;key escape;page landing;";
     const std::string open_two = "key cmd+k;wait 5;type Two;wait 5;key enter;";
-    const std::string script = "wait-file " + t.str("b0") + ";page spec;" + home + open_two + "wait 30;touch " +
+    const std::string script = "wait-file " + t.str("b0") + ";page spec;" + home + open_two + "save until;touch " +
                                t.str("b1") + ";save save;page spec;wait 10;touch " + t.str("b2") + ";wait-file " +
                                t.str("b2go") + ";" + home + open_two + "page spec;wait 30;touch " + t.str("b3");
     SaveApp a;
@@ -684,7 +779,7 @@ TEST_CASE("app save: opening another dashboard from the landing over unsaved cha
     // Two from the landing: the question first, and One stays open meanwhile.
     a.reach(t, "b1");
     CHECK(a.spec()["id"] == "one");
-    CHECK(a.app.text.find("[save] Save changes to One edited? waiting") != std::string::npos);
+    CHECK(app_says(a.app, "[save] Save changes to One edited? waiting", 10000));
     // Save: One is written with its change, then Two opens.
     a.reach(t, "b2");
     CHECK(a.spec()["id"] == "two");
@@ -723,7 +818,7 @@ TEST_CASE("app save: closing the window over unsaved changes asks first; Cancel 
     fs::create_directories(t.str("data"));
     fs::create_directories(t.str("user-applets"));
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
-    const std::string script = "wait-file " + t.str("c0") + ";close;wait 30;touch " + t.str("c1") +
+    const std::string script = "wait-file " + t.str("c0") + ";close;save until;touch " + t.str("c1") +
                                ";save cancel;wait 30;touch " + t.str("c2") + ";wait-file " + t.str("c2go") +
                                ";close;save dont-save";
     SaveApp a;
@@ -732,7 +827,7 @@ TEST_CASE("app save: closing the window over unsaved changes asks first; Cancel 
     go_on(t, "c0");
     a.reach(t, "c1");
     CHECK(::kill(a.app.pid, 0) == 0);   // still running: the question holds the close back
-    CHECK(a.app.text.find("[save] Save changes to Draft? waiting") != std::string::npos);
+    CHECK(app_says(a.app, "[save] Save changes to Draft? waiting", 10000));
     a.reach(t, "c2");
     CHECK(::kill(a.app.pid, 0) == 0);   // Cancel: it runs on
     CHECK(a.spec()["id"] == "draft");
@@ -760,6 +855,41 @@ bool lists(SaveApp& a, const std::string& id) {
 }
 
 }  // namespace
+
+TEST_CASE("app save: closing the window while a command runs on the session's worker still asks Save changes once "
+          "it ends") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("save-busy");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    const std::string script = "wait-file " + t.str("c0") + ";worker busy;close;wait 20;touch " + t.str("c1") +
+                               ";worker idle;save until;touch " + t.str("c2") + ";save cancel;wait 10;touch " +
+                               t.str("c3");
+    SaveApp a;
+    if (!a.start(env, t, script, t.str(""))) return;
+    ok(a.port, a.token, "spec.new", {{"id", "draft"}, {"title", "Draft"}});
+    // A query that keeps the worker busy until its own time limit, as an
+    // agent's data.query, data.import or loader.run does.
+    auto query = std::async(std::launch::async, [&] {
+        return http(a.port, "POST", "/v0/commands/data.query", a.token,
+                    json{{"sql", "SELECT count(*) FROM range(100000000000) t(i) WHERE i % 7 = 3"},
+                         {"timeout_ms", 6000}}.dump());
+    });
+    go_on(t, "c0");
+    // Closed while the worker runs: the app does not quit; it waits for the
+    // command, then asks about the unsaved spec.
+    a.reach(t, "c1");
+    CHECK(::kill(a.app.pid, 0) == 0);
+    CHECK(app_says(a.app, "[save] Save changes to Draft? waiting", 30000));
+    a.reach(t, "c2");
+    a.reach(t, "c3");
+    CHECK(::kill(a.app.pid, 0) == 0);   // Cancel: it runs on
+    CHECK(a.spec()["id"] == "draft");
+    CHECK(query.get().status == 200);
+    ::kill(a.app.pid, SIGTERM);
+    CHECK_MESSAGE(a.app.wait(30000) == 0, a.app.text);
+}
 
 TEST_CASE("app launch: an outside agent's launch of a dashboard over unsaved changes waits on an approval card; "
           "over a saved spec, and with the person's own token, it opens at once") {

@@ -1524,7 +1524,20 @@ class StreamFile:
             tmp = f"{self.path}.tmp.{os.getpid()}"
             try:
                 os.makedirs(folder, mode=0o700, exist_ok=True)
-                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                # The token goes only into a folder of this user's that no one
+                # else can enter: a shared or pre-made folder could hold a
+                # link at the file's name that leads elsewhere.
+                why = _private_folder(folder)
+                if why:
+                    self._refuse(folder, why)
+                    return False
+                try:
+                    os.unlink(tmp)                    # a leftover of this pid's; only this user writes here
+                except FileNotFoundError:
+                    pass
+                # Made new, never through a link, with its mode set at creation.
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+                fd = os.open(tmp, flags, 0o600)
                 try:
                     os.write(fd, body)
                 finally:
@@ -1539,6 +1552,15 @@ class StreamFile:
                 return False
             self._views = views
             return True
+
+    def _refuse(self, folder: str, why: str) -> None:
+        """Says once, on the script's standard error and without the token, why
+        the Caliper app will not list this stream."""
+        if getattr(self, "_refused", False):
+            return
+        self._refused = True
+        print(f"caliper: the stream file is not written, so the Caliper app's session list does not show this "
+              f"stream; attach with its link instead: {folder} {why}", file=sys.stderr, flush=True)
 
     def views(self, names) -> None:
         """The view list changed (the pump thread): rewrite when the names did."""
@@ -1556,6 +1578,22 @@ class StreamFile:
                 os.unlink(self.path)
             except OSError:
                 pass
+
+
+def _private_folder(folder: str) -> str:
+    """'' when `folder` is a folder of this user's that no one else may read or
+    write (POSIX); otherwise why it is not."""
+    if os.name == "nt":
+        return ""
+    import stat
+    st = os.lstat(folder)
+    if not stat.S_ISDIR(st.st_mode):
+        return "is not a folder"
+    if st.st_uid != os.getuid():
+        return "is not owned by this user"
+    if st.st_mode & 0o077:
+        return "can be read or entered by other users (it needs mode 0700)"
+    return ""
 
 
 def _host_name() -> str:

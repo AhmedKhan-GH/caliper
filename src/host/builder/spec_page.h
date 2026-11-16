@@ -120,9 +120,12 @@ public:
     // at the time of the call; the open runs a frame or two later.
     enum class OpenReview { opens, waits, unknown };
     static OpenReview open_review(AppSession& session, const std::string& origin);
-    // The answer of the last request_open(), once it has come: true, with
-    // `error` empty when it succeeded and holding the reason otherwise.
-    bool request_answered(std::string* error);
+    // An answer of the last request_open() or the last request_new(), once
+    // it has come, one per call (spec.new's first): true, with `error` empty
+    // when it succeeded and holding the reason otherwise, and `was_new` true
+    // for spec.new's. The two are kept apart, so an open sent while a new
+    // spec is on its way never drops the new spec's answer.
+    bool request_answered(std::string* error, bool* was_new = nullptr);
 
     // A new spec from the app (the landing's F3 New dashboard, or a drop with
     // no open spec): spec.new from the ui origin through the session's queue,

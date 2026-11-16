@@ -138,7 +138,11 @@ struct AppSession::Impl {
         explicit HostBinding(Impl* i) : im(i) {}
         cb::CommandOutput app_info() override { return im->app_info(); }
         cb::CommandOutput app_applets() override { return im->app_applets(); }
-        cb::CommandOutput app_launch(const std::string& id) override { return im->app_launch(id, "ui"); }
+        // The session always says who asked (app_launch(id, origin) below);
+        // a launch with no origin is refused rather than taken as the person's.
+        cb::CommandOutput app_launch(const std::string&) override {
+            return failed("command.not_available", "app.launch needs the origin of whoever asked.");
+        }
         cb::CommandOutput app_launch(const std::string& id, cb::CommandOrigin origin) override {
             return im->app_launch(id, cb::command_origin_name(origin));
         }
