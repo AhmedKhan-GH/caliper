@@ -1,8 +1,11 @@
 """The demo notebook examples/notebooks/live_training.ipynb, run in JupyterLab
 under headless Chromium with the harness in tests/headless: while it trains,
-the loss, attention and embedding widgets draw and change; choosing a layer
-and a head in the attention widget's picker changes its data view; a
-selection in the embedding widget reaches ``embedding_widget.selection``; and
+the loss, attention and embedding widgets draw and change; a pan of the
+loss stops it following the data and holds while training continues, and a
+double click follows again; choosing a layer and a head in the attention
+widget's picker changes its data view; the attention heatmap zooms and pans,
+and a hover there names the cell under the pointer; a selection in the
+embedding widget reaches ``embedding_widget.selection``; and
 ``attention_widget.data_view = {...}`` from Python reaches the widget. Run
 in the "metal" mode, where Caliper's WebAssembly views draw all three widgets
 on WebGPU and make the selection, and the "canvas2d" mode, where the
@@ -60,6 +63,15 @@ def run_cells(nb, index: int, above: bool) -> None:
                      " n.activeCellIndex = i; n.select(n.widgets[i]);"
                      " window.__run = jupyterapp.commands.execute(command); }",
                      [nb.name, index, command])
+
+
+def page_point(box: dict, d: dict, x: float, y: float) -> tuple[float, float]:
+    """Page coordinates of data point (x, y) in a view's drawing area, from its
+    debug state's area and window (rows grow down in a heatmap)."""
+    a, w = d["area"], d["window"]
+    fy = (y - w["y0"]) / (w["y1"] - w["y0"])
+    py = a["y"] + fy * a["h"] if d["kind"] in ("heatmap", "image") else a["y"] + a["h"] - fy * a["h"]
+    return box["x"] + a["x"] + (x - w["x0"]) / (w["x1"] - w["x0"]) * a["w"], box["y"] + py
 
 
 def cell_done(nb, index: int) -> bool:
@@ -121,6 +133,30 @@ def test_live_training_notebook(tmp_path, mode):
                 assert changed(first, second), f"{n} did not change while training"
         nb.screenshot(shots / f"notebook-{mode}-training.png")
 
+        # A pan of the loss stops it following the data: its window holds while
+        # training goes on, and a double click follows the newest steps again.
+        loss = nb.page.locator('caliper-view[view="loss"] canvas:visible').first
+        loss.scroll_into_view_if_needed()
+        lbox = loss.bounding_box()
+        assert nb.page.evaluate(STATE, "loss")["follow"] is True
+        lx, ly = lbox["x"] + lbox["width"] * 0.6, lbox["y"] + lbox["height"] * 0.5
+        nb.page.mouse.move(lx, ly)
+        nb.page.mouse.down()
+        nb.page.mouse.move(lx + 80, ly, steps=5)
+        nb.page.mouse.up()
+        nb.wait(f"() => (({STATE})('loss') || {{}}).follow === false", timeout=10)
+        nb.page.wait_for_timeout(300)
+        held = nb.page.evaluate(STATE, "loss")
+        nb.page.wait_for_timeout(1500)
+        later = nb.page.evaluate(STATE, "loss")
+        assert not cell_done(nb, train_cell), "training ended before the loss check; raise the steps"
+        assert later["window"] == held["window"], (held["window"], later["window"])
+        assert later["info"] != held["info"], "the loss got no new steps while it was held"
+        nb.page.locator('caliper-view[view="loss"]').screenshot(path=str(shots / f"notebook-{mode}-loss-held.png"))
+        nb.page.mouse.dblclick(lx, ly)
+        nb.wait(f"() => {{ const s = ({STATE})('loss'); return !!s && s.follow === true"
+                f" && s.window.x1 > {held['window']['x1']}; }}", timeout=10)
+
         # The picker: layer 0, head 2 (sequence 0); the heatmap's data view follows.
         att = nb.page.locator('caliper-view[view="attention"]')
         before = att.locator("canvas:visible").first.screenshot()
@@ -132,6 +168,36 @@ def test_live_training_notebook(tmp_path, mode):
         after = att.locator("canvas:visible").first.screenshot()
         assert changed(before, after)
         att.screenshot(path=str(shots / f"notebook-{mode}-attention-layer0-head2.png"))
+
+        # The heatmap zooms about the pointer and pans with a drag; a hover then
+        # names the cell under the pointer; a double click fits it again.
+        heat = att.locator("canvas:visible").first
+        heat.scroll_into_view_if_needed()
+        hbox = heat.bounding_box()
+        fit = nb.page.evaluate(STATE, "attention")["window"]
+        hx, hy = hbox["x"] + hbox["width"] * 0.5, hbox["y"] + hbox["height"] * 0.5
+        nb.page.mouse.move(hx, hy)
+        nb.page.mouse.wheel(0, -400)
+        span = (fit["x1"] - fit["x0"]) * 0.8
+        nb.wait(f"() => {{ const w = ({STATE})('attention').window; return w.x1 - w.x0 < {span}; }}", timeout=10)
+        zoomed = nb.page.evaluate(STATE, "attention")["window"]
+        nb.page.mouse.down()
+        nb.page.mouse.move(hx + 60, hy + 30, steps=5)
+        nb.page.mouse.up()
+        nb.wait(f"() => ({STATE})('attention').window.x0 < {zoomed['x0']}", timeout=10)
+        d = nb.page.evaluate(STATE, "attention")
+        w = d["window"]
+        col = int((w["x0"] + w["x1"]) / 2)
+        row = int((w["y0"] + w["y1"]) / 2)
+        px, py = page_point(hbox, d, col + 0.5, row + 0.5)
+        nb.page.mouse.move(px, py)
+        nb.page.mouse.move(px + 1, py)
+        nb.wait(f"() => {{ const h = ({STATE})('attention').hover; return !!h && h.r === {row} && h.c === {col}; }}",
+                timeout=10)
+        att.screenshot(path=str(shots / f"notebook-{mode}-attention-zoomed.png"))
+        nb.page.mouse.dblclick(px, py)
+        nb.wait(f"() => {{ const w = ({STATE})('attention').window; return Math.abs(w.x0 - {fit['x0']}) < 1e-6"
+                f" && Math.abs(w.x1 - {fit['x1']}) < 1e-6 && Math.abs(w.y0 - {fit['y0']}) < 1e-6; }}", timeout=10)
 
         # A rectangle selection in the embedding (shift + alt drag), after a
         # double click fits the view to the points, which move while it trains.
