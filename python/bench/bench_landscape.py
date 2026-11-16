@@ -329,6 +329,7 @@ def main() -> None:
     print(f"ratio with / without: {ratio:.3f} (budget 1.5)", flush=True)
     if args.diagnose:
         base = statistics.median(times["without"])
+        committed = None
         for variant, mode in (("with", "events"), ("with", "sync"), ("without", "events"),
                               ("without", "bounded"), ("with", "bounded")):
             r = child(["--run", variant, "--steps", str(args.steps), "--mode", mode])
@@ -350,6 +351,13 @@ def main() -> None:
                          f"{max(r['lag_after_surface_s']):.3f} s, worked off in "
                          f"{min(r['catch_up_steps'])} to {max(r['catch_up_steps'])} steps")
             print(line + f" (load {r['load'][0]:.1f} to {r['load'][1]:.1f})", flush=True)
+            if (variant, mode) == ("without", "events"):
+                committed = r["seconds"]
+        # A plain run without the landscape commits no work to the device until
+        # its last step, so its device runs after its host; with an event after
+        # every step the same loop's work is committed as it goes.
+        print(f"ratio with (median plain) / without (events, work committed every step): "
+              f"{statistics.median(times['with']) / committed:.3f} (budget 1.5)", flush=True)
     s = child(["--surface"])
     fmt = lambda xs: ", ".join(f"{x:.3f}" for x in xs)  # noqa: E731
     print(f"surface: first {fmt(s['first path s'])} s; vmap path {fmt(s['vmap path s'])} s;"
