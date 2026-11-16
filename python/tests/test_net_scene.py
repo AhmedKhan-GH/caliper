@@ -745,3 +745,18 @@ def test_the_training_thread_never_waits_for_the_device():
            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
            and n.func.attr in {"item", "cpu", "numpy", "tolist", "synchronize"}]
     assert bad == []
+
+
+def test_a_viewer_without_scenes_gets_unknown_view_whatever_its_data_view(server):
+    """The capability goes before the data view: a 3.1 viewer that names a scene with a data
+    view the scene refuses still gets unknown_view, so nothing tells it that the view exists."""
+    caliper.scene("hidden")
+    caliper.series(1.0, name="loss")
+
+    async def body():
+        async with Viewer(server, caps=()) as v:
+            await v.expect(w.Views, lambda m: any(x["name"] == "loss" for x in m.views))
+            v.views["hidden"] = {}
+            r = await v.subscribe(1, "hidden", data_view={"entities": {"include": ["a/**"], "exclude": []}})
+            assert r.error["code"] == w.ERR_UNKNOWN_VIEW
+    run(body())
