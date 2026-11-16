@@ -350,13 +350,16 @@ public:
                 ctx.spec_facts = [](const caliper_host::AppletEntry& e, SpecAppletFacts* f) {
                     return caliper_host::SpecPage::facts(e.spec_path, f);
                 };
+                ctx.shown_path = [this](const std::string& p) { return workspace_relative(p); };
                 landing_.draw(ctx);
             } else if (page_ == AppPage::Live) {
                 draw_live_page();
             } else if (page_ == AppPage::Spec) {
                 // The open spec in the work area the strips leave; Home and
                 // esc go back to the landing after the frame is rendered.
-                bool go_back = esc_home_pressed();
+                // Escape gives a focused panel's focus up first and goes
+                // Home only when no panel has it (spec_key_action).
+                bool go_back = false;
                 // Dev hook: CALIPER_HOME_AFTER=<sec>, as on the other pages:
                 // Home once, N sec after the spec page opened.
                 if (const char* ha = std::getenv("CALIPER_HOME_AFTER")) {
@@ -364,7 +367,7 @@ public:
                     if (page_t0 < 0) page_t0 = glfwGetTime();
                     if (glfwGetTime() - page_t0 >= std::atof(ha)) go_back = true;
                 }
-                if (spec_page_.draw(session_, renderer_->name(), &jobs_tray_).home || go_back)
+                if (spec_page_.draw(session_, renderer_->name(), &jobs_tray_, esc_home_pressed()).home || go_back)
                     pending_spec_home_ = true;
             } else if (page_ == AppPage::Applet) {
                 bool go_back = esc_home_pressed();
@@ -670,6 +673,10 @@ private:
             } else if (!session_.open_error().empty()) {
                 landing_.log("launch failed", pending_spec_open_, session_.open_error());
                 pending_spec_open_.clear();
+            } else {
+                // A launch before the session started (CALIPER_AUTOLAUNCH)
+                // opens the default workspace here.
+                session_.ensure_open();
             }
         }
         std::string error;
@@ -1092,6 +1099,24 @@ private:
     void log_scan(const std::string& dir, int added) {
         landing_.log("scanned", home_relative(dir),
                      std::to_string(added) + (added == 1 ? " applet" : " applets"));
+    }
+
+    // `path` relative to the workspace when it is in it, such as
+    // applets/run42-dashboard/run42-dashboard.spec.toml; otherwise as
+    // home_relative() writes it.
+    std::string workspace_relative(const std::string& path) const {
+        namespace fs = std::filesystem;
+        if (!workspace_dir_.empty()) {
+            std::error_code ec;
+            for (const bool canonical : {false, true}) {
+                const fs::path p = canonical ? fs::weakly_canonical(path, ec) : fs::path(path);
+                const fs::path w = canonical ? fs::weakly_canonical(workspace_dir_, ec) : fs::path(workspace_dir_);
+                if (ec) break;
+                const fs::path rel = p.lexically_relative(w);
+                if (!rel.empty() && *rel.begin() != "..") return rel.generic_string();
+            }
+        }
+        return home_relative(path);
     }
 
     // `path` with the user's home folder written as "~"; unchanged when it is

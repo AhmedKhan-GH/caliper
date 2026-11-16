@@ -83,6 +83,10 @@ public:
         // A spec applet's facts for the Inspector, from its spec file. Null,
         // or false, leaves the rows that need them out.
         std::function<bool(const caliper_host::AppletEntry&, SpecAppletFacts*)> spec_facts;
+        // A file's path as the Inspector shows it: relative to the workspace
+        // for a file in it, else with the home folder written "~", as the
+        // Activity pane writes paths. Null shows the path as it is.
+        std::function<std::string(const std::string&)> shown_path;
     };
 
     // Draws one frame of the landing page. Owns its windows and dock space;

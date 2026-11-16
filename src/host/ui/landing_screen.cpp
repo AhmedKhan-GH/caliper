@@ -1384,7 +1384,10 @@ void LandingScreen::draw_inspector_rows(const caliper_host::AppletEntry& e, cons
         field("Min host");
         mono_value(m.min_host, "none");
         field("Spec");
-        cell_wrapped(e.spec_path.empty() ? "missing" : e.spec_path.c_str(), mono, font_size::mono, col::faint);
+        const std::string spec = e.spec_path.empty() ? std::string("missing")
+                                 : ctx.shown_path       ? ctx.shown_path(e.spec_path)
+                                                        : e.spec_path;
+        cell_wrapped(spec.c_str(), mono, font_size::mono, col::faint);
         field("Status");
         cell_text(status_word(e.status), ui, font_size::ui, status_colour(e.status));
         if (!launchable(e) && !e.status_text.empty())
