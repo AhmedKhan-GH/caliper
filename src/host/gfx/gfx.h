@@ -214,6 +214,7 @@ enum class BindingType : uint8_t {
     UintTexture,     // texture_2d<u32>
     Sampler,         // sampler, filtering
     StorageTexture,  // texture_storage_2d<format, write>
+    StorageReadWrite,  // var<storage, read_write>: the index clamp's and edge gather's outputs
 };
 struct BindingDesc {
     uint8_t group = 0, binding = 0;
