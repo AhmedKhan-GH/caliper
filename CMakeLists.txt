@@ -579,13 +579,23 @@ endif()
 # Main Application (host — first embedder of libcaliper)
 # ============================================================================
 
+# Sternbild house style (SPEC-sternbild.md, workstation revision): colour
+# tokens, drawing helpers and font loading, one library that the caliper
+# executable and the spec runtime (src/host/spec_runtime) both link, so the
+# two share one copy of the faces sternbild::fonts() points to.
+add_library(caliper_sternbild_ui STATIC
+    src/host/ui/sternbild_theme.cpp
+    src/host/ui/sternbild_fonts.cpp)
+target_include_directories(caliper_sternbild_ui PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_sternbild_ui PUBLIC caliper::ui_stack caliper_app_paths)
+# A development build also finds the house fonts in the source tree.
+target_compile_definitions(caliper_sternbild_ui PRIVATE CALIPER_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+set_target_properties(caliper_sternbild_ui PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+
 add_executable(caliper
     src/main.cpp
-    # Sternbild house style (SPEC-sternbild.md, workstation revision): colour
-    # tokens + drawing helpers, font loading, and the landing screen that
-    # replaced the GL-only IntroScreen for every renderer backend.
-    src/host/ui/sternbild_theme.cpp
-    src/host/ui/sternbild_fonts.cpp
+    # The landing screen that replaced the GL-only IntroScreen for every
+    # renderer backend.
     src/host/ui/landing_screen.cpp
     # The applet page (page bar, status bar, dock space, docking by role, the
     # applet's frame, the jobs tray), drawn by the app and by `caliper shot`,
@@ -599,10 +609,12 @@ add_executable(caliper
     # dispatches (here and in caliper_tests).
     src/host/cli_build.cpp
     src/host/host_cli.cpp
-    # The builder session in the app (src/host/builder/app_session.h): the
-    # session when the builder is built (below), a stub that opens nothing
-    # when it is not.
+    # The builder session in the app (src/host/builder/app_session.h) and the
+    # spec page that draws its open spec (spec_page.h): the session and the
+    # page when the builder is built (below), stubs that open nothing when it
+    # is not.
     src/host/builder/app_session.cpp
+    src/host/builder/spec_page.cpp
 )
 # app_paths.cpp is no longer compiled by path here: it arrives via
 # libcaliper -> caliper_app_paths (PUBLIC). Compiling it here too would be an
@@ -623,7 +635,7 @@ target_compile_definitions(caliper PRIVATE
 # The host links the platform core (libcaliper, which PUBLIC-propagates
 # caliper_host_lib + ui_stack + the per-OS renderer backend) plus the UI/platform
 # libs it uses directly (imgui/glfw/implot chrome).
-target_link_libraries(caliper PRIVATE libcaliper caliper::sdk caliper_api ${CALIPER_DEPENDENCY_LIBS})
+target_link_libraries(caliper PRIVATE libcaliper caliper::sdk caliper_api caliper_sternbild_ui ${CALIPER_DEPENDENCY_LIBS})
 
 if(USE_CUDA)
     target_compile_definitions(caliper PRIVATE USE_CUDA)
@@ -844,13 +856,15 @@ if(CALIPER_WITH_BUILDER)
 endif()
 
 # The builder session in the app (src/host/builder/app_session.h): with the
-# builder, the caliper executable links the session library and
-# app_session.cpp holds the session instead of its stub. Its tests drive the
+# builder, the caliper executable links the session library, the spec runtime
+# that its spec page and panel.render draw with, and Caliper API's command
+# gateway over the session, and app_session.cpp and spec_page.cpp hold the
+# session and the page instead of their stubs. Its tests drive the
 # session with a fake frame loop and the hidden app with a command script
 # (tests/test_app_session.cpp); the second is POSIX only, as the hidden app's
 # other process tests are, and is skipped without a Metal device.
 if(TARGET caliper_builder_session)
-    target_link_libraries(caliper PRIVATE caliper_builder_session)
+    target_link_libraries(caliper PRIVATE caliper_builder_session caliper_spec_runtime caliper_api_session)
     target_compile_definitions(caliper PRIVATE CALIPER_WITH_BUILDER=1)
     if(BUILD_TESTS)
         add_executable(caliper_app_session_tests tests/test_app_session.cpp src/host/builder/app_session.cpp)

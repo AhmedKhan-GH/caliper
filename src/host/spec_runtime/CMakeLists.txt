@@ -3,9 +3,6 @@
 # session resolves. Built only with CALIPER_WITH_BUILDER, since it reads specs
 # and resolved data through the builder's libraries.
 #
-#   caliper_sternbild_ui     the house style and fonts (src/host/ui), which
-#                            the runtime draws with; the caliper executable
-#                            still compiles the same two files itself
 #   caliper_spec_runtime     the layout, the prepared data, the drawing, the
 #                            offscreen canvas and panel.render
 #   caliper-spec-shot        a development tool, not installed: a spec drawn
@@ -17,13 +14,9 @@ if(NOT TARGET caliper_builder_session)
     return()
 endif()
 
-add_library(caliper_sternbild_ui STATIC
-    ${CMAKE_SOURCE_DIR}/src/host/ui/sternbild_theme.cpp
-    ${CMAKE_SOURCE_DIR}/src/host/ui/sternbild_fonts.cpp)
-target_include_directories(caliper_sternbild_ui PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
-target_link_libraries(caliper_sternbild_ui PUBLIC caliper::ui_stack caliper_app_paths)
-set_target_properties(caliper_sternbild_ui PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-
+# caliper_sternbild_ui, the house style and fonts (src/host/ui) that the
+# runtime draws with, is defined in the root CMakeLists.txt beside the caliper
+# executable, which links the same library.
 add_library(caliper_spec_runtime STATIC
     spec_layout.cpp
     spec_prepare.cpp

@@ -1,5 +1,5 @@
-// caliper shot (shot.h): the app's applet page, drawn into an offscreen
-// canvas and written as a PNG.
+// caliper shot (shot.h): the app's applet page, or its spec page, drawn into
+// an offscreen canvas and written as a PNG.
 #include "shot.h"
 
 #include "api/app_api.h"
@@ -7,6 +7,7 @@
 #include "applet_loader.h"
 #include "background_process.h"
 #include "builder/app_hooks.h"
+#include "builder/spec_page.h"
 #include "core_lifecycle.h"
 #include "export_service.h"
 #include "host_services.h"
@@ -31,6 +32,7 @@
 #include <iostream>
 #include <memory>
 #include <random>
+#include <regex>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -76,6 +78,7 @@ struct ShotSession {
     std::unique_ptr<AppSession> session;     // closed next, before the host's stores
     std::unique_ptr<AppletLoader> loader;
     std::unique_ptr<AppletPage> page;        // the dock-hint sink points into it
+    std::unique_ptr<SpecPage> spec_page;     // its records go after the canvas
     std::unique_ptr<HostRenderer> renderer;
     bool ui_context = false;
     bool canvas = false;
@@ -83,7 +86,12 @@ struct ShotSession {
 
     ~ShotSession() {
         if (api) api->stop();
-        if (session) session->close();
+        if (session) {
+            // panel.render's canvas shares the shot's font atlas: it goes
+            // while the shot's UI context is still there.
+            session->set_panel_renderer(nullptr);
+            session->close();
+        }
         if (services) {
             // Workers first: a job may hold a pointer into applet state.
             host_job_system().cancel_all_and_join();
@@ -95,6 +103,8 @@ struct ShotSession {
         loader.reset();
         page.reset();
         if (canvas) renderer->canvas_shutdown();
+        if (spec_page) spec_page->shutdown();
+        spec_page.reset();
         renderer.reset();
         if (ui_context) core_destroy_ui_context();
         if (!temp_root.empty()) {
@@ -149,10 +159,16 @@ int run_shot(const CommandLine& cl) {
     loader.scan(applet_search_dirs(cl.applet_dirs, std::getenv("CALIPER_APPLET_PATH"),
                                    user_dir, shipped_dir));
     const int idx = loader.find(id);
-    if (idx < 0)
+    // An id that no search folder has, written as a workspace's applet id
+    // (no dots), names a spec applet of the workspace: the shot opens it with
+    // applet.open once the workspace is open and a command script, if any,
+    // is done, and draws the spec page (builder/spec_page.h).
+    const bool spec_shot =
+        idx < 0 && SpecPage::built() && std::regex_match(id, std::regex("[a-z][a-z0-9_-]{0,63}"));
+    if (idx < 0 && !spec_shot)
         return fail("no applet with the id " + id +
                     " in the search folders (caliper list shows them)");
-    if (loader.at(idx).status != AppletStatus::Ready)
+    if (idx >= 0 && loader.at(idx).status != AppletStatus::Ready)
         return fail(id + " cannot be launched (" +
                     applet_status_word(loader.at(idx).status) +
                     "): " + loader.at(idx).status_text);
@@ -204,15 +220,20 @@ int run_shot(const CommandLine& cl) {
     if (const char* c = std::getenv("CALIPER_CHROMELESS")) chromeless = std::strcmp(c, "1") == 0;
 
     // Launched as CALIPER_AUTOLAUNCH launches it, before the first frame.
-    {
+    if (!spec_shot) {
         const UiCheckpoint ui_checkpoint = UiCheckpoint::store();
         if (!loader.launch(idx, applet_host_proto())) {
             ui_checkpoint.recover();
             return fail(id + " failed to launch: " + loader.at(idx).status_text);
         }
+        page.enter();
     }
-    page.enter();
-    int current = idx;   // the applet the page shows; a launch through the API changes it
+    // The applet the page shows, -1 while the spec page shows; a launch
+    // through the API, and an applet.open, change it.
+    int current = idx;
+    s.spec_page = std::make_unique<SpecPage>();
+    SpecPage& spec_page = *s.spec_page;
+    bool on_spec = spec_shot;
 
     // Caliper API (--api) while the frames are drawn. The canvas is offscreen,
     // so a capture is read back from it at the end of a frame, as the image is.
@@ -245,12 +266,14 @@ int run_shot(const CommandLine& cl) {
             return {409, want_id + " cannot be launched (" + applet_status_word(w.status) + "): " + w.status_text,
                     "app.launch_refused"};
         host_job_system().cancel_all_and_join();
-        loader.teardown(current);
+        if (current >= 0) loader.teardown(current);
         {
             const UiCheckpoint ui_checkpoint = UiCheckpoint::store();
             if (loader.launch(want, applet_host_proto())) {
                 current = want;
                 page.enter();
+                if (on_spec) spec_page.leave();
+                on_spec = false;
                 return {200, launched_json(loader.at(want).manifest.id, loader.at(want).manifest.version, false),
                         ""};
             }
@@ -258,6 +281,7 @@ int run_shot(const CommandLine& cl) {
         }
         const LaunchOutcome failed{409, want_id + " failed to launch: " + loader.at(want).status_text,
                                    "app.launch_failed"};
+        if (current < 0) return failed;   // the spec page stays
         const UiCheckpoint ui_checkpoint = UiCheckpoint::store();
         if (loader.launch(current, applet_host_proto())) {
             page.enter();
@@ -280,6 +304,10 @@ int run_shot(const CommandLine& cl) {
         h.launch = launch;
         h.request_capture = [&] { capture_wanted = true; };
         s.session->start(app_session_options(cl), std::move(h));
+        // panel.render draws on a canvas that shares this canvas's font atlas.
+        s.session->set_panel_renderer(SpecPage::make_panel_renderer());
+        // A spec applet needs the workspace, also the default one.
+        if (spec_shot) s.session->ensure_open();
     }
 
     // N frames at about 60 a second, as the app draws them, so jobs and
@@ -291,8 +319,18 @@ int run_shot(const CommandLine& cl) {
     double last = 0.0;
     bool alive = true;
     int frames = 0;
-    // A command script keeps the frames coming until it is done.
-    for (int f = 0; (f < cl.frames || s.session->script_running()) && alive && !g_stop; ++f) {
+    // The spec page's plots fit their data over their first frames, so it is
+    // drawn at least this many frames after it opens.
+    constexpr int kSpecSettle = 10;
+    int spec_frames = 0;
+    bool spec_asked = false;     // applet.open of a spec shot was sent
+    bool spec_waiting = spec_shot;   // and has not opened the page yet
+    // A command script keeps the frames coming until it is done, and a spec
+    // page until it has opened and settled.
+    for (int f = 0; (f < cl.frames || s.session->script_running() || spec_waiting ||
+                     (on_spec && spec_frames < kSpecSettle)) &&
+                    alive && !g_stop;
+         ++f) {
         // The API's calls of this frame: the applets and launches now, before
         // the frame is drawn, and captures once it is rendered.
         std::vector<uint64_t> captures;
@@ -313,6 +351,31 @@ int run_shot(const CommandLine& cl) {
         if (lost)
             return fail(loader.at(current).manifest.id + " failed to launch again after a launch: " +
                         loader.at(current).status_text);
+        // A spec shot opens its applet once the workspace is open and the
+        // command script is done, so a script can build the applet first.
+        if (spec_waiting) {
+            const std::string why = s.session->open_error();
+            if (!why.empty()) return fail("cannot open the workspace for " + id + ": " + why);
+            if (!spec_asked && !s.session->script_running())
+                spec_asked = spec_page.request_open(*s.session, id);
+            std::string error;
+            if (spec_page.request_answered(&error) && !error.empty())
+                return fail("no applet with the id " + id + " in the search folders or the workspace (" + error +
+                            ")");
+        }
+        // Every applet.open that succeeded shows the spec page, as in the
+        // app: the applet shown goes first.
+        if (spec_page.take_open(*s.session)) {
+            if (current >= 0) {
+                host_job_system().cancel_all_and_join();
+                loader.teardown(current);
+                current = -1;
+            }
+            spec_page.enter(*s.session);
+            on_spec = true;
+            spec_waiting = false;
+            spec_frames = 0;
+        }
         if (f > 0)
             std::this_thread::sleep_until(start + std::chrono::microseconds(
                                                       (int64_t)f * 1000000 / 60));
@@ -335,10 +398,15 @@ int run_shot(const CommandLine& cl) {
         auto views = host_job_system().views();
         tray.note_failures(views);
         tray.begin_frame(std::move(views), now);
-        const AppletPage::Result r =
-            page.draw(loader, current, fi, s.renderer->name(), chromeless, &tray);
+        if (on_spec) {
+            spec_page.draw(*s.session, s.renderer->name(), &tray);
+            ++spec_frames;
+        } else {
+            const AppletPage::Result r =
+                page.draw(loader, current, fi, s.renderer->name(), chromeless, &tray);
+            alive = r.alive;
+        }
         s.renderer->canvas_render();
-        alive = r.alive;
         ++frames;
 
         // The session's capture: this frame, read back as the image is, opaque.
@@ -375,7 +443,7 @@ int run_shot(const CommandLine& cl) {
         std::signal(SIGINT, old_int);
         std::signal(SIGTERM, old_term);
     }
-    const std::string shown = loader.at(current).manifest.id;
+    const std::string shown = on_spec ? spec_page.title() : loader.at(current).manifest.id;
     if (!alive)
         return fail(shown + " was quarantined: " + loader.at(current).status_text);
 

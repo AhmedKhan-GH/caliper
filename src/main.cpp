@@ -26,6 +26,7 @@
 #include "host/api/app_api.h"
 #include "host/api/window_captures.h"
 #include "host/builder/app_hooks.h"
+#include "host/builder/spec_page.h"
 #include "app_paths.h"
 
 #include <string>
@@ -51,6 +52,7 @@ enum class AppPage {
     Landing,
     Applet,
     Live,     // an attached training script's views (F4 Attach to process)
+    Spec,     // the builder session's open spec (host/builder/spec_page.h)
 };
 
 // The live page's run bar and selection details in the house style: key
@@ -300,6 +302,9 @@ public:
             // frame drawn next (window_captures.h).
             if (api_.running()) serve_api();
             session_.frame();
+            // Every applet.open that succeeded, from any origin, shows the
+            // session's open spec on the spec page (host/builder/spec_page.h).
+            if (spec_page_.take_open(session_)) open_spec_page();
             captures_.before_frame(*renderer_, [this](uint64_t t, int status, const std::string& why) {
                 capture_error(t, status, why);
             });
@@ -339,6 +344,12 @@ public:
                 landing_.draw(ctx);
             } else if (page_ == AppPage::Live) {
                 draw_live_page();
+            } else if (page_ == AppPage::Spec) {
+                // The open spec in the work area the strips leave; Home and
+                // esc go back to the landing after the frame is rendered.
+                const bool esc = esc_home_pressed();
+                if (spec_page_.draw(session_, renderer_->name(), &jobs_tray_).home || esc)
+                    pending_spec_home_ = true;
             } else if (page_ == AppPage::Applet) {
                 bool go_back = esc_home_pressed();
 
@@ -411,6 +422,11 @@ public:
                 pending_detach_ = false;
                 leave_live_page();
             }
+            // The spec page's textures go after the frame that drew them too.
+            if (pending_spec_home_) {
+                pending_spec_home_ = false;
+                leave_spec_page();
+            }
 
             // Deferred applet teardown — runs ONLY after this frame's draw list
             // has been rendered, so no just-released bridge texture is still
@@ -458,6 +474,9 @@ public:
         h.request_capture = [this] { captures_.add(caliper_host::AppSession::kCaptureTicket); };
         h.log = [this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); };
         session_.start(caliper_host::app_session_options(cl), std::move(h));
+        // panel.render draws on an offscreen canvas that shares this
+        // window's font atlas, made on the first call between two frames.
+        session_.set_panel_renderer(caliper_host::SpecPage::make_panel_renderer());
     }
 
     void cleanup() {
@@ -465,6 +484,7 @@ public:
         // builder session: its worker, its journal and its database close
         // here, before the host's own stores.
         api_.stop();
+        session_.set_panel_renderer(nullptr);
         session_.close();
         // Workers FIRST: a job may hold a pointer into applet state, so every
         // worker must be joined before close_all() destroys that state (the
@@ -485,6 +505,9 @@ public:
         // races DuckDB's globals and aborts in malloc at exit.
         caliper_host::services_shutdown();
         renderer_->shutdown();
+        // The spec page's textures were the renderer's to destroy; their
+        // records go while the UI context still exists.
+        spec_page_.shutdown();
         caliper_host::core_destroy_ui_context();
         if (window_) glfwDestroyWindow(window_);
         glfwTerminate();
@@ -515,6 +538,28 @@ private:
         note_live_events();   // "detached"
         page_ = AppPage::Landing;
         glfwSetWindowTitle(window_, "Caliper");
+    }
+
+    // The spec page, for an applet.open that succeeded: the page shown goes
+    // first, as Home takes it (an applet is torn down, a live session
+    // detached), between two frames. Opening another spec applet while the
+    // page shows only changes what it shows.
+    void open_spec_page() {
+        if (page_ == AppPage::Applet) leave_applet_page(active_applet_);
+        else if (page_ == AppPage::Live) leave_live_page();
+        spec_page_.enter(session_);   // reads the open spec
+        if (page_ != AppPage::Spec) landing_.log("open", spec_page_.title(), "spec");
+        page_ = AppPage::Spec;
+        glfwSetWindowTitle(window_, ("Caliper - " + spec_page_.title()).c_str());
+    }
+
+    // Home from the spec page, after the frame that drew it.
+    void leave_spec_page() {
+        const std::string left = spec_page_.title();
+        spec_page_.leave();
+        page_ = AppPage::Landing;
+        glfwSetWindowTitle(window_, "Caliper");
+        landing_.log("home", left);
     }
 
     // Caliper API's calls of this frame (api/api_server.h). A capture waits
@@ -561,6 +606,7 @@ private:
         }
         if (page_ == AppPage::Applet) leave_applet_page(active_applet_);
         else if (page_ == AppPage::Live) leave_live_page();
+        else if (page_ == AppPage::Spec) leave_spec_page();
         launch_applet(i);
         const auto& a = loader_.at(i);
         if (page_ == AppPage::Applet && active_applet_ == i)
@@ -959,6 +1005,8 @@ private:
     std::string live_script_;
     int32_t live_pid_ = 0;
     bool pending_detach_ = false;     // esc Home on the live page: detach after render
+    caliper_host::SpecPage spec_page_;  // the session's open spec (applet.open)
+    bool pending_spec_home_ = false;  // Home on the spec page: leave after render
     caliper_host::AppApi api_;        // Caliper API (--api); not running without it
     caliper_host::WindowCaptures captures_;   // the API's and the session's captures of the window's frame
     caliper_host::AppSession session_;        // the builder session of the workspace
