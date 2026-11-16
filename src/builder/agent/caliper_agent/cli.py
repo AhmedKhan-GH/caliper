@@ -139,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     from .capabilities import ProbeCache, claude_facts, resolve
     from .claude import API_BASE_URL, DEFAULT_EFFORT, DEFAULT_MODEL, MODELS, ClaudeProvider
     from .loop import build_agent
+    from .ollama_native import native_context
     from .openai_compat import BaseUrlError, OpenAICompatProvider
     from .presets import PresetError, choose
     from .prompt import SYSTEM_PROMPT
@@ -221,13 +222,21 @@ def main(argv: list[str] | None = None) -> int:
             entry = cache.get(base_url, args.model) if cache is not None else None
             known = resolve(entry, options={"tools": _yes_no(args.model_tools), "vision": _yes_no(args.model_vision),
                                             "context_length": args.context_length})
+            context, context_source = known.context_length.value, known.context_length.source
+            num_ctx = native_context(choice.preset, context, context_source)
+            if num_ctx is not None:
+                # Ollama loads the model with this context length, so it is the model's.
+                context = num_ctx
+                if context_source not in ("override", "option"):
+                    context_source = "preset"
             provider = OpenAICompatProvider(base_url, args.model,
                                             model_key if model_status == KeyStatus.PRESENT else None,
                                             tools=bool(known.tools.value), vision=bool(known.vision.value),
-                                            backoff_scale=backoff, context_length=known.context_length.value,
+                                            backoff_scale=backoff, context_length=context,
                                             sources={"tools": known.tools.source, "vision": known.vision.source,
-                                                     "context_length": known.context_length.source},
-                                            quirks=known.quirks)
+                                                     "context_length": context_source},
+                                            quirks=known.quirks,
+                                            native={"num_ctx": num_ctx} if num_ctx is not None else None)
         except OfflineError as exc:
             refusal = exc
     if refusal is not None:
@@ -302,6 +311,7 @@ def probe_main(argv: list[str]) -> int:
     from .capabilities import DEFAULT_CONTEXT_LENGTH, CacheError, Entry, ProbeCache, resolve
     from .claude import API_BASE_URL
     from .presets import BaseUrlError, PresetError, choose
+    from .ollama_native import native_context
     from .probe import now_iso, probe_claude, probe_openai_compatible
     from .scripted import SCRIPT_ENV, load_script
     from .stub_transport import StubTransport
@@ -340,6 +350,13 @@ def probe_main(argv: list[str]) -> int:
             return fail(f"the test script cannot be read: {exc}")
         transport = StubTransport(script)
 
+    # The Ollama preset's test calls load the model with the context length the
+    # agent will use: the person's override, else the preset's.
+    over = cache.get(base_url, args.model) if cache is not None else None
+    over_context = over.overrides.get("context_length") if over is not None else None
+    num_ctx = native_context(choice.preset, over_context, "override" if over_context is not None else "default")
+    native = {"num_ctx": num_ctx} if num_ctx is not None else None
+
     async def run_probe(list_only: bool):
         if kind == "claude":
             return await probe_claude(args.model, claude_key if claude_status == KeyStatus.PRESENT else None,
@@ -347,7 +364,7 @@ def probe_main(argv: list[str]) -> int:
         return await probe_openai_compatible(base_url, args.model,
                                              model_key if model_status == KeyStatus.PRESENT else None,
                                              preset=choice.preset.id if choice.preset is not None else None,
-                                             vision=not args.no_vision_probe, list_only=list_only)
+                                             vision=not args.no_vision_probe, list_only=list_only, native=native)
 
     out: dict = {"version": 1, "preset": choice.preset.id if choice.preset is not None else None,
                  "provider": kind, "base_url": base_url, "model": args.model}

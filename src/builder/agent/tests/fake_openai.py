@@ -20,6 +20,13 @@ It speaks the chat completions API (streamed, as Server-Sent Events) and
   `lmstudio` answers LM Studio's `GET /api/v0/models/<id>` with
   `max_context_length`.
 - `require_key` answers 401 to a request without that bearer key.
+- **Ollama's own chat API.** `POST /api/chat` answers as Ollama does, in lines
+  of JSON (or one object without streaming), with the same model behaviour:
+  thinking in `thinking`, tool calls with their arguments as objects (without
+  ids when `native_ids` is False), a 400 `{"error": ...}` for a refusal, and
+  `done_reason` and the token counts in the last line. Its requests are kept
+  in `requests` as sent, and `native_requests` too. `show`, Ollama's
+  `model_info`, answers `POST /api/show`.
 
 Replies to other requests are taken in order from `replies`, or made by
 `responder(body)` when it is given.
@@ -36,6 +43,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 
 PROBE_TOOL = "record_number"
+
+# Ollama's model metadata (POST /api/show) of a hybrid 27B model: 65 layers, one in four with attention,
+# 4 key and value heads of 256: 17 x 4 x 512 x 2 bytes, 68 KiB of context cache a token.
+HYBRID_27B_INFO = {"general.architecture": "qwen35", "qwen35.block_count": 65, "qwen35.full_attention_interval": 4,
+                   "qwen35.attention.head_count": 24, "qwen35.attention.head_count_kv": 4,
+                   "qwen35.attention.key_length": 256, "qwen35.attention.value_length": 256,
+                   "qwen35.context_length": 262144}
 
 _COLOURS = {"red": (220, 30, 30), "green": (30, 170, 40), "blue": (30, 60, 220), "yellow": (240, 215, 20)}
 
@@ -63,7 +77,8 @@ class FakeOpenAI:
                  tool_mode: str = "call", vision_mode: str = "see", refuse_strict: bool = False,
                  refuse_max_completion_tokens: bool = False, args_style: str = "split", reasoning: str | None = None,
                  models: list[dict] | None = None, lmstudio: int | None = None, require_key: str | None = None,
-                 responder: Callable[[dict], dict] | None = None, record: str | None = None) -> None:
+                 responder: Callable[[dict], dict] | None = None, record: str | None = None,
+                 native_ids: bool = True, show: dict | None = None) -> None:
         self.replies = list(replies or [])
         self.refuse_tools = refuse_tools
         self.refuse_images = refuse_images
@@ -78,7 +93,10 @@ class FakeOpenAI:
         self.require_key = require_key
         self.responder = responder
         self.record = record  # a file that gets one JSON line per request: method, path, Authorization
+        self.native_ids = native_ids
+        self.show = show   # Ollama's model_info for POST /api/show; None answers 404
         self.requests: list[dict] = []
+        self.native_requests: list[dict] = []
         self.headers: list[dict] = []
         self.paths: list[str] = []
         self._lock = threading.Lock()
@@ -129,10 +147,35 @@ class FakeOpenAI:
                 body = json.loads(self.rfile.read(length))
                 with fake._lock:
                     fake.paths.append(self.path)
-                    fake.requests.append(body)
-                    fake.headers.append({k.lower(): v for k, v in self.headers.items()})
+                    if self.path != "/api/show":   # the chat requests only
+                        fake.requests.append(body)
+                        fake.headers.append({k.lower(): v for k, v in self.headers.items()})
                 self._record("POST")
                 if not self._authorised():
+                    return
+                if self.path == "/api/show":
+                    if fake.show is None:
+                        self._json(404, {"error": "not found"})
+                    else:
+                        self._json(200, {"model_info": fake.show, "capabilities": ["completion", "tools"]})
+                    return
+                if self.path == "/api/chat":
+                    with fake._lock:
+                        fake.native_requests.append(body)
+                    view = fake.openai_view(body)
+                    error = fake.refusal(view)
+                    if error is not None:
+                        self._json(400, {"error": error})
+                        return
+                    lines = fake.native_lines(fake.reply(view), body.get("model", ""))
+                    if not body.get("stream", True):
+                        self._json(200, fake.native_whole(lines))
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-ndjson")
+                    self.end_headers()
+                    for line in lines:
+                        self.wfile.write(json.dumps(line).encode() + b"\n")
                     return
                 if self.path != "/v1/chat/completions":
                     self._json(404, {"error": {"message": "not found"}})
@@ -227,6 +270,56 @@ class FakeOpenAI:
         out.append({"id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 0, "model": model,
                     "choices": [], "usage": {"prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14}})
         return out
+
+    # ---- Ollama's own chat API ----------------------------------------------------------------------
+
+    @staticmethod
+    def openai_view(body: dict) -> dict:
+        """A native request as the chat completions API would carry it, for refusal() and reply()."""
+        messages = []
+        for m in body.get("messages", []):
+            if m.get("images"):
+                content = [{"type": "text", "text": m.get("content", "")}] + [
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64," + i}} for i in m["images"]]
+                messages.append({**m, "content": content})
+            else:
+                messages.append(m)
+        return {"model": body.get("model"), "messages": messages, "tools": body.get("tools")}
+
+    def native_lines(self, reply: dict, model: str) -> list[dict]:
+        def line(message: dict) -> dict:
+            return {"model": model, "created_at": "2026-01-01T00:00:00Z",
+                    "message": {"role": "assistant", "content": "", **message}, "done": False}
+        out = []
+        thought = reply.get("thought", "Thinking about it." if self.reasoning else None)
+        if thought:
+            out.append(line({"thinking": thought}))
+        text = reply.get("text", "")
+        out += [line({"content": text[i:i + 8]}) for i in range(0, len(text), 8)]
+        for n, call in enumerate(reply.get("tool_calls", [])):
+            try:
+                args = json.loads(call["arguments"])
+            except ValueError:
+                args = {"_unparsed": call["arguments"]}
+            c = {"function": {"index": n, "name": call["name"], "arguments": args}}
+            if self.native_ids:
+                c["id"] = call["id"]
+            out.append(line({"tool_calls": [c]}))
+        out.append({"model": model, "created_at": "2026-01-01T00:00:00Z",
+                    "message": {"role": "assistant", "content": ""}, "done": True,
+                    "done_reason": "length" if reply.get("finish") == "length" else "stop",
+                    "prompt_eval_count": 11, "eval_count": 3})
+        return out
+
+    @staticmethod
+    def native_whole(lines: list[dict]) -> dict:
+        message = {"role": "assistant", "content": "", "thinking": "", "tool_calls": []}
+        for line in lines:
+            m = line.get("message") or {}
+            message["content"] += m.get("content", "")
+            message["thinking"] += m.get("thinking", "")
+            message["tool_calls"] += m.get("tool_calls", [])
+        return {**lines[-1], "message": {k: v for k, v in message.items() if v}}
 
     def close(self) -> None:
         self.server.shutdown()
