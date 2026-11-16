@@ -703,3 +703,36 @@ TEST_CASE("side chat rows: a denied approval or a failed call makes the group an
     CHECK(chat_rows(failed)[0].alert);
     CHECK(chat_rows(failed)[0].expanded);
 }
+
+// caliper-agent as the person's custom agent, on the Ollama preset with a
+// context too small for the general role's tools: the sidecar sends nothing
+// and ends the turn with a message, which the chat must show as the agent's
+// text, followed by the turn's stop word. No model server answers on the port
+// it names, and CALIPER_AGENT_OFFLINE keeps it on this machine.
+TEST_CASE("side chat: caliper-agent's turn that does not fit its context ends with its message in the conversation") {
+    const std::string python = CALIPER_BUILDER_TEST_PYTHON;
+    if (python.empty()) {
+        MESSAGE("skipped: CALIPER_BUILDER_TEST_PYTHON names no interpreter with caliper-agent's dependencies");
+        return;
+    }
+    Fixture f("chat-agent-context");
+    SideChat::Options o = f.options();
+    o.settings.custom_name = "Caliper agent";
+    o.settings.custom_command = "/usr/bin/env 'PYTHONPATH=" + std::string(CALIPER_AGENT_SOURCE) +
+                                "' PYTHONDONTWRITEBYTECODE=1 CALIPER_AGENT_OFFLINE=1 '" + python +
+                                "' -P -m caliper_agent --preset ollama --base-url http://127.0.0.1:9/v1 --model m "
+                                "--context-length 4096";
+    SideChat chat(o);
+    say(chat, "Plot attention entropy per layer while it trains");
+    REQUIRE_MESSAGE(pump_until(chat, [&] { return turn_over(chat) || chat.state() == ChatState::exited ||
+                                                  chat.state() == ChatState::failed; }, 60000),
+                    chat.error().code << " " << chat.error().message);
+    CHECK(chat.agent_info().name == "caliper-agent");
+    const ChatItem* text = find(chat, K::agent, 1);
+    REQUIRE(text);
+    CHECK(text->text.find("no longer fits the model's context of 4,096 tokens") != std::string::npos);
+    CHECK(text->text.find("--context-length") != std::string::npos);
+    const ChatItem* stop = find(chat, K::stop, 1);
+    REQUIRE(stop);
+    CHECK(stop->text == "DONE");
+}

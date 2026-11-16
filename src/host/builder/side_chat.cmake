@@ -69,7 +69,11 @@ if(BUILD_TESTS AND TARGET doctest::doctest AND NOT WIN32)
         CALIPER_CHAT_SHOT_EXE="$<TARGET_FILE:caliper-chat-shot>"
         CALIPER_MCP_EXE="$<TARGET_FILE:caliper-mcp>"
         CALIPER_ACP_STUB_AGENT="$<TARGET_FILE:caliper_acp_stub_agent>"
-        CALIPER_CHAT_STUB_AGENT="$<TARGET_FILE:caliper_chat_stub_agent>")
+        CALIPER_CHAT_STUB_AGENT="$<TARGET_FILE:caliper_chat_stub_agent>"
+        # caliper-agent as the chat's custom agent, from the source; its cases
+        # are skipped without an interpreter that has its dependencies.
+        CALIPER_BUILDER_TEST_PYTHON="${CALIPER_BUILDER_TEST_PYTHON}"
+        CALIPER_AGENT_SOURCE="${CMAKE_SOURCE_DIR}/src/builder/agent")
     set_target_properties(caliper_side_chat_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
     add_dependencies(caliper_side_chat_tests caliper-chat-shot caliper-mcp caliper_acp_stub_agent caliper_chat_stub_agent)
     # Headless: the state machine against the stub agents, the launch, the
