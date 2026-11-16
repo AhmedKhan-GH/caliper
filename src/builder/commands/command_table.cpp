@@ -594,7 +594,7 @@ const Row kRows[] = {
      "the primitive to a spec source id, or to <source>.<column> for one column of a tabular source. place puts it "
      "beside, above, below or in tabs with another panel; without place, the panel goes to the right of the whole "
      "layout. Undo removes it. The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
-     R"json({"type": "object", "additionalProperties": false, "required": ["id", "primitive", "bind"],
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "primitive"],
       "properties": {
         "id": {"$use": "id", "description": "The new panel's id."},
         "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text"], "description": "What the panel draws. Required slots: series y; heatmap values; points x and y, or positions; histogram values; table rows; image values; text none."},

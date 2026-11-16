@@ -1,0 +1,180 @@
+// Tests of the resolved data of a panel: tensors after their transforms down a
+// chain of `from`, columns and tables of catalog tables and `sql` sources, the
+// table panel's columns option, the bounds on rows, cells and tensor sizes,
+// and the sources the session cannot read yet.
+#include <caliper_builder/session/resolve.h>
+#include <caliper_builder/session/session.h>
+
+#include <doctest/doctest.h>
+
+#include "helpers.h"
+
+using namespace caliper_builder;
+using namespace session_test;
+using nlohmann::json;
+
+namespace {
+
+std::vector<double> values_of(const TensorData& t) {
+    std::vector<double> out;
+    for (uint64_t i = 0; i < t.numel(); ++i) out.push_back(t.element(i));
+    return out;
+}
+
+struct Fixture {
+    std::string ws;
+    std::unique_ptr<Session> s;
+    explicit Fixture(const std::string& name, ResolveLimits limits = {}) {
+        ws = fresh_dir(name) + "/workspace";
+        std::string csv = "step,loss,label\n";
+        for (int i = 0; i < 10; ++i) csv += std::to_string(i) + "," + std::to_string(10 - i) + ".5,row" + std::to_string(i) + "\n";
+        write_text(ws + "/data/metrics.csv", csv);
+        // [2, 2, 3]: two layers of 2 x 3.
+        write_safetensors_f32(ws + "/data/acts.safetensors", "x", {2, 2, 3}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12});
+        SessionOptions options;
+        options.registry.check_results = true;
+        options.resolve = limits;
+        auto opened = Session::open(ws, options);
+        REQUIRE(opened.error.ok());
+        s = std::move(opened.session);
+        ok(*s, "data.import", {{"paths", {"data/metrics.csv", "data/acts.safetensors"}}});
+        ok(*s, "spec.new", {{"id", "r"}});
+    }
+};
+
+}  // namespace
+
+TEST_CASE("a tensor binding resolves to the tensor after every transform down the chain") {
+    Fixture f("tensor");
+    ok(*f.s, "source.add", {{"id", "acts"}, {"catalog", "tensor:acts_x"},
+                            {"transform", {{{"op", "slice"}, {"axis", 0}, {"index", 1}}}}});  // [[7,8,9],[10,11,12]]
+    ok(*f.s, "source.add", {{"id", "mean"}, {"from", "acts"},
+                            {"transform", {{{"op", "reduce"}, {"axis", 1}, {"fn", "mean"}}}}});  // [8, 11]
+    ok(*f.s, "source.add", {{"id", "unit"}, {"from", "mean"}, {"transform", {{{"op", "normalise"}, {"mode", "minmax"}}}}});
+    ok(*f.s, "panel.create", {{"id", "heat"}, {"primitive", "heatmap"}, {"bind", {{"values", "acts"}}}});
+    ok(*f.s, "panel.create", {{"id", "line"}, {"primitive", "series"}, {"bind", {{"x", "mean"}, {"y", {"unit", "mean"}}}}});
+
+    const PanelData heat = f.s->resolve("heat");
+    REQUIRE_MESSAGE(heat.error.ok(), heat.error.message);
+    REQUIRE(heat.slots.size() == 1);
+    CHECK(heat.slots[0].kind == SlotData::Kind::tensor);
+    CHECK(heat.slots[0].tensor.shape() == std::vector<int64_t>{2, 3});
+    CHECK(values_of(heat.slots[0].tensor) == std::vector<double>{7, 8, 9, 10, 11, 12});
+
+    const PanelData line = f.s->resolve("line");
+    REQUIRE_MESSAGE(line.error.ok(), line.error.message);
+    REQUIRE(line.slots.size() == 3);
+    CHECK(line.slots[0].slot == "x");
+    CHECK(values_of(line.slots[0].tensor) == std::vector<double>{8, 11});
+    CHECK(line.slots[1].slot == "y");
+    CHECK(line.slots[1].index == 0);
+    CHECK(values_of(line.slots[1].tensor) == std::vector<double>{0, 1});
+    CHECK(line.slots[2].index == 1);
+    CHECK(line.slots[2].binding == "mean");
+    const json summary = panel_data_summary(line);
+    CHECK(summary["slots"][1]["values"] == json{0.0, 1.0});
+}
+
+TEST_CASE("columns and tables resolve through the store's bounded query") {
+    Fixture f("table");
+    ok(*f.s, "source.add", {{"id", "m"}, {"catalog", "table:metrics"}});
+    ok(*f.s, "source.add", {{"id", "q"}, {"sql", "SELECT step * 2 AS twice, label FROM metrics WHERE step < 3 ORDER BY step"}});
+    ok(*f.s, "source.add", {{"id", "alias"}, {"from", "m"}});
+    ok(*f.s, "panel.create", {{"id", "line"}, {"primitive", "series"}, {"bind", {{"x", "m.step"}, {"y", {"m.loss"}}}}});
+    ok(*f.s, "panel.create", {{"id", "alias"}, {"primitive", "histogram"}, {"bind", {{"values", "alias.loss"}}}});
+    ok(*f.s, "panel.create", {{"id", "rows"}, {"primitive", "table"}, {"bind", {{"rows", "m"}}},
+                              {"options", {{"columns", {"label", "step"}}}}});
+    ok(*f.s, "panel.create", {{"id", "sql"}, {"primitive", "table"}, {"bind", {{"rows", "q"}}}});
+    ok(*f.s, "panel.create", {{"id", "last"}, {"primitive", "text"}, {"bind", {{"value", "q.label"}}}});
+
+    const PanelData line = f.s->resolve("line");
+    REQUIRE_MESSAGE(line.error.ok(), line.error.message);
+    REQUIRE(line.slots.size() == 2);
+    CHECK(line.slots[0].kind == SlotData::Kind::column);
+    CHECK(line.slots[0].columns[0].type == "BIGINT");
+    CHECK(line.slots[0].values == json{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+    CHECK(line.slots[1].values[0] == 10.5);
+    CHECK(line.slots[1].values[9] == 1.5);
+    // A source derived with `from` reads its root's rows.
+    const PanelData alias = f.s->resolve("alias");
+    REQUIRE_MESSAGE(alias.error.ok(), alias.error.message);
+    CHECK(alias.slots[0].values == line.slots[1].values);
+
+    const PanelData rows = f.s->resolve("rows");
+    REQUIRE(rows.error.ok());
+    CHECK(rows.slots[0].kind == SlotData::Kind::table);
+    REQUIRE(rows.slots[0].columns.size() == 2);
+    CHECK(rows.slots[0].columns[0].name == "label");
+    CHECK(rows.slots[0].values[2] == json{"row2", 2});
+
+    const PanelData sql = f.s->resolve("sql");
+    REQUIRE(sql.error.ok());
+    CHECK(sql.slots[0].values == json{{0, "row0"}, {2, "row1"}, {4, "row2"}});
+    const PanelData last = f.s->resolve("last");
+    REQUIRE(last.error.ok());
+    CHECK(last.slots[0].values == json{"row0", "row1", "row2"});
+    CHECK(f.s->resolve("none").error.code == "panel.not_found");
+}
+
+TEST_CASE("the bounds cut rows and refuse a tensor that grows too large") {
+    ResolveLimits limits;
+    limits.max_rows = 4;
+    limits.max_cells = 6;  // with two columns, three rows
+    limits.max_tensor_bytes = 16;
+    Fixture f("bounds", limits);
+    ok(*f.s, "source.add", {{"id", "m"}, {"catalog", "table:metrics"}});
+    ok(*f.s, "source.add", {{"id", "q"}, {"sql", "SELECT step, loss FROM metrics"}});
+    ok(*f.s, "source.add", {{"id", "a"}, {"catalog", "tensor:acts_x"}, {"transform", {{{"op", "normalise"}, {"mode", "l2"}}}}});
+    ok(*f.s, "panel.create", {{"id", "one"}, {"primitive", "series"}, {"bind", {{"y", "m.loss"}}}});
+    ok(*f.s, "panel.create", {{"id", "two"}, {"primitive", "table"}, {"bind", {{"rows", "q"}}}});
+    ok(*f.s, "panel.create", {{"id", "big"}, {"primitive", "histogram"}, {"bind", {{"values", "a"}}}});
+    const PanelData one = f.s->resolve("one");
+    REQUIRE(one.error.ok());
+    CHECK(one.slots[0].values.size() == 4);
+    CHECK(one.slots[0].truncated);
+    const PanelData two = f.s->resolve("two");
+    REQUIRE(two.error.ok());
+    CHECK(two.slots[0].values.size() == 3);
+    CHECK(two.slots[0].truncated);
+    // A normalised f32 tensor of 12 elements is 48 bytes, past the 16 allowed.
+    CHECK(f.s->resolve("big").error.code == "resolve.too_large");
+}
+
+TEST_CASE("sources the session cannot read answer clearly") {
+    Fixture f("unavailable");
+    ok(*f.s, "source.add", {{"id", "live"}, {"catalog", "live:attn.weights"}});
+    ok(*f.s, "source.add", {{"id", "gone"}, {"catalog", "tensor:not_loaded"}});
+    ok(*f.s, "source.add", {{"id", "bad"}, {"sql", "SELECT * FROM nowhere"}});
+    ok(*f.s, "panel.create", {{"id", "a"}, {"primitive", "heatmap"}, {"bind", {{"values", "live"}}}});
+    ok(*f.s, "panel.create", {{"id", "b"}, {"primitive", "heatmap"}, {"bind", {{"values", "gone"}}}});
+    ok(*f.s, "panel.create", {{"id", "c"}, {"primitive", "table"}, {"bind", {{"rows", "bad"}}}});
+    CHECK(f.s->resolve("a").error.code == "resolve.unavailable");
+    CHECK(f.s->resolve("b").error.code == "catalog.not_found");
+    CHECK(f.s->resolve("c").error.code == "resolve.query_failed");
+
+    // Without an open spec there is nothing to resolve.
+    ok(*f.s, "history.undo", {{"steps", 7}});
+    CHECK(!f.s->open_spec());
+    CHECK(f.s->resolve("a").error.code == "spec.no_open_spec");
+}
+
+TEST_CASE("resolve_panel follows a spec that the validator would refuse without looping") {
+    Fixture f("cycle");
+    spec::Spec s;
+    s.applet.id = "c";
+    spec::Source a;
+    a.id = "a";
+    a.from = "b";
+    spec::Source b;
+    b.id = "b";
+    b.from = "a";
+    s.sources = {a, b};
+    spec::Panel p;
+    p.id = "p";
+    p.primitive = spec::Primitive::heatmap;
+    p.bind["values"] = spec::SlotValue{{"a"}, false};
+    s.panels = {p};
+    CHECK(resolve_panel(s, "p", f.s->store()).error.code == "resolve.cycle");
+    s.sources[1].from = "zz";
+    CHECK(resolve_panel(s, "p", f.s->store()).error.code == "resolve.unknown_source");
+}

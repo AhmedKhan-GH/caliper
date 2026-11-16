@@ -2931,8 +2931,7 @@
         },
         "required": [
           "id",
-          "primitive",
-          "bind"
+          "primitive"
         ],
         "type": "object"
       },
