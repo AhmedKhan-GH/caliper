@@ -684,7 +684,10 @@ a multiple of 3, a batch over the limits (4,194,304 points, vertices or
 triangles, 1,048,576 strips, 1,024 entities and 2,048 batches in a scene) and a
 batch whose arrays would pass one frame of 64 MiB. These checks read host
 metadata only, so they run on every call, attached or not. An argument of
-the wrong type raises `TypeError`.
+the wrong type raises `TypeError`. Strip lengths in a device tensor are
+checked once their copy reaches host memory, on the network thread: a batch
+whose lengths do not add up to V, or hold a length below 1, is dropped there
+with a warning, and the call has already returned `True`.
 
 **What a call costs.** With no viewer of the scene attached, a call costs its
 checks and a dictionary update and does no device work, unless the batch is
