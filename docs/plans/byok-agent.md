@@ -7,6 +7,9 @@ named `caliper-agent` that speaks the agent side of ACP, so the pane drives both
 and a small key store on the C++ side that keeps the key in the operating system's credential store. It elaborates
 section 12 of the sprint 3 contracts.
 
+The user's side is in [Agent pane backends](../explanations/agent-pane-backends.md) and
+[Set up BYOK](../guides/set-up-byok.md).
+
 **Built on this branch:** the sidecar `caliper-agent` (the Python package `caliper_agent` in `src/builder/agent/`),
 its tests (pytest, run by ctest as `builder_agent_py`, with one end-to-end test through the real C++ client), and the
 key store `caliper_builder_agent` with its doctest suite (`builder_agent`). **Planned:** the pane itself, its key
@@ -407,7 +410,8 @@ key variable in the key store, and its own settings and tests.
   its own request (command layer). The sidecar's permission answer is a convenience for the pane, not an authority for
   the app.
 - **What leaves the machine.** The conversation, including tool results (catalog entries, samples of data, spec text,
-  captures), is sent to the Claude API under the user's key and its data terms. The user docs say so.
+  captures), is sent to the Claude API under the user's key and its data terms. The user docs say so, in
+  [Agent pane backends](../explanations/agent-pane-backends.md).
 - **The key in memory.** The key lives in the sidecar's memory and, until the process ends, in the initial environment
   block of the process, which processes of the same user can read on macOS. Other users cannot.
 - **Logging.** The SDK and HTTP loggers are kept at warning level, `ANTHROPIC_LOG` is removed, and OpenTelemetry is

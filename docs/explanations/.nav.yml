@@ -10,5 +10,6 @@ nav:
   - network-streaming.md
   - testing.md
   - ui-principles.md
+  - agent-pane-backends.md
   - glob: "*"
     ignore_no_matches: true

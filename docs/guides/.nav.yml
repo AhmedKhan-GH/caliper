@@ -7,5 +7,6 @@ nav:
   - control-a-running-script.md
   - verify-on-windows.md
   - ci.md
+  - set-up-byok.md
   - glob: "*"
     ignore_no_matches: true
