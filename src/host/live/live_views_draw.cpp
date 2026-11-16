@@ -340,7 +340,18 @@ std::string fit_text(const std::string& s, float w) {
     return {};
 }
 
-enum Tool : unsigned { kToolPause = 1, kToolLog = 2, kToolFollow = 4, kToolRotate = 8 };
+enum Tool : unsigned { kToolPause = 1, kToolLog = 2, kToolFollow = 4, kToolRotate = 8, kToolUp = 16, kToolDisplay = 32 };
+
+// The popup of a scene view's "display" tool (draw_scene opens its content).
+constexpr const char* kSceneDisplayMenu = "##caliper.scene.display";
+
+// A scene's up-axis segment: "Y up", "Z up", "-Y up".
+std::string up_label(caliper_scene::Axis a) {
+    const char* n = caliper_scene::axis_name(a);   // "+y", "-z"
+    std::string s = n[0] == '-' ? "-" : "";
+    s += char(n[1] - 'a' + 'A');
+    return s + " up";
+}
 
 // A header tool: a word in a thin outlined box, as the browser element's
 // tool buttons; bronze while pressed. True when clicked.
@@ -365,7 +376,7 @@ float tool_width(const char* text) { return ImGui::CalcTextSize(text).x + 12.0f;
 // The view's header, as the browser element's: the name on the left (ImGui's
 // title bar draws it), then on the right a compact info string, the tools
 // (pause for every view, log for plots, follow for a series, rotate for 3-D
-// points) and a status
+// points, the up-axis segments and the display menu of a scene) and a status
 // dot: bronze while the stream is live and the view has data, an outline
 // while it waits for its first data, grey once the stream has ended. The
 // header lives in the window's title bar; in a docked window, whose tab
@@ -409,26 +420,36 @@ void draw_header(CaliperCore* core, CaliperLiveViewsState* S, View& v, unsigned 
     if (L.small_size > 0.0f) ImGui::PushFont(nullptr, L.small_size);
     struct T {
         unsigned bit;
-        const char* id;
-        const char* text;
+        std::string id;
+        std::string text;
         bool pressed;
+        caliper_scene::Axis axis = caliper_scene::Axis::PosY;   // kToolUp: the segment's axis
     };
-    const T all[] = {
+    std::vector<T> all = {
         {kToolPause, "##caliper.tool.pause", S->paused ? "paused" : "pause", S->paused},
         {kToolLog, "##caliper.tool.log", "log", v.log_y},
         {kToolFollow, "##caliper.tool.follow", "follow", v.follow},
         {kToolRotate, "##caliper.tool.rotate", "rotate", v.auto_rotate},
     };
+    // A scene's up-axis switch, one segment per mode with the active one pressed, and its display menu.
+    SceneView* scene = (tools & (kToolUp | kToolDisplay)) ? scene_view(v) : nullptr;
+    if (scene && (tools & kToolUp))
+        for (caliper_scene::Axis a : scene->up_choices())
+            all.push_back({kToolUp, std::string("##caliper.tool.up.") + caliper_scene::axis_name(a), up_label(a),
+                           scene->up_mode() == a, a});
+    if (scene && (tools & kToolDisplay)) all.push_back({kToolDisplay, "##caliper.tool.display", "display", false});
     float tools_w = 0.0f;
     for (const T& t : all)
-        if (tools & t.bit) tools_w += tool_width(t.text) + 4.0f;
+        if (tools & t.bit) tools_w += tool_width(t.text.c_str()) + 4.0f;
     const float th = std::min(r.GetHeight() - 4.0f, ImGui::GetFontSize() + 6.0f);
     if (tools_w > 0.0f && right - tools_w >= left) {
         float x = right - tools_w + 4.0f;
         for (const T& t : all) {
             if (!(tools & t.bit)) continue;
-            if (tool_button(L, t.id, t.text, t.pressed, ImVec2(x, std::floor(cy - th * 0.5f)), th)) {
+            if (tool_button(L, t.id.c_str(), t.text.c_str(), t.pressed, ImVec2(x, std::floor(cy - th * 0.5f)), th)) {
                 if (t.bit == kToolPause) S->paused = !S->paused;
+                else if (t.bit == kToolUp) scene->switch_up(t.axis);   // the camera only: the producer is not told
+                else if (t.bit == kToolDisplay) ImGui::OpenPopup(kSceneDisplayMenu);
                 else if (t.bit == kToolLog) {
                     v.log_y = !v.log_y;
                     v.fit_once = true;
@@ -441,7 +462,7 @@ void draw_header(CaliperCore* core, CaliperLiveViewsState* S, View& v, unsigned 
                     emit(S, v, "toggle", Detail().text("name", "rotate").flag("on", v.auto_rotate).str());
                 }
             }
-            x += tool_width(t.text) + 4.0f;
+            x += tool_width(t.text.c_str()) + 4.0f;
         }
         right -= tools_w + 6.0f;
     }
@@ -1247,14 +1268,50 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
 // camera gestures: a drag orbits (pans in a 2-D scene), a right, middle, alt or
 // ctrl drag pans, the wheel zooms, and F or a double click fits. The view
 // compiles and submits only when the scene, the camera or the size changed.
+// In 3-D the header's segments, or the key U, switch the orbit between Y up
+// and Z up (design/scenes.md, "The up-axis switch"); the header's display menu
+// holds the scale bar's option and the reset. The scale bar is drawn here, over
+// the picture, as overlay lines and text (scene/scale_bar.h).
+
+// The scale bar in the bottom-right corner of the picture at p0 of `size`
+// logical pixels: a bar kScaleBarThickness thick with end ticks kScaleBarTick
+// tall, kScaleBarMargin in from the edges, its length above it in the small
+// text, over a translucent band of the window's background.
+void draw_scale_bar(ImDrawList* dl, const Look& L, ImVec2 p0, ImVec2 size, const caliper_scene::ScaleBar& b) {
+    const float th = (float)caliper_scene::kScaleBarThickness, tick = (float)caliper_scene::kScaleBarTick;
+    const float x1 = std::floor(p0.x + size.x - (float)caliper_scene::kScaleBarMargin);
+    const float y1 = std::floor(p0.y + size.y - (float)caliper_scene::kScaleBarMargin);
+    const float x0 = std::round(x1 - (float)b.pixels);
+    if (L.small_size > 0.0f) ImGui::PushFont(nullptr, L.small_size);
+    const ImVec2 ts = ImGui::CalcTextSize(b.label.c_str());
+    // Centred over the bar, and kept from passing the bar's right end.
+    const float tx = std::floor(std::min(x1 - ts.x, (x0 + x1 - ts.x) * 0.5f));
+    const float ty = std::floor(y1 - tick - 2.0f - ts.y);
+    const ImVec4 bg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+    const float pad = 4.0f;
+    dl->AddRectFilled(ImVec2(std::min(x0, tx) - pad, ty - 2.0f), ImVec2(std::max(x1, tx + ts.x) + pad, y1 + pad),
+                      ImGui::GetColorU32(ImVec4(bg.x, bg.y, bg.z, 0.6f)), 3.0f);
+    dl->AddRectFilled(ImVec2(x0, y1 - th), ImVec2(x1, y1), L.text);
+    dl->AddRectFilled(ImVec2(x0, y1 - tick), ImVec2(x0 + th, y1), L.text);
+    dl->AddRectFilled(ImVec2(x1 - th, y1 - tick), ImVec2(x1, y1), L.text);
+    dl->AddText(ImVec2(tx, ty), L.text, b.label.c_str());
+    if (L.small_size > 0.0f) ImGui::PopFont();
+}
 }  // namespace
 
 void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     const bool open = begin_window(core, v, ImVec2(360.0f, 300.0f));
     if (!open) { ImGui::End(); return; }
-    draw_header(core, S, v, kToolPause);
-    under_header(core, S, v);
     SceneView* sc = scene_view(v);
+    const bool three_d = sc && sc->tree().space() == caliper_scene::Space::k3D;
+    draw_header(core, S, v, kToolPause | (three_d ? kToolUp : 0u) | (sc ? kToolDisplay : 0u));
+    if (sc && ImGui::BeginPopup(kSceneDisplayMenu)) {
+        bool bar = sc->scale_bar_on();
+        if (ImGui::MenuItem("Scale bar", nullptr, &bar)) sc->set_scale_bar(bar);
+        if (ImGui::MenuItem("Reset view")) sc->reset();
+        ImGui::EndPopup();
+    }
+    under_header(core, S, v);
     if (sc) {
         sc->poll();
         char tel[160], line[320];
@@ -1323,6 +1380,14 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     if (((hovered || ImGui::IsWindowFocused()) && ImGui::IsKeyPressed(ImGuiKey_F, false)) ||
         (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)))
         sc->fit();
+    // U steps through the header's up-axis segments.
+    if ((hovered || ImGui::IsWindowFocused()) && ImGui::IsKeyPressed(ImGuiKey_U, false)) {
+        const std::vector<caliper_scene::Axis> c = sc->up_choices();
+        if (!c.empty()) {
+            auto at = std::find(c.begin(), c.end(), sc->up_mode());
+            sc->switch_up(at == c.end() || at + 1 == c.end() ? c.front() : *(at + 1));
+        }
+    }
 
     // ---- GPU: compile and submit when something changed (S->paused freezes the view: the
     // source holds its messages, so nothing changes but the camera)
@@ -1335,6 +1400,8 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (const uint64_t id = sc->imgui_texture())
         dl->AddImage((ImTextureID)id, p0, ImVec2(p0.x + avail.x, p0.y + avail.y));
+    if (const caliper_scene::ScaleBar bar = sc->scale_bar(avail.x, avail.y); bar.visible)
+        draw_scale_bar(dl, S->look, p0, avail, bar);
 
     v.geo_valid = true;
     v.geo_area[0] = p0.x; v.geo_area[1] = p0.y; v.geo_area[2] = avail.x; v.geo_area[3] = avail.y;

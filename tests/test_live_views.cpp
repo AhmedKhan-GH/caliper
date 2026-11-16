@@ -21,6 +21,9 @@
 #include "live/live_clock.h"         // StampClock (network stamps into the viewer's clock)
 #include "live/live_points.h"        // the points view's scene and its orbit camera (white-box)
 #include "live/live_views_state.h"   // kPalette (white-box: the exact categorical colours)
+#include "live/live_scene.h"         // the scene view (up-axis switch, scale bar)
+#include "live/live_views_scene.h"   // scene_open, scene_apply
+#include "net/wire.h"                // decoded scene messages
 #include "tensor_bridge.h"           // map_f32_to_rgba8 / colormap_lut (CPU reference)
 #include "embed/render_stats.h"      // copy counters (white-box)
 
@@ -1656,6 +1659,205 @@ TEST_CASE("live_clock: producer stamps map into the viewer's clock from the fast
     const uint64_t later = base + (uint64_t)(caliper_live::StampClock::kWindow + 2) * 1000000000ull;
     clk.observe(later + skew, later + 4 * ms);
     CHECK(clk.offset_ns() == (int64_t)(skew - 4 * ms));
+}
+
+// ---- the scene view: the up-axis switch and the scale bar --------------------
+// design/scenes.md, "The up-axis switch" and "The scale bar": the mode the person chose and the
+// scale bar option are kept by the view's name when the view closes and given back when it opens
+// again, where a remembered mode wins over the scene's up; a reset returns to the scene's up. The
+// key U steps through the header's segments, and the bar is drawn over the picture, 12 pixels in
+// from its bottom-right corner, in the header's text colour. CALIPER_TEST_SHOTS=<folder> keeps the
+// whole canvas in both modes as scene-y-up.png and scene-z-up.png.
+
+namespace {
+
+namespace wire = caliper_net::wire;
+namespace cs = caliper_scene;
+
+// A scene of a point at the origin and one unit along +z and -z from it, opened as "world".
+caliper_live_views::SceneView* open_scene(CaliperCore* core, const char* up) {
+    std::string why;
+    REQUIRE_MESSAGE(caliper_live_views::scene_open(core, "world", wire::SceneView{CALIPER_NET_SPACE_3D, up, "m"}, &why),
+                    why);
+    caliper_live_views::SceneView* sv = caliper_live_views::scene_view(core, "world");
+    REQUIRE(sv != nullptr);
+    wire::SceneClear reset;
+    reset.sub = 1;
+    reset.view = "world";
+    reset.seq = 1;
+    reset.reset = true;
+    reset.state = true;
+    REQUIRE_MESSAGE(caliper_live_views::scene_apply(core, "world", reset, &why), why);
+    static const float pts[3][3] = {{0, 0, 0}, {0, 0, 1}, {0, 0, -1}};
+    const char* paths[3] = {"target", "above", "below"};
+    const int colours[3][4] = {{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255}};
+    for (int i = 0; i < 3; ++i) {
+        wire::SceneUpdate u;
+        u.sub = 1;
+        u.view = "world";
+        u.seq = uint64_t(2 + i);
+        u.path = paths[i];
+        u.part = CALIPER_NET_PART_POINTS;
+        caliper_net::Json c = caliper_net::Json::array();
+        for (int k = 0; k < 4; ++k) c.push(caliper_net::Json(colours[i][k]));
+        u.params.set("color", c);
+        u.arrays.push_back(wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {1, 3}, pts[i], 12));
+        REQUIRE_MESSAGE(caliper_live_views::scene_apply(core, "world", u, &why), why);
+    }
+    return sv;
+}
+
+}  // namespace
+
+TEST_CASE("live_views/scene: the up mode and the scale bar option survive a close and a reopen; a reset returns "
+          "to the scene's up") {
+    Core c(640, 480);
+    if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
+    caliper_live_views::SceneView* sv = open_scene(c.core, "+y");
+    c.frames(3);
+    CHECK(sv->up_mode() == cs::Axis::PosY);
+    CHECK(sv->scale_bar_on());
+    REQUIRE(sv->switch_up(cs::Axis::PosZ));
+    sv->set_scale_bar(false);
+    c.frames(2);
+    REQUIRE(caliper_core_live_view_remove(c.core, "world") == 1);
+    CHECK(caliper_live_views::scene_view(c.core, "world") == nullptr);
+    // Opened again, now with the scene's up at -y: the remembered mode wins, and the option stays off.
+    sv = open_scene(c.core, "-y");
+    c.frames(3);
+    CHECK(sv->up_mode() == cs::Axis::PosZ);
+    CHECK(sv->up_chosen());
+    CHECK_FALSE(sv->scale_bar_on());
+    CHECK(std::get<cs::Orbit>(sv->camera()).up == cs::Axis::PosZ);
+    CHECK(sv->up_choices() == std::vector<cs::Axis>{cs::Axis::PosY, cs::Axis::PosZ, cs::Axis::NegY});
+    // A reset returns to the scene's up and its default angles; the option is a display option and stays.
+    sv->reset();
+    c.frames(2);
+    CHECK(sv->up_mode() == cs::Axis::NegY);
+    CHECK_FALSE(sv->up_chosen());
+    CHECK(std::get<cs::Orbit>(sv->camera()).up == cs::Axis::NegY);
+    CHECK_FALSE(sv->scale_bar_on());
+    // Closed after the reset, it opens about the scene's up again.
+    REQUIRE(caliper_core_live_view_remove(c.core, "world") == 1);
+    sv = open_scene(c.core, "+z");
+    c.frames(2);
+    CHECK(sv->up_mode() == cs::Axis::PosZ);
+    CHECK_FALSE(sv->up_chosen());
+}
+
+TEST_CASE("live_views/scene: the key U switches the mode, and the scale bar is drawn in the picture's corner") {
+    Core c(900, 640);
+    if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
+    caliper_live_views::SceneView* sv = open_scene(c.core, "+y");
+    c.frames(4);
+    caliper_live_views::View* v = caliper_live_views::find(c.core, "world");
+    REQUIRE(v != nullptr);
+    REQUIRE(v->geo_valid);
+    const float x = v->geo_area[0], y = v->geo_area[1], w = v->geo_area[2], h = v->geo_area[3];
+    const cs::ScaleBar bar = sv->scale_bar(w, h);
+    REQUIRE(bar.visible);
+    MESSAGE("the picture is ", w, " x ", h, "; the bar says ", bar.label, " over ", bar.pixels, " px");
+
+    auto canvas = [&] {
+        std::vector<uint8_t> px(900 * 640 * 4);
+        REQUIRE(caliper_core_read_pixels(c.core, px.data(), 900 * 4) == 1);
+        return px;
+    };
+    auto shot = [&](const char* name, const std::vector<uint8_t>& px) {
+        const char* dir = std::getenv("CALIPER_TEST_SHOTS");
+        if (!dir || !*dir) return;
+        const std::string file = std::string(dir) + "/" + name;
+        CHECK(stbi_write_png(file.c_str(), 900, 640, 4, px.data(), 900 * 4) != 0);
+        MESSAGE("capture written: ", file);
+    };
+    // The bar's middle row: the header's text colour from 3 px in from each end, 12 px in from the
+    // picture's right and bottom edges.
+    auto bar_row = [&](const std::vector<uint8_t>& px) {
+        const int x1 = (int)std::floor(x + w - 12.0f), y1 = (int)std::floor(y + h - 12.0f);
+        const int x0 = (int)std::lround(x1 - bar.pixels);
+        int ink = 0, span = 0;
+        for (int px_x = x0 + 3; px_x < x1 - 3; ++px_x, ++span) {
+            const uint8_t* p = &px[((size_t)(y1 - 1) * 900 + (size_t)px_x) * 4];
+            ink += p[0] == 230 && p[1] == 230 && p[2] == 235;
+        }
+        return std::make_pair(ink, span);
+    };
+    const std::vector<uint8_t> y_up = canvas();
+    shot("scene-y-up.png", y_up);
+    const auto [ink, span] = bar_row(y_up);
+    CHECK(span > 10);
+    CHECK(ink == span);
+
+    // U over the picture: Y up to Z up, through ImGui's own input.
+    auto event = [&](CaliperEventType type, int key, int down, float ex = 0, float ey = 0) {
+        CaliperInputEvent e{};
+        e.struct_size = sizeof e;
+        e.type = type;
+        e.key = key;
+        e.down = down;
+        e.x = ex;
+        e.y = ey;
+        caliper_core_event(c.core, &e);
+    };
+    event(CALIPER_EVENT_MOUSE_MOVE, 0, 0, x + w * 0.5f, y + h * 0.5f);
+    c.frames(2);
+    event(CALIPER_EVENT_KEY, ImGuiKey_U, 1);
+    c.frames(1);
+    event(CALIPER_EVENT_KEY, ImGuiKey_U, 0);
+    c.frames(3);
+    CHECK(sv->up_mode() == cs::Axis::PosZ);
+    CHECK(sv->up_chosen());
+    const std::vector<uint8_t> z_up = canvas();
+    shot("scene-z-up.png", z_up);
+    // The switch keeps the bar.
+    const cs::ScaleBar bar_z = sv->scale_bar(w, h);
+    CHECK(bar_z.label == bar.label);
+    CHECK(bar_row(z_up).first == span);
+    // U again steps back to Y up; with the option off no bar is drawn.
+    event(CALIPER_EVENT_KEY, ImGuiKey_U, 1);
+    c.frames(1);
+    event(CALIPER_EVENT_KEY, ImGuiKey_U, 0);
+    c.frames(2);
+    CHECK(sv->up_mode() == cs::Axis::PosY);
+    sv->set_scale_bar(false);
+    c.frames(2);
+    CHECK(bar_row(canvas()).first == 0);
+}
+
+TEST_CASE("live_views/scene: a 2-D scene has no up-axis segments and an exact scale bar without \"at target\"") {
+    Core c(900, 640);
+    if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
+    std::string why;
+    REQUIRE_MESSAGE(caliper_live_views::scene_open(c.core, "image", wire::SceneView{CALIPER_NET_SPACE_2D, "-y", "px"}, &why),
+                    why);
+    caliper_live_views::SceneView* sv = caliper_live_views::scene_view(c.core, "image");
+    REQUIRE(sv != nullptr);
+    static const float xy[3][2] = {{0, 0}, {640, 480}, {320, 240}};
+    wire::SceneUpdate u;
+    u.sub = 1;
+    u.view = "image";
+    u.seq = 2;
+    u.path = "corners";
+    u.part = CALIPER_NET_PART_POINTS;
+    u.arrays.push_back(wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {3, 2}, xy, sizeof xy));
+    REQUIRE_MESSAGE(caliper_live_views::scene_apply(c.core, "image", u, &why), why);
+    c.frames(4);
+    CHECK(sv->up_choices().empty());
+    caliper_live_views::View* v = caliper_live_views::find(c.core, "image");
+    REQUIRE(v != nullptr);
+    const cs::ScaleBar bar = sv->scale_bar(v->geo_area[2], v->geo_area[3]);
+    REQUIRE(bar.visible);
+    MESSAGE("2-D: the bar says ", bar.label, " over ", bar.pixels, " px");
+    CHECK(bar.label.find("at target") == std::string::npos);
+    const double upp = 2.0 * std::get<cs::PanZoom>(sv->camera()).half_height / v->geo_area[3];
+    CHECK(std::fabs(bar.pixels - bar.length / upp) <= 0.5);
+    if (const char* dir = std::getenv("CALIPER_TEST_SHOTS"); dir && *dir) {
+        std::vector<uint8_t> px(900 * 640 * 4);
+        REQUIRE(caliper_core_read_pixels(c.core, px.data(), 900 * 4) == 1);
+        const std::string file = std::string(dir) + "/scene-2d.png";
+        CHECK(stbi_write_png(file.c_str(), 900, 640, 4, px.data(), 900 * 4) != 0);
+        MESSAGE("capture written: ", file);
+    }
 }
 
 CALIPER_GPU_TEST_MAIN()

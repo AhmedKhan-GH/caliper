@@ -68,6 +68,7 @@ target_sources(caliper_view_layer PRIVATE
     ${CALIPER_ROOT}/src/host/scene/camera.cpp
     ${CALIPER_ROOT}/src/host/scene/compile.cpp
     ${CALIPER_ROOT}/src/host/scene/pick.cpp
+    ${CALIPER_ROOT}/src/host/scene/scale_bar.cpp
     ${CALIPER_ROOT}/src/host/scene/backend_resources.cpp)
 target_compile_definitions(caliper_view_layer PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
 # The scene core's arithmetic without contraction, as natively (the root CMakeLists.txt's caliper_scene),
