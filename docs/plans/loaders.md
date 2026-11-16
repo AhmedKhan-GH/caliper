@@ -2,7 +2,7 @@
 
 This page designs the loaders of the applet builder: saved, declarative recipes that turn files into catalog sources. A loader names a file or a glob, a reader and either SQL or tensor transforms, and running it produces tables in the workspace database and tensors that the catalog lists. It elaborates the loader part of the sprint 3 contracts, and the [Applet builder](applet-builder.md) page gives the wider design.
 
-The library `caliper_builder_loaders` in `src/builder/loaders/` is built on the `sprint3-loaders` branch, with its public headers in `src/builder/include/caliper_builder/loaders/`. It is not wired into the app yet; that waits for sprint 2 to merge. The [last section](#what-is-built-and-what-is-planned) lists what is built and what is only planned.
+The library `caliper_builder_loaders` in `src/builder/loaders/` is built on the `sprint3-loaders` branch, with its public headers in `src/builder/include/caliper_builder/loaders/`, and the `sprint3-pyloader` branch adds [the Python loader](#the-python-loader). It is not wired into the app yet; that waits for sprint 2 to merge. The [last section](#what-is-built-and-what-is-planned) lists what is built and what is only planned.
 
 ## The loader format v0
 
@@ -62,10 +62,11 @@ tensor = "layers.0.attn.weights"
 | `output` | array of tables | required | At least one output, at most 256. |
 | `output.name` | string | required | The source name, `[a-z][a-z0-9_-]{0,63}`. A table output becomes `table:<name>`, a tensor output `tensor:<name>`. With `tensor = "*"` the name is a prefix. |
 | `output.title` | string | the name | A title for people. |
-| `output.mode` | string | `"view"` | Tabular readers only. `"view"` reads the files on each query; `"table"` copies the rows into the database when the loader runs. |
-| `output.sql` | string | none | Tabular readers only. One `SELECT` statement over the relation `input`, which holds every row the reader read. |
-| `output.tensor` | string | none | Tensor readers only. The name of one tensor in the file, or `"*"` for all of them. Required for `npz`, `safetensors` and `hdf5`; refused for `npy`, `image` and `wav`, whose files hold one tensor. |
-| `output.transform` | array of tables | empty | Tensor readers only. The tensor transforms of [Tensor outputs and transforms](#tensor-outputs-and-transforms), applied in order. |
+| `output.mode` | string | `"view"` | Tabular readers, and a Python loader's table outputs. `"view"` reads the files on each query; `"table"` copies the rows into the database when the loader runs. |
+| `output.sql` | string | none | Tabular readers, and a Python loader's table outputs that name one table. One `SELECT` statement over the relation `input`, which holds every row the reader read. |
+| `output.tensor` | string | none | Tensor readers and the Python loader. The name of one tensor in the file, or `"*"` for all of them. Required for `npz`, `safetensors` and `hdf5`; refused for `npy`, `image` and `wav`, whose files hold one tensor. A Python loader's output takes exactly one of `tensor` and `table`. |
+| `output.table` | string | none | The Python loader only. The name of one table the script wrote, or `"*"` for all of them. |
+| `output.transform` | array of tables | empty | Tensor readers, and a Python loader's tensor outputs. The tensor transforms of [Tensor outputs and transforms](#tensor-outputs-and-transforms), applied in order. |
 
 A recipe is at most 1 MiB of text, and an output's `sql` at most 64 KiB. The canonical writer emits the keys in the order of the table above and does not keep comments, as the spec writer does not; a `description` is the place for prose. Unknown keys are errors everywhere, and the loader format reserves no `x` table for extensions, unlike the spec: a recipe is small and a typo in it should never pass silently.
 
@@ -84,7 +85,7 @@ A recipe is at most 1 MiB of text, and an output's `sql` at most 64 KiB. The can
 | `hdf5` | `.h5`, `.hdf5` | `\x89HDF\r\n\x1a\n` | a refusal on this branch; libhdf5 when a build finds it, planned | tensors | `dataset` |
 | `image` | `.png`, `.jpg`, `.jpeg` | `\x89PNG`, `\xFF\xD8\xFF` | stb_image | one tensor `u8 [H, W, C]` | `channels` |
 | `wav` | `.wav` | `RIFF....WAVE` | native | one tensor `[frames, channels]` with `rate_hz` | none |
-| `python` | anything else | none | a Python loader, out of process | tables and tensors | planned |
+| `python` | anything, named explicitly | none | a Python loader, out of process | tables and tensors | `script`, `python`, `timeout_s` |
 
 The reader options:
 
@@ -100,6 +101,9 @@ The reader options:
 | `json` | `format` | string | `"auto"` | `"auto"`, `"array"` (one array of records) or `"unstructured"` (one or more JSON documents). |
 | `hdf5` | `dataset` | string | all datasets | The path of one dataset in the file. |
 | `image` | `channels` | integer, 0 to 4 | 0 | 0 keeps the file's channels; 1, 2, 3 or 4 converts to grey, grey and alpha, RGB or RGBA. |
+| `python` | `script` | string | required | The script that loads the file, inside the workspace. |
+| `python` | `python` | string | `"python3"` | The interpreter: an absolute path, or a command name looked up on `PATH`. |
+| `python` | `timeout_s` | integer, 1 to 3600 | 120 | The time limit of one run, in seconds. |
 
 ### What each reader produces
 
@@ -207,11 +211,12 @@ A tensor has at most 8 dimensions. A transform that names an axis the tensor doe
 <workspace>/
   loaders/<loader-id>.loader.toml      one saved loader each
   tensors/<source-name>.npy            derived tensors
+  loader-outputs/<loader-id>/run-<n>/  the checked outputs of a Python loader's last run
   inputs.toml                          the files and folders the user granted
   workspace.duckdb                     views, tables, caliper.loaders and caliper.sources
 ```
 
-The text files are the source of truth, and `LoaderStore::rebuild()` recreates every database row from them: it drops the views and tables that loaders made, empties the two tables, reads every `.loader.toml` file, runs each loader again and deletes the derived tensors that no source uses. Opening a workspace whose database is missing, or lacks the `caliper` schema, rebuilds it. Opening one whose database exists brings the rows in line with the files without running anything: a row whose file is gone is removed with its sources, and a file without a row, or whose text changed since it was saved (an edit by hand), is indexed with `last_status = "never"`. A loader file that does not parse, or whose id differs from its file name, is listed with `last_status = "error"` and the error, and makes no sources.
+The text files are the source of truth, and `LoaderStore::rebuild()` recreates every database row from them: it drops the views and tables that loaders made, empties the two tables, reads every `.loader.toml` file, runs each loader again (a Python loader's sources are read back from its kept outputs instead; see [Where the outputs are kept](#where-the-outputs-are-kept)) and deletes the derived tensors that no source uses. Opening a workspace whose database is missing, or lacks the `caliper` schema, rebuilds it. Opening one whose database exists brings the rows in line with the files without running anything: a row whose file is gone is removed with its sources, and a file without a row, or whose text changed since it was saved (an edit by hand), is indexed with `last_status = "never"`. A loader file that does not parse, or whose id differs from its file name, is listed with `last_status = "error"` and the error, and makes no sources.
 
 Times are UTC in ISO 8601 (`2026-11-15T12:00:00Z`), stored as text so that they sort and read the same everywhere.
 
@@ -270,19 +275,20 @@ The public headers are in `src/builder/include/caliper_builder/loaders/`:
 | `tensor_ops.h` | `TensorTransform`, its JSON form, `apply_transforms`, `tensor_stats`, `tensor_sample` |
 | `tensor_readers.h` | `read_npy`, `read_npz`, `read_safetensors`, `read_image`, `read_wav`, `read_hdf5`, `write_npy`, `ReaderLimits` |
 | `readers.h` | The reader names, their extensions, `sniff_format` and `validate_reader_options` |
+| `python_loader.h` | `PythonReaderOptions`, `resolve_python`, `python_environment`, `embedded_loader_host`, `PythonManifest`, `read_python_manifest`, `read_typed_csv_header`, `run_python_script` and their limits |
 | `pickle.h` | `check_not_pickle` |
 | `loader.h` | `Loader`, `parse_loader`, `loader_from_json`, `write_loader`, `make_id` |
 | `inference.h` | `infer_reader`, `infer_loader` |
 | `paths.h` | `AllowedRoots`, `expand_input`, `path_allowed` |
 | `query.h` | `QueryResult`, `ColumnInfo` |
 | `loaded_source.h` | `LoadedSource` |
-| `store.h` | `LoaderStore`: `open`, `grant`, `save`, `get`, `list`, `remove`, `run`, `import_files`, `sources`, `describe`, `sample`, `load_tensor`, `query`, `rebuild` |
+| `store.h` | `LoaderStore`: `open`, `grant`, `save`, `get`, `list`, `remove`, `run` (with `RunOptions::allow_python`), `import_files`, `sources`, `describe`, `sample`, `load_tensor`, `query`, `rebuild` |
 
-DuckDB stays behind one source file, `db.cpp`, so no public header includes `duckdb.hpp`. Every method of `LoaderStore` takes one mutex, so the command handlers may call it from any thread; one store opens a workspace at a time in a process.
+DuckDB stays behind one source file, `db.cpp`, so no public header includes `duckdb.hpp`. Every method of `LoaderStore` takes one mutex, so the command handlers may call it from any thread; one store opens a workspace at a time in a process. A Python loader's run releases the mutex while its script runs. The library links `caliper_builder_acp` for `acp::run_process`.
 
 ## The pickle policy
 
-Loading a pickle runs code that the file chooses, so the native readers never load one. They refuse with `loader.pickle_refused`, whose message names the safe routes: convert the file to safetensors, or use the Python loader, which reads torch files weights-only (`torch.load(weights_only=True)`) and marks the catalog entry with a warning.
+Loading a pickle runs code that the file chooses, so the native readers never load one. They refuse with `loader.pickle_refused`, whose message names the safe routes: convert the file to safetensors, or load it with a Python loader (`reader = "python"`) whose script calls `out.torch_weights(path)`, which reads torch files weights-only (`torch.load(weights_only=True)`) and marks each catalog entry with the warning "loaded weights-only from a pickle file".
 
 The refusal applies to:
 
@@ -293,30 +299,158 @@ The refusal applies to:
 - an `.npz` member that is a pickle by its bytes or by its name;
 - a file whose extension has no reader, when its first byte is one of the opcodes `(`, `]`, `}` or `c` and its last byte is the STOP opcode `.`, which is how pickles of protocols 0 and 1 look, since they have no marker.
 
-The last rule is a heuristic, so it applies only where no reader claims the extension; a CSV file that happens to end with a full stop is never refused. `check_not_pickle()` in `pickle.h` applies all the rules. Inference runs it on every dropped file, and `LoaderStore::run()` runs it on every matched file before any reader opens it, whatever reader the recipe names; the `npy` and `npz` readers also refuse the object dtype themselves.
+The last rule is a heuristic, so it applies only where no reader claims the extension; a CSV file that happens to end with a full stop is never refused. `check_not_pickle()` in `pickle.h` applies all the rules. Inference runs it on every dropped file, and `LoaderStore::run()` runs it on every matched file before any reader opens it, whatever reader the recipe names, except for a Python loader's input, which only the user's script opens; every file a Python loader hands back is checked instead. The `npy` and `npz` readers also refuse the object dtype themselves.
 
 ## The Python loader
 
-The `python` reader name is reserved. A recipe that names it is refused with `loader.python_not_available` on this branch. The planned protocol:
+A Python loader reads a file that the native readers do not know, or refuse, by running a script of the user's in a separate Python process. The process hands back only files of formats that the native readers already read safely (`.npy`, Parquet and CSV), and Caliper checks those files as it checks any other untrusted input. It is built on the `sprint3-pyloader` branch: `python_loader.h` and `LoaderStore::run()` in the library, and the host script `python/caliper/loader_host.py`.
 
-1. A recipe names `reader = "python"` and the script, `[reader] script = "scripts/<name>.py"`, a path inside the workspace.
-2. Running it needs the user's approval each time the script or the recipe changes, through the command layer's approval policy (`loader.run` of a Python loader is destructive).
-3. The host starts the Python of the user's environment as a subprocess, never in the app's process, with the input path, an empty output folder under the workspace's temporary folder, and a time limit.
-4. The script uses a helper in Caliper LIB that writes `.npy`, Parquet or CSV files and a `manifest.json` into the output folder:
+It is the route for torch checkpoints (weights-only), Arrow IPC files until the native reader exists, HDF5 files without libhdf5, and any format the native readers do not know.
 
-    ```json
-    {
-      "caliper_python_loader": 0,
-      "outputs": [
-        {"name": "attn_weights", "file": "attn_weights.npy", "warnings": ["loaded weights-only from a pickle file"]},
-        {"name": "run42_metrics", "file": "metrics.parquet"}
-      ]
-    }
-    ```
+### The recipe
 
-5. The host reads the manifest (at most 1 MiB), checks that every file lies inside the output folder, and ingests each file with the native readers, as if a loader had named it. The warnings reach the catalog entries.
+```toml
+caliper_loader = 0
 
-The Python loader is the route for torch checkpoints (weights-only), Arrow IPC files until the native reader exists, HDF5 without libhdf5, and any format the native readers do not know.
+[loader]
+id = "run42-ckpt"
+
+[input]
+path = "checkpoints/run42.pt"
+reader = "python"
+
+[reader]
+script = "scripts/load_ckpt.py"
+python = "/opt/envs/ml/bin/python"
+timeout_s = 300
+
+[[output]]
+name = "run42_"
+tensor = "*"
+
+[[output]]
+name = "run42_metrics"
+table = "metrics"
+sql = "SELECT step, loss FROM input WHERE step > 0"
+```
+
+- `reader = "python"` must be named; inference never chooses it.
+- `input.path` must match exactly one file, inside the workspace or a grant like any other input; a glob that matches more fails with `loader.bad_value`. The script receives the file's canonical path.
+- `reader.script` is required. It is a path inside the workspace, relative to it or absolute inside it, without a `..` segment, and its canonical path, with every symbolic link followed, must lie inside the workspace. A granted folder does not count, because a grant lets a loader read data, and a script is code. The path is checked when the loader is saved (by its text, so a script written later is allowed) and again when it runs, when the script must exist.
+- `reader.python` is optional: an absolute path to an interpreter, or a command name looked up on the absolute entries of `PATH`. The default is `python3`. A relative path such as `.venv/bin/python` is refused with `loader.bad_value`, because its meaning would depend on the app's working folder.
+- `reader.timeout_s` is a whole number of seconds from 1 to 3600, and 120 by default.
+- Each `[[output]]` selects outputs of the script by kind and name, with exactly one of `tensor` and `table`: a name the script wrote, or `"*"` for every output of that kind. As for a multi-tensor file, `"*"` makes `name` a prefix, and each source is `<kind>:<prefix><the script's name>`, made into an id. A tensor output may carry transforms; a table output may carry `mode` and `sql`, except that `table = "*"` takes no `sql`. The `table` key is new in the loader format, and only the Python reader takes it.
+- A selected name that the script did not write fails the run with `loader.tensor_not_found` or `loader.table_not_found`. An output of the script that no `[[output]]` selects is skipped, with a warning in the run's result.
+
+### The script
+
+The script defines one function and imports nothing from Caliper:
+
+```python
+def load(path, out):
+    data = read_my_format(path)
+    out.tensor("embeddings", data.vectors)
+    out.table("metrics", [{"step": 1, "loss": 0.5}, {"step": 2, "loss": 0.25}])
+    out.warn("The file had no header, so the default column names were used.")
+```
+
+| Method | What it does |
+|---|---|
+| `out.tensor(name, array)` | Writes anything that `numpy.asarray` accepts as `<name>.npy`, little-endian and in row-major order, with `numpy.save(..., allow_pickle=False)`. The dtype must be one of the catalog's; the object dtype, strings, complex numbers, dates and structured dtypes raise `TypeError`, and more than 8 dimensions raise `ValueError`. |
+| `out.table(name, rows)` | Writes a list of dicts, a dict of columns, or a pandas or pyarrow table as `<name>.parquet` through pyarrow when pyarrow can be imported, and as `<name>.csv` with the typed header below otherwise. A list of dicts gets every key of any row as a column, in the order first seen, with NULL where a row lacks it. |
+| `out.warn(text)` | Adds a warning that every source of the run carries in its catalog entry: one line of at most 1,024 characters, and at most 64 per run. |
+| `out.torch_weights(file)` | Calls `torch.load(file, map_location="cpu", weights_only=True)`, which refuses every pickled object that is not a tensor or a plain container, and calls no other loader. It walks the dicts and lists that come back and writes each tensor with its key path (`layers.0.attn.weight`) as its title and that path made into an id as its name. Each tensor carries the warning "loaded weights-only from a pickle file"; a `bf16` tensor becomes `f32` and also carries "converted from bf16 to f32"; a tensor whose dtype the catalog lacks, and every value that is not a tensor, is skipped with a warning of the run. It returns the names it wrote. |
+
+Names match the id grammar and are unique per kind; a second output of the same kind and name raises `ValueError`. Each method writes its file at once, opened for exclusive creation, so a file the script planted under that name is never followed or overwritten. The script runs as a module with its own folder first on `sys.path`, so it can import modules that lie beside it. Its working folder is the run's output folder, so a file it writes by a relative path lands there and is discarded unless a method listed it. `make_id` in the host follows the library's rule exactly, so a checkpoint loaded through this route and the same weights in a safetensors file give the same source names, apart from names longer than 64 characters, whose hashes are taken over different text.
+
+Without pyarrow, a table is written as CSV with a typed header. Every header cell is `"<column>:<type>"`, where the type is `BIGINT`, `DOUBLE`, `BOOLEAN` or `VARCHAR`. Every header cell and every `VARCHAR` value is quoted, with a quote inside doubled, so an empty string is `""`; NULL is an empty unquoted field; booleans are `true` and `false`; doubles use Python's shortest round-trip form, with `nan`, `inf` and `-inf`; fields are separated by commas and rows end with a line feed. A column of integers is `BIGINT`, of integers and floats `DOUBLE`, of booleans `BOOLEAN`, of strings or only NULLs `VARCHAR`; any other mixture, an integer outside 64 bits, a NUL character or a value of another type raises an error that suggests installing pyarrow. Caliper reads the header with its own parser and then the file with DuckDB's `read_csv`, with the columns and types from the header and every detection turned off.
+
+### The host and the process
+
+`loader_host.py` is one file that needs only the standard library and numpy, so it runs by path without Caliper LIB; with Caliper LIB installed it also runs as `python -m caliper.loader_host`. The library embeds it at build time (CMake turns it into a byte array), so the app needs no install path for it: for each run the store writes the embedded copy to `tmp-<n>/host/loader_host.py` and runs
+
+```
+<python> -I <workspace>/loader-outputs/<id>/tmp-<n>/host/loader_host.py \
+    --script <script> --input <file> --output <workspace>/loader-outputs/<id>/tmp-<n>/out
+```
+
+through `acp::run_process`, never through a shell, with:
+
+- a scrubbed environment: no inherited variable except `PATH` (its absolute entries only), `HOME`, `TMPDIR` and `LANG`, and, for an interpreter that lies in a virtual environment (a `pyvenv.cfg` above its `bin` folder), `VIRTUAL_ENV` with the environment's `bin` folder first on `PATH`. `-I` also makes Python ignore every `PYTHON*` variable and the user's site-packages. A conda environment runs its Python without variables, so none are passed for it;
+- the empty output folder as its working folder;
+- the time limit, after which the run fails with `loader.python_timeout`: the process group gets SIGTERM and then, within two seconds, SIGKILL, so processes the script started in turn are stopped too;
+- at most 1 MiB kept of each output stream; the rest is read and dropped, so a script that prints gigabytes neither blocks on a full pipe nor fills memory.
+
+The host exits with 0 when the outputs and `manifest.json` are written, with 1 when the script raised (it writes `error.json` with the exception's type and message and prints the traceback), with 2 for wrong arguments, and with 3 when numpy cannot be imported. The store reports exit 3, an interpreter that cannot be found or started, and a platform without process spawning as `loader.python_not_available`; any other failure as `loader.python_failed`, whose message carries the exception from `error.json`, or else the last line of standard error. The store's lock is released while the script runs, so the catalog stays usable; the run then takes the lock again to check and commit.
+
+### The manifest and what Caliper checks
+
+```json
+{
+  "caliper_python_loader": 0,
+  "outputs": [
+    {"name": "layers_0_attn_weight", "kind": "tensor", "file": "layers_0_attn_weight.npy", "bytes": 2176,
+     "dtype": "f32", "shape": [16, 32], "title": "layers.0.attn.weight",
+     "warnings": ["loaded weights-only from a pickle file"]},
+    {"name": "metrics", "kind": "table", "file": "metrics.parquet", "bytes": 1534}
+  ],
+  "warnings": ["1 value of the checkpoint is not a tensor and was skipped."]
+}
+```
+
+`read_python_manifest()` treats the folder as hostile input:
+
+- The output folder and `manifest.json` must not be symbolic links. The manifest is at most 1 MiB, nested at most 64 deep (counted before parsing), and valid JSON with exactly the keys above; an unknown key is an error, and the version must be 0.
+- Every name matches `[a-z][a-z0-9_-]{0,63}` and is unique per kind; the kind is `tensor` or `table`.
+- Every file is a plain name of at most 128 characters from `[A-Za-z0-9_.-]`, not starting with a dot or a dash, so no `..`, separator or absolute path can pass (`loader.path_not_allowed`). It ends in `.npy` for a tensor, and `.parquet` or `.csv` for a table, and no two outputs share it.
+- Every file is a regular file in the folder, not a symbolic link, with exactly one hard link (`loader.path_not_allowed`). Its declared `bytes` must equal its real size and stay within 4 GiB, and all files within 16 GiB (`loader.too_large`).
+- A tensor declares a catalog dtype and a shape of at most 8 sizes that fits its file; a table declares neither.
+- Titles and warnings are single lines of bounded length, at most 64 warnings per output and per run.
+
+The store then moves the listed files into `run-<n>/`, checks them there again, and reads each with the native readers inside the run's transaction: `check_not_pickle()` on every file; the `npy` reader for a tensor, which refuses the object dtype, after which the dtype and shape must equal the manifest's (`loader.malformed`); DuckDB's `read_parquet` for a Parquet table; and the typed header and `read_csv` for a CSV table. The Python process never hands the app anything else.
+
+### Where the outputs are kept
+
+```
+<workspace>/loader-outputs/<loader-id>/
+  tmp-<n>/host/loader_host.py   during a run only: the embedded host script
+  tmp-<n>/out/                  during a run only: the script's empty output folder
+  run-<n>/manifest.json         the checked manifest, as the host rewrote it
+  run-<n>/<name>.npy            the checked tensors
+  run-<n>/<name>.parquet        the checked tables, or <name>.csv
+```
+
+Each run takes the next number `n`. After the checks the listed files move from `tmp-<n>/out/` to a new `run-<n>/`, the manifest is written there from the checked values, and `tmp-<n>/` is deleted with anything else the script left in it. The sources point into `run-<n>/`: a tensor is mapped from its `.npy` file, and a table is a view or a table over its Parquet or CSV file. A transform makes a derived tensor under `tensors/`, as for any other loader. When the run's transaction commits, the older `run-*` folders of the loader are deleted; a failed run deletes its own folders and leaves the previous `run-<n>/` and its sources whole.
+
+A restart keeps the database rows, which point into `run-<n>/`, so nothing runs. `rebuild()`, and opening a workspace whose database is missing, reads the newest `run-<n>/` that has a manifest, checks it again as untrusted input (the files lie in the workspace, where anything can edit them) and makes the sources from it; the script does not run and needs no approval. A Python loader without kept outputs keeps `last_status = "never"`. Removing a loader deletes its folder; a successful run of a loader that is no longer a Python loader deletes it too; and `rebuild()` deletes the folders of loaders that are gone or are no longer Python loaders, and unfinished `tmp-<n>/` folders.
+
+### Approval
+
+Running a Python loader executes the user's code with the user's privileges, out of process. `LoaderStore::run(id, options)` therefore refuses a Python loader unless `RunOptions::allow_python` is set for that run, and fails with `loader.python_needs_approval` without touching any file or recording a status. The command layer sets the flag only after the user approved that run: the user's own click on run in the app is that approval, and `loader.run` of a Python loader counts as destructive, so the approval policy asks the user before it runs one sent by an agent, MCP or Caliper API. Reading kept outputs back in `rebuild()` runs nothing and needs no approval. The script is not sandboxed; the approval is what stands between an agent and running code.
+
+### Limits
+
+| Limit | Default |
+|---|---|
+| Time of one run | 120 seconds, at most 3,600 (`reader.timeout_s`) |
+| Output kept of each stream | 1 MiB |
+| Grace between SIGTERM and SIGKILL | 2 seconds |
+| `manifest.json` | 1 MiB, nested at most 64 deep |
+| Outputs of one run | 10,000 |
+| One output file | 4 GiB |
+| All output files | 16 GiB |
+| Warnings per output, and per run | 64, of at most 1,024 characters |
+| `error.json` | 64 KiB |
+| CSV header | 1 MiB and 10,000 columns |
+| Input files | 1 |
+
+`PythonOutputLimits` and `PythonProcessOptions` in `StoreOptions` hold them.
+
+### What the Python loader does not do yet
+
+- Process spawning is POSIX only in `acp::run_process`, so on Windows every run fails with `loader.python_not_available`.
+- The process group is killed when the time limit passes. A script that finishes normally but leaves a process behind, or a process that left the group (with `setsid`), keeps running; such a process could still change files after the checks, as any program of the user can change any file in the workspace.
+- A Python loader reads one file. A glob of files, one run per file, is a later addition.
 
 ## Safety
 
@@ -407,10 +541,13 @@ A changed grant reopens the database with the new lists, because a locked config
 | `loader.no_reader`, `loader.reader_mismatch` | Inference found no reader, or the extension and the bytes disagree. |
 | `loader.path_not_allowed`, `loader.no_match`, `loader.too_many_files` | A path or a glob fails confinement or its limits. |
 | `loader.pickle_refused` | A pickle or a torch archive. |
-| `loader.python_not_available`, `loader.arrow_not_available`, `loader.hdf5_not_available` | A reader that this build does not have. |
+| `loader.arrow_not_available`, `loader.hdf5_not_available` | A reader that this build does not have. |
+| `loader.python_needs_approval` | A Python loader was run without `RunOptions::allow_python`. |
+| `loader.python_not_available` | The Python loader's interpreter is missing or cannot start, numpy is not installed for it, or the platform cannot start a process. |
+| `loader.python_failed`, `loader.python_timeout` | The script failed, or ran past its time limit and was stopped. |
 | `loader.json_not_available` | The DuckDB build lacks its JSON extension. |
 | `loader.truncated`, `loader.malformed`, `loader.unsupported`, `loader.too_large` | A file is cut short, breaks its format, uses a feature the reader does not support, or exceeds a limit. |
-| `loader.tensor_not_found`, `loader.name_collision`, `loader.source_exists` | An output names a tensor that is not there, or a name clashes. |
+| `loader.tensor_not_found`, `loader.table_not_found`, `loader.name_collision`, `loader.source_exists` | An output names a tensor or a table that is not there, or a name clashes. |
 | `loader.not_found` | No saved loader has the id. |
 | `loader.io`, `loader.database` | A file or the database could not be opened, read or written. |
 | `catalog.not_found`, `catalog.not_a_tensor` | No source has the id, or a table was asked for as a tensor. |
@@ -424,7 +561,9 @@ A changed grant reopens the database with the new lists, because a locked config
 
 Built on this branch, with tests: the tensor type and the three transforms with the statistics; the `npy`, `npz`, `safetensors`, `image` and `wav` readers; the HDF5 refusal; the pickle refusal; the tabular readers through DuckDB with the SQL check; the loader format's parser and writer, inference and globs; `LoaderStore` with its runs, grants, rebuild, the safety settings and the query helper; and an end-to-end test that imports a Parquet file and a safetensors file into a workspace, runs both loaders, reads back a table source and a tensor source, and finds them again after reopening the workspace and after deleting its database.
 
-Planned: the `CatalogProvider` adapter (after the catalog module merges), the command handlers (a later stream), the Python loader, the Arrow IPC reader, the HDF5 reader where libhdf5 is found, stacking a glob of images into one tensor, and the GPU version of the transforms.
+Built on the `sprint3-pyloader` branch, with tests: the Python loader, that is `loader_host.py` with its writer, its typed CSV and `out.torch_weights`; the interpreter lookup and the scrubbed environment; the run through `acp::run_process` with its time limit and bounded output; the manifest checks; the approval flag; the kept outputs and their reuse by `rebuild()`; and the pickle refusal's pointer to this route. The tests run every dtype and both table formats through a whole run; a script that raises, hangs (its child process is stopped with it), prints megabytes, forges a manifest with path tricks, an object array, a symbolic link out of the folder or a huge declared size; a missing interpreter and a missing numpy; a run without approval; and the scrubbed environment. A `.pt` file that the native readers refuse as a pickle loads through a Python loader whose script calls `out.torch_weights`, with a stand-in `torch` module beside the script that records the call, so the test needs no torch and shows that `weights_only=True` is what is called; a second test uses the real torch when the test interpreter has it, and is skipped otherwise. `loader_host.py` has unit tests of its own, which ctest runs with the test interpreter. The tests that run Python need `-DCALIPER_BUILDER_TEST_PYTHON=<interpreter with numpy>`, and pyarrow for the Parquet path; without it they say they are skipped and the rest still run.
+
+Planned: the `CatalogProvider` adapter (after the catalog module merges), the command handlers (a later stream), the Arrow IPC reader, the HDF5 reader where libhdf5 is found, stacking a glob of images into one tensor, the GPU version of the transforms, Python loaders on Windows, and a Python loader over a glob, with one run per file.
 
 ## Decisions
 
@@ -449,3 +588,18 @@ Planned: the `CatalogProvider` adapter (after the catalog module merges), the co
 | A WAV data chunk that claims more bytes than the file holds is cut to what is there, with a warning. | Recorders that stop early leave such files, and the bytes that are there are valid. |
 | Loader outputs have `wire = true`. | The host can send a table's rows or a tensor's bytes to the browser viewer as a snapshot. |
 | A missing source is `catalog.not_found`. | `catalog.describe` and `catalog.sample` report it, and the code should not depend on the provider. |
+| The library embeds `loader_host.py` and writes it next to each run. | The app needs no install path for it, and the copy that runs always matches the code that checks its output. |
+| A Python loader's output selects with `tensor` or `table`, and `"*"` makes its name a prefix. | It follows the multi-tensor files, so one vocabulary covers both kinds; `table` is the only new key. |
+| The manifest also declares each output's kind, size in bytes and, for a tensor, its dtype and shape, and the host compares all of them with the files. | A huge or inconsistent declaration is refused before any file is read, and a tensor file that is not what the manifest says is caught. |
+| Without pyarrow, a table is CSV with the typed header `"<name>:<type>"`, read by Caliper's own parser. | Otherwise DuckDB would guess the types, and a NULL and an empty string would look the same. |
+| Checked outputs move to `loader-outputs/<id>/run-<n>/` with the manifest rewritten, and older runs are deleted after the commit. | The sources survive a restart and a rebuild without Python, a failed run leaves the previous outputs whole, and the database never points into a folder that is being replaced. |
+| `rebuild()` reads kept outputs back and never runs a script. | A rebuild has no approval to give, and the kept files are the results of the last approved run. |
+| A run refused for want of approval records no status. | Nothing ran, so the previous status and sources stay true. |
+| The script must lie inside the workspace, and a grant does not cover it. | A grant lets a loader read data; running code from a dropped folder would widen what a grant means. |
+| `reader.python` is an absolute path or a command name, and the lookup uses only the absolute entries of `PATH`. | A relative path, or a relative entry of `PATH`, would depend on the app's working folder. |
+| The script's folder comes first on `sys.path`. | This is how `python script.py` behaves, so a script can import its own helper modules; the tests use it to put a stand-in torch beside the script. |
+| The store's lock is released while a script runs. | A run may take up to an hour, and the catalog and queries must stay usable meanwhile. |
+| A Python loader reads exactly one file. | `load(path, out)` takes one path; a glob would need one process per file and naming rules of its own. |
+| The pickle check does not apply to a Python loader's input. | Only the user's script opens it, and every file that comes back is checked. |
+| Every output file must have exactly one hard link. | Otherwise a later change to another file could change a source after the checks. |
+| A Python source's `origin.file` is the recipe's `input.path`. | It is what tables already show, and it stays right when the sources are read back from kept outputs after the input moved. |
