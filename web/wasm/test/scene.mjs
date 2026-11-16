@@ -10,7 +10,9 @@
 // applied scene messages and drawn frames. It saves a screenshot to <shot.png>
 // and checks it: the plate is not blank and shows the marker's red. It then
 // asks the script to recolour the surface, waits until the plate shows it,
-// saves <shot>-update.png and checks that the plate changed. Every wait is on
+// saves <shot>-update.png and checks that the plate changed. The plate is the
+// element's body, where the module draws: the header above it is left out,
+// because its info line (bytes copied, GPU time) changes with every frame. Every wait is on
 // the module's frames and updates or on the plate's pixels, never a fixed
 // time. It prints the element's state and the module's report and exits with
 // 1 when a check failed. Headless only.
@@ -43,14 +45,15 @@ const ready = new Promise((resolve, reject) => {
   setTimeout(() => reject(new Error('scene_server.py did not start')), 30000);
 });
 
-// The plate's pixels from a PNG screenshot, decoded in the page (no image library here).
+// The plate's pixels from a PNG screenshot, decoded in the page (no image library here): the
+// element's body, which holds the module's canvas, without the header.
 async function plate(page, png) {
   return page.evaluate(async (b64) => {
     const img = new Image();
     img.src = `data:image/png;base64,${b64}`;
     await img.decode();
     const el = document.querySelector('caliper-view');
-    const r = el.getBoundingClientRect();
+    const r = el.shadowRoot.querySelector('.body').getBoundingClientRect();
     const c = document.createElement('canvas');
     c.width = img.width;
     c.height = img.height;
