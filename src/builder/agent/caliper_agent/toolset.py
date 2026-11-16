@@ -89,3 +89,32 @@ class CaliperToolset(AbstractToolset[Any]):
 
     async def call_tool(self, name: str, tool_args: dict[str, Any], ctx, tool: ToolsetTool[Any]) -> Any:
         return await ctx.deps.runner.run_tool(self._tools[name], tool_args, ctx)
+
+
+class HandoffToolset(AbstractToolset[Any]):
+    """The widget session's one tool of its own, `handoff`: the model says that the
+    request belongs to the side chat (widget.py), and the turn ends there. It is
+    not a command, and its name has no underscore, so it can never be taken for one."""
+
+    def __init__(self) -> None:
+        from .widget import HANDOFF_DESCRIPTION, HANDOFF_SCHEMA, HANDOFF_TOOL
+
+        self._name = HANDOFF_TOOL
+        self._description = HANDOFF_DESCRIPTION
+        self._schema = HANDOFF_SCHEMA
+        self._validator = JsonObjectArgs()
+
+    @property
+    def id(self) -> str:
+        return "caliper-handoff"
+
+    async def get_tools(self, ctx) -> dict[str, ToolsetTool[Any]]:
+        definition = ToolDefinition(name=self._name, description=self._description,
+                                    parameters_json_schema=self._schema,
+                                    strict=bool(getattr(ctx.deps, "strict", True)), sequential=True,
+                                    metadata={"handoff": True})
+        return {self._name: ToolsetTool(toolset=self, tool_def=definition, max_retries=MAX_TOOL_RETRIES,
+                                        args_validator=self._validator)}
+
+    async def call_tool(self, name: str, tool_args: dict[str, Any], ctx, tool: ToolsetTool[Any]) -> Any:
+        return await ctx.deps.runner.handoff(tool_args, ctx)

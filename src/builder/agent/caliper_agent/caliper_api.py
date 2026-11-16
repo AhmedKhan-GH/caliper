@@ -7,7 +7,9 @@ A tool runs by calling Caliper API (contracts sections 8 and 15):
   `POST /v0/applets/{id}/launch`, `GET /v0/capture.png`);
 - every other command is `POST /v0/commands/{name}` with the arguments as the
   JSON body, `X-Caliper-Origin: agent` and `X-Caliper-Group: <the turn's group>`,
-  so that the edits of one prompt undo as one step. A 404 means the app has no
+  so that the edits of one prompt undo as one step, and in a widget session
+  `X-Caliper-Preview: <the session's preview>`, so that its edits stack on the
+  preview the app opened and its reads see it. A 404 means the app has no
   command layer yet.
 
 The address and the session token come from the API file: `--api-file`, else
@@ -271,9 +273,9 @@ class CaliperApi:
             return raw
         return raw  # pragma: no cover
 
-    async def call(self, command: str, args: dict, group: str = "") -> ToolOutput:
+    async def call(self, command: str, args: dict, group: str = "", preview: str = "") -> ToolOutput:
         try:
-            return await self._call(command, args, group)
+            return await self._call(command, args, group, preview)
         except ApiFileError as exc:
             return _error(exc.code, str(exc))
         except httpx2.ConnectError:
@@ -285,7 +287,7 @@ class CaliperApi:
         except httpx2.HTTPError as exc:
             return _error("caliper.transport", f"The call to Caliper API failed: {describe_exception(exc)}")
 
-    async def _call(self, command: str, args: dict, group: str) -> ToolOutput:
+    async def _call(self, command: str, args: dict, group: str, preview: str = "") -> ToolOutput:
         if command == "app.info":
             return self._plain(await self._send("GET", "/v0/info"))
         if command == "app.applets":
@@ -310,6 +312,8 @@ class CaliperApi:
         headers = {"X-Caliper-Origin": "agent"}
         if group:
             headers["X-Caliper-Group"] = group
+        if preview:
+            headers["X-Caliper-Preview"] = preview
         response = await self._send("POST", f"/v0/commands/{quote(command, safe='.')}", body=body, headers=headers)
         if response.status_code == 404:
             return _error("caliper.no_command_layer",
@@ -344,10 +348,11 @@ class CaliperApi:
             return _error("caliper.bad_response", "Caliper API answered with something that is not JSON.")
         return ToolOutput(ok=True, text=_truncate(json.dumps(result, sort_keys=True, ensure_ascii=False)), result=result)
 
-    async def spec_text(self) -> tuple[str, str] | None:
+    async def spec_text(self, preview: str = "") -> tuple[str, str] | None:
         """The open spec's canonical TOML and its path (relative to the workspace),
-        or None when no spec is open or the app cannot say. Used for diffs only."""
-        out = await self.call("spec.get", {})
+        or that of a preview, or None when no spec is open or the app cannot say.
+        Used for diffs only."""
+        out = await self.call("spec.get", {}, preview=preview)
         if not out.ok or not isinstance(out.result, dict):
             return None
         text = out.result.get("text")

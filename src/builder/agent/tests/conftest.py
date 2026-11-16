@@ -127,6 +127,7 @@ class FakeCaliper:
             self.calls.append({"method": method, "path": handler.path, "args": args,
                                "origin": handler.headers.get("X-Caliper-Origin"),
                                "group": handler.headers.get("X-Caliper-Group"),
+                               "preview": handler.headers.get("X-Caliper-Preview"),
                                "host": handler.headers.get("Host")})
 
     def _edit(self, args: dict, new_text: str, result: dict) -> dict:
@@ -205,6 +206,14 @@ def message(*content: dict, stop: str = "end_turn", usage: dict | None = None, *
             "usage": usage or {"input_tokens": 10, "output_tokens": 5}}
     spec.update(extra)
     return {"message": spec}
+
+
+def widget_meta(target: dict | None = None, preview: str = "widget-1", scope: list | None = None) -> dict:
+    """`session/new`'s `_meta` for a widget session."""
+    widget: dict = {"target": target or {"kind": "panel", "panel": "curves"}, "preview": preview}
+    if scope is not None:
+        widget["scope"] = scope
+    return {"caliper": {"widget": widget}}
 
 
 def write_script(folder: Path, steps: list[dict], route: str = "function", **extra) -> tuple[Path, Path]:
@@ -307,15 +316,19 @@ class AgentProcess:
                 if answer is not None:
                     self.send({"jsonrpc": "2.0", "id": msg["id"], "result": answer})
 
-    def start_session(self, cwd: str = "/tmp/caliper-test-workspace") -> str:
+    def start_session(self, cwd: str = "/tmp/caliper-test-workspace", meta: dict | None = None) -> str:
         response, _ = self.request("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
         assert response["result"]["protocolVersion"] == 1
-        response, _ = self.request("session/new", {"cwd": cwd, "mcpServers": []})
+        params: dict = {"cwd": cwd, "mcpServers": []}
+        if meta is not None:
+            params["_meta"] = meta
+        response, _ = self.request("session/new", params)
+        assert "result" in response, response
         return response["result"]["sessionId"]
 
-    def prompt(self, session_id: str, prompt: str, **kwargs) -> tuple[dict, list[dict]]:
-        return self.request("session/prompt", {"sessionId": session_id,
-                                               "prompt": [{"type": "text", "text": prompt}]}, **kwargs)
+    def prompt(self, session_id: str, prompt: str | list, **kwargs) -> tuple[dict, list[dict]]:
+        blocks = [{"type": "text", "text": prompt}] if isinstance(prompt, str) else prompt
+        return self.request("session/prompt", {"sessionId": session_id, "prompt": blocks}, **kwargs)
 
     def stderr(self) -> str:
         return b"".join(self.stderr_chunks).decode("utf-8", "replace")
@@ -351,10 +364,12 @@ def run_agent(tmp_path, caliper):
     """Starts the sidecar with a script; closes it after the test."""
     started: list[AgentProcess] = []
 
-    def start(steps: list[dict] | None, route: str = "function", **kwargs) -> tuple[AgentProcess, Path]:
+    def start(steps: list[dict] | None, route: str = "function", script_extra: dict | None = None,
+              **kwargs) -> tuple[AgentProcess, Path]:
         folder = tmp_path / f"agent{len(started) + 1}"
         folder.mkdir()
-        script, record = write_script(folder, steps, route) if steps is not None else (None, folder / "none.jsonl")
+        script, record = (write_script(folder, steps, route, **(script_extra or {})) if steps is not None
+                          else (None, folder / "none.jsonl"))
         kwargs.setdefault("api_file", caliper.api_file)
         agent = AgentProcess(script=script, **kwargs)
         started.append(agent)

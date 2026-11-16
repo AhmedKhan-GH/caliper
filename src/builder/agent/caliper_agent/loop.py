@@ -34,6 +34,15 @@ cancels the running tool, and raises `RunCancelled` with everything that
 finished. The turn then keeps that history, leaves out a reply the stream did
 not finish, and gives every tool call that has no result one that says the
 person cancelled it, so the next request is valid.
+
+A widget session (widget.py) runs the same turn with its own agent (the widget
+system prompt, its scoped tools and `handoff`) and three differences: every
+call carries the session's preview in `X-Caliper-Preview` and every edit runs
+without `dry_run`, so it stacks on the preview, with no permission request,
+since the preview card in the app is the review; a call outside the scope is
+refused even when the model names it; and the turn budget is small (3 model
+requests, 8 tool calls, 8,000 output tokens). A `handoff` call ends the turn at
+once and is reported in the prompt's answer for the app's "Ask in chat".
 """
 
 from __future__ import annotations
@@ -67,6 +76,8 @@ from .schema import validate
 from .tools import PREVIEW_ARG, ToolSpec, acp_tool_kind
 from .toolset import CaliperToolset, invalid_json
 from .udiff import apply_unified_diff
+from .widget import (HANDOFF_KINDS, MAX_HANDOFF_REASON, WIDGET_MAX_REQUESTS, WIDGET_MAX_TOKENS,
+                     WIDGET_MAX_TOOL_CALLS, WidgetSpec)
 
 log = logging.getLogger("caliper_agent.loop")
 
@@ -99,10 +110,13 @@ class SessionState:
     review: str = REVIEW_SPEC_CHANGES
     turns: int = 0
     strict: bool = True
-    # A prepared block of context (the widget's data, selection and so on) that
-    # is sent with each prompt, ahead of it, never in the system prompt. Planned:
-    # the widget agent's context bundle fills it.
+    # A prepared block of context that is sent with each prompt, ahead of it,
+    # never in the system prompt. The widget agent's context bundle comes in the
+    # prompt's own content blocks instead.
     context_block: str | None = None
+    # The target, the scope and the preview of a widget session; None for the
+    # general role.
+    widget: WidgetSpec | None = None
 
 
 @dataclass
@@ -142,9 +156,10 @@ class CaliperHooks(AbstractCapability[TurnDeps]):
         return await ctx.deps.runner.on_request_error(request_context, error)
 
 
-def build_agent(tools: list[ToolSpec], system_prompt: str) -> Agent:
-    """One agent per sidecar: the system prompt and the tools never change, so
-    the cached prefix stays the same; the model and its settings come per run."""
+def build_agent(tools: list[ToolSpec], system_prompt: str, extra_toolsets: list | None = None) -> Agent:
+    """One agent per sidecar for the general role, and one per tool scope for the
+    widget role: the system prompt and the tools never change, so the cached
+    prefix stays the same; the model and its settings come per run."""
     import pydantic_ai
 
     pydantic_ai.BANNER_ENABLED = False  # stderr is the app's log, not a terminal
@@ -152,7 +167,7 @@ def build_agent(tools: list[ToolSpec], system_prompt: str) -> Agent:
         output_type=str | None,  # a reply with only thinking ends the turn too
         instructions=system_prompt,
         deps_type=TurnDeps,
-        toolsets=[CaliperToolset(tools)],
+        toolsets=[CaliperToolset(tools), *(extra_toolsets or [])],
         capabilities=[CaliperHooks()],
         retries={"tools": 50, "output": 2},
         defer_model_check=True,
@@ -385,6 +400,11 @@ class TurnRunner:
         self._group = ""
         # What Caliper asks the person itself (review.status), read once per turn.
         self._app_review: tuple[bool, bool] | None = None
+        # A widget session's outcome: the edits that stacked on its preview this
+        # turn, and the handoff the model asked for.
+        self.widget_edits = 0
+        self.handoff_info: dict | None = None
+        self.limit_reached = False
 
     # ---- cancellation ------------------------------------------------------------------------------
 
@@ -398,8 +418,11 @@ class TurnRunner:
 
     # ---- the run -----------------------------------------------------------------------------------
 
-    async def run(self, prompt_text: str) -> str:
-        """Runs the turn and returns its ACP stop reason. AgentError ends it with an error."""
+    async def run(self, prompt: Any) -> str:
+        """Runs the turn and returns its ACP stop reason. AgentError ends it with an error.
+
+        `prompt` is the user prompt as Pydantic AI takes it: a string, or a list of
+        strings and images (widget.prompt_content)."""
         s = self.session
         s.turns += 1
         self._group = f"{s.id}-t{s.turns}"
@@ -411,16 +434,26 @@ class TurnRunner:
             self._say_no_tools(model_id)
             return "end_turn"
         before = list(s.history)
-        user_prompt: Any = [s.context_block, prompt_text] if s.context_block else prompt_text
+        if s.context_block:
+            user_prompt: Any = [s.context_block, *(prompt if isinstance(prompt, list) else [prompt])]
+        else:
+            user_prompt = prompt
         messages: list[ModelMessage] = before
+        settings = self._provider.model_settings(s.settings, strict=s.strict)
+        if s.widget is not None:
+            limits = UsageLimits(request_limit=WIDGET_MAX_REQUESTS, tool_calls_limit=WIDGET_MAX_TOOL_CALLS)
+            settings = {**settings, "max_tokens": min(int(settings.get("max_tokens") or WIDGET_MAX_TOKENS),
+                                                      WIDGET_MAX_TOKENS)}
+        else:
+            limits = UsageLimits(request_limit=MAX_REQUESTS_PER_TURN)
         try:
             async with self._agent.iter(
                     user_prompt,
                     message_history=before,
                     model=self._provider.model(model_id),
-                    model_settings=self._provider.model_settings(s.settings, strict=s.strict),
+                    model_settings=settings,
                     deps=TurnDeps(self),
-                    usage_limits=UsageLimits(request_limit=MAX_REQUESTS_PER_TURN),
+                    usage_limits=limits,
             ) as run:
                 self._run = run
                 if self.cancel_requested:
@@ -443,6 +476,8 @@ class TurnRunner:
                         async with node.stream(run.ctx) as tool_stream:
                             async for event in tool_stream:
                                 self._on_tool_event(event)
+                        if self.handoff_info is not None:
+                            break  # the request goes to the side chat; no further request
                 messages = run.all_messages()
             s.history = messages
             return "end_turn"
@@ -461,7 +496,14 @@ class TurnRunner:
             s.history = close_tool_calls(_without_unfinished_reply(self._run.all_messages()),
                                          "Not run: the turn reached its limit of model requests.")
             self._sink.fail_open_calls("Not run: the turn reached its limit.")
-            self._sink.status("limit", f"The turn stopped after {MAX_REQUESTS_PER_TURN} model requests.")
+            self.limit_reached = True
+            if s.widget is not None:
+                self._sink.status("limit", f"The request stopped at the widget agent's limit of {WIDGET_MAX_REQUESTS} "
+                                           f"model requests and {WIDGET_MAX_TOOL_CALLS} tool calls. Refine it, or ask "
+                                           "in the side chat.", max_requests=WIDGET_MAX_REQUESTS,
+                                  max_tool_calls=WIDGET_MAX_TOOL_CALLS)
+            else:
+                self._sink.status("limit", f"The turn stopped after {MAX_REQUESTS_PER_TURN} model requests.")
             return "max_turn_requests"
         except _NoTools:
             s.history = before
@@ -629,6 +671,8 @@ class TurnRunner:
             # Treated like invalid JSON: not run, and the model sees what it sent.
             sink.finish(call_id, "failed", [text_content(f"Not run: {problem}")])
             raise ToolFailed(invalid_json(args, problem))
+        if self.session.widget is not None:
+            return await self._run_widget_tool(spec, args, call_id)
 
         previewable = command.previewable and args.get(PREVIEW_ARG) is not True
         # Caliper may hold the call for the person itself; what it asks, the
@@ -685,6 +729,68 @@ class TurnRunner:
             self._app_review = (result.get("spec_edits") is True, result.get("destructive") is True)
         return self._app_review
 
+    async def _run_widget_tool(self, spec: ToolSpec, args: dict, call_id: str) -> Any:
+        """One call of a widget session: inside the scope only, with the preview's
+        header, and an edit without `dry_run`, so it stacks on the preview."""
+        sink = self._sink
+        widget = self.session.widget
+        command = spec.command
+        if command.name not in widget.scope:
+            # The session's agent offers only the scope's tools; this guards the
+            # call path itself, whatever the model names.
+            sink.finish(call_id, "failed", [text_content("Not run: the command is outside this target's scope.")])
+            raise ToolFailed(json.dumps({"error": {
+                "code": "agent.out_of_scope",
+                "message": f"{command.name} is not one of this widget session's tools. Use the handoff tool when "
+                           "the request needs more than this target."}}))
+        if self.handoff_info is not None:
+            sink.finish(call_id, "failed", [text_content("Not run: the request was handed to the side chat.")])
+            raise ToolFailed("Not run: the request was handed to the side chat.")
+        args = {k: v for k, v in args.items() if k != PREVIEW_ARG}
+        edit = command.previewable
+        before = await self._api.spec_text(widget.preview) if edit else None
+        sink.update({"sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": "in_progress"})
+        out = await self._api.call(command.name, args, self._group, widget.preview)
+        if out.ok and edit and isinstance(out.result, dict) and out.result.get("applied") is True \
+                and out.result.get("diff"):
+            self.widget_edits += 1
+        await self._report(call_id, out, before, edit)
+        text = scrub(out.text)
+        if not out.ok:
+            raise ToolFailed(text)
+        if out.png is not None:
+            return [text, BinaryContent(data=out.png, media_type="image/png")]
+        return text
+
+    async def handoff(self, args: dict, ctx: Any) -> str:
+        """The `handoff` tool: records why the request belongs to the side chat; the
+        turn ends after this reply's calls (`run`)."""
+        call_id = ctx.tool_call_id or ""
+        sink = self._sink
+        sink.tool_started(call_id, "handoff")
+        kind = args.get("kind")
+        reason = args.get("reason")
+        if kind not in HANDOFF_KINDS or not isinstance(reason, str) or not reason.strip() or set(args) - {
+                "kind", "reason"}:
+            problem = f"kind must be one of {', '.join(HANDOFF_KINDS)} and reason one sentence"
+            sink.finish(call_id, "failed", [text_content(f"Not run: {problem}")])
+            raise ToolFailed(invalid_json(args, problem))
+        reason = scrub(" ".join(reason.split()))[:MAX_HANDOFF_REASON]
+        self.handoff_info = {"kind": kind, "reason": reason}
+        sink.update({"sessionUpdate": "tool_call_update", "toolCallId": call_id, "title": "Ask in chat",
+                     "kind": "other", "rawInput": {"kind": kind, "reason": reason}})
+        sink.finish(call_id, "completed", [text_content(reason)], raw_output=self.handoff_info)
+        sink.status("handoff", f"This request belongs in the side chat: {reason}", category=kind, reason=reason)
+        return "Handed to the side chat; the person can ask there. The turn ends now."
+
+    def widget_outcome(self) -> dict | None:
+        """The `_meta.caliper.widget` of the prompt's answer, for a widget session."""
+        widget = self.session.widget
+        if widget is None:
+            return None
+        return {"preview": widget.preview, "edits": self.widget_edits, "handoff": self.handoff_info,
+                "limit": self.limit_reached}
+
     def _diff_content(self, before: tuple[str, str] | None, diff: str | None) -> dict | None:
         """The change as an ACP diff (old and new text), else as the unified diff in a text block."""
         if not isinstance(diff, str) or diff == "":
@@ -738,7 +844,8 @@ class TurnRunner:
             shown = self._diff_content(before, diff) if isinstance(diff, str) else None
             if shown is None and not isinstance(diff, str):
                 # An app whose commands return no diff: compare the spec before and after.
-                after = await self._api.spec_text()
+                widget = self.session.widget
+                after = await self._api.spec_text(widget.preview if widget is not None else "")
                 if after is not None and after[0] != before[0]:
                     shown = {"type": "diff", "path": _diff_path(self.session.cwd, after[1]),
                              "oldText": before[0], "newText": after[0]}

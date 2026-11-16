@@ -1,6 +1,7 @@
 """The `caliper-agent` command: starts the sidecar on stdio.
 
-    caliper-agent [--api-file PATH] [--command-table PATH] [--tools LIST]
+    caliper-agent [--api-file PATH] [--command-table PATH] [--widget-scopes PATH]
+                  [--tools LIST]
                   [--provider claude|openai-compatible] [--base-url URL]
                   [--model ID] [--effort LEVEL] [--model-tools yes|no]
                   [--model-vision yes|no] [--no-compaction]
@@ -17,7 +18,8 @@ What happens at start, in this order:
 3. The keys are read and removed from the environment, with every variable
    that could redirect an SDK (before the SDKs are imported, since they read
    some of them on import).
-4. The command table is read and the tools derived from it.
+4. The command table is read and the tools derived from it, with the widget
+   scope rule (widget_scopes.json beside the table) for widget sessions.
 5. ACP is served until the client closes stdin.
 
 Exit codes: 0 after the client closed the connection; 2 for bad usage or an
@@ -62,6 +64,8 @@ def main(argv: list[str] | None = None) -> int:
                                      description="The widget agent of Caliper, an ACP agent on stdio.")
     parser.add_argument("--api-file", help="Caliper API's file (default: api.json in the app-data folder)")
     parser.add_argument("--command-table", help="the command descriptor table as JSON")
+    parser.add_argument("--widget-scopes", help="the widget agent's scope rule (default: widget_scopes.json beside "
+                                                "the command table)")
     parser.add_argument("--tools", help="only these commands, as a comma-separated list of names and groups")
     parser.add_argument("--provider", choices=("claude", "openai-compatible"), default="claude",
                         help="where model requests go (default: claude, the Claude API)")
@@ -98,16 +102,28 @@ def main(argv: list[str] | None = None) -> int:
     from .scripted import SCRIPT_ENV, ScriptedProvider, load_script
     from .stub_transport import StubTransport
     from .tools import TableError, derive_tools, load_command_table, name_filter
+    from .widget import ScopeRule, WidgetError, default_scope_file
 
     table = Path(args.command_table) if args.command_table else _default_command_table()
     if table is None:
         print("caliper-agent: no command table; pass --command-table.", file=sys.stderr)
         return 2
     try:
-        tools = derive_tools(load_command_table(table), name_filter(args.tools) if args.tools else None)
+        commands = load_command_table(table)
+        tools = derive_tools(commands, name_filter(args.tools) if args.tools else None)
     except TableError as exc:
         print(f"caliper-agent: {exc}", file=sys.stderr)
         return 2
+    scope_file = Path(args.widget_scopes) if args.widget_scopes else default_scope_file(table)
+    scope_rule = None
+    if scope_file is not None:
+        try:
+            scope_rule = ScopeRule.load(scope_file)
+        except WidgetError as exc:
+            print(f"caliper-agent: {exc}", file=sys.stderr)
+            return 2
+    else:
+        print("caliper-agent: no widget scope file; widget sessions are refused.", file=sys.stderr)
 
     script = None
     script_path = os.environ.get(SCRIPT_ENV, "")
@@ -154,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
         api = CaliperApi(Path(args.api_file) if args.api_file else None)
         agent = Agent(conn, provider, key_status, tools, graph, api, default_model=default_model,
                       default_effort=args.effort or DEFAULT_EFFORT, usage_log=args.usage_log,
-                      key_required=key_required)
+                      key_required=key_required, commands=commands, scope_rule=scope_rule)
         try:
             await conn.serve(agent.on_request, agent.on_notification)
         finally:

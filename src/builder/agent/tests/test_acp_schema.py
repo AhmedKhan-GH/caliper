@@ -4,9 +4,10 @@ The models come from the official ACP Python SDK (`agent-client-protocol`,
 generated from the protocol's schema), installed as a test dependency only:
 the sidecar keeps its own JSON-RPC layer (acp.py). Scenarios cover a tool turn
 with a capture, spec diffs in permission requests, statuses, a refusal, a cut-off
-reply, exhausted retries, a missing key and a refusal on the Claude API's wire
-format. Skipped when
-the SDK is not installed.
+reply, exhausted retries, a missing key, a refusal on the Claude API's wire
+format, and a widget session (its `_meta`, a prompt with an embedded resource
+and an image, scoped edits, a handoff and `session/close`). The requests the
+test sends are validated too. Skipped when the SDK is not installed.
 """
 
 from __future__ import annotations
@@ -18,13 +19,22 @@ import pytest
 
 acp_schema = pytest.importorskip("acp.schema")
 
-from conftest import allow, message, text, thinking, tool_use  # noqa: E402
+from conftest import allow, message, text, thinking, tiny_png, tool_use, widget_meta  # noqa: E402
 
 RESPONSES = {
     "initialize": acp_schema.InitializeResponse,
     "session/new": acp_schema.NewSessionResponse,
     "session/set_config_option": acp_schema.SetSessionConfigOptionResponse,
     "session/prompt": acp_schema.PromptResponse,
+    "session/close": acp_schema.CloseSessionResponse,
+}
+
+REQUESTS = {
+    "initialize": acp_schema.InitializeRequest,
+    "session/new": acp_schema.NewSessionRequest,
+    "session/set_config_option": acp_schema.SetSessionConfigOptionSelectRequest,
+    "session/prompt": acp_schema.PromptRequest,
+    "session/close": acp_schema.CloseSessionRequest,
 }
 
 
@@ -128,3 +138,39 @@ def test_the_messages_without_a_key_and_of_a_wire_refusal_follow_the_protocol(tr
     response, _ = agent.prompt(sid, "Go", on_permission=allow)
     assert response["result"]["stopReason"] == "refusal"
     assert _validate_all(agent) > 5
+
+
+def test_the_messages_of_a_widget_session_follow_the_protocol(tracked, caliper):
+    import base64
+
+    caliper.handlers["panel.patch"] = lambda args: {"ok": True, "result": {
+        "id": args["id"], "applied": True, "diff": "--- a\n+++ b\n@@ -1 +1 @@\n-a\n+b\n", "warnings": []}}
+    steps = [message(text("Turning the log scale off."),
+                     tool_use("p1", "panel_patch", {"id": "curves", "patch": {"options": {"y_log": False}}}),
+                     tool_use("x1", "applet_save", {}), stop="tool_use"),
+             message(text("The y axis is linear now.")),
+             message(tool_use("h1", "handoff", {"kind": "loader", "reason": "Loaders belong in the side chat."}),
+                     stop="tool_use")]
+    agent, _ = tracked(steps)
+    response, _ = agent.request("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
+    caps = response["result"]["agentCapabilities"]
+    # The SDK's models fall back to defaults on a bad capability, so the raw values are checked.
+    assert caps["sessionCapabilities"] == {"close": {}}
+    assert caps["promptCapabilities"]["image"] is True and caps["promptCapabilities"]["embeddedContext"] is True
+    response, _ = agent.request("session/new", {"cwd": "/tmp/ws", "mcpServers": [], "_meta": widget_meta()})
+    sid = response["result"]["sessionId"]
+    blocks = [{"type": "resource", "annotations": {"audience": ["assistant"]},
+               "resource": {"uri": "caliper://widget/curves/spec", "mimeType": "text/plain",
+                            "text": "<caliper-data>[[panel]] id = curves</caliper-data>"}},
+              {"type": "image", "mimeType": "image/png", "data": base64.b64encode(tiny_png(8, 5)).decode(),
+               "annotations": {"audience": ["assistant"]}},
+              {"type": "text", "text": "Use a linear y axis"}]
+    response, _ = agent.prompt(sid, blocks)
+    assert response["result"]["_meta"]["caliper"]["widget"]["edits"] == 1
+    response, _ = agent.prompt(sid, "Delete the loader")
+    assert response["result"]["_meta"]["caliper"]["widget"]["handoff"]["kind"] == "loader"
+    response, _ = agent.request("session/close", {"sessionId": sid})
+    assert response["result"] == {}
+    for sent in agent.sent:
+        REQUESTS[sent["method"]].model_validate(sent["params"])
+    assert _validate_all(agent) >= 15

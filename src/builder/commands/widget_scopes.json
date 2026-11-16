@@ -1,0 +1,29 @@
+{
+  "version": 0,
+  "about": "The widget agent's tool scope for each kind of target (design/widget-agent.md, The tool scope). The app's context bundle (src/builder/session/context_bundle.cpp, which embeds this file at build time) and the caliper-agent sidecar (caliper_agent/widget.py, which reads it at start) derive the scope from it and from the command table with one rule: a listed command that the table does not have is passed by; a read must not mutate; an edit must mutate, take a boolean dry_run in its arguments schema and not be destructive; nothing in never or never_groups qualifies; the vision_only commands leave the scope when the model reads no images; the scope keeps the table's order.",
+  "never": ["spec.set_text", "spec.new", "spec.open", "applet.open", "layout.set", "data.import"],
+  "never_groups": ["history", "applet", "preview"],
+  "vision_only": ["panel.render"],
+  "targets": {
+    "panel": {
+      "reads": ["spec.get", "spec.validate", "catalog.describe", "catalog.sample", "panel.render"],
+      "edits": ["panel.patch", "panel.remove", "layout.place", "source.add", "source.patch"]
+    },
+    "selection": {
+      "reads": ["spec.get", "spec.validate", "catalog.describe", "catalog.sample", "panel.render", "data.query"],
+      "edits": ["source.add", "panel.create", "layout.place"]
+    },
+    "dropped_file": {
+      "reads": ["spec.get", "catalog.list", "catalog.describe", "catalog.sample", "loader.describe", "data.query"],
+      "edits": ["source.add", "panel.create", "layout.place"]
+    },
+    "panel_property": {
+      "reads": ["spec.get", "catalog.describe"],
+      "edits": ["panel.patch"]
+    },
+    "source_property": {
+      "reads": ["spec.get", "catalog.describe"],
+      "edits": ["source.patch"]
+    }
+  }
+}
