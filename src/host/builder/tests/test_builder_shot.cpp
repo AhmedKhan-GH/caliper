@@ -3,7 +3,7 @@
 // imports a Parquet table and a safetensors tensor by the pane's file drop.
 // The spec it ends with, and the applet it saves, equal dashboard.spec.toml,
 // as for the other three ways of building it; every command came from the
-// builder origin; two undos took two steps; and the captures have the size
+// builder origin, the dropped files' import from ui; two undos took two steps; and the captures have the size
 // asked for.
 #include <stb_image.h>
 
@@ -98,16 +98,18 @@ TEST_CASE("caliper-builder-shot: the dashboard built by hand equals the fixture"
     // The two undos took two steps and changed the spec.
     CHECK(summary["undo_steps_after_undo"].get<int>() == summary["undo_steps_before_undo"].get<int>() - 2);
     CHECK(summary["undone_text"] != summary["finished_text"]);
-    // Every command from the builder origin, and so every line of the journal.
+    // Every command from the builder origin, and so every line of the journal,
+    // but the import of the dropped files, which is the person's ui.
     REQUIRE(summary["commands"].size() > 20);
-    for (const auto& c : summary["commands"]) CHECK(c["origin"] == "builder");
+    for (const auto& c : summary["commands"]) CHECK(c["origin"] == (c["name"] == "data.import" ? "ui" : "builder"));
     std::ifstream journal(ws + "/journal/commands.jsonl");
     std::string line;
     size_t lines = 0;
     while (std::getline(journal, line)) {
         if (line.empty()) continue;
         ++lines;
-        CHECK(json::parse(line)["origin"] == "builder");
+        const json e = json::parse(line);
+        CHECK(e["origin"] == (e["name"] == "data.import" ? "ui" : "builder"));
     }
     CHECK(lines > 20);
 
