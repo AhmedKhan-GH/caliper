@@ -21,7 +21,7 @@
 <p align="center">
   <a href="https://ahmedkhan-gh.github.io/caliper/"><b>Website</b></a> ·
   <a href="https://ahmedkhan-gh.github.io/caliper/docs/">Documentation</a> ·
-  <a href="docs/design/roadmap.md">Roadmap</a> ·
+  <a href="design/roadmap.md">Roadmap</a> ·
   <a href="docs/references/applets.md">Applets</a>
 </p>
 
