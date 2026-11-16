@@ -283,8 +283,11 @@ Caliper uses the following open-source libraries. Their license texts can be fou
 | [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) | Apache 2.0 or MIT | The Khronos Group | Use, modify, and distribute freely provided the license notice is included. |
 | [volk](https://github.com/zeux/volk) | MIT | Arseny Kapoulkine | Use, modify, and distribute freely provided the license notice is included. |
 | [glslang](https://github.com/KhronosGroup/glslang) | BSD 3-Clause (with other permissive licenses for some files) | The Khronos Group and contributors | Use, modify, and distribute freely provided the license notices are included. |
+| [Naga](https://github.com/gfx-rs/wgpu) | MIT or Apache 2.0 | 2025 The gfx-rs developers | Use, modify, and distribute freely provided the license notice is included. |
 | [IBM Plex Sans Condensed](https://github.com/IBM/plex) | SIL OFL 1.1 | 2017 IBM Corp. | Use, embed, and redistribute freely; the font may not be sold on its own. |
 | [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) | SIL OFL 1.1 | 2010, 2012 Adobe Systems Incorporated | Use, embed, and redistribute freely; the font may not be sold on its own. |
+
+Naga, the shader translator, runs only at developer time and in CI's check of its output, through the driver in `tools/shaders/naga-driver/`, which pins Naga 30.0.2 and which cargo builds with Naga's own license files from crates.io. Only its generated output is committed (the MSL and SPIR-V under `src/host/gfx/shaders/generated/`), so building Caliper needs no Rust and no shader tool.
 
 ## Acknowledgments
 
