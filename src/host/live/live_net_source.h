@@ -16,6 +16,18 @@
 // last pixels, series continue from the backfill, and a new session id starts
 // new views. A failure before the first WELCOME is final.
 //
+// WIRE PROTOCOL 3.1. HELLO announces `controls` and `selection`. The network
+// thread keeps the session's latest CONTROLS, its CONTROL_REPLYs, the current
+// SELECTION of every item space and the views' item axes, under the same mutex,
+// and the frame thread reads them through Source's 3.1 seam (controls(),
+// take_control_replies(), selections(), item_axes()). Whether this viewer may
+// control follows the protocol's "Who may control" (control_access()). What
+// the frame thread sends (CONTROL, select events, VIEW_REQUEST) goes into a
+// bounded queue that the network thread drains between polls, so the frame
+// thread never touches the socket and never waits. A select event of a view
+// whose axis indexes an item space gets the event's `space` and `items` here,
+// from the view's offer and the payload axes of the snapshot it shows.
+//
 // THE HAND-OVER (the claim rules of live_source.h). Every method of Source is
 // called on the frame thread. Each view of a texture or points kind owns
 // kSlots shared-storage MTLBuffers on the renderer's device. The network thread

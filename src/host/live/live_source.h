@@ -13,6 +13,7 @@
 #pragma once
 
 #include "caliper/live.h"   // CALIPER_LIVE_PROTOCOL_VERSION
+#include "net/json.h"       // the JSON values of wire protocol 3.1 controls
 
 #include <cstdint>
 #include <memory>
@@ -64,6 +65,61 @@ struct SourceView {
     uint64_t    key = 0;            // stable for the view's lifetime
     std::string name;
     uint32_t    kind = 0;
+};
+
+// ---- wire protocol 3.1: controls and linked selection --------------------------
+// What a producer that takes controls registered, as its latest CONTROLS says
+// (wire protocol v3, "Controls"). Values are JSON scalars as they travel
+// (number, boolean or string); `pending` is null when nothing waits.
+struct ControlParam {
+    std::string name, type, help;             // type: number, integer, boolean, choice
+    caliper_net::Json value, pending;
+    bool has_min = false, has_max = false, log = false;
+    double min = 0.0, max = 0.0;
+    std::vector<std::string> choices;
+};
+struct ControlAction {
+    std::string name, help;
+    bool running = false, queued = false;
+};
+struct Controls {
+    std::string run_state = "none";           // none, running, pausing, paused, stepping
+    bool has_step = false;
+    uint64_t step = 0, steps_left = 0;
+    std::vector<ControlParam> params;
+    std::vector<ControlAction> actions;
+    uint64_t version = 0;                     // grows with every CONTROLS received
+};
+// Whether this viewer may send CONTROL, by the protocol's "Who may control":
+// the server announced `controls` and set WELCOME's `control`, the attached
+// session lists `controls` and is live. `why` says what is missing.
+struct ControlAccess {
+    bool allowed = false;
+    std::string why;
+};
+// One CONTROL_REPLY, with the request id that send_control returned.
+struct ControlReply {
+    uint32_t request_id = 0;
+    std::string op, status, name;             // status: ok, queued, error
+    caliper_net::Json value;                  // set with ok: the accepted value
+    std::string message;                      // run with ok: the action's result text
+    std::string error_code, error_message;    // status error
+    uint64_t controls_version = 0;            // Controls::version when it arrived
+};
+// The current selection of one item space (SELECTION), with its details.
+struct LinkedSelection {
+    std::string space, view;                  // view: "" when the script set it
+    std::vector<uint64_t> items;              // ascending item ids; empty: nothing selected
+    bool truncated = false;
+    caliper_net::Json details;                // {"fields", "items", "values"}, null when none
+    std::string details_error;
+    uint64_t seq = 0;                         // arrival order among all selections
+};
+// Which axes of a view index the items of a space (VIEWS: `items` on a source
+// dim or on a series view), for the highlight of a linked selection.
+struct ItemAxis {
+    std::string view, source, dim;            // dim "" with source "": a series' own index
+    std::string space;
 };
 
 // THE CONTRACT (an in-process Source implements exactly this).
@@ -122,7 +178,8 @@ public:
 
     // ---- outbound: what the viewer tells the producer ------------------------
     // A Source that cannot send keeps these defaults (the shared-memory session
-    // has no channel back). Both are called on the frame thread.
+    // has no channel back). Both are called on the frame thread and never wait:
+    // a network source queues what it sends.
     //
     // What a person did in view `key` (the view layer's event sink, caliper_
     // live_views::set_event_sink): `type` is "select", "pick" or "hover" and
@@ -139,6 +196,37 @@ public:
     virtual bool request_data_view(uint64_t key, const std::string& data_view_json, std::string* err) {
         (void)key; (void)data_view_json;
         if (err) *err = "this source cannot request data views";
+        return false;
+    }
+
+    // ---- wire protocol 3.1 (frame thread) -------------------------------------
+    // A Source without a channel back, or a producer of 3.0, keeps these
+    // defaults: no controls and no linked selection.
+    //
+    // The latest CONTROLS: false (and *out left alone) when none has arrived
+    // for the attached session.
+    virtual bool controls(Controls* out) { (void)out; return false; }
+    virtual ControlAccess control_access() { return {false, "this stream takes no controls"}; }
+    // Sends CONTROL `op` (pause, resume, step, set, run) for parameter or action
+    // `name` with `value` (set) or `count` (step). Returns the request id its
+    // CONTROL_REPLY will carry, 0 with *err when it was not sent.
+    virtual uint32_t send_control(const std::string& op, const std::string& name,
+                                  const caliper_net::Json& value, uint32_t count, std::string* err) {
+        (void)op; (void)name; (void)value; (void)count;
+        if (err) *err = "this stream takes no controls";
+        return 0;
+    }
+    // The CONTROL_REPLYs received since the last call, oldest first.
+    virtual std::vector<ControlReply> take_control_replies() { return {}; }
+    // The current selection of every item space and a version that grows with
+    // every change; 0 when none ever arrived.
+    virtual uint64_t selections(std::vector<LinkedSelection>* out) { (void)out; return 0; }
+    // The views' axes that index item spaces.
+    virtual std::vector<ItemAxis> item_axes() { return {}; }
+    // The resolved data view and the offer (VIEWS entry) of view `key`, as JSON
+    // objects; false when unknown.
+    virtual bool data_view_of(uint64_t key, caliper_net::Json* resolved, caliper_net::Json* offer) {
+        (void)key; (void)resolved; (void)offer;
         return false;
     }
 };

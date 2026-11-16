@@ -79,6 +79,93 @@ struct Slot {
     id<MTLBuffer> buf = nil;
     uint64_t      cap = 0;
     SlotMeta      meta;
+    PayloadMap    map;      // the snapshot's payload axes (Snapshot::map points here while claimed)
+};
+
+std::string str_or(const Json* j, const char* fallback) {
+    return j && j->is_string() ? j->as_string() : std::string(fallback);
+}
+int64_t int_or(const Json* j, int64_t fallback) {
+    int64_t v = 0;
+    return j && j->get_i64(&v) ? v : fallback;
+}
+
+// A snapshot's axes and tile (wire protocol v3, "Payload axes").
+PayloadMap payload_map(const Json& axes, const Json& tile) {
+    PayloadMap m;
+    if (axes.is_array())
+        for (size_t i = 0; i < axes.size(); ++i) {
+            const Json& a = axes.at(i);
+            if (!a.is_object()) continue;
+            PayloadAxis ax;
+            ax.dim = str_or(a.find("dim"), "");
+            ax.start = int_or(a.find("start"), 0);
+            ax.step = int_or(a.find("step"), 1);
+            ax.count = int_or(a.find("count"), 0);
+            ax.size = int_or(a.find("size"), 0);
+            m.axes.push_back(std::move(ax));
+        }
+    if (tile.is_object()) {
+        m.tile_rows = int_or(tile.find("rows"), 0);
+        m.tile_cols = int_or(tile.find("cols"), 0);
+    }
+    return m;
+}
+
+bool has_cap(const std::vector<std::string>& caps, const char* cap) {
+    return std::find(caps.begin(), caps.end(), cap) != caps.end();
+}
+
+// CONTROLS as the frame thread reads it (wire protocol 3.1, "controls").
+Controls parse_controls(const wire::Controls& c) {
+    Controls out;
+    out.run_state = str_or(c.run.find("state"), CALIPER_NET_RUN_NONE);
+    uint64_t u = 0;
+    if (const Json* st = c.run.find("step"); st && st->get_u64(&u)) {
+        out.has_step = true;
+        out.step = u;
+    }
+    if (const Json* sl = c.run.find("steps_left"); sl && sl->get_u64(&u)) out.steps_left = u;
+    for (const Json& p : c.params.items()) {
+        ControlParam cp;
+        cp.name = str_or(p.find("name"), "");
+        cp.type = str_or(p.find("type"), "");
+        cp.help = str_or(p.find("help"), "");
+        if (const Json* v = p.find("value")) cp.value = *v;
+        if (const Json* v = p.find("pending")) cp.pending = *v;
+        if (const Json* v = p.find("min"); v && v->is_number()) {
+            cp.has_min = true;
+            cp.min = v->as_double();
+        }
+        if (const Json* v = p.find("max"); v && v->is_number()) {
+            cp.has_max = true;
+            cp.max = v->as_double();
+        }
+        if (const Json* v = p.find("log"); v && v->is_bool()) cp.log = v->as_bool();
+        if (const Json* ch = p.find("choices"); ch && ch->is_array())
+            for (const Json& x : ch->items())
+                if (x.is_string()) cp.choices.push_back(x.as_string());
+        out.params.push_back(std::move(cp));
+    }
+    for (const Json& a : c.actions.items()) {
+        ControlAction ca;
+        ca.name = str_or(a.find("name"), "");
+        ca.help = str_or(a.find("help"), "");
+        if (const Json* v = a.find("running"); v && v->is_bool()) ca.running = v->as_bool();
+        if (const Json* v = a.find("queued"); v && v->is_bool()) ca.queued = v->as_bool();
+        out.actions.push_back(std::move(ca));
+    }
+    return out;
+}
+
+// What the frame thread asks the network thread to send (the network thread
+// owns the socket and the subscriptions, and fills in what only it knows).
+struct Outgoing {
+    enum class Kind { Control, Event, ViewRequest } kind = Kind::Control;
+    wire::Control control;
+    uint64_t key = 0;          // Event, ViewRequest: the view
+    std::string type;          // Event
+    Json body;                 // Event: detail; ViewRequest: the data view
 };
 
 struct SeriesDelta {
@@ -97,6 +184,12 @@ struct NetView {
     uint32_t sub = 0;
     bool     subscribed = false;
     uint64_t last_producer_seq = 0;
+    Json     shown_data_view;      // the data view of the newest snapshot (events name it)
+    Json     shown_axes = Json::array(), shown_tile;   // and its payload axes (select events)
+
+    // Guarded by NetSourceImpl::mu_ (3.1 and data views).
+    Json     offer;                // the view's VIEWS entry
+    Json     resolved;             // the data view its subscription resolved to
 
     // Guarded by NetSourceImpl::mu_.
     Slot     slot[NetSource::kSlots];
@@ -197,6 +290,110 @@ public:
         return v->dropped;
     }
 
+    // ---- outbound and wire protocol 3.1 (frame thread) -------------------------------------
+    // The frame thread never touches the socket: it queues what to send and
+    // wakes the network thread, which sends it in order between its polls.
+    bool send_event(uint64_t key, const std::string& type, const std::string& detail_json) override {
+        if (!find(key)) return false;
+        Json detail;
+        if (!Json::parse(detail_json.data(), detail_json.size(), &detail, nullptr) || !detail.is_object())
+            return false;
+        Outgoing o;
+        o.kind = Outgoing::Kind::Event;
+        o.key = key;
+        o.type = type;
+        o.body = std::move(detail);
+        return enqueue(std::move(o));
+    }
+
+    bool request_data_view(uint64_t key, const std::string& data_view_json, std::string* err) override {
+        if (!find(key)) {
+            if (err) *err = "no such view";
+            return false;
+        }
+        Json dv;
+        std::string perr;
+        if (!Json::parse(data_view_json.data(), data_view_json.size(), &dv, &perr) || !dv.is_object()) {
+            if (err) *err = "the data view must be a JSON object" + (perr.empty() ? "" : " (" + perr + ")");
+            return false;
+        }
+        Outgoing o;
+        o.kind = Outgoing::Kind::ViewRequest;
+        o.key = key;
+        o.body = std::move(dv);
+        if (!enqueue(std::move(o))) {
+            if (err) *err = "too many requests wait to be sent";
+            return false;
+        }
+        return true;
+    }
+
+    bool controls(Controls* out) override {
+        std::lock_guard<std::mutex> g(mu_);
+        if (!have_controls_) return false;
+        *out = controls_;
+        return true;
+    }
+
+    ControlAccess control_access() override {
+        std::lock_guard<std::mutex> g(mu_);
+        return access_locked();
+    }
+
+    uint32_t send_control(const std::string& op, const std::string& name, const Json& value, uint32_t count,
+                          std::string* err) override {
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            const ControlAccess a = access_locked();
+            if (!a.allowed) {
+                if (err) *err = a.why;
+                return 0;
+            }
+        }
+        Outgoing o;
+        o.kind = Outgoing::Kind::Control;
+        o.control.request_id = next_control_id_++;
+        if (o.control.request_id == 0) o.control.request_id = next_control_id_++;
+        o.control.op = op;
+        if (op == CALIPER_NET_OP_SET || op == CALIPER_NET_OP_RUN) o.control.name = name;
+        if (op == CALIPER_NET_OP_SET) o.control.value = value;
+        if (op == CALIPER_NET_OP_STEP && count > 0) o.control.count = count;
+        const uint32_t id = o.control.request_id;
+        if (!enqueue(std::move(o))) {
+            if (err) *err = "too many controls wait to be sent";
+            return 0;
+        }
+        return id;
+    }
+
+    std::vector<ControlReply> take_control_replies() override {
+        std::lock_guard<std::mutex> g(mu_);
+        std::vector<ControlReply> out(replies_.begin(), replies_.end());
+        replies_.clear();
+        return out;
+    }
+
+    uint64_t selections(std::vector<LinkedSelection>* out) override {
+        std::lock_guard<std::mutex> g(mu_);
+        out->clear();
+        for (const auto& kv : selections_) out->push_back(kv.second);
+        return sel_version_;
+    }
+
+    std::vector<ItemAxis> item_axes() override {
+        std::lock_guard<std::mutex> g(mu_);
+        return item_axes_;
+    }
+
+    bool data_view_of(uint64_t key, Json* resolved, Json* offer) override {
+        NetView* v = find(key);
+        if (!v) return false;
+        std::lock_guard<std::mutex> g(mu_);
+        if (resolved) *resolved = v->resolved;
+        if (offer) *offer = v->offer;
+        return true;
+    }
+
     // ---- NetSource ------------------------------------------------------------------------
     Ready wait_ready(int timeout_ms, std::string* err) override {
         std::unique_lock<std::mutex> g(mu_);
@@ -221,6 +418,38 @@ public:
     }
 
 private:
+    // ---- 3.1 helpers -----------------------------------------------------------------------------
+    static constexpr size_t kMaxOutgoing = 1024;   // queued for the network thread
+    static constexpr size_t kMaxReplies = 256;     // CONTROL_REPLYs the frame thread has not read
+
+    bool enqueue(Outgoing o) {
+        {
+            std::lock_guard<std::mutex> g(out_mu_);
+            if (outbox_.size() >= kMaxOutgoing) return false;
+            outbox_.push_back(std::move(o));
+        }
+        client_->wake();
+        return true;
+    }
+
+    // Who may control (wire protocol 3.1, "Who may control"); mu_ held.
+    ControlAccess access_locked() const {
+        if (failed_ || !connected_ || !attached_) return {false, "not attached to a session"};
+        if (ended_) return {false, "the session has ended"};
+        if (!server_controls_) return {false, "the server takes no controls (wire protocol 3.0)"};
+        if (!welcome_control_)
+            return {false, "the server does not let this viewer control (a hub needs --allow-control)"};
+        if (!has_cap(session_caps_, CALIPER_NET_CAP_CONTROLS)) return {false, "the script takes no controls"};
+        return {true, ""};
+    }
+
+    void push_reply(ControlReply r) {
+        std::lock_guard<std::mutex> g(mu_);
+        r.controls_version = controls_.version;
+        if (replies_.size() >= kMaxReplies) replies_.pop_front();
+        replies_.push_back(std::move(r));
+    }
+
     // ---- frame thread helpers ------------------------------------------------------------------
     NetView* find(uint64_t key) {
         for (auto& v : frame_views_)
@@ -251,6 +480,7 @@ private:
         out->slot = index;
         out->seq = m.seq;
         out->stamp_ns = m.stamp_ns;
+        out->map = s.map.axes.empty() ? nullptr : &s.map;
     }
 
     // Applies the queued deltas to the view's ring (frame thread only) and hands
@@ -354,10 +584,10 @@ private:
                 switch (e.type) {
                     case caliper_net::Event::Type::Open: {
                         open = true;
-                        // No capabilities: this source implements neither the
-                        // controls nor the linked selection of 3.1.
+                        // 3.1: it shows controls and draws linked selections.
                         wire::Hello h;
                         h.role = CALIPER_NET_ROLE_VIEWER;
+                        h.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION};
                         Json sw = Json::object();
                         sw.set("name", "caliper-app");
                         sw.set("version", caliper_host::kHostVersionStr);
@@ -386,6 +616,7 @@ private:
                         break;
                 }
             }
+            drain_outbox();
             // Timers: the handshake, the protocol's ping and idle rules.
             const uint64_t now = monotonic_ms();
             if (open && !welcomed_ && hello_ms && now - hello_ms > CALIPER_NET_HANDSHAKE_TIMEOUT_MS) {
@@ -503,12 +734,9 @@ private:
         else if (auto* er = std::get_if<wire::Error>(&m)) on_error(*er);
         else if (auto* b = std::get_if<wire::Bye>(&m)) on_bye(*b);
         else if (std::holds_alternative<wire::Unknown>(m)) {}
-        // 3.1: this source announces neither `controls` nor `selection` in its
-        // HELLO, so a server sends it no CONTROLS, CONTROL_REPLY or SELECTION.
-        // One that does anyway is tolerated and ignored; showing run state,
-        // parameters, actions and linked selections needs the capabilities.
-        else if (std::holds_alternative<wire::Controls>(m) || std::holds_alternative<wire::ControlReply>(m) ||
-                 std::holds_alternative<wire::Selection>(m)) {}
+        else if (auto* c = std::get_if<wire::Controls>(&m)) on_controls(*c);
+        else if (auto* cr = std::get_if<wire::ControlReply>(&m)) on_control_reply(*cr);
+        else if (auto* sel = std::get_if<wire::Selection>(&m)) on_selection(*sel);
         else protocol_error(std::string("'") + wire::type_name(type) + "' sent to a viewer");
     }
 
@@ -516,6 +744,220 @@ private:
         welcomed_ = true;
         wire::Identity id;
         if (wire::Identity::parse(w.session, &id)) remember_identity(id);
+        std::lock_guard<std::mutex> g(mu_);
+        server_controls_ = has_cap(w.capabilities, CALIPER_NET_CAP_CONTROLS);
+        server_selection_ = has_cap(w.capabilities, CALIPER_NET_CAP_SELECTION);
+        welcome_control_ = w.control.value_or(false);
+        // A server that is itself the producer (caliper.serve()) names its own
+        // capabilities; a hub's session list names the session's.
+        if (w.role == CALIPER_NET_ROLE_PRODUCER) session_caps_ = w.capabilities;
+    }
+
+    // ---- 3.1 (network thread) --------------------------------------------------------------
+    void on_controls(const wire::Controls& c) {
+        Controls parsed = parse_controls(c);
+        std::lock_guard<std::mutex> g(mu_);
+        parsed.version = controls_.version + 1;
+        controls_ = std::move(parsed);
+        have_controls_ = true;
+    }
+
+    void on_control_reply(const wire::ControlReply& r) {
+        ControlReply out;
+        out.request_id = r.request_id;
+        out.op = r.op;
+        out.status = r.status;
+        out.name = r.name.value_or("");
+        out.value = r.value;
+        out.message = r.message.value_or("");
+        if (!r.error.is_null()) {
+            out.error_code = str_or(r.error.find("code"), "");
+            out.error_message = str_or(r.error.find("message"), "");
+        }
+        push_reply(std::move(out));
+    }
+
+    void on_selection(const wire::Selection& s) {
+        LinkedSelection out;
+        out.space = s.space;
+        out.view = s.view.value_or("");
+        for (const Json& x : s.items.items()) {
+            uint64_t u = 0;
+            if (x.get_u64(&u)) out.items.push_back(u);
+        }
+        out.truncated = s.truncated;
+        out.details = s.details;
+        out.details_error = s.details_error.value_or("");
+        std::lock_guard<std::mutex> g(mu_);
+        if (selections_.size() >= CALIPER_NET_MAX_ITEM_SPACES && !selections_.count(s.space)) return;
+        out.seq = ++sel_version_;
+        selections_[s.space] = std::move(out);
+    }
+
+    // What the frame thread queued, sent in order. Without an attached session
+    // a CONTROL is answered here, as the server would, so no request waits.
+    void drain_outbox() {
+        std::deque<Outgoing> out;
+        {
+            std::lock_guard<std::mutex> g(out_mu_);
+            out.swap(outbox_);
+        }
+        const bool ready = welcomed_ && !session_id_.empty() && client_->state() == Client::State::Open;
+        for (Outgoing& o : out) {
+            switch (o.kind) {
+                case Outgoing::Kind::Control: {
+                    if (!ready) {
+                        ControlReply r;
+                        r.request_id = o.control.request_id;
+                        r.op = o.control.op;
+                        r.status = CALIPER_NET_STATUS_ERROR;
+                        r.name = o.control.name.value_or("");
+                        r.error_code = CALIPER_NET_ERR_NOT_ATTACHED;
+                        r.error_message = "the stream is not attached to a session";
+                        push_reply(std::move(r));
+                        break;
+                    }
+                    send(o.control);
+                    break;
+                }
+                case Outgoing::Kind::Event: {
+                    std::shared_ptr<NetView> v = view_by_key(o.key);
+                    if (!ready || !v || !v->subscribed) break;
+                    wire::Event e;
+                    e.view = v->name;
+                    e.type = o.type;
+                    e.detail = std::move(o.body);
+                    if (server_selection_ && e.type == "select") add_items(*v, &e.detail);
+                    e.sub = v->sub;
+                    if (v->last_producer_seq) e.seq = v->last_producer_seq;
+                    if (v->shown_data_view.is_object()) e.data_view = v->shown_data_view;
+                    send(e);
+                    break;
+                }
+                case Outgoing::Kind::ViewRequest: {
+                    std::shared_ptr<NetView> v = view_by_key(o.key);
+                    if (!ready || !v || !v->subscribed) break;
+                    wire::ViewRequest r;
+                    r.request_id = next_request_++;
+                    r.sub = v->sub;
+                    r.view = v->name;
+                    r.data_view = std::move(o.body);
+                    send(r);
+                    break;
+                }
+            }
+        }
+    }
+
+    // ---- 3.1 "Selecting" (network thread) ----------------------------------------------------
+    // The item space of dim `dim` of the source `source` ("" the first) in the
+    // view's offer, "" when the dim has none. With `dim` "", the last dim (the
+    // point dim of a points source).
+    static std::string dim_space(const NetView& v, const std::string& source, const std::string& dim) {
+        const Json* srcs = v.offer.find("sources");
+        if (!srcs || !srcs->is_array()) return "";
+        for (const Json& s : srcs->items()) {
+            if (!source.empty() && str_or(s.find("name"), "") != source) continue;
+            const Json* dims = s.find("dims");
+            if (!dims || !dims->is_array() || dims->size() == 0) return "";
+            if (dim.empty()) return str_or(dims->at(dims->size() - 1).find("items"), "");
+            for (const Json& d : dims->items())
+                if (str_or(d.find("name"), "") == dim) return str_or(d.find("items"), "");
+            return "";
+        }
+        return "";
+    }
+
+    // The keys `space`, `items` and `truncated` of a select event, from the
+    // view's item spaces and the payload axes of the snapshot it shows: the
+    // row_ids of points, the source rows (else columns) of a heatmap or an
+    // image, the steps of a series. A select that clears ("{}") clears the
+    // view's space. A view without an item space keeps its detail unchanged.
+    static void add_items(const NetView& v, Json* detail) {
+        const std::string source = str_or(v.shown_data_view.find("source"), "");
+        std::string space;
+        std::vector<uint64_t> items;
+        bool truncated = false;
+        const size_t kMax = CALIPER_NET_MAX_EVENT_INDICES;
+        auto take_range = [&](int64_t a, int64_t b, int64_t step) {
+            if (step <= 0) step = 1;
+            for (int64_t i = std::max<int64_t>(a, 0); i < b; i += step) {
+                if (items.size() >= kMax) {
+                    truncated = true;
+                    break;
+                }
+                items.push_back((uint64_t)i);
+            }
+        };
+        auto pair_of = [](const Json* p, int64_t* a, int64_t* b) {
+            return p && p->is_array() && p->size() == 2 && p->at(0).get_i64(a) && p->at(1).get_i64(b);
+        };
+        int64_t a = 0, b = 0;
+        if (v.kind == CALIPER_NET_KIND_SERIES) {
+            space = str_or(v.offer.find("items"), "");
+            if (pair_of(detail->find("steps"), &a, &b)) take_range(a, b, 1);
+        } else if (v.kind == CALIPER_NET_KIND_POINTS) {
+            space = dim_space(v, source, "");
+            if (const Json* ids = detail->find("row_ids"); ids && ids->is_array())
+                for (const Json& x : ids->items()) {
+                    uint64_t u = 0;
+                    if (!x.get_u64(&u)) continue;
+                    if (items.size() >= kMax) {
+                        truncated = true;
+                        break;
+                    }
+                    items.push_back(u);
+                }
+            std::sort(items.begin(), items.end());
+            items.erase(std::unique(items.begin(), items.end()), items.end());
+            if (const Json* t = detail->find("truncated"); t && t->is_bool() && t->as_bool()) truncated = true;
+        } else if (v.kind == CALIPER_NET_KIND_HEATMAP || v.kind == CALIPER_NET_KIND_IMAGE) {
+            // The axes as the view layer reads them: tile, rows, columns for a
+            // mosaic, else rows and columns.
+            const Json& ax = v.shown_axes;
+            const bool mosaic = v.shown_tile.is_object() && ax.is_array() && ax.size() == 3;
+            const size_t ri = mosaic ? 1 : 0, ci = mosaic ? 2 : 1;
+            const std::string row_dim = ax.is_array() && ax.size() > ri ? str_or(ax.at(ri).find("dim"), "") : "";
+            const std::string col_dim = ax.is_array() && ax.size() > ci ? str_or(ax.at(ci).find("dim"), "") : "";
+            const std::string row_space = row_dim.empty() ? "" : dim_space(v, source, row_dim);
+            const std::string col_space = col_dim.empty() ? "" : dim_space(v, source, col_dim);
+            const bool rows = !row_space.empty();
+            space = rows ? row_space : col_space;
+            const Json* range = detail->find(rows ? "rows" : "cols");
+            const int64_t step = int_or(ax.is_array() && ax.size() > (rows ? ri : ci)
+                                            ? ax.at(rows ? ri : ci).find("step") : nullptr, 1);
+            if (!space.empty() && pair_of(range, &a, &b)) take_range(a, b, step);
+        }
+        if (space.empty()) return;
+        detail->set("space", space);
+        Json arr = Json::array();
+        for (uint64_t i : items) arr.push(i);
+        detail->set("items", arr);
+        if (truncated) detail->set("truncated", true);
+    }
+
+    std::shared_ptr<NetView> view_by_key(uint64_t key) {
+        std::lock_guard<std::mutex> g(mu_);
+        for (const auto& v : views_)
+            if (v->key == key) return v;
+        return nullptr;
+    }
+
+    // The attached session's capabilities, from a hub's session list.
+    void note_session_caps() {
+        if (session_id_.empty()) return;
+        for (const Json& e : sessions_json_.items()) {
+            const Json* id = e.find("id");
+            if (!id || !id->is_string() || id->as_string() != session_id_) continue;
+            // An entry without the key keeps what WELCOME said (a producer's own).
+            const Json* c = e.find("capabilities");
+            if (!c || !c->is_array()) continue;
+            std::vector<std::string> caps;
+            for (const Json& x : c->items())
+                if (x.is_string()) caps.push_back(x.as_string());
+            std::lock_guard<std::mutex> g(mu_);
+            session_caps_ = std::move(caps);
+        }
     }
 
     void remember_identity(const wire::Identity& id) {
@@ -538,6 +980,7 @@ private:
 
     void on_sessions(const wire::Sessions& s) {
         sessions_ = s.list;
+        sessions_json_ = s.sessions;
         const std::string& want = url_.session;
         if (!want.empty()) {
             const auto it = std::find_if(sessions_.begin(), sessions_.end(),
@@ -556,23 +999,40 @@ private:
                 set_problem("the server holds " + std::to_string(live) +
                             " live sessions; name one with session=<id> in the link");
         }
-        // The attached session's state and identity.
+        // The attached session's state, identity and capabilities.
         for (const auto& x : sessions_) {
             if (x.identity.id != session_id_ || session_id_.empty()) continue;
             remember_identity(x.identity);
             std::lock_guard<std::mutex> g(mu_);
             ended_ = x.state == CALIPER_NET_SESSION_ENDED;
         }
+        note_session_caps();
+    }
+
+    // A viewer drops its controls and selections when VIEWS names another
+    // session or none (wire protocol 3.1).
+    void forget_session_state() {
+        std::lock_guard<std::mutex> g(mu_);
+        have_controls_ = false;
+        const uint64_t version = controls_.version + 1;
+        controls_ = Controls{};
+        controls_.version = version;
+        if (!selections_.empty()) ++sel_version_;
+        selections_.clear();
+        item_axes_.clear();
     }
 
     void on_views(const wire::Views& v) {
         if (!v.session) {   // detached: the views keep their last pixels
             session_id_.clear();
+            forget_session_state();
             std::lock_guard<std::mutex> g(mu_);
             attached_ = false;
             return;
         }
+        if (!views_session_.empty() && views_session_ != *v.session) forget_session_state();
         session_id_ = *v.session;
+        note_session_caps();
         session_seen_on_connection_ = true;
         bool live = true;
         for (const auto& x : sessions_)
@@ -604,8 +1064,23 @@ private:
             const bool still = std::find(next.begin(), next.end(), it->second) != next.end();
             it = still ? std::next(it) : by_sub_.erase(it);
         }
+        // The views' offers and item spaces (3.1).
+        std::vector<ItemAxis> axes;
+        for (size_t i = 0; i < v.list.size() && i < v.views.size(); ++i) {
+            const Json& entry = v.views.at(i);
+            const std::string& name = v.list[i].name;
+            if (const Json* it = entry.find("items"); it && it->is_string())
+                axes.push_back({name, "", "", it->as_string()});
+            for (const wire::SourceInfo& src : v.list[i].sources)
+                for (const wire::DimInfo& d : src.dims)
+                    if (!d.items.empty()) axes.push_back({name, src.name, d.name, d.items});
+        }
         {
             std::lock_guard<std::mutex> g(mu_);
+            for (const auto& view : next)
+                for (size_t i = 0; i < v.list.size() && i < v.views.size(); ++i)
+                    if (v.list[i].name == view->name) view->offer = v.views.at(i);
+            item_axes_ = std::move(axes);
             views_ = next;
             ++views_gen_;
             attached_ = true;
@@ -629,7 +1104,14 @@ private:
     }
 
     void on_view_reply(const wire::ViewReply& r) {
-        if (r.error.is_null()) return;
+        if (r.error.is_null()) {
+            const auto it = by_sub_.find(r.sub);
+            if (it != by_sub_.end()) {
+                std::lock_guard<std::mutex> g(mu_);
+                it->second->resolved = r.data_view;
+            }
+            return;
+        }
         const Json* code = r.error.find("code");
         const Json* msg = r.error.find("message");
         set_problem("view '" + r.view + "': " + (code ? code->as_string() : "?") +
@@ -740,6 +1222,10 @@ private:
         float* stats = (float*)(base + m.stats_offset);
         for (size_t i = 0; i < kStatsFloats; ++i) stats[i] = i < s.stats.size() ? (float)s.stats[i] : NAN;
 
+        slot.map = payload_map(s.axes, s.tile);
+        v.shown_data_view = s.data_view;
+        v.shown_axes = s.axes;
+        v.shown_tile = s.tile;
         std::lock_guard<std::mutex> g(mu_);
         if (v.last_producer_seq && s.seq > v.last_producer_seq + 1) v.dropped += s.seq - v.last_producer_seq - 1;
         v.last_producer_seq = s.seq;
@@ -790,6 +1276,19 @@ private:
     uint64_t start_ms_ = 0;
     int32_t pid_ = 0;
     bool connected_ = false, attached_ = false, ever_attached_ = false, ended_ = false, failed_ = false;
+    // 3.1, guarded by mu_.
+    bool server_controls_ = false, welcome_control_ = false, have_controls_ = false;
+    bool server_selection_ = false;   // network thread only after WELCOME
+    std::vector<std::string> session_caps_;
+    Controls controls_;
+    std::deque<ControlReply> replies_;
+    std::map<std::string, LinkedSelection> selections_;
+    uint64_t sel_version_ = 0;
+    std::vector<ItemAxis> item_axes_;
+    // The frame thread's requests for the network thread.
+    std::mutex out_mu_;
+    std::deque<Outgoing> outbox_;
+    std::atomic<uint32_t> next_control_id_{1};
 
     // Frame thread only.
     uint64_t seen_gen_ = UINT64_MAX;
@@ -798,6 +1297,7 @@ private:
     // Network thread only.
     std::map<uint32_t, std::shared_ptr<NetView>> by_sub_;
     std::vector<wire::SessionInfo> sessions_;
+    Json sessions_json_ = Json::array();   // the same list as sent, for the capabilities
     std::string session_id_;        // attached on this connection ("" = not attached)
     std::string views_session_;     // the session the views belong to (kept across reconnects)
     std::string bye_reason_;

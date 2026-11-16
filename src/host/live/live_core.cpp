@@ -30,9 +30,11 @@
 
 #include "embed/embed_core.h"
 #include "live/live_attach.h"   // the session-row text the picker shares with the app
+#include "live/live_controls.h"
 #include "live/live_net_source.h"
 #include "live/live_shm.h"
 #include "live/live_source.h"
+#include "live/live_views_state.h"   // the event sink and the payload maps of a stream's views
 
 #include <imgui.h>
 
@@ -85,6 +87,7 @@ struct CaliperLiveState {
     std::string             pending_why;
     caliper_live::NetSource* net = nullptr;  // the source, when it is a network stream (attach_url)
     std::string             net_problem;     // its last problem() (logged when it changes)
+    caliper_live::RunControls controls;      // a stream's controls and selections (wire protocol 3.1)
 
     struct View {
         uint64_t    key = 0;
@@ -151,6 +154,8 @@ void remove_view(CaliperCore* core, View& v) {
 // Back to "not attached": views, source (unmaps; clears the heartbeat and the
 // claims), counters. The picker settings survive.
 void teardown_attached(CaliperCore* core, CaliperLiveState* L) {
+    // A stream's views stop reporting selections (the sink would find no source).
+    if (L->net && core->live_views) caliper_live_views::set_event_sink(core, {});
     for (auto& v : L->views) remove_view(core, v);   // releases the imports, bridge still bound
     L->views.clear();
     L->source.reset();   // MTLBuffer deallocators unmap once the GPU let go
@@ -312,6 +317,8 @@ bool apply_typed(CaliperCore* core, View& v, const Snapshot& s) {
         v.error = caliper_core_last_error(core);
         return false;
     }
+    // How the payload maps onto the source, so a selection names source indices.
+    caliper_live_views::set_payload_map(core, v.name.c_str(), s.map ? *s.map : caliper_live::PayloadMap{});
     return true;
 }
 
@@ -466,6 +473,18 @@ int attach_url_impl(CaliperCore* core, const std::string& url) {
     L->start_ms = L->source->start_unix_ms();
     L->client_alive = L->source->producer_alive();
     L->window_t0 = L->fps_t0 = caliper_live::now_ns();
+    // What people do in the views (select, pick, hover) goes to the producer,
+    // which shares a selection with every viewer (wire protocol 3.1). A
+    // header toggle is the page's own and stays here.
+    caliper_live_views::set_event_sink(core, [core](const caliper_live_views::LiveEvent& e) {
+        CaliperLiveState* S = core->live;
+        if (!S || !S->net || !S->source || std::strcmp(e.type, "toggle") == 0) return;
+        for (const auto& v : S->views)
+            if (v.name == e.view) {
+                S->source->send_event(v.key, e.type, e.detail);
+                return;
+            }
+    });
     core->log(1, "live: attached to the stream of session '" + L->session + "'" +
                      (L->pending ? " (waiting for a session)" : ""));
     core->last_error.clear();
@@ -511,6 +530,7 @@ int poll_attached(CaliperCore* core, CaliperLiveState* L) {
             if (!problem.empty()) core->log(1, "live: " + problem);
             L->net_problem = std::move(problem);
         }
+        L->controls.update(L->source.get(), caliper_live::now_ns());
     }
 
     std::vector<SourceView> now;
@@ -664,6 +684,14 @@ void draw_status(CaliperCore* core, CaliperLiveState* L, float lw, float lh) {
                         kind_name(v.kind), (unsigned long long)v.seq, v.latency_ms_last,
                         (unsigned long long)(L->source ? L->source->producer_dropped(v.key) : 0),
                         v.error.empty() ? "" : "  ERROR: ", v.error.c_str());
+        }
+        if (L->net) {
+            // Wire protocol 3.1: the run bar and the selection's details.
+            ImGui::Separator();
+            const caliper_live::ControlsLook look;
+            caliper_live::draw_run_bar(L->controls, look, ImGui::GetContentRegionAvail().x);
+            caliper_live::draw_selection_details(L->controls, look);
+            ImGui::Separator();
         }
         if (ImGui::Button("Detach")) L->detach_requested = true;
         ImGui::SameLine();
@@ -895,8 +923,29 @@ void caliper_live_frame(CaliperCore* core) {
 
     const float lw = (float)core->canvas_w / core->scale;
     const float lh = (float)core->canvas_h / core->scale;
-    if (L->attached) draw_status(core, L, lw, lh);
-    else if (L->picker_enabled) draw_picker(core, L, lw, lh);
+    if (L->attached) {
+        draw_status(core, L, lw, lh);
+        if (L->net) caliper_live::draw_linked_selection(core, L->controls, caliper_live::ControlsLook{});
+    } else if (L->picker_enabled) {
+        draw_picker(core, L, lw, lh);
+    }
+}
+
+caliper_live::RunControls* caliper_live_controls(CaliperCore* core) {
+    if (!core || !core->live || !core->live->attached || !core->live->net) return nullptr;
+    return &core->live->controls;
+}
+
+caliper_live::Source* caliper_live_stream(CaliperCore* core) {
+    if (!core || !core->live || !core->live->attached || !core->live->net) return nullptr;
+    return core->live->source.get();
+}
+
+uint64_t caliper_live_view_key(CaliperCore* core, const char* name) {
+    if (!core || !core->live || !name) return 0;
+    for (const auto& v : core->live->views)
+        if (v.name == name) return v.key;
+    return 0;
 }
 
 // Called by caliper_core_shutdown before the v1.2 views are destroyed (the

@@ -147,6 +147,8 @@ int Attachment::poll() {
     return n < 0 ? 0 : n;
 }
 
+RunControls* Attachment::controls() const { return core_ ? caliper_live_controls(core_) : nullptr; }
+
 void Attachment::draw(float x, float y, float w, float h, float scale) {
     if (core_) caliper_core_hosted_frame(core_, x, y, w, h, scale);
 }

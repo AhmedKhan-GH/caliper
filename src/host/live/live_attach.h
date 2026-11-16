@@ -33,6 +33,8 @@ namespace caliper_host { class HostRenderer; }
 
 namespace caliper_live {
 
+class RunControls;
+
 // The state column of a session row: "running", "starting", "closing",
 // "viewed by <pid>", "protocol v<n>".
 std::string state_text(const SessionEntry& e);
@@ -129,6 +131,9 @@ public:
     // The hosted core (tests and diagnostics: the caliper_core_live_view_*
     // probes); null when not attached.
     CaliperCore* core() const { return core_; }
+    // A network stream's controls and selections (wire protocol 3.1,
+    // live_controls.h), updated by poll(); null when not attached to a stream.
+    RunControls* controls() const;
 
 private:
     void refresh_status(bool reset_window);

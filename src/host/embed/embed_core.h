@@ -149,6 +149,15 @@ void caliper_embed_views_destroy_all(CaliperCore* core);
 // the bridge still has its renderer.
 void caliper_live_frame(CaliperCore* core);
 void caliper_live_shutdown(CaliperCore* core);
+// The attached stream's wire protocol 3.1 state (live_controls.h) and its
+// source, for a host's live page: null unless the core is attached to a
+// network stream (caliper_core_live_attach_url). Frame-thread only.
+namespace caliper_live { class Source; class RunControls; }
+caliper_live::RunControls* caliper_live_controls(CaliperCore* core);
+caliper_live::Source* caliper_live_stream(CaliperCore* core);
+// The source's key of the attached view `name` (Source::send_event,
+// request_data_view, data_view_of); 0 when there is none.
+uint64_t caliper_live_view_key(CaliperCore* core, const char* name);
 // Typed-views hooks (src/host/live/live_views.cpp): draw the points/series/
 // histogram windows after the v1.2 views; release their GPU resources before
 // the v1.2 views are destroyed.

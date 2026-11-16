@@ -16,7 +16,10 @@
 
 #include "core_lifecycle.h"            // the app-like host of the Attachment case
 #include "host_services.h"
+#include "embed/embed_core.h"        // caliper_live_controls, the views' event sink
 #include "live/live_attach.h"
+#include "live/live_controls.h"
+#include "live/live_ui_driver.h"
 #include "live/live_net_source.h"      // parse_stream_url
 #include "live/live_views_state.h"     // kPalette (the exact categorical colours)
 #include "net/wire.h"
@@ -37,6 +40,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -67,6 +71,22 @@ public:
     std::vector<uint16_t> closes;             // close codes of ended connections
     std::vector<std::string> byes;            // BYE reasons the viewer sent
     uint64_t seq = 0;
+
+    // ---- 3.1 ------------------------------------------------------------------
+    std::vector<std::string> welcome_caps;    // WELCOME's capabilities
+    std::optional<bool> welcome_control;      // WELCOME's control
+    // As a script that calls a checkpoint and registered "lr" and "save": its
+    // views name item spaces ("samples": the rows of "heat" and the points of
+    // "pts"; "step": the series "loss"), CONTROLS follows VIEWS, a CONTROL is
+    // answered and applied at once, and a select event with a space becomes
+    // that space's SELECTION, with details.
+    bool script31 = false;
+    std::string run_state = CALIPER_NET_RUN_RUNNING;
+    double lr = 0.001;
+    int saves = 0;
+    std::vector<wire::Control> controls_in;   // every CONTROL received
+    std::vector<wire::Event> events;          // every EVENT received
+    std::vector<wire::ViewRequest> view_requests;   // every VIEW_REQUEST received
 
     FakeProducer() {
         std::string err;
@@ -128,6 +148,17 @@ public:
     void heatmap(const std::vector<float>& v, int H, int W, int cm, double vmin, double vmax, uint64_t flags,
                  std::vector<double> stats = {}) {
         wire::Snapshot s = snap("heat", CALIPER_NET_KIND_HEATMAP);
+        // The payload axes: every row and column of the source, unpooled.
+        s.axes = Json::array();
+        for (auto [dim, n] : {std::pair<const char*, int>{"rows", H}, {"cols", W}}) {
+            Json a = Json::object();
+            a.set("dim", dim);
+            a.set("start", 0);
+            a.set("step", 1);
+            a.set("count", n);
+            a.set("size", n);
+            s.axes.push(a);
+        }
         s.data = wire::Section::make("data", CALIPER_NET_DTYPE_F32, {H, W}, v.data(), v.size() * 4);
         s.colormap = cm;
         s.vmin = vmin;
@@ -184,8 +215,125 @@ private:
     void send_views() {
         wire::Views v;
         v.session = id.id;
-        v.views = views;
+        v.views = script31 ? views_with_items() : views;
         send(v);
+        if (script31) send_controls();
+    }
+
+    Json views_with_items() const {
+        Json with = Json::array();
+        for (const Json& e : views.items()) {
+            Json x = e;
+            const std::string name = x.find("name")->as_string();
+            if (name == "loss") x.set("items", "step");
+            if (name == "heat" || name == "pts") {
+                Json src = x.find("sources")->at(0);
+                Json dims = Json::array();
+                for (size_t i = 0; i < src.find("dims")->size(); ++i) {
+                    Json d = src.find("dims")->at(i);
+                    if (i == 0) d.set("items", "samples");   // heat: rows; pts: the point dim
+                    dims.push(d);
+                }
+                src.set("dims", dims);
+                Json srcs = Json::array();
+                srcs.push(src);
+                x.set("sources", srcs);
+            }
+            with.push(x);
+        }
+        return with;
+    }
+
+public:
+    void send_controls() {
+        wire::Controls c;
+        c.run.set("state", run_state);
+        c.run.set("step", 7);
+        Json param = Json::object();
+        param.set("name", "lr");
+        param.set("type", CALIPER_NET_PARAM_NUMBER);
+        param.set("value", lr);
+        param.set("min", 1e-05);
+        param.set("max", 0.1);
+        param.set("log", true);
+        c.params.push(param);
+        Json action = Json::object();
+        action.set("name", "save");
+        action.set("running", false);
+        action.set("queued", false);
+        c.actions.push(action);
+        send(c);
+    }
+
+private:
+    void on_control(const wire::Control& c) {
+        controls_in.push_back(c);
+        wire::ControlReply r;
+        r.request_id = c.request_id;
+        r.op = c.op;
+        r.name = c.name;
+        r.status = CALIPER_NET_STATUS_OK;
+        auto refuse = [&](const char* code, const char* msg) {
+            r.status = CALIPER_NET_STATUS_ERROR;
+            Json e = Json::object();
+            e.set("code", code);
+            e.set("message", msg);
+            r.error = e;
+            send(r);
+        };
+        if (c.op == CALIPER_NET_OP_PAUSE) {
+            run_state = CALIPER_NET_RUN_PAUSED;
+        } else if (c.op == CALIPER_NET_OP_RESUME) {
+            run_state = CALIPER_NET_RUN_RUNNING;
+        } else if (c.op == CALIPER_NET_OP_STEP) {
+            run_state = CALIPER_NET_RUN_PAUSED;   // the step ran at once
+        } else if (c.op == CALIPER_NET_OP_SET) {
+            if (c.name != std::string("lr")) return refuse(CALIPER_NET_ERR_UNKNOWN_CONTROL, "no such parameter");
+            if (!c.value.is_number()) return refuse(CALIPER_NET_ERR_BAD_VALUE, "lr is a number");
+            lr = std::min(0.1, std::max(1e-05, c.value.as_double()));
+            r.value = Json(lr);
+        } else if (c.op == CALIPER_NET_OP_RUN) {
+            if (c.name != std::string("save")) return refuse(CALIPER_NET_ERR_UNKNOWN_CONTROL, "no such action");
+            r.status = CALIPER_NET_STATUS_QUEUED;
+            send(r);
+            ++saves;
+            r.status = CALIPER_NET_STATUS_OK;
+            r.message = "saved checkpoint " + std::to_string(saves);
+        }
+        send(r);
+        send_controls();
+    }
+
+    void on_event(const wire::Event& e) {
+        events.push_back(e);
+        const Json* space = e.detail.find("space");
+        if (!script31 || e.type != "select" || !space || !space->is_string()) return;
+        wire::Selection sel;
+        sel.space = space->as_string();
+        sel.view = e.view;
+        Json ids = Json::array(), rows = Json::array();
+        if (const Json* items = e.detail.find("items"); items && items->is_array())
+            for (const Json& x : items->items()) {
+                sel.items.push(x);
+                if (ids.size() < CALIPER_NET_MAX_DETAIL_ITEMS) {
+                    ids.push(x);
+                    Json row = Json::array();
+                    row.push(x.as_double() * 0.5);
+                    row.push(std::string("sample ") + std::to_string((int)x.as_double()));
+                    rows.push(row);
+                }
+            }
+        if (sel.items.size() > 0) {
+            Json fields = Json::array();
+            fields.push("score");
+            fields.push("label");
+            Json d = Json::object();
+            d.set("fields", fields);
+            d.set("items", ids);
+            d.set("values", rows);
+            sel.details = d;
+        }
+        send(sel);
     }
 
     void on_message(const caliper_net::Bytes& data) {
@@ -198,10 +346,18 @@ private:
             wire::Welcome w;
             w.role = CALIPER_NET_ROLE_PRODUCER;
             w.session = id.to_json();
+            w.capabilities = welcome_caps;
+            w.control = welcome_control;
             send(w);
             wire::Sessions s;
             wire::SessionInfo si{id, CALIPER_NET_SESSION_LIVE, views.size()};
-            s.sessions.push(si.to_json());
+            Json entry = si.to_json();
+            if (!welcome_caps.empty()) {
+                Json caps = Json::array();
+                for (const auto& c : welcome_caps) caps.push(c);
+                entry.set("capabilities", caps);
+            }
+            s.sessions.push(entry);
             send(s);
             if (auto_attach) send_views();
         } else if (auto* a = std::get_if<wire::Attach>(&m)) {
@@ -223,6 +379,20 @@ private:
             if (s->view == "loss" && !series.empty()) send_series(0, series);   // the backfill
         } else if (auto* p = std::get_if<wire::Ping>(&m)) {
             send(wire::Pong{p->nonce});
+        } else if (auto* vr = std::get_if<wire::ViewRequest>(&m)) {
+            // Resolved as asked, the source named or the first.
+            view_requests.push_back(*vr);
+            wire::ViewReply rep;
+            rep.request_id = vr->request_id;
+            rep.sub = vr->sub;
+            rep.view = vr->view;
+            rep.data_view = vr->data_view;
+            if (!rep.data_view.has("source")) rep.data_view.set("source", "src");
+            send(rep);
+        } else if (auto* c = std::get_if<wire::Control>(&m)) {
+            on_control(*c);
+        } else if (auto* ev = std::get_if<wire::Event>(&m)) {
+            on_event(*ev);
         } else if (auto* e = std::get_if<wire::Error>(&m)) {
             errors.push_back(e->code);
         } else if (auto* b = std::get_if<wire::Bye>(&m)) {
@@ -651,11 +821,129 @@ TEST_CASE("live/net: after a dropped connection the stream reconnects; views and
     caliper_core_shutdown(core);
 }
 
-// Protocol 3.1: the native source implements neither controls nor linked
-// selection, so it announces neither capability. A server that sends it the
-// 3.1 messages and keys anyway (CONTROLS, CONTROL_REPLY, SELECTION, items in
-// VIEWS) does not disturb it: they are ignored and the views keep drawing.
-TEST_CASE("live/net: the native source announces no 3.1 capability and tolerates every 3.1 message and key") {
+// Protocol 3.1: the native source announces `controls` and `selection`. A
+// script's CONTROLS, its CONTROL_REPLYs and SELECTIONs reach the page's
+// RunControls (live_controls.h), and its requests reach the script. The 3.1
+// golden frames, sent at any moment, never disturb the stream.
+TEST_CASE("live/net: the native source announces controls and selection, and a script's controls reach the page") {
+    std::string no_gpu;
+    CaliperCore* core = net_core(64, 64, &no_gpu);
+    if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
+    FakeProducer p;
+    p.welcome_caps = {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION};
+    p.welcome_control = true;
+    p.script31 = true;
+    p.start();
+    REQUIRE_MESSAGE(caliper_core_live_attach_url(core, p.url().c_str()) == 1, caliper_core_last_error(core));
+    caliper_live::RunControls* rc = caliper_live_controls(core);
+    REQUIRE(rc != nullptr);
+    REQUIRE(poll_until(core, [&] { return rc->have() && rc->state().run_state == "running"; }));
+    CHECK(p.call([](FakeProducer& f) { return f.hello_caps; }) ==
+          std::vector<std::string>{CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION});
+    CHECK(rc->access().allowed);
+    CHECK(rc->why_not(CALIPER_NET_OP_PAUSE).empty());
+    REQUIRE(rc->state().params.size() == 1);
+    CHECK(rc->state().params[0].name == "lr");
+    CHECK(rc->state().params[0].log);
+    CHECK(rc->state().params[0].max == doctest::Approx(0.1));
+    REQUIRE(rc->state().actions.size() == 1);
+    CHECK(rc->state().has_step);
+    CHECK(rc->state().step == 7);
+
+    // Pause, then a value above the range (clamped), then an action.
+    CHECK(rc->pause());
+    REQUIRE(poll_until(core, [&] { return rc->state().run_state == "paused"; }));
+    CHECK(rc->set("lr", Json(0.5)));
+    CHECK(rc->param_waiting(rc->state().params[0]));
+    REQUIRE(poll_until(core, [&] { return !rc->param_waiting(rc->state().params[0]); }));
+    CHECK(rc->state().params[0].value.as_double() == doctest::Approx(0.1));
+    CHECK(rc->run("save"));
+    CHECK(rc->action_busy(rc->state().actions[0]));
+    REQUIRE(poll_until(core, [&] { return rc->action_result("save") != nullptr; }));
+    CHECK(rc->action_result("save")->text == "saved checkpoint 1");
+    CHECK_FALSE(rc->action_result("save")->error);
+    CHECK_FALSE(rc->action_busy(rc->state().actions[0]));
+    // A refusal is shown and changes nothing.
+    CHECK(rc->set("lr", Json("fast")));
+    REQUIRE(poll_until(core, [&] { return !rc->notice().text.empty(); }));
+    CHECK(rc->notice().text.find("bad_value") != std::string::npos);
+    CHECK(rc->state().params[0].value.as_double() == doctest::Approx(0.1));
+    const auto in = p.call([](FakeProducer& f) { return f.controls_in; });
+    REQUIRE(in.size() == 4);
+    CHECK(in[0].op == "pause");
+    CHECK(in[1].op == "set");
+    CHECK(in[1].value.as_double() == doctest::Approx(0.5));
+    CHECK(in[2].op == "run");
+    CHECK(*in[2].name == "save");
+    CHECK(in[0].request_id != in[1].request_id);
+
+    // The golden frames of 3.1 at any moment: tolerated, the views keep drawing.
+    p.call([](FakeProducer& f) {
+        for (const char* name : {"controls", "control_reply_queued", "selection", "selection_clear"}) {
+            std::ifstream in(std::string(CALIPER_TEST_SOURCE_ROOT) + "/tests/fixtures/wire_v3/v3_1/" + name + ".bin",
+                             std::ios::binary);
+            f.send_raw(std::vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()));
+        }
+        f.heatmap(ramp(8, 4, 1.0f), 4, 8, 0, 0.0, 1.0, CALIPER_NET_SNAP_RAW);
+        return 0;
+    });
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 1; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    caliper_core_live_poll(core);
+    CHECK(status(core).client_alive == 1);
+    CHECK(p.call([](FakeProducer& f) { return f.errors.empty() && f.closes.empty() && f.hellos == 1; }));
+    CHECK(readback(core, "heat", 8, 4) == map_ref(ramp(8, 4, 1.0f), 8, 4, 0, 0.0f, 1.0f));
+    caliper_core_shutdown(core);
+}
+
+// Who may control: a server that does not let this viewer control (WELCOME's
+// `control` false, as a hub without --allow-control) or a script without
+// `controls` leaves every control off with the reason, and nothing is sent.
+TEST_CASE("live/net: without WELCOME's control, or without the script's controls, the page sends no control") {
+    std::string no_gpu;
+    CaliperCore* core = net_core(64, 64, &no_gpu);
+    if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
+    {
+        FakeProducer p;
+        p.welcome_caps = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION};
+        p.welcome_control = false;
+        p.script31 = true;
+        p.start();
+        REQUIRE_MESSAGE(caliper_core_live_attach_url(core, p.url().c_str()) == 1, caliper_core_last_error(core));
+        caliper_live::RunControls* rc = caliper_live_controls(core);
+        REQUIRE(poll_until(core, [&] { return rc->have(); }));
+        CHECK_FALSE(rc->access().allowed);
+        CHECK(rc->why_not(CALIPER_NET_OP_PAUSE).find("--allow-control") != std::string::npos);
+        CHECK_FALSE(rc->pause());
+        CHECK_FALSE(rc->set("lr", Json(0.01)));
+        CHECK(rc->notice().text.find("pause") == std::string::npos);   // the last refusal is the set
+        CHECK(rc->notice().text.find("set lr") != std::string::npos);
+        poll_until(core, [] { return false; }, 200);
+        CHECK(p.call([](FakeProducer& f) { return f.controls_in.size(); }) == 0);
+        caliper_core_live_detach(core);
+    }
+    {
+        FakeProducer p;   // a 3.1 server whose script registered no controls
+        p.welcome_caps = {CALIPER_NET_CAP_SELECTION};
+        p.welcome_control = true;
+        p.start();
+        REQUIRE_MESSAGE(caliper_core_live_attach_url(core, p.url().c_str()) == 1, caliper_core_last_error(core));
+        caliper_live::RunControls* rc = caliper_live_controls(core);
+        REQUIRE(rc != nullptr);
+        REQUIRE(poll_until(core, [&] { return view_status(core, "heat").name[0] != 0; }));
+        CHECK_FALSE(rc->have());
+        CHECK(rc->why_not(CALIPER_NET_OP_SET).find("server takes no controls") != std::string::npos);
+        CHECK_FALSE(rc->step());
+        poll_until(core, [] { return false; }, 100);
+        CHECK(p.call([](FakeProducer& f) { return f.controls_in.size(); }) == 0);
+    }
+    caliper_core_shutdown(core);
+}
+
+// A data view request goes out on the view's own subscription from the frame
+// thread without waiting, and the producer's resolved form is kept with the
+// view's offer from VIEWS (what a data view picker reads).
+TEST_CASE("live/net: request_data_view sends VIEW_REQUEST on the view's subscription; the resolved form is kept") {
     std::string no_gpu;
     CaliperCore* core = net_core(64, 64, &no_gpu);
     if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
@@ -663,33 +951,110 @@ TEST_CASE("live/net: the native source announces no 3.1 capability and tolerates
     p.start();
     REQUIRE_MESSAGE(caliper_core_live_attach_url(core, p.url().c_str()) == 1, caliper_core_last_error(core));
     REQUIRE(poll_until(core, [&] { return p.call([](FakeProducer& f) { return f.sub_of.size(); }) == 5; }));
-    CHECK(p.call([](FakeProducer& f) { return f.hello_caps.empty(); }));
+    caliper_live::Source* src = caliper_live_stream(core);
+    REQUIRE(src != nullptr);
+    const uint64_t key = caliper_live_view_key(core, "heat");
+    REQUIRE(key != 0);
+    CHECK(caliper_live_view_key(core, "nope") == 0);
+    std::string err;
+    CHECK_FALSE(src->request_data_view(key, "[1]", &err));
+    CHECK(err.find("JSON object") != std::string::npos);
+    CHECK_FALSE(src->request_data_view(key + 999, "{}", &err));
+    REQUIRE(src->request_data_view(key, R"({"index":{"rows":[0,2]}})", &err));
+    REQUIRE(poll_until(core, [&] { return p.call([](FakeProducer& f) { return f.view_requests.size(); }) == 1; }));
+    const auto vr = p.call([](FakeProducer& f) { return f.view_requests[0]; });
+    CHECK(vr.view == "heat");
+    CHECK(vr.sub == p.call([](FakeProducer& f) { return f.sub_of.at("heat"); }));
+    CHECK(vr.data_view.find("index")->find("rows")->size() == 2);
+    Json resolved, offer;
+    REQUIRE(poll_until(core, [&] {
+        return src->data_view_of(key, &resolved, &offer) && resolved.is_object() && resolved.has("index");
+    }));
+    CHECK(resolved.find("source")->as_string() == "src");
+    CHECK(offer.find("name")->as_string() == "heat");
+    CHECK(offer.find("sources")->at(0).find("dims")->size() == 2);
+    caliper_core_shutdown(core);
+}
+
+// Linked selection: a select event of a view whose axis indexes an item space
+// carries `space` and `items` (wire protocol 3.1, "Selecting"): the source rows
+// of a heatmap, the row ids of points, the steps of a series; a clear clears
+// the space. The script's SELECTION then reaches the page with its details.
+TEST_CASE("live/net: a select event names its item space and items, and the SELECTION comes back with details") {
+    std::string no_gpu;
+    CaliperCore* core = net_core(96, 64, &no_gpu);
+    if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
+    FakeProducer p;
+    p.welcome_caps = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION};
+    p.welcome_control = false;   // a selection is not a control
+    p.script31 = true;
+    p.start();
+    REQUIRE_MESSAGE(caliper_core_live_attach_url(core, p.url().c_str()) == 1, caliper_core_last_error(core));
+    caliper_live::RunControls* rc = caliper_live_controls(core);
+    REQUIRE(poll_until(core, [&] { return p.call([](FakeProducer& f) { return f.sub_of.size(); }) == 5; }));
     p.call([](FakeProducer& f) {
-        for (const char* name : {"controls", "control_reply_queued", "selection", "selection_clear"}) {
-            std::ifstream in(std::string(CALIPER_TEST_SOURCE_ROOT) + "/tests/fixtures/wire_v3/v3_1/" + name + ".bin",
-                             std::ios::binary);
-            f.send_raw(std::vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()));
-        }
-        // The same views, with 3.1's item spaces on a dim and on the series.
-        Json views = f.views;
-        Json with = Json::array();
-        for (const Json& v : views.items()) {
-            Json e = v;
-            if (e.find("name")->as_string() == "loss") e.set("items", "step");
-            with.push(e);
-        }
-        wire::Views v;
-        v.session = f.id.id;
-        v.views = with;
-        f.send(v);
         f.heatmap(ramp(8, 4, 1.0f), 4, 8, 0, 0.0, 1.0, CALIPER_NET_SNAP_RAW);
         return 0;
     });
     REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 1; }));
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    CHECK(status(core).client_alive == 1);
-    CHECK(p.call([](FakeProducer& f) { return f.errors.empty() && f.closes.empty() && f.hellos == 1; }));
-    CHECK(readback(core, "heat", 8, 4) == map_ref(ramp(8, 4, 1.0f), 8, 4, 0, 0.0f, 1.0f));
+    // The item axes the views declared.
+    REQUIRE(poll_until(core, [&] { return rc->item_axes().size() == 3; }));
+
+    // Events as the view layer reports them, through the core's event sink.
+    auto emit = [&](const char* view, const char* detail) {
+        caliper_live_views::LiveEvent e;
+        e.view = view;
+        e.type = "select";
+        e.detail = detail;
+        REQUIRE(core->live_views);
+        REQUIRE(core->live_views->events);
+        core->live_views->events(e);
+    };
+    emit("heat", R"({"rows":[1,3],"cols":[0,8]})");
+    REQUIRE(poll_until(core, [&] { return p.call([](FakeProducer& f) { return f.events.size(); }) == 1; }));
+    REQUIRE(poll_until(core, [&] { return rc->details() != nullptr; }));
+    const caliper_live::LinkedSelection* d = rc->details();
+    CHECK(d->space == "samples");
+    CHECK(d->view == "heat");
+    CHECK(d->items == std::vector<uint64_t>{1, 2});
+    CHECK(d->details.find("fields")->size() == 2);
+    CHECK(d->details.find("values")->at(1).at(1).as_string() == "sample 2");
+
+    emit("pts", R"({"indices":[0,1,2],"row_ids":[4,2,4]})");
+    emit("loss", R"({"steps":[2,5]})");
+    emit("hist", R"({"range":[0.0,1.0]})");   // no item space: unchanged
+    emit("heat", "{}");                        // clears "samples"
+    REQUIRE(poll_until(core, [&] { return p.call([](FakeProducer& f) { return f.events.size(); }) == 5; }));
+    const auto ev = p.call([](FakeProducer& f) { return f.events; });
+    auto items_of = [](const wire::Event& e) {
+        std::vector<uint64_t> v;
+        if (const Json* it = e.detail.find("items"))
+            for (const Json& x : it->items()) v.push_back((uint64_t)x.as_double());
+        return v;
+    };
+    CHECK(ev[0].detail.find("space")->as_string() == "samples");
+    CHECK(ev[0].sub.has_value());
+    CHECK(ev[0].data_view.is_object());
+    CHECK(ev[1].detail.find("space")->as_string() == "samples");
+    CHECK(items_of(ev[1]) == std::vector<uint64_t>{2, 4});
+    CHECK(ev[1].detail.find("row_ids")->size() == 3);   // the view layer's keys stay
+    CHECK(ev[2].detail.find("space")->as_string() == "step");
+    CHECK(items_of(ev[2]) == std::vector<uint64_t>{2, 3, 4});
+    CHECK(ev[3].detail.find("space") == nullptr);
+    CHECK(ev[4].detail.find("space")->as_string() == "samples");
+    CHECK(ev[4].detail.find("items")->size() == 0);
+    REQUIRE(poll_until(core, [&] {
+        for (const auto& s : rc->selections())
+            if (s.space == "step" && s.items.size() == 3) return true;
+        return false;
+    }));
+    // "samples" was cleared last; its details go with it.
+    REQUIRE(poll_until(core, [&] {
+        for (const auto& s : rc->selections())
+            if (s.space == "samples") return s.items.empty();
+        return false;
+    }));
+    CHECK(rc->details() == nullptr);
     caliper_core_shutdown(core);
 }
 
@@ -801,4 +1166,427 @@ TEST_CASE("live/app: Attachment::attach_url through a hosted core, as the Calipe
     CHECK(a.status().views == 5);
     a.detach();
     CHECK_FALSE(a.attached());
+}
+
+// The run bar as the app draws it, driven by real ImGui input (live_ui_driver.h):
+// clicks on Pause and on an action, a typed parameter value and a shift-drag
+// across a heatmap reach the script, and the bar shows what the script echoes.
+// Then, against a server that refuses controls, the same clicks send nothing
+// while a selection still goes out.
+namespace {
+struct HostFrame {
+    std::unique_ptr<caliper_host::HostRenderer> renderer;
+    bool ok = false;
+    HostFrame() {
+        caliper_host::core_create_ui_context();
+        renderer = caliper_host::make_metal_renderer();
+        ok = !caliper_test::force_no_gpu() && renderer &&
+             renderer->canvas_init(nullptr, caliper_host::HostRenderer::CANVAS_OFFSCREEN, 1000, 480);
+        caliper_host::services_set_renderer(renderer.get());
+    }
+    ~HostFrame() {
+        caliper_host::services_set_renderer(nullptr);
+        if (renderer) renderer->canvas_shutdown();
+        renderer.reset();
+        caliper_host::core_destroy_ui_context();
+    }
+    // One frame of a live page: the run bar on top, the views below, the
+    // shared selection over them. The driver's input goes in first.
+    void frame(caliper_live::Attachment& a, caliper_live::UiDriver* driver) {
+        a.poll();
+        if (driver) driver->feed(a.core(), a.controls());
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+        io.DisplaySize = ImVec2(1000.0f, 480.0f);
+        io.DeltaTime = 1.0f / 60.0f;
+        renderer->canvas_new_frame();
+        const caliper_live::ControlsLook look;
+        if (caliper_live::RunControls* rc = a.controls()) {
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            ImGui::SetNextWindowSize(ImVec2(1000, 40));
+            ImGui::Begin("##bar", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
+            caliper_live::draw_run_bar(*rc, look, 980.0f);
+            ImGui::End();
+        }
+        a.draw(0.0f, 44.0f, 1000.0f, 436.0f, 1.0f);
+        if (caliper_live::RunControls* rc = a.controls()) caliper_live::draw_linked_selection(a.core(), *rc, look);
+        renderer->canvas_render();
+    }
+};
+}  // namespace
+
+TEST_CASE("live/app: clicks on the run bar and a shift-drag in a view reach the script; the bar shows its echo") {
+    HostFrame host;
+    if (!host.ok) CALIPER_SKIP_NO_GPU("no Metal device for the host's offscreen canvas");
+    FakeProducer p;
+    p.welcome_caps = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION};
+    p.welcome_control = true;
+    p.script31 = true;
+    p.start();
+    caliper_live::Attachment a;
+    std::string err;
+    REQUIRE_MESSAGE(a.attach_url(host.renderer.get(), p.url(), &err), err);
+    REQUIRE(a.controls() != nullptr);
+    // The heatmap's rows index "samples"; it needs pixels to be selected in.
+    caliper_live::UiDriver driver("state running; click pause; state paused; set lr 0.02; wait 5; "
+                                  "click action:save; wait 5; select heat; wait 5");
+    bool sent_heat = false;
+    std::vector<std::string> steps;
+    for (int i = 0; i < 3000 && !driver.done(); ++i) {
+        if (!sent_heat && p.call([](FakeProducer& f) { return f.sub_of.count("heat"); })) {
+            p.call([](FakeProducer& f) {
+                f.heatmap(ramp(8, 4, 1.0f), 4, 8, 0, 0.0, 1.0, 0);   // with chrome: RAW views take no gestures
+                return 0;
+            });
+            sent_heat = true;
+        }
+        host.frame(a, &driver);
+        for (auto& line : driver.take_log()) steps.push_back(line);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    INFO("driver: " << driver.error());
+    for (const auto& s : steps) INFO(s);
+    REQUIRE(driver.done());
+    REQUIRE(driver.error().empty());
+    caliper_live::RunControls* rc = a.controls();
+    // Let the last echoes arrive.
+    for (int i = 0; i < 600 && !(rc->details() && rc->action_result("save")); ++i) {
+        host.frame(a, nullptr);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    const auto in = p.call([](FakeProducer& f) { return f.controls_in; });
+    REQUIRE(in.size() == 3);
+    CHECK(in[0].op == "pause");
+    CHECK(in[1].op == "set");
+    CHECK(*in[1].name == "lr");
+    CHECK(in[1].value.as_double() == doctest::Approx(0.02));
+    CHECK(in[2].op == "run");
+    CHECK(*in[2].name == "save");
+    // The echo: paused, the value confirmed, the action's result.
+    CHECK(rc->state().run_state == "paused");
+    CHECK(rc->state().params[0].value.as_double() == doctest::Approx(0.02));
+    CHECK_FALSE(rc->param_waiting(rc->state().params[0]));
+    REQUIRE(rc->action_result("save") != nullptr);
+    CHECK(rc->action_result("save")->text == "saved checkpoint 1");
+    // The shift-drag selected the top rows of "heat" in source indices.
+    const auto ev = p.call([](FakeProducer& f) { return f.events; });
+    const wire::Event* sel = nullptr;
+    for (const auto& e : ev)
+        if (e.type == "select" && e.view == "heat") sel = &e;
+    REQUIRE(sel != nullptr);
+    CHECK(sel->detail.find("space")->as_string() == "samples");
+    REQUIRE(sel->detail.find("items")->size() >= 1);
+    CHECK(sel->detail.find("items")->at(0).as_double() == 0.0);
+    REQUIRE(rc->details() != nullptr);
+    CHECK(rc->details()->space == "samples");
+    CHECK(rc->details()->view == "heat");
+    a.detach();
+}
+
+TEST_CASE("live/app: against a server that refuses controls the bar's clicks send nothing; a selection still goes") {
+    HostFrame host;
+    if (!host.ok) CALIPER_SKIP_NO_GPU("no Metal device for the host's offscreen canvas");
+    FakeProducer p;
+    p.welcome_caps = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION};
+    p.welcome_control = false;
+    p.script31 = true;
+    p.start();
+    caliper_live::Attachment a;
+    std::string err;
+    REQUIRE_MESSAGE(a.attach_url(host.renderer.get(), p.url(), &err), err);
+    caliper_live::UiDriver driver("state running; click pause; wait 10; click step; wait 10; "
+                                  "click action:save; wait 10; select heat; wait 10");
+    bool sent_heat = false;
+    for (int i = 0; i < 3000 && !driver.done(); ++i) {
+        if (!sent_heat && p.call([](FakeProducer& f) { return f.sub_of.count("heat"); })) {
+            p.call([](FakeProducer& f) {
+                f.heatmap(ramp(8, 4, 1.0f), 4, 8, 0, 0.0, 1.0, 0);   // with chrome: RAW views take no gestures
+                return 0;
+            });
+            sent_heat = true;
+        }
+        host.frame(a, &driver);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    INFO("driver: " << driver.error());
+    REQUIRE(driver.done());
+    REQUIRE(driver.error().empty());
+    caliper_live::RunControls* rc = a.controls();
+    for (int i = 0; i < 300 && !rc->details(); ++i) {
+        host.frame(a, nullptr);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(p.call([](FakeProducer& f) { return f.controls_in.size(); }) == 0);
+    CHECK(rc->state().run_state == "running");
+    CHECK(rc->why_not(CALIPER_NET_OP_PAUSE).find("does not let this viewer control") != std::string::npos);
+    CHECK(rc->counts().sent == 0);
+    REQUIRE(rc->details() != nullptr);
+    CHECK(rc->details()->space == "samples");
+    a.detach();
+}
+
+// ---- RunControls on a scripted source (no network, no GPU) -----------------------------------
+namespace {
+// A Source whose 3.1 side the test scripts: what it allows, its CONTROLS, the
+// replies it hands over, and every CONTROL it was asked to send (with the
+// test's clock at the time).
+class ScriptedSource : public caliper_live::Source {
+public:
+    caliper_live::ControlAccess access{true, ""};
+    bool have = true;
+    caliper_live::Controls ctl;
+    std::vector<caliper_live::ControlReply> replies;
+    struct Sent {
+        std::string op, name;
+        Json value;
+        uint32_t id = 0;
+        uint64_t at_ns = 0;
+    };
+    std::vector<Sent> sent;
+    uint64_t clock_ns = 0;
+    std::vector<caliper_live::LinkedSelection> sel;
+    uint64_t sel_version = 0;
+
+    std::string label() const override { return "scripted"; }
+    std::string script() const override { return "train.py"; }
+    uint64_t start_unix_ms() const override { return 0; }
+    int32_t producer_pid() const override { return 0; }
+    bool producer_alive() override { return true; }
+    bool sync(std::vector<caliper_live::SourceView>*) override { return false; }
+    bool take(uint64_t, uint64_t, caliper_live::Snapshot*) override { return false; }
+    void release_prev(uint64_t) override {}
+    void unclaim(uint64_t) override {}
+    void drew(uint64_t, uint64_t, uint64_t) override {}
+    uint64_t producer_dropped(uint64_t) override { return 0; }
+    void heartbeat() override {}
+
+    bool controls(caliper_live::Controls* out) override {
+        if (!have) return false;
+        *out = ctl;
+        return true;
+    }
+    caliper_live::ControlAccess control_access() override { return access; }
+    uint32_t send_control(const std::string& op, const std::string& name, const Json& value, uint32_t,
+                          std::string*) override {
+        sent.push_back({op, name, value, (uint32_t)sent.size() + 1, clock_ns});
+        return (uint32_t)sent.size();
+    }
+    std::vector<caliper_live::ControlReply> take_control_replies() override {
+        std::vector<caliper_live::ControlReply> out;
+        out.swap(replies);
+        return out;
+    }
+    uint64_t selections(std::vector<caliper_live::LinkedSelection>* out) override {
+        *out = sel;
+        return sel_version;
+    }
+
+    // A reply to request `id`, as it arrives after the current CONTROLS.
+    void reply(uint32_t id, const char* status, Json value = Json(), const char* code = "", std::string message = "") {
+        caliper_live::ControlReply r;
+        r.request_id = id;
+        r.op = sent.at(id - 1).op;
+        r.name = sent.at(id - 1).name;
+        r.status = status;
+        r.value = value;
+        r.message = std::move(message);
+        if (*code) {
+            r.error_code = code;
+            r.error_message = "refused";
+        }
+        r.controls_version = ctl.version;
+        replies.push_back(r);
+    }
+    // A new CONTROLS with lr's value and pending value.
+    void controls_now(const char* state, double lr, Json pending = Json()) {
+        ctl.run_state = state;
+        ctl.params.resize(1);
+        ctl.params[0].name = "lr";
+        ctl.params[0].type = CALIPER_NET_PARAM_NUMBER;
+        ctl.params[0].value = Json(lr);
+        ctl.params[0].pending = pending;
+        ctl.actions.resize(1);
+        ctl.actions[0].name = "save";
+        ++ctl.version;
+    }
+};
+
+constexpr uint64_t kMs = 1000000ull;
+}  // namespace
+
+TEST_CASE("live/controls: why a control is off, and what a checkpoint unlocks") {
+    ScriptedSource src;
+    caliper_live::RunControls rc;
+    rc.update(nullptr, 0);
+    CHECK(rc.why_not(CALIPER_NET_OP_SET) == "not attached to a session");
+    src.access = {false, "the session has ended"};
+    src.controls_now(CALIPER_NET_RUN_RUNNING, 0.001);
+    rc.update(&src, 1);
+    CHECK(rc.why_not(CALIPER_NET_OP_PAUSE) == "the session has ended");
+    CHECK_FALSE(rc.set("lr", Json(0.01)));
+    CHECK(rc.notice().text == "set lr: the session has ended");
+    CHECK(src.sent.empty());
+    src.access = {true, ""};
+    src.have = false;
+    rc.update(&src, 2);
+    CHECK(rc.why_not(CALIPER_NET_OP_PAUSE) == "the script has sent no controls");
+    src.have = true;
+    src.controls_now(CALIPER_NET_RUN_NONE, 0.001);
+    rc.update(&src, 3);
+    // Before the first checkpoint: pause, step and actions wait for it, a value may be set.
+    CHECK(rc.why_not(CALIPER_NET_OP_PAUSE) == "the script has called no checkpoint yet");
+    CHECK(rc.why_not(CALIPER_NET_OP_STEP) == "the script has called no checkpoint yet");
+    CHECK(rc.why_not(CALIPER_NET_OP_RUN) == "the script has called no checkpoint yet");
+    CHECK(rc.why_not(CALIPER_NET_OP_SET).empty());
+    src.controls_now(CALIPER_NET_RUN_RUNNING, 0.001);
+    rc.update(&src, 4);
+    for (const char* op : {"pause", "resume", "step", "set", "run"}) CHECK(rc.why_not(op).empty());
+    const auto log = rc.take_log();
+    CHECK(std::find(log.begin(), log.end(), "controls off: the session has ended") != log.end());
+    CHECK(std::find(log.begin(), log.end(), "controls on") != log.end());
+    CHECK(std::find(log.begin(), log.end(), "run running") != log.end());
+}
+
+TEST_CASE("live/controls: set goes out at most 30 times a second, and the value where a drag stops goes last") {
+    ScriptedSource src;
+    src.controls_now(CALIPER_NET_RUN_RUNNING, 0.001);
+    caliper_live::RunControls rc;
+    // A drag: a new value every millisecond for 100 ms.
+    double v = 0.0;
+    for (uint64_t t = 0; t < 100; ++t) {
+        src.clock_ns = t * kMs;
+        rc.update(&src, src.clock_ns);
+        v = 0.001 + 0.0001 * (double)t;
+        CHECK(rc.set("lr", Json(v)));
+    }
+    // Then nothing for 50 ms: the last value goes out when its turn comes.
+    for (uint64_t t = 100; t < 150; ++t) {
+        src.clock_ns = t * kMs;
+        rc.update(&src, src.clock_ns);
+    }
+    REQUIRE(src.sent.size() >= 2);
+    CHECK(src.sent.size() <= 5);
+    for (size_t i = 1; i < src.sent.size(); ++i)
+        CHECK(src.sent[i].at_ns - src.sent[i - 1].at_ns >= 1000000000ull / CALIPER_NET_CONTROL_RATE_HZ);
+    CHECK(src.sent.back().value.as_double() == doctest::Approx(v));
+    CHECK(rc.counts().sets == src.sent.size());
+}
+
+TEST_CASE("live/controls: a value set here is pending until a CONTROLS after its reply confirms it") {
+    ScriptedSource src;
+    src.controls_now(CALIPER_NET_RUN_RUNNING, 0.001);
+    caliper_live::RunControls rc;
+    rc.update(&src, 0);
+    CHECK(rc.set("lr", Json(0.02)));
+    REQUIRE(src.sent.size() == 1);
+    const caliper_live::ControlParam* lr = &rc.state().params[0];
+    CHECK(rc.shown_value(*lr).as_double() == doctest::Approx(0.02));
+    CHECK(rc.param_waiting(*lr));
+    // A CONTROLS that crossed the request changes nothing yet.
+    src.controls_now(CALIPER_NET_RUN_RUNNING, 0.001);
+    rc.update(&src, 100 * kMs);
+    lr = &rc.state().params[0];
+    CHECK(rc.param_waiting(*lr));
+    CHECK(rc.shown_value(*lr).as_double() == doctest::Approx(0.02));
+    // The reply, then the CONTROLS that follows it with the script's pending value.
+    src.reply(1, CALIPER_NET_STATUS_OK, Json(0.02));
+    rc.update(&src, 200 * kMs);
+    lr = &rc.state().params[0];
+    CHECK(rc.param_waiting(*lr));
+    src.controls_now(CALIPER_NET_RUN_RUNNING, 0.001, Json(0.02));
+    rc.update(&src, 300 * kMs);
+    lr = &rc.state().params[0];
+    CHECK_FALSE(rc.param_waiting(*lr));
+    CHECK(rc.param_pending(*lr));
+    CHECK(rc.shown_value(*lr).as_double() == doctest::Approx(0.02));
+    // The value the control already shows is not sent again.
+    CHECK(rc.set("lr", Json(0.02)));
+    CHECK(src.sent.size() == 1);
+    // Clamped: the reply's value shows until confirmed.
+    CHECK(rc.set("lr", Json(0.5)));
+    src.reply(2, CALIPER_NET_STATUS_OK, Json(0.1));
+    rc.update(&src, 400 * kMs);
+    lr = &rc.state().params[0];
+    CHECK(rc.shown_value(*lr).as_double() == doctest::Approx(0.1));
+    // Refused: dropped, the script's value shows again, and the reason.
+    src.controls_now(CALIPER_NET_RUN_RUNNING, 0.1);
+    rc.update(&src, 500 * kMs);
+    CHECK(rc.set("lr", Json("fast")));
+    src.reply(3, CALIPER_NET_STATUS_ERROR, Json(), CALIPER_NET_ERR_BAD_VALUE);
+    rc.update(&src, 600 * kMs);
+    lr = &rc.state().params[0];
+    CHECK_FALSE(rc.param_waiting(*lr));
+    CHECK(rc.shown_value(*lr).as_double() == doctest::Approx(0.1));
+    CHECK(rc.notice().text == "set lr: bad_value: refused");
+    CHECK(rc.notice().error);
+}
+
+TEST_CASE("live/controls: an action is busy until its final reply and keeps its result; a refused pause is shown") {
+    ScriptedSource src;
+    src.controls_now(CALIPER_NET_RUN_RUNNING, 0.001);
+    caliper_live::RunControls rc;
+    rc.update(&src, 0);
+    CHECK(rc.run("save"));
+    CHECK(rc.action_busy(rc.state().actions[0]));
+    src.reply(1, CALIPER_NET_STATUS_QUEUED);
+    rc.update(&src, 1);
+    CHECK(rc.action_busy(rc.state().actions[0]));
+    CHECK(rc.action_result("save") == nullptr);
+    src.reply(1, CALIPER_NET_STATUS_OK, Json(), "", "saved at step 9");
+    rc.update(&src, 2);
+    CHECK_FALSE(rc.action_busy(rc.state().actions[0]));
+    REQUIRE(rc.action_result("save") != nullptr);
+    CHECK(rc.action_result("save")->text == "saved at step 9");
+    // The script says it runs: busy again, without a request of ours.
+    src.ctl.actions[0].running = true;
+    ++src.ctl.version;
+    rc.update(&src, 3);
+    CHECK(rc.action_busy(rc.state().actions[0]));
+    src.ctl.actions[0].running = false;
+    ++src.ctl.version;
+    CHECK(rc.run("save"));
+    src.reply(2, CALIPER_NET_STATUS_ERROR, Json(), CALIPER_NET_ERR_ACTION_FAILED);
+    rc.update(&src, 4);
+    REQUIRE(rc.action_result("save") != nullptr);
+    CHECK(rc.action_result("save")->error);
+    CHECK(rc.action_result("save")->text == "action_failed: refused");
+    CHECK(rc.pause());
+    src.reply(3, CALIPER_NET_STATUS_ERROR, Json(), CALIPER_NET_ERR_FORBIDDEN);
+    rc.update(&src, 5);
+    CHECK(rc.notice().text == "pause: forbidden: refused");
+    CHECK(rc.counts().refused == 2);
+}
+
+TEST_CASE("live/controls: the details shown are those of the selection that changed last") {
+    ScriptedSource src;
+    caliper_live::RunControls rc;
+    caliper_live::LinkedSelection a;
+    a.space = "samples";
+    a.view = "emb";
+    a.items = {1, 2};
+    a.details = Json::object();
+    a.seq = 1;
+    src.sel = {a};
+    src.sel_version = 1;
+    rc.update(&src, 0);
+    REQUIRE(rc.details() != nullptr);
+    CHECK(rc.details()->space == "samples");
+    caliper_live::LinkedSelection b;
+    b.space = "step";
+    b.items = {3};
+    b.seq = 2;
+    src.sel = {a, b};
+    src.sel_version = 2;
+    rc.update(&src, 1);
+    CHECK(rc.details() == nullptr);   // "step" changed last and has none
+    b.details_error = "the details function timed out";
+    b.seq = 3;
+    src.sel = {a, b};
+    src.sel_version = 3;
+    rc.update(&src, 2);
+    REQUIRE(rc.details() != nullptr);
+    CHECK(rc.details()->space == "step");
+    const auto log = rc.take_log();
+    CHECK(std::find(log.begin(), log.end(), "selection samples: 2 items, with details") != log.end());
+    CHECK(std::find(log.begin(), log.end(), "selection step: 1 item, details failed") != log.end());
 }
