@@ -287,7 +287,9 @@ TEST_CASE("builder app: New dashboard leaves the landing's command line empty" *
     const std::string script =
         "wait 60; page landing; "
         "key cmd+k; type Run 42; key f3; page spec; wait 10; key escape; page landing; wait 10; command-line none; "
-        "key cmd+k; type new Run 43; key enter; page spec; wait 10; key escape; page landing; wait 10; command-line none; "
+        // Run 42 was never saved, so the second New dashboard asks first.
+        "key cmd+k; type new Run 43; key enter; save dont-save; page spec; wait 10; key escape; page landing; wait 10; "
+        "command-line none; "
         "quit";
     caliper_builder::acp::SpawnOptions o;
     o.argv = {exe, "--hidden", "--workspace", root + "/ws"};
