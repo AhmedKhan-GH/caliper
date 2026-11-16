@@ -6,6 +6,7 @@
 #include <emscripten/emscripten.h>
 #include <emscripten/html5.h>
 
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <cstring>
@@ -59,6 +60,7 @@ void mods(int m) {
 }
 
 double g_last_ms = 0.0;
+float g_last_dt = 0.0f;   // the previous frame's io.DeltaTime
 int g_cursor = -2;
 caliper_web::InputCounts g_counts;
 
@@ -216,6 +218,13 @@ FrameSize input_new_frame() {
     const double now = emscripten_get_now();
     io.DeltaTime = now > g_last_ms ? (float)((now - g_last_ms) * 1e-3) : 1.0f / 60.0f;
     g_last_ms = now;
+    // ImGui applies one change of a mouse button per frame, so the second press
+    // of a double click reaches it two frames after the first, however quick
+    // the hand. Below about 7 frames a second (a software adapter) those two
+    // frames outlast its 0.3 s double-click time, and the WebAssembly views
+    // missed every double click that the element's own views take: allow them.
+    io.MouseDoubleClickTime = std::max(0.30f, 1.01f * (g_last_dt + io.DeltaTime));
+    g_last_dt = io.DeltaTime;
     return f;
 }
 
