@@ -77,34 +77,94 @@ def drain(url: str) -> None:
         pass
 
 
-def run(variant: str, steps: int) -> dict:
-    """One training run of the notebook; prints a JSON line."""
+def run(variant: str, steps: int, mode: str = "plain") -> dict:
+    """One training run of the notebook; prints a JSON line.
+
+    The clock starts after a synchronised warm-up and stops after
+    torch.mps.synchronize(), so the run time includes every kernel the loop
+    queued; it is the training run's time, not the time until a viewer has
+    drawn the last surface. Every step's end is stamped on the host, so the
+    time from the last step's host work to the end of the device's work (the
+    drain) is reported too. ``mode`` "events" also records a timed MPS event
+    after every step and around every surface, without synchronising, to see
+    when the device reaches each one; "sync" synchronises before and after
+    every surface and times it on the host, which serialises the surfaces;
+    "bounded" synchronises after every 25th step, so that the host never runs
+    more than 25 steps ahead of the device."""
     import torch
     ns = notebook(steps)
     assert ns["device"].type == "mps", "the cost row runs on MPS"
     land = ns["land"]
     view = viewer(ns["server"].stream_url)
     time.sleep(1.0)                                         # the viewer subscribes
-    calls = []
+    calls, stamps, events, surfaces = [], [], [], []
+    timing = mode == "events"
+    point = land.point if variant == "with" else (lambda model, step: None)
+
+    def stamped_point(model, step):
+        r = point(model, step)
+        if mode == "bounded" and len(stamps) % 25 == 24:
+            torch.mps.synchronize()
+        stamps.append(time.perf_counter())
+        if timing:
+            e = torch.mps.Event(enable_timing=True)
+            e.record()
+            events.append(e)
+        return r
+    land.point = stamped_point
     if variant == "without":
-        land.point = lambda model, step: None
         land.due = lambda step, every, directions: False
     else:
-        show_path = ns["show_path"]
+        show_path, show_surface = ns["show_path"], ns["show_surface"]
 
         def timed_path(rate=10):
             t = time.perf_counter_ns()
             show_path(rate)
             calls.append(time.perf_counter_ns() - t)
-        ns["show_path"] = timed_path
+
+        def timed_surface():
+            k = len(stamps) - 1                             # the step this surface follows
+            if mode == "sync":
+                torch.mps.synchronize()
+                t = time.perf_counter()
+                show_surface()
+                torch.mps.synchronize()
+                surfaces.append((k, time.perf_counter() - t))
+            elif timing:
+                a, b = torch.mps.Event(enable_timing=True), torch.mps.Event(enable_timing=True)
+                a.record()
+                show_surface()
+                b.record()
+                surfaces.append((k, a, b))
+            else:
+                show_surface()
+                surfaces.append((k, None))
+        ns["show_path"], ns["show_surface"] = timed_path, timed_surface
     ns["train"](20)                                         # warm-up: kernels, the first batches
     torch.mps.synchronize()
+    calls.clear(), stamps.clear(), events.clear(), surfaces.clear()
     load0 = load()
+    start = torch.mps.Event(enable_timing=True)
     t0 = time.perf_counter()
+    start.record()
     ns["train"](steps)
     torch.mps.synchronize()
     seconds = time.perf_counter() - t0
-    out = {"variant": variant, "steps": steps, "seconds": seconds, "load": [load0, load()]}
+    host_end = stamps[-1] - t0
+    out = {"variant": variant, "mode": mode, "steps": steps, "seconds": seconds,
+           "host_end": host_end, "drain": seconds - host_end, "load": [load0, load()]}
+    gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+    out["step_ms_median"] = statistics.median(gaps) * 1e3
+    if timing:
+        # When the device reached each step's event, against when the host
+        # finished that step: the device's lag behind the host, and the
+        # device's own time a step wherever it never waited for the host.
+        gpu = [start.elapsed_time(e) / 1e3 for e in events]
+        lag = [g - (h - t0) for g, h in zip(gpu, stamps)]
+        out["lag_end_s"] = lag[-1]
+        out["device_end_s"] = gpu[-1]
+        busy = [b - a for a, b, la in zip(gpu, gpu[1:], lag) if la > 0.01]
+        out["device_step_ms_when_behind"] = statistics.median(busy) * 1e3 if busy else None
     if variant == "with":
         calls.sort()
         out["path_calls_us"] = {"median": statistics.median(calls) / 1e3,
@@ -114,7 +174,31 @@ def run(variant: str, steps: int) -> dict:
         out["refits"] = [s for s, _ in land.refits]
         out["method"] = land.method
         out["share"] = float(land.share)
-        out["snapshots"] = len(land.snapshot_steps)
+        # The host's step that holds each surface call, and the slowest of the
+        # 50 steps after it, against the median step.
+        out["surface_step_ms"] = [gaps[k] * 1e3 for k, *_ in surfaces if k < len(gaps)]
+        out["next50_max_ms"] = [max(gaps[k + 1:k + 51]) * 1e3 for k, *_ in surfaces
+                                if k + 51 <= len(gaps)]
+        if mode == "sync":
+            out["surface_s"] = [t for _, t in surfaces]
+        if timing:
+            out["surface_s"] = [a.elapsed_time(b) / 1e3 for _, a, b in surfaces]
+            after, catch, busy = [], [], []
+            for k, *_ in surfaces:
+                if k + 1 >= len(lag):
+                    continue
+                after.append(lag[k + 1])
+                n = next((i for i in range(k + 1, len(lag)) if lag[i] < 0.01), len(lag)) - k - 1
+                catch.append(n)
+                if n > 10:                                  # the device's own time a step,
+                    j = k + 1 + n                           # while it works off the backlog
+                    busy.append((gpu[j - 1] - gpu[k + 2]) / (j - 3 - k) * 1e3)
+            far = [lag[i] for i in range(len(lag)) if all(not (k < i <= k + c + 1) for (k, *_), c
+                                                          in zip(surfaces, catch))]
+            out["lag_after_surface_s"] = after
+            out["catch_up_steps"] = catch
+            out["device_step_ms_in_backlog"] = busy
+            out["lag_elsewhere_ms_median"] = statistics.median(far) * 1e3 if far else None
     ns["server"].close()
     view.wait(10)
     print(json.dumps(out), flush=True)
@@ -211,13 +295,16 @@ def main() -> None:
     ap.add_argument("--repeats", type=int, default=2)
     ap.add_argument("--drain")
     ap.add_argument("--run", choices=["with", "without"])
+    ap.add_argument("--mode", choices=["plain", "events", "sync", "bounded"], default="plain")
+    ap.add_argument("--diagnose", action="store_true",
+                    help="also run the arm with the landscape in the modes events and sync")
     ap.add_argument("--surface", action="store_true")
     ap.add_argument("--picture", action="store_true")
     args = ap.parse_args()
     if args.drain:
         return drain(args.drain)
     if args.run:
-        return run(args.run, args.steps) and None
+        return run(args.run, args.steps, args.mode) and None
     if args.surface:
         return surface(600)
     if args.picture:
@@ -230,14 +317,39 @@ def main() -> None:
             extra = ""
             if variant == "with":
                 c = r["path_calls_us"]
-                extra = (f"  path+marker calls median {c['median']:.1f} us, p99 {c['p99']:.1f} us,"
-                         f" mean {c['mean']:.1f} us over {c['count']}, slowest "
-                         + ", ".join(f"{x:.0f}" for x in c["slowest"])
-                         + f" us; {len(r['refits'])} refits, {r['method']}, share {r['share']:.3f}")
-            print(f"{variant:8s} {args.steps} steps {r['seconds']:7.2f} s "
-                  f"(load {r['load'][0]:.1f} to {r['load'][1]:.1f}){extra}", flush=True)
+                extra = (f"; path+marker calls median {c['median']:.1f} us, p99 {c['p99']:.1f} us,"
+                         f" slowest {max(c['slowest']):.0f} us; {len(r['refits'])} refits,"
+                         f" {r['method']}, share {r['share']:.3f}")
+            print(f"{variant:8s} {args.steps} steps {r['seconds']:7.2f} s to the device's end "
+                  f"(host loop {r['host_end']:.2f} s, drain {r['drain'] * 1e3:.0f} ms, step "
+                  f"{r['step_ms_median']:.2f} ms median; load {r['load'][0]:.1f} to "
+                  f"{r['load'][1]:.1f}){extra}", flush=True)
+            print("json: " + json.dumps(r), flush=True)
     ratio = statistics.median(times["with"]) / statistics.median(times["without"])
     print(f"ratio with / without: {ratio:.3f} (budget 1.5)", flush=True)
+    if args.diagnose:
+        base = statistics.median(times["without"])
+        for variant, mode in (("with", "events"), ("with", "sync"), ("without", "events"),
+                              ("without", "bounded"), ("with", "bounded")):
+            r = child(["--run", variant, "--steps", str(args.steps), "--mode", mode])
+            print("json: " + json.dumps(r), flush=True)
+            line = (f"{variant}, {mode}: {r['seconds']:.2f} s to the device's end (host loop "
+                    f"{r['host_end']:.2f} s, drain {r['drain'] * 1e3:.0f} ms), "
+                    f"{r['seconds'] - base:+.2f} s against the median plain run without; host "
+                    f"step {r['step_ms_median']:.2f} ms median")
+            if mode == "events":
+                line += (f"; device {r['device_step_ms_when_behind']:.2f} ms a step while behind"
+                         f" the host, {r['lag_end_s']:.2f} s behind at the last step")
+            if variant == "with" and mode in ("events", "sync"):
+                line += (f"; surfaces {sum(r['surface_s']):.2f} s in all ({min(r['surface_s']):.3f}"
+                         f" to {max(r['surface_s']):.3f} s each); the host step holding a surface "
+                         f"{min(r['surface_step_ms']):.0f} to {max(r['surface_step_ms']):.0f} ms, "
+                         f"the slowest of the 50 after it {max(r['next50_max_ms']):.1f} ms")
+            if variant == "with" and mode == "events":
+                line += (f"; device lag after a surface {min(r['lag_after_surface_s']):.3f} to "
+                         f"{max(r['lag_after_surface_s']):.3f} s, worked off in "
+                         f"{min(r['catch_up_steps'])} to {max(r['catch_up_steps'])} steps")
+            print(line + f" (load {r['load'][0]:.1f} to {r['load'][1]:.1f})", flush=True)
     s = child(["--surface"])
     fmt = lambda xs: ", ".join(f"{x:.3f}" for x in xs)  # noqa: E731
     print(f"surface: first {fmt(s['first path s'])} s; vmap path {fmt(s['vmap path s'])} s;"
