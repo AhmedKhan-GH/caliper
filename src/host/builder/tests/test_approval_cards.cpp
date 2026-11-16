@@ -249,8 +249,10 @@ TEST_CASE("approval cards: a destructive command's card says what is lost, and a
     const ApprovalCard& save = r.cards->cards()[0];
     const ApprovalCard& gone = r.cards->cards()[1];
     CHECK(save.what == "applet.save \xC2\xB7 board");
-    CHECK(save.loss == "Applet board overwritten");
-    CHECK_FALSE(save.review);
+    // An overwrite is approved by its content: the card shows the diff of the
+    // file it would write (empty here, the same content), not a loss line.
+    CHECK(save.review);
+    CHECK(save.loss.empty());
     CHECK(save.diff.empty());
     CHECK(save.time_left);
     CHECK(gone.who == "API");

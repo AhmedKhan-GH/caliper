@@ -438,7 +438,7 @@ TEST_CASE("api commands: a destructive command from mcp or agent is held while t
     const Response look = get(port, "/v0/approvals/" + id);
     REQUIRE(look.status == 200);
     CHECK(look.value() == json{{"approval", id}, {"state", "pending"}, {"result", nullptr}, {"name", "applet.save"},
-                               {"origin", "mcp"}, {"review", nullptr}});
+                               {"origin", "mcp"}, {"review", {{"diff", ""}, {"warnings", json::array()}}}});
     std::string why;
     CHECK_MESSAGE(viewer_handshake(port, &why), why);
     CHECK(command(port, "applet.list", json::object(), "mcp")["result"]["applets"].size() == 1);
@@ -520,7 +520,7 @@ TEST_CASE("api commands: an api call gets command.needs_approval at once and rea
     CHECK(app.server->stats().commands_held == 0);
     CHECK(get(port, "/v0/approvals/" + id).value() == json{{"approval", id}, {"state", "pending"}, {"result", nullptr},
                                                            {"name", "applet.save"}, {"origin", "api"},
-                                                           {"review", nullptr}});
+                                                           {"review", {{"diff", ""}, {"warnings", json::array()}}}});
 
     CHECK(app.session->queue().approve(id).get().ok);
     const json decided = get(port, "/v0/approvals/" + id).value();
