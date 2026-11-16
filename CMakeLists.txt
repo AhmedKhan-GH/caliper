@@ -871,6 +871,8 @@ if(TARGET caliper_builder_session)
                 SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
         endif()
     endif()
+    # The host's catalog providers for live views, feed channels and metrics.
+    add_subdirectory(src/host/catalog_providers)
 endif()
 
 # The Python extension (caliper-python spike): a nanobind module over the embed
