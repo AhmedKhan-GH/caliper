@@ -350,6 +350,8 @@ typedef enum CaliperNetEncoding {
 #define CALIPER_NET_MAX_DETAIL_FIELDS   16u          /* fields in a selection's details    */
 #define CALIPER_NET_DETAIL_TEXT_MAX     256u         /* bytes of a string in the details   */
 #define CALIPER_NET_DETAILS_TIMEOUT_MS  2000u        /* the script's details callback, at most */
+#define CALIPER_NET_REPLY_WAIT_MS       60000u       /* a hub answers an unanswered CONTROL timeout */
+#define CALIPER_NET_RELEASE_GRACE_MS    10000u       /* a paused run with no controller resumes */
 
 /* Item size in bytes of a CaliperNetDType, 0 for an unknown one. */
 static inline uint32_t caliper_net_dtype_size(int32_t dtype) {

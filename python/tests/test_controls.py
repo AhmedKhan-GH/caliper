@@ -173,6 +173,7 @@ def test_strings_and_limits_mirror_the_codec():
     assert C.MAX_SELECTION == w.MAX_EVENT_INDICES
     assert C.ACTION_WAIT_S * 1000 == w.ACTION_WAIT_MS
     assert C.DETAILS_TIMEOUT_S * 1000 == w.DETAILS_TIMEOUT_MS
+    assert C.RELEASE_GRACE_S * 1000 == w.RELEASE_GRACE_MS
 
 
 def test_using_controls_imports_nothing_heavy():

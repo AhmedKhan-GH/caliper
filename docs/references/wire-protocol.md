@@ -514,7 +514,7 @@ The producer sends CONTROLS right after the VIEWS that confirms an attachment, a
 | `value` | number, boolean or string | `set` only: the new value |
 | `count` | integer (uint32), optional | `step` only: how many steps the loop runs before it pauses, at least 1. Default 1 |
 
-A receiver ignores the keys that do not belong to the op. The key `args` is reserved for typed action arguments in a later version: a viewer sends it only to a producer that announced a capability for it, and 3.1 defines none. A viewer sends CONTROL only as [Who may control](#who-may-control) allows, and at most 30 `set` requests per second for one parameter, for example while a slider is dragged, ending with the value where the drag stops.
+A receiver ignores the keys that do not belong to the op. The key `args` is reserved for typed action arguments in a later version: a viewer sends it only to a producer that announced a capability for it, and 3.1 defines none. A viewer sends CONTROL only as [Who may control](#who-may-control) allows, and at most 30 `set` requests per second for one parameter, for example while a slider is dragged, ending with the value where the drag stops. A producer or a hub answers a CONTROL from a peer that did not announce `controls` in its HELLO with an ERROR `bad_request`, which names the request in `in_reply_to` and `request_id`, and keeps the connection.
 
 ### control_reply
 
@@ -660,7 +660,7 @@ A script opts in by calling a checkpoint in its training loop, once per step, on
 2. runs the queued actions one at a time, in the order they were accepted;
 3. waits, when the run pauses here, and while it waits sets parameter values and runs actions as they arrive, until a `resume` or a `step` releases it.
 
-The producer keeps a waiting checkpoint interruptible, so that the person running the script can still stop it, for example with Ctrl-C or a notebook's interrupt. A run stays paused when its viewers disconnect, until a viewer resumes it.
+The producer keeps a waiting checkpoint interruptible, so that the person running the script can still stop it, for example with Ctrl-C or a notebook's interrupt; after such an interrupt the run is no longer paused. A paused run also resumes when its server closes, or when no connection that may control it has been open for 10 seconds (`CALIPER_NET_RELEASE_GRACE_MS`), which leaves a viewer time to reload its page.
 
 ### Pause, resume and step
 
@@ -709,7 +709,7 @@ A viewer sends CONTROL only when all three hold: the WELCOME of the server it is
 A hub that implements 3.1 announces `controls` and `selection` in its WELCOME. It then:
 
 - forwards a viewer's CONTROL only to the producer of the session that the viewer is attached to, rewriting `request_id` in both directions as for SUBSCRIBE, and routes each CONTROL_REPLY to the viewer that asked, keeping the route of a `queued` reply until the final one;
-- answers a CONTROL itself with `forbidden` without `--allow-control`, `not_attached` when the viewer is not attached, and `unsupported` when the session's producer lacks `controls` or the session has ended. When a producer disconnects with requests still waiting, the hub answers them `unsupported`;
+- answers a CONTROL itself with `forbidden` without `--allow-control`, `not_attached` when the viewer is not attached, and `unsupported` when the session's producer lacks `controls` or the session has ended. When a producer disconnects with requests still waiting, the hub answers them `unsupported`. A CONTROL that the producer does not answer within 60 seconds (`CALIPER_NET_REPLY_WAIT_MS`) the hub answers `timeout` itself, and a `run` that the producer answered `queued` gets its final reply from the hub as `timeout` 10 minutes and 60 seconds after it was queued (`CALIPER_NET_ACTION_WAIT_MS` plus `CALIPER_NET_REPLY_WAIT_MS`);
 - forwards the producer's CONTROLS and SELECTION to every viewer of the session that announced the capability, coalescing them like the producer;
 - keeps the latest CONTROLS of each session and its latest SELECTION of each item space, sends them to a viewer right after the VIEWS of an attachment, and keeps them after the session ends. A viewer disables the controls of an ended session.
 
@@ -802,6 +802,8 @@ Nothing in the protocol lets a slow viewer block a producer, and training is nev
 | `CALIPER_NET_MAX_DETAIL_FIELDS` | 16 | Fields in a selection's details (3.1) |
 | `CALIPER_NET_DETAIL_TEXT_MAX` | 256 | Bytes of a string in a selection's details (3.1) |
 | `CALIPER_NET_DETAILS_TIMEOUT_MS` | 2,000 | The time the script's details function has (3.1) |
+| `CALIPER_NET_REPLY_WAIT_MS` | 60,000 | A hub answers a CONTROL `timeout` when the producer has not answered it by then (3.1) |
+| `CALIPER_NET_RELEASE_GRACE_MS` | 10,000 | A paused run resumes when no connection that may control it has been open this long (3.1) |
 
 With the defaults, a heatmap snapshot is at most 1 MiB, an image snapshot 1 MiB, and a 2-D points snapshot with values 1.2 MB.
 
