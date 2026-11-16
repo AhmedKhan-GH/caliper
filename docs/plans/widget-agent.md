@@ -463,22 +463,23 @@ For a local server:
 
 ## Work items
 
-The items come after sprint 2 merges, in the integration order of the [builder overview](builder-overview.md), which
-also lists the items that the widget agent shares with the rest of the builder. S is one to two days, M three to five
+The items come after sprint 2 merges. The numbers are their places in the integration order of the
+[builder overview](builder-overview.md#the-integration-order-after-sprint-2), which also lists the items that come
+before them, such as the session in the app and the command-layer enforcement. S is one to two days, M three to five
 and L six to ten; each figure is rough.
 
 | Order | Item | Size |
 |---|---|---|
-| 1 | Stacked previews in the session: the preview id, the scratch copy, dry runs and `panel.render` against it, `commit_preview` and `drop_preview`, `preview.stale` | M, 4 days |
-| 2 | An optional `_meta` argument on `AcpClient::new_session()` | S, 1 day |
-| 3 | The evaluation of the ACP Python SDK for the sidecar's agent side ([Widget agent sidecar](byok-agent.md#what-is-built-and-what-waits)) | S, 2 days |
-| 4 | Widget sessions in the sidecar: `_meta.caliper.widget`, the scoped tools and their check, the widget system prompt, images and embedded context in prompts, the preview header, the turn budget and `session/close` | M, 5 days |
-| 5 | The context bundle, built in the app from the session, with its bounds and cuts | M, 3 days |
-| 6 | The inline surface: the four entry points, the inline prompt, the preview drawn in place, Accept, Reject and Refine, and Ask in chat | L, 8 days |
-| 7 | Adopt Pydantic AI as the provider layer (spike in progress) | M, about 4 days after the spike, to be sized again by its result |
-| 8 | The capability probe and its cache, with the override | S, 2 days |
-| 9 | The presets and one key per provider in the settings, with `KeyStore` knowing the presets' ids | M, 3 days |
-| 10 | The provider conformance suite, its stubs and its reference page | M, 4 days |
-| 11 | The GPU contention note | S, 1 day |
+| 9 | Stacked previews in the session: the preview id, the scratch copy, dry runs and `panel.render` against it, `commit_preview` and `drop_preview`, `preview.stale` | M, 4 days |
+| 10 | An optional `_meta` argument on `AcpClient::new_session()` | S, 1 day |
+| 11 | The evaluation of the ACP Python SDK for the sidecar's agent side ([Widget agent sidecar](byok-agent.md#what-is-built-and-what-waits)) | S, 2 days |
+| 12 | Widget sessions in the sidecar: `_meta.caliper.widget`, the scoped tools and their check, the widget system prompt, images and embedded context in prompts, the preview header, the turn budget and `session/close` | M, 5 days |
+| 13 | The context bundle, built in the app from the session, with its bounds and cuts | M, 3 days |
+| 14 | The inline surface: the four entry points, the inline prompt, the preview drawn in place, Accept, Reject and Refine, and Ask in chat; with the packaging of `caliper-agent` and a Python runtime | L, 8 days |
+| 15 | Adopt Pydantic AI as the provider layer (spike in progress) | M, about 4 days after the spike, to be sized again by its result |
+| 16 | The capability probe and its cache, with the override | S, 2 days |
+| 17 | The presets and one key per provider in the settings, with `KeyStore` knowing the presets' ids | M, 3 days |
+| 18 | The provider conformance suite, its stubs and its reference page | M, 4 days |
+| 19 | The GPU contention note | S, 1 day |
 
 The Windows Credential Manager store, with one entry per provider, is on the [Windows parity](windows-parity.md) page.
