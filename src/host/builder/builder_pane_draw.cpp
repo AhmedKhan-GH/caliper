@@ -467,7 +467,13 @@ std::string plan_key(const DragPayload& d, const DropHit& h) {
 
 }  // namespace
 
-void BuilderPane::draw(const ImRect& area, SpecRuntime& runtime, const SpecLook& look) {
+void BuilderPane::draw(const ImRect& area, SpecRuntime& runtime, const SpecLook& look, std::string* focus) {
+    if (focus && *focus != synced_focus_) focus_panel(*focus);   // the page changed it
+    draw_body(area, runtime, look);
+    if (focus) *focus = synced_focus_ = focus_panel_;
+}
+
+void BuilderPane::draw_body(const ImRect& area, SpecRuntime& runtime, const SpecLook& look) {
     if (!draw_) draw_ = std::make_unique<Draw>();
     Draw& d = *draw_;
     d.look = look;

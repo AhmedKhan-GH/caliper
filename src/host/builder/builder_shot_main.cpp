@@ -293,6 +293,7 @@ int main(int argc, char** argv) {
         ImGui::GetIO().ConfigInputTrickleEventQueue = true;
     });
     const std::string workspace_name = fs::path(workspace).filename().string();
+    std::string page_focus;   // the spec page's focused panel, which the pane shares
 
     // One frame of a page in build mode: the page bar with Home, the spec's
     // title and the pane's items, the status bar, then the work area.
@@ -356,7 +357,7 @@ int main(int argc, char** argv) {
                                             ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
                                             ImGuiWindowFlags_NoScrollWithMouse);
         ImGui::PopStyleVar(3);
-        if (shown) pane.draw(area, *runtime, look);
+        if (shown) pane.draw(area, *runtime, look, &page_focus);   // the page's focus, shared
         ImGui::End();
     };
 

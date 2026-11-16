@@ -350,8 +350,10 @@ public:
     // In build mode, inside a window over the work area: lays the regions
     // out, draws the runtime on the canvas, then the columns, the strip and
     // the canvas's overlays, and turns the mouse into gestures. Outside build
-    // mode it draws the runtime over the whole area.
-    void draw(const ImRect& area, SpecRuntime& runtime, const SpecLook& look);
+    // mode it draws the runtime over the whole area. `focus`, the page's
+    // focused panel, is taken when the page changed it since the last call
+    // and holds the pane's focused panel after it.
+    void draw(const ImRect& area, SpecRuntime& runtime, const SpecLook& look, std::string* focus = nullptr);
     // Named rectangles of the last draw ("source:table:run42_metrics",
     // "primitive:series", "prop:title", "panel:curves", "divider:", ...), for
     // drivers and tests; false when the name was not drawn.
@@ -366,6 +368,7 @@ public:
 
 private:
     friend struct Draw;
+    void draw_body(const ImRect& area, SpecRuntime& runtime, const SpecLook& look);
     void draw_sources(const SpecRect& rect);
     void draw_primitives(const SpecRect& rect);
     void draw_properties(const SpecRect& rect, SpecRuntime& runtime);
@@ -415,6 +418,7 @@ private:
     std::string selected_, selected_column_;
     std::vector<std::string> fresh_;
     std::string focus_panel_, focus_source_;
+    std::string synced_focus_;   // the page's focus as draw() last left it
     std::map<std::string, std::string> pending_ids_;   // a catalog row's id before it is added
 
     std::string gesture_group_, gesture_what_;
