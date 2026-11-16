@@ -349,9 +349,9 @@ set_target_properties(caliper_api PROPERTIES
 # (validation, handles, the uniform arena, frames, serials, readback) and the recording
 # backend that the headless tests use. Portable C++17 with no graphics API and nothing
 # Emscripten cannot compile, so the native backends, the tests and the WebAssembly views
-# share it. On Apple the Metal backend of the layer is added below. The browser views draw
-# through the layer's WebGPU backend (web/wasm, its own Emscripten project); the native
-# renderers keep their own paths for now.
+# share it. On Apple the Metal backend of the layer is added below. The live views' scene view
+# draws through the layer, and so do the browser views, through the layer's WebGPU backend
+# (web/wasm, its own Emscripten project); the native renderers keep their own paths for now.
 add_library(caliper_gfx STATIC
     src/host/gfx/core.cpp
     src/host/gfx/recording_backend.cpp
@@ -371,8 +371,9 @@ endif()
 # The scene core of the renderer core (design/renderer-core.md, "The scene core"): the scene
 # store, world matrices, cameras, bounds and fitting, compiling scenes into draw lists of the
 # graphics layer (src/host/gfx/gfx.h), picking, and BackendResources, its handles over a backend
-# of the layer. Plain C++17 that never calls a GPU itself. No view uses it yet; the graphics
-# suite's scene rows draw it on Metal, and caliper_scene_tests (tests/scene) checks it headless.
+# of the layer. Plain C++17 that never calls a GPU itself; the live views' scene view
+# (src/host/live/live_scene.h) draws through it, the graphics suite's scene rows draw it on Metal,
+# and caliper_scene_tests (tests/scene) checks it headless.
 add_library(caliper_scene STATIC
     src/host/scene/path.cpp
     src/host/scene/scene_tree.cpp
@@ -563,8 +564,10 @@ target_include_directories(libcaliper PUBLIC
 # CALIPER_DEPENDENCY_LIBS: a static lib's private deps still propagate as
 # link-only, so the full list would drag the chrome widgets (node editor, text
 # editor, ImTerm) into every embedder, including the Python extension.
+# caliper_scene (with caliper_gfx): the scene view of the live views draws scenes through the
+# scene core and the graphics layer (src/host/live/live_scene.h).
 target_link_libraries(libcaliper
-    PUBLIC caliper_host_lib caliper::sdk caliper::ui_stack caliper_app_paths caliper_net
+    PUBLIC caliper_host_lib caliper::sdk caliper::ui_stack caliper_app_paths caliper_net caliper_scene
     PRIVATE ${CALIPER_CORE_LIBS})
 if(APPLE)
     target_link_libraries(libcaliper PUBLIC caliper_metal_backend)
