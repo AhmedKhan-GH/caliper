@@ -3,8 +3,9 @@
 The `caliper` executable starts the app and also takes subcommands. It reads its command line before anything opens a window. Every subcommand except `dev` runs without opening a window: `list`, `check`, `install`, `new`, `build`, `info`, `shot`, `serve` and `--help` never start the app, so they are safe in scripts and CI. `serve` runs until it is stopped; the others exit when they are done. Only `caliper` with no subcommand and `caliper dev` start the app. `shot` draws the app's applet page into an offscreen canvas and writes it as a PNG, and shows nothing on screen. The parser and the subcommands are in `src/host/host_cli.h`, and `src/main.cpp` dispatches to them.
 
 ```text
-usage: caliper [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]
-       caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]
+usage: caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] [--hidden]
+       caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]
+                   [--hidden]
        caliper list [--applets <dir>]...
        caliper check <folder>
        caliper install <folder>
@@ -22,6 +23,8 @@ Results go to standard output, and errors go to standard error, each starting wi
 ## Starting the app
 
 `caliper` with no subcommand starts the app. `--applets <dir>`, or `--applets=<dir>`, adds a development folder to the search. It may be given more than once, and the folders are searched in the order given. It is accepted when starting the app and with `dev`, `list` and `shot`; with any other subcommand it is a usage error, and so is `--applets` followed by an argument that starts with `--`, such as `--applets --help`. An argument that starts with `-psn_`, which Finder passes to an app it launches on older versions of macOS, is ignored.
+
+`--url <link>`, or `--url=<link>`, attaches the app to a stream of [wire protocol v3](wire-protocol.md) as soon as it starts, as pasting the link into the attach pane does: the page link `http://127.0.0.1:<port>/?token=<token>` that `caliper.serve()` prints, or the stream link `ws://127.0.0.1:<port>/v3/stream?token=<token>` of a script or a hub. The app opens on the stream's live page. A link that does not attach leaves the app on its landing page, and the Activity pane and standard error say why. It is accepted when starting the app and with `dev`, may be given once, and needs a value. The link holds the stream's session token, which other users of the machine can read from the process list while the app runs, so use it on a machine you do not share. See [Attach to a running script](../guides/attach-to-a-running-script.md#attach-to-a-stream-by-its-link).
 
 `caliper dev <folder>` starts the app with `<folder>` searched first, before any `--applets` folders. The folder is usually an applet's build folder, such as `build`, or its build output, `build/applets` (see [Build folders](#build-folders)). The Activity pane's `scanned` line names the folder that was searched. If `<folder>` is not a folder, `dev` prints `caliper: not a folder: <folder>` and exits with 1 without starting the app. `dev` does not reload an applet whose library is rebuilt; quit and start it again.
 
@@ -48,6 +51,7 @@ In this mode the app starts as the test binaries that open hidden windows do ([T
 - The window is 1280 by 800 in screen coordinates on every display, unless `CALIPER_WINDOW_SIZE` sets another size, so captures have the same size everywhere: the framebuffer is that size times the display's scale.
 - The app reads and writes no `imgui.ini`, so every run shows the layout of a first run and the saved layout is left alone. Set `CALIPER_DATA_DIR` as well to keep the stores and the API file out of the app-data folder.
 - SIGINT and SIGTERM close the window as a click on its close button would, so the full teardown runs and the API file is removed. `CALIPER_EXIT_AFTER` works as usual.
+- `CALIPER_TEST_UI` plays scripted clicks, typing and drags into the live page, only in this mode ([Host variables](environment.md#host-variables)). With `--url`, a test attaches the hidden app to a stream and drives its run bar and its views as a person would.
 
 At start-up the app prints one line to standard error that says the window is not shown, with its visibility, its focus, whether the background policy holds and the framebuffer's size:
 
@@ -287,7 +291,7 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 |---|---|
 | 0 | Success. |
 | 1 | A check failed, nothing was found, or a file operation failed. `build` also exits with 1 when CMake, a compiler or the SDK is missing or the build fails, `dev` when its folder is not a folder, `shot` when its applet cannot be launched or is quarantined, when the renderer cannot draw offscreen, or when Caliper API cannot listen, and `serve` when it cannot listen or cannot use its token file or assets folder. |
-| 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets`, `--api`, `--api-port` or `--hidden` with a subcommand that does not take it, `--api-port` or `--allow-control` without `--api` when starting the app, `dev` or `shot`, an option of `shot` or `serve` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a port out of range, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
+| 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets`, `--url`, `--api`, `--api-port` or `--hidden` with a subcommand that does not take it, `--url` without a link or given twice, `--api-port` or `--allow-control` without `--api` when starting the app, `dev` or `shot`, an option of `shot` or `serve` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a port out of range, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
 
 ## Environment variables
 

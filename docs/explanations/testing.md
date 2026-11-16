@@ -45,7 +45,7 @@ The app itself takes the same mechanism with `--hidden` or `CALIPER_HIDDEN=1` ([
 
 ## Embedding and live streaming
 
-`caliper_embed_tests` drives `libcaliper` as a third-party embedder would: it creates an offscreen core, loads the `hello` applet, pumps frames, reads pixels back and shuts down, and it checks the refusal gates. `caliper_live_tests` and `caliper_live_views_tests` cover live streaming, on macOS only, in one process over an offscreen core. See [Live streaming](live-streaming.md).
+`caliper_embed_tests` drives `libcaliper` as a third-party embedder would: it creates an offscreen core, loads the `hello` applet, pumps frames, reads pixels back and shuts down, and it checks the refusal gates. `caliper_live_tests` and `caliper_live_views_tests` cover live streaming, on macOS only, in one process over an offscreen core. See [Live streaming](live-streaming.md). The live page's controls of wire protocol 3.1 are checked at three levels: `caliper_live_tests` checks the page's state on a scripted source (who may control, the rate of `set`, pending values, actions, selections), the native stream against a fake script, and the run bar drawn on an offscreen canvas and clicked through ImGui's input queue (`src/host/live/live_ui_driver.h`). The ctest entry `caliper_app_live_controls` (`tests/test_net_hub.cpp`) starts the real app hidden with `--url` on a hub in the test process, clicks Pause, types a parameter value, runs an action and shift-drags across a heatmap with `CALIPER_TEST_UI`, and checks what the fake script received and what the page shows of its echo, once with the hub's `--allow-control` and once without.
 
 ## The command line
 
