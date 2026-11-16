@@ -1256,7 +1256,12 @@ bool Server::listen(uint16_t port, std::string* err, const std::string& host) {
         *err = "socket: " + sock_error_text(cnet_errno());
         return false;
     }
-#ifndef _WIN32
+#ifdef _WIN32
+    // Windows lets a later socket that sets SO_REUSEADDR bind a port in use;
+    // an exclusive socket cannot be taken over that way.
+    BOOL excl = TRUE;
+    ::setsockopt(fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&excl, sizeof excl);
+#else
     int on = 1;   // a restarted server can take its port back at once
     ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof on);
 #endif
