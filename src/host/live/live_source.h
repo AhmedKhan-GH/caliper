@@ -258,6 +258,9 @@ public:
         (void)key; (void)out;
         return false;
     }
+    // The frame thread will never show scene view `key` (the core refused it for good):
+    // the source ends its subscription and drops what still arrives for it.
+    virtual void stop_scene(uint64_t key) { (void)key; }
 };
 
 // Why open_shm_source returned NULL.

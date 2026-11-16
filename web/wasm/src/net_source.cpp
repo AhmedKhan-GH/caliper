@@ -540,6 +540,18 @@ bool NetSource::take_scene(uint64_t key, std::vector<caliper_live::SceneItem>* o
     return true;
 }
 
+void NetSource::stop_scene(uint64_t key) {
+    View* v = by_id(key);
+    if (!v || v->kind != CALIPER_NET_KIND_SCENE || v->scene.stopped) return;
+    v->scene.items.clear();
+    v->scene.stopped = true;   // what is still in flight is dropped
+    if (v->sub) {
+        wire::Unsubscribe u;
+        u.sub = v->sub;
+        send_msg(u);
+    }
+}
+
 const caliper_live::Snapshot* NetSource::shown(const std::string& name) const {
     for (const auto& v : views_)
         if (v.name == name && v.shown.meta.host_base) return &v.shown.meta;

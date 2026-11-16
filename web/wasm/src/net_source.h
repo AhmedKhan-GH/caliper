@@ -99,6 +99,7 @@ public:
     // The view's VIEWS entry (a scene's description); the resolved data view is not kept here.
     bool data_view_of(uint64_t key, caliper_net::Json* resolved, caliper_net::Json* offer) override;
     bool take_scene(uint64_t key, std::vector<caliper_live::SceneItem>* out) override;
+    void stop_scene(uint64_t key) override;
 
     // Socket callbacks (public for the C trampolines in net_source.cpp).
     void on_open();
