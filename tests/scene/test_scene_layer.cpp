@@ -6,6 +6,7 @@
 #include "scene/backend_resources.h"
 #include "scene/pick.h"
 #include "scene_row_fixture.h"
+#include "surface_row_fixture.h"
 
 #include <doctest/doctest.h>
 
@@ -240,4 +241,17 @@ TEST_CASE("the scene core's draw lists pass the layer's validation: images, came
     Batch photo = rgb;
     REQUIRE(flat.set_batch(flat.ensure("photo"), photo));
     submit(L, flat, fx.camera(), 2);
+}
+
+TEST_CASE("the scene core's draw lists pass the layer's validation: the surface row's scene") {
+    Layer L;
+    const scene_fixtures::SurfaceRowFixture fx;
+    const std::vector<uint8_t> bytes = fx.bytes();
+    REQUIRE(bytes.size() <= (1u << 20));
+    REQUIRE(L.backend.write_buffer(L.data, 0, bytes.data(), bytes.size()));
+    SceneTree t;
+    REQUIRE(fx.populate(t, L.data));
+    t.update();
+    // The box, the marker, the path and the surface, after the surface's index clamp.
+    submit(L, t, fx.camera(t), 4);
 }
