@@ -764,3 +764,24 @@ TEST_CASE("labels: projected anchors of points and boxes, nearest first, from CP
     CHECK(labels[1].text == "far");
     CHECK(labels[1].depth > labels[0].depth);
 }
+
+TEST_CASE("labels: one class id for every point is read once, not at each point's stride") {
+    // A class-id array of one row stands for every point, whatever its stride. Its CPU view holds
+    // that row only; the ids after it belong to someone else and must never be read.
+    SceneTree t;
+    REQUIRE(t.set_classes({{7, "seven", 0xff0000ffu}, {9, "nine", 0xff00ff00u}}));
+    const float pts[] = {-1, 0, 0, 0, 0, 0, 1, 0, 0};
+    const int32_t ids[3] = {7, 9, 9};   // only ids[0] is the array's
+    Batch b = bounded(points3(3, pts), -5, 5);
+    b.arrays.push_back(array(Role::ClassIds, 1, 4, VertexFormat::S32, 0, ids));
+    REQUIRE(t.set_batch(t.ensure("p"), b));
+    t.update();
+    Orbit o;
+    o.target[0] = o.target[1] = o.target[2] = 0;
+    o.distance = 10;
+    o.azimuth = kPi / 2;   // the eye on +z
+    o.elevation = 0;
+    const auto labels = project_labels(t, ViewCamera(o), 400, 300);
+    REQUIRE(labels.size() == 3);
+    for (const LabelAnchor& a : labels) CHECK_MESSAGE(a.text == "seven", "point ", a.item, ": ", a.text);
+}
