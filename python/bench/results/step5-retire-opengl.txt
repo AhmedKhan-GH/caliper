@@ -56,3 +56,30 @@ caliper shot (caliper_cli_shot_temp, caliper_cli_shot_data_dir, caliper_cli_api)
 service (caliper_export_tests) and the shader programs (caliper_shader_tests, without a window). No test set
 CALIPER_RENDERER, and the app reached OpenGL only when Metal failed to start, so nothing but the graphics
 suite's OpenGL environment drew with OpenGL.
+
+## After the step (its last code commit, 3b545392), the same build and commands
+
+The build folder was made anew after GLEW and OpenGL left the build: its build.ninja and CMakeCache.txt name
+neither GLEW, OpenGL nor imgui_impl_opengl3, otool -L shows no OpenGL load command in caliper or
+caliper_gfx_tests, and libcaliper.a defines no GLEW or ImGui OpenGL symbol.
+
+ctest --test-dir cmake-build-release --output-on-failure --timeout 600
+  53 entries: 51 passed, 2 skipped, 0 failed. The 49 entries of before, with the same results, and four new
+  ones: caliper_cli_app_no_renderer, caliper_cli_app_renderer_gl, caliper_cli_shot_no_renderer and
+  caliper_cli_shot_renderer_gl, the refusals of the app and caliper shot.
+
+Each binary on its own:
+  caliper_tests              375 test cases, 375 passed, 2 skipped by doctest's own decorators (as before)
+  caliper_gfx_tests           61 test cases, 61 passed, 0 skipped
+  caliper_shader_tests         2 test cases, 2 passed (as before)
+  caliper_scene_tests         51 test cases, 51 passed (as before)
+  caliper_live_tests          33 test cases, 33 passed (as before)
+  caliper_live_views_tests    20 test cases, 20 passed (as before)
+  caliper_embed_tests         25 test cases, 25 passed: the 23 of before and the two embed/refusal cases
+  caliper_export_tests        24 test cases, 24 passed (as before)
+
+The graphics suite lost its OpenGL environment and the 8 gfx/GL rows. Its other 61 rows have the same names
+and each passes, before and after (compared from the suite's XML reports); the 60 Metal rows are unchanged,
+and the Dock-icon row now runs on the Metal environment instead of the OpenGL one.
+
+No timing was taken: no timed path changed, and a live training run held the machine's GPU.
