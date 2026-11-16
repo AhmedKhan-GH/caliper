@@ -7,7 +7,8 @@
 //     CALIPER_SLOW_TESTS=1 ctest -L slow --output-on-failure
 //
 // CALIPER_TEST_THREADS sets the threads, 6 by default and at most 6, the machine's share of a
-// heavy job.
+// heavy job. CALIPER_EXHAUSTIVE_RANGES=<n> runs only the first n ranges, the small case whose peak
+// memory is measured before a full run; the test fails then, so that it never passes as one.
 #include "gfx/colormap_keys.h"
 #include "shaders/colormap_cases.h"
 #include "tensor_bridge.h"
@@ -68,6 +69,10 @@ int main() {
     }
     int threads = 6;
     if (const char* t = std::getenv("CALIPER_TEST_THREADS")) threads = std::max(1, std::min(6, std::atoi(t)));
+    const auto& ranges = colormap_cases::ranges();
+    size_t range_count = ranges.size();
+    if (const char* n = std::getenv("CALIPER_EXHAUSTIVE_RANGES"))
+        range_count = size_t(std::max(1, std::min(int(ranges.size()), std::atoi(n))));
     double load[3] = {};
     getloadavg(load, 3);
     std::printf("caliper_colormap_exhaustive: all 2^32 inputs per range, %d threads, load %.2f at the start\n", threads,
@@ -76,7 +81,8 @@ int main() {
     const auto all = std::chrono::steady_clock::now();
     int failed = 0;
     uint64_t total = 0;
-    for (const auto& r : colormap_cases::ranges()) {
+    for (size_t ri = 0; ri < range_count; ++ri) {
+        const colormap_cases::Range& r = ranges[ri];
         shaders::Cmap c{};
         cmap::fill_block(cmap::derive_keys(r.vmin, r.vmax), r.vmin, r.vmax, nullptr, &c);
         const auto t0 = std::chrono::steady_clock::now();
@@ -113,9 +119,13 @@ int main() {
         failed += sum.bad != 0 || sum.compared != (1ull << 32);
         total += sum.compared;
     }
+    if (range_count != ranges.size()) {
+        std::printf("FAILED: only %zu of %zu ranges ran (CALIPER_EXHAUSTIVE_RANGES)\n", range_count, ranges.size());
+        failed = 1;
+    }
     getloadavg(load, 3);
     const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - all).count();
     std::printf("%s: %llu inputs over %zu ranges in %.1f s with %d threads, load %.2f at the end\n",
-                failed ? "FAILED" : "passed", (unsigned long long)total, colormap_cases::ranges().size(), s, threads, load[0]);
+                failed ? "FAILED" : "passed", (unsigned long long)total, range_count, s, threads, load[0]);
     return failed ? 1 : 0;
 }
