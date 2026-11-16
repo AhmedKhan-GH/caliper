@@ -1,10 +1,18 @@
 // The WebGPU heatmap and image renderer: the snapshot goes to an r32float
 // texture (rgba8unorm for an image) and the fragment shader maps every pixel
 // of the plot area to its cell and applies the colour table.
+//
+// A heatmap's colour index is exactly the native reference's (lutIndex), as
+// in the native WebGPU renderer: WGSL allows a division 2.5 ULP of error and
+// may assume no NaN or infinity, so the shader does not divide. The CPU finds
+// the threshold of each index (colormapThresholds), and the shader counts the
+// thresholds a value has passed with a binary search of exact comparisons;
+// NaN, tested on its bits, is index 0.
 
+import { colormapThresholds } from './colormap.js';
 import type { Plot2D } from '../views/plot.js';
 import { PLATE_RGBA } from '../views/theme.js';
-import { canvasFormat, lutTexture, WGSL_LUT } from './gpu.js';
+import { canvasFormat, lutTexture } from './gpu.js';
 
 const SHADER = /* wgsl */ `
 struct U {
@@ -14,11 +22,25 @@ struct U {
   size: vec2f,   // columns, rows
   range: vec2f,  // vmin, vmax
   mode: u32,     // 0 heatmap, 1 image
+  cmap: u32,     // the thresholds' mode: 0 every value at index 0, 1 increasing, 2 decreasing
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var data: texture_2d<f32>;
 @group(0) @binding(2) var lut: texture_2d<f32>;
-${WGSL_LUT}
+@group(0) @binding(3) var<storage, read> th: array<f32>;   // T[1..255]
+fn index_of(v: f32) -> i32 {
+  let b = bitcast<u32>(v);
+  if (((b & 0x7f800000u) == 0x7f800000u && (b & 0x007fffffu) != 0u) || u.cmap == 0u) { return 0; }
+  var lo = 1u;
+  var hi = 256u;
+  loop {
+    if (lo >= hi) { break; }
+    let mid = (lo + hi) / 2u;
+    let passed = select(v <= th[mid], th[mid] <= v, u.cmap == 1u);
+    if (passed) { lo = mid + 1u; } else { hi = mid; }
+  }
+  return i32(lo - 1u);
+}
 @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
   let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
   return vec4f(p * 2.0 - 1.0, 0.0, 1.0);
@@ -30,7 +52,7 @@ ${WGSL_LUT}
   let c = vec2i(floor(d));
   let t = textureLoad(data, c, 0);
   if (u.mode == 1u) { return vec4f(t.rgb, 1.0); }
-  return textureLoad(lut, vec2i(lut_index(t.r, u.range.x, u.range.y), 0), 0);
+  return textureLoad(lut, vec2i(index_of(t.r), 0), 0);
 }
 `;
 
@@ -46,6 +68,7 @@ function pipelinesOf(device: GPUDevice) {
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType } },
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
       ],
     });
     const pipeline = device.createRenderPipeline({
@@ -77,6 +100,11 @@ export class HeatmapGpu {
   private rows = 0;
   private lo = 0;
   private hi = 1;
+  /** The colour thresholds of [thLo, thHi] (colormapThresholds) and their mode. */
+  private readonly th: GPUBuffer;
+  private thMode = 0;
+  private thLo = NaN;
+  private thHi = NaN;
 
   constructor(private readonly device: GPUDevice) {
     const ctx = this.canvas.getContext('webgpu');
@@ -84,6 +112,7 @@ export class HeatmapGpu {
     this.ctx = ctx;
     this.ctx.configure({ device, format: canvasFormat(), alphaMode: 'opaque' });
     this.uniform = device.createBuffer({ size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.th = device.createBuffer({ size: 1024, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
   }
 
   upload(data: Float32Array | Uint8Array, rows: number, cols: number, image: boolean, lo: number, hi: number, lut: Uint8Array): void {
@@ -104,6 +133,13 @@ export class HeatmapGpu {
     }
     this.lo = lo;
     this.hi = hi;
+    if (!image && !(Object.is(lo, this.thLo) && Object.is(hi, this.thHi))) {
+      const t = colormapThresholds(lo, hi);
+      d.queue.writeBuffer(this.th, 0, t.T as Float32Array<ArrayBuffer>);
+      this.thMode = t.mode;
+      this.thLo = lo;
+      this.thHi = hi;
+    }
   }
 
   draw(plot: Plot2D, dpr: number): void {
@@ -117,6 +153,7 @@ export class HeatmapGpu {
           { binding: 0, resource: { buffer: this.uniform } },
           { binding: 1, resource: this.tex.createView() },
           { binding: 2, resource: this.lut.createView() },
+          { binding: 3, resource: { buffer: this.th } },
         ],
       });
     }
@@ -124,6 +161,7 @@ export class HeatmapGpu {
     const f = new Float32Array(this.u);
     f.set([a.x * dpr, a.y * dpr, a.w * dpr, a.h * dpr, plot.x.lo, plot.x.hi, plot.y.lo, plot.y.hi, ...PLATE_RGBA, this.cols, this.rows, this.lo, this.hi]);
     new Uint32Array(this.u)[16] = this.image ? 1 : 0;
+    new Uint32Array(this.u)[17] = this.thMode;
     d.queue.writeBuffer(this.uniform, 0, this.u);
     const enc = d.createCommandEncoder();
     const pass = enc.beginRenderPass({
@@ -151,6 +189,7 @@ export class HeatmapGpu {
     this.tex?.destroy();
     this.lut?.destroy();
     this.uniform.destroy();
+    this.th.destroy();
     try {
       this.ctx.unconfigure();
     } catch {

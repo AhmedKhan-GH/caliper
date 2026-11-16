@@ -3,24 +3,13 @@
 
 import type { Plot2D } from '../views/plot.js';
 import { C } from '../views/theme.js';
+import { lutIndexer } from './colormap.js';
 
-const f = Math.fround;
-
-/** Colormaps a float32 array into RGBA bytes exactly as the native app does. */
+/** Colormaps a float32 array into RGBA bytes exactly as the native app does (lutIndexer). */
 export function colormapInto(out: Uint8ClampedArray, data: Float32Array, lo: number, hi: number, lut: Uint8Array): void {
-  const flo = f(lo);
-  const denom = f(f(hi) - flo);
+  const index = lutIndexer(lo, hi);
   for (let i = 0, n = data.length; i < n; i++) {
-    const v = data[i];
-    let idx = 0;
-    if (v === v) {
-      let t = denom !== 0 ? f(f(v - flo) / denom) : 0;
-      if (t < 0) t = 0;
-      else if (t > 1) t = 1;
-      idx = Math.trunc(f(f(t * 255) + 0.5));
-      if (idx > 255) idx = 255;
-    }
-    const o = idx * 4, p = i * 4;
+    const o = index(data[i]) * 4, p = i * 4;
     out[p] = lut[o];
     out[p + 1] = lut[o + 1];
     out[p + 2] = lut[o + 2];

@@ -61,16 +61,3 @@ export function lutTexture(device: GPUDevice, lut: Uint8Array, tex?: GPUTexture)
   device.queue.writeTexture({ texture: t }, lut as Uint8Array<ArrayBuffer>, { bytesPerRow: 256 * 4 }, [256, 1]);
   return t;
 }
-
-/** The colour table lookup shared by the shaders: NaN is index 0, as natively. */
-export const WGSL_LUT = /* wgsl */ `
-fn lut_index(v: f32, lo: f32, hi: f32) -> i32 {
-  let b = bitcast<u32>(v);
-  if ((b & 0x7f800000u) == 0x7f800000u && (b & 0x007fffffu) != 0u) { return 0; }
-  let d = hi - lo;
-  var t = 0.0;
-  if (d != 0.0) { t = (v - lo) / d; }
-  t = clamp(t, 0.0, 1.0);
-  return clamp(i32(t * 255.0 + 0.5), 0, 255);
-}
-`;
