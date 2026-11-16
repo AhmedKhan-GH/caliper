@@ -42,6 +42,8 @@ inline AppSession::Options app_session_options(const CommandLine& cl, bool scrip
     o.from = w.from;
     if (const char* s = std::getenv("CALIPER_COMMAND_SCRIPT"); s && *s) o.script = s;
     if (const char* r = std::getenv("CALIPER_COMMAND_RESULTS"); r && *r) o.results = r;
+    // The person's agent permissions live beside the app's other settings.
+    o.permissions_file = caliper::app_data_path("agent-permissions.json");
     gate_command_script(&o, scripts_allowed, refused);
     return o;
 }

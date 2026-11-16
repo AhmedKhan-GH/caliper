@@ -35,6 +35,14 @@
 //     raises it, and an Ollama server reached as Custom or LM Studio's
 //     address, which loads the model at its full context.
 //
+// With them, Permissions (design/command-layer.md, Agent permissions): the
+// mode of the side chat's agent and of caliper-mcp's clients (Ask, Accept
+// edits, Read only; Allow all is the chat's own, for one session, and is not
+// here), and the saved rules, each "<agent> · <command>" with Revoke. The
+// session keeps them in agent-permissions.json in the app-data folder; this
+// surface reads and changes them only through PermissionHooks, as the
+// person's own UI.
+//
 // Where it opens: a popup over the page, a share of the window, from the ⌘K
 // prompt's Setup and Model actions and from the landing screen's ⌘, Agent.
 // What it stores: widget-agent.json in the app-data folder, beside the side
@@ -66,6 +74,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace caliper_host {
@@ -201,6 +210,8 @@ struct AgentSettingsLayoutInput {
     int problems = 0;                      // the probe's tags
     bool state = false;                    // the plain state tag ("No tool calling")
     std::string cache_note;                // "Context cache about 18 GB", or ""
+    bool permissions = false;              // the Permissions section
+    int rules = 0;                         // its saved rules (at most kMaxRulesShown are laid out)
 };
 
 struct AgentSettingsLayout {
@@ -226,12 +237,34 @@ struct AgentSettingsLayout {
     WidgetRect state;
     WidgetRect cache_note;
     bool two_columns = false;
+    // Permissions: in the left column under the key with two columns, else
+    // across the window under the rest; empty without them.
+    WidgetRect perm_title;
+    WidgetRect chat_label, mcp_label;
+    std::vector<WidgetRect> chat_modes, mcp_modes;   // Ask, Accept edits, Read only
+    WidgetRect rules_label;
+    std::vector<WidgetRect> rules, revokes;          // a rule's text and its Revoke
+    WidgetRect rules_more;                           // "+N" past kMaxRulesShown, or the "None" line
 };
+
+// The most saved rules the section lists; the rest fold into "+N".
+constexpr int kMaxRulesShown = 8;
 
 AgentSettingsLayout layout_agent_settings(const AgentSettingsLayoutInput& in, const AgentSettingsMetrics& m,
                                           const WidgetMeasure& measure);
 
 // ---- the component ----------------------------------------------------------------------
+
+// What the Permissions section reads and changes, through the session
+// (Session::agent_mode() and its neighbours). "chat" and "mcp" name whose
+// mode; a mode is "ask", "accept_edits" or "read_only". Unset hooks hide the
+// section.
+struct AgentPermissionHooks {
+    std::function<std::string(const std::string& who)> mode;
+    std::function<void(const std::string& who, const std::string& mode)> set_mode;
+    std::function<std::vector<std::pair<std::string, std::string>>()> rules;   // agent, command
+    std::function<void(const std::string& agent, const std::string& command)> revoke;
+};
 
 class AgentSettings {
 public:
@@ -267,6 +300,22 @@ public:
     // spec page drops its widget agent then); one listener, null for none.
     int revision() const { return revision_; }
     void set_on_change(std::function<void()> on_change) { on_change_ = std::move(on_change); }
+    // The Permissions section's hooks; the app sets them once its session is open.
+    void set_permissions(AgentPermissionHooks hooks) { permissions_ = std::move(hooks); }
+    bool has_permissions() const { return permissions_.mode && permissions_.set_mode && permissions_.rules; }
+    // The section's state and actions, as its buttons read and do them.
+    std::string permission_mode(const std::string& who) const {
+        return permissions_.mode ? permissions_.mode(who) : std::string();
+    }
+    void set_permission_mode(const std::string& who, const std::string& mode) {
+        if (permissions_.set_mode) permissions_.set_mode(who, mode);
+    }
+    std::vector<std::pair<std::string, std::string>> saved_rules() const {
+        return permissions_.rules ? permissions_.rules() : std::vector<std::pair<std::string, std::string>>();
+    }
+    void revoke_rule(const std::string& agent, const std::string& command) {
+        if (permissions_.revoke) permissions_.revoke(agent, command);
+    }
 
     // ---- the choice
     const AgentSettingsData& data() const { return data_; }
@@ -333,6 +382,7 @@ private:
     bool open_ = false, focus_ = false;
     int revision_ = 0;
     std::function<void()> on_change_;
+    AgentPermissionHooks permissions_;
     bool key_editing_ = false;
     std::string key_text_;
     std::string key_problem_;

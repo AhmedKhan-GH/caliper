@@ -267,6 +267,8 @@ public:
     // ---- agent permissions: the app's own UI only (see above)
     // The mode in force: allow_all while Allow all is on for the chat.
     AgentMode agent_mode(AgentPrincipal who) const;
+    // The saved mode, beneath Allow all.
+    AgentMode saved_agent_mode(AgentPrincipal who) const;
     // Sets the mode of the side chat's agent or of mcp clients. Allow all is
     // for the chat only (permissions.allow_all_chat_only otherwise) and is
     // never saved; another mode turns it off and is saved.

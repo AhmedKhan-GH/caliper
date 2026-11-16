@@ -22,6 +22,10 @@
 //                  that each spec edit waits for the person's approval when
 //                  Caliper reviews them
 //   Compare ...    one chunk, a line on stderr, then exits with code 1
+//   call <tool> <json>
+//                  one call of a Caliper tool through caliper-mcp with those
+//                  arguments, as a tool call row, then a chunk with "ok" or
+//                  the error's code (the agent permissions' tests)
 //   report         answers with the prompt's blocks as JSON
 //   summary        with --reply-file <path>: streams that file's text as its
 //                  reply, a few characters at a time
@@ -508,6 +512,24 @@ void run_turn(json id, json prompt) {
             }
         }
         chunk(file.empty() ? "No API file." : "Copied.");
+        end_turn(id);
+    } else if (text.rfind("call ", 0) == 0) {
+        std::stringstream words(text.substr(5));
+        std::string tool;
+        words >> tool;
+        std::string rest;
+        std::getline(words, rest);
+        const json args = json::parse(rest.empty() ? std::string("{}") : rest, nullptr, false);
+        Mcp mcp;
+        std::string why;
+        if (!mcp.start(&why) || !args.is_object()) {
+            chunk(args.is_object() ? "No Caliper tools: " + why : "The arguments are not a JSON object.");
+            end_turn(id);
+            return;
+        }
+        static int calls = 0;
+        const json r = caliper_call(mcp, "call-" + std::to_string(++calls), tool, "edit", args);
+        chunk(r.contains("error") ? r["error"].value("code", std::string("error")) : std::string("ok"));
         end_turn(id);
     } else if (text == "report") {
         chunk(prompt.dump());

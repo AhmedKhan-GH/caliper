@@ -32,6 +32,10 @@ struct CommandRequest {
     std::string name;          // the command's name, from the path
     std::string args;          // the body: JSON text whose value is an object, at most 1 MiB
     std::string origin;        // "api", "mcp", "agent" or "viewer"
+    // The client of the request's token (Server::issue_token()): "chat" for
+    // the side chat's agent, "widget" for the widget agent's sidecar, "" for
+    // any other token. Never from the request itself.
+    std::string client;
     std::string group;         // from X-Caliper-Group; "" for none
     std::string preview;       // from X-Caliper-Preview: a stacked preview's id; "" for none
     // How long a command that needs approval waits for the person's decision

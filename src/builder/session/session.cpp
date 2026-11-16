@@ -1787,6 +1787,11 @@ AgentMode Session::agent_mode(AgentPrincipal who) const {
     return impl_->mode_of(who);
 }
 
+AgentMode Session::saved_agent_mode(AgentPrincipal who) const {
+    std::lock_guard<std::mutex> lock(impl_->perm_mutex);
+    return who == AgentPrincipal::chat ? impl_->perms.chat : who == AgentPrincipal::mcp ? impl_->perms.mcp : AgentMode::ask;
+}
+
 Error Session::set_agent_mode(AgentPrincipal who, AgentMode mode) {
     Impl& im = *impl_;
     std::lock_guard<std::mutex> lock(im.perm_mutex);

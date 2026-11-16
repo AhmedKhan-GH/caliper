@@ -575,6 +575,40 @@ AgentSettingsLayout layout_in_window(const AgentSettingsLayoutInput& in, const A
         cy += m.line + m.gap;
     }
     L.caps.h = cy - L.caps.y;
+
+    // Permissions: in the left column under the key when there are two
+    // columns, where the capabilities leave room; else under everything.
+    if (in.permissions) {
+        const float pw = L.two_columns ? left_w : inner;
+        if (!L.two_columns) y = std::max(y, cy);
+        y += m.gap * 2;
+        L.perm_title = {x0, y, pw, m.line};
+        y += m.line + m.gap;
+        const std::vector<std::string> modes = {"Ask", "Accept edits", "Read only"};
+        auto mode_row = [&](WidgetRect* label, std::vector<WidgetRect>* buttons) {
+            *label = {x0, y, m.label - m.gap, m.row};
+            float x = fx;
+            for (const auto& b : modes) {
+                buttons->push_back({x, y, bw(b), m.row});
+                x += bw(b) + m.gap;
+            }
+            y += m.row + m.gap;
+        };
+        mode_row(&L.chat_label, &L.chat_modes);
+        mode_row(&L.mcp_label, &L.mcp_modes);
+        L.rules_label = {x0, y, m.label - m.gap, m.row};
+        const float revoke = bw("Revoke");
+        const int shown = std::min(in.rules, kMaxRulesShown);
+        for (int i = 0; i < shown; ++i) {
+            L.rules.push_back({fx, y, std::max(0.0f, x0 + pw - fx - revoke - m.gap), m.row});
+            L.revokes.push_back({x0 + pw - revoke, y, revoke, m.row});
+            y += m.row + m.gap;
+        }
+        if (in.rules == 0 || in.rules > shown) {
+            L.rules_more = {fx, y, std::max(0.0f, x0 + pw - fx), m.row};
+            y += m.row + m.gap;
+        }
+    }
     *bottom = std::max(y, cy);
     return L;
 }
@@ -1075,6 +1109,13 @@ std::vector<std::string> AgentSettings::visible_text() const {
     const AgentCapabilities caps = capabilities();
     for (const char* s : {"Capabilities", "Tool calling", "Vision", "Context length", "Yes", "No", "Auto", "Probe"})
         out.push_back(s);
+    if (has_permissions()) {
+        for (const char* s : {"Permissions", "Side chat", "MCP clients", "Ask", "Accept edits", "Read only", "Saved rules"})
+            out.push_back(s);
+        const auto rules = permissions_.rules();
+        for (const auto& r : rules) out.push_back((r.first == "mcp" ? std::string("MCP clients") : r.first) + " " + r.second);
+        if (rules.empty()) out.push_back("None");
+    }
     out.push_back(yes_no(caps.tools) + " " + source_text(caps.tools_source));
     out.push_back(yes_no(caps.vision) + " " + source_text(caps.vision_source));
     out.push_back(tokens_text(caps.context) + " " + source_text(caps.context_source));
@@ -1104,6 +1145,10 @@ AgentSettingsLayoutInput AgentSettings::layout_input(const WidgetRect& area) con
     in.problems = (int)answer_.problems.size() + (answer_.failure.empty() ? 0 : 1);
     in.state = !state().empty();
     in.cache_note = cache_note();
+    if (has_permissions()) {
+        in.permissions = true;
+        in.rules = (int)permissions_.rules().size();
+    }
     return in;
 }
 
@@ -1369,6 +1414,39 @@ void AgentSettings::draw(float x, float y, float w, float h, const SpecLook& L) 
     if (!lay.state.empty() && !st.empty()) tag(L, dl, lay.state, st, L.accent);
     const std::string cache = cache_note();
     if (!lay.cache_note.empty() && !cache.empty()) tag(L, dl, lay.cache_note, cache, L.accent);
+
+    // Permissions: the two modes and the saved rules, each with Revoke.
+    if (!lay.perm_title.empty() && has_permissions()) {
+        dl->AddLine(ImVec2(lay.perm_title.x, lay.perm_title.y - m.gap),
+                    ImVec2(lay.perm_title.right(), lay.perm_title.y - m.gap), L.rule_faint);
+        text_at(dl, L.ui, L.small_size, ImVec2(lay.perm_title.x, lay.perm_title.y), L.faint, "Permissions");
+        const char* names[] = {"ask", "accept_edits", "read_only"};
+        const char* words[] = {"Ask", "Accept edits", "Read only"};
+        auto modes = [&](const WidgetRect& lr, const char* text, const std::vector<WidgetRect>& buttons, const char* who) {
+            label(lr, text);
+            const std::string now = permissions_.mode(who);
+            for (size_t i = 0; i < 3 && i < buttons.size(); ++i)
+                if (house_button(L, dl, buttons[i], (std::string("##perm.") + who + "." + names[i]).c_str(), words[i], true,
+                                 now == names[i]))
+                    permissions_.set_mode(who, names[i]);
+        };
+        modes(lay.chat_label, "Side chat", lay.chat_modes, "chat");
+        modes(lay.mcp_label, "MCP clients", lay.mcp_modes, "mcp");
+        label(lay.rules_label, "Saved rules");
+        const auto rules = permissions_.rules();
+        for (size_t i = 0; i < rules.size() && i < lay.rules.size(); ++i) {
+            const std::string agent = rules[i].first == "mcp" ? "MCP clients" : rules[i].first;
+            text_at(dl, L.ui, L.ui_size, ImVec2(lay.rules[i].x, lay.rules[i].y + ty), L.secondary, agent);
+            const float ax = lay.rules[i].x + extent(L.ui, L.ui_size, agent).x + m.gap;
+            text_at(dl, L.mono, L.mono_size, ImVec2(ax, lay.rules[i].y + ty), L.text, rules[i].second);
+            if (i < lay.revokes.size() && permissions_.revoke &&
+                house_button(L, dl, lay.revokes[i], ("##perm.revoke." + std::to_string(i)).c_str(), "Revoke"))
+                permissions_.revoke(rules[i].first, rules[i].second);
+        }
+        if (!lay.rules_more.empty())
+            text_at(dl, L.ui, L.ui_size, ImVec2(lay.rules_more.x, lay.rules_more.y + ty), L.faint,
+                    rules.empty() ? std::string("None") : "+" + std::to_string(rules.size() - lay.rules.size()));
+    }
 
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Escape, false) &&
         !ImGui::GetIO().WantTextInput)

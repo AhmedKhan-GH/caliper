@@ -175,6 +175,65 @@ TEST_CASE("approval cards: an mcp spec edit waits as a card with its diff, and A
     CHECK(r.cards->cards().empty());
 }
 
+TEST_CASE("approval cards: a governed agent's card offers its rules; Always allow saves one and approves") {
+    Rig r("rules");
+    // An mcp client's edit: the card offers the three answers.
+    auto f = r.submit("panel.patch", y_log_patch(false));
+    r.frame();
+    CHECK(r.only().rules);
+    CHECK(std::string(approval_approve_label(true)) == "Allow once");
+    CHECK(approval_always_label("panel.patch") == "Always allow panel.patch");
+    CHECK(r.cards->allow_always(r.only().id, true));
+    r.frame();
+    REQUIRE(ready(f));
+    CHECK(f.get().ok);
+    CHECK(r.s->saved_agent_rules() == std::vector<caliper_builder::AgentRule>{{"mcp", "panel.patch"}});
+    // The next one runs without a card.
+    auto g = r.submit("panel.patch", y_log_patch(true));
+    r.frame(1.5);
+    REQUIRE(ready(g));
+    CHECK(g.get().ok);
+    // The widget agent's card (an edit into nothing but the open spec, client
+    // widget) offers none, and its rule answer is refused.
+    CommandInvocation w;
+    w.name = "panel.patch";
+    w.args = y_log_patch(false);
+    w.origin = CommandOrigin::agent;
+    w.client = "widget";
+    caliper_builder::SubmitOptions so;
+    so.approval_timeout = 120s;
+    auto h = r.s->queue().submit(std::move(w), so);
+    r.frame(1.5);
+    REQUIRE(r.cards->waiting() == 1);
+    const ApprovalCard* wc = nullptr;
+    for (const ApprovalCard& c : r.cards->cards())
+        if (c.state == ApprovalState::waiting) wc = &c;
+    REQUIRE(wc);
+    CHECK_FALSE(wc->rules);
+    CHECK_FALSE(r.cards->allow_always(wc->id, false));
+    CHECK(r.cards->deny(wc->id));
+    r.frame();
+    CHECK(h.get().error.code == "command.denied");
+    // The layout gives the rule answers a row of their own above the buttons.
+    ApprovalLayoutInput in;
+    in.width = 1440;
+    in.window_h = 900;
+    ApprovalCardShape shape;
+    shape.who = "MCP agent";
+    shape.rules = true;
+    shape.what_command = "panel.patch";
+    in.cards = {shape};
+    const WidgetMeasure measure = [](const std::string& t, WidgetFont) { return 7.0f * (float)t.size(); };
+    const ApprovalStripLayout lay = layout_approval_strip(in, ApprovalLayoutMetrics{}, measure);
+    REQUIRE(lay.cards.size() == 1);
+    const ApprovalCardLayout& cl = lay.cards[0];
+    CHECK_FALSE(cl.session.empty());
+    CHECK_FALSE(cl.always.empty());
+    CHECK(cl.session.bottom() <= cl.approve.y);
+    CHECK(cl.always.x >= cl.session.right());
+    CHECK(cl.always.right() <= cl.card.right());
+}
+
 TEST_CASE("approval cards: Deny answers command.denied and leaves the spec") {
     Rig r("deny");
     auto f = r.submit("panel.patch", y_log_patch(false));

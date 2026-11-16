@@ -498,4 +498,138 @@ TEST_CASE("chat app: a step of the input script waits as long as patience says, 
     CHECK(bad.err.find("[ui] stopped: patience takes a number of seconds from 0 to 86400") != std::string::npos);
 }
 
+TEST_CASE("chat app: Caliper's modes for the chat's agent, the card's three answers, the settings' rules and Allow all" *
+          doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    if (!exe || !*exe) {
+        std::printf("caliper_side_chat_app skipped: needs CALIPER_TEST_CALIPER_EXE\n");
+        return;
+    }
+    const char* offline = std::getenv("CALIPER_AGENT_OFFLINE");
+    REQUIRE_MESSAGE((offline && std::string(offline) == "1"), "run this test through ctest, which sets the switch");
+    // A capture run gives the window's size and a folder for its frames.
+    const char* size_env = std::getenv("CALIPER_TEST_MODES_SIZE");
+    const std::string size = size_env && *size_env ? size_env : "960x600";
+    const fs::path root = fresh("chat-modes");
+    const fs::path ws = root / "ws", data = root / "data", shots = root / "shots";
+    for (const fs::path& d : {ws / "data", data, shots, root / "apps"}) fs::create_directories(d);
+    {
+        std::ofstream csv(ws / "data" / "run42_metrics.csv");
+        csv << "step,loss\n";
+        for (int i = 0; i < 50; ++i) csv << i << "," << 2.0 * std::exp(-i / 20.0) << "\n";
+    }
+    const json build = json::array(
+        {{{"name", "data.import"}, {"args", {{"paths", {"data/run42_metrics.csv"}}, {"run", true}}}},
+         {{"name", "spec.new"}, {"args", {{"id", "run42-dashboard"}, {"title", "Run 42"}}}},
+         {{"name", "source.add"}, {"args", {{"id", "metrics"}, {"catalog", "table:run42_metrics"}}}},
+         {{"name", "panel.create"},
+          {"args", {{"id", "curves"}, {"primitive", "series"}, {"title", "Loss"},
+                    {"bind", {{"x", "metrics.step"}, {"y", "metrics.loss"}}}}}},
+         {{"name", "applet.save"}, {"args", {{"overwrite", true}}}},
+         {{"name", "applet.open"}, {"args", {{"id", "run42-dashboard"}}}}});
+    {
+        std::ofstream f(root / "build.jsonl");
+        for (const json& l : build) f << l.dump() << "\n";
+    }
+    {
+        json s = {{"agent", "custom"},
+                  {"custom_name", "Stub agent"},
+                  {"custom_command", "'" + std::string(CALIPER_CHAT_STUB_AGENT) + "'"},
+                  {"open", false}};
+        std::ofstream(data / "side-chat.json") << s.dump();
+    }
+    // A saved file that asks for Allow all: it is never honoured.
+    const fs::path perms = data / "agent-permissions.json";
+    std::ofstream(perms) << R"({"version": 1, "modes": {"chat": "allow_all"}, "rules": []})";
+    fs::permissions(perms, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
+    const fs::path decisions = root / "decisions.txt";
+    std::ofstream(decisions).close();
+    const std::string d = decisions.string();
+    const std::string ui =
+        "wait 60; chat open; wait 10; chat focus; wait 3; chat mode ask; "
+        // Ask: the edit waits on a card with the three answers; for this session.
+        R"(type call panel_patch {"id":"curves","patch":{"title":"Asked"}}; key enter; )"
+        "chat item approval panel.patch waiting; cards 1; wait 5; shot m-card; append " + d + " session panel.patch agent; "
+        "chat until ready; chat focus; wait 3; "
+        R"(type call panel_patch {"id":"curves","patch":{"title":"Session rule"}}; key enter; )"
+        "chat item applied panel.patch; chat until ready; chat focus; wait 3; "
+        // Always allow panel.create, then the settings list the rule, and it is revoked.
+        R"(type call panel_create {"id":"note","primitive":"text","options":{"text":"Saved"}}; key enter; )"
+        "chat item approval panel.create waiting; cards 1; append " + d + " always panel.create agent; chat until ready; "
+        "settings open; settings rules 1; wait 5; shot m-settings; settings revoke custom panel.create; settings rules 0; "
+        "settings close; wait 5; "
+        // Shift-Tab: Accept edits applies the edit at once, and Undo takes it back.
+        "chat focus; wait 3; key shift+tab; chat mode accept_edits; wait 5; shot m-header; "
+        R"(type call panel_create {"id":"note2","primitive":"text","options":{"text":"Accepted"}}; key enter; )"
+        "chat item applied panel.create; chat until ready; chat undo panel.create; chat item applied panel.create undone; "
+        // Read only refuses the edit.
+        "chat focus; wait 3; key shift+tab; chat mode read_only; wait 3; "
+        R"(type call panel_patch {"id":"curves","patch":{"title":"Refused"}}; key enter; )"
+        "chat item tool panel.patch failed; chat until ready; "
+        // Allow all: its banner, a removal without a card, and an overwrite that still asks.
+        "chat allow-all on; chat mode allow_all; chat focus; wait 5; shot m-banner; "
+        R"(type call panel_remove {"id":"note"}; key enter; )"
+        "chat item applied panel.remove; chat until ready; chat focus; wait 3; "
+        R"(type call applet_save {"overwrite":true}; key enter; )"
+        "chat item approval applet.save waiting; cards 1; wait 5; shot m-bound; append " + d + " approve applet.save agent; "
+        "chat until ready; chat allow-all off; chat mode read_only; wait 5; quit";
+    acp::SpawnOptions o;
+    o.argv = {exe, "--hidden", "--workspace", ws.string()};
+    o.env = {{"CALIPER_DATA_DIR", data.string()},
+             {"CALIPER_USER_APPLETS_DIR", (root / "apps").string()},
+             {"CALIPER_WINDOW_SIZE", size},
+             {"CALIPER_COMMAND_SCRIPT", (root / "build.jsonl").string()},
+             {"CALIPER_TEST_APPROVALS", decisions.string()},
+             {"CALIPER_AGENT_OFFLINE", "1"},
+             {"CALIPER_TEST_SPEC_UI", ui},
+             {"CALIPER_TEST_SPEC_UI_SHOTS", shots.string()},
+             {"CALIPER_EXIT_AFTER", "200"}};
+    o.env_remove = {"CALIPER_API", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"};
+    acp::RunLimits lim;
+    lim.timeout_ms = 240000;
+    const auto run = acp::run_process(o, lim);
+    std::ofstream(root / "stderr.txt") << run.err;   // the whole log, beside the frames
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 6000 ? run.err.size() - 6000 : 0));
+    REQUIRE(run.error.ok());
+    if (!metal(run.err)) {
+        std::printf("caliper_side_chat_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(run.status.success());
+    CHECK(run.err.find("[ui] done") != std::string::npos);
+    CHECK(run.err.find("[ui] stopped") == std::string::npos);
+    if (const char* out = std::getenv("CALIPER_TEST_MODES_SHOTS"); out && *out)
+        for (const char* n : {"m-card", "m-settings", "m-header", "m-banner", "m-bound"})
+            fs::copy_file(shots / (std::string(n) + ".png"), fs::path(out) / (std::string(n) + "-" + size + ".png"),
+                          fs::copy_options::overwrite_existing);
+
+    // The journal: each command with what let it run.
+    std::vector<std::string> seen;
+    const auto journal = caliper_builder::read_journal((ws / "journal" / "commands.jsonl").string());
+    for (const auto& e : journal.events) {
+        if (e.origin == caliper_builder::CommandOrigin::ui && e.name != "history.undo") continue;
+        seen.push_back(std::string(caliper_builder::command_origin_name(e.origin)) + " " + e.name + " " + e.event + " " +
+                       (e.ok ? "ok" : e.error) + (e.allowed_by.empty() ? "" : " " + e.allowed_by));
+    }
+    const std::vector<std::string> want = {
+        "agent panel.patch do ok",                        // the card's answer: for this session
+        "agent panel.patch do ok session_rule",           // the rule of this session
+        "agent panel.create do ok",                       // Always allow: approved, then revoked
+        "agent panel.create do ok accept_edits",          // Accept edits
+        "ui history.undo undo ok",                        // the APPLIED row's Undo
+        "agent panel.patch do command.denied",            // Read only
+        "agent panel.remove do ok allow_all",             // Allow all
+        "agent applet.save do ok",                        // an overwrite still asks, under Allow all
+    };
+    CHECK(seen == want);
+    // The saved file: owner-only, the chat's saved mode, the rule revoked, never Allow all.
+    const std::string saved = read_file(perms);
+    CHECK(saved.find("\"chat\": \"read_only\"") != std::string::npos);
+    CHECK(saved.find("allow_all") == std::string::npos);
+    CHECK(saved.find("panel.create") == std::string::npos);
+    CHECK((fs::status(perms).permissions() & fs::perms::all) == (fs::perms::owner_read | fs::perms::owner_write));
+    CHECK(run.err.find("[approval] ap-1 panel.patch (agent) rule for this session") != std::string::npos);
+    CHECK(run.err.find("[approval] ap-2 panel.create (agent) rule saved") != std::string::npos);
+}
+
 #endif

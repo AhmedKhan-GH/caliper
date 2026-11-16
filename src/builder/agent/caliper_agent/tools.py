@@ -96,6 +96,9 @@ class Command:
     destructive: bool
     frame_thread: bool
     agents: bool = True   # false: the person's own command, which no agent runs
+    # What it does, by which the app's mode for an agent decides it: "read",
+    # "edit" (of the open spec) or "change". A table without it reads as change.
+    effect: str = "change"
 
     @property
     def group(self) -> str:
@@ -287,7 +290,10 @@ def _command_from_json(item: Any, index: int) -> Command:
         if not isinstance(value, bool):
             raise TableError(f"{name}: {flag} is not a boolean.")
         flags[flag] = value
-    return Command(name=name, summary=summary, args=args, result=result, **flags)
+    effect = item.get("effect", "change")
+    if effect not in ("read", "edit", "change"):
+        raise TableError(f"{name}: effect is not read, edit or change.")
+    return Command(name=name, summary=summary, args=args, result=result, effect=effect, **flags)
 
 
 def parse_command_table(data: bytes | str) -> list[Command]:
