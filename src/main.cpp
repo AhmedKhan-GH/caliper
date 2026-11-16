@@ -1125,6 +1125,7 @@ private:
     void feed_spec_ui() {
         spec_ui_->set_page(page_ == AppPage::Spec ? "spec" : page_ == AppPage::Landing ? "landing" : "live");
         spec_ui_->set_drop([this](std::vector<std::string> paths) { on_drop(std::move(paths)); });
+        spec_ui_->set_cards([this] { return approvals_.shown_waiting(); });
 #if CALIPER_WITH_BUILDER
         spec_ui_->set_agent_settings(&agent_settings_);
 #endif

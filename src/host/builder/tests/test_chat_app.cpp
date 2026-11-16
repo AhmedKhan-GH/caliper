@@ -164,7 +164,7 @@ TEST_CASE("chat app: the side chat on the hidden app's spec page, with the cards
         "wait 60; focus rows; wait 3; leave; key escape; wait 10; chat open; wait 10; chat focus; wait 5; shot t-1; "
         "type Add a panel of the learning rate; wait 3; key enter; chat item tool catalog.describe in_progress; "
         "wait 5; shot t-2; touch " + (gates / "turn").string() + "; chat item approval panel.create waiting; "
-        "wait 40; shot t-3; append " + decisions.string() + " approve panel.create agent; chat item stop - DONE; "
+        "cards 1; shot t-3; append " + decisions.string() + " approve panel.create agent; chat item stop - DONE; "
         "wait 10; shot t-4; focus curves; wait 3; leave; key cmd+k; until unavailable; wait 3; "
         "type Build a loader for the validation logs; wait 3; key enter; chat draft; wait 5; shot t-5; "
         "chat focus; wait 3; key enter; wait 30; chat until ready; chat focus; wait 3; "
@@ -194,6 +194,8 @@ TEST_CASE("chat app: the side chat on the hidden app's spec page, with the cards
     CHECK(run.status.success());
     CHECK(run.err.find("[ui] done") != std::string::npos);
     CHECK(run.err.find("[ui] stopped") == std::string::npos);
+    // t-3 waited for the strip to show the card at its full height, not for a time.
+    CHECK(run.err.find("[ui] the approval strip shows 1 waiting card") != std::string::npos);
     for (const char* n : {"t-1", "t-2", "t-3", "t-4", "t-5"}) {
         const Png p = load((shots / (std::string(n) + ".png")).string());
         CHECK_MESSAGE(((p.w == 960 && p.h == 600) || (p.w == 1920 && p.h == 1200)), n);

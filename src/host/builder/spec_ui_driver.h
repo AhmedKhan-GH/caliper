@@ -40,6 +40,8 @@
 //                        ("approval panel.create waiting"), a stop word
 //                        ("stop - DONE")
 //   chat draft           wait until the chat's input holds a handoff's draft
+//   cards <n>            wait until the approval cards' strip shows at least n
+//                        waiting cards at its full height (approval_cards.h)
 //   click <item> [fx fy] a click on a builder pane's named rectangle
 //                        (BuilderPane::item_rect: "source:table:metrics",
 //                        "primitive:series", "prop:title", "bar:save", ...),
@@ -177,6 +179,8 @@ public:
     // a dropped file reaches; the app sets both before each feed().
     void set_page(std::string page) { page_ = std::move(page); }
     void set_drop(std::function<void(std::vector<std::string>)> drop) { drop_ = std::move(drop); }
+    // The waiting cards the approval strip shows (ApprovalTray::shown_waiting()), for `cards`.
+    void set_cards(std::function<int()> cards) { cards_ = std::move(cards); }
 #if CALIPER_WITH_BUILDER
     // The widget agent's settings, for the `settings` steps; the app sets them.
     void set_agent_settings(AgentSettings* settings) { settings_ = settings; }
@@ -495,6 +499,13 @@ public:
             if (s.verb == "append") out << line << "\n";
             if (!out) return void(error_ = s.verb + ": cannot write " + file);
             next(s.verb + " " + std::filesystem::path(file).filename().string());
+        } else if (s.verb == "cards") {
+            if (!cards_) return void(error_ = "cards: the app gave no approval cards");
+            const int want = std::atoi(s.arg.c_str());
+            if (want < 1) return void(error_ = "cards takes a number of cards from 1");
+            const int shown = cards_();
+            if (shown < want) return patience("the approval strip shows " + std::to_string(shown) + " waiting cards");
+            next("the approval strip shows " + std::to_string(shown) + (shown == 1 ? " waiting card" : " waiting cards"));
         } else if (s.verb == "patience") {
             char* end = nullptr;
             const double seconds = std::strtod(s.arg.c_str(), &end);
@@ -641,6 +652,7 @@ private:
 #endif
     std::string page_;
     std::function<void(std::vector<std::string>)> drop_;
+    std::function<int()> cards_;
     float drag_a_[2] = {0, 0}, drag_b_[2] = {0, 0};
     int drag_frame_ = 0;   // the frame of a drag in progress, 0 before its press
     std::optional<std::chrono::steady_clock::time_point> started_;   // a step's first frame, for a wait in seconds

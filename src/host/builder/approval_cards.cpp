@@ -722,6 +722,7 @@ struct ApprovalTray::Impl {
     std::string diff_open;   // the card whose full diff is open
     std::string pointed;     // the card the side chat points at, until pointed_until
     double pointed_until = 0.0;
+    int drawn_waiting = 0;   // the waiting cards of the last frame's strip at its full height (shown_waiting())
 
     void draw_card(const SpecLook& L, ImDrawList* dl, ImVec2 o, const ApprovalCard& c, const ApprovalCardLayout& cl);
     void draw_diff_popup(const SpecLook& L, const ImRect& card, float strip_top);
@@ -918,6 +919,7 @@ void ApprovalTray::Impl::draw_more_popup(const SpecLook& L) {
 
 void ApprovalTray::draw_strip() {
     Impl& im = *impl_;
+    im.drawn_waiting = 0;
     if (!im.started || im.closed || !im.presence.open() || im.cards.cards().empty()) {
         im.height.update(im.now, false, 0.0f);
         return;
@@ -933,6 +935,7 @@ void ApprovalTray::draw_strip() {
     in.fill_height = h;
     const ApprovalStripLayout lay = layout_approval_strip(in, m, measure);
     if (h < 1.0f) return;
+    if (h >= need) im.drawn_waiting = (int)im.cards.waiting();
 
     // A viewport side bar at the bottom, after the status bar and the jobs
     // tray, so it lands above them and the work area ends above it.
@@ -988,6 +991,8 @@ void ApprovalTray::draw_strip() {
     }
     ImGui::End();
 }
+
+int ApprovalTray::shown_waiting() const { return impl_->drawn_waiting; }
 
 void ApprovalTray::point_to(const std::string& approval_id) {
     impl_->pointed = approval_id;
@@ -1049,6 +1054,7 @@ void ApprovalTray::draw_strip() {}
 void ApprovalTray::mark_panel(const std::string&, const std::string&, float, float, float, float, float) {}
 void ApprovalTray::point_to(const std::string&) {}
 void ApprovalTray::close() {}
+int ApprovalTray::shown_waiting() const { return 0; }
 
 #endif
 
