@@ -55,6 +55,10 @@ Every applet splits into a computation and an interface. This is a design decisi
 
 The spec applets of Phase 3 ([Applet builder](applet-builder.md)) are designed to run in the browser unchanged, and they satisfy the split by construction. Their primitives are the live view types, and they bind only to sources that have a wire form.
 
+Built, as a first slice: a saved spec applet opens in a browser tab from the running app, at the link the app prints with `--api`. The page is an entry of the web package, `web/src/spec/`, served by Caliper API at `/v0/spec` from a copy built into the executable. It lays the panels out with a port of the native runtime's layout rectangles and draws them in the app's look on a canvas, from the data that the read-only command `panel.data` sends: the app resolves each panel, transforms and queries included, and bounds it as the native runtime does, so the browser computes nothing but the drawing. The page polls once a second with the version it has, and the app answers "unchanged" until a panel's sources, the spec or the catalog change. Its link carries a viewer token that opens only the page and its three read-only commands, from the viewer origin, which the command layer lets run reads only. [Spec format](spec-format.md#what-is-built-of-the-browser-viewer) records the decisions and limits, and the Caliper API reference (`docs/references/api.md`) the endpoint.
+
+What remains: the same page fed by a hub or by `caliper.serve()`, live sources over the stream rather than polls, and the three tensor transforms in the page for producers that send raw snapshots.
+
 ## Renderers
 
 Metal and Vulkan stay the fast paths. The WebGPU renderer that draws the browser views is written against the standard `webgpu.h`, which Dawn also offers natively, so the same code can serve the native fallbacks through Dawn. The roadmap's [Renderers](roadmap.md#renderers) section gives that plan.

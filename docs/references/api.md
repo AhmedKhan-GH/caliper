@@ -1,6 +1,6 @@
 # Caliper API
 
-Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](wire-protocol.md), returns a capture of the frame the app draws, and runs the commands of the command layer, through which specs, loaders and sources are built with undo, a journal and approvals. It listens on 127.0.0.1 only, behind a session token, and it is off unless the app starts with `--api`. The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
+Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](wire-protocol.md), returns a capture of the frame the app draws, runs the commands of the command layer, through which specs, loaders and sources are built with undo, a journal and approvals, and serves the browser viewer of spec applets. It listens on 127.0.0.1 only, behind a session token, and it is off unless the app starts with `--api`. The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
 
 !!! note "Status"
     Version 0, built and tested on macOS. A capture works in the app's window on Metal and in the windowless mode, `caliper shot --api`; on the GL and Vulkan renderers the app in its window answers a capture with 501. The command endpoints serve the command layer of the app's builder session, in the app, `caliper dev` and `caliper shot` built with `CALIPER_WITH_BUILDER` (`src/host/builder/app_session.h`, over `src/host/api/session_gateway.h`); a build without the builder answers 404 on them, and `caliper-mcp` reads that as an app with no command layer. The Windows build refuses `--api` for now, as [Caliper CLI](cli.md#on-windows) describes.
@@ -16,6 +16,7 @@ Caliper API is an HTTP interface to the running app. Version 0 lists the applets
 | `GET /v0/commands` | The command layer's descriptor table |
 | `POST /v0/commands/{name}` | Runs one command, with its arguments as a JSON body, and answers its result |
 | `GET /v0/approvals/{id}` | What became of a command that needed the person's approval |
+| `GET /v0/spec` | The browser viewer of spec applets, a page |
 
 ## Starting it
 
@@ -31,7 +32,10 @@ When it listens, the process prints one line with the address and the session to
 
 ```text
 [api] Caliper API on http://127.0.0.1:7341/v0 with the session token <token> (also in <API file>)
+[api] Spec applets in a browser at http://127.0.0.1:7341/v0/spec?token=<viewer token>&applet=<id>
 ```
+
+The second line is the link of the [spec page](#get-v0spec), with the viewer token, which opens that page and nothing else.
 
 The API file is `api.json` in the app-data folder ([Folders and environment variables](environment.md)). The process writes it with mode 0600, so that only its owner can read it, and removes it when it exits, as `caliper serve` does with its hub file. It holds one JSON object:
 
@@ -43,8 +47,9 @@ The API file is `api.json` in the app-data folder ([Folders and environment vari
 | `token` | The session token |
 | `url` | `http://127.0.0.1:<port>/v0` |
 | `stream_url` | `ws://127.0.0.1:<port>/v3/stream`, without the token |
+| `spec_url` | `http://127.0.0.1:<port>/v0/spec?token=<viewer token>`, the spec page; a saved spec applet opens at this address with `&applet=<id>` added |
 
-The session token is new for each run: 32 characters of `A-Z`, `a-z`, `0-9`, `_` and `-` from 24 random bytes. When the port is taken, the app starts without the API and says so on standard error and in the Activity pane, and `caliper shot` exits with 1.
+The session token is new for each run, and so is the viewer token, a second token of the same form: 32 characters of `A-Z`, `a-z`, `0-9`, `_` and `-` from 24 random bytes. When the port is taken, the app starts without the API and says so on standard error and in the Activity pane, and `caliper shot` exits with 1.
 
 ## The windowless mode
 
@@ -59,9 +64,11 @@ Every request gets the checks of the stream ([The upgrade request](wire-protocol
 - The server listens on 127.0.0.1 only.
 - The `Host` header must be `127.0.0.1:<port>` or `localhost:<port>`, with the API's port. Anything else is refused with 403, as a guard against DNS rebinding.
 - An `Origin` header, when the request has one, must be one that the protocol accepts: `null`, an `http` or `https` origin on `127.0.0.1`, `localhost` or `[::1]`, or `vscode-webview://`. Any other origin is refused with 403.
-- The session token must come with the request. A request carries it in an `Authorization: Bearer <token>` header. A GET may carry it as the query parameter `token` instead, which is how the WebSocket and a link opened in a browser carry it. A POST takes the header only, so a state-changing request never has the token in its address. The token is compared in constant time. A missing or wrong token is refused with 401 and `WWW-Authenticate: Bearer`, and on the stream with 403, as the protocol says.
+- The session token, or for the spec page the viewer token, must come with the request. A request carries it in an `Authorization: Bearer <token>` header. A GET may carry it as the query parameter `token` instead, which is how the WebSocket and a link opened in a browser carry it. A POST takes the header only, so a state-changing request never has the token in its address. The token is compared in constant time. A missing or wrong token is refused with 401 and `WWW-Authenticate: Bearer`, and on the stream with 403, as the protocol says.
 
-The API serves nothing beyond its endpoints: no files and no way to run code. The commands of the command layer change specs, loaders and sources, which are data; a command that deletes or overwrites saved data, or runs a Python loader, waits for the person's approval in the app, and no endpoint approves or denies. Only `POST /v0/commands/{name}` takes a body, and only after its head passed the checks above; any other request with a body is refused with 413, and launch takes only an applet id in its path that the app's loader lists. A command request is built from its path, its body and the headers `X-Caliper-Origin`, `X-Caliper-Group` and `X-Caliper-Preview` only, so no other header value reaches the command layer or its journal, and the token is never logged. Every response carries `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and the connection closes after it.
+The API serves nothing beyond its endpoints: no files and no way to run code. The spec page is one page built into the executable, not a file it reads. The commands of the command layer change specs, loaders and sources, which are data; a command that deletes or overwrites saved data, or runs a Python loader, waits for the person's approval in the app, and no endpoint approves or denies. Only `POST /v0/commands/{name}` takes a body, and only after its head passed the checks above; any other request with a body is refused with 413, and launch takes only an applet id in its path that the app's loader lists. A command request is built from its path, its body and the headers `X-Caliper-Origin`, `X-Caliper-Group` and `X-Caliper-Preview` only, so no other header value reaches the command layer or its journal, and the token is never logged. Every response carries `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and the connection closes after it.
+
+**The viewer token.** The link of the spec page carries the viewer token, never the session token, because a link is easily copied and kept in a browser's history. A request with the viewer token may only `GET /v0/spec` and `POST /v0/commands/{name}` for the three commands the page reads with, `spec.get`, `applet.list` and `panel.data`; everything else, the other endpoints, the other commands and the stream, is refused with 403. Its commands run from the origin `viewer` whatever the request claims (an `X-Caliper-Origin` other than `viewer` is refused with 400), and the command layer runs only commands that change nothing from that origin, refusing any other with `command.not_allowed`. A request with the session token may also lower itself to the origin `viewer`.
 
 ## Endpoints
 
@@ -133,7 +140,7 @@ Runs the command `{name}`, such as `spec.new` or `panel.patch`. The body is the 
 
 | Header | Meaning |
 |---|---|
-| `X-Caliper-Origin` | Who sends the command: `api` (a program, and the default), `mcp` (an outside agent through `caliper-mcp`) or `agent` (the app's own agents). Any other value is refused with 400, so a request never claims the app's own UI. |
+| `X-Caliper-Origin` | Who sends the command: `api` (a program, and the default), `mcp` (an outside agent through `caliper-mcp`), `agent` (the app's own agents) or `viewer` (the spec page, which runs reads only). Any other value is refused with 400, so a request never claims the app's own UI. |
 | `X-Caliper-Group` | Optional. Commands that share a group undo as one step. |
 | `X-Caliper-Preview` | Optional. The id of a stacked preview, from `preview.begin`: an edit of the open spec applies to the preview instead, and `spec.get` reads it. |
 
@@ -168,6 +175,22 @@ What became of the command that waits, or waited, under approval `{id}`. `state`
 
 An id is 1 to 128 characters of `A-Z`, `a-z`, `0-9`, `.`, `_`, `:` and `-`; anything else is refused with 400. Approval ids are not secret: reading one changes nothing, and only the person decides.
 
+### GET /v0/spec
+
+The browser viewer of spec applets: one HTML page, with its script and its two faces inside it, which draws a saved spec applet of the open workspace with the layout and the look of the app's spec page. It takes the token and the applet's workspace id from its own address, `/v0/spec?token=<token>&applet=<id>`, as the printed link and `spec_url` give it; without `applet` it lists the saved spec applets as links. The page is the web package's (`web/src/spec/`), built into the executable from its checked-in copy, `python/caliper/_web/spec.html`, and answers with `Content-Security-Policy` that lets it reach only its own origin, and `Referrer-Policy: no-referrer`, so the token in its address is never sent elsewhere.
+
+The page reads through the command layer, from the origin `viewer`:
+
+- `spec.get` with `applet` gives the saved spec's canonical JSON, read from its files without opening it. The page asks again once a second and lays the panels out again when the text changed.
+- `panel.data` with `applet` and `panel` gives that panel's data after its sources' transforms, as the app resolves it, within the bounds of what a panel shows: a line of more than 8,192 points as a min/max envelope of 2,048 buckets, a grid or image sampled at a stride to at most 2,048 on a side, at most 100,000 points, a histogram's bin counts rather than its values, at most 1,000 rows of a table with each text cell cut at 256 characters, and a text panel's one value. Arrays of numbers travel as `{"dtype": "f32" | "f64", "shape", "base64"}`, the little-endian bytes in base64; tables, cells and counts as JSON. With the `version` of an earlier answer as `known`, the answer is `unchanged` and carries no data until the panel's sources, the spec or the catalog change, so the page asks once a second for every panel it shows and the app resolves a panel only when its data moved.
+- `applet.list`, for the list of applets.
+
+```json
+{"id":"api-12","ok":true,"result":{"bounds":[],"data":{"lines":[{"binding":"metrics.loss","count":200,"last":0.12,"row":null,"x":{"base64":"...","dtype":"f64","shape":[200]},"y":{"base64":"...","dtype":"f64","shape":[200]}}],"steps":200,"x_index":false},"error":null,"panel":"curves","primitive":"series","state":null,"unchanged":false,"version":"3f2a9c0b5d17e640"}}
+```
+
+The example is shortened. A panel whose data cannot be read answers with the resolver's `error`, such as `resolve.unavailable` for a live source that is not attached, and one whose data does not fit or holds nothing with a `state`, `mismatch` or `empty`; the page draws the same states as the app.
+
 ## Threads and limits
 
 One thread runs the hub's loop and answers every request; it never waits for the app. A request that reads or changes the app's state, which is the list of applets, a launch, a capture, a command or an approval's state, waits for the app's frame thread, which takes it at the start of a frame, between two frames. A launch runs there, as `CALIPER_AUTOLAUNCH` runs before the first frame. A command is handed to the command layer there, and runs when the frame thread drains the command layer's queue; from then on the request is held, without a thread of its own, until the command layer answers it, which the frame thread and the hub's thread both look for without waiting. The 5-second limit therefore applies to the wait before the frame thread takes a command; once taken, the request waits for its result, and one held for approval waits as [above](#post-v0commandsname).
@@ -192,9 +215,9 @@ An error is answered with a JSON object `{"error": "<what went wrong>"}`.
 
 | Status | When |
 |---|---|
-| 400 | A launch names something that cannot be an applet id, or an approval lookup something that cannot be an approval id. For a command: `X-Caliper-Origin` is not `api`, `mcp` or `agent`, a header that the checks read (`Authorization`, `Content-Length`, `Content-Type`, `X-Caliper-Origin`, `X-Caliper-Group`, `X-Caliper-Preview`) is repeated, `Content-Length` is not a number, or the body is not JSON. |
+| 400 | A launch names something that cannot be an applet id, or an approval lookup something that cannot be an approval id. For a command: `X-Caliper-Origin` is not `api`, `mcp`, `agent` or `viewer` (with the viewer token, not `viewer`), a header that the checks read (`Authorization`, `Content-Length`, `Content-Type`, `X-Caliper-Origin`, `X-Caliper-Group`, `X-Caliper-Preview`) is repeated, `Content-Length` is not a number, or the body is not JSON. |
 | 401 | The session token is missing or wrong. |
-| 403 | The `Host` or the `Origin` header is refused. |
+| 403 | The `Host` or the `Origin` header is refused, or a request with the viewer token asks for anything but the spec page and its three commands. |
 | 404 | No such endpoint, no applet with that id, or a command endpoint in an app that has no command layer. |
 | 405 | The endpoint takes another method; `Allow` names it. |
 | 408 | A command's body did not arrive within 10 s of its head. |

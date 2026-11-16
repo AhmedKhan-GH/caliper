@@ -16,9 +16,18 @@ test.beforeEach(({}, info) => test.skip(info.project.name !== 'canvas2d', 'pure 
 
 const FIXTURES = path.join(REPO, 'src', 'builder', 'spec', 'tests', 'fixtures');
 
+// tomllib needs Python 3.11 or newer: CALIPER_PYTHON, else python3.
+const PYTHON = process.env.CALIPER_PYTHON ?? 'python3';
+
 function fixture(name: string): Spec {
-  const text = execFileSync('python3', ['-I', '-c',
-    'import json, sys, tomllib; print(json.dumps(tomllib.load(open(sys.argv[1], "rb"))))', path.join(FIXTURES, name)]);
+  let text: Buffer;
+  try {
+    text = execFileSync(PYTHON, ['-I', '-c',
+      'import json, sys, tomllib; print(json.dumps(tomllib.load(open(sys.argv[1], "rb"))))', path.join(FIXTURES, name)]);
+  } catch {
+    test.skip(true, 'needs a Python with tomllib (3.11 or newer) in CALIPER_PYTHON or as python3');
+    throw new Error('unreachable');
+  }
   return JSON.parse(text.toString()) as Spec;
 }
 
