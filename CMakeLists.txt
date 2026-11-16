@@ -112,6 +112,20 @@ option(CALIPER_BUILD_PYTHON  "Build the caliper Python extension (python/, nanob
 # plus slang's boost_regex/mimalloc network clones).
 option(CALIPER_WITH_SLANG "Configure the vendored slang (SystemVerilog) library" ON)
 option(CALIPER_WITH_LLAMA "Configure the vendored llama.cpp (+ apply its local patches)" ON)
+# The builder (src/builder, design/builder-overview.md): the spec, catalog,
+# command, loaders, ACP, session, MCP and agent libraries, caliper-mcp,
+# caliper-acp-harness, caliper-builder-host and their tests. ON also links
+# DuckDB's json extension into the host's DuckDB, for the loaders' JSON and
+# JSONL readers (cmake/Dependencies.cmake). It is OFF by default on Windows:
+# its sources have not been compiled with MSVC yet, and the Windows CI lane
+# builds every target and runs every test, so a Windows session turns it on
+# with -DCALIPER_WITH_BUILDER=ON and fixes what fails there.
+if(WIN32)
+    set(_caliper_builder_default OFF)
+else()
+    set(_caliper_builder_default ON)
+endif()
+option(CALIPER_WITH_BUILDER "Build the builder libraries, tools and tests (src/builder)" ${_caliper_builder_default})
 if(CALIPER_BUILD_APPLETS AND NOT CALIPER_WITH_TORCH)
     message(STATUS "CALIPER_WITH_TORCH=OFF: most of applets/* need libtorch, forcing CALIPER_BUILD_APPLETS=OFF")
     set(CALIPER_BUILD_APPLETS OFF)
@@ -266,10 +280,7 @@ target_include_directories(caliper_host_lib PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_host_lib
     PUBLIC caliper::sdk
     PRIVATE tomlplusplus::tomlplusplus
-            duckdb_static
-            duckdb_generated_extension_loader
-            parquet_extension
-            core_functions_extension)
+            ${CALIPER_DUCKDB_LIBS})
 
 # Device query (caliper.device.v1): Metal-API-only on Apple, no ML framework
 # linked. The Metal/Foundation frameworks flow PUBLIC so consumers of
@@ -347,6 +358,22 @@ add_library(caliper_api STATIC src/host/api/api_server.cpp)
 target_link_libraries(caliper_api PUBLIC caliper_net)
 set_target_properties(caliper_api PROPERTIES
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+
+# The browser viewer of spec applets that GET /v0/spec answers
+# (src/host/api/spec_page.h): the checked-in build of the web package's spec
+# page, python/caliper/_web/spec.html, embedded as bytes, so the C++ build
+# needs no Node. scripts/build_web.py refreshes that copy.
+set(_spec_page_html "${CMAKE_SOURCE_DIR}/python/caliper/_web/spec.html")
+set(_spec_page_cpp "${CMAKE_BINARY_DIR}/generated/caliper_spec_page.cpp")
+add_custom_command(OUTPUT "${_spec_page_cpp}"
+    COMMAND ${CMAKE_COMMAND} -DIN=${_spec_page_html} -DOUT=${_spec_page_cpp}
+            -P "${CMAKE_SOURCE_DIR}/cmake/embed_spec_page.cmake"
+    DEPENDS "${CMAKE_SOURCE_DIR}/cmake/embed_spec_page.cmake" "${_spec_page_html}"
+    COMMENT "Embedding the spec page"
+    VERBATIM)
+add_library(caliper_spec_page STATIC "${_spec_page_cpp}")
+target_include_directories(caliper_spec_page PRIVATE "${CMAKE_SOURCE_DIR}/src/host")
+set_target_properties(caliper_spec_page PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
 # ============================================================================
 # Metal renderer backend (C2, Apple only)
@@ -568,13 +595,23 @@ endif()
 # Main Application (host — first embedder of libcaliper)
 # ============================================================================
 
+# Sternbild house style (SPEC-sternbild.md, workstation revision): colour
+# tokens, drawing helpers and font loading, one library that the caliper
+# executable and the spec runtime (src/host/spec_runtime) both link, so the
+# two share one copy of the faces sternbild::fonts() points to.
+add_library(caliper_sternbild_ui STATIC
+    src/host/ui/sternbild_theme.cpp
+    src/host/ui/sternbild_fonts.cpp)
+target_include_directories(caliper_sternbild_ui PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_sternbild_ui PUBLIC caliper::ui_stack caliper_app_paths)
+# A development build also finds the house fonts in the source tree.
+target_compile_definitions(caliper_sternbild_ui PRIVATE CALIPER_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+set_target_properties(caliper_sternbild_ui PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+
 add_executable(caliper
     src/main.cpp
-    # Sternbild house style (SPEC-sternbild.md, workstation revision): colour
-    # tokens + drawing helpers, font loading, and the landing screen that
-    # replaced the GL-only IntroScreen for every renderer backend.
-    src/host/ui/sternbild_theme.cpp
-    src/host/ui/sternbild_fonts.cpp
+    # The landing screen that replaced the GL-only IntroScreen for every
+    # renderer backend.
     src/host/ui/landing_screen.cpp
     # The applet page (page bar, status bar, dock space, docking by role, the
     # applet's frame, the jobs tray), drawn by the app and by `caliper shot`,
@@ -588,6 +625,19 @@ add_executable(caliper
     # dispatches (here and in caliper_tests).
     src/host/cli_build.cpp
     src/host/host_cli.cpp
+    # The builder session in the app (src/host/builder/app_session.h) and the
+    # spec page that draws its open spec (spec_page.h): the session and the
+    # page when the builder is built (below), stubs that open nothing when it
+    # is not.
+    src/host/builder/app_session.cpp
+    src/host/builder/spec_page.cpp
+    src/host/builder/app_providers.cpp
+    # The approval cards of agents' requests that wait for the person
+    # (src/host/builder/approval_cards.h); a stub without the builder.
+    src/host/builder/approval_cards.cpp
+    # The side chat in the app (src/host/builder/chat_pane.h); a stub without
+    # the builder.
+    src/host/builder/chat_pane.cpp
 )
 # app_paths.cpp is no longer compiled by path here: it arrives via
 # libcaliper -> caliper_app_paths (PUBLIC). Compiling it here too would be an
@@ -608,7 +658,7 @@ target_compile_definitions(caliper PRIVATE
 # The host links the platform core (libcaliper, which PUBLIC-propagates
 # caliper_host_lib + ui_stack + the per-OS renderer backend) plus the UI/platform
 # libs it uses directly (imgui/glfw/implot chrome).
-target_link_libraries(caliper PRIVATE libcaliper caliper::sdk caliper_api ${CALIPER_DEPENDENCY_LIBS})
+target_link_libraries(caliper PRIVATE libcaliper caliper::sdk caliper_api caliper_spec_page caliper_sternbild_ui ${CALIPER_DEPENDENCY_LIBS})
 
 if(USE_CUDA)
     target_compile_definitions(caliper PRIVATE USE_CUDA)
@@ -720,6 +770,11 @@ message(STATUS "")
 
 if(BUILD_TESTS)
     enable_testing()
+    # Every test of the tree runs with the sidecar's offline switch, inherited
+    # from ctest's own environment (src/builder/cmake/CaliperOfflineTests.cmake);
+    # the entry builder_offline_switch checks it.
+    include(src/builder/cmake/CaliperOfflineTests.cmake)
+    caliper_offline_tests()
     add_subdirectory(tests)
 
     # caliper_sdk_install: install the SDK component and build the probe and a
@@ -798,6 +853,121 @@ if(BUILD_TESTS)
     else()
         message(STATUS "Python 3 not found: caliper_host_names_no_applet is not registered")
     endif()
+endif()
+
+# The builder (src/builder) with the host's toml++, doctest and static DuckDB.
+# It comes after enable_testing(), so that its ctest entries (builder_*) are
+# registered beside the host's. The host library links its spec library for
+# spec applets; it installs nothing, so the sdk and embed install components
+# do not change.
+if(CALIPER_WITH_BUILDER)
+    add_subdirectory(src/builder)
+    # The spec applet kind in the loader (src/host/applet_spec.h): with the
+    # builder, caliper_host_lib validates a spec applet's spec with the spec
+    # library and lists it Ready; without it the loader lists every spec
+    # applet as refused, and applet_loader.cpp has no builder dependency.
+    target_sources(caliper_host_lib PRIVATE src/host/applet_spec.cpp)
+    target_link_libraries(caliper_host_lib PUBLIC caliper_builder_spec)
+    target_compile_definitions(caliper_host_lib PRIVATE CALIPER_HOST_SPEC_RUNTIME=1)
+    # Caliper API's command gateway over the builder session
+    # (src/host/api/session_gateway.h), which serves the session's command
+    # layer at /v0/commands. caliper_api itself builds without the builder.
+    add_library(caliper_api_session STATIC src/host/api/session_gateway.cpp)
+    target_link_libraries(caliper_api_session PUBLIC caliper_api caliper_builder_session)
+    set_target_properties(caliper_api_session PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+    # The spec runtime, which draws a spec's panels from the session's data,
+    # with its harness caliper-spec-shot and its tests.
+    add_subdirectory(src/host/spec_runtime)
+    # The widget agent's inline surface, its agents and caliper-widget-shot.
+    include(src/host/builder/widget_surface.cmake)
+    # The side chat, caliper-chat-shot and their tests.
+    include(src/host/builder/side_chat.cmake)
+    # The WYSIWYG builder pane and caliper-builder-shot.
+    include(src/host/builder/builder_pane.cmake)
+endif()
+
+# The builder session in the app (src/host/builder/app_session.h): with the
+# builder, the caliper executable links the session library, the spec runtime
+# that its spec page and panel.render draw with, and Caliper API's command
+# gateway over the session, and app_session.cpp and spec_page.cpp hold the
+# session and the page instead of their stubs. Its tests drive the
+# session with a fake frame loop and the hidden app with a command script
+# (tests/test_app_session.cpp); the second is POSIX only, as the hidden app's
+# other process tests are, and is skipped without a Metal device.
+if(TARGET caliper_builder_session)
+    target_link_libraries(caliper PRIVATE caliper_builder_session caliper_spec_runtime caliper_api_session
+        caliper_catalog_providers)
+    target_compile_definitions(caliper PRIVATE CALIPER_WITH_BUILDER=1)
+    if(BUILD_TESTS)
+        add_executable(caliper_app_session_tests tests/test_app_session.cpp src/host/builder/app_session.cpp)
+        target_link_libraries(caliper_app_session_tests PRIVATE caliper_builder_test_main doctest::doctest
+            caliper_builder_session caliper_api_session caliper_host_lib)
+        target_include_directories(caliper_app_session_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/host ${CMAKE_SOURCE_DIR}/tests ${CMAKE_SOURCE_DIR}/third_party/stb)
+        target_compile_definitions(caliper_app_session_tests PRIVATE CALIPER_WITH_BUILDER=1)
+        set_target_properties(caliper_app_session_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+        if(TARGET hello_applet)
+            add_dependencies(caliper_app_session_tests hello_applet)   # app.launch in the process test
+        endif()
+        add_test(NAME caliper_app_session COMMAND caliper_app_session_tests "--test-case-exclude=*hidden app*")
+        set_tests_properties(caliper_app_session PROPERTIES LABELS "builder" TIMEOUT 120)
+        # The whole route of an outside agent against the hidden app: Caliper
+        # API's command endpoints build, open, render and capture a dashboard,
+        # and caliper-mcp calls a command tool (tests/test_app_route.cpp).
+        if(NOT WIN32 AND TARGET caliper-mcp)
+            add_executable(caliper_app_route_tests tests/test_app_route.cpp)
+            target_link_libraries(caliper_app_route_tests PRIVATE caliper_builder_test_main doctest::doctest
+                caliper_builder_acp caliper_builder_duckdb)
+            target_include_directories(caliper_app_route_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests
+                ${CMAKE_SOURCE_DIR}/src/builder/mcp/tests ${CMAKE_SOURCE_DIR}/src/builder/session/tests
+                ${CMAKE_SOURCE_DIR}/third_party/stb)
+            target_compile_definitions(caliper_app_route_tests PRIVATE CALIPER_MCP_EXE="$<TARGET_FILE:caliper-mcp>")
+            set_target_properties(caliper_app_route_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+            add_dependencies(caliper_app_route_tests caliper caliper-mcp)
+            add_test(NAME caliper_app_route COMMAND caliper_app_route_tests)
+            set_tests_properties(caliper_app_route PROPERTIES LABELS "cli;builder" TIMEOUT 240
+                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_AGENT_OFFLINE=1"
+                SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+        endif()
+        # The acceptance case "plot attention entropy per layer while it
+        # trains" (tests/test_app_live.cpp): the hidden app attached to the
+        # stream of caliper_attention_producer, a test tool with a hub of its
+        # own that streams a model's sharpening attention, and a spec over the
+        # live sources built and opened through Caliper API. macOS only, as
+        # the app's network source is.
+        if(APPLE AND TARGET caliper_net)
+            add_executable(caliper_attention_producer tests/live_attention_producer.cpp)
+            target_link_libraries(caliper_attention_producer PRIVATE caliper_net)
+            target_include_directories(caliper_attention_producer PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+            set_target_properties(caliper_attention_producer PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+            add_executable(caliper_app_live_tests tests/test_app_live.cpp)
+            target_link_libraries(caliper_app_live_tests PRIVATE caliper_builder_test_main doctest::doctest
+                nlohmann_json::nlohmann_json)
+            target_include_directories(caliper_app_live_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests
+                ${CMAKE_SOURCE_DIR}/third_party/stb)
+            set_target_properties(caliper_app_live_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+            add_dependencies(caliper_app_live_tests caliper caliper_attention_producer)
+            if(TARGET hello_applet)
+                add_dependencies(caliper_app_live_tests hello_applet)
+            endif()
+            add_test(NAME caliper_app_live_entropy COMMAND caliper_app_live_tests)
+            set_tests_properties(caliper_app_live_entropy PROPERTIES LABELS "cli;builder;live" TIMEOUT 240
+                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_PRODUCER_EXE=$<TARGET_FILE:caliper_attention_producer>;CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets;CALIPER_AGENT_OFFLINE=1"
+                SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+        endif()
+        if(NOT WIN32)
+            add_test(NAME caliper_app_session_hidden
+                     COMMAND caliper_app_session_tests "--test-case=app session: the hidden app*")
+            set_tests_properties(caliper_app_session_hidden PROPERTIES LABELS "cli;builder" TIMEOUT 240
+                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets;CALIPER_AGENT_OFFLINE=1"
+                SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+        endif()
+    endif()
+    # The host's catalog providers for live views, feed channels and metrics.
+    add_subdirectory(src/host/catalog_providers)
+    # The approval cards' link to the diff card and their tests.
+    include(src/host/builder/approval_cards.cmake)
 endif()
 
 # The Python extension (caliper-python spike): a nanobind module over the embed

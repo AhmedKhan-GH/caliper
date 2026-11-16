@@ -1,8 +1,11 @@
-// Builds the four files of the browser package into dist/:
+// Builds the five files of the browser package into dist/:
 //   caliper-view.js              the <caliper-view> and <caliper-controls> elements and connect(src)
 //   caliper-widget.js            the anywidget module of caliper.widget()
 //   caliper-controls-widget.js   the anywidget module of the controls panel (caliper.controls())
 //   index.html                   the viewer page, with its fonts and script inlined
+//   spec.html                    the browser viewer of spec applets, one file with its fonts and
+//                                script inlined, which Caliper API serves at /v0/spec (the app
+//                                embeds the checked-in copy, python/caliper/_web/spec.html)
 // and, with --test, the test harness bundle into test-dist/.
 //
 // The fonts are WOFF 1.0 wrappers of the unmodified IBM Plex Sans Condensed
@@ -45,6 +48,13 @@ const template = fs.readFileSync(at('src/page/index.html'), 'utf8');
 const html = template.replace('/*@FONTS@*/', () => fonts).replace('/*@SCRIPT@*/', () => script);
 fs.writeFileSync(path.join(dist, 'index.html'), html);
 
+// The spec page needs no element module: everything it runs is in the page.
+const specPage = await esbuild.build({ ...common, banner: {}, entryPoints: [at('src/spec/main.ts')], write: false });
+const specScript = specPage.outputFiles[0].text.replace(/<\/(script)/gi, '<\\/$1').trim();
+const specTemplate = fs.readFileSync(at('src/spec/index.html'), 'utf8');
+fs.writeFileSync(path.join(dist, 'spec.html'),
+  specTemplate.replace('/*@FONTS@*/', () => fonts).replace('/*@SCRIPT@*/', () => specScript));
+
 if (process.argv.includes('--test')) {
   await esbuild.build({
     bundle: true, format: 'esm', target: 'es2022', logLevel: 'warning', sourcemap: 'inline',
@@ -52,7 +62,7 @@ if (process.argv.includes('--test')) {
   });
 }
 
-const sizes = ['caliper-view.js', 'caliper-widget.js', 'caliper-controls-widget.js', 'index.html'].map((f) => {
+const sizes = ['caliper-view.js', 'caliper-widget.js', 'caliper-controls-widget.js', 'index.html', 'spec.html'].map((f) => {
   const buf = fs.readFileSync(path.join(dist, f));
   return `${f.padEnd(27)} ${String(buf.length).padStart(8)} bytes  ${String(zlib.gzipSync(buf, { level: 9 }).length).padStart(7)} gzipped`;
 });

@@ -101,6 +101,7 @@ it, and [SDK package](docs/references/sdk-package.md) describes the package.
 | `CALIPER_BUILD_VIEWER` | ON | Build `caliper_viewer`, the live viewer process (macOS) |
 | `CALIPER_BUILD_EXAMPLES` | ON | Build the embedding example, `examples/embed_host`. The tutorial applets `hello` and `sine_scope` build with the tests instead. |
 | `CALIPER_BUILD_OPENGLLAMA` | OFF | Build the archived opengllama applet; needs `CALIPER_WITH_LLAMA` |
+| `CALIPER_WITH_BUILDER` | ON, but OFF on Windows | Build the builder under `src/builder/` (its libraries, `caliper-mcp`, `caliper-acp-harness`, `caliper-builder-host` and their tests) and link DuckDB's json extension into the host's DuckDB. The Python wheel sets it OFF. |
 | `CALIPER_STATIC_CRT` | OFF | Use the static MSVC runtime (`/MT`) instead of the dynamic one |
 
 **Examples:**
@@ -276,6 +277,7 @@ Caliper uses the following open-source libraries. Their license texts can be fou
 | [slang](https://github.com/MikePopoloski/slang) | MIT | Michael Popoloski | Use, modify, and distribute freely provided the license notice is included. |
 | [stb](https://github.com/nothings/stb) | MIT / public domain | Sean Barrett and contributors | Use, modify, and distribute freely. |
 | [toml++](https://github.com/marzer/tomlplusplus) | MIT | Mark Gillard | Use, modify, and distribute freely provided the license notice is included. |
+| [JSON for Modern C++](https://github.com/nlohmann/json) | MIT | 2013-2026 Niels Lohmann | Use, modify, and distribute freely provided the license notice is included. |
 | [doctest](https://github.com/doctest/doctest) | MIT | Viktor Kirilov | Use, modify, and distribute freely provided the license notice is included. |
 | [nanobind](https://github.com/wjakob/nanobind) | BSD 3-Clause | Wenzel Jakob | Use, modify, and distribute freely provided the license notice is included and the project name is not used for endorsement. |
 | [zlib](https://github.com/madler/zlib) | Zlib | Jean-loup Gailly and Mark Adler | Use, modify, and distribute freely with no attribution required in binaries. |

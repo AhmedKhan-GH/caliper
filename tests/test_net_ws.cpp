@@ -860,3 +860,67 @@ TEST_CASE("net/ws: a message sent as a prefix and a shared body arrives whole") 
     }
 }
 
+
+TEST_CASE("net/ws: a request body is read only when body_limit allows it, within its time limit") {
+    Options o;
+    o.body_timeout_ms = 300;
+    // Bodies up to 64 bytes on /body; none anywhere else.
+    o.body_limit = [](const HttpRequest& r) { return r.path == "/body" ? size_t(64) : size_t(0); };
+    Server server(o);
+    std::string err;
+    REQUIRE(server.listen(0, &err));
+    Pump p(&server);
+    size_t handled = 0;
+    std::vector<std::string> bodies;   // as the server reported them
+
+    // Sends `parts` with a pause between them and returns the response.
+    auto exchange = [&](const std::vector<std::string>& parts) {
+        Raw r(server.port());
+        std::string resp;
+        bool eof = false;
+        for (size_t i = 0; i < parts.size(); ++i) {
+            r.send_all(parts[i]);
+            if (i + 1 < parts.size()) p.until([] { return false; }, 50);
+        }
+        p.until([&] {
+            for (; handled < p.sev.size(); ++handled) {
+                const Event& e = p.sev[handled];
+                if (e.type != Type::Request) continue;
+                bodies.push_back(e.request.body);
+                server.respond(e.conn, 200, "text/plain", "ok");
+            }
+            bool now_eof = false;
+            resp += r.recv_some(&now_eof);
+            eof |= now_eof;
+            return eof;
+        }, 3000);
+        return resp;
+    };
+    const std::string host = "Host: 127.0.0.1:" + std::to_string(server.port()) + "\r\n";
+    // A body in two pieces, after the head, arrives whole; bytes beyond it are dropped.
+    std::string resp = exchange({"POST /body HTTP/1.1\r\n" + host + "Content-Length: 11\r\n\r\n{\"a\":", "[1,2]}tail"});
+    CHECK(resp.rfind("HTTP/1.1 200 OK\r\n", 0) == 0);
+    REQUIRE(bodies.size() == 1);
+    CHECK(bodies[0] == "{\"a\":[1,2]}");
+    // Over the limit, another path, or chunked: reported at once, without a body.
+    for (const std::string& head :
+         {"POST /body HTTP/1.1\r\n" + host + "Content-Length: 65\r\n\r\n",
+          "POST /other HTTP/1.1\r\n" + host + "Content-Length: 4\r\n\r\n",
+          "POST /body HTTP/1.1\r\n" + host + "Content-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\n",
+          "POST /body HTTP/1.1\r\n" + host + "Content-Length: x4\r\n\r\n"}) {
+        CAPTURE(head);
+        const size_t before = bodies.size();
+        resp = exchange({head});
+        CHECK(resp.rfind("HTTP/1.1 200 OK\r\n", 0) == 0);
+        REQUIRE(bodies.size() == before + 1);
+        CHECK(bodies.back().empty());
+    }
+    // A body that does not arrive within body_timeout_ms gets 408, unreported.
+    const size_t before = bodies.size();
+    const auto t0 = std::chrono::steady_clock::now();
+    resp = exchange({"POST /body HTTP/1.1\r\n" + host + "Content-Length: 10\r\n\r\n{\"a\""});
+    const double waited = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(resp.rfind("HTTP/1.1 408", 0) == 0);
+    CHECK(bodies.size() == before);
+    CHECK(waited < 2.0);
+}

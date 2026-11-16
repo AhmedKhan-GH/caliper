@@ -51,4 +51,9 @@ std::string shipped_applets_dir();
 // empty, otherwise applets/ under the app-data folder. Creates nothing.
 std::string user_applets_dir();
 
+// The builder's default workspace: workspace/ under the app-data folder, so
+// CALIPER_DATA_DIR moves it too. --workspace and CALIPER_WORKSPACE choose
+// another (host_cli.h, workspace_choice). Creates nothing.
+std::string default_workspace_dir();
+
 } // namespace caliper

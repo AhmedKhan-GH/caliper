@@ -11,7 +11,9 @@
 //   dock space    four panes in ImGui docking, first-run layout built with
 //                 DockBuilder and persisted in the app-data imgui.ini:
 //                   Projects     (empty state; F2 Open folder disabled with
-//                                 the reason "not yet available"; F4 Attach
+//                                 the reason "not yet available"; F3 New
+//                                 dashboard, a new spec in build mode, titled
+//                                 by "new <title>" on the command line; F4 Attach
 //                                 to process opens the live sessions of
 //                                 training scripts here: script, pid, start
 //                                 time, state, views; ↑↓ select, Enter /
@@ -38,12 +40,23 @@
 // overview first / details on demand (Shneiderman), honest disabled actions.
 // ============================================================================
 
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <vector>
 
 namespace caliper_host { class AppletLoader; struct AppletEntry; }
 namespace caliper_live { class SessionList; }
+
+// What the Inspector shows of a spec applet, read from its spec by the app
+// (src/host/builder/spec_page.h): the spec's format version (caliper_spec)
+// and its numbers of panels and sources, or why the spec does not read.
+struct SpecAppletFacts {
+    long long format = -1;
+    size_t panels = 0;
+    size_t sources = 0;
+    std::string error;
+};
 
 class LandingScreen {
 public:
@@ -69,6 +82,17 @@ public:
         // link, or the http:// page link that caliper.serve() prints. Null
         // hides the link field under the session list.
         std::function<void(const std::string&)> attach_url;
+        // A spec applet's facts for the Inspector, from its spec file. Null,
+        // or false, leaves the rows that need them out.
+        std::function<bool(const caliper_host::AppletEntry&, SpecAppletFacts*)> spec_facts;
+        // F3 New dashboard, the Projects way in: a new spec titled `title`
+        // ("" for one without a title), opened in build mode. The command
+        // line's "new <title>" and Enter does the same. Null disables it.
+        std::function<void(const std::string& title)> new_spec;
+        // A file's path as the Inspector shows it: relative to the workspace
+        // for a file in it, else with the home folder written "~", as the
+        // Activity pane writes paths. Null shows the path as it is.
+        std::function<std::string(const std::string&)> shown_path;
     };
 
     // Draws one frame of the landing page. Owns its windows and dock space;
@@ -106,7 +130,7 @@ private:
     void draw_sessions(const Context& ctx);   // Projects in attach mode (F4)
     void draw_instruments(const Context& ctx);
     void draw_inspector(const Context& ctx);
-    void draw_inspector_rows(const caliper_host::AppletEntry& e);
+    void draw_inspector_rows(const caliper_host::AppletEntry& e, const Context& ctx);
     void draw_activity();
     void draw_status_bar(const Context& ctx);
     // Filters the loader by command_ and sorts by the table's sort spec.
@@ -129,6 +153,8 @@ private:
     const char* focus_pane_ = nullptr;  // ⌘1–⌘4: pane to focus after the frame
     int pending_launch_ = -1;        // activation, run after the frame is drawn
     int pending_restart_ = -1;       // Restart, run after the frame like a launch
+    bool pending_new_ = false;       // F3 / "new <title>": a new spec after the frame
+    std::string pending_new_title_;
     // F4 Attach to process: Projects lists the live sessions instead of the
     // ways in. The selection is the session token, so a relist keeps it.
     bool attach_mode_ = false;
@@ -151,3 +177,6 @@ private:
 // uppercased, then the device name. Call between sternbild::status_bar_begin()
 // and status_bar_end(); page-specific items follow.
 void draw_host_status_items(const char* renderer_name);
+// A fact of the app's that every page's status bar shows after the machine,
+// such as the address of Caliper API while it runs; "" shows nothing.
+void set_host_status_note(std::function<std::string()> note);

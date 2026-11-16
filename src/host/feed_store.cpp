@@ -51,6 +51,16 @@ uint64_t FeedStore::push(const std::string& channel_id, int64_t t_ns,
     return seq;
 }
 
+bool FeedStore::ring_state(const std::string& id, uint32_t* capacity,
+                           uint64_t* newest_seq) const {
+    Channel* ch = find(id);
+    if (!ch) return false;
+    std::lock_guard<std::mutex> lk(ch->mu);
+    if (capacity) *capacity = ch->capacity;
+    if (newest_seq) *newest_seq = ch->next_seq - 1;
+    return true;
+}
+
 uint32_t FeedStore::caps() const {
     return channel_count() > 0 ? CALIPER_FEED_CAP_LIVE : 0u;
 }

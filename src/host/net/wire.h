@@ -40,6 +40,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <variant>
@@ -60,6 +61,11 @@ namespace wire {
 // `path` is CALIPER_NET_PATH except for a server that mounts the endpoint
 // elsewhere: Caliper API serves the same stream at /v0/stream (api/api_server.h).
 int upgrade_status(const HttpRequest& r, const std::string& session_token, uint16_t port,
+                   const std::string& path = CALIPER_NET_PATH);
+// The same checks, in the same order, for a server that accepts more than one
+// token (Caliper API: api/api_server.h): the token parameter passes when
+// `token_ok` returns true for it, and `token_ok` compares in constant time.
+int upgrade_status(const HttpRequest& r, const std::function<bool(const std::string&)>& token_ok, uint16_t port,
                    const std::string& path = CALIPER_NET_PATH);
 // The single rules, for a server that serves plain HTTP on the same port (the
 // Host check applies to those requests too).

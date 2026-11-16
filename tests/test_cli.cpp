@@ -7,6 +7,7 @@
 #include "host_cli.h"
 #include "net/wire.h"
 #include "net/ws.h"
+#include "spec_applet_fixture.h"
 #include "test_proc.h"
 #include "test_temp.h"
 #include <chrono>
@@ -316,12 +317,26 @@ TEST_CASE("cli: list shows every copy in search order, with reasons") {
     const Run r = run({"list", "--applets", dev.c_str()}, ctx);
     CHECK(r.code == 0);
     const std::string expected =
-        "REFUSED   x.app  2.0.0  " + dev + "\n"
+        "REFUSED   x.app  2.0.0  library  " + dev + "\n"
         "          Built against libtorch 9.9.9; this host provides no libtorch.\n"
-        "READY     x.app  1.0.0  " + t.str("user") + "\n"
-        "SHADOWED  x.app  1.0.0  " + t.str("shipped") + "\n"
+        "READY     x.app  1.0.0  library  " + t.str("user") + "\n"
+        "SHADOWED  x.app  1.0.0  library  " + t.str("shipped") + "\n"
         "          Version 1.0.0 in " + t.str("user") + " is used instead.\n";
     CHECK(r.out == expected);
+}
+
+TEST_CASE("cli: list shows the spec applets of the workspace, after the development folders") {
+    TempDir t("list-workspace");
+    CliContext ctx = context(t);
+    const fs::path ws = t.path / "ws";
+    caliper_test::write_spec_applet(ws / "applets" / "board", "board", "local.board", "0.1.0");
+    // Without the workspace the applet is not listed.
+    CHECK(run({"list"}, ctx).out == "no applets found\n");
+    ctx.workspace_dir = ws.string();
+    const Run r = run({"list"}, ctx);
+    CHECK(r.code == 0);
+    INFO(r.out);
+    CHECK(r.out.find("local.board  0.1.0  spec  " + (ws / "applets" / "board").string()) != std::string::npos);
 }
 
 TEST_CASE("cli: --api and --api-port start the app, dev and shot with Caliper API") {
@@ -374,6 +389,58 @@ TEST_CASE("cli: --url attaches the app or dev to a stream at start") {
           "--url applies only to starting the app and dev");
 }
 
+TEST_CASE("cli: --workspace names the builder's workspace for the app, dev and shot") {
+    auto app = parse({"--workspace", "/w/one"});
+    CHECK(app.error.empty());
+    CHECK(app.command == Command::Run);
+    CHECK(app.workspace == "/w/one");
+    auto dev = parse({"dev", "/a", "--workspace=/w/two", "--hidden"});
+    CHECK(dev.error.empty());
+    CHECK(dev.workspace == "/w/two");
+    auto shot = parse({"shot", "--launch", "x", "--out", "o.png", "--workspace", "w"});
+    CHECK(shot.error.empty());
+    CHECK(shot.workspace == "w");
+    CHECK(parse({"--workspace", "/w", "--help"}).command == Command::Help);
+    CHECK(parse({"--workspace"}).error == "--workspace needs a folder");
+    CHECK(parse({"--workspace="}).error == "--workspace needs a folder");
+    CHECK(parse({"--workspace", "--hidden"}).error == "--workspace needs a folder");
+    CHECK(parse({"--workspace", "a", "--workspace", "b"}).error == "--workspace is given twice");
+    for (const char* sub : {"info", "serve", "check", "install", "build", "new"}) {
+        CAPTURE(sub);
+        std::vector<const char*> args = {sub};
+        if (std::string(sub) == "check" || std::string(sub) == "install" || std::string(sub) == "build" ||
+            std::string(sub) == "new")
+            args.push_back("x");
+        args.push_back("--workspace");
+        args.push_back("/w");
+        CHECK(parse(args).error == "--workspace applies only to starting the app, dev, shot and list");
+    }
+    // list takes it, for the workspace's spec applets.
+    const auto listed = parse({"list", "--workspace", "/w"});
+    CHECK(listed.error.empty());
+    CHECK(listed.workspace == "/w");
+}
+
+TEST_CASE("cli: the workspace is --workspace, then CALIPER_WORKSPACE, then the default, as absolute paths") {
+    namespace fs = std::filesystem;
+    auto flag = workspace_choice(parse({"--workspace", "/w/flag/"}), "/w/env", "/data/workspace");
+    CHECK(flag.chosen);
+    CHECK(std::string(flag.from) == "--workspace");
+    CHECK(fs::path(flag.dir) == fs::absolute("/w/flag").lexically_normal());
+    auto env = workspace_choice(parse({}), "/w/env", "/data/workspace");
+    CHECK(env.chosen);
+    CHECK(std::string(env.from) == "CALIPER_WORKSPACE");
+    CHECK(fs::path(env.dir) == fs::absolute("/w/env").lexically_normal());
+    for (const char* unset : {(const char*)nullptr, ""}) {
+        auto def = workspace_choice(parse({}), unset, "/data/workspace");
+        CHECK_FALSE(def.chosen);
+        CHECK(std::string(def.from) == "default");
+        CHECK(fs::path(def.dir) == fs::absolute("/data/workspace").lexically_normal());
+    }
+    auto rel = workspace_choice(parse({"--workspace", "here/../work"}), nullptr, "/d");
+    CHECK(fs::path(rel.dir) == (fs::current_path() / "work").lexically_normal());
+}
+
 TEST_CASE("cli: the usage names --url, --api, --allow-control and --hidden") {
     const std::string u = usage_text();
     CHECK(u.find("usage: caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] "
@@ -383,6 +450,9 @@ TEST_CASE("cli: the usage names --url, --api, --allow-control and --hidden") {
     CHECK(u.find("--out <file.png> [--api [--api-port <n>] [--allow-control]]") != std::string::npos);
     CHECK(u.find("caliper serve [--port <n>] [--token-file <file>] [--assets <dir>] [--allow-control]") !=
           std::string::npos);
+    CHECK(u.find("[--hidden]\n               [--workspace <dir>]\n") != std::string::npos);
+    CHECK(u.find("[--hidden] [--workspace <dir>]\n") != std::string::npos);
+    CHECK(u.find("[--allow-control]]\n                    [--workspace <dir>]\n") != std::string::npos);
 }
 
 TEST_CASE("cli: info and list as JSON hold what the text forms print") {
@@ -412,6 +482,7 @@ TEST_CASE("cli: info and list as JSON hold what the text forms print") {
     CHECK(refused.find("folder")->as_string() == t.str("dev"));
     CHECK(refused.find("reason")->as_string() ==
           "Built against libtorch 9.9.9; this host provides no libtorch.");
+    CHECK(refused.find("kind")->as_string() == "library");
     CHECK(list->at(1).find("status")->as_string() == "READY");
     CHECK(list->at(1).find("reason")->as_string().empty());
 }
@@ -567,8 +638,8 @@ TEST_CASE("cli: check passes a good folder and fails a bad one") {
     const std::string good = t.str("good");
     const Run ok = run({"check", good.c_str()}, ctx);
     CHECK(ok.code == 0);
-    CHECK(ok.out == "READY  x.a  1.0.0  " + good + "\n"
-                    "READY  x.b  0.3.0  " + good + "\n"
+    CHECK(ok.out == "READY  x.a  1.0.0  library  " + good + "\n"
+                    "READY  x.b  0.3.0  library  " + good + "\n"
                     "2 of 2 applets pass the checks\n");
 
     fake_applet(t.path / "bad", "a", "x.a", "1.0.0", "min_host=\"9.0.0\"\n");
@@ -594,6 +665,83 @@ TEST_CASE("cli: check passes a good folder and fails a bad one") {
     const Run empty = run({"check", t.str("empty").c_str()}, ctx);
     CHECK(empty.code == 1);
     CHECK(empty.err == "caliper: no applets in " + t.str("empty") + "\n");
+}
+
+TEST_CASE("cli: list shows spec applets with their kind, as JSON too") {
+    TempDir t("list-spec");
+    const CliContext ctx = context(t);
+    caliper_test::write_spec_applet(t.path / "user" / "demo", "demo", "local.demo", "0.1.0");
+    fake_applet(t.path / "user", "x", "x.app", "1.0.0");
+    const std::string folder = (t.path / "user" / "demo").string();
+    const Run r = run({"list"}, ctx);
+    CHECK(r.code == 0);
+    if (spec_runtime_available()) {
+        CHECK(r.out == "READY  local.demo  0.1.0  spec     " + folder + "\n"
+                       "READY  x.app       1.0.0  library  " + t.str("user") + "\n");
+    } else {
+        CHECK(r.out == "REFUSED  local.demo  0.1.0  spec     " + folder + "\n"
+                       "         " + no_spec_runtime_reason() + "\n"
+                       "READY    x.app       1.0.0  library  " + t.str("user") + "\n");
+    }
+
+    AppletLoader L(ctx.caps, ctx.data_root);
+    L.scan(applet_search_dirs({}, nullptr, ctx.user_dir, ctx.shipped_dir));
+    caliper_net::Json j;
+    std::string err;
+    const std::string text = applets_json(L);
+    REQUIRE_MESSAGE(caliper_net::Json::parse(text.data(), text.size(), &j, &err), err);
+    const caliper_net::Json* list = j.find("applets");
+    REQUIRE(list);
+    REQUIRE(list->size() == 2);
+    CHECK(list->at(0).find("kind")->as_string() == "spec");
+    CHECK(list->at(0).find("id")->as_string() == "local.demo");
+    CHECK(list->at(0).find("folder")->as_string() == folder);
+    CHECK(list->at(1).find("kind")->as_string() == "library");
+}
+
+TEST_CASE("cli: check validates a spec applet fully and prints its diagnostics") {
+    if (!spec_runtime_available()) return;   // listed as refused, as list shows
+    TempDir t("check-spec");
+    const CliContext ctx = context(t);
+
+    // A valid spec with a warning passes, and the warning is printed with
+    // its line and column.
+    caliper_test::write_spec_applet(t.path / "ws" / "applets" / "warned", "warned",
+                                    "local.warned", "0.1.0", caliper_test::kWarningSpec);
+    const std::string warned = (t.path / "ws" / "applets" / "warned").string();
+    const Run ok = run({"check", warned.c_str()}, ctx);
+    CHECK(ok.code == 0);
+    const std::string head = "READY  local.warned  0.1.0  spec  " + warned + "\n";
+    CHECK(ok.out.rfind(head, 0) == 0);
+    CHECK(ok.out.find("       warned.spec.toml:6:") == head.size());
+    CHECK(ok.out.find(": warning spec.unused_source: ") != std::string::npos);
+    CHECK(ok.out.find("1 of 1 applets pass the checks\n") != std::string::npos);
+
+    // A spec that fails validation fails the check, with every error under it.
+    caliper_test::write_spec_applet(t.path / "ws" / "applets" / "broken", "broken",
+                                    "local.broken", "0.1.0", caliper_test::kInvalidSpec);
+    const std::string broken = (t.path / "ws" / "applets" / "broken").string();
+    const Run bad = run({"check", broken.c_str()}, ctx);
+    CHECK(bad.code == 1);
+    CHECK(bad.out.rfind("FAILED  local.broken  0.1.0  spec  " + broken + "\n"
+                        "        broken.spec.toml:9:", 0) == 0);
+    CHECK(bad.out.find(": error spec.unknown_source: ") != std::string::npos);
+    CHECK(bad.out.find("0 of 1 applets pass the checks\n") != std::string::npos);
+
+    // The workspace's applets/ folder holds its applets one folder down.
+    const std::string applets = (t.path / "ws" / "applets").string();
+    const Run both = run({"check", applets.c_str()}, ctx);
+    CHECK(both.code == 1);
+    CHECK(both.out.find("FAILED  local.broken  0.1.0  spec  " + broken) != std::string::npos);
+    CHECK(both.out.find("READY   local.warned  0.1.0  spec  " + warned) != std::string::npos);
+    CHECK(both.out.find("1 of 2 applets pass the checks\n") != std::string::npos);
+
+    // install takes no spec applet.
+    const Run in = run({"install", warned.c_str()}, ctx);
+    CHECK(in.code == 1);
+    CHECK(in.err == "caliper: nothing installed; local.warned is a spec applet, which install "
+                    "does not take\n");
+    CHECK_FALSE(fs::exists(t.path / "user"));
 }
 
 TEST_CASE("cli: install copies passing applets into the user folder, or nothing") {
@@ -721,7 +869,7 @@ TEST_CASE("cli: check and install take a build folder whose applets are in apple
     const Run r = run({"check", build.c_str()}, ctx);
     CHECK(r.code == 0);
     CHECK(r.out == "using the applets in " + applets + "\n"
-                   "READY  x.a  1.0.0  " + applets + "\n"
+                   "READY  x.a  1.0.0  library  " + applets + "\n"
                    "1 of 1 applets pass the checks\n");
     // Named directly, the folder is used as given and nothing more is said.
     const Run direct = run({"check", applets.c_str()}, ctx);

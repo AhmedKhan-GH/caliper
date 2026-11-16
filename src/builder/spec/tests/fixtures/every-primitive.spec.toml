@@ -1,0 +1,124 @@
+# Every primitive, every option, every transform and extension tables at
+# several levels.
+caliper_spec = 0
+x = { editor = { zoom = 1.5, open = ["a", "b"] } }
+
+[applet]
+id = "every_primitive"
+title = "Every primitive"
+description = "Line one.\n\tLine two, with a tab and \"quotes\" and a backslash \\."
+x = { note = "kept" }
+
+[[source]]
+id = "acts"
+catalog = "tensor:acts"                # [batch, tokens, features]
+x = { colour = "blue" }
+  [[source.transform]]
+  op = "slice"
+  axis = 0
+  start = 0
+  stop = -1
+  step = 2
+  [[source.transform]]
+  op = "reduce"
+  axis = [0, -1]
+  fn = "norm"
+  keepdims = false
+  x = { why = "one value per token" }
+
+[[source]]
+id = "probs"
+from = "acts"
+  [[source.transform]]
+  op = "normalise"
+  mode = "softmax"
+  axis = 0
+
+[[source]]
+id = "image"
+catalog = "tensor:sample_png"          # u8 [H, W, 3]
+
+[[source]]
+id = "cloud"
+catalog = "tensor:embedding"           # [n, 3]
+
+[[source]]
+id = "labels"
+catalog = "tensor:embedding_labels"    # [n]
+
+[[source]]
+id = "feed"
+catalog = "feed:gpu"
+
+[[source]]
+id = "metrics"
+catalog = "metric:run42/train/loss"
+
+[[source]]
+id = "q"
+sql = """
+SELECT step, value
+FROM run42_metrics
+WHERE step > 0"""
+
+[[panel]]
+id = "s"
+primitive = "series"
+title = "Series"
+bind = { y = "probs" }
+options = { x_label = "Token", y_label = "p", x_range = [0, 128], y_range = [0.0, 1.0], x_log = false, y_log = true }
+
+[[panel]]
+id = "h"
+primitive = "histogram"
+bind = { values = "acts" }
+options = { bins = 128, range = [-4.5, 4.5], x_label = "Norm", y_label = "Count", y_log = true }
+
+[[panel]]
+id = "p3"
+primitive = "points"
+bind = { positions = "cloud", color = "labels" }
+options = { colormap = "rdbu", x_label = "x", y_label = "y", z_label = "z" }
+
+[[panel]]
+id = "p2"
+primitive = "points"
+bind = { x = "metrics.step", y = "metrics.value", size = "metrics.value", color = "metrics.step" }
+
+[[panel]]
+id = "img"
+primitive = "image"
+bind = { values = "image" }
+options = { colormap = "greys", range = [0, 255] }
+x = { pinned = true }
+
+[[panel]]
+id = "t"
+primitive = "table"
+bind = { rows = "q" }
+options = { columns = ["step", "value"], x = { widths = [80, 120] } }
+
+[[panel]]
+id = "gpu"
+primitive = "table"
+bind = { rows = "feed" }
+
+[[panel]]
+id = "note"
+primitive = "text"
+options = { text = "Notes about this applet." }
+
+[[panel]]
+id = "last"
+primitive = "text"
+title = "Last value"
+bind = { value = "metrics.value" }
+options = { text = "Loss" }
+
+[layout]
+tabs = [
+  { split = "horizontal", children = ["s", "h", "p3"], title = "Tensors" },
+  { split = "vertical", ratio = 0.3, children = ["p2", { tabs = ["img", "t", "gpu"] }], title = "Tables", x = { collapsed = false } },
+  { tabs = ["note", "last"], title = "Text" },
+]
+x = { active = 0 }

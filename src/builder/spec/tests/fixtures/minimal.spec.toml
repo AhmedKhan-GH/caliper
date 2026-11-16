@@ -1,0 +1,4 @@
+caliper_spec = 0
+
+[applet]
+id = "empty"

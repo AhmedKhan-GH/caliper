@@ -428,6 +428,7 @@ public:
     enum class Phase {
         Connecting,     // client: TCP connect in progress
         ReadHead,       // server: reading the request head
+        ReadBody,       // server: reading a body that Options::body_limit allowed
         Decide,         // server: Request reported, waiting for accept/respond/reject
         AwaitUpgrade,   // client: request sent, reading the response head
         Open,
@@ -460,8 +461,8 @@ public:
     short interest() const {
         short ev = 0;
         if (phase_ == Phase::Connecting) return POLLOUT;
-        if (phase_ == Phase::ReadHead || phase_ == Phase::AwaitUpgrade || phase_ == Phase::Open ||
-            phase_ == Phase::Closing)
+        if (phase_ == Phase::ReadHead || phase_ == Phase::ReadBody || phase_ == Phase::AwaitUpgrade ||
+            phase_ == Phase::Open || phase_ == Phase::Closing)
             ev |= POLLIN;
         if (!out_.empty()) ev |= POLLOUT;
         return ev;
@@ -519,6 +520,7 @@ public:
         switch (phase_) {
             case Phase::Connecting: die(ev, kCloseAbnormal, "connect timed out"); break;
             case Phase::ReadHead: die(ev, kCloseAbnormal, "request head timed out"); break;
+            case Phase::ReadBody: server_bad_head(408, ev); break;
             case Phase::AwaitUpgrade: die(ev, kCloseAbnormal, "upgrade response timed out"); break;
             case Phase::Closing:
             case Phase::Flush: die(ev, close_code_ ? close_code_ : kCloseAbnormal, close_reason_); break;
@@ -849,6 +851,9 @@ private:
                 case Phase::AwaitUpgrade:
                     read_head(buf, (size_t)r, ev);
                     break;
+                case Phase::ReadBody:
+                    read_body(buf, (size_t)r, ev);
+                    break;
                 case Phase::Open:
                 case Phase::Closing:
                     feed(buf, (size_t)r, ev);
@@ -928,6 +933,42 @@ private:
                       base64_decode(field(f, "sec-websocket-key"), &key_raw) && key_raw.size() == 16;
         r.headers = std::move(f);
         req_ = r;
+        // A body that the owner takes for this request (REQUEST BODIES, ws.h):
+        // a Content-Length of digits only, within what body_limit allows.
+        const std::string length = field(req_.headers, "content-length");
+        if (opt_.body_limit && !length.empty() && length.size() <= 18 &&
+            length.find_first_not_of("0123456789") == std::string::npos &&
+            !has_field(req_.headers, "transfer-encoding")) {
+            const unsigned long long n = std::stoull(length);
+            if (n > 0 && n <= (unsigned long long)opt_.body_limit(req_)) {
+                body_need_ = (size_t)n;
+                body_.clear();
+                body_.reserve(body_need_);
+                phase_ = Phase::ReadBody;
+                deadline_ms_ = monotonic_ms() + (uint64_t)opt_.body_timeout_ms;
+                // Body bytes that arrived right behind the head.
+                if (!leftover_.empty()) {
+                    Bytes b;
+                    b.swap(leftover_);
+                    read_body(b.data(), b.size(), ev);
+                }
+                return;
+            }
+        }
+        report_request(ev);
+    }
+
+    void read_body(const uint8_t* p, size_t n, std::vector<Event>& ev) {
+        const size_t take = std::min(n, body_need_ - body_.size());
+        body_.append((const char*)p, take);
+        if (body_.size() < body_need_) return;
+        // Bytes beyond the body are dropped: one request per connection.
+        report_request(ev);
+    }
+
+    // Reports the request (with its body, when one was read) and waits for
+    // the owner's accept(), respond() or reject().
+    void report_request(std::vector<Event>& ev) {
         phase_ = Phase::Decide;
         deadline_ms_ = 0;
         reported_ = true;
@@ -935,6 +976,9 @@ private:
         e.type = Event::Type::Request;
         e.conn = id_;
         e.request = req_;
+        e.request.body = std::move(body_);
+        body_.clear();
+        body_.shrink_to_fit();
         ev.push_back(std::move(e));
     }
 
@@ -1173,7 +1217,9 @@ private:
     // handshake
     std::string head_;
     Bytes leftover_;
-    HttpRequest req_;
+    HttpRequest req_;           // without the body, which goes to the event
+    std::string body_;          // ReadBody: the body so far
+    size_t body_need_ = 0;      // ReadBody: its Content-Length
     std::string key_;
     int http_status_ = 0;
 

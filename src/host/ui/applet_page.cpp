@@ -195,7 +195,13 @@ void text_cut(const char* text, float max_w, ImU32 colour) {
 // The strip: one line, the running jobs, then the kept failures (newest
 // first), as many as fit, then "+N more" for the rest; at the right end, how
 // many finished and "clear finished". Actions are house words, not boxes.
+// The next strip, when one is set, follows it.
 void JobsTray::draw() {
+    draw_tray();
+    if (next_strip_) next_strip_();
+}
+
+void JobsTray::draw_tray() {
     if (!presence_.open()) return;
     sternbild::tray_bar_begin(kJobsTrayHeight);
     ImGuiWindow* window = ImGui::GetCurrentWindow();

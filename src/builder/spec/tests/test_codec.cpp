@@ -1,0 +1,436 @@
+// Parsing and writing a spec: the fixtures, round trips through canonical TOML
+// and JSON, positions, the value rules and hostile input.
+#include <ostream>
+#include <string>
+
+#include <doctest/doctest.h>
+
+#include <cmath>
+
+#include "helpers.h"
+
+using namespace spec_test;
+using nlohmann::json;
+
+namespace {
+
+const char* kCanonicalExample = R"(caliper_spec = 0
+
+[applet]
+id = "attention-entropy"
+title = "Attention entropy"
+description = "Entropy of each attention head while the model trains."
+
+[[source]]
+id = "attn"
+catalog = "live:attn.weights"
+
+[[source]]
+id = "entropy"
+from = "attn"
+  [[source.transform]]
+  op = "reduce"
+  axis = 3
+  fn = "entropy"
+  [[source.transform]]
+  op = "reduce"
+  axis = 2
+  fn = "mean"
+
+[[source]]
+id = "loss"
+sql = "SELECT step, loss FROM run42_metrics ORDER BY step"
+
+[[panel]]
+id = "heat"
+primitive = "heatmap"
+title = "Entropy per layer and head"
+bind = { values = "entropy" }
+options = { colormap = "viridis", x_label = "Head", y_label = "Layer" }
+
+[[panel]]
+id = "loss"
+primitive = "series"
+bind = { x = "loss.step", y = ["loss.loss"] }
+
+[layout]
+split = "horizontal"
+ratio = 0.6
+children = ["heat", "loss"]
+)";
+
+cs::ParseResult parse(const std::string& text) { return cs::parse_toml(text); }
+
+std::string with_applet(const std::string& body) { return "caliper_spec = 0\n[applet]\nid = \"a\"\n" + body; }
+
+}  // namespace
+
+TEST_CASE("the contracts' example parses into the expected spec") {
+    auto r = parse(fixture("attention-entropy.spec.toml"));
+    REQUIRE_MESSAGE(r.ok(), dump(r.diagnostics));
+    const cs::Spec& s = r.spec;
+    CHECK(s.version == 0);
+    CHECK(s.applet.id == "attention-entropy");
+    CHECK(s.applet.title == std::optional<std::string>("Attention entropy"));
+    REQUIRE(s.sources.size() == 3);
+    CHECK(s.sources[0].catalog == std::optional<std::string>("live:attn.weights"));
+    CHECK(s.sources[1].from == std::optional<std::string>("attn"));
+    REQUIRE(s.sources[1].transforms.size() == 2);
+    CHECK(s.sources[1].transforms[0].op == cs::TransformOp::reduce);
+    CHECK(s.sources[1].transforms[0].axis == std::vector<std::int64_t>{3});
+    CHECK_FALSE(s.sources[1].transforms[0].axis_list);
+    CHECK(s.sources[1].transforms[0].fn == std::optional<std::string>("entropy"));
+    CHECK(s.sources[2].sql.has_value());
+    REQUIRE(s.panels.size() == 2);
+    CHECK(s.panels[0].primitive == cs::Primitive::heatmap);
+    CHECK(s.panels[0].bind.at("values").bindings == std::vector<std::string>{"entropy"});
+    CHECK(s.panels[0].options.colormap == std::optional<std::string>("viridis"));
+    CHECK(s.panels[1].bind.at("y").list);
+    REQUIRE(s.layout.has_value());
+    CHECK(s.layout->kind == cs::LayoutNode::Kind::split);
+    CHECK(s.layout->split == cs::SplitDirection::horizontal);
+    CHECK(s.layout->ratio == std::optional<double>(0.6));
+    REQUIRE(s.layout->children.size() == 2);
+    CHECK(s.layout->children[1].panel == "loss");
+}
+
+TEST_CASE("the canonical TOML of the contracts' example is the example without its comments") {
+    auto r = parse(fixture("attention-entropy.spec.toml"));
+    REQUIRE(r.ok());
+    CHECK(cs::to_toml(r.spec) == kCanonicalExample);
+}
+
+TEST_CASE("every valid fixture round trips through canonical TOML") {
+    for (const std::string& name : valid_fixtures()) {
+        CAPTURE(name);
+        auto first = parse(fixture(name));
+        REQUIRE_MESSAGE(first.ok(), dump(first.diagnostics));
+        const std::string text = cs::to_toml(first.spec);
+        auto second = parse(text);
+        REQUIRE_MESSAGE(second.ok(), (dump(second.diagnostics) + text));
+        CHECK(second.spec == first.spec);
+        CHECK(cs::to_toml(second.spec) == text);  // the writer reaches a fixed point at once
+    }
+}
+
+TEST_CASE("every valid fixture round trips through canonical JSON") {
+    for (const std::string& name : valid_fixtures()) {
+        CAPTURE(name);
+        auto parsed = parse(fixture(name));
+        REQUIRE(parsed.ok());
+        const json j = cs::to_json(parsed.spec);
+        auto from_value = cs::from_json(j);
+        REQUIRE_MESSAGE(from_value.ok(), dump(from_value.diagnostics));
+        CHECK(from_value.spec == parsed.spec);
+
+        const std::string text = cs::to_json_text(parsed.spec);
+        auto from_text = cs::from_json_text(text);
+        REQUIRE_MESSAGE(from_text.ok(), dump(from_text.diagnostics));
+        CHECK(from_text.spec == parsed.spec);
+        CHECK(cs::to_json_text(from_text.spec) == text);
+        CHECK(json::parse(text) == j);
+    }
+}
+
+TEST_CASE("the canonical JSON text is compact, with keys in byte order") {
+    auto r = parse(fixture("minimal.spec.toml"));
+    REQUIRE(r.ok());
+    CHECK(cs::to_json_text(r.spec) == R"({"applet":{"id":"empty"},"caliper_spec":0})");
+
+    auto e = parse(fixture("attention-entropy.spec.toml"));
+    REQUIRE(e.ok());
+    const std::string text = cs::to_json_text(e.spec);
+    CHECK(text.find(R"("layout":{"children":["heat","loss"],"ratio":0.6,"split":"horizontal"})") !=
+          std::string::npos);
+    CHECK(text.find(R"("bind":{"x":"loss.step","y":["loss.loss"]})") != std::string::npos);
+}
+
+TEST_CASE("strings with line breaks, quotes and control characters survive both writers") {
+    cs::Spec s;
+    s.applet.id = "texts";
+    s.applet.description = std::string("first line\nsecond \"quoted\" line\twith a tab\\ and \x01 a control\r\n");
+    s.applet.title = "Unicode \xC3\xA9t\xC3\xA9 \xE2\x9C\x93";
+    cs::Panel p;
+    p.id = "note";
+    p.primitive = cs::Primitive::text;
+    p.options.text = std::string("\"\"\"three quotes\"\"\" and a trailing quote\"");
+    s.panels.push_back(p);
+    const std::string toml = cs::to_toml(s);
+    auto back = parse(toml);
+    REQUIRE_MESSAGE(back.ok(), (dump(back.diagnostics) + toml));
+    CHECK(back.spec == s);
+    auto json_back = cs::from_json_text(cs::to_json_text(s));
+    REQUIRE(json_back.ok());
+    CHECK(json_back.spec == s);
+}
+
+TEST_CASE("an extension table is kept as written, and an empty one is dropped") {
+    auto r = parse(fixture("every-primitive.spec.toml"));
+    REQUIRE(r.ok());
+    CHECK(r.spec.x == json::parse(R"({"editor": {"zoom": 1.5, "open": ["a", "b"]}})"));
+    CHECK(r.spec.panels[4].x == json::parse(R"({"pinned": true})"));
+    CHECK(r.spec.layout->x == json::parse(R"({"active": 0})"));
+
+    auto e = parse(with_applet("x = {}\n"));
+    REQUIRE(e.ok());
+    CHECK(e.spec.applet.x.is_null());
+}
+
+TEST_CASE("an integer key takes a number with no fractional part, as a browser cannot tell them apart") {
+    auto r = parse(with_applet(R"(
+[[source]]
+id = "t"
+catalog = "tensor:t"
+  [[source.transform]]
+  op = "slice"
+  axis = 1.0
+  index = -2.0
+)"));
+    REQUIRE_MESSAGE(r.ok(), dump(r.diagnostics));
+    CHECK(r.spec.sources[0].transforms[0].axis == std::vector<std::int64_t>{1});
+    CHECK(r.spec.sources[0].transforms[0].index == std::optional<std::int64_t>(-2));
+
+    auto bad = parse(with_applet(R"(
+[[source]]
+id = "t"
+catalog = "tensor:t"
+  [[source.transform]]
+  op = "slice"
+  axis = 1.5
+)"));
+    CHECK(has(bad.diagnostics, "spec.wrong_type", "source[0].transform[0].axis"));
+}
+
+TEST_CASE("parse errors carry the line and column of the value") {
+    auto r = parse("caliper_spec = 0\n[applet]\nid = \"a\"\n\n[[panel]]\nid = \"p\"\nprimitive = \"heatmap\"\n"
+                   "options = { colourmap = \"viridis\" }\n");
+    REQUIRE_FALSE(r.ok());
+    const cs::Diagnostic* d = find(r.diagnostics, "spec.unknown_option");
+    REQUIRE(d);
+    CHECK(d->path == "panel[0].options.colourmap");
+    CHECK(d->line == 8);
+    CHECK(d->column > 1);
+    CHECK(d->to_error().where == "panel[0].options.colourmap");
+
+    // A missing key points at the table that lacks it.
+    auto m = parse("caliper_spec = 0\n[applet]\nid = \"a\"\n\n[[panel]]\nprimitive = \"text\"\n");
+    const cs::Diagnostic* md = find(m.diagnostics, "spec.missing_key");
+    REQUIRE(md);
+    CHECK(md->path == "panel[0].id");
+    CHECK(md->line == 5);
+}
+
+TEST_CASE("syntax errors carry a line and a column") {
+    auto t = parse("caliper_spec = 0\n[applet]\nid = \"a\"\ntitle = = 3\n");
+    REQUIRE(t.diagnostics.size() == 1);
+    CHECK(t.diagnostics[0].code == "spec.syntax");
+    CHECK(t.diagnostics[0].line == 4);
+    CHECK(t.diagnostics[0].to_error().where == "4:" + std::to_string(t.diagnostics[0].column));
+
+    auto j = cs::from_json_text("{\n  \"caliper_spec\": 0,\n  \"applet\": {\"id\": \"a\",}\n}");
+    REQUIRE(j.diagnostics.size() == 1);
+    CHECK(j.diagnostics[0].code == "spec.syntax");
+    CHECK(j.diagnostics[0].line == 3);
+
+    auto dup = cs::from_json_text(R"({"caliper_spec": 0, "applet": {"id": "a", "id": "b"}})");
+    REQUIRE(dup.diagnostics.size() == 1);
+    CHECK(dup.diagnostics[0].code == "spec.syntax");
+    CHECK(dup.diagnostics[0].message.find("\"id\"") != std::string::npos);
+}
+
+TEST_CASE("values that the JSON form cannot carry are refused") {
+    SUBCASE("a date") {
+        auto r = parse(with_applet("x = { when = 2026-11-15T12:00:00Z }\n"));
+        CHECK(has(r.diagnostics, "spec.wrong_type", "applet.x.when"));
+        CHECK(r.diagnostics[0].line == 4);
+    }
+    SUBCASE("a local date and a time") {
+        CHECK(has(parse(with_applet("title = 2026-11-15\n")).diagnostics, "spec.wrong_type", "applet.title"));
+        CHECK(has(parse(with_applet("title = 12:00:00\n")).diagnostics, "spec.wrong_type", "applet.title"));
+    }
+    SUBCASE("infinity and NaN") {
+        CHECK(has(parse(with_applet("x = { a = inf }\n")).diagnostics, "spec.out_of_range", "applet.x.a"));
+        CHECK(has(parse(with_applet("x = { a = nan }\n")).diagnostics, "spec.out_of_range", "applet.x.a"));
+    }
+    SUBCASE("an integer that JavaScript cannot read exactly") {
+        CHECK(has(parse(with_applet("x = { a = 9007199254740992 }\n")).diagnostics, "spec.out_of_range"));
+        CHECK(parse(with_applet("x = { a = 9007199254740991 }\n")).ok());
+        CHECK(has(cs::from_json(json::parse(R"({"caliper_spec":0,"applet":{"id":"a","x":{"n":18446744073709551615}}})"))
+                      .diagnostics,
+                  "spec.out_of_range"));
+    }
+    SUBCASE("null") {
+        auto r = cs::from_json(json::parse(R"({"caliper_spec":0,"applet":{"id":"a","title":null}})"));
+        CHECK(has(r.diagnostics, "spec.wrong_type", "applet.title"));
+    }
+    SUBCASE("text that is not UTF-8") {
+        json doc = {{"caliper_spec", 0}, {"applet", {{"id", "a"}, {"title", std::string("bad \xFF byte")}}}};
+        CHECK(has(cs::from_json(doc).diagnostics, "spec.bad_value", "applet.title"));
+    }
+}
+
+TEST_CASE("strict parsing refuses unknown keys outside x") {
+    auto r = parse(with_applet("titel = \"typo\"\n[[panel]]\nid = \"p\"\nprimitive = \"text\"\noptions = { text = \"t\" }\n"
+                               "colour = \"red\"\n"));
+    CHECK(has(r.diagnostics, "spec.unknown_key", "applet.titel"));
+    CHECK(has(r.diagnostics, "spec.unknown_key", "panel[0].colour"));
+    CHECK(r.spec == cs::Spec{});  // a failed parse returns an empty spec
+}
+
+TEST_CASE("the item decoders that the command layer uses") {
+    auto p = cs::panel_from_json(json::parse(R"({"id": "h", "primitive": "histogram", "bind": {"values": "a"},
+                                                  "options": {"bins": 32}})"),
+                                 "panel[4]");
+    REQUIRE(p.ok());
+    CHECK(p.value.options.bins == std::optional<std::int64_t>(32));
+    CHECK(cs::to_json(p.value) == json::parse(R"({"id":"h","primitive":"histogram","bind":{"values":"a"},
+                                                  "options":{"bins":32}})"));
+
+    auto bad = cs::panel_from_json(json::parse(R"({"id": "h", "primitive": "histogram", "bind": {"y": "a"}})"),
+                                   "panel[4]");
+    CHECK(has(bad.diagnostics, "spec.unknown_slot", "panel[4].bind.y"));
+
+    auto s = cs::source_from_json(json::parse(R"({"id": "s", "sql": "SELECT 1", "x": {"k": 1}})"), "source[0]");
+    REQUIRE(s.ok());
+    CHECK(s.value.sql == std::optional<std::string>("SELECT 1"));
+
+    auto l = cs::layout_from_json(json::parse(R"({"tabs": ["a", {"split": "vertical", "children": ["b", "c"]}]})"));
+    REQUIRE(l.ok());
+    CHECK(l.value.kind == cs::LayoutNode::Kind::tabs);
+    CHECK(cs::to_json(l.value) == json::parse(R"({"tabs":["a",{"split":"vertical","children":["b","c"]}]})"));
+
+    auto both = cs::layout_from_json(json::parse(R"({"tabs": ["a"], "split": "vertical"})"));
+    CHECK(has(both.diagnostics, "spec.bad_layout", "layout"));
+}
+
+TEST_CASE("hostile input is refused within bounded work") {
+    SUBCASE("a text over the size limit") {
+        std::string big = with_applet("title = \"") + std::string(1024 * 1024, 'a') + "\"\n";
+        auto r = parse(big);
+        REQUIRE(r.diagnostics.size() == 1);
+        CHECK(r.diagnostics[0].code == "spec.too_large");
+        CHECK(cs::from_json_text(std::string(cs::limits::kTextBytes + 1, ' ')).diagnostics[0].code ==
+              "spec.too_large");
+    }
+    SUBCASE("a 1 MiB string in a JSON value") {
+        json doc = {{"caliper_spec", 0}, {"applet", {{"id", "a"}, {"title", std::string(1024 * 1024, 'a')}}}};
+        auto r = cs::from_json(doc);
+        CHECK(has(r.diagnostics, "spec.string_too_long", "applet.title"));
+        // The same string in a Spec built in code is caught by validation.
+        cs::Spec s;
+        s.applet.id = "a";
+        s.applet.description = std::string(1024 * 1024, 'd');
+        CHECK(has(cs::validate(s).diagnostics, "spec.string_too_long", "applet.description"));
+    }
+    SUBCASE("deeply nested inline arrays") {
+        std::string open(40, '['), close(40, ']');
+        auto r = parse(with_applet("x = { a = " + open + "1" + close + " }\n"));
+        CHECK(has(r.diagnostics, "spec.too_deep"));
+        std::string open2(400, '['), close2(400, ']');
+        auto r2 = parse(with_applet("x = { a = " + open2 + "1" + close2 + " }\n"));
+        CHECK(r2.diagnostics.size() == 1);
+        CHECK((r2.diagnostics[0].code == "spec.syntax" || r2.diagnostics[0].code == "spec.too_deep"));
+    }
+    SUBCASE("a dotted key of 100,000 parts") {
+        std::string key = "a";
+        for (int i = 0; i < 100000; ++i) key += ".a";
+        auto r = parse("caliper_spec = 0\n[x." + key + "]\n");
+        REQUIRE(r.diagnostics.size() == 1);
+        CHECK(r.diagnostics[0].code == "spec.too_deep");
+        CHECK(r.diagnostics[0].line == 2);
+        // Quoted parts count too.
+        std::string quoted = "\"a\"";
+        for (int i = 0; i < 100; ++i) quoted += ".\"a\"";
+        CHECK(parse("caliper_spec = 0\nx." + quoted + " = 1\n").diagnostics[0].code == "spec.too_deep");
+        // Floats and dates do not count as dotted keys.
+        CHECK(parse(with_applet("x = { a = [1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, "
+                                "7.5, 8.5, 9.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 1.5, 2.5, 3.5, 4.5, 5.5, "
+                                "6.5, 7.5] }\n"))
+                  .ok());
+    }
+    SUBCASE("deep nesting in JSON") {
+        std::string open(100000, '['), close(100000, ']');
+        auto r = cs::from_json_text("{\"caliper_spec\":0,\"applet\":{\"id\":\"a\",\"x\":{\"a\":" + open + close +
+                                    "}}}");
+        REQUIRE(r.diagnostics.size() == 1);
+        CHECK(r.diagnostics[0].code == "spec.too_deep");
+        json deep = json::array();
+        for (int i = 0; i < 40; ++i) deep = json::array({deep});
+        json doc = {{"caliper_spec", 0}, {"applet", {{"id", "a"}, {"x", {{"a", deep}}}}}};
+        CHECK(has(cs::from_json(doc).diagnostics, "spec.too_deep"));
+    }
+    SUBCASE("a huge count of values") {
+        std::string many = "x = { a = [";
+        for (int i = 0; i < 70000; ++i) many += "1,";
+        many += "] }\n";
+        auto r = parse(with_applet(many));
+        REQUIRE(r.diagnostics.size() == 1);
+        CHECK(r.diagnostics[0].code == "spec.too_many");
+    }
+    SUBCASE("many errors produce a bounded report") {
+        std::string many;
+        for (int i = 0; i < 2000; ++i) many += "k" + std::to_string(i) + " = 1\n";
+        auto r = parse("caliper_spec = 0\n" + many + "[applet]\nid = \"a\"\n");
+        CHECK(r.diagnostics.size() == cs::limits::kDiagnostics);
+    }
+}
+
+TEST_CASE("a later or invalid version is refused with one error") {
+    auto later = parse("caliper_spec = 1\n[applet]\nid = \"a\"\nfuture_key = 1\n[[gadget]]\n");
+    REQUIRE(later.diagnostics.size() == 1);
+    CHECK(later.diagnostics[0].code == "spec.unsupported_version");
+    CHECK(later.diagnostics[0].message.find("newer Caliper") != std::string::npos);
+    CHECK(later.diagnostics[0].line == 1);
+
+    CHECK(has(parse("caliper_spec = \"0\"\n[applet]\nid = \"a\"\n").diagnostics, "spec.wrong_type", "caliper_spec"));
+    CHECK(has(parse("[applet]\nid = \"a\"\n").diagnostics, "spec.missing_key", "caliper_spec"));
+}
+
+TEST_CASE("a spec built in code round trips through both forms") {
+    cs::Spec s;
+    s.applet.id = "built";
+    s.applet.description = std::string("ends with three quotes \"\"\" and a backslash \\");
+    s.x = json::parse(R"({"k": [1, 2.5, "s", true, {"n": {}}], "weird key": {"é": -0.0}})");
+    cs::Source src;
+    src.id = "t";
+    src.catalog = "tensor:t";
+    cs::Transform slice;
+    slice.op = cs::TransformOp::slice;
+    slice.axis = {-1};
+    slice.index = 3;
+    cs::Transform reduce;
+    reduce.op = cs::TransformOp::reduce;
+    reduce.axis = {2};
+    reduce.axis_list = true;  // written as [2]
+    reduce.fn = "var";
+    cs::Transform norm;
+    norm.op = cs::TransformOp::normalise;
+    norm.mode = "minmax";
+    src.transforms = {slice, reduce, norm};
+    s.sources.push_back(src);
+    cs::Source q;
+    q.id = "q";
+    q.sql = "SELECT \"step\", 'v'\nFROM m\n";
+    s.sources.push_back(q);
+    cs::Panel p;
+    p.id = "p";
+    p.primitive = cs::Primitive::series;
+    p.bind["y"] = cs::SlotValue{{"t"}, false};
+    p.options.x_range = std::array<double, 2>{-1e300, 2.5e-7};
+    p.options.x_log = true;
+    p.x = json::parse(R"({"a.b": 1})");
+    s.panels.push_back(p);
+    s.layout = cs::LayoutNode::of_panel("p");
+
+    const std::string toml = cs::to_toml(s);
+    CHECK(toml.rfind("caliper_spec = 0\nlayout = \"p\"\nx = ", 0) == 0);
+    CHECK(toml.find("axis = [2]") != std::string::npos);
+    auto back = parse(toml);
+    REQUIRE_MESSAGE(back.ok(), (dump(back.diagnostics) + toml));
+    CHECK(back.spec == s);
+    CHECK(cs::to_toml(back.spec) == toml);
+    auto from_json = cs::from_json(cs::to_json(s));
+    REQUIRE(from_json.ok());
+    CHECK(from_json.spec == s);
+    CHECK(cs::validate(s).ok());
+}

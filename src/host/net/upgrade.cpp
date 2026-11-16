@@ -68,13 +68,18 @@ bool token_equal(const std::string& a, const std::string& b) {
 
 int upgrade_status(const HttpRequest& r, const std::string& session_token, uint16_t port,
                    const std::string& path) {
+    return upgrade_status(
+        r, [&](const std::string& token) { return !session_token.empty() && token_equal(token, session_token); }, port,
+        path);
+}
+
+int upgrade_status(const HttpRequest& r, const std::function<bool(const std::string&)>& token_ok, uint16_t port,
+                   const std::string& path) {
     if (r.path != path) return 404;
     if (!host_allowed(r.host, port)) return 403;
     if (r.has_origin && !origin_allowed(r.origin)) return 403;
     std::string token;
-    if (!r.query_param(CALIPER_NET_TOKEN_PARAM, &token) || session_token.empty() ||
-        !token_equal(token, session_token))
-        return 403;
+    if (!r.query_param(CALIPER_NET_TOKEN_PARAM, &token) || !token_ok || !token_ok(token)) return 403;
     return 0;
 }
 

@@ -8,6 +8,7 @@
 #include <doctest/doctest.h>
 
 #include "caliper/live_net.h"
+#include "api/api_server.h"
 #include "net/http_door.h"
 #include "net/hub.h"
 #include "net/wire.h"
@@ -1496,6 +1497,157 @@ TEST_CASE("net/hub 3.1: with --allow-control a CONTROL goes to its session's scr
     REQUIRE(w.until([&] { return va->control_replies(11).size() == 1; }));
     CHECK(va->control_replies(11)[0]->error.find("code")->as_string() == CALIPER_NET_ERR_UNSUPPORTED);
     CHECK(p30->count<wire::Control>() == 0);
+}
+
+// A viewer connected with `url` and welcomed (3.1 capabilities).
+std::unique_ptr<Peer> viewer_at(World& w, const std::string& url) {
+    auto v = std::make_unique<Peer>();
+    REQUIRE(v->connect(url));
+    w.add(v.get());
+    REQUIRE(w.until([&] { return v->open; }));
+    v->hello_viewer(kCaps31);
+    REQUIRE(w.until([&] { return v->count<wire::Welcome>() == 1 && v->sessions(); }));
+    return v;
+}
+
+// A producer's HELLO on a connection opened with `url` whose token may only
+// watch: refused as caliper.serve() refuses producers, ERROR `unsupported`
+// and close 4002, and no session appears.
+void publish_refused(World& w, const std::string& url, const std::function<caliper_net::HubStats()>& stats) {
+    const size_t before = stats().sessions_live + stats().sessions_ended;
+    FakeProducer p("clp-watcher", 9);
+    REQUIRE(p.connect(url));
+    w.add(&p);
+    REQUIRE(w.until([&] { return p.closed; }));
+    CHECK(p.close_code == CALIPER_NET_CLOSE_ROLE_REFUSED);
+    REQUIRE(p.last<wire::Error>());
+    CHECK(p.last<wire::Error>()->code == CALIPER_NET_ERR_UNSUPPORTED);
+    CHECK(p.last<wire::Error>()->fatal);
+    CHECK_FALSE(p.welcomed);
+    CHECK(stats().sessions_live + stats().sessions_ended == before);
+}
+
+// The upgrade's HTTP status with `url`: 101 when it opened, else the refusal.
+int upgrade_with(const std::string& url) {
+    caliper_net::Client c;
+    std::string why;
+    if (!c.connect(url, &why)) return -1;
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (std::chrono::steady_clock::now() < end) {
+        for (auto& e : c.poll(10)) {
+            if (e.type == caliper_net::Event::Type::Open) return 101;
+            if (e.type == caliper_net::Event::Type::Closed) return e.http_status;
+        }
+    }
+    return 0;
+}
+
+// A watching viewer and a controlling one on the same session: the same data
+// and the same controls' state, and only the controlling one's CONTROL set
+// reaches the script; the watcher's is answered forbidden, as without
+// --allow-control. Shared by the hub's and Caliper API's cases.
+void watch_and_control(World& w, FakeProducer& p, Peer& watcher, Peer& full) {
+    CHECK(watcher.last<wire::Welcome>()->control == false);
+    CHECK(full.last<wire::Welcome>()->control == true);
+    REQUIRE(w.until([&] {
+        return watcher.views() && watcher.views()->session && full.views() && full.views()->session &&
+               watcher.last<wire::Controls>() && full.last<wire::Controls>();
+    }));
+    // Data flows to the watcher.
+    watcher.subscribe(7, "heat", 70);
+    REQUIRE(w.until([&] { return watcher.reply(70) && p.subs_of("heat").size() == 1; }));
+    CHECK(p.snapshot(2.5f, 4, 8) >= 1);
+    REQUIRE(w.until([&] { return watcher.snapshots(7).size() == 1; }));
+    // Its CONTROL set is refused by the hub and never reaches the script.
+    watcher.control(6, CALIPER_NET_OP_SET, "lr", Json(0.5));
+    REQUIRE(w.until([&] { return watcher.control_replies(6).size() == 1; }));
+    CHECK(watcher.control_replies(6)[0]->status == CALIPER_NET_STATUS_ERROR);
+    CHECK(watcher.control_replies(6)[0]->error.find("code")->as_string() == CALIPER_NET_ERR_FORBIDDEN);
+    sync(w, p);
+    CHECK(p.controls_in.empty());
+    // The controlling viewer's same CONTROL reaches the script, as today.
+    full.control(7, CALIPER_NET_OP_SET, "lr", Json(0.5));
+    REQUIRE(w.until([&] { return full.control_replies(7).size() == 1; }));
+    REQUIRE(p.controls_in.size() == 1);
+    CHECK(p.controls_in[0].name == std::string("lr"));
+    CHECK(full.control_replies(7)[0]->status == CALIPER_NET_STATUS_OK);
+    // The watcher still gets data after it was refused.
+    CHECK(p.snapshot(3.5f, 4, 8) >= 1);
+    REQUIRE(w.until([&] { return watcher.snapshots(7).size() == 2; }));
+}
+
+TEST_CASE("net/hub 3.1: with stream_access, a watching token sees the data and the controls but may not control") {
+    const std::string watch = "hub_watch_token-0123456789abcdef";
+    HubOptions o;
+    o.allow_control = true;
+    o.stream_access = [watch](const std::string& t) {
+        if (wire::token_equal(t, kToken)) return HubOptions::StreamAccess::kFull;
+        if (wire::token_equal(t, watch)) return HubOptions::StreamAccess::kWatch;
+        return HubOptions::StreamAccess::kRefused;
+    };
+    HubRunner h(o);
+    World w;
+    auto p = producer(w, h, "clp-watch", 1, 1763200000000ull, kProducer31, true);
+    auto watcher = viewer_at(w, h.url(watch));
+    auto full = viewer_at(w, h.url());
+    watch_and_control(w, *p, *watcher, *full);
+    // Any other token is refused at the upgrade, as a wrong token always was.
+    CHECK(upgrade_with(h.url("hub_other_token-0123456789abcdef")) == 403);
+    // A watching token may not publish; the full one did, above.
+    publish_refused(w, h.url(watch), [&] { return h.stats(); });
+}
+
+TEST_CASE("net/hub 3.1: Caliper API's stream: the person's token controls, the mcp and agent tokens watch, and the "
+          "viewer, a revoked and a wrong token are refused, on both paths") {
+    const std::string person = "api_person_token-0123456789abcdef";
+    const std::string mcp = "api_mcp_token-0123456789abcdefghij";
+    const std::string viewer_token = "api_viewer_token-0123456789abcdef";
+    caliper_api::Options o;
+    o.port = 0;
+    o.token = person;
+    o.mcp_token = mcp;
+    o.viewer_token = viewer_token;
+    o.allow_control = true;
+    o.info_json = "{\"host\":\"test\"}";
+    caliper_api::Server server(o);
+    std::string err;
+    REQUIRE_MESSAGE(server.start(&err), err);
+    const std::string agent = server.issue_token("agent");
+    const std::string revoked = server.issue_token("agent");
+    server.revoke_token(revoked);
+    for (const char* path : {"/v3/stream", "/v0/stream"}) {
+        CAPTURE(path);
+        const std::string base = "ws://127.0.0.1:" + std::to_string(server.port()) + path + "?token=";
+        CHECK(upgrade_with(base + person) == 101);
+        CHECK(upgrade_with(base + mcp) == 101);
+        CHECK(upgrade_with(base + agent) == 101);
+        CHECK(upgrade_with(base + revoked) == 403);
+        CHECK(upgrade_with(base + viewer_token) == 403);
+        CHECK(upgrade_with(base + "api_wrong_token-0123456789abcdefg") == 403);
+        // The API file's token and an agent's may not publish a session.
+        World w;
+        publish_refused(w, base + mcp, [&] { return server.hub_stats(); });
+        publish_refused(w, base + agent, [&] { return server.hub_stats(); });
+    }
+    // A run's script streams in with the person's token; an agent and the API
+    // file's token watch it and may not control it, the person may.
+    const std::string base = "ws://127.0.0.1:" + std::to_string(server.port()) + "/v3/stream?token=";
+    for (const std::string& watching : {agent, mcp}) {
+        CAPTURE(watching == agent ? "agent" : "mcp");
+        World w;
+        auto p = std::make_unique<FakeProducer>(watching == agent ? "clp-api-a" : "clp-api-m", 1, 1763200000000ull);
+        p->caps = kProducer31;
+        p->send_controls_on_welcome = true;
+        REQUIRE(p->connect(base + person));
+        w.add(p.get());
+        REQUIRE(w.until([&] { return p->welcomed; }));
+        auto watcher = viewer_at(w, base + watching);
+        auto full = viewer_at(w, base + person);
+        watcher->attach(p->chosen);
+        full->attach(p->chosen);
+        watch_and_control(w, *p, *watcher, *full);
+    }
+    server.stop();
 }
 
 TEST_CASE("net/hub 3.1: SELECTION reaches every viewer of the session; select events keep their items for a 3.1 script") {

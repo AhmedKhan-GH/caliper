@@ -6,7 +6,8 @@ Caliper runs applets **in-process**: an applet is a shared library the host
 the host's privileges, in the host's address space. The trust model is therefore
 stated plainly: **in-process applets are trusted code.** What follows is how the
 host stays alive and honest when that trust is misplaced — not a claim that it is
-sandboxed. Applets do not run out of process.
+sandboxed. Applets do not run out of process. A spec applet is the exception:
+it has no code at all, as [Spec applets are data](#spec-applets-are-data) says.
 
 ## Pre-flight beats post-mortem
 
@@ -194,6 +195,31 @@ within the ≤ 100 ms contract (Home and quit wait at most 5 s, then detach the
 worker); and make the object you pass as `user` outlive the job
 (cancel-and-bounded-wait in `on_cleanup`). Real isolation for worker code, like
 everything else here, would need an out-of-process boundary, which Caliper does not provide.
+
+## Spec applets are data
+
+A [spec applet](../references/manifest.md#spec-applets) is a folder with a
+manifest and a spec, a text file of sources, panels and a layout, and no
+library. The loader lists it and never maps or executes anything for it: there
+is no `dlopen`, no descriptor is called, and no applet entry point runs, so the
+crash guard and the frame watchdog have nothing to guard, and a spec applet is
+never quarantined. The app is to draw it as a page with its own code, from the
+data the spec names.
+
+What the loader checks is that the data stays where it belongs and stays
+small. The spec's file is named by a plain file name, so it is a file in the
+applet's folder; it must be a regular file and not a symbolic link, wherever
+the link points; and it may hold at most 512 KiB. When the applet is listed
+the loader reads only the spec's first lines, for its format version; the whole
+spec is parsed and validated by the builder's spec library when the applet is
+launched or checked, and that library bounds its own work on hostile text.
+
+A workspace is data that a person may receive from anyone, so the loader treats
+the open workspace's `applets/` folder as data too: a compiled applet's manifest
+there is refused and its library is never opened, and every manifest there is
+read with a size bound of 64 KiB and a bound on its dotted keys before it is
+parsed. A compiled applet runs only from the folders a person installs into or
+names for development.
 
 ## Supply chain and data
 

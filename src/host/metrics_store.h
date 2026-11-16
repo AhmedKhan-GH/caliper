@@ -42,6 +42,14 @@ struct HistogramInfo {
     int64_t byte_length;  // size of the stored BLOB in bytes
 };
 
+// One run's scalar tag with its points (scalar_series()).
+struct ScalarSeriesInfo {
+    uint64_t    run;
+    std::string tag;
+    int64_t     points;     // rows of (step, value)
+    int64_t     last_step;  // the largest step
+};
+
 class MetricsStore {
 public:
     MetricsStore();
@@ -90,6 +98,21 @@ public:
     // Step-ascending (ORDER BY step) list of (step, value) pairs.
     std::vector<std::pair<int64_t, double>> scalars(uint64_t run, const std::string& tag);
     std::vector<HistogramInfo> histograms(uint64_t run, const std::string& tag);
+
+    // --- change detection and summaries (the builder's metric catalog, ---
+    // --- src/host/catalog_providers/metrics_catalog.h)                    ---
+
+    // A counter that grows with every write that adds a run, adds a scalar or
+    // deletes, and on open and close. Lock-free: a frame thread may read it
+    // every frame to learn whether anything changed, without the mutex.
+    uint64_t revision() const;
+    // Every run and tag that has scalars, with its point count and last step,
+    // ordered by run and tag: one GROUP BY over the scalars.
+    std::vector<ScalarSeriesInfo> scalar_series();
+    // The newest `last` points of a series by step, in step order: a bounded
+    // read, where scalars() reads every point.
+    std::vector<std::pair<int64_t, double>> scalars(uint64_t run, const std::string& tag,
+                                                    uint64_t last);
 
     // --- read surface across the ABI (backs caliper.metrics.v1_1) ---
 

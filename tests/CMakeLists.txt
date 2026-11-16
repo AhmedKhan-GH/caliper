@@ -76,6 +76,9 @@ target_sources(caliper_tests PRIVATE test_work_area.cpp)
 # (src/host/host_cli.h); the acceptance check for applets built outside the
 # core runs only when CALIPER_TEST_APPLET_DIR is set.
 target_sources(caliper_tests PRIVATE test_applet_search.cpp test_applet_acceptance.cpp)
+# Spec applets in the loader (src/host/applet_loader.h): the search, the
+# listing checks, the full validation with the spec library, and launch.
+target_sources(caliper_tests PRIVATE test_spec_applet.cpp)
 # The command line's subcommands (src/host/host_cli.h) on temporary folders,
 # with caliper build's own source and the header's out-of-line part, which the
 # executable compiles too.
@@ -89,6 +92,50 @@ if(NOT WIN32)
     target_sources(caliper_tests PRIVATE test_api.cpp)
     target_link_libraries(caliper_tests PRIVATE caliper_api)
     target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
+endif()
+# Caliper API's command endpoints over a real builder session
+# (src/host/api/session_gateway.h): the server in this process with a session
+# over a temporary workspace and a fake frame thread, driven over HTTP, and the
+# built caliper-mcp as a child against it. caliper_api_session and the builder
+# targets are defined after this folder (CMakeLists.txt, CALIPER_WITH_BUILDER).
+if(CALIPER_WITH_BUILDER AND NOT WIN32)
+    add_executable(caliper_api_commands_tests test_main.cpp test_api_commands.cpp)
+    target_link_libraries(caliper_api_commands_tests PRIVATE doctest::doctest caliper_api_session
+        caliper_builder_acp caliper_builder_duckdb)
+    target_include_directories(caliper_api_commands_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/builder/mcp/tests)
+    set_target_properties(caliper_api_commands_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    add_dependencies(caliper_api_commands_tests caliper-mcp)
+    target_compile_definitions(caliper_api_commands_tests PRIVATE CALIPER_MCP_EXE="$<TARGET_FILE:caliper-mcp>")
+    add_test(NAME caliper_api_commands COMMAND caliper_api_commands_tests)
+    set_tests_properties(caliper_api_commands PROPERTIES ENVIRONMENT
+        "CALIPER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/app-data/caliper_api_commands")
+endif()
+# The manifest parser and the loader compiled as a build without
+# CALIPER_WITH_BUILDER compiles them, without CALIPER_HOST_SPEC_RUNTIME and
+# with no builder library, so that the path that lists every spec applet as
+# refused runs in every build without a second full build.
+add_executable(caliper_loader_nospec_tests test_main.cpp test_spec_applet_nospec.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/applet_manifest.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/applet_loader.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/negotiation.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/crash_guard.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/job_system.cpp)
+target_include_directories(caliper_loader_nospec_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_loader_nospec_tests PRIVATE doctest::doctest caliper::sdk
+    tomlplusplus::tomlplusplus)
+if(UNIX)
+    target_link_libraries(caliper_loader_nospec_tests PRIVATE ${CMAKE_DL_LIBS})
+endif()
+set_target_properties(caliper_loader_nospec_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+add_test(NAME caliper_loader_nospec COMMAND caliper_loader_nospec_tests)
+# What applet.save writes is what the loader accepts: a builder session saves
+# an applet and the loader lists and validates it (test_spec_applet_session.cpp).
+if(CALIPER_WITH_BUILDER AND NOT WIN32)
+    add_executable(caliper_spec_applet_session_tests test_main.cpp test_spec_applet_session.cpp)
+    target_link_libraries(caliper_spec_applet_session_tests PRIVATE doctest::doctest caliper_host_lib
+        caliper_builder_session caliper_builder_duckdb)
+    set_target_properties(caliper_spec_applet_session_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    add_test(NAME caliper_spec_applet_session COMMAND caliper_spec_applet_session_tests)
 endif()
 # On Windows the socket cases of the WebSocket layer, the hub and Caliper API
 # are not built or run: every feature built on them is refused there
@@ -259,7 +306,7 @@ if(TARGET caliper)
         add_test(NAME caliper_cli_serve
                  COMMAND caliper_tests "--test-case=cli: caliper serve runs as a process*")
         set_tests_properties(caliper_cli_serve PROPERTIES LABELS cli
-            ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>")
+            ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_AGENT_OFFLINE=1")
     endif()
 
     # Caliper API as a process (tests/test_api.cpp): `caliper shot --api` on the
@@ -272,6 +319,8 @@ if(TARGET caliper)
         ERROR "--api applies only to starting the app, dev and shot")
     caliper_cli_test(hidden_elsewhere ARGS "shot|--hidden|--launch|x|--out|${_cli_work}/x.png" EXIT 2
         ERROR "--hidden applies only to starting the app and dev")
+    caliper_cli_test(workspace_elsewhere ARGS "info|--workspace|${_cli_work}/ws" EXIT 2
+        ERROR "--workspace applies only to starting the app, dev, shot and list")
     # On Windows the pieces that have not run there as a process yet are
     # refused before anything starts, with exit code 1 and one message
     # (host_cli.h, windows_unavailable); no window opens and nothing is written.
@@ -293,8 +342,11 @@ if(TARGET caliper)
                  COMMAND caliper_tests "--test-case=api: caliper shot --api serves*")
         # With caliper_viewer built, the native viewer also attaches through
         # /v3/stream on the API port (headless, no window).
+        # The app passes its environment on to any caliper-agent it starts
+        # (src/host/builder/widget_app.cpp), so the switch is here too, beside
+        # the tree-wide one of caliper_offline_tests().
         set(_api_env "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>"
-                     "CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets")
+                     "CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets" "CALIPER_AGENT_OFFLINE=1")
         if(TARGET caliper_viewer)
             list(APPEND _api_env "CALIPER_TEST_VIEWER_EXE=$<TARGET_FILE:caliper_viewer>")
         endif()

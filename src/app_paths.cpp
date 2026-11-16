@@ -124,4 +124,8 @@ std::string user_applets_dir() {
     return (fs::path(app_data_location()) / "applets").string();
 }
 
+std::string default_workspace_dir() {
+    return (fs::path(app_data_location()) / "workspace").string();
+}
+
 } // namespace caliper

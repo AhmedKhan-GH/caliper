@@ -1,6 +1,6 @@
 # Windows parity
 
-Caliper is developed on macOS first. This page lists the work that brings Windows level with macOS once the current macOS sprints are finished: the applet platform, Caliper LIB's streaming and notebook widgets, the web viewer, Caliper API, Caliper Embed and the renderer fallbacks. The [roadmap](roadmap.md) holds the order and status. Linux is not planned for now.
+Caliper is developed on macOS first. This page lists the work that brings Windows level with macOS once the current macOS sprints are finished: the applet platform, Caliper LIB's streaming and notebook widgets, the web viewer, Caliper API, Caliper Embed, the renderer fallbacks and the builder's agents. The [roadmap](roadmap.md) holds the order and status. Linux is not planned for now.
 
 On Windows the fast path is Vulkan with CUDA interop, where macOS uses Metal with MPS. The toolchain contract is MSVC with the dynamic CRT (`/MD`), as Compatibility and epochs (`docs/explanations/compatibility.md`) describes.
 
@@ -15,6 +15,7 @@ On Windows the fast path is Vulkan with CUDA interop, where macOS uses Metal wit
     - **Refused.** The executable refuses `caliper serve`, `caliper build`, `--api` and `--url` before anything starts: it prints `... is not available on Windows yet` and exits with 1 (`windows_unavailable` in `src/host/host_cli.h`), and it ignores `CALIPER_API`. The `caliper_cli_windows_*` tests check this in the lane, and docs/references/cli.md, section "On Windows", describes it.
     - **macOS only.** The app's network source, the live attach and the shared-memory sessions. On Windows `src/host/live/live_unsupported.cpp` stands in for them, and every attach, `caliper_core_live_attach_url` included, fails with a reason. The live controls and the typed live views compile on Windows.
     - **Not run on Windows.** The process-level tests of `caliper serve`, `caliper shot --api`, the hidden app, its run bar and `caliper build`, which are registered on macOS only; the network transport of Caliper LIB, `caliper.serve()` and the notebook widget; and the web viewer in a browser on Windows.
+- **The builder's agent pieces build on Windows but stop where they need POSIX.** `Process`, which starts the side chat's agent and the widget agent's sidecar, answers `process.unsupported`; the HTTP client of `caliper-mcp` answers `http.unsupported`; the key store answers `keystore.unsupported`; and the stand-in host says so and exits ([Builder overview](builder-overview.md)).
 
 ## The steps
 
@@ -81,6 +82,21 @@ Each step ends with a check that must pass on a Windows machine with an NVIDIA G
 - Package with an installer (MSIX or MSI) and publish through winget, putting the CLI on `PATH`.
 - **Done when** a clean Windows machine installs Caliper from the package, runs `caliper info` in a terminal, and opens an applet without a SmartScreen block.
 
+### 9. The builder's agents
+
+- **Process spawning.** Implement `Process` (`caliper_builder/acp/subprocess.h`) on Windows: start a program from an argument vector without a shell and without a console window, with three pipes, and stop it together with what it started, such as an `npx` launcher and `caliper-mcp`, which a process group does on macOS. Both roles depend on it: the side chat starts the person's agent, and the widget agent starts `caliper-agent`.
+- **`caliper-mcp`.** Its HTTP client to Caliper API on Winsock, still on 127.0.0.1 only.
+- **The key store.** Keep the widget agent's keys in the Windows Credential Manager, one entry per provider, as the Keychain holds one item per provider on macOS, kept on this machine and never roamed with the user's profile. A local model server needs no entry.
+- **Local model servers.** Ollama runs as a native Windows application with NVIDIA and AMD Radeon GPU support and serves its API on `http://localhost:11434`, as on macOS ([Ollama on Windows](https://docs.ollama.com/windows), read on 15 November 2026), so the Ollama preset needs no change. The agent registry lists opencode binaries for Windows on x64 and ARM64, and opencode's install page says that Windows package managers are not supported. A local model takes video memory that a CUDA training run may need, so the GPU contention note applies.
+- **Turn the builder on and port what the include check lists.** The builder (`CALIPER_WITH_BUILDER`) is off on Windows, so `scripts/check_windows_includes.py` leaves out what is built only with it (its `OFF_ON_WINDOWS` list). When the builder comes to Windows, that list is emptied and these thirteen translation units, which reach POSIX-only or macOS-only headers and calls today, are ported or kept off by design:
+    - `src/builder/acp/acp_client.cpp`: `poll` on the agent's pipes, with the subprocess handling above.
+    - `src/builder/agent/keychain_store_macos.cpp`: macOS-only by design; the Credential Manager store takes its place.
+    - `src/builder/agent/conformance/conformance_main.cpp`: `gmtime_r`.
+    - `src/host/builder/chat_shot_main.cpp`: `<unistd.h>` in the capture tool.
+    - The tests and their helpers that start processes, signal them, set the environment or open sockets: `src/builder/acp/tests/test_subprocess.cpp`, `src/builder/loaders/tests/test_python_loader.cpp`, `src/builder/mcp/tests/fake_http.cpp`, `test_http.cpp` and `test_process.cpp`, `tests/live_attention_producer.cpp`, `tests/test_api_commands.cpp`, `tests/test_app_live.cpp` and `tests/test_app_route.cpp`.
+- **The shortcut.** The widget agent opens with Ctrl+K in place of ⌘K.
+- **Done when** the side chat runs an agent with `caliper-mcp` on Windows, the widget agent's key is stored in and removed from the Credential Manager, and an edit by Ctrl+K on a panel is previewed and accepted, once with Claude and once with a local model through the Ollama preset.
+
 ## Order
 
-Steps 1 and 2 come first, because everything else depends on them. Steps 3 to 5 follow the macOS order of surfaces, with Caliper LIB and notebooks first. Caliper Embed, the renderer fallbacks and distribution come last. Each step updates Verify on Windows hardware (`docs/guides/verify-on-windows.md`) with what it checked.
+Steps 1 and 2 come first, because everything else depends on them. Steps 3 to 5 follow the macOS order of surfaces, with Caliper LIB and notebooks first. Step 9 follows step 4, because the agents reach the app through Caliper API. Caliper Embed, the renderer fallbacks and distribution come last. Each step updates Verify on Windows hardware (`docs/guides/verify-on-windows.md`) with what it checked.
