@@ -19,8 +19,20 @@
 //                             ATTACH, VIEWS; PING and the timeouts; latest-wins
 //                             snapshots and coalesced series per subscription;
 //                             encoding and sending. SUBSCRIBE, UNSUBSCRIBE,
-//                             VIEW_REQUEST and EVENT go to Python (control()),
-//                             which answers with send() and sub_open()/sub_close().
+//                             VIEW_REQUEST, EVENT and (3.1) CONTROL go to Python
+//                             (control()), which answers with send() and
+//                             sub_open()/sub_close().
+//
+// CONTROLS (wire protocol 3.1). After enable_controls(), WELCOME, SESSIONS and
+// the HELLO to a hub announce "controls" and "selection" (caliper._controls
+// in Python implements them), WELCOME tells a viewer that announced "controls"
+// whether it may control, and the "opened" message hands Python what a peer
+// announced as JSON. A CONTROL from a peer that did not announce "controls" is
+// refused here with ERROR bad_request. Python sends CONTROLS, CONTROL_REPLY
+// and SELECTION with send(); a late viewer's state goes with
+// send_after_views() so that it follows the VIEWS of its attachment. A peer
+// that announced "selection" gets the VIEWS with item spaces (set_views()'s
+// second list).
 //
 // OWNERSHIP. publish() and series_append() copy the bytes they are given
 // before they return (with the GIL released), so the caller's pinned memory
@@ -172,6 +184,10 @@ struct Link {
     uint32_t nonce = 0;
     std::deque<SharedBytes> control;          // frames before any data
     bool views_pending = false;
+    bool cap_controls = false;                // 3.1: the peer announced "controls"
+    bool cap_selection = false;               // 3.1: the peer announced "selection"
+    bool may_control = false;                 // 3.1: a CONTROL from it is accepted
+    std::deque<SharedBytes> after_views;      // 3.1: frames that follow the next VIEWS
     std::map<uint32_t, Sub> subs;
     size_t to_python = 0;                     // its messages waiting in the control queue
     uint64_t frames_out = 0, bytes_out = 0, superseded = 0, snapshots_sent = 0, series_sent = 0;
@@ -332,13 +348,19 @@ public:
         return out;
     }
 
-    void set_views(std::string views_json) {
-        Json v;
+    // views_json: the VIEWS list; selection_json (3.1, optional): the same list
+    // with item spaces, for peers that announced "selection".
+    void set_views(std::string views_json, std::string selection_json) {
+        Json v, sv;
         std::string err;
         if (!Json::parse(views_json.data(), views_json.size(), &v, &err, 64) || !v.is_array())
             throw std::invalid_argument("views: " + err);
+        if (!selection_json.empty() &&
+            (!Json::parse(selection_json.data(), selection_json.size(), &sv, &err, 64) || !sv.is_array()))
+            throw std::invalid_argument("selection views: " + err);
         std::lock_guard<std::mutex> g(mu_);
         views_ = std::move(v);
+        views_sel_ = std::move(sv);
         for (auto& [id, l] : links_)
             if (l.attached) l.views_pending = true;
         wake_all();
@@ -351,6 +373,27 @@ public:
         it->second.control.push_back(std::make_shared<caliper_net::Bytes>(frame.begin(), frame.end()));
         wake_all();
         return true;
+    }
+
+    // 3.1: as send(), but after the VIEWS that the connection waits for, if any
+    // (the state a viewer receives right after the VIEWS of its attachment).
+    bool send_after_views(ConnId c, std::string frame) {
+        std::lock_guard<std::mutex> g(mu_);
+        auto it = links_.find(c);
+        if (it == links_.end()) return false;
+        Link& l = it->second;
+        auto b = std::make_shared<caliper_net::Bytes>(frame.begin(), frame.end());
+        (l.views_pending ? l.after_views : l.control).push_back(std::move(b));
+        wake_all();
+        return true;
+    }
+
+    // 3.1: announce "controls" and "selection" from now on; ``allow``: whether
+    // viewers may control (WELCOME's "control").
+    void enable_controls(bool allow) {
+        std::lock_guard<std::mutex> g(mu_);
+        controls_ = true;
+        allow_control_ = allow;
     }
 
     bool sub_open(ConnId c, uint32_t sub, std::string view, int64_t kind, int64_t group,
@@ -644,6 +687,25 @@ private:
 
     void queue(Link& l, const wire::Message& m) { l.control.push_back(encode(m)); }
 
+    // 3.1 (under mu_): the server's capabilities, and what a peer announced as
+    // the JSON of its "opened" message for Python.
+    std::vector<std::string> capabilities() const {
+        if (!controls_) return {CALIPER_NET_CAP_EVENTS};
+        return {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SELECTION};
+    }
+    static bool announces(const std::vector<std::string>& caps, const char* cap) {
+        return std::find(caps.begin(), caps.end(), cap) != caps.end();
+    }
+    static std::vector<uint8_t> link_info(const Link& l) {
+        Json o = Json::object();
+        o.set("controls", l.cap_controls);
+        o.set("selection", l.cap_selection);
+        o.set("control", l.may_control);
+        o.set("upstream", l.upstream);
+        const std::string t = o.dump();
+        return std::vector<uint8_t>(t.begin(), t.end());
+    }
+
     void fatal(Link& l, const std::string& code, const std::string& msg, uint16_t close_code) {
         wire::Error e;
         e.code = code;
@@ -796,22 +858,26 @@ private:
                 return;
             }
             l.helloed = true;
+            l.cap_controls = controls_ && announces(h->capabilities, CALIPER_NET_CAP_CONTROLS);
+            l.cap_selection = controls_ && announces(h->capabilities, CALIPER_NET_CAP_SELECTION);
+            l.may_control = l.cap_controls && allow_control_;
             wire::Welcome w;
             w.role = CALIPER_NET_ROLE_PRODUCER;
-            w.capabilities = {CALIPER_NET_CAP_EVENTS};
+            w.capabilities = capabilities();
             w.software = software_;
             w.session = identity_;
+            if (l.cap_controls) w.control = allow_control_;
             queue(l, w);
             wire::Sessions s;
             Json entry = identity_;
             entry.set("state", CALIPER_NET_SESSION_LIVE);
             entry.set("views", (uint64_t)views_.size());
             Json caps = Json::array();
-            caps.push(CALIPER_NET_CAP_EVENTS);
+            for (const auto& c : capabilities()) caps.push(c);
             entry.set("capabilities", caps);
             s.sessions.push(entry);
             queue(l, s);
-            push_ctl("opened", l.id);         // before "attached": Python makes its state first
+            push_ctl("opened", l.id, link_info(l));   // before "attached": Python makes its state first
             attach(l, ident_.id);
             return;
         }
@@ -845,6 +911,17 @@ private:
         } else if (std::holds_alternative<wire::Subscribe>(m) || std::holds_alternative<wire::Unsubscribe>(m) ||
                    std::holds_alternative<wire::ViewRequest>(m) || std::holds_alternative<wire::Event>(m)) {
             to_python(l, m, e.data);
+        } else if (auto* c = std::get_if<wire::Control>(&m)) {
+            if (l.cap_controls) {
+                to_python(l, m, e.data);
+            } else {                          // the protocol's rule for a peer without "controls"
+                wire::Error err;
+                err.code = CALIPER_NET_ERR_BAD_REQUEST;
+                err.message = "a CONTROL needs the capability controls in HELLO";
+                err.in_reply_to = CALIPER_NET_MSG_CONTROL;
+                err.request_id = c->request_id;
+                queue(l, err);
+            }
         } else {
             fatal(l, CALIPER_NET_ERR_BAD_REQUEST,
                   std::string("a producer does not accept ") + wire::type_name(r.type),
@@ -873,6 +950,17 @@ private:
                 rep.request_id = v->request_id;
                 rep.sub = v->sub;
                 rep.view = v->view;
+                Json err = Json::object();
+                err.set("code", CALIPER_NET_ERR_LIMIT);
+                err.set("message", "too many requests waiting");
+                rep.error = err;
+                queue(l, rep);
+            } else if (auto* c = std::get_if<wire::Control>(&m)) {
+                wire::ControlReply rep;
+                rep.request_id = c->request_id;
+                rep.op = c->op;
+                rep.status = CALIPER_NET_STATUS_ERROR;
+                rep.name = c->name;
                 Json err = Json::object();
                 err.set("code", CALIPER_NET_ERR_LIMIT);
                 err.set("message", "too many requests waiting");
@@ -928,10 +1016,11 @@ private:
                 wire::Views v;
                 if (l.attached) {
                     v.session = l.upstream && !up_session_.empty() ? up_session_ : ident_.id;
-                    v.views = views_;
+                    v.views = l.cap_selection && views_sel_.is_array() ? views_sel_ : views_;
                 }
                 f = encode(v);
                 l.views_pending = false;
+                l.control.swap(l.after_views);    // the state that follows the VIEWS
             } else if (!l.control.empty()) {
                 f = l.control.front();
                 l.control.pop_front();
@@ -1035,7 +1124,7 @@ private:
                     if (e.type == T::Open) {
                         wire::Hello h;
                         h.role = CALIPER_NET_ROLE_PRODUCER;
-                        h.capabilities = {CALIPER_NET_CAP_EVENTS};
+                        h.capabilities = capabilities();
                         h.software = software_;
                         h.session = hello_id;
                         client_->send(encode(h));
@@ -1061,8 +1150,12 @@ private:
                         l.helloed = true;
                         l.follows_default = false;
                         l.opened_ms = caliper_net::monotonic_ms();
+                        l.cap_controls = controls_ && announces(w->capabilities, CALIPER_NET_CAP_CONTROLS);
+                        l.cap_selection = controls_ && announces(w->capabilities, CALIPER_NET_CAP_SELECTION);
+                        l.may_control = l.cap_controls && w->control.value_or(false);
+                        std::vector<uint8_t> info = link_info(l);
                         links_[cid] = std::move(l);
-                        push_ctl("opened", cid);
+                        push_ctl("opened", cid, std::move(info));
                         set_attached(links_[cid], true);
                         links_[cid].views_pending = true;
                     } else if (e.type == T::Message) {
@@ -1155,6 +1248,9 @@ private:
     std::map<int64_t, Group> groups_;
     std::map<std::string, History> histories_;
     Json views_ = Json::array();
+    Json views_sel_;                          // 3.1: views_ with item spaces (an array), or null
+    bool controls_ = false;                   // 3.1: announce "controls" and "selection"
+    bool allow_control_ = false;              // 3.1: viewers may control
     std::vector<float> scratch_;
     uint64_t published_ = 0, http_requests_ = 0, refused_ = 0, series_values_ = 0;
 
@@ -1216,12 +1312,18 @@ NB_MODULE(_netio, m) {
                  return out;
              },
              nb::arg("timeout_ms"))
-        .def("set_views", &NetIO::set_views, R())
+        .def("set_views", &NetIO::set_views, nb::arg("views"), nb::arg("selection_views") = "", R())
         .def("send", [](NetIO& self, ConnId c, nb::bytes frame) {
                  std::string f(frame.c_str(), frame.size());
                  nb::gil_scoped_release release;
                  return self.send(c, std::move(f));
              })
+        .def("send_after_views", [](NetIO& self, ConnId c, nb::bytes frame) {
+                 std::string f(frame.c_str(), frame.size());
+                 nb::gil_scoped_release release;
+                 return self.send_after_views(c, std::move(f));
+             })
+        .def("enable_controls", &NetIO::enable_controls, nb::arg("allow"), R())
         .def("sub_open", &NetIO::sub_open, nb::arg("conn"), nb::arg("sub"), nb::arg("view"), nb::arg("kind"),
              nb::arg("group"), nb::arg("data_view"), nb::arg("max_rate"), nb::arg("backfill"), R())
         .def("sub_close", &NetIO::sub_close, R())
