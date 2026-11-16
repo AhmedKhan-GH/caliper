@@ -250,6 +250,11 @@ TEST_CASE("app route: an agent builds, opens, renders and captures a dashboard i
     for (const json& e : listed["entries"]) catalog.insert(e["id"].get<std::string>());
     CHECK(catalog.count("table:run42_metrics") == 1);
     CHECK(catalog.count("tensor:attn_weights") == 1);
+    // The sources the app serves join the catalog once the session is open:
+    // the host's feed channels.
+    const json feeds = ok(port, token, "catalog.list", {{"kind", "feed"}});
+    INFO(feeds.dump());
+    CHECK(feeds["entries"].size() > 0);
 
     // The dashboard of dashboard.spec.toml, command by command.
     ok(port, token, "spec.new", {{"id", "run42-dashboard"}, {"title", "Run 42"}});

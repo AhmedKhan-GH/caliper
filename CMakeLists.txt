@@ -615,6 +615,7 @@ add_executable(caliper
     # is not.
     src/host/builder/app_session.cpp
     src/host/builder/spec_page.cpp
+    src/host/builder/app_providers.cpp
 )
 # app_paths.cpp is no longer compiled by path here: it arrives via
 # libcaliper -> caliper_app_paths (PUBLIC). Compiling it here too would be an
@@ -864,7 +865,8 @@ endif()
 # (tests/test_app_session.cpp); the second is POSIX only, as the hidden app's
 # other process tests are, and is skipped without a Metal device.
 if(TARGET caliper_builder_session)
-    target_link_libraries(caliper PRIVATE caliper_builder_session caliper_spec_runtime caliper_api_session)
+    target_link_libraries(caliper PRIVATE caliper_builder_session caliper_spec_runtime caliper_api_session
+        caliper_catalog_providers)
     target_compile_definitions(caliper PRIVATE CALIPER_WITH_BUILDER=1)
     if(BUILD_TESTS)
         add_executable(caliper_app_session_tests tests/test_app_session.cpp src/host/builder/app_session.cpp)

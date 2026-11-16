@@ -26,6 +26,7 @@
 #include "host/api/app_api.h"
 #include "host/api/window_captures.h"
 #include "host/builder/app_hooks.h"
+#include "host/builder/app_providers.h"
 #include "host/builder/spec_page.h"
 #include "app_paths.h"
 
@@ -417,6 +418,11 @@ public:
                 if (go_back) pending_home_ = active_applet_;
             }
 
+            // The session's catalog providers: registered once the session is
+            // open, and the live views handed over after the live poll and
+            // the page's draw, on every page, so that a detach is seen.
+            providers_.frame(session_, live_);
+
             // Sampled after every window of the frame: next frame's Esc test
             // needs to know a popup was open before NewFrame() closed it.
             popup_open_prev_ = ImGui::IsPopupOpen(
@@ -510,6 +516,7 @@ public:
         api_.stop();
         api_.set_command_gateway(nullptr);
         session_.set_panel_renderer(nullptr);
+        providers_.close(session_);   // before the session and the host's stores
         session_.close();
         // Workers FIRST: a job may hold a pointer into applet state, so every
         // worker must be joined before close_all() destroys that state (the
@@ -1178,6 +1185,7 @@ private:
     int32_t live_pid_ = 0;
     bool pending_detach_ = false;     // esc Home on the live page: detach after render
     caliper_host::SpecPage spec_page_;  // the session's open spec (applet.open)
+    caliper_host::AppProviders providers_;  // live views, feed channels and metrics as catalog sources
     bool pending_spec_home_ = false;  // Home on the spec page: leave after render
     std::string workspace_dir_;       // the session's workspace, whose spec applets are listed
     std::string pending_spec_open_;   // a workspace spec applet to open once the session is open
