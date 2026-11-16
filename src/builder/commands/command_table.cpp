@@ -121,17 +121,31 @@ const std::pair<const char*, const char*> kFragments[] = {
         "width": {"type": "integer", "description": "The image's width in pixels."},
         "height": {"type": "integer", "description": "The image's height in pixels."}}})json"},
 
+    // The pieces of a spec, kept in line with docs/plans/spec-format.md and the
+    // spec library by the session module's test of the table. Extension tables
+    // (`x`) are left out: a tool schema is closed, and spec.set_text carries them.
+    {"binding", R"json({"type": "string", "minLength": 1, "maxLength": 320, "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$"})json"},
+
+    {"label", R"json({"type": "string", "maxLength": 256})json"},
+
+    {"range", R"json({"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}})json"},
+
+    {"axis", R"json({"type": "integer", "minimum": -8, "maximum": 7})json"},
+
+    {"safe_integer", R"json({"type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991})json"},
+
     {"transform", R"json({
       "type": "object", "additionalProperties": false, "required": ["op"],
       "properties": {
         "op": {"type": "string", "enum": ["slice", "reduce", "normalise"], "description": "slice selects along one axis; reduce reduces over axes; normalise rescales values."},
-        "axis": {"type": ["integer", "array"], "items": {"type": "integer"}, "description": "The axis, counting from 0 (negative counts from the end). reduce also takes a list of axes. normalise without an axis covers the whole tensor."},
-        "index": {"type": "integer", "description": "slice: the one index to keep; it drops the axis."},
-        "start": {"type": "integer", "description": "slice: the first index, Python style, negative allowed."},
-        "stop": {"type": "integer", "description": "slice: the index to stop before, Python style."},
-        "step": {"type": "integer", "minimum": 1, "description": "slice: the step, at least 1."},
+        "axis": {"type": ["integer", "array"], "minimum": -8, "maximum": 7, "minItems": 1, "maxItems": 8, "items": {"$use": "axis"},
+                 "description": "The axis, from -8 to 7, counting from 0 (negative counts from the end). Required for slice and reduce; reduce also takes a list of 1 to 8 axes. normalise without an axis covers the whole tensor."},
+        "index": {"$use": "safe_integer", "description": "slice: the one index to keep, negative counting from the end; it drops the axis. Not with start, stop or step."},
+        "start": {"$use": "safe_integer", "description": "slice: the first index, Python style, negative allowed."},
+        "stop": {"$use": "safe_integer", "description": "slice: the index to stop before, Python style."},
+        "step": {"type": "integer", "minimum": 1, "maximum": 9007199254740991, "description": "slice: the step, at least 1."},
         "fn": {"type": "string", "enum": ["mean", "sum", "min", "max", "std", "var", "norm", "argmax", "argmin", "entropy"],
-               "description": "reduce: the function; entropy treats the axis as a probability distribution, in nats."},
+               "description": "reduce: the function; entropy treats the axis as a probability distribution, in nats; argmax and argmin take one axis."},
         "keepdims": {"type": "boolean", "description": "reduce: keep the reduced axes with size 1; false by default."},
         "mode": {"type": "string", "enum": ["minmax", "zscore", "softmax", "l2"], "description": "normalise: the rescaling."}}})json"},
 
@@ -139,54 +153,72 @@ const std::pair<const char*, const char*> kFragments[] = {
       "type": "object", "additionalProperties": false, "required": ["id"],
       "properties": {
         "id": {"$use": "id", "description": "The source's id in this spec, which panels bind."},
-        "catalog": {"$use": "catalog_id", "description": "A catalog source id, from catalog.list, such as live:attn.weights or table:run42_metrics."},
+        "catalog": {"$use": "catalog_id", "maxLength": 256, "description": "A catalog source id, from catalog.list, such as live:attn.weights or table:run42_metrics."},
         "sql": {"type": "string", "minLength": 1, "maxLength": 65536, "description": "One read-only SELECT (DuckDB SQL) over the workspace's tables, named as in data.query."},
         "from": {"$use": "id", "description": "The id of another source of this spec that this one derives from, usually through transforms."},
-        "transform": {"type": "array", "maxItems": 32, "items": {"$use": "transform"}, "description": "Tensor transforms applied in order; only for tensor-shaped data."}}})json"},
+        "transform": {"type": "array", "maxItems": 16, "items": {"$use": "transform"}, "description": "Up to 16 tensor transforms applied in order; only for tensor-shaped data."}}})json"},
 
     {"bind", R"json({
       "type": "object", "additionalProperties": false, "required": [],
       "properties": {
-        "x": {"type": "string", "description": "series: the x values, a binding such as loss.step; points: the x coordinates."},
-        "y": {"type": ["string", "array"], "items": {"type": "string"}, "description": "series: one binding or a list of bindings drawn as lines; points: the y coordinates."},
-        "z": {"type": "string", "description": "points: the z coordinates, for a 3-D cloud."},
-        "color": {"type": "string", "description": "points: a value per point that sets its colour."},
-        "size": {"type": "string", "description": "points: a value per point that sets its size."},
-        "positions": {"type": "string", "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z."},
-        "values": {"type": "string", "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4]."},
-        "rows": {"type": "string", "description": "table: a tabular source whose rows are shown."},
-        "value": {"type": "string", "description": "text: a binding shown as a number or a string."}}})json"},
+        "x": {"$use": "binding", "description": "series: the x values, a binding such as loss.step; points: the x coordinates."},
+        "y": {"type": ["string", "array"], "minLength": 1, "maxLength": 320, "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
+              "minItems": 1, "maxItems": 16, "items": {"$use": "binding"},
+              "description": "series: one binding or a list of 1 to 16 bindings drawn as lines; points: the y coordinates."},
+        "z": {"$use": "binding", "description": "points: the z coordinates, for a 3-D cloud."},
+        "color": {"$use": "binding", "description": "points: a value per point that sets its colour through the colormap."},
+        "size": {"$use": "binding", "description": "points: a value per point that sets its size."},
+        "positions": {"$use": "binding", "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z."},
+        "values": {"$use": "binding", "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4]."},
+        "rows": {"$use": "id", "description": "table: the id of a tabular source whose rows are shown."},
+        "value": {"$use": "binding", "description": "text: a column, shown as its last value, or a tensor of one element."}}})json"},
 
     {"options", R"json({
       "type": "object", "additionalProperties": false, "required": [],
       "properties": {
-        "colormap": {"type": "string", "maxLength": 64, "description": "heatmap and image: the colour map, such as viridis."},
-        "x_label": {"type": "string", "maxLength": 256, "description": "The label of the x axis."},
-        "y_label": {"type": "string", "maxLength": 256, "description": "The label of the y axis."},
-        "bins": {"type": "integer", "minimum": 1, "maximum": 1024, "description": "histogram: the number of bins."},
-        "columns": {"type": "array", "items": {"type": "string"}, "maxItems": 256, "description": "table: the columns to show, in order."},
-        "text": {"type": "string", "maxLength": 4096, "description": "text: static text to show."}}})json"},
+        "x_label": {"$use": "label", "description": "series, heatmap, points and histogram: the label of the x axis."},
+        "y_label": {"$use": "label", "description": "series, heatmap, points and histogram: the label of the y axis."},
+        "z_label": {"$use": "label", "description": "points: the label of the z axis."},
+        "x_range": {"$use": "range", "description": "series: a fixed x range, [min, max] with min below max."},
+        "y_range": {"$use": "range", "description": "series: a fixed y range, [min, max] with min below max."},
+        "range": {"$use": "range", "description": "heatmap and image: the values at the ends of the colormap; histogram: the binned range; [min, max] with min below max."},
+        "x_log": {"type": "boolean", "description": "series: a log scale on the x axis."},
+        "y_log": {"type": "boolean", "description": "series: a log scale on the y axis; histogram: on the counts."},
+        "colormap": {"type": "string", "enum": ["viridis", "magma", "rdbu", "greys"], "description": "heatmap, points and image: the colormap; viridis by default, greys for a one-channel image."},
+        "bins": {"type": "integer", "minimum": 1, "maximum": 65536, "description": "histogram: the number of bins, from 1 to 65536; 64 by default."},
+        "columns": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"type": "string", "minLength": 1, "maxLength": 255}, "description": "table: the columns to show, in order, each once."},
+        "text": {"type": "string", "maxLength": 16384, "description": "text: static text to show."}}})json"},
 
     {"panel", R"json({
       "type": "object", "additionalProperties": false, "required": ["id", "primitive", "title", "bind", "options"],
       "properties": {
         "id": {"$use": "id", "description": "The panel's id."},
         "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text"], "description": "What the panel draws."},
-        "title": {"type": ["string", "null"], "description": "The panel's title, or null."},
+        "title": {"type": ["string", "null"], "description": "The panel's title, or null when it has none."},
         "bind": {"$use": "bind", "description": "The panel's bindings, by slot."},
         "options": {"$use": "options", "description": "The panel's options."}}})json"},
 
     {"layout", R"json({
       "type": "object", "additionalProperties": false, "required": ["root", "nodes"],
       "properties": {
-        "root": {"type": "string", "minLength": 1, "maxLength": 64, "description": "The id of the top node, or of the one panel when the layout is a single panel."},
+        "root": {"$use": "id", "description": "The id of the top node, or of the one panel when the layout is a single panel."},
         "nodes": {"type": "array", "maxItems": 256, "description": "The nodes of the layout, in any order. Each splits its space between its children or shows them as tabs.",
                   "items": {"type": "object", "additionalProperties": false, "required": ["id", "split", "children"],
                             "properties": {
                               "id": {"$use": "id", "description": "The node's id; it must not be a panel's id."},
                               "split": {"type": "string", "enum": ["horizontal", "vertical", "tabs"], "description": "horizontal puts the children side by side, vertical one above another, tabs in tabs."},
-                              "ratio": {"type": ["number", "null"], "minimum": 0.05, "maximum": 0.95, "description": "For a split of two children, the share of the first, from 0.05 to 0.95; null for an even split or for tabs."},
-                              "children": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"type": "string"}, "description": "Panel ids and node ids, in order; each node is used once."}}}}}})json"},
+                              "ratio": {"type": ["number", "null"], "minimum": 0.05, "maximum": 0.95, "description": "For a split of exactly two children, the share of the first, from 0.05 to 0.95; null for an even split and for tabs."},
+                              "title": {"type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "The node's tab label when it is a child of tabs, or null."},
+                              "children": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$use": "id"}, "description": "Panel ids and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once."}}}}}})json"},
+
+    // What a spec edit returns besides its own fields.
+    {"warnings", R"json({"type": "array", "items": {"$use": "diagnostic"}, "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer."})json"},
+
+    {"diff", R"json({"type": "string", "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change."})json"},
+
+    {"applied", R"json({"type": "boolean", "description": "Whether the change was applied; false for a dry run."})json"},
+
+    {"dry_run", R"json({"type": "boolean", "default": false, "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent."})json"},
 
     {"loader_outputs", R"json({"type": "array", "items": {"type": "string"}})json"},
 };
@@ -372,7 +404,7 @@ const Row kRows[] = {
                        "at": {"type": "string", "description": "When the run ended, in UTC ISO 8601."},
                        "ok": {"type": "boolean", "description": "Whether it succeeded."},
                        "error": {"type": ["string", "null"], "description": "The error code of a failed run, or null."},
-                       "elapsed_ms": {"type": "number", "description": "How long it took, in milliseconds."}}},
+                       "elapsed_ms": {"type": ["number", "null"], "description": "How long it took, in milliseconds, or null when it is not known, as after the workspace was reopened."}}},
         "outputs": {"$use": "loader_outputs", "description": "The catalog ids of the sources it made."}}})json",
      R"json({"id": "run42-metrics"})json"},
     {"loader.create", true, false, false,
@@ -445,7 +477,7 @@ const Row kRows[] = {
      R"json({"type": "object", "additionalProperties": false, "required": ["id"],
       "properties": {
         "id": {"$use": "id", "description": "The applet's id, such as attention-entropy."},
-        "title": {"type": "string", "maxLength": 256, "description": "The applet's title for a person."},
+        "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The applet's title for a person."},
         "description": {"type": "string", "maxLength": 4096, "description": "What the applet shows, in a sentence or two."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "text"],
       "properties": {
@@ -478,13 +510,17 @@ const Row kRows[] = {
      "{}"},
     {"spec.set_text", true, false, true,
      "Replaces the whole open spec with new TOML text after checking it; text with an error is refused, and the "
-     "open spec stays as it was. Use spec.validate first to see every error. Undo restores the previous text.",
+     "open spec stays as it was. Use spec.validate first to see every error. Undo restores the previous text. The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["text"],
-      "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 262144, "description": "The whole spec as TOML text, with caliper_spec = 0, an [applet] table, [[source]] and [[panel]] tables and a [layout] table."}}})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings"],
+      "properties": {
+        "text": {"type": "string", "minLength": 1, "maxLength": 262144, "description": "The whole spec as TOML text, with caliper_spec = 0, an [applet] table, [[source]] and [[panel]] tables and a [layout] table."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings", "diff", "applied"],
       "properties": {
         "id": {"type": "string", "description": "The spec's applet id."},
-        "warnings": {"type": "array", "items": {"$use": "diagnostic"}, "description": "What the validator warns about."}}})json",
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
      R"json({"text": "caliper_spec = 0\n[applet]\nid = \"loss\"\ntitle = \"Loss\"\n[[source]]\nid = \"loss\"\nsql = \"SELECT step, loss FROM run42_metrics ORDER BY step\"\n[[panel]]\nid = \"loss\"\nprimitive = \"series\"\nbind = { x = \"loss.step\", y = [\"loss.loss\"] }\n[layout]\nchildren = [\"loss\"]\n"})json"},
     {"spec.validate", false, false, true,
      "Checks a spec and lists its errors and warnings, each with a code, a message and where it is. It checks the "
@@ -504,33 +540,51 @@ const Row kRows[] = {
      "Adds a source to the open spec. A spec source gives data a name that panels bind. It has exactly one of "
      "catalog (a catalog source id from catalog.list, such as live:attn.weights), sql (one read-only SELECT over the "
      "workspace's tables) or from (the id of another source of this spec), and an optional list of tensor "
-     "transforms (slice, reduce, normalise) for tensor-shaped data. Undo removes it.",
-     R"json({"$use": "source"})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings"],
+     "transforms (slice, reduce, normalise) for tensor-shaped data. Undo removes it. The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id"],
+      "properties": {
+        "id": {"$use": "id", "description": "The source's id in this spec, which panels bind."},
+        "catalog": {"$use": "catalog_id", "maxLength": 256, "description": "A catalog source id, from catalog.list, such as live:attn.weights or table:run42_metrics."},
+        "sql": {"type": "string", "minLength": 1, "maxLength": 65536, "description": "One read-only SELECT (DuckDB SQL) over the workspace's tables, named as in data.query."},
+        "from": {"$use": "id", "description": "The id of another source of this spec that this one derives from, usually through transforms."},
+        "transform": {"type": "array", "maxItems": 16, "items": {"$use": "transform"}, "description": "Up to 16 tensor transforms applied in order; only for tensor-shaped data."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings", "diff", "applied"],
       "properties": {
         "id": {"type": "string", "description": "The source's id."},
-        "warnings": {"type": "array", "items": {"$use": "diagnostic"}, "description": "What the validator warns about."}}})json",
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
      R"json({"id": "entropy", "from": "attn", "transform": [{"op": "reduce", "axis": 3, "fn": "entropy"}, {"op": "reduce", "axis": 2, "fn": "mean"}]})json"},
     {"source.patch", true, false, true,
      "Changes a source of the open spec with a JSON merge patch (RFC 7386): the keys given replace the source's "
      "own, and a key set to null is removed. The id cannot change. The id comes from spec.get. Undo restores the "
-     "source.",
+     "source. The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "patch"],
       "properties": {
         "id": {"$use": "id", "description": "The source's id in the open spec."},
-        "patch": {"$patch": "source", "description": "The keys to change: catalog, sql, from or transform; null removes one."}}})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["source", "warnings"],
+        "patch": {"$patch": "source", "description": "The keys to change: catalog, sql, from or transform; null removes one."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["source", "warnings", "diff", "applied"],
       "properties": {
-        "source": {"$use": "source", "description": "The source as it is now."},
-        "warnings": {"type": "array", "items": {"$use": "diagnostic"}, "description": "What the validator warns about."}}})json",
+        "source": {"$use": "source", "description": "The source as it is now, or would be after a dry run."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
      R"json({"id": "entropy", "patch": {"transform": [{"op": "reduce", "axis": 3, "fn": "entropy"}]}})json"},
     {"source.remove", true, false, true,
      "Removes a source from the open spec. A source that a panel binds, or that another source derives from, cannot "
-     "be removed until they change. The id comes from spec.get. Undo restores it.",
+     "be removed until they change. The id comes from spec.get. Undo restores it. The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["id"],
-      "properties": {"id": {"$use": "id", "description": "The source's id in the open spec."}}})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["id"],
-      "properties": {"id": {"type": "string", "description": "The removed source's id."}}})json",
+      "properties": {
+        "id": {"$use": "id", "description": "The source's id in the open spec."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings", "diff", "applied"],
+      "properties": {
+        "id": {"type": "string", "description": "The removed source's id."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
      R"json({"id": "loss"})json"},
 
     // panel
@@ -539,12 +593,12 @@ const Row kRows[] = {
      "(a colour-mapped grid), points (a 2-D or 3-D cloud), histogram, table, image or text. bind maps each slot of "
      "the primitive to a spec source id, or to <source>.<column> for one column of a tabular source. place puts it "
      "beside, above, below or in tabs with another panel; without place, the panel goes to the right of the whole "
-     "layout. Undo removes it.",
+     "layout. Undo removes it. The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "primitive", "bind"],
       "properties": {
         "id": {"$use": "id", "description": "The new panel's id."},
         "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text"], "description": "What the panel draws. Required slots: series y; heatmap values; points x and y, or positions; histogram values; table rows; image values; text none."},
-        "title": {"type": "string", "maxLength": 256, "description": "The panel's title."},
+        "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The panel's title; the id when absent."},
         "bind": {"$use": "bind", "description": "The bindings by slot: a spec source id, or <source>.<column> for one column of a tabular source."},
         "options": {"$use": "options", "description": "The primitive's options."},
         "place": {"type": "object", "additionalProperties": false, "required": ["target", "where"],
@@ -552,38 +606,50 @@ const Row kRows[] = {
                   "properties": {
                     "target": {"$use": "id", "description": "The id of a panel already in the layout."},
                     "where": {"type": "string", "enum": ["beside", "above", "below", "tabbed"], "description": "beside puts it to the right of the target; tabbed shows both in tabs."},
-                    "ratio": {"type": "number", "minimum": 0.05, "maximum": 0.95, "default": 0.5, "description": "The share of the space the new panel gets; 0.5 when absent."}}}}})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings"],
+                    "ratio": {"type": "number", "minimum": 0.05, "maximum": 0.95, "default": 0.5, "description": "The share of the space the new panel gets; 0.5 when absent."}}},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings", "diff", "applied"],
       "properties": {
         "id": {"type": "string", "description": "The new panel's id."},
-        "warnings": {"type": "array", "items": {"$use": "diagnostic"}, "description": "What the validator warns about."}}})json",
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
      R"json({"id": "heat", "primitive": "heatmap", "title": "Entropy per layer and head", "bind": {"values": "entropy"}, "options": {"colormap": "viridis", "x_label": "Head", "y_label": "Layer"}})json"},
     {"panel.patch", true, false, true,
      "Changes a panel of the open spec with a JSON merge patch (RFC 7386) of its title, primitive, bindings and "
      "options: the keys given replace the panel's own, a key set to null is removed, and bind and options merge key "
-     "by key. The id cannot change. The id comes from spec.get. Undo restores the panel.",
+     "by key. The id cannot change. The id comes from spec.get. Undo restores the panel. The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "patch"],
       "properties": {
         "id": {"$use": "id", "description": "The panel's id in the open spec."},
         "patch": {"type": "object", "additionalProperties": false, "required": [],
                   "description": "The keys to change; null removes one.",
                   "properties": {
-                    "title": {"type": ["string", "null"], "maxLength": 256, "description": "The panel's title."},
+                    "title": {"type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "The panel's title."},
                     "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text"], "description": "What the panel draws."},
                     "bind": {"$patch": "bind", "description": "Slots to bind, or null to unbind one."},
-                    "options": {"$patch": "options", "description": "Options to set, or null to clear one."}}}}})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "warnings"],
+                    "options": {"$patch": "options", "description": "Options to set, or null to clear one."}}},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "warnings", "diff", "applied"],
       "properties": {
-        "panel": {"$use": "panel", "description": "The panel as it is now."},
-        "warnings": {"type": "array", "items": {"$use": "diagnostic"}, "description": "What the validator warns about."}}})json",
+        "panel": {"$use": "panel", "description": "The panel as it is now, or would be after a dry run."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
      R"json({"id": "heat", "patch": {"title": "Entropy", "options": {"colormap": "magma", "y_label": null}}})json"},
     {"panel.remove", true, false, true,
      "Removes a panel from the open spec and from its layout. The id comes from spec.get. Undo restores it in its "
-     "place.",
+     "place. The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["id"],
-      "properties": {"id": {"$use": "id", "description": "The panel's id in the open spec."}}})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["id"],
-      "properties": {"id": {"type": "string", "description": "The removed panel's id."}}})json",
+      "properties": {
+        "id": {"$use": "id", "description": "The panel's id in the open spec."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings", "diff", "applied"],
+      "properties": {
+        "id": {"type": "string", "description": "The removed panel's id."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
      R"json({"id": "heat"})json"},
     {"panel.render", false, false, true,
      "Draws one panel of the open spec off screen and returns it as a PNG image, so that you can check what it "
@@ -601,25 +667,38 @@ const Row kRows[] = {
     {"layout.place", true, false, true,
      "Places a panel of the open spec next to another one, the target: beside puts it to the right, above and "
      "below above or below, tabbed in tabs with the target. ratio is the share of the space the placed panel gets, "
-     "from 0.05 to 0.95, half by default. A panel already in the layout is moved. Undo restores the previous layout.",
+     "from 0.05 to 0.95, half by default. A panel already in the layout is moved. Undo restores the previous layout."
+     " The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["panel", "target", "where"],
       "properties": {
         "panel": {"$use": "id", "description": "The id of the panel to place."},
         "target": {"$use": "id", "description": "The id of the panel to place it next to."},
         "where": {"type": "string", "enum": ["beside", "above", "below", "tabbed"], "description": "Where to place it, relative to the target."},
-        "ratio": {"type": "number", "minimum": 0.05, "maximum": 0.95, "default": 0.5, "description": "The share of the space the placed panel gets; 0.5 when absent."}}})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["layout"],
-      "properties": {"layout": {"$use": "layout", "description": "The whole layout as it is now."}}})json",
+        "ratio": {"type": "number", "minimum": 0.05, "maximum": 0.95, "default": 0.5, "description": "The share of the space the placed panel gets; 0.5 when absent."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["layout", "warnings", "diff", "applied"],
+      "properties": {
+        "layout": {"$use": "layout", "description": "The whole layout as it is now, or would be after a dry run."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
      R"json({"panel": "loss", "target": "heat", "where": "below", "ratio": 0.4})json"},
     {"layout.set", true, false, true,
      "Replaces the whole layout of the open spec. The layout is a flat list of nodes: each node splits its space "
      "horizontally or vertically between its children, with ratio the share of the first child, or shows them in "
      "tabs. A child is a panel id or another node's id, and root names the top node, or the one panel when there "
-     "is only one. Every panel of the spec must appear once. Undo restores the previous layout.",
+     "is only one. Every panel of the spec should appear once; a panel left out is not drawn. Undo restores the "
+     "previous layout. The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["layout"],
-      "properties": {"layout": {"$use": "layout", "description": "The new layout."}}})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["layout"],
-      "properties": {"layout": {"$use": "layout", "description": "The layout as it is now."}}})json",
+      "properties": {
+        "layout": {"$use": "layout", "description": "The new layout."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["layout", "warnings", "diff", "applied"],
+      "properties": {
+        "layout": {"$use": "layout", "description": "The layout as it is now, or would be after a dry run."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
      R"json({"layout": {"root": "main", "nodes": [{"id": "main", "split": "horizontal", "ratio": 0.6, "children": ["heat", "right"]}, {"id": "right", "split": "vertical", "ratio": null, "children": ["mean", "loss"]}]}})json"},
 
     // applet

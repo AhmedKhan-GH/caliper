@@ -1349,8 +1349,11 @@
                 "type": "string"
               },
               "elapsed_ms": {
-                "description": "How long it took, in milliseconds.",
-                "type": "number"
+                "description": "How long it took, in milliseconds, or null when it is not known, as after the workspace was reopened.",
+                "type": [
+                  "number",
+                  "null"
+                ]
               },
               "error": {
                 "description": "The error code of a failed run, or null.",
@@ -1694,6 +1697,7 @@
           "title": {
             "description": "The applet's title for a person.",
             "maxLength": 256,
+            "minLength": 1,
             "type": "string"
           }
         },
@@ -1864,6 +1868,11 @@
       "args": {
         "additionalProperties": false,
         "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
           "text": {
             "description": "The whole spec as TOML text, with caliper_spec = 0, an [applet] table, [[source]] and [[panel]] tables and a [layout] table.",
             "maxLength": 262144,
@@ -1888,12 +1897,20 @@
       "result": {
         "additionalProperties": false,
         "properties": {
+          "applied": {
+            "description": "Whether the change was applied; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
           "id": {
             "description": "The spec's applet id.",
             "type": "string"
           },
           "warnings": {
-            "description": "What the validator warns about.",
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -1922,11 +1939,13 @@
         },
         "required": [
           "id",
-          "warnings"
+          "warnings",
+          "diff",
+          "applied"
         ],
         "type": "object"
       },
-      "summary": "Replaces the whole open spec with new TOML text after checking it; text with an error is refused, and the open spec stays as it was. Use spec.validate first to see every error. Undo restores the previous text."
+      "summary": "Replaces the whole open spec with new TOML text after checking it; text with an error is refused, and the open spec stays as it was. Use spec.validate first to see every error. Undo restores the previous text. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "args": {
@@ -2026,10 +2045,15 @@
         "properties": {
           "catalog": {
             "description": "A catalog source id, from catalog.list, such as live:attn.weights or table:run42_metrics.",
-            "maxLength": 263,
+            "maxLength": 256,
             "minLength": 3,
             "pattern": "^(table|tensor|live|feed|metric):.+$",
             "type": "string"
+          },
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
           },
           "from": {
             "description": "The id of another source of this spec that this one derives from, usually through transforms.",
@@ -2052,22 +2076,28 @@
             "type": "string"
           },
           "transform": {
-            "description": "Tensor transforms applied in order; only for tensor-shaped data.",
+            "description": "Up to 16 tensor transforms applied in order; only for tensor-shaped data.",
             "items": {
               "additionalProperties": false,
               "properties": {
                 "axis": {
-                  "description": "The axis, counting from 0 (negative counts from the end). reduce also takes a list of axes. normalise without an axis covers the whole tensor.",
+                  "description": "The axis, from -8 to 7, counting from 0 (negative counts from the end). Required for slice and reduce; reduce also takes a list of 1 to 8 axes. normalise without an axis covers the whole tensor.",
                   "items": {
+                    "maximum": 7,
+                    "minimum": -8,
                     "type": "integer"
                   },
+                  "maxItems": 8,
+                  "maximum": 7,
+                  "minItems": 1,
+                  "minimum": -8,
                   "type": [
                     "integer",
                     "array"
                   ]
                 },
                 "fn": {
-                  "description": "reduce: the function; entropy treats the axis as a probability distribution, in nats.",
+                  "description": "reduce: the function; entropy treats the axis as a probability distribution, in nats; argmax and argmin take one axis.",
                   "enum": [
                     "mean",
                     "sum",
@@ -2083,7 +2113,9 @@
                   "type": "string"
                 },
                 "index": {
-                  "description": "slice: the one index to keep; it drops the axis.",
+                  "description": "slice: the one index to keep, negative counting from the end; it drops the axis. Not with start, stop or step.",
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
                   "type": "integer"
                 },
                 "keepdims": {
@@ -2111,15 +2143,20 @@
                 },
                 "start": {
                   "description": "slice: the first index, Python style, negative allowed.",
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
                   "type": "integer"
                 },
                 "step": {
                   "description": "slice: the step, at least 1.",
+                  "maximum": 9007199254740991,
                   "minimum": 1,
                   "type": "integer"
                 },
                 "stop": {
                   "description": "slice: the index to stop before, Python style.",
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
                   "type": "integer"
                 }
               },
@@ -2128,7 +2165,7 @@
               ],
               "type": "object"
             },
-            "maxItems": 32,
+            "maxItems": 16,
             "type": "array"
           }
         },
@@ -2162,12 +2199,20 @@
       "result": {
         "additionalProperties": false,
         "properties": {
+          "applied": {
+            "description": "Whether the change was applied; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
           "id": {
             "description": "The source's id.",
             "type": "string"
           },
           "warnings": {
-            "description": "What the validator warns about.",
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -2196,16 +2241,23 @@
         },
         "required": [
           "id",
-          "warnings"
+          "warnings",
+          "diff",
+          "applied"
         ],
         "type": "object"
       },
-      "summary": "Adds a source to the open spec. A spec source gives data a name that panels bind. It has exactly one of catalog (a catalog source id from catalog.list, such as live:attn.weights), sql (one read-only SELECT over the workspace's tables) or from (the id of another source of this spec), and an optional list of tensor transforms (slice, reduce, normalise) for tensor-shaped data. Undo removes it."
+      "summary": "Adds a source to the open spec. A spec source gives data a name that panels bind. It has exactly one of catalog (a catalog source id from catalog.list, such as live:attn.weights), sql (one read-only SELECT over the workspace's tables) or from (the id of another source of this spec), and an optional list of tensor transforms (slice, reduce, normalise) for tensor-shaped data. Undo removes it. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "args": {
         "additionalProperties": false,
         "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
           "id": {
             "description": "The source's id in the open spec.",
             "maxLength": 64,
@@ -2219,7 +2271,7 @@
             "properties": {
               "catalog": {
                 "description": "A catalog source id, from catalog.list, such as live:attn.weights or table:run42_metrics.",
-                "maxLength": 263,
+                "maxLength": 256,
                 "minLength": 3,
                 "pattern": "^(table|tensor|live|feed|metric):.+$",
                 "type": [
@@ -2247,22 +2299,28 @@
                 ]
               },
               "transform": {
-                "description": "Tensor transforms applied in order; only for tensor-shaped data.",
+                "description": "Up to 16 tensor transforms applied in order; only for tensor-shaped data.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
                     "axis": {
-                      "description": "The axis, counting from 0 (negative counts from the end). reduce also takes a list of axes. normalise without an axis covers the whole tensor.",
+                      "description": "The axis, from -8 to 7, counting from 0 (negative counts from the end). Required for slice and reduce; reduce also takes a list of 1 to 8 axes. normalise without an axis covers the whole tensor.",
                       "items": {
+                        "maximum": 7,
+                        "minimum": -8,
                         "type": "integer"
                       },
+                      "maxItems": 8,
+                      "maximum": 7,
+                      "minItems": 1,
+                      "minimum": -8,
                       "type": [
                         "integer",
                         "array"
                       ]
                     },
                     "fn": {
-                      "description": "reduce: the function; entropy treats the axis as a probability distribution, in nats.",
+                      "description": "reduce: the function; entropy treats the axis as a probability distribution, in nats; argmax and argmin take one axis.",
                       "enum": [
                         "mean",
                         "sum",
@@ -2278,7 +2336,9 @@
                       "type": "string"
                     },
                     "index": {
-                      "description": "slice: the one index to keep; it drops the axis.",
+                      "description": "slice: the one index to keep, negative counting from the end; it drops the axis. Not with start, stop or step.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
                       "type": "integer"
                     },
                     "keepdims": {
@@ -2306,15 +2366,20 @@
                     },
                     "start": {
                       "description": "slice: the first index, Python style, negative allowed.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
                       "type": "integer"
                     },
                     "step": {
                       "description": "slice: the step, at least 1.",
+                      "maximum": 9007199254740991,
                       "minimum": 1,
                       "type": "integer"
                     },
                     "stop": {
                       "description": "slice: the index to stop before, Python style.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
                       "type": "integer"
                     }
                   },
@@ -2323,7 +2388,7 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 32,
+                "maxItems": 16,
                 "type": [
                   "array",
                   "null"
@@ -2361,13 +2426,21 @@
       "result": {
         "additionalProperties": false,
         "properties": {
+          "applied": {
+            "description": "Whether the change was applied; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
           "source": {
             "additionalProperties": false,
-            "description": "The source as it is now.",
+            "description": "The source as it is now, or would be after a dry run.",
             "properties": {
               "catalog": {
                 "description": "A catalog source id, from catalog.list, such as live:attn.weights or table:run42_metrics.",
-                "maxLength": 263,
+                "maxLength": 256,
                 "minLength": 3,
                 "pattern": "^(table|tensor|live|feed|metric):.+$",
                 "type": "string"
@@ -2393,22 +2466,28 @@
                 "type": "string"
               },
               "transform": {
-                "description": "Tensor transforms applied in order; only for tensor-shaped data.",
+                "description": "Up to 16 tensor transforms applied in order; only for tensor-shaped data.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
                     "axis": {
-                      "description": "The axis, counting from 0 (negative counts from the end). reduce also takes a list of axes. normalise without an axis covers the whole tensor.",
+                      "description": "The axis, from -8 to 7, counting from 0 (negative counts from the end). Required for slice and reduce; reduce also takes a list of 1 to 8 axes. normalise without an axis covers the whole tensor.",
                       "items": {
+                        "maximum": 7,
+                        "minimum": -8,
                         "type": "integer"
                       },
+                      "maxItems": 8,
+                      "maximum": 7,
+                      "minItems": 1,
+                      "minimum": -8,
                       "type": [
                         "integer",
                         "array"
                       ]
                     },
                     "fn": {
-                      "description": "reduce: the function; entropy treats the axis as a probability distribution, in nats.",
+                      "description": "reduce: the function; entropy treats the axis as a probability distribution, in nats; argmax and argmin take one axis.",
                       "enum": [
                         "mean",
                         "sum",
@@ -2424,7 +2503,9 @@
                       "type": "string"
                     },
                     "index": {
-                      "description": "slice: the one index to keep; it drops the axis.",
+                      "description": "slice: the one index to keep, negative counting from the end; it drops the axis. Not with start, stop or step.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
                       "type": "integer"
                     },
                     "keepdims": {
@@ -2452,15 +2533,20 @@
                     },
                     "start": {
                       "description": "slice: the first index, Python style, negative allowed.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
                       "type": "integer"
                     },
                     "step": {
                       "description": "slice: the step, at least 1.",
+                      "maximum": 9007199254740991,
                       "minimum": 1,
                       "type": "integer"
                     },
                     "stop": {
                       "description": "slice: the index to stop before, Python style.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
                       "type": "integer"
                     }
                   },
@@ -2469,7 +2555,7 @@
                   ],
                   "type": "object"
                 },
-                "maxItems": 32,
+                "maxItems": 16,
                 "type": "array"
               }
             },
@@ -2479,7 +2565,7 @@
             "type": "object"
           },
           "warnings": {
-            "description": "What the validator warns about.",
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -2508,16 +2594,23 @@
         },
         "required": [
           "source",
-          "warnings"
+          "warnings",
+          "diff",
+          "applied"
         ],
         "type": "object"
       },
-      "summary": "Changes a source of the open spec with a JSON merge patch (RFC 7386): the keys given replace the source's own, and a key set to null is removed. The id cannot change. The id comes from spec.get. Undo restores the source."
+      "summary": "Changes a source of the open spec with a JSON merge patch (RFC 7386): the keys given replace the source's own, and a key set to null is removed. The id cannot change. The id comes from spec.get. Undo restores the source. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "args": {
         "additionalProperties": false,
         "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
           "id": {
             "description": "The source's id in the open spec.",
             "maxLength": 64,
@@ -2543,17 +2636,55 @@
       "result": {
         "additionalProperties": false,
         "properties": {
+          "applied": {
+            "description": "Whether the change was applied; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
           "id": {
             "description": "The removed source's id.",
             "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
           }
         },
         "required": [
-          "id"
+          "id",
+          "warnings",
+          "diff",
+          "applied"
         ],
         "type": "object"
       },
-      "summary": "Removes a source from the open spec. A source that a panel binds, or that another source derives from, cannot be removed until they change. The id comes from spec.get. Undo restores it."
+      "summary": "Removes a source from the open spec. A source that a panel binds, or that another source derives from, cannot be removed until they change. The id comes from spec.get. Undo restores it. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "args": {
@@ -2564,38 +2695,67 @@
             "description": "The bindings by slot: a spec source id, or <source>.<column> for one column of a tabular source.",
             "properties": {
               "color": {
-                "description": "points: a value per point that sets its colour.",
+                "description": "points: a value per point that sets its colour through the colormap.",
+                "maxLength": 320,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                 "type": "string"
               },
               "positions": {
                 "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z.",
+                "maxLength": 320,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                 "type": "string"
               },
               "rows": {
-                "description": "table: a tabular source whose rows are shown.",
+                "description": "table: the id of a tabular source whose rows are shown.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                 "type": "string"
               },
               "size": {
                 "description": "points: a value per point that sets its size.",
+                "maxLength": 320,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                 "type": "string"
               },
               "value": {
-                "description": "text: a binding shown as a number or a string.",
+                "description": "text: a column, shown as its last value, or a tensor of one element.",
+                "maxLength": 320,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                 "type": "string"
               },
               "values": {
                 "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4].",
+                "maxLength": 320,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                 "type": "string"
               },
               "x": {
                 "description": "series: the x values, a binding such as loss.step; points: the x coordinates.",
+                "maxLength": 320,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                 "type": "string"
               },
               "y": {
-                "description": "series: one binding or a list of bindings drawn as lines; points: the y coordinates.",
+                "description": "series: one binding or a list of 1 to 16 bindings drawn as lines; points: the y coordinates.",
                 "items": {
+                  "maxLength": 320,
+                  "minLength": 1,
+                  "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                   "type": "string"
                 },
+                "maxItems": 16,
+                "maxLength": 320,
+                "minItems": 1,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                 "type": [
                   "string",
                   "array"
@@ -2603,11 +2763,19 @@
               },
               "z": {
                 "description": "points: the z coordinates, for a 3-D cloud.",
+                "maxLength": 320,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                 "type": "string"
               }
             },
             "required": [],
             "type": "object"
+          },
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
           },
           "id": {
             "description": "The new panel's id.",
@@ -2621,36 +2789,84 @@
             "description": "The primitive's options.",
             "properties": {
               "bins": {
-                "description": "histogram: the number of bins.",
-                "maximum": 1024,
+                "description": "histogram: the number of bins, from 1 to 65536; 64 by default.",
+                "maximum": 65536,
                 "minimum": 1,
                 "type": "integer"
               },
               "colormap": {
-                "description": "heatmap and image: the colour map, such as viridis.",
-                "maxLength": 64,
+                "description": "heatmap, points and image: the colormap; viridis by default, greys for a one-channel image.",
+                "enum": [
+                  "viridis",
+                  "magma",
+                  "rdbu",
+                  "greys"
+                ],
                 "type": "string"
               },
               "columns": {
-                "description": "table: the columns to show, in order.",
+                "description": "table: the columns to show, in order, each once.",
                 "items": {
+                  "maxLength": 255,
+                  "minLength": 1,
                   "type": "string"
                 },
                 "maxItems": 256,
+                "minItems": 1,
+                "type": "array"
+              },
+              "range": {
+                "description": "heatmap and image: the values at the ends of the colormap; histogram: the binned range; [min, max] with min below max.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
                 "type": "array"
               },
               "text": {
                 "description": "text: static text to show.",
-                "maxLength": 4096,
+                "maxLength": 16384,
                 "type": "string"
               },
               "x_label": {
-                "description": "The label of the x axis.",
+                "description": "series, heatmap, points and histogram: the label of the x axis.",
                 "maxLength": 256,
                 "type": "string"
               },
+              "x_log": {
+                "description": "series: a log scale on the x axis.",
+                "type": "boolean"
+              },
+              "x_range": {
+                "description": "series: a fixed x range, [min, max] with min below max.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
               "y_label": {
-                "description": "The label of the y axis.",
+                "description": "series, heatmap, points and histogram: the label of the y axis.",
+                "maxLength": 256,
+                "type": "string"
+              },
+              "y_log": {
+                "description": "series: a log scale on the y axis; histogram: on the counts.",
+                "type": "boolean"
+              },
+              "y_range": {
+                "description": "series: a fixed y range, [min, max] with min below max.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "z_label": {
+                "description": "points: the label of the z axis.",
                 "maxLength": 256,
                 "type": "string"
               }
@@ -2707,8 +2923,9 @@
             "type": "string"
           },
           "title": {
-            "description": "The panel's title.",
+            "description": "The panel's title; the id when absent.",
             "maxLength": 256,
+            "minLength": 1,
             "type": "string"
           }
         },
@@ -2741,12 +2958,20 @@
       "result": {
         "additionalProperties": false,
         "properties": {
+          "applied": {
+            "description": "Whether the change was applied; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
           "id": {
             "description": "The new panel's id.",
             "type": "string"
           },
           "warnings": {
-            "description": "What the validator warns about.",
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -2775,16 +3000,23 @@
         },
         "required": [
           "id",
-          "warnings"
+          "warnings",
+          "diff",
+          "applied"
         ],
         "type": "object"
       },
-      "summary": "Adds a panel to the open spec. A panel draws one primitive from the sources it binds: series (lines), heatmap (a colour-mapped grid), points (a 2-D or 3-D cloud), histogram, table, image or text. bind maps each slot of the primitive to a spec source id, or to <source>.<column> for one column of a tabular source. place puts it beside, above, below or in tabs with another panel; without place, the panel goes to the right of the whole layout. Undo removes it."
+      "summary": "Adds a panel to the open spec. A panel draws one primitive from the sources it binds: series (lines), heatmap (a colour-mapped grid), points (a 2-D or 3-D cloud), histogram, table, image or text. bind maps each slot of the primitive to a spec source id, or to <source>.<column> for one column of a tabular source. place puts it beside, above, below or in tabs with another panel; without place, the panel goes to the right of the whole layout. Undo removes it. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "args": {
         "additionalProperties": false,
         "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
           "id": {
             "description": "The panel's id in the open spec.",
             "maxLength": 64,
@@ -2801,7 +3033,10 @@
                 "description": "Slots to bind, or null to unbind one.",
                 "properties": {
                   "color": {
-                    "description": "points: a value per point that sets its colour.",
+                    "description": "points: a value per point that sets its colour through the colormap.",
+                    "maxLength": 320,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": [
                       "string",
                       "null"
@@ -2809,13 +3044,19 @@
                   },
                   "positions": {
                     "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z.",
+                    "maxLength": 320,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": [
                       "string",
                       "null"
                     ]
                   },
                   "rows": {
-                    "description": "table: a tabular source whose rows are shown.",
+                    "description": "table: the id of a tabular source whose rows are shown.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                     "type": [
                       "string",
                       "null"
@@ -2823,13 +3064,19 @@
                   },
                   "size": {
                     "description": "points: a value per point that sets its size.",
+                    "maxLength": 320,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": [
                       "string",
                       "null"
                     ]
                   },
                   "value": {
-                    "description": "text: a binding shown as a number or a string.",
+                    "description": "text: a column, shown as its last value, or a tensor of one element.",
+                    "maxLength": 320,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": [
                       "string",
                       "null"
@@ -2837,6 +3084,9 @@
                   },
                   "values": {
                     "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4].",
+                    "maxLength": 320,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": [
                       "string",
                       "null"
@@ -2844,16 +3094,27 @@
                   },
                   "x": {
                     "description": "series: the x values, a binding such as loss.step; points: the x coordinates.",
+                    "maxLength": 320,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": [
                       "string",
                       "null"
                     ]
                   },
                   "y": {
-                    "description": "series: one binding or a list of bindings drawn as lines; points: the y coordinates.",
+                    "description": "series: one binding or a list of 1 to 16 bindings drawn as lines; points: the y coordinates.",
                     "items": {
+                      "maxLength": 320,
+                      "minLength": 1,
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                       "type": "string"
                     },
+                    "maxItems": 16,
+                    "maxLength": 320,
+                    "minItems": 1,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": [
                       "string",
                       "array",
@@ -2862,6 +3123,9 @@
                   },
                   "z": {
                     "description": "points: the z coordinates, for a 3-D cloud.",
+                    "maxLength": 320,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": [
                       "string",
                       "null"
@@ -2876,8 +3140,8 @@
                 "description": "Options to set, or null to clear one.",
                 "properties": {
                   "bins": {
-                    "description": "histogram: the number of bins.",
-                    "maximum": 1024,
+                    "description": "histogram: the number of bins, from 1 to 65536; 64 by default.",
+                    "maximum": 65536,
                     "minimum": 1,
                     "type": [
                       "integer",
@@ -2885,19 +3149,40 @@
                     ]
                   },
                   "colormap": {
-                    "description": "heatmap and image: the colour map, such as viridis.",
-                    "maxLength": 64,
+                    "description": "heatmap, points and image: the colormap; viridis by default, greys for a one-channel image.",
+                    "enum": [
+                      "viridis",
+                      "magma",
+                      "rdbu",
+                      "greys",
+                      null
+                    ],
                     "type": [
                       "string",
                       "null"
                     ]
                   },
                   "columns": {
-                    "description": "table: the columns to show, in order.",
+                    "description": "table: the columns to show, in order, each once.",
                     "items": {
+                      "maxLength": 255,
+                      "minLength": 1,
                       "type": "string"
                     },
                     "maxItems": 256,
+                    "minItems": 1,
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "range": {
+                    "description": "heatmap and image: the values at the ends of the colormap; histogram: the binned range; [min, max] with min below max.",
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
                     "type": [
                       "array",
                       "null"
@@ -2905,22 +3190,68 @@
                   },
                   "text": {
                     "description": "text: static text to show.",
-                    "maxLength": 4096,
+                    "maxLength": 16384,
                     "type": [
                       "string",
                       "null"
                     ]
                   },
                   "x_label": {
-                    "description": "The label of the x axis.",
+                    "description": "series, heatmap, points and histogram: the label of the x axis.",
                     "maxLength": 256,
                     "type": [
                       "string",
                       "null"
                     ]
                   },
+                  "x_log": {
+                    "description": "series: a log scale on the x axis.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "x_range": {
+                    "description": "series: a fixed x range, [min, max] with min below max.",
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
                   "y_label": {
-                    "description": "The label of the y axis.",
+                    "description": "series, heatmap, points and histogram: the label of the y axis.",
+                    "maxLength": 256,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "y_log": {
+                    "description": "series: a log scale on the y axis; histogram: on the counts.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "y_range": {
+                    "description": "series: a fixed y range, [min, max] with min below max.",
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "z_label": {
+                    "description": "points: the label of the z axis.",
                     "maxLength": 256,
                     "type": [
                       "string",
@@ -2947,6 +3278,7 @@
               "title": {
                 "description": "The panel's title.",
                 "maxLength": 256,
+                "minLength": 1,
                 "type": [
                   "string",
                   "null"
@@ -2982,47 +3314,84 @@
       "result": {
         "additionalProperties": false,
         "properties": {
+          "applied": {
+            "description": "Whether the change was applied; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
           "panel": {
             "additionalProperties": false,
-            "description": "The panel as it is now.",
+            "description": "The panel as it is now, or would be after a dry run.",
             "properties": {
               "bind": {
                 "additionalProperties": false,
                 "description": "The panel's bindings, by slot.",
                 "properties": {
                   "color": {
-                    "description": "points: a value per point that sets its colour.",
+                    "description": "points: a value per point that sets its colour through the colormap.",
+                    "maxLength": 320,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": "string"
                   },
                   "positions": {
                     "description": "points: a tensor of shape [n, 2] or [n, 3], instead of x, y and z.",
+                    "maxLength": 320,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": "string"
                   },
                   "rows": {
-                    "description": "table: a tabular source whose rows are shown.",
+                    "description": "table: the id of a tabular source whose rows are shown.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                     "type": "string"
                   },
                   "size": {
                     "description": "points: a value per point that sets its size.",
+                    "maxLength": 320,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": "string"
                   },
                   "value": {
-                    "description": "text: a binding shown as a number or a string.",
+                    "description": "text: a column, shown as its last value, or a tensor of one element.",
+                    "maxLength": 320,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": "string"
                   },
                   "values": {
                     "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4].",
+                    "maxLength": 320,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": "string"
                   },
                   "x": {
                     "description": "series: the x values, a binding such as loss.step; points: the x coordinates.",
+                    "maxLength": 320,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": "string"
                   },
                   "y": {
-                    "description": "series: one binding or a list of bindings drawn as lines; points: the y coordinates.",
+                    "description": "series: one binding or a list of 1 to 16 bindings drawn as lines; points: the y coordinates.",
                     "items": {
+                      "maxLength": 320,
+                      "minLength": 1,
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                       "type": "string"
                     },
+                    "maxItems": 16,
+                    "maxLength": 320,
+                    "minItems": 1,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": [
                       "string",
                       "array"
@@ -3030,6 +3399,9 @@
                   },
                   "z": {
                     "description": "points: the z coordinates, for a 3-D cloud.",
+                    "maxLength": 320,
+                    "minLength": 1,
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$",
                     "type": "string"
                   }
                 },
@@ -3048,36 +3420,84 @@
                 "description": "The panel's options.",
                 "properties": {
                   "bins": {
-                    "description": "histogram: the number of bins.",
-                    "maximum": 1024,
+                    "description": "histogram: the number of bins, from 1 to 65536; 64 by default.",
+                    "maximum": 65536,
                     "minimum": 1,
                     "type": "integer"
                   },
                   "colormap": {
-                    "description": "heatmap and image: the colour map, such as viridis.",
-                    "maxLength": 64,
+                    "description": "heatmap, points and image: the colormap; viridis by default, greys for a one-channel image.",
+                    "enum": [
+                      "viridis",
+                      "magma",
+                      "rdbu",
+                      "greys"
+                    ],
                     "type": "string"
                   },
                   "columns": {
-                    "description": "table: the columns to show, in order.",
+                    "description": "table: the columns to show, in order, each once.",
                     "items": {
+                      "maxLength": 255,
+                      "minLength": 1,
                       "type": "string"
                     },
                     "maxItems": 256,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "range": {
+                    "description": "heatmap and image: the values at the ends of the colormap; histogram: the binned range; [min, max] with min below max.",
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
                     "type": "array"
                   },
                   "text": {
                     "description": "text: static text to show.",
-                    "maxLength": 4096,
+                    "maxLength": 16384,
                     "type": "string"
                   },
                   "x_label": {
-                    "description": "The label of the x axis.",
+                    "description": "series, heatmap, points and histogram: the label of the x axis.",
                     "maxLength": 256,
                     "type": "string"
                   },
+                  "x_log": {
+                    "description": "series: a log scale on the x axis.",
+                    "type": "boolean"
+                  },
+                  "x_range": {
+                    "description": "series: a fixed x range, [min, max] with min below max.",
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  },
                   "y_label": {
-                    "description": "The label of the y axis.",
+                    "description": "series, heatmap, points and histogram: the label of the y axis.",
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "y_log": {
+                    "description": "series: a log scale on the y axis; histogram: on the counts.",
+                    "type": "boolean"
+                  },
+                  "y_range": {
+                    "description": "series: a fixed y range, [min, max] with min below max.",
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  },
+                  "z_label": {
+                    "description": "points: the label of the z axis.",
                     "maxLength": 256,
                     "type": "string"
                   }
@@ -3099,7 +3519,7 @@
                 "type": "string"
               },
               "title": {
-                "description": "The panel's title, or null.",
+                "description": "The panel's title, or null when it has none.",
                 "type": [
                   "string",
                   "null"
@@ -3116,7 +3536,7 @@
             "type": "object"
           },
           "warnings": {
-            "description": "What the validator warns about.",
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -3145,16 +3565,23 @@
         },
         "required": [
           "panel",
-          "warnings"
+          "warnings",
+          "diff",
+          "applied"
         ],
         "type": "object"
       },
-      "summary": "Changes a panel of the open spec with a JSON merge patch (RFC 7386) of its title, primitive, bindings and options: the keys given replace the panel's own, a key set to null is removed, and bind and options merge key by key. The id cannot change. The id comes from spec.get. Undo restores the panel."
+      "summary": "Changes a panel of the open spec with a JSON merge patch (RFC 7386) of its title, primitive, bindings and options: the keys given replace the panel's own, a key set to null is removed, and bind and options merge key by key. The id cannot change. The id comes from spec.get. Undo restores the panel. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "args": {
         "additionalProperties": false,
         "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
           "id": {
             "description": "The panel's id in the open spec.",
             "maxLength": 64,
@@ -3180,17 +3607,55 @@
       "result": {
         "additionalProperties": false,
         "properties": {
+          "applied": {
+            "description": "Whether the change was applied; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
           "id": {
             "description": "The removed panel's id.",
             "type": "string"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
           }
         },
         "required": [
-          "id"
+          "id",
+          "warnings",
+          "diff",
+          "applied"
         ],
         "type": "object"
       },
-      "summary": "Removes a panel from the open spec and from its layout. The id comes from spec.get. Undo restores it in its place."
+      "summary": "Removes a panel from the open spec and from its layout. The id comes from spec.get. Undo restores it in its place. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "args": {
@@ -3263,6 +3728,11 @@
       "args": {
         "additionalProperties": false,
         "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
           "panel": {
             "description": "The id of the panel to place.",
             "maxLength": 64,
@@ -3317,9 +3787,17 @@
       "result": {
         "additionalProperties": false,
         "properties": {
+          "applied": {
+            "description": "Whether the change was applied; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
           "layout": {
             "additionalProperties": false,
-            "description": "The whole layout as it is now.",
+            "description": "The whole layout as it is now, or would be after a dry run.",
             "properties": {
               "nodes": {
                 "description": "The nodes of the layout, in any order. Each splits its space between its children or shows them as tabs.",
@@ -3327,8 +3805,11 @@
                   "additionalProperties": false,
                   "properties": {
                     "children": {
-                      "description": "Panel ids and node ids, in order; each node is used once.",
+                      "description": "Panel ids and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once.",
                       "items": {
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                         "type": "string"
                       },
                       "maxItems": 64,
@@ -3343,7 +3824,7 @@
                       "type": "string"
                     },
                     "ratio": {
-                      "description": "For a split of two children, the share of the first, from 0.05 to 0.95; null for an even split or for tabs.",
+                      "description": "For a split of exactly two children, the share of the first, from 0.05 to 0.95; null for an even split and for tabs.",
                       "maximum": 0.95,
                       "minimum": 0.05,
                       "type": [
@@ -3359,6 +3840,15 @@
                         "tabs"
                       ],
                       "type": "string"
+                    },
+                    "title": {
+                      "description": "The node's tab label when it is a child of tabs, or null.",
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     }
                   },
                   "required": [
@@ -3375,6 +3865,7 @@
                 "description": "The id of the top node, or of the one panel when the layout is a single panel.",
                 "maxLength": 64,
                 "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                 "type": "string"
               }
             },
@@ -3383,19 +3874,54 @@
               "nodes"
             ],
             "type": "object"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
           }
         },
         "required": [
-          "layout"
+          "layout",
+          "warnings",
+          "diff",
+          "applied"
         ],
         "type": "object"
       },
-      "summary": "Places a panel of the open spec next to another one, the target: beside puts it to the right, above and below above or below, tabbed in tabs with the target. ratio is the share of the space the placed panel gets, from 0.05 to 0.95, half by default. A panel already in the layout is moved. Undo restores the previous layout."
+      "summary": "Places a panel of the open spec next to another one, the target: beside puts it to the right, above and below above or below, tabbed in tabs with the target. ratio is the share of the space the placed panel gets, from 0.05 to 0.95, half by default. A panel already in the layout is moved. Undo restores the previous layout. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "args": {
         "additionalProperties": false,
         "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
           "layout": {
             "additionalProperties": false,
             "description": "The new layout.",
@@ -3406,8 +3932,11 @@
                   "additionalProperties": false,
                   "properties": {
                     "children": {
-                      "description": "Panel ids and node ids, in order; each node is used once.",
+                      "description": "Panel ids and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once.",
                       "items": {
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                         "type": "string"
                       },
                       "maxItems": 64,
@@ -3422,7 +3951,7 @@
                       "type": "string"
                     },
                     "ratio": {
-                      "description": "For a split of two children, the share of the first, from 0.05 to 0.95; null for an even split or for tabs.",
+                      "description": "For a split of exactly two children, the share of the first, from 0.05 to 0.95; null for an even split and for tabs.",
                       "maximum": 0.95,
                       "minimum": 0.05,
                       "type": [
@@ -3438,6 +3967,15 @@
                         "tabs"
                       ],
                       "type": "string"
+                    },
+                    "title": {
+                      "description": "The node's tab label when it is a child of tabs, or null.",
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     }
                   },
                   "required": [
@@ -3454,6 +3992,7 @@
                 "description": "The id of the top node, or of the one panel when the layout is a single panel.",
                 "maxLength": 64,
                 "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                 "type": "string"
               }
             },
@@ -3503,9 +4042,17 @@
       "result": {
         "additionalProperties": false,
         "properties": {
+          "applied": {
+            "description": "Whether the change was applied; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
           "layout": {
             "additionalProperties": false,
-            "description": "The layout as it is now.",
+            "description": "The layout as it is now, or would be after a dry run.",
             "properties": {
               "nodes": {
                 "description": "The nodes of the layout, in any order. Each splits its space between its children or shows them as tabs.",
@@ -3513,8 +4060,11 @@
                   "additionalProperties": false,
                   "properties": {
                     "children": {
-                      "description": "Panel ids and node ids, in order; each node is used once.",
+                      "description": "Panel ids and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once.",
                       "items": {
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                         "type": "string"
                       },
                       "maxItems": 64,
@@ -3529,7 +4079,7 @@
                       "type": "string"
                     },
                     "ratio": {
-                      "description": "For a split of two children, the share of the first, from 0.05 to 0.95; null for an even split or for tabs.",
+                      "description": "For a split of exactly two children, the share of the first, from 0.05 to 0.95; null for an even split and for tabs.",
                       "maximum": 0.95,
                       "minimum": 0.05,
                       "type": [
@@ -3545,6 +4095,15 @@
                         "tabs"
                       ],
                       "type": "string"
+                    },
+                    "title": {
+                      "description": "The node's tab label when it is a child of tabs, or null.",
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     }
                   },
                   "required": [
@@ -3561,6 +4120,7 @@
                 "description": "The id of the top node, or of the one panel when the layout is a single panel.",
                 "maxLength": 64,
                 "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
                 "type": "string"
               }
             },
@@ -3569,14 +4129,44 @@
               "nodes"
             ],
             "type": "object"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
           }
         },
         "required": [
-          "layout"
+          "layout",
+          "warnings",
+          "diff",
+          "applied"
         ],
         "type": "object"
       },
-      "summary": "Replaces the whole layout of the open spec. The layout is a flat list of nodes: each node splits its space horizontally or vertically between its children, with ratio the share of the first child, or shows them in tabs. A child is a panel id or another node's id, and root names the top node, or the one panel when there is only one. Every panel of the spec must appear once. Undo restores the previous layout."
+      "summary": "Replaces the whole layout of the open spec. The layout is a flat list of nodes: each node splits its space horizontally or vertically between its children, with ratio the share of the first child, or shows them in tabs. A child is a panel id or another node's id, and root names the top node, or the one panel when there is only one. Every panel of the spec should appear once; a panel left out is not drawn. Undo restores the previous layout. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "args": {
