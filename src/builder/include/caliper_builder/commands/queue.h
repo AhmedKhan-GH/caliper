@@ -14,7 +14,11 @@
 // reads the outcome later with approval_outcome() (the last 64 are kept).
 // A submit may also set approval_timeout: when the person has not decided by
 // then, the next drain() withdraws the approval and completes the future with
-// command.approval_timeout (journaled like a denial). Caliper API holds a call
+// command.approval_timeout (journaled like a denial). When an approval turns
+// out void because the content it was for changed (CommandRegistry::
+// approve() with reissue), a waiting caller keeps waiting, on the new card
+// and with its wait counted again; the approve() future answers
+// command.needs_approval with the new approval id. Caliper API holds a call
 // from the mcp and agent origins this way for up to 120 seconds.
 // shutdown() completes every waiting future, those waiting for an approval
 // included, with command.shutdown, and drops the registry's pending
@@ -108,6 +112,7 @@ private:
     struct Waiting {
         std::promise<CommandResult> promise;
         std::optional<std::chrono::steady_clock::time_point> deadline;
+        std::chrono::milliseconds timeout{0};  // the caller's wait, given again to a reissued card
     };
     std::future<CommandResult> enqueue(Item item);
     void remember(const std::string& approval, const CommandResult& result);

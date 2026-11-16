@@ -62,6 +62,7 @@ caliper_builder_add_tests(session
         tests/test_preview.cpp
         tests/test_context_bundle.cpp
         tests/test_review.cpp
+        tests/test_content_review.cpp
         tests/test_resolve.cpp
         tests/test_panel_data.cpp
         tests/test_served_sources.cpp

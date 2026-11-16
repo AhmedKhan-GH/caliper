@@ -3,6 +3,7 @@
 #include <caliper_builder/catalog/catalog_entry.h>
 #include <caliper_builder/commands/command_table.h>
 #include <caliper_builder/commands/schema.h>
+#include <caliper_builder/commands/sha256.h>
 #include <caliper_builder/loaders/inference.h>
 #include <caliper_builder/loaders/loader.h>
 #include <caliper_builder/loaders/paths.h>
@@ -178,6 +179,15 @@ struct Session::Impl {
     std::mutex review_mutex;
     std::deque<Reviewed> reviewed;
     std::pair<std::string, json> last_review;
+    // Approvals bound to content (an overwrite of a saved applet, or the
+    // replacement of an open spec with unsaved changes): the document and the
+    // digest of what the card showed, by invocation key, oldest first out.
+    struct Bound {
+        std::string key;
+        std::uint64_t doc = 0;
+        std::string digest;
+    };
+    std::deque<Bound> bound;  // under review_mutex
     std::mutex close_mutex;
     bool closed = false;
 
@@ -979,6 +989,102 @@ struct Session::Impl {
         return out;
     }
 
+    // ---- approvals bound to content -------------------------------------------
+
+    // What an overwrite or a replacement would write or open, as its card
+    // shows it: the diff and warnings, and the document and digest it is
+    // bound to. `applies` is false when the invocation is not one of these
+    // or would fail, so that it needs no card of this kind.
+    struct Content {
+        bool applies = false;
+        std::uint64_t doc = 0;
+        std::string digest;
+        json review;
+    };
+
+    static bool replaces_document(const std::string& name) {
+        return name == "spec.new" || name == "spec.open" || name == "applet.open";
+    }
+
+    Content content_of(const CommandInvocation& inv) {
+        Content out;
+        std::lock_guard<std::mutex> lock(doc_mutex);
+        if (!doc) return out;
+        std::string before;
+        std::string after;
+        std::string before_label;
+        std::string after_label;
+        std::vector<spec::Diagnostic> diagnostics;
+        if (inv.name == "applet.save") {
+            // The saved file against the open spec it would be overwritten with.
+            const std::string id = str_arg(inv.args, "id", doc->spec.applet.id);
+            if (!valid_id(id)) return out;
+            spec::Spec saved = doc->spec;
+            saved.applet.id = id;
+            after = spec::to_toml(saved);
+            const fs::path file = ws() / "applets" / fs::u8path(id) / fs::u8path(id + ".spec.toml");
+            if (read_file_bounded(file.u8string(), spec::limits::kTextBytes, &before, "spec.too_large")) before.clear();
+            before_label = after_label = "applets/" + id + "/" + id + ".spec.toml";
+            diagnostics = spec::validate(saved, resolver()).diagnostics;
+        } else if (replaces_document(inv.name)) {
+            // The open spec with unsaved changes against the one that would replace it.
+            if (!doc->dirty()) return out;
+            spec::Spec next;
+            if (inv.name == "spec.new") {
+                next = new_spec_from_args(inv.args);
+                diagnostics = spec::validate(next, resolver()).diagnostics;
+                if (first_spec_error(diagnostics)) return out;
+            } else {
+                LoadedSpec loaded = inv.name == "spec.open" ? load_spec_file(str_arg(inv.args, "path"), resolver())
+                                                            : load_applet(str_arg(inv.args, "id"), resolver());
+                if (loaded.error) return out;
+                next = std::move(loaded.spec);
+                diagnostics = std::move(loaded.diagnostics);
+            }
+            before = spec::to_toml(doc->spec);
+            after = spec::to_toml(next);
+            before_label = spec_label();
+            after_label = next.applet.id + ".spec.toml";
+        } else {
+            return out;
+        }
+        out.applies = true;
+        out.doc = doc->id;
+        out.digest = command_sha256_hex(before + std::string(1, '\0') + after);
+        out.review = {{"diff", unified_line_diff(before, after, "a/" + before_label, "b/" + after_label)},
+                      {"warnings", warnings_json(diagnostics)}};
+        return out;
+    }
+
+    // Binds the invocation's approval to the content its card shows, and
+    // keeps the review for the registry; null when it does not apply.
+    json bind_content(const CommandInvocation& inv) {
+        Content c = content_of(inv);
+        if (!c.applies) return nullptr;
+        const std::string key = invocation_key(inv);
+        std::lock_guard<std::mutex> lock(review_mutex);
+        bound.push_back(Bound{key, c.doc, c.digest});
+        while (bound.size() > 256) bound.pop_front();
+        last_review = {key, c.review};
+        return c.review;
+    }
+
+    // The approval check: an approval bound to content holds only while the
+    // document and what it would write or open are what the card showed.
+    bool approval_holds(const CommandInvocation& inv) {
+        const std::string key = invocation_key(inv);
+        std::optional<Bound> b;
+        {
+            std::lock_guard<std::mutex> lock(review_mutex);
+            const auto it = std::find_if(bound.begin(), bound.end(), [&](const Bound& x) { return x.key == key; });
+            if (it == bound.end()) return true;
+            b = *it;
+            bound.erase(it);
+        }
+        const Content now = content_of(inv);
+        return now.applies && now.doc == b->doc && now.digest == b->digest;
+    }
+
     CommandOutput review_status(const CommandContext& ctx) {
         const CommandOrigin o = ctx.invocation.origin;
         return CommandOutput::ok(
@@ -1470,8 +1576,14 @@ struct Session::Impl {
                 std::lock_guard<std::mutex> lock(doc_mutex);
                 if (doc) id = doc->spec.applet.id;
             }
-            return applet_saved(id) ? ApprovalDecision::ask : ApprovalDecision::allow;
+            if (!applet_saved(id)) return ApprovalDecision::allow;
+            bind_content(inv);  // the card shows the file as it would be written
+            return ApprovalDecision::ask;
         }
+        // Replacing an open spec with unsaved changes is a change to the open
+        // spec, reviewed as an edit is, with the diff of the two documents.
+        if (replaces_document(inv.name) && review_for(inv.origin) && !bind_content(inv).is_null())
+            return ApprovalDecision::ask;
         // With review on for its origin, an edit that changes the open spec
         // waits for the person, with its diff.
         if (!review_of(inv).is_null()) return ApprovalDecision::ask;
@@ -1521,6 +1633,8 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
             [raw](const CommandDescriptor& d, const CommandInvocation& inv) { return raw->policy(d, inv); });
         im.registry->set_approval_review(
             [raw](const CommandDescriptor&, const CommandInvocation& inv) { return raw->parked_review(inv); });
+        im.registry->set_approval_check(
+            [raw](const CommandDescriptor&, const CommandInvocation& inv) { return raw->approval_holds(inv); });
         for (CommandOrigin o : {CommandOrigin::ui, CommandOrigin::builder, CommandOrigin::agent, CommandOrigin::mcp,
                                 CommandOrigin::api})
             im.review_on[static_cast<std::size_t>(o)].store(im.options.review.on(o));

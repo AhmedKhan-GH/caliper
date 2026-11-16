@@ -228,6 +228,11 @@ void CommandRegistry::set_approval_review(ApprovalReview review) {
     review_ = std::move(review);
 }
 
+void CommandRegistry::set_approval_check(ApprovalCheck check) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    check_ = std::move(check);
+}
+
 void CommandRegistry::set_journal(CommandJournal* journal) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     journal_ = journal;
@@ -373,34 +378,40 @@ CommandResult CommandRegistry::invoke(CommandInvocation inv) {
     }
     if (decision == ApprovalDecision::deny)
         return finish_refused(inv, entry, "command.denied", inv.name + " was denied by the approval policy.");
-    if (decision == ApprovalDecision::ask) {
-        if (pending_.size() >= options_.max_pending)
-            return CommandResult::failure(
-                inv.id, Error("command.too_many_pending",
-                              "Too many invocations already wait for the person's approval; try again later.", ""));
-        Parked parked;
-        parked.approval = "ap-" + std::to_string(next_approval_++);
-        parked.invocation = inv;
-        parked.requested_at = now_text();
-        parked.steps = steps;
-        if (review_) {
-            try {
-                parked.review = review_(entry.descriptor, inv);
-            } catch (...) {
-                parked.review = nullptr;  // the card shows no review rather than nothing at all
-            }
-        }
-        const std::string why = parked.review.is_null()
-                                    ? " needs the person's approval in Caliper, because it deletes or overwrites saved "
-                                      "data or runs a Python loader. It runs once they approve it."
-                                    : " changes the open spec, and the person reviews such changes in Caliper before "
-                                      "they apply. It runs once they approve it.";
-        CommandResult r = CommandResult::failure(inv.id, Error("command.needs_approval", inv.name + why, ""));
-        r.approval = parked.approval;
-        pending_.push_back(std::move(parked));
-        return r;
-    }
+    if (decision == ApprovalDecision::ask) return park(inv, entry, std::move(steps));
     return run(inv, entry, steps);
+}
+
+CommandResult CommandRegistry::park(const CommandInvocation& inv, const Entry& entry, std::vector<std::uint64_t> steps) {
+    if (pending_.size() >= options_.max_pending)
+        return CommandResult::failure(
+            inv.id, Error("command.too_many_pending",
+                          "Too many invocations already wait for the person's approval; try again later.", ""));
+    Parked parked;
+    parked.approval = "ap-" + std::to_string(next_approval_++);
+    parked.invocation = inv;
+    parked.requested_at = now_text();
+    parked.steps = std::move(steps);
+    if (review_) {
+        try {
+            parked.review = review_(entry.descriptor, inv);
+        } catch (...) {
+            parked.review = nullptr;  // the card shows no review rather than nothing at all
+        }
+    }
+    const std::string why =
+        parked.review.is_null()
+            ? " needs the person's approval in Caliper, because it deletes or overwrites saved data or runs a Python "
+              "loader. It runs once they approve it."
+        : inv.name == "applet.save"
+            ? " overwrites a saved applet, and the person reviews the content it writes in Caliper first. It runs "
+              "once they approve it."
+            : " changes the open spec, and the person reviews such changes in Caliper before they apply. It runs "
+              "once they approve it.";
+    CommandResult r = CommandResult::failure(inv.id, Error("command.needs_approval", inv.name + why, ""));
+    r.approval = parked.approval;
+    pending_.push_back(std::move(parked));
+    return r;
 }
 
 CommandResult CommandRegistry::finish_refused(const CommandInvocation& inv, const Entry& entry, const std::string& code,
@@ -412,7 +423,7 @@ CommandResult CommandRegistry::finish_refused(const CommandInvocation& inv, cons
     return CommandResult::failure(inv.id, Error(code, std::move(message), ""));
 }
 
-CommandResult CommandRegistry::approve(const std::string& approval_id) {
+CommandResult CommandRegistry::approve(const std::string& approval_id, bool reissue) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     const auto it = std::find_if(pending_.begin(), pending_.end(),
                                  [&](const Parked& p) { return p.approval == approval_id; });
@@ -430,6 +441,27 @@ CommandResult CommandRegistry::approve(const std::string& approval_id) {
                                             it->invocation.name + " runs only on the app's frame thread.", "name"));
     Parked parked = std::move(*it);
     pending_.erase(it);
+    bool holds = true;
+    if (check_) {
+        try {
+            holds = check_(cmd->second.descriptor, parked.invocation);
+        } catch (...) {
+            holds = false;
+        }
+    }
+    if (!holds) {
+        // What the person approved changed while the card waited.
+        if (!reissue)
+            return finish_refused(parked.invocation, cmd->second, "history.conflict",
+                                  parked.invocation.name +
+                                      " was approved for content that changed while the person decided, so it did "
+                                      "not run; send it again to have the new content approved.");
+        const ApprovalDecision again = ask_policy(cmd->second.descriptor, parked.invocation);
+        if (again == ApprovalDecision::deny)
+            return finish_refused(parked.invocation, cmd->second, "command.denied",
+                                  parked.invocation.name + " was denied by the approval policy.");
+        if (again == ApprovalDecision::ask) return park(parked.invocation, cmd->second, parked.steps);
+    }
     return run(parked.invocation, cmd->second, parked.steps);
 }
 

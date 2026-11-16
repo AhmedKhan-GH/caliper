@@ -122,11 +122,19 @@ public:
 
     void set_approval_policy(ApprovalPolicy policy);  // empty: the default policy
     void set_approval_review(ApprovalReview review);  // empty: no review is kept
+    void set_approval_check(ApprovalCheck check);     // empty: an approval always holds
     void set_journal(CommandJournal* journal);        // not owned; may be null
     void set_frame_thread(std::optional<std::thread::id> id);
 
     CommandResult invoke(CommandInvocation invocation);
-    CommandResult approve(const std::string& approval_id);
+    // Runs a parked invocation the person approved. When the approval check
+    // says that the content it was approved for changed, the approval is
+    // void: with `reissue` (a caller still waits for the outcome), the policy
+    // is asked again and, if it asks, the invocation is parked anew with the
+    // review of the new content and the call answers command.needs_approval
+    // with the new approval id; without, it answers history.conflict, which
+    // is journaled like a denial.
+    CommandResult approve(const std::string& approval_id, bool reissue = false);
     CommandResult deny(const std::string& approval_id);
     // Withdraws an invocation whose wait for approval ran out: it is journaled
     // like a denial and answers command.approval_timeout.
@@ -179,6 +187,7 @@ private:
     CommandResult finish_refused(const CommandInvocation& inv, const Entry& entry, const std::string& code,
                                  std::string message);
     CommandResult decide(const std::string& approval_id, const std::string& code);
+    CommandResult park(const CommandInvocation& inv, const Entry& entry, std::vector<std::uint64_t> steps);
 
     RegistryOptions options_;
     mutable std::recursive_mutex mutex_;
@@ -189,6 +198,7 @@ private:
     CommandJournal* journal_ = nullptr;
     ApprovalPolicy policy_;
     ApprovalReview review_;
+    ApprovalCheck check_;
     std::optional<std::thread::id> frame_thread_;
     std::uint64_t next_invocation_ = 1;
     std::uint64_t next_approval_ = 1;

@@ -30,6 +30,14 @@ ApprovalDecision default_approval_policy(const CommandDescriptor& descriptor, co
 
 using ApprovalReview = std::function<nlohmann::json(const CommandDescriptor&, const CommandInvocation&)>;
 
+// An ApprovalCheck, when the registry has one, is asked before an approved
+// invocation runs: false when what the person approved no longer holds,
+// because the content its review showed changed while the card waited (the
+// session binds an overwrite of a saved applet, and the replacement of an
+// open spec with unsaved changes, to the content shown). The approval is then
+// void (CommandRegistry::approve()). A check that throws gives false.
+using ApprovalCheck = std::function<bool(const CommandDescriptor&, const CommandInvocation&)>;
+
 // One invocation waiting for the person's decision, as the UI shows it.
 struct PendingApproval {
     std::string approval;  // the approval id, "ap-<n>"

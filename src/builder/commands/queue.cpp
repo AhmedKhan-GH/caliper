@@ -116,6 +116,7 @@ std::size_t CommandQueue::drain(std::size_t max) {
                 } else {
                     Waiting w;
                     w.promise = std::move(item.promise);
+                    w.timeout = item.timeout;
                     if (item.timeout.count() > 0) w.deadline = options_.now() + item.timeout;
                     waiting_approval_.emplace(r.approval, std::move(w));
                 }
@@ -124,16 +125,30 @@ std::size_t CommandQueue::drain(std::size_t max) {
             item.promise.set_value(std::move(r));
             continue;
         }
+        bool waited = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            waited = waiting_approval_.count(item.approval) > 0;
+        }
+        // A caller that waits gets a new card when the approved content changed.
         CommandResult r =
-            item.kind == Kind::approve ? registry_.approve(item.approval) : registry_.deny(item.approval);
+            item.kind == Kind::approve ? registry_.approve(item.approval, waited) : registry_.deny(item.approval);
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (r.error.code != "command.unknown_approval" && r.error.code != "command.wrong_thread") {
                 remember(item.approval, r);
                 const auto it = waiting_approval_.find(item.approval);
                 if (it != waiting_approval_.end()) {
-                    it->second.promise.set_value(r);
-                    waiting_approval_.erase(it);
+                    if (r.error.code == "command.needs_approval" && !r.approval.empty() &&
+                        r.approval != item.approval) {
+                        Waiting w = std::move(it->second);
+                        waiting_approval_.erase(it);
+                        if (w.timeout.count() > 0) w.deadline = options_.now() + w.timeout;
+                        waiting_approval_.emplace(r.approval, std::move(w));
+                    } else {
+                        it->second.promise.set_value(r);
+                        waiting_approval_.erase(it);
+                    }
                 }
             }
         }
