@@ -101,6 +101,7 @@ struct ChatPane::Impl {
     std::unique_ptr<SideChat> chat;
     std::vector<caliper_builder::PendingApproval> pending;   // as read while the registry was free
     std::optional<ChatDraft> draft;   // a handoff that came before the chat was made
+    caliper_builder::Session* session = nullptr;   // the app's, as of the last frame
 
     void save() {
         std::string why;
@@ -117,6 +118,15 @@ struct ChatPane::Impl {
         SideChat::Hooks h;
         h.pending_approvals = [this] { return pending; };
         h.show_approval = hooks.show_approval;
+        h.approval_outcome = [this](const std::string& id) -> std::string {
+            if (!session) return {};
+            const std::optional<caliper_builder::CommandResult> r = session->queue().approval_outcome(id);
+            if (!r) return {};
+            if (r->ok) return "approved";
+            if (r->error.code == "command.denied") return "denied";
+            if (r->error.code == "command.approval_timeout") return "timed out";
+            return "failed";
+        };
         h.settings_changed = [this](const ChatSettings& s) {
             settings.chat = s;
             save();
@@ -161,6 +171,7 @@ void ChatPane::frame(AppSession& app) {
         app.ensure_open();   // the workspace the agent works in
         im.make(app);
     }
+    im.session = app.session();
     if (!im.chat) return;
     // The pending approvals, read only while no long command holds the registry.
     if (caliper_builder::Session* s = app.session(); s && !app.worker_busy()) im.pending = s->registry().pending_approvals();

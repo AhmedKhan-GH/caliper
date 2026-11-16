@@ -325,7 +325,8 @@ TEST_CASE("chat pane: the agent's command that waits for approval is one row, an
     CHECK(rows == 1);
     REQUIRE_FALSE(approval.empty());
     session.queue().approve(approval);
-    REQUIRE(a.run(pane, [&] { return pane.has_item("approval", "panel.create", "decided"); }));
+    // Decided, the row says the outcome the queue recorded.
+    REQUIRE(a.run(pane, [&] { return pane.has_item("approval", "panel.create", "approved"); }));
     REQUIRE(held.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
     CHECK(held.get().ok);
     std::ofstream(dir / "gates" / "go").close();

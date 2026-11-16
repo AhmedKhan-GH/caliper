@@ -531,3 +531,128 @@ bind = { x = "metrics.step", y = ["metrics.lr"] }
     CHECK(chat_compact_diff("/w/loader.py", before, after).empty());
     CHECK(chat_compact_diff("/w/x.spec.toml", "title = \"Old\"\n", "title = \"New\"\n").empty());
 }
+
+namespace {
+
+ChatItem call(const std::string& id, const std::string& command, const std::string& status) {
+    ChatItem it;
+    it.kind = ChatItem::Kind::tool;
+    it.tool.id = id;
+    it.tool.title = "mcp__caliper__" + caliper_builder::command_tool_name(command);
+    it.tool.status = status;
+    it.command = command;
+    return it;
+}
+
+ChatItem approval(const std::string& id, const std::string& command, const std::string& answer) {
+    ChatItem it;
+    it.kind = ChatItem::Kind::approval;
+    it.approval = id;
+    it.command = command;
+    it.answer = answer;
+    return it;
+}
+
+ChatItem said(const std::string& text) {
+    ChatItem it;
+    it.kind = ChatItem::Kind::agent;
+    it.text = text;
+    return it;
+}
+
+}  // namespace
+
+TEST_CASE("side chat rows: a run of one command folds into one group with its approvals") {
+    std::vector<ChatItem> items;
+    for (int i = 0; i < 7; ++i) {
+        items.push_back(call("s" + std::to_string(i), "source.add", "completed"));
+        items.push_back(approval("ap-" + std::to_string(i), "source.add", "approved"));
+    }
+    items.push_back(said("Opened it."));
+    const std::vector<ChatRow> rows = chat_rows(items);
+    REQUIRE(rows.size() == 2);
+    const ChatRow& g = rows[0];
+    CHECK(g.kind == ChatRow::Kind::group);
+    CHECK(g.command == "source.add");
+    CHECK(g.caliper);
+    CHECK(g.count == 7);
+    CHECK(g.members.size() == 14);   // the calls and their decided approvals
+    CHECK(g.approvals == "approved");
+    CHECK(g.status == "done");
+    CHECK(chat_group_summary(g) == "approved \xC2\xB7 done");
+    CHECK_FALSE(g.alert);
+    CHECK_FALSE(g.expanded);   // closed until the person opens it
+    CHECK(rows[1].kind == ChatRow::Kind::item);
+    CHECK(rows[1].item == 14);
+    // The person opens it.
+    CHECK(chat_rows(items, {{g.key, true}})[0].expanded);
+    // A lone call without approvals stays a plain row.
+    const std::vector<ChatItem> one = {call("x", "spec.get", "completed")};
+    REQUIRE(chat_rows(one).size() == 1);
+    CHECK(chat_rows(one)[0].kind == ChatRow::Kind::item);
+    // A lone call with its approval is a group of one.
+    const std::vector<ChatItem> approved = {call("p", "panel.create", "completed"), approval("ap-9", "panel.create", "approved")};
+    REQUIRE(chat_rows(approved).size() == 1);
+    CHECK(chat_rows(approved)[0].count == 1);
+    CHECK(chat_group_summary(chat_rows(approved)[0]) == "approved \xC2\xB7 done");
+}
+
+TEST_CASE("side chat rows: a run is broken by another command, and by the agent's text") {
+    const std::vector<ChatItem> items = {call("a", "source.add", "completed"), call("b", "source.add", "completed"),
+                                         call("c", "panel.create", "completed"), call("d", "source.add", "completed"),
+                                         said("And one more."), call("e", "source.add", "completed"),
+                                         call("f", "source.add", "completed")};
+    const std::vector<ChatRow> rows = chat_rows(items);
+    REQUIRE(rows.size() == 5);
+    CHECK(rows[0].kind == ChatRow::Kind::group);
+    CHECK(rows[0].count == 2);
+    CHECK(rows[0].approvals.empty());
+    CHECK(chat_group_summary(rows[0]) == "done");
+    CHECK(rows[1].kind == ChatRow::Kind::item);   // panel.create alone
+    CHECK(rows[1].item == 2);
+    CHECK(rows[2].kind == ChatRow::Kind::item);   // source.add alone again
+    CHECK(rows[2].item == 3);
+    CHECK(rows[3].kind == ChatRow::Kind::item);   // the text
+    CHECK(rows[4].kind == ChatRow::Kind::group);
+    CHECK(rows[4].count == 2);
+    CHECK(rows[4].members == std::vector<size_t>{5, 6});
+}
+
+TEST_CASE("side chat rows: a waiting approval shows on its own after its group until it is decided") {
+    std::vector<ChatItem> items = {call("a", "source.add", "completed"), approval("ap-1", "source.add", "approved"),
+                                   call("b", "source.add", "in_progress"), approval("ap-2", "source.add", "")};
+    std::vector<ChatRow> rows = chat_rows(items);
+    REQUIRE(rows.size() == 2);
+    CHECK(rows[0].kind == ChatRow::Kind::group);
+    CHECK(rows[0].count == 2);
+    CHECK(rows[0].status == "running");
+    CHECK(rows[0].mark == "in_progress");
+    CHECK(rows[0].members == std::vector<size_t>{0, 1, 2});
+    CHECK(rows[1].kind == ChatRow::Kind::waiting_approval);
+    CHECK(rows[1].item == 3);
+    // Decided: it folds into the group.
+    items[3].answer = "approved";
+    items[2].tool.status = "completed";
+    rows = chat_rows(items);
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].members.size() == 4);
+    CHECK(chat_group_summary(rows[0]) == "approved \xC2\xB7 done");
+}
+
+TEST_CASE("side chat rows: a denied approval or a failed call makes the group an alert, open by default") {
+    const std::vector<ChatItem> items = {call("a", "source.add", "completed"), approval("ap-1", "source.add", "approved"),
+                                         call("b", "source.add", "failed"), approval("ap-2", "source.add", "denied")};
+    const std::vector<ChatRow> rows = chat_rows(items);
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].alert);
+    CHECK(rows[0].expanded);
+    CHECK(rows[0].status == "failed");
+    CHECK(rows[0].approvals == "1 denied \xC2\xB7 1 approved");
+    CHECK(chat_group_summary(rows[0]) == "1 denied \xC2\xB7 1 approved \xC2\xB7 failed");
+    // The person may close it.
+    CHECK_FALSE(chat_rows(items, {{rows[0].key, false}})[0].expanded);
+    // A call that failed without an approval is an alert too.
+    const std::vector<ChatItem> failed = {call("a", "layout.set", "completed"), call("b", "layout.set", "failed")};
+    CHECK(chat_rows(failed)[0].alert);
+    CHECK(chat_rows(failed)[0].expanded);
+}

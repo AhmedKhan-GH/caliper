@@ -93,6 +93,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -259,7 +260,8 @@ struct ChatItem {
     std::vector<caliper_builder::acp::PlanEntry> plan;
     std::uint64_t permission = 0;
     std::vector<caliper_builder::acp::PermissionOption> options;   // the options offered
-    std::string answer;    // permission: the option's name, or "withdrawn"; approval: "decided"; "" while open
+    std::string answer;    // permission: the option's name, or "withdrawn"; approval: its outcome (approved,
+                           // denied, timed out, failed) or "decided"; "" while it waits
     std::string diff;      // permission, tool: the unified diff of its diff content
     std::string diff_path; // the diff's file
     // permission: the compact diff of a spec file's edit (chat_compact_diff()),
@@ -268,6 +270,35 @@ struct ChatItem {
     std::string approval;  // approval: its id
     bool expanded = false; // thought: shown in full; permission: the full diff instead of the compact one
 };
+
+// The conversation as it is shown: the items, with consecutive calls of
+// the same command folded into one group row. A run is the tool calls of one
+// command (or, for an agent's own tool, one title) with nothing else between
+// them but the decided approvals of that command, which fold into it; a
+// waiting approval shows as a row of its own after its group, until it is
+// decided. A group says its count, its approvals' outcome and its status
+// ("source.add ×9 · approved · done"); one with a failure or a denial is an
+// alert and opens by default. A lone call without approvals stays a plain row.
+struct ChatRow {
+    enum class Kind { item, group, waiting_approval };
+    Kind kind = Kind::item;
+    size_t item = 0;                 // item, waiting_approval: the item's index
+    std::vector<size_t> members;     // group: the calls and their decided approvals, in order
+    std::string key;                 // group: its first call's id, the key of `open`
+    std::string command;             // group: the command, or the tool's title
+    bool caliper = false;            // group: a Caliper command
+    int count = 0;                   // group: the calls
+    std::string approvals;           // group: "approved", "1 denied · 2 approved", ...; "" for none
+    std::string status;              // group: the status in a word (chat_tool_status_word())
+    std::string mark;                // group: the status for the mark (in_progress, completed, failed, ...)
+    bool alert = false;              // group: a call failed or an approval was not given
+    bool expanded = false;           // group: shown with its members
+};
+// `open` holds the groups the person opened or closed, by key; the others
+// are open when they are an alert.
+std::vector<ChatRow> chat_rows(const std::vector<ChatItem>& items, const std::map<std::string, bool>& open = {});
+// "approved · done", the words after a group's command and count.
+std::string chat_group_summary(const ChatRow& row);
 
 class SideChat {
 public:
@@ -287,6 +318,9 @@ public:
         // A click on an approval's row: the app points at its card in the
         // approval cards' strip.
         std::function<void(const std::string& approval)> show_approval;
+        // The outcome of an approval that is no longer pending: approved,
+        // denied, timed out or failed; "" when it is not known.
+        std::function<std::string(const std::string& approval)> approval_outcome;
         // The settings changed (an agent chosen, a custom command): the app saves them.
         std::function<void(const ChatSettings&)> settings_changed;
         // Just before an agent starts, on the frame thread: the app may fill
@@ -410,6 +444,7 @@ private:
     std::string custom_line_, custom_name_;
     caliper_builder::Error custom_error_;
     bool diagnostics_open_ = false;
+    std::map<std::string, bool> group_open_;   // groups the person opened or closed
     size_t drawn_items_ = 0;
     bool follow_ = true;
 };

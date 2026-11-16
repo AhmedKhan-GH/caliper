@@ -926,7 +926,10 @@ void SideChat::mirror_approvals() {
         a.command = p.invocation.name;
     }
     for (ChatItem& it : items_)
-        if (it.kind == ChatItem::Kind::approval && it.answer.empty() && !ids.count(it.approval)) it.answer = "decided";
+        if (it.kind == ChatItem::Kind::approval && it.answer.empty() && !ids.count(it.approval)) {
+            const std::string outcome = hooks_.approval_outcome ? hooks_.approval_outcome(it.approval) : std::string();
+            it.answer = outcome.empty() ? "decided" : outcome;
+        }
 }
 
 std::string SideChat::tag() const {
@@ -962,6 +965,96 @@ std::vector<ChatAction> SideChat::header_actions() const {
 
 ChatAction SideChat::input_action() const {
     return state_ == ChatState::running || state_ == ChatState::cancelling ? ChatAction::cancel : ChatAction::send;
+}
+
+// ---- the rows -----------------------------------------------------------------------------
+
+std::vector<ChatRow> chat_rows(const std::vector<ChatItem>& items, const std::map<std::string, bool>& open) {
+    std::vector<ChatRow> out;
+    auto key_of = [](const ChatItem& it) { return it.command.empty() ? it.tool.title : it.command; };
+    size_t i = 0;
+    while (i < items.size()) {
+        const ChatItem& it = items[i];
+        if (it.kind == ChatItem::Kind::approval && it.answer.empty()) {
+            ChatRow r;
+            r.kind = ChatRow::Kind::waiting_approval;
+            r.item = i++;
+            out.push_back(std::move(r));
+            continue;
+        }
+        if (it.kind != ChatItem::Kind::tool) {
+            ChatRow r;
+            r.item = i++;
+            out.push_back(std::move(r));
+            continue;
+        }
+        // A run of calls of one command and the decided approvals of that command.
+        const std::string key = key_of(it);
+        ChatRow g;
+        g.kind = ChatRow::Kind::group;
+        g.key = it.tool.id;
+        g.command = key;
+        g.caliper = !it.command.empty();
+        std::vector<size_t> waiting;
+        std::map<std::string, int> outcomes;   // a decided approval's answer, counted
+        bool failed = false, running = false, pending = false, stopped = false;
+        size_t j = i;
+        for (; j < items.size(); ++j) {
+            const ChatItem& m = items[j];
+            if (m.kind == ChatItem::Kind::tool && key_of(m) == key) {
+                g.members.push_back(j);
+                ++g.count;
+                const std::string& st = m.tool.status;
+                failed = failed || st == "failed";
+                stopped = stopped || st == "cancelled";
+                running = running || st == "in_progress";
+                pending = pending || st.empty() || st == "pending";
+            } else if (m.kind == ChatItem::Kind::approval && g.caliper && m.command == key) {
+                if (m.answer.empty()) {
+                    waiting.push_back(j);
+                } else {
+                    g.members.push_back(j);
+                    ++outcomes[m.answer];
+                }
+            } else {
+                break;
+            }
+        }
+        const bool approvals = !outcomes.empty();
+        if (g.count == 1 && !approvals) {
+            // A lone call: a plain row, as before.
+            ChatRow r;
+            r.item = i;
+            out.push_back(std::move(r));
+        } else {
+            // "approved" when every approval was given; otherwise each outcome with its count.
+            std::string a;
+            const int approved = outcomes.count("approved") ? outcomes["approved"] : 0;
+            for (const char* o : {"denied", "timed out", "failed", "decided"})
+                if (outcomes.count(o)) a += (a.empty() ? "" : " \xC2\xB7 ") + std::to_string(outcomes[o]) + " " + o;
+            if (approved) a += a.empty() ? std::string("approved") : " \xC2\xB7 " + std::to_string(approved) + " approved";
+            g.approvals = a;
+            const bool refused = outcomes.count("denied") || outcomes.count("timed out") || outcomes.count("failed");
+            g.mark = failed ? "failed" : stopped ? "cancelled" : running ? "in_progress" : pending ? "pending" : "completed";
+            g.status = chat_tool_status_word(g.mark);
+            g.alert = failed || refused;
+            const auto o = open.find(g.key);
+            g.expanded = o != open.end() ? o->second : g.alert;
+            out.push_back(std::move(g));
+        }
+        for (size_t w : waiting) {
+            ChatRow r;
+            r.kind = ChatRow::Kind::waiting_approval;
+            r.item = w;
+            out.push_back(std::move(r));
+        }
+        i = j;
+    }
+    return out;
+}
+
+std::string chat_group_summary(const ChatRow& row) {
+    return row.approvals.empty() ? row.status : row.approvals + " \xC2\xB7 " + row.status;
 }
 
 // ---- the layout ---------------------------------------------------------------------------
@@ -1340,8 +1433,9 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
             ImDrawList* cdl = ImGui::GetWindowDrawList();
             const bool at_bottom = ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f;
             const float pad = m.pad + std::round(2.0f * s);
-            const float x0 = ImGui::GetCursorScreenPos().x + pad;
-            const float w = std::max(40.0f, ImGui::GetContentRegionAvail().x - 2.0f * pad);
+            const float x_left = ImGui::GetCursorScreenPos().x + pad;
+            const float w_full = std::max(40.0f, ImGui::GetContentRegionAvail().x - 2.0f * pad);
+            float x0 = x_left, w = w_full;   // a group's members are drawn indented
             const float line = std::round(22.0f * s);
             const float gap = std::round(8.0f * s);
             ImGui::Dummy(v2(1.0f, gap));
@@ -1378,7 +1472,7 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
                 ImGui::Dummy(v2(w, m.button + gap));
             }
 
-            for (size_t idx = 0; idx < items_.size(); ++idx) {
+            auto draw_item = [&](size_t idx) {
                 ChatItem& it = items_[idx];
                 ImGui::PushID((int)idx);
                 switch (it.kind) {
@@ -1627,6 +1721,51 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
                         });
                         break;
                     }
+                }
+                ImGui::PopID();
+            };
+            // The rows: the items, with runs of one command folded into a group.
+            for (const ChatRow& row : chat_rows(items_, group_open_)) {
+                if (row.kind != ChatRow::Kind::group) {
+                    draw_item(row.item);
+                    continue;
+                }
+                ImGui::PushID(row.key.c_str());
+                place(line, [&](ImVec2 p) {
+                    ImGui::SetCursorScreenPos(p);
+                    if (ImGui::InvisibleButton("##group", v2(w, line))) group_open_[row.key] = !row.expanded;
+                    if (ImGui::IsItemHovered()) cdl->AddRectFilled(p, v2(p.x + w, p.y + line), L.plate_hover);
+                    const float half = std::round(3.5f * s);
+                    status_mark(cdl, L, v2(p.x + half + 1.0f, p.y + line * 0.5f), row.mark);
+                    float x = p.x + 2.0f * half + gap;
+                    // The fold's mark: right when closed, down when open.
+                    const float t = std::round(3.0f * s);
+                    const ImVec2 c = v2(std::round(x + t), std::round(p.y + line * 0.5f));
+                    if (row.expanded) cdl->AddTriangleFilled(v2(c.x - t, c.y - t * 0.6f), v2(c.x + t, c.y - t * 0.6f), v2(c.x, c.y + t * 0.7f), L.faint);
+                    else cdl->AddTriangleFilled(v2(c.x - t * 0.6f, c.y - t), v2(c.x - t * 0.6f, c.y + t), v2(c.x + t * 0.7f, c.y), L.faint);
+                    x += 2.0f * t + gap;
+                    const std::string summary = chat_group_summary(row);
+                    const float sw = extent(L.mono, L.mono_size, summary).x;
+                    const float right = p.x + w - sw - gap;
+                    ImFont* f = row.caliper ? L.mono : L.ui;
+                    const float fs = row.caliper ? L.mono_size : L.small_size;
+                    const float fh = row.caliper ? mono_h : small_h;
+                    const std::string name = fit(f, fs, row.command, right - x);
+                    draw_str(cdl, f, fs, v2(x, p.y + (line - fh) * 0.5f), row.caliper ? L.text : L.secondary, name);
+                    x += extent(f, fs, name).x;
+                    if (row.count > 1 && x < right) {
+                        const std::string times = " \xC3\x97" + std::to_string(row.count);   // ×
+                        draw_str(cdl, L.mono, L.mono_size, v2(x, p.y + (line - mono_h) * 0.5f), L.faint, fit(L.mono, L.mono_size, times, right - x));
+                    }
+                    draw_str(cdl, L.mono, L.mono_size, v2(p.x + w - sw, p.y + (line - mono_h) * 0.5f),
+                             row.alert ? L.accent : row.mark == "in_progress" ? L.secondary : L.faint, summary);
+                });
+                if (row.expanded) {
+                    x0 = x_left + std::round(16.0f * s);
+                    w = w_full - std::round(16.0f * s);
+                    for (size_t mi : row.members) draw_item(mi);
+                    x0 = x_left;
+                    w = w_full;
                 }
                 ImGui::PopID();
             }
