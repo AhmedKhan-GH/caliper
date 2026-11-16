@@ -12,7 +12,7 @@ protocol and the agents offered on 15 November 2026, the design of the side chat
 **Built on this branch:** the client library `caliper_builder_acp` (a subprocess helper, a JSON-RPC peer and
 `AcpClient`), a stub agent for tests, the headless tool `caliper-acp-harness`, and their tests. **Planned:** the side
 chat itself, its wiring to the command layer, and everything listed under [what waits](#what-is-built-and-what-waits).
-The earlier proposal is the "Agent integration" section of the [applet builder](../docs/plans/applet-builder.md) page.
+The earlier proposal is the "Agent integration" section of the [applet builder](applet-builder.md) page.
 
 ## The protocol on 15 November 2026
 

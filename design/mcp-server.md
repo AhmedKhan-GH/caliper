@@ -371,7 +371,7 @@ goes at most 16 levels deep and lists at most 5000 files per folder. `caliper-mc
 The app writes `api.json` in its app-data folder while it serves the API, with mode 0600, and removes it when it
 exits. `caliper-mcp` finds it as the app does: `--api-file` when given, otherwise `$CALIPER_DATA_DIR/api.json` when
 the variable is set and not empty, otherwise `api.json` in the app-data folder of the OS
-([Folders and environment variables](../docs/references/environment.md)). It reads the file strictly: at most 64 KiB,
+(Folders and environment variables (`docs/references/environment.md`)). It reads the file strictly: at most 64 KiB,
 `version` 1, `port` 1 to 65535, `url` exactly `http://127.0.0.1:<port>/v0`, and `token` 16 to 256 characters of
 `A-Z a-z 0-9 _ -`, so that it cannot carry anything into a header. Unknown keys are ignored. A file that does not
 parse is read once more after 100 ms, in case the app was writing it. `pid` and `stream_url` are optional: the

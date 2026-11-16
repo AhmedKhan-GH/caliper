@@ -25,6 +25,16 @@ Both fail with a configuration error when run from inside `design/` or with an a
 | [Applets outside the core](applets-outside-the-core.md) | Build, store and install applets outside this repository, so the host ships with none and names none |
 | [Platform candidates](platform-candidates.md) | Pieces that applets built for themselves and that belong in the host or the SDK |
 | [Applet builder](applet-builder.md) | Panels that an agent builds from a declarative spec, through a command layer shared with outside agents |
+| [Builder overview](builder-overview.md) | The map of the builder: its parts, what is built, the integration order and the acceptance criteria |
+| [Spec format](spec-format.md) | The versioned TOML format of a spec applet, with its canonical JSON form and JSON Schema |
+| [Loaders](loaders.md) | Declarative recipes that turn dropped files into sources, the readers, the pickle policy and the Python loader |
+| [Catalog](catalog.md) | The list of every source with its schema, shape and rate, and its three commands |
+| [Command layer](command-layer.md) | The typed commands that everything acts through, with undo, the journal and approvals |
+| [Builder session](builder-session.md) | The headless object that binds the builder libraries for one workspace, and the stand-in host for tests |
+| [MCP server](mcp-server.md) | `caliper-mcp`, the stdio MCP server whose tools mirror the commands |
+| [ACP integration](acp-integration.md) | The side chat, which runs the user's own agent over the Agent Client Protocol |
+| [Widget agent](widget-agent.md) | The inline agent that changes one panel, selection, file or property from a ⌘K prompt, with a preview in place |
+| [Widget agent sidecar](byok-agent.md) | `caliper-agent`, the process that runs the widget agent's loop with the user's own key or a local model |
 | [Applet registry](registry.md) | A registry at caliperapp.ai, a Browse tab and install by id and version |
 | [Data and Cloud](data-and-cloud.md) | Run history, run comparison and session recording in the desktop app's local database, and Caliper Cloud and Caliper Web, which offer them online |
 | [Windows parity](windows-parity.md) | The steps that bring Windows level with macOS: the applet platform, Caliper LIB, streaming and Caliper API, the web viewer, Caliper Embed, the renderer fallbacks and distribution |

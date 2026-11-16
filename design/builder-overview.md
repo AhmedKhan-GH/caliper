@@ -1,8 +1,8 @@
 # Builder overview
 
-This page is the map of the builder: the work that lets someone drop data into Caliper, make loaders and build visuals from inside the app. A person builds by hand in a WYSIWYG builder pane, with their own agent in the side chat, with the widget agent on one panel, selection, dropped file or property, or from an agent outside the app over MCP. Everything that is built is data, a spec or a loader, and never code that runs in the app's process. The page says which parts are built, which wait, and where each part is described. The [roadmap](../docs/plans/roadmap.md#phase-3-agent-built-panels) gives the order and status.
+This page is the map of the builder: the work that lets someone drop data into Caliper, make loaders and build visuals from inside the app. A person builds by hand in a WYSIWYG builder pane, with their own agent in the side chat, with the widget agent on one panel, selection, dropped file or property, or from an agent outside the app over MCP. Everything that is built is data, a spec or a loader, and never code that runs in the app's process. The page says which parts are built, which wait, and where each part is described. The [roadmap](roadmap.md#phase-3-agent-built-panels) gives the order and status.
 
-[Applet builder](../docs/plans/applet-builder.md) is the earlier proposal that this work follows. It left a WYSIWYG editor and an agent inside the app for later; both are now part of the plan.
+[Applet builder](applet-builder.md) is the earlier proposal that this work follows. It left a WYSIWYG editor and an agent inside the app for later; both are now part of the plan.
 
 ## The parts
 
@@ -37,7 +37,7 @@ This page is the map of the builder: the work that lets someone drop data into C
 | Widget agent | An inline agent on one target: Caliper gives it a context bundle and a tool scope, and it proposes a change that is drawn in place as a preview | [Widget agent](widget-agent.md) |
 | `caliper-agent` | The widget agent's process: a sidecar whose agent loop runs on Pydantic AI, with Claude through the person's API key on its native API and every other model, hosted or local, through an OpenAI-compatible API | [Widget agent sidecar](byok-agent.md) |
 
-The side chat and the widget agent are two roles, not two interchangeable backends, and [Agent roles](../docs/explanations/agent-roles.md) explains when to use each. Both are ACP agents that the app drives with one `AcpClient`, so messages, diffs, approvals and cancellation work the same for both, and "Ask in chat" hands a widget request to the side chat with its context.
+The side chat and the widget agent are two roles, not two interchangeable backends, and Agent roles (`docs/explanations/agent-roles.md`) explains when to use each. Both are ACP agents that the app drives with one `AcpClient`, so messages, diffs, approvals and cancellation work the same for both, and "Ask in chat" hands a widget request to the side chat with its context.
 
 ## What is built
 
@@ -113,14 +113,9 @@ This is a placement sketch for review, not a visual design. Each piece is built 
 - **The ⌘K prompt is inside the panel it acts on.** It opens at the top of the focused panel, or at a selection, a dropped file's entry in Sources or a property's row. The preview is drawn in that panel in place of its content, with Accept, Reject and Refine under the prompt. Nothing covers another pane.
 - **A dropped file** lands anywhere on the page and appears in Sources; outside build mode the page shows the import in the jobs tray.
 
-### What the rebase onto sprint 2 costs
+### The integration branch
 
-A trial on a throwaway branch replayed this work onto sprint 2's head of 15 November 2026 (`d5c1000`).
-
-- **Conflicts:** none. All 75 commits applied as they are, because the code is in new files under `src/builder/` and the pages are in `design/`.
-- **The standalone build** passes its 15 test suites on the rebased tree, including the test in which `caliper-mcp` drives the hidden app of sprint 2, and the docs site builds strictly.
-- **In the host build,** one line, `add_subdirectory(src/builder)`, configures and builds every builder target against the host's static DuckDB and its toml++. One suite fails there: the JSON and JSONL readers answer `loader.json_not_available`, because the host builds DuckDB with the `parquet` and `core_functions` extensions only. The host's DuckDB needs the `json` extension.
-- **Left to reconcile by hand:** the roadmap's Phase 3 text, which both sprints edit without a textual conflict; the links from the design pages to the plan pages that sprint 2 moves into `design/`; the snippet includes of `spec-format.md`, which need a `design/mkdocs.yml` whose snippet base is the repository root; and API v0's statement that it serves no command layer, which changes when the command endpoints arrive.
+The work is rebased onto sprint 2 on the branch `sprint3-integration`, where the integration items above are built. The rebase kept sprint 2's version of the files it owns; the builder's pages joined the design pages that sprint 2 moved here, and their links follow this folder's rules. The standalone build of `src/builder/` stays, because it needs no host build.
 
 ## Acceptance
 
