@@ -113,6 +113,11 @@ const std::vector<ProviderPreset>& provider_presets() {
             preset.key = parse_need(p.value("key", "required"));
             if (p.contains("key_env") && p["key_env"].is_string()) preset.key_variable = p["key_env"].get<std::string>();
             preset.local = p.value("local", false);
+            for (const auto& m : p.value("models", nlohmann::json::array()))
+                if (m.is_object() && m.contains("id") && m["id"].is_string())
+                    preset.models.emplace_back(m["id"].get<std::string>(), m.value("name", m["id"].get<std::string>()));
+            for (const auto& e : p.value("efforts", nlohmann::json::array()))
+                if (e.is_string()) preset.efforts.push_back(e.get<std::string>());
             if (!preset.id.empty()) out.push_back(std::move(preset));
         }
         return out;

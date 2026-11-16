@@ -86,6 +86,14 @@ TEST_CASE("the presets are the table of presets.json") {
         CHECK(find_preset(rows[i].id) == &presets[i]);
     }
     CHECK(find_preset("mistral") == nullptr);
+    // The Claude preset's models and efforts, which the app's settings offer.
+    REQUIRE(presets[0].models.size() == 4);
+    CHECK(presets[0].models[2] == std::make_pair(std::string("claude-haiku-5-5"), std::string("Claude Haiku 5.5")));
+    CHECK(presets[0].efforts == std::vector<std::string>{"low", "medium", "high", "xhigh", "max"});
+    for (std::size_t i = 1; i < 7; ++i) {
+        CHECK(presets[i].models.empty());
+        CHECK(presets[i].efforts.empty());
+    }
     CHECK(key_need("ollama") == KeyNeed::none);
     CHECK(key_need("gemini") == KeyNeed::required);
 }

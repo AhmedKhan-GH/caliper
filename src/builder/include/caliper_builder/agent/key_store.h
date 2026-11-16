@@ -55,6 +55,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace caliper_builder::agent {
@@ -76,6 +77,11 @@ struct ProviderPreset {
     KeyNeed key = KeyNeed::required;
     std::string key_variable;  // where the key reaches the sidecar; empty when it takes none
     bool local = false;        // a server on this machine
+    // The models the preset offers without asking its server (the Claude
+    // preset's four), as {id, name}; empty for a preset whose server lists
+    // its own. And the efforts it takes, empty when it takes none.
+    std::vector<std::pair<std::string, std::string>> models;
+    std::vector<std::string> efforts;
 };
 
 // The presets, in the table's order (Claude, OpenAI, Gemini, OpenRouter,

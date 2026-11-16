@@ -60,6 +60,15 @@ def test_the_presets_equal_the_design_page():
     assert json.loads(PRESETS_FILE.read_text())["version"] == 0
 
 
+def test_the_claude_preset_lists_the_sidecars_models_and_efforts():
+    from caliper_agent.claude import EFFORTS, MODELS
+    doc = json.loads(PRESETS_FILE.read_text())
+    claude = next(p for p in doc["presets"] if p["id"] == "anthropic")
+    assert [(m["id"], m["name"]) for m in claude["models"]] == [(m.id, m.name) for m in MODELS]
+    assert claude["efforts"] == list(EFFORTS)
+    assert all("models" not in p and "efforts" not in p for p in doc["presets"] if p["id"] != "anthropic")
+
+
 def test_a_custom_entry_is_named_by_its_base_url():
     # The same value as custom_key_account() in key_store.cpp (test_key_store.cpp).
     assert custom_key_account("https://api.mistral.ai/v1") == "custom-7c6535712768"
