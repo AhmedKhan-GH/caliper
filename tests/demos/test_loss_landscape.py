@@ -751,8 +751,9 @@ def test_capture(notebook, tmp_path):
             Image.fromarray(img).save(Path(keep_dir) / "loss-landscape-app-step299-frame.png")
             Image.fromarray(area).save(Path(keep_dir) / "loss-landscape-app-step299.png")
         # The marker, unlit and flat, around the current point's projected pixel
-        # (within 4 points: from the default camera the box's front edge, which
-        # is nearer, crosses the marker's centre).
+        # (within 4 points, for the rounding of the projection: from the default
+        # camera, azimuth 0.95 and elevation 0.42 radians, no edge of the box
+        # crosses the marker).
         x, y = (int(v) for v in where.pixel(land.current[0].tolist(), k))
         r = int(4 * k)
         patch = img[y - r:y + r + 1, x - r:x + r + 1].reshape(-1, 3).astype(int)

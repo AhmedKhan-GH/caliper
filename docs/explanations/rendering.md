@@ -488,10 +488,13 @@ what still arrives for it.
   dropped with its clamps, and the next frame emits them again. On Metal each scene view has a backend of the layer of
   its own on the renderer's device and queue, so its submits are ordered with the app's frame and its statistics are
   its own; in a browser it borrows the WebGPU renderer's backend.
-- **Camera.** The orbit about the scene's up axis (pan and zoom in a 2-D scene), fitted once when the scene first has
-  bounds and again on F or a double click, with the points view's gestures. It opens at the points view's default
-  three-quarter view, azimuth 0.95 and elevation 0.42 radians at the fit's distance times 1.15, which
-  `src/host/scene/camera_defaults.h` defines once for both views.
+- **Camera.** The orbit about the scene's up axis (pan and zoom in a 2-D scene), turned, panned and zoomed with the
+  points view's gestures. It opens at the points view's default three-quarter view, azimuth 0.95 and elevation 0.42
+  radians at the fit's distance times 1.15, which `src/host/scene/camera_defaults.h` defines once for both views. It is
+  fitted once when the scene first has bounds and again on F or a double click, and there the two views differ: the
+  scene view's fit frames the bounds again at the angles the camera has, so a view the person turned stays turned,
+  while the points view's fit returns to the default three-quarter view. This is the scene design, and
+  `caliper_scene_tests` checks that a fit keeps the orbit's angles.
 
 `caliper_gfx_tests --test-case="gfx/Metal scene view*"` applies the 3.2 golden frames to scene views and checks their
 state, draws the surface row's scene from protocol messages and compares it with the same CPU rasterisation as the
