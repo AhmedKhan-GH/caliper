@@ -49,6 +49,7 @@ if(BUILD_TESTS AND TARGET doctest::doctest)
     add_executable(caliper_widget_surface_tests
         ${_widget_dir}/tests/test_main.cpp
         ${_widget_dir}/tests/test_widget_surface.cpp
+        ${_widget_dir}/tests/test_widget_targets.cpp
         ${_widget_dir}/tests/test_widget_layout.cpp
         ${_widget_dir}/tests/test_widget_shot.cpp
         ${_widget_dir}/tests/test_widget_agent_acp.cpp
