@@ -14,7 +14,8 @@ Built on this branch, in the library `caliper_builder_commands` (`src/builder/co
 - follow-up invocations, which a handler returns and the registry runs as one undo step (the commit of a stacked preview);
 - the queue, with `submit()` from any thread, `drain()` on the caller's thread and `peek()`, which tells the draining side what runs next;
 - an observer on the journal (`JournalOptions::on_append`), through which the app shows each journaled command in its Activity pane;
-- the descriptor table of every command of v0, as data, and its checked-in JSON form `src/builder/commands/command_table.json`.
+- the descriptor table of every command of v0, as data, and its checked-in JSON form `src/builder/commands/command_table.json`;
+- agent permissions: what each command does as data (`effect`), the modes of the side chat's agent and of `caliper-mcp`'s clients, rules for a session and saved ones, and `allowed_by` in the journal ([Agent permissions](#agent-permissions); `permissions.h`).
 
 Built in the host, in `src/host/api/`: the command endpoints of Caliper API described [below](#caliper-api), served by the app's own API server through a small interface, `CommandGateway` (`command_gateway.h`), and the gateway over the builder session, `caliper_api_session` (`session_gateway.h`, built with `CALIPER_WITH_BUILDER`). They are tested with a real session behind the server and with `caliper-mcp` against it. The app serves them once it sets the gateway on its server, which is one call when the session is in the app; until then they answer 404. The reference page is `docs/references/api.md`.
 
@@ -43,6 +44,7 @@ A descriptor describes one command. The registry holds one per command name, and
 | `destructive` | The command deletes or overwrites saved data (a file of the workspace or a database table), or runs a Python loader. It needs approval when an agent sends it. |
 | `frame_thread` | The command must run on the app's frame thread, because it reads or changes what the frame thread draws. |
 | `agents` | An agent may run the command: the origins `agent` and `mcp`. It is false only for `history.undo` and `history.redo`, the person's own tools; the registry refuses them to agents with `command.not_allowed`, and the clients that build an agent's tools from the table leave them out. |
+| `effect` | What the command does, by which an agent's mode decides it: `read` (it reads, or proposes without changing the workspace), `edit` (it edits the open spec in memory) or `change` (anything else that changes something). See [Agent permissions](#agent-permissions). |
 
 `destructive` is about saved data. An edit of the open spec in memory is not destructive, even when it removes a panel, because undo reverses it exactly. Saving an applet, which can overwrite its files, is.
 
@@ -92,6 +94,7 @@ An invocation asks for one command to run. Its JSON form:
 | `origin` | `ui` (the app's own UI), `builder` (the WYSIWYG builder), `agent` (the side chat or the widget agent), `mcp` (an outside agent through `caliper-mcp`) or `api` (a program through Caliper API). |
 | `group` | Optional. Invocations that share a group undo as one step. |
 | `merge_key` | Optional. Consecutive invocations with the same merge key merge into one step. |
+| `client` | Optional, and never from a request. Which agent the app started sent it: `chat` for the side chat's agent, `widget` for the widget agent's sidecar. The app's API server sets it from the token it issued for that agent, so an agent cannot choose it; an agent's mode applies by it ([Agent permissions](#agent-permissions)). 0 to 32 characters of `a-z`. |
 | `preview` | Optional. The id of a stacked preview: an edit of the open spec applies to the preview instead, and `spec.get`, `spec.validate` and `panel.render` read it ([preview](#preview)). Commands that neither read nor edit the open spec ignore it, and any other command that mutates is refused with `preview.not_previewable`. Over Caliper API it is the header `X-Caliper-Preview`. |
 
 `group`, `merge_key` and `preview` match `[A-Za-z0-9._:/-]{1,128}`. An invocation with an unknown field is refused with `command.invalid_invocation`, so a typo does not pass silently.
@@ -357,6 +360,7 @@ The journal is append-only JSON Lines at `journal/commands.jsonl` in the workspa
 - `ts` is the UTC time in ISO 8601 with milliseconds.
 - `group` is the invocation's group, or null.
 - A failed event carries `"ok": false` and `"error": "<code>"`.
+- A `do` event of a command that ran without the person's card because an agent's mode or a rule allowed it carries `"allowed_by"`: `accept_edits`, `allow_all`, `session_rule` or `saved_rule`. It is still a step of its own that the person undoes like any other; the app shows the side chat's agent's ones in the chat as APPLIED rows with Undo.
 - An `undo` or `redo` event is written for each step that `history.undo` or `history.redo` undid or redid. Its `name` is that command, its `args` are `{}`, its `group` is the step's group, and `seqs` lists the `seq` of every `do` event of the step. A failed undo or redo is written with `ok: false` and the error code.
 
 The journal records every invocation of a mutating command that passed argument validation, and the follow-ups of a handler after its own line: the ones that succeeded, the ones whose handler failed, and the ones that were denied, by the policy or by the person. An invocation whose handler reports no effect is a read and is not recorded. An invocation refused earlier (unknown command, invalid arguments, not bound, wrong thread) ran nothing and is not written, since its arguments may be malformed. An invocation waiting for approval is written once, when it is decided or withdrawn. Read-only commands are written only when the journal is opened with `include_read_only`, as `do` events. Results are never written.
@@ -403,7 +407,65 @@ The builder session installs a policy that adds two rules, decided per invocatio
 
 **An approval bound to content holds only while that content does.** Before an approved invocation runs, the registry asks the approval check (`set_approval_check()`). The session's check compares the open document and the digest of what the invocation would write or open now with what the card showed. When they differ, because the open spec, the saved file or the document changed while the card waited, the approval is void: a caller that waits for the outcome (a held call) keeps waiting on a new card, which the policy and the review make for the new content, and the `approve` future answers `command.needs_approval` with the new approval id; a caller that does not wait (an `api` client that polls) gets `history.conflict` for the approval it holds, journaled like a denial, and sends the call again. Nothing is written that the person did not see.
 
-There is no command and no endpoint that approves or denies, and only the `ui` and `builder` origins commit a preview. Only the app's own UI calls `approve` and `deny`, so an agent cannot approve its own request or accept its own preview, and approval ids need not be secret.
+There is no command and no endpoint that approves or denies, or that sets an agent's mode or rules ([Agent permissions](#agent-permissions)), and only the `ui` and `builder` origins commit a preview. Only the app's own UI calls `approve` and `deny`, so an agent cannot approve its own request or accept its own preview, and approval ids need not be secret.
+
+## Agent permissions
+
+The person chooses how much the side chat's agent and outside agents may do without asking, as coding agents commonly offer. The command layer applies it, never the agent: the modes and rules are decided in the session's policy (`Session`, `permissions.h`), after the rules above.
+
+### Who they govern
+
+- The side chat's agent: the origin `agent` with the client `chat`. The app issues the chat's agent its own token with that client (`AppApi::issue_agent_file(why, "chat")`, `Server::issue_token("agent", "chat")`), and the API server sets the invocation's `client` from the token, never from the request.
+- `caliper-mcp`'s clients: the origin `mcp`, through `api.json`'s token.
+
+Nothing else is governed. The widget agent's sidecar has the client `widget` and keeps its preview with Accept, whatever the chat's mode: that is how the two kinds of `agent` session are told apart, and a test sends the same commands with both clients under Allow all and Read only. The person's own UI (`ui`, `builder`) never asks, the viewer only reads, and the person's `api` token behaves as before.
+
+### Modes
+
+Each governed principal has a mode; both start at Ask.
+
+| Mode | What it does |
+|---|---|
+| Ask | The session's policy as before: a card for what asks. |
+| Accept edits | An edit of the open spec (`effect` `edit`) that would ask runs at once, journaled with `allowed_by` and undone like any step. Everything else that asks still asks: deleting or overwriting saved data, running a loader, replacing the open spec. |
+| Read only | Reads and proposals run: commands whose `effect` is `read`, a dry run, an edit into a stacked preview. Every other command is refused with `command.denied` and a plain message that says the agent is in Read only mode. |
+| Allow all | The side chat's agent only, for its session only. What would ask runs without a card, and nothing more. It is never saved, ends when the chat's agent ends (its token is revoked) or the app quits, and no saved setting, environment variable or test hook turns it on. |
+
+Ask is the policy as it was, so a mode never makes an agent stricter than before except Read only, and only Read only can refuse what the policy allowed. The side chat's header shows the mode as a word and Shift-Tab cycles Ask, Accept edits and Read only; Allow all has its own item in the word's menu and a banner while it is on. The settings (⌘,) set the saved mode of each principal.
+
+### Rules
+
+A card of a governed agent offers three answers besides Deny: Allow once (the approval as before), Allow always for this session (that command, for that principal, until the chat's agent ends, or for `mcp` until the app quits), and Always allow `<command>` (saved, per agent, until the person revokes it in the settings). A rule names the command that the command layer runs, from the parked invocation, so no argument, title or `_meta` of an agent selects one.
+
+Saved rules and the two saved modes live in `agent-permissions.json` in the app-data folder, keyed by agent: the side chat's agent id (`claude`, `codex`, `custom`, ...) or `mcp`:
+
+```json
+{"version": 1, "modes": {"chat": "ask", "mcp": "accept_edits"},
+ "rules": [{"agent": "claude", "command": "panel.patch"}]}
+```
+
+The file is written owner-only (0600) through a temporary file. Reading it ignores and reports a file that is not version 1 or not JSON, an unknown field, a mode that is not `ask`, `accept_edits` or `read_only` (so `allow_all` in it is ignored), and a rule for an id that is not an agent id or for a command that is not an agent's (`rule_command_allowed()`: in the table, `agents` true, not a read); on POSIX a file that others may write grants nothing. A missing file is Ask with no rules. **What this does not protect against:** an agent that has its own access to the person's files, such as a coding agent run with file-system tools, can edit this file as it can edit any of the person's files; the file stops nothing that the person's own account can do.
+
+### What no mode or rule changes
+
+- Only the person's own UI sets a mode or adds or revokes a rule: there is no command and no endpoint for them, so an agent, an `mcp` client, the viewer and the `api` token cannot, by any command, endpoint, MCP tool, sidecar tool, follow-up, group or preview. The app calls `Session::set_agent_mode()`, `allow_always()` and `revoke_agent_rule()` from the chat's header, the cards and the settings only. A test sends `permissions.set` with every token and gets `command.unknown`.
+- The ceilings stand: the registry refuses a viewer's change and `history.undo` or `history.redo` from an agent before any policy runs, in every mode; an agent cannot act as `ui` or choose its origin or client.
+- An approval bound to content always asks: the overwrite of a saved applet and the replacement of an open spec with unsaved changes, whatever the mode or rule, since the card shows what is written. Running a Python loader is never covered by a rule; only a card, or Allow all, lets it run.
+- Read only beats every rule.
+
+### Pending approvals and the end of a session
+
+A mode changed while an approval waits leaves it waiting: a stricter mode does not deny it and a looser one does not approve it; the person decides it on its card. When the chat's agent ends, Allow all goes off and the chat's session rules go; its pending approvals stay on their cards until they are decided or their wait runs out, as before.
+
+### What each command does
+
+The `effect` of every command is data in the table (`kEffects` in `command_table.cpp`) and in `command_table.json`; a command missing from it is a fault the table's test reports. When in doubt a command is `change`, which asks.
+
+| Effect | Commands |
+|---|---|
+| `read` | `app.info`, `app.applets`, `catalog.*`, `data.query`, `loader.list`, `loader.describe`, `spec.get`, `spec.validate`, `panel.render`, `panel.data`, `applet.list`, `review.status`, `capture.frame`, `history.list`, and the proposals `preview.begin`, `preview.diff`, `preview.discard` |
+| `edit` | `spec.set_text`, `source.add`, `source.patch`, `source.remove`, `panel.create`, `panel.patch`, `panel.remove`, `layout.place`, `layout.set`, `preview.commit` |
+| `change` | `app.launch` (it changes the page and may replace the open spec), `data.import`, `loader.create`, `loader.update`, `loader.run`, `loader.delete`, `spec.new`, `spec.open`, `applet.open` (they replace the open spec), `applet.save`, `history.undo`, `history.redo` |
 
 ## Threads and the queue
 
@@ -467,6 +529,9 @@ These are additions to, or fixes of, sprint 3 contracts section 7, each the smal
 - **Undo and redo are the person's.** An agent reverts with an edit, which is reviewed; letting an agent move the history would let it take back the person's work, or restore what the person took back, without an edit to show. A flag on the descriptor (`agents`), not a list of names, tells the registry and the clients.
 - **Approvals of overwrites and replacements are bound to the content shown,** and a held call gets a new card when that content changes, so the person never approves one file and gets another.
 - **The origin belongs to the token.** A header that a caller sets cannot be trusted to lower its own rights.
+- **Modes and rules in the command layer, keyed by the token.** The side chat's agent and `mcp` clients get a mode each; the token's client, which the app sets, tells the chat's agent from the widget agent, so nothing a request carries selects a mode or a rule. Ask is the policy as it was; Accept edits and the rules only turn an ask into an allow; Read only only denies.
+- **No rule for a Python run, and no mode or rule over content.** A rule allows a command by name, and `loader.run` of a CSV reader and of a Python script share it; running the person's code needs a card or Allow all. An approval bound to content always asks, since the card shows what is written.
+- **Allow all is the chat's only.** It ends with the chat's agent, which `mcp` clients have no equivalent of, and it is never saved.
 - **Review in the command layer, not in each agent.** An agent that asks before an edit is polite; one that does not, such as an outside agent over MCP, is still reviewed, because the session computes the diff itself and the policy parks the edit.
 - **An approved edit runs only as it was shown.** Recomputing it and comparing the lines it removes and adds lets an unrelated change pass and refuses one that would make the approved change mean something else.
 - **Edits are reviewed one at a time; a stacked review is a preview.** A held call makes an agent's edits sequential, so each card shows a change against the spec the person has seen.
@@ -480,6 +545,11 @@ These are additions to, or fixes of, sprint 3 contracts section 7, each the smal
 - **`Transfer-Encoding` on the command endpoint is 501**, as in the stand-in, while the endpoints of API v0 keep 413 for any body.
 
 ## Open items
+
+From agent permissions (sprint 3.1):
+
+- **Deny rules and finer scopes.** Only allow rules exist, for the side chat's agent and for all `mcp` clients together; the person asked for nothing finer yet.
+- **An `mcp` session.** A rule "for this session" of an `mcp` client lasts until the app quits, because `api.json`'s token is shared by every outside agent and has no session of its own.
 
 These were found in the review of sprint 3's first pull request and left for a later round:
 

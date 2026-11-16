@@ -373,6 +373,11 @@ or not the agent asks on its own. Three parts are built:
   per connection, by the token that opened it (`HubOptions::stream_access`), so its WELCOME sets `control` false, a
   CONTROL is answered `forbidden`, and a producer's HELLO is refused with close code 4002 as `caliper.serve()` refuses
   producers, with no change to the protocol.
+- **Agent permissions.** The person sets how much the side chat's agent and `caliper-mcp`'s clients may do without a
+  card: Ask, Accept edits, Read only, and for the chat's session only, Allow all; a card's answer can also allow its
+  command for this session or always. The command layer applies them by the token's client, so the widget agent
+  (client `widget`) keeps its preview with Accept, and nothing an agent sends selects a mode or a rule
+  ([Command layer](command-layer.md), Agent permissions).
 - **Diff previews of spec edits.** Every edit of the open spec takes `dry_run` and returns its change as a diff of the
   canonical TOML without any effect ([Builder session](builder-session.md)).
 - **Review of spec edits.** With review on for an origin, a session setting that is on by default for `agent` and
@@ -699,6 +704,15 @@ claims the right column with `layout_chat_column()`, and calls `draw()` with tha
   left alone in both directions.
 - **Approvals.** The chat reads the session's pending approvals each frame while no long command holds the registry,
   and a click on an approval's row outlines its card on the strip in bronze for two seconds (`ApprovalTray::point_to()`).
+- **Caliper's mode.** The header shows the session's mode for the chat's agent as a framed word after the title (Ask,
+  Accept edits, Read only, Allow all); a click opens its menu, and Shift-Tab cycles the first three while the chat's
+  input has the keyboard. Allow all is the menu's last item, under a rule, never in the cycle; while it is on, a
+  banner under the header says ALLOW ALL with End, and it ends with the agent's session (its token). A command that a
+  mode or a rule let run without a card is an APPLIED row with what allowed it and Undo, which sends the person's
+  `history.undo` while that command's step is the newest. The approval cards of the chat's agent and of `mcp` clients
+  offer Allow once, Allow always for this session and Always allow `<command>`; the saved rules and the two saved
+  modes are in the ⌘, settings, under Permissions, each rule with Revoke (`agent-permissions.json` in the app-data
+  folder). **Decision:** the settings popup that ⌘, already opens holds them, rather than a second settings place.
 - **Ask in chat.** The inline surface's Ask in chat opens the chat with the handoff draft. The bundle is built in the
   frame, so it leaves the panel's render out.
 - **Tests.** ctest `caliper_chat_pane`: the settings, the toggle and ⌘L, the column the canvas leaves, Ask in chat, the
@@ -706,7 +720,10 @@ claims the right column with `layout_chat_column()`, and calls `draw()` with tha
   `caliper_side_chat_app`: the hidden app's spec page (a turn whose `panel.create` waits on the cards and is approved
   through the test-only decisions file, Ask in chat, the API started on loopback whatever the settings file says and
   stopped when the agent ends) and the acceptance case on `caliper_attention_producer`'s stream with a scripted agent
-  (the app started with `--api`, which the chat leaves alone). The hidden app's input driver
+  (the app started with `--api`, which the chat leaves alone), and one case that walks the modes: a card answered for
+  this session and then always, the rule listed and revoked in the settings, Shift-Tab to Accept edits with an APPLIED
+  edit undone, Read only refusing an edit, and Allow all with its banner, a removal without a card and an overwrite
+  that still asks; a saved `allow_all` in the file is not honoured. The hidden app's input driver
   (`CALIPER_TEST_SPEC_UI`) gained steps for the chat.
 
 ## The manual check with a real agent
