@@ -269,7 +269,9 @@ buffer of storage sizes that their MSL reads. It keeps Metal's fast paths:
 - bind groups are resolved once into Metal objects;
 - dynamic offsets move with `setVertexBufferOffset`;
 - state that repeats from one draw to the next is not set again;
-- command buffers do not retain their resources, because the layer defers every release.
+- command buffers do not retain their resources, because the layer defers every release;
+- a write goes straight into a buffer or a shared texture when no unfinished submit and no earlier queued write uses
+  it, and is otherwise queued as a blit, so that writes always land in the order they were made.
 
 The recording backend has no GPU. It records each frame and each resource operation, and it keeps buffer and texture
 contents in host memory for headless tests. The WebGPU backend, `src/host/renderer/webgpu_backend.cpp`, runs in the
