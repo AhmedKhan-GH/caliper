@@ -124,7 +124,13 @@ A recipe that names its reader skips inference, and the reader's own checks then
 
 ### Arrow IPC files
 
-The `arrow` reader is reserved and refused with `loader.arrow_not_available` on this branch. The plan is nanoarrow's IPC reader (Apache 2.0), fetched with `FetchContent` at a pinned release, decoding the file into an `ArrowArrayStream` that DuckDB's `arrow_scan` copies into a table. An Arrow stream can be scanned once, so an `arrow` output will take only `mode = "table"`. Until then, Arrow IPC files go through the Python loader or are converted to Parquet.
+The `arrow` reader is refused with `loader.arrow_not_available` on this branch. nanoarrow's IPC reader (Apache 2.0) was evaluated and not built here, for three reasons:
+
+- nanoarrow's IPC module needs flatcc, a second fetched dependency, and reads the stream format, so the file format's footer and the old Feather v1 layout need code of their own.
+- The DuckDB in this build has no `read_arrow`. Its C++ route for an `ArrowArrayStream` is the `arrow_scan` table function, which takes raw pointers, is not a stable interface between DuckDB releases, and can scan a stream only once.
+- The other route, decoding with nanoarrow and inserting the rows through DuckDB's appender, needs a mapping of every Arrow type to a DuckDB type and its tests.
+
+The plan stays the same: a later stream fetches nanoarrow at a pinned release, decodes the file into an `ArrowArrayStream` and copies it into a table, so an `arrow` output takes only `mode = "table"`. Until then, Arrow IPC files go through the Python loader or are converted to Parquet. `arrow_scan` is not reachable from SQL: its pointer arguments have no SQL type, so a query cannot pass it an address.
 
 ### HDF5
 
@@ -158,6 +164,8 @@ SELECT step, loss FROM input WHERE step > 0
 - Generated SQL quotes every identifier and every string literal, and a reader option that holds a NUL or another control character is refused.
 - After the run the library reads the columns and their DuckDB types with a `LIMIT 0` query, and the row count with `count(*)`, which scans a view's files once.
 - An output name that is already a table or view the loader did not make fails with `loader.source_exists`.
+- An output name that is a reserved SQL keyword, such as `order` or `semi`, is valid but must be quoted in SQL (`SELECT * FROM "order"`); the source carries a warning that says so.
+- The semicolon that may end an output's `sql` is cut before the SQL is embedded. The cut is made at the first semicolon outside strings, quoted identifiers and comments, which in one statement can only be its end; a misjudged cut can only produce SQL that fails the `CREATE` check.
 
 ## Tensor outputs and transforms
 
@@ -349,7 +357,10 @@ What the tests showed:
 - `SET enable_external_access`, `SET allowed_directories` and every other `SET` fail once the configuration is locked.
 - The `query()` table function accepts only a single `SELECT`.
 
-Two gaps remain, and both are closed by the statement check rather than by a setting. DuckDB v1.5.6 has no setting that forbids `ATTACH`: a database file inside an allowed path, or `:memory:`, can be attached. And `COPY ... TO` may write inside an allowed folder, which includes the workspace. Neither is a `SELECT`, so neither passes the check that every SQL text of a loader or of `query` must pass; the store's own statements are the only others that run.
+- DuckDB refuses to change `temp_directory` once external access is disabled, so the store sets it first.
+- DuckDB parses the table-valued pragmas, such as `PRAGMA database_list` and `PRAGMA version`, as `SELECT` statements over pragma functions. They pass the check and only read.
+
+Two gaps remain, and both are closed by the statement check rather than by a setting. DuckDB v1.5.6 has no setting that forbids `ATTACH`: a database file inside an allowed path, or `:memory:`, can be attached. And `COPY ... TO` may write inside an allowed folder, which includes the workspace. Neither is a `SELECT`, so neither passes the check that every SQL text of a loader or of `query` must pass; the store's own statements are the only others that run. A third, smaller gap is not closed: a `SELECT` can call `nextval()` on a sequence, and the rollback does not undo that. The workspace database holds no sequence, and SQL cannot create one.
 
 A changed grant reopens the database with the new lists, because a locked configuration cannot be changed while it is open.
 

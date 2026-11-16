@@ -6,6 +6,10 @@
 // hdf5, image, wav and python. The first five produce tables through DuckDB;
 // the others produce tensors, except python, which is reserved for the Python
 // loader. Extensions compare without case. No function here throws.
+#include <caliper_builder/error.h>
+
+#include <nlohmann/json.hpp>
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -37,5 +41,17 @@ std::string sniff_format(const uint8_t* bytes, std::size_t n, uint64_t file_size
 // The reader that a sniffed binary format calls for; false for "", "pickle"
 // and anything else.
 bool reader_for_format(const std::string& format, ReaderKind* out);
+
+// Checks the options of a reader (the [reader] table of a loader, as a JSON
+// object): every key must be one the reader takes, with a value of the right
+// type and range. Fails with "loader.unknown_key" or "loader.bad_value", with
+// `where` set to "reader.<key>".
+//   csv:     header (bool), delimiter, quote, escape (one printable character;
+//            a tab is allowed as the delimiter), skip (0 to 1,000,000),
+//            null (a string of at most 256 characters), union_by_name (bool)
+//   parquet: union_by_name;  json: format ("auto", "array", "unstructured"),
+//   union_by_name;  jsonl: union_by_name;  hdf5: dataset (a string);
+//   image: channels (0 to 4); every other reader takes no options.
+Error validate_reader_options(ReaderKind reader, const nlohmann::json& options);
 
 }  // namespace caliper_builder

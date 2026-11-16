@@ -18,11 +18,13 @@ add_library(caliper_builder_loaders STATIC
     wav.cpp
     hdf5.cpp
     readers.cpp
-    pickle.cpp)
+    pickle.cpp
+    db.cpp
+    tabular.cpp)
 target_include_directories(caliper_builder_loaders PUBLIC "${CALIPER_BUILDER_INCLUDE_ROOT}")
 # stb_image is vendored in the tree; image.cpp compiles it with static linkage.
 target_include_directories(caliper_builder_loaders SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/stb")
-target_link_libraries(caliper_builder_loaders PUBLIC nlohmann_json::nlohmann_json)
+target_link_libraries(caliper_builder_loaders PUBLIC nlohmann_json::nlohmann_json PRIVATE caliper_builder_duckdb)
 target_compile_features(caliper_builder_loaders PUBLIC cxx_std_17)
 
 # zlib inflates deflated npz members. Without it, stored members still load and
@@ -46,6 +48,7 @@ caliper_builder_add_tests(loaders
         tests/test_safetensors.cpp
         tests/test_image_wav.cpp
         tests/test_pickle.cpp
+        tests/test_tabular.cpp
     LIBS ${_loaders_test_libs})
 if(TARGET caliper_builder_loaders_tests)
     target_include_directories(caliper_builder_loaders_tests SYSTEM PRIVATE
