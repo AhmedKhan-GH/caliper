@@ -112,7 +112,7 @@ The rules of [Flow control](wire-protocol.md#flow-control) hold, with these addi
 - Per subscription, a sender keeps at most one pending SCENE_UPDATE for each entity path and part, which a newer one replaces.
 - A scene's state goes before any later message of that scene, and a SCENE_CLEAR is never dropped.
 - `max_rate` applies to each entity part of a scene.
-- Among pending data, series go first, then scene messages, then snapshots.
+- Among pending data, series go first, then scene messages, then snapshots. The native sender of Caliper LIB hands its scene messages to its connection as control frames instead, at most two waiting at once, so that they still coalesce in the producer while a viewer drains slowly.
 
 ## Through a hub
 

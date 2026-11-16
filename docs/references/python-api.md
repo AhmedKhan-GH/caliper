@@ -450,7 +450,7 @@ channel, so it keeps updating while a cell runs. It is an ipywidgets widget, so
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
 | `name` | `str` | | The view to show. The widget may be created before the view's first call |
-| `kind` | `str` or `None` | `None` | `"series"`, `"heatmap"`, `"image"`, `"points"` or `"histogram"`; `None` takes the kind from the stream |
+| `kind` | `str` or `None` | `None` | `"series"`, `"heatmap"`, `"image"`, `"points"`, `"histogram"` or `"scene"`; `None` takes the kind from the stream |
 | `height` | `int` | 320 | Height of the whole widget, header included, in CSS pixels |
 
 When no server runs, `widget()` starts one with `serve()`. An unknown kind
@@ -581,6 +581,130 @@ caliper.show(attention, "attention", dims=("layer", "sequence", "head", "query",
 widget.data_view = {"index": {"layer": 0, "sequence": 0}, "reduce": {"head": "max"}}
 caliper.set_data_view("attention", {"index": {"layer": 0, "sequence": 2, "head": 1}})
 ```
+
+## Scenes
+
+A scene is a live view of 3-D or 2-D geometry: a tree of entities, named by
+entity paths such as `"world/cloud"`, each holding a batch of points, lines
+and a mesh. Scenes travel on the network route only, over `caliper.serve()`
+and a hub that it connects to, with the scenes subset of the
+[Wire protocol 3.2 draft](wire-protocol-3-2.md). With only the live session
+or the in-process window open, the first scene call warns once and scene
+calls do nothing there.
+
+```python
+scene = caliper.scene("landscape", up="+z", units="")
+scene.lines("", frame, static=True)                     # the box and the floor grid, once
+scene.mesh("surface", positions, triangles, values=log_loss, vmin=-4.0, vmax=2.0)
+scene.lines("path", path, strip_lengths=[len(path)], colors=(235, 235, 235), rate=10)
+scene.points("current", point[None], colors=(255, 80, 80), rate=10)
+caliper.widget("landscape", "scene", height=480)
+```
+
+### scene
+
+```python
+scene = caliper.scene(name="scene", *, space="3d", up=None, units="m", rate=None,
+                      data_view=None, view_camera=None)
+```
+
+Returns the scene `name`, made on the first call. Like every view call, the
+first call of a script opens the live session when no route is open.
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | `str` | `"scene"` | The view's name: 1 to 63 bytes, no `##` |
+| `space` | `str` | `"3d"` | `"3d"` or `"2d"`; positions are (N, 3) or (N, 2) |
+| `up` | `str` or `None` | `None` | The axis a 3-D view keeps upright when it opens, `"+x"` to `"-z"`; in 2-D the direction of y on screen, `"-y"` or `"+y"`. `None` is `"+y"` in 3-D and `"-y"` in 2-D |
+| `units` | `str` | `"m"` | A unit note of at most 15 bytes, shown with the view; nothing is converted |
+| `rate` | `float` or `None` | `None` | The default rate limit of each batch: `None` is 60 per second, 0 every call |
+
+A second call with the same name returns the same scene and updates `up`,
+`units` and `rate`. A bad name, space, axis, unit note or rate raises
+`ValueError` (`TypeError` for a rate that is not a number), and so does a
+`space` that differs from the scene's. `data_view` and `view_camera` are not
+built yet and raise `NotImplementedError`. `caliper.remove(name)` removes the
+scene and what it retains, and `caliper.widget(name, "scene")` shows it in a
+notebook.
+
+### scene.points, scene.lines and scene.mesh
+
+```python
+scene.points(path, positions, *, colors=None, values=None, cmap="viridis", vmin=None,
+             vmax=None, radii=None, static=False, rate=None)
+scene.lines(path, positions, *, strip_lengths=None, colors=None, values=None, cmap="viridis",
+            vmin=None, vmax=None, color_per=None, width=2.0, static=False, rate=None)
+scene.mesh(path, positions, indices=None, *, colors=None, values=None, cmap="viridis",
+           vmin=None, vmax=None, static=False, rate=None)
+```
+
+Each call logs one part of the entity at `path` and replaces the batch that
+part held. The empty path is the scene's root, which may hold batches too. A
+call returns `True` when a route took a snapshot and `False` when none did:
+no viewer of the scene is attached, or the batch's rate limit dropped it.
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `path` | `str` | | An entity path: 0 to 16 segments of `[A-Za-z0-9_.-]{1,63}` joined by `/`, at most 255 bytes, no `.` or `..` |
+| `positions` | tensor (N, D) | | D is 3 in a 3-D scene and 2 in a 2-D one; any float dtype, cast to float32 on its device |
+| `colors` | tensor (rows, 3 or 4), or one colour | `None` | uint8, or floats in [0, 1] converted on the device; one colour for all is a tuple of 3 or 4 integers from 0 to 255 or floats from 0 to 1. A missing alpha is 255 |
+| `values`, `cmap`, `vmin`, `vmax` | tensor (rows,), `str`, numbers | `None`, `"viridis"` | Values through a colormap (`viridis`, `magma` or `rdbu`); an open end of the range is computed on the device |
+| `radii` | tensor (N,) or a number | `None` | Points: radii in scene units; without them, points are discs of a few pixels |
+| `strip_lengths` | list of `int` or integer tensor (S,) | `None` | Lines: the vertices of each strip, at least 1 each, adding up to V. Without it, vertices 2k and 2k + 1 form segment k |
+| `color_per` | `str` or `None` | `None` | Lines: `"vertex"` or `"strip"`, what the rows of `colors` and `values` belong to; `None` reads it from their count, and a count that fits both raises `ValueError` |
+| `width` | `float` | 2.0 | Lines: the width in pixels |
+| `indices` | integer tensor (T, 3) | `None` | Mesh: the triangles, any integer dtype, cast to int32 on the device. Without them each three vertices form a triangle. An index out of range draws as the last vertex |
+| `static` | `bool` | `False` | A static item: the scene's setup. See below |
+| `rate` | `float` or `None` | `None` | This batch's rate limit; `None` takes the scene's |
+
+The rows of `colors` and `values` are N for points, V or S for lines and V
+for a mesh; faces of a mesh are shaded flat. `colors` and `values` together
+raise `ValueError`, and so do a shape, dtype or row count that does not fit, a
+bad path, an odd number of segment vertices, strip lengths that do not add
+up (when they are host data), a mesh without indices whose vertex count is not
+a multiple of 3, a batch over the limits (4,194,304 points, vertices or
+triangles, 1,048,576 strips, 1,024 entities and 2,048 batches in a scene) and a
+batch whose arrays would pass one frame of 64 MiB. These checks read host
+metadata only, so they run on every call, attached or not. An argument of
+the wrong type raises `TypeError`.
+
+**What a call costs.** With no viewer of the scene attached, a call costs its
+checks and a dictionary update and does no device work, unless the batch is
+static. With a viewer attached and the batch due, the snapshot is built once
+on the arrays' own device: the casts, the per-axis bounds and the value range
+(sent as `stats`), and the budget of the default data view, which samples
+more than 100,000 points or segments by stride. Each array is then copied
+into pinned host memory without waiting, one `torch.mps.Event` is recorded,
+and the network thread reads the copies once the event has completed. Nothing
+reads the device on the training thread.
+
+**Static items.** A batch logged with `static=True` is copied once at the call,
+even with nothing attached, and the producer retains it, a newer static batch
+of the same entity part replacing it. The rate limit never drops one. A
+batch logged without `static` is snapshotted only while a viewer watches the
+scene; the producer keeps the newest one it sent of each entity part.
+
+**A late viewer.** When a viewer subscribes to a scene, it first receives the
+scene's state: a reset, then every static batch and the newest batch of every
+other entity part, in the byte order of their paths. It draws an entity whose
+batch was not kept from its next call.
+
+**Rate limits.** Each batch, an entity path and part, has its own rate limit
+(`rate`, else the scene's, else 60 per second), and a viewer's `max_rate`
+applies to each entity part of its subscription, the newest batch replacing
+one still waiting.
+
+Arguments of the full scene API that later increments build raise
+`NotImplementedError`, naming the increment:
+
+| Call or argument | Comes with |
+|---|---|
+| `scene.points(class_ids=..., labels=...)` | The class table and labels (increment 3 of sprint 4) |
+| `scene.points(items=...)` | Picking and linked selection (increment 5) |
+| `scene.lines(indices=...)`, `color_per="edge"` | Index-pair edges (increment 3) |
+| `scene.mesh(normals=..., uvs=..., texture=...)` | Smooth shading and textures (increment 3) |
+| `caliper.scene(data_view=..., view_camera=...)` | Scene data views and the starting camera (increment 3) |
+| `scene.arrows`, `boxes`, `image`, `depth`, `segmentation`, `camera`, `transform`, `classes`, `clear` | The other primitives, cameras, entity transforms, the class table and clears (increment 3) |
 
 ## Controls
 
