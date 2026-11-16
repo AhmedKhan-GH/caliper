@@ -201,7 +201,9 @@ type ViewEl = HTMLElement & { debugState(): Record<string, unknown>; settled(): 
 /**
  * Waits until the views matching selector have drawn what they hold. A
  * TypeScript view draws on demand: settled() resolves once no frame is
- * pending and the GPU has finished. A WebAssembly view's module draws on every
+ * pending and the GPU has finished, and while data keeps arriving faster than
+ * a slow machine draws, a frame drawn after this call is enough (its frames
+ * count grows). A WebAssembly view's module draws on every
  * animation frame and publishes its frame count at the end of a frame: the
  * count must first change, which a frame that began after this call does, and
  * pass the module's 30 start-up frames, over which the windows are laid out
@@ -212,7 +214,14 @@ export async function drawn(page: Page, selector = 'caliper-view', frames = 2, t
   const settled = page.evaluate(async (sel) => {
     const els = [...document.querySelectorAll(sel)] as ViewEl[];
     const wasm = (e: ViewEl) => e.debugState().drawer === 'wasm';
-    await Promise.all(els.filter((e) => !wasm(e)).map((e) => e.settled()));
+    const frames = (e: ViewEl) => Number(e.debugState().frames ?? NaN);
+    const drew = async (e: ViewEl) => {
+      const f0 = frames(e);
+      let done = false;
+      void e.settled().then(() => { done = true; });
+      while (!done && !(frames(e) > f0)) await new Promise((ok) => requestAnimationFrame(() => ok(null)));
+    };
+    await Promise.all(els.filter((e) => !wasm(e)).map(drew));
     return els.map((e) => (wasm(e) ? Number((e.debugState().wasmStats as { frames?: number } | null)?.frames ?? 0) : null));
   }, selector);
   // A deadline, not a wait: a view that keeps drawing (turning, say) never settles.
