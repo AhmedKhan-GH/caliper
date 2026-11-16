@@ -7,9 +7,9 @@
 // into an offscreen canvas (shot.h) and opens no window either.
 //
 //   caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] [--hidden]
-//                                             start the app
+//           [--workspace <dir>]               start the app
 //   caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]
-//               [--hidden]                    start the app, <folder> searched first
+//               [--hidden] [--workspace <dir>] start the app, <folder> searched first
 //   caliper list [--applets <dir>]...         list the applets in search order
 //   caliper check <folder>                    run the pre-load checks on <folder>
 //   caliper install <folder>                  check, then copy into the user folder
@@ -18,7 +18,7 @@
 //   caliper info                              print versions and served services
 //   caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
 //                [--frames <N>] --out <file.png> [--api [--api-port <n>] [--allow-control]]
-//                                             write the applet page as a PNG
+//                [--workspace <dir>]          write the applet page as a PNG
 //   caliper serve [--port <n>] [--token-file <file>] [--assets <dir>]
 //                                             run the hub of wire protocol v3
 //   caliper --help                            print the usage
@@ -51,6 +51,12 @@
 // `--hidden` (or CALIPER_HIDDEN=1), a testing aid, runs the real app with
 // its window never shown: no Dock icon, no menu bar, no focus (main.cpp).
 // It applies to starting the app and to dev.
+//
+// `--workspace <dir>` (or `--workspace=<dir>`) names the builder's workspace
+// folder (src/host/builder/app_session.h) for the app, dev and shot, in place
+// of CALIPER_WORKSPACE and of workspace/ under the app-data folder
+// (workspace_choice below). A workspace that cannot be opened leaves the app
+// running without the builder and says why.
 //
 // On Windows, `serve`, `build`, `--api` and `--url` are refused before
 // anything starts, with one message (windows_unavailable below).
@@ -104,6 +110,7 @@ struct CommandLine {
     bool hidden = false;                    // --hidden: the app's window is never shown
     std::string url;                        // --url: a stream link to attach to at start
     bool allow_control = false;             // --allow-control: the hub forwards controls
+    std::string workspace;                  // --workspace: the builder's workspace folder
     std::string error;                      // set: print it and the usage, exit 2
 
     // shot's options, with their defaults.
@@ -116,8 +123,9 @@ struct CommandLine {
 
 inline const char* usage_text() {
     return "usage: caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] [--hidden]\n"
+           "               [--workspace <dir>]\n"
            "       caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]\n"
-           "                   [--hidden]\n"
+           "                   [--hidden] [--workspace <dir>]\n"
            "       caliper list [--applets <dir>]...\n"
            "       caliper check <folder>\n"
            "       caliper install <folder>\n"
@@ -126,6 +134,7 @@ inline const char* usage_text() {
            "       caliper info\n"
            "       caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]\n"
            "                    [--frames <N>] --out <file.png> [--api [--api-port <n>] [--allow-control]]\n"
+           "                    [--workspace <dir>]\n"
            "       caliper serve [--port <n>] [--token-file <file>] [--assets <dir>] [--allow-control]\n"
            "       caliper --help\n";
 }
@@ -301,6 +310,25 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             cl.url = value;
             continue;
         }
+        // The builder's workspace: --workspace <dir>.
+        if (arg == "--workspace" || arg.rfind("--workspace=", 0) == 0) {
+            std::string value;
+            if (arg == "--workspace") {
+                if (i + 1 < argc && argv[i + 1]) value = argv[++i];
+            } else {
+                value = arg.substr(std::string("--workspace=").size());
+            }
+            if (value.empty() || value.rfind("--", 0) == 0) {
+                cl.error = "--workspace needs a folder";
+                return cl;
+            }
+            if (!cl.workspace.empty()) {
+                cl.error = "--workspace is given twice";
+                return cl;
+            }
+            cl.workspace = value;
+            continue;
+        }
         // Caliper API: --api, a flag, and --api-port <n>.
         if (arg == "--api") {
             cl.api = true;
@@ -442,6 +470,9 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
     if (cl.error.empty() && !cl.url.empty() && cl.command != C::Run && cl.command != C::Dev &&
         cl.command != C::Help)
         cl.error = "--url applies only to starting the app and dev";
+    if (cl.error.empty() && !cl.workspace.empty() && cl.command != C::Run && cl.command != C::Dev &&
+        cl.command != C::Shot && cl.command != C::Help)
+        cl.error = "--workspace applies only to starting the app, dev and shot";
     if (cl.error.empty() && cl.allow_control && cl.command != C::Serve && cl.command != C::Help) {
         if (cl.command != C::Run && cl.command != C::Dev && cl.command != C::Shot)
             cl.error = "--allow-control applies only to serve, and to the app, dev and shot with --api";
@@ -449,6 +480,43 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             cl.error = "--allow-control needs --api when starting the app, dev or shot";
     }
     return cl;
+}
+
+// The builder's workspace folder (src/host/builder/app_session.h):
+// --workspace, else CALIPER_WORKSPACE when it is set and not empty, else
+// `default_dir`, workspace/ under the app-data folder
+// (caliper::default_workspace_dir()). `chosen` is false for the default,
+// which the app opens only when something first needs it; a chosen folder is
+// opened as soon as the app has drawn its first frame. A relative path is
+// taken from the working directory.
+struct WorkspaceChoice {
+    std::string dir;
+    bool chosen = false;
+    const char* from = "default";   // "--workspace", "CALIPER_WORKSPACE" or "default"
+};
+
+inline WorkspaceChoice workspace_choice(const CommandLine& cl, const char* env,
+                                        const std::string& default_dir) {
+    WorkspaceChoice w;
+    if (!cl.workspace.empty()) {
+        w.dir = cl.workspace;
+        w.chosen = true;
+        w.from = "--workspace";
+    } else if (env && *env) {
+        w.dir = env;
+        w.chosen = true;
+        w.from = "CALIPER_WORKSPACE";
+    } else {
+        w.dir = default_dir;
+    }
+    std::error_code ec;
+    std::filesystem::path abs = std::filesystem::absolute(std::filesystem::path(w.dir), ec);
+    if (ec) return w;
+    abs = abs.lexically_normal();
+    // "work/" is the folder "work": a trailing separator leaves an empty file name.
+    if (!abs.has_filename() && abs.has_relative_path()) abs = abs.parent_path();
+    w.dir = abs.string();
+    return w;
 }
 
 // What the subcommands read from the host. main() fills it with the

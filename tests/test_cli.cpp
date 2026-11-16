@@ -374,6 +374,54 @@ TEST_CASE("cli: --url attaches the app or dev to a stream at start") {
           "--url applies only to starting the app and dev");
 }
 
+TEST_CASE("cli: --workspace names the builder's workspace for the app, dev and shot") {
+    auto app = parse({"--workspace", "/w/one"});
+    CHECK(app.error.empty());
+    CHECK(app.command == Command::Run);
+    CHECK(app.workspace == "/w/one");
+    auto dev = parse({"dev", "/a", "--workspace=/w/two", "--hidden"});
+    CHECK(dev.error.empty());
+    CHECK(dev.workspace == "/w/two");
+    auto shot = parse({"shot", "--launch", "x", "--out", "o.png", "--workspace", "w"});
+    CHECK(shot.error.empty());
+    CHECK(shot.workspace == "w");
+    CHECK(parse({"--workspace", "/w", "--help"}).command == Command::Help);
+    CHECK(parse({"--workspace"}).error == "--workspace needs a folder");
+    CHECK(parse({"--workspace="}).error == "--workspace needs a folder");
+    CHECK(parse({"--workspace", "--hidden"}).error == "--workspace needs a folder");
+    CHECK(parse({"--workspace", "a", "--workspace", "b"}).error == "--workspace is given twice");
+    for (const char* sub : {"list", "info", "serve", "check", "install", "build", "new"}) {
+        CAPTURE(sub);
+        std::vector<const char*> args = {sub};
+        if (std::string(sub) == "check" || std::string(sub) == "install" || std::string(sub) == "build" ||
+            std::string(sub) == "new")
+            args.push_back("x");
+        args.push_back("--workspace");
+        args.push_back("/w");
+        CHECK(parse(args).error == "--workspace applies only to starting the app, dev and shot");
+    }
+}
+
+TEST_CASE("cli: the workspace is --workspace, then CALIPER_WORKSPACE, then the default, as absolute paths") {
+    namespace fs = std::filesystem;
+    auto flag = workspace_choice(parse({"--workspace", "/w/flag/"}), "/w/env", "/data/workspace");
+    CHECK(flag.chosen);
+    CHECK(std::string(flag.from) == "--workspace");
+    CHECK(fs::path(flag.dir) == fs::absolute("/w/flag").lexically_normal());
+    auto env = workspace_choice(parse({}), "/w/env", "/data/workspace");
+    CHECK(env.chosen);
+    CHECK(std::string(env.from) == "CALIPER_WORKSPACE");
+    CHECK(fs::path(env.dir) == fs::absolute("/w/env").lexically_normal());
+    for (const char* unset : {(const char*)nullptr, ""}) {
+        auto def = workspace_choice(parse({}), unset, "/data/workspace");
+        CHECK_FALSE(def.chosen);
+        CHECK(std::string(def.from) == "default");
+        CHECK(fs::path(def.dir) == fs::absolute("/data/workspace").lexically_normal());
+    }
+    auto rel = workspace_choice(parse({"--workspace", "here/../work"}), nullptr, "/d");
+    CHECK(fs::path(rel.dir) == (fs::current_path() / "work").lexically_normal());
+}
+
 TEST_CASE("cli: the usage names --url, --api, --allow-control and --hidden") {
     const std::string u = usage_text();
     CHECK(u.find("usage: caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] "
@@ -383,6 +431,9 @@ TEST_CASE("cli: the usage names --url, --api, --allow-control and --hidden") {
     CHECK(u.find("--out <file.png> [--api [--api-port <n>] [--allow-control]]") != std::string::npos);
     CHECK(u.find("caliper serve [--port <n>] [--token-file <file>] [--assets <dir>] [--allow-control]") !=
           std::string::npos);
+    CHECK(u.find("[--hidden]\n               [--workspace <dir>]\n") != std::string::npos);
+    CHECK(u.find("[--hidden] [--workspace <dir>]\n") != std::string::npos);
+    CHECK(u.find("[--allow-control]]\n                    [--workspace <dir>]\n") != std::string::npos);
 }
 
 TEST_CASE("cli: info and list as JSON hold what the text forms print") {
