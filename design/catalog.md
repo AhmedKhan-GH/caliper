@@ -184,7 +184,29 @@ Each provider has a name (`[a-z][a-z0-9_-]{0,31}`, unique in its catalog) and a 
 | Feed | The channel registry and each channel's ring under its own mutex, which a push holds for one 24-byte store | A copy of at most 1000 samples | Any thread |
 | Metric | The summary under a short mutex, never the store | One prepared query of at most 1001 points, under the store's mutex | `list` and `describe` anywhere; `sample` waits for whatever holds the store's mutex, a few milliseconds at most |
 
-The live provider copies a view's payload on the frame thread, in place, while the live core still holds the snapshot's slot, so the producer never waits: when a newer snapshot was applied and a reader asked for the view in the last 2 s, when the last copy is older than 1 s, or when there is none yet. A payload past 64 MiB is not copied and its sample answers `catalog.no_data` with the reason. `Catalog::revision()` is the sum of the providers' revisions plus the number of times a provider was added or removed. Since every term only grows, a pane that shows the catalog can poll it once a frame and list again only when it changes.
+The live provider copies a view's payload on the frame thread, in place, while the live core still holds the snapshot's slot, so the producer never waits: when a newer snapshot was applied and a reader asked for the view in the last 2 s, when the last copy is older than 1 s, or when there is none yet. A payload past 64 MiB is not copied and its sample answers `catalog.no_data` with the reason.
+
+### The cost of a live panel, measured
+
+The acceptance case, "plot attention entropy per layer while it trains", measured with `caliper_catalog_providers_bench` (`src/host/catalog_providers/bench/`, built on demand): a live view of softmax attention rows reaches a session through the live provider, and the session resolves a panel of its entropy over the last axis and its mean over the query tokens on the CPU reference transforms. Each figure is the median of 30 runs, with the 95th percentile in brackets, on an M5 Max (18 cores, 64 GB).
+
+**These figures were taken on a busy machine**, with all three heavy-job slots held and a 1-minute load average of 29.9 before the run and 25.9 after it, so they are an upper bound. A figure on a quiet machine is still to be taken at a milestone.
+
+| Live payload | Size | Copy on the frame thread | Resolve after a new snapshot | Of which the two transforms | Resolve with nothing new | Probe |
+|---|---|---|---|---|---|---|
+| `[12, 128, 128]`, a tiled heatmap, one cell per layer | 0.8 MB | 0.02 ms (0.06) | 0.87 ms (0.89) | 0.84 ms (0.89) | 2 µs (3) | 0.2 µs (0.3) |
+| `[12, 512, 512]`, tiled | 12 MB | 0.24 ms (0.27) | 14.2 ms (15.0) | 14.1 ms (14.4) | 7 µs (11) | 0.5 µs (0.7) |
+| `[12, 12, 64, 64]` | 2.2 MB | 0.04 ms (0.05) | 2.7 ms (2.8) | 2.6 ms (2.7) | 3 µs (9) | 0.3 µs (0.5) |
+| `[12, 12, 128, 128]`, GPT-2 small at 128 tokens | 9 MB | 0.17 ms (0.20) | 10.8 ms (11.1) | 10.7 ms (10.7) | 5 µs (9) | 0.3 µs (0.6) |
+| `[12, 12, 256, 256]` | 36 MB | 0.72 ms (4.2) | 42.5 ms (43.3) | 42.4 ms (44.3) | 8 µs (12) | 0.8 µs (0.9) |
+| `[24, 16, 256, 256]` | 96 MB | 1.95 ms (6.3) | 113 ms (116) | 113 ms (119) | 11 µs (12) | 0.8 µs (1.0) |
+| `[12, 12, 512, 512]` | 144 MB | 2.9 ms (4.6) | 170 ms (178) | 167 ms (172) | 10 µs (13) | 0.8 µs (0.9) |
+
+What it says:
+
+- **Per frame with nothing new, a live panel costs nothing measurable.** The probe is under a microsecond and a resolve that hits the cache is a few microseconds, so the spec runtime can ask every frame.
+- **The transforms are the cost, once per new snapshot.** The entropy reads every element and takes a logarithm of each, about 4.5 ns an element on one core here. At 60 snapshots a second the frame thread has 16.7 ms per frame, which these transforms fill at about 3.7 million elements: a full `[12, 12, 128, 128]` tensor (2.4 million) already takes two thirds of a frame, and anything larger does not fit.
+- **The smallest fix is to reduce on the producer through a data view.** A data view with `"reduce": {"head": "mean"}` and `"tile": "layer"` sends a `[layers, tokens, tokens]` mosaic, which the provider cuts back into its cells; its entropy per layer costs 0.9 ms at 128 tokens. The entropy itself stays in the spec, since a data view reduces only by `mean`, `sum`, `max`, `min` and `norm`. Where the full tensor is wanted, the next step is in the spec runtime, not here: recompute a panel whose last transforms took longer than a budget at most a few times a second, or resolve it on a worker thread and draw the last result. Neither is built, and no GPU path is proposed. `Catalog::revision()` is the sum of the providers' revisions plus the number of times a provider was added or removed. Since every term only grows, a pane that shows the catalog can poll it once a frame and list again only when it changes.
 
 ## Reserved names
 
