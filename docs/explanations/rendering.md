@@ -60,7 +60,9 @@ be tested on a machine whose GPU works.
 ## The WebGPU backend
 
 The browser views are the native view layer compiled to WebAssembly, and `src/host/renderer/webgpu_renderer.cpp`
-draws them behind the same `HostRenderer` seam, on the browser's own WebGPU through the standard `webgpu.h`. The
+draws them behind the same `HostRenderer` seam, on the browser's own WebGPU through the standard `webgpu.h`. They are
+the only WebGPU drawing in a browser: the `<caliper-view>` element's own views, written in TypeScript, draw with
+Canvas 2D where these views do not draw ([Browser elements](../references/browser-elements.md#what-draws-a-view)). The
 renderer itself keeps only the canvas's surface, the frame loop and ImGui, which it records through
 `imgui_impl_wgpu`, with nearest sampling for magnified heatmap cells. Every resource and draw of the live views goes
 through the graphics layer of the renderer core, whose WebGPU backend (`src/host/renderer/webgpu_backend.cpp`) the
@@ -387,11 +389,12 @@ chooses which integer comparisons run. The vertex-stage colormap of the scene pr
 those programs place points and lines on pixel centres.
 
 The renderers' own colormaps do not use the keys yet: the Metal renderer's compute pass `cmap_f32`, the Vulkan
-renderer's `colormap.comp`, the CUDA kernel, the WebGPU renderer's heatmap pass with its float thresholds
-(`src/host/renderer/webgpu_programs.h`, which draws through the layer's WebGPU backend) and the TypeScript views'
-WGSL each repeat the float formula or the thresholds, and each is replaced by `colormap_texture` when the texture path
-of its client moves onto the layer. The Canvas 2D fallback of the browser views keeps its TypeScript port of the
-reference, which is compared with the C++.
+renderer's `colormap.comp`, the CUDA kernel and the WebGPU renderer's heatmap pass with its float thresholds
+(`src/host/renderer/webgpu_programs.h`, which draws through the layer's WebGPU backend) each repeat the float formula
+or the thresholds, and each is replaced by `colormap_texture` when the texture path of its client moves onto the
+layer. The browser's TypeScript views have no shader: their WebGPU renderers, with their WGSL and the thresholds they
+searched for, were removed, and they draw only with Canvas 2D, which keeps a TypeScript port of the reference
+(`web/src/render/colormap.ts`) that is compared with the C++.
 
 What proves it:
 

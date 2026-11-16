@@ -55,14 +55,16 @@ receives copies.
 
 The viewers in the browser live in the `web/` package: the `<caliper-view>`
 element, the notebook widget built on it, and the viewer page. The element
-decides per view what draws it. Where WebGPU gives an adapter, Caliper's own
-view layer compiled to WebAssembly (`web/wasm`, drawn by the
-[WebGPU backend](rendering.md#the-webgpu-backend)) draws the
-kinds its loader lists, which are now all five: heatmaps, images, points,
-series and histograms. A kind the loader does not list is drawn by small views
-written for the browser in TypeScript. Without an adapter the TypeScript views
-draw every kind, with Canvas 2D where they need it. The element's header, with the view's name, its status, the data view
-picker and a line about the view, is the same either way. Both kinds of
+decides per view what draws it
+([Browser elements](../references/browser-elements.md#what-draws-a-view)).
+Where WebGPU gives an adapter, Caliper's own view layer compiled to
+WebAssembly (`web/wasm`, drawn by the
+[WebGPU backend](rendering.md#the-webgpu-backend)) draws the kinds its loader
+lists: heatmaps, images, points, series, histograms and scenes. It is the only
+WebGPU drawing in a browser. Elsewhere small views written for the browser in
+TypeScript draw with Canvas 2D. The element's header, with the view's name,
+its status, the data view picker and a line about the view, is the same either
+way. Both kinds of
 views select, pick and hover with the same gestures and send the producer the
 same events, in source indices, so a widget's `selection` and the server's
 `events()` do not depend on which views drew the view.
@@ -337,7 +339,7 @@ interface.
   1 and 2. Chromium-based browsers ship WebGPU, while support in Safari and
   Firefox depends on the version and the platform, and neither is tested, nor
   is Windows. Where WebGPU is absent, the views written for the browser draw
-  instead.
+  instead, with Canvas 2D.
 - **Widget traits wait for an idle kernel.** A widget's `selection` and
   `data_view` traits travel over the notebook's message channel, which the
   kernel reads only while no cell runs. The picker in a widget works during
