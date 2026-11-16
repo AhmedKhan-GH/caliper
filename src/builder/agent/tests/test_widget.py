@@ -441,9 +441,9 @@ def test_cancel_leaves_the_preview_and_close_ends_the_session(run_agent, caliper
     # A turn that hangs, then session/cancel: the turn ends as cancelled.
     agent.send({"jsonrpc": "2.0", "id": 900, "method": "session/prompt",
                 "params": {"sessionId": sid, "prompt": [{"type": "text", "text": "Call it Loss"}]}})
-    time.sleep(1.0)
+    earlier = _wait_for_text(agent, sid)   # the turn is in its stalled stream
     agent.notify("session/cancel", {"sessionId": sid})
-    answers = _collect(agent, {900})
+    answers = _collect(agent, {900}, earlier=earlier)
     assert answers[900]["result"]["stopReason"] == "cancelled"
     # The session goes on: a follow-up continues the same conversation and preview.
     response, _ = agent.prompt(sid, "Go on")
@@ -451,9 +451,9 @@ def test_cancel_leaves_the_preview_and_close_ends_the_session(run_agent, caliper
     # session/close during a turn: the turn is cancelled and the session forgotten.
     agent.send({"jsonrpc": "2.0", "id": 901, "method": "session/prompt",
                 "params": {"sessionId": sid, "prompt": [{"type": "text", "text": "One more"}]}})
-    time.sleep(1.0)
+    earlier = _wait_for_text(agent, sid)
     agent.send({"jsonrpc": "2.0", "id": 902, "method": "session/close", "params": {"sessionId": sid}})
-    answers = _collect(agent, {901, 902})
+    answers = _collect(agent, {901, 902}, earlier=earlier)
     assert answers[902]["result"] == {}
     assert answers[901]["result"]["stopReason"] == "cancelled"
     # Neither the cancel nor the close touched the preview: the sidecar never
@@ -465,9 +465,28 @@ def test_cancel_leaves_the_preview_and_close_ends_the_session(run_agent, caliper
     assert response["error"]["code"] == -32602
 
 
-def _collect(agent, ids: set, timeout: float = 30.0) -> dict:
-    """The answers to the requests `ids`, read from the sidecar's output."""
+def _wait_for_text(agent, sid: str, timeout: float = 30.0) -> list:
+    """Reads the sidecar's output until the turn of `sid` streams text, which a
+    scripted step with hang_after sends before its stream stalls; returns the
+    other messages read meanwhile, for _collect. The timeout only bounds a hang."""
+    earlier = []
+    deadline = time.monotonic() + timeout
+    while True:
+        msg = agent.inbox.get(timeout=max(0.1, deadline - time.monotonic()))
+        assert msg is not None, agent.stderr()
+        params = msg.get("params") or {}
+        if (msg.get("method") == "session/update" and params.get("sessionId") == sid
+                and params.get("update", {}).get("sessionUpdate") == "agent_message_chunk"):
+            return earlier
+        earlier.append(msg)
+
+
+def _collect(agent, ids: set, timeout: float = 30.0, earlier: list | None = None) -> dict:
+    """The answers to the requests `ids`, from `earlier` and then the sidecar's output."""
     out: dict = {}
+    for msg in earlier or []:
+        if msg.get("id") in ids and ("result" in msg or "error" in msg):
+            out[msg["id"]] = msg
     deadline = time.monotonic() + timeout
     while set(out) != ids:
         msg = agent.inbox.get(timeout=max(0.1, deadline - time.monotonic()))
