@@ -1,6 +1,6 @@
 # Command layer
 
-The command layer is the one surface through which everything acts on a workspace: the app's UI, the WYSIWYG builder, the agent pane over ACP, outside agents over MCP and programs over Caliper API. Each action is a typed command with a JSON Schema for its arguments and one for its result, so every client gets the same validation, the same undo history, the same journal and the same approval rules. This page elaborates sections 7 and 8 of the sprint 3 contracts and records the decisions taken while building the library. The [Applet builder](applet-builder.md) page gives the background, and the [Trust model](../explanations/trust-model.md) explains why everything an agent builds is data.
+The command layer is the one surface through which everything acts on a workspace: the app's UI, the WYSIWYG builder, the side chat and the widget agent, outside agents over MCP and programs over Caliper API. Each action is a typed command with a JSON Schema for its arguments and one for its result, so every client gets the same validation, the same undo history, the same journal and the same approval rules. This page elaborates sections 7 and 8 of the sprint 3 contracts and records the decisions taken while building the library. The [Applet builder](applet-builder.md) page gives the background, and the [Trust model](../explanations/trust-model.md) explains why everything an agent builds is data.
 
 ## What is built and what is planned
 
@@ -80,7 +80,7 @@ An invocation asks for one command to run. Its JSON form:
 | `id` | Up to 128 characters of `A-Z a-z 0-9 . _ : -`. When it is empty or absent, the registry assigns `c-<n>` from a counter. |
 | `name` | A command name. |
 | `args` | An object; absent or null means `{}`. |
-| `origin` | `ui` (the app's own UI), `builder` (the WYSIWYG builder), `agent` (the agent pane), `mcp` (an outside agent through `caliper-mcp`) or `api` (a program through Caliper API). |
+| `origin` | `ui` (the app's own UI), `builder` (the WYSIWYG builder), `agent` (the side chat or the widget agent), `mcp` (an outside agent through `caliper-mcp`) or `api` (a program through Caliper API). |
 | `group` | Optional. Invocations that share a group undo as one step. |
 | `merge_key` | Optional. Consecutive invocations with the same merge key merge into one step. |
 
@@ -372,7 +372,7 @@ Transport faults keep their HTTP status: 401 and 403 from the checks, 413 for a 
 
 ## caliper-mcp and the Python sidecar
 
-The descriptor table is the one source of tool definitions. `caliper-mcp` links the C++ table, and the BYOK sidecar `caliper-agent` loads its JSON form, `src/builder/commands/command_table.json`, which is the output of `command_table_to_json()` printed with two-space indents, sorted keys and a final newline. A test fails when the file and the C++ table differ. After a change to the table, regenerate the file with the tool target of the commands module:
+The descriptor table is the one source of tool definitions. `caliper-mcp` links the C++ table, and the widget agent sidecar `caliper-agent` loads its JSON form, `src/builder/commands/command_table.json`, which is the output of `command_table_to_json()` printed with two-space indents, sorted keys and a final newline. A test fails when the file and the C++ table differ. After a change to the table, regenerate the file with the tool target of the commands module:
 
 ```sh
 cmake --build <build> --target caliper_builder_command_table

@@ -4,7 +4,7 @@
 Protocol (MCP) server on its standard input and output. It gives the agent one tool per command of the
 [command layer](command-layer.md) and a set of read-only resources (the documentation, the SDK headers, the JSON
 Schema of the [spec format](spec-format.md) and the command table), and it carries out each tool call by calling
-Caliper API on the loopback address of the running app. The agent pane of the app hands the same executable to the
+Caliper API on the loopback address of the running app. The side chat of the app hands the same executable to the
 agent it runs over ACP ([ACP integration](acp-integration.md)). This page elaborates sections 7, 8, 9 and 11 to 17 of
 the sprint 3 contracts and records the decisions taken while building it.
 
@@ -32,7 +32,7 @@ Planned:
 ## How it runs
 
 ```
-agent (Claude Code, Codex, the app's agent pane)
+agent (Claude Code, Codex, the app's side chat)
    │ starts, then speaks MCP on stdin and stdout
    ▼
 caliper-mcp ── reads api.json ──► port and session token
@@ -61,7 +61,7 @@ caliper-mcp --version | --help
 | `--api-file <path>` | The API file to read. Without it, `api.json` in the app-data folder, which `CALIPER_DATA_DIR` moves. |
 | `--docs <dir>` | A folder of documentation pages, served as `caliper://docs/...` resources. Usually the `docs` folder of the repository or of an installed copy. |
 | `--sdk <dir>` | A folder that holds the Caliper SDK headers, served as `caliper://sdk/...` resources. Usually the installed SDK prefix. |
-| `--origin mcp` or `agent` | The value of the `X-Caliper-Origin` header of command calls; `mcp` by default. The app passes `agent` when its own agent pane runs `caliper-mcp` (see [Changes to the contracts](#changes-to-the-contracts)). |
+| `--origin mcp` or `agent` | The value of the `X-Caliper-Origin` header of command calls; `mcp` by default. The app passes `agent` when its own side chat runs `caliper-mcp` (see [Changes to the contracts](#changes-to-the-contracts)). |
 | `--command-timeout <seconds>` | How long a command call may take, 1 to 3600 seconds; 130 by default, since a call may wait up to 120 seconds for the person's approval. |
 
 A folder given with `--docs` or `--sdk` must exist; otherwise `caliper-mcp` says so on standard error and exits
@@ -123,7 +123,7 @@ tool_timeout_sec = 140
 so without it Codex gives up on a call that the person is about to approve. `codex mcp add caliper --
 /absolute/path/to/caliper-mcp --docs /absolute/path/to/caliper/docs` writes the entry without the time limit.
 
-### The app's agent pane
+### The app's side chat
 
 When the app runs an agent over ACP, it sends `caliper-mcp` in `session/new` as a stdio server with an absolute
 `command`, `args` such as `["--api-file", "<the app's API file>", "--origin", "agent", "--docs", "<docs>"]` and an
@@ -504,7 +504,7 @@ declarations. `caliper-mcp` passes the schemas through unchanged; see [Open ques
 - **The origin `agent`.** Contracts section 8 names only the origins `api` and `mcp` for the command endpoints, but
   the [ACP integration](acp-integration.md) page says that commands from the app's own agent arrive with the origin
   `agent`, and that agent reaches the app through `caliper-mcp`. The smallest fix is the option `--origin agent`
-  (the default is `mcp`), which sets `X-Caliper-Origin: agent`, so the agent pane hands an ACP agent the same server
+  (the default is `mcp`), which sets `X-Caliper-Origin: agent`, so the side chat hands an ACP agent the same server
   with that origin. The stand-in `caliper-builder-host` accepts `agent` already, and the app's API server should
   accept it as well as `mcp` when the command endpoints are wired. The default approval policy treats both alike, and
   a request can never claim `ui` or `builder`; `caliper-mcp` refuses any other value of `--origin` at start, with
