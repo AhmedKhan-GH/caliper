@@ -18,6 +18,7 @@ This folder builds Caliper's own view layer (the live views, Dear ImGui and ImPl
 | `caliper-views-loader.js` | The loader: `mountCaliperViews(container, options)`, an ES module with no dependencies |
 | `demo.html` | A page that loads the module onto one canvas and connects it to a stream named in its URL |
 | `test/stream_server.py` | A synthetic producer: one session with a heatmap, a series, a histogram and an image, served over wire protocol v3 with `python/caliper/_wire.py` |
+| `test/scene.mjs`, `test/scene_server.py` | The headless check of a scene (the wire protocol 3.2 draft): a script logs demo 0's kind of scene through `caliper.serve()`, and the viewer page draws it in headless Chromium |
 | `test/check.mjs` | The headless check of one page (Playwright, headless Chromium only) |
 | `test/multi.mjs`, `test/pages/multi.html` | The headless check of several mounts on one page through the loader |
 | `test/cross_origin.mjs` | The headless check of the loader imported from another origin, as a notebook page does |
@@ -29,6 +30,7 @@ The module compiles the native app's view code unchanged, so the views in the br
 | Native files | In the module |
 |---|---|
 | `src/host/live/live_views.cpp`, `live_views_draw.cpp` | Compiled unchanged. The non-Apple block of `live_views.cpp` stands in for `live_views_metal.mm` |
+| `src/host/live/live_scene.cpp`, `live_views_scene.cpp`, `src/host/scene/*.cpp` | Compiled unchanged: the scene view and the scene core it draws through |
 | `src/host/live/live_unsupported.cpp` | Compiled: the stand-in for the shared-memory attach of `live_core.cpp` and `live_attach.cpp` |
 | `src/host/embed/embed_views.cpp` | Compiled unchanged: the embed v1.2 views and the hosted core (`caliper_core_create_hosted`, `caliper_core_hosted_frame`), split out of `embed_core.cpp` |
 | `src/host/tensor_bridge.cpp` | Compiled unchanged. The heatmap and image views keep the bridge, which colormaps through the renderer's `tex_update_mapped_from_host` when the renderer offers it, as the WebGPU renderer does; native renderers keep the default `false` |
@@ -79,7 +81,7 @@ import { mountCaliperViews } from '<assetBase>caliper-views-loader.js';
 const handle = await mountCaliperViews(container, {
   src,          // 'ws://127.0.0.1:<port>/v3/stream?token=<token>'
   view,         // the view to show; '' or absent: every view of the session
-  kind,         // 'heatmap', 'image', 'points', 'series' or 'histogram'; optional
+  kind,         // 'heatmap', 'image', 'points', 'series', 'histogram' or 'scene'; optional
   height,       // CSS pixels; optional, the default fills the container
   header,       // false: the page draws the view's header, so the view shows itself alone (default true)
   assetBase,    // the folder of caliper-views.js and .wasm; default: the loader's own folder
@@ -96,7 +98,7 @@ handle.destroy();                                // BYE, the GPU released, the c
 
 With `header: false` a view shows only itself: no title bar, no diagnostics line (size, path, sequence number, latency, updates, drops) and no Pause or Fit button, while hover values stay (`CaliperCore::views_bare`; the native app keeps all of it). In the browser the views also take the page palette (`src/page_style.cpp`): the view's ground is the plate colour, a series line is parchment, hover marks and selections are bronze, a fitted y range reaches 6% of the data's span past it on each side, and rules and tick labels are drawn as the TypeScript views draw them, so the two renderers of the element look alike.
 
-The loader also exports `CALIPER_VIEWS_KINDS`, the one list of the kinds these views draw: `heatmap`, `image`, `points`, `series` and `histogram`. The `<caliper-view>` element (`web/src`) reads it to decide per view whether these views or its own TypeScript views draw, and it draws the header itself (`header: false`), with the line about the view made from the facts `onInfo` reports, in the TypeScript views' words (`web/src/views/info.ts`).
+The loader also exports `CALIPER_VIEWS_KINDS`, the one list of the kinds these views draw: `heatmap`, `image`, `points`, `series`, `histogram` and `scene`. A scene is drawn by these views only: its scene view (`src/host/live/live_scene.h`, the app's own) compiles the scene through the scene core and submits it through the WebGPU renderer's backend of the graphics layer, and its facts (`entities`, `items`, `copied`, `gpu_ms`) become the header's line. The `<caliper-view>` element (`web/src`) reads it to decide per view whether these views or its own TypeScript views draw, and it draws the header itself (`header: false`), with the line about the view made from the facts `onInfo` reports, in the TypeScript views' words (`web/src/views/info.ts`).
 
 ## Pan, zoom and follow
 

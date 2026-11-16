@@ -185,6 +185,37 @@ the views keep their last pixels, the status says the session ended, and the
 viewer reconnects; a series continues from the values the producer retained.
 When the script ends, the views keep their last pixels.
 
+### Scenes
+
+A scene of `caliper.scene` ([Caliper LIB](../references/python-api.md#scenes))
+reaches the app and `caliper-viewer` on a stream, never through a shared-memory
+session. The viewer announces the capability `scenes` of the
+[protocol 3.2 draft](../references/wire-protocol-3-2.md), so the script lists
+its scenes and sends their messages. A scene's window shows the scene drawn
+on the GPU: its batches of points, lines and meshes, with depth, under an
+orbit camera about the scene's up axis that frames the scene once, when it
+first has bounds.
+
+| Input | What it does |
+|---|---|
+| Drag | Orbits around the target |
+| Right, middle, alt or ctrl drag | Pans |
+| Wheel | Zooms |
+| F, or a double click | Frames the scene again |
+
+The header says how many entities hold batches, how many items they hold
+(points, line segments and triangles), the bytes copied by the latest
+updates and the GPU time of the latest frame, for example
+`4 entities  3,242 items  copied 64.5 KB  gpu 0.21 ms`. Every array arrives
+as bytes on the stream and is copied once into a GPU buffer, so the header
+says `copied`; the drawing reads that buffer in place. A part this viewer
+does not build yet, such as arrows or boxes, is ignored, and a line under the
+header says so. The scene is drawn again only when it, the camera or the
+window's size changes. A viewer that attaches late receives the scene's
+state: its static items and the newest batch of every other entity part
+that the script still holds. Pause holds a scene's messages until Resume, and
+the scene then shows the newest state.
+
 ## Choose what a view shows
 
 A view of a stream may offer more than it draws by default: several sources,

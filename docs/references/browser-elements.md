@@ -18,7 +18,7 @@ One live view of the stream, with a header (the view's name, its data view picke
 |---|---|
 | `src` | The stream's `ws://` URL, with the session token. `session=<id>` in its query picks a session of a hub |
 | `view` | The view's name. Several series share one plate when the names are separated by commas |
-| `kind` | `heatmap`, `image`, `points`, `series` or `histogram`. Without it, the kind comes from the stream |
+| `kind` | `heatmap`, `image`, `points`, `series`, `histogram` or `scene`. Without it, the kind comes from the stream. A scene (the wire protocol 3.2 draft) is drawn only by the WebAssembly views, on WebGPU; where they cannot draw it, the plate shows a notice in its place |
 | `height` | The element's height in CSS pixels, header included. Default 320 |
 | `renderer` | `auto` (the default) uses the WebAssembly views for the kinds their loader lists when WebGPU gives an adapter; `wasm` uses them whatever the adapter; `ts` uses the TypeScript views |
 | `run-controls` | The header shows Pause or Resume and Step beside the run state, when the producer has [controls](wire-protocol.md#controls) |

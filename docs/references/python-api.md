@@ -594,7 +594,11 @@ and a mesh. Scenes travel on the network route only, over `caliper.serve()`
 and a hub that it connects to, with the scenes subset of the
 [Wire protocol 3.2 draft](wire-protocol-3-2.md). With only the live session
 or the in-process window open, the first scene call warns once and scene
-calls do nothing there.
+calls do nothing there. The Caliper app and `caliper-viewer` attached to the
+stream ([Attach to a running script](../guides/attach-to-a-running-script.md#scenes)),
+the notebook widget and the viewer page draw a scene with the same scene
+view on the GPU; in a browser it needs WebGPU and Caliper's WebAssembly
+views, and without them the scene's plate shows a notice in its place.
 
 ```python
 scene = caliper.scene("landscape", up="+z", units="")

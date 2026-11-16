@@ -373,7 +373,12 @@ views are drawn through the tensor view of the same name, so
 them. The header documents the per-kind payload contract, the claim rule that
 `caliper_core_live_view_read_done` reports for each kind, and the per-core
 pause flag. `include/caliper/live.h` is the shared-memory session protocol and
-the client and viewer C API that feed it from another process. Both are
+the client and viewer C API that feed it from another process. A sixth kind,
+scene (6), of the wire protocol 3.2 draft, is not applied as a snapshot:
+`caliper_core_live_apply` refuses it, and a stream attached with
+`caliper_core_live_attach_url` opens and feeds a scene view itself, which
+`caliper_core_live_view_info` (path `copied-from-host`) and
+`caliper_core_live_view_readback` then answer for. Both are
 macOS/Metal only today; the design is in
 [Live streaming](../explanations/live-streaming.md).
 

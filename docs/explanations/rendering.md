@@ -293,8 +293,9 @@ The layer's tests run in three suites:
 
 The renderer core's scene core is in `src/host/scene/`, in the namespace `caliper_scene` and the library
 `caliper_scene`. It is the one camera and scene model that the views are to share, and it compiles a scene into a draw
-list of the renderer core's graphics layer (`src/host/gfx/`). It is plain C++17 that never calls a GPU. Nothing uses
-it yet: no view, no service and not the browser draws through it, and the points live view keeps its own camera.
+list of the renderer core's graphics layer (`src/host/gfx/`). It is plain C++17 that never calls a GPU. The live views'
+scene view draws through it ([The scene view](#the-scene-view)); the points live view keeps its own camera, and no
+service uses it yet.
 
 It holds these parts:
 
@@ -354,3 +355,38 @@ Its tests run in two suites:
   item that the picker decodes. `CALIPER_GFX_CAPTURE_DIR` writes the captures `first-scene-points.png` and
   `first-scene-surface.png`, and `CALIPER_GFX_SCENE_BENCH=1` runs a row that reports the compile time and the
   layer's encode time of the surface scene and of a scene of 1,000 entities.
+
+## The scene view
+
+The live views' scene view (`src/host/live/live_scene.h`, kind 6 of the view registry) draws a scene of the
+[wire protocol 3.2 draft](../references/wire-protocol-3-2.md) through the scene core and the graphics layer, natively
+and in the WebAssembly views alike. A source hands it the decoded SCENE_UPDATE and SCENE_CLEAR messages in their
+order (`src/host/live/live_views_scene.h`): the parts points, lines as segments or strips and mesh, static items, clears
+of entities and parts, and the reset that opens a scene's state for a new subscription. The view keeps each entity's
+static and stamped batches apart, so a clear that is not static leaves a static batch drawn.
+
+- **Buffers.** The arrays of a network message are host bytes. Each is written into a buffer of the layer that the view
+  owns, one copy that the view counts in its copy counters and its header reports; strip lengths become the scene core's
+  break mask, and per-strip colours or values are expanded to their vertices on the way. A batch replaced by one of the
+  same or a smaller size is written into the buffers it has, and a larger one gets buffers with a capacity rounded up to
+  a power of two of at least 4 KiB. In-place import from the shared-memory session's slots is not built yet.
+- **Colormaps.** A colormapped batch takes the colormap block of its colormap and range. Until migration step 6 puts the
+  key derivation in a shared header, the view derives the keys from the CPU reference in one temporary place
+  (`src/host/live/scene_colormap_keys.h`) and caches the blocks by colormap and range.
+- **Drawing.** When the scene, the camera, the size or the clear colour changed, the view compiles the scene and submits
+  it, with the index clamp of changed meshes, to an offscreen colour target with a depth target in 3-D, which its
+  window shows as an image; otherwise it submits nothing. On Metal each scene view has a backend of the layer of its
+  own on the renderer's device and queue, so its submits are ordered with the app's frame and its statistics are its
+  own; in a browser it borrows the WebGPU renderer's backend.
+- **Camera.** The orbit about the scene's up axis (pan and zoom in a 2-D scene), fitted once when the scene first has
+  bounds and again on F or a double click, with the points view's gestures.
+
+`caliper_gfx_tests --test-case="gfx/Metal scene view*"` applies the 3.2 golden frames to scene views and checks their
+state, draws the surface row's scene from protocol messages and compares it with the same CPU rasterisation as the
+surface row under the same parity rules, checks a late attach, clears and static items, and checks that an update of
+one batch reuses its buffers while nothing is drawn when nothing changes. `CALIPER_GFX_CAPTURE_DIR` writes
+`scene-view-row.png` and `scene-view-row-update.png`, and `CALIPER_GFX_SCENE_VIEW_BENCH=1` runs a row that reports
+the view's compile, submit and GPU times for that scene and the cost of applying one mesh update.
+`python/tests/test_scene_app.py` runs the whole path: the app, hidden and attached late to `caliper.serve()`, draws
+a scene that the test reads back through Caliper API's capture, and `web/wasm/test/scene.mjs` draws one on the viewer
+page in headless Chromium.

@@ -16,6 +16,7 @@ This page specifies the part of wire protocol 3.2 that is built: the capability 
 | Codecs | `python/caliper/_wire.py`, `src/host/net/wire.h` and `web/src/protocol/codec.ts`, with the golden frames of `tests/fixtures/wire_v3/v3_2` |
 | Producer | `caliper.scene` in Caliper LIB on `caliper.serve()`, the Python and the native sender ([Caliper LIB](python-api.md#scenes)) |
 | Hub | Forwards both messages to the viewers that announced `scenes` and keeps a scene's state for a late viewer ([Through a hub](#through-a-hub)) |
+| Viewers | The Caliper app, `caliper-viewer` and the WebAssembly views announce `scenes` and draw scenes with one scene view; the TypeScript client announces it so that the `<caliper-view>` element and the viewer page hand a scene to the WebAssembly views |
 
 Not built: timelines and stamps, the parts `arrows`, `boxes`, `image` and `camera`, lines of mode `edges`, entity transforms (SCENE_TRANSFORMS), class tables (SCENE_CLASSES), the dtype `u16`, split updates, labels, class ids, normals, texture coordinates, scene data views other than the default, the starting camera and scene events. [Versioning](#versioning) says what a receiver does when one of them arrives.
 
