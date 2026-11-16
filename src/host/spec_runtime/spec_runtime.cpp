@@ -896,7 +896,9 @@ void SpecRuntime::clear_preview(const std::string& panel_id) {
     previews_.erase(it);
 }
 
-void SpecRuntime::update() {
+void SpecRuntime::update() { update_only(nullptr); }
+
+void SpecRuntime::update_only(const SpecLayout* shown) {
     if (!spec_) return;
     if (source_) {
         const uint64_t r = source_->revision();
@@ -908,6 +910,7 @@ void SpecRuntime::update() {
     for (auto& kv : entries_) {
         Entry& e = kv.second;
         if (!e.stale) continue;
+        if (shown && !shown->find(kv.first)) continue;   // a hidden tab waits until it shows
         PanelData data;
         if (source_) {
             data = source_->resolve(*spec_, e.panel.id);
@@ -922,7 +925,7 @@ void SpecRuntime::update() {
 
 const PreparedPanel* SpecRuntime::prepared(const std::string& panel_id) const {
     auto it = entries_.find(panel_id);
-    return it == entries_.end() ? nullptr : &it->second.view.data;
+    return it == entries_.end() || it->second.stale ? nullptr : &it->second.view.data;
 }
 
 void SpecRuntime::draw_tabs(const SpecLayoutTabs& t, const SpecLook& L) {
@@ -976,7 +979,6 @@ void SpecRuntime::draw_tabs(const SpecLayoutTabs& t, const SpecLook& L) {
 
 void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
     textures_.collect();
-    update();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     // The rules between the panels: the area in the rule colour, which the
     // panels leave showing in the gaps of the layout.
@@ -991,6 +993,9 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
     }
     const SpecLayoutMetrics m = SpecLayoutMetrics::for_text_scale(L.text_scale);
     layout_ = compute_spec_layout(*root, *spec_, {area.Min.x, area.Min.y, area.GetWidth(), area.GetHeight()}, m, tabs_);
+    // Only the panels shown are resolved; a panel in a hidden tab is resolved
+    // when its tab is chosen.
+    update_only(&layout_);
     for (const auto& t : layout_.tabs) draw_tabs(t, L);
     for (const auto& lp : layout_.panels) {
         auto pv = previews_.find(lp.id);

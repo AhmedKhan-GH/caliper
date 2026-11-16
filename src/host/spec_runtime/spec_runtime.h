@@ -201,7 +201,8 @@ public:
     void set_overlay(std::function<void(const SpecPanelFrame&)> overlay) { overlay_ = std::move(overlay); }
 
     // Brings the panels up to date with the spec and the source: resolves
-    // and prepares the ones that changed. draw() calls it.
+    // and prepares the ones that changed. draw() does it for the panels it
+    // shows, so a panel in a hidden tab is resolved when its tab is chosen.
     void update();
 
     // Lays the spec out in `area` and draws it, on the frame thread, inside a
@@ -210,7 +211,8 @@ public:
 
     // The layout of the last draw.
     const SpecLayout& layout() const { return layout_; }
-    // A panel's prepared data, or null.
+    // A panel's prepared data, or null when it has none yet (a panel in a
+    // hidden tab, or a change not drawn yet).
     const PreparedPanel* prepared(const std::string& panel_id) const;
 
 private:
@@ -220,6 +222,7 @@ private:
         bool stale = true;
     };
     void prepare(Entry& e, const caliper_builder::PanelData& data);
+    void update_only(const SpecLayout* shown);
     void draw_tabs(const SpecLayoutTabs& t, const SpecLook& look);
 
     SpecTextures& textures_;
