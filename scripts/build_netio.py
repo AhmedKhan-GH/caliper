@@ -4,23 +4,40 @@
 It needs a C++17 compiler, CMake, Ninja (or make) and nanobind in the Python
 that runs this script, and nothing else of the project: it compiles
 python/src/_netio.cpp and src/host/net in a few seconds and copies the module
-into python/caliper/, where ``PYTHONPATH=python`` finds it (git ignores it).
+into python/caliper/, where ``PYTHONPATH=python`` finds it (git ignores it),
+and into the caliper package that this Python has installed, if any (a wheel
+in a virtual environment). Run it with the Python of the training script:
 
-    python scripts/build_netio.py            # Release
-    python scripts/build_netio.py --asan     # AddressSanitizer, plus the caliper_net tests
+    .venv/bin/python scripts/build_netio.py            # Release
+    .venv/bin/python scripts/build_netio.py --asan     # AddressSanitizer, plus the caliper_net tests
 
-The wheel builds the same module from python/CMakeLists.txt.
+Reinstalling the wheel replaces the installed package; run it again after.
+The wheel's own build of the module (python/CMakeLists.txt) is not tested yet.
 """
 from __future__ import annotations
 
 import argparse
 import glob
+import importlib.util
 import os
 import shutil
 import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def installed_package() -> str | None:
+    """The folder of the caliper package this Python imports when it is not the
+    one in this tree (found without importing it), or None."""
+    try:
+        spec = importlib.util.find_spec("caliper")
+    except (ImportError, ValueError):
+        return None
+    if spec is None or not spec.submodule_search_locations:
+        return None
+    d = os.path.realpath(list(spec.submodule_search_locations)[0])
+    return None if d == os.path.realpath(os.path.join(ROOT, "python", "caliper")) else d
 
 
 def main() -> int:
@@ -40,12 +57,16 @@ def main() -> int:
     if not built:
         print("the build produced no module", file=sys.stderr)
         return 1
-    dest = os.path.join(ROOT, "python", "caliper")
-    for old in glob.glob(os.path.join(dest, "_netio*")):
-        os.remove(old)
-    for f in built:
-        shutil.copy2(f, dest)
-        print(os.path.relpath(os.path.join(dest, os.path.basename(f)), ROOT))
+    dests = [os.path.join(ROOT, "python", "caliper")]
+    other = installed_package()
+    if other is not None:
+        dests.append(other)
+    for dest in dests:
+        for old in glob.glob(os.path.join(dest, "_netio*")):
+            os.remove(old)
+        for f in built:
+            shutil.copy2(f, dest)
+            print(os.path.join(dest, os.path.basename(f)))
     return 0
 
 
