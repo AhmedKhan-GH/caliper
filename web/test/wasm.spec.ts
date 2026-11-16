@@ -291,7 +291,13 @@ test('the fixed heatmaps and points draw the same pixels as the reference set', 
     for (const v of ['h', 'ha', 'p'])
       await expect.poll(async () => String((await wasmStats(page, v)).checks ?? ''), { timeout: 20_000 }).toMatch(new RegExp(`^${v}:\\d+:0:\\d+$`));
     await page.mouse.move(1, 1);
-    await page.waitForTimeout(600);
+    // Every view draws 30 more frames once the pointer has left it, so no hover is left in the
+    // pictures; a wait on frames, not on time, holds on a slow runner too.
+    const views = ['h', 'ha', 'p'];
+    const frames = async (v: string) => Number((await wasmStats(page, v)).frames ?? 0);
+    const f0 = await Promise.all(views.map(frames));
+    for (const [i, v] of views.entries())
+      await expect.poll(() => frames(v), { timeout: 20_000 }).toBeGreaterThanOrEqual(f0[i] + 30);
     const ref = process.env.CALIPER_VIEWS_REFERENCE;
     for (const v of ['h', 'ha', 'p']) {
       const shot = await page.locator(`caliper-view[view="${v}"] .body .wasm canvas`).screenshot();
