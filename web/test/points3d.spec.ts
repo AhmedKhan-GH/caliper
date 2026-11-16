@@ -140,11 +140,19 @@ test('the rotate toggle turns the 3-D view until a drag stops it, and a 2-D view
       await page.mouse.up();
       await expect(button).toHaveAttribute('aria-pressed', 'false');
       await expect.poll(async () => (await state(page, r)).rotate, { timeout: 5000 }).toBe(false);
-      // The module publishes its state a few times a second: let the drag's own turn arrive first.
-      await page.waitForTimeout(500);
-      const az1 = ((await state(page, r)).camera as { az: number }).az;
-      await page.waitForTimeout(600);
-      expect(((await state(page, r)).camera as { az: number }).az, r).toBeCloseTo(az1, 6);
+      // The view stops turning: once the drag's own turn has arrived (the module
+      // publishes its state a few times a second), the azimuth stays.
+      const az = async () => ((await state(page, r)).camera as { az: number }).az;
+      // On SwiftShader a frame of the module can take most of a second, so the
+      // windows are long.
+      await expect.poll(async () => {
+        const a = await az();
+        await page.waitForTimeout(1200);
+        return Math.abs((await az()) - a);
+      }, { timeout: 15_000 }).toBeLessThan(1e-6);
+      const az1 = await az();
+      await page.waitForTimeout(1500);
+      expect(await az(), r).toBeCloseTo(az1, 6);
     }
   } finally {
     prod.stop();

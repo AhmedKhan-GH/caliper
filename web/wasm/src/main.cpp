@@ -329,9 +329,14 @@ bool start_points_check(caliper_live_views::View& v) {
                  (0.5f - (M[1] * x + M[5] * y + M[9] * z + M[13]) / cw * 0.5f) * (float)H,
                  (M[2] * x + M[6] * y + M[10] * z + M[14]) / cw, cw, true};
     }
+    // Half the side a point is drawn with, plus a pixel: with the depth cues
+    // its size follows its distance, as the renderer draws it.
     const bool cues = v.dims == 3 && v.depth_cues;
-    const float grow = cues ? caliper_host::kPointAttenMax : 1.0f;
-    const float half = 0.5f * caliper_live_views::point_size_px(n, g.core->scale) * grow + 1.0f;
+    const float side = caliper_live_views::point_size_px(n, g.core->scale);
+    auto half_of = [&](const Proj& p) {
+        const float k = cues ? std::clamp(v.cam.dist / p.w, caliper_host::kPointAttenMin, caliper_host::kPointAttenMax) : 1.0f;
+        return 0.5f * side * k + 1.0f;
+    };
     struct Want { int px, py; uint32_t rgba; };
     auto wants = std::make_shared<std::vector<Want>>();
     const float* aux = (const float*)v.cur.aux_cpu;
@@ -345,7 +350,8 @@ bool start_points_check(caliper_live_views::View& v) {
         bool covered = false;
         for (uint64_t j = 0; j < n && !covered; ++j) {
             if (j == i || !pr[j].ok) continue;
-            if (std::fabs(pr[j].x - a.x) > 2 * half || std::fabs(pr[j].y - a.y) > 2 * half) continue;
+            const float h = half_of(pr[j]) + 1.0f;   // a pixel more for rounding
+            if (std::fabs(pr[j].x - a.x) > h || std::fabs(pr[j].y - a.y) > h) continue;
             covered = v.dims == 2 ? j > i : (pr[j].z <= a.z + 1e-6f);
         }
         if (covered) continue;
