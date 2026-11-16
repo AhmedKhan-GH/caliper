@@ -176,9 +176,12 @@ def scene(name: str = "scene", *, space: str = "3d", up=None, units: str = "m", 
 
 
 def forget(name: str) -> None:
-    """caliper.remove(name): drop the scene and what it retains."""
+    """caliper.remove(name): drop the scene and what it retains. A later call
+    on its Scene object makes it again, empty, as a view call makes its view."""
     with _lock:
-        SCENES.pop(name, None)
+        st = SCENES.pop(name, None)
+        if st is not None:
+            st.static, st.last, st.batches, st.entities = {}, {}, set(), set()
 
 
 def attach_ring(ring) -> None:
@@ -614,6 +617,11 @@ def _frame_bytes(spec: _Spec) -> int:
 
 def _log(st: SceneState, path: str, spec: _Spec, static: bool, iv) -> bool:
     caliper = _CALIPER or _caliper()
+    if SCENES.get(st.name) is not st:               # removed: a call makes it again
+        with _lock:
+            if SCENES.setdefault(st.name, st) is not st:
+                raise ValueError(f"scene {st.name!r} was removed and made again; log to the "
+                                 "Scene object that caliper.scene returns now")
     nbytes = _frame_bytes(spec)
     if nbytes + META_MARGIN > _wire.MAX_FRAME_BYTES:
         raise ValueError(f"this batch needs {nbytes} bytes, more than one frame of "
@@ -665,23 +673,23 @@ def _snapshot(st: SceneState, path: str, spec: _Spec, static: bool) -> Batch:
     params = dict(spec.params)
     arrays: dict = {}
     axes = None
-    sample = None                                  # an index tensor for the default budget
+    sample = None                       # the default budget's stride: (count, size, per segment)
     if spec.part == _wire.PART_POINTS and n > _wire.DEFAULT_MAX_POINTS:
-        size = _wire.DEFAULT_MAX_POINTS
-        sample = ("rows", _stride(n, size, pos.device))
-        axes = [{"dim": "point", "start": 0, "step": 1, "count": n, "size": size}]
+        sample = (n, _wire.DEFAULT_MAX_POINTS, False)
+        axes = [{"dim": "point", "start": 0, "step": 1, "count": n, "size": sample[1]}]
     elif spec.part == _wire.PART_LINES and params["mode"] == _wire.LINES_SEGMENTS and \
             n // 2 > _wire.SCENE_DEFAULT_MAX_ITEMS:
-        size = _wire.SCENE_DEFAULT_MAX_ITEMS
-        seg = _stride(n // 2, size, pos.device)
-        sample = ("rows", (seg[:, None] * 2 + torch.arange(2, device=pos.device)).reshape(-1))
-        axes = [{"dim": "segment", "start": 0, "step": 1, "count": n // 2, "size": size}]
+        sample = (n // 2, _wire.SCENE_DEFAULT_MAX_ITEMS, True)
+        axes = [{"dim": "segment", "start": 0, "step": 1, "count": n // 2, "size": sample[1]}]
 
     def rows(t):
+        """The rows of ``t`` the budget keeps, gathered on t's own device."""
         if sample is None:
             return t
-        idx = sample[1]
-        return t.index_select(0, idx if idx.device == t.device else idx.to(t.device))
+        idx = _stride(sample[0], sample[1], t.device)
+        if sample[2]:                   # both vertices of each kept segment
+            idx = (idx[:, None] * 2 + torch.arange(2, device=t.device)).reshape(-1)
+        return t.index_select(0, idx)
 
     arrays["positions"] = rows(pos if pos.dtype == f32 else pos.to(f32))
     per_vertex = params.get("color_per") != _wire.COLOR_PER_STRIP

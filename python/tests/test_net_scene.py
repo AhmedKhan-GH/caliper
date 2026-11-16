@@ -238,7 +238,7 @@ def test_2d_scene_mesh(server):
     run(body())
 
 
-def test_points_over_the_budget_are_sampled_by_stride(server):
+def test_points_and_segments_over_the_budget_are_sampled_by_stride(server):
     sc = caliper.scene("big")
     n = 150_000
     pos = torch.arange(n * 3, dtype=torch.float32).reshape(n, 3)
@@ -254,6 +254,14 @@ def test_points_over_the_budget_are_sampled_by_stride(server):
             rows = np.arange(size, dtype=np.int64) * n // size
             np.testing.assert_array_equal(arr(m, "values"), rows.astype(np.float32))
             np.testing.assert_array_equal(arr(m, "positions"), pos.numpy()[rows])
+            seg = torch.arange(2 * n * 3, dtype=torch.float32).reshape(2 * n, 3)
+            sc.lines("edges", seg)                                     # n segments
+            e = await v.update("edges", timeout=20)
+            size = w.SCENE_DEFAULT_MAX_ITEMS
+            assert e.axes == [{"dim": "segment", "start": 0, "step": 1, "count": n, "size": size}]
+            keep = np.arange(size, dtype=np.int64) * n // size
+            pairs = np.stack([2 * keep, 2 * keep + 1], 1).reshape(-1)
+            np.testing.assert_array_equal(arr(e, "positions"), seg.numpy()[pairs])
     run(body())
 
 
@@ -389,10 +397,22 @@ def test_remove_ends_the_scene(server):
         async with Viewer(server) as v:
             await v.subscribe(1, "gone")
             await v.state(1)
+            assert sc.points("p", torch.zeros(1, 3), static=True)
             assert caliper.remove("gone") is False
             await v.expect(w.Views, lambda m: all(x["name"] != "gone" for x in m.views))
             assert "gone" not in _scene.SCENES
-            assert sc.points("p", torch.zeros(1, 3)) is False       # a removed scene logs nowhere
+            # A call on its object makes it again, empty, as a view call makes its view.
+            assert sc.points("q", torch.zeros(1, 3)) is False       # nobody subscribes yet
+            await v.expect(w.Views, lambda m: any(x["name"] == "gone" for x in m.views))
+            await v.subscribe(2, "gone")
+            assert await v.state(2) == []                         # the static item went with it
+            caliper.scene("other")
+            caliper.remove("other")
+            again = caliper.scene("other")
+            with pytest.raises(ValueError, match="made again"):
+                stale = _scene.Scene(_scene.SceneState("other", "3d", "+y", "m", None))
+                stale.points("p", torch.zeros(1, 3))
+            assert again.points("p", torch.zeros(1, 3)) is False
     run(body())
 
 
