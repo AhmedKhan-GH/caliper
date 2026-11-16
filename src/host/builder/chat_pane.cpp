@@ -123,12 +123,14 @@ struct ChatPane::Impl {
         };
         h.before_start = [this](ChatEnvironment* env) -> caliper_builder::Error {
             if (!hooks.start_api) return {"chat.no_api", "Caliper API is not running."};
-            std::string why;
-            const std::string file = hooks.start_api(&why);
+            std::string why, started;
+            const std::string file = hooks.start_api(&why, &started);
             if (file.empty()) return {"chat.no_api", "Caliper API did not start: " + why};
             env->api_file = file;
+            if (!started.empty() && chat) chat->note("API", "Caliper API started on " + started + " for this chat");
             return {};
         };
+        h.agent_ended = hooks.agent_ended;
         chat = std::make_unique<SideChat>(std::move(o), std::move(h));
         if (draft) {
             chat->open_handoff(std::move(*draft));
@@ -248,6 +250,8 @@ void ChatPane::focus_input() {
     if (impl_->chat) impl_->chat->focus_input();
 }
 
+int ChatPane::draft_chips() const { return impl_->chat ? (int)impl_->chat->draft().chips.size() : 0; }
+
 void ChatPane::shutdown() {
     impl_->chat.reset();
     impl_->started = false;
@@ -283,6 +287,7 @@ void ChatPane::draw_column() {}
 std::string ChatPane::state() const { return "none"; }
 bool ChatPane::has_item(const std::string&, const std::string&, const std::string&) const { return false; }
 void ChatPane::focus_input() {}
+int ChatPane::draft_chips() const { return 0; }
 void ChatPane::shutdown() {}
 
 #endif

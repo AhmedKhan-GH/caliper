@@ -453,7 +453,7 @@ SideChat::~SideChat() {
         job_->abandoned = true;
     }
     job_.reset();
-    retire_client();
+    retire_client(/*ending=*/false);   // no hooks while the chat is destroyed
     for (std::thread& t : workers_)
         if (t.joinable()) t.join();
 }
@@ -584,7 +584,7 @@ void SideChat::start_agent() {
         state_ = ChatState::no_agent;
         return;
     }
-    retire_client();
+    retire_client(/*ending=*/false);   // a new agent follows at once
     if (hooks_.before_start) {
         if (Error e = hooks_.before_start(&options_.env)) {
             state_ = ChatState::failed;
@@ -628,7 +628,8 @@ void SideChat::start_agent() {
     mode_.clear();
 }
 
-void SideChat::retire_client() {
+void SideChat::retire_client(bool ending) {
+    const bool had = job_ || client_;
     if (job_) {
         // The start worker still uses the client: it shuts it down itself.
         std::lock_guard<std::mutex> lock(job_->m);
@@ -639,6 +640,13 @@ void SideChat::retire_client() {
     }
     job_.reset();
     client_.reset();
+    if (had && ending && hooks_.agent_ended) hooks_.agent_ended();
+}
+
+void SideChat::note(const std::string& tag, const std::string& line) {
+    ChatItem& n = add(ChatItem::Kind::notice);
+    n.text = tag;
+    n.lines = {line};
 }
 
 void SideChat::finish_start() {
@@ -653,6 +661,7 @@ void SideChat::finish_start() {
     if (!job->error.ok()) {
         // The worker has shut the client down.
         client_.reset();
+        if (hooks_.agent_ended) hooks_.agent_ended();
         error_ = job->error;
         if (error_.code == "acp.auth_required") {
             state_ = ChatState::needs_login;
@@ -1004,6 +1013,19 @@ ChatColumnLayout layout_chat_column(const ChatColumnInput& in, const ChatLayoutM
             out.upper = {out.column.x, w.y, col, upper};
             out.chat = {out.column.x, w.y + upper, col, chat};
         }
+    }
+    return out;
+}
+
+ChatColumnLayout layout_chat_page(const WidgetRect& window, float top_strips, float bottom_strips, bool chat_open,
+                                  bool left_open, const ChatLayoutMetrics& m) {
+    ChatColumnInput in;
+    in.window = {window.x, window.y + top_strips, window.w, std::max(0.0f, window.h - top_strips - bottom_strips)};
+    in.left_open = left_open;
+    ChatColumnLayout out = layout_chat_column(in, m);
+    if (!chat_open) {
+        out.canvas.w += out.column.w;
+        out.column = out.upper = out.chat = WidgetRect{};
     }
     return out;
 }

@@ -1506,9 +1506,22 @@ void LandingScreen::draw_activity() {
 // Status bar
 // ============================================================================
 
+namespace {
+std::function<std::string()>& host_status_note() {
+    static std::function<std::string()> note;
+    return note;
+}
+}  // namespace
+
+void set_host_status_note(std::function<std::string()> note) { host_status_note() = std::move(note); }
+
 void draw_host_status_items(const char* renderer_name) {
     sternbild::status_item(upper(renderer_name ? renderer_name : "").c_str());
     sternbild::status_item(caliper_host::device_info().name.c_str());
+    if (host_status_note()) {
+        const std::string note = host_status_note()();
+        if (!note.empty()) sternbild::status_item(note.c_str());
+    }
 }
 
 // Status bar (VS Code / JetBrains): the machine at a glance, always in the

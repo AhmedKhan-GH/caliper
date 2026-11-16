@@ -21,8 +21,13 @@
 //     build's caliper-mcp and the settings below. Its agent starts with the
 //     first message; Caliper API must run for caliper-mcp, so the pane asks
 //     the app to start it then (Hooks::start_api) when the app was started
-//     without --api: on a free loopback port, with a new session token and the
-//     API file, as --api does.
+//     without --api: on a free port of 127.0.0.1 only, with a new session
+//     token and the API file, as --api does; no setting chooses another
+//     address. The chat then says so in a line of its own ("Caliper API
+//     started on 127.0.0.1:<port> for this chat"), the app writes an
+//     Activity line and shows the API in the status bar, and when the chat's
+//     agent ends the app stops the API it started for it
+//     (Hooks::agent_ended). An API started with --api is left alone.
 //   - The settings. side-chat.json in the app-data folder: the chosen agent's
 //     id, the custom agent's name and command line, whether an agent's
 //     allow_always options are offered, and whether the pane is open. Never a
@@ -47,8 +52,12 @@ class ChatPane {
 public:
     struct Hooks {
         // Starts Caliper API when it is not running, and returns its API file,
-        // or "" with the reason.
-        std::function<std::string(std::string* why)> start_api;
+        // or "" with the reason; `started` gets its address (127.0.0.1:<port>)
+        // when this call started it.
+        std::function<std::string(std::string* why, std::string* started)> start_api;
+        // The chat's agent has ended (side_chat.h, Hooks::agent_ended): the app
+        // stops the API it started for the chat.
+        std::function<void()> agent_ended;
         // A row of the conversation was clicked: point at that approval's card.
         std::function<void(const std::string& approval)> show_approval;
         // One Activity line.
@@ -94,6 +103,8 @@ public:
     std::string state() const;
     bool has_item(const std::string& kind, const std::string& command = {}, const std::string& status = {}) const;
     void focus_input();
+    // The chips of the draft in the input (a handoff's context), 0 for none.
+    int draft_chips() const;
 
     // Before the session and the UI context go: stops the agent.
     void shutdown();

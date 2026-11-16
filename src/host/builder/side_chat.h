@@ -293,6 +293,10 @@ public:
         // in what it has only now, such as the API file of a Caliper API it
         // starts for the chat. An error fails the start with it.
         std::function<caliper_builder::Error(ChatEnvironment*)> before_start;
+        // The chat's agent has ended and no other starts at once: it exited,
+        // could not start, or the person chose another agent. Not called when
+        // a restart replaces it, nor when the chat is destroyed.
+        std::function<void()> agent_ended;
     };
 
     SideChat(Options options, Hooks hooks = {});
@@ -317,6 +321,9 @@ public:
     void open_handoff(ChatDraft draft);
     void clear_draft();
     void act(ChatAction action);
+    // A line of the app's in the conversation, under a tag, such as the
+    // Caliper API that the app started for the chat.
+    void note(const std::string& tag, const std::string& line);
 
     // ---- per frame: the start worker, the agent's events and the mirrored approvals
     void update();
@@ -358,7 +365,9 @@ public:
 
 private:
     void start_agent();
-    void retire_client();
+    // Stops the agent on a worker; `ending`: no agent follows at once, so
+    // Hooks::agent_ended is called.
+    void retire_client(bool ending = true);
     void send_now();
     void on_event(const caliper_builder::acp::AcpEvent& e);
     void end_turn(const caliper_builder::acp::AcpEvent& e);
@@ -454,6 +463,14 @@ struct ChatColumnLayout {
     WidgetRect chat;
 };
 ChatColumnLayout layout_chat_column(const ChatColumnInput& in, const ChatLayoutMetrics& m);
+
+// The page as the app lays it out: the window less the host's strips at its
+// top (the page bar, a stream's run bar) and its bottom (the status bar, the
+// jobs tray, the approval cards' strip), then, with the chat open, the
+// columns of layout_chat_column() in what is left; with it closed, the
+// canvas takes all of it (and the left column its share when open).
+ChatColumnLayout layout_chat_page(const WidgetRect& window, float top_strips, float bottom_strips, bool chat_open,
+                                  bool left_open, const ChatLayoutMetrics& m);
 
 enum class ChatFont { label, key, mono, tag };
 using ChatMeasure = std::function<float(const std::string& text, ChatFont font)>;

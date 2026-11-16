@@ -29,6 +29,7 @@
 //                        catalog.describe in_progress"), an approval row
 //                        ("approval panel.create waiting"), a stop word
 //                        ("stop - DONE")
+//   chat draft           wait until the chat's input holds a handoff's draft
 //   touch <path>         creates an empty file (a stub agent's gate)
 //   append <path> <line> appends a line to a file (a test's approval decision)
 //   quit                 close the app
@@ -163,6 +164,9 @@ public:
             } else if (what == "until") {
                 if (chat->state() != a) return patience("the chat is " + chat->state() + ", not " + a);
                 next("the chat is " + a);
+            } else if (what == "draft") {
+                if (chat->draft_chips() == 0) return patience("the chat has no draft");
+                next("chat draft of " + std::to_string(chat->draft_chips()) + " blocks");
             } else if (what == "item") {
                 const std::string cmd = b == "-" ? std::string() : b;
                 if (!chat->has_item(a, cmd, c)) return patience("no chat item " + s.arg);

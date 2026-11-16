@@ -542,20 +542,39 @@ public:
         co.settings_path = caliper::app_data_path("side-chat.json");
         co.exe_dir = caliper::executable_dir();
         caliper_host::ChatPane::Hooks chh;
-        chh.start_api = [this](std::string* why) -> std::string {
+        // The one case where the API starts without --api: the side chat
+        // starts it for its agent's caliper-mcp, on 127.0.0.1 at a free port
+        // (the server binds loopback only, and no setting chooses another
+        // address), and stops it when the chat's agent ends.
+        chh.start_api = [this](std::string* why, std::string* started) -> std::string {
             if (!api_.running()) {
                 caliper_host::CommandLine c = cl_;
                 c.api_port = 0;
                 start_api(c);
-                if (api_.running()) landing_.log("api", api_.url(), "for the side chat");
+                if (api_.running()) {
+                    api_for_chat_ = true;
+                    *started = api_address();
+                    landing_.log("api started", *started, "for the side chat");
+                    std::cerr << "[chat] Caliper API started on " << *started << " for the side chat" << std::endl;
+                }
             }
             if (!api_.running()) *why = "see Activity";
             else if (api_.file().empty()) *why = "the API file could not be written";
-            return api_.running() ? api_.file() : std::string();
+            return api_.running() && !api_.file().empty() ? api_.file() : std::string();
+        };
+        chh.agent_ended = [this] {
+            if (!api_for_chat_ || !api_.running()) return;
+            const std::string address = api_address();
+            api_.stop();
+            api_for_chat_ = false;
+            landing_.log("api stopped", address, "the side chat's agent ended");
+            std::cerr << "[chat] Caliper API stopped on " << address << ": the side chat's agent ended" << std::endl;
         };
         chh.show_approval = [this](const std::string& id) { approvals_.point_to(id); };
         chh.log = [this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); };
         chat_.start(std::move(co), std::move(chh));
+        // Every page's status bar shows the API's address while it runs.
+        set_host_status_note([this] { return api_.running() ? "api " + api_address() : std::string(); });
         spec_page_.set_chat(&chat_);
     }
 
@@ -1269,6 +1288,16 @@ private:
     caliper_host::ApprovalTray approvals_;  // the agents' requests that wait for the person
     caliper_host::ChatPane chat_;           // the side chat, on the spec and live pages
     caliper_host::CommandLine cl_;          // for starting Caliper API later, for the chat
+    bool api_for_chat_ = false;             // the API runs because the side chat started it
+
+    // The API's address as the status bar and Activity show it: 127.0.0.1:<port>.
+    std::string api_address() const {
+        const std::string url = api_.url();   // http://127.0.0.1:<port>/v0
+        const size_t a = url.find("://");
+        if (a == std::string::npos) return url;
+        const size_t b = url.find('/', a + 3);
+        return url.substr(a + 3, b == std::string::npos ? std::string::npos : b - a - 3);
+    }
     bool pending_spec_home_ = false;  // Home on the spec page: leave after render
     std::string workspace_dir_;       // the session's workspace, whose spec applets are listed
     std::string pending_spec_open_;   // a workspace spec applet to open once the session is open

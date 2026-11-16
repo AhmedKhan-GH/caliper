@@ -169,3 +169,6 @@ private:
 // uppercased, then the device name. Call between sternbild::status_bar_begin()
 // and status_bar_end(); page-specific items follow.
 void draw_host_status_items(const char* renderer_name);
+// A fact of the app's that every page's status bar shows after the machine,
+// such as the address of Caliper API while it runs; "" shows nothing.
+void set_host_status_note(std::function<std::string()> note);
