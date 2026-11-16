@@ -411,7 +411,7 @@ TEST_CASE("app live: the stream stays attached across Home and the spec page unt
     CHECK(app.text.find("[live] detached") == std::string::npos);
     std::ofstream(t.str("detach")).put('\n');
     REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("detached")); }, 60000), app.text);
-    CHECK(app.text.find("[live] detached: attention_train.py") != std::string::npos);
+    CHECK(app_says(app, "[live] detached: attention_train.py", 10000));
     CHECK(eventually(app, [&] { return live_entries(port, token).empty(); }));
     CHECK(ok(port, token, "applet.open", {{"id", "entropy"}})["title"] == "Entropy");
     const Image offline = decode(ok(port, token, "panel.render", {{"id", "heads"}, {"width", 320}, {"height", 200}}));
@@ -716,7 +716,7 @@ TEST_CASE("app save: F3 New dashboard over unsaved changes asks Save changes fir
         return "key cmd+k;wait 5;type new " + title + ";wait 5;key enter;";
     };
     const std::string script = "page landing;wait 60;" + new_spec("Alpha") + "page spec;touch " + t.str("a1") + ";" + home +
-                               new_spec("Beta") + "wait 30;touch " + t.str("a2") + ";save until;shot " + shot +
+                               new_spec("Beta") + "save until;touch " + t.str("a2") + ";shot " + shot +
                                ";save cancel;wait 10;touch " + t.str("a3") + ";" + new_spec("Beta") +
                                "save dont-save;page spec;touch " + t.str("a4") + ";" + home + new_spec("Gamma") +
                                "save save;page spec;touch " + t.str("a5");
@@ -729,7 +729,7 @@ TEST_CASE("app save: F3 New dashboard over unsaved changes asks Save changes fir
     // F3 again: the question holds the new spec back.
     a.reach(t, "a2");
     CHECK(a.spec()["id"] == "alpha");
-    CHECK(a.app.text.find("[save] Save changes to Alpha? waiting") != std::string::npos);
+    CHECK(app_says(a.app, "[save] Save changes to Alpha? waiting", 10000));
     // Cancel: nothing changed.
     a.reach(t, "a3");
     CHECK(a.spec()["id"] == "alpha");
@@ -762,7 +762,7 @@ TEST_CASE("app save: opening another dashboard from the landing over unsaved cha
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
     const std::string home = "key escape;wait 5;key escape;page landing;";
     const std::string open_two = "key cmd+k;wait 5;type Two;wait 5;key enter;";
-    const std::string script = "wait-file " + t.str("b0") + ";page spec;" + home + open_two + "wait 30;touch " +
+    const std::string script = "wait-file " + t.str("b0") + ";page spec;" + home + open_two + "save until;touch " +
                                t.str("b1") + ";save save;page spec;wait 10;touch " + t.str("b2") + ";wait-file " +
                                t.str("b2go") + ";" + home + open_two + "page spec;wait 30;touch " + t.str("b3");
     SaveApp a;
@@ -779,7 +779,7 @@ TEST_CASE("app save: opening another dashboard from the landing over unsaved cha
     // Two from the landing: the question first, and One stays open meanwhile.
     a.reach(t, "b1");
     CHECK(a.spec()["id"] == "one");
-    CHECK(a.app.text.find("[save] Save changes to One edited? waiting") != std::string::npos);
+    CHECK(app_says(a.app, "[save] Save changes to One edited? waiting", 10000));
     // Save: One is written with its change, then Two opens.
     a.reach(t, "b2");
     CHECK(a.spec()["id"] == "two");
@@ -818,7 +818,7 @@ TEST_CASE("app save: closing the window over unsaved changes asks first; Cancel 
     fs::create_directories(t.str("data"));
     fs::create_directories(t.str("user-applets"));
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
-    const std::string script = "wait-file " + t.str("c0") + ";close;wait 30;touch " + t.str("c1") +
+    const std::string script = "wait-file " + t.str("c0") + ";close;save until;touch " + t.str("c1") +
                                ";save cancel;wait 30;touch " + t.str("c2") + ";wait-file " + t.str("c2go") +
                                ";close;save dont-save";
     SaveApp a;
@@ -827,7 +827,7 @@ TEST_CASE("app save: closing the window over unsaved changes asks first; Cancel 
     go_on(t, "c0");
     a.reach(t, "c1");
     CHECK(::kill(a.app.pid, 0) == 0);   // still running: the question holds the close back
-    CHECK(a.app.text.find("[save] Save changes to Draft? waiting") != std::string::npos);
+    CHECK(app_says(a.app, "[save] Save changes to Draft? waiting", 10000));
     a.reach(t, "c2");
     CHECK(::kill(a.app.pid, 0) == 0);   // Cancel: it runs on
     CHECK(a.spec()["id"] == "draft");
