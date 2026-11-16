@@ -2,7 +2,9 @@
 
   v3_2/<name>.bin, .json       the frames of a 3.2 sender (minor 2): HELLO and
                                WELCOME with the capability "scenes", VIEWS with
-                               a scene, the resolved default scene data view,
+                               a scene, VIEWS with a scene whose keys are
+                               null (the defaults), the resolved default scene
+                               data view,
                                SCENE_UPDATE of each part built (points, lines
                                as segments and strips, mesh) and SCENE_CLEAR.
                                Every implementation decodes them and encodes
@@ -37,6 +39,9 @@ M = w.MINOR_3_2
 LANDSCAPE = {"id": 5, "name": "landscape", "kind": int(w.Kind.SCENE), "sources": [],
              "scene": {"space": "3d", "up": "+z", "units": ""}}
 PLANE_SHARE = {"id": 6, "name": "plane share", "kind": int(w.Kind.SERIES), "sources": []}
+# A scene whose optional keys are null, which means the same as absent: 3-D, +y up, metres.
+NULLS = {"id": 7, "name": "defaults", "kind": int(w.Kind.SCENE), "sources": [],
+         "scene": {"space": None, "up": None, "units": None}}
 
 DECODE_ONLY = ("v3_2/scene_update_points_stamped", "v3_2/scene_update_mesh_normals")
 
@@ -83,6 +88,7 @@ def valid_vectors() -> dict[str, bytes]:
                                                w.CAP_SELECTION],
                              PRODUCER_SOFTWARE, SESSION, control=True),
         "views_scene": w.Views([LANDSCAPE, PLANE_SHARE], SESSION["id"]),
+        "views_scene_nulls": w.Views([NULLS], SESSION["id"]),
         "view_reply_scene": w.ViewReply(9, 2, "landscape",
                                         data_view=w.resolve_data_view(LANDSCAPE, {})),
         # The draft's example frame without its stamp (timelines are not built).
