@@ -352,6 +352,11 @@ public:
         std::vector<std::pair<std::string, uint64_t>> updates;   // updates by path, sorted by path
     };
     virtual bool frame_stats(FrameStats* /*out*/, bool /*reset_window*/) { return false; }
+    // The GPU time of view draws made through the graphics layer (src/host/gfx), whose command
+    // buffers the renderer never sees: `ms` summed over `submits` completed submits, as the
+    // layer's Stats reports them. Recorded in the view-draw series of the frame statistics while
+    // they are on (each submit as ms / submits); a no-op otherwise.
+    virtual void note_draw_gpu_ms(double /*ms*/, uint32_t /*submits*/) {}
 
 protected:
     // A backend's init() and canvas_init() fail through this, which records the

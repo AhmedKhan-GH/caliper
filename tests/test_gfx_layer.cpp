@@ -637,6 +637,43 @@ TEST_CASE("gfx layer: import reports its route and the bytes it copied") {
     gfx.release(in_place.buffer);
 }
 
+TEST_CASE("gfx layer: a transient host import is always copied, and an import's memory is mapped for reading") {
+    RecordingBackend gfx;
+    const size_t page = RecordingBackend::kHostPage;
+    std::vector<uint8_t> storage(2 * page);
+    uint8_t* aligned = storage.data() + (page - reinterpret_cast<uintptr_t>(storage.data()) % page) % page;
+    std::memset(aligned, 0x5a, page);
+    ExternalBuffer ext;
+    ext.kind = ExternalKind::HostMemory;
+    ext.handle = aligned;
+    ext.size = page;
+    ext.usage = kVertex;
+    ext.transient = true;                                // page-aligned, but valid only during the call
+    ImportResult copied = gfx.import_buffer(ext);
+    REQUIRE(copied.buffer);
+    CHECK(copied.route == Route::CopiedFromHost);
+    CHECK(copied.bytes_copied == page);
+    CHECK(has(copied.reason, "only during the call"));
+    aligned[7] = 0x11;                                   // the producer's bytes change; the copy does not
+    CHECK(gfx.buffer_bytes(copied.buffer)[7] == 0x5a);
+    const uint8_t* m = static_cast<const uint8_t*>(gfx.mapped(copied.buffer));
+    REQUIRE(m != nullptr);                               // an import is mapped for reading
+    CHECK(m[7] == 0x5a);
+    ext.transient = false;
+    ImportResult wrapped = gfx.import_buffer(ext);
+    REQUIRE(wrapped.buffer);
+    CHECK(wrapped.route == Route::InPlace);
+    CHECK(static_cast<const uint8_t*>(gfx.mapped(wrapped.buffer))[7] == 0x11);
+    BufferDesc bd;
+    bd.size = 256;
+    bd.usage = kVertex | kCopyDst;
+    Buffer own = gfx.create_buffer(bd);
+    CHECK(gfx.mapped(own) == nullptr);                   // a buffer made without host_visible is not
+    gfx.release(copied.buffer);
+    gfx.release(wrapped.buffer);
+    gfx.release(own);
+}
+
 TEST_CASE("gfx layer: copies and dispatches are validated like draws") {
     Scene s;
     Texture t = s.gfx.create_texture({4, 2, Format::RGBA8Unorm, kSampled | kCopyDstTex | kCopySrcTex | kStorageTex});

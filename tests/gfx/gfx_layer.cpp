@@ -524,7 +524,43 @@ TEST_CASE("gfx/Metal layer: an instanced draw from an imported MTLBuffer is in p
     gfx->release(wrapped.buffer);
     gfx->wait(gfx->last_use(color));
     gfx->poll();
+
+    // The submits since the last take whose GPU time is known are counted beside the sum.
+    const Stats st3 = gfx->take_stats();
+    CHECK(st3.gpu_submits >= 1);
+    CHECK(st3.gpu_ms > 0.0);
+
+    // A transient import of the same aligned page is copied, never wrapped, and reads like it.
+    hext.transient = true;
+    ImportResult transient = gfx->import_buffer(hext);
+    REQUIRE_MESSAGE(bool(transient.buffer), transient.reason);
+    CHECK(transient.route == Route::CopiedFromHost);
+    CHECK(transient.bytes_copied == page);
+    static_cast<uint8_t*>(aligned)[kOffset] ^= 0xff;    // the producer's bytes change after the call
+    const uint8_t* tm = static_cast<const uint8_t*>(gfx->mapped(transient.buffer));
+    REQUIRE(tm != nullptr);
+    CHECK(std::memcmp(tm + kOffset, rows, sizeof rows) == 0);
+    gfx->release(transient.buffer);
+    hext.transient = false;
     std::free(aligned);
+
+    // The CPU view of an imported MTLBuffer: its contents in shared storage, none in private storage.
+    id<MTLBuffer> shared_buf = [device newBufferWithBytes:rows length:sizeof rows options:MTLResourceStorageModeShared];
+    id<MTLBuffer> private_buf = [device newBufferWithLength:sizeof rows options:MTLResourceStorageModePrivate];
+    ExternalBuffer mext;
+    mext.kind = ExternalKind::MetalBuffer;
+    mext.handle = (__bridge void*)shared_buf;
+    mext.size = sizeof rows;
+    mext.usage = kVertex;
+    ImportResult ms = gfx->import_buffer(mext);
+    REQUIRE(bool(ms.buffer));
+    CHECK(gfx->mapped(ms.buffer) == shared_buf.contents);
+    mext.handle = (__bridge void*)private_buf;
+    ImportResult mp = gfx->import_buffer(mext);
+    REQUIRE(bool(mp.buffer));
+    CHECK(gfx->mapped(mp.buffer) == nullptr);
+    gfx->release(ms.buffer);
+    gfx->release(mp.buffer);
 
     // An imported texture of the device is used in place too.
     MTLTextureDescriptor* td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm

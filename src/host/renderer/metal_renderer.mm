@@ -1661,6 +1661,16 @@ public:
         return true;
     }
 
+    void note_draw_gpu_ms(double ms, uint32_t submits) override {
+        if (!stats_on_ || !(ms > 0.0) || submits == 0) return;
+        const float each = (float)(ms / (double)submits);
+        std::lock_guard<std::mutex> lk(gpu_times_->mu);
+        for (uint32_t k = 0; k < submits; ++k) {
+            gpu_times_->window.draw_gpu_ms.push_back(each);
+            if (gpu_times_->run.draw_gpu_ms.size() < kStatsRunCap) gpu_times_->run.draw_gpu_ms.push_back(each);
+        }
+    }
+
 private:
     // ---- CALIPER_METAL_STATS (docs/explanations/rendering.md, "Copy counters
     // and frame statistics"): frame times, GPU times from the command buffers'

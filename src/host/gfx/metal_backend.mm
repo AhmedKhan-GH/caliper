@@ -503,7 +503,10 @@ protected:
         texture_writes_[slot] = cb;
     }
 
-    void* on_mapped(uint32_t slot) override { return buffers_[slot].contents; }
+    void* on_mapped(uint32_t slot) override {
+        id<MTLBuffer> b = buffers_[slot];
+        return b.storageMode == MTLStorageModePrivate ? nullptr : b.contents;   // private storage has no CPU view
+    }
 
     bool on_import_buffer(uint32_t slot, const ExternalBuffer& ext, ImportResult* r) override {
         grow(buffers_, slot);
@@ -527,7 +530,7 @@ protected:
             return false;
         }
         const bool aligned = reinterpret_cast<uintptr_t>(ext.handle) % page_ == 0 && ext.size % page_ == 0;
-        if (aligned) {
+        if (aligned && !ext.transient) {
             id<MTLBuffer> b = [device_ newBufferWithBytesNoCopy:ext.handle length:(NSUInteger)ext.size
                                                         options:MTLResourceStorageModeShared deallocator:nil];
             if (b != nil) {
@@ -547,7 +550,9 @@ protected:
         buffers_[slot] = b;
         r->route = Route::CopiedFromHost;
         r->bytes_copied = ext.size;
-        r->reason = aligned ? "the wrap failed" : "the memory is not page-aligned";
+        r->reason = ext.transient ? "the memory is valid only during the call"
+                    : aligned     ? "the wrap failed"
+                                  : "the memory is not page-aligned";
         return true;
     }
 

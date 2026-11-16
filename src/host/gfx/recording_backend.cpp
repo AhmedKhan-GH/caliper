@@ -108,7 +108,7 @@ bool RecordingBackend::on_import_buffer(uint32_t slot, const ExternalBuffer& ext
     buffers_[slot] = Buf{};
     buffers_[slot].size = ext.size;
     const bool aligned = reinterpret_cast<uintptr_t>(ext.handle) % kHostPage == 0 && ext.size % kHostPage == 0;
-    if (caps().has(kCapImportHostMemory) && aligned) {
+    if (caps().has(kCapImportHostMemory) && aligned && !ext.transient) {
         buffers_[slot].wrapped = static_cast<uint8_t*>(ext.handle);
         r->route = Route::InPlace;
         r->bytes_copied = 0;
@@ -121,7 +121,9 @@ bool RecordingBackend::on_import_buffer(uint32_t slot, const ExternalBuffer& ext
                                   static_cast<const uint8_t*>(ext.handle) + ext.size);
         r->route = Route::CopiedFromHost;
         r->bytes_copied = ext.size;
-        r->reason = aligned ? "this backend does not wrap host memory" : "the memory is not page-aligned";
+        r->reason = ext.transient ? "the memory is valid only during the call"
+                    : aligned     ? "this backend does not wrap host memory"
+                                  : "the memory is not page-aligned";
     }
     ops_.push_back({OpKind::Import, HandleKind::Buffer, slot, r->bytes_copied, 0, r->route});
     return true;

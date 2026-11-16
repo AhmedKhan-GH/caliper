@@ -154,7 +154,7 @@ uint32_t Frame::uniform(const void* data, uint32_t size) { return arena_push(are
 
 void CompletionSink::complete(Serial s, double gpu_ms) {
     std::lock_guard<std::mutex> lock(mu_);
-    if (gpu_ms >= 0) { gpu_ms_ += gpu_ms; gpu_known_ = true; }
+    if (gpu_ms >= 0) { gpu_ms_ += gpu_ms; ++gpu_n_; gpu_known_ = true; }
     Serial through = through_.load(std::memory_order_relaxed);
     if (s <= through) return;
     if (s != through + 1) { early_.insert(s); return; }
@@ -164,10 +164,12 @@ void CompletionSink::complete(Serial s, double gpu_ms) {
     through_.store(through, std::memory_order_release);
 }
 
-double CompletionSink::take_gpu_ms() {
+double CompletionSink::take_gpu_ms(uint32_t* submits) {
     std::lock_guard<std::mutex> lock(mu_);
     const double r = gpu_known_ ? gpu_ms_ : -1.0;
+    if (submits) *submits = gpu_n_;
     gpu_ms_ = 0;
+    gpu_n_ = 0;
     gpu_known_ = false;
     return r;
 }
@@ -1133,7 +1135,7 @@ bool Backend::write_texture(Texture t, const void* data, uint32_t row_pitch) {
 void* Backend::mapped(Buffer b) {
     Core& c = *core_;
     auto* s = c.buffers.get(b.id);
-    if (s == nullptr || !s->info.host_visible || !c.caps.has(kCapPersistentMap)) return nullptr;
+    if (s == nullptr || !(s->info.host_visible || s->info.imported) || !c.caps.has(kCapPersistentMap)) return nullptr;
     return on_mapped(handle_slot(b.id));
 }
 
@@ -1336,7 +1338,7 @@ uint64_t Backend::imgui_texture_id(Texture t) {
 Stats Backend::take_stats() {
     Core& c = *core_;
     Stats r = c.stats;
-    r.gpu_ms = c.caps.has(kCapTimestamps) ? c.sink->take_gpu_ms() : -1.0;
+    r.gpu_ms = c.caps.has(kCapTimestamps) ? c.sink->take_gpu_ms(&r.gpu_submits) : -1.0;
     c.stats = Stats{};
     return r;
 }

@@ -366,6 +366,9 @@ struct ExternalBuffer {
     uint64_t size = 0;
     uint32_t usage = 0;            // kVertex | kIndex | kStorage | kCopySrc
     bool allow_copy = true;        // false: refuse rather than copy (geometry service applets ask for this)
+    // true: the memory is valid only until the call returns, so the backend copies it and never
+    // wraps it (a live view's CPU payload, whose producer may free its bytes on return).
+    bool transient = false;
     const char* label = nullptr;
 };
 struct ExternalTexture {
@@ -425,6 +428,7 @@ struct Stats {   // since the last take_stats; the frame's sum feeds the info li
     uint32_t submits = 0, imports_in_place = 0, imports_copied = 0, copies = 0, draws = 0, dispatches = 0;
     uint64_t bytes_copied_from_host = 0, bytes_copied_on_gpu = 0;
     double encode_cpu_ms = 0, gpu_ms = -1;   // gpu_ms < 0 without kCapTimestamps
+    uint32_t gpu_submits = 0;                // the completed submits whose GPU times gpu_ms sums
 };
 
 struct TensorSource {
@@ -471,7 +475,10 @@ public:
     // Ordered before the next submit, after the submits already made (queue order).
     bool  write_buffer(Buffer b, uint64_t offset, const void* data, uint64_t size);
     bool  write_texture(Texture t, const void* data, uint32_t row_pitch);
-    void* mapped(Buffer b);                          // with kCapPersistentMap and host_visible, else nullptr
+    // With kCapPersistentMap: a host_visible buffer's memory, or an import's when the CPU can read
+    // it (an MTLBuffer in shared storage, host memory the backend copied); else nullptr. The
+    // layer never writes imported memory, and neither may a caller through this pointer.
+    void* mapped(Buffer b);
 
     ImportResult import_buffer(const ExternalBuffer& ext);
     ImportResult import_texture(const ExternalTexture& ext);

@@ -75,13 +75,14 @@ class CompletionSink {
 public:
     void complete(Serial s, double gpu_ms);
     Serial completed_through() const { return through_.load(std::memory_order_acquire); }
-    double take_gpu_ms();                           // the sum since the last take; < 0 none
+    double take_gpu_ms(uint32_t* submits = nullptr);   // the sum since the last take; < 0 none
 
 private:
     mutable std::mutex mu_;
     std::set<Serial> early_;                        // completed ahead of an earlier serial
     std::atomic<Serial> through_{0};
     double gpu_ms_ = 0;
+    uint32_t gpu_n_ = 0;
     bool gpu_known_ = false;
 };
 
