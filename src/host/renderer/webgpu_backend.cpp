@@ -52,7 +52,9 @@
 //                             pass; a copy is wgpuCommandEncoderCopyBufferToTexture; a draw list is one
 //                             render pass (clear or load, the ID target cleared to 0, depth to 1.0)
 //                             recorded record by record with redundant state skipped. Completion is
-//                             wgpuQueueOnSubmittedWorkDone, which calls complete(serial).
+//                             wgpuQueueOnSubmittedWorkDone, which calls complete(serial). The upload,
+//                             the encoding and the submit run in a validation error scope, so that a
+//                             frame WebGPU refuses lands in device_errors() as "submit <serial>: ...".
 //   on_wait                   false: a browser cannot block (kCapBlockingWait unset).
 //   on_read_texture           wgpuCommandEncoderCopyTextureToBuffer into a MapRead staging buffer
 //                             with 256-byte rows, submitted on the queue, then wgpuBufferMapAsync; the
@@ -60,9 +62,9 @@
 //   on_take_readback          hands over the packed bytes.
 //   on_imgui_texture_id       the WGPUTextureView, which imgui_impl_wgpu takes as an ImTextureID.
 //
-// What WebGPU changes against the header: creation errors of shader modules and pipelines come
-// back asynchronously, through an error scope, so those hooks cannot refuse at once and the error
-// is kept in device_errors(); gpu_ms is not reported, because timestamp queries are a feature a
+// What WebGPU changes against the header: creation errors of shader modules and pipelines, and the
+// refusal of a frame that the core passed, come back asynchronously, through an error scope, so
+// those hooks cannot refuse at once and the error is kept in device_errors(); gpu_ms is not reported, because timestamp queries are a feature a
 // default device does not have (kCapTimestamps unset).
 #include "webgpu_backend.h"
 
@@ -919,6 +921,9 @@ bool WebGpuBackend::on_submit(Serial s, const Frame& frame, Stats*, std::string*
         return false;
     }
 
+    // Everything from here to the submit is in one error scope: a frame WebGPU refuses is reported.
+    push_scope();
+
     // The arenas, uploaded once.
     if (total > 0) {
         arena_stage_.assign(size_t(total), 0);
@@ -1074,6 +1079,7 @@ bool WebGpuBackend::on_submit(Serial s, const Frame& frame, Stats*, std::string*
     wgpuQueueSubmit(queue_, 1, &cmd);
     wgpuCommandBufferRelease(cmd);
     wgpuCommandEncoderRelease(enc);
+    pop_scope(("submit " + std::to_string(s)).c_str());
 
     struct Done {
         std::shared_ptr<bool> alive;

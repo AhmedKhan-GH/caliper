@@ -286,7 +286,8 @@ test('the graphics layer draws an indexed quad and instanced draws, dispatches a
       if (!got.report.startsWith('ok')) console.log(consoleErrors.join('\n'));
       for (const [name, url] of Object.entries(got.images))
         fs.writeFileSync(shotPath(info, `${name}-${compat ? 'compat' : 'core'}`), Buffer.from(url.split(',')[1], 'base64'));
-      expect(got.report).toBe(`ok color=0 id=0 depth=0 fill=0 copy=0 import=copied-from-host:24 level=${compat ? 'compatibility' : 'core'}`);
+      expect(got.report).toBe('ok color=0 id=0 depth=0 fill=0 copy=0 import=copied-from-host:24 own-target=refused '
+                              + `submit-error=reported level=${compat ? 'compatibility' : 'core'}`);
       expect(Object.keys(got.images).sort()).toEqual(['layer-compute', 'layer-copy', 'layer-draws', 'layer-ids']);
     }
   } finally {
