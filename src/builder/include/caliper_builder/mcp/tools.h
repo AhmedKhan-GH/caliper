@@ -1,5 +1,5 @@
 #pragma once
-// MCP tools from the command table (docs/plans/mcp-server.md, "Tools"). Each
+// MCP tools from the command table (docs/design/mcp-server.md, "Tools"). Each
 // command of a table becomes one tool:
 //
 // - the name is command_tool_name(), `_` for the dot (panel_create), which

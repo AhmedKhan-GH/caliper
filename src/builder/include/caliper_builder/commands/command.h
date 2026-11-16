@@ -1,5 +1,5 @@
 #pragma once
-// The command model (docs/plans/command-layer.md, The command model): a
+// The command model (docs/design/command-layer.md, The command model): a
 // CommandDescriptor describes one command, a CommandInvocation asks for one to
 // run, and a CommandResult answers it. Each has its JSON form.
 //

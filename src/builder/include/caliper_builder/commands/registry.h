@@ -1,5 +1,5 @@
 #pragma once
-// CommandRegistry: the command layer's core (docs/plans/command-layer.md). It
+// CommandRegistry: the command layer's core (docs/design/command-layer.md). It
 // maps command names to descriptors and handlers, and runs an invocation:
 //   1. checks the invocation, finds the command, validates the arguments
 //      against its schema, then checks that a handler is bound and, for a

@@ -1,8 +1,8 @@
 # Builder overview
 
-This page is the map of the builder: the work that lets someone drop data into Caliper, make loaders and build visuals from inside the app. A person builds by hand in a WYSIWYG builder pane, with their own agent in the side chat, with the widget agent on one panel, selection, dropped file or property, or from an agent outside the app over MCP. Everything that is built is data, a spec or a loader, and never code that runs in the app's process. The page says which parts are built, which wait, and where each part is described. The [roadmap](roadmap.md#phase-3-agent-built-panels) gives the order and status.
+This page is the map of the builder: the work that lets someone drop data into Caliper, make loaders and build visuals from inside the app. A person builds by hand in a WYSIWYG builder pane, with their own agent in the side chat, with the widget agent on one panel, selection, dropped file or property, or from an agent outside the app over MCP. Everything that is built is data, a spec or a loader, and never code that runs in the app's process. The page says which parts are built, which wait, and where each part is described. The [roadmap](../plans/roadmap.md#phase-3-agent-built-panels) gives the order and status.
 
-[Applet builder](applet-builder.md) is the earlier proposal that this work follows. It left a WYSIWYG editor and an agent inside the app for later; both are now part of the plan.
+[Applet builder](../plans/applet-builder.md) is the earlier proposal that this work follows. It left a WYSIWYG editor and an agent inside the app for later; both are now part of the plan.
 
 ## The parts
 

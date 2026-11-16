@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:caliper:schema:spec:v0",
   "title": "Caliper spec, version 0, canonical JSON form",
-  "description": "The structure, types, keys, enumerations, ranges, slots and options of a spec. References, cycles, layout placement, shapes and columns are checked by the spec library's validator, not by this schema. See docs/plans/spec-format.md.",
+  "description": "The structure, types, keys, enumerations, ranges, slots and options of a spec. References, cycles, layout placement, shapes and columns are checked by the spec library's validator, not by this schema. See docs/design/spec-format.md.",
   "type": "object",
   "additionalProperties": false,
   "required": ["caliper_spec", "applet"],

@@ -156,11 +156,11 @@ TEST_CASE("acceptance over MCP: an outside agent builds the dashboard through ca
     const json resources = child.request("resources", "resources/list", json::object())["result"];
     std::set<std::string> uris;
     for (const auto& r : resources["resources"]) uris.insert(r["uri"].get<std::string>());
-    CHECK(uris.count("caliper://docs/plans/mcp-server.md") == 1);
-    CHECK(uris.count("caliper://docs/plans/builder-session.md") == 1);
+    CHECK(uris.count("caliper://docs/design/mcp-server.md") == 1);
+    CHECK(uris.count("caliper://docs/design/builder-session.md") == 1);
     CHECK(uris.count("caliper://commands/command_table.json") == 1);
     CHECK(uris.count("caliper://schema/caliper-spec-v0.schema.json") == 1);
-    const json page = child.request("doc", "resources/read", {{"uri", "caliper://docs/plans/builder-session.md"}});
+    const json page = child.request("doc", "resources/read", {{"uri", "caliper://docs/design/builder-session.md"}});
     CHECK(page["result"]["contents"][0]["text"].get<std::string>().rfind("# Builder session", 0) == 0);
     const json from_app = child.request("table", "resources/read", {{"uri", "caliper://commands/command_table.json"}});
     CHECK(json::parse(from_app["result"]["contents"][0]["text"].get<std::string>()) == table);

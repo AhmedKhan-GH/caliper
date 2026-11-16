@@ -1,6 +1,6 @@
 #pragma once
 // caliper_builder::spec: the value types of a spec, format version 0
-// (docs/plans/spec-format.md).
+// (docs/design/spec-format.md).
 //
 // A spec describes an applet built from data: its sources, its panels and their
 // layout. `Spec` is the parsed document, a plain value that can be copied,

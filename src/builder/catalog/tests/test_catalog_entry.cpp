@@ -1,5 +1,5 @@
 // Tests of CatalogEntry: its strict JSON form, the id grammar and every rule
-// of docs/plans/catalog.md, with malformed and hostile entries.
+// of docs/design/catalog.md, with malformed and hostile entries.
 #include <caliper_builder/catalog/catalog_entry.h>
 
 #include <doctest/doctest.h>

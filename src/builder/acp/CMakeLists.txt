@@ -1,5 +1,5 @@
 # The acp module: an Agent Client Protocol client that runs the user's own
-# agent as a child process (docs/plans/acp-integration.md).
+# agent as a child process (docs/design/acp-integration.md).
 #   caliper_builder_acp   the subprocess helper, the JSON-RPC peer and AcpClient
 #   caliper-acp-harness   runs one session headless and prints its transcript
 #   caliper_acp_stub_agent, caliper_acp_test_child   test programs

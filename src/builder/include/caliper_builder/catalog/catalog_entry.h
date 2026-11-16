@@ -1,6 +1,6 @@
 #pragma once
 // CatalogEntry: one source of the catalog, which a spec can bind by its id
-// `<kind>:<name>` (docs/plans/catalog.md). An entry is a plain value. Its JSON
+// `<kind>:<name>` (docs/design/catalog.md). An entry is a plain value. Its JSON
 // form always holds all fourteen keys of the contracts, with null where a value
 // does not apply or is not known.
 //

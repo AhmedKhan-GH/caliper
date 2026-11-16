@@ -1,5 +1,5 @@
 #pragma once
-// The files of a saved spec applet (docs/plans/spec-format.md, The manifest
+// The files of a saved spec applet (docs/design/spec-format.md, The manifest
 // of a spec applet): applets/<id>/<id>.caliper.toml and <id>.spec.toml. Not a
 // public header.
 #include <caliper_builder/error.h>

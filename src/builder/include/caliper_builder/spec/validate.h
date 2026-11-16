@@ -1,5 +1,5 @@
 #pragma once
-// Validation of a spec (docs/plans/spec-format.md#validation).
+// Validation of a spec (docs/design/spec-format.md#validation).
 //
 // validate() checks a Spec however it was made: ids, lengths, counts and
 // ranges; the references between sources, panels and the layout; cycles in

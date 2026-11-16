@@ -20,7 +20,7 @@
 // unless RunOptions::allow_python is set for that run, and the store's lock is
 // released while the script runs.
 //
-// Safety (docs/plans/loaders.md, "Safety"): every input path must lie in the
+// Safety (docs/design/loaders.md, "Safety"): every input path must lie in the
 // workspace or in a grant; the database is opened with external access off,
 // the allowed paths set to the workspace and the grants, autoload and
 // autoinstall off and the configuration locked; every SQL text from a loader

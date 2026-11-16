@@ -10,7 +10,7 @@ again. [Agent roles](../explanations/agent-roles.md) explains how the widget age
     The widget agent's prompt and its settings are not built yet, so the steps that use them describe how they are
     planned to work, and the names of their controls may change. What exists today is the agent itself
     (`caliper-agent`) with Claude as its one provider, and the store that keeps the key;
-    [Widget agent sidecar](../plans/byok-agent.md) describes them, and its manual check shows how to try the agent with
+    [Widget agent sidecar](../design/byok-agent.md) describes them, and its manual check shows how to try the agent with
     your key from the terminal.
 
 ## Choose a provider
@@ -126,7 +126,7 @@ same advice holds.
 ## Local models in the side chat
 
 The side chat runs your own agent, so it uses whatever model your agent is set up for, local models included.
-[ACP integration](../plans/acp-integration.md#local-models-in-the-side-chat) sets up opencode with a model served by
+[ACP integration](../design/acp-integration.md#local-models-in-the-side-chat) sets up opencode with a model served by
 Ollama as a worked example.
 
 ## Remove the key

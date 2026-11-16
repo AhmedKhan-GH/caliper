@@ -54,7 +54,7 @@
 namespace caliper_builder::acp {
 
 // The ACP version this client speaks. Version 2 is a draft (see
-// docs/plans/acp-integration.md); it is added beside version 1 when it is
+// docs/design/acp-integration.md); it is added beside version 1 when it is
 // stable, never in place of it.
 constexpr int kAcpProtocolVersion = 1;
 

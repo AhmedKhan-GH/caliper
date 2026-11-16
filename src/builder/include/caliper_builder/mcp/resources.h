@@ -1,5 +1,5 @@
 #pragma once
-// The MCP resources of caliper-mcp (docs/plans/mcp-server.md, "Resources"):
+// The MCP resources of caliper-mcp (docs/design/mcp-server.md, "Resources"):
 // read-only text that helps an agent use Caliper, under the URI scheme
 // caliper://.
 //

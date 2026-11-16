@@ -1,4 +1,4 @@
-# caliper_builder_spec: the spec format v0 (docs/plans/spec-format.md). It
+# caliper_builder_spec: the spec format v0 (docs/design/spec-format.md). It
 # parses a spec from TOML or its canonical JSON form, validates it, writes it
 # back and applies merge patches to one panel or source.
 add_library(caliper_builder_spec STATIC

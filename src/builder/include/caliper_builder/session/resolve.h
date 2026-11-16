@@ -1,6 +1,6 @@
 #pragma once
 // The resolved data of a panel: for each bound slot, the data the spec
-// runtime will draw (docs/plans/builder-session.md, Resolving a panel's data).
+// runtime will draw (docs/design/builder-session.md, Resolving a panel's data).
 // It is the data path of the future spec runtime and of panel.render.
 //
 // resolve_panel() walks each binding of one panel of a spec:

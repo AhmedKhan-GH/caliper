@@ -1,6 +1,6 @@
 #pragma once
 // The edits of the open spec, as pure functions of a spec and the arguments
-// of a command (docs/plans/builder-session.md, Editing the open spec).
+// of a command (docs/design/builder-session.md, Editing the open spec).
 //
 // apply_spec_edit() runs one of spec.set_text, source.add, source.patch,
 // source.remove, panel.create, panel.patch, panel.remove, layout.place and

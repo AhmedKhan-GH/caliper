@@ -482,4 +482,4 @@ and L six to ten; each figure is rough.
 | 18 | The provider conformance suite, its stubs and its reference page | M, 4 days |
 | 19 | The GPU contention note | S, 1 day |
 
-The Windows Credential Manager store, with one entry per provider, is on the [Windows parity](windows-parity.md) page.
+The Windows Credential Manager store, with one entry per provider, is on the [Windows parity](../plans/windows-parity.md) page.

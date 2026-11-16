@@ -1,6 +1,6 @@
 #pragma once
 // caliper_builder::mcp::Server: the protocol engine of caliper-mcp, an MCP
-// server over newline-delimited JSON-RPC 2.0 (docs/plans/mcp-server.md).
+// server over newline-delimited JSON-RPC 2.0 (docs/design/mcp-server.md).
 //
 // It serves both eras of MCP on one connection:
 // - modern, revision 2026-07-28: every request carries

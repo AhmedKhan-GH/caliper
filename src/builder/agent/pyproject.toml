@@ -1,7 +1,7 @@
 # caliper-agent: the BYOK (bring your own key) backend of Caliper's agent pane.
 # It is an ACP agent on stdio that runs its own loop against the Claude API with
 # the user's key and acts on Caliper through Caliper API on loopback.
-# Design: docs/plans/byok-agent.md.
+# Design: docs/design/byok-agent.md.
 [build-system]
 requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 name = "caliper-agent"
 version = "0.1.0"
 description = "The BYOK agent of Caliper's agent pane: an ACP agent on stdio that drives Caliper through the Claude API with the user's own key."
-readme = { text = "See docs/plans/byok-agent.md in the Caliper repository.", content-type = "text/plain" }
+readme = { text = "See docs/design/byok-agent.md in the Caliper repository.", content-type = "text/plain" }
 requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = [

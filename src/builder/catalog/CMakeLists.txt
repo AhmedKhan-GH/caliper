@@ -1,6 +1,6 @@
 # caliper_builder_catalog: the catalog entry and its JSON form, the provider
 # interface, the merging Catalog, an in-memory provider and the tensor sampler
-# (docs/plans/catalog.md).
+# (docs/design/catalog.md).
 add_library(caliper_builder_catalog STATIC
     catalog_entry.cpp
     catalog.cpp

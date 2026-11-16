@@ -1,7 +1,7 @@
 """Applies a unified diff to a text, to turn a command's preview into an ACP diff.
 
 The command layer returns a spec change as a unified diff of the canonical
-TOML, in the format of `diff -u` (docs/plans/builder-session.md, Diffs). An ACP
+TOML, in the format of `diff -u` (docs/design/builder-session.md, Diffs). An ACP
 diff carries the old and the new text instead, so the sidecar applies the
 command's diff to the open spec's text from `spec.get`. Every context and
 removed line must match the old text where the hunk says; on any mismatch, or
