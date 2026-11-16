@@ -274,6 +274,7 @@ struct ChatItem {
     enum class Kind { person, agent, thought, tool, plan, permission, approval, stop, notice };
     Kind kind = Kind::agent;
     int turn = 0;
+    std::uint64_t serial = 0;   // unique in the conversation and growing, also after its oldest items go
     std::string text;      // person, agent, thought: the text; stop, notice: the tag
     std::string detail;    // stop: the error code; notice: the error code or the exit status
     std::vector<std::string> chips;                 // person: the context sent with it
@@ -482,14 +483,12 @@ private:
     caliper_builder::Error custom_error_;
     bool diagnostics_open_ = false;
     std::map<std::string, bool> group_open_;   // groups the person opened or closed
-    // The agent's text as it is drawn (chat_markdown.h), by item, laid out
-    // again only when the text, the width or the text scale changed.
-    struct MarkdownCache {
-        std::string text;
-        float width = -1.0f, scale = 0.0f;
-        MdLayout layout;
-    };
-    std::map<size_t, MarkdownCache> markdown_;
+    // The agent's text as it is drawn (chat_markdown.h), by the item's
+    // serial, so that the conversation losing its oldest items lays out none
+    // again; an item's text that grew is parsed again from its last finished
+    // block, and laid out again from the first block that changed.
+    std::map<std::uint64_t, MdDocument> markdown_;
+    std::uint64_t next_serial_ = 0;
     size_t drawn_items_ = 0;
     bool follow_ = true;
 };

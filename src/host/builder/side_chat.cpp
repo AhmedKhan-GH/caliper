@@ -509,8 +509,13 @@ bool SideChat::mode_skips_permission() const {
 }
 
 ChatItem& SideChat::add(ChatItem::Kind kind) {
-    if (items_.size() >= kMaxItems) items_.erase(items_.begin(), items_.begin() + (long)(kMaxItems / 10));
+    if (items_.size() >= kMaxItems) {
+        items_.erase(items_.begin(), items_.begin() + (long)(kMaxItems / 10));
+        // The drawn text of the items that went goes with them.
+        markdown_.erase(markdown_.begin(), markdown_.lower_bound(items_.front().serial));
+    }
     items_.emplace_back();
+    items_.back().serial = ++next_serial_;
     items_.back().kind = kind;
     items_.back().turn = turn_;
     return items_.back();
@@ -1594,25 +1599,26 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
                     case ChatItem::Kind::agent: {
                         // The agent's text with its Markdown rendered (chat_markdown.h);
                         // the item keeps the text as the agent sent it.
-                        MarkdownCache& md = markdown_[idx];
-                        if (md.text != it.text || md.width != w || md.scale != s) {
-                            MdMetrics mm;
-                            mm.line = ui_h;
-                            mm.code_line = mono_h + std::round(3.0f * s);
-                            mm.gap = std::round(6.0f * s);
-                            mm.indent = std::round(14.0f * s);
-                            mm.marker = std::round(14.0f * s);
-                            mm.code_pad = std::round(6.0f * s);
-                            mm.bold_extra = bold_dx;
-                            const MdMeasure measure = [&](const std::string& t, MdFont f) {
-                                return f == MdFont::mono ? extent(L.mono, L.mono_size, t).x : extent(L.ui, L.ui_size, t).x;
-                            };
-                            md.layout = layout_chat_markdown(chat_markdown_blocks(it.text), w, mm, measure);
-                            md.text = it.text;
-                            md.width = w;
-                            md.scale = s;
-                        }
-                        place(md.layout.height, [&](ImVec2 p) { draw_markdown(p, md.layout); });
+                        MdDocument& md = markdown_[it.serial];
+                        // An agent's text only grows, so its size and its end say
+                        // whether it changed, without comparing it whole each frame.
+                        const size_t tail = std::min<size_t>(64, it.text.size());
+                        if (md.text().size() != it.text.size() ||
+                            md.text().compare(md.text().size() - tail, tail, it.text, it.text.size() - tail, tail) != 0)
+                            md.set_text(it.text);
+                        MdMetrics mm;
+                        mm.line = ui_h;
+                        mm.code_line = mono_h + std::round(3.0f * s);
+                        mm.gap = std::round(6.0f * s);
+                        mm.indent = std::round(14.0f * s);
+                        mm.marker = std::round(14.0f * s);
+                        mm.code_pad = std::round(6.0f * s);
+                        mm.bold_extra = bold_dx;
+                        const MdMeasure measure = [&](const std::string& t, MdFont f) {
+                            return f == MdFont::mono ? extent(L.mono, L.mono_size, t).x : extent(L.ui, L.ui_size, t).x;
+                        };
+                        const MdLayout& lay = md.layout(w, mm, measure);
+                        place(lay.height, [&](ImVec2 p) { draw_markdown(p, lay); });
                         break;
                     }
                     case ChatItem::Kind::thought: {

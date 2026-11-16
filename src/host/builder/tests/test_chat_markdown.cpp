@@ -8,8 +8,8 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
-#include <chrono>
 #include <fstream>
+#include <functional>
 #include <sstream>
 #include <string>
 
@@ -167,7 +167,6 @@ TEST_CASE("chat markdown: blocks, and what shows as plain blocks") {
 }
 
 TEST_CASE("chat markdown: hostile text is bounded and falls back to plain text") {
-    const auto t0 = std::chrono::steady_clock::now();
     // Thousands of nested and unbalanced marks.
     // (in lines of 1,500 bytes, under the line bound, in one block under the inline bound)
     std::string nested;
@@ -191,21 +190,197 @@ TEST_CASE("chat markdown: hostile text is bounded and falls back to plain text")
     const auto l = chat_markdown_blocks("**" + line + "**");
     REQUIRE(l.size() == 1);
     CHECK(spans_text(l[0]).size() == line.size() + 4);
-    // Many lines: the block count is bounded, the rest shows as it is.
+    // Many lines: past the block bound the text shows as it is, in plain blocks
+    // of a bounded size, none of it lost.
     std::string many;
     for (int i = 0; i < 5000; ++i) many += "- item " + std::to_string(i) + "\n\n";
     const auto m = chat_markdown_blocks(many);
-    CHECK(m.size() == MdLimits::max_blocks + 1);
+    REQUIRE(m.size() > MdLimits::max_blocks);
+    for (size_t i = MdLimits::max_blocks; i < m.size(); ++i) {
+        CHECK(m[i].kind == MdBlockKind::paragraph);
+        CHECK(spans_text(m[i]).size() <= MdLimits::max_plain_block);
+    }
     CHECK(spans_text(m.back()).find("- item 4999") != std::string::npos);
-    // Text over the bound shows as it is.
+    // Text over the Markdown bound: the rest shows as it is, none of it lost.
     const std::string big((size_t)MdLimits::max_text + 1, '*');
-    CHECK(chat_markdown_blocks(big).size() == 1);
+    size_t bytes = 0;
+    for (const MdBlock& b : chat_markdown_blocks(big)) bytes += spans_text(b).size();
+    CHECK(bytes == big.size());
     // Fences that never close, a bracket that never closes, a tag that never closes.
+    // (300 of them, under the block bound, past which the text shows as it is)
     std::string fences;
-    for (int i = 0; i < 3000; ++i) fences += "```\n[x](\n<b\n";
-    CHECK(chat_markdown_blocks(fences).size() <= MdLimits::max_blocks + 1);
-    const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-    CHECK(s < 5.0);
+    for (int i = 0; i < 300; ++i) fences += "```a\n[x](\n<b\n";
+    CHECK(chat_markdown_plain(fences).find("```") == std::string::npos);
+}
+
+namespace {
+
+// The steps the parser and the layout take for `text`, laid out at 300 points.
+size_t steps_of(const std::string& text) {
+    chat_markdown_reset_steps();
+    MdDocument doc;
+    doc.set_text(text);
+    doc.layout(300.0f, MdMetrics{}, fake);
+    return chat_markdown_steps();
+}
+
+// `unit` repeated up to `bytes` bytes.
+std::string repeat(const std::string& unit, size_t bytes) {
+    std::string out;
+    while (out.size() + unit.size() <= bytes) out += unit;
+    return out;
+}
+
+// Lines of `line` bytes of `unit`, in paragraphs of `per` lines, up to `bytes`.
+std::string paragraphs(const std::string& unit, size_t bytes, size_t line = 1900, size_t per = 4) {
+    const std::string one = repeat(unit, line) + "\n";
+    std::string out;
+    size_t n = 0;
+    while (out.size() + one.size() + 1 <= bytes) {
+        out += one;
+        if (++n % per == 0) out += "\n";
+    }
+    return out;
+}
+
+// Linear: twice the text takes at most a little more than twice the steps,
+// and at most `per_byte` steps a byte.
+void check_linear(const std::string& name, const std::function<std::string(size_t)>& make, size_t n,
+                  double per_byte = 48.0) {
+    const std::string a = make(n), b = make(2 * n);
+    const size_t sa = steps_of(a), sb = steps_of(b);
+    INFO(name << ": " << a.size() << " bytes take " << sa << " steps, " << b.size() << " bytes " << sb);
+    CHECK((double)sb <= 2.3 * (double)sa + 4096.0);
+    CHECK((double)sb <= per_byte * (double)b.size());
+}
+
+}  // namespace
+
+// The parser and the layout count their steps (chat_markdown_steps()); a
+// quadratic path shows as a count that grows faster than the text, on any
+// machine, without timing anything.
+TEST_CASE("chat markdown: hostile text takes steps linear in its size") {
+    const size_t n = 24 * 1024;   // and 48 KiB, both under the Markdown bound
+    check_linear("unclosed fences", [](size_t b) { return repeat("```a\n", b); }, n);
+    check_linear("unclosed tilde and backtick fences", [](size_t b) { return repeat("~~~x\n```y\nz\n", b); }, n);
+    check_linear("opening brackets", [](size_t b) { return paragraphs("[", b); }, n);
+    check_linear("links without a target's end", [](size_t b) { return paragraphs("[x](", b); }, n);
+    check_linear("angle brackets", [](size_t b) { return paragraphs("<a ", b); }, n);
+    check_linear("tags without an end", [](size_t b) { return paragraphs("<b", b); }, n);
+    check_linear("backtick runs of every length", [](size_t b) {
+        std::string unit;
+        for (int k = 1; k <= 9; ++k) unit += std::string((size_t)k, '`') + "a";
+        return paragraphs(unit, b);
+    }, n);
+    check_linear("nested emphasis", [](size_t b) { return paragraphs("**a *", b); }, n);
+    check_linear("one long word", [](size_t b) { return std::string(b, 'x'); }, n);
+    check_linear("long lines", [](size_t b) { return repeat(std::string(5000, 'y') + "\n", b); }, n);
+    // An item of the chat's largest size, 256 KiB: Markdown up to the bound,
+    // plain text after it.
+    check_linear("a 256 KiB item", [](size_t b) { return repeat("word **bold** `code` [l](t)\n", b); }, 128 * 1024);
+    check_linear("a 256 KiB word", [](size_t b) { return std::string(b, 'z'); }, 128 * 1024);
+}
+
+TEST_CASE("chat markdown: a streamed text is parsed again only from its last finished block") {
+    // The summary, many times, in paragraphs, as it streams in pieces of 37 bytes.
+    const std::string summary = fixture();
+    auto stream = [&](size_t bytes, size_t* last_append) {
+        const std::string text = repeat(summary + "\n", bytes);
+        chat_markdown_reset_steps();
+        MdDocument doc;
+        size_t before = 0;
+        for (size_t at = 0; at < text.size();) {
+            at = std::min(text.size(), at + 37);
+            while (at < text.size() && ((unsigned char)text[at] & 0xC0) == 0x80) ++at;
+            before = chat_markdown_steps();
+            doc.set_text(text.substr(0, at));
+            doc.layout(300.0f, MdMetrics{}, fake);
+        }
+        *last_append = chat_markdown_steps() - before;
+        // The end result is that of the whole text read at once.
+        CHECK(chat_markdown_plain(text) == [&] {
+            std::string out;
+            for (const MdBlock& b : doc.blocks()) {
+                if (!out.empty()) out += '\n';
+                if (b.kind == MdBlockKind::bullet) out += "\xE2\x80\xA2 ";
+                for (const MdSpan& s : b.spans) out += s.text;
+            }
+            return out;
+        }());
+        return chat_markdown_steps();
+    };
+    size_t last_small = 0, last_big = 0;
+    const size_t small = stream(16 * 1024, &last_small), big = stream(32 * 1024, &last_big);
+    INFO("16 KiB streamed: " << small << " steps, 32 KiB: " << big);
+    CHECK((double)big <= 2.3 * (double)small);
+    CHECK((double)big <= 64.0 * 32 * 1024);
+    // The last piece costs about the same whatever came before it.
+    CHECK(last_big <= 2 * last_small + 2048);
+    CHECK(last_big < 8000);
+}
+
+TEST_CASE("chat markdown: a fence that arrives later closes an earlier one, as if read at once") {
+    MdDocument doc;
+    const std::string text = "Before\n\n```py\nx = 1\n\ny = **2**\n";
+    doc.set_text(text);
+    // Unclosed so far: the fence's line goes, the lines after it are plain.
+    REQUIRE(doc.blocks().size() == 3);
+    CHECK(doc.blocks()[1].kind == MdBlockKind::paragraph);
+    doc.set_text(text + "```\nAfter");
+    REQUIRE(doc.blocks().size() == 3);
+    CHECK(doc.blocks()[1].kind == MdBlockKind::code);
+    CHECK(doc.blocks()[1].lines == std::vector<std::string>{"x = 1", "", "y = **2**"});
+    CHECK(shape(doc.blocks()[2]) == "plain:After");
+    // Any other change than an append reads the whole text again.
+    doc.set_text("Other");
+    REQUIRE(doc.blocks().size() == 1);
+    CHECK(shape(doc.blocks()[0]) == "plain:Other");
+}
+
+TEST_CASE("chat markdown: a long word is broken from the width of each character, measured once") {
+    // The bytes the layout asks the measure for: a word of n characters wider
+    // than the line costs about 2n, not one measure of every prefix.
+    size_t measured = 0;
+    const MdMeasure counting = [&](const std::string& t, MdFont f) {
+        measured += t.size();
+        return fake(t, f);
+    };
+    for (const size_t n : {2000u, 8000u}) {
+        measured = 0;
+        layout_chat_markdown(chat_markdown_blocks(std::string(n, 'w')), 120.0f, MdMetrics{}, counting);
+        INFO(n << " characters measured " << measured << " bytes");
+        CHECK(measured <= 3 * n);
+    }
+}
+
+TEST_CASE("chat markdown: a document lays out again only the blocks that changed") {
+    size_t measured = 0;
+    const MdMeasure counting = [&](const std::string& t, MdFont f) {
+        measured += t.size();
+        return fake(t, f);
+    };
+    const std::string summary = fixture();
+    MdDocument doc;
+    doc.set_text(repeat(summary + "\n", 16 * 1024));
+    const MdLayout full = doc.layout(300.0f, MdMetrics{}, counting);
+    const size_t first = measured;
+    measured = 0;
+    doc.set_text(doc.text() + "One more line.");
+    const MdLayout& more = doc.layout(300.0f, MdMetrics{}, counting);
+    CHECK(measured < first / 20);
+    CHECK(more.height > full.height);
+    // The same as a layout of the whole text at once.
+    const MdLayout whole = layout_chat_markdown(chat_markdown_blocks(doc.text()), 300.0f, MdMetrics{}, fake);
+    REQUIRE(whole.runs.size() == more.runs.size());
+    CHECK(whole.height == more.height);
+    for (size_t i = 0; i < whole.runs.size(); ++i) {
+        CHECK(whole.runs[i].text == more.runs[i].text);
+        CHECK(whole.runs[i].y == more.runs[i].y);
+    }
+    // Another width lays out every block again.
+    measured = 0;
+    doc.layout(200.0f, MdMetrics{}, counting);
+    CHECK(measured >= first / 2);
 }
 
 TEST_CASE("chat markdown: the layout wraps words in the width, indents lists and plates code") {
