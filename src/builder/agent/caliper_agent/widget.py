@@ -199,7 +199,7 @@ def _str(target: dict, key: str, pattern: re.Pattern, what: str, *, required: bo
     value = target.get(key)
     if value is None and not required:
         return None
-    if not isinstance(value, str) or not pattern.match(value):
+    if not isinstance(value, str) or not pattern.fullmatch(value):
         raise WidgetError(f"The widget target needs {what} in {key}.")
     return value
 
@@ -225,7 +225,7 @@ def parse_target(raw: Any) -> dict:
         target["loader"] = _str(raw, "loader", _LOADER_ID, "a loader id")
         ids = raw.get("catalog", [])
         if not isinstance(ids, list) or len(ids) > MAX_CATALOG_IDS or not all(
-                isinstance(i, str) and _CATALOG_ID.match(i) for i in ids):
+                isinstance(i, str) and _CATALOG_ID.fullmatch(i) for i in ids):
             raise WidgetError(f"The widget target's catalog must be at most {MAX_CATALOG_IDS} catalog ids.")
         target["catalog"] = list(dict.fromkeys(ids))
     else:  # property
@@ -266,7 +266,7 @@ def parse_widget_meta(meta: Any, commands: list[Command], rule: ScopeRule | None
         raise WidgetError("This sidecar has no widget scope file, so it cannot open a widget session.")
     target = parse_target(widget.get("target"))
     preview = widget.get("preview")
-    if not isinstance(preview, str) or not _PREVIEW_ID.match(preview):
+    if not isinstance(preview, str) or not _PREVIEW_ID.fullmatch(preview):
         raise WidgetError("A widget session needs the id of the preview the app opened, in preview.")
     allowed = rule.scope(target_key(target), commands, vision=True)
     scope = widget.get("scope")
@@ -274,7 +274,7 @@ def parse_widget_meta(meta: Any, commands: list[Command], rule: ScopeRule | None
         chosen = allowed
     else:
         if not isinstance(scope, list) or not scope or len(scope) > MAX_SCOPE or not all(
-                isinstance(n, str) and _COMMAND.match(n) for n in scope):
+                isinstance(n, str) and _COMMAND.fullmatch(n) for n in scope):
             raise WidgetError(f"The widget scope must be a list of 1 to {MAX_SCOPE} command names.")
         outside = [n for n in scope if n not in allowed]
         if outside:
