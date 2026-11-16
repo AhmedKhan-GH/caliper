@@ -40,6 +40,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <vector>
 
@@ -732,6 +733,34 @@ TEST_CASE("gfx/Metal layer: a write after a queued write lands last, while the q
             gfx->release(tex);
         }
     }
+}
+
+TEST_CASE("gfx/Metal layer: a queued texture write reads only the rows the caller gave") {
+    // A 16 x 4 RGBA8 render target (private, so every write is queued) written with a row pitch
+    // of 256 needs 3 * 256 + 64 bytes from the caller. The data ends right at a page that cannot
+    // be read, so reading row_pitch * height bytes would fault.
+    std::unique_ptr<Backend> gfx = metal_layer();
+    if (!gfx) CALIPER_SKIP_NO_GPU("no Metal device");
+    const uint32_t W = 16, H = 4, kPitch = 256, kTight = (H - 1) * kPitch + W * 4;
+    Texture t = gfx->create_texture({W, H, Format::RGBA8Unorm, kRenderTarget | kCopyDstTex | kCopySrcTex, "target"});
+    REQUIRE(bool(t));
+    const size_t page = size_t(getpagesize());
+    void* mem = mmap(nullptr, 2 * page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    REQUIRE(mem != MAP_FAILED);
+    REQUIRE(mprotect(static_cast<uint8_t*>(mem) + page, page, PROT_NONE) == 0);
+    uint8_t* data = static_cast<uint8_t*>(mem) + page - kTight;
+    std::vector<uint8_t> want(size_t(W) * H * 4);
+    for (uint32_t y = 0; y < H; ++y)
+        for (uint32_t x = 0; x < W * 4; ++x) {
+            const uint8_t v = uint8_t(y * 61 + x * 7 + 1);
+            data[size_t(y) * kPitch + x] = v;
+            want[size_t(y) * W * 4 + x] = v;
+        }
+    REQUIRE(gfx->write_texture(t, data, kPitch));
+    const std::vector<uint8_t> got = read_back(*gfx, t, W, H);
+    const size_t d = first_diff(got, want.data(), want.size());
+    CHECK_MESSAGE(d == SIZE_MAX, "the texture differs from the rows written at byte ", d);
+    munmap(mem, 2 * page);
 }
 
 // The layer's CPU encode time for a draw list of 1,000 draws, on the recording backend and on
