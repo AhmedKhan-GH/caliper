@@ -20,7 +20,9 @@ What is translated:
   call id and tool name; the tools; `max_tokens` or `max_completion_tokens` as
   `options.num_predict`; temperature, top_p, seed, stop and the penalties as
   options; `reasoning_effort` as `think`; a JSON schema response format as
-  `format`. Every request gets `options.num_ctx` and `keep_alive`.
+  `format`. Every request gets `options.num_ctx` and `keep_alive`: the
+  transport's own, or the `options.num_ctx` of the request's body, where the
+  provider puts the context length of the session's role.
 - **The reply.** Ollama streams lines of JSON; each becomes a chunk of the
   chat completions API: `thinking` as `reasoning` (the field Ollama's own
   OpenAI-compatible endpoint uses), text as `content`, each tool call with an
@@ -57,14 +59,18 @@ def native_chat_url(base_url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}{path}/api/chat"
 
 
-def native_context(preset: Any, value: Any, source: str) -> int | None:
-    """The context length a preset with Ollama's own chat API loads the model with: the person's (an override
-    in the settings, or --context-length), else the preset's; None for any other preset."""
+ROLES = ("widget", "general")
+
+
+def native_context(preset: Any, value: Any, source: str, role: str = "widget") -> int | None:
+    """The context length a preset with Ollama's own chat API loads the model with for a role (the widget
+    agent's or the general one's): the person's (an override in the widget agent's settings, or
+    --context-length), else the preset's for that role; None for any other preset."""
     if preset is None or getattr(preset, "chat_api", "openai") != "ollama":
         return None
     if source in ("override", "option") and isinstance(value, int) and value > 0:
         return value
-    return preset.context_length
+    return (preset.context_length or {}).get(role)
 
 
 # ---- the request ---------------------------------------------------------------------------------
@@ -293,7 +299,9 @@ class OllamaNativeTransport(httpx2.AsyncBaseTransport):
             body = json.loads(await request.aread())
         except ValueError:
             return httpx2.Response(400, json=_error_body("The request is not JSON."), request=request)
-        native = native_request(body, num_ctx=self.num_ctx, keep_alive=self.keep_alive)
+        asked = (body.get("options") or {}).get("num_ctx") if isinstance(body.get("options"), dict) else None
+        num_ctx = asked if isinstance(asked, int) and not isinstance(asked, bool) and asked > 0 else self.num_ctx
+        native = native_request(body, num_ctx=num_ctx, keep_alive=self.keep_alive)
         headers = {k: v for k, v in request.headers.items()
                    if k.lower() not in ("content-length", "host", "accept-encoding", "accept")}
         headers["content-type"] = "application/json"

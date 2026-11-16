@@ -82,8 +82,9 @@ struct ProviderPreset {
     // its own. And the efforts it takes, empty when it takes none.
     std::vector<std::pair<std::string, std::string>> models;
     std::vector<std::string> efforts;
-    // The context length the preset loads the model with (Ollama's num_ctx),
-    // unless the person sets another; 0 leaves it to the server.
+    // The context length the preset loads the model with for the widget agent
+    // (Ollama's num_ctx; presets.json's context_length.widget), unless the
+    // person sets another; 0 leaves it to the server.
     long long context_length = 0;
 };
 

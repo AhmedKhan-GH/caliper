@@ -89,8 +89,9 @@ class Preset:
     # length below as options.num_ctx (ollama_native.py); "openai" otherwise.
     chat_api: str = "openai"
     # The context length the preset asks the server to load the model with,
-    # unless the person sets another; None leaves it to the server.
-    context_length: int | None = None
+    # for each role ("widget", "general"), unless the person sets another;
+    # None leaves it to the server.
+    context_length: dict | None = None
 
 
 def load_presets(path: str | Path | None = None) -> dict[str, Preset]:
@@ -111,13 +112,13 @@ def load_presets(path: str | Path | None = None) -> dict[str, Preset]:
         except (KeyError, TypeError, AttributeError):
             raise PresetError("A preset of the presets file lacks a field.") from None
         context = preset.context_length
+        good_context = context is None or (isinstance(context, dict) and set(context) == {"widget", "general"} and all(
+            isinstance(v, int) and not isinstance(v, bool) and 0 < v <= 100_000_000 for v in context.values()))
         if (not isinstance(preset.id, str) or preset.api not in APIS or preset.key not in KEY_NEEDS
                 or not isinstance(preset.local, bool) or (preset.key == "none") != (preset.key_env is None)
                 or preset.chat_api not in CHAT_APIS
                 or (preset.chat_api == "ollama" and preset.api != "openai-compatible")
-                or not (context is None or (isinstance(context, int) and not isinstance(context, bool)
-                                            and 0 < context <= 100_000_000))
-                or preset.id in out):
+                or not good_context or preset.id in out):
             raise PresetError(f"The preset {str(preset.id)[:32]} of the presets file is malformed.")
         out[preset.id] = preset
     return out

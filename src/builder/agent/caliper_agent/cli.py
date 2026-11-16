@@ -112,7 +112,9 @@ def main(argv: list[str] | None = None) -> int:
                              "until the server says no)")
     parser.add_argument("--context-length", type=_context_length,
                         help="the model's context length in tokens, the person's setting (default: the cached probe, "
-                             "else 8192 for an OpenAI-compatible model)")
+                             "else 8192 for an OpenAI-compatible model); for the Ollama preset, the context length "
+                             "the model is loaded with in every session (default: 16384 for the widget agent, 32768 "
+                             "for the general role)")
     parser.add_argument("--cache-dir", help="the folder of the capability cache (model-capabilities.json)")
     parser.add_argument("--no-compaction", action="store_true", help="turn server-side compaction off")
     parser.add_argument("--usage-log", help="append the token counts of each request to this file (JSON Lines)")
@@ -222,7 +224,11 @@ def main(argv: list[str] | None = None) -> int:
             known = resolve(entry, options={"tools": _yes_no(args.model_tools), "vision": _yes_no(args.model_vision),
                                             "context_length": args.context_length})
             context, context_source = known.context_length.value, known.context_length.source
-            num_ctx = native_context(choice.preset, context, context_source)
+            # The widget role takes the person's setting in the app (an override in
+            # the cache) or --context-length; the general role takes --context-length.
+            num_ctx = native_context(choice.preset, context, context_source, "widget")
+            general_ctx = native_context(choice.preset, args.context_length, "option" if args.context_length else
+                                         "default", "general")
             if num_ctx is not None:
                 # Ollama loads the model with this context length, so it is the model's.
                 context = num_ctx
@@ -235,7 +241,9 @@ def main(argv: list[str] | None = None) -> int:
                                             sources={"tools": known.tools.source, "vision": known.vision.source,
                                                      "context_length": context_source},
                                             quirks=known.quirks,
-                                            native={"num_ctx": num_ctx} if num_ctx is not None else None)
+                                            native={"num_ctx": {"widget": num_ctx, "general": general_ctx},
+                                                    "kv_bytes_per_token": known.quirks.get("kv_bytes_per_token")}
+                                            if num_ctx is not None else None)
         except OfflineError as exc:
             refusal = exc
     if refusal is not None:
@@ -353,7 +361,8 @@ def probe_main(argv: list[str]) -> int:
     # agent will use: the person's override, else the preset's.
     over = cache.get(base_url, args.model) if cache is not None else None
     over_context = over.overrides.get("context_length") if over is not None else None
-    num_ctx = native_context(choice.preset, over_context, "override" if over_context is not None else "default")
+    num_ctx = native_context(choice.preset, over_context, "override" if over_context is not None else "default",
+                             "widget")
     native = {"num_ctx": num_ctx} if num_ctx is not None else None
 
     async def run_probe(list_only: bool):

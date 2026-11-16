@@ -111,15 +111,17 @@ Beside the model, **Capabilities** shows three answers, each with where it came 
 
 **Probe** checks the model with two short test requests: one asks it to call a tool, and one asks it to name the
 colour of a small picture. For Claude it reads Anthropic's model list instead, and spends no tokens. The context length
-comes from the server where it reports one; Ollama reports none, so Caliper assumes 8,192 tokens there unless you set
-it. Caliper keeps the answers for 30 days.
+comes from the server where it reports one, else Caliper assumes 8,192 tokens; for Ollama it is the preset's own,
+16,384 tokens (see [Use a local model](#use-a-local-model)). Caliper keeps the answers for 30 days.
 
 Each row has **Yes**, **No** and **Auto**, and the context length a field: an answer you set wins over the probe's
 until you choose Auto again. A short tag says when the probe could not answer, such as **Server unreachable**,
 **Timeout** or **Key rejected**.
 
 When the model cannot call tools, the settings show **No tool calling**, and ⌘K offers only Ask in chat. Other tags
-say what is still missing: **No provider**, **No key**, **No model** or **Invalid address**.
+say what is still missing: **No provider**, **No key**, **No model** or **Invalid address**. For a server on your own
+machine, **Context cache about 18 GB** warns that the model's context length would take that much memory (4 GB or
+more), on top of the model itself.
 
 ## Use it
 
@@ -157,8 +159,19 @@ memory, and small models do this work less reliably than large ones.
 2. In the settings, choose the Ollama or LM Studio preset. Change the address if your server listens elsewhere.
 3. Choose **List**, then the model.
 4. Choose **Probe**. If the model cannot call tools, choose another one.
-5. For Ollama, type the context length you run the model with into the Context length field. Below 8,192 tokens
+5. For LM Studio, type the context length you load the model with into the Context length field. Below 8,192 tokens
    requests may not fit.
+
+**The context length with Ollama.** Ollama loads a model with room for its whole context length unless asked for
+less, and that room, the context cache, takes memory on top of the model: for `qwen3.8:27b`, whose context length is
+262,144 tokens, it is about 18 GB. Caliper therefore asks Ollama for 16,384 tokens for ⌘K and 32,768 tokens for the
+side chat's `caliper-agent`, about 1 GB and 2 GB of cache for that model, and Ollama unloads the model a
+minute after its last request. To change it, type another length into the Context length field (for ⌘K) or give
+`--context-length` to `caliper-agent` (for the side chat); the tag **Context cache about N GB** shows what a large one
+costs. When a conversation no longer fits, Caliper does not send it, and says so. If you reach Ollama through the
+Custom preset instead, Caliper cannot set the length, and you set it yourself: start Ollama with
+`OLLAMA_CONTEXT_LENGTH=16384 ollama serve`, which applies to every model, or make a copy of the model with a
+Modelfile that holds `FROM <model>` and `PARAMETER num_ctx 16384` (`ollama create <name> -f Modelfile`).
 
 [Widget agent conformance](../references/widget-agent-conformance.md) lists how models did on the widget agent's
 test tasks, and shows how to run the tasks against your own model. A server on another computer works too, through
