@@ -21,7 +21,7 @@ import time
 from pydantic_ai.models._anthropic_schema_limits import exceeded_limit
 
 from caliper_agent.loop import REFUSAL_TEXT
-from conftest import (FAKE_KEY, allow, deny, message, message_text, prompts, read_requests, statuses, text,
+from conftest import (general_tool_count, FAKE_KEY, allow, deny, message, message_text, prompts, read_requests, statuses, text,
                       thinking, tool_results, tool_use)
 
 CACHE_1 = {"input_tokens": 40, "output_tokens": 12, "cache_creation_input_tokens": 9000, "cache_read_input_tokens": 0}
@@ -65,7 +65,7 @@ def test_plain_turn_streams_and_sends_the_documented_request(run_agent):
     # Tools: one per command, named with _ for ., eagerly streamed, and strict
     # within the Claude API's limits for one request.
     names = [t["name"] for t in body["tools"]]
-    assert "panel_create" in names and "capture_frame" in names and len(names) == len(set(names)) == 35
+    assert "panel_create" in names and "capture_frame" in names and len(names) == len(set(names)) == general_tool_count()
     for tool in body["tools"]:
         assert tool["eager_input_streaming"] is True
     strict = [t for t in body["tools"] if t.get("strict")]

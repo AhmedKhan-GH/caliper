@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from conftest import AgentProcess, message_text, statuses
+from conftest import AgentProcess, message_text, statuses, general_tool_count
 from fake_openai import FakeOpenAI
 
 
@@ -52,7 +52,7 @@ def test_tools_work_against_an_openai_compatible_server(openai_agent, caliper):
     first, second = server.requests
     assert first["model"] == "fake-model" and first["stream"] is True
     names = [t["function"]["name"] for t in first["tools"]]
-    assert "catalog_list" in names and len(names) == 35
+    assert "catalog_list" in names and len(names) == general_tool_count()
     assert "authorization" in server.headers[0]  # a placeholder: OPENAI_API_KEY is never read
     tool_message = next(m for m in second["messages"] if m["role"] == "tool")
     assert tool_message["tool_call_id"] == "call_1" and "run42_metrics" in tool_message["content"]

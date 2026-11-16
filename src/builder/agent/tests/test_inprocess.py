@@ -12,7 +12,7 @@ import asyncio
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 
-from conftest import COMMAND_TABLE
+from conftest import COMMAND_TABLE, general_tool_count
 
 from caliper_agent.caliper_api import CaliperApi
 from caliper_agent.loop import SessionState, TurnRunner, build_agent
@@ -85,7 +85,7 @@ def test_testmodel_calls_tools_generated_from_the_table(caliper):
     assert asyncio.run(go()) == "end_turn"
     params = model.last_model_request_parameters
     tools = {t.name: t for t in params.function_tools}
-    assert len(tools) == 35 and all(t.sequential for t in tools.values())
+    assert len(tools) == general_tool_count() and all(t.sequential for t in tools.values())
     assert 0 < sum(bool(t.strict) for t in tools.values()) <= 20
     assert [c["path"] for c in caliper.calls if c["path"] != "/v0/commands/spec.get"][:2] == [
         "/v0/commands/catalog.list", "/v0/info"]

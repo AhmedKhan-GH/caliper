@@ -412,3 +412,11 @@ def message_text(updates: list[dict]) -> str:
 def statuses(updates: list[dict]) -> list[dict]:
     return [u["_meta"]["caliper"] | {"text": u["content"]["text"]}
             for u in updates if u.get("sessionUpdate") == "agent_thought_chunk" and "_meta" in u]
+
+
+def general_tool_count() -> int:
+    """How many tools a general session offers: one per command of the table
+    that derive_tools() keeps. The tests compare against this instead of a
+    number, so a new command does not break them."""
+    from caliper_agent.tools import derive_tools, load_command_table
+    return len(derive_tools(load_command_table(COMMAND_TABLE)))
