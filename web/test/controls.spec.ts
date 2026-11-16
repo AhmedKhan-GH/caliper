@@ -180,11 +180,26 @@ test.describe('run controls and the controls panel', () => {
       document.querySelector('caliper-controls')!.addEventListener('caliper-reply', (e) => r.push((e as CustomEvent).detail));
       return r;
     });
+    // Queued and running last one training step and 0.2 s, which can be over
+    // before the click returns on a busy machine: the page records each state
+    // of the button and its note as it changes.
+    const seen = await page.evaluateHandle(() => {
+      const root = document.querySelector('caliper-controls')!.shadowRoot!;
+      const now = () => {
+        const b = root.querySelector('button[data-action="save checkpoint"]')!;
+        return `${b.getAttribute('aria-busy')} ${b.parentElement!.querySelector('.note')!.textContent}`;
+      };
+      const r = [now()];
+      new MutationObserver(() => { if (r.at(-1) !== now()) r.push(now()); })
+        .observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
+      return r;
+    });
     const btn = panel(page).locator('button[data-action="save checkpoint"]');
     await btn.click();
-    await expect(btn).toHaveAttribute('aria-busy', 'true');
     await expect(panel(page).locator('.action .note')).toHaveText(/^saved step \d+$/, { timeout: 10_000 });
     await expect(btn).toHaveAttribute('aria-busy', 'false');
+    const states = await seen.evaluate((r) => r.map((s) => s.replace(/\d+$/, 'N')));
+    expect(states).toEqual(['false ', 'true queued', 'true running', 'false saved step N']);
     const got = await replies.evaluate((r) => r.map((x) => (x as { status: string }).status));
     expect(got).toEqual(['queued', 'ok']);
   });
