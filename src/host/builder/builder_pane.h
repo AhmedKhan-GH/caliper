@@ -248,6 +248,25 @@ public:
     void select(const std::string& key, const std::string& column = {});
     // The rows the last file drop made.
     const std::vector<std::string>& fresh() const { return fresh_; }
+    // The loader that made a row of the last drop ("" for none).
+    std::string fresh_loader(const std::string& catalog) const;
+
+    // ---- ⌘K: the widget agent's inline surface, which the page owns. The
+    // pane offers ⌘K on the rows of the files just dropped (the prompt for
+    // that file's loader and its catalog ids) and beside the focused panel's
+    // title and options (the prompt for that one property), and draws the
+    // surface under the row it is open on ("source:<key>", "prop:<path>").
+    struct WidgetHooks {
+        std::function<void(const std::string& loader, const std::vector<std::string>& catalog,
+                           const std::string& anchor)> open_file;
+        std::function<void(const std::string& panel, const std::string& path)> open_property;
+        std::function<float(const std::string& anchor, float width)> height;   // 0: not open there
+        std::function<void(const std::string& anchor, const SpecRect& rect)> draw;
+    };
+    void set_widget_hooks(WidgetHooks hooks) { widget_ = std::move(hooks); }
+    // ⌘K on the selected row of a file just dropped, as its ⌘K control does;
+    // false when the selection is not such a row.
+    bool open_file_prompt();
 
     // ---- the focus: one panel of the canvas, or one source
     const std::string& focused_panel() const { return focus_panel_; }
@@ -396,6 +415,12 @@ private:
     void draw_source_properties(Rows& rows);
     void draw_spec_properties(Rows& rows);
     void draw_text_strip(const SpecRect& rect);
+    // Under a row: the surface's space when it is open on `anchor`.
+    void widget_under(const std::string& anchor, float x, float w);
+    // The ⌘K control in `r`; true when clicked.
+    bool widget_key(const std::string& id, const ImRect& r, bool shown);
+    // A property row's ⌘K, and the prompt under the row when it is open there.
+    void property_key(Rows& rows, const ImRect& r, const std::string& panel, const std::string& path);
     bool run_plan(PanePlan plan, const std::string& merge = {});
     PanePlan simulate(std::vector<caliper_builder::CommandInvocation> commands) const;
     caliper_builder::CommandResult send(caliper_builder::CommandInvocation inv, const std::string& group,
@@ -440,6 +465,8 @@ private:
     std::set<std::string> expanded_;
     std::string selected_, selected_column_;
     std::vector<std::string> fresh_;
+    std::map<std::string, std::string> fresh_loaders_;   // catalog id -> the loader the drop made
+    WidgetHooks widget_;
     std::string focus_panel_, focus_source_;
     std::string synced_focus_;   // the page's focus as draw() last left it
     std::map<std::string, std::string> pending_ids_;   // a catalog row's id before it is added

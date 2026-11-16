@@ -830,7 +830,10 @@ void BuilderPane::draw_sources(const SpecRect& rect) {
                 const bool sel = selected_ == r->key && selected_column_.empty();
                 const ImVec2 p = ImGui::GetCursorScreenPos();
                 const ImRect rowr(p, v2(p.x + w, p.y + row));
+                // A file just dropped offers ⌘K at its row's right end.
+                const bool cmdk = widget_.open_file && !fresh_loader(r->key).empty();
                 ImGui::PushID(r->key.c_str());
+                if (cmdk) ImGui::SetNextItemAllowOverlap();
                 ImGui::InvisibleButton("##row", rowr.GetSize());
                 const bool hovered = ImGui::IsItemHovered();
                 if (ImGui::IsItemActivated()) {
@@ -861,14 +864,27 @@ void BuilderPane::draw_sources(const SpecRect& rect) {
                     else ldl->AddTriangleFilled(v2(c.x - a * 0.6f, c.y - a), v2(c.x - a * 0.6f, c.y + a), v2(c.x + a * 0.7f, c.y), L.secondary);
                 }
                 x += std::round(18.0f * s);
+                float right_end = rowr.Max.x - pad;
+                if (cmdk) {
+                    const float kw = key_button_width(L, "\xE2\x8C\x98K", "");
+                    const ImRect kr(v2(right_end - kw, rowr.Min.y + std::round(2.0f * s)), v2(right_end, rowr.Max.y - std::round(2.0f * s)));
+                    ImGui::PushID(r->key.c_str());
+                    if (widget_key("##cmdk.source", kr, true)) {
+                        select(r->key);
+                        open_file_prompt();
+                    }
+                    ImGui::PopID();
+                    d.item("cmdk:source:" + r->key, kr);
+                    right_end -= kw + std::round(6.0f * s);
+                }
                 const std::string shape = r->shape_text;
                 const float shape_w = std::min(extent(L.mono, L.mono_size, shape).x, w * 0.55f);
-                const float name_w = rowr.Max.x - pad - shape_w - std::round(10.0f * s) - x;
+                const float name_w = right_end - shape_w - std::round(10.0f * s) - x;
                 const ImU32 ink = sel ? L.accent : L.text;
                 put(ldl, L.ui, L.ui_size, v2(x, rowr.Min.y + (row - d.ui_h()) * 0.5f), ink, fit(L.ui, L.ui_size, r->name, name_w));
                 const std::string sh = fit(L.mono, L.mono_size, shape, shape_w + 1.0f);
                 put(ldl, L.mono, L.mono_size,
-                     v2(rowr.Max.x - pad - extent(L.mono, L.mono_size, sh).x, rowr.Min.y + (row - d.mono_h()) * 0.5f),
+                     v2(right_end - extent(L.mono, L.mono_size, sh).x, rowr.Min.y + (row - d.mono_h()) * 0.5f),
                      L.faint, sh);
                 if (open) {
                     for (const auto& c : r->shape.columns) {
@@ -899,6 +915,8 @@ void BuilderPane::draw_sources(const SpecRect& rect) {
                         put(ldl, L.mono, L.mono_size, v2(cr.Max.x - pad - tw, cr.Min.y + (row - d.mono_h()) * 0.5f), L.faint, c.type);
                     }
                 }
+                // The inline prompt on this file, under its row.
+                widget_under("source:" + r->key, rowr.Min.x, w);
             }
             if (visible.empty()) {
                 const ImVec2 p = ImGui::GetCursorScreenPos();
@@ -1008,6 +1026,48 @@ struct BuilderPane::Rows {
     }
 };
 
+// ---- ⌘K ------------------------------------------------------------------------------------
+
+bool BuilderPane::widget_key(const std::string& id, const ImRect& r, bool shown) {
+    if (!shown) return false;
+    const SpecLook& L = draw_->look;
+    return key_button_at(L, id.c_str(), r, "\xE2\x8C\x98K", "", true, false);
+}
+
+void BuilderPane::widget_under(const std::string& anchor, float x, float w) {
+    if (!widget_.height || !widget_.draw) return;
+    const float h = widget_.height(anchor, w);
+    if (h <= 0.0f) return;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(v2(w, h));
+    widget_.draw(anchor, SpecRect{x, p.y, w, h});
+    ImGui::SetCursorScreenPos(v2(p.x, p.y + h));
+    ImGui::Dummy(v2(0.0f, 0.0f));
+}
+
+// A property row's ⌘K: at the right end of its label, shown while the row is
+// under the pointer or its prompt is open; then the prompt under the row.
+void BuilderPane::property_key(Rows& rows, const ImRect& r, const std::string& panel, const std::string& path) {
+    if (!widget_.open_property) return;
+    const std::string anchor = "prop:" + path;
+    const SpecLook& L = draw_->look;
+    const float kw = key_button_width(L, "\xE2\x8C\x98K", "");
+    const float rh = std::min(r.GetHeight(), draw_->m.row);
+    const ImRect kr(v2(r.Min.x + rows.label_w - kw - std::round(4.0f * L.text_scale), r.Min.y + std::round(2.0f * L.text_scale)),
+                    v2(r.Min.x + rows.label_w - std::round(4.0f * L.text_scale), r.Min.y + rh - std::round(2.0f * L.text_scale)));
+    draw_->item("cmdk:" + anchor, kr);
+    const bool open = widget_.height && widget_.height(anchor, r.GetWidth()) > 0.0f;
+    const bool shown = open || ImGui::IsMouseHoveringRect(r.Min, r.Max, false);
+    const ImVec2 back = ImGui::GetCursorScreenPos();
+    ImGui::PushID(anchor.c_str());
+    // A plate under the key, so that the label's end does not show through.
+    if (shown) rows.dl->AddRectFilled(v2(kr.Min.x - 2.0f, r.Min.y), v2(kr.Max.x + 2.0f, r.Min.y + rh), L.ground);
+    if (widget_key("##cmdk.prop", kr, shown)) widget_.open_property(panel, path);
+    ImGui::PopID();
+    ImGui::SetCursorScreenPos(back);
+    widget_under(anchor, r.Min.x, r.GetWidth());
+}
+
 void BuilderPane::draw_properties(const SpecRect& rect, SpecRuntime& runtime) {
     Draw& d = *draw_;
     const SpecLook& L = d.look;
@@ -1112,6 +1172,7 @@ void BuilderPane::draw_panel_properties(Rows& rows, const spec::Panel& panel_in,
         if (f.changed) set_title(f.value);
         if (f.deactivated) end_gesture();
         d.item("prop:title", v);
+        property_key(rows, r, pid, "title");
     }
 
     // ---- bindings: one row per slot, required slots marked.
@@ -1197,6 +1258,7 @@ void BuilderPane::draw_panel_properties(Rows& rows, const spec::Panel& panel_in,
     const PreparedPanel* prepared = runtime.prepared(pid);
     for (const PaneOption& o : opts) {
         const std::string oname = o.name;
+        const float option_top = ImGui::GetCursorScreenPos().y;
         const json current = [&]() -> json {
             const json all = spec::to_json(p).value("options", json::object());
             return all.contains(oname) ? all[oname] : json(nullptr);
@@ -1378,6 +1440,9 @@ void BuilderPane::draw_panel_properties(Rows& rows, const spec::Panel& panel_in,
                 break;
             }
         }
+        // ⌘K beside the option, and the inline prompt on it under its row.
+        const float option_bottom = ImGui::GetCursorScreenPos().y;
+        property_key(rows, ImRect(v2(rows.x0, option_top), v2(rows.x1, option_bottom)), pid, "options." + oname);
     }
 
     // ---- the footer: Remove.
