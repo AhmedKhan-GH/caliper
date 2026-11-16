@@ -51,7 +51,7 @@ const char* kUsage =
     "\n"
     "  --agent <command>          the agent's command and arguments, split into words as a\n"
     "                             shell would split them (no shell runs)\n"
-    "  --preset <id>              a known agent: claude, codex or gemini\n"
+    "  --preset <id>              a known agent: claude, codex, gemini or opencode\n"
     "  --cwd <folder>             the session's working folder (default: the current folder)\n"
     "  --mcp <name>=<command>     an MCP server for the agent to start; repeatable\n"
     "  --meta <json>              a JSON object sent as the _meta of session/new\n"

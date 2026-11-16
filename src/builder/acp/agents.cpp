@@ -12,6 +12,8 @@ const std::vector<AgentPreset>& known_agents() {
          "Log in once with `codex login`."},
         {"gemini", "Gemini CLI", {"gemini", "--acp"},
          "Log in once by running `gemini` and choosing a sign-in method."},
+        {"opencode", "opencode", {"opencode", "acp"},
+         "Log in once with `opencode auth login`; a local model needs none."},
     };
     return presets;
 }

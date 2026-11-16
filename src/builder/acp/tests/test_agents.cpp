@@ -37,7 +37,7 @@ TEST_CASE("split_command_line refuses broken input") {
 
 TEST_CASE("the known agents have launch commands") {
     const auto& agents = known_agents();
-    REQUIRE(agents.size() == 3);
+    REQUIRE(agents.size() == 4);
     for (const auto& a : agents) {
         CHECK_FALSE(a.id.empty());
         CHECK_FALSE(a.argv.empty());
@@ -46,6 +46,8 @@ TEST_CASE("the known agents have launch commands") {
     REQUIRE(find_agent_preset("gemini") != nullptr);
     CHECK(find_agent_preset("gemini")->argv == std::vector<std::string>{"gemini", "--acp"});
     CHECK(find_agent_preset("claude")->argv.back() == "@agentclientprotocol/claude-agent-acp");
+    REQUIRE(find_agent_preset("opencode") != nullptr);
+    CHECK(find_agent_preset("opencode")->argv == std::vector<std::string>{"opencode", "acp"});
     CHECK(find_agent_preset("nobody") == nullptr);
 }
 

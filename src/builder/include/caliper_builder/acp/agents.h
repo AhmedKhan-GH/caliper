@@ -18,7 +18,7 @@
 namespace caliper_builder::acp {
 
 struct AgentPreset {
-    std::string id;                  // "claude", "codex", "gemini"
+    std::string id;                  // "claude", "codex", "gemini", "opencode"
     std::string title;               // for a menu
     std::vector<std::string> argv;   // the launch command
     std::string login_hint;          // how a person logs in, in their own terminal
