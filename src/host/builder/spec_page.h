@@ -121,10 +121,11 @@ public:
     std::string widget_state() const;
     // Draws over each shown panel in the panel's own window after its
     // content, as the page's overlay does the focus frame, with the panel's
-    // id, its rectangle and its title strip's height (0 for a tab): the
-    // approval cards mark the panel a waiting edit changes
-    // (approval_cards.h).
-    using PanelOverlay = std::function<void(const std::string& panel_id, float x, float y, float w, float h, float strip)>;
+    // id, the title its strip shows, its rectangle and its title strip's
+    // height (0 for a tab): the approval cards mark the panel a waiting edit
+    // changes (approval_cards.h).
+    using PanelOverlay = std::function<void(const std::string& panel_id, const std::string& title, float x, float y,
+                                            float w, float h, float strip)>;
     void set_panel_overlay(PanelOverlay overlay);
     // The focused panel's id, "" for none; focus_panel("") gives it up.
     const std::string& focused_panel() const;

@@ -95,10 +95,11 @@ public:
     // that it lands above the tray on every page.
     void draw_strip();
     // The spec page's overlay of each shown panel, in the panel's own window
-    // after its content (SpecPage::set_panel_overlay()): the panel's
-    // rectangle and its title strip's height (0 for a tab). Marks the panel
-    // a waiting edit changes.
-    void mark_panel(const std::string& panel_id, float x, float y, float w, float h, float strip);
+    // after its content (SpecPage::set_panel_overlay()): the title its strip
+    // shows, its rectangle and its title strip's height (0 for a tab).
+    // Marks the panel a waiting edit changes.
+    void mark_panel(const std::string& panel_id, const std::string& title, float x, float y, float w, float h,
+                    float strip);
     // Before the session closes: the cards go, and nothing is read again.
     void close();
 

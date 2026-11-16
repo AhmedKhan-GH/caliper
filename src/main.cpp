@@ -529,9 +529,8 @@ public:
         if (const char* d = std::getenv("CALIPER_TEST_APPROVALS"); d && hidden_) ah.decisions = d;
         approvals_.start(std::move(ah));
         jobs_tray_.set_next_strip([this] { approvals_.draw_strip(); });
-        spec_page_.set_panel_overlay([this](const std::string& id, float x, float y, float w, float h, float strip) {
-            approvals_.mark_panel(id, x, y, w, h, strip);
-        });
+        spec_page_.set_panel_overlay([this](const std::string& id, const std::string& title, float x, float y, float w,
+                                            float h, float strip) { approvals_.mark_panel(id, title, x, y, w, h, strip); });
     }
 
     void cleanup() {

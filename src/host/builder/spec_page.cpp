@@ -370,8 +370,11 @@ struct SpecPage::Impl {
         runtime->set_overlay([this](const SpecPanelFrame& f) {
             if (f.id == focused)
                 ImGui::GetWindowDrawList()->AddRect(f.rect.Min, f.rect.Max, sternbild::col::bronze, 0.0f, 0, 1.0f);
-            if (panel_overlay)
-                panel_overlay(f.id, f.rect.Min.x, f.rect.Min.y, f.rect.GetWidth(), f.rect.GetHeight(), f.header.GetHeight());
+            if (panel_overlay) {
+                const PreparedPanel* p = runtime->prepared(f.id);
+                panel_overlay(f.id, p ? p->title : std::string(), f.rect.Min.x, f.rect.Min.y, f.rect.GetWidth(),
+                              f.rect.GetHeight(), f.header.GetHeight());
+            }
             if (widget) widget->overlay(f);
         });
     }
