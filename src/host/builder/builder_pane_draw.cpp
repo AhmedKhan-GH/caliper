@@ -777,7 +777,7 @@ void BuilderPane::draw_sources(const SpecRect& rect) {
         const float pad = d.m.pad;
         const ImRect fr(v2(rect.x + pad, head.Max.y + std::round(2.0f * s)), v2(rect.right() - pad, head.Max.y + d.m.row + std::round(2.0f * s)));
         const Field f = text_field(d.bufs, L, "##sources.filter", fr, filter_, "Filter", false);
-        if (f.changed) filter_ = f.value;
+        if (f.changed) set_filter(f.value);
         d.item("filter", fr);
         // The rows, scrolling.
         const float list_y = fr.Max.y + std::round(4.0f * s);
@@ -787,10 +787,14 @@ void BuilderPane::draw_sources(const SpecRect& rect) {
             ImDrawList* ldl = ImGui::GetWindowDrawList();
             const float row = d.m.row;
             const float w = ImGui::GetContentRegionAvail().x;
-            const auto visible = visible_sources();
+            // Made again only when the rows, the filter, an expansion or Show
+            // all changed; a click below changes them after the loop.
+            const std::vector<PaneListItem>& items = list_items();
             int last_group = -1;
             const ImGuiIO& io = ImGui::GetIO();
             bool want_add = false;   // run after the rows: an add rebuilds them
+            std::string want_toggle;  // a run opened or closed, after the rows
+            bool want_more = false;   // Show all or Show fewer, after the rows
             // The files the last drop refused: the file's name and the loader
             // store's code, its reason in the tooltip, until the next drop.
             if (!refused_.empty()) {
@@ -821,18 +825,70 @@ void BuilderPane::draw_sources(const SpecRect& rect) {
                     if (hovered && !f.message.empty()) ImGui::SetTooltip("%s", f.message.c_str());
                 }
             }
-            for (const PaneSource* r : visible) {
-                if ((int)r->group != last_group) {
-                    last_group = (int)r->group;
+            for (const PaneListItem& item : items) {
+                const PaneSource::Group group =
+                    item.kind == PaneListItem::Kind::source ? item.source->group : PaneSource::Group::metric;
+                if ((int)group != last_group) {
+                    last_group = (int)group;
                     const ImVec2 p = ImGui::GetCursorScreenPos();
-                    caps(L, ldl, v2(p.x + pad, p.y + std::round(row * 0.45f) - 1.0f), L.faint, pane_group_label(r->group));
+                    caps(L, ldl, v2(p.x + pad, p.y + std::round(row * 0.45f) - 1.0f), L.faint, pane_group_label(group));
                     ImGui::Dummy(v2(w, std::round(row * 1.15f)));
                 }
+                if (item.kind != PaneListItem::Kind::source) {
+                    // A run of metrics, which opens to them, or Show all.
+                    const ImVec2 p = ImGui::GetCursorScreenPos();
+                    const ImRect rowr(p, v2(p.x + w, p.y + row));
+                    if (!ImGui::IsRectVisible(rowr.Min, rowr.Max)) {   // scrolled away: its space only
+                        ImGui::Dummy(rowr.GetSize());
+                        continue;
+                    }
+                    const bool run = item.kind == PaneListItem::Kind::run;
+                    const std::string key = run ? "run:" + std::to_string(item.run) : std::string("runs:all");
+                    ImGui::PushID(key.c_str());
+                    const bool clicked = ImGui::InvisibleButton("##run", rowr.GetSize());
+                    const bool hovered = ImGui::IsItemHovered();
+                    ImGui::PopID();
+                    d.item(key, rowr);
+                    if (hovered) ldl->AddRectFilled(rowr.Min, rowr.Max, L.plate_hover);
+                    float x = rowr.Min.x + pad;
+                    if (run) {
+                        const float a = std::round(4.0f * s);
+                        const ImVec2 c(x + a, rowr.GetCenter().y);
+                        if (item.open) ldl->AddTriangleFilled(v2(c.x - a, c.y - a * 0.6f), v2(c.x + a, c.y - a * 0.6f), v2(c.x, c.y + a * 0.7f), L.secondary);
+                        else ldl->AddTriangleFilled(v2(c.x - a * 0.6f, c.y - a), v2(c.x - a * 0.6f, c.y + a), v2(c.x + a * 0.7f, c.y), L.secondary);
+                    }
+                    x += std::round(18.0f * s);
+                    // A run: its id and its number of metrics; Show all: the runs in all.
+                    const std::string right = run ? std::to_string(item.metrics) + (item.metrics == 1 ? " metric" : " metrics") +
+                                                        "  #" + std::to_string(item.run)
+                                                  : std::to_string(item.metrics) + " runs";
+                    const float right_w = std::min(extent(L.mono, L.mono_size, right).x, w * 0.55f);
+                    const float right_end = rowr.Max.x - pad;
+                    put(ldl, L.ui, L.ui_size, v2(x, rowr.Min.y + (row - d.ui_h()) * 0.5f), run ? L.text : L.secondary,
+                        fit(L.ui, L.ui_size, item.name, right_end - right_w - std::round(10.0f * s) - x));
+                    const std::string sh = fit(L.mono, L.mono_size, right, right_w + 1.0f);
+                    put(ldl, L.mono, L.mono_size,
+                        v2(right_end - extent(L.mono, L.mono_size, sh).x, rowr.Min.y + (row - d.mono_h()) * 0.5f), L.faint, sh);
+                    if (hovered && run && !item.experiment.empty()) ImGui::SetTooltip("%s", item.experiment.c_str());
+                    if (clicked) {
+                        if (run) want_toggle = key;
+                        else want_more = true;
+                    }
+                    continue;
+                }
+                const PaneSource* r = item.source;
                 const bool tabular = r->shape.tabular && !r->shape.columns.empty();
                 const bool open = tabular && expanded(r->key);
                 const bool sel = selected_ == r->key && selected_column_.empty();
                 const ImVec2 p = ImGui::GetCursorScreenPos();
                 const ImRect rowr(p, v2(p.x + w, p.y + row));
+                // A closed row scrolled out of sight takes its space only, so
+                // that hundreds of rows cost little.
+                if (!open && !ImGui::IsRectVisible(rowr.Min, rowr.Max) &&
+                    !(widget_.height && widget_.height("source:" + r->key, w) > 0.0f)) {
+                    ImGui::Dummy(rowr.GetSize());
+                    continue;
+                }
                 // A file just dropped offers ⌘K at its row's right end. Its
                 // target is submitted before the row's, so that it takes the
                 // pointer there and the row everywhere else.
@@ -855,7 +911,7 @@ void BuilderPane::draw_sources(const SpecRect& rect) {
                 const bool hovered = ImGui::IsItemHovered();
                 if (ImGui::IsItemActivated()) {
                     // A press on the disclosure opens the columns; on the row, it selects and may drag.
-                    const float arrow_w = std::round(18.0f * s) + pad;
+                    const float arrow_w = std::round(18.0f * s) + pad + (item.nested ? std::round(12.0f * s) : 0.0f);
                     if (tabular && io.MousePos.x < rowr.Min.x + arrow_w) {
                         toggle_expanded(r->key);
                     } else {
@@ -872,7 +928,8 @@ void BuilderPane::draw_sources(const SpecRect& rect) {
                 if (sel) ldl->AddRectFilled(rowr.Min, rowr.Max, L.plate);
                 else if (hovered) ldl->AddRectFilled(rowr.Min, rowr.Max, L.plate_hover);
                 if (sel) ldl->AddRectFilled(rowr.Min, v2(rowr.Min.x + 2.0f, rowr.Max.y), L.accent);
-                float x = rowr.Min.x + pad;
+                // A run's metric is drawn under its run, by its tag.
+                float x = rowr.Min.x + pad + (item.nested ? std::round(12.0f * s) : 0.0f);
                 if (tabular) {
                     // ▸ closed, ▾ open.
                     const float a = std::round(4.0f * s);
@@ -899,7 +956,8 @@ void BuilderPane::draw_sources(const SpecRect& rect) {
                 const float shape_w = std::min(extent(L.mono, L.mono_size, shape).x, w * 0.55f);
                 const float name_w = right_end - shape_w - std::round(10.0f * s) - x;
                 const ImU32 ink = sel ? L.accent : L.text;
-                put(ldl, L.ui, L.ui_size, v2(x, rowr.Min.y + (row - d.ui_h()) * 0.5f), ink, fit(L.ui, L.ui_size, r->name, name_w));
+                put(ldl, L.ui, L.ui_size, v2(x, rowr.Min.y + (row - d.ui_h()) * 0.5f), ink,
+                    fit(L.ui, L.ui_size, item.nested ? r->tag : r->name, name_w));
                 const std::string sh = fit(L.mono, L.mono_size, shape, shape_w + 1.0f);
                 put(ldl, L.mono, L.mono_size,
                      v2(right_end - extent(L.mono, L.mono_size, sh).x, rowr.Min.y + (row - d.mono_h()) * 0.5f),
@@ -936,7 +994,7 @@ void BuilderPane::draw_sources(const SpecRect& rect) {
                 // The inline prompt on this file, under its row.
                 widget_under("source:" + r->key, rowr.Min.x, w);
             }
-            if (visible.empty()) {
+            if (items.empty()) {
                 const ImVec2 p = ImGui::GetCursorScreenPos();
                 put(ldl, L.ui, L.ui_size, v2(p.x + pad, p.y + std::round(6.0f * s)), L.faint,
                      filter_.empty() ? "No sources" : "No match");
@@ -946,6 +1004,8 @@ void BuilderPane::draw_sources(const SpecRect& rect) {
             if (ImGui::IsWindowHovered() && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Enter, false))
                 want_add = true;
             if (want_add) add_selected();
+            if (!want_toggle.empty()) toggle_expanded(want_toggle);
+            if (want_more) set_show_all_runs(!show_all_runs());
         }
         ImGui::EndChild();
     }

@@ -52,7 +52,9 @@
 //   click <item> [fx fy] a click on a named rectangle of the spec page
 //                        (SpecPage::item_rect: "page:browser") or of the
 //                        builder pane (BuilderPane::item_rect:
-//                        "source:table:metrics", "primitive:series",
+//                        "source:table:metrics", "run:12" (a run of
+//                        metrics in Sources), "runs:all" (its Show all),
+//                        "primitive:series",
 //                        "prop:title", "bar:save", ...),
 //                        at the fractions fx, fy of it (0.5 0.5 by default); a
 //                        negative fraction counts pixels from its right or

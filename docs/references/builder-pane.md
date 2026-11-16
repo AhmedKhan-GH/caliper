@@ -78,6 +78,11 @@ Live, Feeds and Metrics. Each row has the source's name and, in mono, its shape:
 its transforms. A table opens with the triangle at its left to show its columns and their types. The filter line
 narrows the list by name, id or column.
 
+Metrics are grouped by run, newest first. Each run is one line with its name, its number of metrics and its id; a click
+opens it to its metrics, each named by its tag and used like any other row. Sources lists the newest five runs, and
+Show all after them lists every run. The filter searches every run, by the run's name, its experiment, or a metric's
+tag, and opens the runs it finds. Every kind of source is listed, however many metrics the store holds.
+
 A click selects a row or a column and shows it in Properties. Dragging a row or a column onto the canvas makes a panel
 there, of the primitive that suits the data: a series for a column or a table with numeric columns, a heatmap for a
 rank-2 tensor, points for `[n, 2]` and `[n, 3]`, an image for `[H, W, 3]` and `[H, W, 4]`, a table for other tables,

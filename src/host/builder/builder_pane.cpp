@@ -224,11 +224,29 @@ bool BuilderPane::open_file_prompt() {
 }
 
 void BuilderPane::refresh_catalog() {
-    CommandInvocation inv = invocation("catalog.list", {{"limit", 1000}});
-    const CommandResult r = port_->run(std::move(inv));
-    catalog_ = r.ok ? r.result.value("entries", json::array()) : json::array();
+    // One list per kind, so that hundreds of metrics never crowd the tables
+    // and tensors out of one list cut at its limit.
+    catalog_ = json::array();
+    for (const char* kind : {"table", "tensor", "live", "feed", "metric"}) list_kind(kind, "", 0);
     rebuild_rows();
     invalidate_caches();
+}
+
+void BuilderPane::list_kind(const std::string& kind, const std::string& prefix, int depth) {
+    json args = {{"kind", kind}, {"limit", 1000}};
+    if (!prefix.empty()) args["prefix"] = prefix;
+    const CommandResult r = port_->run(invocation("catalog.list", std::move(args)));
+    if (!r.ok) return;
+    // A metric's name is "<run id>/<tag>": a list cut at the limit is listed
+    // again by the next character, a digit or the '/' that ends the run id,
+    // which reaches every metric in a few calls per thousand.
+    if (kind == "metric" && r.result.value("truncated", false) && depth < 8 &&
+        (prefix.empty() || prefix.back() != '/')) {
+        for (char c : std::string("0123456789")) list_kind(kind, prefix + c, depth + 1);
+        if (!prefix.empty()) list_kind(kind, prefix + "/", depth + 1);
+        return;
+    }
+    for (auto& e : r.result.value("entries", json::array())) catalog_.push_back(std::move(e));
 }
 
 void BuilderPane::reread() {
@@ -288,6 +306,13 @@ void BuilderPane::rebuild_rows() {
         r.catalog = r.key;
         r.shape = shape_of_entry(e);
         r.shape_text = pane_shape_text(r.shape);
+        if (r.group == PaneSource::Group::metric) {
+            const json o = e.value("origin", json::object());
+            if (o.contains("run") && o["run"].is_number_integer()) r.run = o["run"].get<std::int64_t>();
+            r.run_name = o.contains("run_name") && o["run_name"].is_string() ? o["run_name"].get<std::string>() : "";
+            r.experiment = o.contains("experiment") && o["experiment"].is_string() ? o["experiment"].get<std::string>() : "";
+            r.tag = o.contains("tag") && o["tag"].is_string() ? o["tag"].get<std::string>() : r.name;
+        }
         if (s)
             for (const auto& src : s->sources)
                 if (src.catalog && *src.catalog == r.key && src.transforms.empty() && !src.from) {
@@ -296,24 +321,88 @@ void BuilderPane::rebuild_rows() {
                 }
         cat.push_back(std::move(r));
     }
+    // Metrics newest run first, then by tag; the rest by name.
     std::stable_sort(cat.begin(), cat.end(), [](const PaneSource& a, const PaneSource& b) {
-        return a.group != b.group ? a.group < b.group : a.name < b.name;
+        if (a.group != b.group) return a.group < b.group;
+        if (a.group == PaneSource::Group::metric && a.run != b.run) return a.run > b.run;
+        if (a.group == PaneSource::Group::metric) return a.tag != b.tag ? a.tag < b.tag : a.name < b.name;
+        return a.name < b.name;
     });
     for (auto& r : cat) rows_.push_back(std::move(r));
+    items_dirty_ = true;
+}
+
+const std::vector<PaneListItem>& BuilderPane::list_items() const {
+    if (!items_dirty_) return items_;
+    items_dirty_ = false;
+    items_.clear();
+    const std::string f = lower(filter_);
+    auto matches = [&](const PaneSource& r) {
+        if (f.empty()) return true;
+        if (lower(r.name).find(f) != std::string::npos || lower(r.key).find(f) != std::string::npos) return true;
+        if (r.group == PaneSource::Group::metric &&
+            (lower(r.run_name).find(f) != std::string::npos || lower(r.experiment).find(f) != std::string::npos ||
+             lower(r.tag).find(f) != std::string::npos))
+            return true;
+        for (const auto& c : r.shape.columns)
+            if (lower(c.name).find(f) != std::string::npos) return true;
+        return false;
+    };
+    // rows_ holds a run's metrics together, newest run first (rebuild_rows).
+    size_t runs_listed = 0, runs_total = 0;
+    for (size_t i = 0; i < rows_.size();) {
+        const PaneSource& r = rows_[i];
+        if (r.group != PaneSource::Group::metric) {
+            if (matches(r)) items_.push_back({PaneListItem::Kind::source, &r});
+            ++i;
+            continue;
+        }
+        size_t end = i;
+        while (end < rows_.size() && rows_[end].group == PaneSource::Group::metric && rows_[end].run == r.run) ++end;
+        ++runs_total;
+        PaneListItem run;
+        run.kind = PaneListItem::Kind::run;
+        run.run = r.run;
+        run.name = !r.run_name.empty() ? r.run_name : "Run " + std::to_string(r.run);
+        run.experiment = r.experiment;
+        run.metrics = (int)(end - i);
+        // A filter lists every run with a match, open; a run whose name or
+        // experiment matches shows all its metrics.
+        const bool run_matches = !f.empty() && (lower(run.name).find(f) != std::string::npos ||
+                                                lower(r.experiment).find(f) != std::string::npos ||
+                                                std::to_string(r.run).find(f) == 0);
+        std::vector<const PaneSource*> shown;
+        for (size_t k = i; k < end; ++k)
+            if (f.empty() || run_matches || matches(rows_[k])) shown.push_back(&rows_[k]);
+        const bool listed = !f.empty() ? !shown.empty() : (show_all_runs_ || runs_listed < kPaneRunsShown);
+        if (listed) {
+            ++runs_listed;
+            run.open = !f.empty() || expanded("run:" + std::to_string(r.run));
+            items_.push_back(run);
+            if (run.open)
+                for (const PaneSource* m : shown) {
+                    PaneListItem it{PaneListItem::Kind::source, m};
+                    it.nested = true;
+                    items_.push_back(it);
+                }
+        }
+        i = end;
+    }
+    if (f.empty() && runs_total > kPaneRunsShown) {
+        // After the last run: Show all, or back to the newest few.
+        PaneListItem more;
+        more.kind = PaneListItem::Kind::more;
+        more.metrics = (int)runs_total;
+        more.name = show_all_runs_ ? "Show fewer" : "Show all";
+        items_.push_back(more);   // metrics are the last group
+    }
+    return items_;
 }
 
 std::vector<const PaneSource*> BuilderPane::visible_sources() const {
     std::vector<const PaneSource*> out;
-    const std::string f = lower(filter_);
-    for (const auto& r : rows_) {
-        if (!f.empty()) {
-            bool match = lower(r.name).find(f) != std::string::npos || lower(r.key).find(f) != std::string::npos;
-            for (const auto& c : r.shape.columns)
-                if (lower(c.name).find(f) != std::string::npos) match = true;
-            if (!match) continue;
-        }
-        out.push_back(&r);
-    }
+    for (const auto& it : list_items())
+        if (it.kind == PaneListItem::Kind::source) out.push_back(it.source);
     return out;
 }
 
@@ -325,6 +414,7 @@ const PaneSource* BuilderPane::find_source(const std::string& key) const {
 
 void BuilderPane::toggle_expanded(const std::string& key) {
     if (!expanded_.erase(key)) expanded_.insert(key);
+    items_dirty_ = true;
 }
 
 void BuilderPane::select(const std::string& key, const std::string& column) {

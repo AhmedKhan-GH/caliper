@@ -14,7 +14,11 @@
 //   - Sources (left, upper): the catalog's sources grouped by kind, and the
 //     open spec's own sources, each with its name and its shape or columns in
 //     the terse style of the panel headers; a filter; a tabular source's
-//     columns as children. Dragging a source or a column onto the canvas or
+//     columns as children. Metrics are grouped by run, newest first, each run
+//     opening to its metrics, the newest kPaneRunsShown runs until Show all;
+//     the filter searches every run. The catalog is listed per kind, so that
+//     metrics never crowd the other kinds out of a list cut at its limit.
+//     Dragging a source or a column onto the canvas or
 //     onto a panel's slot is the main gesture; select, then Add (⏎) is the
 //     other way.
 //   - Primitives (left, lower): the seven primitives as nouns. Adding one
@@ -164,8 +168,29 @@ struct PaneSource {
     std::string shape_text;   // pane_shape_text(shape)
     std::string spec_id;      // the spec source's id; for a catalog row, the spec source that reads it unchanged
     int transforms = 0;       // a spec source's transforms
+    // A metric's run and tag, from its catalog origin; run -1 for other rows.
+    std::int64_t run = -1;
+    std::string run_name, experiment, tag;
 };
 const char* pane_group_label(PaneSource::Group g);   // "Spec", "Tables", "Tensors", "Live", "Feeds", "Metrics"
+
+// One line of the Sources list as it is drawn. Metrics are grouped by run:
+// a run's line, newest run (highest id) first, opens to its metrics; only
+// the newest kPaneRunsShown runs are listed until "Show all", and a filter
+// searches every run. Every other row is a source line, as are a run's
+// metrics, which are nested under it.
+struct PaneListItem {
+    enum class Kind { source, run, more };
+    Kind kind = Kind::source;
+    const PaneSource* source = nullptr;   // source: the row
+    bool nested = false;                  // source: a metric under its run
+    std::int64_t run = -1;                // run
+    std::string name;                     // run: its name, or "Run <id>"; more: the label
+    std::string experiment;               // run
+    int metrics = 0;                      // run: its metrics; more: the runs in all
+    bool open = false;                    // run: its metrics are shown
+};
+constexpr size_t kPaneRunsShown = 5;
 
 // What is dragged.
 struct DragPayload {
@@ -246,12 +271,25 @@ public:
 
     // ---- Sources
     const std::vector<PaneSource>& sources() const { return rows_; }
-    std::vector<const PaneSource*> visible_sources() const;   // the filter applied
+    // The list as drawn (PaneListItem), made again only when the rows, the
+    // filter, an expansion or Show all changed, never every frame.
+    const std::vector<PaneListItem>& list_items() const;
+    std::vector<const PaneSource*> visible_sources() const;   // the source lines of list_items()
     const PaneSource* find_source(const std::string& key) const;
     const std::string& filter() const { return filter_; }
-    void set_filter(std::string text) { filter_ = std::move(text); }
+    void set_filter(std::string text) {
+        if (text != filter_) items_dirty_ = true;
+        filter_ = std::move(text);
+    }
+    // A row's columns, or a run's metrics ("run:<id>").
     bool expanded(const std::string& key) const { return expanded_.count(key) != 0; }
     void toggle_expanded(const std::string& key);
+    // Every run listed, not only the newest kPaneRunsShown.
+    bool show_all_runs() const { return show_all_runs_; }
+    void set_show_all_runs(bool on) {
+        if (on != show_all_runs_) items_dirty_ = true;
+        show_all_runs_ = on;
+    }
     // The selection: one row, or one column of a tabular row. Selecting a
     // row focuses it in Properties.
     const std::string& selected() const { return selected_; }
@@ -472,6 +510,9 @@ private:
     bool blocked();
     void reread();
     void refresh_catalog();
+    // catalog.list of one kind into catalog_; for metrics, a list that is cut
+    // at the limit is listed again by the next digit of the name.
+    void list_kind(const std::string& kind, const std::string& prefix, int depth);
     void rebuild_rows();
     void invalidate_caches();
     std::string next_group();
@@ -506,6 +547,9 @@ private:
     std::vector<PaneSource> rows_;
     std::string filter_;
     std::set<std::string> expanded_;
+    bool show_all_runs_ = false;
+    mutable std::vector<PaneListItem> items_;
+    mutable bool items_dirty_ = true;
     std::string selected_, selected_column_;
     std::vector<std::string> fresh_;
     std::map<std::string, std::string> fresh_loaders_;   // catalog id -> the loader the drop made
