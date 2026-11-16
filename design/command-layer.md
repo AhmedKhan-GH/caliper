@@ -214,7 +214,7 @@ These commands edit the open spec, the one spec the builder shows. There is at m
 |---|---|---|---|
 | `spec.new` | `id`, `title`, `description` | `id`, `text` | `spec.invalid_id` |
 | `spec.open` | `path` (relative to the workspace, ending in `.spec.toml`) | `id`, `path`, `warnings` | `spec.not_found`, `spec.path_refused`, validator codes |
-| `spec.get` | none | `id`, `path`, `dirty`, `text`, `json` | `spec.no_open_spec` |
+| `spec.get` | `applet` (optional; the open spec when absent) | `open`, then `id`, `path`, `dirty`, `text`, `json`; with no spec open and no `applet`, `open` false alone, which is a read and not an error | `applet.not_found`; `spec.no_open_spec` only when it names a preview |
 | `spec.set_text` | `text` (at most 256 KiB), `dry_run` | `id`, `warnings`, `diff`, `applied` | `spec.no_open_spec`, validator codes |
 | `spec.validate` | `text` (optional; the open spec when absent) | `valid`, `errors`, `warnings` | `spec.no_open_spec` |
 | `source.add` | `id`, one of `catalog`, `sql`, `from`, and `transform`; `dry_run` | `id`, `warnings`, `diff`, `applied` | `spec.no_open_spec`, `source.exists`, validator codes |

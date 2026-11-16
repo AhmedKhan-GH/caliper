@@ -506,11 +506,14 @@ const Row kRows[] = {
     {"spec.get", false, false, true,
      "Returns the open spec as its TOML text and as its canonical JSON form, with its applet id, the file it was "
      "saved to or opened from, and whether it has unsaved changes. With applet, it returns that saved spec applet's "
-     "spec instead, read from its files without opening it. It changes nothing.",
+     "spec instead, read from its files without opening it. When no spec is open and no applet is named, it answers "
+     "open false and nothing else, which is not an error: make one with spec.new or open one with spec.open or "
+     "applet.open. It changes nothing.",
      R"json({"type": "object", "additionalProperties": false, "required": [],
       "properties": {"applet": {"$use": "id", "description": "A saved spec applet's id, from applet.list; the open spec when absent."}}})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["id", "path", "dirty", "text", "json"],
+     R"json({"type": "object", "additionalProperties": false, "required": ["open"],
       "properties": {
+        "open": {"type": "boolean", "description": "True with a spec in the result, the open one or the named applet's; false when no applet is named and no spec is open, and then no other field is given."},
         "id": {"type": "string", "description": "The spec's applet id."},
         "path": {"type": ["string", "null"], "description": "Its file, relative to the workspace, or null when it was never saved."},
         "dirty": {"type": "boolean", "description": "Whether it has changes that are not saved."},

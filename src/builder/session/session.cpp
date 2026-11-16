@@ -826,13 +826,17 @@ struct Session::Impl {
         if (!applet.empty()) {
             LoadedSpec loaded = load_applet(applet, {});
             if (loaded.error) return fail(loaded.error.code, loaded.error.message, "args.applet");
-            return CommandOutput::ok({{"id", loaded.spec.applet.id},
+            return CommandOutput::ok({{"open", true},
+                                      {"id", loaded.spec.applet.id},
                                       {"path", loaded.path},
                                       {"dirty", false},
                                       {"text", spec::to_toml(loaded.spec)},
                                       {"json", spec::to_json(loaded.spec)}});
         }
         std::lock_guard<std::mutex> lock(doc_mutex);
+        // No spec open: a first look, answered as a read, not as a failure
+        // (a preview needs an open spec, so naming one still fails).
+        if (!doc && ctx.invocation.preview.empty()) return CommandOutput::ok({{"open", false}});
         if (!doc) return no_open_spec();
         const spec::Spec* s = &doc->spec;
         if (!ctx.invocation.preview.empty()) {
@@ -841,7 +845,8 @@ struct Session::Impl {
             s = &p->shadow;
         }
         const std::string text = spec::to_toml(*s);
-        return CommandOutput::ok({{"id", s->applet.id},
+        return CommandOutput::ok({{"open", true},
+                                  {"id", s->applet.id},
                                   {"path", doc->path ? json(*doc->path) : json(nullptr)},
                                   {"dirty", !doc->path || text != doc->saved_text},
                                   {"text", text},

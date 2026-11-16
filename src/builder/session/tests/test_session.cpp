@@ -88,7 +88,8 @@ TEST_CASE("opening a workspace makes its folders, binds every windowless command
         CHECK(f.s->registry().is_bound(d.name) == !app);
     }
     CHECK(err(*f.s, "app.info") == "command.not_bound");
-    CHECK(err(*f.s, "spec.get") == "spec.no_open_spec");
+    // A first look with no spec open is a plain read, not a failure.
+    CHECK(ok(*f.s, "spec.get") == json({{"open", false}}));
     CHECK(err(*f.s, "source.add", {{"id", "a"}, {"sql", "SELECT 1"}}) == "spec.no_open_spec");
     CHECK(err(*f.s, "applet.save") == "spec.no_open_spec");
     CHECK(!f.s->open_spec());
