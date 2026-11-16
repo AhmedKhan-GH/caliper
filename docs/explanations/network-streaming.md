@@ -166,9 +166,21 @@ Python:
 
 | Thread | What it does | The GIL |
 |---|---|---|
-| The training thread | For each subscribed view that is due: reduce the snapshot on the device (pool a heatmap, sample points), queue a non-blocking copy into pinned host memory, record a `torch.mps.Event`. For a series: keep each value, and move gathered values to the host 30 times a second while a viewer watches | Held: about 65 µs per snapshot and 1.5 µs per series call. A call between due times returns after a clock check |
-| The pump (`caliper.net`, Python) | Waits in native code. Wakes for a request from a viewer, for the training thread, or every 4 ms while snapshots are in flight; polls their events, which needs the GIL; hands each completed snapshot to the native sender | Held about 20 µs per snapshot. The native sender copies the snapshot with the GIL released |
-| The native sender (C++, `caliper._netio`) | Listens on 127.0.0.1, checks upgrades, serves the viewer page, runs the handshake, pings and time-outs, keeps the latest snapshot per subscription and the retained series, computes heatmap and points stats from the payload, encodes and sends | Never |
+| The training thread | For each subscribed view that is due: reduce the snapshot on the device (pool a heatmap, sample points) and queue a non-blocking copy into pinned host memory. The views that are due take their snapshots together, in a **tick** at the session's rate of 60 a second, with the series values gathered since the last tick, and one `torch.mps.Event` recorded when the tick closes covers all of their copies | Held: per tick, about 140 µs for a 1024 by 1024 heatmap, 120 µs for 100,000 points and 100 µs for a series' values. A call between ticks returns after a clock check, in 1 to 2 µs for a series, which keeps its value, and under 1 µs for the others |
+| The pump (`caliper.net`, Python) | Waits in native code. Wakes for a request from a viewer, when a tick closes, or every 4 ms while a tick's copies are in flight; polls the tick's event, which needs the GIL; hands each completed snapshot to the native sender | Held about 60 µs per snapshot. The native sender copies the snapshot with the GIL released |
+| The native sender (C++, `caliper._netio`) | Listens on 127.0.0.1, checks upgrades, serves the viewer page, runs the handshake, pings and time-outs, keeps the latest snapshot per subscription and the retained series, computes heatmap and points stats from the payload (with NEON on arm64), encodes and sends | Never |
+
+A tick opens at the first view call after it is due and closes as soon as
+every subscribed view called in the last second has its snapshot, which is
+right after the step's last view call. It also closes when a view it already
+holds is called again, because the next step began, and at the first call
+after it has been open for a second. So the view calls of one step share a tick
+in any order and however far apart in the step they are, with series calls
+between them. Recording an event commits torch's command buffer, so the tick
+keeps the commits at 60 a second however many views a viewer watches. A view
+called with a lower rate, or a subscription with a lower `max_rate`, joins only
+the ticks its rate allows, every second one at 30 a second, and never exceeds
+that rate.
 
 SUBSCRIBE, UNSUBSCRIBE, VIEW_REQUEST and EVENT go to Python, because the data
 view engine and the event handlers live there. They are rare, and the native
