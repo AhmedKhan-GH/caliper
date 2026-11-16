@@ -164,11 +164,11 @@ Release build, as `python/caliper/_web` ships it:
 
 | File | Raw | gzip -9 | Brotli 11 |
 |---|---|---|---|
-| `caliper-views.wasm` | 1,619,248 B | 695,500 B | 558,531 B |
-| `caliper-views.js` | 34,335 B | 13,189 B | 11,480 B |
+| `caliper-views.wasm` | 1,647,981 B | 706,006 B | 565,087 B |
+| `caliper-views.js` | 34,335 B | 13,189 B | 11,497 B |
 | `caliper-views-loader.js` | 7,616 B | 2,962 B | 2,486 B |
 
-A page therefore transfers about 572 KB of the module with Brotli, once per page however many views it mounts. Drawing through the graphics layer added 130,764 bytes to the module (47,712 with gzip, 34,940 with Brotli) over the build of the commit before it, which was 1,488,484 bytes: the layer's core, with its validation and handle tables, and its WebGPU backend, and the self-test the browser tests start. The breakdown below was measured before that. The module holds about 0.97 MB of code and a 407 KB data segment, of which the two embedded faces take 321 KB (Source Code Pro 210 KB, IBM Plex Sans Condensed 111 KB). Attributed by origin in a relink at `-O1` that keeps function names, where little is inlined across origins, the code is:
+A page therefore transfers about 579 KB of the module with Brotli, once per page however many views it mounts. Drawing through the graphics layer added 130,764 bytes to the module (47,712 with gzip, 34,940 with Brotli) over the build of the commit before it, which was 1,488,484 bytes: the layer's core, with its validation and handle tables, and its WebGPU backend, and the self-test the browser tests start. The copy counters of the live views and the scene messages of wire protocol 3.2 in the codec add the other 28,733 bytes. The breakdown below was measured before that. The module holds about 0.97 MB of code and a 407 KB data segment, of which the two embedded faces take 321 KB (Source Code Pro 210 KB, IBM Plex Sans Condensed 111 KB). Attributed by origin in a relink at `-O1` that keeps function names, where little is inlined across origins, the code is:
 
 | Origin | Share of code |
 |---|---|
