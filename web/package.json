@@ -1,0 +1,20 @@
+{
+  "name": "@caliper/view",
+  "version": "0.1.0",
+  "description": "The <caliper-view> element, the Jupyter widget module and the viewer page for Caliper's data stream.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "node build.mjs --test && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "@types/node": "24.19.2",
+    "@webgpu/types": "0.1.74",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

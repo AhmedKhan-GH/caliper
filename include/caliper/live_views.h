@@ -57,7 +57,8 @@
  * torch buffer) is refused for SERIES/HISTOGRAM and loses hover values for
  * HEATMAP (the colormap kernel still runs; nothing is copied to the host).
  * Heatmap hover reads the slot after its claim ended, so it may show a value of
- * a newer snapshot of the same view (display aid only; CPU payloads: no hover).
+ * a newer snapshot of the same view (display aid only). A CPU payload is copied
+ * at apply for hover, since the caller may free its bytes on return.
  *
  * SYNC. The producer applies a snapshot only after the GPU work that wrote it
  * completed (torch.mps.Event polled, never waited on) and never rewrites a
@@ -109,7 +110,12 @@ enum {
     CALIPER_LIVE_APPLY_RAW       = 1u << 0,  /* heatmap/image: draw 1:1 at canvas (0,0), no chrome (tests) */
     CALIPER_LIVE_APPLY_AUTO_VMIN = 1u << 1,  /* vmin = stats[0] */
     CALIPER_LIVE_APPLY_AUTO_VMAX = 1u << 2,  /* vmax = stats[1] */
-    CALIPER_LIVE_APPLY_WAIT_GPU  = 1u << 3   /* block until the GPU read completed (tests only) */
+    CALIPER_LIVE_APPLY_WAIT_GPU  = 1u << 3,  /* block until the GPU read completed (tests only) */
+    /* stamp_ns was mapped from a producer's own clock (a network source,
+     * src/host/live/live_clock.h): the latency is the delay above the fastest
+     * recent message, not including a constant transit time, and the view
+     * labels it "rel lat" */
+    CALIPER_LIVE_APPLY_STAMP_RELATIVE = 1u << 4
 };
 
 typedef struct CaliperLiveSnapshot {
@@ -129,7 +135,7 @@ typedef struct CaliperLiveSnapshot {
     int32_t              points_dims;   /* POINTS: 2 (pan/zoom) or 3 (orbit) */
     int32_t              label_count;   /* POINTS: categorical classes in aux, 0 = continuous */
     uint64_t             seq;           /* producer's publish counter for this view */
-    uint64_t             stamp_ns;      /* producer CLOCK_UPTIME_RAW ns at snapshot time (0 = unknown) */
+    uint64_t             stamp_ns;      /* snapshot time in the viewer's clock (CLOCK_UPTIME_RAW on Apple, which a producer on the same machine stamps with; a network source maps the producer's stamps, src/host/live/live_clock.h); 0 = unknown */
 } CaliperLiveSnapshot;
 
 typedef struct CaliperLiveViewInfo {

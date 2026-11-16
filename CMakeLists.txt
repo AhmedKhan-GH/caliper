@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.18...4.2)
+# Every Apple binary is built for macOS 14.0 (Sonoma) or later; it must be set
+# before project(). cmake/CaliperMacOSTarget.cmake says why 14.0.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CaliperMacOSTarget.cmake)
 project(caliper CXX C)
 
 if(APPLE)
@@ -312,6 +315,39 @@ if(CALIPER_WITH_TORCH)
         CALIPER_HOST_TORCH_VERSION="${CALIPER_TORCH_VERSION}")
 endif()
 
+# Wire protocol v3 networking (src/host/net, caliper/live_net.h): the WebSocket
+# layer (client and server), the strict JSON reader and canonical writer, the
+# frame and message codec, the HTTP front door (upgrade checks, static files)
+# and the hub that `caliper serve` runs. Portable C++17 with no graphics, Metal or torch
+# dependency, so libcaliper's NetSource, the `caliper serve` hub and the
+# headless tests share it. Windows links Winsock.
+add_library(caliper_net STATIC
+    src/host/net/sha1.cpp
+    src/host/net/ws.cpp
+    src/host/net/json.cpp
+    src/host/net/wire.cpp
+    src/host/net/upgrade.cpp
+    src/host/net/http_door.cpp
+    src/host/net/hub.cpp
+)
+target_include_directories(caliper_net PUBLIC
+    ${CMAKE_SOURCE_DIR}/src/host
+    ${CMAKE_SOURCE_DIR}/include)
+if(WIN32)
+    target_link_libraries(caliper_net PUBLIC ws2_32)
+endif()
+set_target_properties(caliper_net PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+
+# Caliper API v0 (src/host/api/api_server.h): the routes, the token, Host and
+# Origin checks of the HTTP interface to the running app, and its server around
+# the hub. Headless, like caliper_net, so the unit tests link it directly; the
+# app's side (src/host/api/app_api.cpp) is in the caliper executable.
+add_library(caliper_api STATIC src/host/api/api_server.cpp)
+target_link_libraries(caliper_api PUBLIC caliper_net)
+set_target_properties(caliper_api PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+
 # ============================================================================
 # Metal renderer backend (C2, Apple only)
 # ============================================================================
@@ -454,6 +490,7 @@ add_library(libcaliper STATIC
     src/host/renderer/gl_renderer.cpp
     src/host/core_lifecycle.cpp
     src/host/embed/embed_core.cpp
+    src/host/embed/embed_views.cpp
     ${CALIPER_LIVE_SOURCES}
 )
 if(APPLE)
@@ -489,7 +526,7 @@ target_include_directories(libcaliper PUBLIC
 # link-only, so the full list would drag the chrome widgets (node editor, text
 # editor, ImTerm) into every embedder, including the Python extension.
 target_link_libraries(libcaliper
-    PUBLIC caliper_host_lib caliper::sdk caliper::ui_stack caliper_app_paths
+    PUBLIC caliper_host_lib caliper::sdk caliper::ui_stack caliper_app_paths caliper_net
     PRIVATE ${CALIPER_CORE_LIBS})
 if(APPLE)
     target_link_libraries(libcaliper PUBLIC caliper_metal_backend)
@@ -544,6 +581,13 @@ add_executable(caliper
     # which renders it into an offscreen canvas and writes a PNG.
     src/host/ui/applet_page.cpp
     src/host/shot.cpp
+    # Caliper API v0 for the app and for `caliper shot` (--api).
+    src/host/api/app_api.cpp
+    # caliper build <folder>: CMake against the installed SDK, then check, and
+    # the out-of-line part of host_cli.h. Compiled wherever host_cli.h
+    # dispatches (here and in caliper_tests).
+    src/host/cli_build.cpp
+    src/host/host_cli.cpp
 )
 # app_paths.cpp is no longer compiled by path here: it arrives via
 # libcaliper -> caliper_app_paths (PUBLIC). Compiling it here too would be an
@@ -564,7 +608,7 @@ target_compile_definitions(caliper PRIVATE
 # The host links the platform core (libcaliper, which PUBLIC-propagates
 # caliper_host_lib + ui_stack + the per-OS renderer backend) plus the UI/platform
 # libs it uses directly (imgui/glfw/implot chrome).
-target_link_libraries(caliper PRIVATE libcaliper caliper::sdk ${CALIPER_DEPENDENCY_LIBS})
+target_link_libraries(caliper PRIVATE libcaliper caliper::sdk caliper_api ${CALIPER_DEPENDENCY_LIBS})
 
 if(USE_CUDA)
     target_compile_definitions(caliper PRIVATE USE_CUDA)

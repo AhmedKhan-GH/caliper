@@ -3,10 +3,10 @@ name: Build
 on:
   push:
     branches: [main]
-    paths-ignore: ['site/**', 'docs/**', 'mkdocs.yml', '**.md',
+    paths-ignore: ['site/**', 'docs/**', 'design/**', 'mkdocs.yml', '**.md',
                    '.github/workflows/pages.yml']
   pull_request:
-    paths-ignore: ['site/**', 'docs/**', 'mkdocs.yml', '**.md',
+    paths-ignore: ['site/**', 'docs/**', 'design/**', 'mkdocs.yml', '**.md',
                    '.github/workflows/pages.yml']
   workflow_dispatch:
 permissions:
@@ -67,6 +67,11 @@ jobs:
           -DCALIPER_SDK_PROBE_DIR="$RUNNER_TEMP/sdk-probe"
           -DCALIPER_EMBED_PROBE_DIR="$RUNNER_TEMP/embed-probe"
       - run: cmake --build cmake-build-release --parallel
+      # Every binary must say macOS 14.0 as its minimum (cmake/CaliperMacOSTarget.cmake).
+      - run: >-
+          python3 scripts/check_macos_min.py 14.0
+          cmake-build-release/caliper cmake-build-release/caliper_viewer
+          cmake-build-release/libcaliper_embed.dylib
       # The GPU suites (gfx, export, embed, torch) skip without a device and
       # report that as Skipped, not Passed. A hosted runner's Metal/GL
       # availability is not guaranteed, so skips are accepted here; a lane
@@ -86,6 +91,14 @@ jobs:
           CMAKE_GENERATOR: Ninja
           CMAKE_C_COMPILER_LAUNCHER: sccache
           CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      # What was built against the installed packages carries their minimum
+      # macOS too: the applets above, and the copies of examples/hello and
+      # examples/embed_host that the install tests built.
+      - run: >-
+          python3 scripts/check_macos_min.py 14.0
+          "$RUNNER_TEMP"/applets/build/*/applets/*.dylib
+          "$RUNNER_TEMP/sdk-probe/hello-build/applets/libhello.dylib"
+          "$RUNNER_TEMP/embed-probe/embed_host-build/embed_host"
       # The host must name no applet: no applet id, name or window title may
       # appear as a string literal in src/ or include/.
       - run: python3 scripts/check_host_names_no_applet.py

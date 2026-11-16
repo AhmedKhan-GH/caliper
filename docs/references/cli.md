@@ -1,17 +1,20 @@
 # Caliper CLI
 
-The `caliper` executable starts the app and also takes subcommands. It reads its command line before anything opens a window. Every subcommand except `dev` runs and exits without opening a window: `list`, `check`, `install`, `new`, `info`, `shot` and `--help` never start the app, so they are safe in scripts and CI. Only `caliper` with no subcommand and `caliper dev` start the app. `shot` draws the app's applet page into an offscreen canvas and writes it as a PNG, and shows nothing on screen. The parser and the subcommands are in `src/host/host_cli.h`, and `src/main.cpp` dispatches to them.
+The `caliper` executable starts the app and also takes subcommands, which make up Caliper CLI. There is no separate program, so there is one thing to install. The executable reads its command line before anything opens a window. Every subcommand except `dev` runs without opening a window: `list`, `check`, `install`, `new`, `build`, `info`, `shot`, `serve` and `--help` never start the app, so they are safe in scripts and CI. `serve` runs until it is stopped; the others exit when they are done. Only `caliper` with no subcommand and `caliper dev` start the app. `shot` draws the app's applet page into an offscreen canvas and writes it as a PNG, and shows nothing on screen. The parser and the subcommands are in `src/host/host_cli.h`, and `src/main.cpp` dispatches to them.
 
 ```text
-usage: caliper [--applets <dir>]...
-       caliper dev <folder> [--applets <dir>]...
+usage: caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] [--hidden]
+       caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]
+                   [--hidden]
        caliper list [--applets <dir>]...
        caliper check <folder>
        caliper install <folder>
        caliper new <name> [<dir>]
+       caliper build <folder>
        caliper info
        caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
-                    [--frames <N>] --out <file.png>
+                    [--frames <N>] --out <file.png> [--api [--api-port <n>] [--allow-control]]
+       caliper serve [--port <n>] [--token-file <file>] [--assets <dir>] [--allow-control]
        caliper --help
 ```
 
@@ -21,7 +24,40 @@ Results go to standard output, and errors go to standard error, each starting wi
 
 `caliper` with no subcommand starts the app. `--applets <dir>`, or `--applets=<dir>`, adds a development folder to the search. It may be given more than once, and the folders are searched in the order given. It is accepted when starting the app and with `dev`, `list` and `shot`; with any other subcommand it is a usage error, and so is `--applets` followed by an argument that starts with `--`, such as `--applets --help`. An argument that starts with `-psn_`, which Finder passes to an app it launches on older versions of macOS, is ignored.
 
+`--url <link>`, or `--url=<link>`, attaches the app to a stream of [wire protocol v3](wire-protocol.md) as soon as it starts, as pasting the link into the attach pane does: the page link `http://127.0.0.1:<port>/?token=<token>` that `caliper.serve()` prints, or the stream link `ws://127.0.0.1:<port>/v3/stream?token=<token>` of a script or a hub. The app opens on the stream's live page. A link that does not attach leaves the app on its landing page, and the Activity pane and standard error say why. It is accepted when starting the app and with `dev`, may be given once, and needs a value. The link holds the stream's session token, which other users of the machine can read from the process list while the app runs, so use it on a machine you do not share. See [Attach to a running script](../guides/attach-to-a-running-script.md#attach-to-a-stream-by-its-link).
+
 `caliper dev <folder>` starts the app with `<folder>` searched first, before any `--applets` folders. The folder is usually an applet's build folder, such as `build`, or its build output, `build/applets` (see [Build folders](#build-folders)). The Activity pane's `scanned` line names the folder that was searched. If `<folder>` is not a folder, `dev` prints `caliper: not a folder: <folder>` and exits with 1 without starting the app. `dev` does not reload an applet whose library is rebuilt; quit and start it again.
+
+### Caliper API
+
+`--api` serves [Caliper API](api.md), the HTTP interface to the running app, on 127.0.0.1 while the app runs. It is accepted when starting the app and with `dev` and `shot`, whose offscreen canvas is the app's windowless mode; with any other subcommand it is a usage error. Setting `CALIPER_API=1` turns the API on as `--api` does.
+
+| Option | Meaning |
+|---|---|
+| `--api` | Serve Caliper API. The process prints the address and the session token, and writes them in `api.json` in the app-data folder, readable by its owner only, until it exits. |
+| `--api-port <n>` | The port, from 0 to 65535. The default is 7341, and 0 takes any free port. It needs `--api`, and may be given once. |
+| `--allow-control` | The API's stream, which is a hub, forwards viewers' controls to the scripts, as `caliper serve --allow-control` does. It needs `--api`. Off by default. `CALIPER_API=1` alone never turns it on. |
+
+`--api-port` also takes the form `--api-port=<n>`. `--api` takes no value. When the port is taken, the app starts without the API and says why on standard error and in the Activity pane, and `shot` exits with 1. With `--api`, SIGINT and SIGTERM end the frames of `shot` early, and it then writes its image as usual.
+
+### The hidden window
+
+`--hidden` is a testing aid: it runs the real app, with its renderer and its frame loop, but never shows its window. Setting `CALIPER_HIDDEN=1` does the same. It is accepted when starting the app and with `dev`; with any other subcommand it is a usage error, and it takes no value. With `--api` it lets a test or an agent drive the whole app through [Caliper API](api.md), captures included, with nothing on screen.
+
+In this mode the app starts as the test binaries that open hidden windows do ([Testing](../explanations/testing.md#the-pixel-exact-graphics-suite)):
+
+- On macOS the process has no Dock icon and no menu bar, and it is never activated: the activation policy is `NSApplicationActivationPolicyProhibited` before and after GLFW starts, and GLFW builds no menu bar.
+- The window is created invisible and unfocused, and nothing shows it later. Should anything make it visible, the app hides it again at once and says so on standard error.
+- The window is 1280 by 800 in screen coordinates on every display, unless `CALIPER_WINDOW_SIZE` sets another size, so captures have the same size everywhere: the framebuffer is that size times the display's scale.
+- The app reads and writes no `imgui.ini`, so every run shows the layout of a first run and the saved layout is left alone. Set `CALIPER_DATA_DIR` as well to keep the stores and the API file out of the app-data folder.
+- SIGINT and SIGTERM close the window as a click on its close button would, so the full teardown runs and the API file is removed. `CALIPER_EXIT_AFTER` works as usual.
+- `CALIPER_TEST_UI` plays scripted clicks, typing and drags into the live page, only in this mode ([Host variables](environment.md#host-variables)). With `--url`, a test attaches the hidden app to a stream and drives its run bar and its views as a person would.
+
+At start-up the app prints one line to standard error that says the window is not shown, with its visibility, its focus, whether the background policy holds and the framebuffer's size:
+
+```text
+[hidden] the window is not shown (visible 0, focused 0, background policy 1, framebuffer 2560x1600)
+```
 
 ## The search order
 
@@ -109,7 +145,47 @@ created <dir> for applet dev.example.my-viewer
   tests/test_my_viewer.cpp
 ```
 
-The comment at the top of the generated `CMakeLists.txt` gives the next steps: configure with `-DCMAKE_PREFIX_PATH=<sdk prefix>`, build, run `ctest --test-dir build`, and run `caliper dev build/applets`.
+The comment at the top of the generated `CMakeLists.txt` gives the next steps: configure with `-DCMAKE_PREFIX_PATH=<sdk prefix>`, build, run `ctest --test-dir build`, and run `caliper dev build/applets`. [caliper build](#caliper-build) does the first two and the checks in one step.
+
+### caliper build <folder>
+
+Configures and builds an applet's folder against the installed SDK with CMake, then runs the checks of [caliper check](#caliper-check) on the result. The folder must hold a `CMakeLists.txt` that finds `caliper-sdk`, such as one that `caliper new` writes. The build goes into `<folder>/build`, in the Release configuration, and the library and its manifest land in `<folder>/build/applets`, where `caliper dev` and `caliper install` take them. It runs these steps, and prints what CMake prints as it comes:
+
+```sh
+cmake -S <folder> -B <folder>/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=<sdk prefix>
+cmake --build <folder>/build --config Release --parallel <cores>
+caliper check <folder>/build
+```
+
+```text
+caliper build my-viewer
+using the Caliper SDK in /home/me/caliper-sdk
+configuring /home/me/my-viewer/build with /usr/local/bin/cmake
+...
+using the applets in /home/me/my-viewer/build/applets
+READY  dev.example.my-viewer  0.1.0  /home/me/my-viewer/build/applets
+1 of 1 applets pass the checks
+```
+
+The SDK's prefix is found without being named. `build` takes the first of these that holds `lib/cmake/caliper-sdk/caliper-sdk-config.cmake`:
+
+1. `CALIPER_SDK_DIR`, when it is set and not empty. A folder without the SDK is an error.
+2. The prefix the executable is installed in: the folder above the executable's folder, then the executable's folder.
+3. `caliper-sdk` in the home folder, where the [tutorials](../tutorials/development-basics.md#the-development-loop) install the SDK.
+
+When none of them holds the SDK, `build` says where it looked and lets CMake search its own places, such as `CMAKE_PREFIX_PATH` in the environment and the system prefixes.
+
+`build` runs `CALIPER_CMAKE` when it is set and not empty, else `cmake` from `PATH`, else, on macOS, the command of CMake.app in `/Applications`. CMake chooses the generator and the compiler as usual, so `CMAKE_GENERATOR` and `CXX` in the environment apply. A folder that was built before is configured and built again incrementally.
+
+`build` exits with 0 when the build passes the checks, with 2 for a wrong command line, and with 1 when:
+
+- `<folder>` is not a folder or holds no `CMakeLists.txt`;
+- no cmake is found: `caliper: cmake was not found: install CMake 3.18 or later and put it on PATH, or set CALIPER_CMAKE to its path`, or `CALIPER_CMAKE` names something that is not a program;
+- `CALIPER_SDK_DIR` names a folder without the SDK;
+- the configure fails. When CMake found no working C++ compiler, no build tool for its generator, or no SDK, a last line says which and how to install it, such as `caliper: no Caliper SDK was found. Install it from a Caliper build with cmake --install <build folder> --prefix <prefix> --component sdk, then set CALIPER_SDK_DIR=<prefix> or use the prefix ~/caliper-sdk`;
+- the build fails, or an applet in the build folder fails the checks.
+
+`build` is built and tested on macOS. The Windows build refuses it (see [On Windows](#on-windows)); configure and build there with CMake as [SDK package](sdk-package.md#using-the-package) describes.
 
 ### caliper info
 
@@ -169,6 +245,42 @@ The applet runs as it runs in the app: its `on_init`, its frames and any jobs it
 
 The id and the image's folder are checked before anything is drawn or created.
 
+### caliper serve
+
+Runs the hub of [wire protocol v3](wire-protocol.md): producers, such as training scripts, connect out to it and each becomes a session, and viewers (the browser viewer page, the notebook widget, the Caliper app) connect to it, list the sessions and attach to one. It needs no window, renderer or GPU, and listens on 127.0.0.1 only. [Run a hub](../guides/run-a-hub.md) explains how to use it, what it keeps and its limits.
+
+| Option | Meaning |
+|---|---|
+| `--port <n>` | The port to listen on, 0 to 65535. The default is 7340. 0 takes any free port. |
+| `--token-file <file>` | Read the session token from the first line of `<file>` instead of making a random one. The token must be 22 to 128 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`. On macOS and Linux, the file must not be readable or writable by other users (`chmod 600`). |
+| `--assets <dir>` | Serve the viewer page and its files from `<dir>`, such as the `caliper/_web/` folder of Caliper LIB. Without it, `/` answers with a short note that says where the page is. |
+| `--allow-control` | Forward viewers' controls, of [wire protocol 3.1](wire-protocol.md#controls-through-a-hub), to the script of each viewer's own session: pause, resume, step, setting a registered parameter and running a registered action. Off by default: without it the hub answers every control with `forbidden`, and viewers show the controls without letting them be changed. |
+
+The options with a value also take the form `--port=<n>`. They apply only to `serve`, except `--allow-control`, which also applies with `--api` (see [Caliper API](#caliper-api)), and takes no value. The token is never given on the command line, where other users could read it from the process list. Without `--token-file`, the hub makes a random token of 32 characters (24 random bytes) for this run.
+
+`serve` prints the viewer link and the producer address, then one line for each session that starts, resumes, ends or is forgotten:
+
+```text
+viewers   http://127.0.0.1:7340/?token=<token>
+producers ws://127.0.0.1:7340/v3/stream (address and token in <hub file>)
+controls are not forwarded; start with --allow-control to allow them
+stop with Ctrl-C
+session clp-41222-9f03ab started (train.py, pid 41222)
+```
+
+The **hub file** tells producers on the same machine where the hub is. It is `hub.json` in the app-data folder, or the path in `CALIPER_HUB_FILE` when that is set and not empty. The hub writes it when it starts, readable and writable by its owner only (mode 0600), and removes it when it stops. It holds one JSON object:
+
+| Key | Value |
+|---|---|
+| `version` | 1 |
+| `pid` | The hub's process id |
+| `port` | The port it listens on |
+| `token` | The session token |
+| `stream_url` | `ws://127.0.0.1:<port>/v3/stream`, without the token |
+| `url` | The viewer link, with the token |
+
+SIGINT (Ctrl-C) or SIGTERM stops the hub: it sends BYE `shutdown` on every connection, closes them with code 1001, removes the hub file, prints `hub stopped` and exits with 0. It exits with 1 when the port is taken, the token file cannot be used, or the `--assets` folder does not exist. When the default port is taken, another hub is probably running; start this one with `--port`.
+
 ### caliper --help
 
 Prints the usage to standard output and exits with 0. `-h` and `help` do the same.
@@ -178,8 +290,12 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | A check failed, nothing was found, or a file operation failed. `dev` also exits with 1 when its folder is not a folder, and `shot` when its applet cannot be launched or is quarantined, or when the renderer cannot draw offscreen. |
-| 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets` with a subcommand that does not take it, an option of `shot` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
+| 1 | A check failed, nothing was found, or a file operation failed. `build` also exits with 1 when CMake, a compiler or the SDK is missing or the build fails, `dev` when its folder is not a folder, `shot` when its applet cannot be launched or is quarantined, when the renderer cannot draw offscreen, or when Caliper API cannot listen, and `serve` when it cannot listen or cannot use its token file or assets folder. On Windows, `serve`, `build`, `--api` and `--url` exit with 1 before anything starts ([On Windows](#on-windows)). |
+| 2 | The command line is wrong: an unknown command or option, a missing or extra operand, `--applets`, `--url`, `--api`, `--api-port` or `--hidden` with a subcommand that does not take it, `--url` without a link or given twice, `--api-port` or `--allow-control` without `--api` when starting the app, `dev` or `shot`, an option of `shot` or `serve` with another subcommand, a missing or unusable value of `--launch`, `--out`, `--size` or `--frames`, a port out of range, a URL given to `install`, or a name that `new` cannot use. For an unknown command or option and for wrong operands, the usage follows the error on standard error. |
+
+## On Windows
+
+The Windows build refuses `caliper serve`, `caliper build`, `--api` (when starting the app, with `dev` and with `shot`) and `--url` before anything starts. It prints one line, such as `caliper: caliper serve is not available on Windows yet`, and exits with 1. A wrong command line is still a usage error with exit code 2. The code of these pieces compiles on Windows but is untested there: the socket tests of the WebSocket layer, the hub and Caliper API do not run in the Windows CI lane, and the network source that `--url` attaches through exists on macOS only. `CALIPER_API=1` is ignored on Windows, and a line on standard error says so. Every other subcommand behaves as this page describes.
 
 ## Environment variables
 
@@ -189,5 +305,10 @@ Prints the usage to standard output and exits with 0. `-h` and `help` do the sam
 | `CALIPER_USER_APPLETS_DIR` | Replaces the user applets folder, for the app, `dev`, `list`, `install` and `shot`. |
 | `CALIPER_DATA_DIR` | Moves the whole app-data folder: the stores, `imgui.ini`, `data/`, `live/` and, unless `CALIPER_USER_APPLETS_DIR` is set, the user applets folder `applets/`. `check` reads its data-schema stamps there and `install` copies into its `applets/`; `list`, `check`, `info`, `new` and `--help` create nothing in it, whether it is set or not. `shot` keeps its stores and the applet's data folder there when it is set, and in a temporary folder when it is not. |
 | `CALIPER_CHROMELESS` | `1` draws the applet page without the page bar, the status bar and the jobs tray, in the app and in `shot`. |
+| `CALIPER_HUB_FILE` | Replaces the path of the hub file that `serve` writes, `hub.json` in the app-data folder, when it is set and not empty. |
+| `CALIPER_API` | `1` serves [Caliper API](api.md) as `--api` does, when starting the app and with `dev` and `shot`. Ignored on Windows ([On Windows](#on-windows)). |
+| `CALIPER_HIDDEN` | `1` runs the app with its window never shown, as `--hidden` does: a testing aid (see [The hidden window](#the-hidden-window)). |
+| `CALIPER_SDK_DIR` | The prefix of the installed SDK that `build` uses, when it is set and not empty. |
+| `CALIPER_CMAKE` | The cmake that `build` runs, when it is set and not empty. |
 
 [Folders and environment variables](environment.md) lists every variable the host reads.

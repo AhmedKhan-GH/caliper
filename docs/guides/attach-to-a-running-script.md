@@ -54,7 +54,8 @@ The session's live page opens:
 | Part | Shows |
 |---|---|
 | Bar | `esc Home`, the script's name, and its state: a filled, breathing diamond and `live` while it runs, `waiting for the session to start`, or an outlined diamond and `SESSION ENDED` once it has gone |
-| Views | One window per view (see [What you see](../tutorials/live-pytorch.md#what-you-see)), tiled into the page on first appearance; move, resize or dock them, and the layout is kept in `imgui.ini` |
+| Run bar | For a stream only, under the bar: the script's run state, Pause or Resume, Step, its parameters and its actions (see [Control the run and share a selection](#control-the-run-and-share-a-selection)) |
+| Views | One window per view on a grid that fills the page and lays itself out again when the page narrows, each with a header of its name, a summary, its tools and a status dot (see [What you see](../tutorials/live-pytorch.md#what-you-see)); a window you move, resize or dock keeps its place, and that layout is kept in `imgui.ini` |
 | Status bar | The backend and GPU, then the script's pid, the number of views, and the frame rate and step-to-screen latency over the last second |
 
 The window title reads `Caliper - <script> (pid <pid>)`, with
@@ -116,13 +117,162 @@ the script's terminal does not close it and it outlives the script.
 | Flag | Effect |
 |---|---|
 | `--session <token>` | Attach to this session at once |
+| `--url <link>` | Attach to a network stream by its link (see [Attach to a stream by its link](#attach-to-a-stream-by-its-link)) |
 | `--data-dir <root>` | Session-file root (default `$CALIPER_DATA_DIR`, else the app-data folder) |
 | `--exit-after <s>` | Close the window after `s` seconds |
 | `--size <w>x<h>` | Window size in points (default 1280x800) |
 | `--stats` | Print a stats line to stderr every 2 s: fps, updates, step-to-screen median/p95/max, skipped and client-dropped counts, each view's renderer path, RSS and footprint |
 | `--latency-log <file>` | Write every latency sample (`t_ns lat_ms` per line); implies `--stats` |
-| `--headless` | No window, an offscreen canvas (CI, tests). Needs `--session` |
+| `--headless` | No window, an offscreen canvas (CI, tests). Needs `--session` or `--url`, and prints one `received` line per view when it exits |
 | `--dump-dir <dir>` | With `--headless`: write each view's pixels or values to `<dir>` whenever its sequence number changes |
+
+## Attach to a stream by its link
+
+A script that streams with `caliper.serve()` sends its views over a WebSocket on
+127.0.0.1 ([wire protocol v3](../references/wire-protocol.md)) instead of shared
+memory, so it has no session file and does not appear in the session lists
+above. Attach to it with the link it prints. Two forms are accepted, with
+`localhost` in place of `127.0.0.1`:
+
+- the page link, `http://127.0.0.1:<port>/?token=<token>`;
+- the stream link, `ws://127.0.0.1:<port>/v3/stream?token=<token>`.
+
+A server that holds several sessions, such as the `caliper serve` hub, needs
+the one to show: add `&session=<session id>` to the link. With one session the
+server attaches the viewer to it.
+
+The token in the link is the stream's only secret. The viewer never prints it,
+and messages show the link without its query. Only links to 127.0.0.1 or
+`localhost` are accepted.
+
+**In the Caliper app**, press F4 and paste the link into the field under the
+session list, then press Enter or click `Attach link`. A refusal stays on the
+landing, and Activity says why: nothing listens on that port, or the server
+refused the token (HTTP 403). To open the app on the stream directly, give
+the link on the command line:
+
+```sh
+caliper --url "http://127.0.0.1:8765/?token=$TOKEN"
+```
+
+**With caliper-viewer**, pass `--url`:
+
+```sh
+caliper-viewer --url "http://127.0.0.1:8765/?token=$TOKEN"
+```
+
+Without a window, the viewer runs for a while and prints what it received,
+which is how a script that streams is checked in a terminal or CI:
+
+```sh
+caliper-viewer --headless --url "ws://127.0.0.1:8765/v3/stream?token=$TOKEN" --exit-after 5 --stats
+```
+
+```text
+[caliper-viewer] received session=clp-41222-9f03ab script=train.py pid=41222 alive=1 views=3 updates=381
+[caliper-viewer] received view=weights kind=heatmap updates=127 seq=135 series=0
+[caliper-viewer] received view=loss kind=series updates=127 seq=135 series=135
+[caliper-viewer] received view=acts kind=histogram updates=127 seq=135 series=0
+```
+
+`updates` counts the snapshots the viewer drew, `seq` is the last one's number,
+and `series` is the number of values a series holds. The exit status is 2 when
+the attach fails.
+
+The viewer subscribes to every view of the session with the view's default
+data view and draws it like a shared-memory view. When the connection drops,
+the views keep their last pixels, the status says the session ended, and the
+viewer reconnects; a series continues from the values the producer retained.
+When the script ends, the views keep their last pixels.
+
+## Choose what a view shows
+
+A view of a stream may offer more than it draws by default: several sources,
+such as the layers of a model, and dimensions beyond the ones its kind
+draws, such as the heads of an attention map
+([Data views](../references/wire-protocol.md#data-views)). In the app and in
+`caliper-viewer` such a view has a picker under its header, as in the
+browser: a menu of its sources when it has several, and a menu per
+dimension that keeps the dimension (`all`), reduces it (`mean`, `sum`,
+`max`, `min` or `norm`), or picks one index (a field past 256 positions). A
+heatmap that keeps three dimensions shows the first as a mosaic of tiles. A
+view with nothing to choose has no picker.
+
+A choice goes to the script at once; the script computes the new data view
+on its device and only the result travels. The menus then show the data view
+the script resolved, so a choice it refused or clamped returns to what it
+shows. A shared-memory session offers no choices.
+
+## Control the run and share a selection
+
+A script on protocol 3.1 can take controls from its viewers: it calls a
+checkpoint once per training step (`caliper.step()`), and it may register
+parameters and actions and declare which axes of its views index the same
+items, such as the samples of a test set ([Controls](../references/wire-protocol.md#controls)
+and [Item spaces](../references/wire-protocol.md#item-spaces)). The app's live
+page and `caliper-viewer` show these for a stream. A shared-memory session has
+no channel back to the script, so its page has no run bar.
+
+The run bar sits under the page bar, above the views:
+
+| Part | Shows and does |
+|---|---|
+| Run state | `running`, `pausing`, `paused`, `stepping, N left` or `no checkpoint yet`, with the step at which the state last changed |
+| Pause, Resume | Pause holds the training loop at its next checkpoint; Resume releases it |
+| Step | Runs one step and pauses again |
+| Parameters | One control per registered parameter, by its type: a slider for a number or an integer with a range (on a log scale when the script asks for one) with a field beside it that shows and takes the exact value, a field for one without a range, a box for a boolean, a menu for a choice |
+| Actions | One button per registered action, then `queued` or `running` while it waits or runs, and its result for 15 s after it finishes, or `FAILED:` and the reason |
+| Right edge | The last refused request and why, for 10 s, or why the controls are off |
+
+A value you set shows at once, marked `pending`, until the script confirms
+it: the script reads a new value at its next checkpoint, and the mark stays
+until a CONTROLS sent after the script's reply carries the value. A value out
+of range comes back clamped, and a refused value returns to the script's own
+with the reason at the right edge. While a slider is dragged, at most 30
+values a second go to the script, and the value where the drag stops always
+goes last.
+
+**Who may control.** The run bar shows the run state, the parameters and the
+actions to every viewer, but changes them only when all of these hold;
+otherwise every control is off and the bar says why:
+
+- the server lets this viewer control: `caliper.serve()` of a script does
+  unless it was told to refuse controls, and a hub does only when it was
+  started with `--allow-control` (`caliper serve --allow-control`, or the app's
+  `--api` stream with `--allow-control`; see [Run a hub](run-a-hub.md#controls-and-selections));
+- the script takes controls (it announced them);
+- the session is live: the controls of an ended session stay visible and off.
+
+Before the script's first checkpoint, Pause, Step and the actions are off
+with `the script has called no checkpoint yet`; a parameter can already be
+set, and the script reads it at once. The stream carries only these requests,
+never a command to the app or the machine.
+
+**Selecting.** Shift-drag across a view to select: rows of a heatmap or an
+image, a range of steps of a series, points inside the lasso of an embedding.
+When the selected axis indexes an item space, the selection is sent to the
+script with the item ids, and the script shares it with every viewer of the
+session. Every view whose axis indexes the same space then shows it, as the
+browser views do: the selected points over the dimmed rest with their count,
+the selected rows or columns of a heatmap or an image outlined in bronze (in
+every cell of a mosaic), and markers on the selected steps of a series. So
+selecting units in one weight matrix marks the same units in the next and in
+an embedding of them. A selection is not a control: every viewer may select,
+with or without `--allow-control`.
+
+**Details.** When the script provides details for the space, such as a few
+fields of each selected sample, a Selection pane opens at the right of the
+page with one row per selected item, for the first 32, under the item space's
+name. It closes when the selection is cleared. When the details failed, the
+pane says why.
+
+In `caliper-viewer` the same run bar and details are in the status window, in
+ImGui's own style.
+
+The page logs what changes to standard error, one `[live]` line each, for
+example `[live] run paused at step 165`, `[live] param lr = 0.02`,
+`[live] save: saved at step 165` or `[live] controls off: the server does not
+let this viewer control (a hub needs --allow-control)`.
 
 ## What caliper-viewer shows
 
@@ -139,10 +289,12 @@ and a status window in the bottom-right corner shows:
 | Counters | Updates applied, snapshots skipped (a newer one arrived first), refused updates |
 | Latency | Step-to-screen median and p95 over the recent samples |
 | Per view | Name, kind, last sequence number, latency, `dropped@client` (snapshots the script dropped for want of a free slot), and an error if the last update was refused |
+| Controls | For a stream: the run bar and the selection's details (see [Control the run and share a selection](#control-the-run-and-share-a-selection)) |
 | Buttons | **Detach** and **Pause** / **Resume** |
 
-Pause freezes the display only; snapshots keep arriving and are dropped, so
-training is not slowed.
+Pause here freezes the display only; snapshots keep arriving and are dropped,
+so training is not slowed. To hold the training loop itself, use Pause in the
+run bar.
 
 ## Detach
 
@@ -235,9 +387,10 @@ CaliperLiveSessionInfo s[16];
 for (int i = 0; i < 16; ++i) s[i].struct_size = sizeof s[i];
 int n = caliper_live_list_sessions(s, 16);      /* newest first; -1 + caliper_live_last_error() */
 
-/* Attach: by token, by pid, or show the built-in session list. */
+/* Attach: by token, by pid, by a stream link, or show the built-in session list. */
 caliper_core_live_attach(core, s[0].session);
 caliper_core_live_attach_pid(core, pid, NULL);  /* NULL = the default data root */
+caliper_core_live_attach_url(core, "ws://127.0.0.1:8765/v3/stream?token=...");
 caliper_core_live_picker(core, 1, NULL);        /* list with Attach buttons; Detach returns to it */
 
 /* Every frame, before caliper_core_frame. */
@@ -253,6 +406,7 @@ caliper_core_live_detach(core);                 /* release claims, clear the hea
 | `caliper_live_list_sessions(out, cap)` / `_in(root, out, cap)` | List sessions newest first, reclaiming stale ones; returns the count |
 | `caliper_core_live_attach(core, token)` | Attach by token; refuses an unknown token, another protocol version and a session another live viewer holds |
 | `caliper_core_live_attach_pid(core, pid, root)` | Attach to the session of process `pid` |
+| `caliper_core_live_attach_url(core, link)` | Attach to a stream by its link; waits up to 2 s for the server and fails with the reason when nothing listens or the server refuses |
 | `caliper_core_live_picker(core, enable, root)` | The session list drawn by the core while not attached |
 | `caliper_core_live_poll(core)` | Once per frame: apply the newest completed snapshot of every view, write the heartbeat; -1 when not attached |
 | `caliper_core_live_detach(core)` | Drop the views and claims, clear the heartbeat |

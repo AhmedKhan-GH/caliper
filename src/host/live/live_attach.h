@@ -33,6 +33,8 @@ namespace caliper_host { class HostRenderer; }
 
 namespace caliper_live {
 
+class RunControls;
+
 // The state column of a session row: "running", "starting", "closing",
 // "viewed by <pid>", "protocol v<n>".
 std::string state_text(const SessionEntry& e);
@@ -103,6 +105,11 @@ public:
     // device. A session that is still starting attaches and waits.
     bool attach(caliper_host::HostRenderer* renderer, const std::string& session,
                 std::string* err);
+    // The same for a wire protocol v3 stream by its link (caliper_core_live_
+    // attach_url: ws://127.0.0.1:<port>/v3/stream?token=..., or the page link
+    // http://127.0.0.1:<port>/?token=...). Status::session is the session id.
+    bool attach_url(caliper_host::HostRenderer* renderer, const std::string& url,
+                    std::string* err);
     bool attached() const { return core_ != nullptr; }
 
     // Once per host frame, OUTSIDE the ImGui frame (like caliper_core_live_poll
@@ -124,9 +131,15 @@ public:
     // The hosted core (tests and diagnostics: the caliper_core_live_view_*
     // probes); null when not attached.
     CaliperCore* core() const { return core_; }
+    // A network stream's controls and selections (wire protocol 3.1,
+    // live_controls.h), updated by poll(); null when not attached to a stream.
+    RunControls* controls() const;
 
 private:
     void refresh_status(bool reset_window);
+    // The common part of attach and attach_url: a hosted core, then `go` on it.
+    bool attach_with(caliper_host::HostRenderer* renderer, int (*go)(CaliperCore*, const char*),
+                     const std::string& what, const char* prefix, std::string* err);
 
     CaliperCore*       core_ = nullptr;
     void*              activity_ = nullptr;   // live_activity.h, while attached

@@ -5,15 +5,20 @@
 // libcaliper's (caliper_core_live_picker / _attach / the status window's
 // Detach button), so the Caliper app's "Attach to process" can reuse them.
 //
-//   caliper-viewer [--session <token>] [--data-dir <root>] [--exit-after <s>]
-//                  [--stats] [--latency-log <file>] [--size <w>x<h>]
-//                  [--headless --dump-dir <dir>] [--probe-file <file>]
+//   caliper-viewer [--session <token> | --url <link>] [--data-dir <root>]
+//                  [--exit-after <s>] [--stats] [--latency-log <file>]
+//                  [--size <w>x<h>] [--headless --dump-dir <dir>]
+//                  [--probe-file <file>]
 //
-// Without --session the window shows the session list (refreshed every
-// second) with an Attach button per session; with it, it attaches at once
-// (tolerating a session that is still starting). Detach (status window)
-// returns to the list. The title reads "caliper: <script> (<pid>)", plus
-// "session ended" once the training process is gone (its last frames stay).
+// Without --session or --url the window shows the session list (refreshed
+// every second) with an Attach button per session; with --session it attaches
+// to that shared-memory session at once (tolerating a session that is still
+// starting). --url attaches to a wire protocol v3 stream on this machine
+// (caliper/live_net.h): ws://127.0.0.1:<port>/v3/stream?token=<token>, or the
+// http://127.0.0.1:<port>/?token=<token> link that caliper.serve() prints
+// (caliper_core_live_attach_url). Detach (status window) returns to the list.
+// The title reads "caliper: <script> (<pid>)", plus "session ended" once the
+// training process is gone (its last frames stay). The token is never printed.
 //
 // The window is driven by a 60 Hz NSTimer in the common run-loop modes (so it
 // keeps ticking through live resize and window drags): each tick polls the
@@ -25,7 +30,10 @@
 // --headless: no window, an offscreen canvas (CI, tests). With --dump-dir, every
 // time a view's seq changes its pixels (texture kinds: RGBA8 readback) or values
 // (series/histogram: f32) are written to <dir>/<name>.rgba|.f32 and then
-// <dir>/<name>.json ({seq, kind, width, height, count, path, imported}).
+// <dir>/<name>.json ({seq, kind, width, height, count, path, imported}). On exit
+// it prints one "received" line per view (kind, updates, seq, series values,
+// error), which is how a script streaming to the viewer is checked without a
+// window.
 //
 // Signals (automation): SIGTERM/SIGINT close the window gracefully (final stats
 // line, core shutdown). SIGUSR1 posts synthetic input through this process's
@@ -68,6 +76,7 @@ static CaliperCore* g_core = nullptr;
 
 struct Options {
     std::string session;
+    std::string url;           // --url: a wire protocol v3 stream link (holds the token)
     std::string data_root;     // --data-dir, else the default resolved before the core exists
     double exit_after = 0.0;
     bool stats = false;
@@ -235,6 +244,33 @@ static void dump_views() {
                                     (unsigned long long)vs.seq, vs.kind, li.width, li.height, (long long)li.count,
                                     path.c_str(), imported, name.c_str(), ext, vs.apply);
         if (write_atomic(base + ".json", js, (size_t)n)) g_dumped[name] = vs.seq;
+    }
+}
+
+// The stream link without its query (the token), for messages.
+static std::string url_display(const std::string& url) { return url.substr(0, url.find('?')); }
+
+// Attach to --url or --session. 1 ok.
+static int attach_requested() {
+    if (!g_opt.url.empty()) return caliper_core_live_attach_url(g_core, g_opt.url.c_str());
+    return caliper_core_live_attach(g_core, g_opt.session.c_str());
+}
+
+// One line per view: what this viewer received.
+static void print_received() {
+    const CaliperLiveStatus st = live_status(0);
+    std::fprintf(stderr, "[caliper-viewer] received session=%s script=%s pid=%d alive=%d views=%d updates=%llu\n",
+                 st.session ? st.session : "", st.script ? st.script : "", st.client_pid, st.client_alive, st.views,
+                 (unsigned long long)st.updates);
+    static const char* kKind[] = {"none", "heatmap", "image", "points", "series", "histogram"};
+    for (int i = 0; i < st.views; ++i) {
+        CaliperLiveViewStatus vs{};
+        vs.struct_size = sizeof vs;
+        if (!caliper_core_live_view_status(g_core, i, &vs)) continue;
+        std::fprintf(stderr, "[caliper-viewer] received view=%s kind=%s updates=%llu seq=%llu series=%llu%s%s\n",
+                     vs.name, vs.kind <= 5 ? kKind[vs.kind] : "?", (unsigned long long)vs.updates,
+                     (unsigned long long)vs.seq, (unsigned long long)vs.series_total, vs.error[0] ? " error=" : "",
+                     vs.error);
     }
 }
 
@@ -529,7 +565,7 @@ static void mouse_xy(NSView* v, NSEvent* e, float* x, float* y) {
     }
     // The session list is always there to come back to (Detach returns to it).
     caliper_core_live_picker(g_core, 1, g_opt.data_root.c_str());
-    if (!g_opt.session.empty() && !caliper_core_live_attach(g_core, g_opt.session.c_str())) {
+    if ((!g_opt.session.empty() || !g_opt.url.empty()) && !attach_requested()) {
         std::fprintf(stderr, "[caliper-viewer] %s\n", caliper_core_last_error(g_core));
         caliper_core_shutdown(g_core);
         g_core = nullptr;
@@ -538,7 +574,8 @@ static void mouse_xy(NSView* v, NSEvent* e, float* x, float* y) {
     [self updateTitle];
     // The CGWindowID, for screenshots / automation (screencapture -l <id>).
     std::fprintf(stderr, "[caliper-viewer] ready pid=%d window=%ld session=%s data_root=%s\n", (int)getpid(),
-                 (long)self.window.windowNumber, g_opt.session.empty() ? "-" : g_opt.session.c_str(),
+                 (long)self.window.windowNumber,
+                 !g_opt.url.empty() ? url_display(g_opt.url).c_str() : g_opt.session.empty() ? "-" : g_opt.session.c_str(),
                  g_opt.data_root.c_str());
 
     [self installSignals];
@@ -591,12 +628,12 @@ static int run_headless() {
     if (!caliper_core_attach_canvas(g_core, nullptr, &canvas)) {
         std::fprintf(stderr, "[caliper-viewer] no GPU for an offscreen canvas: %s\n", caliper_core_last_error(g_core));
         rc = 3;
-    } else if (!caliper_core_live_attach(g_core, g_opt.session.c_str())) {
+    } else if (!attach_requested()) {
         std::fprintf(stderr, "[caliper-viewer] %s\n", caliper_core_last_error(g_core));
         rc = 2;
     } else {
         std::fprintf(stderr, "[caliper-viewer] ready pid=%d headless session=%s\n", (int)getpid(),
-                     g_opt.session.c_str());
+                     !g_opt.url.empty() ? url_display(g_opt.url).c_str() : g_opt.session.c_str());
         const double t0 = CACurrentMediaTime();
         double last_stats = t0;
         while (!g_stop) {
@@ -614,6 +651,7 @@ static int run_headless() {
             usleep(16000);
         }
         if (g_opt.stats) print_stats(CACurrentMediaTime() - t0);
+        print_received();
     }
     caliper_core_shutdown(g_core);
     g_core = nullptr;
@@ -625,9 +663,9 @@ static int run_headless() {
 }
 
 static void usage() {
-    std::fprintf(stderr, "usage: caliper-viewer [--session <token>] [--data-dir <root>] [--exit-after <seconds>] "
-                         "[--stats] [--size <w>x<h>] [--latency-log <file>] [--headless --dump-dir <dir>] "
-                         "[--probe-file <file>]\n");
+    std::fprintf(stderr, "usage: caliper-viewer [--session <token> | --url <link>] [--data-dir <root>] "
+                         "[--exit-after <seconds>] [--stats] [--size <w>x<h>] [--latency-log <file>] "
+                         "[--headless --dump-dir <dir>] [--probe-file <file>]\n");
 }
 
 int main(int argc, const char* argv[]) {
@@ -636,6 +674,8 @@ int main(int argc, const char* argv[]) {
         auto next = [&]() -> const char* { return i + 1 < argc ? argv[++i] : nullptr; };
         if (!std::strcmp(a, "--session")) {
             const char* v = next(); if (!v) { usage(); return 64; } g_opt.session = v;
+        } else if (!std::strcmp(a, "--url")) {
+            const char* v = next(); if (!v) { usage(); return 64; } g_opt.url = v;
         } else if (!std::strcmp(a, "--data-dir")) {
             const char* v = next(); if (!v) { usage(); return 64; } g_opt.data_root = v;
         } else if (!std::strcmp(a, "--exit-after")) {
@@ -665,8 +705,12 @@ int main(int argc, const char* argv[]) {
     // (below) would otherwise redirect caliper::app_data_dir().
     if (g_opt.data_root.empty()) g_opt.data_root = caliper_live_data_root();
     setenv("CALIPER_DATA_DIR", g_opt.data_root.c_str(), 1);   // every later default lookup agrees
-    if (g_opt.headless && g_opt.session.empty()) {
-        std::fprintf(stderr, "caliper-viewer: --headless needs --session\n");
+    if (!g_opt.session.empty() && !g_opt.url.empty()) {
+        std::fprintf(stderr, "caliper-viewer: give --session or --url, not both\n");
+        return 64;
+    }
+    if (g_opt.headless && g_opt.session.empty() && g_opt.url.empty()) {
+        std::fprintf(stderr, "caliper-viewer: --headless needs --session or --url\n");
         return 64;
     }
     if (!g_opt.session.empty() && !session_known(g_opt.session)) {

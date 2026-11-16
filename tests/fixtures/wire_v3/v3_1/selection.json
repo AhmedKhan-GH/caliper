@@ -1,0 +1,46 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 158,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 134,
+    "minor": 1,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 96
+  },
+  "meta": {
+    "details": {
+      "fields": [
+        "label",
+        "loss"
+      ],
+      "items": [
+        0,
+        500
+      ],
+      "values": [
+        [
+          7,
+          0.125
+        ],
+        [
+          2,
+          1.5
+        ]
+      ]
+    },
+    "items": [
+      0,
+      500
+    ],
+    "space": "test",
+    "view": "embedding"
+  },
+  "meta_offset": 24,
+  "name": "v3_1/selection",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "selection"
+}

@@ -12,6 +12,7 @@
 #include "ui/ui_recovery.h"
 #include "host/applet_loader.h"
 #include "host/host_cli.h"
+#include "host/background_process.h"
 #include "host/shot.h"
 #include "host/host_services.h"
 #include "host/core_lifecycle.h"
@@ -19,17 +20,31 @@
 #include "host/host_version.h"
 #include "host/renderer/host_renderer.h"
 #include "host/live/live_attach.h"
+#include "host/live/live_controls.h"
+#include "host/live/live_ui_driver.h"
+#include "host/live/live_views_state.h"   // the views' header look
+#include "host/api/app_api.h"
+#include "host/api/window_captures.h"
 #include "app_paths.h"
 
 #include <string>
 #include <vector>
 #include <cstdint>
 #include <cstdio>
+#include <algorithm>
 #include <cmath>
+#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <system_error>
+
+// The hidden window (--hidden, CALIPER_HIDDEN=1): SIGINT and SIGTERM ask for
+// the normal close of the window, which nobody can click, so the teardown runs
+// and the API file is removed.
+static volatile std::sig_atomic_t g_hidden_stop = 0;
+extern "C" void caliper_hidden_on_signal(int) { g_hidden_stop = 1; }
 
 enum class AppPage {
     Landing,
@@ -37,17 +52,67 @@ enum class AppPage {
     Live,     // an attached training script's views (F4 Attach to process)
 };
 
+// The live page's run bar and selection details in the house style: key
+// buttons, secondary labels, the dense booktabs table, and bronze for the
+// shared selection's highlight.
+static caliper_live::ControlsLook house_controls_look() {
+    caliper_live::ControlsLook l;
+    l.button = [](const char* label, bool enabled, const char* reason) {
+        return sternbild::key_button("", label, enabled, reason);
+    };
+    l.label = [](const char* text) {
+        ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
+        ImGui::TextUnformatted(text);
+        ImGui::PopStyleColor();
+    };
+    l.begin_table = [](const char* id, int columns) { return sternbild::begin_table(id, columns); };
+    l.end_table = [] { sternbild::end_table(); };
+    l.header_row = [] { sternbild::table_header_row(); };
+    l.text = sternbild::col::parchment;
+    l.secondary = sternbild::col::secondary;
+    l.faint = sternbild::col::faint;
+    return l;
+}
+
+// The live views' headers in the house style: the info string in mono at the
+// small size, the tools in the UI face at the small size, bronze for a
+// pressed tool and the live dot.
+static caliper_live_views::Look house_view_look() {
+    caliper_live_views::Look l;
+    l.mono = sternbild::fonts().mono;
+    l.mono_size = sternbild::font_size::ui_small;
+    l.small_size = sternbild::font_size::ui_small;
+    l.text = sternbild::col::parchment;
+    l.faint = sternbild::col::faint;
+    l.rule = sternbild::col::rule;
+    l.accent = sternbild::col::bronze;
+    l.plot = sternbild::col::parchment;
+    return l;
+}
+
 class CaliperApp {
 public:
-    // `applet_dirs`: the --applets folders, searched first.
-    explicit CaliperApp(std::vector<std::string> applet_dirs)
-        : applet_dirs_(std::move(applet_dirs)) {}
+    // `applet_dirs`: the --applets folders, searched first. `hidden`: the
+    // window is never shown (--hidden, CALIPER_HIDDEN=1), a testing aid.
+    explicit CaliperApp(std::vector<std::string> applet_dirs, bool hidden = false)
+        : applet_dirs_(std::move(applet_dirs)), hidden_(hidden) {}
 
     bool initialize() {
+        // The hidden window takes the mechanism of the test binaries that open
+        // hidden windows (tests/glfw_background.h): the background activation
+        // policy before and after glfwInit(), and no menu bar from GLFW, so the
+        // process has no Dock icon, takes no menu bar and is never activated.
+        // The window is created invisible and unfocused (create_window_and_init)
+        // and nothing shows it later; run() hides it again should anything do.
+        if (hidden_) {
+            caliper_host::use_background_activation_policy();
+            glfwInitHint(GLFW_COCOA_MENUBAR, GLFW_FALSE);
+        }
         if (!glfwInit()) {
             std::cerr << "GLFW init failed" << std::endl;
             return false;
         }
+        if (hidden_) caliper_host::use_background_activation_policy();
 
         // Renderer seam (docs/explanations/rendering.md): backend selection (env
         // CALIPER_RENDERER + platform default, GL fallback) now lives in
@@ -59,7 +124,11 @@ public:
         // back to a sane default window instead of crashing at startup.
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
         int ww = 1440, wh = 900;
-        if (monitor) {
+        if (hidden_) {
+            // The same size on every display, for reproducible captures.
+            ww = 1280;
+            wh = 800;
+        } else if (monitor) {
             int ax, ay, aw, ah;
             glfwGetMonitorWorkarea(monitor, &ax, &ay, &aw, &ah);
             // GLFW work areas and window sizes are both in screen coordinates.
@@ -93,7 +162,9 @@ public:
         // files around. IniFilename is a raw pointer read until shutdown, so
         // the path string is static.
         static const std::string ini = caliper::app_data_path("imgui.ini");
-        ImGui::GetIO().IniFilename = ini.c_str();
+        // The hidden window reads and writes no layout: every run is a first
+        // run's, and the user's saved layout is left alone.
+        ImGui::GetIO().IniFilename = hidden_ ? nullptr : ini.c_str();
 
         // Sternbild house style. Faces first: apply_style() reads the UI font
         // size, and the first NewFrame() fixes style.FontSizeBase from the
@@ -121,6 +192,15 @@ public:
         }
         std::cerr << "[renderer] " << renderer_->name() << std::endl;
         landing_.log("renderer", renderer_->name());
+        if (hidden_) {
+            int fw = 0, fh = 0;
+            glfwGetFramebufferSize(window_, &fw, &fh);
+            std::cerr << "[hidden] the window is not shown (visible "
+                      << glfwGetWindowAttrib(window_, GLFW_VISIBLE) << ", focused "
+                      << glfwGetWindowAttrib(window_, GLFW_FOCUSED) << ", background policy "
+                      << caliper_host::background_activation_policy_active() << ", framebuffer " << fw
+                      << "x" << fh << ")" << std::endl;
+        }
         caliper_host::services_init();
         // caliper.ui.v1_1 dock hints go to the applet page's layout.
         caliper_host::set_dock_hint_sink(
@@ -168,6 +248,15 @@ public:
         if (const char* aa = std::getenv("CALIPER_AUTOATTACH"))
             autoattach_pid_ = std::atoi(aa);
 
+        // Testing aid: CALIPER_TEST_UI=<script> plays scripted mouse and key
+        // input into the live page (live/live_ui_driver.h), only while the
+        // window is hidden, so a test clicks the real widgets and nothing
+        // appears on the screen.
+        if (const char* ui = std::getenv("CALIPER_TEST_UI")) {
+            if (hidden_ && *ui) ui_driver_ = std::make_unique<caliper_live::UiDriver>(ui);
+            else if (*ui) std::cerr << "[ui] CALIPER_TEST_UI needs --hidden; ignored" << std::endl;
+        }
+
         return true;
     }
 
@@ -184,6 +273,15 @@ public:
         while (!glfwWindowShouldClose(window_)) {
             if (exit_after > 0.0 && glfwGetTime() - t0 >= exit_after)
                 glfwSetWindowShouldClose(window_, GLFW_TRUE);
+            if (hidden_) {
+                if (g_hidden_stop) glfwSetWindowShouldClose(window_, GLFW_TRUE);
+                // A safety net: nothing in the app shows the window, but a
+                // window that became visible is hidden again at once.
+                if (glfwGetWindowAttrib(window_, GLFW_VISIBLE)) {
+                    glfwHideWindow(window_);
+                    std::cerr << "[hidden] the window became visible and was hidden again" << std::endl;
+                }
+            }
             if (page_ == AppPage::Live) wait_for_live_frame();
             glfwPollEvents();
 
@@ -193,9 +291,24 @@ public:
             if (page_ == AppPage::Live) live_.poll();
             if (autoattach_pid_ > 0 && page_ == AppPage::Landing) autoattach();
             note_live_events();
+            note_control_lines();
+
+            // Caliper API (--api): the calls that read or change the app run
+            // here, between frames, as CALIPER_AUTOLAUNCH launches. A capture
+            // arms the read-back of the frame drawn next (window_captures.h).
+            if (api_.running()) {
+                serve_api();
+                captures_.before_frame(*renderer_, [this](uint64_t t, int status, const std::string& why) {
+                    api_.reply_error(t, status, why);
+                });
+            }
 
             int dw, dh;
             glfwGetFramebufferSize(window_, &dw, &dh);
+
+            // CALIPER_TEST_UI with --hidden: the scripted clicks of a UI test,
+            // queued into ImGui before the frame reads its input.
+            if (ui_driver_ && page_ == AppPage::Live) feed_ui_driver();
 
             renderer_->new_frame();
 
@@ -221,6 +334,7 @@ public:
                 ctx.sessions = &sessions_;
                 ctx.attach = [this](const std::string& s) { attach_session(s); };
                 ctx.after_bars = [this] { jobs_tray_.draw(); };
+                ctx.attach_url = [this](const std::string& u) { attach_stream(u); };
                 landing_.draw(ctx);
             } else if (page_ == AppPage::Live) {
                 draw_live_page();
@@ -279,40 +393,62 @@ public:
 
             renderer_->render(dw, dh);
 
+            // Caliper API's captures: a read-back that has finished on the GPU
+            // answers its calls; one still copying is picked up by a later frame.
+            if (api_.running())
+                captures_.after_frame(
+                    *renderer_,
+                    [this](uint64_t t, uint32_t w, uint32_t h, std::vector<uint8_t> rgba) {
+                        api_.reply_capture(t, w, h, std::move(rgba));
+                    },
+                    [this](uint64_t t, int status, const std::string& why) { api_.reply_error(t, status, why); });
+
             // Deferred detach (esc Home on the live page), for the same reason
             // as the applet teardown below: the views' textures and imports are
             // released only after the frame that drew them has been rendered.
             if (pending_detach_) {
                 pending_detach_ = false;
-                live_.detach();
-                note_live_events();   // "detached"
-                page_ = AppPage::Landing;
-                glfwSetWindowTitle(window_, "Caliper");
+                leave_live_page();
             }
 
             // Deferred applet teardown — runs ONLY after this frame's draw list
             // has been rendered, so no just-released bridge texture is still
-            // referenced by the Metal pass. Order: hard-join workers (they
-            // reference applet state and the applet's own cleanup wait is a
-            // timeout, not a join), tear the applet down, then return to the
-            // landing page (it reads statuses live, so nothing to refresh).
+            // referenced by the Metal pass (leave_applet_page gives the order).
             if (pending_home_ >= 0) {
-                const std::string left = loader_.at(pending_home_).manifest.name;
-                // Joining drops every job entry, failed ones included, so a
-                // failure since the tray last looked is recorded first.
-                note_failed_jobs(caliper_host::host_job_system().views());
-                caliper_host::host_job_system().cancel_all_and_join();
-                loader_.teardown(pending_home_);
+                const int idx = pending_home_;
                 pending_home_ = -1;
-                active_applet_ = -1;
-                page_ = AppPage::Landing;
-                glfwSetWindowTitle(window_, "Caliper");
-                landing_.log("home", left);
+                leave_applet_page(idx);
             }
         }
     }
 
+    // --url: the stream to attach to once the app has started.
+    void attach_at_start(const std::string& link) {
+        std::cerr << "[live] attaching to " << link.substr(0, link.find('?')) << std::endl;
+        attach_stream(link);
+    }
+
+    // Caliper API (--api): listens until cleanup(). A failure to start is
+    // said on stderr and in Activity, and the app runs without it.
+    void start_api(const caliper_host::CommandLine& cl) {
+        std::string why;
+        // A capture reads the window's frame back where the renderer can
+        // (Metal); elsewhere it is answered 501 with the reason.
+        const std::string capture_unavailable =
+            renderer_->window_capture_supported()
+                ? std::string()
+                : caliper_host::WindowCaptures::unsupported(renderer_->name());
+        if (!api_.start(cl, capture_unavailable, caliper::app_data_location(), std::cout, &why)) {
+            std::cerr << "[api] not started: " << why << std::endl;
+            landing_.log("api not started", why);
+            return;
+        }
+        landing_.log("api", api_.url());
+    }
+
     void cleanup() {
+        // The API first: calls still waiting for a frame get 503.
+        api_.stop();
         // Workers FIRST: a job may hold a pointer into applet state, so every
         // worker must be joined before close_all() destroys that state (the
         // 139-at-exit was a worker touching a freed applet mid-teardown).
@@ -338,6 +474,86 @@ public:
     }
 
 private:
+    // The applet page's teardown, run only after the frame that drew the
+    // applet has been rendered. Order: hard-join workers (they reference
+    // applet state and the applet's own cleanup wait is a timeout, not a
+    // join), tear the applet down, then return to the landing page (it reads
+    // statuses live, so nothing to refresh).
+    void leave_applet_page(int idx) {
+        const std::string left = loader_.at(idx).manifest.name;
+        // Joining drops every job entry, failed ones included, so a
+        // failure since the tray last looked is recorded first.
+        note_failed_jobs(caliper_host::host_job_system().views());
+        caliper_host::host_job_system().cancel_all_and_join();
+        loader_.teardown(idx);
+        active_applet_ = -1;
+        page_ = AppPage::Landing;
+        glfwSetWindowTitle(window_, "Caliper");
+        landing_.log("home", left);
+    }
+
+    // The live page's detach, after the frame that drew its views.
+    void leave_live_page() {
+        live_.detach();
+        note_live_events();   // "detached"
+        page_ = AppPage::Landing;
+        glfwSetWindowTitle(window_, "Caliper");
+    }
+
+    // Caliper API's calls of this frame (api/api_server.h). A capture waits
+    // for the read-back of a presented frame (captures_).
+    void serve_api() {
+        for (const caliper_api::Call& c : api_.take()) {
+            switch (c.kind) {
+                case caliper_api::Call::Kind::Applets:
+                    api_.reply(c.ticket, 200, caliper_host::applets_json(loader_));
+                    break;
+                case caliper_api::Call::Kind::Launch:
+                    api_launch(c);
+                    break;
+                case caliper_api::Call::Kind::Capture:
+                    captures_.add(c.ticket);
+                    break;
+            }
+        }
+    }
+
+    // POST /v0/applets/{id}/launch: opens that applet's page as a click on
+    // its row does. The page shown goes first, as Home takes it: an applet
+    // is torn down, a live session detached.
+    void api_launch(const caliper_api::Call& c) {
+        const int i = loader_.find(c.applet_id);
+        if (i < 0) {
+            api_.reply_error(c.ticket, 404,
+                             "no applet with the id " + c.applet_id +
+                                 " in the search folders (GET /v0/applets lists them)");
+            return;
+        }
+        if (page_ == AppPage::Applet && active_applet_ == i) {
+            const auto& a = loader_.at(i);
+            api_.reply(c.ticket, 200,
+                       caliper_host::launched_json(a.manifest.id, a.manifest.version, true));
+            return;
+        }
+        if (loader_.at(i).status != caliper_host::AppletStatus::Ready) {
+            const auto& a = loader_.at(i);
+            api_.reply_error(c.ticket, 409,
+                             c.applet_id + " cannot be launched (" +
+                                 caliper_host::applet_status_word(a.status) + "): " +
+                                 a.status_text);
+            return;
+        }
+        if (page_ == AppPage::Applet) leave_applet_page(active_applet_);
+        else if (page_ == AppPage::Live) leave_live_page();
+        launch_applet(i);
+        const auto& a = loader_.at(i);
+        if (page_ == AppPage::Applet && active_applet_ == i)
+            api_.reply(c.ticket, 200,
+                       caliper_host::launched_json(a.manifest.id, a.manifest.version, false));
+        else
+            api_.reply_error(c.ticket, 409, c.applet_id + " failed to launch: " + a.status_text);
+    }
+
     void launch_applet(int idx) {
         if (idx < 0 || idx >= loader_.count()) return;
         const std::string name = loader_.at(idx).manifest.name;
@@ -412,6 +628,7 @@ private:
             landing_.log("attach failed", script, err);
             return;
         }
+        caliper_live_views::set_look(live_.core(), house_view_look());
         const auto& st = live_.status();
         live_script_ = st.script.empty() ? script : st.script;
         live_pid_ = st.pid ? st.pid : (e ? e->pid : 0);
@@ -419,6 +636,44 @@ private:
         page_ = AppPage::Live;
         set_live_title();
         note_live_events();   // "attached"
+    }
+
+    // The attach pane's stream link (wire protocol v3, live_net_source.h):
+    // attach through a hosted core as for a session; a refusal (nothing
+    // listens, a wrong token) stays on the landing and says why in Activity.
+    // The link holds the session token, so only the part before '?' is shown.
+    void attach_stream(const std::string& link) {
+        const std::string shown = link.substr(0, link.find('?'));
+        std::string err;
+        if (!live_.attach_url(renderer_.get(), link, &err)) {
+            landing_.log("attach failed", shown, err);
+            return;
+        }
+        caliper_live_views::set_look(live_.core(), house_view_look());
+        const auto& st = live_.status();
+        live_script_ = !st.script.empty() ? st.script : !st.session.empty() ? st.session : shown;
+        live_pid_ = st.pid;
+        live_frame_t_ = 0.0;
+        page_ = AppPage::Live;
+        set_live_title();
+        note_live_events();   // "attached"
+    }
+
+    // What the live page's controls did (live_controls.h), one stderr line
+    // each like [live] attached, for headless runs and tests.
+    void note_control_lines() {
+        caliper_live::RunControls* rc = live_.controls();
+        if (!rc) return;
+        for (const std::string& line : rc->take_log()) std::cerr << "[live] " << line << std::endl;
+    }
+
+    void feed_ui_driver() {
+        ui_driver_->feed(live_.core(), live_.controls());
+        for (const std::string& line : ui_driver_->take_log()) std::cerr << "[ui] " << line << std::endl;
+        if (ui_driver_->done()) {
+            std::cerr << "[ui] " << (ui_driver_->error().empty() ? "done" : "stopped") << std::endl;
+            ui_driver_.reset();
+        }
     }
 
     void autoattach() {
@@ -543,6 +798,17 @@ private:
             ImGui::EndMainMenuBar();
         }
 
+        // The run bar (wire protocol 3.1) under the page bar, for a stream:
+        // the run state, pause, resume and step, the script's parameters and
+        // actions, and why they are off when they are.
+        caliper_live::RunControls* rc = live_.controls();
+        const caliper_live::ControlsLook look = house_controls_look();
+        if (rc) {
+            sternbild::control_bar_begin();
+            caliper_live::draw_run_bar(*rc, look, ImGui::GetContentRegionAvail().x);
+            sternbild::control_bar_end();
+        }
+
         // Status bar: the machine, then the session's facts.
         sternbild::status_bar_begin();
         draw_host_status_items(renderer_->name());
@@ -571,7 +837,25 @@ private:
         const ImRect area = caliper_host::work_area();
         caliper_host::dock_space_over_work_area(ImGui::GetID("caliper_live_dockspace"),
                                                 ImGuiDockNodeFlags_PassthruCentralNode);
-        live_.draw(area.Min.x, area.Min.y, area.GetWidth(), area.GetHeight(),
+        // The selection's details take a pane at the right edge while a
+        // selection has them; the views tile what is left.
+        float views_w = area.GetWidth();
+        if (rc && rc->details()) {
+            const float pane_w = std::floor(std::min(380.0f, area.GetWidth() * 0.4f));
+            views_w -= pane_w;
+            ImGui::SetNextWindowPos(ImVec2(area.Min.x + views_w, area.Min.y));
+            ImGui::SetNextWindowSize(ImVec2(pane_w, area.GetHeight()));
+            const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                           ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+                                           ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings;
+            if (ImGui::Begin("##caliper_live_selection", nullptr, flags)) {
+                const caliper_live::LinkedSelection* sel = rc->details();
+                sternbild::pane_header("Selection", sel->space.c_str(), nullptr, false);
+                caliper_live::draw_selection_details(*rc, look);
+            }
+            ImGui::End();
+        }
+        live_.draw(area.Min.x, area.Min.y, views_w, area.GetHeight(),
                    ImGui::GetIO().DisplayFramebufferScale.x);
 
         if (go_back) pending_detach_ = true;
@@ -621,12 +905,20 @@ private:
         if (window_) { glfwDestroyWindow(window_); window_ = nullptr; }
         glfwDefaultWindowHints();
         renderer_->window_hints();
+        if (hidden_) {
+            // Never shown, never focused (GLFW shows and focuses a window at
+            // creation only when it is visible).
+            glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+            glfwWindowHint(GLFW_FOCUSED, GLFW_FALSE);
+            glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
+        }
         window_ = glfwCreateWindow(ww, wh, "Caliper", nullptr, nullptr);
         if (!window_) return false;
         return renderer_->init(window_);
     }
 
     std::vector<std::string> applet_dirs_;   // --applets, in order
+    bool hidden_ = false;                    // --hidden: the window is never shown
     GLFWwindow* window_ = nullptr;
     std::unique_ptr<caliper_host::HostRenderer> renderer_;
     AppPage page_ = AppPage::Landing;
@@ -646,8 +938,11 @@ private:
     std::string live_script_;
     int32_t live_pid_ = 0;
     bool pending_detach_ = false;     // esc Home on the live page: detach after render
+    caliper_host::AppApi api_;        // Caliper API (--api); not running without it
+    caliper_host::WindowCaptures captures_;   // the API's captures of the window's frame
     double live_frame_t_ = 0.0;       // start of the live page's current frame
     int autoattach_pid_ = 0;          // CALIPER_AUTOATTACH, until attached
+    std::unique_ptr<caliper_live::UiDriver> ui_driver_;   // CALIPER_TEST_UI with --hidden
     bool chromeless_ = false;         // CALIPER_CHROMELESS=1: applet page without bars
 };
 
@@ -664,6 +959,18 @@ int main(int argc, char** argv) {
         std::fputs(caliper_host::usage_text(), stdout);
         return 0;
     }
+#ifdef _WIN32
+    // What the Windows build refuses for now (host_cli.h), before anything
+    // starts. CALIPER_API, a setting rather than this command line's request,
+    // is said to be ignored, and the app starts without the API.
+    if (const char* what = caliper_host::windows_unavailable(cl)) {
+        std::fprintf(stderr, "caliper: %s\n", caliper_host::windows_unavailable_message(what).c_str());
+        return 1;
+    }
+    if (const char* v = std::getenv("CALIPER_API"); v && std::strcmp(v, "1") == 0)
+        std::fprintf(stderr, "caliper: CALIPER_API is ignored: %s\n",
+                     caliper_host::windows_unavailable_message("Caliper API").c_str());
+#endif
     if (cl.command == Command::Shot) {
         // The applet page drawn into an offscreen canvas and written as a
         // PNG (host/shot.h). No window, no GLFW, no Dock icon.
@@ -675,7 +982,8 @@ int main(int argc, char** argv) {
         // folder; the others create nothing in the app-data folder.
         const bool reads_applets = cl.command == Command::List ||
                                    cl.command == Command::Check ||
-                                   cl.command == Command::Install;
+                                   cl.command == Command::Install ||
+                                   cl.command == Command::Build;
         caliper_host::CliContext ctx;
         ctx.caps = caliper_host::host_caps();
         ctx.sdk_version = caliper_host::host_sdk_version();
@@ -687,6 +995,13 @@ int main(int argc, char** argv) {
                 (std::filesystem::path(caliper::app_data_location()) / "data").string();
         }
         ctx.applet_path_env = std::getenv("CALIPER_APPLET_PATH");
+        ctx.exe_dir = caliper::executable_dir();   // build: the SDK may be installed beside it
+        if (cl.command == Command::Serve) {
+            // Producers on this machine find the hub here (0600, removed on exit).
+            const char* hub_file = std::getenv("CALIPER_HUB_FILE");
+            ctx.hub_file = hub_file && *hub_file ? std::string(hub_file)
+                                                 : caliper::app_data_path("hub.json");
+        }
         return caliper_host::run_subcommand(cl, ctx, std::cout, std::cerr);
     }
     if (cl.command == Command::Dev) {
@@ -700,13 +1015,28 @@ int main(int argc, char** argv) {
 
     std::cout << "=== Caliper ===" << std::endl;
 
-    CaliperApp app(cl.applet_dirs);
+    // --hidden or CALIPER_HIDDEN=1: the real app with its window never shown.
+    const char* hidden_env = std::getenv("CALIPER_HIDDEN");
+    const bool hidden = cl.hidden || (hidden_env && std::strcmp(hidden_env, "1") == 0);
+    CaliperApp app(cl.applet_dirs, hidden);
     if (!app.initialize()) {
         std::cerr << "Initialization failed" << std::endl;
         return 1;
     }
+    if (caliper_host::api_wanted(cl)) app.start_api(cl);
+    if (!cl.url.empty()) app.attach_at_start(cl.url);
 
+    void (*old_int)(int) = SIG_DFL;
+    void (*old_term)(int) = SIG_DFL;
+    if (hidden) {
+        old_int = std::signal(SIGINT, caliper_hidden_on_signal);
+        old_term = std::signal(SIGTERM, caliper_hidden_on_signal);
+    }
     app.run();
+    if (hidden) {
+        std::signal(SIGINT, old_int);
+        std::signal(SIGTERM, old_term);
+    }
     app.cleanup();
     return 0;
 }

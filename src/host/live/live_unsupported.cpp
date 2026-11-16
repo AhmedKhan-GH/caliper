@@ -17,10 +17,17 @@ constexpr const char* kUnsupported = "live attach is not available on this platf
 
 void caliper_live_frame(CaliperCore*) {}
 void caliper_live_shutdown(CaliperCore*) {}
+caliper_live::RunControls* caliper_live_controls(CaliperCore*) { return nullptr; }
+caliper_live::Source* caliper_live_stream(CaliperCore*) { return nullptr; }
+uint64_t caliper_live_view_key(CaliperCore*, const char*) { return 0; }
 
 extern "C" {
 
 int caliper_core_live_attach(CaliperCore* core, const char*) {
+    if (core) core->fail(kUnsupported);
+    return 0;
+}
+int caliper_core_live_attach_url(CaliperCore* core, const char*) {
     if (core) core->fail(kUnsupported);
     return 0;
 }
@@ -63,8 +70,13 @@ bool Attachment::attach(caliper_host::HostRenderer*, const std::string&, std::st
     if (err) *err = kUnsupported;
     return false;
 }
+bool Attachment::attach_url(caliper_host::HostRenderer*, const std::string&, std::string* err) {
+    if (err) *err = kUnsupported;
+    return false;
+}
 int Attachment::poll() { return 0; }
 void Attachment::draw(float, float, float, float, float) {}
+RunControls* Attachment::controls() const { return nullptr; }
 void Attachment::detach() {}
 std::vector<Attachment::Event> Attachment::take_events() { return {}; }
 void Attachment::refresh_status(bool) {}

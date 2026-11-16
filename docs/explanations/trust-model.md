@@ -200,6 +200,6 @@ everything else here, would need an out-of-process boundary, which Caliper does 
 The loader trusts the files in the folders it scans. Two things are in place around them, and two are not.
 
 - **Digests.** The artifact store ([`caliper.artifacts.v1`](../references/service-artifacts-v1.md)) keys every stored file by its sha256 digest, so identical bytes are stored once and a file is always found by its content.
-- **Signing is undecided.** The loader does not check a signature on an applet. Whether and how third-party applets will be signed is an [open question](../plans/roadmap.md#open-questions) on the roadmap.
+- **Signing is undecided.** The loader does not check a signature on an applet. Whether and how third-party applets will be signed is an open question, to be settled before the first third-party applet ships.
 - **Data folders are a convention.** Each applet gets its own data folder, `data/<id>/` under the app-data root. Nothing enforces it. An applet runs in the host's process with the host's file permissions and can read any file the host can read. The restriction on the id (`[a-z0-9.-]`) only keeps the folder name a single, safe path component.
 - **No sandbox.** Everything in this page that sounds like a boundary is containment of faults, not protection against a hostile applet. Load only applets you trust.

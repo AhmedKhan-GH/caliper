@@ -1,0 +1,12 @@
+{
+  "name": "caliper-views-wasm-test",
+  "private": true,
+  "description": "Headless Chromium checks of Caliper's views in the browser (web/wasm).",
+  "type": "module",
+  "scripts": {
+    "check": "node check.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.65.0"
+  }
+}

@@ -481,6 +481,11 @@ void LandingScreen::draw(const Context& ctx) {
         pending_attach_.clear();
         if (ctx.attach) ctx.attach(session);
     }
+    if (!pending_attach_url_.empty()) {
+        const std::string link = std::move(pending_attach_url_);
+        pending_attach_url_.clear();
+        if (ctx.attach_url) ctx.attach_url(link);
+    }
 
     if (focus_pane_) {
         ImGui::SetWindowFocus(focus_pane_);
@@ -929,7 +934,8 @@ void LandingScreen::draw_sessions(const Context& ctx) {
     projects_focused_ = focused;
     bool attach = false;
     bool back = false;
-    if (focused && !any_popup_open()) {
+    // While the stream link field has the keys, they are its own.
+    if (focused && !any_popup_open() && !stream_link_active_) {
         const ImGuiID owner = ImGui::GetID("##session_keys");
         for (const ImGuiKey k : {ImGuiKey_UpArrow, ImGuiKey_DownArrow, ImGuiKey_Enter,
                                  ImGuiKey_KeypadEnter, ImGuiKey_Escape})
@@ -947,9 +953,11 @@ void LandingScreen::draw_sessions(const Context& ctx) {
     }
 
     // The footer is the plate and a padding above and below it, as in the
-    // Inspector; the table takes the rest of the pane.
+    // Inspector (plus the stream link row when the host takes links); the
+    // table takes the rest of the pane.
     constexpr float kPlate = 24.0f;   // primary_button's documented height
-    const float footer_h = kPlate + 2.0f * metric::pad;
+    const float footer_h =
+        kPlate + 2.0f * metric::pad + (ctx.attach_url ? kPlate + metric::gap : 0.0f);
     const float table_y = ImGui::GetCursorPosY();
     const float table_h =
         std::max(metric::row * 2.0f, ImGui::GetContentRegionAvail().y - footer_h);
@@ -1055,6 +1063,24 @@ void LandingScreen::draw_sessions(const Context& ctx) {
         ImGui::PushStyleColor(ImGuiCol_Text, col::faint);
         ImGui::TextUnformatted(reason);
         ImGui::PopStyleColor();
+    }
+
+    // A stream on this machine by its link (wire protocol v3), for a script
+    // that streams with caliper.serve(): Enter in the field or Attach link.
+    if (ctx.attach_url) {
+        ImGui::SetCursorPosY(button_y + kPlate + metric::gap);
+        ImGui::SetNextItemWidth(std::max(160.0f, ImGui::GetContentRegionAvail().x - 120.0f));
+        const bool entered = ImGui::InputTextWithHint(
+            "##stream_link", "or a stream link: http://127.0.0.1:<port>/?token=...",
+            stream_link_.data(), stream_link_.capacity() + 1,
+            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackResize,
+            grow_string, &stream_link_);
+        stream_link_active_ = ImGui::IsItemActive();
+        ImGui::SameLine(0.0f, metric::gap);
+        ImGui::BeginDisabled(stream_link_.empty());
+        const bool clicked = sternbild::word_button("Attach link");
+        ImGui::EndDisabled();
+        if ((entered || clicked) && !stream_link_.empty()) pending_attach_url_ = stream_link_;
     }
 
     if (attach && can) pending_attach_ = cur->session;

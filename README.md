@@ -21,7 +21,7 @@
 <p align="center">
   <a href="https://ahmedkhan-gh.github.io/caliper/"><b>Website</b></a> ·
   <a href="https://ahmedkhan-gh.github.io/caliper/docs/">Documentation</a> ·
-  <a href="docs/plans/roadmap.md">Roadmap</a> ·
+  <a href="design/roadmap.md">Roadmap</a> ·
   <a href="docs/references/applets.md">Applets</a>
 </p>
 
@@ -82,8 +82,8 @@ it, and [SDK package](docs/references/sdk-package.md) describes the package.
 - **An NVIDIA GPU and driver** to use the CUDA and Vulkan interop path at run time. Vulkan is loaded at run time (`vulkan-1.dll`), so no Vulkan SDK is needed.
 
 ### macOS
+- **macOS 14 (Sonoma) or later** on **Apple Silicon**. Every binary is built for macOS 14.0 (`cmake/CaliperMacOSTarget.cmake`); `-DCMAKE_OSX_DEPLOYMENT_TARGET=<version>` chooses another.
 - **Xcode** with command line tools
-- **Apple Silicon**
 - **Metal compiler** (`xcrun --find metal`)
 
 ## Build options

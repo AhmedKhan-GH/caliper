@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>caliper-view test harness</title>
+<style>
+  @font-face { font-family: "Plex Condensed"; src: url("/fonts/IBMPlexSansCondensed-Regular.woff") format("woff"); }
+  @font-face { font-family: "Source Code Pro"; src: url("/fonts/SourceCodePro-Regular.woff") format("woff"); }
+  body { margin: 0; padding: 16px; background: #181715; color: #f0e9db; font: 14px "Plex Condensed", sans-serif; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 16px; }
+</style>
+<script type="module" src="/dist/caliper-view.js"></script>
+<script type="module" src="/test-dist/harness.js"></script>
+</head>
+<body>
+<div id="root"></div>
+</body>
+</html>

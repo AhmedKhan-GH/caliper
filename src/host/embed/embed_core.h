@@ -7,6 +7,7 @@
 
 #include "caliper/embed.h"
 
+#include <atomic>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -51,6 +52,10 @@ struct TensorView {
     // handed to ImGui as FirstUseEver so the user may move/resize freely.
     bool             placed = false;
     float            pos_x = 0.0f, pos_y = 0.0f, size_x = 0.0f, size_y = 0.0f;
+
+    // The typed live view of the same name draws the image itself (its pan
+    // and zoom, src/host/live/live_views_draw.cpp); the window stays ours.
+    bool             drawn_by_live = false;
 };
 }  // namespace caliper_embed_views
 
@@ -70,7 +75,11 @@ struct CaliperLiveViewsState;
 // l1-survey §7 / the report). That is why v0 is one-core-per-process.
 struct CaliperCore {
     std::unique_ptr<caliper_host::HostRenderer> renderer;
-    std::unique_ptr<caliper_host::AppletLoader> loader;
+    // The deleter is a function pointer set where the loader is made
+    // (embed_core.cpp), so destroying a core without one (a hosted core, the
+    // browser's views) references nothing of the applet loader.
+    std::unique_ptr<caliper_host::AppletLoader, void (*)(caliper_host::AppletLoader*)> loader{
+        nullptr, nullptr};
     caliper_host::FrameWatchdog                 watchdog;
 
     CaliperLogFn   log_fn = nullptr;
@@ -108,6 +117,15 @@ struct CaliperCore {
     // whose top-left (logical points) is (area_x, area_y); 0 for every other core.
     bool  hosted = false;
     float area_x = 0.0f, area_y = 0.0f;
+    // A host that draws each view's name, status and data view picker in its
+    // own header (the browser element, web/wasm) sets this: view windows then
+    // show the view alone, with no title bar, no diagnostics line (size,
+    // path, seq, latency, updates, drops) and no Pause or Fit button; hover
+    // values and the plot stay. Every other core keeps all of them.
+    bool  views_bare = false;
+    // The views' diagnostics under each header (caliper_live_views::views_debug):
+    // also on with CALIPER_VIEWS_DEBUG=1.
+    bool  views_debug = false;
 
     void log(int level, const std::string& msg) {
         if (log_fn) log_fn(userdata, level, msg.c_str());
@@ -116,12 +134,33 @@ struct CaliperCore {
     void fail(const std::string& why) { last_error = why; log(2, why); }
 };
 
+// The one-core-per-process slot (embed_views.cpp). caliper_core_create and
+// caliper_core_create_hosted claim it with a compare-exchange from nullptr to
+// the reserved sentinel before building anything, publish the built core, and
+// release it to nullptr on failure or destroy.
+std::atomic<CaliperCore*>& caliper_core_slot();
+inline CaliperCore* caliper_core_slot_reserved() { return reinterpret_cast<CaliperCore*>(1); }
+
+// v1.2 view hooks (embed_views.cpp) for embed_core.cpp: draw every v1.2 view
+// into the current ImGui frame; release every v1.2 view through the bridge.
+void caliper_embed_views_draw(CaliperCore* core);
+void caliper_embed_views_destroy_all(CaliperCore* core);
+
 // Live-module hooks called by embed_core.cpp (defined in src/host/live/
 // live_core.cpp). frame: draw the live typed views into the current ImGui
 // frame, after the v1.2 views. shutdown: release every live GPU resource while
 // the bridge still has its renderer.
 void caliper_live_frame(CaliperCore* core);
 void caliper_live_shutdown(CaliperCore* core);
+// The attached stream's wire protocol 3.1 state (live_controls.h) and its
+// source, for a host's live page: null unless the core is attached to a
+// network stream (caliper_core_live_attach_url). Frame-thread only.
+namespace caliper_live { class Source; class RunControls; }
+caliper_live::RunControls* caliper_live_controls(CaliperCore* core);
+caliper_live::Source* caliper_live_stream(CaliperCore* core);
+// The source's key of the attached view `name` (Source::send_event,
+// request_data_view, data_view_of); 0 when there is none.
+uint64_t caliper_live_view_key(CaliperCore* core, const char* name);
 // Typed-views hooks (src/host/live/live_views.cpp): draw the points/series/
 // histogram windows after the v1.2 views; release their GPU resources before
 // the v1.2 views are destroyed.

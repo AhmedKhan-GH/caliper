@@ -417,6 +417,22 @@ int  caliper_core_live_attach(CaliperCore* core, const char* session);  /* 1 ok 
 /* v2: attach to the session of process `pid` (its session file under
  * data_root/live, NULL = the default root). */
 int  caliper_core_live_attach_pid(CaliperCore* core, int32_t pid, const char* data_root);
+/* v3: attach to a wire protocol v3 stream (caliper/live_net.h) of a producer
+ * (caliper.serve()) or a hub (`caliper serve`) on this machine, by its link:
+ * ws://127.0.0.1:<port>/v3/stream?token=<token>, or the page link
+ * http://127.0.0.1:<port>/?token=<token> ("localhost" works for 127.0.0.1); an
+ * optional session=<id> parameter names a hub's session. Waits up to 2 s for the
+ * server: returns 0 with last_error for a link that is not a loopback stream
+ * link, when nothing listens, when the server refuses (HTTP 403: the token, Host
+ * or Origin) or breaks the protocol; 1 once attached, or while the server holds
+ * no session yet (status.pending = 1). Every view of the session is subscribed
+ * with its default data view. The status's session is the session id, never the
+ * token; client_alive turns 0 when the connection ends or the session ends, and
+ * the views keep their last pixels (the stream reconnects after a drop). Views,
+ * claims, status, detach and the caliper_core_live_view_* probes behave as for a
+ * shared-memory attach. */
+#define CALIPER_EMBED_HAVE_LIVE_NET 1
+int  caliper_core_live_attach_url(CaliperCore* core, const char* url);
 /* Detach: drop the live views, release the claims, clear the heartbeat (the
  * client's attached() turns false at once). Training is untouched. */
 void caliper_core_live_detach(CaliperCore* core);

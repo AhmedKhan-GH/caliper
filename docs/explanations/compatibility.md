@@ -47,7 +47,7 @@ A binary applet is compatible with a host only when both are built with the same
 
 | Platform | Compiler and runtime | Notes |
 |---|---|---|
-| macOS arm64 | AppleClang with libc++ | CI builds on `macos-15`. |
+| macOS arm64 | AppleClang with libc++ | macOS 14 (Sonoma) or later: every binary is built for macOS 14.0. CI builds on `macos-15`. |
 | Windows x64 | MSVC with the dynamic CRT (`/MD`) | Host and applets share one CRT heap. CI builds on `windows-latest`. |
 
 On Windows the dynamic CRT is the default, so that the CRT state of the host and of every applet agrees: heap, locale, `FILE*` and `errno`. The CMake option `CALIPER_STATIC_CRT=ON` selects the static runtime (`/MT`) as an escape hatch for a build that needs it. Linux is not a supported platform.
@@ -142,7 +142,7 @@ A promoted feature arrives as a new service id or as a new revision of an existi
 
 Sugar that is compiled into the applet, such as the `caliper::viz` components, needs nothing from the host at run time. It arrives in a minor version of the SDK, changes no table, and reaches an applet when the applet is rebuilt.
 
-[Platform candidates](../plans/platform-candidates.md) lists the features that are candidates for promotion and the order in which they move.
+The first candidates for promotion are pieces that applets built for themselves: a Python sidecar, a layout grid and text scale, tours, automation and capture, and the `caliper::viz` components.
 
 ## Negotiation at load
 

@@ -1,6 +1,6 @@
 # SDK package
 
-The SDK installs as the `caliper-sdk` CMake package, version 0.2.0. An applet builds against it from a folder of its own with `find_package(caliper-sdk)` and `caliper_add_applet()`, and needs nothing else from the Caliper source tree. How the SDK version relates to the ABI epoch is in [The SDK version](../explanations/compatibility.md#the-sdk-version).
+The SDK installs as the `caliper-sdk` CMake package, version 0.2.0. An applet builds against it from a folder of its own with `find_package(caliper-sdk)` and `caliper_add_applet()`, and needs nothing else from the Caliper source tree. On macOS the host runs on macOS 14 (Sonoma) or later, and an applet built against the package is built for the same minimum unless its project chooses another. How the SDK version relates to the ABI epoch is in [The SDK version](../explanations/compatibility.md#the-sdk-version).
 
 ## Installing the SDK
 
@@ -65,6 +65,7 @@ The UI stack ships as sources rather than prebuilt libraries because a prebuilt 
 | `CALIPER_SDK_ABI_EPOCH` | The ABI epoch the headers speak, `2` |
 | `CALIPER_UI_STACK_HASH` | The [UI-stack hash](#the-ui-stack-hash) |
 | `CALIPER_TORCH_VERSION` | The version of the host's libtorch, or empty when the SDK was built without libtorch |
+| `CALIPER_MACOS_MIN` | The host's minimum macOS, `14.0` by default. On macOS it becomes `CMAKE_OSX_DEPLOYMENT_TARGET` unless the project, `-DCMAKE_OSX_DEPLOYMENT_TARGET` or the environment variable `MACOSX_DEPLOYMENT_TARGET` chose one. |
 | `CALIPER_TORCH_DIR` | Where that libtorch is. It defaults to the absolute path of the libtorch of the build that installed the SDK, recorded in the package. A cache variable, so `-DCALIPER_TORCH_DIR=<libtorch root>` points it at another copy of the same version. |
 
 ## caliper_add_applet()

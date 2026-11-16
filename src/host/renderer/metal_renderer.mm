@@ -12,6 +12,7 @@
 // live as members / in an internal id table; the uint64 texture ids handed to
 // callers are sequential handles, never raw retained pointers (§5.4).
 #include "host_renderer.h"
+#include "host/tensor_bridge.h"   // colormap_thresholds: the reference's exact indices
 #include <caliper/services/tensor_bridge_v1_2.h>   // CALIPER_ALLOC_HANDLE_MTLBUFFER
 #include <caliper/services/geometry_v1_1.h>
 #include <caliper/services/geometry_v1_2.h>
@@ -29,9 +30,12 @@
 #include <backends/imgui_impl_metal.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <unordered_map>
 
 namespace caliper_host {
@@ -181,9 +185,13 @@ struct PrimParams {
     uint inst_base;           // 168 — instance_offset / 4
     uint use_instance_attr;   // 172 — 0/1
     uint inst_attr_base;      // 176 — instance_attr_offset / 4
-    uint pad0;                // 180
-    uint pad1;                // 184
-    uint pad2;                // 188  (192)
+    float att_ref;            // 180 — the live points view's depth cues
+    float fade_w0;            // 184   (HostGeomDraw; zero for every
+    float fade_w1;            // 188   service draw)
+    uint cmap_mode;           // 192 — exact colormap (HostGeomDraw::exact_colormap):
+    uint pad3;                //       0 the service's rule, 1 or 2 the thresholds
+    uint pad4;                //       of an increasing or decreasing range, 3 a
+    uint pad5;                //       range that maps every value to index 0 (208)
 };
 
 /* Metal validates [[point_size]] against the pipeline's topology class: a
@@ -321,7 +329,8 @@ vertex VOutPoint geom_vs_point(uint vid [[vertex_id]],
                                constant PrimParams& p    [[buffer(5)]],
                                device const float* uv    [[buffer(6)]],
                                device const float* im    [[buffer(7)]],
-                               device const uint*  iattr [[buffer(8)]])
+                               device const uint*  iattr [[buffer(8)]],
+                               constant float*     th    [[buffer(9)]])
 {
     VOut b = geom_compute(vid, iid, pos, idx, nrm, attr, uv, im, iattr, lut, p);
     VOutPoint o;
@@ -329,6 +338,36 @@ vertex VOutPoint geom_vs_point(uint vid [[vertex_id]],
     o.size  = p.size_px;
     o.color = b.color;
     o.uv    = b.uv;
+    // The live points view's exact colormap: the value's index is the number
+    // of thresholds it has passed (colormap_thresholds), compared exactly, so
+    // it is map_f32_to_rgba8's whatever the shader's division would round; NaN,
+    // tested on its bits, is index 0.
+    if (p.cmap_mode != 0u && p.color_mode == 1u && !(p.use_instance != 0u && p.use_instance_attr != 0u)) {
+        const uint vi = p.use_index != 0u ? min(idx[p.idx_base + vid], p.vertex_count - 1u) : vid;
+        const uint vb = attr[p.attr_base + vi];
+        const bool nan = (vb & 0x7f800000u) == 0x7f800000u && (vb & 0x007fffffu) != 0u;
+        uint k = 0u;
+        if (!nan && p.cmap_mode != 3u) {
+            const float v = as_type<float>(vb);
+            uint lo = 1u, hi = 256u;
+            while (lo < hi) {
+                const uint mid = (lo + hi) / 2u;
+                const bool passed = p.cmap_mode == 1u ? th[mid] <= v : v <= th[mid];
+                if (passed) lo = mid + 1u; else hi = mid;
+            }
+            k = lo - 1u;
+        }
+        o.color = unpack_rgba(lut[k]);
+    }
+    // The depth cues of the live points view (HostGeomDraw, kPointAtten* and
+    // kPointFadeFloor): nearer points larger within a clamp, farther points
+    // dimmer with their hue kept. Both off (zero) for every service draw.
+    if (p.att_ref > 0.0f)
+        o.size = min(p.size_px * clamp(p.att_ref / max(b.pos.w, 1e-6f), 0.5f, 2.0f), 511.0f);
+    if (p.fade_w1 > p.fade_w0) {
+        float f = clamp((b.pos.w - p.fade_w0) / (p.fade_w1 - p.fade_w0), 0.0f, 1.0f);
+        o.color = float4(o.color.rgb * (1.0f - 0.5f * f), o.color.a);
+    }
     return o;
 }
 
@@ -358,9 +397,11 @@ struct PrimParams {
     uint32_t flat_rgba;
     float    vmin, vmax, size_px;
     uint32_t uv_base, use_instance, inst_base, use_instance_attr;   // v1.3 tail
-    uint32_t inst_attr_base, pad0, pad1, pad2;
+    uint32_t inst_attr_base;
+    float    att_ref, fade_w0, fade_w1;   // the live points view's depth cues
+    uint32_t cmap_mode, pad3, pad4, pad5; // its exact colormap (0 off, 1 inc, 2 dec, 3 all index 0)
 };
-static_assert(sizeof(PrimParams) == 192, "MSL primitive params layout");
+static_assert(sizeof(PrimParams) == 208, "MSL primitive params layout");
 
 void mat4_mul_cm(const float* a, const float* b, float* out) {
     for (int c = 0; c < 4; ++c)
@@ -728,6 +769,7 @@ public:
                 ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),
                                                frame_cmd_, frame_enc_);
                 [frame_enc_ endEncoding];
+                copy_for_capture();                // before present, in the same command buffer
                 [frame_cmd_ presentDrawable:drawable_];
                 [frame_cmd_ commit];
             } else if (frame_cmd_) {
@@ -739,7 +781,86 @@ public:
         }
     }
 
+    // ---- Window capture: the presented frame, copied in the frame's own
+    // command buffer after the ImGui pass and before present, never waited
+    // for on the frame thread. ----
+    bool window_capture_supported() const override { return layer_ != nil; }
+
+    bool window_capture_request() override {
+        if (layer_ == nil) return false;
+        const int s = cap_state_->load();
+        if (s == kCapArmed || s == kCapCopying) return true;   // the next result serves it
+        cap_buf_ = nil;
+        if (!cap_readable_) {
+            layer_.framebufferOnly = NO;   // drawables from now on can be a blit source
+            cap_readable_ = true;
+        }
+        cap_state_->store(kCapArmed);
+        return true;
+    }
+
+    WindowCapture window_capture_poll(std::vector<uint8_t>* rgba, int* w, int* h) override {
+        const int s = cap_state_->load();
+        if (s == kCapNone) return WindowCapture::None;
+        if (s == kCapArmed || s == kCapCopying) return WindowCapture::Pending;
+        if (s == kCapFailed || cap_buf_ == nil) {
+            cap_buf_ = nil;
+            cap_state_->store(kCapNone);
+            return WindowCapture::Failed;
+        }
+        // BGRA8Unorm (the layer's format) to opaque RGBA8.
+        const size_t n = (size_t)cap_w_ * (size_t)cap_h_;
+        const uint8_t* src = (const uint8_t*)cap_buf_.contents;
+        rgba->resize(n * 4);
+        uint8_t* dst = rgba->data();
+        for (size_t i = 0; i < n; ++i) {
+            dst[4 * i + 0] = src[4 * i + 2];
+            dst[4 * i + 1] = src[4 * i + 1];
+            dst[4 * i + 2] = src[4 * i + 0];
+            dst[4 * i + 3] = 255;
+        }
+        *w = cap_w_;
+        *h = cap_h_;
+        cap_buf_ = nil;
+        cap_state_->store(kCapNone);
+        return WindowCapture::Ready;
+    }
+
+    // In render(), for an armed capture: blit this frame's drawable into a
+    // shared buffer before it is presented. A drawable still framebuffer-only
+    // (made before the request) leaves the capture armed for the next frame.
+    void copy_for_capture() {
+        if (cap_state_->load() != kCapArmed || drawable_ == nil) return;
+        id<MTLTexture> t = drawable_.texture;
+        if (t == nil || t.framebufferOnly || t.pixelFormat != MTLPixelFormatBGRA8Unorm) return;
+        const NSUInteger w = t.width, h = t.height, bpr = w * 4;
+        id<MTLBuffer> buf = [device_ newBufferWithLength:bpr * h options:MTLResourceStorageModeShared];
+        if (buf == nil) {
+            cap_state_->store(kCapFailed);
+            return;
+        }
+        id<MTLBlitCommandEncoder> blit = [frame_cmd_ blitCommandEncoder];
+        [blit copyFromTexture:t
+                  sourceSlice:0 sourceLevel:0
+                 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake(w, h, 1)
+                     toBuffer:buf destinationOffset:0
+       destinationBytesPerRow:bpr
+     destinationBytesPerImage:bpr * h];
+        [blit endEncoding];
+        cap_buf_ = buf;
+        cap_w_ = (int)w;
+        cap_h_ = (int)h;
+        cap_state_->store(kCapCopying);
+        std::shared_ptr<std::atomic<int>> state = cap_state_;
+        [frame_cmd_ addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+            state->store(cb.status == MTLCommandBufferStatusCompleted ? kCapReady : kCapFailed);
+        }];
+    }
+
     void shutdown() override {
+        cap_buf_ = nil;
+        cap_state_->store(kCapNone);
         ImGui_ImplMetal_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         [events_ removeAllObjects]; events_ = nil; event_values_.clear();
@@ -1101,6 +1222,7 @@ public:
                 id<MTLRenderPipelineState> pipeline = nil;
                 id<MTLDepthStencilState> depth_state = nil;
                 PrimParams params{};
+                std::array<float, 256> th{};   // the exact colormap's thresholds (buffer 9)
             };
             std::vector<EncodedDraw> encs;
             encs.reserve(count);
@@ -1313,6 +1435,15 @@ public:
                 e.params.inst_base = (uint32_t)(d.instance_offset / 4u);
                 e.params.use_instance_attr = use_instance_attr ? 1u : 0u;
                 e.params.inst_attr_base = (uint32_t)(d.instance_attr_offset / 4u);
+                if (d.topology == CALIPER_GEOM_TOPO_POINTS) {
+                    e.params.att_ref = d.att_ref;
+                    e.params.fade_w0 = d.fade_w0;
+                    e.params.fade_w1 = d.fade_w1;
+                    if (d.exact_colormap && d.color_mode == CALIPER_GEOM_COLOR_COLORMAP) {
+                        const uint32_t mode = thresholds(d.vmin, d.vmax, e.th.data());
+                        e.params.cmap_mode = mode ? mode : 3u;
+                    }
+                }
                 encs.push_back(e);
             }
 
@@ -1428,6 +1559,8 @@ public:
                 // the read harmless), mirroring the idx/nrm/attr trick above.
                 [re setVertexBuffer:(e.inst  != nil ? e.inst  : e.pos) offset:0 atIndex:7];
                 [re setVertexBuffer:(e.iattr != nil ? e.iattr : e.pos) offset:0 atIndex:8];
+                if (e.prim == MTLPrimitiveTypePoint)
+                    [re setVertexBytes:e.th.data() length:sizeof(float) * 256 atIndex:9];
                 if (e.texture != nil) [re setFragmentTexture:e.texture atIndex:0];
                 [re drawPrimitives:e.prim vertexStart:0 vertexCount:e.consumed
                      instanceCount:(e.use_instance ? e.n_inst : 1)];
@@ -1759,6 +1892,17 @@ private:
     std::unordered_map<uint32_t, id<MTLRenderPipelineState>> geom_pipelines_;
     std::unordered_map<uint32_t, id<MTLDepthStencilState>> depth_states_;
 
+    // Window capture (window_capture_*). The state is shared with the copy's
+    // completion handler, which may run after a frame and on another thread:
+    // 0 none, 1 armed (the next presented frame is copied), 2 copying,
+    // 3 ready, 4 failed. framebufferOnly is turned off for good on the first
+    // request, since a drawable that is framebuffer-only cannot be copied.
+    enum : int { kCapNone = 0, kCapArmed = 1, kCapCopying = 2, kCapReady = 3, kCapFailed = 4 };
+    std::shared_ptr<std::atomic<int>> cap_state_ = std::make_shared<std::atomic<int>>(kCapNone);
+    id<MTLBuffer>                cap_buf_ = nil;
+    int                          cap_w_ = 0, cap_h_ = 0;
+    bool                         cap_readable_ = false;
+
     // Per-frame transients created in new_frame(), consumed in render().
     id<CAMetalDrawable>          drawable_  = nil;
     id<MTLCommandBuffer>         frame_cmd_ = nil;
@@ -1804,6 +1948,29 @@ private:
     // command buffer: what geom_draw_retain_last() hands out. Strong (ARC);
     // replaced by every draw, cleared on shutdown. Never waited on.
     id<MTLCommandBuffer> last_geom_cb_ = nil;
+    // The exact colormap's thresholds of the last few ranges (deriving them
+    // takes some 8,000 evaluations of the reference; a points view draws the
+    // same range frame after frame).
+    struct ThCache { uint32_t vmin_bits = 0, vmax_bits = 0, mode = 0; bool valid = false; std::array<float, 256> T{}; };
+    std::array<ThCache, 4> th_cache_{};
+    size_t th_next_ = 0;
+    uint32_t thresholds(float vmin, float vmax, float* T) {
+        uint32_t a, b;
+        std::memcpy(&a, &vmin, 4);
+        std::memcpy(&b, &vmax, 4);
+        for (const ThCache& c : th_cache_)
+            if (c.valid && c.vmin_bits == a && c.vmax_bits == b) {
+                std::memcpy(T, c.T.data(), sizeof(float) * 256);
+                return c.mode;
+            }
+        ThCache& c = th_cache_[th_next_++ % th_cache_.size()];
+        c.mode = caliper_host::colormap_thresholds(vmin, vmax, c.T.data());
+        c.vmin_bits = a;
+        c.vmax_bits = b;
+        c.valid = true;
+        std::memcpy(T, c.T.data(), sizeof(float) * 256);
+        return c.mode;
+    }
 };
 
 }  // namespace

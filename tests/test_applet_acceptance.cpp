@@ -12,6 +12,7 @@
 //       ./cmake-build-release/tests/caliper_tests -tc="acceptance: applets*"
 #include <doctest/doctest.h>
 #include "applet_loader.h"
+#include "test_temp.h"
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -39,7 +40,7 @@ TEST_CASE("acceptance: applets in CALIPER_TEST_APPLET_DIR load headless" *
     const std::string dir = applet_dir();
     REQUIRE_MESSAGE(fs::is_directory(dir), "not a folder: " << dir);
     // A private data root: the check never touches the user's applet data.
-    const fs::path data = fs::temp_directory_path() / "caliper-acceptance-data";
+    const fs::path data = caliper_test::unique_temp_path("caliper-acceptance-data");
     std::error_code ec;
     fs::remove_all(data, ec);
 

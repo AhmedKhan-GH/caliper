@@ -1101,6 +1101,17 @@ void tray_bar_begin(float height) {
 
 void tray_bar_end() { ImGui::End(); }
 
+void control_bar_begin() {
+    // Under the bar above it (a side bar takes its place from the work area
+    // left by earlier bars), frame-height padding centred like the command bar.
+    strip_begin("##sternbild_control_bar", ImGuiDir_Up, metric::command_bar,
+                ImGui::GetFrameHeight(), col::ground);
+    strip_rule(true);
+    ImGui::AlignTextToFramePadding();
+}
+
+void control_bar_end() { ImGui::End(); }
+
 void status_item(const char* text, ImU32 c) {
     const int frame = ImGui::GetFrameCount();
     const ImGuiID window = ImGui::GetCurrentWindowRead()->ID;

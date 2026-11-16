@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Caliper views</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #181715; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="views" tabindex="0"></canvas>
+<script type="module">
+  // Loads the module beside this page onto the canvas. The page's own URL
+  // names the stream: ?token=T connects to /v3/stream on this page's host,
+  // or ?src=ws://... names another one; ?view= and ?kind= pick one view.
+  // The module publishes its counters as module.caliperStats.
+  import createCaliperViews from './caliper-views.js';
+  const q = new URLSearchParams(location.search);
+  const src = q.get('src') ||
+    (q.get('token') ? `ws://${location.host}/v3/stream?token=${encodeURIComponent(q.get('token'))}` : '');
+  globalThis.caliperDataViews = [];
+  globalThis.caliperViews = await createCaliperViews({
+    canvas: document.getElementById('views'),
+    caliperConfig: { src, view: q.get('view') || '', kind: q.get('kind') || '' },
+    onDataView: (view, dataView) => globalThis.caliperDataViews.push({ view, dataView }),
+    print: (t) => console.log(t),
+    printErr: (t) => console.error(t),
+  });
+</script>
+</body>
+</html>

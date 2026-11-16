@@ -194,6 +194,63 @@ void map_f32_to_rgba8(const float* src, int w, int h, const uint32_t* lut,
     }
 }
 
+namespace {
+
+// Floats in their numeric order as unsigned keys (-inf lowest, +inf highest).
+uint32_t float_key(float f) {
+    uint32_t u;
+    std::memcpy(&u, &f, 4);
+    return (u & 0x80000000u) ? ~u : (u | 0x80000000u);
+}
+float key_float(uint32_t k) {
+    const uint32_t u = (k & 0x80000000u) ? (k & 0x7fffffffu) : ~k;
+    float f;
+    std::memcpy(&f, &u, 4);
+    return f;
+}
+
+// The reference's index of v, from the reference itself (an identity LUT).
+int reference_index(float v, float vmin, float vmax) {
+    static uint32_t ident[256];
+    static bool init = false;
+    if (!init) {
+        for (uint32_t i = 0; i < 256; ++i) ident[i] = i;
+        init = true;
+    }
+    uint8_t out[4];
+    caliper_host::map_f32_to_rgba8(&v, 1, 1, ident, vmin, vmax, out);
+    return out[0];
+}
+
+}  // namespace
+
+uint32_t colormap_thresholds(float vmin, float vmax, float* T) {
+    const float denom = vmax - vmin;
+    // A zero width maps every value to index 0 (t = 0); so does an infinite or
+    // NaN one (t is 0, or NaN, which the reference takes as index 0), which is
+    // not monotone in v and so has no thresholds.
+    if (!(denom != 0.0f) || !std::isfinite(denom)) return 0u;
+    const bool inc = denom > 0.0f;
+    const uint32_t lo_key = float_key(-INFINITY), hi_key = float_key(INFINITY);
+    T[0] = 0.0f;
+    for (int k = 1; k < 256; ++k) {
+        uint32_t lo = lo_key, hi = hi_key;
+        if (inc) {   // the first v with index >= k (+inf has 255)
+            while (lo < hi) {
+                const uint32_t mid = lo + (hi - lo) / 2;
+                if (reference_index(key_float(mid), vmin, vmax) >= k) hi = mid; else lo = mid + 1;
+            }
+        } else {     // the last v with index >= k (-inf has 255)
+            while (lo < hi) {
+                const uint32_t mid = lo + (hi - lo + 1) / 2;
+                if (reference_index(key_float(mid), vmin, vmax) >= k) lo = mid; else hi = mid - 1;
+            }
+        }
+        T[k] = key_float(lo);
+    }
+    return inc ? 1u : 2u;
+}
+
 void expand_u8_to_rgba8(const uint8_t* src, int w, int h, int c, uint8_t* dst) {
     const int n = w * h;
     for (int i = 0; i < n; ++i) {
@@ -930,6 +987,16 @@ bool TensorBridge::upload_into(Entry& e, const CaliperTensor* t) {
         const uint32_t* lut = e.mapped ? colormap_lut(e.colormap) : nullptr;
         return renderer_.tex_update_from_device(e.tex, *t, lut, e.vmin, e.vmax);
     }
+    // A backend that colormaps host memory on its GPU (the browser's WebGPU
+    // renderer, web/wasm) takes the f32 bytes as they are; every other backend
+    // returns false and keeps the CPU staging below.
+    if (e.mapped &&
+        renderer_.tex_update_mapped_from_host(e.tex, (const float*)t->data, e.w, e.h,
+                                              colormap_lut(e.colormap), e.vmin, e.vmax)) {
+        last_upload_path_ = renderer_.last_device_path();
+        return true;
+    }
+    last_upload_path_ = "cpu-staged";
     std::vector<uint8_t> staging((size_t)e.w * (size_t)e.h * 4);
     if (e.mapped)
         map_f32_to_rgba8((const float*)t->data, e.w, e.h,

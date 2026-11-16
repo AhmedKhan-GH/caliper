@@ -1,0 +1,23 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 63,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 39,
+    "minor": 1,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 81
+  },
+  "meta": {
+    "count": 5,
+    "op": "step",
+    "request_id": 12
+  },
+  "meta_offset": 24,
+  "name": "v3_1/control_step",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "control"
+}

@@ -195,6 +195,11 @@ void status_bar_begin();
 void status_bar_end();
 void tray_bar_begin(float height);
 void tray_bar_end();
+// The control bar: a second strip under the command bar (or the page bar),
+// h metric::command_bar (ground, rule under), for a page's own controls such
+// as the live page's run bar. Begin it after the bar above it.
+void control_bar_begin();
+void control_bar_end();
 // Inline status item: text in `c`, preceded by a faint " · " separator after
 // the first item on the line.
 void status_item(const char* text, ImU32 c = col::secondary);

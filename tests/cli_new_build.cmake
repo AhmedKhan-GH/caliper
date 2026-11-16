@@ -9,7 +9,7 @@
 #
 #   cmake -DEXE=<caliper> -DCALIPER_BUILD_DIR=<build> -DWORK_DIR=<dir>
 #         [-DGENERATOR=<generator>] [-DMAKE_PROGRAM=<path>] [-DCXX_COMPILER=<path>]
-#         [-DBUILD_TYPE=<type>] -P cli_new_build.cmake
+#         [-DBUILD_TYPE=<type>] [-DMACOS_MIN=<version>] -P cli_new_build.cmake
 cmake_minimum_required(VERSION 3.18)
 foreach(var EXE CALIPER_BUILD_DIR WORK_DIR)
     if(NOT ${var})
@@ -53,6 +53,17 @@ endif()
 run("Configuring the template" "${CMAKE_COMMAND}" -S "${project}" -B "${project}/build"
     ${configure_args})
 run("Building the template" "${CMAKE_COMMAND}" --build "${project}/build" --config "${BUILD_TYPE}")
+# On macOS the library carries the host's minimum macOS (MACOS_MIN, the core
+# build's CMAKE_OSX_DEPLOYMENT_TARGET), which the SDK package passes on.
+if(MACOS_MIN)
+    file(GLOB libs "${project}/build/applets/*.dylib")
+    execute_process(COMMAND vtool -show-build ${libs} OUTPUT_VARIABLE shown ERROR_VARIABLE shown)
+    string(REGEX MATCHALL "minos [0-9.]+" minos "${shown}")
+    list(REMOVE_DUPLICATES minos)
+    if(NOT libs OR NOT minos STREQUAL "minos ${MACOS_MIN}")
+        message(FATAL_ERROR "the template's library does not say macOS ${MACOS_MIN} as its minimum:\n${shown}")
+    endif()
+endif()
 run("Running the template's test" "${CMAKE_CTEST_COMMAND}" --test-dir "${project}/build"
     -C "${BUILD_TYPE}" --output-on-failure)
 

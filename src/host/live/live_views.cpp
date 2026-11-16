@@ -35,6 +35,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -59,7 +60,8 @@ namespace caliper_live_views {
 namespace {
 
 constexpr uint32_t kKnownFlags = CALIPER_LIVE_APPLY_RAW | CALIPER_LIVE_APPLY_AUTO_VMIN |
-                                 CALIPER_LIVE_APPLY_AUTO_VMAX | CALIPER_LIVE_APPLY_WAIT_GPU;
+                                 CALIPER_LIVE_APPLY_AUTO_VMAX | CALIPER_LIVE_APPLY_WAIT_GPU |
+                                 CALIPER_LIVE_APPLY_STAMP_RELATIVE;
 constexpr int64_t kMaxTexDim = 16384;
 
 const char* kind_name(int32_t k) {
@@ -149,6 +151,8 @@ void release_typed(CaliperCore* core, View& v) {
     v.pending.clear();
     if (v.have_cur) release_payload(core, v, v.cur);
     v.have_cur = false;
+    if (v.have_sel_draw) release_payload(core, v, v.sel_draw);
+    v.have_sel_draw = false;
     for (auto& p : v.retired) release_payload(core, v, p);
     v.retired.clear();
     for (auto& im : v.imports) {   // empty unless a payload leaked a ref
@@ -164,6 +168,8 @@ void release_typed(CaliperCore* core, View& v) {
     v.values.clear();
     v.xs.clear();
     v.ys.clear();
+    v.tex_copy = {};
+    v.tex_cpu = nullptr;
 }
 
 void erase_view(CaliperCore* core, CaliperLiveViewsState* S, View* v) {
@@ -250,12 +256,20 @@ bool apply_texture(CaliperCore* core, View& v, const CaliperLiveSnapshot& s,
     v.imported = tv && tv->imported;
     v.path = tv ? tv->path : "";
     v.count = 0;
-    // Hover values: the CPU side of a METAL payload (NULL for private storage
-    // and for CPU payloads, whose bytes the caller may free on return). Read
-    // only while the v1.2 view still imports this very buffer.
+    // Hover values: a copy of a CPU payload (the caller may free its bytes on
+    // return), or the CPU side of a METAL payload (NULL for private storage),
+    // read only while the v1.2 view still imports this very buffer.
     v.tex_buf = nullptr;
     v.tex_cpu = nullptr;
-    if (s.data->device == CALIPER_DEV_METAL) {
+    if (s.data->device == CALIPER_DEV_CPU) {
+        // (H,W) f32 and (H,W,4) u8 are both H * W * 4 bytes (validate()); the
+        // copy keeps its capacity between applies.
+        const size_t bytes = (size_t)t.shape[0] * (size_t)t.shape[1] * 4u;
+        const uint8_t* src = (const uint8_t*)s.data->data + s.data_offset;
+        v.tex_copy.assign(src, src + bytes);
+        v.tex_cpu = v.tex_copy.data();
+    } else if (s.data->device == CALIPER_DEV_METAL) {
+        v.tex_copy.clear();
         const BufferInfo bi = metal_buffer_info(s.data->data);
         if (bi.contents) {
             v.tex_buf = s.data->data;
@@ -312,6 +326,19 @@ bool bind_buffer(CaliperCore* core, View& v, const CaliperTensor& t, uint64_t of
         *out_cpu = bi.contents ? (const uint8_t*)bi.contents + off : nullptr;
         return true;
     }
+    // A renderer that copies host memory itself (the browser's WebGPU renderer).
+    if (const uint64_t rid = r->import_host_allocation((const uint8_t*)t.data + off, bytes)) {
+        auto p = std::make_unique<Import>();
+        p->rid = rid;
+        p->bytes = bytes;
+        p->refs = 1;
+        p->host.assign((const uint8_t*)t.data + off, (const uint8_t*)t.data + off + bytes);
+        *out = p.get();
+        *out_off = 0;
+        *out_cpu = p->host.data();
+        v.imports.push_back(std::move(p));
+        return true;
+    }
     void* dev = r->native_device();
     if (!dev) { *why = std::string(what) + ": CPU payload needs a Metal renderer"; return false; }
     void* buf = metal_new_shared_buffer(dev, (const uint8_t*)t.data + off, bytes);
@@ -365,6 +392,12 @@ bool apply_points(CaliperCore* core, View& v, const CaliperLiveSnapshot& s,
     v.cur = p;
     v.have_cur = true;
     if (v.dims != s.points_dims) v.fit_pending = true;   // 2-D <-> 3-D: new camera model
+    if (!v.selected.empty() && v.selected.size() != n) {
+        // Another sample size: the indices no longer name the same points.
+        v.selected.clear();
+        v.sel_count = 0;
+        ++v.sel_version;
+    }
     v.dims = s.points_dims;
     v.label_count = has_aux ? s.label_count : 0;
     v.colormap = s.colormap;
@@ -580,6 +613,166 @@ View* find(CaliperCore* core, const char* name) {
     return nullptr;
 }
 
+void set_event_sink(CaliperCore* core, EventSink sink) {
+    if (core) state(core)->events = std::move(sink);
+}
+
+void set_look(CaliperCore* core, const Look& look) {
+    if (core) state(core)->look = look;
+}
+
+void set_under_header(CaliperCore* core, std::function<float(View&, float)> fn) {
+    if (core) state(core)->under_header = std::move(fn);
+}
+
+void set_stream_state(CaliperCore* core, int stream) {
+    if (core && core->live_views) core->live_views->stream = stream;
+}
+
+bool views_debug(const CaliperCore* core) {
+    static const bool env = [] {
+        const char* e = std::getenv("CALIPER_VIEWS_DEBUG");
+        return e && std::strcmp(e, "1") == 0;
+    }();
+    return env || (core && core->views_debug);
+}
+
+// ---- the grid ----------------------------------------------------------------------------
+namespace {
+constexpr float kMinCellW = 340.0f, kMinCellH = 240.0f;   // the size a view wants at least
+constexpr float kGap = 8.0f;
+
+// The columns that give the worst cell the most room against kMinCell (the
+// rows follow): no cell is squeezed to a strip while another has room.
+int grid_columns(int n, float w, float h) {
+    int best = 1;
+    float score = -1.0f;
+    for (int cols = 1; cols <= n; ++cols) {
+        const int rows = (n + cols - 1) / cols;
+        const float cw = (w - kGap * (float)(cols + 1)) / (float)cols;
+        const float ch = (h - kGap * (float)(rows + 1)) / (float)rows;
+        const float sc = std::min(cw / kMinCellW, ch / kMinCellH);
+        if (sc > score + 1e-4f) {
+            score = sc;
+            best = cols;
+        }
+    }
+    return best;
+}
+}  // namespace
+
+void layout_views(CaliperCore* core) {
+    if (!core || !core->live_views || core->views_bare) return;
+    CaliperLiveViewsState* S = core->live_views;
+    const int n = (int)S->views.size();
+    if (n == 0) return;
+    const float x = core->hosted ? core->area_x : 0.0f, y = core->hosted ? core->area_y : 0.0f;
+    const float w = (float)core->canvas_w / core->scale, h = (float)core->canvas_h / core->scale;
+    const float sig[5] = {x, y, w, h, (float)n};
+    if (S->grid_gen && std::equal(sig, sig + 5, S->grid_sig)) return;
+    std::copy(sig, sig + 5, S->grid_sig);
+    ++S->grid_gen;
+    const int cols = grid_columns(n, w, h);
+    const int rows = (n + cols - 1) / cols;
+    const float cw = std::max(120.0f, (w - kGap * (float)(cols + 1)) / (float)cols);
+    const float ch = std::max(90.0f, (h - kGap * (float)(rows + 1)) / (float)rows);
+    for (int i = 0; i < n; ++i) {
+        View& v = *S->views[(size_t)i];
+        const int r = i / cols, c = i % cols;
+        v.cell[0] = std::floor(x + kGap + (float)c * (cw + kGap));
+        v.cell[1] = std::floor(y + kGap + (float)r * (ch + kGap));
+        v.cell[2] = std::floor(cw);
+        v.cell[3] = std::floor(ch);
+        v.cell_gen = S->grid_gen;
+    }
+}
+
+bool window_before(CaliperCore* core, const std::string& name) {
+    if (!core || core->views_bare) return false;
+    View* v = find(core, name.c_str());
+    if (!v || !v->cell_gen) return false;
+    v->applied_now = false;
+    if (v->off_grid) return true;   // the person's place, kept by ImGui
+    if (v->applied_gen != v->cell_gen) {
+        ImGui::SetNextWindowPos(ImVec2(v->cell[0], v->cell[1]), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(v->cell[2], v->cell[3]), ImGuiCond_Always);
+        std::copy(v->cell, v->cell + 4, v->applied);
+        v->applied_gen = v->cell_gen;
+        v->applied_now = true;
+    }
+    return true;
+}
+
+void window_after(CaliperCore* core, const std::string& name) {
+    if (!core || core->views_bare) return;
+    View* v = find(core, name.c_str());
+    if (!v || !v->cell_gen || v->off_grid || v->applied_now || !v->applied_gen) return;
+    const ImVec2 p = ImGui::GetWindowPos(), sz = ImGui::GetWindowSize();
+    const bool moved = std::fabs(p.x - v->applied[0]) > 0.5f || std::fabs(p.y - v->applied[1]) > 0.5f ||
+                       std::fabs(sz.x - v->applied[2]) > 0.5f || std::fabs(sz.y - v->applied[3]) > 0.5f;
+    if (moved || ImGui::IsWindowDocked()) v->off_grid = true;
+}
+
+bool set_toggle(CaliperCore* core, const char* name, const char* toggle, bool on) {
+    View* v = core ? find(core, name) : nullptr;
+    if (!v || !toggle) return false;
+    const bool plot = v->kind == CALIPER_LIVE_KIND_SERIES || v->kind == CALIPER_LIVE_KIND_HISTOGRAM;
+    if (std::strcmp(toggle, "follow") == 0 && plot) {
+        v->follow = on;
+    } else if (std::strcmp(toggle, "log") == 0 && plot) {
+        v->log_y = on;
+        v->fit_once = true;   // a new scale: fit y once, as the browser views do
+    } else if (std::strcmp(toggle, "rotate") == 0 && v->kind == CALIPER_LIVE_KIND_POINTS) {
+        v->auto_rotate = on;
+    } else if (std::strcmp(toggle, "depth") == 0 && v->kind == CALIPER_LIVE_KIND_POINTS) {
+        v->depth_cues = on;
+        v->dirty = true;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+bool set_link(CaliperCore* core, const char* name, const char* axis, std::vector<int64_t> items) {
+    View* v = core ? find(core, name) : nullptr;
+    if (!v) return false;
+    const std::string a = axis ? axis : "";
+    const int old = v->link_axis;
+    v->link_axis = a == "points" ? 1 : a == "rows" ? 2 : a == "columns" ? 3 : a == "steps" ? 4 : 0;
+    if (old == 1 && v->link_axis != 1 && v->sel_count) {
+        // The linked selection of the points went; a selection made here stays
+        // until it does.
+        v->selected.clear();
+        v->sel_count = 0;
+        ++v->sel_version;
+    }
+    std::sort(items.begin(), items.end());
+    items.erase(std::unique(items.begin(), items.end()), items.end());
+    v->link_items = v->link_axis ? std::move(items) : std::vector<int64_t>();
+    ++v->link_version;
+    v->dirty = true;
+    return true;
+}
+
+bool set_payload_map(CaliperCore* core, const char* name, const caliper_live::PayloadMap& map) {
+    View* v = core ? find(core, name) : nullptr;
+    if (!v) return false;
+    v->map = map;
+    return true;
+}
+
+bool stage_host(CaliperCore* core, View& v, const void* bytes, uint64_t len, Import** out,
+                const uint8_t** cpu, std::string* why) {
+    CaliperTensor t{};
+    t.struct_size = sizeof t;
+    t.device = CALIPER_DEV_CPU;
+    t.data = const_cast<void*>(bytes);
+    uint64_t off = 0;
+    return bind_buffer(core, v, t, 0, len, "selection", out, &off, cpu, why);
+}
+
+void drop_payload(CaliperCore* core, View& v, PointsPayload& p) { release_payload(core, v, p); }
+
 void poll_handles(CaliperCore* core, View& v) {
     HostRenderer* r = core->renderer.get();
     if (!r) return;
@@ -642,7 +835,9 @@ void fit_points(View& v, float aspect) {
         c.radius = r;
         const float half_fovy = 22.5f * 3.14159265f / 180.0f;
         const float half_fovx = std::atan(std::tan(half_fovy) * aspect);
-        c.dist = r / std::sin(std::min(half_fovy, half_fovx)) * 1.05f;
+        c.dist = r / std::sin(std::min(half_fovy, half_fovx)) * kCamFit;
+        c.az = kCamAz;   // the default three-quarter view, as every renderer
+        c.el = kCamEl;
     } else {
         float hh = std::max(ey, ex / aspect);
         if (!(hh > 1e-12f) || !std::isfinite(hh)) hh = 1.0f;
@@ -762,6 +957,7 @@ extern "C" int caliper_core_live_apply(CaliperCore* core, const CaliperLiveSnaps
     t.stamp_ns = s.stamp_ns;
     const uint64_t now = now_ns();
     t.latency_ms = (s.stamp_ns && now > s.stamp_ns) ? (double)(now - s.stamp_ns) * 1e-6 : 0.0;
+    t.latency_relative = (s.flags & CALIPER_LIVE_APPLY_STAMP_RELATIVE) != 0;
     t.last_apply_ms = ms_since(t0);
     core->last_error.clear();
     return 1;

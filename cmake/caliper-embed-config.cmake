@@ -15,4 +15,12 @@
 # program built in its build folder finds it through the build rpath, and an
 # installed program needs an rpath to <prefix>/lib. On Windows the program
 # needs bin/caliper_embed.dll beside it or on PATH.
+#
+# The library's minimum macOS, 14.0 by default, is CALIPER_MACOS_MIN. On macOS
+# it becomes CMAKE_OSX_DEPLOYMENT_TARGET unless the project,
+# -DCMAKE_OSX_DEPLOYMENT_TARGET or MACOSX_DEPLOYMENT_TARGET chose one.
+set(CALIPER_MACOS_MIN "@CMAKE_OSX_DEPLOYMENT_TARGET@")
+if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET AND "$ENV{MACOSX_DEPLOYMENT_TARGET}" STREQUAL "")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "${CALIPER_MACOS_MIN}")
+endif()
 include("${CMAKE_CURRENT_LIST_DIR}/CaliperEmbedTargets.cmake")

@@ -40,6 +40,15 @@ if(NOT TARGET ZLIB::ZLIB)
 endif()
 target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk caliper_host_lib
     caliper::sdk_testing caliper::ui_stack ZLIB::ZLIB)
+# Wire protocol v3 networking (src/host/net): the codec against the golden
+# frames in tests/fixtures/wire_v3, everywhere; the WebSocket layer against its
+# own server on 127.0.0.1 and the hub (src/host/net/hub.h) in-process with fake
+# producers and viewers, not on Windows yet (caliper_net_tests below).
+target_sources(caliper_tests PRIVATE test_net_wire.cpp)
+if(NOT WIN32)
+    target_sources(caliper_tests PRIVATE test_net_ws.cpp test_net_hub.cpp)
+endif()
+target_link_libraries(caliper_tests PRIVATE caliper_net)
 # mnist_idx.h now lives with EmbedScope (the sole exemplar is self-contained).
 target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/embed_scope)
 # InstanceScope's pure pose/tint/mesh reference (instance_field.h) is torch-free,
@@ -67,8 +76,29 @@ target_sources(caliper_tests PRIVATE test_work_area.cpp)
 # (src/host/host_cli.h); the acceptance check for applets built outside the
 # core runs only when CALIPER_TEST_APPLET_DIR is set.
 target_sources(caliper_tests PRIVATE test_applet_search.cpp test_applet_acceptance.cpp)
-# The command line's subcommands (src/host/host_cli.h) on temporary folders.
-target_sources(caliper_tests PRIVATE test_cli.cpp)
+# The command line's subcommands (src/host/host_cli.h) on temporary folders,
+# with caliper build's own source and the header's out-of-line part, which the
+# executable compiles too.
+target_sources(caliper_tests PRIVATE test_cli.cpp ${CMAKE_SOURCE_DIR}/src/host/cli_build.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/host_cli.cpp)
+# Caliper API v0 (src/host/api/api_server.h): the routes, the token, the Host
+# and Origin refusals and the limits, with the server in this process; the
+# ctest entry caliper_cli_api runs the same binary against `caliper shot --api`.
+# Not on Windows yet (caliper_net_tests below).
+if(NOT WIN32)
+    target_sources(caliper_tests PRIVATE test_api.cpp)
+    target_link_libraries(caliper_tests PRIVATE caliper_api)
+    target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
+endif()
+# On Windows the socket cases of the WebSocket layer, the hub and Caliper API
+# are not built or run: every feature built on them is refused there
+# (windows_unavailable in src/host/host_cli.h), and their socket and timer
+# behaviour has not run on Winsock yet. This entry says so in the ctest log.
+if(WIN32)
+    add_test(NAME caliper_net_tests COMMAND "${CMAKE_COMMAND}" -E echo
+        "skipped on Windows: the socket tests of the WebSocket layer, the hub and Caliper API do not run there yet")
+    set_tests_properties(caliper_net_tests PROPERTIES SKIP_REGULAR_EXPRESSION "skipped on Windows")
+endif()
 # The throwing fixture (a raw descriptor that throws across the ABI) backs the
 # crash guard's exception case; it builds into test-applets, not applets.
 add_subdirectory(fixtures/throwing_applet)
@@ -162,8 +192,28 @@ if(TARGET caliper)
         "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
         "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
         "-DBUILD_TYPE=$<CONFIG>"
+        "-DMACOS_MIN=$<$<PLATFORM_ID:Darwin>:${CMAKE_OSX_DEPLOYMENT_TARGET}>"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cli_new_build.cmake")
     set_tests_properties(caliper_cli_new_builds PROPERTIES LABELS "cli;sdk" TIMEOUT 900)
+
+    # `caliper build`: the template configured, built and checked against
+    # this build's installed SDK, then its clear errors for a missing SDK,
+    # CMake or compiler (tests/cli_build.cmake). POSIX only, as build is.
+    caliper_cli_test(build_operand ARGS "build" EXIT 2 ERROR "build takes one folder")
+    caliper_cli_test(build_applets ARGS "build|${_cli_work}|--applets|${_cli_work}" EXIT 2
+        ERROR "--applets applies only to starting the app, dev, list and shot")
+    if(NOT WIN32)
+        add_test(NAME caliper_cli_build COMMAND "${CMAKE_COMMAND}"
+            "-DEXE=$<TARGET_FILE:caliper>"
+            "-DCALIPER_BUILD_DIR=${CMAKE_BINARY_DIR}"
+            "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-build"
+            "-DGENERATOR=${CMAKE_GENERATOR}"
+            "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+            "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DMACOS_MIN=$<$<PLATFORM_ID:Darwin>:${CMAKE_OSX_DEPLOYMENT_TARGET}>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cli_build.cmake")
+        set_tests_properties(caliper_cli_build PROPERTIES LABELS "cli;sdk" TIMEOUT 900)
+    endif()
 
     # `caliper shot`: the command-line errors first, which need no GPU and
     # create nothing; an unknown id is found before any folder is made.
@@ -198,6 +248,79 @@ if(TARGET caliper)
         set_tests_properties(${name} PROPERTIES LABELS "cli;shot" TIMEOUT 180
             SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
     endforeach()
+
+    caliper_cli_test(serve_operand ARGS "serve|extra" EXIT 2 ERROR "serve takes no operands")
+    caliper_cli_test(serve_option_elsewhere ARGS "list|--port|1" EXIT 2
+        ERROR "--port applies only to serve")
+    # caliper serve as a process (tests/test_cli.cpp): it prints its link,
+    # serves a viewer and a producer, stops on SIGTERM with BYE to both and
+    # leaves neither its hub file nor a listening socket. POSIX only.
+    if(NOT WIN32)
+        add_test(NAME caliper_cli_serve
+                 COMMAND caliper_tests "--test-case=cli: caliper serve runs as a process*")
+        set_tests_properties(caliper_cli_serve PROPERTIES LABELS cli
+            ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>")
+    endif()
+
+    # Caliper API as a process (tests/test_api.cpp): `caliper shot --api` on the
+    # hello fixture, every endpoint, the capture as a PNG of the shot's size,
+    # the stream's handshake on /v3/stream and /v0/stream, the native viewer
+    # attached through /v3/stream, and a clean stop on SIGTERM. No window: shot
+    # draws offscreen. Without a GPU the run is reported as skipped, as the
+    # shot runs do. POSIX only.
+    caliper_cli_test(api_elsewhere ARGS "list|--api" EXIT 2
+        ERROR "--api applies only to starting the app, dev and shot")
+    caliper_cli_test(hidden_elsewhere ARGS "shot|--hidden|--launch|x|--out|${_cli_work}/x.png" EXIT 2
+        ERROR "--hidden applies only to starting the app and dev")
+    # On Windows the pieces that have not run there as a process yet are
+    # refused before anything starts, with exit code 1 and one message
+    # (host_cli.h, windows_unavailable); no window opens and nothing is written.
+    if(WIN32)
+        caliper_cli_test(windows_serve ARGS "serve|--port|0" EXIT 1
+            ERROR "caliper serve is not available on Windows yet")
+        caliper_cli_test(windows_build ARGS "build|${_cli_work}" EXIT 1
+            ERROR "caliper build is not available on Windows yet")
+        caliper_cli_test(windows_api ARGS "--api|--api-port|0" EXIT 1
+            ERROR "Caliper API \\(--api\\) is not available on Windows yet")
+        caliper_cli_test(windows_shot_api
+            ARGS "shot|--launch|dev.caliper.hello|--out|${_cli_work}/x.png|--api" EXIT 1
+            ERROR "Caliper API \\(--api\\) is not available on Windows yet")
+        caliper_cli_test(windows_url ARGS "--url|ws://127.0.0.1:9/v3/stream?token=x" EXIT 1
+            ERROR "attaching to a stream \\(--url\\) is not available on Windows yet")
+    endif()
+    if(NOT WIN32)
+        add_test(NAME caliper_cli_api
+                 COMMAND caliper_tests "--test-case=api: caliper shot --api serves*")
+        # With caliper_viewer built, the native viewer also attaches through
+        # /v3/stream on the API port (headless, no window).
+        set(_api_env "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>"
+                     "CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets")
+        if(TARGET caliper_viewer)
+            list(APPEND _api_env "CALIPER_TEST_VIEWER_EXE=$<TARGET_FILE:caliper_viewer>")
+        endif()
+        set_tests_properties(caliper_cli_api PROPERTIES LABELS "cli;shot;api" TIMEOUT 180
+            ENVIRONMENT "${_api_env}"
+            SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+        # The real app with its window never shown (--hidden, the mechanism of
+        # tests/glfw_background.h) and Caliper API: every endpoint, the capture
+        # of the hidden window's frame, the stream on /v3/stream, and a normal
+        # close on SIGTERM. Skipped without a Metal device.
+        add_test(NAME caliper_cli_app_hidden
+                 COMMAND caliper_tests "--test-case=api: the hidden app serves*")
+        set_tests_properties(caliper_cli_app_hidden PROPERTIES LABELS "cli;api" TIMEOUT 180
+            ENVIRONMENT "${_api_env}"
+            SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+        # The app's live page as a 3.1 viewer (tests/test_net_hub.cpp): the
+        # hidden app attached with --url through an in-process hub, its run bar
+        # clicked by scripted ImGui input, with and without --allow-control.
+        if(APPLE)
+            add_test(NAME caliper_app_live_controls
+                     COMMAND caliper_tests "--test-case=app: the hidden app's run bar*")
+            set_tests_properties(caliper_app_live_controls PROPERTIES LABELS "cli;live" TIMEOUT 240
+                ENVIRONMENT "${_api_env}"
+                SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+        endif()
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -406,6 +529,13 @@ if(APPLE)
     set_source_files_properties(test_live.cpp PROPERTIES
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
 endif()
+# The network part (test_live_net.cpp): a fake wire protocol v3 producer on
+# loopback (net/ws.h server, net/wire.h encoder) streams every kind to a core
+# attached by URL (caliper_core_live_attach_url, live_net_source.h).
+target_sources(caliper_live_tests PRIVATE test_live_net.cpp)
+# The 3.1 golden frames (tests/fixtures/wire_v3/v3_1) that the native source
+# must tolerate.
+target_compile_definitions(caliper_live_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 add_test(NAME caliper_live_tests COMMAND caliper_live_tests)
 # The stores this binary opens go to a work folder, never the user's app-data.
 set_tests_properties(caliper_live_tests PROPERTIES ENVIRONMENT

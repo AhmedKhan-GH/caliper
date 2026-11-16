@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Caliper</title>
+<style>
+/*@FONTS@*/
+  :root {
+    --ground: #181715;
+    --deep: #1c1b18;
+    --plate: #272622;
+    --rule: #5a5751;
+    --rule-faint: #36342f;
+    --parchment: #f0e9db;
+    --secondary: #d0c9ba;
+    --faint: #a49d8f;
+    --bronze: #b38b59;
+    --text: "Plex Condensed", -apple-system, "Helvetica Neue", sans-serif;
+    --mono: "Source Code Pro", ui-monospace, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { min-height: 100vh; background: var(--ground); color: var(--parchment); font: 15px/1.5 var(--text); -webkit-font-smoothing: antialiased; }
+  .bar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 18px; height: 52px; padding: 0 24px;
+         background: var(--ground); border-bottom: 1px solid var(--rule-faint); }
+  /* The name in the text face, in capitals, as the app's wordmark falls back to it. */
+  .wordmark { font: 16px/1 var(--text); letter-spacing: .14em; text-transform: uppercase; color: var(--parchment); }
+  .script { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 13px var(--mono); color: var(--secondary); }
+  .state { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--faint); white-space: nowrap; }
+  .state .dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--faint); }
+  .state[data-state="connected"] .dot { background: var(--bronze); border-color: var(--bronze); }
+  .state[data-state="ended"] .dot { background: var(--rule); border-color: var(--rule); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 16px; padding: 20px 24px 28px; }
+  .controls { display: block; padding: 20px 24px 0; }
+  .controls[hidden] { display: none; }
+  .empty { margin: 0; padding: 48px 24px; text-align: center; color: var(--faint); }
+  @media (max-width: 600px) {
+    .bar { padding: 0 16px; gap: 12px; }
+    .grid { padding: 16px; gap: 12px; }
+    .controls { padding: 16px 16px 0; }
+  }
+</style>
+</head>
+<body>
+<header class="bar">
+  <span class="wordmark">Caliper</span>
+  <span class="script" id="script"></span>
+  <span class="state" id="state" data-state="connecting" role="status"><span class="dot"></span><span class="text">connecting</span></span>
+</header>
+<caliper-controls class="controls" id="controls" hidden></caliper-controls>
+<main class="grid" id="grid"></main>
+<p class="empty" id="empty">Connecting to the stream.</p>
+<script type="module">/*@SCRIPT@*/</script>
+</body>
+</html>

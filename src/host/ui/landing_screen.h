@@ -65,6 +65,10 @@ public:
         // space: the host's jobs tray takes its strip above the status bar
         // here, and the panes fill what is left.
         std::function<void()> after_bars;
+        // Attach to a network stream by its link (wire protocol v3): the ws://
+        // link, or the http:// page link that caliper.serve() prints. Null
+        // hides the link field under the session list.
+        std::function<void(const std::string&)> attach_url;
     };
 
     // Draws one frame of the landing page. Owns its windows and dock space;
@@ -131,6 +135,9 @@ private:
     bool open_sessions_ = false;     // F4 / the button: enter attach mode after the frame
     std::string session_selected_;
     std::string pending_attach_;     // Enter / double-click: attach after the frame
+    std::string stream_link_;        // the stream link typed or pasted under the list
+    bool stream_link_active_ = false;   // the link field had the keys last frame
+    std::string pending_attach_url_; // Attach link: attach after the frame
     bool scroll_to_session_ = false;
     bool projects_focused_ = false;  // Projects had focus last frame (owns Esc then)
     int focus_projects_ = 0;         // frames left to hand focus to Projects

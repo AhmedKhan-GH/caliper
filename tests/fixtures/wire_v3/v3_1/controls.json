@@ -1,0 +1,57 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 383,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 359,
+    "minor": 1,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 80
+  },
+  "meta": {
+    "actions": [
+      {
+        "name": "save checkpoint",
+        "queued": true,
+        "running": false
+      }
+    ],
+    "params": [
+      {
+        "help": "learning rate",
+        "log": true,
+        "max": 0.1,
+        "min": 1e-05,
+        "name": "lr",
+        "pending": 0.01,
+        "type": "number",
+        "value": 0.001
+      },
+      {
+        "name": "augment",
+        "type": "boolean",
+        "value": true
+      },
+      {
+        "choices": [
+          "adam",
+          "sgd"
+        ],
+        "name": "optimizer",
+        "type": "choice",
+        "value": "adam"
+      }
+    ],
+    "run": {
+      "state": "paused",
+      "step": 1200
+    }
+  },
+  "meta_offset": 24,
+  "name": "v3_1/controls",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "controls"
+}

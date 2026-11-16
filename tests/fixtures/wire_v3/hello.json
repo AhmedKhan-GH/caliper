@@ -1,0 +1,26 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 111,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 87,
+    "minor": 0,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 1
+  },
+  "meta": {
+    "capabilities": [],
+    "role": "viewer",
+    "software": {
+      "name": "caliper-web",
+      "version": "0.1.0"
+    }
+  },
+  "meta_offset": 24,
+  "name": "hello",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "hello"
+}

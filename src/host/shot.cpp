@@ -2,6 +2,7 @@
 // canvas and written as a PNG.
 #include "shot.h"
 
+#include "api/app_api.h"
 #include "app_paths.h"
 #include "applet_loader.h"
 #include "background_process.h"
@@ -20,11 +21,13 @@
 #include <imgui.h>
 
 #include <chrono>
+#include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <iostream>
 #include <memory>
 #include <random>
 #include <string>
@@ -42,6 +45,11 @@ int fail(const std::string& message) {
     std::fprintf(stderr, "caliper: %s\n", message.c_str());
     return 1;
 }
+
+// With Caliper API on, SIGINT and SIGTERM end the frames after the one being
+// drawn, and the shot writes its image as usual.
+volatile std::sig_atomic_t g_stop = 0;
+extern "C" void shot_on_signal(int) { g_stop = 1; }
 
 // A new, empty folder under the system's temporary folder, or "" when none
 // could be made.
@@ -63,6 +71,7 @@ fs::path make_temp_root() {
 // cleanup) whichever way the shot ends.
 struct ShotSession {
     fs::path temp_root;                      // removed last, when set
+    std::unique_ptr<AppApi> api;             // stopped first: waiting calls get 503
     std::unique_ptr<AppletLoader> loader;
     std::unique_ptr<AppletPage> page;        // the dock-hint sink points into it
     std::unique_ptr<HostRenderer> renderer;
@@ -71,6 +80,7 @@ struct ShotSession {
     bool services = false;
 
     ~ShotSession() {
+        if (api) api->stop();
         if (services) {
             // Workers first: a job may hold a pointer into applet state.
             host_job_system().cancel_all_and_join();
@@ -117,6 +127,7 @@ int run_shot(const CommandLine& cl) {
     // a temporary one.
     const std::string user_dir = caliper::user_applets_dir();
     const std::string shipped_dir = caliper::shipped_applets_dir();
+    const std::string user_data_folder = caliper::app_data_location();   // the API file's
     const char* data_env = std::getenv("CALIPER_DATA_DIR");
     const bool own_root = !(data_env && *data_env);
 
@@ -198,6 +209,69 @@ int run_shot(const CommandLine& cl) {
         }
     }
     page.enter();
+    int current = idx;   // the applet the page shows; a launch through the API changes it
+
+    // Caliper API (--api) while the frames are drawn. The canvas is offscreen,
+    // so a capture is read back from it at the end of a frame, as the image is.
+    void (*old_int)(int) = SIG_DFL;
+    void (*old_term)(int) = SIG_DFL;
+    if (api_wanted(cl)) {
+        s.api = std::make_unique<AppApi>();
+        std::string why;
+        if (!s.api->start(cl, "", user_data_folder, std::cout, &why))
+            return fail("cannot start Caliper API: " + why);
+        g_stop = 0;
+        old_int = std::signal(SIGINT, shot_on_signal);
+        old_term = std::signal(SIGTERM, shot_on_signal);
+    }
+
+    // A launch through the API: the page shows that applet from this frame
+    // on. The applet shown goes first, as Home takes it in the app; when the
+    // new one fails to launch, the previous one is launched again. False when
+    // that fails too and the shot has no applet left.
+    auto api_launch = [&](const caliper_api::Call& c) {
+        const int want = loader.find(c.applet_id);
+        if (want < 0) {
+            s.api->reply_error(c.ticket, 404,
+                               "no applet with the id " + c.applet_id +
+                                   " in the search folders (GET /v0/applets lists them)");
+            return true;
+        }
+        const AppletEntry& w = loader.at(want);
+        if (want == current) {
+            s.api->reply(c.ticket, 200, launched_json(w.manifest.id, w.manifest.version, true));
+            return true;
+        }
+        if (w.status != AppletStatus::Ready) {
+            s.api->reply_error(c.ticket, 409, c.applet_id + " cannot be launched (" +
+                                                  applet_status_word(w.status) + "): " +
+                                                  w.status_text);
+            return true;
+        }
+        host_job_system().cancel_all_and_join();
+        loader.teardown(current);
+        {
+            const UiCheckpoint ui_checkpoint = UiCheckpoint::store();
+            if (loader.launch(want, applet_host_proto())) {
+                current = want;
+                page.enter();
+                s.api->reply(c.ticket, 200,
+                             launched_json(loader.at(want).manifest.id,
+                                           loader.at(want).manifest.version, false));
+                return true;
+            }
+            ui_checkpoint.recover();
+        }
+        s.api->reply_error(c.ticket, 409,
+                           c.applet_id + " failed to launch: " + loader.at(want).status_text);
+        const UiCheckpoint ui_checkpoint = UiCheckpoint::store();
+        if (loader.launch(current, applet_host_proto())) {
+            page.enter();
+            return true;
+        }
+        ui_checkpoint.recover();
+        return false;
+    };
 
     // N frames at about 60 a second, as the app draws them, so jobs and
     // workers the applet starts get the time they get in the app.
@@ -207,7 +281,24 @@ int run_shot(const CommandLine& cl) {
     const auto start = clock::now();
     double last = 0.0;
     bool alive = true;
-    for (int f = 0; f < cl.frames && alive; ++f) {
+    int frames = 0;
+    for (int f = 0; f < cl.frames && alive && !g_stop; ++f) {
+        // The API's calls of this frame: the applets and launches now, before
+        // the frame is drawn, and captures once it is rendered.
+        std::vector<uint64_t> captures;
+        if (s.api) {
+            for (const caliper_api::Call& c : s.api->take()) {
+                if (c.kind == caliper_api::Call::Kind::Applets) {
+                    s.api->reply(c.ticket, 200, applets_json(loader));
+                } else if (c.kind == caliper_api::Call::Kind::Capture) {
+                    captures.push_back(c.ticket);
+                } else if (!api_launch(c)) {
+                    return fail(loader.at(current).manifest.id +
+                                " failed to launch again after a launch through Caliper API: " +
+                                loader.at(current).status_text);
+                }
+            }
+        }
         if (f > 0)
             std::this_thread::sleep_until(start + std::chrono::microseconds(
                                                       (int64_t)f * 1000000 / 60));
@@ -231,12 +322,35 @@ int run_shot(const CommandLine& cl) {
         tray.note_failures(views);
         tray.begin_frame(std::move(views), now);
         const AppletPage::Result r =
-            page.draw(loader, idx, fi, s.renderer->name(), chromeless, &tray);
+            page.draw(loader, current, fi, s.renderer->name(), chromeless, &tray);
         s.renderer->canvas_render();
         alive = r.alive;
+        ++frames;
+
+        // Captures: this frame, read back as the image is, opaque.
+        if (!captures.empty()) {
+            std::vector<uint8_t> px((size_t)W * (size_t)H * 4);
+            const bool read = s.renderer->canvas_read_pixels(px.data(), W * 4);
+            if (read)
+                for (size_t i = 3; i < px.size(); i += 4) px[i] = 255;
+            for (size_t i = 0; i < captures.size(); ++i) {
+                if (!read)
+                    s.api->reply_error(captures[i], 500,
+                                       std::string("could not read the frame back from the ") +
+                                           s.renderer->name() + " renderer");
+                else
+                    s.api->reply_capture(captures[i], (uint32_t)W, (uint32_t)H,
+                                         i + 1 == captures.size() ? std::move(px) : px);
+            }
+        }
     }
+    if (s.api) {
+        std::signal(SIGINT, old_int);
+        std::signal(SIGTERM, old_term);
+    }
+    const std::string shown = loader.at(current).manifest.id;
     if (!alive)
-        return fail(id + " was quarantined: " + loader.at(idx).status_text);
+        return fail(shown + " was quarantined: " + loader.at(current).status_text);
 
     // The last frame, opaque as the window shows it.
     std::vector<uint8_t> px((size_t)W * (size_t)H * 4);
@@ -248,8 +362,8 @@ int run_shot(const CommandLine& cl) {
     if (!export_write_png_atomic(out.string(), px.data(), (uint32_t)W, (uint32_t)H, &why))
         return fail("cannot write " + out.string() + (why.empty() ? "" : ": " + why));
 
-    std::printf("wrote %s: %s at %dx%d after %d frames\n", out.string().c_str(), id.c_str(),
-                W, H, cl.frames);
+    std::printf("wrote %s: %s at %dx%d after %d frames\n", out.string().c_str(), shown.c_str(),
+                W, H, frames);
     return 0;
 }
 

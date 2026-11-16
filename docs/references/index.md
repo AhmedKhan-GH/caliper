@@ -42,6 +42,9 @@ The [service catalog](services.md) lists every service id the host serves, with 
 |---|---|
 | [Embedding Caliper](embedding.md) | `caliper/embed.h`, the C interface for hosting the core in another program |
 | [Caliper LIB](python-api.md) | The `caliper` Python package |
+| [Wire protocol v3](wire-protocol.md) | `caliper/live_net.h`, the WebSocket protocol between producers, viewers and the hub |
+| [Browser elements](browser-elements.md) | `<caliper-view>` and `<caliper-controls>`: their attributes, methods and events, and the widgets built on them |
+| [Caliper API](api.md) | The HTTP interface to the running app: its endpoints, its session token and its limits |
 
 ## Applets and environment
 

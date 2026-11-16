@@ -6,16 +6,21 @@
 // starting it, so it never shows a window. `shot` draws the app's applet page
 // into an offscreen canvas (shot.h) and opens no window either.
 //
-//   caliper [--applets <dir>]...              start the app
-//   caliper dev <folder> [--applets <dir>]... start the app, <folder> searched first
+//   caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] [--hidden]
+//                                             start the app
+//   caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]
+//               [--hidden]                    start the app, <folder> searched first
 //   caliper list [--applets <dir>]...         list the applets in search order
 //   caliper check <folder>                    run the pre-load checks on <folder>
 //   caliper install <folder>                  check, then copy into the user folder
 //   caliper new <name> [<dir>]                create an applet from a template
+//   caliper build <folder>                    configure and build it, then check it
 //   caliper info                              print versions and served services
 //   caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
-//                [--frames <N>] --out <file.png>
+//                [--frames <N>] --out <file.png> [--api [--api-port <n>] [--allow-control]]
 //                                             write the applet page as a PNG
+//   caliper serve [--port <n>] [--token-file <file>] [--assets <dir>]
+//                                             run the hub of wire protocol v3
 //   caliper --help                            print the usage
 //
 // `--applets <dir>` (or `--applets=<dir>`) adds a development folder to the
@@ -26,34 +31,79 @@
 // (resolve_applet_folder); dev, check and install resolve their folder the
 // same way.
 //
+// `caliper serve` runs the hub (net/hub.h) on 127.0.0.1 until SIGINT or
+// SIGTERM; it needs no window, renderer or GPU either. --port, --token-file
+// and --assets apply only to it. `--allow-control` lets the hub forward
+// viewers' controls (wire protocol 3.1) to their session's script: with serve,
+// and with --api for the stream of Caliper API. Off without it.
+//
+// `--api` serves Caliper API v0 (api/api_server.h) on 127.0.0.1 while the app
+// runs: with no subcommand, with dev, and with shot, whose offscreen canvas
+// is the app's windowless mode. `--api-port <n>` chooses its port (7341
+// without it, 0 for any free port) and needs --api.
+//
+// `--url <link>` (or `--url=<link>`) attaches the app to a stream of wire
+// protocol v3 as soon as it starts, as the attach pane's stream link does: the
+// ws:// link of a viewer or the http:// page link, holding the session token.
+// It applies to starting the app and to dev; a link that does not attach
+// leaves the app on its landing page and says why in Activity.
+//
+// `--hidden` (or CALIPER_HIDDEN=1), a testing aid, runs the real app with
+// its window never shown: no Dock icon, no menu bar, no focus (main.cpp).
+// It applies to starting the app and to dev.
+//
+// On Windows, `serve`, `build`, `--api` and `--url` are refused before
+// anything starts, with one message (windows_unavailable below).
+//
 // Exit codes: 0 success; 1 a check failed, nothing was found, or a file
 // operation failed; 2 the command line is wrong (the usage goes to stderr).
 //
-// Header-only and free of any graphics dependency: main() dispatches here
+// Header-only but for serve's signal handler (host_cli.cpp) and `build`
+// (cli_build.cpp), and free of any graphics dependency: main() dispatches here
 // and the tests call the same functions with their own CliContext. `shot`
 // needs the renderer, so only its parsing is here and main() runs it
 // (run_shot in shot.h).
 // ============================================================================
 #include "applet_loader.h"
 #include "negotiation.h"
+#include "net/hub.h"
+#include "net/json.h"
 #include <algorithm>
+#include <atomic>
 #include <iterator>
 #include <cctype>
 #include <chrono>
+#include <csignal>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <ostream>
 #include <string>
 #include <system_error>
 #include <vector>
+#ifdef _WIN32
+#include <process.h>   // _getpid
+#else
+#include <unistd.h>    // getpid
+#endif
 
 namespace caliper_host {
 
 struct CommandLine {
-    enum class Command { Run, Help, Dev, List, Check, Install, New, Info, Shot };
+    enum class Command { Run, Help, Dev, List, Check, Install, New, Build, Info, Shot, Serve };
     Command command = Command::Run;
     std::vector<std::string> applet_dirs;   // dev's folder, then --applets, in order
     std::vector<std::string> operands;      // the subcommand's operands
+    // serve
+    int port = -1;                          // --port; -1: kDefaultHubPort
+    std::string token_file;                 // --token-file
+    std::string assets_dir;                 // --assets
+    // Caliper API (the app, dev and shot)
+    bool api = false;                       // --api
+    int api_port = -1;                      // --api-port; -1: caliper_api::kDefaultPort
+    bool hidden = false;                    // --hidden: the app's window is never shown
+    std::string url;                        // --url: a stream link to attach to at start
+    bool allow_control = false;             // --allow-control: the hub forwards controls
     std::string error;                      // set: print it and the usage, exit 2
 
     // shot's options, with their defaults.
@@ -65,15 +115,18 @@ struct CommandLine {
 };
 
 inline const char* usage_text() {
-    return "usage: caliper [--applets <dir>]...\n"
-           "       caliper dev <folder> [--applets <dir>]...\n"
+    return "usage: caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] [--hidden]\n"
+           "       caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]\n"
+           "                   [--hidden]\n"
            "       caliper list [--applets <dir>]...\n"
            "       caliper check <folder>\n"
            "       caliper install <folder>\n"
            "       caliper new <name> [<dir>]\n"
+           "       caliper build <folder>\n"
            "       caliper info\n"
            "       caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]\n"
-           "                    [--frames <N>] --out <file.png>\n"
+           "                    [--frames <N>] --out <file.png> [--api [--api-port <n>] [--allow-control]]\n"
+           "       caliper serve [--port <n>] [--token-file <file>] [--assets <dir>] [--allow-control]\n"
            "       caliper --help\n";
 }
 
@@ -96,6 +149,31 @@ inline int parse_count(const std::string& s, int lo, int hi) {
 // supports on Apple GPUs, and that desktop Vulkan drivers commonly support.
 constexpr int kShotMaxSide = 16384;
 
+// The port `caliper serve` listens on without --port.
+constexpr int kDefaultHubPort = 7340;
+
+// ---- what the Windows build refuses for now ------------------------------------
+// The network stream, the hub, Caliper API and `caliper build` compile on
+// Windows, and the in-process tests of the WebSocket layer, the hub and the
+// API run there, but none of them has run on Windows as a process yet, and
+// the network source that --url attaches through is macOS-only, as the live
+// attach is. So the Windows build refuses them before anything starts:
+// main() prints windows_unavailable_message() and exits with 1. The function
+// is pure and platform-neutral, so the tests check it everywhere.
+inline const char* windows_unavailable(const CommandLine& cl) {
+    using C = CommandLine::Command;
+    if (cl.command == C::Serve) return "caliper serve";
+    if (cl.command == C::Build) return "caliper build";
+    if (cl.command != C::Run && cl.command != C::Dev && cl.command != C::Shot) return nullptr;
+    if (cl.api) return "Caliper API (--api)";
+    if (!cl.url.empty()) return "attaching to a stream (--url)";
+    return nullptr;
+}
+
+inline std::string windows_unavailable_message(const char* what) {
+    return std::string(what) + " is not available on Windows yet";
+}
+
 inline CommandLine parse_command_line(int argc, const char* const* argv) {
     using C = CommandLine::Command;
     CommandLine cl;
@@ -103,6 +181,8 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
     bool have_command = false;
     // shot's options, in the order of their first appearance.
     std::vector<std::string> shot_options;
+    std::vector<std::string> serve_options;   // given, to refuse them elsewhere
+    bool api_port_given = false;
     for (int i = 1; i < argc; i++) {
         const std::string arg = argv[i] ? argv[i] : "";
         // macOS passes -psn_<number> to an app that Finder launches on older
@@ -184,6 +264,109 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             break;
         }
         if (shot_option) continue;
+        // Controls through the hub (serve, or the stream of --api): a flag.
+        if (arg == "--allow-control") {
+            cl.allow_control = true;
+            continue;
+        }
+        if (arg.rfind("--allow-control=", 0) == 0) {
+            cl.error = "--allow-control takes no value";
+            return cl;
+        }
+        // The hidden window (a testing aid): a flag.
+        if (arg == "--hidden") {
+            cl.hidden = true;
+            continue;
+        }
+        if (arg.rfind("--hidden=", 0) == 0) {
+            cl.error = "--hidden takes no value";
+            return cl;
+        }
+        // A stream to attach to at start: --url <link>.
+        if (arg == "--url" || arg.rfind("--url=", 0) == 0) {
+            std::string value;
+            if (arg == "--url") {
+                if (i + 1 < argc && argv[i + 1]) value = argv[++i];
+            } else {
+                value = arg.substr(std::string("--url=").size());
+            }
+            if (value.empty() || value.rfind("--", 0) == 0) {
+                cl.error = "--url needs a stream link";
+                return cl;
+            }
+            if (!cl.url.empty()) {
+                cl.error = "--url is given twice";
+                return cl;
+            }
+            cl.url = value;
+            continue;
+        }
+        // Caliper API: --api, a flag, and --api-port <n>.
+        if (arg == "--api") {
+            cl.api = true;
+            continue;
+        }
+        if (arg.rfind("--api=", 0) == 0) {
+            cl.error = "--api takes no value; choose the port with --api-port <n>";
+            return cl;
+        }
+        if (arg == "--api-port" || arg.rfind("--api-port=", 0) == 0) {
+            std::string value;
+            if (arg == "--api-port") {
+                if (i + 1 < argc && argv[i + 1]) value = argv[++i];
+            } else {
+                value = arg.substr(std::string("--api-port=").size());
+            }
+            if (value.empty() || value.rfind("--", 0) == 0) {
+                cl.error = "--api-port needs a number";
+                return cl;
+            }
+            if (api_port_given) {
+                cl.error = "--api-port is given twice";
+                return cl;
+            }
+            api_port_given = true;
+            cl.api_port = cli_detail::parse_count(value, 0, 65535);
+            if (cl.api_port < 0) {
+                cl.error = "--api-port needs a number from 0 to 65535, not " + value;
+                return cl;
+            }
+            continue;
+        }
+        // The options of serve: --port, --token-file, --assets.
+        bool serve_option = false;
+        for (const char* opt : {"--port", "--token-file", "--assets"}) {
+            const std::string o = opt;
+            if (arg != o && arg.rfind(o + "=", 0) != 0) continue;
+            serve_option = true;
+            std::string value;
+            if (arg == o) {
+                if (i + 1 < argc && argv[i + 1]) value = argv[++i];
+            } else {
+                value = arg.substr(o.size() + 1);
+            }
+            if (value.empty()) {
+                cl.error = o + (o == "--port" ? " needs a number" : o == "--assets" ? " needs a folder" : " needs a file");
+                return cl;
+            }
+            if (o == "--port") {
+                int port = 0;
+                bool ok = value.size() <= 5;
+                for (char c : value) ok = ok && c >= '0' && c <= '9';
+                if (ok) port = std::stoi(value);
+                if (!ok || port > 65535) {
+                    cl.error = "--port needs a number from 0 to 65535, not " + value;
+                    return cl;
+                }
+                cl.port = port;
+            } else if (o == "--token-file") {
+                cl.token_file = value;
+            } else {
+                cl.assets_dir = value;
+            }
+            serve_options.push_back(o);
+        }
+        if (serve_option) continue;
         if (arg.size() > 1 && arg[0] == '-') {
             cl.error = "unknown option: " + arg;
             return cl;
@@ -195,8 +378,10 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             else if (arg == "check") cl.command = C::Check;
             else if (arg == "install") cl.command = C::Install;
             else if (arg == "new") cl.command = C::New;
+            else if (arg == "build") cl.command = C::Build;
             else if (arg == "info") cl.command = C::Info;
             else if (arg == "shot") cl.command = C::Shot;
+            else if (arg == "serve") cl.command = C::Serve;
             else if (arg == "help") cl.command = C::Help;
             else {
                 cl.error = "unknown command: " + arg;
@@ -225,9 +410,11 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             break;
         case C::List: operands(0, 0, "list"); break;
         case C::Info: operands(0, 0, "info"); break;
+        case C::Serve: operands(0, 0, "serve"); break;
         case C::Check: operands(1, 1, "check"); break;
         case C::Install: operands(1, 1, "install"); break;
         case C::New: operands(1, 2, "new"); break;
+        case C::Build: operands(1, 1, "build"); break;
         case C::Shot:
             operands(0, 0, "shot");
             if (cl.error.empty() && cl.launch_id.empty())
@@ -237,11 +424,30 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             break;
     }
     if (cl.error.empty() && !cl.applet_dirs.empty() &&
-        (cl.command == C::Check || cl.command == C::Install ||
-         cl.command == C::New || cl.command == C::Info))
+        (cl.command == C::Check || cl.command == C::Install || cl.command == C::Build ||
+         cl.command == C::New || cl.command == C::Info || cl.command == C::Serve))
         cl.error = "--applets applies only to starting the app, dev, list and shot";
     if (cl.error.empty() && !shot_options.empty() && cl.command != C::Shot)
         cl.error = shot_options.front() + " applies only to shot";
+    if (cl.error.empty() && !serve_options.empty() && cl.command != C::Serve)
+        cl.error = serve_options.front() + " applies only to serve";
+    if (cl.error.empty() && (cl.api || api_port_given) && cl.command != C::Run &&
+        cl.command != C::Dev && cl.command != C::Shot && cl.command != C::Help)
+        cl.error = std::string(cl.api ? "--api" : "--api-port") +
+                   " applies only to starting the app, dev and shot";
+    if (cl.error.empty() && api_port_given && !cl.api) cl.error = "--api-port needs --api";
+    if (cl.error.empty() && cl.hidden && cl.command != C::Run && cl.command != C::Dev &&
+        cl.command != C::Help)
+        cl.error = "--hidden applies only to starting the app and dev";
+    if (cl.error.empty() && !cl.url.empty() && cl.command != C::Run && cl.command != C::Dev &&
+        cl.command != C::Help)
+        cl.error = "--url applies only to starting the app and dev";
+    if (cl.error.empty() && cl.allow_control && cl.command != C::Serve && cl.command != C::Help) {
+        if (cl.command != C::Run && cl.command != C::Dev && cl.command != C::Shot)
+            cl.error = "--allow-control applies only to serve, and to the app, dev and shot with --api";
+        else if (!cl.api)
+            cl.error = "--allow-control needs --api when starting the app, dev or shot";
+    }
     return cl;
 }
 
@@ -254,6 +460,8 @@ struct CliContext {
     std::string shipped_dir;            // the applets shipped with the app
     std::string data_root;              // <app data>/data, for data-schema stamps
     const char* applet_path_env = nullptr;   // CALIPER_APPLET_PATH
+    std::string hub_file;               // serve: where producers find the hub ("" none)
+    std::string exe_dir;                // build: the executable's folder, for the SDK search
 };
 
 namespace cli_detail {
@@ -264,9 +472,9 @@ inline bool passes(const AppletEntry& a) {
     return a.status == AppletStatus::Ready || a.status == AppletStatus::Shadowed;
 }
 
-// One line per applet: status, id, version, folder, in columns; a refused,
-// failed or shadowed applet's reason on the next line, under the id.
-inline void print_entries(const AppletLoader& L, std::ostream& out) {
+// The order list prints the applets in: search order, then id, then the
+// highest version first.
+inline std::vector<int> list_order(const AppletLoader& L) {
     std::vector<int> order;
     for (int i = 0; i < L.count(); i++) order.push_back(i);
     std::stable_sort(order.begin(), order.end(), [&](int x, int y) {
@@ -278,9 +486,18 @@ inline void print_entries(const AppletLoader& L, std::ostream& out) {
         if (ia != ib) return ia < ib;
         return semver_cmp(a.manifest.version, b.manifest.version) > 0;
     });
-    auto id_of = [](const AppletEntry& a) {
-        return a.manifest.id.empty() ? a.manifest.name : a.manifest.id;
-    };
+    return order;
+}
+
+inline std::string list_id(const AppletEntry& a) {
+    return a.manifest.id.empty() ? a.manifest.name : a.manifest.id;
+}
+
+// One line per applet: status, id, version, folder, in columns; a refused,
+// failed or shadowed applet's reason on the next line, under the id.
+inline void print_entries(const AppletLoader& L, std::ostream& out) {
+    const std::vector<int> order = list_order(L);
+    auto id_of = [](const AppletEntry& a) { return list_id(a); };
     auto version_of = [](const AppletEntry& a) {
         return a.manifest.version.empty() ? std::string("-") : a.manifest.version;
     };
@@ -773,6 +990,126 @@ inline int run_info(const CommandLine&, const CliContext& ctx, std::ostream& out
     return 0;
 }
 
+// ---- the same data as JSON (Caliper API v0) ----------------------------------
+
+// What `caliper info` prints, as a JSON object: {"host", "abi_epoch", "sdk",
+// "libtorch", "ui_stack", "services"}, with null for what is unknown or absent.
+inline std::string info_json(const CliContext& ctx) {
+    using caliper_net::Json;
+    auto or_null = [](const std::string& s) { return s.empty() ? Json() : Json(s); };
+    Json j = Json::object();
+    j.set("host", ctx.caps.version);
+    j.set("abi_epoch", (int64_t)ctx.caps.abi_epoch);
+    j.set("sdk", or_null(ctx.sdk_version));
+    j.set("libtorch", or_null(ctx.caps.torch_version));
+    j.set("ui_stack", or_null(ctx.caps.ui_stack_hash));
+    Json services = Json::array();
+    for (const std::string& id : ctx.caps.services) services.push(id);
+    j.set("services", std::move(services));
+    return j.dump();
+}
+
+// What `caliper list` prints for the applets of `L`, in its order, as a JSON
+// object {"applets": [{"status", "id", "version", "folder", "reason"}]}: the
+// status word, the version ("" when the manifest has none) and the reason that
+// list prints under the id ("" for a READY applet).
+inline std::string applets_json(const AppletLoader& L) {
+    using caliper_net::Json;
+    Json list = Json::array();
+    for (int i : cli_detail::list_order(L)) {
+        const AppletEntry& a = L.at(i);
+        Json e = Json::object();
+        e.set("status", applet_status_word(a.status));
+        e.set("id", cli_detail::list_id(a));
+        e.set("version", a.manifest.version);
+        e.set("folder", a.folder);
+        e.set("reason", a.status == AppletStatus::Ready ? std::string() : a.status_text);
+        list.push(std::move(e));
+    }
+    Json j = Json::object();
+    j.set("applets", std::move(list));
+    return j.dump();
+}
+
+// ---- caliper serve -----------------------------------------------------------
+namespace cli_detail {
+// The hub that SIGINT and SIGTERM stop. Hub::stop() is async-signal-safe.
+inline std::atomic<caliper_net::Hub*>& serving_hub() {
+    static std::atomic<caliper_net::Hub*> hub{nullptr};
+    return hub;
+}
+// SIGINT and SIGTERM's handler while serve runs: stops serving_hub(). Defined
+// in host_cli.cpp, since a function with C linkage is not made inline.
+extern "C" void caliper_serve_on_signal(int);
+} // namespace cli_detail
+
+// Runs the hub until SIGINT or SIGTERM. Prints the viewer link and the
+// producer address, writes the hub file (0600) for producers on this machine
+// and removes it on the way out.
+inline int run_serve(const CommandLine& cl, const CliContext& ctx, std::ostream& out,
+                     std::ostream& err) {
+    caliper_net::HubOptions o;
+    o.port = (uint16_t)(cl.port >= 0 ? cl.port : kDefaultHubPort);
+    o.allow_control = cl.allow_control;
+    o.assets_dir = cl.assets_dir;
+    o.software_version = ctx.caps.version;
+    if (!cl.token_file.empty()) {
+        std::string why;
+        if (!caliper_net::read_token_file(cl.token_file, &o.token, &why)) {
+            err << "caliper: " << why << "\n";
+            return 1;
+        }
+    } else {
+        o.token = caliper_net::random_token();
+    }
+    o.log = [&out](const std::string& line) { out << line << std::endl; };
+    caliper_net::Hub hub(o);
+    std::string why;
+    if (!hub.listen(&why)) {
+        err << "caliper: " << why << "\n";
+        if (cl.port < 0)
+            err << "caliper: is another hub running? Choose a port with --port, or --port 0 "
+                   "for any free port\n";
+        return 1;
+    }
+    std::string hub_text;
+    if (!ctx.hub_file.empty()) {
+#ifdef _WIN32
+        const long pid = (long)_getpid();
+#else
+        const long pid = (long)getpid();
+#endif
+        hub_text = caliper_net::hub_file_text(hub.port(), hub.token(), pid);
+        if (!caliper_net::write_hub_file(ctx.hub_file, hub_text, &why)) {
+            err << "caliper: " << why << "; producers must be given the hub's address\n";
+            hub_text.clear();
+        }
+    }
+    out << "viewers   " << hub.viewer_url() << "\n";
+    out << "producers " << hub.stream_url();
+    if (!hub_text.empty()) out << " (address and token in " << ctx.hub_file << ")";
+    out << "\n";
+    if (!cl.assets_dir.empty()) out << "serving the viewer page from " << cl.assets_dir << "\n";
+    out << (cl.allow_control ? "controls are forwarded to the scripts (--allow-control)\n"
+                             : "controls are not forwarded; start with --allow-control to allow them\n");
+    out << "stop with Ctrl-C" << std::endl;
+
+    cli_detail::serving_hub().store(&hub);
+    auto old_int = std::signal(SIGINT, cli_detail::caliper_serve_on_signal);
+    auto old_term = std::signal(SIGTERM, cli_detail::caliper_serve_on_signal);
+    hub.run();
+    std::signal(SIGINT, old_int);
+    std::signal(SIGTERM, old_term);
+    cli_detail::serving_hub().store(nullptr);
+    if (!hub_text.empty()) caliper_net::remove_hub_file(ctx.hub_file, hub_text);
+    out << "hub stopped" << std::endl;
+    return 0;
+}
+
+// ---- caliper build <folder> ----------------------------------------------------
+// CMake against the installed SDK, then check (cli_build.h, cli_build.cpp).
+int run_build(const CommandLine& cl, const CliContext& ctx, std::ostream& out, std::ostream& err);
+
 // Runs a subcommand that needs no window. Not for Run, Dev or Help, which
 // main() handles.
 inline int run_subcommand(const CommandLine& cl, const CliContext& ctx,
@@ -783,7 +1120,9 @@ inline int run_subcommand(const CommandLine& cl, const CliContext& ctx,
         case C::Check: return run_check(cl, ctx, out, err);
         case C::Install: return run_install(cl, ctx, out, err);
         case C::New: return run_new(cl, ctx, out, err);
+        case C::Build: return run_build(cl, ctx, out, err);
         case C::Info: return run_info(cl, ctx, out, err);
+        case C::Serve: return run_serve(cl, ctx, out, err);
         default: return 2;
     }
 }

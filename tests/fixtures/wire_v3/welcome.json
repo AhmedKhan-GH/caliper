@@ -1,0 +1,34 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 220,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 196,
+    "minor": 0,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 2
+  },
+  "meta": {
+    "capabilities": [
+      "events"
+    ],
+    "role": "producer",
+    "session": {
+      "id": "clp-4242-a1b2c3",
+      "pid": 4242,
+      "script": "train.py",
+      "start_unix_ms": 1763200000000
+    },
+    "software": {
+      "name": "caliper-python",
+      "version": "0.1.0"
+    }
+  },
+  "meta_offset": 24,
+  "name": "welcome",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "welcome"
+}

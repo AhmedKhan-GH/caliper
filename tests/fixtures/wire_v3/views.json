@@ -1,0 +1,99 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 567,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 543,
+    "minor": 0,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 32
+  },
+  "meta": {
+    "session": "clp-4242-a1b2c3",
+    "views": [
+      {
+        "default": {
+          "index": {
+            "head": 0
+          }
+        },
+        "id": 1,
+        "kind": 1,
+        "name": "attn",
+        "sources": [
+          {
+            "dims": [
+              {
+                "name": "head",
+                "size": 4
+              },
+              {
+                "name": "query",
+                "size": 2
+              },
+              {
+                "name": "key",
+                "size": 3
+              }
+            ],
+            "dtype": "f32",
+            "name": "layer0"
+          },
+          {
+            "dims": [
+              {
+                "name": "head",
+                "size": 4
+              },
+              {
+                "name": "query",
+                "size": 2
+              },
+              {
+                "name": "key",
+                "size": 3
+              }
+            ],
+            "dtype": "f32",
+            "name": "layer1"
+          }
+        ]
+      },
+      {
+        "default": {
+          "budget": {
+            "max_points": 4
+          }
+        },
+        "id": 2,
+        "kind": 3,
+        "name": "embedding",
+        "sources": [
+          {
+            "dims": [
+              {
+                "name": "point",
+                "size": 1000
+              }
+            ],
+            "dtype": "f32",
+            "name": "z"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "kind": 4,
+        "name": "loss",
+        "sources": []
+      }
+    ]
+  },
+  "meta_offset": 24,
+  "name": "views",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "views"
+}

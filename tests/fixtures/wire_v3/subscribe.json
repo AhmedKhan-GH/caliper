@@ -1,0 +1,24 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 78,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 54,
+    "minor": 0,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 33
+  },
+  "meta": {
+    "max_rate": 30.0,
+    "request_id": 7,
+    "sub": 1,
+    "view": "attn"
+  },
+  "meta_offset": 24,
+  "name": "subscribe",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "subscribe"
+}

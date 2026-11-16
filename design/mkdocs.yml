@@ -1,0 +1,42 @@
+# The design pages: proposals for work that is not built yet. They are not part of the docs
+# site and are not published; CI only checks that they build. Build from the repository root,
+# with the path to this file, as `mkdocs build --strict -f design/mkdocs.yml`: MkDocs refuses
+# a docs folder that holds its own config file when the path to the file is absolute, as it
+# is when this folder is the working directory.
+site_name: Caliper Design
+docs_dir: .
+site_dir: ../build/design-site
+exclude_docs: |
+  mkdocs.yml
+validation:
+  anchors: warn
+theme:
+  name: material
+  # The docs site's theme: icons, fonts and the stylesheet.
+  custom_dir: ../docs-theme
+  logo: assets/caliper-icon.svg
+  favicon: assets/caliper-icon.svg
+  font: false
+  palette:
+    scheme: slate
+    primary: custom
+    accent: custom
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - content.code.copy
+    - search.suggest
+# The navigation follows this folder; .nav.yml sets its order.
+plugins:
+  - search
+  - awesome-nav
+# The docs site's extensions, so that a page renders the same in both builds. Snippets resolve
+# against the working directory, which is the repository root.
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      base_path: ['.']
+      check_paths: true

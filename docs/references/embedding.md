@@ -251,10 +251,12 @@ test for it at compile time.
 | `caliper_core_view_readback(core, name, buf, buf_bytes)` | Copy the view's **texture** (not the canvas) as tightly packed RGBA8, `width*height*4` bytes. The test and measurement surface. |
 | `caliper_core_colormap_lut(colormap, out256)` | The built-in 256-entry RGBA8 LUT, each entry `r | g<<8 | b<<16 | a<<24`. Needs no core; callable from any thread. |
 
-Windowed views are drawn in creation order and tiled left to right. A small
-tensor is magnified by a whole-number factor and sampled nearest, so cells
-stay cells; each window carries an info line
-(`WxH dtype device path updates=N last=ms`). `CALIPER_VIEW_FLAG_RAW` draws the
+Windowed views are drawn in creation order and tiled left to right; the views
+of a live session take the cells of a grid instead (see
+[What you see](../tutorials/live-pytorch.md#what-you-see)). A small tensor is
+magnified by a whole-number factor and sampled nearest, so cells stay cells.
+With `CALIPER_VIEWS_DEBUG=1`, or `views_debug` set on a host's core, each
+window carries an info line (`WxH dtype device path updates=N last=ms`). `CALIPER_VIEW_FLAG_RAW` draws the
 texture 1:1 at canvas (0,0) with no window chrome, the surface the byte-exact
 `read_pixels` tests compare.
 
@@ -390,7 +392,11 @@ macOS/Metal only today; the design is in
 
 `find_package(caliper-embed CONFIG)` gives one imported target,
 `caliper::embed`, which carries the library and the include root
-`include/caliper-embed`. The package version is the interface version
+`include/caliper-embed`. On macOS the library needs macOS 14 (Sonoma) or
+later. The package sets `CALIPER_MACOS_MIN` to its minimum, `14.0` by default,
+and makes it `CMAKE_OSX_DEPLOYMENT_TARGET` unless the project,
+`-DCMAKE_OSX_DEPLOYMENT_TARGET` or `MACOSX_DEPLOYMENT_TARGET` chose one.
+The package version is the interface version
 ([Versions](#versions)), 1.4.0, with CMake's `SameMajorVersion` rule: a request
 for 1.2 accepts 1.4, and a request for 2 refuses it. In the core build
 `caliper::embed` is an alias of the `caliper_embed` target, so one

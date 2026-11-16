@@ -7,14 +7,16 @@
 #   ID        the applet id to launch
 #   SIZE      <W>x<H>
 #   FRAMES    the number of frames
-#   WORK_DIR  a work folder, removed and created again before the run
+#   WORK_DIR  a work folder; each run makes a folder of its own in it,
+#             run-<random>, removed after a run that passes and kept after one
+#             that fails, so two runs at once never share one
 #   MODE      temp: CALIPER_DATA_DIR unset, so shot uses a temporary data
 #             folder, which must be gone after the run, and creates nothing
 #             in the app-data folder;
-#             data_dir: CALIPER_DATA_DIR on <WORK_DIR>/data, which must then
+#             data_dir: CALIPER_DATA_DIR on data/ in the run's folder, which must then
 #             hold the applet's data folder and no imgui.ini
 # The run's HOME, TMPDIR (TMP and TEMP on Windows) and user applets folder are
-# inside the work folder, so it touches nothing of the user's own. When the
+# inside the run's folder, so it touches nothing of the user's own. When the
 # renderer cannot draw offscreen (no GPU) the run is reported as skipped,
 # unless CALIPER_REQUIRE_GPU=1 makes that a failure.
 foreach(var EXE CHECK APPLETS ID SIZE FRAMES WORK_DIR MODE)
@@ -23,7 +25,8 @@ foreach(var EXE CHECK APPLETS ID SIZE FRAMES WORK_DIR MODE)
     endif()
 endforeach()
 
-file(REMOVE_RECURSE "${WORK_DIR}")
+string(RANDOM LENGTH 12 ALPHABET "0123456789abcdef" run_id)
+set(WORK_DIR "${WORK_DIR}/run-${run_id}")
 foreach(dir tmp home user-applets)
     file(MAKE_DIRECTORY "${WORK_DIR}/${dir}")
 endforeach()
@@ -49,6 +52,7 @@ message(STATUS "caliper shot ${ID}\n--- stdout\n${stdout}--- stderr\n${stderr}--
 if(NOT code EQUAL 0)
     if(stderr MATCHES "shot cannot draw offscreen" AND NOT "$ENV{CALIPER_REQUIRE_GPU}" STREQUAL "1")
         message(STATUS "caliper shot: run skipped: no GPU")
+        file(REMOVE_RECURSE "${WORK_DIR}")
         return()
     endif()
     message(FATAL_ERROR "caliper shot failed (exit ${code})")
@@ -90,3 +94,4 @@ else()
     endif()
 endif()
 message(STATUS "caliper shot: OK (${out})")
+file(REMOVE_RECURSE "${WORK_DIR}")

@@ -47,7 +47,31 @@ struct HostGeomDraw {
     uint64_t instance_count = 0;       // N; 0 -> non-instanced
     uint64_t instance_attr_alloc = 0;  // resolved (N,) f32 tint alloc; 0 -> none
     uint64_t instance_attr_offset = 0;
+    // The depth cues of the 3-D live points view (host-internal: no service
+    // draw sets them). With att_ref > 0 a point is size_px * clamp(att_ref / w,
+    // kPointAttenMin, kPointAttenMax) wide, w being its clip-space w, the
+    // distance along the view; nearer points are larger. With fade_w1 > fade_w0
+    // its colour is scaled by 1 up to w = fade_w0, falling linearly to
+    // kPointFadeFloor at w = fade_w1 and beyond, so farther points are dimmer
+    // and keep their hue. Zero: neither, the draw exactly as without them. The
+    // Metal and WebGPU backends draw them; the Vulkan and GL backends ignore
+    // them (constant size, no fade).
+    float att_ref = 0.0f;
+    float fade_w0 = 0.0f;
+    float fade_w1 = 0.0f;
+    // Host-internal, set by the live points view: colour a COLORMAP points
+    // draw by exactly the index map_f32_to_rgba8 gives each value (through
+    // colormap_thresholds, tensor_bridge.h), as the browser views do, instead
+    // of the geometry service's own rule. The WebGPU backend always does; the
+    // Metal backend does when this is set; Vulkan and GL keep the service's.
+    bool exact_colormap = false;
 };
+
+// The constants of the depth cues above, written out in each backend's shader
+// and in the TypeScript points view (web/src/render/points-gpu.ts).
+constexpr float kPointAttenMin = 0.5f;
+constexpr float kPointAttenMax = 2.0f;
+constexpr float kPointFadeFloor = 0.5f;
 
 // Host-internal renderer seam (docs/explanations/rendering.md). The ABI never sees this;
 // backends are swappable forever because applets only see ImGui + bridge ids.
@@ -73,6 +97,19 @@ public:
     virtual bool tex_update_from_device(uint64_t tex, const CaliperTensor& t,
                                         const uint32_t* lut256 /*nullable*/,
                                         float vmin, float vmax) = 0;
+
+    // The browser's views (web/wasm), additive: colormap a
+    // HOST-memory row-major (h,w) f32 buffer into texture `tex` on the GPU. A
+    // browser receives every snapshot as bytes in its own memory, so the
+    // bridge's device path above (keyed on the tensor's device) never runs
+    // there; this is the browser's counterpart. Default false: the bridge then
+    // colormaps on the CPU exactly as before, which every native backend keeps.
+    virtual bool tex_update_mapped_from_host(uint64_t /*tex*/, const float* /*src*/,
+                                             int /*w*/, int /*h*/,
+                                             const uint32_t* /*lut256*/,
+                                             float /*vmin*/, float /*vmax*/) {
+        return false;
+    }
 
     // Diagnostic: which path the last device update took ("compute"/"blit" on
     // Metal). Lifted onto the interface (C2 review) so the bridge and gfx tests
@@ -138,6 +175,13 @@ public:
                                                 uint64_t /*size_bytes*/,
                                                 uint32_t /*handle_type*/) { return 0; }
     virtual void release_external_allocation(uint64_t /*id*/) {}
+    // The browser's views (web/wasm), additive: copy `bytes` of HOST memory
+    // into a renderer allocation that the geometry draws read like an
+    // imported one (same id table, released by release_external_allocation).
+    // A browser has no device memory to import, so a points payload, which
+    // arrives as bytes, takes this path. Default 0: unsupported; the live
+    // views then stage a CPU payload into a shared MTLBuffer as before.
+    virtual uint64_t import_host_allocation(const void* /*data*/, uint64_t /*bytes*/) { return 0; }
     virtual bool tex_update_from_imported(uint64_t /*tex*/, uint64_t /*alloc*/,
                                           uint64_t /*offset_bytes*/,
                                           const CaliperTensor& /*desc*/,
@@ -213,6 +257,25 @@ public:
     // RGBA8, `stride` bytes/row). false if not offscreen / nothing rendered.
     virtual bool canvas_read_pixels(uint8_t* /*dst*/, int /*stride*/) { return false; }
     virtual void canvas_shutdown() {}
+
+    // ---- Window capture (the swapchain path; Caliper API's capture in the
+    // app, api/window_captures.h) -------------------------------------------
+    // A read-back of the window's frame as it is presented, with no extra
+    // render and no wait on the frame thread. window_capture_request(), called
+    // before new_frame(), asks for the frame that the next render() presents
+    // to be copied out as it is presented; window_capture_poll() says, without
+    // waiting, whether that copy has finished on the GPU and then hands it
+    // over: tightly packed opaque RGBA8 at the framebuffer's size, top row
+    // first. A frame without a drawable leaves the request armed for the next
+    // one. Default: unsupported (request returns false). Metal implements it;
+    // the GL and Vulkan backends keep the default.
+    enum class WindowCapture { None, Pending, Ready, Failed };
+    virtual bool window_capture_supported() const { return false; }
+    virtual bool window_capture_request() { return false; }
+    virtual WindowCapture window_capture_poll(std::vector<uint8_t>* /*rgba*/, int* /*w*/,
+                                              int* /*h*/) {
+        return WindowCapture::None;
+    }
 
     // Test-only: copy a texture's pixels back to host RGBA8 (w*h*4 bytes), or
     // empty on failure. GL/Metal read back their handle directly in the gfx
