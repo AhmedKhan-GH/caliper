@@ -60,7 +60,7 @@ A viewer's request runs the function at the next `caliper.step()`, on the traini
 
 ## Pause, resume and step
 
-A viewer pauses the run with Pause in the header of any view or in the controls panel. The loop stops in its next `caliper.step()` and waits there, while the views keep their last snapshots and the controls keep working: values change and actions run during the pause. Resume continues the loop, and Step runs it one step, or a given number of steps, and pauses it again.
+A viewer pauses the run with Pause in the header of a notebook widget, or in the controls panel of a notebook or of the viewer page. The loop stops in its next `caliper.step()` and waits there. The views show the step at which it paused, and the controls keep working: values change and actions run during the pause. Resume continues the loop, and Step runs it one step, or a given number of steps, and pauses it again. Every header shows the run state, such as `paused at 1897`.
 
 The script can pause itself too, for example when its loss stops being finite:
 
@@ -108,6 +108,6 @@ The viewer page that the link of `caliper.serve()` opens shows the same panel ab
 
 ## Who may control
 
-Every viewer that holds the session token of `caliper.serve()` may control the script. The token is in the link that `caliper.serve()` prints, and the server listens on 127.0.0.1 only. Controls cannot run code that the script did not register: a viewer can only set a registered parameter to a value that the script checks, and run a registered action by its name.
+Every viewer that holds the session token of `caliper.serve()` may control the script. The token is in the link that `caliper.serve()` prints, and the server listens on 127.0.0.1 only. To let viewers watch without changing anything, start the server with `caliper.serve(control=False)`: the viewers still show the run state, the parameters and the actions, with every control disabled. Controls cannot run code that the script did not register: a viewer can only set a registered parameter to a value that the script checks, and run a registered action by its name.
 
-The hub of Caliper CLI, `caliper serve`, forwards controls to a script only when it was started with `--allow-control`; [Run a hub](run-a-hub.md#controls-and-selections) explains that option.
+A script that streams to the hub of Caliper CLI with `caliper.connect()` takes the same controls, and the hub, `caliper serve`, forwards them to it only when it was started with `--allow-control`; [Run a hub](run-a-hub.md#controls-and-selections) explains that option.

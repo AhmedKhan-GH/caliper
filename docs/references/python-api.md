@@ -322,7 +322,7 @@ sender written in Python.
 ### serve
 
 ```python
-server = caliper.serve(port=0)
+server = caliper.serve(port=0, *, control=True)
 ```
 
 Start the stream server of this process, print its link,
@@ -332,6 +332,7 @@ Start the stream server of this process, print its link,
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
 | `port` | `int` | 0 | TCP port on 127.0.0.1; 0 lets the system choose a free one |
+| `control` | `bool` | `True` | Whether viewers may pause the run, change parameters and run actions ([Controls](#controls)); `False` shows them read-only |
 
 The server listens on 127.0.0.1 only and makes a new random session token.
 It is one more route: every view call is offered to it, and a view takes a
@@ -364,6 +365,7 @@ viewer watches it, and sends them first to a viewer that subscribes late.
 | `port` | The port the server listens on |
 | `token` | The session token |
 | `session` | The session id, `clp-<pid>-<6 hex>`, that viewers see |
+| `control` | Whether viewers may control the run, as `serve()` was told |
 | `closed` | `True` once the server is stopped |
 | `stats()` | A dict: `url`, `port`, `session`, `closed`, `attached` (connected viewers), `connections`, `views` (per view its `id`, `kind`, `groups` of subscriptions with one data view, and `seq`), `series` (values retained per series) and counters |
 | `on_event(fn)` | Call `fn(event)` for every viewer event from now on; returns `fn`, so it also works as a decorator |
@@ -571,14 +573,16 @@ caliper.set_data_view("attention", {"index": {"layer": 0, "sequence": 2, "head":
 
 ## Controls
 
-Controls let the viewers of `caliper.serve()` reach back into the running
-script: pause, resume and single-step its training loop, change the
-parameters it registered, and run the actions it registered. Linked
-selection makes a selection in one view highlight the same items in the
-other views. Both travel on the stream as messages of wire protocol 3.1
-([Controls](wire-protocol.md#controls) and
+Controls let viewers reach back into the running script: pause, resume and
+single-step its training loop, change the parameters it registered, and run
+the actions it registered. Linked selection makes a selection in one view
+highlight the same items in the other views. Both travel on the stream as
+messages of wire protocol 3.1 ([Controls](wire-protocol.md#controls) and
 [Linked selection](wire-protocol.md#linked-selection)), so they work while a
-notebook cell runs, when the kernel cannot read widget messages.
+notebook cell runs, when the kernel cannot read widget messages. The viewers
+of `caliper.serve()` may control unless it was started with `control=False`;
+the viewers of a hub that `connect()` streams to may control only when the hub
+was started with `--allow-control`. Both senders carry them.
 [Control a running script](../guides/control-a-running-script.md) uses them in
 a training loop. Every call also works without a server: parameters keep their
 values, `step()` returns at once, and an action can be called from Python.
@@ -610,8 +614,10 @@ of single steps, when the server closes, or when no connection that may
 control has been open for 10 seconds, which a page reload stays well within.
 While it waits, it still sets values and runs actions as they arrive. Ctrl-C,
 or a notebook's interrupt, ends the wait with `KeyboardInterrupt`, and the run
-is no longer paused afterwards. With nothing waiting, a call costs about
-22 ns on an Apple silicon Mac: it counts the step and reads one flag.
+is no longer paused afterwards. Right before it waits, it sends the snapshots
+and series values of the step it paused at, so the viewers show that step.
+With nothing waiting, a call costs about 22 ns on an Apple silicon Mac, with a
+viewer attached or not: it counts the step and reads one flag.
 
 Before the script's first `step()`, viewers can change parameters, which then
 take effect at once, but cannot pause the run, and actions wait for the first
