@@ -35,6 +35,20 @@ finished. The turn then keeps that history, leaves out a reply the stream did
 not finish, and gives every tool call that has no result one that says the
 person cancelled it, so the next request is valid.
 
+**The context length.** Where the sidecar chose the context length the server
+runs the model with (the Ollama preset's num_ctx, per role), it never lets the
+server cut the front of a request silently: before each model request
+`CaliperHooks.prepare_model_request` estimates the request's tokens (the last
+reply's prompt tokens, as the server counted them, plus a token for every three
+characters added since; the first request of a session at a token for every
+four characters of the instructions, the tools and the messages) and, when it
+would leave less than an eighth of the context (at most 4,096 tokens) for the
+reply, sends nothing: the turn ends with the stop reason `max_tokens`, which
+the chat and the ⌘K prompt show as a limit, and a plain message (and the
+status `context_full`) that says the conversation no longer fits and what the
+person can do. For a
+server whose context length the sidecar does not know, nothing changes.
+
 A widget session (widget.py) runs the same turn with its own agent (the widget
 system prompt, its scoped tools and `handoff`) and three differences: every
 call carries the session's preview in `X-Caliper-Preview` and every edit runs
@@ -95,6 +109,26 @@ REFUSAL_TEXT = ("The model declined this request. You can rephrase it, try it ag
                 "model or provider, such as a local model.")
 REFUSAL_CHANGES_STAY = " Changes this turn already made in Caliper stay; you can undo them in the app."
 
+# The context check (see the module docstring): the room a request must leave
+# for the reply, and the characters a token is taken to be.
+CONTEXT_RESERVE_MAX = 4096
+CHARS_PER_TOKEN_ADDED = 3
+CHARS_PER_TOKEN_FIRST = 4
+IMAGE_TOKENS = 1500
+
+def widget_limit_text(max_requests: int, edits: list[str], pending: list[str]) -> str:
+    """The reply of a widget prompt that reached its limit: the change is not finished, what the preview holds, and
+    the edit that was next, where the last reply named one."""
+    before = f", before {pending[0]}" if pending else ""
+    limit = "1 model request" if max_requests == 1 else f"{max_requests} model requests"
+    if not edits:
+        return (f"The agent stopped at its limit of {limit}{before}, without a change. Refine the request to try "
+                "again, or ask in the side chat.")
+    count = "1 edit" if len(edits) == 1 else f"{len(edits)} edits"
+    return (f"The change is not finished: the agent stopped at its limit of {limit} after {count} "
+            f"({', '.join(edits)}){before}. Accept applies the edits shown, or Refine lets it finish.")
+
+
 REVIEW_SPEC_CHANGES = "spec_changes"
 REVIEW_DESTRUCTIVE_ONLY = "destructive_only"
 
@@ -117,6 +151,13 @@ class SessionState:
     # The target, the scope and the preview of a widget session; None for the
     # general role.
     widget: WidgetSpec | None = None
+    # The context check: the prompt tokens of the last reply as the server
+    # counted them, and the characters of the request they were for.
+    last_prompt_tokens: int | None = None
+    last_request_chars: int = 0
+    pending_request_chars: int = 0
+    # The model requests a widget prompt may make (WIDGET_MAX_REQUESTS, or --widget-requests).
+    widget_max_requests: int = WIDGET_MAX_REQUESTS
 
 
 @dataclass
@@ -132,6 +173,49 @@ class TurnDeps:
 
 class _NoTools(Exception):
     """The model server cannot call tools."""
+
+
+class _ContextFull(Exception):
+    """The next request would not fit the context length the server runs the model with."""
+
+    def __init__(self, estimate: int, limit: int) -> None:
+        super().__init__(f"{estimate} of {limit} tokens")
+        self.estimate = estimate
+        self.limit = limit
+
+
+def _part_chars(part: Any) -> int:
+    if isinstance(part, ToolCallPart):
+        return len(part.tool_name) + len(part.args_as_json_str())
+    content = getattr(part, "content", None)
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        total = 0
+        for item in content:
+            if isinstance(item, str):
+                total += len(item)
+            elif isinstance(item, BinaryContent):
+                total += IMAGE_TOKENS * CHARS_PER_TOKEN_ADDED
+            else:
+                total += len(str(item))
+        return total
+    if content is not None:
+        try:
+            return len(json.dumps(content, default=str))
+        except (TypeError, ValueError):
+            return len(str(content))
+    return 0
+
+
+def message_chars(messages: list) -> int:
+    """The characters of a request's messages and their instructions, a stand-in for their tokens."""
+    total = 0
+    for m in messages:
+        total += len(getattr(m, "instructions", None) or "")
+        for part in getattr(m, "parts", []):
+            total += _part_chars(part)
+    return total
 
 
 # ---- the agent ---------------------------------------------------------------------------------
@@ -150,6 +234,7 @@ class CaliperHooks(AbstractCapability[TurnDeps]):
             params = request_context.model_request_parameters
             request_context.model_request_parameters = replace(
                 params, function_tools=[replace(t, strict=False) for t in params.function_tools])
+        ctx.deps.runner.check_context(request_context)
         return request_context
 
     async def on_model_request_error(self, ctx, *, request_context, error):
@@ -403,8 +488,10 @@ class TurnRunner:
         # A widget session's outcome: the edits that stacked on its preview this
         # turn, and the handoff the model asked for.
         self.widget_edits = 0
+        self.widget_edit_names: list[str] = []   # the commands of those edits, in order
         self.handoff_info: dict | None = None
         self.limit_reached = False
+        self._reply_text = False   # the turn sent the pane a reply's text
 
     # ---- cancellation ------------------------------------------------------------------------------
 
@@ -439,9 +526,9 @@ class TurnRunner:
         else:
             user_prompt = prompt
         messages: list[ModelMessage] = before
-        settings = self._provider.model_settings(s.settings, strict=s.strict)
+        settings = self._provider.model_settings(s.settings, strict=s.strict, role=self.role)
         if s.widget is not None:
-            limits = UsageLimits(request_limit=WIDGET_MAX_REQUESTS, tool_calls_limit=WIDGET_MAX_TOOL_CALLS)
+            limits = UsageLimits(request_limit=s.widget_max_requests, tool_calls_limit=WIDGET_MAX_TOOL_CALLS)
             settings = {**settings, "max_tokens": min(int(settings.get("max_tokens") or WIDGET_MAX_TOKENS),
                                                       WIDGET_MAX_TOKENS)}
         else:
@@ -493,15 +580,19 @@ class TurnRunner:
             self._sink.fail_open_calls("Cancelled.")
             return "cancelled"
         except UsageLimitExceeded:
-            s.history = close_tool_calls(_without_unfinished_reply(self._run.all_messages()),
-                                         "Not run: the turn reached its limit of model requests.")
+            sent = _without_unfinished_reply(self._run.all_messages())
+            pending = self._unrun_commands(sent)
+            s.history = close_tool_calls(sent, "Not run: the turn reached its limit of model requests.")
             self._sink.fail_open_calls("Not run: the turn reached its limit.")
             self.limit_reached = True
             if s.widget is not None:
-                self._sink.status("limit", f"The request stopped at the widget agent's limit of {WIDGET_MAX_REQUESTS} "
-                                           f"model requests and {WIDGET_MAX_TOOL_CALLS} tool calls. Refine it, or ask "
-                                           "in the side chat.", max_requests=WIDGET_MAX_REQUESTS,
-                                  max_tool_calls=WIDGET_MAX_TOOL_CALLS)
+                # The card's reply says that the change is not finished, what it
+                # holds, and the edit that was next where the reply named one.
+                text = widget_limit_text(s.widget_max_requests, self.widget_edit_names, pending)
+                self._sink.status("limit", text, max_requests=s.widget_max_requests,
+                                  max_tool_calls=WIDGET_MAX_TOOL_CALLS, edits=list(self.widget_edit_names),
+                                  next=pending[0] if pending else None)
+                self._sink.message(("\n\n" if self._sink_has_text() else "") + text)
             else:
                 self._sink.status("limit", f"The turn stopped after {MAX_REQUESTS_PER_TURN} model requests.")
             return "max_turn_requests"
@@ -510,6 +601,17 @@ class TurnRunner:
             self._sink.fail_open_calls("Not run.")
             self._say_no_tools(model_id)
             return "end_turn"
+        except _ContextFull as exc:
+            # Nothing was sent: the turn keeps what ran, with every open call closed.
+            sent = self._run.all_messages() if self._run is not None else before
+            s.history = close_tool_calls(_without_unfinished_reply(sent),
+                                         "Not run: the conversation no longer fits the model's context.")
+            self._sink.fail_open_calls("Not run: the conversation no longer fits the model's context.")
+            self.limit_reached = True
+            self._say_context_full(model_id, exc)
+            # A limit, as a reply cut off at the output limit: the chat and the
+            # ⌘K prompt show LIMIT, not a finished turn.
+            return "max_tokens"
         except AgentError:
             self._keep_failed_turn()
             raise
@@ -535,6 +637,57 @@ class TurnRunner:
                                                     "Not run: the turn failed.")
         self._sink.fail_open_calls("Not run: the turn failed.")
 
+    def _sink_has_text(self) -> bool:
+        return self._reply_text
+
+    def _unrun_commands(self, messages: list) -> list[str]:
+        """The commands of the last reply's tool calls that have no result: what the model was about to run."""
+        answered = {getattr(p, "tool_call_id", None) for m in messages if isinstance(m, ModelRequest) for p in m.parts}
+        last = next((m for m in reversed(messages) if isinstance(m, ModelResponse)), None)
+        out = []
+        for part in (last.parts if last is not None else []):
+            if isinstance(part, ToolCallPart) and part.tool_call_id not in answered:
+                spec = self._tools.get(part.tool_name)
+                if spec is not None:
+                    out.append(spec.command.name)
+        return out
+
+    @property
+    def role(self) -> str:
+        return "widget" if self.session.widget is not None else "general"
+
+    def check_context(self, request_context: Any) -> None:
+        """Raises _ContextFull when the request would not fit the context length the server was asked for."""
+        s = self.session
+        limit_of = getattr(self._provider, "context_length", None)
+        limit = limit_of(s.settings.model, self.role) if callable(limit_of) else None
+        chars = message_chars(request_context.messages)
+        s.pending_request_chars = chars
+        if not limit:
+            return
+        if s.last_prompt_tokens is not None and chars >= s.last_request_chars:
+            estimate = s.last_prompt_tokens + (chars - s.last_request_chars) // CHARS_PER_TOKEN_ADDED
+        else:
+            tools = request_context.model_request_parameters.function_tools
+            tool_chars = sum(len(t.name) + len(t.description or "") + len(json.dumps(t.parameters_json_schema))
+                             for t in tools)
+            estimate = (chars + tool_chars) // CHARS_PER_TOKEN_FIRST
+        if estimate + min(CONTEXT_RESERVE_MAX, limit // 8) > limit:
+            raise _ContextFull(estimate, limit)
+
+    def _say_context_full(self, model_id: str, exc: _ContextFull) -> None:
+        limit = exc.limit
+        where = ("the widget agent's settings" if self.role == "widget"
+                 else "caliper-agent's command line (--context-length)")
+        kv = (getattr(self._provider, "native", None) or {}).get("kv_bytes_per_token")
+        cost = (f"; {2 * limit:,} tokens would take about {limit * kv / 1e9:.1f} GB more memory for this model"
+                if isinstance(kv, int) and kv > 0 else ", which takes more memory")
+        start = "Close the prompt and ask again" if self.role == "widget" else "Start a new chat"
+        text = (f"The conversation no longer fits the model's context of {limit:,} tokens, so the next request "
+                f"was not sent. {start}, or raise the context length in {where}{cost}.")
+        self._sink.status("context_full", text, model=model_id, context_length=limit, estimate=exc.estimate)
+        self._sink.message(text)
+
     def _say_no_tools(self, model_id: str) -> None:
         text = (f"The model {model_id} cannot call tools, so it cannot drive Caliper. "
                 "Choose a model that supports tool calling.")
@@ -549,6 +702,7 @@ class TurnRunner:
             part = event.part
             if isinstance(part, TextPart):
                 if part.content:
+                    self._reply_text = True
                     sink.message(part.content)
             elif isinstance(part, ThinkingPart):
                 if part.content:
@@ -560,6 +714,7 @@ class TurnRunner:
         elif isinstance(event, PartDeltaEvent):
             delta = event.delta
             if isinstance(delta, TextPartDelta) and delta.content_delta:
+                self._reply_text = True
                 sink.message(delta.content_delta)
             elif isinstance(delta, ThinkingPartDelta) and delta.content_delta:
                 sink.thought(delta.content_delta)
@@ -568,6 +723,10 @@ class TurnRunner:
         """Accounts for a finished reply and says whether the turn stops before its tools."""
         counts = usage_counts(response)
         self._add_usage(counts, response.model_name or model_id)
+        if counts["input_tokens"] > 0:
+            # What the server counted for the request this reply answers.
+            self.session.last_prompt_tokens = counts["input_tokens"]
+            self.session.last_request_chars = self.session.pending_request_chars
         details = response.provider_details or {}
         if response.finish_reason == "content_filter":
             self._sink.fail_open_calls("Not run: the model declined the request.")
@@ -754,6 +913,7 @@ class TurnRunner:
         if out.ok and edit and isinstance(out.result, dict) and out.result.get("applied") is True \
                 and out.result.get("diff"):
             self.widget_edits += 1
+            self.widget_edit_names.append(command.name)
         await self._report(call_id, out, before, edit)
         text = scrub(out.text)
         if not out.ok:

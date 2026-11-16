@@ -61,6 +61,37 @@ caliper_builder::ContextBundle SessionWidgetSession::bundle(const WidgetTarget& 
 
 // ---- names ------------------------------------------------------------------------------
 
+std::string widget_plain_reply(std::string text) {
+    auto word = [](char c) { return std::isalnum((unsigned char)c) != 0; };
+    for (const std::string mark : {"**", "__", "`", "*", "_"}) {
+        size_t from = 0;
+        for (;;) {
+            const size_t open = text.find(mark, from);
+            if (open == std::string::npos) break;
+            const size_t inner = open + mark.size();
+            // An opening mark: not after a word's letter, and before a non-space.
+            if ((open > 0 && word(text[open - 1])) || inner >= text.size() || std::isspace((unsigned char)text[inner])) {
+                from = open + 1;
+                continue;
+            }
+            size_t close = text.find(mark, inner + 1);
+            while (close != std::string::npos) {
+                const size_t after = close + mark.size();
+                if (!std::isspace((unsigned char)text[close - 1]) && (after >= text.size() || !word(text[after]))) break;
+                close = text.find(mark, close + 1);
+            }
+            if (close == std::string::npos) {
+                from = open + 1;
+                continue;
+            }
+            text.erase(close, mark.size());
+            text.erase(open, mark.size());
+            from = close - mark.size();
+        }
+    }
+    return text;
+}
+
 const char* widget_state_name(WidgetState state) {
     switch (state) {
         case WidgetState::idle: return "idle";
@@ -349,7 +380,9 @@ void WidgetSurface::on_agent(const WidgetAgentEvent& e) {
 
 void WidgetSurface::finish_turn(const WidgetAgentEvent& e) {
     if (e.stop_reason == "cancelled") return;   // the surface left the turn already
-    reply_ = trimmed(reply_);
+    turn_input_tokens_ = e.input_tokens;
+    turn_output_tokens_ = e.output_tokens;
+    reply_ = widget_plain_reply(trimmed(reply_));
     if (!conversation_.empty()) conversation_.back().reply = reply_;
     progress_.clear();
     if (e.handoff) {
@@ -726,7 +759,9 @@ std::vector<WidgetAction> WidgetSurface::row_actions() const {
 InlineWidget::InlineWidget(Options o)
     : session_(std::make_unique<SessionWidgetSession>(*o.session, std::move(o.busy))),
       agent_(std::move(o.agent)),
-      surface_(std::make_unique<WidgetSurface>(*session_, *agent_, std::move(o.hooks))) {}
+      surface_(std::make_unique<WidgetSurface>(*session_, *agent_, std::move(o.hooks))) {
+    session_->bundle_options = o.bundle;
+}
 
 InlineWidget::~InlineWidget() {
     surface_.reset();   // discards an open preview and closes the session first
@@ -1026,9 +1061,11 @@ std::string WidgetSurface::reply_body() const {
 int WidgetSurface::reply_lines(float card_width, bool row) const {
     // An answer without a change is the card's content: its reply wraps over
     // up to six lines in a panel and four under a row, elided past them, with
-    // Text for the whole of it. Otherwise the reply is one elided line.
+    // Text for the whole of it. So does the reply of a turn cut at its limit,
+    // which says that the change is not finished. Otherwise the reply is one
+    // elided line.
     reply_overflow_ = false;
-    if (!look_ || state_ != WidgetState::preview || edits_ > 0 || reply_.empty()) return 1;
+    if (!look_ || state_ != WidgetState::preview || (edits_ > 0 && !limit_) || reply_.empty()) return 1;
     const SpecLook& L = *look_;
     const float w = std::max(40.0f, card_width);
     ImFont* f = L.ui ? L.ui : ImGui::GetFont();

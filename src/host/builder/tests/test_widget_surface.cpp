@@ -222,6 +222,21 @@ TEST_CASE("widget surface: Accept commits the preview as one undo step journaled
     CHECK(r.surface->state() == WidgetState::idle);
 }
 
+TEST_CASE("widget surface: a reply's Markdown emphasis shows as plain text") {
+    // A local model answered "Changed the heatmap colormap from magma to the
+    // diverging **rdbu** colormap." where the prompt asks for one plain sentence;
+    // the surface draws plain text, so the marks showed as they were.
+    Rig r("markdown", script_of({edit_turn({{"options", {{"y_log", false}}}},
+                                           "Set `y_log` to **false**, so the *y axis* is __linear__.")}));
+    r.ask("Use a linear y axis");
+    r.run(800);
+    REQUIRE(r.surface->state() == WidgetState::preview);
+    CHECK(r.surface->reply() == "Set y_log to false, so the y axis is linear.");
+    // Asterisks and underscores that are not emphasis stay.
+    CHECK(widget_plain_reply("2 * 3 = 6, and snake_case_names stay") == "2 * 3 = 6, and snake_case_names stay");
+    CHECK(widget_plain_reply("**bold** and `code`") == "bold and code");
+}
+
 TEST_CASE("widget surface: Reject and Escape discard the preview and leave no trace") {
     Rig r("reject", script_of({linear_turn(), linear_turn()}));
     r.ask("Use a linear y axis");
@@ -574,6 +589,48 @@ TEST_CASE("widget surface: InlineWidget, the page's one object, owns the session
     CHECK(s->preview(preview).error);
     CHECK(s->open_spec()->text == before);
     s->close();
+}
+
+TEST_CASE("widget surface: InlineWidget sizes the context bundle to the model's context length and vision") {
+    // The app gives the widget agent's settings to the bundle (spec_page.cpp):
+    // a small context length cuts parts, and a model without vision gets no render.
+    auto bundle_of = [](const std::string& name, caliper_builder::ContextBundleOptions bundle) {
+        const std::string root = fresh_dir("widget-inline-" + name);
+        auto s = dashboard_workspace(root + "/ws", root + "/data");
+        auto t = std::chrono::steady_clock::now();
+        InlineWidget::Options o;
+        o.session = s.get();
+        o.bundle = bundle;
+        auto agent = std::make_unique<ScriptedWidgetAgent>(
+            script_of({linear_turn()}), [&s](caliper_builder::CommandInvocation inv) { return s->invoke(std::move(inv)); },
+            [&t] { return t; });
+        ScriptedWidgetAgent* seen = agent.get();
+        o.agent = std::move(agent);
+        o.hooks.now = [&t] { return t; };
+        std::pair<std::vector<std::string>, std::string> out;
+        {
+            InlineWidget w(std::move(o));
+            REQUIRE(w.surface().open(WidgetTarget::for_panel("curves")));
+            w.surface().set_text("Use a linear y axis");
+            w.surface().submit();
+            out.first = w.surface().bundle_cuts();
+            REQUIRE(seen->contexts().size() == 1);
+            out.second = seen->contexts()[0].dump();
+            w.surface().close();
+        }
+        s->close();
+        return out;
+    };
+    caliper_builder::ContextBundleOptions whole;
+    const auto [whole_cuts, whole_text] = bundle_of("whole", whole);
+    CHECK(whole_cuts.empty());
+    caliper_builder::ContextBundleOptions small;
+    small.context_tokens = 1200;   // a quarter is 300 tokens
+    small.vision = false;
+    const auto [small_cuts, small_text] = bundle_of("small", small);
+    CHECK_FALSE(small_cuts.empty());
+    CHECK(small_text.size() < whole_text.size());
+    CHECK(small_text.find("\"image\"") == std::string::npos);
 }
 
 TEST_CASE("widget surface: the agent's thoughts show as the progress line, and a model is chosen from the row") {

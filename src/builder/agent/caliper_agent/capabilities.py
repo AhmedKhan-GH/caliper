@@ -56,6 +56,9 @@ DEFAULT_CONTEXT_LENGTH = 8192
 MAX_CONTEXT_LENGTH = 100_000_000
 CAPABILITY_NAMES = ("tools", "vision", "context_length")
 QUIRK_KEYS = ("strict", "max_tokens_field", "reasoning_field", "streamed_arguments")
+# What the probe learned of the model's memory: the bytes of context cache one
+# token takes, from an Ollama server's model metadata (probe.py).
+FACT_KEYS = ("kv_bytes_per_token",)
 
 
 class CacheError(ValueError):
@@ -77,6 +80,10 @@ def _clean_quirks(doc: Any) -> dict:
     for key in QUIRK_KEYS:
         value = doc.get(key)
         if isinstance(value, bool) or (isinstance(value, str) and len(value) <= 32):
+            out[key] = value
+    for key in FACT_KEYS:
+        value = doc.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and 0 < value < (1 << 30):
             out[key] = value
     return out
 

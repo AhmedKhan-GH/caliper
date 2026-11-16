@@ -49,7 +49,7 @@ class OneModel:
     def model(self, model_id: str):
         return self._model
 
-    def model_settings(self, settings: Settings, *, strict: bool) -> dict:
+    def model_settings(self, settings: Settings, *, strict: bool, role: str = "general") -> dict:
         return {}
 
     def capabilities(self, model_id: str) -> Capabilities:

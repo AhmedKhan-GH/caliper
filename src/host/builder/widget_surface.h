@@ -145,6 +145,12 @@ public:
 enum class WidgetState { idle, prompt, running, preview, applied, declined, handoff, unavailable, conflict, failed };
 const char* widget_state_name(WidgetState state);
 
+// The agent's reply as the surface draws it, plain: Markdown emphasis and code
+// marks around words (**bold**, __bold__, *em*, _em_, `code`) are taken out,
+// since the surface draws text as it is; a mark that wraps no word, such as
+// the asterisk of "2 * 3" or the underscores of snake_case, stays.
+std::string widget_plain_reply(std::string text);
+
 // The actions a state offers, in their order on the surface.
 enum class WidgetAction { accept, reject, refine, diff, ask_in_chat, cancel, retry, rephrase, model, setup, close, text };
 const char* widget_action_label(WidgetAction action);   // the noun on the surface
@@ -235,6 +241,10 @@ public:
     bool showing_full_diff() const { return show_full_diff_; }
     int edits() const { return edits_; }
     bool limit() const { return limit_; }
+    // The last turn's tokens as the agent reported them: the input of each
+    // model request and the output of all; empty before a turn ends.
+    const std::vector<long long>& turn_input_tokens() const { return turn_input_tokens_; }
+    long long turn_output_tokens() const { return turn_output_tokens_; }
     const std::optional<WidgetHandoff>& handoff() const { return handoff_; }
     const caliper_builder::Error& error() const { return error_; }
     const std::vector<WidgetExchange>& conversation() const { return conversation_; }
@@ -309,6 +319,8 @@ private:
     std::vector<std::string> bundle_cuts_;
     int edits_ = 0;
     bool limit_ = false;
+    std::vector<long long> turn_input_tokens_;   // the last turn's, per model request
+    long long turn_output_tokens_ = 0;
     bool show_full_diff_ = false;
     bool session_open_ = false;     // the agent has a session on preview_
     bool fresh_session_ = false;    // the next submit starts a new agent session
@@ -356,6 +368,9 @@ public:
         std::function<bool()> busy;              // AppSession::worker_busy()
         std::unique_ptr<WidgetAgent> agent;
         WidgetSurface::Hooks hooks;
+        // The context bundle's sizing: the model's context length and whether
+        // it reads images, from the widget agent's settings.
+        caliper_builder::ContextBundleOptions bundle;
     };
     explicit InlineWidget(Options options);
     ~InlineWidget();

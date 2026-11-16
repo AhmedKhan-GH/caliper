@@ -30,6 +30,7 @@ Caliper starts the agent as a child process and speaks ACP version 1 on its stan
 | `--provider claude\|openai-compatible`, `--base-url <url>`, `--model <id>`, `--effort <level>` | Where model requests go, and the defaults of a session in the general role |
 | `--cache-dir <path>` | The folder of the capability cache that `caliper-agent probe` writes; the agent reads its answer for the model at start |
 | `--model-tools yes\|no`, `--model-vision yes\|no`, `--context-length <tokens>` | What the model can do, when Caliper knows it; each wins over the cache |
+| `--widget-requests <n>` | The model requests a widget prompt may make, from 1 to 20; 6 by default (see Limits below) |
 
 The Claude API key reaches the agent in `ANTHROPIC_API_KEY`, and a key for an OpenAI-compatible server in
 `CALIPER_MODEL_API_KEY`, never in its arguments. `-I` keeps the workspace folder off Python's import path.
@@ -80,8 +81,13 @@ it when the person picks a model:
 
 For an OpenAI-compatible server it lists the server's models, makes one streamed request that asks the model to call a
 tool with fixed arguments and one that asks it to name the colour of a small PNG, each with at most 1,024 output
-tokens and 60 seconds, and reads the context length where the server reports it. For Claude it reads the Models API
-and makes no request that costs tokens. The key comes from the environment, as for the agent.
+tokens and 60 seconds, and reads the context length where the server reports it. For a server on this machine it also
+asks Ollama's `POST /api/show` for the model's metadata, which loads nothing, and keeps the bytes of context cache one
+token takes as the quirk `kv_bytes_per_token`; a server that is not Ollama answers 404 and nothing is kept. For the
+Ollama preset the two test requests go to Ollama's own chat API with the preset's context length, as the agent's do
+(see [Ollama's own chat API](#ollamas-own-chat-api)), and that context length is the answer, with the source
+`preset`. For Claude it reads the Models API and makes no request that costs tokens. The key comes from the
+environment, as for the agent.
 
 | Option | Meaning |
 |---|---|
@@ -95,9 +101,9 @@ and makes no request that costs tokens. The key comes from the environment, as f
 | Field | Meaning |
 |---|---|
 | `models` | The server's models, or `null` when it lists none or the answer came from the cache |
-| `capabilities` | `tools`, `vision` and `context_length`, each `{"value", "source", "detail"}`: what the agent will assume, with `source` one of `probe`, `server`, `known`, `override`, `default` and `unknown` |
+| `capabilities` | `tools`, `vision` and `context_length`, each `{"value", "source", "detail"}`: what the agent will assume, with `source` one of `probe`, `server`, `known`, `preset`, `override`, `default` and `unknown` |
 | `can_drive_caliper` | `false` when the model cannot call tools |
-| `probe`, `overrides`, `quirks` | The cached probe answers, the person's overrides, and what the server needed (`strict`, `max_tokens_field`) or showed (`reasoning_field`, `streamed_arguments`) |
+| `probe`, `overrides`, `quirks` | The cached probe answers, the person's overrides, and what the server needed (`strict`, `max_tokens_field`) or showed (`reasoning_field`, `streamed_arguments`, and `kv_bytes_per_token` from Ollama's metadata) |
 | `probed_at`, `from_cache`, `stale` | When the probe ran, and whether this answer came from the cache |
 | `errors`, `warnings` | Why an answer is unknown (such as `probe.unreachable`, `probe.key_rejected`, `probe.timeout`, or `probe.cut_off` for a reply that reached the output limit first), and notes such as a context length below 8,192 tokens |
 
@@ -120,6 +126,30 @@ gives to `build_context_bundle()` as the context length and whether to send a re
 
 A model without vision gets no image and no `panel.render`. When the context length is known, a request asks for at
 most half of it as output.
+
+## Ollama's own chat API
+
+Ollama's OpenAI-compatible endpoint takes no context length: it ignores `options.num_ctx`, so Ollama loads the model at
+the context length it chooses itself, which for a model of 262,144 tokens of context can take more than 10 GB of
+memory for the context cache alone. The Ollama preset therefore sends its chat requests to Ollama's own `/api/chat`,
+each with `options.num_ctx` and a `keep_alive` of 60 seconds, so the model is loaded with that context length and
+unloaded a minute after its last request. The list of models still comes from `/v1/models`. Every other preset, LM
+Studio and Custom included, stays on the OpenAI-compatible endpoint.
+
+| Role | Context length (`num_ctx`) | The person's setting |
+|---|---|---|
+| The widget agent (⌘K) | 16,384 tokens | Context length in the widget agent's settings (an override in the cache), or `--context-length` |
+| The general role (the side chat's `caliper-agent`) | 32,768 tokens | `--context-length` on its command line |
+
+The defaults are what one request of each role costs: the widget agent's first request, with its ten tools, the
+context bundle and the render, takes about 7,000 tokens before the model's reply, and the general role's, with every
+command of the table as a tool, about 11,000, growing with each tool result. Where the agent chose the context length,
+it never lets the server cut a request: before each model request it estimates the request from the prompt tokens the
+server counted for the last one, and when the request would leave less than an eighth of the context (at most 4,096
+tokens) for the reply, it sends nothing and the turn ends with the stop reason `max_tokens`, which Caliper shows as
+LIMIT, and a message, with the status `context_full`, that the conversation no longer fits the model's context and that
+the person can start again or raise the context length.
+For a server whose context length the agent did not choose, nothing is checked.
 
 ## Opening a widget session
 
@@ -248,9 +278,14 @@ with a `kind` (`build_from_scratch`, `loader`, `project_code`, `explanation`, `a
 one sentence. The prompt ends at once with `end_turn`, the `handoff` field is set, and a thought with
 `_meta.caliper.status` `handoff` carries the same kind and sentence.
 
-**Limits.** A prompt makes at most 3 model requests and 8 tool calls, and each request asks for at most 8,000 output
-tokens. A prompt that reaches a limit ends with `max_turn_requests` and a thought whose `_meta.caliper.status` is
-`limit`.
+**Limits.** A prompt makes at most 6 model requests and 8 tool calls, and each request asks for at most 8,000 output
+tokens; `--widget-requests <n>` sets another number of requests, from 1 to 20. A prompt that reaches a limit ends with
+`max_turn_requests`, a thought whose `_meta.caliper.status` is `limit` (with `edits`, the commands of the edits made,
+and `next`, the command of the first call that did not run, or `null`), and a reply that says the change is not
+finished, which edits the preview holds and that Accept applies them or Refine lets the agent finish, such as "The
+change is not finished: the agent stopped at its limit of 6 model requests after 2 edits (source.add, panel.create).
+Accept applies the edits shown, or Refine lets it finish." Caliper shows the reply in full on the card, under LIMIT and
+the count of edits.
 
 ## Closing
 
@@ -363,7 +398,7 @@ of the work area's height below the work area's top, and its height is its conte
 | Model | A field, and as choices the Claude preset's four models or the server's list after **List** (`caliper-agent probe --list-models`) |
 | Effort | Claude only: low, medium, high, xhigh and max, which each of its four models takes |
 | Key | Set or Not set; a password field with Save, or Replace and Remove; no row for Ollama and LM Studio, nor for Custom before its address is valid |
-| Capabilities | Tool calling, vision and the context length with where each came from (probe, server, known, override, assumed), Yes, No and Auto for the person's override (`caliper-agent probe --set`), and **Probe** (`--refresh`) |
+| Capabilities | Tool calling, vision and the context length with where each came from (probe, server, known, preset, override, assumed), Yes, No and Auto for the person's override (`caliper-agent probe --set`), **Probe** (`--refresh`), and the tag Context cache about N GB when a server on this machine would hold a context cache of 4 GB or more |
 | Note | Shared GPU, while a live run is attached and the base URL is a loopback address |
 
 The settings never show a key or read one back for themselves. They call `KeyStore::set()`, `has()` and `remove()`,

@@ -234,6 +234,13 @@ struct SpecPage::Impl {
                 widget_api_file.clear();
             }
             widget_revision = settings ? settings->revision() : -1;
+            if (settings) {
+                // The bundle takes at most a quarter of the model's context
+                // length, and no render for a model that reads no images.
+                const AgentCapabilities caps = settings->capabilities();
+                if (caps.context && *caps.context > 0) o.bundle.context_tokens = (std::uint64_t)*caps.context;
+                if (caps.vision && !*caps.vision) o.bundle.vision = false;
+            }
             o.hooks.open_settings = [this] {
                 if (settings) settings->set_open(true);
             };
@@ -772,6 +779,28 @@ std::string SpecPage::widget_state() const {
     return impl_->widget ? widget_state_name(impl_->widget->surface().state()) : "idle";
 }
 
+std::string SpecPage::widget_facts() const {
+    if (!impl_->widget) return {};
+    const WidgetSurface& w = impl_->widget->surface();
+    auto one_line = [](std::string t, size_t most) {
+        for (char& c : t)
+            if (c == '\n' || c == '\r') c = ' ';
+        if (t.size() > most) t = t.substr(0, most) + "...";
+        return t;
+    };
+    std::string out = "tag " + (w.tag().empty() ? std::string("none") : w.tag()) + ", " + std::to_string(w.edits()) +
+                      (w.edits() == 1 ? " edit" : " edits");
+    if (!w.model_label().empty()) out += ", model " + w.model_label();
+    if (w.error()) out += ", error " + w.error().code + ": " + one_line(w.error().message, 200);
+    if (!w.turn_input_tokens().empty()) {
+        out += ", tokens in";
+        for (long long t : w.turn_input_tokens()) out += " " + std::to_string(t);
+        out += ", out " + std::to_string(w.turn_output_tokens());
+    }
+    if (!w.reply().empty()) out += ", reply " + one_line(w.reply(), 200);
+    return out;
+}
+
 std::string SpecPage::selection_json() const {
     const SpecSelection& sel = impl_->runtime->selection();
     if (sel.empty()) return {};
@@ -892,6 +921,7 @@ void SpecPage::set_agent_settings(AgentSettings*) {}
 bool SpecPage::widget_action(const std::string&) { return false; }
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
 std::string SpecPage::widget_state() const { return "idle"; }
+std::string SpecPage::widget_facts() const { return {}; }
 std::string SpecPage::selection_json() const { return {}; }
 void SpecPage::set_panel_overlay(PanelOverlay) {}
 const std::string& SpecPage::focused_panel() const { return impl_->focused; }
