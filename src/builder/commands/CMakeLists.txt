@@ -28,4 +28,5 @@ caliper_builder_add_tests(commands
         tests/test_registry.cpp
         tests/test_queue.cpp
         tests/test_command_table.cpp
+        tests/test_worked.cpp
     LIBS caliper_builder_commands caliper_builder_catalog)

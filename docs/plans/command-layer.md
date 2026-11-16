@@ -94,12 +94,14 @@ No handler throws across the registry. An exception that escapes a handler becom
 
 ### Errors common to every command
 
+The registry checks an invocation in this order and answers the first fault: the invocation itself, the command's name, the arguments, whether a handler is bound, the thread, and then the approval policy. The arguments come before the handler, so that a caller learns that its call is malformed even from an app that has no handler for the command yet.
+
 | Code | When |
 |---|---|
 | `command.invalid_invocation` | The invocation itself is malformed: a missing name, a bad id, group or merge key, an unknown origin or an unknown field. |
 | `command.unknown` | No command has that name. |
-| `command.not_bound` | The command is in the table but no handler is bound yet. |
 | `command.invalid_args` | The arguments fail the schema, or are nested too deeply or hold too many values. `where` names the value. |
+| `command.not_bound` | The command is in the table but no handler is bound yet. |
 | `command.wrong_thread` | A `frame_thread` command was invoked directly on a thread other than the frame thread. |
 | `command.reentrant` | A handler invoked a command. Handlers call library functions, never commands. |
 | `command.needs_approval` | The approval policy asked; the error carries the approval id. |
@@ -256,7 +258,7 @@ A slider drag sends many commands that should undo as one. An invocation with a 
 - the last command of the record ran less than 1000 ms ago (configurable);
 - the record holds fewer than 4096 merged commands.
 
-A merged record keeps the `undo` of its first command and takes the `redo` of its newest one, so a long drag costs one record, not one per frame. This is correct only when every command of the run sets the same thing absolutely, which is what a merge key promises; a command that changes something relatively (adds 0.1) must not carry one.
+A merged record keeps the `undo` of its first command and takes the `redo` of its newest one, so a long drag costs one record, not one per frame. This is correct only when every command of the run sets the same thing absolutely, which is what a merge key promises; a command that changes something relatively (adds 0.1) must not carry one. For the same reason, the check that an undo makes against changes from outside (see below) must, for a command meant to merge, test only what the whole run leaves unchanged, such as that the panel still exists, and not the value its own command set, because the kept undo belongs to the first command of the run.
 
 ### Redo
 
@@ -317,7 +319,7 @@ Each line is written and flushed before the command's result is returned, so a c
 
 ### Rotation and sequence numbers
 
-When the file passes 16 MiB, it is renamed `commands.1.jsonl`, older files shift up to `commands.4.jsonl`, the oldest is deleted, and a new `commands.jsonl` begins. Both bounds are options. When the journal is opened, it reads the end of the newest file that has a line (the current file, else `commands.1.jsonl`) to find the last `seq`, and continues from it. If the current file does not end with a newline, because a write was cut short, it first writes one, so the cut line stays a damaged line of its own and the next line is whole.
+When the next line would take the file past 16 MiB, the file is renamed `commands.1.jsonl`, older files shift up to `commands.4.jsonl`, the oldest is deleted, and a new `commands.jsonl` begins. Both bounds are options. When the journal is opened, it reads the end of the newest file that has a line (the current file, else `commands.1.jsonl`) to find the last `seq`, and continues from it. If the current file does not end with a newline, because a write was cut short, it first writes one, so the cut line stays a damaged line of its own and the next line is whole.
 
 ### Reading and replay
 
@@ -387,6 +389,7 @@ These are additions to, or fixes of, sprint 3 contracts section 7, each the smal
 - **A failed undo drops the older steps.** Older steps assume the failed one was undone first; keeping them would let a later undo apply to a state it was not recorded against.
 - **Commands that cannot be undone are passed by, not barriers.** This is how editors treat a save, and it keeps undo useful after a run or a save.
 - **Replay applies the steps in effect instead of running undo records.** It needs nothing but the journal and the apply function, and it is exact because the history is a stack.
+- **A command meant to merge checks only what a whole run leaves unchanged.** The history keeps the first undo of a merged run, so a check against the value the first command set would report a conflict after any drag.
 - **Journaled invocations are those that passed validation.** A refused invocation ran nothing, and its arguments may be malformed or hostile.
 - **One lock for the registry in this phase.** It makes ordering and the history simple; running long read-only commands off the frame thread is left for the wiring.
 - **No approval through commands or endpoints.** Only the app's UI decides, so an agent cannot approve itself.
