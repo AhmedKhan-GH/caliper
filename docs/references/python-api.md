@@ -569,6 +569,189 @@ widget.data_view = {"index": {"layer": 0, "sequence": 0}, "reduce": {"head": "ma
 caliper.set_data_view("attention", {"index": {"layer": 0, "sequence": 2, "head": 1}})
 ```
 
+## Controls
+
+Controls let the viewers of `caliper.serve()` reach back into the running
+script: pause, resume and single-step its training loop, change the
+parameters it registered, and run the actions it registered. Linked
+selection makes a selection in one view highlight the same items in the
+other views. Both travel on the stream as messages of wire protocol 3.1
+([Controls](wire-protocol.md#controls) and
+[Linked selection](wire-protocol.md#linked-selection)), so they work while a
+notebook cell runs, when the kernel cannot read widget messages.
+[Control a running script](../guides/control-a-running-script.md) uses them in
+a training loop. Every call also works without a server: parameters keep their
+values, `step()` returns at once, and an action can be called from Python.
+
+| Call | Returns | Does |
+|---|---|---|
+| `step(step=None)` | `None` | The checkpoint of the training loop: sets changed parameter values, runs requested actions, waits while the run is paused |
+| `pause()` | `bool` | Pauses the run at the next `step()` |
+| `param(name, value, *, min=None, max=None, log=False, choices=None, help=None)` | `Param` | A value that viewers can change |
+| `action(name, fn=None, *, help=None)` | `Action` | A function that viewers can run; also a decorator |
+| `items(space, details=None)` | `ItemSpace` | An item space for linked selection, with optional details |
+| `controls(*, height=160)` | widget | The notebook panel of run controls, parameters and actions |
+
+### step
+
+```python
+caliper.step(step=None)
+```
+
+The checkpoint of the training loop. Call it once per step, on the training
+thread, between two steps. It is the only place where the controls change
+the script: there it sets the parameter values that viewers changed, runs the
+actions they asked for in the order they asked, and waits while a viewer has
+paused the run. `step` is the step's number, which viewers show where the run
+paused; `None` counts the calls.
+
+A waiting `step()` returns when a viewer resumes the run or asks for a number
+of single steps, when the server closes, or when no connection that may
+control has been open for 10 seconds, which a page reload stays well within.
+While it waits, it still sets values and runs actions as they arrive. Ctrl-C,
+or a notebook's interrupt, ends the wait with `KeyboardInterrupt`, and the run
+is no longer paused afterwards. With nothing waiting, a call costs about
+22 ns on an Apple silicon Mac: it counts the step and reads one flag.
+
+Before the script's first `step()`, viewers can change parameters, which then
+take effect at once, but cannot pause the run, and actions wait for the first
+checkpoint.
+
+### pause
+
+```python
+caliper.pause()
+```
+
+Pause the run at the next `step()`, as a viewer's Pause button does, for
+example when the loss stops being finite. A viewer resumes it. Returns `True`.
+When no stream server runs, no viewer could resume the run, so it returns
+`False` with a `RuntimeWarning` and does nothing. When a server runs but no
+connection may control it, it warns that the run resumes after 10 seconds.
+
+### param
+
+```python
+lr = caliper.param("lr", 1e-3, min=1e-5, max=1e-1, log=True, help="learning rate")
+for batch in loader:
+    caliper.step()
+    for group in opt.param_groups:
+        group["lr"] = lr.value
+```
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | `str` | | 1 to 63 bytes. Registering a name again replaces the parameter |
+| `value` | see below | | The first value; its type sets the parameter's type |
+| `min`, `max` | number | `None` | The range of a number or an integer; a value from a viewer is clamped to it |
+| `log` | `bool` | `False` | Draw the slider on a log scale; needs `min` greater than 0 and `max` |
+| `choices` | list of `str` | `None` | The choices of a `str` value, 1 to 64 |
+| `help` | `str` | `None` | A tooltip, at most 1,024 bytes |
+
+| `value` | Type | A viewer shows |
+|---|---|---|
+| `bool` | `boolean` | A toggle |
+| `int` | `integer` | A slider or a field |
+| `float` | `number` | A slider or a field |
+| `str`, with `choices` | `choice` | A menu |
+
+A value from a viewer is checked and clamped: a number or an integer to `min`
+and `max`, an integer must be a whole number, and a choice must be one of
+`choices`. It reaches `value` at the next `step()`, or at once before the
+script's first `step()`. When a viewer sends several values before a `step()`,
+the last one wins. A script has at most 64 parameters. `param()` returns a
+`caliper.Param`:
+
+| Member | Meaning |
+|---|---|
+| `value` | The current value, to read in the loop. It changes only in `step()`, or at once before the first `step()` |
+| `pending` | A value from a viewer that `value` takes at the next `step()`, or `None` |
+| `set(v)` | Set the value from the script, at once and for every viewer, checked and clamped like a viewer's value; returns the value set, or raises `ValueError` |
+| `remove()` | Take the parameter away from the viewers; `value` keeps its last value |
+| `name`, `type`, `min`, `max`, `log`, `choices`, `help` | The registration |
+
+### action
+
+```python
+@caliper.action("save checkpoint", help="saves the model's weights")
+def save_checkpoint():
+    torch.save(model.state_dict(), "checkpoint.pt")
+    return "saved checkpoint.pt"
+```
+
+`caliper.action(name, fn)` registers `fn`, a function without arguments, and
+`caliper.action(name)` is the same as a decorator. A viewer's request runs it
+at the next `step()`, on the training thread, after the parameter values are
+set. Requests run one at a time in the order they arrived, and a request for
+an action that already waits joins that run. The text of what `fn` returns
+goes back to the viewer that asked, cut to 1,024 bytes. An exception goes back
+to that viewer with its message, appears in the script as a `RuntimeWarning`,
+and does not stop the loop. A request that no `step()` has run within 10
+minutes fails with a time-out. A script has at most 64 actions, and
+registering a name again replaces the action.
+
+`action()` returns a `caliper.Action`. Calling it runs `fn` at once on the
+caller's thread, and `remove()` takes it away from the viewers.
+
+### items
+
+```python
+caliper.items("eval", details={"class": eval_labels})
+caliper.points(z, eval_labels, "embedding", classes=10, items="eval")
+caliper.show(probabilities, "predictions", items="eval")
+```
+
+An item space is a set of items numbered from 0 that several views index,
+such as the samples of an evaluation set. A view names the item space of its
+item axis with `items=`, a keyword of `show`, `points`, `series` and
+`offer`:
+
+| Call | `items="eval"` names the space of |
+|---|---|
+| `show` | Its rows: the first dimension, or the first of `dims` |
+| `points` | Its points: the point dimension |
+| `series` | Its index, the number of values appended before each value |
+| `offer` | The first dimension of each source, or the point dimension of points |
+
+`items={"sample": "eval"}` names the dimensions of `dims` instead. A histogram
+has no item axis. A selection made on an axis with an item space highlights
+the same items in every view of the session that names the space: the
+points, the rows of a heatmap, markers on a series. Without `items=`, a call
+costs what it did.
+
+`details` gives a viewer a few fields of the selected items, shown in a small
+table under the view in which the selection was made. It is a mapping
+`{field: sequence}` indexed by item id, copied to the host once, now; or a
+function `fn(ids)` that returns `{field: values}` in the order of `ids`, or
+one dict per item. The function runs on the thread `caliper.details`, never
+on the training thread, and has 2 seconds, so it must read only data that the
+loop does not change in place, such as labels or arrays the script computed
+before. Details cover the first 32 selected items and at most 16 fields, and
+each value is a number, a string of at most 256 bytes, a boolean or `None`.
+
+`items()` returns a `caliper.ItemSpace`. Its `selection` is the list of
+selected item ids, ascending, and it is current even while a cell runs.
+`select(ids)` sets the selection for every viewer, and `clear()` clears it. A
+session has at most 16 item spaces. Python code still receives each select
+event as before, through `server.on_event`, `server.events()`,
+`widget.selection` and `on_select`, and its `detail` now has `space` and
+`items` too.
+
+### controls
+
+```python
+caliper.controls(*, height=160)
+```
+
+A notebook widget, like `widget()`, with the run state and the Pause, Resume
+and Step buttons, every parameter and every action of the script, and the
+result of the last action it ran. It reads the stream directly, so it works
+while a cell runs, and it starts `serve()` when no server runs. Its traits are
+`src` and `height`. The header of every view widget also shows the run state
+and the Pause, Resume and Step buttons. A build whose browser assets lack the
+panel's module, `caliper-controls-widget.js`, warns and shows a note in its
+place.
+
 ## Inspection and test helpers
 
 These read the in-process core and raise `RuntimeError` without a `window()` or
