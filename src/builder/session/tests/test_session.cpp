@@ -452,6 +452,13 @@ TEST_CASE("a SessionHost serves the app's commands, and panel.render draws resol
     CHECK(host->renders == 1);
     REQUIRE(host->last.slots.size() == 1);
     CHECK(host->last.slots[0].tensor.shape() == std::vector<int64_t>{2, 3});
+    // A panel whose source is offline reaches the host with its resolve
+    // error, so the host draws it in that state.
+    ok(*f.s, "source.add", {{"id", "live"}, {"catalog", "live:attn"}});
+    ok(*f.s, "panel.create", {{"id", "q"}, {"primitive", "heatmap"}, {"bind", {{"values", "live"}}}});
+    CHECK(ok(*f.s, "panel.render", {{"id", "q"}})["width"] == 800);
+    CHECK(host->renders == 2);
+    CHECK(host->last.error.code == "resolve.unavailable");
 
     f.s->set_host(nullptr);
     CHECK(err(*f.s, "app.info") == "command.not_bound");

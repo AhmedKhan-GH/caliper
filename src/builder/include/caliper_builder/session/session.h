@@ -123,7 +123,9 @@ public:
     virtual CommandOutput app_launch(const std::string& id) = 0;
     // Draws one panel of the open spec off screen. The session has found the
     // panel and resolved its data; the host draws `data` and answers
-    // {"png_base64", "width", "height"} or panel.render_failed.
+    // {"png_base64", "width", "height"} or panel.render_failed. When `data`
+    // carries a resolve error, such as resolve.unavailable for a source the
+    // app serves, the host draws the panel in that state.
     virtual CommandOutput render_panel(const spec::Spec& spec, const PanelData& data, int width, int height) = 0;
     virtual CommandOutput capture_frame() = 0;
 };

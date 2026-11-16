@@ -1317,8 +1317,9 @@ struct Session::Impl {
                         std::string("The ") + (ctx.invocation.preview.empty() ? "open spec" : "preview") +
                             " has no panel " + id + ".",
                         "args.id");
+        // A resolve error goes to the host with the data, which draws it as the
+        // panel's state ("Source offline", "Missing column"), as the app shows it.
         PanelData data = resolve_panel(s, id, *store, options.resolve, &sources);
-        if (data.error) return CommandOutput::fail(data.error);
         return h->render_panel(s, data, static_cast<int>(int_arg(ctx.invocation.args, "width", 800)),
                                static_cast<int>(int_arg(ctx.invocation.args, "height", 500)));
     }
