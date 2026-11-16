@@ -14,10 +14,12 @@
 //     onEvent,      // ({ view, type, detail }) => {}, every select, pick and hover
 //     onInfo,       // (facts, view) => {}, what a header says about the view, as it changes
 //     onToggle,     // (name, on, view) => {}, a view changed a header toggle itself ('follow')
+//     augment,      // (detail, view) => detail, adds to a selection's detail before it is sent (3.1 item space)
 //     onDataView,   // (dataView) => {}, every data view the producer resolved
 //   });
 //   handle.setDataView({ index: { layer: 2 } });   // a VIEW_REQUEST
 //   handle.setToggle('follow', false);             // a header toggle of the view
+//   handle.setLink('points', [3, 9]);              // a linked selection to draw (3.1)
 //   handle.destroy();
 //
 // A selection, pick or hover goes to the producer as an EVENT on the mount's
@@ -69,7 +71,7 @@ export function preloadCaliperViews(assetBase) {
 }
 
 export async function mountCaliperViews(container, options = {}) {
-  const { src = '', view = '', kind = '', height, header = true, assetBase, onSelect, onEvent, onInfo, onToggle, onDataView } = options;
+  const { src = '', view = '', kind = '', height, header = true, assetBase, onSelect, onEvent, onInfo, onToggle, augment, onDataView } = options;
   if (!container) throw new Error('caliper-views: no container element');
   if (!navigator.gpu) throw new Error('caliper-views: this browser has no WebGPU');
 
@@ -100,6 +102,7 @@ export async function mountCaliperViews(container, options = {}) {
       },
       onInfo: (v, facts) => { if (onInfo && (!view || v === view)) onInfo(facts, v); },
       onToggle: (v, name, on) => { if (onToggle && (!view || v === view)) onToggle(name, on, v); },
+      onAugment: (v, detail) => (augment ? augment(detail, v) : null),
       print: () => {},
       printErr: (t) => console.warn('[caliper-views]', t),
     });
@@ -132,6 +135,18 @@ export async function mountCaliperViews(container, options = {}) {
       const p = module.stringToNewUTF8(String(name));
       const ok = module._caliper_views_set_toggle(p, on ? 1 : 0) === 1;
       module._free(p);
+      return ok;
+    },
+    // Draws a linked selection (3.1): the axis of the view that carries the
+    // selection's item space ('points', 'rows', 'columns' or 'steps', or '' to
+    // clear) and the selected item ids.
+    setLink(axis, items) {
+      if (destroyed) return false;
+      const a = module.stringToNewUTF8(String(axis || ''));
+      const j = module.stringToNewUTF8(JSON.stringify(Array.from(items || [])));
+      const ok = module._caliper_views_set_link(a, j) === 1;
+      module._free(a);
+      module._free(j);
       return ok;
     },
     // Says goodbye to the producer, releases the GPU and removes the canvas.

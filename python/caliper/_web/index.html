@@ -34,10 +34,13 @@
   .state[data-state="connected"] .dot { background: var(--bronze); border-color: var(--bronze); }
   .state[data-state="ended"] .dot { background: var(--rule); border-color: var(--rule); }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 16px; padding: 20px 24px 28px; }
+  .controls { display: block; padding: 20px 24px 0; }
+  .controls[hidden] { display: none; }
   .empty { margin: 0; padding: 48px 24px; text-align: center; color: var(--faint); }
   @media (max-width: 600px) {
     .bar { padding: 0 16px; gap: 12px; }
     .grid { padding: 16px; gap: 12px; }
+    .controls { padding: 16px 16px 0; }
   }
 </style>
 </head>
@@ -47,8 +50,9 @@
   <span class="script" id="script"></span>
   <span class="state" id="state" data-state="connecting" role="status"><span class="dot"></span><span class="text">connecting</span></span>
 </header>
+<caliper-controls class="controls" id="controls" hidden></caliper-controls>
 <main class="grid" id="grid"></main>
 <p class="empty" id="empty">Connecting to the stream.</p>
-<script type="module">import{connect as h}from"./caliper-view.js";var d="/v3/stream",c="token";var b={heatmap:1,image:2,points:3,series:4,histogram:5};function x(e){for(let r in b)if(b[r]===e)return r;return null}var _={maxFrameBytes:64<<20,maxMetaBytes:1<<20,maxSections:8,maxJsonDepth:16,maxEventIndices:32768,handshakeTimeoutMs:1e4,pingIntervalMs:1e4,idleTimeoutMs:3e4,seriesRetainMin:4096};function y(e,r,v){let i=new Map,u=()=>{let n=e.state,a=n==="ended"||e.session?.state==="ended",t=a?"ended":n==="open"?"connected":"connecting";r.state.dataset.state=t;let s=r.state.querySelector(".text");s&&(s.textContent=t),r.empty.textContent=a?"The stream has ended.":n==="open"?"No views yet.":"Connecting to the stream.",r.empty.hidden=i.size>0},p=()=>{let n=e.session?.script??"";r.script.textContent=n,r.script.title=n,document.title=n?`${n} \xB7 Caliper`:"Caliper",u()},g=n=>{let a=new Set(n.map(t=>t.name));for(let[t,s]of i)a.has(t)||(s.remove(),i.delete(t));for(let t of n){if(i.has(t.name))continue;let s=document.createElement("caliper-view");s.setAttribute("view",t.name);let l=x(t.kind);l&&s.setAttribute("kind",l),s.setAttribute("height","340"),v(s),i.set(t.name,s),r.grid.append(s)}u()},S=e.listen({onStatus:u,onSession:p,onViews:g});return e.connect(),p(),g(e.views),S}var M=new URLSearchParams(location.search),o=new URL(d,location.href);o.protocol=location.protocol==="https:"?"wss:":"ws:";o.search="";o.searchParams.set(c,M.get(c)??"");var f=M.get("session");f&&o.searchParams.set("session",f);var w=o.toString(),m=e=>document.getElementById(e);y(h(w),{grid:m("grid"),script:m("script"),state:m("state"),empty:m("empty")},e=>e.setAttribute("src",w));</script>
+<script type="module">import{connect as _}from"./caliper-view.js";var y="/v3/stream",p="token";var d={heatmap:1,image:2,points:3,series:4,histogram:5};function f(t){for(let n in d)if(d[n]===t)return n;return null}var R={maxFrameBytes:64<<20,maxMetaBytes:1<<20,maxSections:8,maxJsonDepth:16,maxEventIndices:32768,handshakeTimeoutMs:1e4,pingIntervalMs:1e4,idleTimeoutMs:3e4,seriesRetainMin:4096};function M(t,n,l){let i=new Map,c=()=>{let e=t.state,o=e==="ended"||t.session?.state==="ended",r=o?"ended":e==="open"?"connected":"connecting";n.state.dataset.state=r;let s=n.state.querySelector(".text");s&&(s.textContent=r),n.empty.textContent=o?"The stream has ended.":e==="open"?"No views yet.":"Connecting to the stream.",n.empty.hidden=i.size>0},g=()=>{let e=t.session?.script??"";n.script.textContent=e,n.script.title=e,document.title=e?`${e} \xB7 Caliper`:"Caliper",c()},x=e=>{let o=new Set(e.map(r=>r.name));for(let[r,s]of i)o.has(r)||(s.remove(),i.delete(r));for(let r of e){if(i.has(r.name))continue;let s=document.createElement("caliper-view");s.setAttribute("view",r.name);let b=f(r.kind);b&&s.setAttribute("kind",b),s.setAttribute("height","340"),s.setAttribute("link",""),s.setAttribute("details",""),l(s),i.set(r.name,s),n.grid.append(s)}c()},u=()=>{if(!n.controls)return;let e=t.controls,o=!!e&&(e.run.state!=="none"||e.params.length>0||e.actions.length>0);n.controls.hidden=!(t.controlAccess?.().shown&&o)};n.controls&&l(n.controls);let h=t.listen({onStatus:()=>{c(),u()},onSession:g,onViews:x,onControls:u});return t.connect(),g(),x(t.views),u(),h}var S=new URLSearchParams(location.search),m=new URL(y,location.href);m.protocol=location.protocol==="https:"?"wss:":"ws:";m.search="";m.searchParams.set(p,S.get(p)??"");var w=S.get("session");w&&m.searchParams.set("session",w);var v=m.toString(),a=t=>document.getElementById(t);M(_(v),{grid:a("grid"),controls:a("controls"),script:a("script"),state:a("state"),empty:a("empty")},t=>t.setAttribute("src",v));</script>
 </body>
 </html>
