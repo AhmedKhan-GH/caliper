@@ -144,6 +144,7 @@
 #include <optional>
 
 #include <cfloat>
+#include <cstdio>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -632,12 +633,15 @@ private:
         step_start_ = std::chrono::steady_clock::now();
     }
 
+    // The step's error once it has waited its patience, with how long it
+    // waited in frames and in seconds, so that a log says which limit stopped it.
     void patience(const std::string& why) {
-        const bool over =
-            patience_s_ > 0.0
-                ? std::chrono::duration<double>(std::chrono::steady_clock::now() - step_start_).count() > patience_s_
-                : frames_ > kPatience;
-        if (over) error_ = steps_[at_].verb + " " + steps_[at_].arg + ": " + why;
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - step_start_).count();
+        const bool over = patience_s_ > 0.0 ? seconds > patience_s_ : frames_ > kPatience;
+        if (!over) return;
+        char spent[64];
+        std::snprintf(spent, sizeof spent, " (after %d frames, %.1f s)", frames_, seconds);
+        error_ = steps_[at_].verb + " " + steps_[at_].arg + ": " + why + spent;
     }
 
     // As patience(), for at most `seconds` of wall time since the step began
