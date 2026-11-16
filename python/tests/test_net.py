@@ -588,6 +588,29 @@ def test_series_backfill_for_a_late_subscriber(server, device):
     run(go())
 
 
+@pytest.mark.parametrize("device", DEVICES)
+def test_flush_sends_the_last_series_values_before_the_next_tick(server, device):
+    # A loop appends a 0-d tensor at every step, and the values of the steps
+    # since the last tick wait to be gathered. caliper.flush() right after the
+    # loop, before the next tick is due, sends them without another call.
+    vals = torch.arange(200, dtype=torch.float32, device=device)
+
+    async def go():
+        async with Client(server) as c:
+            caliper.series(vals[0], name="share")
+            await c.subscribe(1, "share")
+            for v in vals[1:]:
+                caliper.series(v, name="share")
+            caliper.flush()
+            got = []
+            while sum(len(x) for x in got) < 200:
+                m = await c.expect(w.Series)
+                assert m.start == sum(len(x) for x in got)
+                got.append(m.values.array().copy())
+            assert np.array_equal(np.concatenate(got), np.arange(200, dtype=np.float32))
+    run(go())
+
+
 # ---------------------------------------------------------------------------
 # requests that fail
 # ---------------------------------------------------------------------------

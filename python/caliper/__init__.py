@@ -684,7 +684,16 @@ def flush(timeout: float = 5.0) -> int:
     """Publish every pending snapshot (polls their GPU events; not for the
     training loop). Returns how many are still pending after ``timeout``."""
     with LOCK:
-        return sum(r.ring.flush(timeout=timeout) for r in _routes if r.transport.attached())
+        return sum(r.ring.flush(timeout=timeout) for r in _routes if _has_viewer(r.transport))
+
+
+def _has_viewer(transport) -> bool:
+    """A viewer is attached to the route. The network transport's attached()
+    also says whether its next tick is due, which a flush must not wait for:
+    right after a step's view calls it is not, and the step's gathered series
+    values would wait for the next call."""
+    n = getattr(transport, "n_attached", None)
+    return n > 0 if n is not None else transport.attached()
 
 
 def spin(seconds: float | None = None) -> None:
