@@ -894,14 +894,14 @@ if(TARGET caliper_builder_session)
             add_dependencies(caliper_app_route_tests caliper caliper-mcp)
             add_test(NAME caliper_app_route COMMAND caliper_app_route_tests)
             set_tests_properties(caliper_app_route PROPERTIES LABELS "cli;builder" TIMEOUT 240
-                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>"
+                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_AGENT_OFFLINE=1"
                 SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
         endif()
         if(NOT WIN32)
             add_test(NAME caliper_app_session_hidden
                      COMMAND caliper_app_session_tests "--test-case=app session: the hidden app*")
             set_tests_properties(caliper_app_session_hidden PROPERTIES LABELS "cli;builder" TIMEOUT 240
-                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets"
+                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets;CALIPER_AGENT_OFFLINE=1"
                 SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
         endif()
     endif()
