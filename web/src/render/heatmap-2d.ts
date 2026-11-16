@@ -15,7 +15,7 @@ export function colormapInto(out: Uint8ClampedArray, data: Float32Array, lo: num
     let idx = 0;
     if (v === v) {
       let t = denom !== 0 ? f(f(v - flo) / denom) : 0;
-      if (t < 0) t = 0;
+      if (!(t >= 0)) t = 0;   // also a NaN quotient, from an infinite end or span
       else if (t > 1) t = 1;
       idx = Math.trunc(f(f(t * 255) + 0.5));
       if (idx > 255) idx = 255;

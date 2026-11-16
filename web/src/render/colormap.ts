@@ -111,12 +111,13 @@ export function paletteLut(): Uint8Array {
 /**
  * The table index of a value, as map_f32_to_rgba8 computes it: NaN is index 0,
  * otherwise clamp((v - vmin) / (vmax - vmin), 0, 1) * 255 rounded, in float32.
+ * A NaN quotient (an infinite end or span of the range) is index 0 as well.
  */
 export function lutIndex(v: number, vmin: number, vmax: number): number {
   if (Number.isNaN(v)) return 0;
   const denom = f(f(vmax) - f(vmin));
   let t = denom !== 0 ? f(f(f(v) - f(vmin)) / denom) : 0;
-  if (t < 0) t = 0;
+  if (!(t >= 0)) t = 0;
   else if (t > 1) t = 1;
   const idx = Math.trunc(f(f(t * 255) + 0.5));
   return idx < 0 ? 0 : idx > 255 ? 255 : idx;
