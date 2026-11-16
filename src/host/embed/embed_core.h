@@ -123,6 +123,9 @@ struct CaliperCore {
     // path, seq, latency, updates, drops) and no Pause or Fit button; hover
     // values and the plot stay. Every other core keeps all of them.
     bool  views_bare = false;
+    // The views' diagnostics under each header (caliper_live_views::views_debug):
+    // also on with CALIPER_VIEWS_DEBUG=1.
+    bool  views_debug = false;
 
     void log(int level, const std::string& msg) {
         if (log_fn) log_fn(userdata, level, msg.c_str());

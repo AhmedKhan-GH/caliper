@@ -12,6 +12,7 @@
 // through caliper_embed_views_draw / caliper_embed_views_destroy_all.
 // ===========================================================================
 #include "caliper/embed.h"
+#include "live/live_views_state.h"   // the views' grid, header flags and debug switch
 
 #include <algorithm>
 #include <atomic>
@@ -86,6 +87,7 @@ void caliper_core_hosted_frame(CaliperCore* core, float x, float y, float w, flo
     core->area_y = y;
     core->canvas_w = std::max(1, (int)(w * core->scale));
     core->canvas_h = std::max(1, (int)(h * core->scale));
+    caliper_live_views::layout_views(core);
     caliper_embed_views_draw(core);
     caliper_live_views_frame(core);   // typed views: points/series/histogram
     caliper_live_frame(core);         // live bookkeeping (no chrome when hosted)
@@ -266,16 +268,28 @@ void caliper_embed_views_draw(CaliperCore* core) {
             continue;
         }
 
-        if (!v.placed) place_view(core, v, img);
-        ImGui::SetNextWindowPos(ImVec2(v.pos_x, v.pos_y), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(v.size_x, v.size_y), ImGuiCond_FirstUseEver);
+        // A view of the live views (a heatmap or an image) takes its cell of
+        // their grid; any other v1.2 view tiles as it always did.
+        if (!caliper_live_views::window_before(core, v.name)) {
+            if (!v.placed) place_view(core, v, img);
+            ImGui::SetNextWindowPos(ImVec2(v.pos_x, v.pos_y), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(v.size_x, v.size_y), ImGuiCond_FirstUseEver);
+        }
+        v.placed = true;
         // Title = the view name; the ### id keeps it apart from applet windows.
         const std::string label = v.name + "###caliper.view." + v.name;
-        if (ImGui::Begin(label.c_str(), nullptr,
-                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-                             (core->views_bare ? ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                                                     ImGuiWindowFlags_NoMove : 0))) {
-            if (!core->views_bare)
+        ImGui::PushStyleColor(ImGuiCol_ResizeGrip, 0);   // a view resizes from its edges
+        const bool open = ImGui::Begin(label.c_str(), nullptr,
+                                       caliper_live_views::kWindowFlags | ImGuiWindowFlags_NoScrollbar |
+                                           ImGuiWindowFlags_NoScrollWithMouse |
+                                           (core->views_bare ? ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                                                   ImGuiWindowFlags_NoMove : 0));
+        ImGui::PopStyleColor();
+        caliper_live_views::window_after(core, v.name);
+        if (open) {
+            // The diagnostics only with CALIPER_VIEWS_DEBUG=1: a live view's
+            // header says what a person needs.
+            if (!core->views_bare && caliper_live_views::views_debug(core))
                 ImGui::Text("%dx%d %s %s %s updates=%llu last=%.2fms", v.w, v.h,
                             v.mapped ? "f32" : "u8", view_device_name(v.device),
                             v.path.c_str(), (unsigned long long)v.updates,

@@ -35,6 +35,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -614,6 +615,98 @@ View* find(CaliperCore* core, const char* name) {
 
 void set_event_sink(CaliperCore* core, EventSink sink) {
     if (core) state(core)->events = std::move(sink);
+}
+
+void set_look(CaliperCore* core, const Look& look) {
+    if (core) state(core)->look = look;
+}
+
+void set_stream_state(CaliperCore* core, int stream) {
+    if (core && core->live_views) core->live_views->stream = stream;
+}
+
+bool views_debug(const CaliperCore* core) {
+    static const bool env = [] {
+        const char* e = std::getenv("CALIPER_VIEWS_DEBUG");
+        return e && std::strcmp(e, "1") == 0;
+    }();
+    return env || (core && core->views_debug);
+}
+
+// ---- the grid ----------------------------------------------------------------------------
+namespace {
+constexpr float kMinCellW = 340.0f, kMinCellH = 240.0f;   // the size a view wants at least
+constexpr float kGap = 8.0f;
+
+// The columns that give the worst cell the most room against kMinCell (the
+// rows follow): no cell is squeezed to a strip while another has room.
+int grid_columns(int n, float w, float h) {
+    int best = 1;
+    float score = -1.0f;
+    for (int cols = 1; cols <= n; ++cols) {
+        const int rows = (n + cols - 1) / cols;
+        const float cw = (w - kGap * (float)(cols + 1)) / (float)cols;
+        const float ch = (h - kGap * (float)(rows + 1)) / (float)rows;
+        const float sc = std::min(cw / kMinCellW, ch / kMinCellH);
+        if (sc > score + 1e-4f) {
+            score = sc;
+            best = cols;
+        }
+    }
+    return best;
+}
+}  // namespace
+
+void layout_views(CaliperCore* core) {
+    if (!core || !core->live_views || core->views_bare) return;
+    CaliperLiveViewsState* S = core->live_views;
+    const int n = (int)S->views.size();
+    if (n == 0) return;
+    const float x = core->hosted ? core->area_x : 0.0f, y = core->hosted ? core->area_y : 0.0f;
+    const float w = (float)core->canvas_w / core->scale, h = (float)core->canvas_h / core->scale;
+    const float sig[5] = {x, y, w, h, (float)n};
+    if (S->grid_gen && std::equal(sig, sig + 5, S->grid_sig)) return;
+    std::copy(sig, sig + 5, S->grid_sig);
+    ++S->grid_gen;
+    const int cols = grid_columns(n, w, h);
+    const int rows = (n + cols - 1) / cols;
+    const float cw = std::max(120.0f, (w - kGap * (float)(cols + 1)) / (float)cols);
+    const float ch = std::max(90.0f, (h - kGap * (float)(rows + 1)) / (float)rows);
+    for (int i = 0; i < n; ++i) {
+        View& v = *S->views[(size_t)i];
+        const int r = i / cols, c = i % cols;
+        v.cell[0] = std::floor(x + kGap + (float)c * (cw + kGap));
+        v.cell[1] = std::floor(y + kGap + (float)r * (ch + kGap));
+        v.cell[2] = std::floor(cw);
+        v.cell[3] = std::floor(ch);
+        v.cell_gen = S->grid_gen;
+    }
+}
+
+bool window_before(CaliperCore* core, const std::string& name) {
+    if (!core || core->views_bare) return false;
+    View* v = find(core, name.c_str());
+    if (!v || !v->cell_gen) return false;
+    v->applied_now = false;
+    if (v->off_grid) return true;   // the person's place, kept by ImGui
+    if (v->applied_gen != v->cell_gen) {
+        ImGui::SetNextWindowPos(ImVec2(v->cell[0], v->cell[1]), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(v->cell[2], v->cell[3]), ImGuiCond_Always);
+        std::copy(v->cell, v->cell + 4, v->applied);
+        v->applied_gen = v->cell_gen;
+        v->applied_now = true;
+    }
+    return true;
+}
+
+void window_after(CaliperCore* core, const std::string& name) {
+    if (!core || core->views_bare) return;
+    View* v = find(core, name.c_str());
+    if (!v || !v->cell_gen || v->off_grid || v->applied_now || !v->applied_gen) return;
+    const ImVec2 p = ImGui::GetWindowPos(), sz = ImGui::GetWindowSize();
+    const bool moved = std::fabs(p.x - v->applied[0]) > 0.5f || std::fabs(p.y - v->applied[1]) > 0.5f ||
+                       std::fabs(sz.x - v->applied[2]) > 0.5f || std::fabs(sz.y - v->applied[3]) > 0.5f;
+    if (moved || ImGui::IsWindowDocked()) v->off_grid = true;
 }
 
 bool set_toggle(CaliperCore* core, const char* name, const char* toggle, bool on) {

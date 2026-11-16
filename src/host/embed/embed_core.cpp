@@ -38,6 +38,7 @@
 #include "frame_watchdog.h"
 #include "renderer/host_renderer.h"
 #include "tensor_bridge.h"   // TensorBridge (views), colormap_lut, bridge_last_reject
+#include "live/live_views_state.h"   // the views' grid (layout_views)
 
 #include <caliper/abi.h>
 #include <caliper/services/log_v1.h>   // CaliperLogLevel (applet log routing)
@@ -408,6 +409,7 @@ void caliper_core_frame(CaliperCore* core) {
     // applet loaded and float alongside one). Skipped on a fault frame: the
     // quarantined applet may have left the ImGui window stack mid-Begin.
     if (alive) {
+        caliper_live_views::layout_views(core);
         views_draw(core);
         caliper_live_views_frame(core);   // typed views: points/series/histogram
         caliper_live_frame(core);         // live session status (src/host/live)

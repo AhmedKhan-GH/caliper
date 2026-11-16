@@ -19,6 +19,8 @@
 #include "embed/embed_core.h"
 #include "live/live_source.h"   // PayloadMap
 
+#include <imgui.h>
+
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -39,6 +41,22 @@ void* metal_new_shared_buffer(void* mtl_device, const void* bytes, uint64_t len)
 void  metal_release(void* obj);   // balances metal_new_shared_buffer; NULL-safe
 
 uint64_t now_ns();   // CLOCK_UPTIME_RAW ns on Apple (== Python time.monotonic_ns)
+
+// ---- the look of a view window's header ---------------------------------------
+// A host sets it (set_look) to draw the headers in its own type and colours;
+// the defaults read as ImGui's own. `mono` (may be null: the current font) at
+// `mono_size` writes the info string, the current font at `small_size` the
+// header's tool buttons.
+struct Look {
+    ImFont* mono = nullptr;
+    float   mono_size = 0.0f;               // 0: the current size
+    float   small_size = 0.0f;              // 0: the current size
+    ImU32   text = IM_COL32(230, 230, 235, 255);
+    ImU32   faint = IM_COL32(140, 140, 150, 255);
+    ImU32   rule = IM_COL32(90, 90, 100, 255);
+    ImU32   accent = IM_COL32(110, 170, 255, 255);   // a pressed tool, the live dot
+    ImU32   plot = 0;                                // a series' line and a histogram's bars (0: ImPlot's)
+};
 
 // ---- points --------------------------------------------------------------
 // One renderer import of an MTLBuffer, shared by every payload of the view
@@ -160,6 +178,14 @@ struct View {
     // Windowed layout (first placement tiles like the v1.2 views).
     bool  placed = false;
     float pos_x = 0.0f, pos_y = 0.0f, size_x = 0.0f, size_y = 0.0f;
+    // The grid (layout_views): this view's cell, the layout it was last set
+    // to, and whether the person moved, resized or docked its window since,
+    // which takes it off the grid for good.
+    float    cell[4] = {};                 // x, y, w, h in screen units
+    uint64_t cell_gen = 0, applied_gen = 0;
+    float    applied[4] = {};
+    bool     applied_now = false;
+    bool     off_grid = false;
 
     // ---- events (only while the host has an event sink) ----------------------
     caliper_live::PayloadMap map;     // of the last applied snapshot (set_payload_map)
@@ -222,6 +248,14 @@ struct CaliperLiveViewsState {
     // Set by a host that sends what people do in the views to a producer (the
     // browser's NetSource). Without it the views neither select nor report.
     caliper_live_views::EventSink events;
+    // The headers' look (set_look), and the stream's state for each header's
+    // dot (set_stream_state): 0 no stream known (no dot), 1 live, 2 ended.
+    caliper_live_views::Look look;
+    int stream = 0;
+    // The grid of the view windows (layout_views): the layout's signature
+    // (area x, y, w, h and the number of views) and its generation.
+    float grid_sig[5] = {};
+    uint64_t grid_gen = 0;
 };
 
 namespace caliper_live_views {
@@ -230,6 +264,30 @@ namespace caliper_live_views {
 View* find(CaliperCore* core, const char* name);
 // The host's event sink (empty: no selections, no events). Creates the state.
 void set_event_sink(CaliperCore* core, EventSink sink);
+// The headers' look and the stream state their dots show (see the state).
+void set_look(CaliperCore* core, const Look& look);
+void set_stream_state(CaliperCore* core, int state);
+// Whether the views show their diagnostics (size, path, seq, latency,
+// updates, drops) under their header: CALIPER_VIEWS_DEBUG=1, or a host that
+// sets core->views_debug. Off by default.
+bool views_debug(const CaliperCore* core);
+// The grid of the view windows, before the frame draws them: every view of
+// this core gets a cell of the area (the host's work area for a hosted core,
+// else the canvas), at least kMinCell large when the area allows, in creation
+// order, laid out again whenever the area or the number of views changes.
+// A window the person moved, resized or docked keeps its own place.
+void layout_views(CaliperCore* core);
+// Around ImGui::Begin of view `name`'s window (the typed views' own windows
+// and the v1.2 window a heatmap or image draws in): window_before sets the
+// window's cell when the grid changed and returns false when the view has no
+// cell (the caller places it itself); window_after notes a window the person
+// moved, resized or docked.
+bool window_before(CaliperCore* core, const std::string& name);
+void window_after(CaliperCore* core, const std::string& name);
+// The flags every view window takes: no collapse, and no focus when it
+// appears, so a view that appears never takes a click from the page.
+constexpr ImGuiWindowFlags kWindowFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoFocusOnAppearing;
+
 // A header toggle of view `name`, set by the page: "follow" (series) or
 // "log" (series, histogram). False: no such view or toggle. The views report
 // their own changes of a toggle to the sink as type "toggle" with detail

@@ -50,6 +50,7 @@
 #include <caliper/services/geometry_v1_1.h>
 
 #include <imgui.h>
+#include <imgui_internal.h>   // the header's items in the title bar
 #include <implot.h>
 
 #include <algorithm>
@@ -293,18 +294,239 @@ void place(CaliperCore* core, View& v, ImVec2 content) {
 }
 
 bool begin_window(CaliperCore* core, View& v, ImVec2 content) {
-    if (!v.placed) place(core, v, content);
-    ImGui::SetNextWindowPos(ImVec2(v.pos_x, v.pos_y), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(v.size_x, v.size_y), ImGuiCond_FirstUseEver);
-    return ImGui::Begin(window_label(v).c_str(), nullptr,
-                        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-                            (core->views_bare ? ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                                                    ImGuiWindowFlags_NoMove : 0));
+    if (!window_before(core, v.name)) {
+        if (!v.placed) place(core, v, content);
+        ImGui::SetNextWindowPos(ImVec2(v.pos_x, v.pos_y), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(v.size_x, v.size_y), ImGuiCond_FirstUseEver);
+    }
+    // The resize grip only under the pointer: a view resizes from its edges.
+    ImGui::PushStyleColor(ImGuiCol_ResizeGrip, 0);
+    const bool open = ImGui::Begin(window_label(v).c_str(), nullptr,
+                                   kWindowFlags | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+                                       (core->views_bare ? ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                                               ImGuiWindowFlags_NoMove : 0));
+    ImGui::PopStyleColor();
+    window_after(core, v.name);
+    return open;
 }
 
-void pause_button(CaliperLiveViewsState* S) {
-    if (ImGui::SmallButton(S->paused ? "Resume###caliper.live.pause" : "Pause###caliper.live.pause"))
-        S->paused = !S->paused;
+void set_follow(CaliperLiveViewsState* S, View& v, bool on);
+
+// ---- the header ---------------------------------------------------------------------
+// What a view's header says about it, as the browser element's header does
+// (web/src/views/info.ts): 4 significant digits, an exponent below 1e-3 or
+// from 1e5.
+std::string fmt4(double v) {
+    if (!std::isfinite(v)) return std::isnan(v) ? "NaN" : v > 0 ? "inf" : "-inf";
+    if (v == 0.0) return "0";
+    char b[48];
+    const double a = std::fabs(v);
+    if (a >= 1e5 || a < 1e-3) {
+        std::snprintf(b, sizeof b, "%.3e", v);
+        // "1.234e-04" as JavaScript writes it: "1.234e-4"
+        std::string t = b;
+        const size_t e = t.find('e');
+        std::string mant = t.substr(0, e), ex = t.substr(e + 1);
+        const bool neg = !ex.empty() && ex[0] == '-';
+        if (!ex.empty() && (ex[0] == '-' || ex[0] == '+')) ex.erase(0, 1);
+        while (ex.size() > 1 && ex[0] == '0') ex.erase(0, 1);
+        if (mant.find('.') != std::string::npos) {
+            while (mant.back() == '0') mant.pop_back();
+            if (mant.back() == '.') mant.pop_back();
+        }
+        return mant + "e" + (neg ? "-" : "") + ex;
+    }
+    std::snprintf(b, sizeof b, "%.4g", v);
+    std::snprintf(b, sizeof b, "%.10g", std::strtod(b, nullptr));   // 1.235e+04 -> 12350
+    return b;
+}
+
+const char* const kTimes = "\xC3\x97";      // U+00D7
+const char* const kEllipsis = "\xE2\x80\xA6";   // U+2026
+
+std::string info_text(const CaliperCore* core, const View& v) {
+    char b[200];
+    switch (v.kind) {
+        case CALIPER_LIVE_KIND_HEATMAP:
+        case CALIPER_LIVE_KIND_IMAGE:
+            for (const auto& tv : core->views)
+                if (tv.name == v.name && tv.tex) {
+                    if (v.kind == CALIPER_LIVE_KIND_IMAGE) {
+                        std::snprintf(b, sizeof b, "%d%s%d RGBA", tv.h, kTimes, tv.w);
+                    } else {
+                        std::snprintf(b, sizeof b, "%d%s%d  %s %s %s", tv.h, kTimes, tv.w, fmt4(tv.vmin).c_str(),
+                                      kEllipsis, fmt4(tv.vmax).c_str());
+                    }
+                    return b;
+                }
+            return {};
+        case CALIPER_LIVE_KIND_POINTS: {
+            std::string label = v.label_count ? std::to_string(v.label_count) + " classes"
+                                : v.cur.aux       ? std::string("values")
+                                                  : std::string();
+            std::snprintf(b, sizeof b, "%lld points  %d-D%s%s", (long long)v.count, v.dims, label.empty() ? "" : "  ",
+                          label.c_str());
+            return b;
+        }
+        case CALIPER_LIVE_KIND_SERIES:
+            if (v.values.empty()) return {};
+            std::snprintf(b, sizeof b, "%llu steps  last %s", (unsigned long long)(v.first + v.values.size()),
+                          fmt4(v.values.back()).c_str());
+            return b;
+        case CALIPER_LIVE_KIND_HISTOGRAM: {
+            double total = 0.0;
+            for (float c : v.values) total += c;
+            std::snprintf(b, sizeof b, "%zu bins  %s %s %s  n %s", v.values.size(), fmt4(v.lo).c_str(), kEllipsis,
+                          fmt4(v.hi).c_str(), fmt4(total).c_str());
+            return b;
+        }
+        default:
+            return {};
+    }
+}
+
+// `s` cut to `w` with an ellipsis, "" when not even that fits.
+std::string fit_text(const std::string& s, float w) {
+    if (ImGui::CalcTextSize(s.c_str()).x <= w) return s;
+    const float ell = ImGui::CalcTextSize(kEllipsis).x;
+    if (ell > w) return {};
+    std::string t = s;
+    while (!t.empty()) {
+        // One whole UTF-8 character off the end.
+        while (!t.empty()) {
+            const unsigned char c = (unsigned char)t.back();
+            t.pop_back();
+            if ((c & 0xC0) != 0x80) break;
+        }
+        while (!t.empty() && t.back() == ' ') t.pop_back();
+        if (ImGui::CalcTextSize((t + kEllipsis).c_str()).x <= w) return t + kEllipsis;
+    }
+    return {};
+}
+
+enum Tool : unsigned { kToolPause = 1, kToolLog = 2, kToolFollow = 4 };
+
+// A header tool: a word in a thin outlined box, as the browser element's
+// tool buttons; bronze while pressed. True when clicked.
+bool tool_button(const Look& L, const char* id, const char* text, bool pressed, ImVec2 pos, float h) {
+    ImGuiWindow* w = ImGui::GetCurrentWindow();
+    const ImVec2 ts = ImGui::CalcTextSize(text);
+    const ImRect bb(pos, ImVec2(pos.x + ts.x + 12.0f, pos.y + h));
+    const ImGuiID gid = w->GetID(id);
+    if (!ImGui::ItemAdd(bb, gid)) return false;
+    bool hovered = false, held = false;
+    const bool clicked = ImGui::ButtonBehavior(bb, gid, &hovered, &held);
+    ImDrawList* dl = w->DrawList;
+    const ImU32 edge = pressed ? L.accent : L.rule;
+    dl->AddRect(bb.Min, bb.Max, edge, 3.0f);
+    const ImU32 ink = pressed ? L.accent : hovered ? L.text : L.faint;
+    dl->AddText(ImVec2(bb.Min.x + 6.0f, bb.Min.y + (h - ts.y) * 0.5f), ink, text);
+    return clicked;
+}
+
+float tool_width(const char* text) { return ImGui::CalcTextSize(text).x + 12.0f; }
+
+// The view's header, as the browser element's: the name on the left (ImGui's
+// title bar draws it), then on the right a compact info string, the tools
+// (pause for every view, log for plots, follow for a series) and a status
+// dot: bronze while the stream is live and the view has data, an outline
+// while it waits for its first data, grey once the stream has ended. The
+// header lives in the window's title bar; in a docked window, whose tab
+// carries the name, it takes the first line of the content. What does not
+// fit goes, the info first (cut with an ellipsis), then the tools; nothing
+// overlaps the name.
+void draw_header(CaliperCore* core, CaliperLiveViewsState* S, View& v, unsigned tools) {
+    if (core->views_bare) return;
+    const Look& L = S->look;
+    ImGuiWindow* w = ImGui::GetCurrentWindow();
+    if (w->SkipItems) return;
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const bool title = !(w->Flags & ImGuiWindowFlags_NoTitleBar) && !w->DockIsActive && w->TitleBarHeight > 0.0f;
+    ImRect r;
+    float left;
+    if (title) {
+        r = w->TitleBarRect();
+        left = r.Min.x + st.FramePadding.x + ImGui::CalcTextSize(v.name.c_str(), nullptr, true).x + 14.0f;
+    } else {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float hh = ImGui::GetFrameHeight();
+        r = ImRect(p, ImVec2(p.x + ImGui::GetContentRegionAvail().x, p.y + hh));
+        ImGui::Dummy(ImVec2(r.GetWidth(), hh));
+        left = r.Min.x;
+    }
+    const ImVec2 cursor = ImGui::GetCursorScreenPos();
+    ImGui::PushClipRect(r.Min, r.Max, false);
+    ImDrawList* dl = w->DrawList;
+    const float cy = std::floor((r.Min.y + r.Max.y) * 0.5f) + 0.5f;
+    float right = r.Max.x - st.FramePadding.x;
+
+    // The dot.
+    if (S->stream) {
+        const ImVec2 c(right - 4.0f, cy);
+        if (v.updates == 0) dl->AddCircle(c, 3.5f, L.faint, 12, 1.0f);
+        else dl->AddCircleFilled(c, 4.0f, S->stream == 2 ? L.rule : L.accent, 12);
+        right -= 8.0f + 10.0f;
+    }
+
+    // The tools, right to left, in the small size.
+    if (L.small_size > 0.0f) ImGui::PushFont(nullptr, L.small_size);
+    struct T {
+        unsigned bit;
+        const char* id;
+        const char* text;
+        bool pressed;
+    };
+    const T all[] = {
+        {kToolPause, "##caliper.tool.pause", S->paused ? "paused" : "pause", S->paused},
+        {kToolLog, "##caliper.tool.log", "log", v.log_y},
+        {kToolFollow, "##caliper.tool.follow", "follow", v.follow},
+    };
+    float tools_w = 0.0f;
+    for (const T& t : all)
+        if (tools & t.bit) tools_w += tool_width(t.text) + 4.0f;
+    const float th = std::min(r.GetHeight() - 4.0f, ImGui::GetFontSize() + 6.0f);
+    if (tools_w > 0.0f && right - tools_w >= left) {
+        float x = right - tools_w + 4.0f;
+        for (const T& t : all) {
+            if (!(tools & t.bit)) continue;
+            if (tool_button(L, t.id, t.text, t.pressed, ImVec2(x, std::floor(cy - th * 0.5f)), th)) {
+                if (t.bit == kToolPause) S->paused = !S->paused;
+                else if (t.bit == kToolLog) {
+                    v.log_y = !v.log_y;
+                    v.fit_once = true;
+                    emit(S, v, "toggle", Detail().text("name", "log").flag("on", v.log_y).str());
+                } else if (t.bit == kToolFollow) {
+                    set_follow(S, v, !v.follow);
+                    if (v.follow) v.fit_once = true;
+                }
+            }
+            x += tool_width(t.text) + 4.0f;
+        }
+        right -= tools_w + 6.0f;
+    }
+    if (L.small_size > 0.0f) ImGui::PopFont();
+
+    // The info string, in mono, right-aligned before the tools.
+    const std::string info = info_text(core, v);
+    if (!info.empty() && right > left) {
+        ImGui::PushFont(L.mono, L.mono_size);
+        const std::string t = fit_text(info, right - left);
+        if (!t.empty()) {
+            const ImVec2 ts = ImGui::CalcTextSize(t.c_str());
+            dl->AddText(ImVec2(right - ts.x, cy - ts.y * 0.5f), L.faint, t.c_str());
+        }
+        ImGui::PopFont();
+    }
+    ImGui::PopClipRect();
+    ImGui::SetCursorScreenPos(cursor);
+}
+
+// Under the header with CALIPER_VIEWS_DEBUG=1: the view's diagnostics on one
+// line, cut to the window's width.
+void debug_line(const CaliperCore* core, const std::string& text) {
+    if (core->views_bare || !views_debug(core)) return;
+    const std::string t = fit_text(text, ImGui::GetContentRegionAvail().x);
+    ImGui::TextUnformatted(t.c_str());
 }
 
 // "seq 41  lat 2.3 ms  upd 41  drop 0  [paused]"; "rel lat" when the stamps came
@@ -484,14 +706,12 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     HostRenderer* r = core->renderer.get();
     const bool open = begin_window(core, v, ImVec2(320.0f, 260.0f));
     if (!open) { ImGui::End(); return; }
-    if (!core->views_bare) {
-        if (ImGui::SmallButton("Fit")) v.fit_pending = true;
-        ImGui::SameLine();
-        pause_button(S);
-        ImGui::SameLine();
-        char tel[160];
+    draw_header(core, S, v, kToolPause);
+    {
+        char tel[160], line[220];
         telemetry(tel, sizeof tel, S, v);
-        ImGui::Text("points N=%lld %d-D  %s", (long long)v.count, v.dims, tel);
+        std::snprintf(line, sizeof line, "points N=%lld %d-D  %s", (long long)v.count, v.dims, tel);
+        debug_line(core, line);
     }
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -986,16 +1206,16 @@ void draw_series(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     const bool open = begin_window(core, v, ImVec2(360.0f, 200.0f));
     if (!open) { ImGui::End(); return; }
     const size_t n = v.values.size();
-    if (!core->views_bare) {
-        pause_button(S);
-        ImGui::SameLine();
-        char tel[160];
+    draw_header(core, S, v, kToolPause | kToolLog | kToolFollow);
+    {
+        char tel[160], line[260];
         telemetry(tel, sizeof tel, S, v);
         if (n)
-            ImGui::Text("series n=%zu  latest %.6g @ step %llu  %s", n, v.values.back(),
-                        (unsigned long long)(v.first + n - 1), tel);
+            std::snprintf(line, sizeof line, "series n=%zu  latest %.6g @ step %llu  %s", n, v.values.back(),
+                          (unsigned long long)(v.first + n - 1), tel);
         else
-            ImGui::Text("series (no values yet)  %s", tel);
+            std::snprintf(line, sizeof line, "series (no values yet)  %s", tel);
+        debug_line(core, line);
     }
     const bool ev = true;   // gestures everywhere; events only through a sink
     Gesture& g = v.gesture;
@@ -1009,11 +1229,13 @@ void draw_series(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         // The retained steps [lo, hi), as the browser view bounds a selection.
         const int64_t lo = (int64_t)v.first, hi = (int64_t)(v.first + n);
         if (n) {
+            ImPlotSpec line;
+            if (S->look.plot) line.LineColor = ImGui::ColorConvertU32ToFloat4(S->look.plot);
             if (n <= kSeriesRawMax) {
-                ImPlot::PlotLine("##line", v.values.data(), (int)n, 1.0, (double)v.first);
+                ImPlot::PlotLine("##line", v.values.data(), (int)n, 1.0, (double)v.first, line);
             } else {
                 if (v.draw_dirty) decimate_series(v, 2048);
-                ImPlot::PlotLine("##line", v.xs.data(), v.ys.data(), (int)v.xs.size());
+                ImPlot::PlotLine("##line", v.xs.data(), v.ys.data(), (int)v.xs.size(), line);
             }
             v.draw_dirty = false;
             if (ImPlot::IsPlotHovered() && !(ev && g.down)) {
@@ -1107,12 +1329,12 @@ void draw_histogram(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     const bool open = begin_window(core, v, ImVec2(360.0f, 200.0f));
     if (!open) { ImGui::End(); return; }
     const size_t B = v.values.size();
-    if (!core->views_bare) {
-        pause_button(S);
-        ImGui::SameLine();
-        char tel[160];
+    draw_header(core, S, v, kToolPause | kToolLog);
+    {
+        char tel[160], line[220];
         telemetry(tel, sizeof tel, S, v);
-        ImGui::Text("histogram bins=%zu [%.4g, %.4g]  %s", B, v.lo, v.hi, tel);
+        std::snprintf(line, sizeof line, "histogram bins=%zu [%.4g, %.4g]  %s", B, v.lo, v.hi, tel);
+        debug_line(core, line);
     }
     const bool ev = true;   // gestures everywhere; events only through a sink
     Gesture& g = v.gesture;
@@ -1134,7 +1356,9 @@ void draw_histogram(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                 }
                 v.draw_dirty = false;
             }
-            ImPlot::PlotBars("##bars", v.xs.data(), v.ys.data(), (int)B, w);
+            ImPlotSpec bars;
+            if (S->look.plot) bars.FillColor = bars.LineColor = ImGui::ColorConvertU32ToFloat4(S->look.plot);
+            ImPlot::PlotBars("##bars", v.xs.data(), v.ys.data(), (int)B, w, bars);
             bool over = false;
             if (ImPlot::IsPlotHovered() && !(ev && g.down)) {
                 const ImPlotPoint mp = ImPlot::GetPlotMousePos();
@@ -1347,24 +1571,20 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
     if (ImGui::Begin(window_label(v).c_str())) {   // appends to that window
         const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
         const ImGuiStyle& st = ImGui::GetStyle();
-        bool on_button = false;
-        if (!core->views_bare) {
-            char tel[160];
+        const bool on_button = false;
+        draw_header(core, S, v, kToolPause);
+        // With CALIPER_VIEWS_DEBUG=1 the diagnostics take a line under the
+        // image (the v1.2 window writes its own line above it); nothing is
+        // ever drawn over the image.
+        const bool debug = !core->views_bare && views_debug(core);
+        if (debug) {
+            char tel[160], line[200];
             telemetry(tel, sizeof tel, S, v);
-            char line[200];
             std::snprintf(line, sizeof line, "%s  %s", v.kind == CALIPER_LIVE_KIND_HEATMAP ? "heatmap" : "image", tel);
-            const ImVec2 ts = ImGui::CalcTextSize(line);
-            const float bh = ImGui::GetFrameHeight();
-            const float y = wp.y + ws.y - st.WindowPadding.y - bh;
-            const float x = wp.x + st.WindowPadding.x;
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            dl->AddRectFilled(ImVec2(x - 2.0f, y), ImVec2(std::min(wp.x + ws.x - st.WindowPadding.x, x + ts.x + 4.0f), y + bh),
-                              IM_COL32(0, 0, 0, 150), 3.0f);
-            dl->AddText(ImVec2(x, y + (bh - ts.y) * 0.5f), IM_COL32(230, 230, 235, 255), line);
-            const float btn_w = ImGui::CalcTextSize("Resume").x + st.FramePadding.x * 2.0f;
-            ImGui::SetCursorScreenPos(ImVec2(wp.x + ws.x - st.WindowPadding.x - btn_w, y));
-            pause_button(S);
-            on_button = ImGui::IsItemHovered();
+            const float y = wp.y + ws.y - st.WindowPadding.y - ImGui::GetTextLineHeight();
+            const std::string t = fit_text(line, ws.x - 2.0f * st.WindowPadding.x);
+            ImGui::GetWindowDrawList()->AddText(ImVec2(wp.x + st.WindowPadding.x, y), ImGui::GetColorU32(ImGuiCol_Text),
+                                                t.c_str());
         }
 
         // The plot area and how cells map onto it: kx and ky screen units per
@@ -1390,9 +1610,13 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
         // colorbar right of a heatmap (web/src/views/heatmap.ts).
         const float ml = page ? 46.0f : 0.0f, mt = page ? 16.0f : 0.0f;
         const float mr = page ? (image ? 10.0f : 26.0f) : 0.0f;
-        const float mb = page ? 32.0f : core->views_bare ? 0.0f : ImGui::GetFrameHeight() + st.ItemSpacing.y;
+        const float mb = page ? 32.0f : debug ? ImGui::GetTextLineHeightWithSpacing() : 0.0f;
         const float ax = wp.x + cs.x + ml;
-        const float ay = wp.y + cs.y + (core->views_bare ? 0.0f : ImGui::GetTextLineHeightWithSpacing()) + mt;
+        // Under the header row of a docked window, and the v1.2 window's
+        // diagnostics line in debug.
+        ImGuiWindow* cw = ImGui::GetCurrentWindow();
+        const float head = !core->views_bare && cw->DockIsActive ? ImGui::GetFrameHeight() + st.ItemSpacing.y : 0.0f;
+        const float ay = wp.y + cs.y + head + (debug ? ImGui::GetTextLineHeightWithSpacing() : 0.0f) + mt;
         const float aw = wp.x + ws.x - st.WindowPadding.x - ax - mr;
         const float ah = wp.y + ws.y - st.WindowPadding.y - ay - mb;
         const ImVec2 m = ImGui::GetIO().MousePos;
