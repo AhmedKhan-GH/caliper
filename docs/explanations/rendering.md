@@ -473,7 +473,9 @@ static and stamped batches apart, so a clear that is not static leaves a static 
   own on the renderer's device and queue, so its submits are ordered with the app's frame and its statistics are its
   own; in a browser it borrows the WebGPU renderer's backend.
 - **Camera.** The orbit about the scene's up axis (pan and zoom in a 2-D scene), fitted once when the scene first has
-  bounds and again on F or a double click, with the points view's gestures.
+  bounds and again on F or a double click, with the points view's gestures. It opens at the points view's default
+  three-quarter view, azimuth 0.95 and elevation 0.42 radians at the fit's distance times 1.15, which
+  `src/host/scene/camera_defaults.h` defines once for both views.
 
 `caliper_gfx_tests --test-case="gfx/Metal scene view*"` applies the 3.2 golden frames to scene views and checks their
 state, draws the surface row's scene from protocol messages and compares it with the same CPU rasterisation as the

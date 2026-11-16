@@ -7,11 +7,13 @@
 // u the up axis, a the first of +x, +y and +z perpendicular to u, and b = a x u, which with
 // +y up puts azimuth 0 on the +x side and 90 degrees on the +z side, the points view's
 // convention. Its field of view is 45 degrees and its near and far planes follow the bounds as
-// the points view computes them. Pan and zoom is orthographic with y up or down. Looking
+// the points view computes them. Its default angles and the fit's margin are the points view's
+// (camera_defaults.h). Pan and zoom is orthographic with y up or down. Looking
 // through a pinhole projects with the intrinsics, letterboxed to the view. Clip space has x
 // right, y up and depth in [0, 1] with near at 0; matrices are column-major.
 #pragma once
 
+#include "scene/camera_defaults.h"
 #include "scene/scene.h"
 #include "scene/scene_math.h"
 
@@ -22,8 +24,6 @@
 namespace caliper_scene {
 
 inline constexpr double kOrbitFovY = 45.0 * kPi / 180.0;
-inline constexpr double kDefaultAzimuth = 45.0 * kPi / 180.0;   // radians
-inline constexpr double kDefaultElevation = 0.5;                // radians, 28.6479 degrees
 inline constexpr double kMaxElevation = 89.0 * kPi / 180.0;     // the bound the orbit keeps within
 
 struct Orbit {

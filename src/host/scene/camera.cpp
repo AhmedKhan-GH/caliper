@@ -212,7 +212,7 @@ void fit(ViewCamera& cam, const Aabb& world, double aspect) {
         o->target[0] = c.x;
         o->target[1] = c.y;
         o->target[2] = c.z;
-        o->distance = r / std::sin(std::min(half_fovy, half_fovx)) * 1.05;
+        o->distance = r / std::sin(std::min(half_fovy, half_fovx)) * kDefaultFitMargin;
         return;
     }
     if (PanZoom* p = std::get_if<PanZoom>(&cam)) {

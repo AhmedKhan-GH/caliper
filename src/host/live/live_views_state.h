@@ -18,6 +18,7 @@
 #include "caliper/live_views.h"
 #include "embed/embed_core.h"
 #include "live/live_source.h"   // PayloadMap
+#include "scene/camera_defaults.h"   // the 3-D views' default camera
 
 #include <imgui.h>
 
@@ -118,14 +119,17 @@ struct Gesture {
 };
 
 // The 3-D points camera's default, the same in every renderer
-// (web/src/views/camera.ts, CAMERA): a three-quarter view from azimuth kCamAz
-// and elevation kCamEl (radians; the eye at target + dist * (cos el cos az,
-// sin el, cos el sin az)), at the distance that fits the data's bounding
-// sphere into the narrower field of view with kCamFit to spare, for the box's
-// labels. The rotate tool turns the azimuth at kRotateRate radians a second.
-constexpr float kCamAz = 0.95f;
-constexpr float kCamEl = 0.42f;
-constexpr float kCamFit = 1.15f;
+// (web/src/views/camera.ts, CAMERA) and in the scene view's orbit, from the
+// one definition in scene/camera_defaults.h: a three-quarter view from
+// azimuth kCamAz and elevation kCamEl (radians; the eye at target + dist *
+// (cos el cos az, sin el, cos el sin az)), at the distance that fits the
+// data's bounding sphere into the narrower field of view with kCamFit to
+// spare, for the box's labels. The rotate tool turns the azimuth at
+// kRotateRate radians a second.
+constexpr float kCamAz = (float)caliper_scene::kDefaultAzimuth;
+constexpr float kCamEl = (float)caliper_scene::kDefaultElevation;
+constexpr float kCamFit = (float)caliper_scene::kDefaultFitMargin;
+static_assert(kCamAz == 0.95f && kCamEl == 0.42f && kCamFit == 1.15f, "the points view's camera as before");
 constexpr float kRotateRate = 0.35f;
 
 struct Camera {

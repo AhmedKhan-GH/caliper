@@ -96,7 +96,8 @@ TEST_CASE("the azimuth convention: +y up puts 0 on +x and 90 on +z; +z up puts 9
     // The points view's eye (live_views_draw.cpp, eye_of) for its defaults.
     Orbit pv;
     pv.distance = 3;
-    const double ce = std::cos(0.5), se = std::sin(0.5), ca = std::cos(kDefaultAzimuth), sa = std::sin(kDefaultAzimuth);
+    const double ce = std::cos(kDefaultElevation), se = std::sin(kDefaultElevation);
+    const double ca = std::cos(kDefaultAzimuth), sa = std::sin(kDefaultAzimuth);
     CHECK(near(orbit_eye(pv), {3 * ce * ca, 3 * se, 3 * ce * sa}));
     // Elevation lifts the eye along the up axis.
     o.elevation = deg(30);
@@ -268,7 +269,7 @@ TEST_CASE("the orbit's projection: 45 degrees and the points view's near and far
     fit(v, t.scene_bounds(), 1.5);
     const Orbit& o = std::get<Orbit>(v);
     const double r = std::sqrt(1.0 + 4.0 + 9.0);
-    CHECK(o.distance == doctest::Approx(r / std::sin(std::min(kOrbitFovY / 2, std::atan(std::tan(kOrbitFovY / 2) * 1.5))) * 1.05));
+    CHECK(o.distance == doctest::Approx(r / std::sin(std::min(kOrbitFovY / 2, std::atan(std::tan(kOrbitFovY / 2) * 1.5))) * 1.15));
     const CameraMatrices m = camera_matrices(v, t, 300, 200);
     const double d = o.distance;
     const Mat4 want = perspective_z01(kOrbitFovY, 1.5, std::max(d - 2 * r, d * 1e-3), d + 2 * r);
@@ -314,7 +315,7 @@ TEST_CASE("fits: the orbit frames the bounding sphere and keeps its angles; pan 
     // No bounds: the box from -1 to 1, as the points view.
     ViewCamera e = Orbit{};
     fit(e, Aabb{}, 1.0);
-    CHECK(std::get<Orbit>(e).distance == doctest::Approx(std::sqrt(3.0) / std::sin(kOrbitFovY / 2) * 1.05));
+    CHECK(std::get<Orbit>(e).distance == doctest::Approx(std::sqrt(3.0) / std::sin(kOrbitFovY / 2) * 1.15));
 }
 
 TEST_CASE("the starting camera: both forms, both up modes, keys filled from the fit, and reset") {
@@ -332,8 +333,8 @@ TEST_CASE("the starting camera: both forms, both up modes, keys filled from the 
     REQUIRE(std::holds_alternative<Orbit>(r.camera));
     Orbit o = std::get<Orbit>(r.camera);
     CHECK(o.up == Axis::PosZ);
-    CHECK(o.azimuth == doctest::Approx(deg(45)));
-    CHECK(o.elevation == doctest::Approx(deg(28.6479)).epsilon(1e-6));
+    CHECK(o.azimuth == doctest::Approx(deg(54.4309905)).epsilon(1e-8));
+    CHECK(o.elevation == doctest::Approx(deg(24.0642274)).epsilon(1e-8));
     ViewCamera fitted = Orbit{};
     std::get<Orbit>(fitted).up = Axis::PosZ;
     fit(fitted, t.scene_bounds(), 1.0);
