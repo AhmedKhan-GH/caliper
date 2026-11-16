@@ -146,8 +146,11 @@ class ClaudeConversation:
 
     Messages are appended and never edited, which keeps the prompt cache warm and
     keeps every thinking block valid for the models that check the history
-    before them. The one removal is `rollback_prompt()`, which takes back a
-    prompt that is still the last message, after a refusal of its first request.
+    before them. The one removal is `rollback_turn()`, after a refusal: ACP's
+    `refusal` stop reason means that the prompt and everything after it are left
+    out of the next request, so the history is cut back to what it was before
+    the prompt. What remains is a prefix of what was sent before, so every
+    thinking block in it still sees the same history and the cache still holds.
     """
 
     def __init__(self) -> None:
@@ -159,12 +162,12 @@ class ClaudeConversation:
         self._prompt_index = len(self.messages)
         self.messages.append({"role": "user", "content": [{"type": "text", "text": text}]})
 
-    def rollback_prompt(self) -> bool:
-        if self._prompt_index is not None and self._prompt_index == len(self.messages) - 1:
-            self.messages.pop()
-            self._prompt_index = None
-            return True
-        return False
+    def rollback_turn(self) -> bool:
+        if self._prompt_index is None or self._prompt_index >= len(self.messages):
+            return False
+        del self.messages[self._prompt_index:]
+        self._prompt_index = None
+        return True
 
     def add_assistant(self, content: list[dict]) -> None:
         self.messages.append({"role": "assistant", "content": content})

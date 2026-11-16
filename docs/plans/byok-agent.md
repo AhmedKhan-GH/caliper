@@ -86,11 +86,11 @@ most 16 sessions, a prompt holds at most 200,000 characters of text, and a line 
 | `review` | none | `spec_changes` (ask before each spec change), `destructive_only` | `spec_changes` |
 
 **Decision: config options, not modes.** The protocol pages say that modes are being replaced by config options, and
-a model and an effort level are settings rather than modes of work. The shapes follow ACP's session config options
+a model and an effort level are settings rather than modes of work. The shapes are ACP's session config options
 (`id`, `name`, `description`, `category`, `type: "select"`, `currentValue`, `options` of `value` and `name`;
-`session/set_config_option` takes `sessionId`, `configId` and `value` and answers with the full list). They were
-written from the protocol's documentation as the builder of this stream knew it; this stream had no network access
-beyond the package registry, so the pane stream should check them against schema v1.32.0. `AcpClient` keeps the
+`session/set_config_option` takes `sessionId`, `configId` and `value` and answers with the full list), checked against
+the protocol's schema as [below](#checked-against-the-protocols-schema) says. `model` and `thought_level` are categories
+the schema reserves for exactly these selectors; `review` has none, which the schema allows. `AcpClient` keeps the
 `configOptions` of `session/new` as received, so nothing in the client depends on them yet.
 
 ### What the pane receives
@@ -99,7 +99,7 @@ beyond the package registry, so the pane stream should check them against schema
 |---|---|
 | The model writes its reply | `agent_message_chunk` with a text block |
 | The model's reasoning, summarized | `agent_thought_chunk` with a text block |
-| A tool call starts in the stream | `tool_call` with the tool name as title and status `pending` |
+| A tool call starts in the stream | `tool_call` with the tool name as `title` and `name`, and status `pending` |
 | The call is checked | `tool_call_update` with the command and its main id as title, the ACP kind and `rawInput` |
 | The call runs | `tool_call_update` with status `in_progress` |
 | The call ends | `tool_call_update` with `completed` or `failed`, the result as text, a PNG as an image block, a spec diff, and `rawOutput` |
@@ -108,7 +108,7 @@ beyond the package registry, so the pane stream should check them against schema
 A status travels as a thought so that any ACP client shows it, and Caliper's pane can show it as a status line by
 reading `_meta.caliper.status`: `retry` (with `reason`, `http_status`, `attempt`, `max_attempts` and `delay_s`),
 `fallback` (with `from_model`, `to_model` and `category`), `served_by`, `refusal` (with `category`, `explanation` and
-`prompt_removed`), `compaction`, `strict_off` and `limit`. The sidecar sends no `plan` updates in this phase, since its
+`turn_removed`), `compaction`, `strict_off` and `limit`. The sidecar sends no `plan` updates in this phase, since its
 turns are short sequences of commands that the tool calls already show.
 
 The ACP kind of a tool call follows the descriptor's flags: `read` for a command that does not mutate, `delete` for a
@@ -201,8 +201,10 @@ always stays valid:
 
 - **Not run** (cut off, declined, unknown, invalid): an error result that says why.
 - **Cancelled**: a result that says the user cancelled it, and the turn ends with `cancelled`.
-- **A refusal on the first request of a prompt** takes the prompt back out of the history, so a conversation does not
-  carry a prompt that will be declined again; the status says so. A declined reply is never added to the history.
+- **A refusal** takes the prompt and everything after it out of the history, since ACP's `refusal` stop reason means
+  that they are left out of the next request; the status says so, and when tools of that turn already ran, it says
+  that their changes stay in Caliper. What remains is a prefix of what was sent before, so the cache and every thinking
+  block in it stay valid. A declined reply is never added to the history.
 - **A mid-reply fallback**: the blocks of the declining model before the last `fallback` block are left out, except
   text, the fallback blocks and paired server-tool blocks, as the API requires. Tool calls of the declining model are
   never run, and the pane marks them failed.
@@ -314,8 +316,9 @@ Verification:
 **Refusals.** With fallbacks on, a declined request is run again on the model Anthropic recommends for its category,
 within the same request; the pane sees a `fallback` status and, when the fallback served the turn, a `served_by`
 status. When the whole chain declines, or the model has no fallback, the turn ends with the stop reason `refusal` and a
-`refusal` status with the category and the explanation. A declined reply is not kept in the history, and a prompt whose
-first request was declined is taken back so the person can rephrase it.
+`refusal` status with the category and the explanation. The prompt and everything after it leave the history, as ACP's
+`refusal` means, so the person can rephrase it; commands that the turn already ran stay in Caliper and in its undo
+history.
 
 **Errors.** The sidecar catches the SDK's typed errors in the order of their chain: rate limits first, then the other
 status errors, then the connection errors.
@@ -384,6 +387,33 @@ planned. The one function that reads a key is `place_key_in_environment()`, a fr
 test calls the Keychain store, because touching the login keychain can show a system prompt; it is compiled on macOS
 and covered by the manual check. Error codes: `keystore.bad_provider`, `keystore.bad_key`, `keystore.not_found`,
 `keystore.unsupported`, `keystore.failed`; no error quotes a key.
+
+## Checked against the protocol's schema
+
+The ACP shapes of this page were first written from the protocol's documentation as the builder knew it. They were
+then checked, on 15 November 2026, against the schema of protocol version 1 in the protocol's public repository
+(`schema/v1/schema.json` and `schema/v1/meta.json` of `agentclientprotocol/agent-client-protocol`, read with a plain
+HTTP client), against the [ACP integration](acp-integration.md) page and against what `AcpClient` parses:
+
+- **Every message the sidecar sends was validated** with a JSON Schema validator against the schema's own definition for
+  its method: `InitializeResponse`, `NewSessionResponse`, `SetSessionConfigOptionResponse`, `PromptResponse` and
+  `Error` for the answers, `SessionNotification` for every update (message and thought chunks, statuses with
+  `_meta`, tool calls and their updates with text, image and diff content) and `RequestPermissionRequest` for the
+  permission requests. Seven scenarios covered a tool turn with a capture, an unknown tool, a retry and approvals, a
+  denial, a refusal, `max_tokens`, a mid-reply fallback, exhausted retries and a missing key: 66 messages, no
+  problem. The validator was checked to reject wrong values of the same shapes.
+- **What the sidecar accepts** follows the request definitions: `session/set_config_option` with `sessionId`,
+  `configId` and `value`; `session/cancel` with `sessionId`; `session/prompt` with content blocks, of which the
+  sidecar reads text and resource links, as its prompt capabilities declare.
+- **Two differences were fixed.** The schema's `refusal` stop reason says that the prompt and everything after it are
+  left out of the next prompt; the sidecar had taken the prompt back only when the first request was declined, and
+  now takes the whole turn back. A tool call has an optional `name`, the tool's programmatic name, which the sidecar
+  now sends beside its `title`.
+- **The rest matched**: the config option shape and its categories (`mode`, `model`, `model_config`, `thought_level`,
+  custom ones starting with `_`), the stop reasons, the permission option kinds and outcomes, the tool call content
+  items (`content`, `diff` with `path`, `oldText` and `newText`), image blocks (`data`, `mimeType`), `_meta` on every
+  update, and -32000 as "authentication required". `AcpClient` reads the fields it needs from these shapes and keeps
+  `configOptions` raw.
 
 ## Other providers
 
@@ -528,7 +558,7 @@ Waiting for later work:
 - **Tools read generically from the table**, strict where the schema allows, with the full schema checked locally.
 - **Approval before destructive commands always, and before spec edits by default**, with Allow for the session for
   spec edits only. Diffs before the change for `spec.set_text`, after it for the other spec edits.
-- **A declined prompt taken back** when its first request was declined; a declined reply never kept.
+- **A refusal takes the turn back**: the prompt and everything after it leave the history, as ACP's `refusal` means.
 - **Retry only while the pane saw nothing.**
 - **Summarized thinking and one default effort, `high`.**
 - **Fallbacks on by default, except on Claude Haiku 5.5**, which has none.

@@ -79,6 +79,8 @@ def test_multi_tool_turn_runs_calls_in_order_and_returns_results_together(run_ag
 
     completed = [u for u in updates if u["sessionUpdate"] == "tool_call_update" and u.get("status") == "completed"]
     assert [u["toolCallId"] for u in completed] == ["toolu_1", "toolu_2", "toolu_3"]
+    started = [u for u in updates if u["sessionUpdate"] == "tool_call"]
+    assert [u["name"] for u in started] == ["catalog_list", "app_info", "catalog_describe"]
 
     requests = read_requests(record)
     assert len(requests) == 3
@@ -140,7 +142,7 @@ def test_max_tokens_runs_no_tool_and_keeps_the_history_valid(run_agent, caliper)
     assert history[2]["content"][0]["tool_use_id"] == "toolu_cut" and history[2]["content"][0]["is_error"]
 
 
-def test_refusal_is_surfaced_and_the_prompt_is_taken_back(run_agent, caliper):
+def test_refusal_is_surfaced_and_the_turn_is_taken_back(run_agent, caliper):
     steps = [
         message(text("I can"), stop="refusal",
                 stop_details={"type": "refusal", "category": "cyber", "explanation": "Declined."}),
@@ -151,12 +153,34 @@ def test_refusal_is_surfaced_and_the_prompt_is_taken_back(run_agent, caliper):
     response, updates = agent.prompt(sid, "Something the classifier declines")
     assert response["result"]["stopReason"] == "refusal"
     [status] = [s for s in statuses(updates) if s["status"] == "refusal"]
-    assert status["category"] == "cyber" and status["prompt_removed"] is True
+    assert status["category"] == "cyber" and status["turn_removed"] is True
     response, _ = agent.prompt(sid, "Plan a loss dashboard")
     assert response["result"]["stopReason"] == "end_turn"
     # The declined prompt and its partial reply are not in the next request.
     history = read_requests(record)[1]["body"]["messages"]
     assert history == [{"role": "user", "content": [{"type": "text", "text": "Plan a loss dashboard"}]}]
+
+
+def test_a_refusal_later_in_a_turn_removes_the_whole_turn(run_agent, caliper):
+    # ACP's refusal: the prompt and everything after it are left out of the next request.
+    steps = [message(text("First.")),
+             message(text("Looking."), tool_use("t1", "catalog_list", {}), stop="tool_use"),
+             message(text("I won't"), stop="refusal"),
+             message(text("Fine."))]
+    agent, record = run_agent(steps)
+    sid = agent.start_session()
+    agent.prompt(sid, "One")
+    response, updates = agent.prompt(sid, "Two")
+    assert response["result"]["stopReason"] == "refusal"
+    [status] = [s for s in statuses(updates) if s["status"] == "refusal"]
+    assert "stay" in status["text"] and status["turn_removed"] is True
+    assert len(caliper.commands("catalog.list")) == 1  # the tool round did run
+    agent.prompt(sid, "Three")
+    requests = read_requests(record)
+    first_turn = requests[0]["body"]["messages"] + [{"role": "assistant", "content": [{"type": "text",
+                                                                                      "text": "First."}]}]
+    assert requests[3]["body"]["messages"] == first_turn + [{"role": "user",
+                                                            "content": [{"type": "text", "text": "Three"}]}]
 
 
 def test_rate_limit_then_success_reports_the_retry(run_agent):

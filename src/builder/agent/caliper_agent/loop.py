@@ -9,9 +9,8 @@ pane, then acts on how the reply ended:
   be, then sent to Caliper API) and all results go back in one message.
 - `max_tokens` or `context_full`: no tool of that reply runs; each gets an error
   result so the history stays valid, and the turn ends with `max_tokens`.
-- `refusal`: no tool runs; the turn ends with `refusal`. When the very first
-  request of the prompt was declined, the prompt is taken back out of the
-  history so the person can rephrase it.
+- `refusal`: no tool runs; the turn ends with `refusal`, and the prompt and
+  everything after it are left out of the history, as ACP's `refusal` means.
 - cancellation: whatever is running stops; every tool call of the reply gets a
   result (`cancelled` for those that did not finish) and the turn ends with
   `cancelled`.
@@ -96,7 +95,7 @@ class AcpSink:
             return
         self.started_calls[call_id] = name
         self.open_calls.add(call_id)
-        self.update({"sessionUpdate": "tool_call", "toolCallId": call_id, "title": name,
+        self.update({"sessionUpdate": "tool_call", "toolCallId": call_id, "title": name, "name": name,
                      "kind": "other", "status": "pending"})
 
     def ensure_started(self, call_id: str, name: str) -> None:
@@ -201,14 +200,15 @@ class TurnRunner:
                 kept = {c.id for c in result.tool_calls}
                 if result.stop == "refusal":
                     self._sink.fail_open_calls("Not run: the model declined the request.")
-                    rolled_back = index == 0 and conv.rollback_prompt()
+                    rolled_back = conv.rollback_turn()
                     text = "The model declined this request."
                     if result.refusal_category:
                         text += f" Category: {result.refusal_category}."
-                    if rolled_back:
-                        text += " The prompt was left out of the conversation, so you can rephrase it."
+                    text += " The prompt and what followed it are left out of the conversation, so you can rephrase it."
+                    if index > 0:
+                        text += " Changes this turn already made in Caliper stay; undo them in the app if needed."
                     self._sink.status("refusal", text, category=result.refusal_category,
-                                      explanation=result.refusal_explanation, prompt_removed=rolled_back)
+                                      explanation=result.refusal_explanation, turn_removed=rolled_back)
                     return "refusal"
                 # Calls the pane saw that are not in the reply any more (a fallback
                 # replaced the reply that proposed them) never run.
