@@ -1,5 +1,6 @@
 # The builder libraries of sprint 3: the spec format, the catalog, the loaders,
-# the command layer, caliper-mcp and the ACP client (docs/plans/builder-overview.md).
+# the command layer, the session that binds them, caliper-mcp, the ACP client
+# and the caliper-agent sidecar (docs/plans/builder-overview.md).
 #
 # This folder configures in two ways:
 #   - on its own, as a small project that needs no host build:
@@ -95,7 +96,7 @@ endfunction()
 # Public headers are included as <caliper_builder/<module>/<header>.h>.
 set(CALIPER_BUILDER_INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
-foreach(_module spec catalog commands loaders mcp acp)
+foreach(_module spec catalog commands loaders acp session mcp agent)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_module}/CMakeLists.txt")
         add_subdirectory(${_module})
     endif()
