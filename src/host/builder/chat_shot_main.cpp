@@ -284,7 +284,8 @@ int main(int argc, char** argv) {
     const fs::path api_file = data_dir / "api.json";
     {
         json f{{"version", 1},       {"pid", (long long)::getpid()}, {"port", server->port()},
-               {"token", ao.token},  {"url", server->base_url()},    {"stream_url", server->stream_url()}};
+               {"token", server->issue_token("agent")},   // the agent's own token, never the person's
+               {"url", server->base_url()},    {"stream_url", server->stream_url()}};
         std::ofstream(api_file, std::ios::trunc) << f.dump() << "\n";
         fs::permissions(api_file, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace, ec);
     }

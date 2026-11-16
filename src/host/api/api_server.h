@@ -25,14 +25,25 @@
 // thread only after the request head passed every check. It answers the
 // command layer's result envelope with 200, whether `ok` is true or false;
 // faults of the request itself keep their status. The origin of the
-// invocation is api, or mcp or agent from X-Caliper-Origin (400 for anything
-// else), X-Caliper-Group gives its group, and X-Caliper-Preview the id of a
-// stacked preview that its edits apply to. A command that needs approval
-// is held for the origins mcp and agent while the person decides, up to
-// Options::command_approval_wait_ms, and answers command.needs_approval at
-// once for api, whose caller reads the outcome from GET /v0/approvals/{id}.
-// X-Caliper-Origin may also be viewer, which only lowers what a request may
-// do: the command layer runs reads only from that origin.
+// invocation is the origin of the token that authenticated the request (see
+// TOKENS), never a header: X-Caliper-Origin is ignored, so no request can
+// claim an origin its token does not have. X-Caliper-Group gives its group,
+// and X-Caliper-Preview the id of a stacked preview that its edits apply to.
+// A command that needs approval is held for the origins mcp and agent while
+// the person decides, up to Options::command_approval_wait_ms, and answers
+// command.needs_approval at once for api, whose caller reads the outcome from
+// GET /v0/approvals/{id}.
+//
+// TOKENS. Each token has a fixed origin. Options::token is the person's own
+// (api): unreviewed scripting, printed on the app's start line and written to
+// no file. Options::mcp_token (mcp) is the one the API file holds, for an
+// outside agent's caliper-mcp: its spec edits and destructive commands are
+// reviewed in the app. issue_token() makes a token for an agent the app
+// starts (agent: the side chat's agent, the widget agent's sidecar), and
+// revoke_token() ends it when that agent's session ends; an unknown or
+// revoked token is 401. Options::viewer_token opens the spec page only (THE
+// SPEC PAGE). Every comparison is constant-time. The stream (/v3/stream)
+// belongs to the net layer's hub, which takes the person's token only.
 //
 // THE SPEC PAGE. GET /v0/spec answers Options::spec_page_html, the page of
 // the web package that draws a saved spec applet in a browser
@@ -89,6 +100,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -136,19 +148,27 @@ bool plausible_approval_id(const std::string& id);
 // compared with wire::token_equal, in constant time.
 bool token_ok(const caliper_net::HttpRequest& r, const std::string& token, bool query_ok);
 
+// The tokens the server accepts, each with its origin: "api", "mcp", "agent"
+// or "viewer". find() compares the request's token with every entry in
+// constant time and answers its origin, or "" for a missing or unknown token.
+struct TokenTable {
+    std::vector<std::pair<std::string, std::string>> entries;   // token, origin
+    std::string find(const caliper_net::HttpRequest& r, bool query_ok) const;
+};
+
 // The checks of a plain request after the door's Host check, in this order:
 // Origin (403), route (404, then 405), token (401), then for a command: a
 // repeated header that the checks read or the command takes (400), Transfer-Encoding (501), no
 // Content-Length (411), one that is not a number (400) or over
-// kMaxCommandBody (413), a Content-Type other than application/json (415) and
-// an X-Caliper-Origin other than api, mcp, agent or viewer (400); for every
-// other endpoint: a body (413), the applet id of a launch and the approval id
-// of an approval (400). The command layer's three endpoints are 404 unless
-// command_layer is true. A request with `viewer_token` (not empty) in place
-// of the session token passes the token check as a viewer: it may GET the
-// spec page and POST the kViewerCommands from the origin viewer only, and
-// anything else is 403. status 0 means it may be served; the body itself is
-// checked once it has arrived.
+// kMaxCommandBody (413), a Content-Type other than application/json (415),
+// and with the viewer token an X-Caliper-Origin other than viewer (400); for
+// every other endpoint: a body (413), the applet id of a launch and the
+// approval id of an approval (400). The command layer's three endpoints are
+// 404 unless command_layer is true. The command's origin is the token's
+// (TOKENS); X-Caliper-Origin is ignored for every other token. A request with
+// the viewer token may GET the spec page and POST the kViewerCommands from the
+// origin viewer only, and anything else is 403. status 0 means it may be
+// served; the body itself is checked once it has arrived.
 struct Verdict {
     int status = 0;
     std::string message;   // for the JSON error body
@@ -161,6 +181,8 @@ struct Verdict {
     // connection closes.
     bool body_ok = false;
 };
+Verdict check(const caliper_net::HttpRequest& r, const TokenTable& tokens, bool command_layer = false);
+// The same with the person's token (api) and a viewer token alone.
 Verdict check(const caliper_net::HttpRequest& r, const std::string& token, bool command_layer = false,
               const std::string& viewer_token = {});
 
@@ -178,7 +200,10 @@ std::string error_json(const std::string& message);
 
 struct Options {
     uint16_t port = kDefaultPort;      // 0: any free port (see Server::port())
-    std::string token;                 // the session token (caliper_net::valid_token)
+    std::string token;                 // the person's session token, origin api (caliper_net::valid_token)
+    // The token of the API file, origin mcp (caliper_net::valid_token, not the
+    // session token), or "" for none.
+    std::string mcp_token;
     std::string info_json;             // the body of GET /v0/info
     std::string software_version;      // the hub's WELCOME software.version
     // The stream's hub forwards viewers' controls (wire protocol 3.1) only with
@@ -236,6 +261,13 @@ public:
 
     uint16_t port() const;
     const std::string& token() const { return opt_.token; }
+    const std::string& mcp_token() const { return opt_.mcp_token; }
+
+    // A new token with the origin "agent" or "mcp" ("" for any other origin),
+    // accepted until revoke_token(); any thread, while the server runs or not.
+    std::string issue_token(const std::string& origin);
+    // Ends an issued token: a request that carries it is then 401.
+    void revoke_token(const std::string& token);
     std::string base_url() const;      // http://127.0.0.1:<port>/v0
     std::string stream_url() const;    // ws://127.0.0.1:<port>/v3/stream (no token)
     // http://127.0.0.1:<port>/v0/spec?token=<viewer token>, "" without a
@@ -268,7 +300,10 @@ public:
 
 private:
     struct Impl;
+    TokenTable tokens() const;
     Options opt_;
+    mutable std::mutex issued_mu_;
+    std::vector<std::pair<std::string, std::string>> issued_;   // issue_token()'s, token and origin
     std::shared_ptr<CommandGateway> gateway_;
     std::unique_ptr<Impl> impl_;
 };

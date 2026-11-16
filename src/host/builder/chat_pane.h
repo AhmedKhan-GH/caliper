@@ -51,10 +51,16 @@ class AppSession;
 class ChatPane {
 public:
     struct Hooks {
-        // Starts Caliper API when it is not running, and returns its API file,
-        // or "" with the reason; `started` gets its address (127.0.0.1:<port>)
-        // when this call started it.
+        // Starts Caliper API when it is not running, and returns an API file of
+        // the agent's own, with a token of the origin agent issued for this
+        // session (AppApi::issue_agent_file()), or "" with the reason;
+        // `started` gets its address (127.0.0.1:<port>) when this call
+        // started the API.
         std::function<std::string(std::string* why, std::string* started)> start_api;
+        // Ends a file that start_api() gave: its token is revoked and the
+        // file removed (AppApi::revoke_agent_file()). The pane calls it when
+        // the agent ends, before a restart's new file, and at shutdown.
+        std::function<void(const std::string& file)> end_api_file;
         // The chat's agent has ended (side_chat.h, Hooks::agent_ended): the app
         // stops the API it started for the chat.
         std::function<void()> agent_ended;

@@ -102,6 +102,12 @@ struct ChatPane::Impl {
     std::vector<caliper_builder::PendingApproval> pending;   // as read while the registry was free
     std::optional<ChatDraft> draft;   // a handoff that came before the chat was made
     caliper_builder::Session* session = nullptr;   // the app's, as of the last frame
+    std::string agent_file;   // the API file of the agent's session, with its own agent token
+
+    void end_agent_file() {
+        if (!agent_file.empty() && hooks.end_api_file) hooks.end_api_file(agent_file);
+        agent_file.clear();
+    }
 
     void save() {
         std::string why;
@@ -133,14 +139,19 @@ struct ChatPane::Impl {
         };
         h.before_start = [this](ChatEnvironment* env) -> caliper_builder::Error {
             if (!hooks.start_api) return {"chat.no_api", "Caliper API is not running."};
+            end_agent_file();   // a restart's agent gets a new token; the old one ends
             std::string why, started;
             const std::string file = hooks.start_api(&why, &started);
             if (file.empty()) return {"chat.no_api", "Caliper API did not start: " + why};
             env->api_file = file;
+            agent_file = file;
             if (!started.empty() && chat) chat->note("API", "Caliper API started on " + started + " for this chat");
             return {};
         };
-        h.agent_ended = hooks.agent_ended;
+        h.agent_ended = [this] {
+            end_agent_file();   // the session's token is revoked with it
+            if (hooks.agent_ended) hooks.agent_ended();
+        };
         chat = std::make_unique<SideChat>(std::move(o), std::move(h));
         if (draft) {
             chat->open_handoff(std::move(*draft));
@@ -271,6 +282,7 @@ int ChatPane::draft_chips() const { return impl_->chat ? (int)impl_->chat->draft
 
 void ChatPane::shutdown() {
     impl_->chat.reset();
+    impl_->end_agent_file();
     impl_->started = false;
 }
 

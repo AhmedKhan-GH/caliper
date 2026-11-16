@@ -744,8 +744,9 @@ TEST_CASE("api: a command request is checked for its headers and its body's leng
     CHECK(check(req("POST", path + "?token=" + kToken, {json, len}), kToken, true).status == 401);
     CHECK(check(req("POST", path, {auth, json, len, len}), kToken, true).status == 400);
     CHECK(check(req("POST", path, {auth, json, json, len}), kToken, true).status == 400);
+    // X-Caliper-Origin is ignored, repeated or not: the origin is the token's.
     CHECK(check(req("POST", path, {auth, json, len, {"x-caliper-origin", "mcp"}, {"x-caliper-origin", "mcp"}}),
-                kToken, true).status == 400);
+                kToken, true).status == 0);
     CHECK(check(req("POST", path, {auth, json, len, {"x-caliper-preview", "a"}, {"x-caliper-preview", "b"}}), kToken,
                 true).status == 400);
     CHECK(check(req("POST", path, {auth, json, len, {"x-caliper-preview", "a"}}), kToken, true).status == 0);
@@ -759,16 +760,26 @@ TEST_CASE("api: a command request is checked for its headers and its body's leng
     CHECK(check(req("POST", path, {auth, len, {"content-type", "text/plain"}}), kToken, true).status == 415);
     CHECK(check(req("POST", path, {auth, len, {"content-type", "Application/JSON; charset=utf-8"}}), kToken, true)
               .status == 0);
-    for (const char* bad : {"ui", "builder", "MCP", "", "mcp, agent"}) {
-        CAPTURE(bad);
-        CHECK(check(req("POST", path, {auth, json, len, {"x-caliper-origin", bad}}), kToken, true).status == 400);
+    // The origin is the token's, whatever X-Caliper-Origin claims: the
+    // session token runs as api, the API file's as mcp, an agent's as agent.
+    const std::string mcp = "api_mcp_token-0123456789abcdefghij";
+    const std::string agent = "api_agent_token-0123456789abcdefgh";
+    caliper_api::TokenTable tokens;
+    tokens.entries = {{kToken, "api"}, {mcp, "mcp"}, {agent, "agent"}};
+    for (const char* claim : {"", "api", "mcp", "agent", "ui", "builder", "viewer", "MCP", "mcp, agent"}) {
+        CAPTURE(claim);
+        for (const auto& [token, origin] : tokens.entries) {
+            CAPTURE(origin);
+            std::vector<std::pair<std::string, std::string>> h = {{"authorization", "Bearer " + token}, json, len};
+            if (*claim) h.push_back({"x-caliper-origin", claim});
+            const caliper_api::Verdict v = check(req("POST", path, h), tokens, true);
+            CHECK(v.status == 0);
+            CHECK(v.origin == origin);
+        }
     }
-    for (const char* good : {"api", "mcp", "agent"}) {
-        CAPTURE(good);
-        const caliper_api::Verdict v = check(req("POST", path, {auth, json, len, {"x-caliper-origin", good}}), kToken, true);
-        CHECK(v.status == 0);
-        CHECK(v.origin == good);
-    }
+    // A token the table does not hold is 401.
+    CHECK(check(req("POST", path, {{"authorization", "Bearer api_other_token-0123456789abcdefg"}, json, len}), tokens,
+                true).status == 401);
 }
 
 TEST_CASE("api: the viewer token passes only the spec page and the page's reads, from the viewer origin") {
@@ -812,13 +823,13 @@ TEST_CASE("api: the viewer token passes only the spec page and the page's reads,
         CAPTURE(path);
         CHECK(check(req("GET", path, {as_viewer}), kToken, true, vt).status == 403);
     }
-    // The session token may lower a command to the viewer origin.
+    // The session token's commands run as api, a claim of viewer included.
     const auto auth = std::make_pair(std::string("authorization"), "Bearer " + kToken);
-    const caliper_api::Verdict lowered =
+    const caliper_api::Verdict claimed =
         check(req("POST", "/v0/commands/panel.remove", {auth, json, len, {"x-caliper-origin", "viewer"}}), kToken, true, vt);
-    CHECK(lowered.status == 0);
-    CHECK(lowered.origin == "viewer");
-    CHECK_FALSE(lowered.viewer);
+    CHECK(claimed.status == 0);
+    CHECK(claimed.origin == "api");
+    CHECK_FALSE(claimed.viewer);
 
     // The server refuses a viewer token that is not a token, or is the session token.
     for (const std::string bad : {std::string("short"), kToken}) {
@@ -863,8 +874,19 @@ TEST_CASE("api: a command's body is a JSON object, checked without building it")
 TEST_CASE("api: the command endpoints hand requests to the gateway on the frame thread, with every refusal") {
     caliper_api::Options o;
     o.command_approval_wait_ms = 4321;
+    o.mcp_token = "api_mcp_token-0123456789abcdefghij";
+    const std::string mcp = o.mcp_token;
     FakeApp app(o);
     const uint16_t port = app.port();
+    const std::string agent = app.server->issue_token("agent");
+    // A command with another token than the session token.
+    auto post_as = [&](const std::string& token, const std::string& name, const std::string& b,
+                       const std::string& extra = {}) {
+        return http(port, "POST", "/v0/commands/" + name,
+                    bearer(token) + "Content-Type: application/json\r\nContent-Length: " + std::to_string(b.size()) +
+                        "\r\n" + extra,
+                    {}, b);
+    };
     // No gateway: 404, as for any path the API does not serve.
     CHECK(http(port, "GET", "/v0/commands", bearer()).status == 404);
     CHECK(post_command(port, "spec.get", "{}").status == 404);
@@ -878,8 +900,7 @@ TEST_CASE("api: the command endpoints hand requests to the gateway on the frame 
     CHECK(http(port, "GET", "/v0/commands?token=" + kToken).status == 200);
 
     const std::string args = "{\"id\": \"heat\", \"patch\": {\"title\": \"Entropy\"}}";
-    Response r = post_command(port, "panel.patch", args,
-                              "X-Caliper-Origin: mcp\r\nX-Caliper-Group: turn-7\r\nX-Caliper-Preview: try-2\r\n");
+    Response r = post_as(mcp, "panel.patch", args, "X-Caliper-Group: turn-7\r\nX-Caliper-Preview: try-2\r\n");
     CHECK(r.status == 200);
     CHECK(r.headers["content-type"] == "application/json");
     Json env = parse_json(r.body);
@@ -895,7 +916,7 @@ TEST_CASE("api: the command endpoints hand requests to the gateway on the frame 
     CHECK(gw->threads[0] == app.frame.get_id());
     // From api the command answers at once when it needs approval; agent waits as mcp does.
     CHECK(post_command(port, "spec.get", "{}").status == 200);
-    CHECK(post_command(port, "spec.get", "{}", "X-Caliper-Origin: agent\r\n").status == 200);
+    CHECK(post_as(agent, "spec.get", "{}").status == 200);
     REQUIRE(gw->submitted() == 3);
     CHECK(gw->requests[1].origin == "api");
     CHECK(gw->requests[1].approval_wait_ms == 0);
@@ -924,8 +945,13 @@ TEST_CASE("api: the command endpoints hand requests to the gateway on the frame 
     // a length within 1 MiB has its body read before it is refused; the others
     // are refused from the head, and these tests send no body with them.
     const std::string body = "{}";
-    CHECK(post_command(port, "spec.get", body, "X-Caliper-Origin: ui\r\n").status == 400);
-    CHECK(post_command(port, "spec.get", body, "X-Caliper-Origin: builder\r\n").status == 400);
+    // A claim of the app's own origins is ignored: the command runs as its
+    // token's, api here, and reaches the gateway as such.
+    CHECK(post_command(port, "spec.get", body, "X-Caliper-Origin: ui\r\n").status == 200);
+    CHECK(post_command(port, "spec.get", body, "X-Caliper-Origin: builder\r\n").status == 200);
+    REQUIRE(gw->submitted() == 5);
+    CHECK(gw->requests[3].origin == "api");
+    CHECK(gw->requests[4].origin == "api");
     CHECK(post_command(port, "spec.get", body, "X-Caliper-Preview: a\r\nX-Caliper-Preview: b\r\n").status == 400);
     CHECK(http(port, "POST", "/v0/commands/spec.get", bearer() + "Content-Type: text/plain\r\nContent-Length: 2\r\n",
                {}, body).status == 415);
@@ -944,13 +970,13 @@ TEST_CASE("api: the command endpoints hand requests to the gateway on the frame 
     CHECK(http(port, "POST", "/v0/commands/spec.get", json_head(2), "evil.example:1").status == 403);
     CHECK(http(port, "POST", "/v0/commands/spec.get", json_head(2, "Origin: https://evil.example\r\n")).status == 403);
     CHECK(http(port, "GET", "/v0/commands/spec.get", bearer()).status == 405);
-    CHECK(gw->submitted() == 3);
+    CHECK(gw->submitted() == 5);
     // A body of exactly 1 MiB is read and handed over.
     std::string mib = "{\"text\":\"" + std::string((size_t(1) << 20) - 11, 'x') + "\"}";
     REQUIRE(mib.size() == size_t(1) << 20);
     CHECK(post_command(port, "spec.set_text", mib).status == 200);
-    REQUIRE(gw->submitted() == 4);
-    CHECK(gw->requests[3].args == mib);
+    REQUIRE(gw->submitted() == 6);
+    CHECK(gw->requests[5].args == mib);
     // Other endpoints still refuse a body.
     CHECK(http(port, "POST", "/v0/applets/dev.caliper.hello/launch", bearer() + "Content-Length: 2\r\n", {}, body)
               .status == 413);
@@ -1155,7 +1181,8 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     }
     REQUIRE_MESSAGE(p.text.find("[api] Caliper API on ") != std::string::npos, p.text);
 
-    // The API file: owner only, with the port and the token the line printed.
+    // The API file: owner only, with the port and the outside agents' token
+    // (mcp), never the person's token that the start line printed.
     const std::string api_file = (fs::path(data) / "api.json").string();
     REQUIRE(fs::exists(api_file));
     CHECK((fs::status(api_file).permissions() & (fs::perms::group_all | fs::perms::others_all)) == fs::perms::none);
@@ -1169,8 +1196,15 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     CHECK(caliper_net::valid_token(token));
     CHECK(api.find("url")->as_string() == "http://127.0.0.1:" + std::to_string(port) + "/v0");
     CHECK(api.find("stream_url")->as_string() == "ws://127.0.0.1:" + std::to_string(port) + "/v3/stream");
-    CHECK(p.text.find("http://127.0.0.1:" + std::to_string(port) + "/v0 with the session token " + token +
-                      " (also in " + api_file + ")") != std::string::npos);
+    const std::string mark = "/v0 with the session token ";
+    const size_t at = p.text.find("http://127.0.0.1:" + std::to_string(port) + mark);
+    REQUIRE(at != std::string::npos);
+    const size_t ts = p.text.find(mark, at) + mark.size();
+    const std::string person = p.text.substr(ts, p.text.find(' ', ts) - ts);
+    CHECK(caliper_net::valid_token(person));
+    CHECK(person != token);
+    CHECK(api_text.find(person) == std::string::npos);
+    CHECK(p.text.find(" (agents read " + api_file + ", whose commands are reviewed)", ts) != std::string::npos);
 
     // info
     Response info = http(port, "GET", "/v0/info", bearer(token));
@@ -1232,11 +1266,14 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     CHECK(http(port, "GET", "/v0/applets/dev.caliper.hello/launch", bearer(token)).status == 405);
     capture();
 
-    // The stream's handshake on both paths: the app answers as the hub.
+    // The stream's handshake on both paths: the app answers as the hub. The
+    // stream is the person's (producers, viewers and, with --allow-control,
+    // controls): it takes the start line's token, not the API file's.
     for (const char* path : {"/v3/stream", "/v0/stream"}) {
         std::string role, why;
-        REQUIRE_MESSAGE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + path + "?token=" + token, &role, &why), why);
+        REQUIRE_MESSAGE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + path + "?token=" + person, &role, &why), why);
         CHECK(role == CALIPER_NET_ROLE_HUB);
+        CHECK_FALSE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + path + "?token=" + token, &role, &why));
     }
 
     // The native viewer (caliper_viewer --headless, the app's NetSource)
@@ -1244,12 +1281,12 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     // a fake producer streams into the app.
     if (const char* viewer = std::getenv("CALIPER_TEST_VIEWER_EXE"); viewer && *viewer) {
         TinyProducer prod;
-        REQUIRE(prod.connect("ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + token));
+        REQUIRE(prod.connect("ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + person));
         const auto ready = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         while (!prod.welcomed && std::chrono::steady_clock::now() < ready) prod.pump(10);
         REQUIRE(prod.welcomed);
         Proc v;
-        REQUIRE(v.start(viewer, {"--headless", "--url", "ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + token,
+        REQUIRE(v.start(viewer, {"--headless", "--url", "ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + person,
                                  "--exit-after", "3", "--stats", "--data-dir", t.str("viewer-data")}, {}));
         int code = -1;
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(30);
@@ -1272,11 +1309,11 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
         // A bad link fails the viewer, and nothing it prints repeats the token.
         for (const std::string bad : {"ws:///v3/stream?token=", "ws://127.0.0.1:99999/v3/stream?token="}) {
             Proc b;
-            REQUIRE(b.start(viewer, {"--headless", "--url", bad + token, "--exit-after", "3",
+            REQUIRE(b.start(viewer, {"--headless", "--url", bad + person, "--exit-after", "3",
                                      "--data-dir", t.str("viewer-data")}, {}));
             const int bad_code = b.wait(30000);
             CHECK_MESSAGE(bad_code == 2, b.text);
-            CHECK_MESSAGE(b.text.find(token) == std::string::npos, b.text);
+            CHECK_MESSAGE(b.text.find(person) == std::string::npos, b.text);
             CHECK_MESSAGE(b.text.find(bad.substr(0, bad.find('?'))) != std::string::npos, b.text);
         }
     } else {
@@ -1298,7 +1335,8 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     CHECK(fs::exists(out_png));
     CHECK_FALSE(fs::exists(api_file));
     CHECK(open_socket(port) == (api_sock)-1);
-    CHECK(p.text.find(token, p.text.find("(also in")) == std::string::npos);   // printed once
+    CHECK(p.text.find(token) == std::string::npos);   // the file's token is never printed
+    CHECK(p.text.find(person, p.text.find(person) + 1) == std::string::npos);   // the person's, once
 }
 
 // ---- the app itself, hidden (--hidden), as a process -------------------------------------
@@ -1406,11 +1444,16 @@ TEST_CASE("api: the hidden app serves every endpoint through its window and stop
     CHECK(page.size() == landing.size());
     CHECK(page != landing);
 
-    // The stream's handshake on the protocol's path.
+    // The stream's handshake on the protocol's path, with the person's token
+    // from the start line; the API file's token does not open the stream.
+    const std::string mark = "with the session token ";
+    const size_t ts = p.text.find(mark) + mark.size();
+    const std::string person = p.text.substr(ts, p.text.find(' ', ts) - ts);
     std::string role, why;
-    REQUIRE_MESSAGE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + token, &role, &why),
+    REQUIRE_MESSAGE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + person, &role, &why),
                     why);
     CHECK(role == CALIPER_NET_ROLE_HUB);
+    CHECK_FALSE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + token, &role, &why));
 
     // SIGTERM closes the hidden window as a click would: the teardown runs, the
     // API file goes, nothing listens, no layout was written.

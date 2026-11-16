@@ -52,17 +52,10 @@ std::string env_text(const char* name) {
     return v ? std::string(v) : std::string();
 }
 
-long this_pid() {
-#ifdef _WIN32
-    return (long)_getpid();
-#else
-    return (long)getpid();
-#endif
-}
 
 }  // namespace
 
-AppWidgetEnv app_widget_env(bool hidden, const std::string& workspace) {
+AppWidgetEnv app_widget_env(bool hidden, const std::string& workspace, const std::string& api_file) {
     AppWidgetEnv e;
     e.hidden = hidden;
     e.workspace = workspace;
@@ -70,16 +63,8 @@ AppWidgetEnv app_widget_env(bool hidden, const std::string& workspace) {
     e.source = env_text("CALIPER_AGENT_SOURCE");
     if (e.source.empty()) e.source = CALIPER_WIDGET_AGENT_SOURCE;
     if (hidden) e.test_script = env_text("CALIPER_AGENT_TEST_SCRIPT");
-    // Caliper API's file, when this process wrote it (app_api.h).
-    const std::string api = caliper::app_data_path("api.json");
-    std::ifstream in(api);
-    if (in) {
-        std::stringstream ss;
-        ss << in.rdbuf();
-        const nlohmann::json j = nlohmann::json::parse(ss.str(), nullptr, false);
-        if (j.is_object() && j.contains("pid") && j["pid"].is_number_integer() && j["pid"].get<long>() == this_pid())
-            e.api_file = api;
-    }
+    // The sidecar's own API file, with an agent token the app issued for it.
+    e.api_file = api_file;
     return e;
 }
 

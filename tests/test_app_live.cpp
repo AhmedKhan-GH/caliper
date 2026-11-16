@@ -29,6 +29,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cctype>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -202,6 +203,7 @@ TEST_CASE("app live: attention entropy per layer, from a live stream, on the spe
                       {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_APPLETS_DIR=" + t.str("user-applets"),
                        std::string("CALIPER_WINDOW_SIZE=") + (window && *window ? window : "800x500")}));
     REQUIRE_MESSAGE(app.read_until("[api] Caliper API on ", 60000), app.text);
+    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 10000), app.text);   // after the start line
     if (app.text.find("[renderer] metal") == std::string::npos) {
         MESSAGE("caliper --hidden: run skipped: no GPU (no Metal device)");
         ::kill(app.pid, SIGTERM);
@@ -213,7 +215,20 @@ TEST_CASE("app live: attention entropy per layer, from a live stream, on the spe
     const json api = json::parse(std::ifstream(data + "/api.json"), nullptr, false);
     REQUIRE(api.is_object());
     const uint16_t port = api["port"].get<uint16_t>();
-    const std::string token = api["token"].get<std::string>();
+    // The test builds the spec as the person's own scripting would, with the
+    // token of the app's start line, whose commands are not reviewed; the API
+    // file's token is an outside agent's (mcp), whose edits wait for review.
+    std::string token;
+    {
+        const std::string mark = "with the session token ";
+        const size_t at = app.text.find(mark);
+        REQUIRE(at != std::string::npos);
+        size_t e = at + mark.size();
+        while (e < app.text.size() && (std::isalnum((unsigned char)app.text[e]) || app.text[e] == '_' || app.text[e] == '-')) ++e;
+        token = app.text.substr(at + mark.size(), e - at - mark.size());
+    }
+    REQUIRE(token.size() >= 22);
+    CHECK(token != api["token"].get<std::string>());
 
     // The live sources reach the catalog with their shapes, and with a rate
     // once a few snapshots have arrived.

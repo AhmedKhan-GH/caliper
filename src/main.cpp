@@ -566,10 +566,15 @@ public:
                     std::cerr << "[chat] Caliper API started on " << *started << " for the side chat" << std::endl;
                 }
             }
-            if (!api_.running()) *why = "see Activity";
-            else if (api_.file().empty()) *why = "the API file could not be written";
-            return api_.running() && !api_.file().empty() ? api_.file() : std::string();
+            if (!api_.running()) {
+                *why = "see Activity";
+                return {};
+            }
+            // The agent's own API file, with a token of the origin agent for
+            // this session: never the person's token, nor the API file's.
+            return api_.issue_agent_file(why);
         };
+        chh.end_api_file = [this](const std::string& file) { api_.revoke_agent_file(file); };
         chh.agent_ended = [this] {
             if (!api_for_chat_ || !api_.running()) return;
             const std::string address = api_address();
@@ -584,6 +589,14 @@ public:
         // Every page's status bar shows the API's address while it runs.
         set_host_status_note([this] { return api_.running() ? "api " + api_address() : std::string(); });
         spec_page_.set_chat(&chat_);
+        // ⌘K's sidecar gets an API file of its own, with an agent token.
+        caliper_host::SpecPage::ApiFiles af;
+        af.issue = [this]() -> std::string {
+            std::string why;
+            return api_.running() ? api_.issue_agent_file(&why) : std::string();
+        };
+        af.revoke = [this](const std::string& file) { api_.revoke_agent_file(file); };
+        spec_page_.set_api_files(std::move(af));
     }
 
     void cleanup() {

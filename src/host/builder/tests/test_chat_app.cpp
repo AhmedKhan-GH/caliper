@@ -30,6 +30,7 @@
 #include <doctest/doctest.h>
 #include <nlohmann/json.hpp>
 
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -167,6 +168,7 @@ TEST_CASE("chat app: the side chat on the hidden app's spec page, with the cards
         "wait 10; shot t-4; focus curves; wait 3; leave; key cmd+k; until unavailable; wait 3; "
         "type Build a loader for the validation logs; wait 3; key enter; chat draft; wait 5; shot t-5; "
         "chat focus; wait 3; key enter; wait 30; chat until ready; chat focus; wait 3; "
+        "type copy-api; wait 3; key enter; wait 30; chat until ready; chat focus; wait 3; "
         "type Compare the first and the last layer; wait 3; key enter; chat until exited; wait 10; quit";
     acp::SpawnOptions o;
     o.argv = {exe, "--hidden", "--workspace", ws.string()};
@@ -213,6 +215,37 @@ TEST_CASE("chat app: the side chat on the hidden app's spec page, with the cards
     CHECK(run.err.find("0.0.0.0") == std::string::npos);
     CHECK(run.err.find("[chat] Caliper API stopped on 127.0.0.1:") != std::string::npos);
     CHECK_FALSE(fs::exists(data / "api.json"));
+    // The agent reached Caliper with a token of its own, origin agent, in an
+    // API file of its own, which went when its session ended; the person's
+    // token, printed on the start line, is in none of what the agent was given
+    // (its API file, the app's api.json, its environment), and api.json holds
+    // a token for outside agents, not the person's and not the agent's.
+    {
+        const std::string mark = "with the session token ";
+        const size_t at = run.out.find(mark);
+        REQUIRE(at != std::string::npos);
+        size_t e = at + mark.size();
+        while (e < run.out.size() && (std::isalnum((unsigned char)run.out[e]) || run.out[e] == '_' || run.out[e] == '-')) ++e;
+        const std::string person = run.out.substr(at + mark.size(), e - at - mark.size());
+        REQUIRE(person.size() >= 22);
+        const json agent_file = json::parse(read_file(gates / "api-seen.json"), nullptr, false);
+        const json api_file = json::parse(read_file(gates / "api-json-seen.json"), nullptr, false);
+        REQUIRE(agent_file.is_object());
+        REQUIRE(api_file.is_object());
+        const std::string agent_token = agent_file["token"];
+        CHECK(agent_token.size() >= 22);
+        CHECK(agent_token != person);
+        CHECK(agent_token != api_file["token"].get<std::string>());
+        CHECK(api_file["token"].get<std::string>() != person);
+        CHECK(read_file(gates / "env-seen.txt").find(person) == std::string::npos);
+        CHECK(read_file(gates / "env-seen.txt").find(agent_token) == std::string::npos);
+        const std::string agent_path = read_file(gates / "api-seen-path.txt");
+        CHECK(agent_path.find("api-agent-") != std::string::npos);
+        CHECK_FALSE(fs::exists(agent_path));
+        // The token went into no argument of caliper-mcp: only the file's path did.
+        CHECK(run.err.find(agent_token) == std::string::npos);
+        CHECK(run.out.find(agent_token) == std::string::npos);
+    }
     // The settings were saved with the pane open, and only the keys the app writes.
     const std::string saved = read_file(data / "side-chat.json");
     CHECK(saved.find("\"open\": true") != std::string::npos);

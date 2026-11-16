@@ -267,7 +267,37 @@ bool token_ok(const HttpRequest& r, const std::string& token, bool query_ok) {
     return caliper_net::wire::token_equal(q, token);
 }
 
+std::string TokenTable::find(const HttpRequest& r, bool query_ok) const {
+    // The token the request presents: the first Authorization header's
+    // "Bearer <token>", else, when query_ok, the query parameter.
+    std::string presented;
+    bool has_header = false;
+    for (const auto& h : r.headers)
+        if (h.first == "authorization") has_header = true;
+    if (has_header) {
+        const std::string v = trim(r.header("authorization"));
+        const size_t sp = v.find_first_of(" \t");
+        if (sp == std::string::npos || lower(v.substr(0, sp)) != "bearer") return {};
+        presented = trim(v.substr(sp + 1));
+    } else if (!query_ok || !r.query_param(CALIPER_NET_TOKEN_PARAM, &presented)) {
+        return {};
+    }
+    if (presented.empty()) return {};
+    // Every entry is compared, in constant time each, whichever matches.
+    std::string origin;
+    for (const auto& e : entries)
+        if (!e.first.empty() && caliper_net::wire::token_equal(presented, e.first) && origin.empty()) origin = e.second;
+    return origin;
+}
+
 Verdict check(const HttpRequest& r, const std::string& token, bool command_layer, const std::string& viewer_token) {
+    TokenTable t;
+    t.entries.push_back({token, "api"});
+    if (!viewer_token.empty()) t.entries.push_back({viewer_token, "viewer"});
+    return check(r, t, command_layer);
+}
+
+Verdict check(const HttpRequest& r, const TokenTable& tokens, bool command_layer) {
     Verdict v;
     if (r.has_origin && !caliper_net::wire::origin_allowed(r.origin)) {
         v.status = 403;
@@ -292,14 +322,15 @@ Verdict check(const HttpRequest& r, const std::string& token, bool command_layer
         v.message = std::string(r.path) + " takes " + v.routed.allow;
         return v;
     }
-    if (!token_ok(r, token, r.method == "GET")) {
-        if (viewer_token.empty() || !token_ok(r, viewer_token, r.method == "GET")) {
-            v.status = 401;
-            v.message = r.method == "GET" ? "the session token is missing or wrong"
-                                          : "the session token is missing or wrong (a POST takes it in "
-                                            "the Authorization header only)";
-            return v;
-        }
+    const std::string token_origin = tokens.find(r, r.method == "GET");
+    if (token_origin.empty()) {
+        v.status = 401;
+        v.message = r.method == "GET" ? "the session token is missing or wrong"
+                                      : "the session token is missing or wrong (a POST takes it in "
+                                        "the Authorization header only)";
+        return v;
+    }
+    if (token_origin == "viewer") {
         // The viewer token opens the spec page and its read-only commands only.
         v.viewer = true;
         if (rt != Route::SpecPage && !(rt == Route::Command && viewer_command(v.routed.name))) {
@@ -311,8 +342,8 @@ Verdict check(const HttpRequest& r, const std::string& token, bool command_layer
     }
     const std::string length = trim(r.header("content-length"));
     if (rt == Route::Command) {
-        for (const char* h : {"authorization", "content-length", "content-type", "x-caliper-origin",
-                              "x-caliper-group", "x-caliper-preview"}) {
+        for (const char* h : {"authorization", "content-length", "content-type", "x-caliper-group",
+                              "x-caliper-preview"}) {
             if (header_count(r, h) > 1) {
                 v.status = 400;
                 v.message = std::string("the ") + h + " header is repeated";
@@ -347,25 +378,19 @@ Verdict check(const HttpRequest& r, const std::string& token, bool command_layer
             v.message = "a command's arguments are application/json";
             return v;
         }
-        const std::string origin = r.header("x-caliper-origin");
         if (v.viewer) {
-            // The viewer token's commands come from the viewer origin, whatever
-            // the request claims beside it.
-            if (header_count(r, "x-caliper-origin") > 0 && origin != "viewer") {
+            // The viewer token's commands come from the viewer origin; a
+            // request that claims another beside it is refused, as before.
+            const std::string claimed = r.header("x-caliper-origin");
+            if (header_count(r, "x-caliper-origin") > 1 || (header_count(r, "x-caliper-origin") > 0 && claimed != "viewer")) {
                 v.status = 400;
                 v.message = "with the viewer token, X-Caliper-Origin is viewer";
                 return v;
             }
-            v.origin = "viewer";
-        } else if (header_count(r, "x-caliper-origin") == 0 || origin == "api") {
-            v.origin = "api";
-        } else if (origin == "mcp" || origin == "agent" || origin == "viewer") {
-            v.origin = origin;
-        } else {
-            v.status = 400;
-            v.message = "X-Caliper-Origin is api, mcp, agent or viewer";
-            return v;
         }
+        // The token decides the origin; X-Caliper-Origin is ignored, so no
+        // request becomes api by leaving it out or by naming another origin.
+        v.origin = token_origin;
         return v;
     }
     if ((!length.empty() && length != "0") || !r.header("transfer-encoding").empty()) {
@@ -463,7 +488,8 @@ struct Server::Impl {
     bool enc_stop = false;
     std::thread enc_thread;
 
-    explicit Impl(const Options& o) : opt(o) {}
+    explicit Impl(const Options& o, const Server* s) : opt(o), server(s) {}
+    const Server* server;   // its token table
 
     std::shared_ptr<CommandGateway> current_gateway() const {
         std::lock_guard<std::mutex> g(mu);
@@ -503,7 +529,7 @@ struct Server::Impl {
     // without the token or the right Host and Origin.
     size_t body_limit(const HttpRequest& r) {
         if (!caliper_net::wire::host_allowed(r.host, hub->port())) return 0;
-        const Verdict v = check(r, opt.token, current_gateway() != nullptr, opt.viewer_token);
+        const Verdict v = check(r, server->tokens(), current_gateway() != nullptr);
         return v.routed.route == Route::Command && v.body_ok ? kMaxCommandBody : 0;
     }
 
@@ -514,7 +540,7 @@ struct Server::Impl {
             ++st.requests;
         }
         const std::shared_ptr<CommandGateway> gw = current_gateway();
-        const Verdict v = check(r, opt.token, gw != nullptr, opt.viewer_token);
+        const Verdict v = check(r, server->tokens(), gw != nullptr);
         if (v.status == 401) {
             answer_error(c, 401, v.message, {{"WWW-Authenticate", "Bearer realm=\"caliper\""}});
             return;
@@ -762,6 +788,35 @@ struct Server::Impl {
 
 Server::Server(Options o) : opt_(std::move(o)) {}
 
+TokenTable Server::tokens() const {
+    TokenTable t;
+    t.entries.push_back({opt_.token, "api"});
+    if (!opt_.mcp_token.empty()) t.entries.push_back({opt_.mcp_token, "mcp"});
+    if (!opt_.viewer_token.empty()) t.entries.push_back({opt_.viewer_token, "viewer"});
+    std::lock_guard<std::mutex> g(issued_mu_);
+    for (const auto& e : issued_) t.entries.push_back(e);
+    return t;
+}
+
+std::string Server::issue_token(const std::string& origin) {
+    if (origin != "agent" && origin != "mcp") return {};
+    std::lock_guard<std::mutex> g(issued_mu_);
+    for (;;) {
+        std::string t = caliper_net::random_token();
+        bool taken = t == opt_.token || t == opt_.mcp_token || t == opt_.viewer_token;
+        for (const auto& e : issued_) taken = taken || e.first == t;
+        if (taken) continue;
+        issued_.push_back({t, origin});
+        return t;
+    }
+}
+
+void Server::revoke_token(const std::string& token) {
+    std::lock_guard<std::mutex> g(issued_mu_);
+    for (auto it = issued_.begin(); it != issued_.end();)
+        it = it->first == token ? issued_.erase(it) : it + 1;
+}
+
 Server::~Server() { stop(); }
 
 bool Server::start(std::string* err) {
@@ -777,7 +832,12 @@ bool Server::start(std::string* err) {
         *err = "the viewer token must be a valid token other than the session token";
         return false;
     }
-    auto m = std::make_unique<Impl>(opt_);
+    if (!opt_.mcp_token.empty() && (!caliper_net::valid_token(opt_.mcp_token) || opt_.mcp_token == opt_.token ||
+                                    opt_.mcp_token == opt_.viewer_token)) {
+        *err = "the mcp token must be a valid token other than the session and viewer tokens";
+        return false;
+    }
+    auto m = std::make_unique<Impl>(opt_, this);
     Impl* p = m.get();
     m->gateway = gateway_;
     caliper_net::HubOptions h;

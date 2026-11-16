@@ -25,6 +25,12 @@
 //   report         answers with the prompt's blocks as JSON
 //   hold           one chunk, then waits for the gate file <gate-dir>/go (or a
 //                  cancel), then ends the turn
+//   copy-api       copies what it was given into <gate-dir>, for a test to
+//                  read: the API file named after --api-file in the MCP
+//                  server of session/new (api-seen.json, with its path in
+//                  api-seen-path.txt), the app's api.json beside it
+//                  (api-json-seen.json) and its environment's CALIPER* variables
+//                  and PATH (env-seen.txt), never another value
 //   anything else  echoes the text
 //
 // Options: --gate-dir <dir> makes the learning-rate scenario wait, after its
@@ -41,6 +47,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <future>
 #include <iostream>
 #include <map>
@@ -50,6 +57,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+extern char** environ;
 
 using nlohmann::json;
 namespace acp = caliper_builder::acp;
@@ -467,6 +476,36 @@ void run_turn(json id, json prompt) {
         chunk("Holding.");
         wait_gate("go");
         end_turn(id, g_cancelled ? "cancelled" : "end_turn");
+    } else if (text == "copy-api") {
+        json server;
+        {
+            std::lock_guard<std::mutex> lock(g_state_mutex);
+            const json servers = g_session_params.value("mcpServers", json::array());
+            if (!servers.empty()) server = servers[0];
+        }
+        std::string file;
+        const json args = server.is_object() ? server.value("args", json::array()) : json::array();
+        for (size_t i = 0; i + 1 < args.size(); ++i)
+            if (args[i] == "--api-file") file = args[i + 1].get<std::string>();
+        std::error_code ec;
+        const fs::path gates(g_gate_dir);
+        if (!file.empty()) {
+            fs::copy_file(file, gates / "api-seen.json", fs::copy_options::overwrite_existing, ec);
+            std::ofstream(gates / "api-seen-path.txt") << file;
+            fs::copy_file(fs::path(file).parent_path() / "api.json", gates / "api-json-seen.json",
+                          fs::copy_options::overwrite_existing, ec);
+        }
+        {
+            std::ofstream env(gates / "env-seen.txt");
+            // Caliper's own variables and PATH only: never a key the
+            // person's shell may hold.
+            for (char** e = environ; e && *e; ++e) {
+                const std::string v = *e;
+                if (v.rfind("CALIPER", 0) == 0 || v.rfind("PATH=", 0) == 0) env << v << "\n";
+            }
+        }
+        chunk(file.empty() ? "No API file." : "Copied.");
+        end_turn(id);
     } else if (text == "report") {
         chunk(prompt.dump());
         end_turn(id);

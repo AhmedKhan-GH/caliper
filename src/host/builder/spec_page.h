@@ -144,6 +144,15 @@ public:
     // surface's "Ask in chat", which opens it with the handoff draft. Null
     // leaves the page without it.
     void set_chat(ChatPane* chat);
+    // The widget agent's sidecar reaches the session's commands through an API
+    // file of its own: issue() gives one with a token of the origin agent
+    // (AppApi::issue_agent_file(); "" when the API is not running), and
+    // revoke() ends it when the inline surface goes.
+    struct ApiFiles {
+        std::function<std::string()> issue;
+        std::function<void(const std::string& file)> revoke;
+    };
+    void set_api_files(ApiFiles files);
     // Whether the app runs hidden (--hidden): the widget agent then never
     // touches the key store, and runs the sidecar only on a test's script
     // (builder/widget_app.h).

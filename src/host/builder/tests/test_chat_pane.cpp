@@ -285,10 +285,16 @@ TEST_CASE("chat pane: the agent's command that waits for approval is one row, an
     int api_starts = 0, ended = 0;
     std::vector<std::string> pointed;
     ChatPane::Hooks h;
+    // Each agent session gets an API file of its own, as AppApi issues them.
+    std::vector<std::string> issued, ended_files;
     h.start_api = [&](std::string*, std::string* started) {
         if (api_starts++ == 0) *started = "127.0.0.1:61234";   // the first call started it
-        return api.string();
+        const fs::path f = dir / ("api-agent-" + std::to_string(api_starts) + ".json");
+        fs::copy_file(api, f, fs::copy_options::overwrite_existing);
+        issued.push_back(f.string());
+        return f.string();
     };
+    h.end_api_file = [&](const std::string& f) { ended_files.push_back(f); };
     h.agent_ended = [&] { ++ended; };
     h.show_approval = [&](const std::string& id) { pointed.push_back(id); };
     pane.start(o, h);
@@ -339,9 +345,17 @@ TEST_CASE("chat pane: the agent's command that waits for approval is one row, an
     REQUIRE(a.run(pane, [&] { return pane.state() == "exited"; }));
     CHECK(ended == 1);
     CHECK(api_starts == 1);
-    // A restart replaces the agent without an end.
+    // ...and the session's own API file, with its token, ends with it.
+    CHECK(ended_files == issued);
+    // A restart replaces the agent without an end, with a file of its own.
     chat->restart();
     REQUIRE(a.run(pane, [&] { return pane.state() == "ready"; }));
     CHECK(ended == 1);
     CHECK(api_starts == 2);
+    REQUIRE(issued.size() == 2);
+    CHECK(issued[1] != issued[0]);
+    CHECK(ended_files.size() == 1);
+    // The pane's shutdown ends the second.
+    pane.shutdown();
+    CHECK(ended_files == issued);
 }

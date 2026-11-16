@@ -13,8 +13,10 @@
 //   - the sidecar's package and the command table, from this build's source
 //     tree (CALIPER_AGENT_SOURCE overrides the folder that holds
 //     caliper_agent/ and commands/command_table.json);
-//   - Caliper API running for this process (--api), whose file the sidecar
-//     reads to reach the session's commands; without it no agent is set up;
+//   - Caliper API running for this process, and an API file of the
+//     sidecar's own that the app gives it, with a token of the origin agent
+//     issued for it (AppApi::issue_agent_file()), which the sidecar reads to
+//     reach the session's commands; without it no agent is set up;
 //   - the provider's key, from the operating system's key store, placed
 //     only in the sidecar's environment at spawn (place_key_in_environment(),
 //     which also passes CALIPER_AGENT_OFFLINE through when the app has it and
@@ -39,15 +41,15 @@ namespace caliper_host {
 struct AppWidgetEnv {
     bool hidden = false;
     std::string workspace;     // the session's folder: the sidecar's cwd
-    std::string api_file;      // this process's Caliper API file, or "" when the API is not running
+    std::string api_file;      // the sidecar's own API file (an agent token), or "" when the API is not running
     std::string python;        // CALIPER_AGENT_PYTHON
     std::string source;        // the folder with caliper_agent/ and commands/ (CALIPER_AGENT_SOURCE or the build's)
     std::string test_script;   // CALIPER_AGENT_TEST_SCRIPT, read only when hidden
 };
 
-// The environment of this process: the variables above, and the API file
-// (api.json in the app-data folder) when it was written by this process.
-AppWidgetEnv app_widget_env(bool hidden, const std::string& workspace);
+// The environment of this process: the variables above, and the sidecar's
+// API file, which the app issued for it ("" when the API is not running).
+AppWidgetEnv app_widget_env(bool hidden, const std::string& workspace, const std::string& api_file = {});
 
 // The agent for that environment; never null. `why`, when given, says why
 // none is set up ("" when one is).

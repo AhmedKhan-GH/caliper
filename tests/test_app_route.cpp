@@ -62,7 +62,7 @@ struct Http {
 };
 
 Http http(uint16_t port, const std::string& method, const std::string& target, const std::string& token,
-          const std::string& body = {}) {
+          const std::string& body = {}, const std::string& extra_headers = {}) {
     Http out;
     const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     REQUIRE(fd >= 0);
@@ -77,7 +77,7 @@ Http http(uint16_t port, const std::string& method, const std::string& target, c
                       "\r\nAuthorization: Bearer " + token + "\r\nConnection: close\r\n";
     if (method == "POST")
         req += "Content-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\n";
-    req += "\r\n" + body;
+    req += extra_headers + "\r\n" + body;
     for (size_t sent = 0; sent < req.size();) {
         const ssize_t n = ::send(fd, req.data() + sent, req.size() - sent, 0);
         REQUIRE(n > 0);
@@ -98,9 +98,22 @@ Http http(uint16_t port, const std::string& method, const std::string& target, c
     return out;
 }
 
-// POST /v0/commands/{name} from the api origin; the result envelope.
-json command(uint16_t port, const std::string& token, const std::string& name, const json& args = json::object()) {
-    const Http r = http(port, "POST", "/v0/commands/" + name, token, args.dump());
+// The person's own token, from the app's start line: it is in no file.
+std::string start_line_token(const std::string& text) {
+    const std::string mark = "with the session token ";
+    const size_t at = text.find(mark);
+    if (at == std::string::npos) return {};
+    const size_t s = at + mark.size();
+    size_t e = s;
+    while (e < text.size() && (std::isalnum((unsigned char)text[e]) || text[e] == '_' || text[e] == '-')) ++e;
+    return text.substr(s, e - s);
+}
+
+// POST /v0/commands/{name} with `token`, whose origin the command runs from;
+// the result envelope.
+json command(uint16_t port, const std::string& token, const std::string& name, const json& args = json::object(),
+             const std::string& extra_headers = {}) {
+    const Http r = http(port, "POST", "/v0/commands/" + name, token, args.dump(), extra_headers);
     REQUIRE_MESSAGE(r.status == 200, name << ": " << r.status << " " << r.body);
     json env = json::parse(r.body, nullptr, false);
     REQUIRE(env.is_object());
@@ -111,6 +124,12 @@ json ok(uint16_t port, const std::string& token, const std::string& name, const 
     const json env = command(port, token, name, args);
     REQUIRE_MESSAGE(env["ok"] == true, name << ": " << env.dump());
     return env["result"];
+}
+
+size_t count_in(const std::string& text, const std::string& what) {
+    size_t n = 0;
+    for (size_t at = text.find(what); at != std::string::npos; at = text.find(what, at + 1)) ++n;
+    return n;
 }
 
 std::string unb64(const std::string& in) {
@@ -215,6 +234,7 @@ TEST_CASE("app route: an agent builds, opens, renders and captures a dashboard i
                     {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_APPLETS_DIR=" + t.str("user-applets"),
                      "CALIPER_WINDOW_SIZE=800x500"}));
     REQUIRE_MESSAGE(p.read_until("[api] Caliper API on ", 60000), p.text);
+    REQUIRE_MESSAGE(p.read_until("[api] Spec applets in a browser", 10000), p.text);   // after the start line
     if (p.text.find("[renderer] metal") == std::string::npos) {
         const char* require = std::getenv("CALIPER_REQUIRE_GPU");
         REQUIRE_MESSAGE(!(require && std::string(require) == "1"), p.text);
@@ -226,7 +246,11 @@ TEST_CASE("app route: an agent builds, opens, renders and captures a dashboard i
     const json api = json::parse(std::ifstream(data + "/api.json"), nullptr, false);
     REQUIRE(api.is_object());
     const uint16_t port = api["port"].get<uint16_t>();
-    const std::string token = api["token"].get<std::string>();
+    // The person's own scripting takes the token of the start line, whose
+    // commands are not reviewed; the API file's is an outside agent's.
+    const std::string token = start_line_token(p.text);
+    REQUIRE(token.size() >= 22);
+    REQUIRE(api["token"].get<std::string>() != token);
 
     // The command table, and the landing screen as the frame shows it.
     const Http table = http(port, "GET", "/v0/commands", token);
@@ -331,6 +355,7 @@ TEST_CASE("app route: an agent builds, opens, renders and captures a dashboard i
         CHECK(got["structuredContent"]["json"]["applet"]["id"] == "run42-dashboard");
         CHECK(child.finish().success());
         CHECK(child.all_err().find(token) == std::string::npos);
+        CHECK(child.all_err().find(api["token"].get<std::string>()) == std::string::npos);
     }
 
     // SIGTERM closes the hidden window; the session closes and the API file
@@ -341,6 +366,73 @@ TEST_CASE("app route: an agent builds, opens, renders and captures a dashboard i
     CHECK(p.text.find("[session] workspace " + ws + " closed") != std::string::npos);
     CHECK_FALSE(fs::exists(data + "/api.json"));
     CHECK(fs::is_regular_file(ws + "/applets/run42-dashboard/run42-dashboard.spec.toml"));
+}
+
+TEST_CASE("app route: the API file's token is an outside agent's, mcp, so its spec edits are reviewed whatever the "
+          "request claims, and the person's token is on the start line only") {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    if (!exe || !*exe) {
+        MESSAGE("CALIPER_TEST_CALIPER_EXE is not set: run the ctest entry caliper_app_route");
+        return;
+    }
+    TempDir t("tokens");
+    const std::string ws = t.str("ws");
+    const std::string data = t.str("data");
+    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(data);
+    // The person denies the outside agent's two edits on the approval cards
+    // (the hidden app's test decisions), so a held request answers at once.
+    {
+        std::ofstream d(t.str("decisions.txt"));
+        d << "deny panel.create mcp\ndeny panel.create mcp\n";
+    }
+    Proc p;
+    REQUIRE(p.start(exe, {"--hidden", "--api", "--api-port", "0", "--workspace", ws},
+                    {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_APPLETS_DIR=" + t.str("user-applets"),
+                     "CALIPER_WINDOW_SIZE=640x400", "CALIPER_TEST_APPROVALS=" + t.str("decisions.txt")}));
+    REQUIRE_MESSAGE(p.read_until("[api] Caliper API on ", 60000), p.text);
+    REQUIRE_MESSAGE(p.read_until("[api] Spec applets in a browser", 10000), p.text);   // after the start line
+    if (p.text.find("[renderer] metal") == std::string::npos) {
+        MESSAGE("caliper --hidden --api: run skipped: no GPU (no Metal device)");
+        ::kill(p.pid, SIGTERM);
+        p.wait(30000);
+        return;
+    }
+    const json api = json::parse(std::ifstream(data + "/api.json"), nullptr, false);
+    REQUIRE(api.is_object());
+    const uint16_t port = api["port"].get<uint16_t>();
+    const std::string person = start_line_token(p.text);
+    const std::string file_token = api["token"].get<std::string>();
+    REQUIRE(person.size() >= 22);
+    // The person's token is in no file Caliper writes.
+    CHECK(file_token != person);
+    for (const auto& e : fs::recursive_directory_iterator(data)) {
+        if (!e.is_regular_file()) continue;
+        std::ifstream in(e.path(), std::ios::binary);
+        std::stringstream ss;
+        ss << in.rdbuf();
+        CHECK_MESSAGE(ss.str().find(person) == std::string::npos, e.path().string());
+    }
+    // The person's scripting: unreviewed.
+    ok(port, person, "spec.new", {{"id", "dash"}, {"title", "Dash"}});
+    const json note = {{"id", "note"}, {"primitive", "text"}, {"options", {{"text", "Hi"}}}};
+    // The API file's token, with no X-Caliper-Origin and with one that claims
+    // api: both run as mcp, are held for review, and the person denies them.
+    for (const std::string& claim : {std::string(), std::string("X-Caliper-Origin: api\r\n")}) {
+        INFO("claim: " << claim);
+        const json env = command(port, file_token, "panel.create", note, claim);
+        INFO(env.dump());
+        CHECK(env["ok"] == false);
+        CHECK(env["error"]["code"] == "command.denied");
+    }
+    // The file's token reads as before.
+    CHECK(http(port, "GET", "/v0/info", file_token).status == 200);
+    // The person's own token: the same edit runs at once.
+    CHECK(command(port, person, "panel.create", note)["ok"] == true);
+    ::kill(p.pid, SIGTERM);
+    CHECK_MESSAGE(p.wait(30000) == 0, p.text);
+    CHECK(count_in(p.text, "panel.create (mcp) denied") == 2);
+    CHECK(p.text.find("[session] command panel.create (api)") != std::string::npos);
 }
 
 TEST_CASE("app route: caliper shot draws a workspace's spec applet on the spec page, built by a command script") {

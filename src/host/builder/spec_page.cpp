@@ -155,6 +155,15 @@ struct SpecPage::Impl {
     std::unique_ptr<InlineWidget> widget;
     bool hidden = false;
     ChatPane* chat = nullptr;   // the side chat, when the app has one
+    ApiFiles api_files;         // the sidecar's own API file
+    std::string widget_api_file;
+
+    // Drops the inline surface and ends its sidecar's token.
+    void drop_widget() {
+        widget.reset();
+        if (!widget_api_file.empty() && api_files.revoke) api_files.revoke(widget_api_file);
+        widget_api_file.clear();
+    }
 
     // The builder pane over the bound session (builder_pane.h), made with it;
     // build mode is its own.
@@ -167,7 +176,13 @@ struct SpecPage::Impl {
             InlineWidget::Options o;
             o.session = bound;
             o.busy = [&app] { return app.worker_busy(); };
-            o.agent = make_app_widget_agent(app_widget_env(hidden, app.workspace()));
+            widget_api_file = api_files.issue ? api_files.issue() : std::string();
+            std::string none;
+            o.agent = make_app_widget_agent(app_widget_env(hidden, app.workspace(), widget_api_file), &none);
+            if (!none.empty() && !widget_api_file.empty()) {   // no sidecar runs: its token ends now
+                if (api_files.revoke) api_files.revoke(widget_api_file);
+                widget_api_file.clear();
+            }
             // Ask in chat: the side chat opens with the request and its context
             // as a draft. The bundle is built here, inside the frame, so it
             // leaves the panel's render out (no offscreen draw mid-frame).
@@ -238,7 +253,7 @@ struct SpecPage::Impl {
             // Its session has gone or changed: the surface forgets its
             // preview without a command to it, then detaches.
             widget->surface().abandon();
-            widget.reset();
+            drop_widget();
             install_overlay();
         }
         bound = s;
@@ -639,6 +654,8 @@ void SpecPage::set_seams(Seams seams) { impl_->seams = std::move(seams); }
 
 void SpecPage::set_hidden(bool hidden) { impl_->hidden = hidden; }
 
+void SpecPage::set_api_files(ApiFiles files) { impl_->api_files = std::move(files); }
+
 void SpecPage::set_chat(ChatPane* chat) { impl_->chat = chat; }
 
 bool SpecPage::panel_rect(const std::string& panel_id, float rect[4]) const {
@@ -716,7 +733,7 @@ void SpecPage::shutdown() {
     // since a command into the closed session crashed the app on quitting
     // with a prompt open; then it goes, before the runtime it is attached to.
     if (impl_->widget) impl_->widget->surface().abandon();
-    impl_->widget.reset();
+    impl_->drop_widget();
     impl_->builder.reset();
     impl_->runtime.reset();
     impl_->source.reset();
@@ -757,6 +774,7 @@ bool SpecPage::drop_files(AppSession&, const std::vector<std::string>&, std::str
 }
 BuilderPane* SpecPage::builder() { return nullptr; }
 void SpecPage::set_hidden(bool) {}
+void SpecPage::set_api_files(ApiFiles) {}
 void SpecPage::set_chat(ChatPane*) {}
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
 std::string SpecPage::widget_state() const { return "idle"; }

@@ -47,7 +47,17 @@ using nlohmann::json;
 
 namespace {
 
-const std::string kToken = "api_commands_token-0123456789abcdef";
+const std::string kToken = "api_commands_token-0123456789abcdef";      // the person's: origin api
+const std::string kMcpToken = "api_commands_mcp-token-0123456789abcd";  // the API file's: origin mcp
+std::string g_agent_token;   // issued by the running SessionApp: origin agent
+
+// The token whose origin a request runs from: the origin is the token's, and
+// X-Caliper-Origin, which these helpers still send, is ignored.
+const std::string& token_for(const std::string& origin) {
+    if (origin == "mcp") return kMcpToken;
+    if (origin == "agent") return g_agent_token;
+    return kToken;
+}
 
 // ---- raw HTTP -----------------------------------------------------------------------------
 struct Response {
@@ -120,7 +130,7 @@ int send_request(uint16_t port, const std::string& method, const std::string& ta
     return fd;
 }
 
-std::string bearer() { return "Authorization: Bearer " + kToken + "\r\n"; }
+std::string bearer(const std::string& origin = {}) { return "Authorization: Bearer " + token_for(origin) + "\r\n"; }
 
 Response get(uint16_t port, const std::string& target) {
     return read_response(send_request(port, "GET", target, bearer()));
@@ -130,8 +140,8 @@ Response get(uint16_t port, const std::string& target) {
 int send_command(uint16_t port, const std::string& name, const json& args, const std::string& origin = {},
                  const std::string& group = {}, const std::string& preview = {}) {
     const std::string body = args.dump();
-    std::string extra = bearer() + "Content-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) +
-                        "\r\n";
+    std::string extra = bearer(origin) + "Content-Type: application/json\r\nContent-Length: " +
+                        std::to_string(body.size()) + "\r\n";
     if (!origin.empty()) extra += "X-Caliper-Origin: " + origin + "\r\n";
     if (!group.empty()) extra += "X-Caliper-Group: " + group + "\r\n";
     if (!preview.empty()) extra += "X-Caliper-Preview: " + preview + "\r\n";
@@ -221,11 +231,13 @@ struct SessionApp {
         session = std::move(opened.session);
         o.port = 0;
         o.token = kToken;
+        o.mcp_token = kMcpToken;
         o.info_json = "{\"host\":\"test\"}";
         server = std::make_unique<caliper_api::Server>(std::move(o));
         server->set_command_gateway(caliper_api::make_session_gateway(*session));
         std::string err;
         REQUIRE_MESSAGE(server->start(&err), err);
+        g_agent_token = server->issue_token("agent");
         // The frame thread, as the app's frame loop: it names itself to the
         // registry, takes the API's calls and drains the command queue.
         frame = std::thread([this] {
@@ -251,6 +263,7 @@ struct SessionApp {
         fs::remove_all(root, ec);
     }
     uint16_t port() const { return server->port(); }
+    friend uint16_t port_of(const SessionApp& a) { return a.server->port(); }
 
     // The approval the registry waits on for `name`, once it is there.
     std::string pending_approval(const std::string& name, const std::string& origin) {
@@ -415,10 +428,9 @@ TEST_CASE("api commands: the viewer token opens the spec page and runs its reads
     }
     CHECK(refused);
 
-    // With the session token, a request may lower itself to the viewer origin,
-    // and the command layer then runs reads only.
+    // The session token runs from its own origin, whatever X-Caliper-Origin
+    // claims: a claim of viewer neither lowers nor raises it.
     CHECK(command(port, "panel.data", {{"applet", "dash"}, {"panel", "note"}}, "viewer")["ok"] == true);
-    CHECK(error_code(command(port, "panel.remove", {{"id", "note"}}, "viewer")) == "command.not_allowed");
     REQUIRE(app.session->open_spec().has_value());
     CHECK(app.session->open_spec()->spec.panels.size() == 1);
 }
@@ -543,7 +555,7 @@ TEST_CASE("api commands: caliper-mcp drives a session through the app's API serv
         json f{{"version", 1},
                {"pid", (long long)::getpid()},
                {"port", app.port()},
-               {"token", kToken},
+               {"token", kMcpToken},   // as the app writes it: the mcp token
                {"url", app.server->base_url()},
                {"stream_url", app.server->stream_url()}};
         std::ofstream(api_file) << f.dump() << "\n";
@@ -563,6 +575,57 @@ TEST_CASE("api commands: caliper-mcp drives a session through the app's API serv
     CHECK(app.session->open_spec()->spec.applet.id == "from-mcp");
     CHECK(child.finish().success());
     CHECK(child.all_err().find("the app's command table") != std::string::npos);
-    CHECK(child.all_out().find(kToken) == std::string::npos);
-    CHECK(child.all_err().find(kToken) == std::string::npos);
+    CHECK(child.all_out().find(kMcpToken) == std::string::npos);
+    CHECK(child.all_err().find(kMcpToken) == std::string::npos);
+    // Its command ran from the origin of the file's token.
+    CHECK(command(port_of(app), "history.list", json::object())["result"]["undo"][0]["origin"] == "mcp");
+}
+
+TEST_CASE("api commands: the origin is the token's, whatever X-Caliper-Origin claims, and an issued token can be "
+          "revoked") {
+    SessionApp app;
+    const uint16_t port = app.port();
+    app.session->set_review(caliper_builder::CommandOrigin::mcp, true);
+    app.session->set_review(caliper_builder::CommandOrigin::agent, true);
+    CHECK(command(port, "spec.new", {{"id", "dash"}, {"title", "Dash"}})["ok"] == true);
+    const json note = {{"id", "note"}, {"primitive", "text"}, {"options", {{"text", "Hi"}}}};
+    // An mcp or agent token, with no header or with a header that claims api,
+    // ui or builder: the edit runs from the token's origin and waits for
+    // review; the person denies it.
+    struct Case {
+        std::string token, origin, claim;
+    };
+    const std::vector<Case> cases = {{kMcpToken, "mcp", ""},
+                                     {kMcpToken, "mcp", "X-Caliper-Origin: api\r\n"},
+                                     {g_agent_token, "agent", ""},
+                                     {g_agent_token, "agent", "X-Caliper-Origin: ui\r\n"},
+                                     {g_agent_token, "agent", "X-Caliper-Origin: builder\r\n"}};
+    for (const Case& c : cases) {
+        INFO(c.origin << " " << c.claim);
+        const std::string body = note.dump();
+        const int fd = send_request(port, "POST", "/v0/commands/panel.create",
+                                    "Authorization: Bearer " + c.token + "\r\nContent-Type: application/json\r\n" +
+                                        "Content-Length: " + std::to_string(body.size()) + "\r\n" + c.claim,
+                                    body);
+        const std::string id = app.pending_approval("panel.create", c.origin);
+        REQUIRE_FALSE(id.empty());
+        app.session->queue().deny(id);
+        const Response r = read_response(fd);
+        REQUIRE(r.status == 200);
+        CHECK(error_code(r.value()) == "command.denied");
+    }
+    CHECK(app.session->open_spec()->spec.panels.empty());
+    // The person's token runs the edit at once, as api.
+    CHECK(command(port, "panel.create", note)["ok"] == true);
+
+    // A revoked token, and one the server never issued, are 401.
+    const std::string issued = app.server->issue_token("agent");
+    CHECK(read_response(send_request(port, "GET", "/v0/info", "Authorization: Bearer " + issued + "\r\n")).status == 200);
+    app.server->revoke_token(issued);
+    CHECK(read_response(send_request(port, "GET", "/v0/info", "Authorization: Bearer " + issued + "\r\n")).status == 401);
+    CHECK(read_response(send_request(port, "GET", "/v0/info", "Authorization: Bearer never_issued-token_0123456789\r\n"))
+              .status == 401);
+    // Only agent and mcp tokens are issued.
+    CHECK(app.server->issue_token("api").empty());
+    CHECK(app.server->issue_token("ui").empty());
 }
