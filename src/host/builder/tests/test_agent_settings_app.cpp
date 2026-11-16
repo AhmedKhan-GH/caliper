@@ -6,7 +6,7 @@
 //   - with the Ollama preset on loopback chosen in widget-agent.json, the
 //     settings show the Shared GPU note while the app is attached to the
 //     stream of caliper_attention_producer, and not after the stream is
-//     detached (esc Home on the live page).
+//     detached (⌘D Detach on the live page; esc Home keeps it attached).
 // It needs the caliper executable (CALIPER_TEST_CALIPER_EXE), and the second
 // case the producer (CALIPER_TEST_PRODUCER_EXE) and the built applets
 // (CALIPER_TEST_APPLETS), as the side chat's live case; without Metal both
@@ -215,7 +215,7 @@ TEST_CASE("agent settings app: the Shared GPU note while a live run is attached"
              {"CALIPER_AGENT_OFFLINE", "1"},
              {"CALIPER_TEST_SPEC_UI",
               "page live; settings until note Shared GPU; settings open; wait 5; shot live; settings close; "
-              "key escape; page landing; settings until note none; quit"},
+              "key cmd+d; page landing; settings until note none; quit"},
              {"CALIPER_TEST_SPEC_UI_SHOTS", root},
              {"CALIPER_EXIT_AFTER", "100"}};
     o.env_remove = {"CALIPER_AGENT_TEST_SCRIPT", "ANTHROPIC_API_KEY", "CALIPER_MODEL_API_KEY", "OPENAI_API_KEY"};
