@@ -194,7 +194,8 @@ session. The viewer announces the capability `scenes` of the
 its scenes and sends their messages. A scene's window shows the scene drawn
 on the GPU: its batches of points, lines and meshes, with depth, under an
 orbit camera about the scene's up axis that frames the scene once, when it
-first has bounds.
+first has bounds. The other parts of a scene, its entity transforms and its
+class table are not drawn yet; the window lists each in its notes.
 
 | Input | What it does |
 |---|---|
