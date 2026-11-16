@@ -13,18 +13,9 @@ What moves work to Caliper Cloud and Caliper Web is being online: syncing and sh
 
 Caliper Platform, the registry and exchange of applets and widgets, is a third product. Phase 4 of the roadmap plans it as the [Applet registry](registry.md). The desktop app can install from it but never needs it, because sideloading keeps working.
 
-## What the desktop app keeps today
-
-Everything the desktop app stores stays on the machine, under the app-data folder:
-
-- The metrics store, behind [`caliper.metrics.v1`](../references/service-metrics-v1.md): scalars, histograms and images per run and step, and SQL queries over them.
-- The artifacts store, behind [`caliper.artifacts.v1`](../references/service-artifacts-v1.md): content-addressed files such as checkpoints.
-- The data service, [`caliper.data.v1`](../references/service-data-v1.md): SQL in and Arrow out, on an embedded DuckDB.
-- Each applet's data folder, `data/<id>/`, which the applet owns and versions with its data schema ([The version of each applet's stored data](../explanations/compatibility.md#the-version-of-each-applets-stored-data)).
-
 ## Local history and recording
 
-These are planned for the desktop app, after Phase 1 and after the streaming work. They build on the DuckDB-backed data service and on the metrics and artifacts stores, and they keep everything on the machine.
+These are planned for the desktop app, after Phase 1 and after the streaming work. They build on what the desktop app already keeps on the machine, under its app-data folder ([Folders and environment variables](../references/environment.md#the-app-data-folder)): the DuckDB-backed data service and the metrics and artifacts stores.
 
 - **Run history.** The desktop app keeps the runs that the metrics and artifacts stores already record, and shows them as a history that outlives each session.
 - **Comparing runs.** The desktop app shows two or more runs from that history side by side.

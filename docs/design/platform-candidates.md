@@ -37,16 +37,12 @@ native. Applets built before the rule stay native-only until they are ported.
   applet failed, while the same capture started from outside it worked. A host
   service that owns capture, scripting and recording gives every applet
   screenshots for documentation and tests, and demo recordings, through one
-  interface. Its first piece is built: `caliper shot` draws an applet's page
-  as the app draws it, with nothing on screen, and writes it as a PNG (see
-  [Caliper CLI](../references/cli.md#caliper-shot)).
+  interface. It starts from the captures the host already takes:
+  [`caliper shot`](../references/cli.md#caliper-shot) and Caliper API's
+  [capture](../references/api.md#get-v0capturepng).
 - **ImGui errors went unnoticed.** One pane produced a constant stream of ImGui
   runtime errors, and nothing showed them. Development builds of the host
   should.
-- **Applets could not live outside the repository.** The applet needed a full
-  copy of the repository and a patch. Applets now build against the installed
-  SDK and load from development folders; see [SDK package](../references/sdk-package.md)
-  and [Applets outside the core](applets-outside-the-core.md).
 
 ## Order
 

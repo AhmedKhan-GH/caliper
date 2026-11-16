@@ -8,6 +8,8 @@ This page is the only place for the order and status of work. Each phase links t
 
 On 15 November 2026, `main` holds the host, the SDK with its 19 service ids, Caliper Embed, the embeddable core, which installs as the `caliper-embed` 1.4.0 package, Caliper LIB, the Python package, and nine applets that live in the tree but that the core build does not compile. The SDK installs as the `caliper-sdk` 0.2.0 package, and every applet builds against it. The loader enforces the whole versioning contract, searches development folders and loads one copy of each applet. The inspector applet is being developed on the `inspector` branch and is not on `main`. The [references](../references/index.md) and [explanations](../explanations/index.md) describe what is built.
 
+Streaming to notebooks, browsers and the Caliper app, the hub, Caliper API v0 and `caliper build` are built as well. [Network streaming](../explanations/network-streaming.md), [Caliper API](../references/api.md) and [Caliper CLI](../references/cli.md#caliper-build) describe them, and [Streaming and embedding](#streaming-and-embedding) below lists what remains.
+
 ## Phase 1: one core with versioned applets
 
 1. Done: the versioning contract and the promotion rule are written in [Compatibility and epochs](../explanations/compatibility.md#versioning).
@@ -48,18 +50,11 @@ Plan: [Applet registry](registry.md).
 
 ### API
 
-[Caliper LIB](../references/python-api.md), the `caliper` Python package, and Caliper Embed, the embeddable core in the `caliper-embed` package ([Embedding Caliper](../references/embedding.md)), exist. Caliper API, an HTTP interface to the running app, is planned work that follows the [streaming work](#streaming-and-embedding):
-
-- **API v0** listens only on the loopback interface and requires a token. It lists the applets, launches one, streams data to it over the wire protocol of data streaming, and fetches a capture of what it shows.
-- **The full API** comes later, with the command layer of [Phase 3](#phase-3-agent-built-panels), which is what lets a program drive the app's state from outside.
-
-API v0 is built: [Caliper API](../references/api.md) lists the applets, launches one, takes producers and viewers on its stream as a hub, and returns a capture of the frame in the windowless mode, `caliper shot --api`, while driving the app's state beyond a launch stays in Phase 3.
+[Caliper LIB](../references/python-api.md), [Caliper Embed](../references/embedding.md) and version 0 of [Caliper API](../references/api.md), the HTTP interface to the running app, are built. The full API comes later, with the command layer of [Phase 3](#phase-3-agent-built-panels), which is what lets a program drive the app's state from outside.
 
 ### Caliper CLI
 
-Caliper CLI is the subcommands of the `caliper` binary rather than a separate program, so there is one thing to install. Phase 1 built `list`, `check`, `info`, `new`, `install <folder>`, `dev` and `shot`, with the `--applets <dir>` flag and `CALIPER_APPLET_PATH`; [Caliper CLI](../references/cli.md) describes them.
-
-`caliper install <url>`, `caliper package` and `caliper publish` come later, with the `.caliperapp` bundle format, the signing policy and the [registry](#phase-4-the-registry). Hot reload comes later too, and its entry points are [undecided](#undecided).
+The subcommands that are built, among them `build` and `serve`, are described in [Caliper CLI](../references/cli.md). `caliper install <url>`, `caliper package` and `caliper publish` come later, with the `.caliperapp` bundle format, the signing policy and the [registry](#phase-4-the-registry). Hot reload comes later too, and its entry points are [undecided](#undecided).
 
 ### MCP
 
@@ -77,22 +72,22 @@ If agents need to see the screen sooner, the capture service moves earlier, not 
 
 ## Streaming and embedding
 
-[Streaming and embedding](streaming-and-embedding.md) gives the plan for using Caliper from other programs. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift. Data streaming is the only way Caliper reaches a browser.
+[Streaming and embedding](streaming-and-embedding.md) gives the plan for what remains of using Caliper from other programs. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift. Data streaming is the only way Caliper reaches a browser.
 
-1. Done: the minimal embedding package, built in Phase 1; see [Embed Caliper in a program](../guides/embed-caliper.md).
-2. Done: network streaming for Python scripts and notebooks. [Wire protocol v3](../references/wire-protocol.md) is a WebSocket protocol in which the latest snapshot of each view wins and a series travels as deltas. `caliper.serve()` serves a script's live views and a viewer page on the loopback interface with a session token, and `caliper.widget()` shows a view in a notebook. Data views let each subscription ask for a slice, selection or reduction of a tensor, which the producer computes on the device. [Network streaming](../explanations/network-streaming.md) describes the design, and [Watch a training run in a notebook](../tutorials/watch-a-training-run-in-a-notebook.md) uses it. A native sender frames, encodes and sends without the interpreter lock, and the views due in a step share one snapshot tick; [Network streaming](../explanations/network-streaming.md#cost-of-streaming) gives the measured cost. Still to do: confirming that cost under 3 % on a quiet machine. Done: the controls of [wire protocol 3.1](../references/wire-protocol.md#controls), with which a viewer pauses, steps and resumes a training loop at `caliper.step()`, changes the parameters the script registered and runs its actions, and links selections between views with their details, through `caliper.serve()` and through the hub with `caliper.connect()`, on both senders, in the browser views, the notebook widgets and the Caliper app's live page; [Control a running script](../guides/control-a-running-script.md) uses them. Next: interventions on a model, such as ablating a head or steering along a direction, which come with the inspector work.
-3. Done: the Caliper app and `caliper-viewer` attach to a stream by its link, through a native source for wire protocol v3 with its own WebSocket layer and codec, tested against a producer inside the test process; see [Attach to a running script](../guides/attach-to-a-running-script.md). Done: the hub, `caliper serve`, a subcommand of the `caliper` binary that relays the same protocol from producers to viewers and outlives the producers; see [Run a hub](../guides/run-a-hub.md). `caliper.connect()` connects a Python script to the hub.
-4. Done: views written for the browser in TypeScript, in the `web/` package, behind the `<caliper-view>` element, the notebook widget and the viewer page, tested against a synthetic stream. They stay as the fallback where WebGPU is absent, and draw with Canvas 2D there.
-5. Done: Caliper's own view layer compiled to WebAssembly with Emscripten and drawn by a WebGPU backend behind `HostRenderer`, first proven by a spike that drew a heatmap and a series in headless Chromium. [Rendering](../explanations/rendering.md#the-webgpu-backend) describes the backend, and `web/wasm/README.md` the module.
-6. Done: the notebook widget and the viewer page draw every live view kind with Caliper's own view layer, the [web viewer](streaming-and-embedding.md#the-web-viewer), where WebGPU is available, and its views select, pick and hover as the views written for the browser do.
-7. Then the web viewer grows in this order:
-    1. Done: Caliper's real views in notebooks and browsers, for every live view kind. Still to do: the clipboard and multi-touch in the canvas, a CI job for the module's checks, and testing in Safari, Firefox and on Windows.
+Built so far: the minimal embedding package; network streaming over [wire protocol v3](../references/wire-protocol.md), with data views, `caliper.serve()`, the notebook widgets and, from version 3.1, controls that let a viewer pause and step the training loop, change registered parameters and run registered actions; the Caliper app and `caliper-viewer` attached to a stream by its link; the hub, `caliper serve`, with `caliper.connect()`; and the browser views, where Caliper's own view layer, compiled to WebAssembly and drawn through WebGPU, draws every live view kind and the views written for the browser in TypeScript draw where WebGPU is absent. [Network streaming](../explanations/network-streaming.md) describes the design and links the references.
+
+Still to do, in this order:
+
+1. Confirm the [cost of streaming](../explanations/network-streaming.md#cost-of-streaming) under 3 % on a quiet machine.
+2. Interventions on a model, such as ablating a head or steering along a direction, after the controls of [wire protocol 3.1](../references/wire-protocol.md#controls). They come with the inspector work.
+3. The rest of the web viewer's order in [The web viewer](streaming-and-embedding.md#the-web-viewer):
+    1. For the views that are built: the clipboard and multi-touch in the canvas, a CI job for the module's checks, and testing in Safari, Firefox and on Windows.
     2. Every built-in view: points are built; the geometry path and ImPlot3D remain.
     3. The whole Caliper interface in a browser, with the landing screen, docking and the panes, storage in the browser's file system, DuckDB's WebAssembly build, and cross-origin isolation so that the page can use threads.
     4. Applets in the browser, through the split into computation and interface that [Phase 2](#phase-2-promote-proven-features) settles.
     5. The same WebGPU backend as the native fallback through Dawn, as [Renderers](#renderers) describes.
-8. Still to do: WebTransport beside the WebSocket, and the dedicated security review that comes before any session leaves the machine.
-9. Then the rest of C++ embedding, Rust bindings and Swift.
+4. WebTransport beside the WebSocket, and the dedicated security review that comes before any session leaves the machine.
+5. Then the rest of C++ embedding, Rust bindings and Swift.
 
 ## Data and Cloud
 
@@ -100,11 +95,11 @@ Run history, comparison between runs, and recording and replaying a session are 
 
 ## Renderers
 
-This work comes after Phase 1, alongside the web viewer of [Streaming and embedding](#streaming-and-embedding). The browser role of step 1 below is built: the web viewer draws Caliper's views in a browser through a WebGPU backend behind `HostRenderer`, described in [Rendering](../explanations/rendering.md#the-webgpu-backend). The native fallback through Dawn is the last step of the web viewer's order and is not part of the current work.
+This work comes after Phase 1. The WebGPU backend behind `HostRenderer` is built for the browser, where it draws the web viewer's views ([Rendering](../explanations/rendering.md#the-webgpu-backend)). Its native role through Dawn is the last step of the web viewer's order and is not part of the current work.
 
 Caliper's own Metal renderer on macOS and Vulkan renderer on Windows stay the normal path, at full speed and with zero-copy from torch. Nothing routes them through another layer.
 
-1. Add one WebGPU backend behind `HostRenderer`, with two roles. In the browser it runs on the browser's own WebGPU, as part of the web viewer. As the native fallback it runs through Dawn, Google's WebGPU library, which is an optional build component, and the host chooses it only when its own Metal or Vulkan renderer is unavailable. Dawn then draws through Direct3D 12 or 11, through OpenGL ES in a limited compatibility mode, or on the CPU through SwiftShader, which covers virtual machines, headless CI and machines with broken graphics drivers. This fallback is slower, but it works and says so, as the [invariants](#invariants) require.
+1. Run the WebGPU backend as the native fallback through Dawn, Google's WebGPU library, which is an optional build component. The host chooses it only when its own Metal or Vulkan renderer is unavailable. Dawn then draws through Direct3D 12 or 11, through OpenGL ES in a limited compatibility mode, or on the CPU through SwiftShader, which covers virtual machines, headless CI and machines with broken graphics drivers. This fallback is slower, but it works and says so, as the [invariants](#invariants) require.
 2. Retire the GLEW OpenGL fallback once the Dawn path covers its cases. There is no separate hand-written OpenGL or CPU renderer.
 3. Evaluate writing each shader once and translating it for each backend, for example with the Slang shading language. This Slang is not the SystemVerilog library of the same name that `third_party/` vendors. The WebGPU backend's two shaders are written by hand in WGSL for now; a single source becomes worth its toolchain once the backend also serves the Dawn fallback and every shader exists three times.
 

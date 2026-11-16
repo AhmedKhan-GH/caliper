@@ -56,8 +56,8 @@ receives copies.
 The viewers in the browser live in the `web/` package: the `<caliper-view>`
 element, the notebook widget built on it, and the viewer page. The element
 decides per view what draws it. Where WebGPU gives an adapter, Caliper's own
-view layer compiled to WebAssembly (`web/wasm`, the
-[web viewer](../design/streaming-and-embedding.md#the-web-viewer)) draws the
+view layer compiled to WebAssembly (`web/wasm`, drawn by the
+[WebGPU backend](rendering.md#the-webgpu-backend)) draws the
 kinds its loader lists, which are now all five: heatmaps, images, points,
 series and histograms. A kind the loader does not list is drawn by small views
 written for the browser in TypeScript. Without an adapter the TypeScript views
@@ -242,12 +242,29 @@ interface.
   show the widgets, because the browser connects to its own 127.0.0.1.
 - **Copies, not zero-copy.** Every snapshot on the network is a copy off the
   device. Data views and the budget keep it small; they do not remove it.
-- **No applets in the browser yet.** The browser draws views and runs no
-  applet. Applets reach the browser only after the split into computation and
-  interface that Phase 2 settles
-  ([Applets in the browser](../design/streaming-and-embedding.md#applets-in-the-browser)).
-  [Limits in the browser](../design/streaming-and-embedding.md#limits-in-the-browser)
-  lists the limits of the web viewer itself.
+- **No computation and no applets in the browser.** The browser draws what a
+  producer sends and computes nothing; data views are computed by the producer
+  on its own device. The browser runs no applet. Applets reach it only after
+  each applet is split into a computation that runs natively and an interface
+  compiled to WebAssembly, which is planned.
+- **A bounded heap.** WebAssembly in a browser is 32-bit, so the views can never
+  hold more than 4 GB, and the module caps its heap at 512 MB
+  (`web/wasm/README.md` gives the reasons). It bounds the size of the snapshots
+  the views accept.
+- **A second copy in the browser.** The browser copies each snapshot from
+  WebAssembly memory into its GPU process. A 2048 by 2048 heatmap updated every
+  frame sent 16 MB into the GPU process per frame, and the GPU queue backed up.
+  Sampling and data views keep snapshots small for this reason as well.
+- **ImGui is not a web page.** Caliper's views draw into one canvas. The
+  pointer, the wheel, keys and text reach them while the canvas has focus, but
+  the clipboard and multi-touch gestures do not. The canvas gives the browser's
+  accessibility tools nothing to read, so a screen reader cannot follow it.
+- **Most browsers are untested.** The browser views are tested in headless
+  Chromium only, on SwiftShader and on the Mac's GPU, at device pixel ratios of
+  1 and 2. Chromium-based browsers ship WebGPU, while support in Safari and
+  Firefox depends on the version and the platform, and neither is tested, nor
+  is Windows. Where WebGPU is absent, the views written for the browser draw
+  instead.
 - **Widget traits wait for an idle kernel.** A widget's `selection` and
   `data_view` traits travel over the notebook's message channel, which the
   kernel reads only while no cell runs. The picker in a widget works during

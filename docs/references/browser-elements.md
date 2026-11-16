@@ -1,6 +1,6 @@
 # Browser elements
 
-The `web/` package defines two custom elements, `<caliper-view>` and `<caliper-controls>`. The viewer page that `caliper.serve()` serves and the notebook widgets of Caliper LIB are built from them. Both read a [wire protocol v3](wire-protocol.md) stream, and elements with the same `src` on one page share one WebSocket. The module `caliper-view.js` registers both elements and exports `connect(src)`, the shared stream client.
+The `web/` package defines two custom elements, `<caliper-view>` and `<caliper-controls>`. The viewer page that `caliper.serve()` serves and the notebook widgets of Caliper LIB are built from them. Both read a [wire protocol v3](wire-protocol.md) stream, and elements with the same `src` on one page share one WebSocket. The module `caliper-view.js` registers both elements and exports `connect(src)`, the shared stream client. The `web/` package is licensed under Apache 2.0, like the core.
 
 ```html
 <script type="module" src="http://127.0.0.1:7341/caliper-view.js"></script>

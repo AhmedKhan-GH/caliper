@@ -1,43 +1,28 @@
 # Streaming and embedding
 
-This page plans how other programs use Caliper: scripts and notebooks that stream data to a viewer, a viewer that runs in a browser, applets that run in a browser over the same data, and programs that embed Caliper. The minimal embedding package and the first pieces of data streaming are built: the wire protocol, the notebook widget and the first browser views. The transport in the Python client, `caliper.serve()`, the `caliper serve` hub and a native source that attaches the Caliper app to a stream are built too. Data views of tensors and the Python script's connection to the hub, `caliper.connect()`, are built as well. The web viewer draws the live views with Caliper's own view layer, compiled to WebAssembly. The rest is planned. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status. What is built today is described in [Live streaming](../explanations/live-streaming.md), [Network streaming](../explanations/network-streaming.md), the [Python API](../references/python-api.md), the [Wire protocol](../references/wire-protocol.md) and [Embedding Caliper](../references/embedding.md).
+This page plans what remains of using Caliper from other programs: the browser views beyond the live views, applets in a browser, the rest of C++ embedding, and the steps before a stream may leave the machine. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status.
+
+What is built is described in the reference: [Network streaming](../explanations/network-streaming.md) and [Live streaming](../explanations/live-streaming.md) explain the design, [Caliper LIB](../references/python-api.md), [Wire protocol v3](../references/wire-protocol.md), [Browser elements](../references/browser-elements.md), [Caliper CLI](../references/cli.md#caliper-serve) and [Caliper API](../references/api.md) list the interfaces, [Rendering](../explanations/rendering.md#the-webgpu-backend) describes the browser's renderer, and [Watch a training run in a notebook](../tutorials/watch-a-training-run-in-a-notebook.md), [Run a hub](../guides/run-a-hub.md), [Attach to a running script](../guides/attach-to-a-running-script.md), [Control a running script](../guides/control-a-running-script.md) and [Embedding Caliper](../references/embedding.md) show them in use.
 
 ## The order of surfaces
 
-The tools that ML engineers use come first, and consumer surfaces come last:
+The tools that ML engineers use come first, and consumer surfaces come last. Python scripts and notebooks and the browser views are built. The surfaces that remain come in this order:
 
-1. Python scripts and notebooks.
-2. The web viewer.
-3. C++ embedding.
-4. Rust bindings.
-5. Swift.
+1. The rest of C++ embedding.
+2. Rust bindings.
+3. Swift.
 
 ## Data streaming
 
-Data streaming is the portable core of the plan and the only way Caliper reaches a browser. A producer keeps its computation in native torch, and only snapshots of its tensors travel. The browser draws from that data with the [web viewer](#the-web-viewer), which is Caliper's own view layer compiled to WebAssembly, and with small views written for the browser where WebGPU is absent. Data streaming powers notebooks, `caliper.serve()` and the hub; [Network streaming](../explanations/network-streaming.md) describes the design.
+Data streaming is the only way Caliper reaches a browser: a producer keeps its computation in native torch, and only snapshots of its tensors travel. What it still needs:
 
-- The live protocol gains a network transport. The WebSocket protocol is specified as [wire protocol v3](../references/wire-protocol.md), its transport in the Python client is built, and WebTransport comes later.
-- The latest snapshot wins for each live view, and a series is sent as deltas.
-- Streaming never blocks training.
-- The zero-copy claim applies only to viewing on the same machine. A viewer on the network receives copies.
-
-Large data is handled by sampling and by data views rather than sent whole:
-
-- **Sampling.** The producer samples a large tensor or series on the device, so that a snapshot carries a sample of the data rather than all of it.
-- **Data views.** A data view is a slice, selection, projection or aggregation of a tensor or table, such as one layer, one head, a window of steps, a subset of rows, or a mean over the batch. The viewer requests it, the producer computes it on the device where the data lives, and only the view's result is streamed. This is the same idea as a tensor view or a database view.
-- A zoom or a selection is a request for a different data view.
-
-Data views of tensors come first: a producer names the dimensions of a tensor, and a viewer indexes and reduces them within a budget. Data views of tables, such as a subset of rows, come later.
-
-A data view decides which data travels, and a live view, such as a series or a histogram, decides how the viewer draws it.
+- **WebTransport** beside the WebSocket.
+- **Data views of tables,** such as a subset of rows. Data views of tensors are built.
+- **A zoom as a data view.** A zoom or a selection that needs more detail than a snapshot holds becomes a request for another data view, computed by the producer.
 
 ## The web viewer
 
-The web viewer is Caliper's own view layer, which is the live views, ImGui, ImPlot and ImPlot3D, compiled to WebAssembly with Emscripten and drawn by a WebGPU backend behind `HostRenderer`. Its first form holds the views only, with no applet loader and no DuckDB; the views and the hosted core are split from the native core into `embed_views.cpp`, and the texture live views keep the tensor bridge. It ships in the `web/` package, behind the `<caliper-view>` element, the notebook widget and the viewer page that `caliper.serve()` serves. `web/wasm/README.md` describes the module, and [Rendering](../explanations/rendering.md#the-webgpu-backend) its renderer.
-
-The notebook widget and the viewer page draw every live view kind with the web viewer where WebGPU is available: heatmap, image, series, histogram and points. Small views written for the browser in TypeScript, over the same protocol, remain as the fallback where WebGPU is absent, where they draw with Canvas 2D. Both select, pick and hover with the same gestures and send the same events.
-
-The web viewer then grows in this order:
+The web viewer is Caliper's own view layer, which is the live views, ImGui, ImPlot and ImPlot3D, compiled to WebAssembly with Emscripten and drawn by a WebGPU backend behind `HostRenderer`. It draws every live view kind today, behind the `<caliper-view>` element, the notebook widget and the viewer page, and views written for the browser in TypeScript draw where WebGPU is absent. It grows in this order:
 
 1. Done: Caliper's real views in notebooks and browsers, for every live view kind.
 2. Every built-in view. Points are built; the geometry path and ImPlot3D remain, and need a WebGPU geometry pipeline within WebGPU's limit on the storage buffers of a vertex stage.
@@ -51,24 +36,11 @@ No computation runs in the browser. libtorch does not run there, and the plan ad
 
 ## Limits in the browser
 
-These limits hold for the web viewer at every step. They were measured in headless Chromium on a software and a hardware WebGPU adapter.
+The limits of the browser views as they are, such as the bounded heap, the second copy into the GPU process and the browsers that are untested, are listed under [Known limits](../explanations/network-streaming.md#known-limits) in Network streaming. Every later step works within them, and three more bound the work ahead:
 
-- **Computation stays native.** The browser draws what a producer sends and computes nothing. Data views are computed by the producer on its own device.
-- **The heap stops at 4 GB.** WebAssembly in the browser is 32-bit, so the web viewer cannot hold more than 4 GB, and it bounds the size of the snapshots it accepts.
-- **Each snapshot is copied twice.** A snapshot crosses the network, and the browser then copies it from WebAssembly memory into its GPU process. A 2048 by 2048 heatmap updated every frame sent 16 MB into the GPU process per frame, and the GPU queue backed up. Sampling and data views keep snapshots small for this reason as well.
-- **Colours match exactly, by a different route.** Natively, Caliper's colormap matches its CPU reference byte for byte. WGSL does not promise the same arithmetic: recomputing the formula on the GPU left a few texels of the largest heatmaps one level off on Metal. The web viewer therefore compares each value against thresholds that the CPU derives from its own colormap function, and its heatmaps match the CPU reference exactly on the adapters tested.
-- **ImGui is not a web page.** ImGui draws the whole interface into one canvas. The pointer, the wheel, keys and text reach it while the canvas has focus, but the clipboard and multi-touch gestures do not. The canvas gives the browser's accessibility tools nothing to read, so a screen reader cannot follow the interface.
-- **Most browsers are untested.** The views are tested in headless Chromium only, on SwiftShader and on the Mac's GPU, at device pixel ratios of 1 and 2. Chromium-based browsers ship WebGPU, while support in Safari and Firefox depends on the version and the platform, and neither is tested, nor is Windows. Where WebGPU is absent, the views written for the browser draw instead.
 - **The WebGPU binding moves with Emscripten.** The core of `webgpu.h` is stable, but Emscripten's `emdawnwebgpu` port and its Emscripten-specific parts change, and each Emscripten release pins its own Dawn package, so an Emscripten update can need changes in the renderer.
 - **Headless tests depend on flags.** Headless Chromium presents a WebGPU canvas on SwiftShader only with `--use-angle=swiftshader`, and a Chromium update can change which flags work.
 - **The download grows with the views.** The module is about 495 KB with Brotli, of which Dear ImGui and ImPlot are more than half of the code and the two embedded faces most of the data. ImPlot3D and the geometry path will add to it.
-
-## Serving
-
-Two modes serve the browser views, both with the same protocol, built in this order:
-
-1. **`caliper.serve()` in Python.** The script itself serves the viewer page and its stream.
-2. **`caliper serve`, a subcommand of the `caliper` binary.** It runs a hub. Any number of scripts send to it, any number of browsers or Caliper apps watch it, and it outlives the scripts.
 
 ## Applets in the browser
 
@@ -85,21 +57,15 @@ The spec applets of Phase 3 ([Applet builder](applet-builder.md)) are designed t
 
 ## Renderers
 
-Metal and Vulkan stay the fast paths. One WebGPU renderer serves the browser and, through Dawn, the native fallbacks. The spike's backend is written against the standard `webgpu.h`, which Dawn also offers natively, so the same code can serve both roles. The roadmap's [Renderers](roadmap.md#renderers) section gives that plan.
+Metal and Vulkan stay the fast paths. The WebGPU renderer that draws the browser views is written against the standard `webgpu.h`, which Dawn also offers natively, so the same code can serve the native fallbacks through Dawn. The roadmap's [Renderers](roadmap.md#renderers) section gives that plan.
 
 ## The embedding package
 
-The minimal embedding package is built: the `caliper-embed` package, `caliper_embed_api_version()`, and `examples/embed_host` built outside the repository with only `find_package(caliper-embed)`. [Embedding Caliper](../references/embedding.md) describes it, and [Embed Caliper in a program](../guides/embed-caliper.md) builds an embedder against it.
-
-The rest comes when C++ embedding comes up in the order of surfaces: several views in one app, rendering a frame to an image file, HiDPI work and a Qt widget. Offscreen canvases and `caliper_core_read_pixels()` exist today.
+The minimal embedding package is built ([Embedding Caliper](../references/embedding.md)). The rest comes when C++ embedding comes up in the order of surfaces: several views in one app, rendering a frame to an image file, HiDPI work and a Qt widget.
 
 ## Security
 
-Network streaming stays on the local machine, on the loopback interface and with the session token, until a dedicated security review. That review happens before any session leaves the machine. The confidentiality of streamed data rests on the transport and on the security of whoever hosts it: the session token, encryption, and that review before anything leaves the machine. The streaming socket never carries the command layer.
-
-## Licence
-
-The web package and the protocol are licensed under Apache 2.0, like the core.
+Network streaming stays on the local machine, on the loopback interface and with the session token ([Security](../explanations/network-streaming.md#security)), until a dedicated security review, which comes before any session leaves the machine. The confidentiality of streamed data then rests on the transport and on the security of whoever hosts it: the session token, encryption and that review. The streaming socket never carries the command layer.
 
 ## Platforms
 
