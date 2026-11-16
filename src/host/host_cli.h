@@ -6,10 +6,10 @@
 // starting it, so it never shows a window. `shot` draws the app's applet page
 // into an offscreen canvas (shot.h) and opens no window either.
 //
-//   caliper [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]
+//   caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] [--hidden]
 //                                             start the app
-//   caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]
-//                                             start the app, <folder> searched first
+//   caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]
+//               [--hidden]                    start the app, <folder> searched first
 //   caliper list [--applets <dir>]...         list the applets in search order
 //   caliper check <folder>                    run the pre-load checks on <folder>
 //   caliper install <folder>                  check, then copy into the user folder
@@ -41,6 +41,12 @@
 // runs: with no subcommand, with dev, and with shot, whose offscreen canvas
 // is the app's windowless mode. `--api-port <n>` chooses its port (7341
 // without it, 0 for any free port) and needs --api.
+//
+// `--url <link>` (or `--url=<link>`) attaches the app to a stream of wire
+// protocol v3 as soon as it starts, as the attach pane's stream link does: the
+// ws:// link of a viewer or the http:// page link, holding the session token.
+// It applies to starting the app and to dev; a link that does not attach
+// leaves the app on its landing page and says why in Activity.
 //
 // `--hidden` (or CALIPER_HIDDEN=1), a testing aid, runs the real app with
 // its window never shown: no Dock icon, no menu bar, no focus (main.cpp).
@@ -92,6 +98,7 @@ struct CommandLine {
     bool api = false;                       // --api
     int api_port = -1;                      // --api-port; -1: caliper_api::kDefaultPort
     bool hidden = false;                    // --hidden: the app's window is never shown
+    std::string url;                        // --url: a stream link to attach to at start
     bool allow_control = false;             // --allow-control: the hub forwards controls
     std::string error;                      // set: print it and the usage, exit 2
 
@@ -104,8 +111,9 @@ struct CommandLine {
 };
 
 inline const char* usage_text() {
-    return "usage: caliper [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]\n"
-           "       caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]\n"
+    return "usage: caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] [--hidden]\n"
+           "       caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]\n"
+           "                   [--hidden]\n"
            "       caliper list [--applets <dir>]...\n"
            "       caliper check <folder>\n"
            "       caliper install <folder>\n"
@@ -248,6 +256,25 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             cl.error = "--hidden takes no value";
             return cl;
         }
+        // A stream to attach to at start: --url <link>.
+        if (arg == "--url" || arg.rfind("--url=", 0) == 0) {
+            std::string value;
+            if (arg == "--url") {
+                if (i + 1 < argc && argv[i + 1]) value = argv[++i];
+            } else {
+                value = arg.substr(std::string("--url=").size());
+            }
+            if (value.empty() || value.rfind("--", 0) == 0) {
+                cl.error = "--url needs a stream link";
+                return cl;
+            }
+            if (!cl.url.empty()) {
+                cl.error = "--url is given twice";
+                return cl;
+            }
+            cl.url = value;
+            continue;
+        }
         // Caliper API: --api, a flag, and --api-port <n>.
         if (arg == "--api") {
             cl.api = true;
@@ -386,6 +413,9 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
     if (cl.error.empty() && cl.hidden && cl.command != C::Run && cl.command != C::Dev &&
         cl.command != C::Help)
         cl.error = "--hidden applies only to starting the app and dev";
+    if (cl.error.empty() && !cl.url.empty() && cl.command != C::Run && cl.command != C::Dev &&
+        cl.command != C::Help)
+        cl.error = "--url applies only to starting the app and dev";
     if (cl.error.empty() && cl.allow_control && cl.command != C::Serve && cl.command != C::Help) {
         if (cl.command != C::Run && cl.command != C::Dev && cl.command != C::Shot)
             cl.error = "--allow-control applies only to serve, and to the app, dev and shot with --api";

@@ -354,12 +354,28 @@ TEST_CASE("cli: wrong --api command lines are usage errors") {
     CHECK(parse({"--api=7400"}).error == "--api takes no value; choose the port with --api-port <n>");
 }
 
-TEST_CASE("cli: the usage names --api, --allow-control and --hidden") {
+TEST_CASE("cli: --url attaches the app or dev to a stream at start") {
+    auto app = parse({"--url", "ws://127.0.0.1:7340/v3/stream?token=abc"});
+    CHECK(app.error.empty());
+    CHECK(app.command == Command::Run);
+    CHECK(app.url == "ws://127.0.0.1:7340/v3/stream?token=abc");
+    auto dev = parse({"dev", "/a", "--url=http://127.0.0.1:8000/?token=abc", "--hidden"});
+    CHECK(dev.error.empty());
+    CHECK(dev.url == "http://127.0.0.1:8000/?token=abc");
+    CHECK(parse({"--url"}).error == "--url needs a stream link");
+    CHECK(parse({"--url", "--hidden"}).error == "--url needs a stream link");
+    CHECK(parse({"--url", "a", "--url", "b"}).error == "--url is given twice");
+    CHECK(parse({"list", "--url", "a"}).error == "--url applies only to starting the app and dev");
+    CHECK(parse({"shot", "--launch", "x", "--out", "o.png", "--url", "a"}).error ==
+          "--url applies only to starting the app and dev");
+}
+
+TEST_CASE("cli: the usage names --url, --api, --allow-control and --hidden") {
     const std::string u = usage_text();
-    CHECK(u.find("usage: caliper [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]") !=
-          std::string::npos);
-    CHECK(u.find("caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]") !=
-          std::string::npos);
+    CHECK(u.find("usage: caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] "
+                 "[--hidden]") != std::string::npos);
+    CHECK(u.find("caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] "
+                 "[--allow-control]]\n                   [--hidden]") != std::string::npos);
     CHECK(u.find("--out <file.png> [--api [--api-port <n>] [--allow-control]]") != std::string::npos);
     CHECK(u.find("caliper serve [--port <n>] [--token-file <file>] [--assets <dir>] [--allow-control]") !=
           std::string::npos);

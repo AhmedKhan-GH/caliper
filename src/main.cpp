@@ -20,6 +20,9 @@
 #include "host/host_version.h"
 #include "host/renderer/host_renderer.h"
 #include "host/live/live_attach.h"
+#include "host/live/live_controls.h"
+#include "host/live/live_shm.h"        // now_ns
+#include "host/live/live_ui_driver.h"
 #include "host/api/app_api.h"
 #include "host/api/window_captures.h"
 #include "app_paths.h"
@@ -28,11 +31,13 @@
 #include <vector>
 #include <cstdint>
 #include <cstdio>
+#include <algorithm>
 #include <cmath>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <system_error>
 
 // The hidden window (--hidden, CALIPER_HIDDEN=1): SIGINT and SIGTERM ask for
@@ -46,6 +51,29 @@ enum class AppPage {
     Applet,
     Live,     // an attached training script's views (F4 Attach to process)
 };
+
+// The live page's run bar and selection details in the house style: key
+// buttons, secondary labels, the dense booktabs table, and bronze for the
+// shared selection's highlight.
+static caliper_live::ControlsLook house_controls_look() {
+    caliper_live::ControlsLook l;
+    l.button = [](const char* label, bool enabled, const char* reason) {
+        return sternbild::key_button("", label, enabled, reason);
+    };
+    l.label = [](const char* text) {
+        ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
+        ImGui::TextUnformatted(text);
+        ImGui::PopStyleColor();
+    };
+    l.begin_table = [](const char* id, int columns) { return sternbild::begin_table(id, columns); };
+    l.end_table = [] { sternbild::end_table(); };
+    l.header_row = [] { sternbild::table_header_row(); };
+    l.text = sternbild::col::parchment;
+    l.secondary = sternbild::col::secondary;
+    l.faint = sternbild::col::faint;
+    l.accent = sternbild::col::bronze;
+    return l;
+}
 
 class CaliperApp {
 public:
@@ -205,6 +233,15 @@ public:
         if (const char* aa = std::getenv("CALIPER_AUTOATTACH"))
             autoattach_pid_ = std::atoi(aa);
 
+        // Testing aid: CALIPER_TEST_UI=<script> plays scripted mouse and key
+        // input into the live page (live/live_ui_driver.h), only while the
+        // window is hidden, so a test clicks the real widgets and nothing
+        // appears on the screen.
+        if (const char* ui = std::getenv("CALIPER_TEST_UI")) {
+            if (hidden_ && *ui) ui_driver_ = std::make_unique<caliper_live::UiDriver>(ui);
+            else if (*ui) std::cerr << "[ui] CALIPER_TEST_UI needs --hidden; ignored" << std::endl;
+        }
+
         return true;
     }
 
@@ -239,6 +276,7 @@ public:
             if (page_ == AppPage::Live) live_.poll();
             if (autoattach_pid_ > 0 && page_ == AppPage::Landing) autoattach();
             note_live_events();
+            note_control_lines();
 
             // Caliper API (--api): the calls that read or change the app run
             // here, between frames, as CALIPER_AUTOLAUNCH launches. A capture
@@ -252,6 +290,10 @@ public:
 
             int dw, dh;
             glfwGetFramebufferSize(window_, &dw, &dh);
+
+            // CALIPER_TEST_UI with --hidden: the scripted clicks of a UI test,
+            // queued into ImGui before the frame reads its input.
+            if (ui_driver_ && page_ == AppPage::Live) feed_ui_driver();
 
             renderer_->new_frame();
 
@@ -363,6 +405,12 @@ public:
                 leave_applet_page(idx);
             }
         }
+    }
+
+    // --url: the stream to attach to once the app has started.
+    void attach_at_start(const std::string& link) {
+        std::cerr << "[live] attaching to " << link.substr(0, link.find('?')) << std::endl;
+        attach_stream(link);
     }
 
     // Caliper API (--api): listens until cleanup(). A failure to start is
@@ -594,6 +642,23 @@ private:
         note_live_events();   // "attached"
     }
 
+    // What the live page's controls did (live_controls.h), one stderr line
+    // each like [live] attached, for headless runs and tests.
+    void note_control_lines() {
+        caliper_live::RunControls* rc = live_.controls();
+        if (!rc) return;
+        for (const std::string& line : rc->take_log()) std::cerr << "[live] " << line << std::endl;
+    }
+
+    void feed_ui_driver() {
+        ui_driver_->feed(live_.core(), live_.controls());
+        for (const std::string& line : ui_driver_->take_log()) std::cerr << "[ui] " << line << std::endl;
+        if (ui_driver_->done()) {
+            std::cerr << "[ui] " << (ui_driver_->error().empty() ? "done" : "stopped") << std::endl;
+            ui_driver_.reset();
+        }
+    }
+
     void autoattach() {
         sessions_.refresh();
         const int i = sessions_.find_pid(autoattach_pid_);
@@ -716,6 +781,17 @@ private:
             ImGui::EndMainMenuBar();
         }
 
+        // The run bar (wire protocol 3.1) under the page bar, for a stream:
+        // the run state, pause, resume and step, the script's parameters and
+        // actions, and why they are off when they are.
+        caliper_live::RunControls* rc = live_.controls();
+        const caliper_live::ControlsLook look = house_controls_look();
+        if (rc) {
+            sternbild::control_bar_begin();
+            caliper_live::draw_run_bar(*rc, look, ImGui::GetContentRegionAvail().x);
+            sternbild::control_bar_end();
+        }
+
         // Status bar: the machine, then the session's facts.
         sternbild::status_bar_begin();
         draw_host_status_items(renderer_->name());
@@ -744,8 +820,28 @@ private:
         const ImRect area = caliper_host::work_area();
         caliper_host::dock_space_over_work_area(ImGui::GetID("caliper_live_dockspace"),
                                                 ImGuiDockNodeFlags_PassthruCentralNode);
-        live_.draw(area.Min.x, area.Min.y, area.GetWidth(), area.GetHeight(),
+        // The selection's details take a pane at the right edge while a
+        // selection has them; the views tile what is left.
+        float views_w = area.GetWidth();
+        if (rc && rc->details()) {
+            const float pane_w = std::floor(std::min(380.0f, area.GetWidth() * 0.4f));
+            views_w -= pane_w;
+            ImGui::SetNextWindowPos(ImVec2(area.Min.x + views_w, area.Min.y));
+            ImGui::SetNextWindowSize(ImVec2(pane_w, area.GetHeight()));
+            const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                           ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+                                           ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings;
+            if (ImGui::Begin("##caliper_live_selection", nullptr, flags)) {
+                const caliper_live::LinkedSelection* sel = rc->details();
+                sternbild::pane_header("Selection", sel->space.c_str(), nullptr, false);
+                caliper_live::draw_selection_details(*rc, look);
+            }
+            ImGui::End();
+        }
+        live_.draw(area.Min.x, area.Min.y, views_w, area.GetHeight(),
                    ImGui::GetIO().DisplayFramebufferScale.x);
+        // The shared selection over every view of its item space.
+        if (rc) caliper_live::draw_linked_selection(live_.core(), *rc, look);
 
         if (go_back) pending_detach_ = true;
     }
@@ -831,6 +927,7 @@ private:
     caliper_host::WindowCaptures captures_;   // the API's captures of the window's frame
     double live_frame_t_ = 0.0;       // start of the live page's current frame
     int autoattach_pid_ = 0;          // CALIPER_AUTOATTACH, until attached
+    std::unique_ptr<caliper_live::UiDriver> ui_driver_;   // CALIPER_TEST_UI with --hidden
     bool chromeless_ = false;         // CALIPER_CHROMELESS=1: applet page without bars
 };
 
@@ -900,6 +997,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (caliper_host::api_wanted(cl)) app.start_api(cl);
+    if (!cl.url.empty()) app.attach_at_start(cl.url);
 
     void (*old_int)(int) = SIG_DFL;
     void (*old_term)(int) = SIG_DFL;
