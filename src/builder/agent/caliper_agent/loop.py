@@ -42,9 +42,11 @@ server cut the front of a request silently: before each model request
 reply's prompt tokens, as the server counted them, plus a token for every three
 characters added since; the first request of a session at a token for every
 four characters of the instructions, the tools and the messages) and, when it
-would leave less than `CONTEXT_RESERVE` tokens for the reply, sends nothing:
-the turn ends normally with a plain message (and the status `context_full`)
-that says the conversation no longer fits and what the person can do. For a
+would leave less than an eighth of the context (at most 4,096 tokens) for the
+reply, sends nothing: the turn ends with the stop reason `max_tokens`, which
+the chat and the ⌘K prompt show as a limit, and a plain message (and the
+status `context_full`) that says the conversation no longer fits and what the
+person can do. For a
 server whose context length the sidecar does not know, nothing changes.
 
 A widget session (widget.py) runs the same turn with its own agent (the widget
@@ -584,9 +586,11 @@ class TurnRunner:
             s.history = close_tool_calls(_without_unfinished_reply(sent),
                                          "Not run: the conversation no longer fits the model's context.")
             self._sink.fail_open_calls("Not run: the conversation no longer fits the model's context.")
-            self.limit_reached = s.widget is not None and self.widget_edits > 0
+            self.limit_reached = True
             self._say_context_full(model_id, exc)
-            return "end_turn"
+            # A limit, as a reply cut off at the output limit: the chat and the
+            # ⌘K prompt show LIMIT, not a finished turn.
+            return "max_tokens"
         except AgentError:
             self._keep_failed_turn()
             raise

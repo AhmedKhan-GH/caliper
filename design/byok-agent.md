@@ -653,7 +653,8 @@ agent will. With it, the same probe left `/api/ps` at a context of 16,384 tokens
   the prompt tokens the server counted for the last one plus a token for every three characters added since (the
   first request of a session at four characters a token, tools and instructions included), and when it would leave
   less than an eighth of the context (at most 4,096 tokens) for the reply, it sends nothing: the turn ends with
-  `end_turn`, a `context_full` status and a message that names the context length and what the person can do. For a
+  `max_tokens`, which the side chat and the ⌘K prompt show as LIMIT rather than as a finished turn, a
+  `context_full` status and a message that names the context length and what the person can do. For a
   server whose context length the sidecar did not choose (LM Studio, Custom, hosted presets), nothing is checked, as
   before: the sidecar knows only the length it assumes, not the one the server loaded.
 - **The cache note.** For a server on loopback the probe also reads Ollama's `/api/show`, which loads nothing, and

@@ -137,7 +137,7 @@ def test_a_request_that_would_not_fit_is_not_sent(ollama_agent, caliper):
                                   {"text": "never"}], "--context-length", "16384", prompt_tokens=[15900])
     sid = agent.start_session()
     response, updates = agent.prompt(sid, "What data do I have?")
-    assert response["result"]["stopReason"] == "end_turn"
+    assert response["result"]["stopReason"] == "max_tokens"   # a limit, not a finished turn
     assert len(server.native_requests) == 1
     assert [c["origin"] for c in caliper.commands("catalog.list")] == ["agent"]   # what ran stays
     text = message_text(updates)
@@ -154,7 +154,8 @@ def test_a_widget_request_that_would_not_fit_names_the_settings(ollama_agent):
     agent, server = ollama_agent([{"text": "never"}], "--context-length", "1024")
     sid = agent.start_session(meta=widget_meta())
     response, updates = agent.prompt(sid, "Use a linear y axis")
-    assert response["result"]["stopReason"] == "end_turn"
+    assert response["result"]["stopReason"] == "max_tokens"
+    assert response["result"]["_meta"]["caliper"]["widget"]["limit"] is True   # ⌘K shows LIMIT
     assert server.native_requests == []   # the tools alone take more than 1,024 tokens
     text = message_text(updates)
     assert "context of 1,024 tokens" in text and "Close the prompt and ask again" in text

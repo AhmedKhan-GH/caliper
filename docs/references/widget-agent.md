@@ -145,8 +145,9 @@ context bundle and the render, takes about 7,000 tokens before the model's reply
 command of the table as a tool, about 11,000, growing with each tool result. Where the agent chose the context length,
 it never lets the server cut a request: before each model request it estimates the request from the prompt tokens the
 server counted for the last one, and when the request would leave less than an eighth of the context (at most 4,096
-tokens) for the reply, it sends nothing and the turn ends with a message, with the status `context_full`, that the
-conversation no longer fits the model's context and that the person can start again or raise the context length.
+tokens) for the reply, it sends nothing and the turn ends with the stop reason `max_tokens`, which Caliper shows as
+LIMIT, and a message, with the status `context_full`, that the conversation no longer fits the model's context and that
+the person can start again or raise the context length.
 For a server whose context length the agent did not choose, nothing is checked.
 
 ## Opening a widget session
