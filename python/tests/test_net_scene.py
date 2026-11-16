@@ -834,3 +834,27 @@ def test_device_strip_lengths_that_do_not_add_up_never_reach_a_viewer(server):
             assert not [x for x in v.inbox if isinstance(x, w.SceneUpdate) and x.path == "bad"]
             assert any("strip lengths" in str(r.message) for r in rec)
     run(body())
+
+
+def test_native_pump_waits_until_a_rate_limited_scene_frame_is_due():
+    """The native sender's pump polls every POLL_MS while copies are in flight or a scene frame
+    waits for room in its link (pump_native's 4 ms), and otherwise waits until the next
+    rate-limited scene frame is due, at most IDLE_MS: a batch that waits 1,000 s for its
+    max_rate does not wake the pump, and take the GIL, every 4 ms."""
+    import types
+    from caliper import _net_native as nn
+    sc = types.SimpleNamespace(pending=[], native_wait=None)
+    p = nn._NativeProducer.__new__(nn._NativeProducer)
+    p.ring = types.SimpleNamespace(pending=[], series={}, scenes=sc)
+    p.controls = None
+    cases = ((None, False, nn.IDLE_MS), (1000.0, False, nn.IDLE_MS), (0.05, False, 50),
+             (0.0101, False, 11), (0.004, True, nn.POLL_MS), (0.0, True, nn.POLL_MS))
+    for wait, busy, _ in cases:
+        sc.native_wait = wait
+        assert p.busy() is busy, wait
+    for wait, _, ms in cases:
+        sc.native_wait = wait
+        assert p.wait_ms() == ms, wait
+    sc.native_wait = 1000.0
+    sc.pending = [object()]                          # a copy in flight
+    assert p.busy() is True and p.wait_ms() == nn.POLL_MS
