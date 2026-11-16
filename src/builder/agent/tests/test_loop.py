@@ -340,6 +340,26 @@ def test_an_unknown_tool_is_an_error_result(run_agent, caliper):
     assert result["outcome"] == "retried" and "Unknown tool name" in str(result["content"])
 
 
+def test_undo_and_redo_are_never_offered_and_a_forced_call_is_not_sent(run_agent, caliper):
+    # Undo and redo are the person's own commands (tools.PERSON_ONLY): no
+    # session offers them, and a model that calls one anyway gets the unknown
+    # tool's error result, while Caliper receives nothing.
+    steps = [message(tool_use("toolu_u", "history_undo", {}), tool_use("toolu_r", "history_redo", {"steps": 1}),
+                     stop="tool_use"),
+             message(text("I will restore it with an edit instead."))]
+    agent, record = run_agent(steps)
+    sid = agent.start_session()
+    response, updates = agent.prompt(sid, "Undo that")
+    assert response["result"]["stopReason"] == "end_turn"
+    requests = read_requests(record)
+    names = [t["name"] for t in requests[0]["tools"]]
+    assert "history_list" in names and "history_undo" not in names and "history_redo" not in names
+    results = tool_results(requests[1]["messages"])
+    for call in ("toolu_u", "toolu_r"):
+        assert results[call]["outcome"] == "retried" and "Unknown tool name" in str(results[call]["content"])
+    assert not [c for c in caliper.commands(dry=None) if c["path"].startswith("/v0/commands/history.")]
+
+
 def test_max_tokens_runs_no_tool_and_keeps_the_history_valid(run_agent, caliper):
     steps = [
         message(text("Creating the panel"), tool_use("toolu_cut", "panel_create", {"id": "heat"}), stop="max_tokens"),

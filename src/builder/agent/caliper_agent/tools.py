@@ -67,6 +67,19 @@ PREVIEW_ARG = "dry_run"
 # commits one. review.status is the sidecar's own question to the app.
 NOT_FOR_THE_MODEL = frozenset({"preview", "review"})
 
+# Commands only the person runs, offered to the model in no session, general or
+# widget, and refused by the sidecar before they reach Caliper when a model
+# calls one anyway. Undo and redo are the person's tools: an agent reverts with
+# an ordinary edit, which is reviewed like any other, and the command layer
+# refuses both for the origins agent and mcp too. The command table does not
+# mark such commands yet; when it gets a flag for them, this set comes from it.
+PERSON_ONLY = frozenset({"history.undo", "history.redo"})
+
+
+def offered_to_the_model(command: "Command") -> bool:
+    """Whether any session may offer the command as a tool (NOT_FOR_THE_MODEL, PERSON_ONLY)."""
+    return command.group not in NOT_FOR_THE_MODEL and command.name not in PERSON_ONLY
+
 
 class TableError(Exception):
     """The command table could not be read or is malformed."""
@@ -366,12 +379,13 @@ def derive_tools(commands: list[Command], include: Callable[[Command], bool] | N
     """One tool per command, in the table's order (stable, for prompt caching).
 
     `include` keeps only the commands it accepts: the seam for a session whose
-    role needs fewer tools. The groups of NOT_FOR_THE_MODEL are always left
-    out. The strict tools are chosen among those kept.
+    role needs fewer tools. The groups of NOT_FOR_THE_MODEL and the commands
+    of PERSON_ONLY are always left out. The strict tools are chosen among those
+    kept.
     """
     tools = []
     for c in commands:
-        if c.group in NOT_FOR_THE_MODEL or (include is not None and not include(c)):
+        if not offered_to_the_model(c) or (include is not None and not include(c)):
             continue
         stripped = split_type_lists(strip_for_strict(c.args))
         tools.append(ToolSpec(name=tool_name(c.name), command=c, input_schema=stripped,

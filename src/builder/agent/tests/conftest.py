@@ -422,7 +422,8 @@ def statuses(updates: list[dict]) -> list[dict]:
 
 def general_tool_count() -> int:
     """How many tools a general session offers: one per command of the table
-    that derive_tools() keeps. The tests compare against this instead of a
-    number, so a new command does not break them."""
+    that derive_tools() keeps, which leaves out the app's own groups and the
+    person's own commands (tools.offered_to_the_model). The tests compare
+    against this instead of a number, so a new command does not break them."""
     from caliper_agent.tools import derive_tools, load_command_table
     return len(derive_tools(load_command_table(COMMAND_TABLE)))

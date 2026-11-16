@@ -10,7 +10,7 @@ import threading
 
 import pytest
 
-from conftest import COMMAND_TABLE, FAKE_KEY, tiny_png
+from conftest import COMMAND_TABLE, FAKE_KEY, general_tool_count, tiny_png
 
 from caliper_agent import keyguard
 from caliper_agent.caliper_api import (ApiFileError, MAX_IMAGE_BYTES, default_api_file, output_from_envelope,
@@ -26,8 +26,8 @@ from caliper_agent.provider import AgentError
 from caliper_agent.schema import MAX_DEPTH, validate
 from caliper_agent.toolset import JsonObjectArgs
 from caliper_agent.udiff import apply_unified_diff
-from caliper_agent.tools import (NOT_FOR_THE_MODEL, STRICT_UNSUPPORTED, TableError, acp_tool_kind, choose_strict,
-                                 command_name, derive_tools, is_strict_compatible, load_command_table, name_filter,
+from caliper_agent.tools import (NOT_FOR_THE_MODEL, PERSON_ONLY, STRICT_UNSUPPORTED, TableError, acp_tool_kind, choose_strict,
+                                 command_name, derive_tools, is_strict_compatible, load_command_table, name_filter, offered_to_the_model,
                                  parse_command_table, split_type_lists, strip_for_strict, tool_name)
 
 
@@ -45,14 +45,48 @@ def _walk_all(schema):
         yield from _walk_all(sub)
 
 
+def test_undo_and_redo_are_the_persons_own_in_every_session(caliper):
+    import asyncio
+
+    from caliper_agent.caliper_api import CaliperApi
+    from caliper_agent.widget import ScopeRule, widget_tools
+
+    commands = load_command_table(COMMAND_TABLE)
+    by_name = {c.name: c for c in commands}
+    assert PERSON_ONLY == {"history.undo", "history.redo"} and PERSON_ONLY <= set(by_name)
+    assert not offered_to_the_model(by_name["history.undo"]) and offered_to_the_model(by_name["history.list"])
+    # A general session, one narrowed to the history group, and a widget whose
+    # scope names every command: none offers either.
+    rule = ScopeRule.load(COMMAND_TABLE.parent / "widget_scopes.json")
+    sessions = {"general": derive_tools(commands), "history": derive_tools(commands, name_filter("history")),
+                "widget": widget_tools(commands, tuple(by_name), vision=True, rule=rule)}
+    for session, tools in sessions.items():
+        names = {t.command.name for t in tools}
+        assert not names & PERSON_ONLY, session
+    assert "history.list" in {t.command.name for t in sessions["history"]}
+    # The tool count the tests compare against follows the same rule.
+    offered = [c for c in commands if offered_to_the_model(c)]
+    assert general_tool_count() == len(offered) == len([c for c in commands if c.group not in NOT_FOR_THE_MODEL]) - 2
+    # A call made anyway is refused by the sidecar and never reaches Caliper.
+    api = CaliperApi(caliper.api_file)
+    try:
+        for name in sorted(PERSON_ONLY):
+            out = asyncio.run(api.call(name, {}))
+            assert not out.ok and out.error_code == "agent.person_only", name
+        assert asyncio.run(api.call("history.list", {})).ok
+    finally:
+        asyncio.run(api.aclose())
+    assert [c["path"] for c in caliper.commands(dry=None)] == ["/v0/commands/history.list"]
+
+
 def test_every_command_of_the_real_table_becomes_a_tool_strict_within_the_limits():
     commands = load_command_table(COMMAND_TABLE)
     tools = derive_tools(commands)
     # The preview and review commands are the app's and the sidecar's, never the model's.
     assert {c.name for c in commands if c.group in NOT_FOR_THE_MODEL} == {
         "preview.begin", "preview.diff", "preview.commit", "preview.discard", "review.status"}
-    commands = [c for c in commands if c.group not in NOT_FOR_THE_MODEL]
-    assert len(tools) == len(commands) >= 35
+    commands = [c for c in commands if offered_to_the_model(c)]   # without undo and redo, the person's own
+    assert len(tools) == len(commands) >= 34
     for tool, command in zip(tools, commands):
         assert tool.name == tool_name(command.name) and command_name(tool.name) == command.name
         assert tool.strict, f"{command.name} should be strict-compatible"

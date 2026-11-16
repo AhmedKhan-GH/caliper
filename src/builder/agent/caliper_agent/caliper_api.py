@@ -42,6 +42,7 @@ from urllib.parse import quote, urlsplit
 import httpx2
 
 from .keyguard import SCRUBBER, describe_exception
+from .tools import PERSON_ONLY
 
 MAX_API_FILE_BYTES = 64 << 10
 MAX_ARGS_BYTES = 1 << 20
@@ -288,6 +289,10 @@ class CaliperApi:
             return _error("caliper.transport", f"The call to Caliper API failed: {describe_exception(exc)}")
 
     async def _call(self, command: str, args: dict, group: str, preview: str = "") -> ToolOutput:
+        if command in PERSON_ONLY:
+            # Offered to no model (tools.PERSON_ONLY); a call made anyway is not sent.
+            return _error("agent.person_only", f"{command} is the person's own command in Caliper; an agent does not "
+                                               "run it. To revert a change, make an edit that restores it.")
         if command == "app.info":
             return self._plain(await self._send("GET", "/v0/info"))
         if command == "app.applets":
