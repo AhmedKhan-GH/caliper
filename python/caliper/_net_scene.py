@@ -47,7 +47,9 @@ __all__ = ["route_of", "SceneRoute", "LinkScenes", "SubQueue"]
 _routes_lock = threading.Lock()
 NATIVE_BACKLOG = 2                       # scene frames a native link may have waiting at once
                                          # (caliper._netio.MAX_SCENE_BYTES is this many frames)
-FRAME_ROOM = _wire.MAX_FRAME_BYTES - 64 * 1024   # array bytes a batch sends whole, at most
+# The array bytes a batch sends whole, at most: a frame less the largest metadata (labels take up
+# to 258 KB) and the section table with its padding.
+FRAME_ROOM = _wire.MAX_FRAME_BYTES - _wire.MAX_META_BYTES - 8 * 1024
 PIECE_BYTES = _wire.MAX_FRAME_BYTES              # the frame of a piece of a split update, at most
 
 
