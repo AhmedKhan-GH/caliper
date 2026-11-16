@@ -1,27 +1,30 @@
-# BYOK agent
+# Widget agent sidecar
 
-The agent pane has two backends behind one chat. The ACP backend runs the user's own coding agent on its own login,
-as the [ACP integration](acp-integration.md) page describes. The BYOK backend (bring your own key) runs Caliper's own
-agent loop against the Claude API with the user's API key. This page designs the BYOK backend: a Python sidecar
-named `caliper-agent` that speaks the agent side of ACP, so the pane drives both backends with the same `AcpClient`,
-and a small key store on the C++ side that keeps the key in the operating system's credential store. It elaborates
-section 12 of the sprint 3 contracts.
+Caliper's agents have two roles. The side chat runs the person's own agent on its own login, as the
+[ACP integration](acp-integration.md) page describes. The widget agent works inline on one target, a panel, a
+selection, a dropped file or a property, as the [Widget agent](widget-agent.md) page designs it. This page describes
+the widget agent's process as it is built: a Python sidecar named `caliper-agent` that runs Caliper's own agent loop
+against the Claude API with the person's key and speaks the agent side of ACP, so the app drives both roles with the
+same `AcpClient`, and a small key store on the C++ side that keeps the key in the operating system's credential store.
+It elaborates section 12 of the sprint 3 contracts, which named it the BYOK agent (bring your own key).
 
 The user's side is in [Agent pane backends](../explanations/agent-pane-backends.md) and
 [Set up BYOK](../guides/set-up-byok.md).
 
 **Built on this branch:** the sidecar `caliper-agent` (the Python package `caliper_agent` in `src/builder/agent/`),
 its tests (pytest, run by ctest as `builder_agent_py`, with one end-to-end test through the real C++ client), and the
-key store `caliper_builder_agent` with its doctest suite (`builder_agent`). **Planned:** the pane itself, its key
-settings and its wiring to the app, a packaged Python runtime for the sidecar, and the items under
-[what waits](#what-is-built-and-what-waits).
+key store `caliper_builder_agent` with its doctest suite (`builder_agent`). What is built runs in one mode, unscoped:
+a session gets every command of the table, which the tests and the manual check use. **Planned:** the widget role on
+top of it (the context bundle, the tool scope, the previews and the inline surface, on the
+[Widget agent](widget-agent.md) page), the provider layer, the settings and their wiring to the app, a packaged Python
+runtime for the sidecar, and the items under [what waits](#what-is-built-and-what-waits).
 
 ## The shape
 
 ```
 app process                                            sidecar process (Python, out of process)
 ───────────                                            ───────────────────────────────────────
-agent pane ── AcpClient ── stdin/stdout (ACP v1) ──►  caliper-agent
+the app ──── AcpClient ── stdin/stdout (ACP v1) ──►  caliper-agent
     │                                                    ├─ ACP agent side: sessions, prompts, cancel
     │ KeyStore (Keychain)                                ├─ the loop: model requests, tool calls, approval
     │   └─ place_key_in_environment() at spawn ───────►  │    env ANTHROPIC_API_KEY, never argv
@@ -30,8 +33,8 @@ agent pane ── AcpClient ── stdin/stdout (ACP v1) ──►  caliper-agen
 command layer ◄── Caliper API (/v0/commands, v0 endpoints) ◄─────────────────────────────────┘
 ```
 
-- **One session model.** The sidecar is an ACP agent like Claude Code, Codex or Gemini CLI, so messages, thoughts,
-  tool calls, spec diffs, permission requests and cancellation reach the pane in the same shapes for both backends.
+- **One session model.** The sidecar is an ACP agent like the side chat's agents, so messages, thoughts, tool calls,
+  spec diffs, permission requests and cancellation reach the app in the same shapes for both roles.
 - **No model-driven code in the app.** The loop, the SDK and every response from the model live in the sidecar. The
   app starts it as a child process with `caliper_builder::acp::AcpClient` and sees only ACP messages.
 - **The command layer is the only way in.** A tool call becomes a call to Caliper API on loopback with the origin
@@ -54,10 +57,13 @@ path, so a file such as `json.py` in a workspace would run as code.
 | `--no-compaction` | Turns server-side compaction off |
 | `--usage-log <path>` | Appends the token counts of each request to a file, for the manual check; no content is written |
 
+These defaults are the unscoped mode's. A widget session will default to `claude-haiku-5-5` at the effort `low`, for
+the reasons on the [Widget agent](widget-agent.md#the-turn-budget-the-model-and-the-effort) page.
+
 At start the sidecar keeps the real stdout for the protocol and points file descriptor 1 at stderr, so a stray print
 from a library cannot corrupt the stream. It then routes uncaught exceptions and log records through the scrubber,
 takes the key from the environment, reads the command table and serves ACP until the client closes stdin. It exits
-with 0 then, and with 2 for bad usage or an unreadable table, which the pane sees as an agent that could not start,
+with 0 then, and with 2 for bad usage or an unreadable table, which the app sees as an agent that could not start,
 with the reason in the agent's stderr.
 
 ## ACP, agent side
@@ -67,7 +73,7 @@ The sidecar speaks ACP version 1, the version the client speaks.
 | Method | What the sidecar does |
 |---|---|
 | `initialize` | Answers version 1 whatever the client offers first, declares no optional capability (no session loading, no images or embedded context in prompts, no MCP transports) and lists no login method, because the key comes from the app |
-| `session/new` | Creates a session with its own conversation and answers with three config options; the request's `mcpServers` are not started, since the sidecar reaches Caliper through Caliper API itself |
+| `session/new` | Creates a session with its own conversation and answers with three config options; the request's `mcpServers` are not started, since the sidecar reaches Caliper through Caliper API itself. A widget session will also carry its target, tool scope and preview in `_meta.caliper.widget` ([Widget agent](widget-agent.md#how-it-stays-an-acp-agent)) |
 | `session/set_config_option` | Sets `model`, `effort` or `review`; the value applies from the next model request |
 | `session/prompt` | Runs one turn and answers with its stop reason, and with the turn's token counts in `_meta.caliper.usage` |
 | `session/cancel` | Stops the running turn, which then answers with the stop reason `cancelled` |
@@ -93,7 +99,7 @@ the protocol's schema as [below](#checked-against-the-protocols-schema) says. `m
 the schema reserves for exactly these selectors; `review` has none, which the schema allows. `AcpClient` keeps the
 `configOptions` of `session/new` as received, so nothing in the client depends on them yet.
 
-### What the pane receives
+### What the client receives
 
 | What happens | Session update |
 |---|---|
@@ -105,7 +111,7 @@ the schema reserves for exactly these selectors; `review` has none, which the sc
 | The call ends | `tool_call_update` with `completed` or `failed`, the result as text, a PNG as an image block, a spec diff, and `rawOutput` |
 | A status (below) | `agent_thought_chunk` whose text says it plainly and whose `_meta.caliper.status` names it |
 
-A status travels as a thought so that any ACP client shows it, and Caliper's pane can show it as a status line by
+A status travels as a thought so that any ACP client shows it, and Caliper's UI can show it as a status line by
 reading `_meta.caliper.status`: `retry` (with `reason`, `http_status`, `attempt`, `max_attempts` and `delay_s`),
 `fallback` (with `from_model`, `to_model` and `category`), `served_by`, `refusal` (with `category`, `explanation` and
 `turn_removed`), `compaction`, `strict_off` and `limit`. The sidecar sends no `plan` updates in this phase, since its
@@ -165,7 +171,7 @@ A tool runs by calling Caliper API (contracts sections 8 and 15):
 - A 404 from `/v0/commands` means the app has no command layer yet; the tool answers with `caliper.no_command_layer`,
   and the four v0 tools still work. A 501 from a capture becomes `capture.unavailable` with the app's reason.
 - A PNG, from a capture or from `png_base64` in a result such as `panel.render`, reaches the model as an image block
-  inside the tool result, and the pane as an image block in the tool call. A PNG larger than 3.75 MB is refused with a
+  inside the tool result, and the app as an image block in the tool call. A PNG larger than 3.75 MB is refused with a
   tool error, so its base64 text stays under the 5 MB the Claude API takes for one image.
 - A result is given to the model as JSON text, cut at 96 KiB with a note, and scrubbed of secrets.
 - The API file is read when a tool first needs it and read again after a 401, since a restarted app has a new token.
@@ -176,7 +182,7 @@ A tool runs by calling Caliper API (contracts sections 8 and 15):
 
 **Decision: the sidecar runs its own loop rather than the SDK's tool runner.** The tool runner
 (`client.beta.messages.tool_runner`) can express the approval gate, by asking inside a tool's function. It was not
-chosen because the pane needs things the runner keeps inside: the state of each retry (the runner's requests retry
+chosen because the app needs things the runner keeps inside: the state of each retry (the runner's requests retry
 inside the SDK, and a runner that raised cannot be iterated again), cancellation in the middle of a stream with a
 history that stays valid, one history that lasts across the prompts of an ACP session, and the stop-reason rules
 below. The runner also sends message threads by default on the first-party client, which keep the conversation on
@@ -184,7 +190,7 @@ the server for a while; the sidecar does not want that. The loop is about 350 li
 
 For each prompt the loop appends the prompt to the session's history and then repeats:
 
-1. **Stream a request.** The provider streams the reply to the pane and returns how it ended, the tool calls and the
+1. **Stream a request.** The provider streams the reply to the app and returns how it ended, the tool calls and the
    token counts.
 2. **Check how it ended** before running anything (the table above). After `max_tokens` or a refusal no tool of that
    reply runs, because a cut-off or declined reply can hold a tool input that is truncated yet parses.
@@ -207,13 +213,17 @@ always stays valid:
   block in it stay valid. A declined reply is never added to the history.
 - **A mid-reply fallback**: the blocks of the declining model before the last `fallback` block are left out, except
   text, the fallback blocks and paired server-tool blocks, as the API requires. Tool calls of the declining model are
-  never run, and the pane marks them failed.
+  never run, and the app marks them failed.
 
 **Cancellation** stops whatever runs: the stream (its connection is closed), a call to Caliper API, a permission
 request or a retry delay. A call that Caliper had already started may still finish in the app; its result is not given
 to the model, and the journal records it. The turn answers with `cancelled` and never with an error, as ACP asks.
 
 ## Approval and spec diffs
+
+This section describes the unscoped mode as it is built. In a widget session the preview card is the review, the
+sidecar sends no permission request for edits, and no destructive command can be in the scope
+([Widget agent](widget-agent.md#preview-and-apply-on-the-command-layer)).
 
 The sidecar asks with `session/request_permission` before:
 
@@ -252,9 +262,10 @@ asks an agent only before a save that overwrites an applet.
 **Two approvals for one destructive command.** Caliper API holds a destructive command from the origin `agent` for the
 app's own approval (contracts section 15), so a destructive call is asked about twice: once by the sidecar and once
 by the app. The app must not take the sidecar's word for the person's answer, because the sidecar runs code that a
-model drives. The pane can still show one decision: when it answers a permission request of the BYOK sidecar with
+model drives. The app can still show one decision: when it answers a permission request of the sidecar with
 Allow, it can record the command and a hash of its arguments, and approve the matching command approval of the origin
-`agent` that arrives within a few seconds, since the record is the app's own. That is for the pane stream to decide.
+`agent` that arrives within a few seconds, since the record is the app's own. That is for the app's approval cards
+to decide.
 
 ## The system prompt
 
@@ -273,8 +284,9 @@ session id, no setting), because it is cached with the tools at the front of eve
    Caliper's names, no raw JSON unless asked, and say so when a request needs something the tools cannot do.
 
 The prompt asks for the intent sentence and the recap because Claude Opus 5.5 returns the notes it writes between tool
-calls as thinking blocks; with summarized thinking the pane shows them as thoughts, and the instructions keep the
-reply itself readable.
+calls as thinking blocks; with summarized thinking the app shows them as thoughts, and the instructions keep the
+reply itself readable. The prompt's text still names the agent pane, from before the two roles; a widget session will
+use a second, shorter fixed prompt ([Widget agent](widget-agent.md#how-it-stays-an-acp-agent)).
 
 ## Claude API settings and why
 
@@ -287,7 +299,7 @@ version `2026-10-21`); they are in `caliper_agent/claude.py`, the one module wit
 | Client | `AsyncAnthropic(api_key=..., base_url="https://api.anthropic.com", max_retries=0, open_telemetry=False)` | An explicit key stops the SDK from looking for other credentials; a fixed base URL ignores `ANTHROPIC_BASE_URL`; the loop retries itself; no tracing |
 | `model` | `claude-opus-5-5` by default; the picker offers `claude-sonnet-5-5`, `claude-haiku-5-5` and `claude-fable-5-2` | The user's choice of models, exact ids without dates |
 | `max_tokens` | 64000 | The skill's starting point for streamed agentic turns, with room for thinking |
-| `thinking` | `{"type": "adaptive", "display": "summarized"}` | Adaptive thinking on every model; summaries give the pane thoughts to show |
+| `thinking` | `{"type": "adaptive", "display": "summarized"}` | Adaptive thinking on every model; summaries give the app thoughts to show |
 | `output_config.effort` | `high` by default, set on every request | Claude Opus 5.5 defaults to `medium` when it is left out; building a spec from data is work where the skill advises at least `high` |
 | `tools` | strict, `eager_input_streaming: true` | Schema-valid inputs, streamed as they are written; the client validates them |
 | `tool_choice` | `{"type": "auto"}` | Forced tool use is refused by these models; the prompt steers |
@@ -300,11 +312,11 @@ version `2026-10-21`); they are in `caliper_agent/claude.py`, the one module wit
 
 **Decision: summarized thinking rather than `display: "updates"`.** The updates display shows only the notes between
 tool calls and needs another beta, and not every model in the picker documents it; summaries work on all four and
-show the pane what the ACP agents show.
+show the app what the ACP agents show.
 
 **Decision: one default effort, `high`, for every model.** The skill starts Claude Opus 5.5 and Claude Sonnet 5.5 at
 `medium` for agentic work and Claude Fable 5.2 at `high`, and advises at least `high` where intelligence matters. A
-single default keeps the pane simple; the effort option offers all five levels, and the manual check compares
+single default keeps the settings simple; the effort option offers all five levels, and the manual check compares
 `medium` with `high`.
 
 ## Prompt caching and how it is verified
@@ -321,15 +333,15 @@ and is not a history edit; per-message effort (a beta) could avoid even that cos
 Verification:
 
 - **In tests**, the scripted transport returns usage with cache writes on the first request and cache reads on the
-  second, and a test checks that both reach the pane in `_meta.caliper.usage` and in the usage log, and that the tools
+  second, and a test checks that both reach the app in `_meta.caliper.usage` and in the usage log, and that the tools
   and the system prompt are byte-identical across the two requests and the second history starts with the first.
 - **For real**, the manual check below runs a prompt that needs a tool, so the turn makes at least two requests, and
   checks that the usage log shows `cache_read_input_tokens` above zero on the second.
 
-## Refusals and errors in the pane
+## Refusals and errors
 
 **Refusals.** With fallbacks on, a declined request is run again on the model Anthropic recommends for its category,
-within the same request; the pane sees a `fallback` status and, when the fallback served the turn, a `served_by`
+within the same request; the app sees a `fallback` status and, when the fallback served the turn, a `served_by`
 status. When the whole chain declines, or the model has no fallback, the turn ends with the stop reason `refusal` and a
 `refusal` status with the category and the explanation. The prompt and everything after it leave the history, as ACP's
 `refusal` means, so the person can rephrase it; commands that the turn already ran stay in Caliper and in its undo
@@ -344,14 +356,14 @@ status errors, then the connection errors.
 | 408, 409, 5xx, 529 overloaded, an `overloaded_error` or `api_error` event in the stream | Retried with backoff |
 | A connection error or a timeout | Retried with backoff |
 | Tool input the SDK could not parse at all | The request is sent again |
-| 401 | The turn fails with -32000 and `agent.key_rejected`: the pane offers to replace the key |
+| 401 | The turn fails with -32000 and `agent.key_rejected`: the app offers to replace the key |
 | 400, 402, 403, 404, 413 | The turn fails with the API's message (`agent.bad_request`, `agent.billing`, `agent.forbidden`, `agent.model_unavailable`, `agent.request_too_large`) |
 
-A retry is announced to the pane with a `retry` status that says what happened, how long the sidecar waits and which
+A retry is announced to the app with a `retry` status that says what happened, how long the sidecar waits and which
 attempt follows. There are at most five attempts; delays are capped at 60 seconds and backoff at 30 seconds. A request
-is retried only while nothing of it has reached the pane: once text or a tool call has been shown, a broken stream ends
+is retried only while nothing of it has reached the app: once text or a tool call has been shown, a broken stream ends
 the turn with `agent.stream_interrupted` and a message that says to send the prompt again, because a retried reply
-would repeat what the pane already shows. A 400 that mentions strict tools on the first request of a session turns
+would repeat what the app already shows. A 400 that mentions strict tools on the first request of a session turns
 strict mode off for that session and goes on (`strict_off` status); later in a session it would change the tools under
 existing thinking blocks, so it is not done then.
 
@@ -359,20 +371,21 @@ existing thinking blocks, so it is not done then.
 
 Server-side compaction is on by default: when a request's input reaches 150,000 tokens, the API summarizes the
 earlier conversation and returns a `compaction` block, which the sidecar keeps in the history like any other block
-(the full content always goes back). The pane sees a `compaction` status. Captures are what grows a session fastest,
+(the full content always goes back). The app sees a `compaction` status. Captures are what grows a session fastest,
 about 4,800 tokens each at full resolution, so they are kept inside tool results, where server-side context editing
 could later clear them without editing the history. `--no-compaction` turns compaction off.
 
 ## The key's whole life
 
 1. **Getting it.** The person creates an API key in the Claude Console and copies it.
-2. **Entering it.** The person pastes it into the pane's settings field, which never shows it again. The app calls
+2. **Entering it.** The person pastes it into the key field of the widget agent's settings, which never shows it
+   again. The app calls
    `KeyStore::set("anthropic", key)`, which checks it (1 to 1024 bytes of printable ASCII without spaces) and stores it
    in the macOS Keychain as a generic password item (service `caliper.agent-keys`, account `anthropic`, readable only
    while the device is unlocked, never synchronised). The field's buffer is wiped.
-3. **Showing it.** The pane shows only whether a key is set (`KeyStore::has`). There is no function that returns the
+3. **Showing it.** The settings show only whether a key is set (`KeyStore::has`). There is no function that returns the
    key for display.
-4. **Removing it.** A control in the pane calls `KeyStore::remove`, which deletes the Keychain item.
+4. **Removing it.** A control in the settings calls `KeyStore::remove`, which deletes the Keychain item.
 5. **Spawning the sidecar.** `place_key_in_environment(store, "anthropic", &spawn)` reads the key and puts it in the
    child's environment as `ANTHROPIC_API_KEY`, the variable the SDK reads. It also removes from the child's environment
    every variable that could make the SDK use another credential, another host or extra headers
@@ -382,7 +395,7 @@ could later clear them without editing the history. `--no-compaction` turns comp
 6. **In the sidecar.** Before the SDK is imported, the key is read once and removed from `os.environ`, with the same
    variables. It is held in a `Secret` whose repr never shows it and handed to the SDK client as an explicit argument,
    so the SDK never looks for a profile, a token or federation credentials. A missing or malformed key refuses each
-   turn with -32000 and a message that says to add the key in the pane.
+   turn with -32000 and a message that says to add the key in the settings.
 7. **On the wire.** The SDK (2.x) sends it in the `Authorization` header of requests to `api.anthropic.com` only.
 8. **Never written out.** Every line the sidecar writes to the client, every stderr line, every log record and every
    exception report passes through the scrubber, which replaces the key, Caliper API's session token and anything
@@ -402,6 +415,10 @@ planned. The one function that reads a key is `place_key_in_environment()`, a fr
 test calls the Keychain store, because touching the login keychain can show a system prompt; it is compiled on macOS
 and covered by the manual check. Error codes: `keystore.bad_provider`, `keystore.bad_key`, `keystore.not_found`,
 `keystore.unsupported`, `keystore.failed`; no error quotes a key.
+
+The store already takes a provider id, and the Keychain item's account is that id. It knows one provider today,
+`anthropic`. With the presets of the [Widget agent](widget-agent.md#presets) page it gains one id per preset, so each
+provider that needs a key has an entry of its own; that change is a work item.
 
 ## Checked against the protocol's schema
 
@@ -430,13 +447,20 @@ HTTP client), against the [ACP integration](acp-integration.md) page and against
   update, and -32000 as "authentication required". `AcpClient` reads the fields it needs from these shapes and keeps
   `configOptions` raw.
 
-## Other providers
+## Providers
 
-OpenAI, Gemini and local models are a later, separate decision, each through its own official SDK and never through
-a compatibility shim. The sidecar is shaped for that: the loop talks to a provider through the small interface in
-`caliper_agent/provider.py` (a conversation it owns, one streamed request at a time, provider-neutral events and
-results), and all Claude-specific code is in `caliper_agent/claude.py`. A new provider is one more module, one more
-key variable in the key store, and its own settings and tests.
+The widget agent is model-agnostic. Today the sidecar has one provider, Claude through the official `anthropic` SDK,
+with the settings above. The loop talks to it through the small interface in `caliper_agent/provider.py` (a
+conversation it owns, one streamed request at a time, provider-neutral events and results), and all Claude-specific
+code is in `caliper_agent/claude.py`.
+
+The planned provider layer is Pydantic AI, with Claude on its native Anthropic support and every other model, hosted
+or local, through its OpenAI-compatible support against a configurable base URL. A spike on another branch is checking
+cancellation, retry visibility, the Claude features (adaptive thinking, prompt caching, compaction and refusal
+fallbacks), stop reasons, capability differences and the dependency footprint, and this page will be updated with its
+result. Claude runs on its native API, so that its features are kept; other models run through an OpenAI-compatible
+API. The [Widget agent](widget-agent.md#providers) page gives the reasons, the presets with their base URLs, and the
+capability checks and degradations that do not depend on the library.
 
 ## Security notes for the later security pass
 
@@ -452,7 +476,7 @@ key variable in the key store, and its own settings and tests.
   path.
 - **Prompt injection.** Everything a tool returns is workspace data. The system prompt says so, destructive commands
   need the person's approval, the app's own approval policy holds for the origin `agent`, and an agent cannot approve
-  its own request (command layer). The sidecar's permission answer is a convenience for the pane, not an authority for
+  its own request (command layer). The sidecar's permission answer is a convenience for the app's UI, not an authority for
   the app.
 - **What leaves the machine.** The conversation, including tool results (catalog entries, samples of data, spec text,
   captures), is sent to the Claude API under the user's key and its data terms. The user docs say so, in
@@ -462,7 +486,7 @@ key variable in the key store, and its own settings and tests.
 - **Logging.** The SDK and HTTP loggers are kept at warning level, `ANTHROPIC_LOG` is removed, and OpenTelemetry is
   off.
 - **Supply chain.** The sidecar depends on `anthropic` 2.x (Apache 2.0) and what it pulls in (`httpx2`, `pydantic`,
-  `jiter`, `anyio` and others). A lock file and a packaged runtime come with the pane.
+  `jiter`, `anyio` and others). A lock file and a packaged runtime come with the wiring into the app.
 - **Limits.** Protocol lines of at most 8 MiB, 16 sessions, 50 model requests per prompt, a command table of at most
   8 MiB and 512 commands, an API file of at most 64 KiB, responses from Caliper API of at most 32 MiB, images of at
   most 3.75 MB, and the validator's bounds of 64 levels and 1,048,576 values.
@@ -478,7 +502,7 @@ Caliper API runs on loopback in the test process.
   and an append-only history; inputs that fail the schema or arrive cut off; `max_tokens`; a refusal at the start and
   later in a turn; a rate limit and
   an overload followed by success; connection errors retried and then reported; a stream that breaks before and after
-  the pane saw it; cancellation in the middle of a stream; destructive approval allowed and denied; previews of spec
+  the client saw it; cancellation in the middle of a stream; destructive approval allowed and denied; previews of spec
   edits shown as diffs before the edits run, a preview that changes nothing, one that is refused and one the model
   asked for, and allow-always; a capture and a rendered panel as images; a capture that the renderer cannot take; the
   cache fields across two turns; config options and the Haiku settings; a mid-reply fallback; no key and a malformed
@@ -550,9 +574,9 @@ spends money (a few cents). It uses `caliper-acp-harness`, which opens no window
    on GL and Vulkan.
 10. Check the effort: add `--effort medium` and then `--effort high` to the sidecar's command in `--agent`, on a
     prompt that builds something once the command layer is wired, and compare the replies and the usage logs.
-11. Once the pane exists, enter the key in the pane, check that it shows that a key is set and never the key, run the
-    three-panel dashboard of the acceptance test through the BYOK backend, then remove the key and check that a new
-    prompt is refused with the message that no key is set.
+11. Once the inline surface exists, enter the key in the widget agent's settings, check that they show that a key is
+    set and never the key, make an edit by ⌘K on a panel of the acceptance test's dashboard and accept it, check that
+    one undo takes it back, then remove the key and check that ⌘K offers only Ask in chat.
 
 ## What is built and what waits
 
@@ -570,27 +594,45 @@ Built on this branch:
 
 Waiting for later work:
 
-- The pane: the backend switch, the key field and its remove control, the model, effort and review pickers from the
-  config options, status lines from `_meta.caliper.status`, and the merged approval described above.
+- The widget role: widget sessions with `_meta.caliper.widget`, the scoped tools, the widget system prompt, images and
+  embedded context in prompts, the preview header, the turn budget and `session/close`, with the rest of the inline
+  design, as the [work items](widget-agent.md#work-items) of the Widget agent page list them with their sizes.
+- The settings: the presets, the key field for each provider and its remove control, the model and effort pickers
+  from the config options, and status lines from `_meta.caliper.status`.
+- Adopting Pydantic AI as the provider layer, after its spike; the capability probe and its cache; one key per
+  provider in `KeyStore`.
+- **The evaluation of the ACP Python SDK.** The sidecar's agent side is hand-written: `acp.py` holds the JSON-RPC
+  transport and `agent.py` the methods and message shapes. The official SDK,
+  [`agent-client-protocol`](https://pypi.org/project/agent-client-protocol/) on PyPI (1.0.0 of 9 November 2026,
+  Apache-2.0, Python 3.10 to 3.15, from the protocol's
+  [python-sdk](https://github.com/agentclientprotocol/python-sdk) repository, read on 15 November 2026), offers
+  Pydantic models generated from the schema, async base classes and stdio JSON-RPC. The evaluation checks that every
+  line still leaves through one write point where the scrubber runs; that malformed and oversized lines (over 8 MiB)
+  are dropped and reported rather than fatal; that `session/cancel` and `$/cancel_request` stop a running prompt as the
+  loop needs; that `_meta` passes through `session/new`, prompts and updates; that the messages still validate against
+  the version 1 schema in the seven scenarios of [the schema check](#checked-against-the-protocols-schema); what the
+  dependency adds (Pydantic already comes with `anthropic`); and how its releases follow the schema's weekly releases.
+  If it passes, it replaces `acp.py` and the message shapes of `agent.py`; otherwise the hand-written side stays and
+  the reasons are recorded here.
 - Spawning the sidecar from the app with the key store, and a packaged Python runtime with a lock file.
-- The Windows Credential Manager store.
+- The Windows Credential Manager store, with one entry per provider.
 - Per-message effort and context editing for old captures, both betas.
-- Images and embedded resources in prompts, and `session/load`.
-- Other providers, each its own decision.
+- `session/load`.
 
 ## Decisions
 
-- **A Python sidecar speaking ACP**, so the pane has one session model and no model-driven code runs in the app.
+- **A Python sidecar speaking ACP**, so the app drives both roles with one session model and no model-driven code
+  runs in the app.
 - **The sidecar's own loop** rather than the SDK's tool runner, for retry reporting, cancellation, a session-long
   history and the stop-reason rules.
 - **Config options for model, effort and review**, not modes.
-- **Statuses as thoughts with `_meta`**, so every ACP client shows them and Caliper's pane can style them.
+- **Statuses as thoughts with `_meta`**, so every ACP client shows them and Caliper's UI can style them.
 - **Tools read generically from the table**, strict where the schema allows, with the full schema checked locally.
 - **Approval before destructive commands always, and before spec edits by default**, with Allow for the session for
   spec edits only. A dry run of each reviewed edit gives its diff before it runs; previewable commands are found in
   the table's schemas, not in a list.
 - **A refusal takes the turn back**: the prompt and everything after it leave the history, as ACP's `refusal` means.
-- **Retry only while the pane saw nothing.**
+- **Retry only while the client saw nothing.**
 - **Summarized thinking and one default effort, `high`.**
 - **Fallbacks on by default, except on Claude Haiku 5.5**, which has none.
 - **Compaction on by default.**
@@ -599,14 +641,15 @@ Waiting for later work:
 - **The API file's address must be loopback.**
 - **A usage log of token counts only**, for checking the cache with a real key.
 - **`-I` at launch**, so the workspace is never on the import path.
-- **One provider module**, so other providers stay a separate decision.
+- **Claude on its native API**, so that its features are kept, and other models through an OpenAI-compatible API,
+  with Pydantic AI as the planned provider layer once its spike holds up.
 
 ## Notes on the contracts
 
 - **The origin `agent` over Caliper API.** Section 8 says the origin is `api`, or `mcp` with `X-Caliper-Origin: mcp`;
   section 15 speaks of calls with the origin `agent`. The sidecar sends `X-Caliper-Origin: agent`, and the smallest
   fix is that the API accepts `agent` as well as `mcp` in that header.
-- **Two approvals.** Sections 12 and 15 together ask about a destructive command from the sidecar twice; the pane
+- **Two approvals.** Sections 12 and 15 together ask about a destructive command from the sidecar twice; the app
   should merge them as described above, without trusting the sidecar's answer.
 - **Fallbacks on Claude Haiku 5.5.** Section 12 turns server-side refusal fallbacks on by default; Claude Haiku 5.5 has
   none, so its requests leave the parameter out.
