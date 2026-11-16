@@ -42,8 +42,10 @@
 // starts (agent: the side chat's agent, the widget agent's sidecar), and
 // revoke_token() ends it when that agent's session ends; an unknown or
 // revoked token is 401. Options::viewer_token opens the spec page only (THE
-// SPEC PAGE). Every comparison is constant-time. The stream (/v3/stream)
-// belongs to the net layer's hub, which takes the person's token only.
+// SPEC PAGE). Every comparison is constant-time. The stream (/v3/stream) takes
+// the person's token, which may control a run when allow_control is on, and
+// the mcp and agent tokens, which watch it and may not control
+// (HubOptions::stream_access); the viewer token does not open it.
 //
 // THE SPEC PAGE. GET /v0/spec answers Options::spec_page_html, the page of
 // the web package that draws a saved spec applet in a browser
@@ -301,6 +303,9 @@ public:
 private:
     struct Impl;
     TokenTable tokens() const;
+    // The stream's access for a token: full for the person's (api), watch
+    // for mcp and agent tokens, refused for the viewer's and any other.
+    caliper_net::HubOptions::StreamAccess stream_access(const std::string& presented) const;
     Options opt_;
     mutable std::mutex issued_mu_;
     std::vector<std::pair<std::string, std::string>> issued_;   // issue_token()'s, token and origin

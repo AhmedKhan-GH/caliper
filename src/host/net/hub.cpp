@@ -208,6 +208,7 @@ struct Peer {
     uint64_t pinged_at = 0;          // last_input_ms when the last PING went out
     uint32_t nonce = 0;
     bool closing = false;
+    bool watch_only = false;         // its token may watch, not control (HubOptions::stream_access)
     // viewer
     std::string attached;            // session id, "" when not attached
     bool follows_default = true;
@@ -311,6 +312,7 @@ struct Hub::Impl {
     StaticFiles files;
     std::unique_ptr<HttpDoor> door;
     std::map<ConnId, Peer> peers;
+    std::set<ConnId> watch_only;   // upgraded with a watching token, not yet open
     std::map<std::string, Session> sessions;
     uint64_t next_channel = 1;
     uint64_t next_order = 1;
@@ -1083,6 +1085,10 @@ struct Hub::Impl {
             refuse(CALIPER_NET_ERR_FORBIDDEN, "this hub does not allow control; start it with --allow-control");
             return;
         }
+        if (p.watch_only) {
+            refuse(CALIPER_NET_ERR_FORBIDDEN, "this connection's token may watch the stream, not control a run");
+            return;
+        }
         Session* s = session_of(p);
         if (!s) {
             refuse(CALIPER_NET_ERR_NOT_ATTACHED, "attach to a session first");
@@ -1798,7 +1804,9 @@ struct Hub::Impl {
         p.role = Peer::Role::Viewer;
         p.cap_controls = has_cap(h.capabilities, CALIPER_NET_CAP_CONTROLS);
         p.cap_selection = has_cap(h.capabilities, CALIPER_NET_CAP_SELECTION);
-        send(p.conn, hub_welcome(p.cap_controls));
+        wire::Welcome w = hub_welcome(p.cap_controls);
+        if (p.cap_controls && p.watch_only) w.control = false;
+        send(p.conn, w);
         send(p.conn, sessions_msg());
         reconsider_defaults();
     }
@@ -1842,6 +1850,7 @@ struct Hub::Impl {
     }
 
     void on_closed(ConnId conn) {
+        watch_only.erase(conn);
         auto pt = peers.find(conn);
         if (pt == peers.end()) return;
         Peer& p = pt->second;
@@ -1861,12 +1870,17 @@ struct Hub::Impl {
     void handle(Event& e) {
         switch (e.type) {
             case Event::Type::Request:
-                door->answer(server, e.conn, e.request);
+                if (door->answer(server, e.conn, e.request) && opt.stream_access) {
+                    std::string t;
+                    e.request.query_param(CALIPER_NET_TOKEN_PARAM, &t);
+                    if (opt.stream_access(t) != HubOptions::StreamAccess::kFull) watch_only.insert(e.conn);
+                }
                 break;
             case Event::Type::Open: {
                 Peer p;
                 p.conn = e.conn;
                 p.opened_ms = monotonic_ms();
+                p.watch_only = watch_only.erase(e.conn) > 0;
                 peers[e.conn] = std::move(p);
                 break;
             }
@@ -2149,6 +2163,11 @@ bool Hub::listen(std::string* err) {
         "--assets <that folder> to open the stream in a browser at this address.\n";
     m.door = std::make_unique<HttpDoor>(m.opt.token, m.server.port(), &m.files, note,
                                         m.opt.stream_path, m.opt.on_request, m.opt.stream_alias);
+    if (m.opt.stream_access) {
+        auto access = m.opt.stream_access;
+        m.door->set_token_check(
+            [access](const std::string& t) { return access(t) != HubOptions::StreamAccess::kRefused; });
+    }
     m.publish(true);
     return true;
 }

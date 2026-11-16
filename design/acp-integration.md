@@ -368,7 +368,10 @@ or not the agent asks on its own. Three parts are built:
   the widget agent's sidecar each get an `agent` token of their own in an API file of their own,
   `api-agent-<pid>-<n>.json` (mode 0600), which the app revokes and removes when that agent's session ends. An agent
   that reads a file and calls the API with curl therefore runs as `mcp` or `agent`, and its spec edits wait for review
-  like those that go through `caliper-mcp` (Caliper API, `docs/references/api.md`, under Who sends a command).
+  like those that go through `caliper-mcp` (Caliper API, `docs/references/api.md`, under Who sends a command). On the
+  stream, the `mcp` and `agent` tokens watch and cannot control a run: the hub decides per connection, by the token
+  that opened it (`HubOptions::stream_access`), so its WELCOME sets `control` false and a CONTROL is answered
+  `forbidden`, with no change to the protocol.
 - **Diff previews of spec edits.** Every edit of the open spec takes `dry_run` and returns its change as a diff of the
   canonical TOML without any effect ([Builder session](builder-session.md)).
 - **Review of spec edits.** With review on for an origin, a session setting that is on by default for `agent` and
@@ -745,9 +748,7 @@ Waiting for later work:
     `src/host/builder/tests/test_widget_app.cpp` reads;
   - the stand-in host, `caliper-builder-host` (`src/builder/session/command_server.cpp`), still takes the origin from
     `X-Caliper-Origin` with its one token; it is a development tool, not the product, and its owner changes it with
-    the session library;
-  - the stream (`/v3/stream`) takes the person's token only, so an outside agent with `api.json` cannot attach a
-    producer or a viewer; giving the `mcp` token the stream needs a change in the net layer's hub.
+    the session library.
 - The review setting per origin in the side chat's settings, and running the spec validator on an agent's own edit of a
   spec file before the person answers.
 - The setting that marks an agent as running on a local model, with the note while a run is live, and the warning when

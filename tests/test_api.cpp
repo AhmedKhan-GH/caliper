@@ -1266,14 +1266,14 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     CHECK(http(port, "GET", "/v0/applets/dev.caliper.hello/launch", bearer(token)).status == 405);
     capture();
 
-    // The stream's handshake on both paths: the app answers as the hub. The
-    // stream is the person's (producers, viewers and, with --allow-control,
-    // controls): it takes the start line's token, not the API file's.
+    // The stream's handshake on both paths: the app answers as the hub, to
+    // the start line's token and to the API file's, which watches the stream
+    // and may not control a run.
     for (const char* path : {"/v3/stream", "/v0/stream"}) {
         std::string role, why;
         REQUIRE_MESSAGE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + path + "?token=" + person, &role, &why), why);
         CHECK(role == CALIPER_NET_ROLE_HUB);
-        CHECK_FALSE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + path + "?token=" + token, &role, &why));
+        CHECK_MESSAGE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + path + "?token=" + token, &role, &why), why);
     }
 
     // The native viewer (caliper_viewer --headless, the app's NetSource)
@@ -1445,7 +1445,7 @@ TEST_CASE("api: the hidden app serves every endpoint through its window and stop
     CHECK(page != landing);
 
     // The stream's handshake on the protocol's path, with the person's token
-    // from the start line; the API file's token does not open the stream.
+    // from the start line and with the API file's, which watches it.
     const std::string mark = "with the session token ";
     const size_t ts = p.text.find(mark) + mark.size();
     const std::string person = p.text.substr(ts, p.text.find(' ', ts) - ts);
@@ -1453,7 +1453,8 @@ TEST_CASE("api: the hidden app serves every endpoint through its window and stop
     REQUIRE_MESSAGE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + person, &role, &why),
                     why);
     CHECK(role == CALIPER_NET_ROLE_HUB);
-    CHECK_FALSE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + token, &role, &why));
+    CHECK_MESSAGE(viewer_handshake("ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + token, &role, &why),
+                  why);
 
     // SIGTERM closes the hidden window as a click would: the teardown runs, the
     // API file goes, nothing listens, no layout was written.

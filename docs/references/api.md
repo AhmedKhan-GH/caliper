@@ -35,7 +35,7 @@ When it listens, the process prints the address and **your session token**, and 
 [api] Spec applets in a browser at http://127.0.0.1:7341/v0/spec?token=<viewer token>&applet=<id>
 ```
 
-The session token on the first line is yours: commands sent with it run as the origin `api`, without review, and the stream takes it. Caliper writes it to no file, so a program you run that should act without review takes it from this line, for example through an environment variable that you set, such as `CALIPER_API_TOKEN` in the [examples](#examples). The second line is the link of the [spec page](#get-v0spec), with the viewer token, which opens that page and nothing else.
+The session token on the first line is yours: commands sent with it run as the origin `api`, without review, and on the stream it may control a run when the app allows control. Caliper writes it to no file, so a program you run that should act without review takes it from this line, for example through an environment variable that you set, such as `CALIPER_API_TOKEN` in the [examples](#examples). The second line is the link of the [spec page](#get-v0spec), with the viewer token, which opens that page and nothing else.
 
 **Commands sent with the API file's token are reviewed.** The API file is what an outside agent reads, through `caliper-mcp` or otherwise, and its token runs commands as the origin `mcp`: each change to the open spec waits for your review in the app, and each command that deletes or overwrites saved data waits for your approval, whatever the request claims ([Who sends a command](#who-sends-a-command)).
 
@@ -46,9 +46,9 @@ The API file is `api.json` in the app-data folder ([Folders and environment vari
 | `version` | 1 |
 | `pid` | The process id |
 | `port` | The port the API listens on |
-| `token` | The token of outside agents, whose commands run as `mcp` and are reviewed; not your session token, and it does not open the stream |
+| `token` | The token of outside agents, whose commands run as `mcp` and are reviewed; not your session token. On the stream it watches and cannot control a run |
 | `url` | `http://127.0.0.1:<port>/v0` |
-| `stream_url` | `ws://127.0.0.1:<port>/v3/stream`, without a token; the stream takes your session token |
+| `stream_url` | `ws://127.0.0.1:<port>/v3/stream`, without the token |
 | `spec_url` | `http://127.0.0.1:<port>/v0/spec?token=<viewer token>`, the spec page; a saved spec applet opens at this address with `&applet=<id>` added |
 
 Every token is new for each run: your session token, the API file's token, the viewer token and each agent's own. Each has the same form: 32 characters of `A-Z`, `a-z`, `0-9`, `_` and `-` from 24 random bytes. When the port is taken, the app starts without the API and says so on standard error and in the Activity pane, and `caliper shot` exits with 1.
@@ -76,7 +76,7 @@ Every request gets the checks of the stream ([The upgrade request](wire-protocol
 - The server listens on 127.0.0.1 only.
 - The `Host` header must be `127.0.0.1:<port>` or `localhost:<port>`, with the API's port. Anything else is refused with 403, as a guard against DNS rebinding.
 - An `Origin` header, when the request has one, must be one that the protocol accepts: `null`, an `http` or `https` origin on `127.0.0.1`, `localhost` or `[::1]`, or `vscode-webview://`. Any other origin is refused with 403.
-- A token must come with the request: your session token, the API file's token, an agent's own token, or for the spec page the viewer token. A request carries it in an `Authorization: Bearer <token>` header. A GET may carry it as the query parameter `token` instead, which is how the WebSocket and a link opened in a browser carry it. A POST takes the header only, so a state-changing request never has the token in its address. The token is compared in constant time with every token the API holds. A missing, wrong or revoked token is refused with 401 and `WWW-Authenticate: Bearer`, and on the stream, which takes your session token only, with 403, as the protocol says.
+- A token must come with the request: your session token, the API file's token, an agent's own token, or for the spec page the viewer token. A request carries it in an `Authorization: Bearer <token>` header. A GET may carry it as the query parameter `token` instead, which is how the WebSocket and a link opened in a browser carry it. A POST takes the header only, so a state-changing request never has the token in its address. The token is compared in constant time with every token the API holds. A missing, wrong or revoked token is refused with 401 and `WWW-Authenticate: Bearer`, and on the stream with 403, as the protocol says; the viewer token does not open the stream.
 
 The API serves nothing beyond its endpoints: no files and no way to run code. The spec page is one page built into the executable, not a file it reads. The commands of the command layer change specs, loaders and sources, which are data; a command that deletes or overwrites saved data, or runs a Python loader, waits for the person's approval in the app, and no endpoint approves or denies. Only `POST /v0/commands/{name}` takes a body, and only after its head passed the checks above; any other request with a body is refused with 413, and launch takes only an applet id in its path that the app's loader lists. A command request is built from its path, its body, the origin of its token and the headers `X-Caliper-Group` and `X-Caliper-Preview` only, so no other header value reaches the command layer or its journal, and the token is never logged. Every response carries `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and the connection closes after it.
 
@@ -86,12 +86,12 @@ The API serves nothing beyond its endpoints: no files and no way to run code. Th
 
 The origin of a command, which decides what is reviewed, comes from the token that the request carries, never from a header:
 
-| Token | Where it is | Origin | Review |
-|---|---|---|---|
-| Your session token | The start line only | `api` | None for spec edits; a command that deletes or overwrites saved data answers `command.needs_approval` at once |
-| The API file's token | `api.json` | `mcp` | Spec edits wait for your review, and destructive commands for your approval |
-| An agent's own token | `api-agent-<pid>-<n>.json`, while that agent's session runs | `agent` | As `mcp` |
-| The viewer token | The spec page's link | `viewer` | Reads only |
+| Token | Where it is | Origin | Review | The stream |
+|---|---|---|---|---|
+| Your session token | The start line only | `api` | None for spec edits; a command that deletes or overwrites saved data answers `command.needs_approval` at once | Watches, streams a run in, and controls a run when the app allows control |
+| The API file's token | `api.json` | `mcp` | Spec edits wait for your review, and destructive commands for your approval | Watches and cannot control a run |
+| An agent's own token | `api-agent-<pid>-<n>.json`, while that agent's session runs | `agent` | As `mcp` | Watches and cannot control a run |
+| The viewer token | The spec page's link | `viewer` | Reads only | Refused |
 
 `X-Caliper-Origin` is ignored for every token but the viewer token, so a request cannot claim `api`, `ui` or any other origin that its token does not have.
 
@@ -141,7 +141,7 @@ A capture waits for the app's frames like every call that needs the frame thread
 
 ### GET /v3/stream
 
-The WebSocket of [wire protocol v3](wire-protocol.md), with the app in the hub role. It is the hub of [`caliper serve`](../guides/run-a-hub.md) on the API's port: producers connect to it and each becomes a session, and viewers list the sessions and attach to one. Everything the protocol states for a hub applies, with its bounds and its flow control. It is served at the protocol's own path, so every client of the protocol attaches to it unchanged: the app's NetSource, `caliper-viewer --url`, the link field of the app's attach pane and the `<caliper-view>` element. The upgrade is checked for its path, `Host`, `Origin` and the `token` parameter in the protocol's order, so a client gives the token in the address. The stream takes your session token, from the start line; the API file's token and the agents' tokens do not open it:
+The WebSocket of [wire protocol v3](wire-protocol.md), with the app in the hub role. It is the hub of [`caliper serve`](../guides/run-a-hub.md) on the API's port: producers connect to it and each becomes a session, and viewers list the sessions and attach to one. Everything the protocol states for a hub applies, with its bounds and its flow control. It is served at the protocol's own path, so every client of the protocol attaches to it unchanged: the app's NetSource, `caliper-viewer --url`, the link field of the app's attach pane and the `<caliper-view>` element. The upgrade is checked for its path, `Host`, `Origin` and the `token` parameter in the protocol's order, so a client gives the token in the address. Your session token, the API file's token and an agent's own token open it, and the viewer token does not. A connection opened with the API file's token or an agent's watches: it gets the data and the controls' state, its WELCOME sets `control` false, and a CONTROL from it is answered `forbidden`, so an agent cannot pause, step, change a parameter of or run an action of a training run. Only a connection opened with your session token may control, and only as the next paragraph says:
 
 ```text
 ws://127.0.0.1:7341/v3/stream?token=<token>

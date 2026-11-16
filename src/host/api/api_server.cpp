@@ -798,6 +798,19 @@ TokenTable Server::tokens() const {
     return t;
 }
 
+caliper_net::HubOptions::StreamAccess Server::stream_access(const std::string& presented) const {
+    using A = caliper_net::HubOptions::StreamAccess;
+    if (presented.empty()) return A::kRefused;
+    // Every token is compared, in constant time each, whichever matches.
+    const TokenTable t = tokens();
+    std::string origin;
+    for (const auto& e : t.entries)
+        if (!e.first.empty() && caliper_net::wire::token_equal(presented, e.first) && origin.empty()) origin = e.second;
+    if (origin == "api") return A::kFull;
+    if (origin == "mcp" || origin == "agent") return A::kWatch;
+    return A::kRefused;   // the viewer token, a revoked or an unknown one
+}
+
 std::string Server::issue_token(const std::string& origin) {
     if (origin != "agent" && origin != "mcp") return {};
     std::lock_guard<std::mutex> g(issued_mu_);
@@ -852,6 +865,10 @@ bool Server::start(std::string* err) {
     h.on_tick = [p] { p->on_tick(); };
     h.tick_ms = 50;
     h.body_limit = [p](const HttpRequest& r) { return p->body_limit(r); };
+    // The stream: the person's token may control a run (with allow_control);
+    // the API file's token and the agents' watch it and may not. The viewer
+    // token never opens it.
+    h.stream_access = [this](const std::string& t) { return stream_access(t); };
     m->hub = std::make_unique<caliper_net::Hub>(std::move(h));
     if (!m->hub->listen(err)) return false;
     m->enc_thread = std::thread([p] { p->encoder(); });

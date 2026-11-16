@@ -46,7 +46,7 @@ A client opens a connection with a WebSocket upgrade (RFC 6455) of `GET /v3/stre
 | Path | The path is exactly `/v3/stream` | HTTP 404 |
 | Host | The `Host` header is `127.0.0.1:<port>` or `localhost:<port>`, where `<port>` is the port the server listens on and the host name is compared ASCII case-insensitively. When the server listens on port 80, the forms without a port are accepted too. Anything else could be a DNS rebinding attack | HTTP 403 |
 | Origin | The `Origin` header is absent or accepted by the rule below | HTTP 403 |
-| Token | The `token` parameter is present and equal to the server's session token, compared in constant time | HTTP 403 |
+| Token | The `token` parameter is present and equal to the server's session token, compared in constant time. A server may accept further tokens of its own, as the hub of Caliper API does ([Who may control](#who-may-control)) | HTTP 403 |
 
 The `Origin` header is accepted when its value is one of these:
 
@@ -711,6 +711,7 @@ A viewer sends CONTROL only when all three hold: the WELCOME of the server it is
 
 - **`caliper.serve()`** of Caliper LIB accepts CONTROL from every connection that holds the session token. A server option makes it refuse every CONTROL; its WELCOME then sets `control` false, and a CONTROL is answered `forbidden`.
 - **The hub**, `caliper serve` of Caliper CLI, forwards no control unless it was started with `--allow-control`, which is off by default. Without it, its WELCOME sets `control` false, to viewers and to producers, and it answers every CONTROL itself with `forbidden`.
+- **The hub of Caliper API**, in the app, takes the person's session token and also the tokens it gives agents ([Caliper API](api.md#who-sends-a-command)). A viewer connected with an agent's token watches: its WELCOME sets `control` false and the hub answers its CONTROL with `forbidden`, even with `--allow-control`. A viewer connected with the session token may control as with `caliper serve`.
 
 ### Controls through a hub
 
