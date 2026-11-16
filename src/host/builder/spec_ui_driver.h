@@ -146,6 +146,12 @@ public:
             io.AddMouseButtonEvent(0, false);
             mouse_down_ = false;
         }
+        // After a step of input, frames for the page to act on it and draw
+        // its new rectangles, so the next step aims at where things are now.
+        if (settle_ > 0) {
+            --settle_;
+            return;
+        }
         const Step& s = steps_[at_];
         ++frames_;
         if (s.verb == "click") {
@@ -326,6 +332,10 @@ private:
     };
 
     void next(const std::string& what) {
+        const std::string& verb = steps_[at_].verb;
+        if (verb == "click" || verb == "key" || verb == "type" || verb == "drag" || verb == "release" ||
+            verb == "drop")
+            settle_ = kSettle;
         log_.push_back(what);
         ++at_;
         frames_ = 0;
@@ -409,6 +419,8 @@ private:
     std::function<void(std::vector<std::string>)> drop_;
     float drag_a_[2] = {0, 0}, drag_b_[2] = {0, 0};
     int drag_frame_ = 0;   // the frame of a drag in progress, 0 before its press
+    static constexpr int kSettle = 3;   // frames after a step of input
+    int settle_ = 0;
 };
 
 }  // namespace caliper_host
