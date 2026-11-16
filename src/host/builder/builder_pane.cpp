@@ -231,8 +231,13 @@ void BuilderPane::reread() {
     std::optional<cb::OpenSpec> next = port_->open_spec();
     const bool changed = !next != !open_ || (next && open_ && next->text != open_->text);
     const std::string before = open_ ? open_->text : std::string();
+    const std::string id_before = open_ ? open_->spec.applet.id : std::string();
     open_ = std::move(next);
     if (!changed) return;
+    // The strip follows a change of the same spec to its last changed line.
+    text_follow_ = open_ && !before.empty() && open_->spec.applet.id == id_before
+                       ? pane_text_follow_line(before, open_->text)
+                       : -1;
     invalidate_caches();
     spec_shapes_ = open_ ? pane_source_shapes(open_->spec, port_->resolver()) : std::map<std::string, PaneShape>{};
     rebuild_rows();
@@ -246,7 +251,6 @@ void BuilderPane::reread() {
         draft_ = open_ ? open_->text : std::string();
         diagnostics_.clear();
     }
-    (void)before;
 }
 
 void BuilderPane::rebuild_rows() {

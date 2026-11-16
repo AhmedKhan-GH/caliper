@@ -120,7 +120,8 @@ Text and numbers apply as you type; ids apply on Enter or when the field is left
 into an editor, and Esc Done back. An edit applies as soon as the text is a valid spec, and the panels follow. While
 it is not, each error's line is marked with its code, the message is in the line's tooltip, the panels keep the last
 valid spec, and other changes wait until the text is fixed or left. A change made on the canvas or in Properties
-shows in the text at once.
+shows in the text at once, and the strip scrolls to the last line that changed when that line is out of view, so a
+new panel's block at the end of the text, or a title changed in the middle of it, comes into view.
 
 ## Keys
 

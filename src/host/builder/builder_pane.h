@@ -335,6 +335,11 @@ public:
     const std::vector<caliper_builder::spec::Diagnostic>& diagnostics() const { return diagnostics_; }
     // The draft does not validate, so it is not applied.
     bool draft_pending() const { return editing_ && draft_pending_; }
+    // The line, 0-based, that the read-only strip brings into view at its
+    // next draw: the last line that changed when the open spec's text last
+    // changed (pane_text_follow_line()), or -1. Another spec opened is not a
+    // change to follow.
+    int text_follow_line() const { return text_follow_; }
 
     // ---- history and saving
     bool undo();
@@ -476,6 +481,7 @@ private:
     std::string prefix_;
 
     bool editing_ = false;
+    int text_follow_ = -1;   // text_follow_line()
     std::string draft_;
     bool draft_pending_ = false;
     std::vector<caliper_builder::spec::Diagnostic> diagnostics_;

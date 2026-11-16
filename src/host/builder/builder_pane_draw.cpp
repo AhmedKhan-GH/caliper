@@ -1850,6 +1850,15 @@ void BuilderPane::draw_text_strip(const SpecRect& rect) {
                         ImGui::Dummy(v2(std::max(1.0f, gutter + extent(L.mono, L.mono_size, line).x), line_h));
                     }
                 }
+                // The last change comes into view: a line below the view ends
+                // it with two lines after, one above starts it.
+                if (text_follow_ >= 0) {
+                    const float y = top_pad + (float)text_follow_ * line_h;
+                    const float top = ImGui::GetScrollY(), view = ImGui::GetWindowHeight();
+                    if (y < top) ImGui::SetScrollY(std::max(0.0f, y - line_h));
+                    else if (y + line_h > top + view) ImGui::SetScrollY(y + 3.0f * line_h - view);
+                    text_follow_ = -1;
+                }
             }
             ImGui::EndChild();
         }

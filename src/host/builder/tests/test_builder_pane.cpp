@@ -16,6 +16,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <memory>
@@ -494,6 +495,48 @@ TEST_CASE("builder pane: the spec text follows the canvas, and the canvas the te
     CHECK(p.text() == p.open_spec()->text);
     p.set_editing(false);
     CHECK(p.text() == p.open_spec()->text);
+}
+
+// The read-only strip follows each change of the open spec: it brings the
+// last line that changed into view, so a panel added at the end of the text
+// or a title changed in the middle shows where it changed.
+TEST_CASE("builder pane: the spec text strip follows the last changed line") {
+    // The helper: the last changed line of the new text, 0-based.
+    CHECK(pane_text_follow_line("a\nb\nc\n", "a\nb\nc\n") == -1);
+    CHECK(pane_text_follow_line("a\nb\nc\n", "a\nB\nc\n") == 1);
+    CHECK(pane_text_follow_line("a\nb\n", "a\nb\nc\nd\n") == 3);
+    CHECK(pane_text_follow_line("a\nb\nc\nd\n", "a\nd\n") == 1);   // lines taken out: where they were
+    CHECK(pane_text_follow_line("", "a\n") == 0);
+
+    Rig r = rig("pane-follow");
+    BuilderPane& p = *r.pane;
+    const auto line_of = [&](const std::string& needle) {
+        const std::string& t = p.text();
+        const size_t at = t.find(needle);
+        REQUIRE(at != std::string::npos);
+        return (int)std::count(t.begin(), t.begin() + (long)at, '\n');
+    };
+    const auto last_line = [&] {
+        const std::string& t = p.text();
+        const size_t end = t.find_last_not_of('\n');
+        return (int)std::count(t.begin(), t.begin() + (long)end, '\n');
+    };
+    // A new panel: its block ends the text.
+    p.select("table:run42_metrics");
+    REQUIRE(p.add_primitive(spec::Primitive::series));
+    CHECK(p.text_follow_line() == last_line());
+    // A second panel, then the first one's title, which is above it.
+    p.select("spec:run42_metrics");
+    REQUIRE(p.add_primitive(spec::Primitive::table));
+    CHECK(p.text_follow_line() == last_line());
+    p.focus_panel("series");
+    REQUIRE(p.set_title("Curves"));
+    CHECK(p.text_follow_line() == line_of("title = \"Curves\""));
+    CHECK(p.text_follow_line() < last_line());
+    // An undo is a change too.
+    REQUIRE(p.undo());
+    CHECK(p.text_follow_line() >= line_of("[[panel]]\nid = \"series\""));
+    CHECK(p.text_follow_line() < line_of("[[panel]]\nid = \"table\""));
 }
 
 TEST_CASE("builder pane: renames reach every reference, and the spec's own title") {

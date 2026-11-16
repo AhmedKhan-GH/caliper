@@ -14,6 +14,7 @@
 //     panel or a source with every reference to it (the format has no rename
 //     command, so the pane sends a rename as spec.set_text of the renamed
 //     spec's canonical text).
+//   - The spec text: the line the read-only strip follows after a change.
 //   - The layout tree: a node by its path, a panel placed at an edge of the
 //     whole layout or next to another panel (also on its left, which
 //     layout.place does not offer), and a split's ratio set and snapped.
@@ -148,6 +149,15 @@ caliper_builder::spec::Spec pane_rename_panel(const caliper_builder::spec::Spec&
 // that names it and every `from` that derives from it.
 caliper_builder::spec::Spec pane_rename_source(const caliper_builder::spec::Spec& spec, const std::string& from,
                                                const std::string& to);
+
+// ---- the spec text ----------------------------------------------------------------------
+
+// The line of `after` that the read-only text strip brings into view after
+// the open spec's text changed from `before`: the last line that differs,
+// 0-based, found by the lines the two share at their start and at their
+// end; where lines were only taken out, the line now in their place. -1
+// when the texts are equal.
+int pane_text_follow_line(const std::string& before, const std::string& after);
 
 // ---- the layout tree --------------------------------------------------------------------
 

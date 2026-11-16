@@ -455,6 +455,38 @@ spec::Spec pane_rename_source(const spec::Spec& s, const std::string& from, cons
     return out;
 }
 
+// ---- the spec text ----------------------------------------------------------------------
+
+namespace {
+
+std::vector<std::string> text_lines(const std::string& t) {
+    std::vector<std::string> out;
+    size_t at = 0;
+    while (at < t.size()) {
+        size_t end = t.find('\n', at);
+        if (end == std::string::npos) end = t.size();
+        out.push_back(t.substr(at, end - at));
+        at = end + 1;
+    }
+    return out;
+}
+
+}  // namespace
+
+int pane_text_follow_line(const std::string& before, const std::string& after) {
+    if (before == after) return -1;
+    const std::vector<std::string> a = text_lines(before), b = text_lines(after);
+    size_t head = 0;
+    while (head < a.size() && head < b.size() && a[head] == b[head]) ++head;
+    size_t tail = 0;
+    while (tail < a.size() - head && tail < b.size() - head && a[a.size() - 1 - tail] == b[b.size() - 1 - tail]) ++tail;
+    if (b.empty()) return -1;
+    // The changed lines of `after` are [head, b.size() - tail); with none,
+    // lines were only taken out, before line `head`.
+    if (b.size() - tail > head) return (int)(b.size() - tail - 1);
+    return (int)std::min(head, b.size() - 1);
+}
+
 // ---- the layout tree --------------------------------------------------------------------
 
 namespace {
