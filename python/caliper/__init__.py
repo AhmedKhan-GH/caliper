@@ -248,7 +248,7 @@ def _cmap(cmap) -> int:
 # the calls
 # ---------------------------------------------------------------------------
 def show(t, name: str = "tensor", cmap="viridis", vmin=None, vmax=None, rate=None, *,
-         dims=None, data_view=None, _raw: bool = False):
+         dims=None, data_view=None, items=None, _raw: bool = False):
     """Show/update view ``name`` with tensor ``t``. Returns at once.
 
     * 2-D -> heatmap (float32; autoscaled on the GPU unless vmin/vmax given)
@@ -260,11 +260,15 @@ def show(t, name: str = "tensor", cmap="viridis", vmin=None, vmax=None, rate=Non
     one); the view then offers t as a source that a viewer can index, reduce
     and tile, and shows its data view instead of the rules above.
     ``data_view``: the view's default data view (see :func:`set_data_view`).
+    ``items``: the item space of the rows (a str), or {dim: space}, for
+    linked selection (see :func:`items`).
 
     Returns True if a snapshot was taken, False when the call was rate limited,
     the ring was full or nothing is attached; a :class:`ShowStats` in the
     synchronous offscreen mode."""
     _name_ok(name)
+    if items is not None:
+        _CTL.view_items_call(name, "heatmap", items)
     cm = _cmap(cmap)
     if vmin is not None or vmax is not None:
         check_range(vmin, vmax)
@@ -284,15 +288,19 @@ def _points_plan(z, labels, classes, cm, rng):
 
 
 def points(z, labels=None, name: str = "points", classes=None, cmap="viridis", vmin=None,
-           vmax=None, rate=None, *, dims=None, data_view=None):
+           vmax=None, rate=None, *, dims=None, data_view=None, items=None):
     """Scatter of ``z`` (N, 2) or (N, 3) (2-D: pan/zoom, 3-D: orbit), coloured by
     ``labels`` (N,): categorical with ``classes=K`` (labels 0..K-1), otherwise
     colormapped over their range. ``dims``: one name per dimension of z but the
     coordinates, ending with the point dimension, which makes z a source of
     data views (labels follow the kept dimension, and above the budget points
     and labels are sampled with a stride); ``data_view``: the default data
-    view. Same return values as :func:`show`."""
+    view; ``items``: the item space of the points (a str), or {dim: space},
+    for linked selection (see :func:`items`). Same return values as
+    :func:`show`."""
     _name_ok(name)
+    if items is not None:
+        _CTL.view_items_call(name, "points", items)
     cm = _cmap(cmap)
     if vmin is not None or vmax is not None:
         check_range(vmin, vmax)
@@ -328,11 +336,15 @@ def histogram(t, name: str = "histogram", bins: int = 64, rate=None, *, dims=Non
     return _dispatch(KIND_HISTOGRAM, name, rate, _hist_plan, t, bins, None, None, None)
 
 
-def series(value, name: str = "series", rate=None):
+def series(value, name: str = "series", rate=None, *, items=None):
     """Append ``value`` (a float, a 0-d tensor or a 1-D tensor of values) to the
     series ``name`` (a ring of the last 4096 values, on the value's device).
-    Every call appends; the view is updated at most ``rate`` times per second."""
+    Every call appends; the view is updated at most ``rate`` times per second.
+    ``items``: the item space that the series' index numbers, for linked
+    selection (see :func:`items`)."""
     _name_ok(name)
+    if items is not None:
+        _CTL.view_items_call(name, "series", items)
     tap = _series_tap               # caliper.serve() keeps every value for late viewers
     tapped = tap is not None and tap(name, value)
     for r in _routes or _auto_routes():
@@ -390,7 +402,7 @@ _DV_OPTIONS = {"heatmap": ("cmap", "vmin", "vmax"), "image": (),
 
 
 def offer(name: str, sources, kind: str = "heatmap", dims=None, *, data_view=None, rate=None,
-          **options):
+          items=None, **options):
     """Offer ``sources`` as the sources of view ``name``; a viewer, or
     :func:`set_data_view`, picks one of them and a data view of it.
 
@@ -406,7 +418,9 @@ def offer(name: str, sources, kind: str = "heatmap", dims=None, *, data_view=Non
     ``data_view`` is the view's default data view. ``options`` are the matching
     call's arguments: ``cmap``, ``vmin`` and ``vmax`` (heatmap, points),
     ``labels`` (a tensor or callable, along the kept dimension) and ``classes``
-    (points), ``bins`` (histogram).
+    (points), ``bins`` (histogram). ``items``: the item space of the item axis
+    (a heatmap's or image's first dim, the point dim), or {dim: space}, for
+    linked selection (see :func:`items`).
 
     The view takes snapshots when the training loop calls :func:`update`.
     Replaces an earlier view of the same name. Returns the default data view,
@@ -415,6 +429,8 @@ def offer(name: str, sources, kind: str = "heatmap", dims=None, *, data_view=Non
     kind = _dataview._kind(kind)
     if kind == "series":
         raise ValueError("a series view has no sources; use caliper.series")
+    if items is not None:
+        _CTL.view_items_call(name, kind, items)
     opts = _dv_options(kind, options)
     _dataview.REGISTRY.offer_view(name, sources, kind, dims, default=data_view, rate=rate,
                                   options=opts)
@@ -711,6 +727,7 @@ def remove(name: str) -> bool:
     core had it."""
     found = False
     _dataview.REGISTRY.remove(name)
+    _CTL.forget_view(name)
     with LOCK:
         for r in _routes:
             r.ring.forget(name)
@@ -887,3 +904,86 @@ def connect(url: str | None = None):
     native sender (caliper._netio). :func:`close` ends it."""
     from ._net import connect as _connect
     return _connect(url)
+
+
+# ---------------------------------------------------------------------------
+# controls of the running script and linked selection (wire protocol 3.1;
+# caliper._controls holds the state and the seam its transports attach to)
+# ---------------------------------------------------------------------------
+__all__ += ["step", "pause", "param", "action", "items", "controls", "Param", "Action",
+            "ItemSpace"]
+from . import _controls                                        # noqa: E402
+from ._controls import Action, ItemSpace, Param                # noqa: E402
+_CTL = _controls.CONTROLS
+
+
+def step(step=None) -> None:
+    """The checkpoint of the training loop: call it once per step, on the
+    training thread. It sets the parameter values that viewers changed, runs
+    the actions they asked for, in order, and waits while a viewer has paused
+    the run, until a viewer resumes or steps it, the server closes, or no
+    connection that may control has been open for 10 s. Ctrl-C or a
+    notebook's interrupt ends the wait. ``step``: this step's number, shown to
+    viewers (default: one more than the last). With nothing waiting it only
+    counts the step."""
+    c = _CTL
+    if step is None:
+        c.n += 1
+    else:
+        c.n = step
+    if c.busy:
+        c.checkpoint()
+
+
+def pause() -> bool:
+    """Pause the run at the next :func:`step`, as a viewer's Pause button does;
+    a viewer resumes or steps it. Returns False, with a warning, when no stream
+    server runs, since no viewer could resume it."""
+    return _CTL.pause()
+
+
+def param(name: str, value, *, min=None, max=None, log=False, choices=None, help=None) -> Param:
+    """A parameter that viewers can change while the script runs. The type
+    comes from ``value``: a bool is a toggle, an int an integer, a float a
+    number, and a str one of ``choices``. ``min`` and ``max`` bound a number
+    or an integer (a viewer's value is clamped to them), ``log=True`` draws
+    its slider on a log scale (it needs min > 0 and max), and ``help`` is a
+    tooltip. Returns a :class:`Param`: read ``.value`` in the loop; a
+    viewer's change reaches it at the next :func:`step`, or at once while the
+    script has called no step yet. ``.set(v)`` changes it from the script and
+    ``.remove()`` takes it away. Registering a name again replaces it."""
+    return _CTL.param(name, value, min=min, max=max, log=log, choices=choices, help=help)
+
+
+def action(name: str, fn=None, *, help=None):
+    """Register ``fn``, a function without arguments, as an action that a
+    viewer can run: it runs at the next :func:`step`, on the training thread,
+    and the text of what it returns, or of the error it raises, goes back to
+    the viewer that asked. Works as a decorator, ``@caliper.action("save
+    checkpoint")``. Returns an :class:`Action`, which calls ``fn`` when called
+    and has ``.remove()``. Registering a name again replaces it."""
+    if fn is None:
+        return lambda f: _CTL.action(name, f, help=help)
+    return _CTL.action(name, fn, help=help)
+
+
+def items(space: str, details=None) -> ItemSpace:
+    """The item space ``space``: items numbered from 0, such as the samples
+    of a test set, that the ``items=`` of several views index, so that a
+    selection in one view highlights the same items in the others.
+    ``details`` gives a viewer a few fields of the selected items: a mapping
+    {field: sequence indexed by item id} (copied once, now), or a function
+    ``fn(ids)`` that returns {field: values} or one dict per item. The
+    function runs on the thread "caliper.details", never on the training
+    thread, so it must only read data that the loop does not change in place.
+    Returns an :class:`ItemSpace` with ``.selection`` (the item ids viewers
+    selected, current even while a cell runs) and ``.select(ids)``."""
+    return _CTL.items(space, details)
+
+
+def controls(*, height: int = 160):
+    """A notebook widget with the run controls, every parameter and every
+    action of this script (the notebook extra). Starts :func:`serve` when no
+    server runs."""
+    from ._widget import controls as _controls_widget
+    return _controls_widget(height=height)
