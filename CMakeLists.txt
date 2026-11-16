@@ -839,6 +839,8 @@ if(CALIPER_WITH_BUILDER)
     # The spec runtime, which draws a spec's panels from the session's data,
     # with its harness caliper-spec-shot and its tests.
     add_subdirectory(src/host/spec_runtime)
+    # The widget agent's inline surface, its agents and caliper-widget-shot.
+    include(src/host/builder/widget_surface.cmake)
 endif()
 
 # The builder session in the app (src/host/builder/app_session.h): with the
