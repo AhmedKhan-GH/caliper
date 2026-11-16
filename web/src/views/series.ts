@@ -5,7 +5,7 @@
 
 import { PALETTE } from '../render/colormap.js';
 import type { SeriesMsg, SnapshotMsg } from '../protocol/messages.js';
-import { toggle, type LiveView, type ViewHost } from './base.js';
+import { toggle, type LinkAxis, type LiveView, type ViewHost } from './base.js';
 import { seriesInfo } from './info.js';
 import { attachGestures } from './interact.js';
 import { drawAxes, fitCanvas, Plot2D } from './plot.js';
@@ -69,6 +69,8 @@ export class SeriesView implements LiveView {
   private dragSel: { x0: number; x1: number } | null = null;
   private selection: { s0: number; s1: number } | null = null;
   private readonly followBtn;
+  /** A linked selection (3.1): the selected steps of the series' item space, sorted. */
+  private linkSteps: readonly number[] | null = null;
   private frames = 0;
   private drawn = 0;
 
@@ -118,6 +120,12 @@ export class SeriesView implements LiveView {
         if (i !== null && !this.dragSel) this.host.report('pick', this.stepDetail(i));
       },
     });
+  }
+
+  /** A linked selection on the steps (3.1). */
+  link(axis: LinkAxis | null, items: readonly number[]): void {
+    this.linkSteps = axis === 'steps' ? items : null;
+    this.host.request('overlay');
   }
 
   private release(): void {
@@ -364,6 +372,23 @@ export class SeriesView implements LiveView {
     };
     if (this.selection) band(this.selection.s0, this.selection.s1 - 1, false);
     if (this.dragSel) band(this.dragSel.x0, this.dragSel.x1, true);
+    // A linked selection: markers at the selected steps that are held and in
+    // view (at most 4096, the first ones).
+    if (this.linkSteps && this.curves[0]) {
+      const c = this.curves[0];
+      const lo = Math.max(c.lo, Math.floor(p.x.lo)), hi = Math.min(c.end - 1, Math.ceil(p.x.hi));
+      ctx.fillStyle = C.bronze;
+      let drawn = 0;
+      for (const step of this.linkSteps) {
+        if (step < lo || step > hi) continue;
+        const v = c.get(step);
+        if (!Number.isFinite(v) || (p.logY && v <= 0)) continue;
+        ctx.beginPath();
+        ctx.arc(p.xToPx(step), p.yToPx(v), 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        if (++drawn >= 4096) break;
+      }
+    }
     if (this.hoverX !== null) {
       const X = Math.round(p.xToPx(this.hoverX)) + 0.5;
       ctx.strokeStyle = C.rule;

@@ -6,7 +6,7 @@
 import { colormapLut, lutIndex, paletteLut } from '../render/colormap.js';
 import { PointsGpu } from '../render/points-gpu.js';
 import { COLORMAPS, LIMITS, snapshotRange, type SnapshotMsg } from '../protocol/messages.js';
-import type { LiveView, ViewHost } from './base.js';
+import { linkedIn, type LinkAxis, type LiveView, type ViewHost } from './base.js';
 import { Orbit, ortho, type Mat4 } from './camera.js';
 import { pointsInfo } from './info.js';
 import { attachGestures } from './interact.js';
@@ -110,6 +110,8 @@ export class PointsView implements LiveView {
   private lasso: { x: number; y: number }[] | null = null;
   private rect = false;
   private selected: Uint8Array | null = null;
+  /** A linked selection (3.1): the selected source rows of the point dim's item space, sorted. */
+  private linkItems: readonly number[] | null = null;
   private selCount = 0;
   private frames = 0;
   private lastDrawMs = 0;
@@ -181,6 +183,7 @@ export class PointsView implements LiveView {
       }
     }
     if (bb.every(Number.isFinite)) this.bbox = bb;
+    if (this.linkItems) this.linkMask();
     this.colorize(s);
     this.projKey = '';
     if (!this.fitted) this.fit();
@@ -216,6 +219,35 @@ export class PointsView implements LiveView {
       this.base.fill(pack(FLAT[0], FLAT[1], FLAT[2]), 0, n);
     }
     this.applySelection();
+  }
+
+  /** A linked selection: the points whose source row is a selected item, drawn over the dimmed rest. */
+  link(axis: LinkAxis | null, items: readonly number[]): void {
+    const was = this.linkItems;
+    this.linkItems = axis === 'points' ? items : null;
+    if (this.linkItems) this.linkMask();
+    else if (was) {
+      this.selected = null;   // the linked selection went
+      this.selCount = 0;
+    } else return;
+    this.applySelection();
+    if (this.r instanceof PointsGpu) this.r.recolor(this.colors);
+    this.host.request('data');
+  }
+
+  private linkMask(): void {
+    const items = this.linkItems!;
+    const sel = new Uint8Array(this.n);
+    let count = 0;
+    for (let i = 0; i < this.n; i++) {
+      const r = this.rowId(i);
+      if (linkedIn(items, r, r + 1)) {
+        sel[i] = 1;
+        count++;
+      }
+    }
+    this.selected = count ? sel : null;
+    this.selCount = count;
   }
 
   /** Dims the points outside the selection. */

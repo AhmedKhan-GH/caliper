@@ -6,7 +6,7 @@ import { colormapLut, lutCss } from '../render/colormap.js';
 import { Heatmap2D } from '../render/heatmap-2d.js';
 import { HeatmapGpu } from '../render/heatmap-gpu.js';
 import { COLORMAPS, snapshotRange, type PayloadAxis, type SnapshotMsg } from '../protocol/messages.js';
-import type { LiveView, ViewHost } from './base.js';
+import { linkedIn, type LinkAxis, type LiveView, type ViewHost } from './base.js';
 import { heatmapInfo, imageInfo } from './info.js';
 import { attachGestures } from './interact.js';
 import { drawAxes, fitCanvas, Plot2D } from './plot.js';
@@ -31,6 +31,8 @@ export class HeatmapView implements LiveView {
   private dragSel: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private selection: { r0: number; r1: number; c0: number; c1: number } | null = null;
   private frames = 0;
+  /** A linked selection (3.1): the axis that carries the space, and the selected items, sorted. */
+  private linked: { axis: 'rows' | 'columns'; items: readonly number[] } | null = null;
 
   constructor(private readonly host: ViewHost, private readonly image: boolean) {
     this.r = host.device ? new HeatmapGpu(host.device) : new Heatmap2D();
@@ -155,6 +157,12 @@ export class HeatmapView implements LiveView {
       if (Number.isFinite(v)) d.value = v;
     }
     return d;
+  }
+
+  /** A linked selection on the rows or columns (3.1). */
+  link(axis: LinkAxis | null, items: readonly number[]): void {
+    this.linked = axis === 'rows' || axis === 'columns' ? { axis, items } : null;
+    this.host.request('overlay');
   }
 
   // --- interaction ------------------------------------------------------------
@@ -310,6 +318,39 @@ export class HeatmapView implements LiveView {
       ctx.setLineDash([4, 3]);
       box(s.y0, s.y1, s.x0, s.x1, C.bronze, 'rgba(179,139,89,0.12)');
       ctx.setLineDash([]);
+    }
+    // A linked selection: each run of rows (or columns) that stand for a
+    // selected item gets a band over the image, an outline and a mark at the
+    // image's edge.
+    if (this.linked && this.linked.items.length) {
+      const rows = this.linked.axis === 'rows';
+      const ax = rows ? row : col;
+      const n = rows ? this.rows : this.cols;
+      const per = t && ax ? ax.size : n;
+      const items = this.linked.items;
+      const marked = (i: number) => {
+        const [s0, s1] = HeatmapView.range(ax, i % per, (i % per) + 1);
+        return linkedIn(items, s0, s1);
+      };
+      for (let i = 0; i < n;) {
+        if (!marked(i)) {
+          i++;
+          continue;
+        }
+        let j = i + 1;
+        while (j < n && marked(j)) j++;
+        const x0 = p.xToPx(rows ? 0 : i), x1 = p.xToPx(rows ? this.cols : j);
+        const y0 = p.yToPx(rows ? i : 0), y1 = p.yToPx(rows ? j : this.rows);
+        ctx.fillStyle = 'rgba(179,139,89,0.16)';
+        ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+        ctx.strokeStyle = C.bronze;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+        ctx.fillStyle = C.bronze;
+        if (rows) ctx.fillRect(x0, y0, 4, y1 - y0);
+        else ctx.fillRect(x0, y0, x1 - x0, 4);
+        i = j;
+      }
     }
     if (this.hover) box(this.hover.r, this.hover.r + 1, this.hover.c, this.hover.c + 1, C.parchment);
     ctx.restore();

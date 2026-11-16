@@ -15,23 +15,33 @@
 // same detail the TypeScript views send, and its selections come out of the
 // element as caliper-select events just the same; the header line about the
 // view comes from the facts the module reports.
+//
+// Wire protocol 3.1, on the shared socket: the header shows the run state
+// whenever the producer has one, and with the attribute run-controls also
+// Pause or Resume and Step (methods pause(), resume(), step(n)). With link, a
+// selection carries its item space and items, and the producer's SELECTION is
+// drawn in the view whose axis carries the space (event caliper-selection);
+// with details, the selection's item details show under the view it was made
+// in. docs/references/browser-elements.md has the whole interface.
 
 import { acquire, release } from './client/socket.js';
 import type { StreamClient, StreamListener } from './client/stream.js';
 import {
-  KIND_IDS, kindName, type DataView, type Kind, type SeriesMsg, type SnapshotMsg, type ViewEntry,
+  CAP, KIND_IDS, kindName, LIMITS, type ControlReplyMsg, type DataView, type Kind, type SelectionMsg, type SeriesMsg,
+  type SnapshotMsg, type ViewEntry,
 } from './protocol/messages.js';
 import { adapterInfo, gpuDevice, onDeviceLost } from './render/gpu.js';
-import type { LiveView, ViewHost } from './views/base.js';
+import type { LinkAxis, LiveView, ViewHost } from './views/base.js';
 import { HeatmapView } from './views/heatmap.js';
 import { HistogramView } from './views/histogram.js';
+import { RunBar } from './controls/run.js';
 import { toggle } from './views/base.js';
 import { Picker } from './views/picker.js';
 import { PointsView } from './views/points.js';
 import { SeriesView } from './views/series.js';
 import { assetBase, hasAdapter, mountWasm, wasmKinds, type WasmHandle } from './wasm.js';
 import { factsInfo } from './views/info.js';
-import { C, FONT_MONO, FONT_TEXT } from './views/theme.js';
+import { C, FONT_MONO, FONT_TEXT, fmt } from './views/theme.js';
 
 const STYLE = `
 :host { display: block; height: var(--caliper-view-height, 320px); min-width: 220px; color: ${C.parchment};
@@ -55,6 +65,12 @@ select:focus-visible, input:focus-visible, button:focus-visible { outline: 1px s
   border-radius: 3px; padding: 1px 7px; height: 21px; cursor: pointer; }
 .tool:hover { color: ${C.parchment}; }
 .tool[aria-pressed="true"] { color: ${C.bronze}; border-color: ${C.bronze}; }
+.tool:disabled { opacity: .45; cursor: default; }
+.tool:disabled:hover { color: ${C.faint}; }
+.run { display: inline-flex; align-items: center; gap: 4px; }
+.run[hidden], .run [hidden] { display: none; }
+.badge { font: 11px ${FONT_MONO}; color: ${C.faint}; border: 1px solid ${C.rule}; border-radius: 3px; padding: 1px 6px; white-space: nowrap; }
+.badge[data-state="paused"], .badge[data-state="pausing"] { color: ${C.bronze}; border-color: ${C.bronze}; }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; border: 1px solid ${C.faint}; }
 .dot[data-state="connected"] { background: ${C.bronze}; border-color: ${C.bronze}; }
 .dot[data-state="ended"] { background: ${C.rule}; border-color: ${C.rule}; }
@@ -69,6 +85,12 @@ select:focus-visible, input:focus-visible, button:focus-visible { outline: 1px s
   text-align: center; color: ${C.faint}; font-size: 13px; pointer-events: none; }
 .msg.error { color: ${C.secondary}; align-items: flex-end; }
 .msg.error span { background: rgba(24, 23, 21, .94); border: 1px solid ${C.rule}; border-radius: 4px; padding: 5px 9px; }
+.details { flex: none; max-height: 7.6em; overflow: auto; border-top: 1px solid ${C.ruleFaint}; padding: 3px 10px 4px; font: 11.5px/1.45 ${FONT_MONO}; }
+.details[hidden] { display: none; }
+.details table { border-collapse: collapse; }
+.details th { color: ${C.faint}; font: 11px ${FONT_TEXT}; text-align: left; font-weight: normal; padding: 0 14px 1px 0; }
+.details td { color: ${C.secondary}; padding: 0 14px 0 0; white-space: nowrap; }
+.details .more { color: ${C.faint}; font: 11px ${FONT_TEXT}; padding-top: 2px; }
 `;
 
 const NEEDS_GPU: ReadonlySet<Kind> = new Set(['heatmap', 'image', 'points']);
@@ -76,7 +98,7 @@ const HOVER_MS = 1000 / 30;
 
 export class CaliperView extends HTMLElement {
   static get observedAttributes(): string[] {
-    return ['src', 'view', 'kind', 'height', 'renderer'];
+    return ['src', 'view', 'kind', 'height', 'renderer', 'run-controls', 'link', 'details'];
   }
 
   private sourceProp: StreamClient | null = null;
@@ -110,11 +132,15 @@ export class CaliperView extends HTMLElement {
   private drawer: 'wasm' | 'ts' | null = null;
   private deciding = false;
   private readonly picker = new Picker((dv) => this.pick(dv));
+  /** 3.1: the run state badge, and Pause or Resume and Step with the attribute run-controls. */
+  private readonly runBar = new RunBar(() => this.client, false, (r) => this.replied(r));
   private readonly root: ShadowRoot;
   private readonly parts: {
     name: HTMLElement; info: HTMLElement; tools: HTMLElement; dot: HTMLElement; body: HTMLElement;
-    overlay: HTMLCanvasElement; tip: HTMLElement; msg: HTMLElement; plate: HTMLElement; wasm: HTMLElement;
+    overlay: HTMLCanvasElement; tip: HTMLElement; msg: HTMLElement; plate: HTMLElement; wasm: HTMLElement; details: HTMLElement;
   };
+  /** 3.1: the linked selection this view draws, if one of its axes carries the selection's space. */
+  private linked: { space: string; axis: LinkAxis; items: readonly number[] } | null = null;
 
   constructor() {
     super();
@@ -127,7 +153,7 @@ export class CaliperView extends HTMLElement {
     this.parts = {
       name: el('span', 'name'), info: el('span', 'info'), tools: el('span', 'tools'), dot: el('span', 'dot'),
       body: el('div', 'body'), overlay: el('canvas', 'overlay'), tip: el('div', 'tip'), msg: el('div', 'msg'),
-      plate: el('div', 'plate'), wasm: el('div', 'wasm'),
+      plate: el('div', 'plate'), wasm: el('div', 'wasm'), details: el('div', 'details'),
     };
   }
 
@@ -172,6 +198,8 @@ export class CaliperView extends HTMLElement {
       view: this.names.join(','), renderer: this.renderer, drawer: this.drawer, wasmReady: this.wasmReady,
       subs: [...this.subs], status: this.parts.dot.dataset.state, dataView: this.dataView,
       adapter: this.device ? adapterInfo() : null, wasmStats: this.wasm?.stats ?? null, info: this.parts.info.textContent,
+      linked: this.linked, details: this.parts.details.hidden ? null : this.parts.details.textContent,
+      run: this.runBar.el.hidden ? null : this.runBar.el.querySelector('.badge')?.textContent ?? null,
       ...(this.wasm ? this.wasmDebug() : {}), ...(this.live?.debug() ?? {}),
     };
   }
@@ -197,6 +225,167 @@ export class CaliperView extends HTMLElement {
         : k === 'heatmap' || k === 'image' ? { r: Math.floor(geo.hover / geo.cols), c: geo.hover % geo.cols } : geo.hover;
     }
     return out;
+  }
+
+  // --- 3.1: run controls ---------------------------------------------------------
+
+  /** Pauses the run at its next checkpoint; resolves with the reply, or null when it could not be sent. */
+  pause(): Promise<ControlReplyMsg | null> {
+    return this.runBar.pause();
+  }
+
+  /** Resumes a paused run. */
+  resume(): Promise<ControlReplyMsg | null> {
+    return this.runBar.resume();
+  }
+
+  /** Runs n steps of the loop, then pauses. */
+  step(n = 1): Promise<ControlReplyMsg | null> {
+    return this.runBar.step(n);
+  }
+
+  // --- 3.1: linked selection -------------------------------------------------------
+
+  /**
+   * The item space each axis of the view carries, from VIEWS and the resolved
+   * data view: a series' steps; the point dim of points; the rows and columns
+   * of a heatmap or image (the cell's, in a mosaic).
+   */
+  private itemAxes(): Partial<Record<LinkAxis, string>> {
+    const e = this.entry(), k = this.kind();
+    if (!e || !k) return {};
+    if (k === 'series') return e.items ? { steps: e.items } : {};
+    const dv = this.resolved ?? e.default ?? {};
+    const src = e.sources.find((s) => s.name === dv.source) ?? e.sources[0];
+    if (!src) return {};
+    const kept = src.dims.filter((d) => typeof dv.index?.[d.name] !== 'number' && !(dv.reduce && d.name in dv.reduce));
+    if (k === 'points') {
+      const d = kept[kept.length - 1];
+      return d?.items ? { points: d.items } : {};
+    }
+    if (k === 'heatmap' || k === 'image') {
+      const cells = dv.tile ? kept.filter((d) => d.name !== dv.tile) : kept;
+      const out: Partial<Record<LinkAxis, string>> = {};
+      if (cells[0]?.items) out.rows = cells[0].items;
+      if (cells[1]?.items) out.columns = cells[1].items;
+      return out;
+    }
+    return {};
+  }
+
+  /**
+   * A selection's detail with its item space and items, when the attribute
+   * link is set, the server announced selection and the selection is on an
+   * axis with a space: the row ids of points, the source rows (else columns)
+   * of a heatmap or image, the steps of a series. {} becomes a clear of the space.
+   */
+  private augment(detail: Record<string, unknown>): Record<string, unknown> {
+    if (!this.hasAttribute('link') || !this.client?.capabilities?.includes(CAP.selection)) return detail;
+    const ax = this.itemAxes(), k = this.kind();
+    const cap = LIMITS.maxEventIndices;
+    const range = (r: unknown) => {
+      if (!Array.isArray(r)) return { items: [] as number[], truncated: false };
+      const [a, b] = r as number[];
+      const n = Math.max(0, Math.min(b - a, cap));
+      return { items: Array.from({ length: n }, (_, i) => a + i), truncated: b - a > cap };
+    };
+    let space: string | undefined, sel: { items: number[]; truncated: boolean };
+    if (k === 'points' && ax.points) {
+      space = ax.points;
+      sel = { items: ((detail.row_ids as number[]) ?? []).slice(), truncated: !!detail.truncated };
+    } else if ((k === 'heatmap' || k === 'image') && (ax.rows || ax.columns)) {
+      space = ax.rows ?? ax.columns;
+      sel = range(ax.rows ? detail.rows : detail.cols);
+    } else if (k === 'series' && ax.steps) {
+      space = ax.steps;
+      sel = range(detail.steps);
+    } else {
+      return detail;
+    }
+    return { ...detail, space, items: sel.items, ...(sel.truncated ? { truncated: true } : {}) };
+  }
+
+  /** The selection of the first space one of this view's axes carries, drawn by the view. */
+  private refreshLink(): void {
+    if (!this.hasAttribute('link')) {
+      this.linked = null;
+    } else {
+      const ax = this.itemAxes();
+      this.linked = null;
+      for (const s of this.client?.selections?.values() ?? []) {
+        const axis = (Object.keys(ax) as LinkAxis[]).find((a) => ax[a] === s.space);
+        if (axis) {
+          this.linked = { space: s.space, axis, items: s.items };
+          break;
+        }
+      }
+    }
+    this.applyLink();
+  }
+
+  private applyLink(): void {
+    const l = this.linked;
+    if (this.wasm) this.wasm.setLink?.(l?.axis ?? '', l?.items ?? []);
+    else this.live?.link?.(l?.axis ?? null, l?.items ?? []);
+  }
+
+  private selectionArrived(sel: SelectionMsg): void {
+    if (!this.hasAttribute('link')) return;
+    this.refreshLink();
+    const mine = sel.view === this.names[0];
+    if (mine || this.linked?.space === sel.space) {
+      this.dispatchEvent(new CustomEvent('caliper-selection', { detail: sel, bubbles: true, composed: true }));
+    }
+    this.showDetails(sel);
+  }
+
+  /**
+   * With the attribute details, the details of a selection made in this view
+   * under it: one row per item, the script's fields as columns. A selection
+   * of the same space made elsewhere, or an empty one, hides them.
+   */
+  private showDetails(sel: SelectionMsg): void {
+    const box = this.parts.details;
+    const shownSpace = box.dataset.space;
+    const mine = sel.view === this.names[0];
+    if (!this.hasAttribute('details') || !mine || !sel.items.length || (!sel.details && !sel.details_error)) {
+      if (shownSpace === sel.space || !this.hasAttribute('details')) {
+        box.hidden = true;
+        box.replaceChildren();
+        delete box.dataset.space;
+      }
+      return;
+    }
+    box.replaceChildren();
+    box.dataset.space = sel.space;
+    if (sel.details) {
+      const t = document.createElement('table');
+      const head = t.insertRow();
+      for (const f of ['item', ...sel.details.fields]) {
+        const th = document.createElement('th');
+        th.textContent = f;
+        head.append(th);
+      }
+      sel.details.items.forEach((item, i) => {
+        const row = t.insertRow();
+        for (const v of [item, ...sel.details!.values[i]]) {
+          row.insertCell().textContent = v === null ? '' : typeof v === 'number' ? fmt(v, 6) : String(v);
+        }
+      });
+      box.append(t);
+    }
+    const more = document.createElement('div');
+    more.className = 'more';
+    const n = sel.items.length, shown = sel.details?.items.length ?? 0;
+    more.textContent = sel.details_error ? `No details: ${sel.details_error}`
+      : n > shown ? `${n}${sel.truncated ? '+' : ''} items selected, the first ${shown} shown` : '';
+    if (more.textContent) box.append(more);
+    box.hidden = false;
+    this.request('data');
+  }
+
+  private replied(r: ControlReplyMsg): void {
+    this.dispatchEvent(new CustomEvent('caliper-reply', { detail: r, bubbles: true, composed: true }));
   }
 
   /** Resolves once pending drawing is done, including the GPU's work. */
@@ -226,6 +415,12 @@ export class CaliperView extends HTMLElement {
   attributeChangedCallback(name: string, old: string | null, value: string | null): void {
     if (!this.isConnected || old === value) return;
     if (name === 'height') this.applyHeight();
+    else if (name === 'run-controls') this.runBar.setButtons(this.hasAttribute('run-controls'));
+    else if (name === 'link') this.refreshLink();
+    else if (name === 'details' && value === null) {
+      this.parts.details.hidden = true;
+      this.parts.details.replaceChildren();
+    }
     else if (name === 'src' || name === 'view' || name === 'renderer') this.reattach();
     else if (name === 'kind') this.wasm ? this.reattach() : this.recreate();
   }
@@ -239,11 +434,13 @@ export class CaliperView extends HTMLElement {
     head.className = 'head';
     const p = this.parts;
     p.dot.setAttribute('role', 'status');
-    head.append(p.name, this.picker.el, p.info, p.tools, p.dot);
+    head.append(p.name, this.picker.el, p.info, this.runBar.el, p.tools, p.dot);
+    this.runBar.setButtons(this.hasAttribute('run-controls'));
     p.tip.hidden = true;
     p.wasm.hidden = true;
     p.body.append(p.wasm, p.overlay, p.tip, p.msg);
-    plate.append(head, p.body);
+    p.details.hidden = true;
+    plate.append(head, p.body, p.details);
     this.root.append(style, plate);
     this.ro = new ResizeObserver(() => {
       this.live?.resize();
@@ -327,12 +524,14 @@ export class CaliperView extends HTMLElement {
         if (text !== null) this.parts.info.textContent = text;
       },
       onToggle: (name, on) => this.wasmToggles.get(name)?.set(on),
+      augment: (detail) => this.augment(detail),
       // The reply to the module's own subscription or data view request.
       onDataView: (dv) => {
         if (this.drawer !== 'wasm') return;
         this.resolved = dv;
         this.wanted = null;
         this.picker.show(dv);
+        this.refreshLink();
       },
     });
   }
@@ -349,6 +548,7 @@ export class CaliperView extends HTMLElement {
     ready.then(() => {
       if (gen !== this.generation) return;
       this.wasmReady = true;
+      this.refreshLink();
       this.message(null);
       this.status();
     });
@@ -387,7 +587,13 @@ export class CaliperView extends HTMLElement {
       return;
     }
     const listener: StreamListener = {
-      onStatus: () => this.status(),
+      onStatus: () => {
+        this.status();
+        this.runBar.update();
+      },
+      onControls: () => this.runBar.update(),
+      onSelection: (s) => this.selectionArrived(s),
+      onSession: () => this.runBar.update(),
       onViews: (views) => this.views(views),
       onSnapshot: (s) => this.snapshot(s),
       onSeries: (d) => this.seriesDelta(d),
@@ -400,6 +606,7 @@ export class CaliperView extends HTMLElement {
           this.resolved = r.data_view;
           this.wanted = null;
           this.picker.show(r.data_view);
+          this.refreshLink();
         }
       },
       onError: (e) => {
@@ -414,6 +621,7 @@ export class CaliperView extends HTMLElement {
     this.names = view.includes(',') && !known(view) ? view.split(',').map((s) => s.trim()).filter(Boolean) : [view];
     this.views(client.views);
     this.status();
+    this.runBar.update();
   }
 
   /** The element's own views draw: subscribe on the shared client. */
@@ -463,6 +671,7 @@ export class CaliperView extends HTMLElement {
   private views(_views: readonly ViewEntry[]): void {
     const e = this.entry();
     this.picker.offer(e);
+    if (this.linked || this.client?.selections?.size) this.refreshLink();
     if (this.resolved) this.picker.show(this.resolved);
     if (!this.drawer) this.decide(this.generation);
     const k = this.kind();
@@ -558,6 +767,7 @@ export class CaliperView extends HTMLElement {
     }
     this.live = live;
     this.liveKind = kind;
+    this.applyLink();
     if (this.current && !this.pending) this.pending = this.current;
     this.request('data');
   }
@@ -656,6 +866,7 @@ export class CaliperView extends HTMLElement {
   }
 
   private report(type: 'select' | 'pick' | 'hover', detail: Record<string, unknown>): void {
+    if (type === 'select') detail = this.augment(detail);
     const view = this.names[0];
     const event = { view, type, detail };
     if (type === 'select') this.dispatchEvent(new CustomEvent('caliper-select', { detail: event, bubbles: true, composed: true }));

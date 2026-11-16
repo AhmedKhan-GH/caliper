@@ -26,7 +26,23 @@ export interface ViewHost {
   info(text: string): void;
 }
 
+/** The axis of a view that carries an item space (wire protocol 3.1, linked selection). */
+export type LinkAxis = 'points' | 'rows' | 'columns' | 'steps';
+
+/** Whether sorted items hold one in the source range [a, b). */
+export function linkedIn(items: readonly number[], a: number, b: number): boolean {
+  let lo = 0, hi = items.length;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (items[m] < a) lo = m + 1;
+    else hi = m;
+  }
+  return lo < items.length && items[lo] < b;
+}
+
 export interface LiveView {
+  /** Draws a linked selection: the selected items of the space the axis carries (null: none). */
+  link?(axis: LinkAxis | null, items: readonly number[]): void;
   /** Takes the newest snapshot (the previous one is dropped). */
   snapshot(s: SnapshotMsg): void;
   /** Appends a series delta (series views only). */

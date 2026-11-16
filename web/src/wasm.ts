@@ -24,6 +24,8 @@ export interface WasmHandle {
   onSelect?: ((event: WasmSelect | Record<string, unknown>) => void) | null;
   /** Sets a header toggle of the view: 'follow' or 'log' (the real loader has it; a stub may not). */
   setToggle?(name: string, on: boolean): boolean;
+  /** Draws a linked selection: the axis carrying the space ('' to clear) and the items. */
+  setLink?(axis: string, items: readonly number[]): boolean;
   onDataView?: ((dataView: DataView) => void) | null;
 }
 
@@ -42,6 +44,8 @@ export interface WasmOptions {
   onInfo?(facts: ViewFacts): void;
   /** A view changed a header toggle itself (a plot stopped or started following). */
   onToggle?(name: string, on: boolean): void;
+  /** Adds the item space and items to a selection's detail before the module sends it (3.1). */
+  augment?(detail: Record<string, unknown>): Record<string, unknown>;
   onDataView(dataView: DataView): void;
 }
 
