@@ -778,8 +778,18 @@ private:
         else if (auto* c = std::get_if<wire::Controls>(&m)) on_controls(*c);
         else if (auto* cr = std::get_if<wire::ControlReply>(&m)) on_control_reply(*cr);
         else if (auto* sel = std::get_if<wire::Selection>(&m)) on_selection(*sel);
-        else if (auto* su = std::get_if<wire::SceneUpdate>(&m)) on_scene(keep, r.frame, std::move(*su));
+        else if (auto* su = std::get_if<wire::SceneUpdate>(&m)) {
+            const std::string why = scene_not_drawn(*su);
+            if (why.empty()) on_scene(keep, r.frame, std::move(*su));
+            else refuse_scene(r.frame.meta, su->sub, su->view, r.type, why);
+        }
         else if (auto* sc = std::get_if<wire::SceneClear>(&m)) on_scene(keep, r.frame, std::move(*sc));
+        // 3.2 draft: the scene view applies no entity transform or class table yet, so they are ignored
+        // and the view says so (docs/references/wire-protocol-3-2.md, "Versioning").
+        else if (std::holds_alternative<wire::SceneTransforms>(m))
+            scene_note(r.frame.meta, "ignored: entity transforms are not applied yet");
+        else if (std::holds_alternative<wire::SceneClasses>(m))
+            scene_note(r.frame.meta, "ignored: class tables are not applied yet");
         else protocol_error(std::string("'") + wire::type_name(type) + "' sent to a viewer");
     }
 
@@ -792,15 +802,8 @@ private:
         const auto it = by_sub_.find(sub);
         if (it == by_sub_.end() || it->second->kind != CALIPER_NET_KIND_SCENE) return;
         NetView& v = *it->second;
-        std::string ignored;
-        if (const auto* u = std::get_if<wire::SceneUpdate>(&msg)) {
-            // Sections this viewer does not build (stamp, normals, class ids, ...) are ignored.
-            for (const wire::Section& s : frame.sections)
-                if (!u->array(s.name)) ignored += (ignored.empty() ? "" : ", ") + s.name;
-            if (!ignored.empty())
-                ignored = "ignored in " + (u->path.empty() ? std::string("the root") : u->path) + " " + u->part +
-                          ": " + ignored;
-        }
+        std::string ignored;   // what this view does not use of an update (a stamp, class ids, normals, ...)
+        if (const auto* u = std::get_if<wire::SceneUpdate>(&msg)) ignored = scene_ignored(*u, frame);
         bool again = false;
         {
             std::lock_guard<std::mutex> g(mu_);
@@ -824,6 +827,18 @@ private:
         s.view = v.name;
         s.request_id = next_request_++;
         send(s);
+    }
+
+    // A scene update of a part this view does not draw yet: answered ERROR unsupported, not queued, and noted.
+    void refuse_scene(const Json& meta, uint32_t sub, const std::string& view, uint16_t type, const std::string& why) {
+        wire::Error e;
+        e.code = CALIPER_NET_ERR_UNSUPPORTED;
+        e.message = why;
+        e.in_reply_to = type;
+        e.sub = sub;
+        e.view = view;
+        send(e);
+        scene_note(meta, "ignored: " + why);
     }
 
     void scene_note(const Json& meta, const std::string& text) {

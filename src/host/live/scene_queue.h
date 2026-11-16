@@ -21,6 +21,39 @@ namespace caliper_live {
 
 inline constexpr size_t kSceneQueueMax = 8192;
 
+// ---- what the scene view draws (docs/references/wire-protocol-3-2.md, "Versioning") ----------
+// The codec decodes every part of the 3.2 draft; the scene view draws points, lines of mode
+// segments and strips, and meshes. For another part or mode this is why a source does not queue
+// the update: it answers ERROR unsupported and notes it in the view. "" when the view draws it.
+inline std::string scene_not_drawn(const caliper_net::wire::SceneUpdate& u) {
+    if (u.part == CALIPER_NET_PART_POINTS || u.part == CALIPER_NET_PART_MESH) return {};
+    if (u.part == CALIPER_NET_PART_LINES) {
+        const caliper_net::Json* mode = u.params.find("mode");
+        if (mode && mode->is_string() && mode->as_string() == CALIPER_NET_LINES_EDGES)
+            return "lines of mode 'edges' (index-pair edges) are not drawn yet";
+        return {};
+    }
+    return "the part '" + u.part + "' is not drawn yet";
+}
+
+// The sections and keys of an update the view draws that it does not use (a stamp, class ids,
+// normals, a texture, labels or a section no part has), named for a note; "" when none.
+inline std::string scene_ignored(const caliper_net::wire::SceneUpdate& u, const caliper_net::wire::Frame& f) {
+    static const char* const points[] = {"positions", "colors", "values", "radii", nullptr};
+    static const char* const lines[] = {"positions", "strip_lengths", "colors", "values", nullptr};
+    static const char* const mesh[] = {"positions", "indices", "colors", "values", nullptr};
+    const char* const* used = u.part == CALIPER_NET_PART_POINTS ? points : u.part == CALIPER_NET_PART_LINES ? lines : mesh;
+    std::string out;
+    for (const caliper_net::wire::Section& s : f.sections) {
+        bool drawn = false;
+        for (const char* const* k = used; *k && !drawn; ++k) drawn = s.name == *k;
+        if (!drawn) out += (out.empty() ? "" : ", ") + s.name;
+    }
+    if (u.params.find("labels")) out += std::string(out.empty() ? "" : ", ") + "labels";
+    if (out.empty()) return out;
+    return "ignored in " + (u.path.empty() ? std::string("the root") : u.path) + " " + u.part + ": " + out;
+}
+
 // A scene view's queue, whether it waits for the scene's next state (a reset), and whether the
 // view will never be shown (Source::stop_scene), so that nothing is queued for it.
 struct SceneQueue {
