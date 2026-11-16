@@ -12,6 +12,8 @@
 //   web geometry: a colour from a lookup is exact away from edges, a pixel within a pixel of an
 //   edge (the edges between a mesh's flat faces included) may take either side's colour, and
 //   flat-shaded faces may differ by 2 levels.
+// - The pick row draws the same scene's pick variants into the 16 x 16 ID window around a pixel
+//   on the surface, on the marker and on the path, and decodes the texels with the Picker.
 //
 // CALIPER_GFX_CAPTURE_DIR=<folder> writes first-scene-points.png (scaled up eight times) and
 // first-scene-surface.png there. Compiled as Objective-C++ with ARC on Apple.
@@ -605,6 +607,105 @@ TEST_CASE("gfx/Metal scene: a surface, a path, a marker and a box drawn through 
     CHECK_MESSAGE(c.failed == 0, c.failed, " pixels outside the parity rules; ", c.first);
     // Every part is checked away from its edges.
     for (int d = -1; d < 4; ++d) CHECK(c.interior_by_draw[d] > 0);
+}
+
+TEST_CASE("gfx/Metal scene: the pick pass finds the surface, the marker and the path with their items") {
+    SurfaceScene sc;
+    if (!sc.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    Backend& gfx = *sc.rig.gfx;
+    const std::vector<DrawInfo> draws = sc.draw();
+    REQUIRE(draws.size() == 4);
+    const Reference ref = rasterise(draws, sc.fx);
+    const int S = sc.fx.kSize;
+
+    // Pixels well inside each part in the reference.
+    auto interior = [&](int i, int j) {
+        const uint32_t v = ref.id[size_t(j) * S + i];
+        for (int dj = -1; dj <= 1; ++dj)
+            for (int di = -1; di <= 1; ++di)
+                if (ref.id[size_t(std::clamp(j + dj, 0, S - 1)) * S + std::clamp(i + di, 0, S - 1)] != v) return false;
+        return true;
+    };
+    auto pixels_of = [&](int draw) {
+        std::vector<std::pair<int, int>> out;
+        for (int j = 1; j + 1 < S; ++j)
+            for (int i = 1; i + 1 < S; ++i)
+                if (ref.id[size_t(j) * S + i] && Reference::draw_of(ref.id[size_t(j) * S + i]) == draw && interior(i, j))
+                    out.push_back({i, j});
+        return out;
+    };
+    std::vector<std::pair<int, int>> on_surface = pixels_of(3), on_path = pixels_of(2), on_marker = pixels_of(1);
+    REQUIRE(!on_surface.empty());
+    REQUIRE(!on_path.empty());
+    REQUIRE(!on_marker.empty());
+    auto nearest = [&](const std::vector<std::pair<int, int>>& v, double x, double y) {
+        return *std::min_element(v.begin(), v.end(), [&](auto a, auto b) {
+            return std::hypot(a.first - x, a.second - y) < std::hypot(b.first - x, b.second - y);
+        });
+    };
+    const F4 mc = mul(draws[1].p.mvp, sc.fx.marker[0], sc.fx.marker[1], sc.fx.marker[2]);
+    const double mx = (mc.x / mc.w + 1) * 0.5 * S, my = (1 - mc.y / mc.w) * 0.5 * S;
+    struct Probe { const char* what; std::pair<int, int> px; const char* path; Primitive primitive; };
+    const Probe probes[3] = {
+        {"surface", nearest(on_surface, S / 2.0, S / 2.0), "surface", Primitive::Mesh},
+        {"marker", nearest(on_marker, mx, my), "marker", Primitive::Points},
+        {"path", on_path[on_path.size() / 2], "path", Primitive::Lines},
+    };
+
+    Texture ids = gfx.create_texture({16, 16, Format::RG32Uint, kRenderTarget | kCopySrcTex, "pick ids"});
+    Texture pick_depth = gfx.create_texture({16, 16, Format::Depth32Float, kRenderTarget | kCopySrcTex, "pick depth"});
+    REQUIRE_MESSAGE((ids && pick_depth), gfx.last_error());
+    Picker picker;
+    for (const Probe& pr : probes) {
+        const std::string what = pr.what;
+        CAPTURE(what);
+        const int i = pr.px.first, j = pr.px.second;
+        const uint32_t expect = ref.id[size_t(j) * S + i];
+        const PickWindow w = picker.request(i + 0.5f, j + 0.5f, 8, S, S);
+        const int32_t window[4] = {w.x0, w.y0, w.width, w.height};
+        RenderTarget pt;
+        pt.color = ids;
+        pt.depth = pick_depth;
+        DrawList pick(pt);
+        DrawMap pick_map;
+        const CompileResult r = sc.compiler.compile_pick(sc.tree, sc.camera, sc.fx.options(), window, *sc.rig.res, pick, &pick_map);
+        REQUIRE_MESSAGE(r.ok, (r.notes.empty() ? std::string() : r.notes[0]));
+        caliper_gfx::Frame f;
+        f.render(std::move(pick));
+        REQUIRE_MESSAGE(gfx.submit(std::move(f)) != 0, gfx.last_error());
+        const std::vector<uint8_t> id_bytes = read_back(gfx, ids, 16, 16);
+        const std::vector<uint8_t> depth_bytes = read_back(gfx, pick_depth, 16, 16);
+        const std::optional<Hit> hit = picker.deliver(picker.current(), pick_map.revision, id_bytes, &depth_bytes, pick_map);
+        REQUIRE(hit.has_value());
+        CHECK(sc.tree.path(hit->entity) == pr.path);
+        CHECK(hit->primitive == pr.primitive);
+        CHECK(hit->texel[0] == 8);
+        CHECK(hit->texel[1] == 8);
+        const uint32_t item = Reference::item_of(expect);
+        if (pr.primitive == Primitive::Mesh) {
+            // A vertex of the triangle under the pixel.
+            const Reference::Tri& tri = ref.tris[item];
+            CHECK((hit->item == uint64_t(tri.index[0]) || hit->item == uint64_t(tri.index[1]) ||
+                   hit->item == uint64_t(tri.index[2])));
+            // The world position from the depth lies on that face.
+            double q[3], z;
+            bool inside;
+            REQUIRE(weights(tri.v, i + 0.5, j + 0.5, q, &z, &inside));
+            double o[3];
+            for (int k = 0; k < 3; ++k) o[k] = q[0] * tri.v[0].o[k] + q[1] * tri.v[1].o[k] + q[2] * tri.v[2].o[k];
+            REQUIRE(hit->has_position);
+            const double dist = std::sqrt((hit->position.x - o[0]) * (hit->position.x - o[0]) +
+                                          (hit->position.y - o[1]) * (hit->position.y - o[1]) +
+                                          (hit->position.z - o[2]) * (hit->position.z - o[2]));
+            MESSAGE("surface pick: item ", hit->item, ", triangle ", item, ", position off the face's point by ", dist);
+            CHECK(dist < 1e-3);
+        } else {
+            CHECK(hit->item == item);   // the marker's point 0, or the strip's segment
+        }
+        CHECK(std::fabs(hit->depth - ref.depth[size_t(j) * S + i]) < 1e-5f);
+        MESSAGE(what, " at (", i, ", ", j, "): entity ", sc.tree.path(hit->entity), ", item ", hit->item, ", depth ",
+                hit->depth);
+    }
 }
 
 #endif  // CALIPER_HAVE_METAL
