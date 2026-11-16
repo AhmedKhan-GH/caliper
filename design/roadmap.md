@@ -93,6 +93,20 @@ Still to do, in this order:
 
 Run history, comparison between runs, and recording and replaying a session are planned for the desktop app after Phase 1, after the streaming work whose format they share. They build on the local DuckDB-backed stores and never need an account or a server. Caliper Cloud and Caliper Web, which offer the same online with sync, sharing, teams, hosted storage and hosted compute, are separate later products outside this repository. [Data and Cloud](data-and-cloud.md) gives the plan.
 
+## Scenes and recordings
+
+3-D scenes and recordings are designed and not built. The design waits for review, and nothing of it is part of the current work. It builds on the streaming work of sprint 2, and only its recordings in the workspace and its spec primitive also wait for the agent-built panels of sprint 3. [Sprint 4](sprint-4.md) builds it as increments that a person can see, in this order: the renderer core's minimum cut; then a loss-landscape demo in a notebook, the first visible increment; then the rest of scenes, recordings and the demos, with every remaining migration step of the renderer core interleaved as a measured increment of its own. The parts are these:
+
+1. The renderer core: one graphics layer that each backend implements once, one shader source, a shared scene core, and zero-copy kept as an import capability with a measurement before and after every step. Its minimum cut comes first: the layer with its Metal backend, the shader generator, the scene core and the browser's WebGPU backend, on which scenes start. Every remaining migration step then follows in full: each existing view moved onto the layer, the Dawn fallback, and the retirement of the GLEW OpenGL path once Dawn covers its cases. The Vulkan backend comes with [Windows parity](windows-parity.md). Each step lands as its own series of commits, with measurements before and after, byte-exact pixel checks and offscreen captures, and the next step waits until it passes. It takes over the steps of [Renderers](#renderers) below. Plan: [Renderer core](renderer-core.md).
+2. Scenes: entities on paths with entity transforms, points, lines, arrows, boxes, meshes, images and pinhole cameras, logged from Caliper LIB, with a text log and a bar chart. Plan: [Scenes](scenes.md).
+3. Timelines and recordings: stamps on several timelines, a recording file, recordings in the workspace database, and a scrubber in the app and in the browser. This is the recording and replay of [Data and Cloud](#data-and-cloud). Plans: [Recordings](recordings.md) and the [wire protocol 3.2 draft](wire-protocol-3-2.md).
+4. Scenes in the browser, on the WebGPU backend of the renderer core. Plan: [Web geometry](web-geometry.md).
+5. The loss-landscape demo, and four demos on openly licensed data. Plan: [Demos](demos.md).
+
+### Sprint 5
+
+A script sets the camera a 3-D view starts on, and a person switches the view between Y up and Z up; both are part of [Scenes](scenes.md). [Sprint 5](sprint-5.md) follows scenes and recordings with run comparison and linked cameras, slice planes and isosurfaces of 3-D fields, mesh files, a URDF helper, following an entity, trails, ellipsoids and error bands, ROS 2 import, an orthographic projection with preset views, saved viewpoints, more shapes, and events from the app to a script over shared memory. A fly mode is left out.
+
 ## Renderers
 
 This work comes after Phase 1. The WebGPU backend behind `HostRenderer` is built for the browser, where it draws the web viewer's views (see `docs/explanations/rendering.md`). Its native role through Dawn is the last step of the web viewer's order and is not part of the current work.
@@ -101,7 +115,7 @@ Caliper's own Metal renderer on macOS and Vulkan renderer on Windows stay the no
 
 1. Run the WebGPU backend as the native fallback through Dawn, Google's WebGPU library, which is an optional build component. The host chooses it only when its own Metal or Vulkan renderer is unavailable. Dawn then draws through Direct3D 12 or 11, through OpenGL ES in a limited compatibility mode, or on the CPU through SwiftShader, which covers virtual machines, headless CI and machines with broken graphics drivers. This fallback is slower, but it works and says so, as the [invariants](#invariants) require.
 2. Retire the GLEW OpenGL fallback once the Dawn path covers its cases. There is no separate hand-written OpenGL or CPU renderer.
-3. Evaluate writing each shader once and translating it for each backend, for example with the Slang shading language. This Slang is not the SystemVerilog library of the same name that `third_party/` vendors. The WebGPU backend's two shaders are written by hand in WGSL for now; a single source becomes worth its toolchain once the backend also serves the Dawn fallback and every shader exists three times.
+3. Write each shader once and translate it for each backend. This is decided: the source is WGSL, translated to MSL and SPIR-V by Naga, with the generated sources committed, as [Renderer core](renderer-core.md#one-shader-source) describes.
 
 Caliper then maintains three renderers: Metal, Vulkan and WebGPU. The renderers that exist today are described in Rendering (`docs/explanations/rendering.md`).
 
