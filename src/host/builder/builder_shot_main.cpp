@@ -419,8 +419,20 @@ int main(int argc, char** argv) {
     drv.click("transform:add:reduce");
     drv.click("transform:add:normalise");
     expect(pane.selected() == "spec:attn", "the attention source was not added");
-    drv.drag("primitive:heatmap", 0.5f, 0.5f, "panel:curves", 0.93f, 0.55f);
+    {
+        // Onto the curves' right edge, inside its edge band at any size.
+        SpecRect c;
+        ImVec2 from;
+        if (drv.ok() && pane.item_rect("panel:curves", &c) && drv.target("primitive:heatmap", 0.5f, 0.5f, &from))
+            drv.drag_points(from, ImVec2(c.right() - 40.0f, std::round(c.y + c.h * 0.55f)), false);
+    }
     expect(pane.focused_panel() == "heatmap", "the heatmap was not made");
+    {
+        const auto& open = pane.open_spec();
+        const bool beside = open && open->spec.layout && open->spec.layout->kind == cb::spec::LayoutNode::Kind::split &&
+                            open->spec.layout->split == cb::spec::SplitDirection::horizontal;
+        expect(beside, "the heatmap is not beside the curves");
+    }
     rename("prop:id", "attention");
     typed("prop:title", "Mean attention of layer 0");
     drv.click("colormap:magma");
@@ -440,6 +452,12 @@ int main(int argc, char** argv) {
             drv.drag_points(from, ImVec2(std::round(c.x + c.w * 0.5f), c.bottom() - 4.0f), false);
     }
     expect(pane.focused_panel() == "table", "the table was not made");
+    {
+        const auto& open = pane.open_spec();
+        const bool below = open && open->spec.layout && open->spec.layout->kind == cb::spec::LayoutNode::Kind::split &&
+                           open->spec.layout->split == cb::spec::SplitDirection::vertical;
+        expect(below, "the table is not under everything");
+    }
     rename("prop:id", "rows");
     drv.click("option:columns:accuracy");
     {
