@@ -424,12 +424,9 @@ class Link:
             return
         self.drop(msg.sub)
         try:
-            v, resolved = self.p.resolve(msg.view, msg.data_view)
+            v, resolved = self.p.resolve(msg.view, msg.data_view, self.caps)
         except _wire.MessageError as e:
             self._reply_error(msg, e.code, e.message)
-            return
-        if v.kind == _wire.Kind.SCENE and _wire.CAP_SCENES not in self.caps:   # 3.2 draft
-            self._reply_error(msg, _wire.ERR_UNKNOWN_VIEW, f"no view {msg.view!r}")
             return
         rate = min(float(msg.max_rate or _wire.DEFAULT_RATE_HZ), float(_wire.LIMIT_RATE_HZ))
         s = Sub(msg.sub, v.name, v.id, v.kind, resolved, 1.0 / rate, rate)
@@ -612,11 +609,14 @@ class _Producer:
         self.ring.changed()
 
     # -- subscriptions ------------------------------------------------------------
-    def resolve(self, name: str, request: dict | None):
+    def resolve(self, name: str, request: dict | None, caps=None):
+        """The view and its resolved data view. ``caps``, the capabilities of the
+        peer that subscribes: a scene is unknown to a peer without "scenes",
+        whatever data view it names (3.2 draft)."""
         with self.ring.lock:
             v = self.ring.views.get(name)
             entry = v.entry() if v is not None else None
-        if v is None:
+        if v is None or (caps is not None and v.kind == _wire.Kind.SCENE and _wire.CAP_SCENES not in caps):
             raise _wire.MessageError(_wire.ERR_UNKNOWN_VIEW, f"no view {name!r}")
         try:
             if v.kind == KIND_SERIES:
