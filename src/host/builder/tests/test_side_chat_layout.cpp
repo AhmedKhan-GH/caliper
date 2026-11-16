@@ -221,3 +221,34 @@ TEST_CASE("side chat layout: a longer input grows the row up to its maximum, and
     in.pane = {0, 0, 1400, 700};
     CHECK(layout_chat_pane(in, m, fake_measure()).chips_shown == (int)in.chips.size());
 }
+
+TEST_CASE("side chat layout: the builder's left column keeps its share free beside the chat") {
+    const ChatLayoutMetrics m = ChatLayoutMetrics::for_text_scale(1.0f);
+    for (const auto& size : {std::pair<float, float>{2560, 1440}, std::pair<float, float>{1440, 900}}) {
+        INFO(size.first << "x" << size.second);
+        ChatColumnInput in;
+        in.window = work_area(size.first, size.second);
+        in.left_open = true;
+        const ChatColumnLayout c = layout_chat_column(in, m);
+        CHECK(c.left.x == in.window.x);
+        CHECK(c.left.w == std::max(m.min_left, std::round(size.first * 0.18f)));
+        CHECK(c.canvas.x == c.left.right());
+        CHECK(c.canvas.right() == c.column.x);
+        CHECK(c.left.w + c.canvas.w + c.column.w == size.first);
+        CHECK(c.canvas.w >= m.min_canvas);
+        check_no_overlap({c.left, c.canvas, c.column});
+        // Closed, it takes nothing.
+        in.left_open = false;
+        CHECK(layout_chat_column(in, m).left.empty());
+        CHECK(layout_chat_column(in, m).canvas.x == in.window.x);
+    }
+    // A narrow window: the right column gives way to its minimum first, then the left one.
+    ChatColumnInput in;
+    in.window = work_area(1050, 700);
+    in.left_open = true;
+    in.left_share = 0.3f;   // 315 points wanted
+    const ChatColumnLayout c = layout_chat_column(in, m);
+    CHECK(c.column.w == m.min_width);
+    CHECK(c.left.w == 1050 - m.min_width - m.min_canvas);
+    CHECK(c.canvas.w == m.min_canvas);
+}

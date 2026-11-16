@@ -263,61 +263,6 @@ std::string caliper_command_of(const acp::ToolCallInfo& call, const std::string&
 
 // ---- the compact diff of a spec file ------------------------------------------------------
 
-namespace {
-
-// A value as the cards show it: JSON, whole numbers without a fraction, a
-// space after each comma, cut at `max` characters.
-std::string card_value(const json& v, size_t max) {
-    std::string s;
-    if (v.is_number_float()) {
-        const double d = v.get<double>();
-        char buf[32];
-        if (std::isfinite(d) && std::fabs(d) < 1e15 && d == std::floor(d)) std::snprintf(buf, sizeof buf, "%.0f", d);
-        else std::snprintf(buf, sizeof buf, "%.6g", d);
-        s = buf;
-    } else if (v.is_array()) {
-        s = "[";
-        for (size_t i = 0; i < v.size(); ++i) s += (i ? ", " : "") + card_value(v[i], SIZE_MAX);
-        s += "]";
-    } else {
-        s = v.dump();
-    }
-    if (s.size() > max && max > 3) {
-        size_t cut = max - 1;
-        while (cut > 0 && ((unsigned char)s[cut] & 0xC0) == 0x80) --cut;
-        s = s.substr(0, cut) + "\xE2\x80\xA6";
-    }
-    return s;
-}
-
-void flatten_keys(const json& v, const std::string& prefix, std::vector<std::pair<std::string, json>>* out) {
-    if (v.is_object() && !v.empty()) {
-        for (auto it = v.begin(); it != v.end(); ++it)
-            flatten_keys(it.value(), prefix.empty() ? it.key() : prefix + "." + it.key(), out);
-    } else {
-        out->push_back({prefix, v});
-    }
-}
-
-// A new item's keys as added lines, "<id> primitive" and "<id> title" first.
-std::vector<WidgetDiffLine> new_item_lines(const std::string& id, const json& item) {
-    std::vector<std::pair<std::string, json>> keys;
-    flatten_keys(item, "", &keys);
-    std::vector<WidgetDiffLine> out;
-    for (const auto& kv : keys) {
-        if (kv.first == "id" || kv.first.empty() || kv.second.is_null()) continue;
-        if (kv.second.is_object() && kv.second.empty()) continue;
-        out.push_back({WidgetDiffLine::Kind::added, id + " " + kv.first, "", card_value(kv.second, 40)});
-    }
-    auto rank = [&id](const WidgetDiffLine& l) {
-        return l.key == id + " primitive" ? 0 : l.key == id + " title" ? 1 : 2;
-    };
-    std::stable_sort(out.begin(), out.end(), [&](const WidgetDiffLine& a, const WidgetDiffLine& b) { return rank(a) < rank(b); });
-    return out;
-}
-
-}  // namespace
-
 std::vector<WidgetDiffLine> chat_compact_diff(const std::string& path, const std::string& before, const std::string& after) {
     const std::string suffix = ".spec.toml";
     if (path.size() < suffix.size() || path.compare(path.size() - suffix.size(), suffix.size(), suffix) != 0) return {};
@@ -329,12 +274,12 @@ std::vector<WidgetDiffLine> chat_compact_diff(const std::string& path, const std
     for (const spec::Panel& q : b.spec.panels)
         if (!a.spec.find_panel(q.id)) {
             added.insert("panel " + q.id);
-            for (WidgetDiffLine& l : new_item_lines(q.id, spec::to_json(q))) out.push_back(std::move(l));
+            for (WidgetDiffLine& l : widget_item_lines(spec::to_json(q))) out.push_back(std::move(l));
         }
     for (const spec::Source& q : b.spec.sources)
         if (!a.spec.find_source(q.id)) {
             added.insert("source " + q.id);
-            for (WidgetDiffLine& l : new_item_lines(q.id, spec::to_json(q))) out.push_back(std::move(l));
+            for (WidgetDiffLine& l : widget_item_lines(spec::to_json(q))) out.push_back(std::move(l));
         }
     for (WidgetDiffLine& l : widget_compact_diff(a.spec, b.spec, std::string()))
         if (!added.count(l.key)) out.push_back(std::move(l));
@@ -640,6 +585,14 @@ void SideChat::start_agent() {
         return;
     }
     retire_client();
+    if (hooks_.before_start) {
+        if (Error e = hooks_.before_start(&options_.env)) {
+            state_ = ChatState::failed;
+            error_ = e;
+            notice("FAILED", e);
+            return;
+        }
+    }
     ChatLaunch launch;
     if (Error e = build_chat_launch(*a, options_.env, &launch, options_.client)) {
         state_ = ChatState::failed;
@@ -1023,6 +976,7 @@ ChatLayoutMetrics ChatLayoutMetrics::for_text_scale(float s) {
     m.min_height = r(220);
     m.min_canvas = r(480);
     m.min_upper = r(160);
+    m.min_left = r(220);
     return m;
 }
 
@@ -1030,9 +984,13 @@ ChatColumnLayout layout_chat_column(const ChatColumnInput& in, const ChatLayoutM
     ChatColumnLayout out;
     const WidgetRect& w = in.window;
     float col = std::max(m.min_width, std::round(w.w * std::clamp(in.share, 0.05f, 0.9f)));
-    if (w.w - col < m.min_canvas) col = std::max(m.min_width, w.w - m.min_canvas);
+    float left = in.left_open ? std::max(m.min_left, std::round(w.w * std::clamp(in.left_share, 0.05f, 0.9f))) : 0.0f;
+    if (w.w - col - left < m.min_canvas) col = std::max(m.min_width, w.w - left - m.min_canvas);
+    if (in.left_open && w.w - col - left < m.min_canvas) left = std::max(m.min_left, w.w - col - m.min_canvas);
     col = std::min(col, w.w);
-    out.canvas = {w.x, w.y, w.w - col, w.h};
+    left = std::min(left, std::max(0.0f, w.w - col));
+    if (in.left_open) out.left = {w.x, w.y, left, w.h};
+    out.canvas = {w.x + left, w.y, w.w - col - left, w.h};
     out.column = {w.x + w.w - col, w.y, col, w.h};
     out.chat = out.column;
     if (in.upper_open) {

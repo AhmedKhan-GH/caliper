@@ -514,9 +514,9 @@ bind = { x = "metrics.step", y = ["metrics.lr"] }
 )";
     const std::vector<WidgetDiffLine> d = chat_compact_diff("/w/applets/d/d.spec.toml", before, after);
     REQUIRE(d.size() >= 4);
-    CHECK(d[0].key == "lr primitive");
+    CHECK(d[0].key == "primitive");
     CHECK(d[0].after == "\"series\"");
-    CHECK(d[1].key == "lr title");
+    CHECK(d[1].key == "title");
     CHECK(d[1].after == "\"Learning rate\"");
     bool y_log = false;
     for (const WidgetDiffLine& l : d)

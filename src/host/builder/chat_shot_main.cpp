@@ -436,7 +436,7 @@ int main(int argc, char** argv) {
         for (const auto& p : open->spec.panels) out["panels"].push_back(p.id);
 
     // 5: an agent that exits in the middle of a turn.
-    chat->set_text("Plot attention entropy per layer");
+    chat->set_text("Compare the attention of the first and the last layer");
     chat->send();
     if (!wait_for([&] { return chat->state() == ChatState::exited; }, 60000))
         return finish(fail(std::string("the agent did not exit: ") + chat_state_name(chat->state())));

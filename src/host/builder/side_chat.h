@@ -190,7 +190,8 @@ std::string caliper_command_of(const caliper_builder::acp::ToolCallInfo& call,
 
 // The compact diff of an edit of a spec file, as the inline surface and the
 // approval cards show a change (diff_card.h): a new panel's or source's keys
-// first, primitive and title leading, then every other changed key. Empty
+// first (widget_item_lines(), primitive and title leading), then every other
+// changed key. Empty
 // when the file is not a *.spec.toml or a text does not parse as a spec.
 std::vector<WidgetDiffLine> chat_compact_diff(const std::string& path, const std::string& before,
                                               const std::string& after);
@@ -288,6 +289,10 @@ public:
         std::function<void(const std::string& approval)> show_approval;
         // The settings changed (an agent chosen, a custom command): the app saves them.
         std::function<void(const ChatSettings&)> settings_changed;
+        // Just before an agent starts, on the frame thread: the app may fill
+        // in what it has only now, such as the API file of a Caliper API it
+        // starts for the chat. An error fails the start with it.
+        std::function<caliper_builder::Error(ChatEnvironment*)> before_start;
     };
 
     SideChat(Options options, Hooks hooks = {});
@@ -419,24 +424,30 @@ struct ChatLayoutMetrics {
     float min_height = 220;    // the pane's minimum height
     float min_canvas = 480;    // the canvas's minimum width beside the column
     float min_upper = 160;     // the upper part's minimum height (Selection, Properties)
+    float min_left = 220;      // the builder's left column's minimum width (Sources, Primitives)
     int max_input_lines = 6;
     static ChatLayoutMetrics for_text_scale(float s);
 };
 
-// The right column beside the canvas: the canvas keeps the rest of the
-// window. With the upper part (Selection and Properties) open it takes
-// `upper_share` of the column's height and the chat the rest; closed, the
-// chat takes the whole column. What gives way as the window shrinks: the
-// column's share down to its minimum, then the upper part down to its
+// The right column beside the canvas, and the builder's left column when it
+// is open (Sources and Primitives in build mode): the canvas keeps the rest
+// of the window between them. With the upper part (Selection and Properties)
+// open the right column gives it `upper_share` of its height and the chat
+// the rest; closed, the chat takes the whole column. What gives way as the
+// window shrinks: the right column's share down to its minimum, then the
+// left column's share down to its own, then the upper part down to its
 // minimum and then away, so the chat keeps its minimum; the canvas gives
-// way last, below the two minimums.
+// way last, below the minimums.
 struct ChatColumnInput {
     WidgetRect window;          // the work area the host's strips leave
-    float share = 0.28f;        // the column's share of the window's width
+    float share = 0.28f;        // the right column's share of the window's width
     bool upper_open = false;    // Selection or Properties has something to show
     float upper_share = 0.45f;
+    bool left_open = false;     // the builder's left column
+    float left_share = 0.18f;
 };
 struct ChatColumnLayout {
+    WidgetRect left;            // empty when closed
     WidgetRect canvas;
     WidgetRect column;
     WidgetRect upper;           // empty when closed or given way

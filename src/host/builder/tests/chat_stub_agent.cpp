@@ -14,7 +14,14 @@
 //                  when Caliper reviews them, the panel.create at once, which
 //                  Caliper holds until the person decides. The panel shows
 //                  metrics.lr over metrics.step beside the table.
-//   ... entropy ...  one chunk, a line on stderr, then exits with code 1
+//   ... while it trains ...   the acceptance case: catalog.list of the live
+//                  sources, then spec.new, a source for each live source it
+//                  needs and one whose transforms take the entropy of each
+//                  layer's head-mean attention, three panels, the layout,
+//                  applet.save and applet.open, each through caliper-mcp, so
+//                  that each spec edit waits for the person's approval when
+//                  Caliper reviews them
+//   Compare ...    one chunk, a line on stderr, then exits with code 1
 //   report         answers with the prompt's blocks as JSON
 //   anything else  echoes the text
 //
@@ -26,6 +33,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -344,6 +352,96 @@ void learning_rate(const json& id) {
     end_turn(id);
 }
 
+// One Caliper command as a tool call row: in progress, then completed or failed.
+json caliper_call(Mcp& mcp, const std::string& row, const std::string& tool, const char* kind, const json& args) {
+    update(tool_call(row, tool, kind, "in_progress", args));
+    const json r = mcp.call(tool, args);
+    tool_status(row, r.contains("error") ? "failed" : "completed");
+    return r;
+}
+
+void live_entropy(const json& id) {
+    Mcp mcp;
+    std::string why;
+    if (!mcp.start(&why)) {
+        chunk("No Caliper tools: " + why);
+        end_turn(id);
+        return;
+    }
+    auto steps = [](const char* a, const char* b, const char* c) {
+        update({{"sessionUpdate", "plan"},
+                {"entries", json::array({{{"content", "Find the stream's sources in the catalog"}, {"priority", "high"}, {"status", a}},
+                                         {{"content", "Build the spec over them"}, {"priority", "high"}, {"status", b}},
+                                         {{"content", "Open it"}, {"priority", "medium"}, {"status", c}}})}});
+    };
+    steps("in_progress", "pending", "pending");
+    chunk("A live stream is attached; its sources are in the catalog as live entries.", "agent_thought_chunk");
+    const json listed = caliper_call(mcp, "l1", "catalog_list", "read", {{"kind", "live"}});
+    std::vector<std::string> layers;
+    bool attn = false, entropy = false;
+    for (const json& e : listed.value("entries", json::array())) {
+        const std::string eid = e.value("id", std::string());
+        if (eid == "live:attn") attn = true;
+        if (eid == "live:attn.entropy") entropy = true;
+        if (eid.rfind("live:entropy.l", 0) == 0) layers.push_back(eid);
+    }
+    std::sort(layers.begin(), layers.end());
+    if (!attn || !entropy) {
+        chunk("The catalog has no live attention yet; is the training script streaming?");
+        end_turn(id);
+        return;
+    }
+    chunk("The stream sends its attention as live:attn, the entropy of each head as live:attn.entropy, computed by the "
+          "training script, and " + std::to_string(layers.size()) + " series of each layer's mean entropy. ");
+    steps("completed", "in_progress", "pending");
+    int n = 0;
+    auto row = [&n] { return "e" + std::to_string(++n); };
+    auto ok = [&](const json& r) { return !r.contains("error"); };
+    bool good = ok(caliper_call(mcp, row(), "spec_new", "edit", {{"id", "attention-entropy"}, {"title", "Attention entropy"}}));
+    good = good && ok(caliper_call(mcp, row(), "source_add", "edit", {{"id", "entropy"}, {"catalog", "live:attn.entropy"}}));
+    good = good && ok(caliper_call(mcp, row(), "source_add", "edit", {{"id", "attn"}, {"catalog", "live:attn"}}));
+    good = good && ok(caliper_call(mcp, row(), "source_add", "edit",
+                                   {{"id", "layer_entropy"},
+                                    {"from", "attn"},
+                                    {"transform", json::array({{{"op", "reduce"}, {"axis", -1}, {"fn", "entropy"}},
+                                                               {{"op", "reduce"}, {"axis", -1}, {"fn", "mean"}}})}}));
+    json history = json::array();
+    for (size_t l = 0; good && l < layers.size(); ++l) {
+        const std::string sid = "layer" + std::to_string(l);
+        good = ok(caliper_call(mcp, row(), "source_add", "edit", {{"id", sid}, {"catalog", layers[l]}}));
+        history.push_back(sid);
+    }
+    good = good && ok(caliper_call(mcp, row(), "panel_create", "edit",
+                                   {{"id", "heads"}, {"primitive", "heatmap"}, {"title", "Attention entropy by layer and head"},
+                                    {"bind", {{"values", "entropy"}}}, {"options", {{"x_label", "Head"}, {"y_label", "Layer"}}}}));
+    good = good && ok(caliper_call(mcp, row(), "panel_create", "edit",
+                                   {{"id", "layers"}, {"primitive", "series"}, {"title", "Entropy of the head-mean attention by layer"},
+                                    {"bind", {{"y", "layer_entropy"}}}, {"options", {{"x_label", "Layer"}}}}));
+    if (good && !history.empty())
+        good = ok(caliper_call(mcp, row(), "panel_create", "edit",
+                               {{"id", "steps"}, {"primitive", "series"}, {"title", "Mean entropy per layer by step"},
+                                {"bind", {{"y", history}}}, {"options", {{"x_label", "Step"}}}}));
+    good = good && ok(caliper_call(mcp, row(), "layout_set", "edit",
+                                   {{"layout", {{"root", "main"},
+                                                {"nodes", json::array({{{"id", "main"}, {"split", "vertical"}, {"ratio", 0.6},
+                                                                        {"children", json::array({"top", "steps"})}},
+                                                                       {{"id", "top"}, {"split", "horizontal"}, {"ratio", 0.5},
+                                                                        {"children", json::array({"heads", "layers"})}}})}}}}));
+    good = good && ok(caliper_call(mcp, row(), "applet_save", "edit", json::object()));
+    if (!good) {
+        chunk("Caliper refused a step, so the spec is not complete.");
+        end_turn(id);
+        return;
+    }
+    steps("completed", "completed", "in_progress");
+    caliper_call(mcp, row(), "applet_open", "other", {{"id", "attention-entropy"}});
+    steps("completed", "completed", "completed");
+    chunk("Opened Attention entropy: the entropy by layer and head as the training script computes it, the entropy of "
+          "each layer's head-mean attention computed by the spec, and each layer's mean entropy by step. They follow "
+          "the stream while it trains.");
+    end_turn(id);
+}
+
 void run_turn(json id, json prompt) {
     std::string text;
     for (const auto& block : prompt) {
@@ -354,9 +452,11 @@ void run_turn(json id, json prompt) {
     }
     if (text.find("learning rate") != std::string::npos) {
         learning_rate(id);
-    } else if (text.find("entropy") != std::string::npos) {
+    } else if (text.find("while it trains") != std::string::npos) {
+        live_entropy(id);
+    } else if (text.rfind("Compare", 0) == 0) {
         chunk("Reading the attention tensor of every layer.");
-        std::fprintf(stderr, "stub agent: the entropy script exits here on purpose\n");
+        std::fprintf(stderr, "stub agent: the Compare script exits here on purpose\n");
         std::fflush(stderr);
         pause(50);
         std::fflush(stdout);
