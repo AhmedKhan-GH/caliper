@@ -530,14 +530,17 @@ test('data view changes and resizes do not grow what the module holds', async ({
   // every change makes the heatmap a new texture; each width makes the points
   // a new render target.
   const views = [{ source: 'attn', index: { layer: 0, head: 0 } }, { source: 'attn', index: { layer: 0, query: 0 } }];
+  const shapes = ['32×32 ', '8×32 '];   // the heatmap's rows and columns in its header, for each data view
   const churn = async (n: number) => {
     for (let i = 0; i < n; i++) {
       await page.evaluate(([dv, w]) => {
         (document.querySelector('caliper-view[view="attention"]') as El).dataView = dv;
         (document.querySelector('caliper-view[view="embedding"]') as HTMLElement).style.width = `${w}px`;
       }, [views[i % 2], 560 + (i % 2) * 64] as const);
-      // One animation frame of the page, in which the module draws one too.
-      await page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => ok(null))));
+      // Until the module has made the heatmap's texture of this shape (its
+      // header says so), and drawn a frame at the new width.
+      await page.waitForFunction((want) => String((document.querySelector('caliper-view[view="attention"]') as El)
+        .debugState().info ?? '').startsWith(want), shapes[i % 2], { polling: 'raf', timeout: 10_000 });
     }
     await drawn(page, 'caliper-view[view="attention"], caliper-view[view="embedding"]', 5);
   };
