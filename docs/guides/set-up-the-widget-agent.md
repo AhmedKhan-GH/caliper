@@ -10,8 +10,9 @@ widget agent, share the GPU with a training run, and remove the key again.
 !!! note "Status"
     The settings and ⌘K on a panel, on a selection, on a dropped file and on a property are built.
     Until Caliper ships the agent with its own Python runtime, Caliper finds the agent through the environment
-    variable `CALIPER_AGENT_PYTHON`, an interpreter that has `caliper-agent`'s dependencies, and the agent reaches
-    your workspace through Caliper API, so start Caliper with `--api`.
+    variable `CALIPER_AGENT_PYTHON`, an interpreter that has `caliper-agent`'s dependencies, such as a virtual
+    environment where you ran `pip install ./src/builder/agent` in a checkout of Caliper, and the agent reaches your
+    workspace through Caliper API, so start Caliper with `--api`.
 
 ## Open the settings
 
@@ -128,8 +129,10 @@ more), on top of the model itself.
 1. Focus a panel and press ⌘K (Ctrl+K on Windows).
 2. Type what you want, for example "Use a linear y axis", and press Return. The prompt row shows the model, as the
    agent reports it.
-3. The panel shows the change as a preview, with the change to the spec beside it. **Accept** applies it as one undo
-   step, **Reject** discards it and leaves nothing behind, and **Refine** lets you add to the request.
+3. The panel shows the change as a preview, with the change to the spec beside it. **Accept** (Return) applies it as
+   one undo step, **Reject** (Escape) discards it and leaves nothing behind, and **Refine** lets you add to the
+   request. To take an accepted change back, press ⌘B for build mode and then ⌘Z, or choose Undo in the page bar
+   there; outside build mode ⌘Z does nothing.
 4. When the request is bigger than one panel, choose **Ask in chat**, which sends it, with what the widget agent knew,
    to the side chat.
 
@@ -153,7 +156,8 @@ tag, such as DECLINED or NO PROVIDER, and the actions that help:
 ## Use a local model
 
 A local model costs nothing per request and keeps your data on your machine, but it uses your computer's GPU and
-memory, and small models do this work less reliably than large ones.
+memory, and small models do this work less reliably than large ones. It is also slower: with `qwen3.8:27b` on an Apple
+M5 Max, a ⌘K request took 5 to 30 seconds in tests, and the first one takes longer while Ollama loads the model.
 
 1. Install a model server, such as Ollama or LM Studio, and download a model that supports tool calling.
 2. In the settings, choose the Ollama or LM Studio preset. Change the address if your server listens elsewhere.

@@ -495,7 +495,13 @@ them.
   that nothing reached `do_read()`. A hidden app's store is an in-memory one (`app_key_store()`).
 - **Tests and captures** use an in-memory store, the offline switch and a fake model server on loopback
   (`src/builder/agent/tests/fake_openai_serve.py`, whose `--record` writes the credential each request carried); the
-  hidden app's input driver gained `widget <action>`, `settings open|close|preset|model|until` and `files`.
+  hidden app's input driver gained `widget <action>`, `settings open|close|preset|model|until` and `files`, and for
+  the walk-through's run against a local model `settings list|probe`, `settings until done [<seconds>]` and `until
+  <state> [<seconds>]`: a wait in seconds of wall time, since the hidden app draws about 120 frames a second and the
+  1,800 frames of a step's patience are then about 15 seconds, shorter than a local model's turn. A wait for the
+  surface ends at once on a state that does not change by itself (failed, declined, handoff, conflict, unavailable),
+  and its log line carries what the surface shows: the tag, the edits, the model, the error, each request's prompt
+  tokens and the reply.
 - **A change applies at once.** Every change of the settings (a preset, an address, a model, an effort, a key saved or
   removed, a probe's answer for the current model) ends the inline surface's agent on any page: an open prompt closes
   as Close closes it, so a running turn is cancelled and a preview discarded, and the agent goes with its sidecar and
