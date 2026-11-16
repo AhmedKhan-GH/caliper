@@ -1,27 +1,45 @@
 // The WebGPU points renderer: one instanced quad per point, a round sprite
 // cut in the fragment shader, depth-tested in 3-D so categorical colours stay
-// exact under overlap.
+// exact under overlap. The canvas is transparent where no point is, so the
+// view's under-canvas (its plate, and in 3-D the box's back layer) shows.
+//
+// The depth cues of 3-D points, as the native renderers draw them
+// (src/host/renderer/host_renderer.h, HostGeomDraw): with attRef > 0 a point
+// is radius * clamp(attRef / w, 0.5, 2) wide, w being its clip w, so nearer
+// points are larger; with fadeW1 > fadeW0 its colour is scaled from 1 at
+// w = fadeW0 to 0.5 at w = fadeW1, so farther points are dimmer with their hue
+// kept. A colour whose alpha byte is 0 is drawn at full strength (a selected
+// point).
 
-import { PLATE_RGBA } from '../views/theme.js';
 import { canvasFormat } from './gpu.js';
+
+export interface DepthCues { attRef: number; fadeW0: number; fadeW1: number }
 
 const SHADER = /* wgsl */ `
 struct U {
   mvp: mat4x4f,
   viewport: vec2f,   // device pixels of the viewport
   radius: f32,       // device pixels
-  _pad: f32,
+  att_ref: f32,
+  fade_w: vec2f,
+  _pad: vec2f,
 };
 @group(0) @binding(0) var<uniform> u: U;
 struct V { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) color: vec4f };
 @vertex fn vs(@builtin(vertex_index) vi: u32, @location(0) p: vec3f, @location(1) color: vec4f) -> V {
   let corner = vec2f(f32(vi & 1u) * 2.0 - 1.0, f32((vi >> 1u) & 1u) * 2.0 - 1.0);
   var c = u.mvp * vec4f(p, 1.0);
-  c = vec4f(c.xy + corner * (2.0 * u.radius / u.viewport) * c.w, c.zw);
+  var radius = u.radius;
+  if (u.att_ref > 0.0) { radius = radius * clamp(u.att_ref / max(c.w, 1e-6), 0.5, 2.0); }
+  var rgb = color.rgb;
+  if (u.fade_w.y > u.fade_w.x && color.a > 0.5) {
+    rgb = rgb * (1.0 - 0.5 * clamp((c.w - u.fade_w.x) / (u.fade_w.y - u.fade_w.x), 0.0, 1.0));
+  }
+  c = vec4f(c.xy + corner * (2.0 * radius / u.viewport) * c.w, c.zw);
   var o: V;
   o.pos = c;
   o.uv = corner;
-  o.color = color;
+  o.color = vec4f(rgb, 1.0);
   return o;
 }
 @fragment fn fs(v: V) -> @location(0) vec4f {
@@ -70,8 +88,8 @@ export class PointsGpu {
     const ctx = this.canvas.getContext('webgpu');
     if (!ctx) throw new Error('no webgpu context');
     this.ctx = ctx;
-    ctx.configure({ device, format: canvasFormat(), alphaMode: 'opaque' });
-    this.uniform = device.createBuffer({ size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    ctx.configure({ device, format: canvasFormat(), alphaMode: 'premultiplied' });
+    this.uniform = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.bind = device.createBindGroup({ layout: pipelines(device).layout, entries: [{ binding: 0, resource: { buffer: this.uniform } }] });
   }
 
@@ -98,23 +116,24 @@ export class PointsGpu {
     if (this.col && this.n) this.device.queue.writeBuffer(this.col, 0, colors as Uint32Array<ArrayBuffer>, 0, this.n);
   }
 
-  /** viewport is the drawing rectangle in device pixels. */
-  draw(mvp: Float32Array, viewport: { x: number; y: number; w: number; h: number }, radius: number, depth: boolean): void {
+  /** viewport is the drawing rectangle in device pixels; cues, the depth cues of 3-D points, or null. */
+  draw(mvp: Float32Array, viewport: { x: number; y: number; w: number; h: number }, radius: number, depth: boolean,
+       cues: DepthCues | null = null): void {
     const d = this.device;
     const W = this.canvas.width, H = this.canvas.height;
     if (!this.depthTex || this.depthTex.width !== W || this.depthTex.height !== H) {
       this.depthTex?.destroy();
       this.depthTex = d.createTexture({ size: [W, H], format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT });
     }
-    const u = new Float32Array(20);
+    const u = new Float32Array(24);
     u.set(mvp, 0);
-    u.set([viewport.w, viewport.h, radius, 0], 16);
+    u.set([viewport.w, viewport.h, radius, cues ? cues.attRef : 0, cues ? cues.fadeW0 : 0, cues ? cues.fadeW1 : 0], 16);
     d.queue.writeBuffer(this.uniform, 0, u);
     const enc = d.createCommandEncoder();
     const pass = enc.beginRenderPass({
       colorAttachments: [{
         view: this.ctx.getCurrentTexture().createView(),
-        clearValue: { r: PLATE_RGBA[0], g: PLATE_RGBA[1], b: PLATE_RGBA[2], a: 1 },
+        clearValue: { r: 0, g: 0, b: 0, a: 0 },
         loadOp: 'clear', storeOp: 'store',
       }],
       depthStencilAttachment: { view: this.depthTex.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'discard' },

@@ -40,7 +40,7 @@ import { Picker } from './views/picker.js';
 import { PointsView } from './views/points.js';
 import { SeriesView } from './views/series.js';
 import { assetBase, hasAdapter, mountWasm, wasmKinds, type WasmHandle } from './wasm.js';
-import { factsInfo } from './views/info.js';
+import { factsInfo, type ViewFacts } from './views/info.js';
 import { C, FONT_MONO, FONT_TEXT, fmt } from './views/theme.js';
 
 const STYLE = `
@@ -127,7 +127,7 @@ export class CaliperView extends HTMLElement {
   private wasm: WasmHandle | null = null;
   private wasmReady = false;
   /** The header toggles of a view the WebAssembly views draw, by name. */
-  private readonly wasmToggles = new Map<string, { set(v: boolean): void }>();
+  private readonly wasmToggles = new Map<string, { el: HTMLElement; set(v: boolean): void }>();
   /** null until the view's kind is known; then which views draw it. */
   private drawer: 'wasm' | 'ts' | null = null;
   private deciding = false;
@@ -208,7 +208,10 @@ export class CaliperView extends HTMLElement {
   private wasmDebug(): Record<string, unknown> {
     const s = (this.wasm?.stats ?? {}) as Record<string, unknown>;
     const out: Record<string, unknown> = { kind: this.kind(), updates: s.updates ?? 0, selected: s.selected ?? 0 };
-    let geo: { area: number[]; window: number[]; hover: number; cols: number; follow: boolean; log: boolean } | undefined;
+    let geo: {
+      area: number[]; window: number[]; hover: number; cols: number; follow: boolean; log: boolean;
+      dims?: number; camera?: number[]; rotate?: boolean; cues?: boolean; box?: string;
+    } | undefined;
     try {
       geo = JSON.parse(String(s.geometry ?? '{}'))[this.names[0]];
     } catch {
@@ -223,6 +226,15 @@ export class CaliperView extends HTMLElement {
       const k = this.kind();
       out.hover = geo.hover < 0 ? null
         : k === 'heatmap' || k === 'image' ? { r: Math.floor(geo.hover / geo.cols), c: geo.hover % geo.cols } : geo.hover;
+      if (geo.camera) {
+        // A points view, under the TypeScript view's names.
+        const [az, el, dist, radius] = geo.camera;
+        out.dims = geo.dims;
+        out.camera = { az, el, dist };
+        out.rotate = geo.rotate;
+        out.cues = geo.cues && geo.dims === 3 ? { attRef: dist, fadeW0: dist, fadeW1: dist + radius } : null;
+        out.box = geo.box ?? '';
+      }
     }
     return out;
   }
@@ -522,6 +534,7 @@ export class CaliperView extends HTMLElement {
         if (this.drawer !== 'wasm' && !this.deciding) return;
         const text = factsInfo(facts);
         if (text !== null) this.parts.info.textContent = text;
+        this.wasmRotateTool(facts);
       },
       onToggle: (name, on) => this.wasmToggles.get(name)?.set(on),
       augment: (detail) => this.augment(detail),
@@ -569,6 +582,24 @@ export class CaliperView extends HTMLElement {
     const host = { tools: this.parts.tools };
     this.wasmToggles.set('log', toggle(host, 'log', kind === 'series' ? 'Log scale for y' : 'Log scale for counts', false, set('log')));
     if (kind === 'series') this.wasmToggles.set('follow', toggle(host, 'follow', 'Follow the newest values', true, set('follow')));
+  }
+
+  /**
+   * The rotate toggle of 3-D points the WebAssembly views draw, as the
+   * TypeScript view's: off until pressed, and turned off by the view itself
+   * when a drag stops the turn. A 2-D view has none.
+   */
+  private wasmRotateTool(facts: ViewFacts): void {
+    if (facts.kind !== 'points' || !this.wasm?.setToggle) return;
+    const have = this.wasmToggles.get('rotate');
+    if (facts.dims === 3 && !have) {
+      const handle = this.wasm;
+      this.wasmToggles.set('rotate', toggle({ tools: this.parts.tools }, 'rotate', 'Turn the view slowly; any drag stops it', false,
+        (on) => handle.setToggle?.('rotate', on)));
+    } else if (facts.dims !== 3 && have) {
+      have.el.remove();
+      this.wasmToggles.delete('rotate');
+    }
   }
 
   /** The stream for the header: the element's shared client, without subscriptions until it draws itself. */

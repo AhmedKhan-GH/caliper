@@ -54,19 +54,33 @@ export function ortho(x0: number, x1: number, y0: number, y1: number): Mat4 {
 
 export const FOV = (45 * Math.PI) / 180;
 
+/**
+ * The default camera, the same in every renderer (the native points view's
+ * kCamAz, kCamEl and kCamFit in src/host/live/live_views_state.h): a
+ * three-quarter view from azimuth AZ and elevation EL, at the distance that
+ * fits the data's bounding sphere into the narrower field of view with FIT to
+ * spare for the box's labels. The rotate toggle turns at ROTATE_RATE radians a
+ * second.
+ */
+export const CAMERA = { AZ: 0.95, EL: 0.42, FIT: 1.15, ROTATE_RATE: 0.35 } as const;
+
 export class Orbit {
-  az = 0.7;
-  el = 0.35;
+  az: number = CAMERA.AZ;
+  el: number = CAMERA.EL;
   dist = 10;
   target: V3 = [0, 0, 0];
   radius = 1;
 
-  fit(bbox: number[]): void {
+  /** Fits the camera to the box [x0, x1, y0, y1, z0, z1] of the data, seen in a viewport of this aspect. */
+  fit(bbox: number[], aspect = 1): void {
     this.target = [(bbox[0] + bbox[1]) / 2, (bbox[2] + bbox[3]) / 2, (bbox[4] + bbox[5]) / 2];
-    this.radius = Math.max(1e-6, Math.hypot(bbox[1] - bbox[0], bbox[3] - bbox[2], bbox[5] - bbox[4]) / 2);
-    this.dist = (this.radius / Math.sin(FOV / 2)) * 0.85;
-    this.az = 0.7;
-    this.el = 0.35;
+    let r = Math.hypot(bbox[1] - bbox[0], bbox[3] - bbox[2], bbox[5] - bbox[4]) / 2;
+    if (!(r > 1e-12) || !Number.isFinite(r)) r = 1;
+    this.radius = r;
+    const halfY = FOV / 2, halfX = Math.atan(Math.tan(halfY) * (aspect > 0 ? aspect : 1));
+    this.dist = (r / Math.sin(Math.min(halfY, halfX))) * CAMERA.FIT;
+    this.az = CAMERA.AZ;
+    this.el = CAMERA.EL;
   }
 
   eye(): V3 {
@@ -82,7 +96,7 @@ export class Orbit {
 
   rotate(dx: number, dy: number): void {
     this.az += dx * 0.01;
-    this.el = Math.max(-1.5, Math.min(1.5, this.el + dy * 0.01));
+    this.el = Math.max(-1.55, Math.min(1.55, this.el + dy * 0.01));
   }
 
   /** Moves the target in the view plane by a drag of (dx, dy) pixels over a viewport h pixels high. */
@@ -94,13 +108,6 @@ export class Orbit {
   }
 
   zoom(factor: number): void {
-    this.dist = Math.max(this.radius * 0.05, this.dist / factor);
-  }
-
-  /** Unit vectors of the world axes in view space, for the axis triad. */
-  axes(): V3[] {
-    const eye = this.eye();
-    const f = norm(sub(this.target, eye)), s = norm(cross(f, [0, 1, 0])), u = cross(s, f);
-    return [[1, 0, 0], [0, 1, 0], [0, 0, 1]].map((a) => [dot(a as V3, s), dot(a as V3, u), dot(a as V3, f)] as V3);
+    this.dist = Math.max(this.radius * 1e-3, Math.min(this.radius * 1e3, this.dist / factor));
   }
 }
