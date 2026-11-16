@@ -150,6 +150,7 @@ struct ReviewSettings {
             case CommandOrigin::agent: return agent;
             case CommandOrigin::mcp: return mcp;
             case CommandOrigin::api: return api;
+            case CommandOrigin::viewer: return false;  // it only reads
         }
         return true;
     }
@@ -160,6 +161,7 @@ struct ReviewSettings {
             case CommandOrigin::agent: agent = value; break;
             case CommandOrigin::mcp: mcp = value; break;
             case CommandOrigin::api: api = value; break;
+            case CommandOrigin::viewer: break;
         }
     }
 };

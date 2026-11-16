@@ -38,13 +38,14 @@ const char* command_origin_name(CommandOrigin origin) {
         case CommandOrigin::agent: return "agent";
         case CommandOrigin::mcp: return "mcp";
         case CommandOrigin::api: return "api";
+        case CommandOrigin::viewer: return "viewer";
     }
     return "ui";
 }
 
 std::optional<CommandOrigin> command_origin_from_name(std::string_view name) {
     for (const CommandOrigin o : {CommandOrigin::ui, CommandOrigin::builder, CommandOrigin::agent,
-                                  CommandOrigin::mcp, CommandOrigin::api})
+                                  CommandOrigin::mcp, CommandOrigin::api, CommandOrigin::viewer})
         if (name == command_origin_name(o)) return o;
     return std::nullopt;
 }
@@ -183,7 +184,7 @@ CommandInvocationParse command_invocation_from_json(const json& v) {
     }
     const auto origin = command_origin_from_name(v["origin"].get_ref<const std::string&>());
     if (!origin) {
-        out.error = invalid("The origin is ui, builder, agent, mcp or api.", "origin");
+        out.error = invalid("The origin is ui, builder, agent, mcp, api or viewer.", "origin");
         return out;
     }
     inv.origin = *origin;

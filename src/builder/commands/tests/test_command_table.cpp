@@ -31,9 +31,9 @@ const char* const kV0[] = {
     "data.query",      "data.import",     "loader.list",    "loader.describe", "loader.create",  "loader.update",
     "loader.run",      "loader.delete",   "spec.new",       "spec.open",     "spec.get",         "spec.set_text",
     "spec.validate",   "source.add",      "source.patch",   "source.remove", "panel.create",     "panel.patch",
-    "panel.remove",    "panel.render",    "layout.place",   "layout.set",    "preview.begin",    "preview.diff",
-    "preview.commit",  "preview.discard", "applet.save",    "applet.open",   "applet.list",      "review.status",
-    "capture.frame",   "history.undo",    "history.redo",    "history.list",
+    "panel.remove",    "panel.render",    "panel.data",     "layout.place",  "layout.set",       "preview.begin",
+    "preview.diff",    "preview.commit",  "preview.discard", "applet.save",  "applet.open",      "applet.list",
+    "review.status",   "capture.frame",   "history.undo",   "history.redo",  "history.list",
 };
 
 std::set<std::string> names_where(bool (*pred)(const CommandDescriptor&)) {
@@ -134,7 +134,7 @@ TEST_CASE("the flags follow the design page") {
     CHECK(names_where([](const CommandDescriptor& d) { return d.frame_thread; }) ==
           std::set<std::string>{"app.applets", "app.launch", "spec.new", "spec.open", "spec.get", "spec.set_text",
                                 "spec.validate", "source.add", "source.patch", "source.remove", "panel.create",
-                                "panel.patch", "panel.remove", "panel.render", "layout.place", "layout.set",
+                                "panel.patch", "panel.remove", "panel.render", "panel.data", "layout.place", "layout.set",
                                 "preview.begin", "preview.diff", "preview.commit", "preview.discard",
                                 "applet.save", "applet.open", "capture.frame", "history.undo", "history.redo",
                                 "history.list"});

@@ -21,6 +21,7 @@ add_library(caliper_builder_session STATIC
     context_bundle.cpp
     line_diff.cpp
     loader_catalog.cpp
+    panel_data.cpp
     resolve.cpp
     session.cpp
     spec_edit.cpp
@@ -62,6 +63,7 @@ caliper_builder_add_tests(session
         tests/test_context_bundle.cpp
         tests/test_review.cpp
         tests/test_resolve.cpp
+        tests/test_panel_data.cpp
         tests/test_served_sources.cpp
         tests/test_command_server.cpp
         tests/test_acceptance.cpp

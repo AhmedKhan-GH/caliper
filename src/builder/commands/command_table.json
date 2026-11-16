@@ -1822,7 +1822,15 @@
     {
       "args": {
         "additionalProperties": false,
-        "properties": {},
+        "properties": {
+          "applet": {
+            "description": "A saved spec applet's id, from applet.list; the open spec when absent.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
         "required": [],
         "type": "object"
       },
@@ -1870,7 +1878,7 @@
         ],
         "type": "object"
       },
-      "summary": "Returns the open spec as its TOML text and as its canonical JSON form, with its applet id, the file it was saved to or opened from, and whether it has unsaved changes. It changes nothing."
+      "summary": "Returns the open spec as its TOML text and as its canonical JSON form, with its applet id, the file it was saved to or opened from, and whether it has unsaved changes. With applet, it returns that saved spec applet's spec instead, read from its files without opening it. It changes nothing."
     },
     {
       "args": {
@@ -3730,6 +3738,147 @@
         "type": "object"
       },
       "summary": "Draws one panel of the open spec off screen and returns it as a PNG image, so that you can check what it looks like. width and height are in pixels, 800 by 500 by default. The id comes from spec.get. It changes nothing."
+    },
+    {
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "applet": {
+            "description": "A saved spec applet's id, from applet.list; the open spec when absent.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "known": {
+            "description": "The version of the data you have, from an earlier answer.",
+            "maxLength": 64,
+            "type": "string"
+          },
+          "panel": {
+            "description": "The panel's id in the spec.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "examples": [
+        {
+          "applet": "run42-dashboard",
+          "panel": "curves"
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "panel.data",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "bounds": {
+            "description": "The bounds that applied, in plain words, such as a line decimated or a table cut.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "data": {
+            "additionalProperties": true,
+            "description": "The primitive's data, null with an error, a state or unchanged. Arrays of numbers are objects of dtype (f32 or f64), shape and base64, the little-endian bytes; tables, cells and counts are JSON. series: x_index, steps and lines of binding, row, count, last, x and y. heatmap: source_rows, source_cols, stride_rows, stride_cols and values. image: source_rows, source_cols, stride, channels, float and values. points: three_d, total, stride, x, y, z, color, color_integer and size. histogram: lo, hi, total, outside and counts. table: columns, rows, total_rows and truncated. text: value.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "error": {
+            "additionalProperties": false,
+            "description": "Why the data could not be read, such as resolve.unavailable for a live source that is not attached; null otherwise.",
+            "properties": {
+              "code": {
+                "description": "A stable code, such as resolve.unavailable or resolve.unknown_column.",
+                "type": "string"
+              },
+              "message": {
+                "description": "One plain sentence that says what is wrong.",
+                "type": "string"
+              },
+              "where": {
+                "description": "The spec source or binding it concerns; empty when none.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "where"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "panel": {
+            "description": "The panel's id.",
+            "type": "string"
+          },
+          "primitive": {
+            "description": "The panel's primitive, such as series or table.",
+            "type": "string"
+          },
+          "state": {
+            "additionalProperties": false,
+            "description": "A state of the data in place of the drawing; null when it draws.",
+            "properties": {
+              "detail": {
+                "description": "The binding or panel it concerns.",
+                "type": "string"
+              },
+              "kind": {
+                "description": "empty: no values to draw; mismatch: the data does not fit the slot.",
+                "enum": [
+                  "empty",
+                  "mismatch"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "detail"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "unchanged": {
+            "description": "True when known was this version: the data is null and the caller keeps what it has.",
+            "type": "boolean"
+          },
+          "version": {
+            "description": "The version of this data: 16 hex digits that change when the panel's sources, the spec or the catalog change.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel",
+          "primitive",
+          "version",
+          "unchanged",
+          "error",
+          "state",
+          "bounds",
+          "data"
+        ],
+        "type": "object"
+      },
+      "summary": "Returns the data of one panel as the browser viewer draws it: the panel's data after its sources' transforms, within the bounds of what a panel can show (long lines as a min/max envelope, large grids and clouds sampled at a stride, a histogram's bin counts, the first 1,000 rows of a table), with a version. Pass the version you have as known, and the answer is unchanged, with no data, until the panel's sources, the spec or the catalog change. It reads a saved spec applet with applet, else the open spec. It changes nothing."
     },
     {
       "args": {

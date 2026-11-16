@@ -502,8 +502,10 @@ const Row kRows[] = {
      R"json({"path": "applets/attention-entropy/attention-entropy.spec.toml"})json"},
     {"spec.get", false, false, true,
      "Returns the open spec as its TOML text and as its canonical JSON form, with its applet id, the file it was "
-     "saved to or opened from, and whether it has unsaved changes. It changes nothing.",
-     kNoArgs,
+     "saved to or opened from, and whether it has unsaved changes. With applet, it returns that saved spec applet's "
+     "spec instead, read from its files without opening it. It changes nothing.",
+     R"json({"type": "object", "additionalProperties": false, "required": [],
+      "properties": {"applet": {"$use": "id", "description": "A saved spec applet's id, from applet.list; the open spec when absent."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "path", "dirty", "text", "json"],
       "properties": {
         "id": {"type": "string", "description": "The spec's applet id."},
@@ -666,6 +668,39 @@ const Row kRows[] = {
         "height": {"type": "integer", "minimum": 64, "maximum": 4096, "default": 500, "description": "The image's height in pixels; 500 when absent."}}})json",
      R"json({"$use": "png"})json",
      R"json({"id": "heat", "width": 640, "height": 400})json"},
+    {"panel.data", false, false, true,
+     "Returns the data of one panel as the browser viewer draws it: the panel's data after its sources' transforms, "
+     "within the bounds of what a panel can show (long lines as a min/max envelope, large grids and clouds sampled "
+     "at a stride, a histogram's bin counts, the first 1,000 rows of a table), with a version. Pass the version you "
+     "have as known, and the answer is unchanged, with no data, until the panel's sources, the spec or the catalog "
+     "change. It reads a saved spec applet with applet, else the open spec. It changes nothing.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel"],
+      "properties": {
+        "panel": {"$use": "id", "description": "The panel's id in the spec."},
+        "applet": {"$use": "id", "description": "A saved spec applet's id, from applet.list; the open spec when absent."},
+        "known": {"type": "string", "maxLength": 64, "description": "The version of the data you have, from an earlier answer."}}})json",
+     R"json({"type": "object", "additionalProperties": false,
+      "required": ["panel", "primitive", "version", "unchanged", "error", "state", "bounds", "data"],
+      "properties": {
+        "panel": {"type": "string", "description": "The panel's id."},
+        "primitive": {"type": "string", "description": "The panel's primitive, such as series or table."},
+        "version": {"type": "string", "description": "The version of this data: 16 hex digits that change when the panel's sources, the spec or the catalog change."},
+        "unchanged": {"type": "boolean", "description": "True when known was this version: the data is null and the caller keeps what it has."},
+        "error": {"type": ["object", "null"], "additionalProperties": false, "required": ["code", "message", "where"],
+          "description": "Why the data could not be read, such as resolve.unavailable for a live source that is not attached; null otherwise.",
+          "properties": {
+            "code": {"type": "string", "description": "A stable code, such as resolve.unavailable or resolve.unknown_column."},
+            "message": {"type": "string", "description": "One plain sentence that says what is wrong."},
+            "where": {"type": "string", "description": "The spec source or binding it concerns; empty when none."}}},
+        "state": {"type": ["object", "null"], "additionalProperties": false, "required": ["kind", "detail"],
+          "description": "A state of the data in place of the drawing; null when it draws.",
+          "properties": {
+            "kind": {"type": "string", "enum": ["empty", "mismatch"], "description": "empty: no values to draw; mismatch: the data does not fit the slot."},
+            "detail": {"type": "string", "description": "The binding or panel it concerns."}}},
+        "bounds": {"type": "array", "items": {"type": "string"}, "description": "The bounds that applied, in plain words, such as a line decimated or a table cut."},
+        "data": {"type": ["object", "null"], "additionalProperties": true,
+          "description": "The primitive's data, null with an error, a state or unchanged. Arrays of numbers are objects of dtype (f32 or f64), shape and base64, the little-endian bytes; tables, cells and counts are JSON. series: x_index, steps and lines of binding, row, count, last, x and y. heatmap: source_rows, source_cols, stride_rows, stride_cols and values. image: source_rows, source_cols, stride, channels, float and values. points: three_d, total, stride, x, y, z, color, color_integer and size. histogram: lo, hi, total, outside and counts. table: columns, rows, total_rows and truncated. text: value."}}})json",
+     R"json({"panel": "curves", "applet": "run42-dashboard"})json"},
 
     // layout
     {"layout.place", true, false, true,
@@ -947,6 +982,8 @@ std::string command_table_json_text() {
     return command_table_to_json().dump(2, ' ', false, json::error_handler_t::replace) + "\n";
 }
 
-std::vector<std::pair<std::string, std::string>> command_table_open_paths() { return {{"spec.get", "result.json"}}; }
+std::vector<std::pair<std::string, std::string>> command_table_open_paths() {
+    return {{"spec.get", "result.json"}, {"panel.data", "result.data"}};
+}
 
 }  // namespace caliper_builder

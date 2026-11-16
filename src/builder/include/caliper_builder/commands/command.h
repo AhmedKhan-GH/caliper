@@ -31,8 +31,9 @@
 namespace caliper_builder {
 
 // Who sent an invocation: the app's UI, the WYSIWYG builder, the agent pane,
-// an outside agent through caliper-mcp, or a program through Caliper API.
-enum class CommandOrigin { ui, builder, agent, mcp, api };
+// an outside agent through caliper-mcp, a program through Caliper API, or the
+// browser's spec page, which the registry lets run reads only.
+enum class CommandOrigin { ui, builder, agent, mcp, api, viewer };
 
 const char* command_origin_name(CommandOrigin origin);
 std::optional<CommandOrigin> command_origin_from_name(std::string_view name);

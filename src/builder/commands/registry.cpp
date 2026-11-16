@@ -350,6 +350,12 @@ CommandResult CommandRegistry::invoke(CommandInvocation inv) {
         err.code = "command.invalid_args";
         return CommandResult::failure(inv.id, err);
     }
+    // The browser's spec page reads; a command that changes the workspace is
+    // refused before any policy sees it, so it is never journaled.
+    if (inv.origin == CommandOrigin::viewer && entry.descriptor.mutates)
+        return CommandResult::failure(
+            inv.id, Error("command.not_allowed", inv.name + " changes the workspace, and the viewer origin only reads.",
+                          "origin"));
     if (!entry.handler)
         return CommandResult::failure(
             inv.id, Error("command.not_bound", inv.name + " is in the command table, but this app has no handler for it yet.",

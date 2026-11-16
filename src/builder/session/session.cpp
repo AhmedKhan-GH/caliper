@@ -7,6 +7,7 @@
 #include <caliper_builder/loaders/loader.h>
 #include <caliper_builder/loaders/paths.h>
 #include <caliper_builder/session/line_diff.h>
+#include <caliper_builder/session/panel_data.h>
 #include <caliper_builder/session/spec_edit.h>
 #include <caliper_builder/spec/format.h>
 
@@ -173,7 +174,7 @@ struct Session::Impl {
         std::uint64_t doc = 0;
         std::string change;
     };
-    std::array<std::atomic<bool>, 5> review_on{};
+    std::array<std::atomic<bool>, 6> review_on{};  // by CommandOrigin
     std::mutex review_mutex;
     std::deque<Reviewed> reviewed;
     std::pair<std::string, json> last_review;
@@ -789,7 +790,38 @@ struct Session::Impl {
         return open_loaded(std::move(loaded), std::move(result));
     }
 
+    // The spec that the read-only commands of the browser's spec page read: a
+    // saved applet's, read from its files without opening it, or else the
+    // open spec or the preview the invocation names.
+    Error view_spec(const std::string& applet, const std::string& preview, spec::Spec* out) {
+        if (!applet.empty()) {
+            LoadedSpec loaded = load_applet(applet, {});
+            if (loaded.error) return Error(loaded.error.code, loaded.error.message, "args.applet");
+            *out = std::move(loaded.spec);
+            return {};
+        }
+        std::lock_guard<std::mutex> lock(doc_mutex);
+        if (!doc) return no_open_spec().error;
+        *out = doc->spec;
+        Preview* p = nullptr;
+        if (!preview.empty()) {
+            if (Error e = use_preview(preview, "preview", &p)) return e;
+            *out = p->shadow;
+        }
+        return {};
+    }
+
     CommandOutput spec_get(const CommandContext& ctx) {
+        const std::string applet = str_arg(ctx.invocation.args, "applet");
+        if (!applet.empty()) {
+            LoadedSpec loaded = load_applet(applet, {});
+            if (loaded.error) return fail(loaded.error.code, loaded.error.message, "args.applet");
+            return CommandOutput::ok({{"id", loaded.spec.applet.id},
+                                      {"path", loaded.path},
+                                      {"dirty", false},
+                                      {"text", spec::to_toml(loaded.spec)},
+                                      {"json", spec::to_json(loaded.spec)}});
+        }
         std::lock_guard<std::mutex> lock(doc_mutex);
         if (!doc) return no_open_spec();
         const spec::Spec* s = &doc->spec;
@@ -1295,6 +1327,20 @@ struct Session::Impl {
         return CommandOutput::ok({{"applets", json(found)}});
     }
 
+    // One panel's data for the browser's spec page (panel_data.h); with
+    // `known` equal to the version, nothing is resolved.
+    CommandOutput panel_data(const CommandContext& ctx) {
+        const json& args = ctx.invocation.args;
+        spec::Spec s;
+        if (Error e = view_spec(str_arg(args, "applet"), ctx.invocation.preview, &s)) return CommandOutput::fail(e);
+        const std::string id = str_arg(args, "panel");
+        if (!s.find_panel(id)) return fail("panel.not_found", "The spec has no panel " + id + "; spec.get lists them.", "args.panel");
+        const std::uint64_t revision = catalog->revision();
+        const std::string version = panel_data_version(s, id, revision, panel_generation(s, id, sources));
+        if (str_arg(args, "known") == version) return CommandOutput::ok(panel_data_unchanged(s, id, version));
+        return CommandOutput::ok(panel_data_result(s, resolve_panel(s, id, *store, options.resolve, &sources), revision));
+    }
+
     // ---- the app's commands ------------------------------------------------
 
     CommandOutput panel_render(const CommandContext& ctx) {
@@ -1367,6 +1413,7 @@ struct Session::Impl {
         bind("applet.save", &Impl::applet_save);
         bind("applet.open", &Impl::applet_open);
         bind("applet.list", &Impl::applet_list);
+        bind("panel.data", &Impl::panel_data);
         bind("review.status", &Impl::review_status);
     }
 
