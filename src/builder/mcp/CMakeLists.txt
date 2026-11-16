@@ -60,6 +60,18 @@ if(BUILD_TESTS)
     target_compile_definitions(caliper_builder_mcp_tests PRIVATE
         CALIPER_MCP_EXE="$<TARGET_FILE:caliper-mcp>")
 
+    # The acceptance test of the MCP route: caliper-mcp against
+    # caliper-builder-host, the session module's stand-in for the app's command
+    # endpoints, which exists only when DuckDB is given.
+    if(NOT WIN32 AND TARGET caliper_builder_session AND TARGET caliper-builder-host)
+        caliper_builder_add_tests(mcp_acceptance SOURCES tests/test_acceptance_mcp.cpp
+            LIBS caliper_builder_mcp caliper_builder_session caliper_builder_acp caliper_builder_duckdb)
+        add_dependencies(caliper_builder_mcp_acceptance_tests caliper-mcp caliper-builder-host)
+        target_compile_definitions(caliper_builder_mcp_acceptance_tests PRIVATE
+            CALIPER_MCP_EXE="$<TARGET_FILE:caliper-mcp>"
+            CALIPER_BUILDER_HOST_EXE="$<TARGET_FILE:caliper-builder-host>")
+    endif()
+
     # The end-to-end test against the real app, after contracts sections 14
     # and 17. It runs when CALIPER_BUILDER_TEST_APP names a caliper executable,
     # and reports itself skipped otherwise.

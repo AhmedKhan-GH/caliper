@@ -463,6 +463,17 @@ The tests are headless and run with the builder project's ctest.
   tool, a command call, a call held for approval and then approved, denied or cancelled, a timeout, a 501 capture, an
   app without a command layer, a 401, the app restarting on another port with another token, the tool list changing,
   and the check that no token appears on standard output or standard error.
+- `builder_mcp_acceptance` is the acceptance test of the MCP route, headless. It starts `caliper-builder-host`, the
+  stand-in for the app's command endpoints ([Builder session](builder-session.md)), on a fresh workspace that holds a
+  Parquet file and a safetensors file, runs `caliper-mcp` against the API file the host writes, and through MCP
+  messages alone does what an outside agent would: it lists the tools (the host's table), reads a docs page, the
+  command table and the spec schema as resources, imports the two files, runs their loaders while the host holds each
+  call until the test allows it through the host's approval lines, reads the catalog, queries the table, builds the
+  three-panel dashboard of the spec fixture `dashboard.spec.toml` command by command, saves the applet and reads the
+  spec back. The saved spec on disk must equal the fixture. A second `caliper-mcp` with `--origin agent` then sends a
+  destructive command, which the host announces with the origin `agent` and the test denies. The build's arguments
+  come from the fixture through the session's conversions, so the test knows no command's schema. It runs whenever
+  the session module is built, that is when DuckDB is given.
 - `builder_mcp_app` is the end-to-end test against the real app, after contracts sections 14 and 17. When the CMake
   variable `CALIPER_BUILDER_TEST_APP` names a `caliper` executable, it starts it with
   `--hidden --api --api-port 0` and its own `CALIPER_DATA_DIR`, runs `caliper-mcp` against the API file it writes,
