@@ -627,8 +627,11 @@ void frame() {
         start_check();
     }
     send_infos();
-    // The counters every 15 frames, or every 250 ms when frames are slower.
-    if (g.frames % 15 == 0 || g.publish_soon || t1 - g.last_publish >= 250.0) {
+    // The counters every 15 frames, and past the start-up frames every 250 ms
+    // as well when frames are slower. Not sooner: the views' windows are laid
+    // out over the first frames, and a page reads the first geometry published
+    // as the settled one.
+    if (g.frames % 15 == 0 || g.publish_soon || (g.frames > 30 && t1 - g.last_publish >= 250.0)) {
         publish();
         g.last_publish = t1;
     }
