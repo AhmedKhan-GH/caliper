@@ -46,7 +46,7 @@ from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.openai_compatible import OpenAICompatibleProvider
 
 from .keyguard import Secret
-from .offline import check_provider
+from .offline import check_provider, trust_env
 from .presets import MAX_BASE_URL, BaseUrlError, check_base_url  # noqa: F401  (re-exported)
 from .provider import Capabilities, ModelInfo, Settings
 
@@ -63,8 +63,8 @@ class OpenAICompatProvider:
                  max_tokens: int = MAX_TOKENS, context_length: int | None = None,
                  sources: dict | None = None, quirks: dict | None = None) -> None:
         self.base_url = check_base_url(base_url)
-        # With CALIPER_AGENT_OFFLINE set, only a server on loopback (or a test's transport).
-        check_provider("openai-compatible", base_url=self.base_url, stubbed=transport is not None)
+        # With CALIPER_AGENT_OFFLINE set, only a server on loopback.
+        check_provider("openai-compatible", base_url=self.base_url, transport=transport)
         host = urlsplit(self.base_url).hostname or "the model server"
         self.name = f"The model server at {host}"
         self.models = (ModelInfo(model_id, model_id, f"{model_id} on {host}"),)
@@ -74,7 +74,9 @@ class OpenAICompatProvider:
             api_key=key.reveal() if key is not None else "not-needed",
             max_retries=0,
             timeout=httpx2.Timeout(600.0, connect=10.0),
-            http_client=httpx2.AsyncClient(transport=transport) if transport is not None else None,
+            # Offline, the client ignores the environment's proxy settings (offline.trust_env).
+            http_client=(httpx2.AsyncClient(transport=transport, trust_env=trust_env())
+                         if transport is not None or not trust_env() else None),
         )
         self._caps = {model_id: Capabilities(tools=tools, vision=vision, context_length=context_length,
                                              sources=dict(sources or {}))}

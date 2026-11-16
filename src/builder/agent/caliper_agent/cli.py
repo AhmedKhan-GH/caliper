@@ -124,9 +124,8 @@ def main(argv: list[str] | None = None) -> int:
 
     reader, writer = _protocol_streams()
     install_guards()
-    from .offline import OfflineError, check_provider, install_socket_guard, offline
-    if offline():
-        install_socket_guard()
+    from .offline import OfflineError, check_provider, enter_offline
+    enter_offline()   # with the switch: no proxy variables, and the socket guard
     claude_key, claude_status = take_key_from_environment(name=KEY_ENV)
     model_key, model_status = take_key_from_environment(name=MODEL_KEY_ENV)
     SCRUBBER.register(claude_key)
@@ -204,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
                 provider = ScriptedProvider(script, compaction=not args.no_compaction)
             else:
                 try:
-                    check_provider("claude", stubbed=script is not None)
+                    # ClaudeProvider refuses the Claude API itself when offline (offline.check_provider).
                     provider = ClaudeProvider(claude_key, compaction=not args.no_compaction, backoff_scale=backoff,
                                               transport=StubTransport(script) if script is not None else None,
                                               facts=claude_facts(cache, API_BASE_URL, args.context_length))
@@ -292,9 +291,8 @@ def probe_main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     install_guards()
-    from .offline import install_socket_guard, offline
-    if offline():
-        install_socket_guard()
+    from .offline import enter_offline
+    enter_offline()   # with the switch: no proxy variables, and the socket guard
     claude_key, claude_status = take_key_from_environment(name=KEY_ENV)
     model_key, model_status = take_key_from_environment(name=MODEL_KEY_ENV)
     SCRUBBER.register(claude_key)

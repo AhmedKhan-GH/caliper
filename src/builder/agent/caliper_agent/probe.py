@@ -59,7 +59,7 @@ from urllib.parse import quote, urlsplit
 import httpx2
 
 from .keyguard import Secret, scrub
-from .offline import OfflineError, check_provider
+from .offline import OfflineError, check_provider, trust_env
 
 PROBE_VERSION = 1
 PROBE_TIMEOUT_S = 60.0       # one test call, including the model's thinking
@@ -206,7 +206,8 @@ def _openai_client(base_url: str, key: Secret | None, transport: Any = None):
     from openai import AsyncOpenAI
     return AsyncOpenAI(base_url=base_url, api_key=key.reveal() if key is not None else "not-needed", max_retries=0,
                        timeout=httpx2.Timeout(PROBE_TIMEOUT_S, connect=CONNECT_TIMEOUT_S),
-                       http_client=httpx2.AsyncClient(transport=transport) if transport is not None else None)
+                       http_client=(httpx2.AsyncClient(transport=transport, trust_env=trust_env())
+                                    if transport is not None or not trust_env() else None))
 
 
 @dataclass
@@ -406,7 +407,7 @@ async def probe_openai_compatible(base_url: str, model: str, key: Secret | None,
     """Probes one model of an OpenAI-compatible server."""
     result = ProbeResult("openai-compatible", base_url, model)
     try:
-        check_provider("openai-compatible", base_url=base_url, stubbed=transport is not None)
+        check_provider("openai-compatible", base_url=base_url, transport=transport)
     except OfflineError as exc:
         result.error("models", exc.code, str(exc))
         return result
@@ -443,7 +444,7 @@ async def probe_claude(model: str, key: Secret | None, *, transport: Any = None,
 
     result = ProbeResult("claude", API_BASE_URL, model)
     try:
-        check_provider("claude", stubbed=transport is not None)
+        check_provider("claude", transport=transport)
     except OfflineError as exc:
         result.error("models", exc.code, str(exc))
         return result
@@ -453,7 +454,8 @@ async def probe_claude(model: str, key: Secret | None, *, transport: Any = None,
     client = AsyncAnthropic(api_key=key.reveal(), base_url=API_BASE_URL, max_retries=0,
                             timeout=anthropic.Timeout(LIST_TIMEOUT_S, connect=CONNECT_TIMEOUT_S),
                             open_telemetry=False,
-                            http_client=DefaultAsyncHttpxClient(transport=transport) if transport is not None else None)
+                            http_client=(DefaultAsyncHttpxClient(transport=transport, trust_env=trust_env())
+                                         if transport is not None or not trust_env() else None))
     try:
         models: list[str] = []
         try:

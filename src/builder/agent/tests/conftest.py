@@ -37,6 +37,12 @@ FAKE_TOKEN = "fakeSessionToken_0123456789abcdef"
 
 sys.path.insert(0, str(AGENT_DIR))
 
+# The guard in this process too: no proxy variables, and no socket or name
+# lookup off loopback for the code the tests run in it.
+from caliper_agent.offline import enter_offline  # noqa: E402
+
+enter_offline()
+
 
 def tiny_png(width: int = 2, height: int = 2) -> bytes:
     def chunk(kind: bytes, data: bytes) -> bytes:
