@@ -69,7 +69,10 @@ every 5 seconds (memory_pressure, on macOS) and prints it with the resident
 size of the model server and of train.py. Two readings in a row below
 --memory-low (20 % free), or one below --memory-critical (15 %), stop the
 step, the stream and their processes by pid and skip what remains of the job.
-The summary gives the lowest reading and the largest resident sizes.
+The summary gives the lowest reading and the largest resident sizes. With
+--memory-baseline, a job with a model step first waits inside its slot, up to
+--baseline-wait seconds, for that much memory free, and its steps are skipped
+when it does not come.
 
 Every process a step starts (the training script, the app and its sidecar,
 the producer, caliper-mcp, the browser) is watched by pid while the step
@@ -622,6 +625,18 @@ class MemoryWatch:
             self._done.wait(5.0)
 
 
+def wait_for_baseline(ctx) -> int | None:
+    """Waits inside the job's slot, up to --baseline-wait seconds, for --memory-baseline percent of memory
+    free, reading every 10 s; returns the last reading."""
+    end = time.monotonic() + ctx.baseline_wait
+    while True:
+        free = free_percent()
+        say(f"memory, before the job: {free if free is not None else '?'}% free, the baseline is {ctx.memory_baseline}%")
+        if free is None or free >= ctx.memory_baseline or time.monotonic() >= end:
+            return free
+        time.sleep(10)
+
+
 # ---- one job: steps run one after another, plainly ----------------------------------------------
 
 
@@ -689,6 +704,17 @@ def run_job_plainly(steps: list[Step], ctx, env, results: dict, stopped: list, m
     watch = MemoryWatch(ctx, memory)
     tripped = ""
     try:
+        if ctx.memory_baseline and any(s.model for s in steps):
+            free = wait_for_baseline(ctx)
+            memory["baseline"] = free
+            if free is not None and free < ctx.memory_baseline:
+                why = (f"free memory stayed below the baseline of {ctx.memory_baseline}% for "
+                       f"{minutes(ctx.baseline_wait)} ({free}% free)")
+                memory["stopped"] = why
+                say(f"memory: {why}; the job's steps do not start")
+                for s in steps:
+                    results[s.n].update(status="skipped", where=why)
+                return
         for step in steps:
             r = results[step.n]
             if tripped:
@@ -848,6 +874,8 @@ def merge_memory(into: dict, more: dict):
     for key in ("model_server_kb", "train_kb"):
         into[key] = max(into.get(key, 0), more.get(key, 0))
     into["readings"] = into.get("readings", 0) + more.get("readings", 0)
+    if more.get("baseline") is not None:
+        into["baseline"] = more["baseline"]
     if more.get("stopped"):
         into["stopped"] = more["stopped"]
 
@@ -909,6 +937,9 @@ def summarise(ctx, steps, results, stopped, memory, interrupted) -> tuple[str, i
             lines.append(f"Step {s.n} " + "; ".join(notes) + ".")
     for note in ctx.notes:
         lines.append(note)
+    if memory.get("baseline") is not None:
+        lines.append(f"Memory before the model job: {memory['baseline']}% free, against a baseline of "
+                     f"{ctx.memory_baseline}%.")
     if memory.get("readings"):
         readings = memory["readings"]
         lines.append(f"Memory during the model steps: lowest {memory['lowest_free']}% free in {readings} "
@@ -974,6 +1005,11 @@ def main() -> int:
                     help="stop the model steps at two readings in a row below this free percentage (default 20)")
     ap.add_argument("--memory-critical", type=int, default=15,
                     help="stop the model steps at one reading below this free percentage (default 15)")
+    ap.add_argument("--memory-baseline", type=int, default=0,
+                    help="before a job with a model step, wait inside its slot for this free percentage, and skip "
+                         "the job when it does not come (default 0, no wait)")
+    ap.add_argument("--baseline-wait", type=float, default=300.0,
+                    help="seconds to wait for --memory-baseline (default 300)")
     ap.add_argument("--in-job", help=argparse.SUPPRESS)
     ap.add_argument("--job-file", help=argparse.SUPPRESS)
     args = ap.parse_args()
@@ -1000,11 +1036,13 @@ def main() -> int:
     ctx.train_python, ctx.agent_python = args.train_python, args.agent_python
     ctx.step_timeout = args.step_timeout
     ctx.memory_low, ctx.memory_critical = args.memory_low, args.memory_critical
+    ctx.memory_baseline, ctx.baseline_wait = args.memory_baseline, args.baseline_wait
     ctx.heavy, ctx.model_wrapper = wrapper("CALIPER_DEMO_HEAVY"), wrapper("CALIPER_DEMO_MODEL")
     ctx.notes = []
     ctx.forwarded = ["--out", str(ctx.out), "--size", ctx.size, "--caliper", str(ctx.caliper), "--model", ctx.model,
                      "--ollama", ctx.ollama, "--step-timeout", str(ctx.step_timeout), "--stream", ctx.stream,
                      "--memory-low", str(ctx.memory_low), "--memory-critical", str(ctx.memory_critical),
+                     "--memory-baseline", str(ctx.memory_baseline), "--baseline-wait", str(ctx.baseline_wait),
                      "--steps", ",".join(str(n) for n in args.steps)]
     ctx.forwarded += ["--train-python", ctx.train_python] if ctx.train_python else []
     ctx.forwarded += ["--agent-python", ctx.agent_python] if ctx.agent_python else []
