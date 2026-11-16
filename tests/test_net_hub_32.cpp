@@ -14,6 +14,7 @@
 #include "net/wire.h"
 #include "net/ws.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <deque>
@@ -360,11 +361,12 @@ TEST_CASE("net/hub 3.2: scene messages reach the subscription's viewers; a late 
     auto c = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
     subscribe(*c, 1, "world");
     REQUIRE(w.until([&] { return c->scene_log(1).size() == 3; }));
-    w.spin(100);
+    // The hub publishes its counters at the end of a loop round: wait for them, not for a time.
+    REQUIRE(w.until([&] { return h.hub->stats().scenes_out >= 14; }));
     CHECK(c->scene_log(1) == std::vector<std::string>{"reset", ":lines", "world/cloud:points"});
     const caliper_net::HubStats st = h.hub->stats();
     CHECK(st.scenes_in == 6);
-    CHECK(st.scenes_out >= 14);
+    CHECK(st.scenes_out == 14);
     CHECK(st.retained_scene_bytes > 0);
 }
 
@@ -386,6 +388,13 @@ TEST_CASE("net/hub 3.2: a viewer without scenes sees no scene and cannot subscri
     CHECK(v->all<wire::SceneUpdate>().empty());
 }
 
+// The hub sends each entity part of a subscription at most once per 1/max_rate and keeps
+// one batch of it waiting, which a newer one replaces. The test asserts on what is sent and
+// on the hub's counters, never on how many batches arrive per second, so it holds on a
+// runner of any speed: the slow subscription's interval (1,000 s) is far longer than the
+// test, so after its first batch of each part the 39 that follow can only wait as one, and
+// the paced one (4 a second) receives each part in order, the newest last, with every batch
+// it did not receive replaced by a newer one.
 TEST_CASE("net/hub 3.2: a slow viewer's batches coalesce per entity part, the newest last") {
     Runner h;
     World32 w;
@@ -393,22 +402,47 @@ TEST_CASE("net/hub 3.2: a slow viewer's batches coalesce per entity part, the ne
     REQUIRE(p->connect(h.url()));
     w.peers.push_back(p.get());
     REQUIRE(w.until([&] { return p->welcomed; }));
-    auto v = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
-    subscribe(*v, 2, "world", 4.0);   // 4 batches a second per entity part
-    REQUIRE(w.until([&] { return v->scene_log(2).size() == 2; }));
-    for (int i = 0; i < 40; ++i) {
+    auto paced = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    auto slow = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    subscribe(*paced, 2, "world", 4.0);   // 4 batches a second per entity part
+    REQUIRE(w.until([&] { return paced->scene_log(2).size() == 2; }));
+    subscribe(*slow, 3, "world", 0.001);  // 1 batch per entity part every 1,000 s
+    REQUIRE(w.until([&] { return slow->scene_log(3).size() == 2; }));
+    // The value of each batch of "a" or "b", in arrival order.
+    const auto got = [](const Client& v, const std::string& path) {
+        std::vector<float> out;
+        for (auto* u : v.all<wire::SceneUpdate>())
+            if (u->path == path) out.push_back(floats(*u->array("positions"))[path == "a" ? 0 : 1]);
+        return out;
+    };
+    // The first batch of each part goes to both viewers at once.
+    p->points("a", {0, 0, 0});
+    p->points("b", {0, 0, 0});
+    REQUIRE(w.until([&] {
+        for (const Client* v : {paced.get(), slow.get()})
+            if (got(*v, "a").size() != 1 || got(*v, "b").size() != 1) return false;
+        return true;
+    }));
+    for (int i = 1; i < 40; ++i) {
         p->points("a", {(float)i, 0, 0});
         p->points("b", {0, (float)i, 0});
-        w.spin(5);
     }
-    w.spin(700);
-    std::map<std::string, std::vector<float>> got;
-    for (auto* u : v->all<wire::SceneUpdate>())
-        if (u->path == "a" || u->path == "b") got[u->path].push_back(floats(*u->array("positions"))[u->path == "a" ? 0 : 1]);
-    for (const char* path : {"a", "b"}) {
+    REQUIRE(w.until([&] {
+        const std::vector<float> a = got(*paced, "a"), b = got(*paced, "b");
+        return a.back() == 39.0f && b.back() == 39.0f;
+    }, 20000));
+    size_t paced_n = 0;
+    for (const std::string path : {"a", "b"}) {
         INFO(path);
-        REQUIRE(!got[path].empty());
-        CHECK(got[path].size() <= 5);                 // 4 a second over about 0.9 s, not 40
-        CHECK(got[path].back() == 39.0f);             // the newest arrives
+        const std::vector<float> pv = got(*paced, path);
+        paced_n += pv.size();
+        CHECK(pv.front() == 0.0f);
+        CHECK(std::adjacent_find(pv.begin(), pv.end(), std::greater_equal<float>()) == pv.end());   // newer each time
+        CHECK(got(*slow, path) == std::vector<float>{0.0f});   // the rest wait as one
     }
+    // Every batch is sent or replaced by a newer one: the paced viewer's that it did not
+    // receive, and 38 of each part's 39 that wait for the slow one, which keeps the newest.
+    CHECK(p->scene_subscribes == 1);                   // both viewers share one producer subscription
+    REQUIRE(w.until([&] { return h.hub->stats().scenes_in == 2 + 80; }));   // its state, then the batches
+    CHECK(h.hub->stats().scenes_superseded == (80 - paced_n) + 2 * 38);
 }
