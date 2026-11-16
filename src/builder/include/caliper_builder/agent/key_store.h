@@ -119,6 +119,13 @@ class KeyStore;
 // An AcpClient takes the result as `agent_env` and `agent_env_remove`.
 Error place_key_in_environment(KeyStore& store, const std::string& provider, acp::SpawnOptions* spawn);
 
+// Places no key: removes from `spawn->env` and adds to `spawn->env_remove`
+// every variable that could redirect the child and every provider's key
+// variable, as place_key_in_environment() does for a local server, and passes
+// the offline switch. For a child that must never see a key the app's own
+// environment holds, when no store is asked for one.
+void strip_key_environment(acp::SpawnOptions* spawn);
+
 // When this process has CALIPER_AGENT_OFFLINE, sets it in `spawn->env` with
 // the same value and takes it out of `spawn->env_remove`; otherwise does
 // nothing. place_key_in_environment() calls it.

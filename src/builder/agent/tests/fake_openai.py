@@ -63,7 +63,7 @@ class FakeOpenAI:
                  tool_mode: str = "call", vision_mode: str = "see", refuse_strict: bool = False,
                  refuse_max_completion_tokens: bool = False, args_style: str = "split", reasoning: str | None = None,
                  models: list[dict] | None = None, lmstudio: int | None = None, require_key: str | None = None,
-                 responder: Callable[[dict], dict] | None = None) -> None:
+                 responder: Callable[[dict], dict] | None = None, record: str | None = None) -> None:
         self.replies = list(replies or [])
         self.refuse_tools = refuse_tools
         self.refuse_images = refuse_images
@@ -77,6 +77,7 @@ class FakeOpenAI:
         self.lmstudio = lmstudio
         self.require_key = require_key
         self.responder = responder
+        self.record = record  # a file that gets one JSON line per request: method, path, Authorization
         self.requests: list[dict] = []
         self.headers: list[dict] = []
         self.paths: list[str] = []
@@ -95,6 +96,13 @@ class FakeOpenAI:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _record(self, method: str) -> None:
+                if fake.record:
+                    line = json.dumps({"method": method, "path": self.path,
+                                       "authorization": self.headers.get("Authorization")})
+                    with fake._lock, open(fake.record, "a", encoding="utf-8") as out:
+                        out.write(line + "\n")
+
             def _authorised(self) -> bool:
                 if fake.require_key and self.headers.get("Authorization") != f"Bearer {fake.require_key}":
                     self._json(401, {"error": {"message": "Incorrect API key provided.", "type": "invalid_request_error"}})
@@ -104,6 +112,7 @@ class FakeOpenAI:
             def do_GET(self):
                 with fake._lock:
                     fake.paths.append(self.path)
+                self._record("GET")
                 if not self._authorised():
                     return
                 if self.path == "/v1/models" and fake.models is not None:
@@ -122,6 +131,7 @@ class FakeOpenAI:
                     fake.paths.append(self.path)
                     fake.requests.append(body)
                     fake.headers.append({k.lower(): v for k, v in self.headers.items()})
+                self._record("POST")
                 if not self._authorised():
                     return
                 if self.path != "/v1/chat/completions":

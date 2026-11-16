@@ -23,6 +23,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <optional>
 #include <sstream>
 #include <thread>
 
@@ -122,6 +124,35 @@ void settle(AgentSettings& s) {
     REQUIRE_MESSAGE(!s.busy(), "the probe did not answer within 150 s");
     s.frame();
 }
+
+// Sets variables in this process's environment and puts back what was there.
+class EnvGuard {
+public:
+    void set(const std::string& name, const char* value) {
+        if (!saved_.count(name)) {
+            const char* old = std::getenv(name.c_str());
+            saved_[name] = old ? std::optional<std::string>(old) : std::nullopt;
+        }
+        set_env(name.c_str(), value);
+    }
+    ~EnvGuard() {
+        for (const auto& [name, value] : saved_) set_env(name.c_str(), value ? value->c_str() : nullptr);
+    }
+
+private:
+    std::map<std::string, std::optional<std::string>> saved_;
+};
+
+// A store that has a key but cannot read it, as a locked keychain.
+class LockedKeyStore final : public agent::KeyStore {
+protected:
+    caliper_builder::Error do_set(const std::string&, const std::string&) override { return {}; }
+    agent::KeyPresence do_has(const std::string&) override { return {{}, true}; }
+    caliper_builder::Error do_remove(const std::string&) override { return {}; }
+    caliper_builder::Error do_read(const std::string&, std::string*) override {
+        return {"keystore.failed", "The store is locked."};
+    }
+};
 
 }  // namespace
 
@@ -600,6 +631,115 @@ TEST_CASE("agent settings: List and Probe through caliper-agent on a fake local 
     CHECK(s.state() == "No tool calling");
     const std::string cache = read_text((fs::path(dir) / "model-capabilities.json").string());
     CHECK(cache.find("sk-") == std::string::npos);
+}
+
+TEST_CASE("agent settings: the probe never passes on a key or an endpoint from the app's own environment") {
+    const std::string python = CALIPER_BUILDER_TEST_PYTHON;
+    if (python.empty()) {
+        MESSAGE("caliper_agent_settings_agent skipped: no CALIPER_BUILDER_TEST_PYTHON");
+        return;
+    }
+    const std::string agent_dir = std::string(CALIPER_BUILDER_SOURCE_DIR) + "/agent";
+    const std::string dir = tmp_dir("probe-env");
+    const std::string record = dir + "/requests.jsonl";
+    std::string why;
+    auto server = test::FakeModelServer::start(python, agent_dir, {"--models", "local-a", "--record", record}, &why);
+    REQUIRE_MESSAGE(server, why);
+    // The app's own environment holds keys and endpoints of its own; none may
+    // reach the server the person chose.
+    const std::string inherited = "sk-TESTONLY-inherited-0123456789abcdef";
+    EnvGuard env;
+    for (const char* name : {"CALIPER_MODEL_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"}) env.set(name, inherited.c_str());
+    env.set("OPENAI_BASE_URL", "http://127.0.0.1:9/v1");
+    env.set("ANTHROPIC_BASE_URL", "http://127.0.0.1:9");
+    env.set("CALIPER_AGENT_OFFLINE", "1");
+    auto requests = [&] {
+        std::vector<json> out;
+        std::istringstream lines(read_text(record));
+        for (std::string line; std::getline(lines, line);)
+            if (!line.empty()) out.push_back(json::parse(line));
+        return out;
+    };
+    auto options = [&](const std::string& name, agent::KeyStore* keys) {
+        AgentSettings::Options o = options_in(tmp_dir("probe-env-" + name), keys);
+        o.now = {};
+        o.python = python;
+        o.source = CALIPER_BUILDER_SOURCE_DIR;
+        o.probe_env = {{"CALIPER_AGENT_OFFLINE", "1"}};
+        return o;
+    };
+
+    // A store that holds the Custom entry's key but cannot read it: the probe
+    // does not run, as the sidecar's start would not, and nothing reaches the
+    // server.
+    {
+        LockedKeyStore locked;
+        AgentSettings s;
+        s.start(options("locked", &locked));
+        s.choose_preset("custom");
+        s.set_base_url(server->base_url());
+        s.set_model("local-a");
+        s.probe(true);
+        settle(s);
+        CHECK(s.probe_answer().failure == "Unreadable key");
+        CHECK_FALSE(s.probe_answer().ran);
+        CHECK(requests().empty());
+    }
+    // No store at all, and a Custom entry, whose key is optional: the server
+    // is still listed and probed, with no key from the environment.
+    {
+        AgentSettings s;
+        s.start(options("no-store", nullptr));
+        s.choose_preset("custom");
+        s.set_base_url(server->base_url());
+        s.list_models();
+        settle(s);
+        CHECK(s.model_choices() == std::vector<std::string>{"local-a"});
+        s.set_model("local-a");
+        s.probe(true);
+        settle(s);
+        CHECK(s.probe_answer().ran);
+        CHECK(s.capabilities().tools == std::optional<bool>(true));
+    }
+    // A local server through the store, which needs no key: probed, no key.
+    {
+        agent::MemoryKeyStore keys;
+        AgentSettings s;
+        s.start(options("local", &keys));
+        s.choose_preset("lmstudio");
+        s.set_base_url(server->base_url());
+        s.set_model("local-a");
+        s.probe(true);
+        settle(s);
+        CHECK(s.probe_answer().ran);
+    }
+    const std::vector<json> seen = requests();
+    CHECK(seen.size() >= 3);   // the list, then the probes' model list and test calls
+    for (const json& r : seen) {
+        CAPTURE(r.dump());
+        const std::string auth = r["authorization"].is_string() ? r["authorization"].get<std::string>() : std::string();
+        CHECK(auth.find(inherited) == std::string::npos);
+        CHECK(auth.find("TESTONLY") == std::string::npos);
+    }
+    // A provider that requires a key, with none stored: refused at once,
+    // before any child starts, as the sidecar's start refuses.
+    {
+        agent::MemoryKeyStore keys;
+        AgentSettings s;
+        s.start(options("required", &keys));
+        s.choose_preset("openai");
+        s.set_model("gpt-test");
+        s.probe(true);
+        CHECK_FALSE(s.busy());
+        CHECK(s.probe_answer().failure == "No key");
+        AgentSettings none;
+        none.start(options("required-no-store", nullptr));
+        none.choose_preset("gemini");
+        none.set_model("gemini-test");
+        none.probe(true);
+        CHECK_FALSE(none.busy());
+        CHECK(none.probe_answer().failure == "No key");
+    }
 }
 
 TEST_SUITE_END();

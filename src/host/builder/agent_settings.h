@@ -37,7 +37,9 @@
 // actions and what it shows), the layout (layout_agent_settings(), plain
 // rectangles from measured text) and the ImGui side (draw()). The probe runs
 // caliper-agent as a child on a thread of its own, with the provider's key
-// placed only in its environment by the key store.
+// placed only in its environment by the key store, which also removes every
+// key and endpoint variable of the app's own environment from it; when the
+// store cannot place the key the provider requires, the probe does not run.
 //
 // Built only with CALIPER_WITH_BUILDER.
 // ============================================================================

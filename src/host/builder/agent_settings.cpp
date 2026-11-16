@@ -136,6 +136,13 @@ std::string base_for_cache(const AgentChoice& c) {
     return c.base_url;
 }
 
+// Why the key store could not place a key, as the probe's tag.
+std::string key_failure(const caliper_builder::Error& e) {
+    if (e.code == "keystore.not_found") return "No key";
+    if (e.code == "keystore.bad_key") return "Malformed key";
+    return "Unreadable key";
+}
+
 // The id the key store places the key under: the choice's account, or the
 // preset's own for a server that takes none (place_key_in_environment() then
 // places nothing and removes every key variable).
@@ -746,12 +753,25 @@ void AgentSettings::run_probe(std::vector<std::string> extra, bool list_only) {
     spawn.env = {{"PYTHONPATH", (source / "agent").string()}, {"PYTHONDONTWRITEBYTECODE", "1"}};
     for (const auto& v : options_.probe_env) spawn.env.push_back(v);
     spawn.env_remove = options_.probe_env_remove;
-    // The provider's key, only in the child's environment; the offline switch
-    // passes through with it.
+    // The child's environment is the sidecar's: the provider's key, placed by
+    // the store, and none of the key or endpoint variables of the app's own
+    // environment; the offline switch passes through. When the store cannot
+    // place a key, or a key is required and there is no store, the probe
+    // does not run, as the sidecar's start does not (AcpWidgetAgent::start()).
     const std::string id = placement_id(c);
-    caliper_builder::Error placed;
-    if (options_.keys && !id.empty()) placed = agent::place_key_in_environment(*options_.keys, id, &spawn);
-    if (!options_.keys || id.empty() || placed) agent::pass_offline_switch(&spawn);
+    if (options_.keys && !id.empty()) {
+        if (const caliper_builder::Error e = agent::place_key_in_environment(*options_.keys, id, &spawn)) {
+            answer_ = {};
+            answer_.failure = key_failure(e);
+            return;
+        }
+    } else if (c.key == agent::KeyNeed::required) {
+        answer_ = {};
+        answer_.failure = "No key";
+        return;
+    } else {
+        agent::strip_key_environment(&spawn);
+    }
     runner_ = std::make_unique<Runner>();
     runner_->shared = std::make_shared<Runner::Shared>();
     runner_->list_only = list_only;
