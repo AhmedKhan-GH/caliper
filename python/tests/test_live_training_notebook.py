@@ -4,9 +4,15 @@ the loss, attention and embedding widgets draw and change; a pan of the
 loss stops it following the data and holds while training continues, and a
 double click follows again; choosing a layer and a head in the attention
 widget's picker changes its data view; the attention heatmap zooms and pans,
-and a hover there names the cell under the pointer; a selection in the
-embedding widget reaches ``embedding_widget.selection``; and
-``attention_widget.data_view = {...}`` from Python reaches the widget. Run
+and a hover there names the cell under the pointer; the controls of wire
+protocol 3.1 work while the cell trains: Pause in the loss widget's header
+holds the loop, Step runs it one step, Resume lets it go on, the learning
+rate set in the controls panel comes back as the value the script took and
+is the optimizer's afterwards, and the save action answers with its result; a
+selection in the embedding widget highlights the same sequences in the
+predictions widget, shows their details, and reaches
+``embedding_widget.selection``; and ``attention_widget.data_view = {...}``
+from Python reaches the widget. Run
 in the "metal" mode, where Caliper's WebAssembly views draw all three widgets
 on WebGPU and make the selection, and the "canvas2d" mode, where the
 element's own TypeScript views do.
@@ -39,6 +45,8 @@ pytestmark = [
 STATE = """(name) => { const v = __caliperHarness.deepQueryAll('caliper-view')
                         .find((e) => e.getAttribute('view') === name);
                        return v ? v.debugState() : null; }"""
+PANEL = """() => { const p = __caliperHarness.deepQueryAll('caliper-controls')[0];
+                   return p ? p.debugState() : null; }"""
 
 
 def cell_index(text: str) -> int:
@@ -199,6 +207,45 @@ def test_live_training_notebook(tmp_path, mode):
         nb.wait(f"() => {{ const w = ({STATE})('attention').window; return Math.abs(w.x0 - {fit['x0']}) < 1e-6"
                 f" && Math.abs(w.x1 - {fit['x1']}) < 1e-6 && Math.abs(w.y0 - {fit['y0']}) < 1e-6; }}", timeout=10)
 
+        # The controls (3.1), while the cell trains. Pause in the loss widget's
+        # header holds the loop at its next caliper.step(): the loss gets no
+        # new values. Step runs one step and pauses again; Resume lets it go on.
+        assert not cell_done(nb, train_cell), "training ended before the controls; raise the steps"
+        loss_view = nb.page.locator('caliper-view[view="loss"]')
+        toggle, step = loss_view.locator("button.run-toggle"), loss_view.locator("button.run-step")
+        nb.wait(f"() => (({STATE})('loss') || {{}}).run === 'running'", timeout=30)
+        assert toggle.inner_text() == "Pause" and toggle.is_enabled()
+        toggle.click()
+        nb.wait(f"() => /^paused at \\d+$/.test((({STATE})('loss') || {{}}).run || '')", timeout=30)
+        paused = nb.page.evaluate(STATE, "loss")
+        nb.page.wait_for_timeout(1200)
+        still = nb.page.evaluate(STATE, "loss")
+        assert still["run"] == paused["run"] and still["info"] == paused["info"], (paused, still)
+        assert toggle.inner_text() == "Resume"
+        loss_view.screenshot(path=str(shots / f"notebook-{mode}-loss-paused.png"))
+        at = int(paused["run"].rsplit(" ", 1)[1])
+        step.click()
+        nb.wait(f"() => (({STATE})('loss') || {{}}).run === 'paused at {at + 1}'", timeout=30)
+        nb.page.wait_for_timeout(500)
+        assert nb.page.evaluate(STATE, "loss")["run"] == f"paused at {at + 1}"
+        # The learning rate in the controls panel, set while the run is paused:
+        # the panel shows the value the script took, at the checkpoint it waits in.
+        panel = nb.page.locator("caliper-controls")
+        field = panel.locator('input[aria-label="lr"]')
+        field.fill("0.004")
+        field.dispatch_event("change")
+        nb.wait(f"() => {{ const c = ({PANEL})().controls; const p = c && c.params.find((x) => x.name === 'lr');"
+                " return !!p && p.value === 0.004 && p.pending === undefined; }", timeout=30)
+        # The save action runs at the checkpoint and answers with its result.
+        panel.locator('button[data-action="save checkpoint"]').click()
+        nb.wait(f"() => {{ const r = ({PANEL})().results['save checkpoint'];"
+                " return !!r && /^saved /.test(r.text || ''); }", timeout=30)
+        panel.screenshot(path=str(shots / f"notebook-{mode}-controls.png"))
+        toggle.click()
+        nb.wait(f"() => (({STATE})('loss') || {{}}).run === 'running'", timeout=30)
+        resumed = nb.page.evaluate(STATE, "loss")
+        nb.wait(f"() => (({STATE})('loss') || {{}}).info !== {json.dumps(resumed['info'])}", timeout=30)
+
         # A rectangle selection in the embedding (shift + alt drag), after a
         # double click fits the view to the points, which move while it trains.
         # The visible canvas takes the events: the WebAssembly views' own, or
@@ -224,12 +271,46 @@ def test_live_training_notebook(tmp_path, mode):
         nb.page.wait_for_timeout(300)
         nb.page.locator('caliper-view[view="embedding"]').screenshot(
             path=str(shots / f"notebook-{mode}-embedding-selection.png"))
+        # Linked selection: a second rectangle over the left part of the
+        # embedding selects some of its sequences; the predictions widget
+        # marks the same sequences of the item space "eval", and the embedding
+        # shows their details.
+        x2 = box["x"] + box["width"] * 0.45
+        nb.page.mouse.move(x0, y0)
+        nb.page.keyboard.down("Shift")
+        nb.page.keyboard.down("Alt")
+        nb.page.mouse.down()
+        for k in range(1, 6):
+            nb.page.mouse.move(x0 + (x2 - x0) * k / 5, y0 + (y1 - y0) * k / 5)
+        nb.page.mouse.up()
+        nb.page.keyboard.up("Alt")
+        nb.page.keyboard.up("Shift")
+        nb.wait(f"() => {{ const l = (({STATE})('predictions') || {{}}).linked;"
+                " return !!l && l.space === 'eval' && l.items.length > 0 && l.items.length < 512; }",
+                timeout=20)
+        nb.page.wait_for_timeout(300)
+        nb.wait(f"() => /class/.test((({STATE})('embedding') || {{}}).details || '')", timeout=20)
+        linked = nb.page.evaluate(STATE, "predictions")["linked"]
+        details = nb.page.evaluate(STATE, "embedding")["details"]
+        assert "marker at" in details, details
+        nb.page.locator('caliper-view[view="predictions"]').screenshot(
+            path=str(shots / f"notebook-{mode}-predictions-linked.png"))
+        nb.page.locator('caliper-view[view="embedding"]').screenshot(
+            path=str(shots / f"notebook-{mode}-embedding-details.png"))
 
         # The training cell ends; the selection is in Python.
         nb.wait(lambda page: cell_done(nb, train_cell), timeout=240)
         sel = json.loads(nb.execute("import json; print(json.dumps(embedding_widget.selection))"))
         assert sel["view"] == "embedding" and sel["type"] == "select", sel
         assert sel["detail"]["indices"] and len(sel["detail"]["row_ids"]) == len(sel["detail"]["indices"])
+        assert sel["detail"]["space"] == "eval" and sel["detail"]["items"], sel["detail"].keys()
+        # The script took the learning rate, used it, and saved once; it knows
+        # the selected sequences too.
+        got = json.loads(nb.execute(
+            "import json; print(json.dumps([lr.value, opt.param_groups[0]['lr'], os.path.exists(CHECKPOINT),"
+            " evaluation.selection[:5]]))"))
+        assert got[0] == got[1] == 0.004 and got[2] is True, got
+        assert got[3] == linked["items"][:5], (got[3], linked["items"][:5])
 
         # The next cell sets the attention widget's data view from Python and trains again.
         run_cells(nb, select_cell, above=False)
