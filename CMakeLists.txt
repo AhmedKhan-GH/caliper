@@ -359,6 +359,13 @@ target_include_directories(caliper_gfx PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_gfx PUBLIC caliper::sdk)
 set_target_properties(caliper_gfx PROPERTIES
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+if(APPLE)
+    # The layer's Metal backend, Objective-C++ with ARC, on the renderer's device and queue.
+    target_sources(caliper_gfx PRIVATE src/host/gfx/metal_backend.mm)
+    set_source_files_properties(src/host/gfx/metal_backend.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_target_properties(caliper_gfx PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+    target_link_libraries(caliper_gfx PUBLIC "-framework Metal" "-framework Foundation")
+endif()
 
 # ============================================================================
 # Metal renderer backend (C2, Apple only)

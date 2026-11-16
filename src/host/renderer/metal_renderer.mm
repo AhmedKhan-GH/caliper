@@ -948,6 +948,7 @@ public:
         if (h != nullptr) { id<MTLCommandBuffer> cb = (__bridge_transfer id<MTLCommandBuffer>)h; (void)cb; }
     }
     void* native_device() const override { return (__bridge void*)device_; }
+    void* native_queue() const override { return (__bridge void*)queue_; }
     // Typed live views: +1 handle on the last geometry draw's command buffer
     // (polled with device_update_is_done, dropped with device_update_release).
     void* geom_draw_retain_last() override {

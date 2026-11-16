@@ -124,6 +124,10 @@ public:
     // MTLBuffers on it, because import_external_allocation refuses a buffer
     // whose device differs.
     virtual void* native_device() const { return nullptr; }
+    // The backend's command queue (id<MTLCommandQueue> on Metal) beside native_device, or
+    // NULL. The graphics layer's Metal backend (src/host/gfx) runs on both, so its work is
+    // ordered with the renderer's by commit order and no second device exists.
+    virtual void* native_queue() const { return nullptr; }
 
     // Which device kind this backend imports on its zero-copy path (spec §3.4).
     // The bridge maps this to active_device_ instead of matching on name(),
