@@ -108,3 +108,51 @@ The share of a frame: step 0's baseline measured, for a 1,024² heatmap in the v
 a frame of 24.1 µs of GPU time (2,048²: 63.9 µs and 47.5 µs). The kernel-level difference above adds about
 21.6 µs to the first (58 % more GPU time per frame, the colormap from about a quarter of it to about half) and
 53.4 µs to the second (48 % more); against the 16.7 ms of a 60 Hz frame it is 0.13 % and 0.32 %.
+
+## The decision, and the built form re-measured (2026-11-16, 01:42, load 3.93)
+
+The orchestrator decided: keys everywhere, in the cheaper exact form, with the threshold read as 20 µs
+absolute; the float formula is retired on the native path when the texture path moves (step 8). The built form
+differs from the edited-MSL variant above in two ways, each measured first in a scratch probe:
+- The block is one 16-byte entry per level (its first key, the next level's first key, its colour; 4,112
+  bytes) instead of flat u32 arrays, which WGSL does not allow in a uniform (its arrays there have a 16-byte
+  stride). A level test and the level's colour are then one load; in the probe, at load 22, it took 10.7 µs
+  against 11.8 µs for flat arrays at 1,024² and 27.2 µs against 36.4 µs at 2,048².
+- The workgroup is 16 x 8, not 16 x 16: compatibility mode allows 128 invocations by default, and the browser
+  rows refused 256 there. On Metal the shape changed nothing (8 x 8 and 16 x 16 above).
+Fast math is a per-program option of the layer (ProgramDesc::fast_math, "fast_math" in the manifest), set only
+for colormap_texture.
+
+Measured in a quiet moment (slot 1 held, the other slots free, load 3.93), as above:
+CALIPER_GFX_CMAP_BENCH=1 caliper_gfx_tests --test-case="gfx/Metal colormap: timing*"
+
+1024 x 1024, smooth field: integer decision, as the layer compiles it (fast math, 16 x 8) median     9.5 us, p95    35.4 us per pass,  1.23x the float pass (+1.8 us); 40 samples of 16 dispatches; load 3.93
+1024 x 1024, smooth field: float pass (renderer: default fast math, 16 x 16)        median     7.7 us, p95    29.7 us per pass,  1.00x the float pass (+0.0 us); 40 samples of 16 dispatches; load 3.93
+1024 x 1024, smooth field: integer decision with safe math                          median    24.5 us, p95    78.2 us per pass,  3.17x the float pass (+16.8 us); 40 samples of 16 dispatches; load 3.93
+1024 x 1024, uniform random values: integer decision, as the layer compiles it (fast math, 16 x 8) median     8.5 us, p95     8.5 us per pass,  1.24x the float pass (+1.6 us); 40 samples of 16 dispatches; load 3.93
+1024 x 1024, uniform random values: float pass (renderer: default fast math, 16 x 16)        median     6.8 us, p95     6.8 us per pass,  1.00x the float pass (+0.0 us); 40 samples of 16 dispatches; load 3.93
+1024 x 1024, uniform random values: integer decision with safe math                          median    16.7 us, p95    16.7 us per pass,  2.44x the float pass (+9.9 us); 40 samples of 16 dispatches; load 3.93
+2048 x 2048, smooth field: integer decision, as the layer compiles it (fast math, 16 x 8) median    32.4 us, p95    32.5 us per pass,  1.26x the float pass (+6.6 us); 40 samples of 16 dispatches; load 3.93
+2048 x 2048, smooth field: float pass (renderer: default fast math, 16 x 16)        median    25.8 us, p95    25.9 us per pass,  1.00x the float pass (+0.0 us); 40 samples of 16 dispatches; load 3.93
+2048 x 2048, smooth field: integer decision with safe math                          median    62.1 us, p95    62.2 us per pass,  2.41x the float pass (+36.3 us); 40 samples of 16 dispatches; load 3.93
+2048 x 2048, uniform random values: integer decision, as the layer compiles it (fast math, 16 x 8) median    34.5 us, p95    34.9 us per pass,  1.20x the float pass (+5.9 us); 40 samples of 16 dispatches; load 3.93
+2048 x 2048, uniform random values: float pass (renderer: default fast math, 16 x 16)        median    28.7 us, p95    28.9 us per pass,  1.00x the float pass (+0.0 us); 40 samples of 16 dispatches; load 3.93
+2048 x 2048, uniform random values: integer decision with safe math                          median    62.5 us, p95    64.1 us per pass,  2.18x the float pass (+33.9 us); 40 samples of 16 dispatches; load 3.93
+
+| Heatmap | Float pass | Integer pass, built form | Difference |
+|---|---|---|---|
+| 1,024², smooth field | 7.7 µs | 9.5 µs | +1.8 µs, 1.23x |
+| 1,024², uniform random values | 6.8 µs | 8.5 µs | +1.6 µs, 1.24x |
+| 2,048², smooth field | 25.8 µs | 32.4 µs | +6.6 µs, 1.26x |
+| 2,048², uniform random values | 28.7 µs | 34.5 µs | +5.9 µs, 1.20x |
+
+Within the 20 µs threshold at both sizes. The first data set's p95 (35 µs) is the GPU's clock still settling;
+the float pass shows the same there. Against step 0's frame (13.4 µs update and 24.1 µs draw at 1,024²; 63.9 µs
+and 47.5 µs at 2,048²) the difference is about 5 % and 6 % more GPU time per frame.
+
+The CPU in the same moment (CALIPER_CMAP_BENCH=1 caliper_tests --test-case="colormap keys: timing*"):
+[cmap-bench] derive_keys(0, 1): median 67.4 us, p95 75.8 us, 7659 evaluations of the reference; load 3.93
+[cmap-bench] derive_keys(-3.5, 7.25): median 74.3 us, p95 89.4 us, 7796 evaluations of the reference; load 3.93
+[cmap-bench] derive_keys(2, -1): median 81.0 us, p95 95.0 us, 7931 evaluations of the reference; load 3.93
+[cmap-bench] derive_keys(0, 3.40282e+38): median 63.1 us, p95 77.4 us, 5854 evaluations of the reference; load 3.93
+[cmap-bench] cache hit: block() median 3.7 ns, fill() with the 4,112-byte copy median 45.7 ns; 18000000 hits, 4 misses; load 3.93

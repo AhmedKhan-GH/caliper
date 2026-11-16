@@ -302,22 +302,26 @@ only where the compiler happens to keep the reference's operations. The keys mak
 - **The keys of a range.** For a range (vmin, vmax), the CPU finds by binary search over keys, for every level k from
   1 to 255, the first key whose reference level is at least k, evaluating `map_f32_to_rgba8` itself 5,900 to 7,900
   times for the ranges measured, in 65 to 83 microseconds on an M-series Max. A view keeps the blocks it uses, so a
-  range is derived once; finding a block in the cache costs about 4 nanoseconds and copying it out about 30. A level that no float reaches gets the
-  sentinel `0xffffffff`. A decreasing range flips every
-  key, so that the level only grows with the key. A degenerate range, an infinite end, an infinite span or a NaN end
+  range is derived once; finding a block in the cache costs about 4 nanoseconds and copying it out about 46. A level
+  that no float reaches gets the sentinel `0xffffffff`. A decreasing range flips every key, so that the level only
+  grows with the key. A degenerate range, an infinite end, an infinite span or a NaN end
   maps every value to level 0, so all its keys are the sentinel.
+- **The block.** The `Cmap` uniform block holds the range (for the guess), the flip, and one 16-byte entry per level:
+  the level's first key, the next level's first key and the level's packed colour, 4,112 bytes in all. A level test
+  and the level's colour are then one load of one entry. WGSL gives an array in a uniform a 16-byte stride, so flat
+  arrays of 32-bit keys are not possible there, and indexing into a vector of four keys costs more.
 - **The decision.** The shader tests NaN on the bits, guesses the level with the usual float formula, and accepts the
-  guess only if two integer comparisons with the keys confirm it; it tries the two neighbouring levels next and a
-  binary search of eight integer steps last. The guess only chooses which comparisons run. The colour is the table's
-  32-bit entry, converted to [0, 1] and back at the store, an error far below the half level that would change a byte.
+  guess only if its entry confirms it with two integer comparisons; it tries the two neighbouring levels next and a
+  binary search of eight integer steps last. The guess only chooses which comparisons run. The colour is the entry's
+  32-bit colour, converted to [0, 1] and back at the store, an error far below the half level that would change a
+  byte.
 
 The algorithm has two sources. The WGSL one is `cmap_color` in `src/host/gfx/shaders/common/colormap.wgsl`, which
 every generated program that colours by value uses: the vertex stages of points, lines, boxes and meshes, the image
 program, and `colormap_texture`, the compute form that writes an `rgba8unorm` texture from f32 values at an element
 base and row pitch, which the texture path is to run. The C++ one is `src/host/gfx/colormap_keys.h`, header-only
 C++17 with no GPU, whose decision functions are marked for a CUDA kernel to include. It holds the key of a float, the
-derivation of a range's keys, the fill of the `Cmap` uniform block (the range, the flip, 260 keys and the 256-entry
-table, 2,080 bytes), the integer decision exactly as the shader takes it, the range of a mapping whose ends may come
+derivation of a range's keys, the fill of the `Cmap` uniform block, the integer decision exactly as the shader takes it, the range of a mapping whose ends may come
 from statistics, as the snapshot flags `AUTO_VMIN` and `AUTO_VMAX` take them, and `KeyBlockCache`, which keeps the
 blocks of one owner by colormap and the exact bits of the range and drops the least recently used. A target that
 derives keys links `src/host/tensor_bridge.cpp`, where the reference lives.
@@ -326,13 +330,22 @@ The keys follow whatever the reference computes. Its index for a NaN quotient, w
 defined as 0, and fusing its `t * 255 + 0.5` into one multiply-add, which the compiler does on arm64, changes no
 level for any t in [0, 1], so the reference and its keys are the same on every platform.
 
-On Metal the integer decision costs more GPU time than the float formula. Measured on an M-series Max, the
-generated `colormap_texture`, compiled with safe math as the layer compiles every program, takes 31 µs on a
-1,024 x 1,024 heatmap and 79 µs on a 2,048 x 2,048 one, about three times the Metal renderer's float pass (9.5 µs
-and 26 µs). Most of the difference is the precise division of the float guess, which the decision does not need
-to be exact, and the rest the uint4-packed key and table reads and the two comparisons; with fast math, flat
-arrays and a 16 x 16 workgroup the same decision takes 15 µs and 36 µs. `python/bench/results/step6-colormap-keys.txt`
-holds the measurement with its variants.
+Keys decide the colour everywhere: in the app on every native backend, in the browser, on Dawn and in the CPU
+reference, which give bit-identical colours. The float formula is retired on the native path too, when the texture
+path moves onto the layer. The decision rested on its cost on Metal, measured on an M-series Max in quiet moments
+(`python/bench/results/step6-colormap-keys.txt`). As first built, with keys packed four to a vector, the layer's safe
+math and an 8 x 8 workgroup, the compute form took 31.0 µs on a 1,024 x 1,024 heatmap and 79.2 µs on a 2,048 x 2,048
+one, against 9.5 µs and 25.8 µs for the Metal renderer's float pass (load 3.49). Most of the difference was the
+precise division of the float guess, which the decision does not need, and the rest the vector-packed reads. The
+cheaper exact form then measured 14.7 µs and 36.3 µs in the same window. As built now, with one entry per level,
+fast math and a 16 x 8 workgroup, it takes 9.5 µs and 32.4 µs against 7.7 µs and 25.8 µs for the float pass (load
+3.93), within the 20 µs that a step may add to an update's GPU time.
+
+Fast math is a per-program option. The Metal backend compiles every program with fast math off, so that float
+results follow IEEE rules as the CPU references do, and `colormap_texture` alone sets `fast_math` in the shader
+manifest (`ProgramDesc::fast_math`): no rounding of its float guess can change a texel, because the guess only
+chooses which integer comparisons run. The vertex-stage colormap of the scene programs keeps safe math, because
+those programs place points and lines on pixel centres.
 
 The renderers' own colormaps do not use the keys yet: the Metal renderer's compute pass `cmap_f32`, the Vulkan
 renderer's `colormap.comp`, the CUDA kernel, the WebGPU renderer's pass with its float thresholds and the TypeScript
@@ -349,8 +362,9 @@ What proves it:
   signalling and negative NaNs, subnormals, the largest floats and 65,536 random bit patterns. It also checks that a
   wrong guess never changes a level, the keys' order, the AUTO ends and the cache.
 - `caliper_colormap_exhaustive` compares the C++ decision with the reference for all 2<sup>32</sup> inputs on each
-  of those ranges. It is a ctest entry under the label `slow` that skips unless `CALIPER_SLOW_TESTS=1`, and it runs
-  in up to 6 threads.
+  of those ranges, and `caliper_colormap_gpu_exhaustive` does the same for the generated `colormap_texture` on
+  Metal, created through the layer with fast math as the layer compiles it. Both are ctest entries under the label
+  `slow` that skip unless `CALIPER_SLOW_TESTS=1`, and they run in up to 6 threads.
 - `caliper_gfx_tests --test-case="gfx/Metal colormap*"` runs the boundary sets through the layer's Metal backend with
   the generated programs: `colormap_texture` as a dispatch and the vertex stage of `scene_points` as one point a pixel
   wide on each pixel centre, each from a layer buffer and from an imported `MTLBuffer` that the layer reports as in

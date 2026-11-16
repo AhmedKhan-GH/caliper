@@ -10,10 +10,12 @@ The shaders of the graphics layer in `src/host/gfx/` are written once, in WGSL, 
 | `src/host/gfx/shaders/scene/` | The vertex and fragment stages of each kind of scene draw: points, lines, boxes, meshes and images |
 | `src/host/gfx/shaders/compute/` | The index clamp, the edge gather and `colormap_texture`, the colormap's compute form for textures |
 | `src/host/gfx/shaders/tests/` | Programs that only the tests use, such as the colormap probe |
-| `src/host/gfx/shaders/manifest.json` | The programs: each one's sources in order, its outputs and the vertex and fragment pairs the checks make into pipelines |
+| `src/host/gfx/shaders/manifest.json` | The programs: each one's sources in order, its outputs, the vertex and fragment pairs the checks make into pipelines, and `fast_math` for a program that Metal may compile with fast math |
 | `src/host/gfx/shaders/generated/` | The committed outputs; never edit them by hand |
 
 A program is its sources concatenated in the order the manifest gives. Programs are appended to the manifest, because a program's id is its position there.
+
+The Metal backend compiles every program with fast math off, so that float results follow IEEE rules as the CPU references do: positions land on pixel centres, lighting stays within its two levels and NaN positions are hidden. A program whose output no float rounding can change may set `"fast_math": true` in the manifest, which the generator passes on as `ProgramDesc::fast_math`. Only `colormap_texture` sets it: its float guess only chooses which integer comparisons run, and an exhaustive test on Metal checks every input.
 
 ## What is generated
 
