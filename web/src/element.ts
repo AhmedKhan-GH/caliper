@@ -94,6 +94,8 @@ select:focus-visible, input:focus-visible, button:focus-visible { outline: 1px s
 `;
 
 const NEEDS_GPU: ReadonlySet<Kind> = new Set(['heatmap', 'image', 'points']);
+/** What a scene's plate says where the WebAssembly views cannot draw it. */
+const SCENE_NOTICE = 'A scene needs WebGPU and Caliper\'s WebAssembly views, which this browser or server does not have';
 const HOVER_MS = 1000 / 30;
 
 export class CaliperView extends HTMLElement {
@@ -504,7 +506,9 @@ export class CaliperView extends HTMLElement {
       return;
     }
     this.drawer = 'ts';
-    this.subscribe();
+    // A scene is drawn only by the WebAssembly views on WebGPU (protocol 3.2 draft): the element's
+    // own views do not draw scenes, so it subscribes to nothing and shows a notice in its place.
+    if (kind !== 'scene') this.subscribe();
     this.views(this.client?.views ?? []);
   }
 
@@ -675,6 +679,10 @@ export class CaliperView extends HTMLElement {
     if (this.resolved) this.picker.show(this.resolved);
     if (!this.drawer) this.decide(this.generation);
     const k = this.kind();
+    if (k === 'scene' && this.drawer === 'ts') {
+      this.message(SCENE_NOTICE);
+      return;
+    }
     if (k && this.drawer === 'ts') this.ensureLive(k);
     if (this.gotData || this.wasmReady) return;
     const missing = !e && this.client?.state === 'open';
@@ -734,6 +742,10 @@ export class CaliperView extends HTMLElement {
   // --- the live view ------------------------------------------------------------
 
   private ensureLive(kind: Kind): void {
+    if (kind === 'scene') {
+      this.message(SCENE_NOTICE);
+      return;
+    }
     if (this.liveKind === kind || this.creating === kind) return;
     this.destroyLive();
     const wantGpu = NEEDS_GPU.has(kind);

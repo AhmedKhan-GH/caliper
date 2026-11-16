@@ -35,8 +35,9 @@ export const MSG = {
 } as const;
 export type MessageType = keyof typeof MSG;
 
-export type Kind = 'heatmap' | 'image' | 'points' | 'series' | 'histogram';
-export const KIND_IDS: Record<Kind, number> = { heatmap: 1, image: 2, points: 3, series: 4, histogram: 5 };
+/** The live view kinds; scene (6) is the protocol 3.2 draft's (KIND_SCENE below). */
+export type Kind = 'heatmap' | 'image' | 'points' | 'series' | 'histogram' | 'scene';
+export const KIND_IDS: Record<Kind, number> = { heatmap: 1, image: 2, points: 3, series: 4, histogram: 5, scene: 6 };
 export function kindName(id: number): Kind | null {
   for (const k in KIND_IDS) if (KIND_IDS[k as Kind] === id) return k as Kind;
   return null;
