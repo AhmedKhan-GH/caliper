@@ -494,15 +494,25 @@ Caliper API runs on loopback in the test process.
   transcript (initialisation, thoughts, messages, four tool calls, two permission requests, a spec diff, an image, the
   end of the turn), the calls that reached Caliper API with the origin `agent`, the hosts the transport saw, and that
   the key appears nowhere.
+- `tests/test_dashboard_e2e.cpp` (doctest): the sidecar on the real command layer. `caliper-acp-harness` drives the
+  sidecar, still with the scripted model and a fake key, and its tools call a running `caliper-builder-host` over a
+  fresh workspace holding a Parquet file (written through DuckDB) and a safetensors file. The scripted conversation
+  imports both files, runs their loaders, creates the spec, adds the sources and the three panels of the fixture
+  `dashboard.spec.toml`, sets the layout and saves the applet, and the harness allows every permission request. The
+  test checks that each spec edit was asked about with a diff before it ran, that the diffs chain from the new spec to
+  the fixture's canonical text and match what each edit did, that the loader runs and the save were asked about too,
+  that the applet saved on disk equals the fixture, that every journal line comes from the origin `agent` and that no
+  dry run was journaled, and that the key appears nowhere.
 - `tests/test_key_store.cpp` (doctest): the memory store, the checks of providers and keys, the placement in a
   child's environment, and that no error quotes a key.
 
-ctest runs the pytest suite as `builder_agent_py` when the CMake variable `CALIPER_BUILDER_TEST_PYTHON` names an
-interpreter with `anthropic` and `pytest`, and otherwise reports it as skipped:
+ctest runs the pytest suite as `builder_agent_py`, and the test on the real command layer as `builder_agent_e2e`,
+when the CMake variable `CALIPER_BUILDER_TEST_PYTHON` names an interpreter with `anthropic` and `pytest` (the
+loaders module's tests of the same variable also need `numpy`), and otherwise reports them as skipped:
 
 ```sh
 uv venv --python 3.12 src/builder/agent/.venv
-uv pip install --python src/builder/agent/.venv/bin/python anthropic pytest
+uv pip install --python src/builder/agent/.venv/bin/python anthropic pytest numpy
 cmake -S src/builder -B <build> -G Ninja -DCALIPER_BUILDER_DUCKDB_DIR=<duckdb> \
       -DCALIPER_BUILDER_TEST_PYTHON=$PWD/src/builder/agent/.venv/bin/python
 cmake --build <build> && ctest --test-dir <build> -R builder_agent
@@ -518,7 +528,10 @@ spends money (a few cents). It uses `caliper-acp-harness`, which opens no window
 3. Start Caliper with its API on, for example `caliper --hidden --api --api-port 0` with `CALIPER_DATA_DIR` on a
    folder of the check, and note the path of `api.json` in that folder. Until the command layer is wired into the app,
    only the tools `app_info`, `app_applets`, `app_launch` and `capture_frame` work; the others answer that the app has
-   no command layer.
+   no command layer. To try the whole command layer before then, start the stand-in instead,
+   `caliper-builder-host --workspace ~/byok-check --api-dir ~/byok-check/api --approve allow`, put a Parquet file in
+   `~/byok-check/data`, and in step 5 ask the agent to import it and build a panel from it; the stand-in has no
+   `app_info` or capture, so use such a prompt there.
 4. In your own terminal, read the key without echoing it or putting it in the shell's history:
    `read -s ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY`.
 5. Make an empty folder for the check, for example `~/byok-check`, and run the harness. Give absolute paths inside
@@ -553,7 +566,7 @@ Built on this branch:
 - `src/builder/agent/pyproject.toml`: the package `caliper-agent` with its console script, Python 3.12 or later.
 - The key store: `src/builder/include/caliper_builder/agent/key_store.h`, `src/builder/agent/key_store.cpp` and
   `keychain_store_macos.cpp`.
-- The tests listed above, and the ctest entries `builder_agent` and `builder_agent_py`.
+- The tests listed above, and the ctest entries `builder_agent`, `builder_agent_py` and `builder_agent_e2e`.
 
 Waiting for later work:
 

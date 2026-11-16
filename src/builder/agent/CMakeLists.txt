@@ -7,9 +7,10 @@
 #
 # The sidecar's pytest suite runs as the ctest builder_agent_py when
 # CALIPER_BUILDER_TEST_PYTHON names a Python interpreter that has the sidecar's
-# dependencies (anthropic, pytest), for example the .venv of this folder:
+# dependencies (anthropic, pytest; the loaders module's tests of the same
+# variable also need numpy), for example the .venv of this folder:
 #   uv venv --python 3.12 src/builder/agent/.venv
-#   uv pip install --python src/builder/agent/.venv/bin/python anthropic pytest
+#   uv pip install --python src/builder/agent/.venv/bin/python anthropic pytest numpy
 #   cmake ... -DCALIPER_BUILDER_TEST_PYTHON=src/builder/agent/.venv/bin/python
 # Without it the test reports that it was skipped.
 set(_agent_sources key_store.cpp)
@@ -26,6 +27,22 @@ if(APPLE)
 endif()
 
 caliper_builder_add_tests(agent SOURCES tests/test_key_store.cpp LIBS caliper_builder_agent)
+
+# The sidecar end to end on the real command layer: caliper-acp-harness drives
+# caliper-agent, whose tools call caliper-builder-host over a fresh workspace
+# (tests/test_dashboard_e2e.cpp). POSIX only, like the host; it needs the
+# session module and CALIPER_BUILDER_TEST_PYTHON, and says it is skipped
+# without the interpreter.
+if(BUILD_TESTS AND NOT WIN32 AND TARGET caliper_builder_session_host AND TARGET caliper-builder-host)
+    caliper_builder_add_tests(agent_e2e SOURCES tests/test_dashboard_e2e.cpp
+        LIBS caliper_builder_session caliper_builder_acp caliper_builder_duckdb)
+    add_dependencies(caliper_builder_agent_e2e_tests caliper-builder-host caliper-acp-harness)
+    target_compile_definitions(caliper_builder_agent_e2e_tests PRIVATE
+        CALIPER_BUILDER_HOST_EXE="$<TARGET_FILE:caliper-builder-host>"
+        CALIPER_ACP_HARNESS="$<TARGET_FILE:caliper-acp-harness>"
+        CALIPER_BUILDER_TEST_PYTHON="${CALIPER_BUILDER_TEST_PYTHON}")
+    set_tests_properties(builder_agent_e2e PROPERTIES TIMEOUT 300 SKIP_REGULAR_EXPRESSION "builder_agent_e2e skipped")
+endif()
 
 if(BUILD_TESTS)
     set(CALIPER_BUILDER_TEST_PYTHON "" CACHE FILEPATH
