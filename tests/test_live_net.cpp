@@ -770,6 +770,61 @@ TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's message
     caliper_core_shutdown(core);
 }
 
+// The scene view reads a batch's colormap and flags as the integers they are: a flag far above
+// the known ones keeps AUTO_VMIN (2^60 + 1 is not a double, and through one it loses bit 0), and
+// a colormap id past 32 bits, or below 0, is no colormap.
+TEST_CASE("live/net: a scene batch's colormap and flags are read as integers, whatever their size") {
+    std::string no_gpu;
+    CaliperCore* core = net_core(320, 240, &no_gpu);
+    if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
+    FakeProducer p;
+    p.add_scene();
+    p.start();
+    REQUIRE_MESSAGE(caliper_core_live_attach_url(core, p.url().c_str()) == 1, caliper_core_last_error(core));
+    REQUIRE(poll_until(core, [&] { return p.call([](FakeProducer& f) { return f.sub_of.count("world"); }) == 1; }));
+    const std::vector<float> two = {0, 0, 0, 1, 1, 1};
+    p.call([&](FakeProducer& f) {
+        wire::SceneClear reset;
+        reset.sub = f.sub_of.at("world");
+        reset.view = "world";
+        reset.seq = ++f.seq;
+        reset.reset = true;
+        reset.state = true;
+        f.send(reset);
+        Json stats = Json::array();
+        for (double x : {5.0, 9.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0}) stats.push(x);
+        wire::SceneUpdate a = f.scene_update("auto", CALIPER_NET_PART_POINTS, two, false);
+        a.params.set("flags", (uint64_t(1) << 60) | (uint64_t)CALIPER_NET_SNAP_AUTO_VMIN);
+        a.params.set("vmin", 0.0);
+        a.params.set("vmax", 1.0);
+        a.params.set("stats", stats);
+        f.send(a);
+        wire::SceneUpdate big = f.scene_update("big", CALIPER_NET_PART_POINTS, two, false);
+        big.params.set("colormap", (int64_t)((uint64_t(1) << 40) | 2u));
+        f.send(big);
+        wire::SceneUpdate neg = f.scene_update("negative", CALIPER_NET_PART_POINTS, two, false);
+        neg.params.set("colormap", (int64_t)-2);
+        f.send(neg);
+        return 0;
+    });
+    caliper_live_views::SceneView* sv = nullptr;
+    REQUIRE(poll_until(core, [&] {
+        sv = caliper_live_views::scene_view(core, "world");
+        return sv && sv->counts().batches == 3;
+    }));
+    using caliper_scene::Primitive;
+    const caliper_scene::Batch* a = sv->tree().batch(sv->tree().find("auto"), Primitive::Points);
+    const caliper_scene::Batch* big = sv->tree().batch(sv->tree().find("big"), Primitive::Points);
+    const caliper_scene::Batch* neg = sv->tree().batch(sv->tree().find("negative"), Primitive::Points);
+    REQUIRE((a && big && neg));
+    CHECK(a->vmin == 5.0f);   // AUTO_VMIN: the producer's stats
+    CHECK(a->vmax == 1.0f);   // fixed
+    CHECK(big->colormap == 0u);
+    CHECK(neg->colormap == 0u);
+    caliper_core_live_detach(core);
+    caliper_core_shutdown(core);
+}
+
 TEST_CASE("live/net: a producer streams a heatmap, an image, points, a series and a histogram to "
           "an offscreen core attached by URL") {
     std::string no_gpu;
