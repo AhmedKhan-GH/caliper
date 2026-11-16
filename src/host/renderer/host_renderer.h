@@ -58,8 +58,8 @@ struct HostGeomDraw {
     // its colour is scaled by 1 up to w = fade_w0, falling linearly to
     // kPointFadeFloor at w = fade_w1 and beyond, so farther points are dimmer
     // and keep their hue. Zero: neither, the draw exactly as without them. The
-    // Metal and WebGPU backends draw them; the Vulkan and GL backends ignore
-    // them (constant size, no fade).
+    // Metal and WebGPU backends draw them; the Vulkan backend ignores them
+    // (constant size, no fade).
     float att_ref = 0.0f;
     float fade_w0 = 0.0f;
     float fade_w1 = 0.0f;
@@ -67,7 +67,7 @@ struct HostGeomDraw {
     // draw by exactly the index map_f32_to_rgba8 gives each value (through
     // colormap_thresholds, tensor_bridge.h), as the browser views do, instead
     // of the geometry service's own rule. The WebGPU backend always does; the
-    // Metal backend does when this is set; Vulkan and GL keep the service's.
+    // Metal backend does when this is set; Vulkan keeps the service's.
     bool exact_colormap = false;
 };
 

@@ -75,7 +75,7 @@ WINDOWS_ONLY = {
     "src/host/device_query_cuda.cpp": "src/host/applet_loader.cpp",
     "src/host/cuda_driver.cpp": "src/host/applet_loader.cpp",
     "src/host/live/live_unsupported.cpp": "src/host/live/live_controls.cpp",
-    "src/host/renderer/vulkan_renderer.cpp": "src/host/renderer/gl_renderer.cpp",
+    "src/host/renderer/vulkan_renderer.cpp": "src/host/core_lifecycle.cpp",
     "examples/embed_host/main_win32.cpp": "tests/test_embed.cpp",
     "tests/sdk_install_probe/probe.cpp": "tests/test_sugar.cpp",
 }
