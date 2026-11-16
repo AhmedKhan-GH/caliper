@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Caliper</title>
+<style>
+/*@FONTS@*/
+  /* The app's colours (src/host/ui/sternbild_theme.h), so a spec applet looks as it does in the app. */
+  :root {
+    --deep: #12110f;
+    --ground: #181715;
+    --plate: #201f1c;
+    --rule: #4b4945;
+    --parchment: #e8e0d0;
+    --secondary: #c1baaa;
+    --faint: #8f897c;
+    --bronze: #b38b59;
+    --text: "Plex Condensed", -apple-system, "Helvetica Neue", sans-serif;
+    --mono: "Source Code Pro", ui-monospace, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { display: flex; flex-direction: column; background: var(--ground); color: var(--parchment);
+         font: 11.54px/1 var(--text); -webkit-font-smoothing: antialiased; overflow: hidden; }
+  /* The page bar and the status strip keep their places at the window's edges, as the app's do. */
+  .bar { flex: 0 0 28px; display: flex; align-items: center; gap: 12px; padding: 0 8px;
+         background: var(--ground); border-bottom: 1px solid var(--rule); }
+  .wordmark { font: 12.3px/1 var(--text); letter-spacing: .14em; text-transform: uppercase; color: var(--parchment);
+              padding-right: 12px; border-right: 1px solid var(--rule); line-height: 27px; }
+  .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--parchment); }
+  main { position: relative; flex: 1 1 auto; min-height: 0; }
+  canvas { position: absolute; inset: 0; display: block; }
+  .list { margin: 0; padding: 16px; list-style: none; }
+  .list li { display: flex; gap: 16px; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--rule); }
+  .list a { color: var(--parchment); text-decoration: none; }
+  .list a:hover { color: var(--bronze); }
+  .list span { font: 11.14px var(--mono); color: var(--faint); }
+  .status { flex: 0 0 22px; display: flex; align-items: center; padding: 0 12px; background: var(--deep);
+            border-top: 1px solid var(--rule); font: 10.77px/1 var(--text); color: var(--secondary); white-space: nowrap; overflow: hidden; }
+  .status[data-state="offline"] { color: var(--bronze); }
+</style>
+</head>
+<body>
+<header class="bar"><span class="wordmark">Caliper</span><span class="title" id="title"></span></header>
+<main id="area"><canvas id="canvas"></canvas><ul class="list" id="list" hidden></ul></main>
+<footer class="status" id="status" role="status" data-state="connecting">connecting</footer>
+<script type="module">/*@SCRIPT@*/</script>
+</body>
+</html>
