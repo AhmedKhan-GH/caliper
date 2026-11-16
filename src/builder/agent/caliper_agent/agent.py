@@ -91,7 +91,8 @@ class Agent:
                  usage_log: str | None = None, key_required: bool = True, commands: list[Command] | None = None,
                  scope_rule: ScopeRule | None = None, refusal: Exception | None = None,
                  provider_meta: dict | None = None, widget_model: str | None = None,
-                 widget_effort: str | None = None) -> None:
+                 widget_effort: str | None = None, widget_requests: int | None = None) -> None:
+        self._widget_requests = widget_requests
         self._usage_log = usage_log
         # Why no provider may run (offline.py): every session/new and
         # session/prompt is then answered with this error.
@@ -235,6 +236,8 @@ class Agent:
             caliper_meta["model"] = caps.as_meta(model)
         state = SessionState(id=sid, cwd=cwd.rstrip("/") or "/", settings=Settings(model=model, effort=effort),
                              widget=widget)
+        if self._widget_requests:
+            state.widget_max_requests = self._widget_requests
         self._sessions[sid] = Session(state)
         result: dict = {"sessionId": sid, "configOptions": self._config_options(state)}
         if widget is not None:

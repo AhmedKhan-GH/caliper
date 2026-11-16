@@ -5,7 +5,7 @@
                   [--preset ID] [--provider claude|openai-compatible] [--base-url URL]
                   [--model ID] [--effort LEVEL] [--model-tools yes|no]
                   [--model-vision yes|no] [--context-length TOKENS]
-                  [--cache-dir PATH] [--no-compaction]
+                  [--cache-dir PATH] [--no-compaction] [--widget-requests N]
                   [--usage-log PATH] [--version]
     caliper-agent probe --model ID [--preset ID] [--provider ...] [--base-url URL] [--cache-dir PATH]
                   [--refresh] [--list-models] [--no-vision-probe] [--set NAME=VALUE ...]
@@ -82,6 +82,16 @@ def _context_length(text: str) -> int:
     return value
 
 
+def _widget_requests(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("the widget agent's budget is a whole number of requests") from None
+    if not 1 <= value <= 20:
+        raise argparse.ArgumentTypeError("the widget agent's budget is from 1 to 20 requests")
+    return value
+
+
 def _yes_no(value: str | None) -> bool | None:
     return None if value is None else value == "yes"
 
@@ -112,9 +122,13 @@ def main(argv: list[str] | None = None) -> int:
                              "until the server says no)")
     parser.add_argument("--context-length", type=_context_length,
                         help="the model's context length in tokens, the person's setting (default: the cached probe, "
-                             "else 8192 for an OpenAI-compatible model)")
+                             "else 8192 for an OpenAI-compatible model); for the Ollama preset, the context length "
+                             "the model is loaded with in every session (default: 16384 for the widget agent, 32768 "
+                             "for the general role)")
     parser.add_argument("--cache-dir", help="the folder of the capability cache (model-capabilities.json)")
     parser.add_argument("--no-compaction", action="store_true", help="turn server-side compaction off")
+    parser.add_argument("--widget-requests", type=_widget_requests,
+                        help="the model requests a widget prompt may make (default: 6)")
     parser.add_argument("--usage-log", help="append the token counts of each request to this file (JSON Lines)")
     parser.add_argument("--version", action="store_true", help="print the version and exit")
     args = parser.parse_args(argv)
@@ -138,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     from .capabilities import ProbeCache, claude_facts, resolve
     from .claude import API_BASE_URL, DEFAULT_EFFORT, DEFAULT_MODEL, MODELS, ClaudeProvider
     from .loop import build_agent
+    from .ollama_native import native_context
     from .openai_compat import BaseUrlError, OpenAICompatProvider
     from .presets import PresetError, choose
     from .prompt import SYSTEM_PROMPT
@@ -220,13 +235,27 @@ def main(argv: list[str] | None = None) -> int:
             entry = cache.get(base_url, args.model) if cache is not None else None
             known = resolve(entry, options={"tools": _yes_no(args.model_tools), "vision": _yes_no(args.model_vision),
                                             "context_length": args.context_length})
+            context, context_source = known.context_length.value, known.context_length.source
+            # The widget role takes the person's setting in the app (an override in
+            # the cache) or --context-length; the general role takes --context-length.
+            num_ctx = native_context(choice.preset, context, context_source, "widget")
+            general_ctx = native_context(choice.preset, args.context_length, "option" if args.context_length else
+                                         "default", "general")
+            if num_ctx is not None:
+                # Ollama loads the model with this context length, so it is the model's.
+                context = num_ctx
+                if context_source not in ("override", "option"):
+                    context_source = "preset"
             provider = OpenAICompatProvider(base_url, args.model,
                                             model_key if model_status == KeyStatus.PRESENT else None,
                                             tools=bool(known.tools.value), vision=bool(known.vision.value),
-                                            backoff_scale=backoff, context_length=known.context_length.value,
+                                            backoff_scale=backoff, context_length=context,
                                             sources={"tools": known.tools.source, "vision": known.vision.source,
-                                                     "context_length": known.context_length.source},
-                                            quirks=known.quirks)
+                                                     "context_length": context_source},
+                                            quirks=known.quirks,
+                                            native={"num_ctx": {"widget": num_ctx, "general": general_ctx},
+                                                    "kv_bytes_per_token": known.quirks.get("kv_bytes_per_token")}
+                                            if num_ctx is not None else None)
         except OfflineError as exc:
             refusal = exc
     if refusal is not None:
@@ -240,7 +269,8 @@ def main(argv: list[str] | None = None) -> int:
         agent = Agent(conn, provider, key_status, tools, graph, api, default_model=default_model,
                       default_effort=args.effort or DEFAULT_EFFORT, usage_log=args.usage_log,
                       key_required=key_required, commands=commands, scope_rule=scope_rule, refusal=refusal,
-                      provider_meta=choice.as_meta(), widget_model=args.model, widget_effort=args.effort)
+                      provider_meta=choice.as_meta(), widget_model=args.model, widget_effort=args.effort,
+                      widget_requests=args.widget_requests)
         try:
             await conn.serve(agent.on_request, agent.on_notification)
         finally:
@@ -301,6 +331,7 @@ def probe_main(argv: list[str]) -> int:
     from .capabilities import DEFAULT_CONTEXT_LENGTH, CacheError, Entry, ProbeCache, resolve
     from .claude import API_BASE_URL
     from .presets import BaseUrlError, PresetError, choose
+    from .ollama_native import native_context
     from .probe import now_iso, probe_claude, probe_openai_compatible
     from .scripted import SCRIPT_ENV, load_script
     from .stub_transport import StubTransport
@@ -339,6 +370,14 @@ def probe_main(argv: list[str]) -> int:
             return fail(f"the test script cannot be read: {exc}")
         transport = StubTransport(script)
 
+    # The Ollama preset's test calls load the model with the context length the
+    # agent will use: the person's override, else the preset's.
+    over = cache.get(base_url, args.model) if cache is not None else None
+    over_context = over.overrides.get("context_length") if over is not None else None
+    num_ctx = native_context(choice.preset, over_context, "override" if over_context is not None else "default",
+                             "widget")
+    native = {"num_ctx": num_ctx} if num_ctx is not None else None
+
     async def run_probe(list_only: bool):
         if kind == "claude":
             return await probe_claude(args.model, claude_key if claude_status == KeyStatus.PRESENT else None,
@@ -346,7 +385,7 @@ def probe_main(argv: list[str]) -> int:
         return await probe_openai_compatible(base_url, args.model,
                                              model_key if model_status == KeyStatus.PRESENT else None,
                                              preset=choice.preset.id if choice.preset is not None else None,
-                                             vision=not args.no_vision_probe, list_only=list_only)
+                                             vision=not args.no_vision_probe, list_only=list_only, native=native)
 
     out: dict = {"version": 1, "preset": choice.preset.id if choice.preset is not None else None,
                  "provider": kind, "base_url": base_url, "model": args.model}

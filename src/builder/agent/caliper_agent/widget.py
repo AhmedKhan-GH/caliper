@@ -61,8 +61,10 @@ MAX_PROMPT_IMAGE_BYTES = (5 * 1000 * 1000 * 3) // 4
 TARGET_KINDS = ("panel", "selection", "dropped_file", "property")
 
 # The turn budget of a widget prompt (design/widget-agent.md, The turn budget):
-# two rounds and a correction, a few tool calls and a bounded reply.
-WIDGET_MAX_REQUESTS = 3
+# six model requests, enough for a model that makes the edits of a selection's
+# table one call at a time (three edits, a check and the reply), a few tool
+# calls and a bounded reply. `caliper-agent --widget-requests` sets another.
+WIDGET_MAX_REQUESTS = 6
 WIDGET_MAX_TOOL_CALLS = 8
 WIDGET_MAX_TOKENS = 8000
 

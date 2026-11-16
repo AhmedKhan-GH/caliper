@@ -381,7 +381,8 @@ def test_the_widget_request_on_the_claude_wire_is_haiku_at_low_effort_with_a_sma
 
 
 def test_the_turn_budget_stops_a_widget_prompt(run_agent, caliper):
-    steps = [message(tool_use(f"r{i}", "spec_get", {}), stop="tool_use") for i in range(5)]
+    assert WIDGET_MAX_REQUESTS == 6
+    steps = [message(tool_use(f"r{i}", "spec_get", {}), stop="tool_use") for i in range(WIDGET_MAX_REQUESTS + 2)]
     agent, record = run_agent(steps)
     sid = agent.start_session(meta=widget_meta())
     response, updates = agent.prompt(sid, "Keep looking")
@@ -390,6 +391,9 @@ def test_the_turn_budget_stops_a_widget_prompt(run_agent, caliper):
     assert len(read_requests(record)) == WIDGET_MAX_REQUESTS
     [limit] = [s for s in statuses(updates) if s["status"] == "limit"]
     assert limit["max_requests"] == WIDGET_MAX_REQUESTS and limit["max_tool_calls"] == WIDGET_MAX_TOOL_CALLS
+    # Reads only: the reply says so, with nothing to accept.
+    assert message_text(updates) == ("The agent stopped at its limit of 6 model requests, without a change. Refine "
+                                     "the request to try again, or ask in the side chat.")
 
     ran = len(caliper.commands("spec.get", dry=None))
     assert ran == WIDGET_MAX_REQUESTS
@@ -401,6 +405,36 @@ def test_the_turn_budget_stops_a_widget_prompt(run_agent, caliper):
     assert len(caliper.commands("spec.get", dry=None)) == ran     # none of the nine ran
     assert len(read_requests(record)) == 1
     assert {u["toolCallId"] for u in updates if u.get("status") == "failed"} == {f"g{i}" for i in range(9)}
+    # The calls the model asked for and that did not run: the reply names the first.
+    assert "before spec.get" in message_text(updates)
+
+
+def test_a_prompt_cut_by_the_budget_says_the_change_is_not_finished_and_refine_finishes_it(run_agent, caliper):
+    # A budget of one request: the first reply's edit runs, the request after it is not made.
+    caliper.handlers["panel.patch"] = _patch_ok
+    steps = [message(text("Adding the table."),
+                     tool_use("p1", "panel_patch", {"id": "curves", "patch": {"title": "Selected"}}), stop="tool_use"),
+             message(tool_use("p2", "panel_patch", {"id": "curves", "patch": {"options": {"y_log": False}}}),
+                     stop="tool_use")]
+    agent, record = run_agent(steps, extra_args=["--widget-requests", "1"])
+    sid = agent.start_session(meta=widget_meta(preview="widget-9"))
+    response, updates = agent.prompt(sid, "Make a table of these points")
+    assert response["result"]["stopReason"] == "max_turn_requests"
+    widget = response["result"]["_meta"]["caliper"]["widget"]
+    assert widget["limit"] is True and widget["edits"] == 1 and widget["preview"] == "widget-9"
+    assert message_text(updates) == (
+        "Adding the table.\n\nThe change is not finished: the agent stopped at its limit of 1 model request after "
+        "1 edit (panel.patch). Accept applies the edits shown, or Refine lets it finish.")
+    [limit] = [s for s in statuses(updates) if s["status"] == "limit"]
+    assert limit["edits"] == ["panel.patch"] and limit["next"] is None
+    assert len(read_requests(record)) == 1
+    # Refine: the same session and preview go on, with the cut turn in the history.
+    response, updates = agent.prompt(sid, "Finish it")
+    assert response["result"]["_meta"]["caliper"]["widget"]["edits"] == 1
+    patches = caliper.commands("panel.patch")
+    assert len(patches) == 2 and all(c["preview"] == "widget-9" for c in patches)
+    second = read_requests(record)[1]
+    assert "Make a table of these points" in json.dumps(second) and "Finish it" in json.dumps(second)
 
 
 def test_handoff_ends_the_turn_with_a_structured_answer(run_agent, caliper):

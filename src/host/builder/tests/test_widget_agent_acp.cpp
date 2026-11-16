@@ -81,7 +81,7 @@ struct AcpRig {
     std::string before;
     size_t steps_before = 0;
 
-    AcpRig(const std::string& name, const json& steps) {
+    AcpRig(const std::string& name, const json& steps, const std::vector<std::string>& extra_args = {}) {
         root = fresh_dir("widget-acp-" + name);
         ws = root + "/ws";
         s = dashboard_workspace(ws, root + "/data");
@@ -109,6 +109,7 @@ struct AcpRig {
         AcpWidgetAgentOptions o;
         o.argv = {CALIPER_BUILDER_TEST_PYTHON, "-P", "-m", "caliper_agent", "--command-table",
                   builder + "/commands/command_table.json", "--api-file", api_file};
+        o.argv.insert(o.argv.end(), extra_args.begin(), extra_args.end());
         o.env = {{"ANTHROPIC_API_KEY", kFakeKey},
                  {"CALIPER_AGENT_OFFLINE", "1"},
                  {"CALIPER_AGENT_TEST_SCRIPT", script},
@@ -248,6 +249,47 @@ TEST_CASE("widget agent over ACP: a prompt, a refinement and Accept through the 
     CHECK(requests.find("\"preview_commit\"") == std::string::npos);
     CHECK(requests.find("caliper-data") != std::string::npos);   // the context bundle reached the model
     CHECK(r.agent->running());   // the process stays for the next ⌘K
+}
+
+TEST_CASE("widget agent over ACP: a turn cut at its budget says the change is not finished, Refine goes on, and "
+          "Accept applies what the card shows" * doctest::test_suite("agent")) {
+    if (skipped()) return;
+    // A budget of one model request: each reply's edit runs, and the request
+    // after it is not made.
+    AcpRig r("limit", json::array({step({kLinearY}, "tool_use"), step({kTitle}, "tool_use")}),
+             {"--widget-requests", "1"});
+    r.ask("Use a linear y axis and call the panel Training curves");
+    INFO("error: " << r.surface->error().code << " " << r.surface->error().message);
+    REQUIRE(r.surface->state() == WidgetState::preview);
+    CHECK(r.surface->limit());
+    CHECK(r.surface->tag() == "LIMIT");
+    CHECK(r.surface->edits() == 1);
+    CHECK(r.surface->reply() == "The change is not finished: the agent stopped at its limit of 1 model request after "
+                                "1 edit (panel.patch). Accept applies the edits shown, or Refine lets it finish.");
+    CHECK(r.surface->card_actions() == std::vector<WidgetAction>{WidgetAction::accept, WidgetAction::reject,
+                                                                 WidgetAction::refine, WidgetAction::diff});
+    const std::string preview = r.surface->preview_id();
+    // Refine goes on in the same session, on the same preview.
+    r.surface->refine();
+    r.surface->set_text("Finish it");
+    r.surface->submit();
+    r.wait();
+    REQUIRE(r.surface->state() == WidgetState::preview);
+    CHECK(r.surface->preview_id() == preview);
+    CHECK(r.surface->edits() == 2);
+    REQUIRE(r.surface->diff().size() == 2);
+    CHECK(r.s->open_spec()->text == r.before);
+    // Accept applies the two edits the card shows, as one undo step.
+    r.surface->accept();
+    REQUIRE(r.surface->state() == WidgetState::applied);
+    const std::string after = r.s->open_spec()->text;
+    CHECK(after.find("y_log") == std::string::npos);
+    CHECK(after.find("Training curves") != std::string::npos);
+    CHECK(r.undo_steps() == r.steps_before + 1);
+    int edits = 0;
+    for (const auto& e : caliper_builder::read_journal(r.ws + "/journal/commands.jsonl").events)
+        if (e.name == "panel.patch" && e.group == preview) ++edits;
+    CHECK(edits == 2);
 }
 
 TEST_CASE("widget agent over ACP: a refusal, a handoff and Reject" * doctest::test_suite("agent")) {

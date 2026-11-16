@@ -100,6 +100,10 @@ struct WidgetAgentEvent {
     int edits = -1;                       // finished: the preview's edits after the turn; -1 unknown
     std::optional<WidgetHandoff> handoff; // finished
     bool limit = false;                   // finished: a budget limit ended the turn
+    // finished: the input tokens of each model request of the turn and the
+    // output tokens of all, as the agent reports them; empty when it does not.
+    std::vector<long long> input_tokens;
+    long long output_tokens = 0;
     caliper_builder::Error error;         // failed, exited
 };
 

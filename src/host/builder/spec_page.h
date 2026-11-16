@@ -170,6 +170,12 @@ public:
     // ("idle" before any ⌘K).
     bool panel_rect(const std::string& panel_id, float rect[4]) const;
     std::string widget_state() const;
+    // What the inline surface shows besides its state, for the driver's log:
+    // its tag, its edits, the model, an error's code and message, the input
+    // tokens of each request of the last turn and its output tokens, and the
+    // start of the reply, such as "tag LIMIT, 1 edit, model qwen, reply ...";
+    // "" before any ⌘K.
+    std::string widget_facts() const;
     // Presses the inline surface's action of that label ("Setup", "Accept",
     // ...) when the surface offers it now, as a click on its button does;
     // false otherwise. For the hidden app's input driver.
