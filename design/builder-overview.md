@@ -77,6 +77,51 @@ These items need the app's main loop, its window or its API server, or build the
 | 18 | **The provider conformance suite**, with stubs by default and real runs on demand | M, 4 days |
 | 19 | **The GPU contention note** while a training run is live | S, 1 day |
 
+### Where the pieces sit
+
+This is a placement sketch for review, not a visual design. Each piece is built in the app and checked with screenshots at two window sizes, as the UI principles ask. The sketch shows a live page in build mode with every pane open.
+
+```
+┌────────────────────────────────────────────────────────────────────────────────┐
+│ page bar    Home ▸ run42                                   [Build]  [Chat]     │
+├────────────────────────────────────────────────────────────────────────────────┤
+│ run bar     ● running   ❙❙  ▶  ⏭    lr 0.001   …        (a stream only)        │
+├────────────┬──────────────────────────────────────────────┬────────────────────┤
+│ Sources    │ canvas: the page's views and spec panels      │ Selection │ Props  │
+│  table:…   │ ┌────────────────────┐ ┌───────────────────┐  │  (tabs, upper)     │
+│  tensor:…  │ │ loss               │ │ attention         │  │                    │
+│  live:…    │ │ ┌────────────────┐ │ │                   │  │                    │
+│            │ │ │ ⌘K  prompt   ⏎ │ │ │                   │  ├────────────────────┤
+│ Primitives │ │ └────────────────┘ │ │                   │  │ Chat               │
+│  series    │ │  preview in place  │ │                   │  │  (the side chat,   │
+│  heatmap   │ │ Accept Reject Refine│ └───────────────────┘  │   lower)           │
+│  points …  │ └────────────────────┘                        │                    │
+│            │ ┌ Spec text (toggled, under the canvas) ────┐ │                    │
+│            │ └───────────────────────────────────────────┘ │                    │
+├────────────┴──────────────────────────────────────────────┴────────────────────┤
+│ jobs tray   (while it is open)                                                 │
+├────────────────────────────────────────────────────────────────────────────────┤
+│ status bar                                                                     │
+└────────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **The host's strips stay as they are.** The page bar, the run bar of a stream, the jobs tray and the status bar keep their places at the window's edges. The page bar gains two toggles, Build and Chat.
+- **The canvas is the page itself.** The live page's views and a spec's panels fill the centre, which stays the largest region. Build mode does not open another page; it adds the columns beside the same views.
+- **The right column is where the selection pane already is.** Today the live page gives the selection's details a pane at its right edge. That place becomes a side column with two parts, like the side roles of the applet page. The upper part holds Selection and, in build mode, Properties, as tabs. The lower part holds the side chat. Each part appears only while it has something to show, and the column is a share of the window.
+- **The left column exists only in build mode.** It holds the two palettes, Sources (the catalog) and Primitives. Dragging a source or a primitive onto the canvas makes a panel.
+- **The spec text** is a strip under the canvas, toggled from the builder, in sync with the panels both ways.
+- **The ⌘K prompt is inside the panel it acts on.** It opens at the top of the focused panel, or at a selection, a dropped file's entry in Sources or a property's row. The preview is drawn in that panel in place of its content, with Accept, Reject and Refine under the prompt. Nothing covers another pane.
+- **A dropped file** lands anywhere on the page and appears in Sources; outside build mode the page shows the import in the jobs tray.
+
+### What the rebase onto sprint 2 costs
+
+A trial on a throwaway branch replayed this work onto sprint 2's head of 15 November 2026 (`d5c1000`).
+
+- **Conflicts:** none. All 75 commits applied as they are, because the code is in new files under `src/builder/` and the pages are in `design/`.
+- **The standalone build** passes its 15 test suites on the rebased tree, including the test in which `caliper-mcp` drives the hidden app of sprint 2, and the docs site builds strictly.
+- **In the host build,** one line, `add_subdirectory(src/builder)`, configures and builds every builder target against the host's static DuckDB and its toml++. One suite fails there: the JSON and JSONL readers answer `loader.json_not_available`, because the host builds DuckDB with the `parquet` and `core_functions` extensions only. The host's DuckDB needs the `json` extension.
+- **Left to reconcile by hand:** the roadmap's Phase 3 text, which both sprints edit without a textual conflict; the links from the design pages to the plan pages that sprint 2 moves into `design/`; the snippet includes of `spec-format.md`, which need a `design/mkdocs.yml` whose snippet base is the repository root; and API v0's statement that it serves no command layer, which changes when the command endpoints arrive.
+
 ## Acceptance
 
 The work is accepted when all of these hold:
