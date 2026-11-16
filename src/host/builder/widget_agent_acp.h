@@ -7,10 +7,11 @@
 //     key placed only in its environment by the key store
 //     (place_key_in_environment()), and stays for later sessions;
 //   - start() opens a session with `session/new` and
-//     _meta.caliper.widget = {target, preview}, closing the one before with
+//     _meta.caliper.widget = {target, preview, scope}, closing the one before with
 //     `session/close`; the model and effort shown are the session's config
 //     options as the sidecar reports them;
-//   - prompt() is a `session/prompt`, whose updates become progress (each tool
+//   - prompt() is a `session/prompt` with the context bundle's blocks before
+//     the request on a session's first prompt, whose updates become progress (each tool
 //     call's title), thoughts and the reply, and whose answer's
 //     _meta.caliper.widget gives the edits, the handoff and the limit;
 //   - cancel() is `session/cancel`, close() `session/close`.
@@ -71,15 +72,18 @@ public:
     AcpWidgetAgent& operator=(const AcpWidgetAgent&) = delete;
 
     bool available(std::string* why) const override;
-    void start(const WidgetTarget& target, const std::string& preview) override;
-    void prompt(const std::string& text) override;
+    void start(const WidgetTarget& target, const std::string& preview, const std::vector<std::string>& scope) override;
+    void prompt(const std::string& text, const nlohmann::json& context) override;
     void cancel() override;
     void close() override;
     bool poll(WidgetAgentEvent* out) override;
     std::string model_label() const override;
 
     // The session's _meta as start() sends it.
-    static nlohmann::json session_meta(const WidgetTarget& target, const std::string& preview);
+    static nlohmann::json session_meta(const WidgetTarget& target, const std::string& preview,
+                                       const std::vector<std::string>& scope = {});
+    // The prompt's content: the context blocks, then the request as text.
+    static nlohmann::json prompt_content(const std::string& text, const nlohmann::json& context);
     // "Model name · effort" from session/new's configOptions, or "".
     static std::string label_from_config(const nlohmann::json& config_options);
 

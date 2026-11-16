@@ -216,6 +216,7 @@ TEST_CASE("widget agent over ACP: a prompt, a refinement and Accept through the 
     const std::string requests = r.requests();
     CHECK(requests.find(kFakeKey) == std::string::npos);
     CHECK(requests.find("\"preview_commit\"") == std::string::npos);
+    CHECK(requests.find("caliper-data") != std::string::npos);   // the context bundle reached the model
     CHECK(r.agent->running());   // the process stays for the next ⌘K
 }
 
@@ -283,7 +284,7 @@ TEST_CASE("widget agent over ACP: no key means no provider, and the sidecar is n
     AcpWidgetAgent local(o);
     CHECK(local.available(nullptr));
     // A start that cannot spawn the sidecar fails the session.
-    local.start(WidgetTarget::for_panel("curves"), "widget-x");
+    local.start(WidgetTarget::for_panel("curves"), "widget-x", {});
     WidgetAgentEvent e;
     bool got = false;
     for (int i = 0; i < 500 && !got; ++i) {
@@ -300,9 +301,15 @@ TEST_CASE("widget agent over ACP: the session's _meta and the label from config 
     t.kind = WidgetTarget::Kind::property;
     t.panel = "attention";
     t.path = "options.colormap";
-    const json meta = AcpWidgetAgent::session_meta(t, "widget-1");
-    CHECK(meta == json{{"caliper", {{"widget", {{"target", {{"kind", "property"}, {"panel", "attention"}, {"path", "options.colormap"}}},
-                                                {"preview", "widget-1"}}}}}});
+    const json meta = AcpWidgetAgent::session_meta(t, "widget-1", {"spec.get", "panel.patch"});
+    CHECK(meta["caliper"]["widget"]["target"] == json{{"kind", "property"}, {"panel", "attention"}, {"path", "options.colormap"}});
+    CHECK(meta["caliper"]["widget"]["preview"] == "widget-1");
+    CHECK(meta["caliper"]["widget"]["scope"] == json::array({"spec.get", "panel.patch"}));
+    CHECK_FALSE(AcpWidgetAgent::session_meta(t, "widget-1")["caliper"]["widget"].contains("scope"));
+    const json content = AcpWidgetAgent::prompt_content("Use a linear y axis", json::array({{{"type", "text"}, {"text", "ctx"}}}));
+    REQUIRE(content.size() == 2);
+    CHECK(content[1]["text"] == "Use a linear y axis");
+    CHECK(AcpWidgetAgent::prompt_content("x", json()).size() == 1);
     const json config = json::array(
         {{{"id", "model"}, {"currentValue", "claude-haiku-5-5"},
           {"options", json::array({{{"value", "claude-haiku-5-5"}, {"name", "Claude Haiku 5.5"}}})}},

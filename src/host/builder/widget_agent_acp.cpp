@@ -76,8 +76,17 @@ std::string AcpWidgetAgent::model_label() const {
     return label_;
 }
 
-json AcpWidgetAgent::session_meta(const WidgetTarget& target, const std::string& preview) {
-    return {{"caliper", {{"widget", {{"target", target.to_json()}, {"preview", preview}}}}}};
+json AcpWidgetAgent::session_meta(const WidgetTarget& target, const std::string& preview,
+                                  const std::vector<std::string>& scope) {
+    json w{{"target", target.to_json()}, {"preview", preview}};
+    if (!scope.empty()) w["scope"] = scope;
+    return {{"caliper", {{"widget", w}}}};
+}
+
+json AcpWidgetAgent::prompt_content(const std::string& text, const json& context) {
+    json blocks = context.is_array() ? context : json::array();
+    blocks.push_back({{"type", "text"}, {"text", text}});
+    return blocks;
 }
 
 std::string AcpWidgetAgent::label_from_config(const json& config) {
@@ -100,14 +109,14 @@ std::string AcpWidgetAgent::label_from_config(const json& config) {
     return effort.empty() ? model : model + " \xC2\xB7 " + effort;   // ·
 }
 
-void AcpWidgetAgent::start(const WidgetTarget& target, const std::string& preview) {
+void AcpWidgetAgent::start(const WidgetTarget& target, const std::string& preview, const std::vector<std::string>& scope) {
     int gen = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         gen = ++generation_;
         session_.clear();
     }
-    const json meta = session_meta(target, preview);
+    const json meta = session_meta(target, preview, scope);
     post([this, gen, meta] {
         auto stale = [&] {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -168,13 +177,14 @@ void AcpWidgetAgent::start(const WidgetTarget& target, const std::string& previe
     });
 }
 
-void AcpWidgetAgent::prompt(const std::string& text) {
+void AcpWidgetAgent::prompt(const std::string& text, const json& context) {
     int gen = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         gen = generation_;
     }
-    post([this, gen, text] {
+    const json content = prompt_content(text, context);
+    post([this, gen, content] {
         std::shared_ptr<acp::AcpClient> client;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -182,7 +192,7 @@ void AcpWidgetAgent::prompt(const std::string& text) {
             if (session_.empty()) return;   // the session failed to open; its failure is posted
             client = client_;
         }
-        if (caliper_builder::Error e = client->prompt(text)) {
+        if (caliper_builder::Error e = client->prompt_blocks(content)) {
             WidgetAgentEvent ev;
             ev.kind = WidgetAgentEvent::Kind::failed;
             ev.error = e;

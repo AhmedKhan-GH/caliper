@@ -30,23 +30,23 @@ const char* widget_target_kind_name(WidgetTarget::Kind kind) {
     return "panel";
 }
 
-json WidgetTarget::to_json() const {
-    json t{{"kind", widget_target_kind_name(kind)}};
+caliper_builder::WidgetTarget WidgetTarget::to_builder() const {
+    caliper_builder::WidgetTarget t;
     switch (kind) {
-        case Kind::panel:
-        case Kind::selection: t["panel"] = panel; break;
-        case Kind::dropped_file:
-            t["loader"] = loader;
-            t["catalog"] = catalog;
-            break;
-        case Kind::property:
-            if (!panel.empty()) t["panel"] = panel;
-            else t["source"] = source;
-            t["path"] = path;
-            break;
+        case Kind::panel: t.kind = caliper_builder::WidgetTargetKind::panel; break;
+        case Kind::selection: t.kind = caliper_builder::WidgetTargetKind::selection; break;
+        case Kind::dropped_file: t.kind = caliper_builder::WidgetTargetKind::dropped_file; break;
+        case Kind::property: t.kind = caliper_builder::WidgetTargetKind::property; break;
     }
+    t.panel = panel;
+    t.source = source;
+    t.loader = loader;
+    t.catalog = catalog;
+    t.path = path;
     return t;
 }
+
+json WidgetTarget::to_json() const { return caliper_builder::widget_target_to_json(to_builder()); }
 
 json WidgetTarget::preview_scope() const {
     switch (kind) {
@@ -92,7 +92,8 @@ std::string ScriptedWidgetAgent::model_label() const {
     return script_.effort.empty() ? script_.model : script_.model + " · " + script_.effort;
 }
 
-void ScriptedWidgetAgent::start(const WidgetTarget&, const std::string& preview) {
+void ScriptedWidgetAgent::start(const WidgetTarget&, const std::string& preview, const std::vector<std::string>& scope) {
+    scopes_.push_back(scope);
     if (open_) close();
     open_ = true;
     started_ = false;
@@ -105,8 +106,9 @@ void ScriptedWidgetAgent::start(const WidgetTarget&, const std::string& preview)
     previews_.push_back(preview);
 }
 
-void ScriptedWidgetAgent::prompt(const std::string& text) {
+void ScriptedWidgetAgent::prompt(const std::string& text, const json& context) {
     prompts_.push_back(text);
+    contexts_.push_back(context);
     if (!open_) {
         WidgetAgentEvent e;
         e.kind = WidgetAgentEvent::Kind::failed;

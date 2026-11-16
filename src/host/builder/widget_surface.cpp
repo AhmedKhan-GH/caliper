@@ -50,6 +50,13 @@ caliper_builder::PanelData SessionWidgetSession::resolve(const std::string& pane
     return session_.resolve(panel, preview);
 }
 
+caliper_builder::ContextBundle SessionWidgetSession::bundle(const WidgetTarget& target, const std::string& preview) {
+    caliper_builder::ContextBundleOptions o = bundle_options;
+    o.preview = preview;
+    o.origin = caliper_builder::CommandOrigin::ui;
+    return caliper_builder::build_context_bundle(session_, target.to_builder(), o);
+}
+
 // ---- the compact diff -------------------------------------------------------------------
 
 namespace {
@@ -386,13 +393,25 @@ void WidgetSurface::begin_turn(const std::string& text) {
         enter(WidgetState::failed);
         return;
     }
+    json context;
     if (!session_open_ || fresh_session_) {
-        agent_.start(target_, preview_);
+        // A new session: the context bundle goes before its first request,
+        // and its scope with session/new. Without one, the sidecar derives
+        // the scope itself and the model reads what it needs.
+        caliper_builder::ContextBundle b = session_.bundle(target_, preview_);
+        bundle_error_ = b.error;
+        bundle_cuts_ = b.cuts;
+        std::vector<std::string> scope;
+        if (!b.error) {
+            context = std::move(b.blocks);
+            scope = std::move(b.scope);
+        }
+        agent_.start(target_, preview_, scope);
         session_open_ = true;
         fresh_session_ = false;
     }
     conversation_.push_back({request, ""});
-    agent_.prompt(request);
+    agent_.prompt(request, context);
     text_.clear();
     enter(WidgetState::running);
 }

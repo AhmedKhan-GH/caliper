@@ -27,6 +27,7 @@
 // ============================================================================
 #include <caliper_builder/commands/command.h>
 #include <caliper_builder/error.h>
+#include <caliper_builder/session/context_bundle.h>
 
 #include <nlohmann/json.hpp>
 
@@ -55,7 +56,10 @@ struct WidgetTarget {
     // The panel whose frame the surface draws in, or "" (a dropped file, a
     // property of a source).
     const std::string& frame_panel() const { return panel; }
-    // {"kind", ...} as session/new's _meta.caliper.widget.target takes it.
+    // The same target as the session library's context bundle takes it.
+    caliper_builder::WidgetTarget to_builder() const;
+    // {"kind", ...} as session/new's _meta.caliper.widget.target takes it
+    // (caliper_builder::widget_target_to_json()).
     nlohmann::json to_json() const;
     // The scope of preview.begin: {"panel": id}, {"source": id} or {}.
     nlohmann::json preview_scope() const;
@@ -97,13 +101,17 @@ public:
     // Whether a provider is set up; when not, `why` names what is missing and
     // the surface offers only Ask in chat.
     virtual bool available(std::string* why = nullptr) const = 0;
-    // Opens a session for the target on the preview the surface began. A
+    // Opens a session for the target on the preview the surface began, with
+    // the tool scope of the context bundle (empty: the sidecar derives it). A
     // session already open is closed first. The answer arrives as started or
     // failed.
-    virtual void start(const WidgetTarget& target, const std::string& preview) = 0;
-    // One prompt in the open session (queued until it has started). The turn
-    // reports progress, thoughts and messages, then finished.
-    virtual void prompt(const std::string& text) = 0;
+    virtual void start(const WidgetTarget& target, const std::string& preview,
+                       const std::vector<std::string>& scope = {}) = 0;
+    // One prompt in the open session (queued until it has started), with the
+    // context bundle's ACP content blocks before the request on a session's
+    // first prompt (null or empty: none). The turn reports progress, thoughts
+    // and messages, then finished.
+    virtual void prompt(const std::string& text, const nlohmann::json& context = nlohmann::json()) = 0;
     // Cancels the running turn, which then finishes with `cancelled`.
     virtual void cancel() = 0;
     // Ends the session (session/close); no event follows.
@@ -159,8 +167,8 @@ public:
     ScriptedWidgetAgent(WidgetScript script, Send send, Clock now = {}, CountEdits count_edits = {});
 
     bool available(std::string* why) const override;
-    void start(const WidgetTarget& target, const std::string& preview) override;
-    void prompt(const std::string& text) override;
+    void start(const WidgetTarget& target, const std::string& preview, const std::vector<std::string>& scope) override;
+    void prompt(const std::string& text, const nlohmann::json& context) override;
     void cancel() override;
     void close() override;
     bool poll(WidgetAgentEvent* out) override;
@@ -168,6 +176,8 @@ public:
 
     // What the surface asked, for the tests.
     const std::vector<std::string>& prompts() const { return prompts_; }
+    const std::vector<nlohmann::json>& contexts() const { return contexts_; }   // one per prompt
+    const std::vector<std::vector<std::string>>& scopes() const { return scopes_; }   // one per session
     const std::vector<std::string>& previews() const { return previews_; }
     int sessions_started() const { return sessions_; }
     int sessions_closed() const { return closed_; }
@@ -192,6 +202,8 @@ private:
     int sent_ok_ = 0;
     std::deque<std::string> queued_;
     std::vector<std::string> prompts_, previews_;
+    std::vector<nlohmann::json> contexts_;
+    std::vector<std::vector<std::string>> scopes_;
     int sessions_ = 0, closed_ = 0, cancels_ = 0;
 };
 

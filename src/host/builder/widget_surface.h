@@ -83,6 +83,12 @@ public:
     virtual std::optional<caliper_builder::OpenSpec> open_spec() const = 0;
     virtual caliper_builder::PreviewState preview(const std::string& id) const = 0;
     virtual caliper_builder::PanelData resolve(const std::string& panel, const std::string& preview) const = 0;
+    // The context bundle for a session's first prompt; an empty one by default.
+    virtual caliper_builder::ContextBundle bundle(const WidgetTarget& target, const std::string& preview) {
+        (void)target;
+        (void)preview;
+        return {};
+    }
 };
 
 // A WidgetSession over a builder Session: run() is Session::invoke() from the
@@ -96,6 +102,9 @@ public:
     std::optional<caliper_builder::OpenSpec> open_spec() const override;
     caliper_builder::PreviewState preview(const std::string& id) const override;
     caliper_builder::PanelData resolve(const std::string& panel, const std::string& preview) const override;
+    // build_context_bundle() from the ui origin, read on the preview.
+    caliper_builder::ContextBundle bundle(const WidgetTarget& target, const std::string& preview) override;
+    caliper_builder::ContextBundleOptions bundle_options;   // the model's context length and vision
 
 private:
     caliper_builder::Session& session_;
@@ -225,6 +234,9 @@ public:
     const std::optional<WidgetHandoff>& handoff() const { return handoff_; }
     const caliper_builder::Error& error() const { return error_; }
     const std::vector<WidgetExchange>& conversation() const { return conversation_; }
+    // What the last session's bundle cut, or why it could not be built.
+    const std::vector<std::string>& bundle_cuts() const { return bundle_cuts_; }
+    const caliper_builder::Error& bundle_error() const { return bundle_error_; }
     std::string model_label() const;
     // The tag of the state's card ("DECLINED", ...) or "".
     std::string tag() const;
@@ -274,7 +286,8 @@ private:
     std::vector<WidgetDiffLine> diff_;
     std::vector<WidgetExchange> conversation_;
     std::optional<WidgetHandoff> handoff_;
-    caliper_builder::Error error_;
+    caliper_builder::Error error_, bundle_error_;
+    std::vector<std::string> bundle_cuts_;
     int edits_ = 0;
     bool limit_ = false;
     bool show_full_diff_ = false;

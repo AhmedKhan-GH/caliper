@@ -157,6 +157,17 @@ TEST_CASE("widget surface: Accept commits the preview as one undo step journaled
     REQUIRE(preview.rfind("widget-", 0) == 0);
     CHECK(r.agent->previews() == std::vector<std::string>{preview});
     CHECK(r.s->preview(preview).panel == "curves");   // scoped to the target
+    // The context bundle went before the first request, its scope with the session.
+    CHECK_FALSE(r.surface->bundle_error());
+    REQUIRE(r.agent->contexts().size() == 1);
+    REQUIRE(r.agent->contexts()[0].is_array());
+    CHECK(r.agent->contexts()[0].size() >= 2);
+    CHECK(r.agent->contexts()[0].dump().find("curves") != std::string::npos);
+    CHECK(r.agent->contexts()[0].dump().find("run42_metrics") != std::string::npos);
+    REQUIRE(r.agent->scopes().size() == 1);
+    const auto& scope = r.agent->scopes()[0];
+    CHECK(std::find(scope.begin(), scope.end(), "panel.patch") != scope.end());
+    CHECK(std::find(scope.begin(), scope.end(), "preview.commit") == scope.end());
 
     r.run(250);   // started at 100 ms, spec.get at 200 ms
     CHECK(r.surface->state() == WidgetState::running);
@@ -275,6 +286,10 @@ TEST_CASE("widget surface: Refine twice stacks on the same preview in the same a
     CHECK(r.surface->preview_id() == preview);
     CHECK(r.agent->sessions_started() == 1);
     CHECK(r.agent->prompts().size() == 3);
+    // Only the session's first prompt carries the bundle.
+    CHECK(r.agent->contexts()[0].is_array());
+    CHECK(r.agent->contexts()[1].is_null());
+    CHECK(r.agent->contexts()[2].is_null());
     CHECK(r.surface->conversation().size() == 3);
     CHECK(r.surface->conversation()[1].reply == "Renames it.");
     CHECK(r.open_text() == r.before);
