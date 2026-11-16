@@ -73,14 +73,14 @@ renderer makes on its own device and queue:
   frame's arena. The pass gives exactly the bytes of the CPU reference `map_f32_to_rgba8`: the CPU derives, from that
   function itself, the value at which each of the 255 colour steps begins, and the shader only compares values with
   those thresholds, so the GPU's rounding cannot change a colour.
-- **Points.** A points payload is imported into the layer through `HostRenderer::import_host_allocation`. A browser
-  cannot wrap host memory, so the layer copies it and reports the route `copied-from-host` with the bytes copied. Each
-  point is an instanced quad of the native point size, with the native depth test, because WebGPU draws a point as
-  one pixel. A value-coloured point takes the colour index `map_f32_to_rgba8` gives its value, through the same
-  thresholds as the heatmap, and in 3-D the points draw the live points view's depth cues. The positions and values
-  are instance-step vertex buffers bound at the draw's byte offsets and the colour table and thresholds are part of
-  the draw's uniform block, so no storage buffer is read in a vertex stage, which a WebGPU device in compatibility
-  mode would refuse. Released buffers are kept by the layer and reused for the next snapshot of the same capacity.
+- **Points.** The points view draws through the scene core over the renderer's backend, as natively
+  ([The points view](#the-points-view)). Its payload's buffers are imported with the layer's `import_buffer`. A
+  browser cannot wrap host memory, so the layer copies them and reports the route `copied-from-host` with the bytes
+  copied, and the view's path label reads `points-cpu-staged`. Each point is an instanced quad of the generated
+  points program, and in 3-D the points draw the view's depth cues. The positions and values are instance-step vertex
+  buffers bound at their byte offsets and the colormap is the draw's uniform block of keys, so no storage buffer is
+  read in a vertex stage, which a WebGPU device in compatibility mode would refuse. Released buffers are kept by the
+  layer and reused for the next snapshot of the same capacity.
 - **Lifetimes.** The layer destroys a released texture once the last submit that used it has completed, and keeps
   its view to the end of the frame, after ImGui's backend has dropped the bind groups it made while recording that
   frame. Readbacks for the module's own checks go through the layer's asynchronous readback.
@@ -93,9 +93,9 @@ the three blend modes, the RG32Uint ID target, completion through the queue's ca
 buffer's asynchronous map. It keeps to WebGPU's default limits, and on a compatibility-mode device to that level's
 limits. Shader modules and pipelines are validated by WebGPU asynchronously, so their errors are collected afterwards
 rather than refused at once. Each submit runs in an error scope too, so that a frame the core passed and WebGPU
-refuses is reported in `device_errors()` as `submit <serial>: ...` rather than lost. The two programs the live views
-draw are the hand-written WGSL in `src/host/renderer/webgpu_programs.h`, to be replaced by the shader generator's
-table.
+refuses is reported in `device_errors()` as `submit <serial>: ...` rather than lost. The textures' colormap pass is
+the hand-written WGSL in `src/host/renderer/webgpu_programs.h`, to be replaced by the shader generator's table; the
+points and scene views draw with the generated programs.
 
 The renderer refuses the rest of the interface: device tensors and imported GPU memory (a browser has neither),
 geometry other than points, and the embed canvas. `web/wasm/README.md` gives the module's build, its size and its
@@ -183,9 +183,9 @@ The host counts every copy it makes of tensor or geometry data on the way to pix
 be read and compared, and the Metal renderer can record frame times and GPU times. Both exist to measure the
 renderer: a change to it must leave a zero-copy route at zero copies and keep the times within bounds.
 
-**What counts as a copy.** An upload of host bytes into GPU memory (a CPU tensor's staged upload; in the browser, the
-host colormap's upload of the values and the host import of a points payload), a host copy into a staging buffer
-(a CPU points payload staged into a shared `MTLBuffer`), a copy inside the GPU (the Vulkan buffer path's copy into
+**What counts as a copy.** An upload of host bytes into GPU memory (a CPU tensor's staged upload; the graphics layer's
+copy of a CPU points payload at import, natively and in the browser; in the browser, the host colormap's upload of the
+values), a host copy into a staging buffer, a copy inside the GPU (the Vulkan buffer path's copy into
 the shared buffer), a network snapshot received into its slot, the values of a series or histogram copied into the
 view at apply, and a readback of a payload (the Metal geometry rigidity check reading private instance matrices).
 The pass that turns a payload into a view's pixels, such as a colormap dispatch, the blit of an RGBA8 image into the
@@ -205,16 +205,18 @@ heatmap reached through the shared-memory session or the in-process window count
 | MPS tensor, imported allocation, shared-memory slot, in-process window slot | 0 | 0 |
 | Points from an `MTLBuffer` (also while the view redraws every frame) | 0 | 0 |
 | CPU tensor to a heatmap or image view (an embedder's `caliper_core_view_tensor`, an applet's bridge texture) | 1 | width x height x 4 |
-| CPU points payload (Metal staging, or the browser's host import) | 1 per buffer | N x 12, and N x 4 for the values |
+| CPU points payload (the graphics layer's copy at import, natively and in the browser) | 1 per buffer | N x 12, and N x 4 for the values |
 | Browser heatmap (`tex_update_mapped_from_host`) | 1 | width x height x 4 |
 | Network snapshot (`caliper_core_live_attach_url`) | 1, into its slot | the payload and its values |
 | Series and histogram values | 1 at apply (a network series adds its received values) | the values |
 | Vulkan buffer path | 1, inside VRAM | the tensor's bytes |
 
 **Frame statistics.** With `CALIPER_METAL_STATS` set, the Metal renderer records the interval between the ends of
-consecutive frames, the GPU time of every texture update, of every view draw (a geometry render target) and of the
-frame's own pass, taken from each command buffer's `GPUStartTime` and `GPUEndTime`, and the updates by path, such as
-`compute-imported`. Without the variable nothing is recorded and no completion handler is added. At shutdown it
+consecutive frames, the GPU time of every texture update, of every view draw and of the frame's own pass, taken from
+each command buffer's `GPUStartTime` and `GPUEndTime`, and the updates by path, such as `compute-imported`. A view
+draw is a geometry render target, or a frame of a points view through the graphics layer, whose GPU time the layer
+measures and the view hands to the renderer (`HostRenderer::note_draw_gpu_ms`); a points draw is not an update by
+path. Without the variable nothing is recorded and no completion handler is added. At shutdown it
 prints one line for the whole run, beside the renderer's copy count, in the form of `CALIPER_VULKAN_STATS`:
 
 ```text
@@ -260,8 +262,8 @@ is what the stream-ordered handoff removes; [Zero-copy tensor visualization](zer
 
 The renderer core's graphics layer is in `src/host/gfx/`, in the namespace `caliper_gfx`. It is an internal C++17
 layer shaped to WebGPU's model and default limits, and nothing of it crosses the ABI. The browser views draw through
-it ([the WebGPU backend](#the-webgpu-backend)); the native renderers keep their own paths, and their clients are to
-move onto the layer one at a time.
+it ([the WebGPU backend](#the-webgpu-backend)). Natively the scene view and the points view draw through it, and the
+renderers' other clients are to move onto the layer one at a time.
 
 The layer offers these pieces:
 
@@ -282,13 +284,16 @@ The layer offers these pieces:
   may not bind a texture that its own pass renders into.
 - **Readback.** A texture region is read back asynchronously.
 - **Import.** External memory becomes a layer buffer or texture, and the result reports the route: in place, copied
-  on the GPU, copied from the host, or refused. `take_stats()` counts the imports, copies and bytes copied, so an info
-  line can say what ran.
+  on the GPU, copied from the host, or refused. A transient host import, whose memory is valid only until the call
+  returns, is always copied. `mapped()` gives the CPU view of an import whose memory the CPU can read: an `MTLBuffer`
+  in shared storage, or the backend's copy of host memory, where the backend maps buffers. `take_stats()` counts the
+  imports, copies and bytes copied, so an info line can say what ran, and the GPU time of the submits completed since
+  the last call with their number.
 
 Three backends exist. The Metal backend runs on the Metal renderer's own device and queue (`HostRenderer::native_device`
 and `native_queue`), so the layer creates no second device, and its work is ordered with the renderer's by commit
-order. It imports an `MTLBuffer` of that device, and page-aligned host memory, in place, and it copies other host
-memory. It runs the programs of the shader generator ([Write a shader](../guides/write-a-shader.md)), and it binds the
+order. It imports an `MTLBuffer` of that device, and page-aligned host memory that is not transient, in place, and it
+copies other host memory. It runs the programs of the shader generator ([Write a shader](../guides/write-a-shader.md)), and it binds the
 buffer of storage sizes that their MSL reads. It keeps Metal's fast paths:
 
 - bind groups are resolved once into Metal objects;
@@ -413,8 +418,8 @@ What proves it:
 The renderer core's scene core is in `src/host/scene/`, in the namespace `caliper_scene` and the library
 `caliper_scene`. It is the one camera and scene model that the views are to share, and it compiles a scene into a draw
 list of the renderer core's graphics layer (`src/host/gfx/`). It is plain C++17 that never calls a GPU. The live views'
-scene view draws through it ([The scene view](#the-scene-view)); the points live view keeps its own camera, and no
-service uses it yet.
+scene view and points view draw through it ([The scene view](#the-scene-view), [The points view](#the-points-view));
+no service uses it yet.
 
 It holds these parts:
 
@@ -448,6 +453,15 @@ It holds these parts:
 - **Picking.** The pick pass compiles the same draws with their pick entries into a 16 x 16 `RG32Uint` window around
   the pointer, which it reaches by zooming clip space. Decoding a read-back window gives the entity, the primitive and
   the item under the pointer, the world position from the depth, and for an image the pixel.
+
+**One camera, the same bytes on every backend.** The scene core composes each view's camera in double precision and
+rounds every draw's model-view-projection to f32 once, and it is compiled without floating-point contraction, so its
+arithmetic is the same sequence of IEEE operations natively as in WebAssembly, which has no fused multiply-add. The
+backends upload the draw list's arena as it is (the Metal backend copies it into its arena buffer, the WebGPU backend
+writes it with one `wgpuQueueWriteBuffer`, and the recording backend keeps the frame), so a browser draws from the same
+uniform bytes as Metal. `src/host/scene/uniform_check.h` compiles a fixed scene of points under an orbit and under a
+pan and zoom and hashes its arena; the graphics suite checks the hash on the recording and Metal backends, and the
+browser module's self-test checks it on WebGPU.
 
 The scene core asks a `Resources` object for the handles its records name: pipelines of the generated programs, bind
 groups, the buffer of its constant streams, the buffers it owns for clamped indices and gathered edges, and the
@@ -527,3 +541,59 @@ the view's compile, submit and GPU times for that scene and the cost of applying
 `python/tests/test_scene_app.py` runs the whole path: the app, hidden and attached late to `caliper.serve()`, draws
 a scene that the test reads back through Caliper API's capture, and `web/wasm/test/scene.mjs` draws one on the viewer
 page in headless Chromium.
+
+## The points view
+
+The live views' points view (`caliper.points`, kind 3) is a scene of the scene core, drawn through the graphics layer by
+the same machinery as the scene view (`src/host/live/live_points.h`), natively and in the WebAssembly views alike.
+
+- **The payload.** The view's points are one points batch on the scene's root entity; a payload above the scene model's
+  4,194,304 points a batch continues on child entities at later offsets of the same buffers, so that it draws in the
+  same order. Each buffer of a snapshot, the positions and the optional values or labels, is bound with one
+  `import_buffer` call of the layer. An `MTLBuffer`, such as an MPS tensor or a slot of the shared-memory session, is
+  imported in place up to the end of its window, and every payload in the same buffer before that end shares the
+  import. A CPU payload is a transient host import, which the layer copies, so the caller's bytes are free when the
+  apply returns, and the copy counts in the view's copy counters.
+- **The route and the path label.** The view's path label comes from the route the layer returned, never from the
+  tensor's device: `points-imported` for an import in place, `points-cpu-staged` for a copy of host memory. The flag
+  `imported` is set for an import in place.
+- **Colours.** Flat points are light grey. Values map through the colormap blocks of the shared key cache
+  ([The colormap by keys](#the-colormap-by-keys)). Labels, which the producer sends as f32, map through the same keys
+  over the range 0 to 255 with a table that holds the fixed 16-colour palette at every level, so a label above 255
+  takes the colour of 255, one below 0 or NaN that of 0, as before, and the labels are read in place. A selection draws
+  every point dimmed toward the plot's ground and then the selected points in their own colours over them.
+- **Sizes.** Each point is a square of 7, 5.5, 4 or 3 logical pixels by count, as the browser's points view sizes them
+  (`caliper_scene::default_point_size`), drawn as an instanced quad of the generated points program.
+- **Depth cues.** In 3-D the points draw the view's depth cues, which the scene core passes to the points program
+  (`CompileOptions`, the parameter block's `att_ref`, `fade_w0` and `fade_w1`): a point is its size times
+  `clamp(d / w, 0.5, 2)` wide, d being the orbit's distance and w the point's distance along the view, so that nearer
+  points are larger, and past the camera's target its colour falls linearly to half at the far side of the fitted
+  bounding sphere, its hue kept. The selected points of a selection are never faded. `set_toggle` "depth" turns the
+  cues off.
+- **Camera.** The scene core's orbit about +y in 3-D and its pan and zoom with y up in 2-D, fitted by its `fit` to the
+  producer's bounding box, or else to a scan of a CPU-visible payload, when the first payload, the first box or a change
+  between 2-D and 3-D arrives, and again on F or a double click. A fit in 3-D returns to the default three-quarter view
+  (`src/host/scene/camera_defaults.h`). The gestures keep their rates and bounds, and the header's rotate tool turns
+  the orbit's azimuth until a drag stops it.
+- **The box.** In 3-D the target's ground is transparent, and the window draws the box with its ticks and floor grid
+  around the points through ImGui's draw list: its back layer under the target's image and its front layer over it,
+  projected with the f32 matrix the draw takes.
+- **Hover and lasso.** They project the CPU-visible payload on the CPU with the f32 matrix the draw takes, as before.
+  The CPU view is the layer's mapping of the import: an `MTLBuffer` in shared storage or the copy of a CPU payload. A
+  private-storage buffer has none, and the view says so instead of hovering.
+- **Lifetime.** Each payload remembers the layer's serial of the last frame that drew it. A superseded payload is
+  released when that frame has completed, which is when the producer may rewrite its slot (`read_done`).
+
+The view drew through the Metal renderer's geometry draw with hardware point sprites before migration step 7 of the
+renderer core, and in the browser with quads. 3-D points are now exact squares on Metal, as they already were in the
+browser. A sprite of a whole or half size is the exact square, so in 2-D, for points at every sub-pixel phase and size
+class, and for a single 3-D point, the pixels did not change. The depth cues make a 3-D point's size fractional, and a
+Metal sprite of a fractional size can have an edge up to about 1/32 of a pixel from the exact square's, so a 3-D cloud
+differs from the old view in pixels at the edges of its points: 152 to 717 pixels of 421,632 in the step's clouds,
+every one within 1/32 of a pixel, plus the rasteriser's 1/256 snap, of a point's edge. That is the only difference of
+the step: the old view's float camera, where the scene core composes in double, changes none of these pixels.
+
+`caliper_gfx_views_tests` (`tests/gfx/gfx_points_view.mm`) checks the view through an offscreen core
+([Testing](testing.md#the-pixel-exact-graphics-suite)): 36 cases against the references recorded from the old view,
+against a CPU rasterisation of the draws the scene core compiled, and, with a folder of the old view's images, pixel by
+pixel.
