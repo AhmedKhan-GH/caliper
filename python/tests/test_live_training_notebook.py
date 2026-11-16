@@ -84,6 +84,35 @@ def page_point(box: dict, d: dict, x: float, y: float) -> tuple[float, float]:
     return box["x"] + a["x"] + (x - w["x0"]) / (w["x1"] - w["x0"]) * a["w"], box["y"] + py
 
 
+def first_state(nb, view: str, pred: str, timeout: float = 30.0) -> dict:
+    """The debug state of ``view`` read in the first animation frame in which
+    the JavaScript predicate ``pred`` holds for it: the same reading the
+    predicate saw, not a later one."""
+    handle = nb.page.wait_for_function(
+        f"() => {{ const s = ({STATE})({json.dumps(view)}); return s && ({pred})(s) ? s : null; }}",
+        timeout=timeout * 1000)
+    return handle.json_value()
+
+
+def loss_values(state: dict) -> int:
+    """The number of loss values a loss view holds, from its info line
+    ("1801 steps  last 1.208")."""
+    return int(state["info"].split()[0])
+
+
+def settled(nb, state: dict, values: int) -> dict:
+    """The loss view's state once it holds ``values`` values. A view drawn by
+    the element's own views shares the connection that carries the run state,
+    which follows the data on that connection, so it must hold them in the
+    same frame. Caliper's WebAssembly views read the stream on a connection of
+    their own and draw on their own frame: the producer sends their data
+    before the run state too, but nothing orders two connections, so they get
+    a bounded moment to show it, and then exactly that many values."""
+    if state["drawer"] != "wasm":
+        return state
+    return first_state(nb, "loss", f"(s) => parseInt(s.info) === {values}", timeout=5.0)
+
+
 def cell_done(nb, index: int) -> bool:
     state = nb.state()
     cell = next(c for c in state["cells"] if c["index"] == index)
@@ -217,26 +246,34 @@ def test_live_training_notebook(tmp_path, mode):
                 f" && Math.abs(w.x1 - {fit['x1']}) < 1e-6 && Math.abs(w.y0 - {fit['y0']}) < 1e-6; }}", timeout=10)
 
         # The controls (3.1), while the cell trains. Pause in the loss widget's
-        # header holds the loop at its next caliper.step(): the loss gets no
-        # new values. Step runs one step and pauses again; Resume lets it go on.
+        # header holds the loop at its next caliper.step(), and the run state
+        # follows the data of that step: in the very frame in which the header
+        # first says "paused at N", the loss already shows its N - 1 values
+        # (the loop calls caliper.step() before each step's work), and nothing
+        # changes while it stays paused. Step runs one step, whose value is
+        # there when the header says "paused at N + 1"; Resume lets it go on.
         assert not cell_done(nb, train_cell), "training ended before the controls; raise the steps"
         loss_view = nb.page.locator('caliper-view[view="loss"]')
         toggle, step = loss_view.locator("button.run-toggle"), loss_view.locator("button.run-step")
         nb.wait(f"() => (({STATE})('loss') || {{}}).run === 'running'", timeout=30)
         assert toggle.inner_text() == "Pause" and toggle.is_enabled()
         toggle.click()
-        nb.wait(f"() => /^paused at \\d+$/.test((({STATE})('loss') || {{}}).run || '')", timeout=30)
-        paused = nb.page.evaluate(STATE, "loss")
+        paused = first_state(nb, "loss", "(s) => /^paused at \\d+$/.test(s.run || '')")
+        at = int(paused["run"].rsplit(" ", 1)[1])
+        paused = settled(nb, paused, at - 1)
+        assert loss_values(paused) == at - 1, paused
         nb.page.wait_for_timeout(1200)
         still = nb.page.evaluate(STATE, "loss")
         assert still["run"] == paused["run"] and still["info"] == paused["info"], (paused, still)
         assert toggle.inner_text() == "Resume"
         loss_view.screenshot(path=str(shots / f"notebook-{mode}-loss-paused.png"))
-        at = int(paused["run"].rsplit(" ", 1)[1])
         step.click()
-        nb.wait(f"() => (({STATE})('loss') || {{}}).run === 'paused at {at + 1}'", timeout=30)
+        stepped = first_state(nb, "loss", f"(s) => s.run === 'paused at {at + 1}'")
+        stepped = settled(nb, stepped, at)
+        assert loss_values(stepped) == at, stepped
         nb.page.wait_for_timeout(500)
-        assert nb.page.evaluate(STATE, "loss")["run"] == f"paused at {at + 1}"
+        still = nb.page.evaluate(STATE, "loss")
+        assert still["run"] == stepped["run"] and still["info"] == stepped["info"], (stepped, still)
         # The learning rate in the controls panel, set while the run is paused:
         # the panel shows the value the script took, at the checkpoint it waits in.
         panel = nb.page.locator("caliper-controls")
