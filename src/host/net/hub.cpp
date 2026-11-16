@@ -1230,6 +1230,13 @@ struct Hub::Impl {
     }
 
     void on_producer_hello(Peer& p, const wire::Hello& h) {
+        // A connection whose token may only watch does not take the producer
+        // role, as caliper.serve() refuses producers (HubOptions::stream_access).
+        if (p.watch_only) {
+            fatal(p.conn, CALIPER_NET_CLOSE_ROLE_REFUSED, CALIPER_NET_ERR_UNSUPPORTED,
+                  "this connection's token may watch the stream, not publish to it");
+            return;
+        }
         wire::Identity id;
         if (!wire::Identity::parse(h.session, &id)) {
             fatal(p.conn, CALIPER_NET_CLOSE_PROTOCOL_ERROR, CALIPER_NET_ERR_BAD_REQUEST, "a producer's hello needs 'session'");

@@ -1510,6 +1510,23 @@ std::unique_ptr<Peer> viewer_at(World& w, const std::string& url) {
     return v;
 }
 
+// A producer's HELLO on a connection opened with `url` whose token may only
+// watch: refused as caliper.serve() refuses producers, ERROR `unsupported`
+// and close 4002, and no session appears.
+void publish_refused(World& w, const std::string& url, const std::function<caliper_net::HubStats()>& stats) {
+    const size_t before = stats().sessions_live + stats().sessions_ended;
+    FakeProducer p("clp-watcher", 9);
+    REQUIRE(p.connect(url));
+    w.add(&p);
+    REQUIRE(w.until([&] { return p.closed; }));
+    CHECK(p.close_code == CALIPER_NET_CLOSE_ROLE_REFUSED);
+    REQUIRE(p.last<wire::Error>());
+    CHECK(p.last<wire::Error>()->code == CALIPER_NET_ERR_UNSUPPORTED);
+    CHECK(p.last<wire::Error>()->fatal);
+    CHECK_FALSE(p.welcomed);
+    CHECK(stats().sessions_live + stats().sessions_ended == before);
+}
+
 // The upgrade's HTTP status with `url`: 101 when it opened, else the refusal.
 int upgrade_with(const std::string& url) {
     caliper_net::Client c;
@@ -1576,6 +1593,8 @@ TEST_CASE("net/hub 3.1: with stream_access, a watching token sees the data and t
     watch_and_control(w, *p, *watcher, *full);
     // Any other token is refused at the upgrade, as a wrong token always was.
     CHECK(upgrade_with(h.url("hub_other_token-0123456789abcdef")) == 403);
+    // A watching token may not publish; the full one did, above.
+    publish_refused(w, h.url(watch), [&] { return h.stats(); });
 }
 
 TEST_CASE("net/hub 3.1: Caliper API's stream: the person's token controls, the mcp and agent tokens watch, and the "
@@ -1605,6 +1624,10 @@ TEST_CASE("net/hub 3.1: Caliper API's stream: the person's token controls, the m
         CHECK(upgrade_with(base + revoked) == 403);
         CHECK(upgrade_with(base + viewer_token) == 403);
         CHECK(upgrade_with(base + "api_wrong_token-0123456789abcdefg") == 403);
+        // The API file's token and an agent's may not publish a session.
+        World w;
+        publish_refused(w, base + mcp, [&] { return server.hub_stats(); });
+        publish_refused(w, base + agent, [&] { return server.hub_stats(); });
     }
     // A run's script streams in with the person's token; an agent and the API
     // file's token watch it and may not control it, the person may.

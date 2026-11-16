@@ -46,7 +46,7 @@ The API file is `api.json` in the app-data folder ([Folders and environment vari
 | `version` | 1 |
 | `pid` | The process id |
 | `port` | The port the API listens on |
-| `token` | The token of outside agents, whose commands run as `mcp` and are reviewed; not your session token. On the stream it watches and cannot control a run |
+| `token` | The token of outside agents, whose commands run as `mcp` and are reviewed; not your session token. On the stream it watches, and cannot publish a session or control a run |
 | `url` | `http://127.0.0.1:<port>/v0` |
 | `stream_url` | `ws://127.0.0.1:<port>/v3/stream`, without the token |
 | `spec_url` | `http://127.0.0.1:<port>/v0/spec?token=<viewer token>`, the spec page; a saved spec applet opens at this address with `&applet=<id>` added |
@@ -89,8 +89,8 @@ The origin of a command, which decides what is reviewed, comes from the token th
 | Token | Where it is | Origin | Review | The stream |
 |---|---|---|---|---|
 | Your session token | The start line only | `api` | None for spec edits; a command that deletes or overwrites saved data answers `command.needs_approval` at once | Watches, streams a run in, and controls a run when the app allows control |
-| The API file's token | `api.json` | `mcp` | Spec edits wait for your review, and destructive commands for your approval | Watches and cannot control a run |
-| An agent's own token | `api-agent-<pid>-<n>.json`, while that agent's session runs | `agent` | As `mcp` | Watches and cannot control a run |
+| The API file's token | `api.json` | `mcp` | Spec edits wait for your review, and destructive commands for your approval | Watches; cannot publish a session or control a run |
+| An agent's own token | `api-agent-<pid>-<n>.json`, while that agent's session runs | `agent` | As `mcp` | Watches; cannot publish a session or control a run |
 | The viewer token | The spec page's link | `viewer` | Reads only | Refused |
 
 `X-Caliper-Origin` is ignored for every token but the viewer token, so a request cannot claim `api`, `ui` or any other origin that its token does not have.
@@ -141,7 +141,7 @@ A capture waits for the app's frames like every call that needs the frame thread
 
 ### GET /v3/stream
 
-The WebSocket of [wire protocol v3](wire-protocol.md), with the app in the hub role. It is the hub of [`caliper serve`](../guides/run-a-hub.md) on the API's port: producers connect to it and each becomes a session, and viewers list the sessions and attach to one. Everything the protocol states for a hub applies, with its bounds and its flow control. It is served at the protocol's own path, so every client of the protocol attaches to it unchanged: the app's NetSource, `caliper-viewer --url`, the link field of the app's attach pane and the `<caliper-view>` element. The upgrade is checked for its path, `Host`, `Origin` and the `token` parameter in the protocol's order, so a client gives the token in the address. Your session token, the API file's token and an agent's own token open it, and the viewer token does not. A connection opened with the API file's token or an agent's watches: it gets the data and the controls' state, its WELCOME sets `control` false, and a CONTROL from it is answered `forbidden`, so an agent cannot pause, step, change a parameter of or run an action of a training run. Only a connection opened with your session token may control, and only as the next paragraph says:
+The WebSocket of [wire protocol v3](wire-protocol.md), with the app in the hub role. It is the hub of [`caliper serve`](../guides/run-a-hub.md) on the API's port: producers connect to it and each becomes a session, and viewers list the sessions and attach to one. Everything the protocol states for a hub applies, with its bounds and its flow control. It is served at the protocol's own path, so every client of the protocol attaches to it unchanged: the app's NetSource, `caliper-viewer --url`, the link field of the app's attach pane and the `<caliper-view>` element. The upgrade is checked for its path, `Host`, `Origin` and the `token` parameter in the protocol's order, so a client gives the token in the address. Your session token, the API file's token and an agent's own token open it, and the viewer token does not. A connection opened with the API file's token or an agent's watches: it gets the data and the controls' state, its WELCOME sets `control` false, and a CONTROL from it is answered `forbidden`, so an agent cannot pause, step, change a parameter of or run an action of a training run. It cannot publish either: a producer's HELLO on it is answered with the error `unsupported` and closed with code 4002, as `caliper.serve()` refuses producers. Only a connection opened with your session token may control, and only as the next paragraph says:
 
 ```text
 ws://127.0.0.1:7341/v3/stream?token=<token>

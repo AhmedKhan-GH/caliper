@@ -369,9 +369,10 @@ or not the agent asks on its own. Three parts are built:
   `api-agent-<pid>-<n>.json` (mode 0600), which the app revokes and removes when that agent's session ends. An agent
   that reads a file and calls the API with curl therefore runs as `mcp` or `agent`, and its spec edits wait for review
   like those that go through `caliper-mcp` (Caliper API, `docs/references/api.md`, under Who sends a command). On the
-  stream, the `mcp` and `agent` tokens watch and cannot control a run: the hub decides per connection, by the token
-  that opened it (`HubOptions::stream_access`), so its WELCOME sets `control` false and a CONTROL is answered
-  `forbidden`, with no change to the protocol.
+  stream, the `mcp` and `agent` tokens watch, and can neither control a run nor publish a session: the hub decides
+  per connection, by the token that opened it (`HubOptions::stream_access`), so its WELCOME sets `control` false, a
+  CONTROL is answered `forbidden`, and a producer's HELLO is refused with close code 4002 as `caliper.serve()` refuses
+  producers, with no change to the protocol.
 - **Diff previews of spec edits.** Every edit of the open spec takes `dry_run` and returns its change as a diff of the
   canonical TOML without any effect ([Builder session](builder-session.md)).
 - **Review of spec edits.** With review on for an origin, a session setting that is on by default for `agent` and
@@ -748,7 +749,9 @@ Waiting for later work:
     `src/host/builder/tests/test_widget_app.cpp` reads;
   - the stand-in host, `caliper-builder-host` (`src/builder/session/command_server.cpp`), still takes the origin from
     `X-Caliper-Origin` with its one token; it is a development tool, not the product, and its owner changes it with
-    the session library.
+    the session library;
+  - revoking an agent's token refuses its next requests and upgrades, but a stream connection that the token opened
+    before stays open until it closes.
 - The review setting per origin in the side chat's settings, and running the spec validator on an agent's own edit of a
   spec file before the person answers.
 - The setting that marks an agent as running on a local model, with the note while a run is live, and the warning when

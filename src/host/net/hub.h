@@ -134,8 +134,10 @@ struct HubOptions {
     // must still be valid, and which viewer_url() gives): kRefused answers
     // 403 as a wrong token does, kWatch opens a connection that receives
     // everything but may not control (its WELCOME sets `control` false and a
-    // CONTROL is answered `forbidden`, as without allow_control), and kFull
-    // one that may control when allow_control is on. Called on the hub's
+    // CONTROL is answered `forbidden`, as without allow_control) or publish
+    // (a producer's HELLO is answered ERROR `unsupported` and closed with
+    // 4002, as caliper.serve() refuses producers), and kFull one that may
+    // publish, and control when allow_control is on. Called on the hub's
     // thread at each upgrade, so a token issued or revoked later counts from
     // the next upgrade; it compares in constant time.
     enum class StreamAccess { kRefused, kWatch, kFull };
