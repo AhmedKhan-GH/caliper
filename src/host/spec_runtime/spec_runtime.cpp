@@ -836,31 +836,60 @@ uint64_t SessionPanelSource::revision() const { return session_.catalog().revisi
 
 // ---- one panel --------------------------------------------------------------------------
 
-SpecPanelFrame draw_spec_panel(SpecPanelView& view, const ImRect& rect, const SpecLook& L, SpecTextures& textures) {
+float spec_panel_strip_height(const SpecLook& L, bool show_title, float panel_height) {
+    return show_title ? std::min(panel_height, std::round(L.ui_size + 9.0f * L.text_scale)) : 0.0f;
+}
+
+namespace {
+
+// The mark of a panel drawn from a preview: "PREVIEW" in the small UI face,
+// uppercase and tracked like the house's labels, in bronze. Returns its width.
+float preview_tag_width(const SpecLook& L) {
+    return sternbild::text_tracked_width(L.ui, L.small_size, "PREVIEW", std::round(L.small_size * 0.08f));
+}
+
+void preview_tag(ImDrawList* dl, const SpecLook& L, ImVec2 pos) {
+    sternbild::text_tracked(dl, L.ui, L.small_size, pos, L.accent, "PREVIEW", std::round(L.small_size * 0.08f));
+}
+
+}  // namespace
+
+SpecPanelFrame draw_spec_panel(SpecPanelView& view, const ImRect& rect, const SpecLook& L, SpecTextures& textures,
+                               float band) {
     SpecPanelFrame f;
     f.id = view.data.id;
     f.rect = rect;
+    f.preview = view.preview;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float s = L.text_scale;
     dl->AddRectFilled(rect.Min, rect.Max, L.ground);
 
     // The title strip: the title on the left, the info string in mono on the
-    // right, cut first when they meet.
+    // right, cut first when they meet. A preview's strip carries the bronze
+    // PREVIEW tag after its title and a bronze rule under it.
     // A tab has no strip: its tab carries the title and the tab bar its info.
-    const float hh = view.show_title ? std::min(rect.GetHeight(), std::round(L.ui_size + 9.0f * s)) : 0.0f;
+    const float hh = spec_panel_strip_height(L, view.show_title, rect.GetHeight());
     f.header = ImRect(rect.Min, ImVec2(rect.Max.x, rect.Min.y + hh));
     const float pad = std::round(8.0f * s);
     if (hh > 0.0f) {
         dl->AddRectFilled(f.header.Min, f.header.Max, L.plate);
-        dl->AddRectFilled(ImVec2(rect.Min.x, f.header.Max.y - 1.0f), ImVec2(rect.Max.x, f.header.Max.y), L.rule_faint);
+        dl->AddRectFilled(ImVec2(rect.Min.x, f.header.Max.y - 1.0f), ImVec2(rect.Max.x, f.header.Max.y),
+                          view.preview ? L.accent : L.rule_faint);
     }
-    const float avail = rect.GetWidth() - 2.0f * pad;
+    const float tag_w = view.preview && hh > 0.0f ? preview_tag_width(L) + std::round(12.0f * s) : 0.0f;
+    const float avail = rect.GetWidth() - 2.0f * pad - tag_w;
     const std::string title = hh > 0.0f ? fit_text(L.ui, L.ui_size, view.data.title, avail) : std::string();
     const ImVec2 ts = text_size(L.ui, L.ui_size, title);
     if (!title.empty())
         text_at(dl, L.ui, L.ui_size, ImVec2(rect.Min.x + pad, rect.Min.y + (hh - ts.y) * 0.5f), L.text, title);
+    float title_end = rect.Min.x + pad + ts.x;
+    if (tag_w > 0.0f && avail > 0.0f) {
+        const float th = text_size(L.ui, L.small_size, "P").y;
+        preview_tag(dl, L, ImVec2(std::round(title_end + 12.0f * s), std::round(rect.Min.y + (hh - th) * 0.5f)));
+        title_end += tag_w;
+    }
     if (hh > 0.0f && view.data.state.ready() && !view.data.info.empty()) {
-        const float left = rect.Min.x + pad + ts.x + 14.0f * s, right = rect.Max.x - pad;
+        const float left = title_end + 14.0f * s, right = rect.Max.x - pad;
         const std::string info = fit_text(L.mono, L.mono_size, view.data.info, right - left);
         if (!info.empty()) {
             const ImVec2 is = text_size(L.mono, L.mono_size, info);
@@ -868,11 +897,15 @@ SpecPanelFrame draw_spec_panel(SpecPanelView& view, const ImRect& rect, const Sp
         }
     }
 
+    // The band an overlay keeps free under the strip, then the content.
+    const float bh = std::max(0.0f, std::min(std::round(band), rect.Max.y - f.header.Max.y));
+    f.band = ImRect(ImVec2(rect.Min.x, f.header.Max.y), ImVec2(rect.Max.x, f.header.Max.y + bh));
+    const float top = f.band.Max.y;
     const float py = std::round(6.0f * s);
-    f.content = ImRect(ImVec2(rect.Min.x + pad, f.header.Max.y + py), ImVec2(rect.Max.x - pad, rect.Max.y - py));
+    f.content = ImRect(ImVec2(rect.Min.x + pad, top + py), ImVec2(rect.Max.x - pad, rect.Max.y - py));
     if (view.data.primitive == spec::Primitive::table) {
         // A table runs to the panel's bottom edge, under the title's margin.
-        f.content = ImRect(ImVec2(rect.Min.x + pad, f.header.Max.y + 1.0f), ImVec2(rect.Max.x - pad, rect.Max.y));
+        f.content = ImRect(ImVec2(rect.Min.x + pad, top + 1.0f), ImVec2(rect.Max.x - pad, rect.Max.y));
     }
     if (f.content.GetWidth() < 8.0f || f.content.GetHeight() < 8.0f) return f;
 
@@ -956,19 +989,19 @@ void SpecRuntime::invalidate() {
     for (auto& e : entries_) e.second.stale = true;
 }
 
-void SpecRuntime::prepare(Entry& e, const PanelData& data) {
+void SpecRuntime::prepare(Entry& e, const PanelData& data, const spec::Spec* spec) {
     textures_.release(e.view.texture);
     e.view.texture = nullptr;
-    e.view.data = prepare_panel(spec_ ? *spec_ : spec::Spec{}, e.panel, data, limits_);
+    e.view.data = prepare_panel(spec ? *spec : spec_ ? *spec_ : spec::Spec{}, e.panel, data, limits_);
     e.view.fit_frames = 2;
     ++e.view.version;
     e.stale = false;
 }
 
-void SpecRuntime::set_preview(const spec::Panel& panel, const PanelData& data) {
+void SpecRuntime::set_preview(const spec::Panel& panel, const PanelData& data, const spec::Spec* spec) {
     Entry& e = previews_[panel.id];
     e.panel = panel;
-    prepare(e, data);
+    prepare(e, data, spec);
 }
 
 void SpecRuntime::clear_preview(const std::string& panel_id) {
@@ -1049,8 +1082,17 @@ void SpecRuntime::draw_tabs(const SpecLayoutTabs& t, const SpecLook& L) {
         auto pv = previews_.find(lp.id);
         auto it = entries_.find(lp.id);
         const Entry* e = pv != previews_.end() ? &pv->second : it != entries_.end() ? &it->second : nullptr;
-        if (!e || !e->view.data.state.ready() || e->view.data.info.empty()) break;
-        const float right = b.x - std::round(8.0f * s), left = x + 14.0f * s;
+        if (!e) break;
+        float left = x + 14.0f * s;
+        if (pv != previews_.end()) {
+            // A tab drawn from a preview: the PREVIEW tag after the tabs.
+            const float th = text_size(L.ui, L.small_size, "P").y;
+            if (left + preview_tag_width(L) < b.x - std::round(8.0f * s))
+                preview_tag(dl, L, ImVec2(std::round(left), std::round(a.y + (t.bar.h - th) * 0.5f)));
+            left += preview_tag_width(L) + 14.0f * s;
+        }
+        if (!e->view.data.state.ready() || e->view.data.info.empty()) break;
+        const float right = b.x - std::round(8.0f * s);
         const std::string info = fit_text(L.mono, L.mono_size, e->view.data.info, right - left);
         if (info.empty()) break;
         const ImVec2 is = text_size(L.mono, L.mono_size, info);
@@ -1087,8 +1129,20 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
         Entry& e = preview ? pv->second : it->second;
         e.view.key = &key_;
         e.view.show_title = !lp.tab;
+        e.view.preview = preview;
         const ImRect r(ImVec2(lp.rect.x, lp.rect.y), ImVec2(lp.rect.right(), lp.rect.bottom()));
         if (r.GetWidth() < 1.0f || r.GetHeight() < 1.0f) continue;
+        // The band an overlay keeps under the strip, asked before the content.
+        float band = 0.0f;
+        if (reserve_) {
+            SpecPanelFrame pre;
+            pre.id = lp.id;
+            pre.rect = r;
+            pre.header = ImRect(r.Min, ImVec2(r.Max.x, r.Min.y + spec_panel_strip_height(L, e.view.show_title, r.GetHeight())));
+            pre.band = ImRect(pre.header.GetBL(), pre.header.GetBR());
+            pre.preview = preview;
+            band = reserve_(pre);
+        }
         // Each panel in its own child window: its own ids, clipping and
         // scrolling, so ImPlot keeps one plot state per panel.
         ImGui::SetCursorScreenPos(r.Min);
@@ -1099,8 +1153,7 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
                               ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
                                   ImGuiWindowFlags_NoBackground)) {
             ImGui::PopStyleVar(2);
-            SpecPanelFrame f = draw_spec_panel(e.view, r, L, textures_);
-            f.preview = preview;
+            SpecPanelFrame f = draw_spec_panel(e.view, r, L, textures_, band);
             if (overlay_) overlay_(f);
         } else {
             ImGui::PopStyleVar(2);

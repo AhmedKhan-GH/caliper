@@ -25,9 +25,11 @@
 //     runtime what is left;
 //   - set_preview() swaps one panel's spec fragment and data for a
 //     preview's, which is drawn in that panel's rectangle until
-//     clear_preview();
+//     clear_preview(), with the panel's title strip marked as a preview;
+//   - set_reserve() keeps a band of a panel free under its title strip, and
+//     the content is drawn below it;
 //   - set_overlay() is called for every panel after its content, inside the
-//     panel's own rectangle, for a prompt row or a diff card.
+//     panel's own rectangle, for a prompt row or a diff card in that band.
 //
 // Threads: everything here runs on the frame thread, where the ImGui context
 // is. resolve() of the source runs there too, when the spec or the data
@@ -127,9 +129,14 @@ struct SpecPanelFrame {
     std::string id;
     ImRect rect;       // the whole panel
     ImRect header;     // its title strip
-    ImRect content;    // under the strip, inside the padding
+    ImRect band;       // under the strip, the band set_reserve() kept free (empty: none)
+    ImRect content;    // under the band, inside the padding
     bool preview = false;
 };
+
+// The height of a panel's title strip: 0 for a tab, whose tab carries the
+// title.
+float spec_panel_strip_height(const SpecLook& look, bool show_title, float panel_height);
 
 // The data of a spec's panels. resolve() is called on the frame thread when
 // the spec or revision() changed.
@@ -160,6 +167,7 @@ struct SpecPanelView {
     PreparedPanel data;
     SpecColorKey* key = nullptr;    // the spec's colour key; null: colours by position
     bool show_title = true;         // false for a tab, whose label carries it
+    bool preview = false;           // drawn from a preview: the strip says so
     ImTextureData* texture = nullptr;
     int fit_frames = 2;          // frames that fit the axes to the data
     double x_extent[2] = {0, 0}, y_extent[2] = {0, 0};   // the data's, for log ticks
@@ -167,9 +175,11 @@ struct SpecPanelView {
 };
 
 // Draws one prepared panel into `rect` of the current window: the title
-// strip, then the primitive or the state. `textures` makes the panel's
-// texture when it has none. Returns the panel's frame.
-SpecPanelFrame draw_spec_panel(SpecPanelView& view, const ImRect& rect, const SpecLook& look, SpecTextures& textures);
+// strip, then a free band `band` pixels tall, then the primitive or the
+// state. `textures` makes the panel's texture when it has none. Returns the
+// panel's frame.
+SpecPanelFrame draw_spec_panel(SpecPanelView& view, const ImRect& rect, const SpecLook& look, SpecTextures& textures,
+                               float band = 0.0f);
 
 class SpecRuntime {
 public:
@@ -195,9 +205,16 @@ public:
     SpecTabChoice& tabs() { return tabs_; }
 
     // ⌘K seams: a panel drawn from a preview's fragment and data instead of
-    // its own, and a callback after each panel's content.
-    void set_preview(const caliper_builder::spec::Panel& panel, const caliper_builder::PanelData& data);
+    // its own (with `spec`, the preview's spec, for its title and sources;
+    // the runtime's spec otherwise), the height of the band a panel keeps
+    // free under its strip (called with the frame's id, rect, header and
+    // preview before its content is drawn; 0 keeps none), and a callback
+    // after each panel's content.
+    void set_preview(const caliper_builder::spec::Panel& panel, const caliper_builder::PanelData& data,
+                     const caliper_builder::spec::Spec* spec = nullptr);
     void clear_preview(const std::string& panel_id);
+    bool has_preview(const std::string& panel_id) const { return previews_.count(panel_id) != 0; }
+    void set_reserve(std::function<float(const SpecPanelFrame&)> reserve) { reserve_ = std::move(reserve); }
     void set_overlay(std::function<void(const SpecPanelFrame&)> overlay) { overlay_ = std::move(overlay); }
 
     // Brings the panels up to date with the spec and the source: resolves
@@ -221,7 +238,7 @@ private:
         SpecPanelView view;
         bool stale = true;
     };
-    void prepare(Entry& e, const caliper_builder::PanelData& data);
+    void prepare(Entry& e, const caliper_builder::PanelData& data, const caliper_builder::spec::Spec* spec = nullptr);
     void update_only(const SpecLayout* shown);
     void draw_tabs(const SpecLayoutTabs& t, const SpecLook& look);
 
@@ -235,6 +252,7 @@ private:
     SpecTabChoice tabs_;
     SpecColorKey key_;
     SpecLayout layout_;
+    std::function<float(const SpecPanelFrame&)> reserve_;
     std::function<void(const SpecPanelFrame&)> overlay_;
 };
 
