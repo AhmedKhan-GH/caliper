@@ -26,7 +26,14 @@ namespace caliper_host {
 // The workspace of workspace_choice() (--workspace, CALIPER_WORKSPACE, else
 // workspace/ under the app-data folder), and the command script of
 // CALIPER_COMMAND_SCRIPT with its results in CALIPER_COMMAND_RESULTS.
-inline AppSession::Options app_session_options(const CommandLine& cl) {
+//
+// The command script is a testing and demo aid that may claim the ui origin
+// and approve what waits ("approve": true), so it runs only where
+// CALIPER_TEST_APPROVALS does: in the hidden app (--hidden) and in `caliper
+// shot`, which shows no window (`scripts_allowed`). A visible app refuses it
+// whole, reads neither variable, and says why in `refused`.
+inline AppSession::Options app_session_options(const CommandLine& cl, bool scripts_allowed = false,
+                                               std::string* refused = nullptr) {
     const WorkspaceChoice w =
         workspace_choice(cl, std::getenv("CALIPER_WORKSPACE"), caliper::default_workspace_dir());
     AppSession::Options o;
@@ -35,6 +42,7 @@ inline AppSession::Options app_session_options(const CommandLine& cl) {
     o.from = w.from;
     if (const char* s = std::getenv("CALIPER_COMMAND_SCRIPT"); s && *s) o.script = s;
     if (const char* r = std::getenv("CALIPER_COMMAND_RESULTS"); r && *r) o.results = r;
+    gate_command_script(&o, scripts_allowed, refused);
     return o;
 }
 

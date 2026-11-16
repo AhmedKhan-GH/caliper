@@ -801,4 +801,11 @@ std::shared_ptr<caliper_api::CommandGateway> AppSession::command_gateway() { ret
 
 #endif
 
+void gate_command_script(AppSession::Options* o, bool scripts_allowed, std::string* refused) {
+    if (scripts_allowed || o->script.empty()) return;
+    o->script.clear();
+    o->results.clear();
+    if (refused) *refused = "CALIPER_COMMAND_SCRIPT runs only in the hidden app (--hidden) and in caliper shot; ignored";
+}
+
 }  // namespace caliper_host

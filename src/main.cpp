@@ -522,7 +522,12 @@ public:
             h.capture_unavailable = caliper_host::WindowCaptures::unsupported(renderer_->name());
         h.request_capture = [this] { captures_.add(caliper_host::AppSession::kCaptureTicket); };
         h.log = [this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); };
-        session_.start(caliper_host::app_session_options(cl), std::move(h));
+        std::string refused;   // a command script, which only a hidden app runs
+        session_.start(caliper_host::app_session_options(cl, hidden_, &refused), std::move(h));
+        if (!refused.empty()) {
+            std::cerr << "[session] " << refused << std::endl;
+            landing_.log("command script refused", "CALIPER_COMMAND_SCRIPT", "needs --hidden");
+        }
         spec_page_.set_hidden(hidden_);
         // panel.render draws on an offscreen canvas that shares this
         // window's font atlas, made on the first call between two frames.

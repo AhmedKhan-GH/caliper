@@ -819,3 +819,32 @@ TEST_CASE("app session: the hidden app runs a command script on its workspace an
     CHECK(listed.result["applets"][0]["id"] == "temps-board");
 }
 #endif
+
+// The command script may claim the ui origin and approve what waits, so the
+// app runs it only where CALIPER_TEST_APPROVALS works: hidden, or in caliper
+// shot. No test opens a visible window, so the gate is checked where it is
+// decided, in app_session_options().
+TEST_CASE("app session: the command script runs only in the hidden app or caliper shot, never in a visible app") {
+    std::string refused;
+    // A visible app: refused whole, with the reason.
+    AppSession::Options visible;
+    visible.script = "script.jsonl";
+    visible.results = "results.jsonl";
+    caliper_host::gate_command_script(&visible, /*scripts_allowed=*/false, &refused);
+    CHECK(visible.script.empty());
+    CHECK(visible.results.empty());
+    CHECK(refused.find("--hidden") != std::string::npos);
+    // The hidden app and caliper shot run it.
+    refused.clear();
+    AppSession::Options hidden;
+    hidden.script = "script.jsonl";
+    hidden.results = "results.jsonl";
+    caliper_host::gate_command_script(&hidden, /*scripts_allowed=*/true, &refused);
+    CHECK(hidden.script == "script.jsonl");
+    CHECK(hidden.results == "results.jsonl");
+    CHECK(refused.empty());
+    // Without a script there is nothing to refuse.
+    AppSession::Options none;
+    caliper_host::gate_command_script(&none, false, &refused);
+    CHECK(refused.empty());
+}

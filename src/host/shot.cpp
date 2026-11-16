@@ -312,7 +312,7 @@ int run_shot(const CommandLine& cl) {
         h.applets_json = [&] { return applets_json(loader); };
         h.launch = launch;
         h.request_capture = [&] { capture_wanted = true; };
-        s.session->start(app_session_options(cl), std::move(h));
+        s.session->start(app_session_options(cl, /*scripts_allowed=*/true), std::move(h));   // no window
         // panel.render draws on a canvas that shares this canvas's font atlas.
         s.session->set_panel_renderer(SpecPage::make_panel_renderer());
         // A spec applet needs the workspace, also the default one.

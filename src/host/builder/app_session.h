@@ -210,4 +210,11 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
+// The command script may claim the ui origin and approve what waits, so it
+// runs only where CALIPER_TEST_APPROVALS does: in the hidden app (--hidden)
+// and in `caliper shot`, which shows no window (`scripts_allowed`). Otherwise
+// the script and its results file are dropped from `o`, and `refused` (when
+// given) says why. app_session_options() (app_hooks.h) applies it.
+void gate_command_script(AppSession::Options* o, bool scripts_allowed, std::string* refused);
+
 }  // namespace caliper_host
