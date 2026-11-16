@@ -155,3 +155,54 @@ is in use. The remaining CPU waits are in readbacks, the offscreen canvas, the g
 
 The larger stall was never in the renderer. Draining the whole device at the handoff was the dominant cost, and that
 is what the stream-ordered handoff removes; [Zero-copy tensor visualization](zero-copy.md#the-sync-ladder) covers it.
+
+## The graphics layer
+
+The renderer core's graphics layer is in `src/host/gfx/`, in the namespace `caliper_gfx`. It is an internal C++17
+layer shaped to WebGPU's model and default limits, and nothing of it crosses the ABI. No view or service draws through
+it yet: the renderers above keep their own paths, and their clients are to move onto the layer one at a time.
+
+The layer offers these pieces:
+
+- **Resources.** Buffers, textures, samplers, programs, render and compute pipelines and bind groups, named by typed
+  64-bit handles. A released handle is refused rather than reaching another resource, and the object behind it is
+  destroyed only after the last submit that used it has completed.
+- **Draw lists.** A draw list holds the plain records of the draws for one target. Each record names a pipeline, up
+  to four bind groups and four dynamic offsets, up to eight vertex buffers at any 4-byte-aligned offset (read per
+  vertex, per instance or as a constant), an optional buffer of u32 indices, the counts and a pick id. A target has a
+  colour attachment, an optional `RG32Uint` ID attachment and an optional `Depth32Float` depth attachment.
+- **The uniform arena.** `DrawList::uniform` copies a parameter block into a 256-byte-aligned slice of the list's
+  arena and returns its dynamic offset. The backend uploads each arena once per submit.
+- **Frames.** A frame is an ordered list of producer waits, compute dispatches, buffer-to-texture copies and render
+  passes. A submit returns a serial, and completion is polled. A blocking wait exists only where the backend allows
+  one.
+- **Validation.** Every descriptor and every frame is checked against the backend's limits before anything is
+  encoded. One bad draw refuses the whole submit and leaves its targets untouched, and `last_error()` says why.
+- **Readback.** A texture region is read back asynchronously.
+- **Import.** External memory becomes a layer buffer or texture, and the result reports the route: in place, copied
+  on the GPU, copied from the host, or refused. `take_stats()` counts the imports, copies and bytes copied, so an info
+  line can say what ran.
+
+Two backends exist. The Metal backend runs on the Metal renderer's own device and queue (`HostRenderer::native_device`
+and `native_queue`), so the layer creates no second device, and its work is ordered with the renderer's by commit
+order. It imports an `MTLBuffer` of that device, and page-aligned host memory, in place, and it copies other host
+memory. It keeps Metal's fast paths:
+
+- bind groups are resolved once into Metal objects;
+- dynamic offsets move with `setVertexBufferOffset`;
+- state that repeats from one draw to the next is not set again;
+- command buffers do not retain their resources, because the layer defers every release.
+
+The recording backend has no GPU. It records each frame and each resource operation, and it keeps buffer and texture
+contents in host memory for headless tests. A WebGPU backend for the browser and a Vulkan backend are planned.
+
+The layer's tests run in two suites:
+
+- `caliper_tests --test-case="gfx layer*"` runs the core on the recording backend. It covers the handles, the
+  limits, the arena, deferred release, readback, the routes of import, and the refusal of bad frames.
+- `caliper_gfx_tests --test-case="gfx/Metal layer*"` runs the layer's rows of the graphics suite on Metal. One row
+  draws a list of quads with an indexed draw, depth, additive blending and the ID target. Another draws instanced
+  quads from an imported `MTLBuffer` and checks that the route is reported as in place, with zero bytes copied. Each
+  target is read back through the layer and compared byte for byte with a CPU reference. `CALIPER_GFX_CAPTURE_DIR`
+  writes PNG captures of the rows, and `CALIPER_GFX_LAYER_BENCH=1` runs a row that times the CPU encoding of 1,000
+  draws a frame on both backends.
