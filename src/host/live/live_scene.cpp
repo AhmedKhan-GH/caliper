@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 
@@ -42,6 +43,19 @@ Primitive primitive_of(const std::string& part) {
 double num(const caliper_net::Json& params, const char* key, double fallback) {
     const caliper_net::Json* v = params.find(key);
     return v && v->is_number() ? v->as_double() : fallback;
+}
+
+// The integer keys, read as the integers they are (the decoder takes any integer): a colormap
+// id outside 0 to INT32_MAX is no colormap, and flags keep every bit of a uint64.
+uint32_t colormap_id(const caliper_net::Json& params) {
+    const caliper_net::Json* v = params.find("colormap");
+    int64_t id = 0;
+    return v && v->get_i64(&id) && id >= 0 && id <= INT32_MAX ? uint32_t(id) : 0u;
+}
+uint64_t flag_bits(const caliper_net::Json& params) {
+    const caliper_net::Json* v = params.find("flags");
+    uint64_t f = 0;
+    return v && v->get_u64(&f) ? f : 0u;
 }
 
 // The `color` key, [r, g, b, a] from 0 to 255, packed r | g << 8 | b << 16 | a << 24.
@@ -223,7 +237,7 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
     uint32_t rgba = 0;
     const bool has_flat = flat_color(params, &rgba);
     if (has_flat) b.flat_rgba = rgba;
-    b.colormap = uint32_t(std::max(0.0, num(params, "colormap", 0)));
+    b.colormap = colormap_id(params);
     if (!caliper_host::colormap_lut(int32_t(b.colormap))) b.colormap = 0;
 
     // The colormap's range: the fixed ends, or the producer's stats for the AUTO ones, as in
@@ -231,7 +245,7 @@ bool SceneView::apply(const wire::SceneUpdate& u, std::string* why) {
     std::vector<double> stats;
     if (const caliper_net::Json* st = params.find("stats"); st && st->is_array())
         for (const caliper_net::Json& x : st->items()) stats.push_back(x.as_double());
-    const uint64_t flags = uint64_t(std::max(0.0, num(params, "flags", 0)));
+    const uint64_t flags = flag_bits(params);
     double vmin = num(params, "vmin", 0.0), vmax = num(params, "vmax", 1.0);
     const bool amin = (flags & CALIPER_NET_SNAP_AUTO_VMIN) != 0, amax = (flags & CALIPER_NET_SNAP_AUTO_VMAX) != 0;
     if (amin) vmin = stats.size() > 0 ? stats[0] : NAN;
