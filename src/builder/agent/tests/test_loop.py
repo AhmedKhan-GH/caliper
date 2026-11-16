@@ -13,8 +13,8 @@ import json
 import threading
 import time
 
-from conftest import (FAKE_KEY, allow, deny, kinds, message, message_text, read_requests, statuses, text, thinking,
-                      tiny_png, tool_use)
+from conftest import (FAKE_KEY, allow, deny, message, message_text, read_requests, statuses, text, thinking,
+                      tool_use)
 
 CACHE_1 = {"input_tokens": 40, "output_tokens": 12, "cache_creation_input_tokens": 9000, "cache_read_input_tokens": 0}
 CACHE_2 = {"input_tokens": 25, "output_tokens": 8, "cache_creation_input_tokens": 60, "cache_read_input_tokens": 9000}

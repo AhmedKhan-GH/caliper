@@ -343,10 +343,6 @@ def run_agent(tmp_path, caliper):
         assert FAKE_TOKEN not in agent.all_output()
 
 
-def kinds(updates: list[dict]) -> list[str]:
-    return [u.get("sessionUpdate") for u in updates]
-
-
 def message_text(updates: list[dict]) -> str:
     return "".join(u["content"]["text"] for u in updates if u.get("sessionUpdate") == "agent_message_chunk")
 

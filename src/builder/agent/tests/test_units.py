@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import json
 import logging
-import os
 import sys
 import threading
 
