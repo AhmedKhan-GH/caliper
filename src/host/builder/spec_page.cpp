@@ -3,6 +3,8 @@
 
 #include "builder/app_session.h"
 
+#include "builder/chat_pane.h"
+
 #if CALIPER_WITH_BUILDER
 #include "builder/panel_renderer.h"
 #include "builder/widget_app.h"
@@ -17,6 +19,7 @@
 #include "ui/work_area.h"
 
 #include <caliper_builder/commands/command.h>
+#include <caliper_builder/session/context_bundle.h>
 #include <caliper_builder/session/session.h>
 
 #include <imgui.h>
@@ -147,6 +150,7 @@ struct SpecPage::Impl {
     // first ⌘K on a panel, with the agent the app has (widget_app.h).
     std::unique_ptr<InlineWidget> widget;
     bool hidden = false;
+    ChatPane* chat = nullptr;   // the side chat, when the app has one
 
     void open_widget(AppSession& app, const std::string& panel) {
         if (!bound || from_file) return;
@@ -155,6 +159,17 @@ struct SpecPage::Impl {
             o.session = bound;
             o.busy = [&app] { return app.worker_busy(); };
             o.agent = make_app_widget_agent(app_widget_env(hidden, app.workspace()));
+            // Ask in chat: the side chat opens with the request and its context
+            // as a draft. The bundle is built here, inside the frame, so it
+            // leaves the panel's render out (no offscreen draw mid-frame).
+            o.hooks.ask_in_chat = [this](const WidgetChatRequest& r) {
+                if (!chat || !bound) return;
+                cb::ContextBundleOptions bo;
+                bo.vision = false;
+                const cb::ContextBundle bundle = cb::build_context_bundle(*bound, r.target.to_builder(), bo);
+                const std::optional<cb::OpenSpec> open = bound->open_spec();
+                chat_pane_handoff(*chat, r, bundle, open ? &open->spec : nullptr);
+            };
             widget = std::make_unique<InlineWidget>(std::move(o));
             widget->attach(*runtime);
             install_overlay();   // the page's, which calls the widget's
@@ -268,8 +283,11 @@ struct SpecPage::Impl {
             const char* key = "Ctrl K";
 #endif
             const float w = ImGui::CalcTextSize(key).x + ImGui::CalcTextSize("Command").x + 32.0f;
-            const float right = ImGui::GetWindowContentRegionMax().x - w - sternbild::metric::pad;
+            // ⌘L Chat, then ⌘K Command at the right end.
+            const float cw = chat ? ChatPane::toggle_width() + ImGui::GetStyle().ItemSpacing.x : 0.0f;
+            const float right = ImGui::GetWindowContentRegionMax().x - w - cw - sternbild::metric::pad;
             if (right > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(right);
+            if (chat) chat->draw_toggle();
             if (sternbild::key_button(key, "Command")) *command_key = true;
             ImGui::EndMainMenuBar();
         }
@@ -289,8 +307,11 @@ struct SpecPage::Impl {
             }
         }
         sternbild::status_bar_end();
-        // The jobs tray's strip above the status bar while it is open.
+        // The jobs tray's strip above the status bar while it is open (and
+        // the approval cards' above it), then the side chat's column at the
+        // right: the spec fills what they leave.
         if (tray) tray->draw();
+        if (chat) chat->draw_column();
         return home;
     }
 
@@ -467,6 +488,7 @@ SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, 
     // Escape first, also while their input has the keyboard; the page's
     // order follows only when neither is open.
     const bool command_key = clicked_command || ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_K);
+    if (im.chat) im.chat->read_keys();   // ⌘L Chat
     const bool esc_key = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
     if (im.widget_open() && esc_key) {
         im.widget->surface().escape();
@@ -515,6 +537,8 @@ SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, 
 void SpecPage::set_seams(Seams seams) { impl_->seams = std::move(seams); }
 
 void SpecPage::set_hidden(bool hidden) { impl_->hidden = hidden; }
+
+void SpecPage::set_chat(ChatPane* chat) { impl_->chat = chat; }
 
 bool SpecPage::panel_rect(const std::string& panel_id, float rect[4]) const {
     for (const auto& lp : impl_->runtime->layout().panels)
@@ -612,6 +636,7 @@ void SpecPage::enter(AppSession&) {}
 SpecPage::Result SpecPage::draw(AppSession&, const char*, JobsTray*, bool) { return {}; }
 void SpecPage::set_seams(Seams) {}
 void SpecPage::set_hidden(bool) {}
+void SpecPage::set_chat(ChatPane*) {}
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
 std::string SpecPage::widget_state() const { return "idle"; }
 void SpecPage::set_panel_overlay(PanelOverlay) {}

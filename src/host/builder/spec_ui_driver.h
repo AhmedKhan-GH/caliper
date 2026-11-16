@@ -19,6 +19,18 @@
 //   until <state>        wait until the inline surface's state is <state>
 //                        (prompt, running, preview, applied, ...)
 //   shot <name>          read the next frame back into <name>.png
+//   chat open|close      the side chat's toggle (chat_pane.h)
+//   chat focus           puts the keyboard into the chat's input
+//   chat until <state>   wait until the chat's state is <state> (ready,
+//                        running, exited, ...)
+//   chat item <kind> [<command> [<status>]]
+//                        wait until the conversation has such an item: a
+//                        tool call of a command in a status ("tool
+//                        catalog.describe in_progress"), an approval row
+//                        ("approval panel.create waiting"), a stop word
+//                        ("stop - DONE")
+//   touch <path>         creates an empty file (a stub agent's gate)
+//   append <path> <line> appends a line to a file (a test's approval decision)
 //   quit                 close the app
 // A step whose target is not there yet waits for it, up to kPatience frames,
 // then the script stops with an error.
@@ -26,6 +38,7 @@
 // Header-only; frame thread. Call feed() once per frame BEFORE ImGui::NewFrame.
 // ============================================================================
 #include "builder/app_session.h"
+#include "builder/chat_pane.h"
 #include "builder/spec_page.h"
 #include "export_service.h"
 
@@ -39,6 +52,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -91,7 +105,7 @@ public:
     }
     void shot_failed(const std::string& why) { error_ = "shot failed: " + why; }
 
-    void feed(const SpecPage& page, AppSession& app) {
+    void feed(const SpecPage& page, AppSession& app, ChatPane* chat = nullptr) {
         if (done()) return;
         ImGuiIO& io = ImGui::GetIO();
         // Releases of the last frame's presses.
@@ -128,12 +142,44 @@ public:
             if (!armed_) {
                 facts_ = "surface " + page.widget_state() + ", focus " +
                          (page.focused_panel().empty() ? std::string("none") : page.focused_panel()) + ", undo " +
-                         std::to_string(undo_steps(app));
+                         std::to_string(undo_steps(app)) + (chat ? ", chat " + chat->state() : std::string());
                 shot_requested_ = true;
                 armed_ = true;
             } else if (frames_ > kPatience) {
                 error_ = "shot " + s.arg + ": no frame was read back";
             }
+        } else if (s.verb == "chat") {
+            if (!chat) return void(error_ = "chat: the app has no side chat");
+            std::stringstream words(s.arg);
+            std::string what, a, b, c;
+            words >> what >> a >> b >> c;
+            if (what == "open" || what == "close") {
+                chat->set_open(what == "open");
+                next("chat " + what);
+            } else if (what == "focus") {
+                if (chat->state() == "none") return patience("the chat is not made yet");
+                chat->focus_input();
+                next("chat focus");
+            } else if (what == "until") {
+                if (chat->state() != a) return patience("the chat is " + chat->state() + ", not " + a);
+                next("the chat is " + a);
+            } else if (what == "item") {
+                const std::string cmd = b == "-" ? std::string() : b;
+                if (!chat->has_item(a, cmd, c)) return patience("no chat item " + s.arg);
+                next("chat " + s.arg);
+            } else {
+                error_ = "unknown chat step " + what;
+            }
+        } else if (s.verb == "touch" || s.verb == "append") {
+            std::stringstream words(s.arg);
+            std::string file, line;
+            words >> file;
+            std::getline(words, line);
+            while (!line.empty() && line.front() == ' ') line.erase(line.begin());
+            std::ofstream out(file, std::ios::app);
+            if (s.verb == "append") out << line << "\n";
+            if (!out) return void(error_ = s.verb + ": cannot write " + file);
+            next(s.verb + " " + std::filesystem::path(file).filename().string());
         } else if (s.verb == "quit") {
             quit_ = true;
             next("quit");

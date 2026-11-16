@@ -46,6 +46,7 @@ struct SpecAppletFacts;   // ui/landing_screen.h
 namespace caliper_host {
 
 class AppSession;
+class ChatPane;
 class JobsTray;
 class PanelRenderSeam;
 
@@ -110,6 +111,11 @@ public:
         std::function<void()> page_command;
     };
     void set_seams(Seams seams);
+    // The side chat (chat_pane.h): its toggle in the page bar beside ⌘K
+    // Command, its column after the page's strips, its key, and the inline
+    // surface's "Ask in chat", which opens it with the handoff draft. Null
+    // leaves the page without it.
+    void set_chat(ChatPane* chat);
     // Whether the app runs hidden (--hidden): the widget agent then never
     // touches the key store, and runs the sidecar only on a test's script
     // (builder/widget_app.h).

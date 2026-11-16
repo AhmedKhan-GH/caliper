@@ -28,6 +28,7 @@
 #include "host/builder/app_hooks.h"
 #include "host/builder/app_providers.h"
 #include "host/builder/approval_cards.h"
+#include "host/builder/chat_pane.h"
 #include "host/builder/spec_page.h"
 #include "host/builder/spec_ui_driver.h"
 #include "app_paths.h"
@@ -322,6 +323,7 @@ public:
             if (api_.running()) serve_api();
             session_.frame();
             approvals_.frame(session_.session(), session_.worker_busy(), glfwGetTime());
+            chat_.frame(session_);   // the side chat polls its agent
             note_spec_applets();
             captures_.before_frame(*renderer_, [this](uint64_t t, int status, const std::string& why) {
                 capture_error(t, status, why);
@@ -333,7 +335,7 @@ public:
             // CALIPER_TEST_UI with --hidden: the scripted clicks of a UI test,
             // queued into ImGui before the frame reads its input.
             if (ui_driver_ && page_ == AppPage::Live) feed_ui_driver();
-            if (spec_ui_ && page_ == AppPage::Spec) feed_spec_ui();
+            if (spec_ui_ && (page_ == AppPage::Spec || page_ == AppPage::Live)) feed_spec_ui();
 
             renderer_->new_frame();
 
@@ -509,6 +511,7 @@ public:
     // The builder session (host/builder/app_session.h) for the workspace of
     // the command line. It opens nothing yet.
     void start_session(const caliper_host::CommandLine& cl) {
+        cl_ = cl;
         caliper_host::AppSession::Hooks h = caliper_host::app_session_hooks();
         h.applets_json = [this] { return caliper_host::applets_json(loader_); };
         h.launch = [this](const std::string& id) { return launch_by_id(id); };
@@ -531,12 +534,37 @@ public:
         jobs_tray_.set_next_strip([this] { approvals_.draw_strip(); });
         spec_page_.set_panel_overlay([this](const std::string& id, const std::string& title, float x, float y, float w,
                                             float h, float strip) { approvals_.mark_panel(id, title, x, y, w, h, strip); });
+        // The side chat (host/builder/chat_pane.h) on the spec page and the
+        // live page. Its agent's caliper-mcp needs Caliper API: when the app
+        // runs without --api, the chat starts it at its first message, on a
+        // free loopback port with a new token and the API file.
+        caliper_host::ChatPane::Options co;
+        co.settings_path = caliper::app_data_path("side-chat.json");
+        co.exe_dir = caliper::executable_dir();
+        caliper_host::ChatPane::Hooks chh;
+        chh.start_api = [this](std::string* why) -> std::string {
+            if (!api_.running()) {
+                caliper_host::CommandLine c = cl_;
+                c.api_port = 0;
+                start_api(c);
+                if (api_.running()) landing_.log("api", api_.url(), "for the side chat");
+            }
+            if (!api_.running()) *why = "see Activity";
+            else if (api_.file().empty()) *why = "the API file could not be written";
+            return api_.running() ? api_.file() : std::string();
+        };
+        chh.show_approval = [this](const std::string& id) { approvals_.point_to(id); };
+        chh.log = [this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); };
+        chat_.start(std::move(co), std::move(chh));
+        spec_page_.set_chat(&chat_);
     }
 
     void cleanup() {
-        // The API first: calls still waiting for a frame get 503. Then the
+        // The side chat's agent first, while the API it calls still answers.
+        // Then the API: calls still waiting for a frame get 503. Then the
         // builder session: its worker, its journal and its database close
         // here, before the host's own stores.
+        chat_.shutdown();
         api_.stop();
         api_.set_command_gateway(nullptr);
         session_.set_panel_renderer(nullptr);
@@ -927,7 +955,7 @@ private:
     }
 
     void feed_spec_ui() {
-        spec_ui_->feed(spec_page_, session_);
+        spec_ui_->feed(spec_page_, session_, &chat_);
         if (spec_ui_->take_shot_request()) captures_.add(caliper_host::SpecUiDriver::kShotTicket);
         for (const std::string& line : spec_ui_->take_log()) std::cerr << "[ui] " << line << std::endl;
         if (spec_ui_->quit()) glfwSetWindowShouldClose(window_, GLFW_TRUE);
@@ -1065,8 +1093,17 @@ private:
                 ImGui::TextUnformatted("live");
                 ImGui::PopStyleColor();
             }
+            // ⌘L Chat at the right end: the side chat, which can build a spec
+            // over this stream's live sources.
+            if (caliper_host::ChatPane::built()) {
+                const float right = ImGui::GetWindowContentRegionMax().x - caliper_host::ChatPane::toggle_width() -
+                                    sternbild::metric::pad;
+                if (right > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(right);
+                chat_.draw_toggle();
+            }
             ImGui::EndMainMenuBar();
         }
+        chat_.read_keys();
 
         // The run bar (wire protocol 3.1) under the page bar, for a stream:
         // the run state, pause, resume and step, the script's parameters and
@@ -1100,6 +1137,7 @@ private:
         }
         sternbild::status_bar_end();
         jobs_tray_.draw();   // above the status bar while it is open
+        chat_.draw_column();   // the side chat's column at the right, while open
 
         // Its own dock space id, so the applet page's docked layout never
         // shows through on this page (and the reverse). The views tile the
@@ -1229,6 +1267,8 @@ private:
     caliper_host::SpecPage spec_page_;  // the session's open spec (applet.open)
     caliper_host::AppProviders providers_;  // live views, feed channels and metrics as catalog sources
     caliper_host::ApprovalTray approvals_;  // the agents' requests that wait for the person
+    caliper_host::ChatPane chat_;           // the side chat, on the spec and live pages
+    caliper_host::CommandLine cl_;          // for starting Caliper API later, for the chat
     bool pending_spec_home_ = false;  // Home on the spec page: leave after render
     std::string workspace_dir_;       // the session's workspace, whose spec applets are listed
     std::string pending_spec_open_;   // a workspace spec applet to open once the session is open

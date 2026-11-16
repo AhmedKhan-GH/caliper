@@ -635,6 +635,9 @@ add_executable(caliper
     # The approval cards of agents' requests that wait for the person
     # (src/host/builder/approval_cards.h); a stub without the builder.
     src/host/builder/approval_cards.cpp
+    # The side chat in the app (src/host/builder/chat_pane.h); a stub without
+    # the builder.
+    src/host/builder/chat_pane.cpp
 )
 # app_paths.cpp is no longer compiled by path here: it arrives via
 # libcaliper -> caliper_app_paths (PUBLIC). Compiling it here too would be an

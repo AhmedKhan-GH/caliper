@@ -34,6 +34,12 @@ if(NOT MSVC)
     target_compile_options(caliper_side_chat PRIVATE -Wall -Wextra)
 endif()
 
+# The app's pane (chat_pane.cpp, compiled by the caliper target itself as
+# spec_page.cpp is) draws this component.
+if(TARGET caliper)
+    target_link_libraries(caliper PRIVATE caliper_side_chat)
+endif()
+
 if(NOT WIN32)
     add_executable(caliper-chat-shot ${_chat_dir}/chat_shot_main.cpp)
     target_link_libraries(caliper-chat-shot PRIVATE caliper_side_chat caliper_api_session)
