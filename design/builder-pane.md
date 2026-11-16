@@ -21,6 +21,11 @@ Built after the walk-through's dry run of building a dashboard by hand: the empt
 
 Left: the pane on the live page, and Windows, where the builder is off.
 
+Open items, found in the walk-through's dry run and left for later:
+
+- Activity shows a row for every `layout.set` of one divider drag; they are to be grouped as the side chat groups repeated calls of one command.
+- Nothing tells a person that F3 New dashboard takes the command line's text as the new dashboard's title.
+
 ## The regions
 
 Build mode adds two columns and a strip beside the page's own canvas, as the placement sketch of the overview places them. The regions are computed without ImGui by `compute_builder_pane_layout()` from the work area that the host's strips leave; on the spec page through `layout_spec_page()`, which also gives the page's rectangles outside build mode:
