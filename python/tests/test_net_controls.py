@@ -410,23 +410,52 @@ def test_the_script_sets_a_selection(server, ctl):
 # ---------------------------------------------------------------------------
 # the training thread's side
 # ---------------------------------------------------------------------------
+def _before(v, msg):
+    """The messages ``v`` received before ``msg`` (by identity)."""
+    return v.seen[:next(k for k, m in enumerate(v.seen) if m is msg)]
+
+
+def _last(msgs, cls, view, key):
+    vals = [getattr(m, key) for m in msgs if isinstance(m, cls) and m.view == view]
+    return max(vals) if vals else None
+
+
 def test_a_paused_run_shows_its_last_step(server, ctl):
-    """The values a step appended before the pause reach the viewer while the
-    loop waits: the open tick is closed on the training thread."""
+    """On the connection, the run state of a pause follows the data taken
+    before it, read at once: every series value appended before the
+    checkpoint and the last snapshot each subscribed view took come before the
+    CONTROLS that says "paused", and so after a single step."""
+    z = torch.randn(500, 2)
+
     def body(i):
-        caliper.series(torch.tensor(float(i)), "loss")
+        caliper.series(torch.tensor(float(i)), "loss")       # gathered, moved in chunks
+        caliper.points(z + i * 1e-3, name="z")
 
     async def go():
         async with Viewer(server) as v:
             with Loop(body=body, delay=0.0005) as loop:
-                await v.expect(w.Views, lambda m: any(x["name"] == "loss" for x in m.views))
+                await v.expect(w.Views, lambda m: {"loss", "z"} <= {x["name"] for x in m.views})
                 await v.send(w.Subscribe(1, "loss", 1))
-                await v.expect(w.ViewReply)
+                await v.send(w.Subscribe(2, "z", 2))
+                await v.expect(w.Snapshot)
                 await v.control("pause")
-                await v.state(lambda m: m.run["state"] == "paused")
-                total = loop.count
-                got = await v.expect(w.Series, lambda m: m.total == total, timeout=5)
-                assert got.values.array()[-1] == total - 1
+                paused = await v.state(lambda m: m.run["state"] == "paused")
+                before = _before(v, paused)
+                total = loop.count                           # the loop waits in caliper.step()
+                assert paused.run["step"] == ctl.n
+                assert _last(before, w.Series, "loss", "total") == total
+                assert _last(before, w.Snapshot, "z", "seq") == server.stats()["views"]["z"]["seq"]
+                await v.drain(0.3)
+                after = v.seen[len(before) + 1:]
+                assert not any(isinstance(m, (w.Series, w.Snapshot)) for m in after), after
+                # a single step: its data, then "paused" again
+                await v.control("step", count=1)
+                again = await v.state(lambda m: m.run["state"] == "paused" and m is not paused
+                                      and m.run["step"] == paused.run["step"] + 1)
+                before = _before(v, again)
+                assert loop.count == total + 1
+                assert _last(before, w.Series, "loss", "total") == total + 1
+                assert _last(before, w.Snapshot, "z", "seq") == server.stats()["views"]["z"]["seq"]
     run(go())
 
 

@@ -46,7 +46,10 @@ them may block or call back into this module:
                                      metadata to every peer of the route that
                                      announced the capability for it ("controls"
                                      or "selection"); it may coalesce them as the
-                                     protocol allows
+                                     protocol allows. The CONTROLS that announces
+                                     a pause comes with after_data=True: it goes
+                                     to each peer only after the data that the
+                                     route took before it (the protocol's order)
     transport.reply(conn, meta)      send a CONTROL_REPLY with this metadata to
                                      the connection conn (an opaque key the
                                      transport chose)
@@ -82,8 +85,9 @@ The route gives the transport, callable from any thread:
 
 A transport may also append a function to ``CONTROLS.wait_hooks``: it runs on
 the training thread, in the checkpoint, right before a pause starts to wait
-(the network route closes its open tick there, so that the views show the
-step the run paused at).
+and before the pause is announced (the network route closes its open tick and
+moves its gathered series values there, and waits for their copies, so that
+the data of the step the run paused at goes out before the run state).
 
 ``CAPABILITIES`` are the strings a transport announces for this module.
 """
@@ -620,10 +624,13 @@ class Route:
             except Exception:
                 _log.debug("a reply failed", exc_info=True)
 
-    def _broadcast(self, type_, meta) -> None:
+    def _broadcast(self, type_, meta, after_data: bool = False) -> None:
         if self.attached:
             try:
-                self.transport.broadcast(type_, meta)
+                if after_data:
+                    self.transport.broadcast(type_, meta, after_data=True)
+                else:
+                    self.transport.broadcast(type_, meta)
             except Exception:
                 _log.debug("a broadcast failed", exc_info=True)
 
@@ -771,7 +778,7 @@ class Controls:
                 hook()
             except Exception:
                 _log.debug("a wait hook failed", exc_info=True)
-        self._publish()
+        self._publish(after_data=True)            # "paused" follows the step's data
         absent_since = None
         try:
             while True:
@@ -1203,7 +1210,7 @@ class Controls:
                     for sp in self.spaces.values() if sp._selection]
         return out
 
-    def _publish(self) -> None:
+    def _publish(self, after_data: bool = False) -> None:
         if not self.routes:
             return
         w = _w()
@@ -1215,7 +1222,7 @@ class Controls:
                     self._steps_reported = time.monotonic()
             self.counters["controls_out"] += 1
             for r in routes:
-                r._broadcast(w.MsgType.CONTROLS, meta)
+                r._broadcast(w.MsgType.CONTROLS, meta, after_data)
 
     def _publish_selection(self, sp: ItemSpace) -> None:
         if not self.routes:

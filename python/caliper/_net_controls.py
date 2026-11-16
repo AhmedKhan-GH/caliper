@@ -24,8 +24,14 @@ What it does for the server:
 * sends CONTROLS, SELECTION and the later replies of actions from the
   server's own thread, coalesced: of the CONTROLS (and of each item space's
   SELECTION) made between two sends, only the newest goes out;
-* closes the network ring's open tick on the training thread right before a
-  pause waits, so that the viewers show the step at which it paused.
+* at a pause, closes the network ring's open tick and moves its gathered
+  series values on the training thread, waiting for their copies, and holds
+  the CONTROLS that announces the pause until no connection has a snapshot or
+  series values left to send (at most ORDER_WAIT_S): on every connection the
+  run state then follows the data of the step at which the run paused. A
+  newer CONTROLS while one is held replaces it, and the hold ends when it is
+  sent, so the run state never overtakes that data and later changes are not
+  held back.
 
 Nothing here runs on the training thread per snapshot or per step: a change
 of the controls stores a message and wakes the server's thread.
@@ -33,12 +39,16 @@ of the controls stores a message and wakes the server's thread.
 from __future__ import annotations
 
 import threading
+import time
 
 from . import _controls, _wire
 
 __all__ = ["ControlsPort", "capabilities"]
 
 _CAPS = frozenset((_wire.CAP_CONTROLS, _wire.CAP_SELECTION))
+ORDER_WAIT_S = _wire.ORDER_WAIT_MS / 1000    # the longest a pause's run state waits for data
+COPY_WAIT_S = 1.0                            # the longest a pause waits for the device's copies
+RECHECK_S = 0.002                            # how often a held run state looks again
 
 
 def capabilities(controls: bool) -> list:
@@ -67,14 +77,19 @@ class ControlsPort:
         self._selections: dict = {}               # space -> the newest SELECTION not sent yet
         self._replies: list = []                  # (link, meta) of later replies
         self._scheduled = False                   # the Python sender: a flush is on its way
+        self._after_data = False                  # the stored CONTROLS announces a pause
+        self._held = None                         # the CONTROLS that waits for data to go out
+        self._held_until = 0.0
+        self._recheck = False                     # the Python sender: a look again is on its way
         self.route = _controls.attach(self)
         _controls.CONTROLS.wait_hooks.append(self._before_wait)
 
     # -- what caliper._controls calls (any thread) ---------------------------------------
-    def broadcast(self, type_, meta) -> None:
+    def broadcast(self, type_, meta, after_data: bool = False) -> None:
         with self._lock:
             if int(type_) == _wire.MsgType.CONTROLS:
                 self._controls = meta
+                self._after_data = self._after_data or after_data
             else:
                 self._selections[meta["space"]] = meta
         self._kick()
@@ -136,14 +151,28 @@ class ControlsPort:
         """VIEWS entries with their item spaces, for a peer with ``selection``."""
         return [self.route.annotate_view(e) for e in entries]
 
+    def holding(self) -> bool:
+        """A pause's run state waits for data to go out (the server's thread
+        then looks again soon)."""
+        return self._held is not None
+
     def flush(self) -> None:
         """Send what the controls stored: CONTROLS and SELECTION to the
-        attached peers that announced the capability, then the later replies."""
+        attached peers that announced the capability, then the later replies.
+        A CONTROLS that announces a pause, and any newer one, waits until no
+        connection has data left to send (see the module docstring)."""
         with self._lock:
             self._scheduled = False
             controls, self._controls = self._controls, None
             selections, self._selections = self._selections, {}
             replies, self._replies = self._replies, []
+            if controls is not None and (self._after_data or self._held is not None):
+                if self._held is None:
+                    self._held_until = time.monotonic() + ORDER_WAIT_S
+                self._held, controls = controls, None
+                self._after_data = False
+        if self._held is not None:
+            controls = self._release()
         if controls is None and not selections and not replies:
             return
         links = [ln for ln in list(self.server.producer.links) if ln.attached and not ln.closed]
@@ -160,6 +189,37 @@ class ControlsPort:
         for ln, meta in replies:
             if not ln.closed:
                 self._send(ln, _wire.encode_frame(_wire.MsgType.CONTROL_REPLY, meta))
+
+    def _release(self):
+        """The held CONTROLS once the data sent before it has gone out (or the
+        wait is over), else None and a look again soon. The server's thread."""
+        self.server.producer.pump_once()          # the paused step's data, published first
+        if self._data_pending() and time.monotonic() < self._held_until:
+            if not self.native and not self._recheck:
+                self._recheck = True
+                self.server._loop.call_later(RECHECK_S, self._look_again)
+            return None
+        held, self._held, self._held_until = self._held, None, 0.0
+        return held
+
+    def _look_again(self) -> None:
+        self._recheck = False
+        self.flush()
+
+    def _data_pending(self) -> bool:
+        """A connection has a snapshot or series values it has not sent yet."""
+        if self.native:
+            return self.server.nio.data_pending()
+        p = self.server.producer
+        for ln in list(p.links):
+            if ln.closed:
+                continue
+            for s in list(ln.subs.values()):
+                if s.snap is not None:
+                    return True
+                if s.series is not None and s.next < p.history(s.series).total:
+                    return True
+        return False
 
     def detach(self) -> None:
         self.route.detach()
@@ -207,6 +267,8 @@ class ControlsPort:
             return None
 
     def _before_wait(self) -> None:
-        """On the training thread, before a pause waits: the open tick goes out."""
+        """On the training thread, before a pause waits and is announced: the
+        open tick and the gathered series values go out, and their copies
+        complete, so that the server's thread can send them first."""
         if not self.server.closed:
-            self.server.ring.flush(timeout=0)
+            self.server.ring.flush(timeout=COPY_WAIT_S)

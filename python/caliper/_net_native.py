@@ -111,7 +111,7 @@ class _NativeProducer(_Producer):
 
     # -- the pump ---------------------------------------------------------------------
     def busy(self) -> bool:
-        if self.ring.pending:
+        if self.ring.pending or (self.controls is not None and self.controls.holding()):
             return True
         for st in list(self.ring.series.values()):
             if st.q:

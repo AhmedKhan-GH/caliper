@@ -49,12 +49,14 @@ class Fake:
     def __init__(self, allow=True, controllers=1):
         self.lock = threading.Lock()
         self.sent, self.replies = [], []
+        self.ordered = []                     # after_data of each broadcast
         self.allow, self.n, self.views = allow, controllers, 0
 
-    def broadcast(self, type_, meta):
+    def broadcast(self, type_, meta, after_data=False):
         valid(type_, meta)
         with self.lock:
             self.sent.append((int(type_), meta))
+            self.ordered.append(after_data)
 
     def reply(self, conn, meta):
         valid(w.MsgType.CONTROL_REPLY, meta)
@@ -415,6 +417,9 @@ def test_pause_and_resume_from_another_thread(ctl, fast):
         assert loop.still()
         states = [m["run"]["state"] for m in t.controls()]
         assert states[-2:] == ["pausing", "paused"]
+        # only the announcement of the pause waits for the data before it
+        flags = [f for (k, _), f in zip(t.sent, t.ordered) if k == w.MsgType.CONTROLS]
+        assert flags[-2:] == [False, True]
         assert t.controls()[-1]["run"]["step"] == ctl.n
         assert control(r, "pause")["status"] == "ok" and ctl.state == "paused"   # no change
         assert control(r, "resume")["status"] == "ok"
