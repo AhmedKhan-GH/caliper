@@ -97,7 +97,7 @@ Run history, comparison between runs, and recording and replaying a session are 
 
 3-D scenes and recordings are designed and not built. The design waits for review, and nothing of it is part of the current work. It builds on the streaming work of sprint 2, and only its recordings in the workspace and its spec primitive also wait for the agent-built panels of sprint 3. [Sprint 4](sprint-4.md) builds it as increments that a person can see, in this order: the renderer core's minimum cut; then a loss-landscape demo in a notebook, the first visible increment; then the rest of scenes, recordings and the demos, with every remaining migration step of the renderer core interleaved as a measured increment of its own. The parts are these:
 
-1. The renderer core: one graphics layer that each backend implements once, one shader source, a shared scene core, and zero-copy kept as an import capability with a measurement before and after every step. Its minimum cut comes first: the layer with its Metal backend, the shader generator, the scene core and the browser's WebGPU backend, on which scenes start. Every remaining migration step then follows in full: each existing view moved onto the layer, the Dawn fallback, and the retirement of the GLEW OpenGL path once Dawn covers its cases. The Vulkan backend comes with [Windows parity](windows-parity.md). Each step lands as its own series of commits, with measurements before and after, byte-exact pixel checks and offscreen captures, and the next step waits until it passes. It takes over the steps of [Renderers](#renderers) below. Plan: [Renderer core](renderer-core.md).
+1. The renderer core: one graphics layer that each backend implements once, one shader source, a shared scene core, and zero-copy kept as an import capability with a measurement before and after every step. Its minimum cut comes first: the layer with its Metal backend, the shader generator, the scene core and the browser's WebGPU backend, on which scenes start. Every remaining migration step then follows in full: the retirement of the GLEW OpenGL path, early; each existing view moved onto the layer; the removal of the TypeScript WebGPU views; one version of each graphics service, with one ABI epoch bump; and the Dawn fallback. The Vulkan backend comes with [Windows parity](windows-parity.md). Each step lands as its own series of commits that replaces what it moves and deletes the old code, since the user decided that the graphics change needs no backwards compatibility, with measurements before and after, byte-exact pixel checks and offscreen captures, and the next step waits until it passes. It takes over the steps of [Renderers](#renderers) below. Plan: [Renderer core](renderer-core.md).
 2. Scenes: entities on paths with entity transforms, points, lines, arrows, boxes, meshes, images and pinhole cameras, logged from Caliper LIB, with a text log and a bar chart. Plan: [Scenes](scenes.md).
 3. Timelines and recordings: stamps on several timelines, a recording file, recordings in the workspace database, and a scrubber in the app and in the browser. This is the recording and replay of [Data and Cloud](#data-and-cloud). Plans: [Recordings](recordings.md) and the [wire protocol 3.2 draft](wire-protocol-3-2.md).
 4. Scenes in the browser, on the WebGPU backend of the renderer core. Plan: [Web geometry](web-geometry.md).
@@ -109,15 +109,16 @@ A script sets the camera a 3-D view starts on, and a person switches the view be
 
 ## Renderers
 
-This work comes after Phase 1. The WebGPU backend behind `HostRenderer` is built for the browser, where it draws the web viewer's views (see `docs/explanations/rendering.md`). Its native role through Dawn is the last step of the web viewer's order and is not part of the current work.
+This work is part of the renderer core of [Sprint 4](sprint-4.md), whose [migration](renderer-core.md#migration) orders the steps. It is designed and not built.
 
-Caliper's own Metal renderer on macOS and Vulkan renderer on Windows stay the normal path, at full speed and with zero-copy from torch. Nothing routes them through another layer.
+Caliper's own Metal backend on macOS and Vulkan backend on Windows stay the normal path, at full speed and with zero-copy from torch, as backends of Caliper's own thin graphics layer. No third-party graphics library sits between them and the GPU.
 
-1. Run the WebGPU backend as the native fallback through Dawn, Google's WebGPU library, which is an optional build component. The host chooses it only when its own Metal or Vulkan renderer is unavailable. Dawn then draws through Direct3D 12 or 11, through OpenGL ES in a limited compatibility mode, or on the CPU through SwiftShader, which covers virtual machines, headless CI and machines with broken graphics drivers. This fallback is slower, but it works and says so, as the [invariants](#invariants) require.
-2. Retire the GLEW OpenGL fallback once the Dawn path covers its cases. There is no separate hand-written OpenGL or CPU renderer.
+1. Retire the GLEW OpenGL fallback now, early in sprint 4 and before Dawn, as the user decided. Until the Dawn fallback lands, a machine where neither Metal nor Vulkan starts gets a clear refusal instead of a slower path. There is no separate hand-written OpenGL or CPU renderer.
+2. Add one WebGPU backend of the graphics layer, with two roles. In the browser it runs on the browser's own WebGPU, as part of the web viewer. Later in sprint 4 it becomes the native fallback through Dawn, Google's WebGPU library, which is an optional build component, and the host chooses it only when its own Metal or Vulkan renderer is unavailable. Dawn then draws through Direct3D 12 or 11, through OpenGL ES in a limited compatibility mode, or on the CPU through SwiftShader, which covers virtual machines, headless CI and machines with broken graphics drivers. This fallback is slower, but it works and says so, as the [invariants](#invariants) require.
 3. Write each shader once and translate it for each backend. This is decided: the source is WGSL, translated to MSL and SPIR-V by Naga, with the generated sources committed, as [Renderer core](renderer-core.md#one-shader-source) describes.
+4. Keep one version of each graphics service. In sprint 4 the tensor bridge, the geometry service and the export service each collapse to one version, the embedding library's two kinds of tensor views become one, and the ABI epoch is bumped once, from 2 to 3, with every applet in this repository updated in the same changes, as the user decided. Applets and embedding hosts outside this repository stop loading until they are rebuilt against the new SDK, and whether to update them is the user's decision.
 
-Caliper then maintains three renderers: Metal, Vulkan and WebGPU. The renderers that exist today are described in Rendering (`docs/explanations/rendering.md`).
+Caliper then maintains three backends: Metal, Vulkan and WebGPU. The Vulkan backend of the layer comes with [Windows parity](windows-parity.md); until then the Windows app draws its ImGui pages and refuses textures and geometry, unless the user chooses one of the other options in [Renderer core](renderer-core.md#open-decisions). The renderers that exist today are described in [Rendering](../explanations/rendering.md).
 
 ## Windows parity
 
@@ -149,12 +150,12 @@ Every phase keeps these rules. Platform rules (`docs/explanations/architecture.m
 
 - Data flows from tensors to pixels, one way.
 - Applets supply no shaders.
-- A missing capability falls back to a working slower path and says so.
-- Graphics increments are verified byte for byte on both platforms.
+- A missing capability falls back to a working slower path where one exists, and says so; where none exists, as for a machine without Metal or Vulkan before the Dawn fallback, Caliper refuses with a message that names what is missing.
+- Graphics increments are verified byte for byte on every platform where they draw, and a platform whose path is not yet built refuses it rather than drawing it unverified.
 
 ## Risks
 
-- Every additive revision grows the ABI surface that must be kept working.
+- Every additive revision of a service that keeps revisions grows the ABI surface that must be kept working. The graphics services keep one version each from sprint 4, so an incompatible change to one of them costs an epoch bump and a rebuild of every applet instead.
 - Once a registry exists, an epoch bump strands every installed applet until it is rebuilt.
 - A registry is a supply-chain target; see signing under [Open questions](#open-questions).
 

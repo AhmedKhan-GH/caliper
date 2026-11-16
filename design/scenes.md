@@ -86,7 +86,7 @@ An entity transform maps the entity's space into its parent's. It is given in on
 | Form | Values | Meaning |
 |---|---|---|
 | Parts | `translation`, 3 f32; `rotation`, a unit quaternion in the order x y z w; `scale`, 1 or 3 f32. Each part is optional | A point p maps to T · R · S · p: scaled, then rotated, then translated |
-| Matrix | One 4 x 4 f32 matrix | Stored column-major, the layout of the instance poses of `caliper.geometry.v1_3` |
+| Matrix | One 4 x 4 f32 matrix | Stored column-major, the layout of the geometry service's instance poses |
 
 The world pose of an entity is the product of the transforms down its path, M<sub>1</sub> · M<sub>2</sub> · … · M<sub>n</sub>, from the root's child to the entity. A missing transform is the identity. The view normalises a quaternion and hides an entity whose world pose is not finite, saying so in the entity's hover. In a 2-D scene the transform takes a translation of 2 numbers, a rotation of one angle in radians, counter-clockwise when y is up, and a scale of 1 or 2 numbers, and is stored as the same 4 x 4 matrix.
 
@@ -463,7 +463,7 @@ Transforms, cameras, class tables and clears always travel whole. Encoded frames
 
 ### The scene core and the graphics layer
 
-The native scene view is the scene core compiling entities into a draw list for the graphics layer, both planned in [Renderer core](renderer-core.md). It calls no backend, and it is not a second drawing path beside the geometry service: the public `caliper.geometry.v1` to `v1_3` ABI stays as it is for applets and becomes another client of the same layer. The browser runs the same scene core over the layer's WebGPU backend, which [Web geometry](web-geometry.md) plans.
+The native scene view is the scene core compiling entities into a draw list for the graphics layer, both planned in [Renderer core](renderer-core.md). It calls no backend, and it is not a second drawing path beside the geometry service: the geometry service, which the renderer core's migration collapses into one version, stays the applets' way to draw in 3-D and becomes another client of the same layer. The browser runs the same scene core over the layer's WebGPU backend, which [Web geometry](web-geometry.md) plans.
 
 The points live view becomes a scene of one entity in the scene core. Today it calls the host renderer directly, `HostRenderer::geom_draw_primitives` with the host-internal draw record, which carries a raw 256-entry colour table that the public record lacks. Its camera is the right-handed orbit with +y up, a 45° field of view and clip z in [0, 1]. It picks on the CPU from the CPU-visible payload. Platform details reach into it in several places, which the layer's import capability replaces: `bind_buffer` in `src/host/live/live_views.cpp` has one branch for an imported `MTLBuffer`, one for a renderer that copies host memory (the browser's) and one that stages a CPU payload into a new Metal buffer and refuses on any other renderer; the Metal helpers in `live_views_metal.mm`; and the `mtl_buffer` field of the snapshot in `live_source.h`. The WebGPU renderer of the sprint 2 branch draws points only.
 
@@ -505,7 +505,7 @@ From the scene core: the entity tree and its world matrices; the cameras, that i
 
 ### What the geometry service lacks
 
-Scenes do not need a revision of the geometry service, because they do not draw through it. For the record, a scene uses five things that the service's applets cannot ask for today: lines wider than 1 pixel, per-instance colours, integer textures with a class table, label overlays and picking. Once the layer exists, a later additive revision, `caliper.geometry.v1_4`, could expose wide lines and per-instance RGBA to applets by growing the draw record, as v1_2 and v1_3 did, when an applet asks for them.
+Scenes do not need a change to the geometry service, because they do not draw through it. For the record, a scene uses five things that the service's applets cannot ask for today: lines wider than 1 pixel, per-instance colours, integer textures with a class table, label overlays and picking. Once the layer exists, the service's one version could give applets wide lines and per-instance RGBA by appending to its draw record, when an applet asks for them, as [Renderer core](renderer-core.md#one-version-of-each-graphics-service) plans for the growth of a graphics service.
 
 ### Picking, hover and selection
 

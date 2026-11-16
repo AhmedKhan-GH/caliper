@@ -15,8 +15,12 @@ On Windows the fast path is Vulkan with CUDA interop, where macOS uses Metal wit
     - **Refused.** The executable refuses `caliper serve`, `caliper build`, `--api` and `--url` before anything starts: it prints `... is not available on Windows yet` and exits with 1 (`windows_unavailable` in `src/host/host_cli.h`), and it ignores `CALIPER_API`. The `caliper_cli_windows_*` tests check this in the lane, and docs/references/cli.md, section "On Windows", describes it.
     - **macOS only.** The app's network source, the live attach and the shared-memory sessions. On Windows `src/host/live/live_unsupported.cpp` stands in for them, and every attach, `caliper_core_live_attach_url` included, fails with a reason. The live controls and the typed live views compile on Windows.
     - **Not run on Windows.** The process-level tests of `caliper serve`, `caliper shot --api`, the hidden app, its run bar and `caliper build`, which are registered on macOS only; the network transport of Caliper LIB, `caliper.serve()` and the notebook widget; and the web viewer in a browser on Windows.
+- **CI builds and tests the core on `windows-latest`.** The Windows lane of the Build workflow runs the same steps as the macOS lane: the core build without applets, the whole ctest suite with the Caliper CLI tests and the Caliper SDK and Caliper Embed package tests, the builds of `hello`, `sine_scope` and the scopes against the installed SDK, and the check that the host names no applet. It skips `embed_scope` and `gpt_scope`, which need the curl and zlib that only the core build provides on Windows. The runner has no GPU, so the GPU rows skip there. Sprint 4 retires the OpenGL fallback before the Dawn fallback lands, as the user decided, so from then until Dawn every test in the lane that needs a renderer skips on the runner; [Renderer core](renderer-core.md#no-fallback-renderer-until-dawn) lists what still runs. Several of these pieces have only run on macOS so far; [Watch the first Windows CI run](../guides/verify-on-windows.md#watch-the-first-windows-ci-run) lists what to look for.
+- **The Vulkan backend, the CUDA interop paths and the gfx suite have been verified on Windows hardware before.** [Verify on Windows hardware](../guides/verify-on-windows.md) describes the procedure.
+- **The code already handles several Windows details.** The loader opens an applet with `LoadLibraryA` and looks for `<stem>.dll`, with or without the `lib` prefix. `CALIPER_APPLET_PATH` uses `;` as its separator, and the user applets folder is `%APPDATA%\Caliper\applets\`. The lock around the data-schema stamp uses `LockFileEx`. `caliper shot` draws into the Vulkan offscreen canvas and reads the frame back, with no window. The `caliper-embed` package installs `bin\caliper_embed.dll`, `lib\caliper_embed.lib`, the headers and the CMake package, without the `caliper_live_*` calls, which exist on macOS only, and `embed_host` copies the DLL beside itself.
+- **No one has yet run on Windows hardware** applets loaded from outside the repository, the Caliper CLI subcommands, `caliper shot` or the Caliper Embed package.
 - **Agent-built panels, loaders and the command layer are built on macOS first,** on the sprint 3 branch, as libraries under `src/builder/` that no Windows build compiles yet. Starting a child process, the loopback HTTP client and the key store are stubs on Windows that refuse with a clear error.
-- **The renderer core, scenes and recordings are designed and not built** ([Renderer core](renderer-core.md), [Scenes](scenes.md), [Recordings](recordings.md)). The Vulkan backend of the graphics layer is done with this page's steps, not with the macOS work.
+- **The renderer core, scenes and recordings are designed and not built** ([Renderer core](renderer-core.md), [Scenes](scenes.md), [Recordings](recordings.md)). The Vulkan backend of the graphics layer is done with this page's steps, not with the macOS work. Because the user decided that the migration keeps no old path, sprint 4 reduces the Vulkan renderer to the window, the frame loop, the embed canvas and ImGui when the tensor bridge moves onto the layer. From then until step 7 of this page, Windows refuses bridge textures, geometry views, PNG exports and embedding views, and draws them through Dawn with a copy once Dawn lands, unless the user chooses another option ([The Vulkan renderer until Windows parity](renderer-core.md#the-vulkan-renderer-until-windows-parity)).
 
 ## How the sprints add to this page
 
@@ -29,7 +33,7 @@ Each step ends with a check that must pass on a Windows machine with an NVIDIA G
 ### 1. Build and test baseline
 
 - Run the full CI on `windows-latest` for every new package and subcommand. A test that skips on a GPU-less runner must also run on real hardware before the step counts as done.
-- Run the gfx, export and embed suites on Windows hardware with zero skips.
+- Run the embed suite on Windows hardware with zero skips. The gfx and export suites draw on Windows again only with the Vulkan backend of step 7, and their run with zero skips belongs to that step.
 - **Done when** CI is green and the hardware run shows no skipped GPU rows.
 
 | Item | Added by | Depends on | Builder days |
@@ -86,7 +90,7 @@ Each step ends with a check that must pass on a Windows machine with an NVIDIA G
 | Owner-only access to the hub file, the API file and the token file. On Windows they are written with default access and read without a check, where macOS requires mode 600 | Sprint 2 | None | 1 |
 | Stopping `caliper serve` cleanly. Only Ctrl-C reaches it on Windows; add a console control handler and the process-level test | Sprint 2 | None | 1 |
 | The app's network source. It is refused on Windows today, because its slots are Metal buffers | Sprint 2 | The graphics layer's import and copy paths ([Renderer core](renderer-core.md)); the Vulkan backend of step 7, or the Dawn fallback with a reported copy | 4 |
-| `GET /v0/capture.png` in the windowed app on Vulkan. It answers 501 today, since only the Metal renderer captures its window | Sprint 2 | The Vulkan renderer's readback, or the graphics layer's once it lands | 2 |
+| `GET /v0/capture.png` in the windowed app on Vulkan. It answers 501 today, since only the Metal renderer captures its window | Sprint 2 | Window capture in the Vulkan renderer, which keeps the window when sprint 4 reduces it | 2 |
 | Recording in the hub, `caliper serve --record` and `--recordings`: appending, reading a file that is still growing (file sharing modes), recovery after a crash, and offsets past 4 GiB | Sprint 4 | The recording file library | 2 |
 
 ### 5. The web viewer and notebooks
@@ -113,17 +117,19 @@ Each step ends with a check that must pass on a Windows machine with an NVIDIA G
 ### 7. Renderer fallbacks
 
 - The WebGPU backend through Dawn as the native fallback on Windows: Direct3D 12 and Direct3D 11 for machines without working Vulkan, and SwiftShader for machines without a usable GPU.
-- Retire the GLEW OpenGL fallback once Dawn covers its cases.
+- The GLEW OpenGL fallback is already gone: sprint 4 retires it before Dawn, as the user decided, so until Dawn is verified here a Windows machine without working Vulkan refuses to start, with a message that says so.
 - **Done when** the app runs on a machine with Vulkan disabled and says which fallback it is using.
 
 | Item | Added by | Depends on | Builder days |
 |---|---|---|---|
-| The Vulkan backend of the graphics layer, with the CUDA direct path, the buffer path and the semaphores as private paths, and the texture path, the geometry service and the points view moved onto it. It was moved out of the macOS work to this page | Sprint 4 | The layer and its Metal steps ([Renderer core](renderer-core.md), step 10 there); Windows hardware with CUDA | 8 |
+| The Vulkan backend of the graphics layer, with the CUDA direct path, the buffer path and the semaphores as private paths, and the texture path, the geometry service and the points view moved onto it. It was moved out of the macOS work to this page. Its code comes from the repository's history, because sprint 4 deletes the Vulkan renderer's texture, import, CUDA direct, buffer and geometry paths and their GLSL when the tensor bridge moves onto the layer, and the gfx/Vulkan and Vulkan+CUDA rows return with it, written against the layer | Sprint 4 | The layer and its Metal steps ([Renderer core](renderer-core.md), step 14 there); Windows hardware with CUDA | 8 |
+| The collapsed graphics services on Windows: the one version of the tensor bridge with CUDA import (`CALIPER_ALLOC_HANDLE_OPAQUE_WIN32`) through the layer's import, the one geometry version and the export version drawing from imported CUDA blocks, the Windows refusals of sprint 4 removed, and the scopes that use them, built against the SDK of epoch 3, run on the Vulkan backend | Sprint 4 | The Vulkan backend | 1 |
 | The Dawn fallback on Direct3D 12 and Direct3D 11, and on SwiftShader, verified on Windows | Sprint 4 | The Dawn step of the renderer core, built on macOS first | 2 |
-| Scenes on Windows before the Vulkan backend lands: they draw through Dawn, with a copy that the view's info line reports | Sprint 4 | The item above | 1 |
-| The zero-copy measurement on Windows: the timing rows, `CALIPER_VULKAN_STATS` and the benchmarks within the renderer core's thresholds, before and after the Vulkan step | Sprint 4 | The Vulkan backend; the CUDA benchmarks of step 3 | 2 |
-| The colormap decided by integer keys in the CUDA kernel, with its PTX generated again and the boundary rows run on Vulkan with CUDA | Sprint 4 | The colormap step of the renderer core | 1 |
-| The Windows build without its build-time glslang, once the SPIR-V that Naga generates from the WGSL sources is committed | Sprint 4 | The shader generator step of the renderer core | 1 |
+| Scenes, bridge textures and embedding views on Windows before the Vulkan backend lands: they draw through Dawn, with a copy that the view's info line reports | Sprint 4 | The item above | 1 |
+| The zero-copy measurement on Windows: the timing rows, `CALIPER_VULKAN_STATS` and the benchmarks within the renderer core's thresholds, comparing the Vulkan step's build with a build of the last commit that still had the Vulkan renderer's paths, run interleaved on one machine | Sprint 4 | The Vulkan backend; the CUDA benchmarks of step 3 | 2 |
+| The CUDA direct kernel written again from the colormap's shared C++ header, so that it decides by integer keys, with its PTX generated and the boundary rows run on Vulkan with CUDA. Sprint 4 deletes the old kernel with the Vulkan renderer's paths | Sprint 4 | The colormap step of the renderer core; the Vulkan backend | 1 |
+
+The Windows build loses its build-time glslang in sprint 4, together with the Vulkan renderer's GLSL shaders, so this step no longer carries that item. The Vulkan backend takes the SPIR-V that Naga generates from the WGSL sources, which is committed.
 
 ### 8. Signing, packaging and distribution
 

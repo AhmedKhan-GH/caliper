@@ -9,7 +9,7 @@ Nothing on this page is built. It rests on these built pieces, which are on the 
 - The web viewer module in `web/wasm/`: the live views, Dear ImGui and ImPlot compiled with Emscripten, the wire protocol client, and the WebGPU backend `src/host/renderer/webgpu_renderer.cpp` behind `HostRenderer`. The web viewer spike, a plan page on the `sprint2` branch, reports how this path was proved.
 - In that backend, the heatmap colormap in WGSL. It matches the CPU reference `map_f32_to_rgba8` byte for byte on every adapter tested, because it compares each value with thresholds that the CPU derives from the reference instead of recomputing the reference's division.
 - In that backend, the points of the geometry path and nothing more. A points payload is copied from WebAssembly memory into a GPU buffer (`import_host_allocation`), and each point is an instanced quad whose vertex shader pulls its position, value and colour table from three storage buffers. Lines, triangles, indices, normals, UVs, textures and instance matrices are refused.
-- In the TypeScript package `web/src`, the views written for the browser: a WebGPU points renderer (`render/points-gpu.ts`) that already draws instanced quads from instance-step vertex buffers, and the Canvas 2D views that draw where WebGPU is absent, among them the points view with its orbit camera (`views/points.ts`, `views/camera.ts`).
+- In the TypeScript package `web/src`, the views written for the browser: a WebGPU points renderer (`render/points-gpu.ts`) that already draws instanced quads from instance-step vertex buffers, and the Canvas 2D views that draw where WebGPU is absent, among them the points view with its orbit camera (`views/points.ts`, `views/camera.ts`). The renderer core's migration removes the TypeScript WebGPU views, which duplicate the WebAssembly views, and keeps the Canvas 2D views, as the user decided.
 
 Natively, Metal and Vulkan draw the whole geometry service, `caliper.geometry.v1` to `v1_3` (`docs/references/service-geometry-v1.md`): points, lines, triangles, textures and instanced poses, which `geom.vert` pulls from eight storage buffers (Rendering (`docs/explanations/rendering.md`)).
 
@@ -32,7 +32,7 @@ The scene core turns a scene's entities into a draw list, the graphics layer tak
 
 Every draw also has a pick variant, whose fragment stage writes the pick identity instead of a colour (see [Picking](#picking)), and indexed meshes and index-pair edges depend on one compute module, the index clamp and its edge gather.
 
-The geometry service is not one of these draws. It keeps its vertex-pulling program, which reads the storage buffers of group 3, and its one-pixel hardware lines, because its byte-exact rows and its index-clamp contract depend on them; only its points become instanced quads ([Renderer core](renderer-core.md)). In a browser it therefore runs on a default device and not on a compatibility device, where its capability bits stay unset as they do on OpenGL today.
+The geometry service is not one of these draws. It keeps its vertex-pulling program, which reads the storage buffers of group 3, and its one-pixel hardware lines, because its byte-exact rows and its index-clamp contract depend on them; only its points become instanced quads ([Renderer core](renderer-core.md)). In a browser it therefore runs on a default device and not on a compatibility device, where its capability bit stays unset.
 
 ## WebGPU limits that shape the design
 
@@ -117,11 +117,11 @@ An arrow is one instance of nine vertices: a shaft quad and a flat triangular he
 
 ### Boxes
 
-A box is an instance of the unit cube, or of the unit square in 2-D. Its center, half sizes and rotation quaternion are instance attributes at their offsets in the batch's arrays, and the vertex stage turns them into the column-major 4 × 4 pose that a `caliper.geometry.v1_3` instance pose holds: translation, rotation, then the half sizes as scale. The pose is applied first, as `mvp · (pose · v)`, and never folded into `mvp`. Edges are 12 segment quads, 4 in 2-D. With `fill`, the faces are 12 triangles, 2 in 2-D, drawn translucent with alpha blending and depth test only. A face's normal is an axis vector, so the pose maps it onto a vector parallel to the true normal under any rotation and positive scale, and the native normal chain lights a face exactly when lighting is asked for; boxes need none of the rigidity check that general instanced meshes need under Lambert lighting. Labels are text that the view layer draws over the image at anchors that the scene core projects.
+A box is an instance of the unit cube, or of the unit square in 2-D. Its center, half sizes and rotation quaternion are instance attributes at their offsets in the batch's arrays, and the vertex stage turns them into the column-major 4 × 4 pose that an instance pose of the geometry service holds: translation, rotation, then the half sizes as scale. The pose is applied first, as `mvp · (pose · v)`, and never folded into `mvp`. Edges are 12 segment quads, 4 in 2-D. With `fill`, the faces are 12 triangles, 2 in 2-D, drawn translucent with alpha blending and depth test only. A face's normal is an axis vector, so the pose maps it onto a vector parallel to the true normal under any rotation and positive scale, and the native normal chain lights a face exactly when lighting is asked for; boxes need none of the rigidity check that general instanced meshes need under Lambert lighting. Labels are text that the view layer draws over the image at anchors that the scene core projects.
 
 ### Meshes
 
-A mesh binds its positions, normals, colour source and UVs as vertex buffers and its indices as a `uint32` index buffer for `drawIndexed`. With normals, lighting is the native per-vertex headlight, with the normal matrix computed on the CPU. Without normals, faces are flat: the fragment stage lights each face from the cross product of the derivatives of its entity-space position, on both sides. A textured mesh samples its image with the fixed sampler of `caliper.geometry.v1_2`: linear, clamped to the edge, without mipmaps. A mesh with instance poses takes them and its per-instance values as the geometry service's v1.3 records do; without them, an identity pose is bound at stride 0.
+A mesh binds its positions, normals, colour source and UVs as vertex buffers and its indices as a `uint32` index buffer for `drawIndexed`. With normals, lighting is the native per-vertex headlight, with the normal matrix computed on the CPU. Without normals, faces are flat: the fragment stage lights each face from the cross product of the derivatives of its entity-space position, on both sides. A textured mesh samples its image with the geometry service's fixed sampler: linear, clamped to the edge, without mipmaps. A mesh with instance poses takes them and its per-instance values as the geometry service's instanced records do; without them, an identity pose is bound at stride 0.
 
 Index values come from the producer and cannot be checked without reading them. A hardware index fetch cannot clamp, and WebGPU either discards a draw with an index out of range or reads it as an invalid memory reference, so a small compute pass copies a batch's indices into an index buffer that the layer owns, each clamped to the last vertex, once per batch update. This keeps the geometry service's index-clamp contract for scenes.
 
@@ -189,7 +189,7 @@ The same backend compiles natively against Dawn, which offers the same `webgpu.h
 - There is no 4 GiB heap and no GPU process, so a copy is a staging write within the process.
 - Native code may block on the queue, where the browser allows only callbacks.
 - The surface is the app's window, presented explicitly, where the browser presents the canvas when the frame returns to its event loop.
-- Native adapters offer higher limits. The backend keeps to the defaults on both, so one path is tested, and its fit to compatibility mode lets Dawn's backends for older graphics APIs replace the OpenGL fallback for scenes; the geometry service stays unavailable there.
+- Native adapters offer higher limits. The backend keeps to the defaults on both, so one path is tested, and its fit to compatibility mode lets Dawn's backends for older graphics APIs draw scenes on machines without Metal or Vulkan, which the OpenGL fallback served until the renderer core retires it; the geometry service stays unavailable there.
 
 ## Shader sources
 
@@ -754,6 +754,8 @@ The tests run in headless Chromium through Playwright, on SwiftShader in CI and 
 
 ## The fallback without WebGPU
 
+After the renderer core's migration, the element's own TypeScript views draw only with Canvas 2D. The migration removes their WebGPU renderers, which duplicate the WebAssembly views, and keeps Canvas 2D as the fallback, as the user decided; whether to drop the Canvas 2D fallback too is a separate decision that the user has not made ([Renderer core](renderer-core.md#the-typescript-views-in-the-browser)). With WebGPU, the WebAssembly views draw scenes through the backend this page plans, and they are the only WebGPU drawing in a browser.
+
 Where WebGPU is absent, refused or lost, the element draws a scene with its TypeScript views in Canvas 2D, and it draws only the scene's points. It walks the entity tree, composes each entity's world matrix from the entity transforms in TypeScript, transforms each points batch on the CPU and draws all of them as the existing points view draws one cloud: round sprites per colour, far points first in 3-D, with the same orbit camera, hover and lasso. Colours follow the same rules, with colormap indices computed in the reference's f32 arithmetic so that they match. The fallback draws at most 100,000 points, which is the points data view's default budget, and samples a larger scene with a stride.
 
 Everything else is not drawn, and the view says so. A notice appears as the first line of the scene view's body, under its header, in the faint text style, while the scene holds primitives the fallback cannot draw. Its wording names only the kinds that the scene holds, in this order: lines, arrows, boxes, meshes and images.
@@ -804,7 +806,7 @@ The total is 24 builder days. The native fallback through Dawn is sized in [Rend
 - **Depth and segmentation textures hold bits.** The integer decision then sees NaN and infinite depths as they are.
 - **Lines as screen-space quads with extended ends and no joins; arrow heads flat in screen space.** Both keep their width in pixels and fit one instanced draw.
 - **Index-pair edges gathered into the segment streams, decided by the user.** A compute gather keeps `vs_lines` unchanged and the vertex stage free of storage buffers, at 24 to 32 bytes per edge, where fetching both ends by index in the vertex stage would need a new variant and a positions texture per batch.
-- **Box poses built in the vertex stage from center, half sizes and rotation.** The arrays bind as they arrive, and the pose is the matrix of a `caliper.geometry.v1_3` instance.
+- **Box poses built in the vertex stage from center, half sizes and rotation.** The arrays bind as they arrive, and the pose is the matrix of an instance of the geometry service.
 - **Flat faces from derivatives for meshes without normals.** Scenes asks for flat faces, and derivatives give them without duplicating vertices.
 - **The scene core's pick pass, 16 × 16 pixels.** It is exact for every primitive at a CPU cost independent of the item count.
 - **Mesh indices clamped by a compute pass.** WebGPU does not define an out-of-range index the way the native clamp does.

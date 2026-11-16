@@ -4,13 +4,14 @@ Sprint 4 gives Caliper 3-D scenes and recordings on a new renderer core. This pa
 
 ## Where things stand
 
-- **Sprint 4 is designed and not built.** Its pages wait for review. Recordings are MCAP files with the extension `.mcap`, as the user decided, and the section of Recordings on the recording file is being rewritten for MCAP.
+- **Sprint 4 is designed and not built.** Its pages wait for review. Recordings are MCAP files with the extension `.mcap`, as the user decided, and [Recordings](recordings.md#the-recording-file) specifies the file.
 - **Sprint 2 is built on its branches and not merged, and sprint 3 is built as libraries and not wired into the app.** Every increment builds on sprint 2's `caliper.serve()`, notebook widget, controls of protocol 3.1, `web/wasm` module and WebGPU backend; only increment 9 needs sprint 3.
 - **The user decided the shape of the sprint.** The renderer core's minimum cut comes first, then a loss-landscape demo in a notebook as the first visible increment, then the rest. Every remaining migration step follows in full, the Vulkan backend comes with [Windows parity](windows-parity.md), and what the sprint leaves out is in [Sprint 5](sprint-5.md).
+- **The user decided that the graphics change keeps no backwards compatibility,** because nothing is deployed or commercialised yet. Each migration step replaces what it moves and deletes the old code, OpenGL is retired at the start of increment 2, each graphics service keeps one version under one ABI epoch bump in increment 6, with every applet in this repository updated, and the TypeScript WebGPU views go in increment 4 while the Canvas 2D fallback stays. [Migration](renderer-core.md#migration) gives the steps.
 
 ## How the sizes are given
 
-Each increment lists its items with what each depends on and an estimated size in days of one builder. The sizes are the designers' estimates, kept unchanged. Where an item is split between increments, a table gives its share as "of" its whole size, and the shares add up to it. Three items are new, because no page sized them: the scene view in the shared view layer (2 days), drawing the landscape in the app (1.5) and demo 0 itself (3). The 25 days of recordings on MCAP are provisional until the validation of MCAP is written up. Every migration step of the renderer core lands under the rule of [Migration](renderer-core.md#migration): its own series of commits, measurements before and after against the fast-path thresholds, the byte-exact rows of the graphics suite and offscreen captures for the user. The next step waits until it passes.
+Each increment lists its items with what each depends on and an estimated size in days of one builder. The sizes are the designers' estimates, kept unchanged, except the migration's, which [Renderer core](renderer-core.md#the-steps) planned again when the user decided that the graphics change keeps no backwards compatibility. Where an item is split between increments, a table gives its share as "of" its whole size, and the shares add up to it. Three items are new, because no page sized them: the scene view in the shared view layer (2 days), drawing the landscape in the app (1.5) and demo 0 itself (3). The 25 days of recordings on MCAP are itemised in [Recordings](recordings.md#size) and rest on a structural check of MCAP, not on stress tests. Every migration step of the renderer core lands under the rule of [Migration](renderer-core.md#the-rule-of-every-step): its own series of commits, which replaces what it moves and deletes the old code with no switch back, measurements before and after against the fast-path thresholds, the byte-exact rows of the graphics suite, references recorded from the old path at the step's first commit, and offscreen captures for the user. The next step waits until it passes.
 
 ## The increments
 
@@ -51,21 +52,22 @@ Each increment lists its items with what each depends on and an estimated size i
 | Their WGSL and the index clamp's, in the one shader source | Step 2 | 2 (of 4) |
 | The index clamp pass | Step 4 | 0.5 (of 2) |
 | The colormap blocks, cached by range | The row below | 0.5 (of 1) |
-| Step 6, browser half: the key derivation in the shared C++ header, the exhaustive CPU test, the integer decision in the browser's WGSL and its boundary rows | Steps 2 and 4 | 1.5 (of 3) |
+| Step 6, browser half: the key derivation in the shared C++ header, the exhaustive CPU test, the integer decision in the browser's WGSL and its boundary rows | Steps 2 and 4 | 1.5 (of 2) |
 | Parity rows for the three draws in headless Chromium, on a default and a compatibility device | The draws | 2 (of 4) |
 | Demo 0: the notebook, `landscape.py`, the headless test, the reference captures and the cost measurement | The rows above | 3 (new) |
 
-### 2. The landscape in the app, and three views on the layer
+### 2. The landscape in the app, the end of OpenGL, and the views on the layer
 
-- **What a person sees.** The Caliper app, attached to the notebook's server, draws the same landscape on Metal. `caliper.points` draws through the scene core with unchanged pixels, the native colormap decides by keys, and heatmaps, images and the embed views take the texture path through the layer. It needs increment 1 and step 0's baseline.
-- **Done when** a capture of the app's scene view matches the CPU reference rows on Metal, and steps 5, 6 and 7 pass their thresholds.
+- **What a person sees.** The Caliper app, attached to the notebook's server, draws the same landscape on Metal. GLEW and the OpenGL renderer are gone, and where Metal cannot start the app says so and exits, which a test that forces the failure captures. `caliper.points` draws through the scene core, and heatmaps, images and the embed views take the texture path through the layer with the colormap decided by keys, each with pixels identical to the references recorded before its step and with its old Metal code deleted. On Windows the Vulkan renderer keeps the window, the canvas and ImGui, and bridge textures and geometry views are refused with a reason until Windows parity, unless the user chooses otherwise ([Open decisions](renderer-core.md#open-decisions)). It needs increment 1 and step 0's baseline. Retiring OpenGL depends on nothing, so a builder who is free during increments 0 and 1 may land it then.
+- **Done when** a capture of the app's scene view matches the CPU reference rows on Metal, and steps 5 to 8 pass their checks.
 
 | Item | Depends on | Builder days |
 |---|---|---|
 | The scene from the network route in the app, with capture rows on Metal | Increment 1 | 1.5 (new) |
-| Step 5: the points live view on the scene core | Step 3 | 3 |
-| Step 6, native half: the Metal compute colormap by keys, the CUDA kernel's source and PTX, the boundary rows on Metal | Step 6's browser half | 1.5 (of 3) |
-| Step 7: the texture path on Metal | Step 1 | 3 |
+| Step 5: retiring the GLEW OpenGL path, with the refusal where no renderer starts | Nothing | 2 |
+| Step 6, native rows: the colormap by keys on Metal through the generated program | Step 6's browser half | 0.5 (of 2) |
+| Step 7: the points live view on the scene core, with the graphics suite's reference mode | Step 3 | 3 |
+| Step 8: the texture path on Metal, and the Vulkan renderer reduced | Steps 1 and 6 | 4 |
 
 ### 3. Every primitive natively, through shared memory
 
@@ -84,8 +86,8 @@ Each increment lists its items with what each depends on and an estimated size i
 
 ### 4. Every primitive in the browser, and the geometry service on the layer
 
-- **What a person sees.** The browser draws everything of increment 3 under the parity rules, with budgets, the refusal line, rebuilding after a lost device and the points-only fallback with its notice. Step 8 moves the geometry service onto the layer with all its rows unchanged. It needs increment 3.
-- **Done when** the scene rows of [Web geometry](web-geometry.md#parity-with-the-native-renderers) pass in headless Chromium for every primitive, and step 8 passes its thresholds.
+- **What a person sees.** The browser draws everything of increment 3 under the parity rules, with budgets, the refusal line, rebuilding after a lost device and the points-only fallback with its notice. Step 9 moves the geometry service onto the layer with all its rows unchanged and deletes the hand-written geometry shaders. Step 10 removes the TypeScript WebGPU views, so that the WebAssembly views are the browser's one WebGPU path and the element's own views draw with Canvas 2D. It needs increment 3.
+- **Done when** the scene rows of [Web geometry](web-geometry.md#parity-with-the-native-renderers) pass in headless Chromium for every primitive, and steps 9 and 10 pass their checks.
 
 | Item | Depends on | Builder days |
 |---|---|---|
@@ -96,7 +98,8 @@ Each increment lists its items with what each depends on and an estimated size i
 | Budgets, the refusal line and the lost device | Scene data views | 2 |
 | The remaining parity rows | The rows above | 2 (of 4) |
 | The scene fallback in TypeScript | The codec rows | 2 |
-| Step 8: the geometry service on Metal | Step 7 | 5 |
+| Step 9: the geometry service on the layer | Step 8 | 5.5 |
+| Step 10: the TypeScript WebGPU views removed | Step 4 | 1.5 |
 
 ### 5. Picking, events, the text log and the bar chart
 
@@ -111,16 +114,16 @@ Each increment lists its items with what each depends on and an estimated size i
 | The text log and the bar chart natively | Increment 3 | 3 |
 | The text log in DOM and the bar chart in Canvas 2D | The row above | 3 |
 
-### 6. The Dawn fallback, the end of the OpenGL path and the clean-up
+### 6. One version of each graphics service, the final renderer seam and the Dawn fallback
 
-- **What a person sees.** The app on Dawn over Metal and over SwiftShader, scenes included, saying that it copies; GLEW and the OpenGL renderer gone, their rows passing on Dawn headless in CI; `HostRenderer` reduced to the window, the canvas and capture, the hand-written MSL gone and the docs updated. The GLSL shaders and the Vulkan renderer's entry points stay until the Vulkan step of Windows parity. It needs increment 4, so that the WebGPU backend draws every scene primitive.
-- **Done when** steps 9, 11 and 12 pass their checks.
+- **What a person sees.** Every applet in this repository rebuilt at ABI epoch 3 against the SDK 0.3.0, each page captured as before, and an applet built for epoch 2 refused with the epoch message; `caliper.show` and the viewer drawing through the typed live views alone; `HostRenderer` reduced to the window, the frame loop, the canvas and ImGui, with the docs updated; and the app on Dawn over Metal and over SwiftShader, scenes included, saying that it copies, with the Windows lane's tests that need a renderer running again on SwiftShader. Applets and embedding hosts outside this repository stop loading until they are rebuilt, which is the user's decision to act on. It needs increment 4, so that the geometry service is on the layer and the WebGPU backend draws every scene primitive.
+- **Done when** steps 11, 12 and 13 pass their checks.
 
 | Item | Depends on | Builder days |
 |---|---|---|
-| Step 9: the Dawn fallback | Increment 4 | 5 |
-| Step 11: retiring the GLEW OpenGL path | Step 9 | 2 |
-| Step 12: the clean-up, on the macOS side | Step 11 | 3 |
+| Step 11: one version of each graphics service, the one epoch bump and every applet in this repository updated | Increment 4 | 8 |
+| Step 12: `HostRenderer` at its final shape, and the docs | Step 11 | 1.5 |
+| Step 13: the Dawn fallback | Increment 4 | 5 |
 
 ### 7. Timelines, recordings on MCAP and the scrubber
 
@@ -131,7 +134,7 @@ Each increment lists its items with what each depends on and an estimated size i
 | Item | Depends on | Builder days |
 |---|---|---|
 | Timelines in Caliper LIB | The codec rows of increment 3 | 3 |
-| Recordings on MCAP: the recorder and reader in C++, `caliper.record`, the browser reader, the timeline and keyframe index, commit points and tailing, the writer lock, segments with a manifest, recovery, thinning and `caliper export --to parquet` | Timelines | 25, provisional |
+| Recordings on MCAP: the recorder and reader in C++, `caliper.record`, the browser reader, the timeline and keyframe index, commit points and tailing, the writer lock, segments with a manifest, recovery, thinning and `caliper export --to parquet` | Timelines | 25 |
 | The scrubber in the app | Recordings | 5 |
 | The scrubber in the browser | Recordings; increment 4 | 3 |
 | Demo 4, the training run | The rows above; increment 5 | 2 |
@@ -161,7 +164,7 @@ Each increment lists its items with what each depends on and an estimated size i
 
 ## Totals and the wait for the first increment
 
-Increments 0 to 9 take 22, 18.5, 9, 20, 17, 12, 10, 38, 7 and 17 builder days, 170.5 in all: the 164 days that the design pages size, and 6.5 for the three new items. The migration takes 46 of them, steps 0 to 9, 11 and 12, and it ends with increment 6, before recordings. The Vulkan step, 8 days, is counted with Windows parity.
+Increments 0 to 9 take 22, 18.5, 11, 20, 19, 12, 14.5, 38, 7 and 17 builder days, 179 in all: the 172.5 days that the design pages size, and 6.5 for the three new items. The migration takes 54.5 of them, steps 0 to 13, and it ends with increment 6, before recordings. The Vulkan step, 8 days, is counted with Windows parity. Against the plan before the user's decision on backwards compatibility, the sprint grows by 8.5 days: deleting the dual paths saves 2.5, deleting old code inside steps 8 and 9 adds 1.5, and one version of each graphics service with the applets updated, 8, and the removal of the TypeScript WebGPU views, 1.5, are new.
 
 With one builder the first increment is seen after 40.5 builder days: the minimum cut, 22, then increment 1, 18.5. With two it is about 21 days: one builder takes steps 1 and 4 while the other takes steps 0, 2 and 3, which ends the cut in 11 days; then one takes the shaders, draws, clamp, colormap and parity rows, and the other the codec subset, the Caliper LIB subset, the scene view and the demo. With three it is about 16 days: during the cut the third builder takes the codec subset, the Caliper LIB subset, the demo's numerical module, the CPU half of step 6 and the three draws' WGSL, none of which touches renderer code, and what remains in a chain is step 1, step 4, the draws, the parity rows and the demo's captures, 6 + 5 + 2 + 2 + 1 days.
 
@@ -176,7 +179,8 @@ With one builder the first increment is seen after 40.5 builder days: the minimu
 - **The subset of increment 1 is what demo 0 draws and nothing more.** Three primitives, the protocol messages that carry them and their draws in the browser make the demo; each deferred piece is planned whole in a later increment.
 - **The network route only in increment 1.** A notebook and a browser receive scenes over the network in any case, and the shared-memory layout and the in-process window would add 5 days and more without changing what the demo shows.
 - **The box and the floor grid as ordinary line draws at the scene's root, logged by the script, not overlays of the scene core.** They need no new code in the scene core or in either backend and draw alike natively and in the browser. The script knows the fixed range the box shows, while a box from the data's bounds would move at every update. The view's own ground grid and axes mark, in Scenes, come with the up-axis switch.
-- **Step 6 in two halves.** The surface's colours need the keys in the browser now, and the native half, which changes the fast path, keeps its own measurement as a migration step.
+- **Step 6 in two halves.** The surface's colours need the keys in the browser now. The native half adds only the boundary rows on Metal through the generated program, and edits no hand-written copy, because each copy is deleted by the step that moves its client; the fast path's measurement of the keys comes with step 8.
+- **The graphics change with no backwards compatibility.** Decided by the user, because nothing is deployed or commercialised yet: no dual paths, OpenGL retired at the start of increment 2, one version of each graphics service with one epoch bump and every applet in this repository updated in increment 6, the TypeScript WebGPU views removed in increment 4 with the Canvas 2D fallback kept, and zero-copy kept as a hard requirement. Protocol compatibility and the UI service's revisions are not part of it. [Renderer core](renderer-core.md#decisions) records each point with its reason.
 - **Strip break masks built by the viewer from `strip_lengths`.** The wire carries strip lengths and per-strip colours, while Web geometry expects masks and expanded colours from the producer; building a mask costs the viewer one byte per vertex.
 - **The key `static` travels with `scenes` alone.** Increment 1 sends no stamps, but a scene's state for a new subscription and its clears need the key, which Wire protocol 3.2 lists under `timelines`; sprint 2 is asked to move it.
 - **The plane of the path's principal components as demo 0's default, with filter-normalised random directions as a switch.** Decided by the user: the question includes how the optimizer moves across the surface, and in random directions, nearly orthogonal to the trajectory, the path is an almost vertical line.
@@ -186,13 +190,16 @@ With one builder the first increment is seen after 40.5 builder days: the minimu
 
 - **The cost of the surface.** About 1.1 TFLOP per surface, estimated at 0.2 to 0.5 s on an Apple laptop GPU and not measured, to which a refit of the plane adds about 13 GFLOP, a few milliseconds; `vmap` batching rules on MPS are unverified for every operation of the model, and the fallback loop is several times slower. If the budget of demo 0 misses, the default N rises.
 - **Demo 0's plane.** The plane's axes change at each refit, so successive surfaces are not comparable and the path is redrawn, and early in training the two components may hold little of the path's variance, which a series reports. In the random directions of the switch the path moves under 1 % of the grid's width and reads as a vertical line.
-- **A slower fast path, pixels that move, and two paths at once.** The thresholds and byte-exact rows of every migration step catch the first two, and a step that misses is fixed or reverted. Old renderer paths and the layer coexist until step 12, and the Vulkan renderer's own paths until Windows parity.
+- **A slower fast path, pixels that move, and no switch back.** The thresholds and byte-exact rows of every migration step catch the first two, and a step that misses is fixed, or reverted with git, since no old path is kept to switch back to.
+- **Windows and machines without a GPU.** With no old path kept and the Vulkan backend at Windows parity, Windows refuses bridge textures and geometry views from step 8 until then, or draws them through Dawn with a copy from step 13. From step 5 until step 13 a machine where neither Metal nor Vulkan starts cannot run the app, and the Windows lane's tests that need a renderer skip.
+- **Applets outside this repository.** From step 11 they are refused until rebuilt against the new SDK, and embedding hosts that call the v1.2 views no longer compile against `caliper-embed` 2.0.0. This sprint touches neither.
 - **Ids under review, and one browser.** Three sprints edit the protocol, the roadmap and the web package, and the ids of 3.2 are proposals until sprint 2 takes them. Only headless Chromium was used for checks; Safari and Firefox are untested.
-- **MCAP.** Its sizes are provisional, its specification's major version is 0, and standard tools that rewrite a file do not keep Caliper's alignment and mixed compression.
-- **Scope.** 170.5 builder days.
+- **MCAP.** Its sizes hold with no margin and rest on a structural check only, its specification's major version is 0, and standard tools that rewrite a file do not keep Caliper's alignment and mixed compression.
+- **Scope.** 179 builder days.
 
 ## Open questions
 
 1. **Reordering inside the minimum cut.** Increment 1 is seen only in a notebook and a browser, so it needs the layer's interface and core with its recording backend, the generator, the scene core and the browser's WebGPU backend, 17 days, and not step 0 or the layer's Metal backend, 5 days, which no browser draw uses. Options: the cut whole, as decided; or step 0 and the Metal backend moved to the start of increment 2, before any native path changes. The second brings the first increment forward from 40.5 to 35.5 builder days with one builder, and to about 18 and 13 days with two and three, and moves no work out of the sprint. It risks that the interface is exercised by WebGPU alone until Metal lands, so that what Metal needs changed (a bind model without bind group objects, inline constants, import, readback) reaches back into the scene core and the browser backend already built on it; the cut's captures on Metal come later; and it departs from the order the user decided. Recommendation: the cut whole, because a second backend on another API checks the interface before two clients are built on it.
 2. **The app in increment 1.** Drawing the landscape natively costs about 1.5 days once the minimum cut exists: the app's network source passes kind 6 to the same scene view, which is shared C++ code, the Metal backend draws the three programs from their generated MSL, and three capture rows compare them with the CPU reference. Options: in increment 2, as planned, or in increment 1. Recommendation: increment 2 with one or two builders; with three it fits beside the browser rows and can come in.
 3. **Demo 0's default N and cost budget.** Options: N = 500 with the run at most 1.5 times as long as without the landscape, as planned; or a tighter budget with a larger N. Recommendation: as planned, with N set again from the first measurement if the budget misses.
+4. **The Vulkan renderer until Windows parity.** Options, given in full in [Renderer core](renderer-core.md#open-decisions): reduce it in step 8 and let Windows refuse textures and geometry until Windows parity, as planned; bring the Vulkan step forward before step 8, at 8 more builder days in this sprint and with Windows hardware with CUDA; or bring forward only the general part of the Vulkan backend, about 5 days, which keeps textures but not geometry or zero-copy on Windows. Recommendation: as planned, because no one runs Caliper on Windows yet and the hosted runner has no GPU.

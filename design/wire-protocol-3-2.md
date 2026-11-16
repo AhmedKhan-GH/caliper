@@ -157,7 +157,7 @@ The entity transforms of up to 1,024 entities of one scene. Every entity transfo
 |---|---|
 | `sub`, `view`, `seq`, `stamp_ns`, `static`, `state` | As in SCENE_UPDATE |
 | `paths` | The K entity paths, distinct, never the root |
-| Section `matrices` f32 (K, 16) | Row k is the entity transform of `paths[k]`, column-major, the layout of the instance poses of `caliper.geometry.v1_3` |
+| Section `matrices` f32 (K, 16) | Row k is the entity transform of `paths[k]`, column-major, the layout of the geometry service's instance poses |
 | Section `stamps` i64 (K, T) or `stamp` i64 (T,) | Each entity transform's stamp, or one for all |
 
 A producer merges the pending entity transforms of a scene into one message, keeping the newest per path, so a robot of 50 links updated at 60 Hz costs one message per frame. A static entity transform travels in a message of its own with `static` true. SCENE_CLEAR with `parts` `["transform"]` removes one.
