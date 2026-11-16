@@ -117,7 +117,8 @@ The check already exists in the agent, so you can run it from a terminal before 
 `caliper-agent probe --provider openai-compatible --base-url http://localhost:11434/v1 --model <model>` prints what it
 found as JSON. The [Widget agent](../references/widget-agent.md) reference lists its options and fields.
 
-Caliper will publish which models pass the widget agent's test tasks, so you can choose one that works. A server on
+[Widget agent conformance](../references/widget-agent-conformance.md) lists how models did on the widget agent's
+test tasks, and shows how to run the tasks against your own model. A server on
 another computer works too, through the Custom preset, but then your data leaves your machine, and Caliper warns you.
 
 ## Share the GPU with a training run

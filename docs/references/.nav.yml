@@ -32,6 +32,7 @@ nav:
       - browser-elements.md
       - api.md
       - widget-agent.md
+      - widget-agent-conformance.md
   - Applets and environment:
       - applets.md
       - environment.md

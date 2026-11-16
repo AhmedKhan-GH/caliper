@@ -61,8 +61,8 @@ path, so a file such as `json.py` in a workspace would run as code.
 | `--preset <id>` | A provider preset of `caliper_agent/presets.json` (`anthropic`, `openai`, `gemini`, `openrouter`, `ollama`, `lmstudio`, `custom`), which fills the provider and the base URL ([Widget agent](widget-agent.md#presets)) |
 | `--provider <name>` | `claude` (the default), the Claude API, or `openai-compatible`, a server at `--base-url` |
 | `--base-url <url>` | The OpenAI-compatible server, such as `http://127.0.0.1:11434/v1` for Ollama |
-| `--model <id>` | The model of new sessions; default `claude-opus-5-5` on the Claude API, required for an OpenAI-compatible server |
-| `--effort <level>` | The effort of new sessions on the Claude API; default `high` |
+| `--model <id>` | The model of new sessions; default `claude-opus-5-5` on the Claude API, required for an OpenAI-compatible server. When given, it is a widget session's model on the Claude API too |
+| `--effort <level>` | The effort of new sessions on the Claude API; default `high`. When given, it is a widget session's effort too |
 | `--model-tools yes\|no`, `--model-vision yes\|no` | What an OpenAI-compatible model can do, when the app knows it; default the cached probe, else `yes` until the server says otherwise ([Providers](#providers)) |
 | `--context-length <tokens>` | The model's context length, the person's setting; default the cached probe, else 8,192 for an OpenAI-compatible model and unknown for Claude |
 | `--cache-dir <path>` | The folder of the capability cache, `model-capabilities.json`, which `caliper-agent probe` writes |
@@ -740,6 +740,10 @@ A fake Caliper API runs on loopback in the test process, and a fake OpenAI-compa
   overrides and with bad usage; and the sidecar's use of the cache (a refused session, vision and the context length in
   the session and the request, options over overrides over a fresh probe, a stale entry ignored).
 - `tests/test_offline.py`: the offline switch (Security notes above).
+- `tests/test_conformance.py`: the provider conformance suite (`conformance/`, the program
+  `caliper-agent-conformance`) with every passing scripted answer, every failing one, the vision task without vision,
+  against the fake OpenAI-compatible server, a model without tool calling, and a hosted provider refused without
+  `--real` ([Widget agent](widget-agent.md#the-provider-conformance-suite)).
 - `tests/test_presets.py`: `presets.json` against both tables of the Widget agent page, the Custom account, hostile base
   URLs, the choices of preset, provider and base URL with their warnings, every documented key shape scrubbed, and
   `--preset` on the sidecar (with `initialize`'s `_meta.caliper.provider`) and on the probe.
@@ -860,6 +864,8 @@ Built on this branch:
   (`presets.py`).
 - Widget sessions (`widget.py`, the widget prompt, the `handoff` toolset), with the scope rule in
   `src/builder/commands/widget_scopes.json`.
+- The provider conformance suite: `src/builder/agent/conformance/` (`tasks.json` and the runner
+  `caliper-agent-conformance`, built with the tests on POSIX).
 - The tests listed above, and the ctest entries `builder_agent`, `builder_agent_py`, `builder_agent_e2e` and
   `builder_agent_widget`.
 

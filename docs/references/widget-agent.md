@@ -3,8 +3,9 @@
 The widget agent is `caliper-agent`, Caliper's own ACP agent, in the role in which it works on one target: a panel, a
 selection, a dropped file or a property. This page gives the interface between Caliper and that role: how a widget
 session is opened, which commands it may use, what a prompt may hold, and what each answer carries.
-[Agent roles](../explanations/agent-roles.md) explains the two roles, and
-[Set up the widget agent](../guides/set-up-the-widget-agent.md) shows the person's side.
+[Agent roles](../explanations/agent-roles.md) explains the two roles,
+[Set up the widget agent](../guides/set-up-the-widget-agent.md) shows the person's side, and
+[Widget agent conformance](widget-agent-conformance.md) tests a provider and a model against the widget tasks.
 
 !!! note "Status"
     The agent and its widget sessions are built and tested in `src/builder/agent/`. The inline surface that opens them
@@ -98,7 +99,7 @@ and makes no request that costs tokens. The key comes from the environment, as f
 | `can_drive_caliper` | `false` when the model cannot call tools |
 | `probe`, `overrides`, `quirks` | The cached probe answers, the person's overrides, and what the server needed (`strict`, `max_tokens_field`) or showed (`reasoning_field`, `streamed_arguments`) |
 | `probed_at`, `from_cache`, `stale` | When the probe ran, and whether this answer came from the cache |
-| `errors`, `warnings` | Why an answer is unknown (such as `probe.unreachable`, `probe.key_rejected`, `probe.timeout`), and notes such as a context length below 8,192 tokens |
+| `errors`, `warnings` | Why an answer is unknown (such as `probe.unreachable`, `probe.key_rejected`, `probe.timeout`, or `probe.cut_off` for a reply that reached the output limit first), and notes such as a context length below 8,192 tokens |
 
 The command exits with 0 when it printed its answer and with 2 for bad usage. A base URL must be an http or https
 address without a user name, password, query or fragment.
