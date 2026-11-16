@@ -29,6 +29,11 @@ keeps the selection a viewer makes in each space and sends it to every viewer
 in SELECTION, with the details of the selected units (the norms of their
 input and output weights) computed off the network thread.
 
+With --all-kinds it also streams "units", a points view of the hidden
+units placed by their two output weights and coloured by the norm of their
+input weights (its point dim indexes "units" with --selection), and
+"fc1 values", a histogram of the first layer's weights.
+
 When it exits it prints one JSON line: {"id", "steps", "loss_values",
 "snapshots_sent", "events", "lr", "saves", "selects", "selection"}.
 """
@@ -343,6 +348,25 @@ class Stream:
                          round(w_out, 4) if w_out is not None else None])
         return {"fields": ["in_norm", "out_norm"], "items": first, "values": rows}
 
+    def _derived(self, sub: int, s: dict, view: dict, seq: int, a) -> W.Snapshot:
+        """A snapshot of the points view (positions, values) or the histogram (weights)."""
+        if view["kind"] == W.Kind.HISTOGRAM:
+            w = np.asarray(a, dtype=np.float32).ravel()
+            lo, hi = float(w.min()), float(w.max())
+            counts, _ = np.histogram(w, bins=32, range=(lo, hi))
+            return W.Snapshot(sub, s["view"], seq, time.monotonic_ns(), int(W.Kind.HISTOGRAM), s["resolved"],
+                              counts.astype(np.float32), stats=[lo, hi])
+        pos, val = a
+        (ax,) = W.payload_layout(view, s["resolved"])["axes"]
+        rows = slice(ax["start"], ax["start"] + ax["count"] * ax["step"], ax["step"])
+        pos = np.ascontiguousarray(pos[rows][:ax["size"]], dtype=np.float32)
+        val = np.ascontiguousarray(val[rows][:ax["size"]], dtype=np.float32)
+        stats = [float(val.min()), float(val.max()), float(pos[:, 0].min()), float(pos[:, 0].max()),
+                 float(pos[:, 1].min()), float(pos[:, 1].max())]
+        return W.Snapshot(sub, s["view"], seq, time.monotonic_ns(), int(W.Kind.POINTS), s["resolved"], pos,
+                          aux=val, colormap=0, flags=W.SNAP_AUTO_VMIN | W.SNAP_AUTO_VMAX, stats=stats,
+                          axes=[ax], points_dims=2, label_count=0)
+
     def _subscribe(self, msg: W.Subscribe, ws) -> None:
         v = self.views.get(msg.view)
         if v is None:
@@ -379,6 +403,16 @@ class Stream:
                     wait = min(wait, due)
                     continue
                 view = self.views[s["view"]]
+                if view["kind"] in (W.Kind.POINTS, W.Kind.HISTOGRAM):
+                    with self.lock:
+                        seq, a = self.latest.get(s["view"], (0, None))
+                    if a is None or seq == s["seq"]:
+                        continue
+                    await ws.send(W.encode(self._derived(sub, s, view, seq, a)))
+                    self.snapshots_sent += 1
+                    s["seq"] = seq
+                    s["last"] = now
+                    continue
                 if view["kind"] == W.Kind.SERIES:
                     with self.lock:
                         total = len(self.loss)
@@ -435,8 +469,13 @@ def train(stream: Stream, seconds: float, device: str) -> int:
         if stream.controls is not None:
             stream.controls.checkpoint(steps, opt)
         stream.append(float(loss.item()))
-        stream.publish("fc1.weight", model[0].weight.detach().cpu().numpy())
-        stream.publish("fc2.weight", model[2].weight.detach().cpu().numpy())
+        w1 = model[0].weight.detach().cpu().numpy()
+        w2 = model[2].weight.detach().cpu().numpy()
+        stream.publish("fc1.weight", w1)
+        stream.publish("fc2.weight", w2)
+        if "units" in stream.views:
+            stream.publish("units", (w2.T.copy(), np.linalg.norm(w1, axis=1)))
+            stream.publish("fc1 values", w1)
         time.sleep(0.004)
     return steps
 
@@ -463,6 +502,7 @@ def main() -> int:
     ap.add_argument("--rate", type=float, default=60)
     ap.add_argument("--controls", action="store_true", help="take the controls of protocol 3.1")
     ap.add_argument("--selection", action="store_true", help="take the linked selection of protocol 3.1")
+    ap.add_argument("--all-kinds", action="store_true", help="also stream a points view and a histogram")
     a = ap.parse_args()
     identity = {"id": a.id, "script": os.path.basename(__file__), "pid": os.getpid(),
                 "start_unix_ms": int(time.time() * 1000)}
@@ -475,6 +515,15 @@ def main() -> int:
                  {"id": 3, "name": "loss", "kind": int(W.Kind.SERIES), "sources": []}]
         if a.selection:
             views[2]["items"] = "step"
+        if a.all_kinds:
+            point = {"name": "unit", "size": 64}
+            if a.selection:
+                point["items"] = "units"
+            views.append({"id": 4, "name": "units", "kind": int(W.Kind.POINTS), "default": {},
+                          "sources": [{"name": "units", "dtype": "f32", "dims": [point]}]})
+            views.append({"id": 5, "name": "fc1 values", "kind": int(W.Kind.HISTOGRAM), "default": {},
+                          "sources": [{"name": "fc1.weight", "dtype": "f32",
+                                       "dims": [{"name": "out", "size": 64}, {"name": "in", "size": 32}]}]})
     stream = Stream(hub_address(a.hub_file), identity, views, controls=a.controls, selection=a.selection)
     if a.bench:
         stream.start()

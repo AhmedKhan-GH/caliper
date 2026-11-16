@@ -12,7 +12,7 @@
 //   click <widget>        a click on "pause", "resume", "step", "action:<name>", "more"
 //   set <param> <text>    ctrl+click the parameter's slider or field, type <text>, Enter
 //   toggle <param>        a click on a boolean parameter's box
-//   select <view>         a shift-drag across the top quarter of the view's data area
+//   select <view>         a shift-drag across the top quarter of the view's image or plot area
 //   wait <frames>         nothing for that many frames
 //   state <run state>     wait until the run state is <run state> (paused, running, ...)
 // A step whose target has not been drawn waits for it, up to kPatience frames,
@@ -25,8 +25,8 @@
 #include "live/live_views_state.h"
 
 #include <imgui.h>
-#include <imgui_internal.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
@@ -38,8 +38,6 @@ namespace caliper_live {
 class UiDriver {
 public:
     static constexpr int kPatience = 1200;   // frames a step waits for its target (20 s at 60 Hz)
-    static constexpr int kSettleFrames = 30;  // no pointer input before the page's 30th frame
-    static constexpr int kRetries = 5;        // presses again after a cancelled press, at most
 
     explicit UiDriver(const std::string& script) {
         std::stringstream all(script);
@@ -80,8 +78,6 @@ public:
         }
         if (s.verb == "click" || s.verb == "toggle" || s.verb == "set") {
             const std::string name = s.verb == "click" ? s.a : "param:" + s.a;
-            // The page's first frames: its windows appear and take focus.
-            if (ImGui::GetFrameCount() < kSettleFrames) return;
             if (phase_ == 0) {
                 const auto& w = bar_widgets();
                 const auto it = w.find(name);
@@ -106,18 +102,7 @@ public:
                     if (typed) io.AddKeyEvent(ctrl, true);
                     break;
                 case 2: io.AddMouseButtonEvent(0, true); break;
-                case 3:
-                    // A window that appeared and took focus in the frame of the
-                    // press (a view's first frame) cancels the press: press again.
-                    if (ImGui::GetCurrentContext()->ActiveId == 0 && retries_ < kRetries) {
-                        ++retries_;
-                        io.AddMouseButtonEvent(0, false);
-                        if (typed) io.AddKeyEvent(ctrl, false);
-                        phase_ = 1;
-                        break;
-                    }
-                    io.AddMouseButtonEvent(0, false);
-                    break;
+                case 3: io.AddMouseButtonEvent(0, false); break;
                 case 4:
                     if (!typed) next(s.verb + " " + s.a + " at " + where());
                     else io.AddKeyEvent(ctrl, false);
@@ -144,6 +129,22 @@ public:
                 ay_ = v->geo_area[1];
                 aw_ = v->geo_area[2];
                 ah_ = v->geo_area[3];
+                // A heatmap or an image: its image, which may sit inside the
+                // area with margins (cells keep their aspect).
+                const double* gw = v->geo_window;
+                if ((v->kind == CALIPER_LIVE_KIND_HEATMAP || v->kind == CALIPER_LIVE_KIND_IMAGE) && v->zoom_w > 0 &&
+                    v->zoom_h > 0 && gw[1] > gw[0] && gw[3] > gw[2]) {
+                    auto sx = [&](double c) { return ax_ + (float)((c - gw[0]) / (gw[1] - gw[0])) * aw_; };
+                    auto sy = [&](double r) { return ay_ + (float)((r - gw[2]) / (gw[3] - gw[2])) * ah_; };
+                    const float x0 = std::max(ax_, sx(0.0)), x1 = std::min(ax_ + aw_, sx((double)v->zoom_w));
+                    const float y0 = std::max(ay_, sy(0.0)), y1 = std::min(ay_ + ah_, sy((double)v->zoom_h));
+                    if (x1 - x0 >= 8.0f && y1 - y0 >= 8.0f) {
+                        ax_ = x0;
+                        ay_ = y0;
+                        aw_ = x1 - x0;
+                        ah_ = y1 - y0;
+                    }
+                }
                 x_ = ax_ + 0.02f * aw_;
                 y_ = ay_ + 0.02f * ah_;
                 io.AddMousePosEvent(x_, y_);
@@ -181,11 +182,10 @@ private:
         return buf;
     }
     void next(const std::string& line) {
-        log_.push_back(retries_ ? line + " (pressed " + std::to_string(retries_ + 1) + " times)" : line);
+        log_.push_back(line);
         ++at_;
         phase_ = 0;
         frames_ = 0;
-        retries_ = 0;
     }
     void fail(const std::string& why) {
         error_ = why;
@@ -194,7 +194,7 @@ private:
 
     std::vector<Step> steps_;
     size_t at_ = 0;
-    int phase_ = 0, frames_ = 0, retries_ = 0;
+    int phase_ = 0, frames_ = 0;
     float x_ = 0, y_ = 0, ax_ = 0, ay_ = 0, aw_ = 0, ah_ = 0;
     std::string error_;
     std::vector<std::string> log_;
