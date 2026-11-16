@@ -12,10 +12,12 @@ connection to the notebook's ``caliper.serve()`` decodes every scene batch:
   separately, the path's last point at the current point whenever the path
   is sent (each 10th step and each refit), orthonormal directions, the first
   eleven points of the path after the refit at step 200 against the
-  snapshots' projections in float64, and ``plane share per refit``;
+  snapshots' projections in float64, and ``plane share``, one value per
+  training step: NaN before the first plane, then the last refit's share;
 * random directions, 100 steps with ``every`` at 50: the filter-normalised
   rows, zero biases and normalisation entries, the centre vertex, a path of
-  one point every 10th step that is never redrawn;
+  one point every 10th step that is never redrawn, and ``plane share`` NaN
+  at every step;
 * the controls: ``span``, ``directions`` and ``every`` set while paused take
   effect at the next surface, and ``surface now`` computes one while paused;
 * two fixtures of ``Landscape`` alone: snapshots along a known curve whose
@@ -108,7 +110,7 @@ def notebook(monkeypatch):
             if name in ns:
                 ns[name].remove()
         caliper.remove("landscape")
-        caliper.remove("plane share per refit")
+        caliper.remove("plane share")
         ns["server"].close()
     torch.use_deterministic_algorithms(deterministic)
 
@@ -194,7 +196,7 @@ class Recorder:
 class Viewer:
     """A viewer on a thread of its own, on a real loopback connection: it
     announces scenes and controls, subscribes to the scene ``landscape`` and,
-    once it is listed, the series ``plane share per refit``, and keeps every message
+    once it is listed, the series ``plane share``, and keeps every message
     decodes."""
 
     def __init__(self, server):
@@ -235,7 +237,7 @@ class Viewer:
                 self.msgs.append(m)
             if isinstance(m, w.Views):
                 names = {v["name"] for v in m.views}
-                for sub, view in ((1, "landscape"), (2, "plane share per refit")):
+                for sub, view in ((1, "landscape"), (2, "plane share")):
                     if view in names and view not in self.subscribed:
                         self.subscribed.add(view)
                         await self.ws.send(w.encode(w.Subscribe(sub, view, 100 + sub, None, None)))
@@ -335,7 +337,7 @@ def test_path_plane(notebook):
         ns["train"](300)
         v.wait(lambda: any(len(arr(m, "positions")) == 20 for m in v.updates("path", "lines")),
                what="the last path")
-        v.wait(lambda: len(v.series()) == 3, what="three plane shares")
+        v.wait(lambda: len(v.series()) == 300, what="a plane share for each step")
 
     # refits at 40, 100 and 200; nothing drawn before step 40, then only at
     # points (every 10th step) and refits, and once more after the last step
@@ -386,11 +388,17 @@ def test_path_plane(notebook):
     top = torch.linalg.eigvalsh(m64 @ m64.T)[-2:].sum() / (m64 * m64).sum()
     assert abs(last["share"] - top.item()) < 1e-3
 
-    # plane share: one value per refit, between 0 and 1
-    shares = v.series()
-    np.testing.assert_allclose(shares, [s["share"] for s in rec.surfaces], rtol=0, atol=1e-6)
-    assert all(0.0 <= s <= 1.0 for s in shares)
-    assert shares[2] >= PINNED_SHARE_200 - 0.05, shares
+    # plane share: one value per training step, so that its index is the step:
+    # NaN (a gap) before the first plane, then from each refit's step on that
+    # refit's share, between 0 and 1
+    shares = np.array(v.series())
+    assert len(shares) == 300
+    assert np.isnan(shares[:40]).all()
+    bounds = [s["step"] for s in rec.surfaces] + [300]
+    for s, a, b in zip(rec.surfaces, bounds, bounds[1:]):
+        np.testing.assert_allclose(shares[a:b], s["share"], rtol=0, atol=1e-6)
+        assert 0.0 <= s["share"] <= 1.0
+    assert shares[200] >= PINNED_SHARE_200 - 0.05, shares[200]
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +415,7 @@ def test_random_directions(notebook):
         ns["train"](100)
         v.wait(lambda: any(len(arr(m, "positions")) == 10 for m in v.updates("path", "lines")),
                what="the last path")
+        v.wait(lambda: len(v.series()) == 100, what="a plane share for each step")
 
     assert [(s["step"], s["mode"]) for s in rec.surfaces] == [(0, "random"), (50, "random")]
     # each row of each direction has the norm of the same row of the weights at step 0
@@ -440,6 +449,8 @@ def test_random_directions(notebook):
         np.testing.assert_array_equal(pb[:len(pa)], pa)
     final = arr(paths[-1], "positions")
     assert len(final) == 10
+    # no plane, so no plane share: a gap at every step
+    assert np.isnan(np.array(v.series())).all()
     # the path barely moves in random directions: its last point, at step 90,
     # against the coordinates of that step's weights on the anchor by least
     # squares, in float64

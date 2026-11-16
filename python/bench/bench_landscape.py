@@ -25,7 +25,7 @@ viewer attached in a process of its own, which subscribes to the scene and
 the series and discards what it receives, as a notebook widget would read
 them; a run starts only once the server holds the viewer's subscription to
 the scene, and fails if the viewer ends early or fails. The arms alternate. Without the landscape the loop is the same, with
-land.point and land.due made no-ops. Each run's clock stops after
+land.point, land.due and show_share made no-ops. Each run's clock stops after
 torch.mps.synchronize(), so it includes every kernel the loop queued. The
 budget of design/demos.md is at most 1.5 times as long with the landscape.
 --grid overrides the notebook's 41 points a side. Prints one line per row with
@@ -154,6 +154,7 @@ def run(variant: str, steps: int, mode: str = "plain") -> dict:
     land.point = stamped_point
     if variant == "without":
         land.due = lambda step, every, directions: False
+        ns["show_share"] = lambda: None                     # nor the plane share's series
     else:
         show_path, show_surface = ns["show_path"], ns["show_surface"]
 

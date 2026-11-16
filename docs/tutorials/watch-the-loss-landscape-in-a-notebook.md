@@ -44,10 +44,13 @@ and the scene calls of [Caliper LIB](../references/python-api.md#scenes):
 | `path` | `scene.lines` with `strip_lengths` | When the path has a new point, every 10th step, at most 10 times a second, and at once after each refit | The optimizer's path as one strip |
 | `current` | `scene.points` | With the path | The current point, a red marker, which is the path's last point; between points it stays on it |
 
-The series `plane share per refit` receives one value at each refit in the
-path's plane. Its index counts refits, not training steps: an 8,000-step run
-at the default `every` refits four times, at steps 40, 2,000, 4,000 and 6,000,
-and once more for each `surface now`.
+The series `plane share` receives one value at the end of every training
+step, the share of the last refit, so its index is the training step: the
+curve is flat between refits and steps where a refit changes it. Before the
+first plane, at step 40, and in random directions, which have no plane, the
+values are NaN, which the series view draws as a gap. After its loop,
+`train()` calls `caliper.flush()`, so that the values of the last steps reach
+the viewers at once rather than with the next call.
 
 Height and colour are both the log of the loss. A vertex stands at half the
 log10 of the loss of the landscape batch, the first 128 of the notebook's 512
@@ -74,7 +77,7 @@ offsets, about 1,800 parameters, keep their current values.
 | The first refit | At step 40, when three snapshots exist | At step 0 |
 | The box's half-width | 1.5 times `span` times the farthest snapshot's distance from the centre on either axis | `span` units of the directions |
 | The path | One point per kept snapshot, then one point every 10th step until the next refit, where it is drawn again in the new plane | One point every 10th step, never drawn again; it barely moves and reads as an almost vertical line at the centre |
-| `plane share per refit` | The share of the kept snapshots' variance that the plane holds | Not sent |
+| `plane share` | The share of the kept snapshots' variance that the plane of the last refit holds | NaN at every step, a gap |
 
 ## Controls
 
