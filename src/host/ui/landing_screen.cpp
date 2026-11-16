@@ -388,6 +388,10 @@ void LandingScreen::draw(const Context& ctx) {
     show_live_ = ctx.show_live;
     // F5: the attached live session's page, from anywhere on the landing.
     if (has_live_ && ImGui::IsKeyPressed(ImGuiKey_F5, false) && !any_popup_open()) pending_show_live_ = true;
+    open_spec_ = ctx.show_spec ? ctx.open_spec : std::string();
+    show_spec_ = ctx.show_spec;
+    // F6: the open dashboard's page, from anywhere on the landing.
+    if (!open_spec_.empty() && ImGui::IsKeyPressed(ImGuiKey_F6, false) && !any_popup_open()) pending_show_spec_ = true;
     draw_command_bar();
     draw_status_bar(ctx);
     if (ctx.after_bars) ctx.after_bars();
@@ -528,6 +532,10 @@ void LandingScreen::draw(const Context& ctx) {
     if (pending_show_live_) {
         pending_show_live_ = false;
         if (has_live_ && show_live_) show_live_();
+    }
+    if (pending_show_spec_) {
+        pending_show_spec_ = false;
+        if (!open_spec_.empty() && show_spec_) show_spec_();
     }
 
     if (focus_pane_) {
@@ -676,6 +684,17 @@ void LandingScreen::draw_command_bar() {
         }
         ImGui::SameLine(0.0f, metric::pad);
         if (sternbild::key_button("F5", "Live page")) pending_show_live_ = true;
+        ImGui::SameLine(0.0f, metric::gap);
+    }
+    // The builder session's open dashboard: its title and F6 Dashboard, the
+    // way back to its page.
+    if (!open_spec_.empty()) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::PushStyleColor(ImGuiCol_Text, col::secondary);
+        ImGui::TextUnformatted(open_spec_.c_str());
+        ImGui::PopStyleColor();
+        ImGui::SameLine(0.0f, metric::pad);
+        if (sternbild::key_button("F6", "Dashboard")) pending_show_spec_ = true;
         ImGui::SameLine(0.0f, metric::gap);
     }
     if (const int jobs = running_jobs(); jobs > 0) {

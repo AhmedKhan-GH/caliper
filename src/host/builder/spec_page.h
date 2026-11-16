@@ -101,6 +101,9 @@ public:
     // True once for each applet.open, or agent's spec.new or spec.open, that
     // succeeded since the last call.
     bool take_open(const AppSession& session);
+    // Whether every open that the last true take_open() took was an agent's
+    // (AppSession::agent_specs_opened()), not the person's own.
+    bool opened_by_agent() const;
 
     // Sends applet.open for the workspace's spec applet `id` through the
     // session's queue, without waiting, from `origin`: "ui" for the person's
@@ -134,6 +137,9 @@ public:
     // ... and it has changes that are not saved (a new spec that was never
     // saved has).
     static bool has_unsaved_spec(AppSession& session);
+    // The open spec's title, or its applet id when it has none; "" when no
+    // spec is open or a long command holds the session.
+    static std::string open_title(AppSession& session);
     // An import from drop_files() still runs.
     bool importing() const;
 

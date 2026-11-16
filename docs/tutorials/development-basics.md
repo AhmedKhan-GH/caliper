@@ -189,6 +189,7 @@ has a button in the bar with its key printed on it:
 | ⌘R | `⌘R Restart` (Inspector) | Unload and relaunch the selected applet. Offered only for an applet quarantined by a C++ exception. |
 | F4 | `F4 Attach to process` (Projects) | List the live sessions and streams in Projects. In the list, ↑ / ↓ move the selection, Enter (`⏎ Attach`) attaches, and Esc (`esc Back`) returns to the ways in. |
 | F5 | `F5 Live page` (command bar) | Open the live page of the attached session. Shown only while the app is attached. |
+| F6 | `F6 Dashboard` (command bar) | Open the spec page of the dashboard the builder has open, beside its title: one left with Home, unsaved or not, or one an agent opened while an applet's page showed. Shown only while a dashboard is open. |
 
 On Windows and Linux the keys are Ctrl K, Ctrl R and Ctrl 1–Ctrl 4, and the
 buttons are labelled that way.

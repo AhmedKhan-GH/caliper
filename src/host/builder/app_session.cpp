@@ -171,6 +171,7 @@ struct AppSession::Impl {
     std::vector<Line> lines;   // from the journal, any thread
     std::atomic<uint64_t> journaled{0};        // every journaled command
     std::atomic<uint64_t> specs_opened{0};     // every applet.open, and an agent's spec.new or spec.open, that succeeded
+    std::atomic<uint64_t> agent_specs_opened{0};   // of those, the ones an agent sent
     std::atomic<uint64_t> applets_saved{0};    // every applet.save that succeeded
 
     // Caliper API's gateway (command_gateway()), and the pending approvals as
@@ -284,8 +285,10 @@ struct AppSession::Impl {
 
     void note(const cb::JournalEvent& e) {
         const bool agent = e.origin == cb::CommandOrigin::agent || e.origin == cb::CommandOrigin::mcp;
-        if (e.ok && (e.name == "applet.open" || (agent && (e.name == "spec.new" || e.name == "spec.open"))))
+        if (e.ok && (e.name == "applet.open" || (agent && (e.name == "spec.new" || e.name == "spec.open")))) {
+            if (agent) agent_specs_opened.fetch_add(1, std::memory_order_acq_rel);
             specs_opened.fetch_add(1, std::memory_order_acq_rel);
+        }
         if (e.ok && e.name == "applet.save") applets_saved.fetch_add(1, std::memory_order_acq_rel);
         journaled.fetch_add(1, std::memory_order_acq_rel);
         Line l;
@@ -751,6 +754,9 @@ void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderSeam> renderer) {
 uint64_t AppSession::journaled() const { return impl_->journaled.load(std::memory_order_acquire); }
 
 uint64_t AppSession::specs_opened() const { return impl_->specs_opened.load(std::memory_order_acquire); }
+uint64_t AppSession::agent_specs_opened() const {
+    return impl_->agent_specs_opened.load(std::memory_order_acquire);
+}
 
 uint64_t AppSession::applets_saved() const { return impl_->applets_saved.load(std::memory_order_acquire); }
 
@@ -801,6 +807,7 @@ bool AppSession::script_running() const { return false; }
 void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderSeam>) {}
 uint64_t AppSession::journaled() const { return 0; }
 uint64_t AppSession::specs_opened() const { return 0; }
+uint64_t AppSession::agent_specs_opened() const { return 0; }
 uint64_t AppSession::applets_saved() const { return 0; }
 std::shared_ptr<caliper_api::CommandGateway> AppSession::command_gateway() { return nullptr; }
 

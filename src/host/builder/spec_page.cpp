@@ -136,6 +136,8 @@ struct SpecPage::Impl {
     cb::Session* bound = nullptr;   // the session `source` reads
 
     uint64_t opens_taken = 0;               // AppSession::specs_opened() at the last take_open()
+    uint64_t agent_opens_taken = 0;         // AppSession::agent_specs_opened() then
+    bool opened_by_agent = false;           // every open the last take_open() took was an agent's
     std::optional<uint64_t> journal_read;   // AppSession::journaled() when the open spec was last read
 
     std::string title;
@@ -621,9 +623,14 @@ bool SpecPage::built() { return true; }
 bool SpecPage::take_open(const AppSession& session) {
     const uint64_t n = session.specs_opened();
     if (n == impl_->opens_taken) return false;
+    const uint64_t a = session.agent_specs_opened();
+    impl_->opened_by_agent = a - impl_->agent_opens_taken >= n - impl_->opens_taken;
     impl_->opens_taken = n;
+    impl_->agent_opens_taken = a;
     return true;
 }
+
+bool SpecPage::opened_by_agent() const { return impl_->opened_by_agent; }
 
 SpecPage::OpenReview SpecPage::open_review(AppSession& session, const std::string& origin) {
     cb::Session* s = session.session();
@@ -676,6 +683,15 @@ bool SpecPage::take_new() {
 bool SpecPage::has_open_spec(AppSession& session) {
     cb::Session* s = session.session();
     return s && !session.worker_busy() && s->open_spec().has_value();
+}
+
+std::string SpecPage::open_title(AppSession& session) {
+    cb::Session* s = session.session();
+    if (!s || session.worker_busy()) return {};
+    const std::optional<cb::OpenSpec> open = s->open_spec();
+    if (!open) return {};
+    const auto& a = open->spec.applet;
+    return a.title && !a.title->empty() ? *a.title : a.id;
 }
 
 bool SpecPage::has_unsaved_spec(AppSession& session) {
@@ -994,12 +1010,14 @@ SpecPage::SpecPage() : impl_(std::make_unique<Impl>()) {}
 SpecPage::~SpecPage() = default;
 bool SpecPage::built() { return false; }
 bool SpecPage::take_open(const AppSession&) { return false; }
+bool SpecPage::opened_by_agent() const { return false; }
 bool SpecPage::request_open(AppSession&, const std::string&, const std::string&) { return false; }
 SpecPage::OpenReview SpecPage::open_review(AppSession&, const std::string&) { return OpenReview::opens; }
 bool SpecPage::request_answered(std::string*) { return false; }
 bool SpecPage::request_new(AppSession&, const std::string&) { return false; }
 bool SpecPage::take_new() { return false; }
 bool SpecPage::has_open_spec(AppSession&) { return false; }
+std::string SpecPage::open_title(AppSession&) { return {}; }
 bool SpecPage::has_unsaved_spec(AppSession&) { return false; }
 bool SpecPage::importing() const { return false; }
 void SpecPage::enter(AppSession&) {}

@@ -346,7 +346,9 @@ public:
             // CALIPER_TEST_UI with --hidden: the scripted clicks of a UI test,
             // queued into ImGui before the frame reads its input.
             if (ui_driver_ && page_ == AppPage::Live) feed_ui_driver();
-            if (spec_ui_ && (page_ == AppPage::Spec || page_ == AppPage::Live || page_ == AppPage::Landing)) feed_spec_ui();
+            if (spec_ui_ && (page_ == AppPage::Spec || page_ == AppPage::Live || page_ == AppPage::Landing ||
+                             page_ == AppPage::Applet))
+                feed_spec_ui();
 
             renderer_->new_frame();
 
@@ -383,6 +385,10 @@ public:
                     ctx.live = &live_row;
                     ctx.show_live = [this] { show_live_page(); };
                 }
+                // F6 Dashboard: the session's open spec, the way back to its
+                // page, as F5 is to the live page.
+                ctx.open_spec = open_spec_title();
+                if (!ctx.open_spec.empty()) ctx.show_spec = [this] { open_spec_page(); };
                 ctx.spec_facts = [](const caliper_host::AppletEntry& e, SpecAppletFacts* f) {
                     return caliper_host::SpecPage::facts(e.spec_path, f);
                 };
@@ -628,7 +634,12 @@ public:
         chh.log = [this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); };
         chat_.start(std::move(co), std::move(chh));
         // Every page's status bar shows the API's address while it runs.
-        set_host_status_note([this] { return api_.running() ? "api " + api_address() : std::string(); });
+        set_host_status_note([this] {
+            std::string note = api_.running() ? "api " + api_address() : std::string();
+            if (page_ == AppPage::Applet && !agent_spec_note_.empty())
+                note += (note.empty() ? "" : "  \xc2\xb7  ") + ("dashboard " + agent_spec_note_ + " open");
+            return note;
+        });
         spec_page_.set_chat(&chat_);
         // ⌘O Open in browser on the spec page, and the names of a live view's
         // dims for the builder's Properties.
@@ -810,6 +821,7 @@ private:
         caliper_host::host_job_system().cancel_all_and_join();
         loader_.teardown(idx);
         active_applet_ = -1;
+        agent_spec_note_.clear();
         page_ = AppPage::Landing;
         glfwSetWindowTitle(window_, "Caliper");
         landing_.log("home", left);
@@ -860,6 +872,7 @@ private:
         // The workspace's spec applet that the page shows is ACTIVE, also
         // when it already was (an agent's open of the dashboard on screen).
         mark_spec_entry(workspace_spec_entry(spec_page_.applet_id()));
+        agent_spec_note_.clear();
     }
 
     // Home from the spec page, after the frame that drew it. An attached
@@ -1010,7 +1023,12 @@ private:
             if (!error.empty()) landing_.log(new_pending_ ? "new failed" : "launch failed", new_pending_ ? "spec.new" : "applet.open", error);
             if (!error.empty()) new_pending_ = false;
         }
-        if (spec_page_.take_open(session_)) open_spec_page();
+        if (spec_page_.take_open(session_)) {
+            // An agent never ends the person's running applet: on a compiled
+            // applet's page its spec opens in the session, and the page stays.
+            if (page_ == AppPage::Applet && spec_page_.opened_by_agent()) note_agent_spec();
+            else open_spec_page();
+        }
         // A new spec (F3 New dashboard, or a drop with none open): the page in build mode.
         if (spec_page_.take_new()) {
             open_spec_page();
@@ -1035,6 +1053,30 @@ private:
                 }
             }
         }
+    }
+
+    // The session's open spec's title, read again only when the journal
+    // moved and no long command holds the session; "" when none is open.
+    const std::string& open_spec_title() {
+        const uint64_t j = session_.journaled();
+        if (j != open_spec_read_ && !session_.worker_busy()) {
+            open_spec_title_ = caliper_host::SpecPage::open_title(session_);
+            open_spec_read_ = j;
+        }
+        return open_spec_title_;
+    }
+
+    // An agent's spec.new, spec.open or applet.open while the person is on a
+    // compiled applet's page: the page stays, Activity and standard error say
+    // that a dashboard was opened and how to get to it, and the page's status
+    // bar names it until the person leaves the page. The person's own opens
+    // show the spec page as before.
+    void note_agent_spec() {
+        const std::string title = caliper_host::SpecPage::open_title(session_);
+        agent_spec_note_ = title.empty() ? std::string("a dashboard") : title;
+        landing_.log("agent opened", agent_spec_note_, "esc Home, then F6 Dashboard");
+        std::cerr << "[spec] an agent opened " << agent_spec_note_
+                  << "; the applet's page stays (esc Home, then F6 Dashboard)" << std::endl;
     }
 
     // The entry of the workspace's spec applet `id` (its folder's name), or -1.
@@ -1391,7 +1433,10 @@ private:
     }
 
     void feed_spec_ui() {
-        spec_ui_->set_page(page_ == AppPage::Spec ? "spec" : page_ == AppPage::Landing ? "landing" : "live");
+        spec_ui_->set_page(page_ == AppPage::Spec      ? "spec"
+                           : page_ == AppPage::Landing ? "landing"
+                           : page_ == AppPage::Applet  ? "applet"
+                                                       : "live");
         spec_ui_->set_drop([this](std::vector<std::string> paths) { on_drop(std::move(paths)); });
         spec_ui_->set_command_line(landing_.command_text());
         spec_ui_->set_cards([this] { return approvals_.shown_waiting(); });
@@ -1763,6 +1808,13 @@ private:
     bool api_started_here_ = false;         // the app started the API without --api (api_for())
     bool api_for_chat_ = false;             // ... and the side chat's agent uses it
     bool api_for_browser_ = false;          // ... and Open in browser gave its link out
+    // The dashboard an agent opened while a compiled applet's page showed,
+    // which that page's status bar names (note_agent_spec()); "" for none.
+    std::string agent_spec_note_;
+    // The open spec's title for the landing's F6 Dashboard, read again when
+    // the journal moved (open_spec_title()).
+    std::string open_spec_title_;
+    uint64_t open_spec_read_ = ~uint64_t(0);
 
     // The API's address as the status bar and Activity show it: 127.0.0.1:<port>.
     std::string api_address() const {

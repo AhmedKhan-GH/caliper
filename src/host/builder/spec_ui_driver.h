@@ -15,7 +15,7 @@
 //   leave                the pointer leaves the window (no hover is left behind)
 //   key <chord>          a press and release of a chord: cmd, shift and one
 //                        key (a letter, a digit, enter, escape, backspace,
-//                        f3, f4, f5, up, down, comma), such as "cmd+k"
+//                        f3, f4, f5, f6, up, down, comma), such as "cmd+k"
 //                        (Ctrl+K off macOS) or "cmd+shift+z"
 //   type <text>          the text as the keyboard's characters; "\n" is a
 //                        line break
@@ -73,7 +73,8 @@
 //   pane source <key>    wait until the builder lists that source and no
 //                        import runs
 //   pane focus <panel>   wait until the builder's focused panel is <panel>
-//   page <name>          wait until the app shows that page (landing, spec, live)
+//   page <name>          wait until the app shows that page (landing, spec,
+//                        live, applet)
 //   command-line <text>|none
 //                        wait until the landing's command line holds that
 //                        text, or nothing
@@ -690,6 +691,8 @@ private:
                 keys.push_back(ImGuiKey_F4);
             } else if (p == "f5") {
                 keys.push_back(ImGuiKey_F5);
+            } else if (p == "f6") {
+                keys.push_back(ImGuiKey_F6);
             } else if (p == "up") {
                 keys.push_back(ImGuiKey_UpArrow);
             } else if (p == "down") {
