@@ -299,8 +299,9 @@ public:
 
             // An attached session: claim and apply the newest completed
             // snapshot of every view before the frame draws them (the live
-            // core's order: poll, then frame). Never waits on the script.
-            if (page_ == AppPage::Live) live_.poll();
+            // core's order: poll, then frame). Never waits on the script. The
+            // spec page keeps polling an attachment, for its live sources.
+            if (page_ == AppPage::Live || (page_ == AppPage::Spec && live_.attached())) live_.poll();
             if (autoattach_pid_ > 0 && page_ == AppPage::Landing) autoattach();
             note_live_events();
             note_control_lines();
@@ -572,13 +573,13 @@ private:
         glfwSetWindowTitle(window_, "Caliper");
     }
 
-    // The spec page, for an applet.open that succeeded: the page shown goes
-    // first, as Home takes it (an applet is torn down, a live session
-    // detached), between two frames. Opening another spec applet while the
+    // The spec page, for an applet.open that succeeded: an applet's page goes
+    // first, as Home takes it, between two frames. An attached live session
+    // stays attached, so that the spec's live sources keep their data; Home
+    // from the spec page detaches it. Opening another spec applet while the
     // page shows only changes what it shows.
     void open_spec_page() {
         if (page_ == AppPage::Applet) leave_applet_page(active_applet_);
-        else if (page_ == AppPage::Live) leave_live_page();
         spec_page_.enter(session_);   // reads the open spec
         if (page_ != AppPage::Spec) landing_.log("open", spec_page_.title(), "spec");
         page_ = AppPage::Spec;
@@ -593,9 +594,15 @@ private:
         mark_spec_entry(shown);
     }
 
-    // Home from the spec page, after the frame that drew it.
+    // Home from the spec page, after the frame that drew it. A live session
+    // kept attached for the spec goes too, as Home from the live page takes
+    // it; the spec page draws none of its views, so it can go at once.
     void leave_spec_page() {
         const std::string left = spec_page_.title();
+        if (live_.attached()) {
+            live_.detach();
+            note_live_events();   // "detached"
+        }
         spec_page_.leave();
         mark_spec_entry(-1);
         page_ = AppPage::Landing;
@@ -655,7 +662,6 @@ private:
             return true;
         }
         if (page_ == AppPage::Applet) leave_applet_page(active_applet_);
-        else if (page_ == AppPage::Live) leave_live_page();
         if (!spec_page_.enter_file(session_, loader_.at(idx).spec_path, why)) {
             landing_.log("launch failed", name, *why);
             return false;
