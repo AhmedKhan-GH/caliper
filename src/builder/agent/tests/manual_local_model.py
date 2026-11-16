@@ -91,7 +91,8 @@ def main() -> int:
     ws = root / "workspace"
     write_files(ws / "data")
     api_dir = root / "api"
-    host = subprocess.Popen([args.host_exe, "--workspace", str(ws), "--api-dir", str(api_dir), "--approve", "allow"],
+    host = subprocess.Popen([args.host_exe, "--workspace", str(ws), "--api-dir", str(api_dir), "--origin", "agent",
+                             "--approve", "allow"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         for _ in range(200):

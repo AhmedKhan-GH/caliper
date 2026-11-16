@@ -41,9 +41,11 @@ struct Host {
     std::string api_file;
     std::string pending;
 
-    Host(const std::string& ws, const std::string& api_dir) {
+    // `origin` is the origin of the host's token, which every call runs under.
+    Host(const std::string& ws, const std::string& api_dir, const std::string& origin = "mcp") {
         acp::SpawnOptions so;
-        so.argv = {CALIPER_BUILDER_HOST_EXE, "--workspace", ws, "--api-dir", api_dir, "--approve", "ask"};
+        so.argv = {CALIPER_BUILDER_HOST_EXE, "--workspace", ws, "--api-dir", api_dir, "--origin", origin,
+                   "--approve", "ask"};
         Error e;
         process = acp::Process::spawn(so, &e);
         REQUIRE_MESSAGE(process, e.message);
@@ -215,18 +217,6 @@ TEST_CASE("acceptance over MCP: an outside agent builds the dashboard through ca
     CHECK(parsed.spec == dashboard);
     CHECK(saved_text == spec::to_toml(dashboard));
 
-    // The same server under the origin agent, as the app's agent pane runs it:
-    // the stand-in asks with that origin, and a denial is a tool error.
-    {
-        McpChild pane({"--api-file", host.api_file, "--origin", "agent"});
-        const json denied = call_with_approval(pane, host, "delete", "loader.delete",
-                                               {{"id", imported["loaders"][0]["id"]}}, "deny", "agent");
-        CHECK(error_code(denied) == "command.denied");
-        CHECK(pane.finish().success());
-        CHECK(pane.all_out().find(token) == std::string::npos);
-        CHECK(pane.all_err().find(token) == std::string::npos);
-    }
-
     CHECK(child.finish().success());
     CHECK(child.all_out().find(token) == std::string::npos);
     CHECK(child.all_err().find(token) == std::string::npos);
@@ -235,4 +225,21 @@ TEST_CASE("acceptance over MCP: an outside agent builds the dashboard through ca
     CHECK(status.exited);
     CHECK(status.code == 0);
     CHECK(!fs::exists(host.api_file));
+
+    // The same server under the origin agent, as the app's agent pane runs it,
+    // against a host whose token is the agent's: the stand-in asks with that
+    // origin, and a denial is a tool error.
+    {
+        Host agent_host(ws, root + "/api-agent", "agent");
+        const std::string agent_token =
+            json::parse(session_test::read_text(agent_host.api_file))["token"].get<std::string>();
+        McpChild pane({"--api-file", agent_host.api_file, "--origin", "agent"});
+        const json denied = call_with_approval(pane, agent_host, "delete", "loader.delete",
+                                               {{"id", imported["loaders"][0]["id"]}}, "deny", "agent");
+        CHECK(error_code(denied) == "command.denied");
+        CHECK(pane.finish().success());
+        CHECK(pane.all_out().find(agent_token) == std::string::npos);
+        CHECK(pane.all_err().find(agent_token) == std::string::npos);
+        CHECK(agent_host.process->terminate(10000).code == 0);
+    }
 }

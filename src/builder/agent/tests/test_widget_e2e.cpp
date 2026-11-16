@@ -105,6 +105,7 @@ struct WidgetWorkspace {
 
         CommandServerOptions options;
         options.token = generate_session_token();
+        options.origin = CommandOrigin::agent;  // the token is the sidecar's
         server = std::make_unique<CommandServer>(session->queue(), options);
         REQUIRE(server->start().ok());
         drainer = std::thread([this] {

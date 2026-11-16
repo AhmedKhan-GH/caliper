@@ -121,7 +121,7 @@ TEST_CASE("the BYOK agent builds the dashboard through caliper-builder-host") {
     // prints a line for each approval, which a thread reads.
     acp::SpawnOptions host_options;
     host_options.argv = {CALIPER_BUILDER_HOST_EXE, "--workspace", ws, "--api-dir", root + "/api",
-                         "--approve", "allow", "--review", "agent,mcp"};
+                         "--origin", "agent", "--approve", "allow", "--review", "agent,mcp"};
     Error spawn_error;
     std::unique_ptr<acp::Process> host = acp::Process::spawn(host_options, &spawn_error);
     REQUIRE_MESSAGE(host, spawn_error.message);

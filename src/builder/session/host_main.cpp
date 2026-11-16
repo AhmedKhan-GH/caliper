@@ -5,13 +5,17 @@
 // API server replaces it at the wiring; it is not part of the product.
 //
 //   caliper-builder-host --workspace <dir> --api-dir <dir>
-//                        [--port <n>] [--approve allow|deny|ask]
+//                        [--port <n>] [--origin mcp|agent|api]
+//                        [--approve allow|deny|ask]
 //                        [--review none|<origin>,<origin>...]
 //
 // It opens the workspace as a Session, serves GET /v0/commands and
 // POST /v0/commands/{name} on 127.0.0.1 (a free port unless --port says), and
 // writes <api-dir>/api.json as the app writes its API file (mode 0600,
-// removed on exit). The main thread drains the command queue, as the app's
+// removed on exit). The token in that file is for one origin, --origin (mcp
+// unless given), and every call runs under it: a request's X-Caliper-Origin
+// that names another origin is refused with 400, so a caller cannot raise its
+// origin by leaving the header out or by naming another. The main thread drains the command queue, as the app's
 // frame thread will. --review names the origins whose spec edits wait for
 // review, such as agent,mcp as the app has it by default; it is none unless
 // given, so that a test written before review keeps its flow. A command that
@@ -46,7 +50,7 @@ namespace {
 void usage() {
     std::fprintf(stderr,
                  "usage: caliper-builder-host --workspace <dir> --api-dir <dir> [--port <n>] "
-                 "[--approve allow|deny|ask] [--review none|<origin>,<origin>...]\n");
+                 "[--origin mcp|agent|api] [--approve allow|deny|ask] [--review none|<origin>,<origin>...]\n");
 }
 
 }  // namespace
@@ -74,6 +78,7 @@ int main(int argc, char** argv) {
     std::string api_dir;
     std::string approve = "ask";
     std::string review = "none";
+    std::string origin_name = "mcp";
     long port = 0;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -87,6 +92,7 @@ int main(int argc, char** argv) {
         if (a == "--api-dir" && value(&api_dir)) continue;
         if (a == "--approve" && value(&approve)) continue;
         if (a == "--review" && value(&review)) continue;
+        if (a == "--origin" && value(&origin_name)) continue;
         if (a == "--port" && value(&text)) {
             char* end = nullptr;
             port = std::strtol(text.c_str(), &end, 10);
@@ -99,7 +105,9 @@ int main(int argc, char** argv) {
         usage();
         return 2;
     }
-    if (workspace.empty() || api_dir.empty() || (approve != "allow" && approve != "deny" && approve != "ask")) {
+    const auto origin = command_origin_from_name(origin_name);
+    if (workspace.empty() || api_dir.empty() || (approve != "allow" && approve != "deny" && approve != "ask") ||
+        !origin || (*origin != CommandOrigin::mcp && *origin != CommandOrigin::agent && *origin != CommandOrigin::api)) {
         usage();
         return 2;
     }
@@ -143,6 +151,7 @@ int main(int argc, char** argv) {
     CommandServerOptions options;
     options.port = static_cast<std::uint16_t>(port);
     options.token = generate_session_token();
+    options.origin = *origin;
     CommandServer server(session.queue(), options);
     if (Error e = server.start()) {
         std::fprintf(stderr, "caliper-builder-host: %s\n", e.message.c_str());
@@ -156,8 +165,9 @@ int main(int argc, char** argv) {
     }
     std::fprintf(stderr,
                  "caliper-builder-host: the command endpoints listen on http://127.0.0.1:%u/v0; the API file is %s; "
-                 "approvals: %s; review: %s\n",
-                 static_cast<unsigned>(server.port()), api_file.c_str(), approve.c_str(), review.c_str());
+                 "origin: %s; approvals: %s; review: %s\n",
+                 static_cast<unsigned>(server.port()), api_file.c_str(), origin_name.c_str(), approve.c_str(),
+                 review.c_str());
 
     std::set<std::string> announced;
     std::string input;

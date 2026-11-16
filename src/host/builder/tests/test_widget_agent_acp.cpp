@@ -89,6 +89,7 @@ struct AcpRig {
         steps_before = s->registry().history_state().undo.size();
         caliper_builder::CommandServerOptions options;
         options.token = caliper_builder::generate_session_token();
+        options.origin = caliper_builder::CommandOrigin::agent;  // the token is the sidecar's
         server = std::make_unique<caliper_builder::CommandServer>(s->queue(), options);
         REQUIRE(server->start().ok());
         drainer = std::thread([this] {

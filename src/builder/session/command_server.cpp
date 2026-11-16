@@ -519,11 +519,13 @@ struct CommandServer::Impl {
         inv.id = id;
         inv.name = name;
         inv.args = std::move(args);
+        // The origin belongs to the token, not to the request.
+        inv.origin = options.origin;
         const std::string claimed = header(req, "x-caliper-origin");
-        if (claimed.empty() || claimed == "api") inv.origin = CommandOrigin::api;
-        else if (claimed == "mcp") inv.origin = CommandOrigin::mcp;
-        else if (claimed == "agent") inv.origin = CommandOrigin::agent;
-        else return error_response(400, "X-Caliper-Origin is mcp, agent or api.");
+        if (!claimed.empty() && claimed != command_origin_name(options.origin))
+            return error_response(400, std::string("This server's token is for the origin ") +
+                                           command_origin_name(options.origin) +
+                                           "; X-Caliper-Origin cannot name another.");
         inv.group = header(req, "x-caliper-group");
         inv.preview = header(req, "x-caliper-preview");
 
@@ -620,6 +622,9 @@ Error CommandServer::start() {
     Impl& im = *impl_;
     if (im.listener >= 0) return Error("server.started", "The server is running already.");
     if (im.options.token.empty()) return Error("server.no_token", "The server needs a session token.");
+    if (im.options.origin != CommandOrigin::mcp && im.options.origin != CommandOrigin::agent &&
+        im.options.origin != CommandOrigin::api)
+        return Error("server.bad_origin", "The server's origin is mcp, agent or api.");
     if (::pipe(im.wake) != 0) return Error("server.io", "The server could not make its wake pipe.");
     ::fcntl(im.wake[0], F_SETFD, FD_CLOEXEC);
     ::fcntl(im.wake[1], F_SETFD, FD_CLOEXEC);

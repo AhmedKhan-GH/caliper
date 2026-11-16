@@ -581,6 +581,7 @@ bool build_workspace(const std::string& root, Workspace* w, std::string* problem
     if (!open.ok) return *problem = "spec.open: " + open.error.message, false;
     CommandServerOptions options;
     options.token = generate_session_token();
+    options.origin = CommandOrigin::agent;  // the token is the sidecar's
     w->server = std::make_unique<CommandServer>(w->session->queue(), options);
     if (Error e = w->server->start()) return *problem = e.message, false;
     w->drainer = std::thread([w] {

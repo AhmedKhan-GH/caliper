@@ -324,6 +324,7 @@ TEST_CASE("the stand-in's server sends a call's edits to the preview its X-Calip
     ok(*s, "preview.begin", {{"id", "widget-7"}});
     CommandServerOptions options;
     options.token = generate_session_token();
+    options.origin = CommandOrigin::agent;  // the token is the agent's
     CommandServer server(s->queue(), options);
     REQUIRE(server.start().ok());
     std::atomic<bool> stop{false};

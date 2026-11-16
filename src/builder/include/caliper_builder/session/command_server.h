@@ -28,12 +28,16 @@
 // answered 200 with command.invalid_args, and a name that is not a command
 // with command.unknown, so that a 404 always means "no command layer".
 //
-// The origin is api, or mcp or agent when X-Caliper-Origin says so; any other
-// value is refused with 400, so a request can never claim the ui or builder
-// origin. X-Caliper-Group gives the group, and X-Caliper-Preview the id of a
-// stacked preview that the call's edits apply to. A call from mcp or agent that needs
-// approval is held while the person decides, up to `approval_wait` (120 s);
-// a call from api gets command.needs_approval with the approval id at once.
+// The origin is fixed when the server starts (`origin`, mcp by default), as
+// the token that a request must carry belongs to one caller: mcp, agent or
+// api, never ui, builder or viewer (start() refuses them with
+// server.bad_origin). A request cannot change it: X-Caliper-Origin, when
+// present, must name the server's origin, and any other value is refused with
+// 400. X-Caliper-Group gives the group, and X-Caliper-Preview the id of a
+// stacked preview that the call's edits apply to. A call from mcp or agent
+// that needs approval is held while the person decides, up to
+// `approval_wait` (120 s); a call from api gets command.needs_approval with
+// the approval id at once.
 //
 // One request per connection: the response carries Connection: close,
 // Cache-Control: no-store and X-Content-Type-Options: nosniff, and errors are
@@ -42,6 +46,7 @@
 //
 // POSIX only for now: on Windows start() fails with server.unsupported. No
 // function here throws.
+#include <caliper_builder/commands/command.h>
 #include <caliper_builder/commands/queue.h>
 #include <caliper_builder/error.h>
 
@@ -57,6 +62,7 @@ namespace caliper_builder {
 struct CommandServerOptions {
     std::uint16_t port = 0;  // 0 takes any free port
     std::string token;       // the session token; start() refuses an empty one
+    CommandOrigin origin = CommandOrigin::mcp;  // the origin of every call: mcp, agent or api
     std::size_t max_connections = 32;
     std::size_t max_head_bytes = 16 * 1024;
     std::size_t max_body_bytes = std::size_t(1) << 20;

@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <map>
 #include <thread>
 
 #include "helpers.h"
@@ -237,11 +238,24 @@ TEST_CASE("the stand-in's server holds a reviewed call until it is approved, den
     const std::string ws = fresh_dir("review-http") + "/workspace";
     auto s = open_session(ws);
     ok(*s, "spec.new", {{"id", "web"}});
-    CommandServerOptions options;
-    options.token = generate_session_token();
-    options.approval_wait = std::chrono::milliseconds(1500);
-    CommandServer server(s->queue(), options);
-    REQUIRE(server.start().ok());
+    // One session behind a server for each origin a token can have; the
+    // decisions are made when the call is parked, and only the "late" server
+    // has a short wait, for the call that nobody decides.
+    std::map<std::string, std::unique_ptr<CommandServer>> servers;
+    std::map<std::string, std::string> tokens;
+    auto serve = [&](const std::string& key, CommandOrigin origin, std::chrono::milliseconds wait) {
+        CommandServerOptions options;
+        options.token = generate_session_token();
+        options.origin = origin;
+        options.approval_wait = wait;
+        tokens[key] = options.token;
+        servers[key] = std::make_unique<CommandServer>(s->queue(), options);
+        REQUIRE(servers[key]->start().ok());
+    };
+    serve("agent", CommandOrigin::agent, std::chrono::milliseconds(120000));
+    serve("mcp", CommandOrigin::mcp, std::chrono::milliseconds(120000));
+    serve("late", CommandOrigin::agent, std::chrono::milliseconds(1500));
+    serve("api", CommandOrigin::api, std::chrono::milliseconds(120000));
     std::atomic<bool> stop{false};
     std::thread drainer([&] {
         while (!stop.load()) {
@@ -249,15 +263,14 @@ TEST_CASE("the stand-in's server holds a reviewed call until it is approved, den
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
     });
-    const int port = server.port();
-    auto post = [&](const std::string& name, const json& args, const std::string& origin) {
-        return http(port, "POST", "/v0/commands/" + name, options.token, args.dump(),
-                    {"X-Caliper-Origin: " + origin, "X-Caliper-Group: turn-9"})
+    auto post = [&](const std::string& key, const std::string& name, const json& args) {
+        return http(servers[key]->port(), "POST", "/v0/commands/" + name, tokens[key], args.dump(),
+                    {"X-Caliper-Group: turn-9"})
             .json_body();
     };
     // Waits for the call to be parked and decides it as the app's UI does.
     auto decide_when_pending = [&](bool allow) {
-        for (int i = 0; i < 500; ++i) {
+        for (int i = 0; i < 4000; ++i) {
             const auto pending = s->registry().pending_approvals();
             if (!pending.empty()) {
                 CHECK(pending[0].review.is_object());
@@ -273,41 +286,44 @@ TEST_CASE("the stand-in's server holds a reviewed call until it is approved, den
 
     json reply;
     std::thread approver([&] { decide_when_pending(true); });
-    reply = post("source.add", {{"id", "one"}, {"sql", "SELECT 1 AS one"}}, "agent");
+    reply = post("agent", "source.add", {{"id", "one"}, {"sql", "SELECT 1 AS one"}});
     approver.join();
     CHECK(reply["ok"] == true);
     CHECK(reply["result"]["applied"] == true);
     CHECK(s->open_spec()->spec.sources.size() == 1);
 
     std::thread denier([&] { decide_when_pending(false); });
-    reply = post("source.add", {{"id", "two"}, {"sql", "SELECT 2 AS two"}}, "mcp");
+    reply = post("mcp", "source.add", {{"id", "two"}, {"sql", "SELECT 2 AS two"}});
     denier.join();
     CHECK(reply["error"]["code"] == "command.denied");
 
     // Nobody decides: withdrawn after the wait, and journaled like a denial.
-    reply = post("source.add", {{"id", "three"}, {"sql", "SELECT 3 AS three"}}, "agent");
+    reply = post("late", "source.add", {{"id", "three"}, {"sql", "SELECT 3 AS three"}});
     CHECK(reply["error"]["code"] == "command.approval_timeout");
     CHECK(s->registry().pending_approvals().empty());
     CHECK(s->open_spec()->spec.sources.size() == 1);
 
     // A program gets the approval id at once; a dry run is answered at once.
-    reply = post("source.add", {{"id", "four"}, {"sql", "SELECT 4 AS four"}}, "api");
+    reply = post("api", "source.add", {{"id", "four"}, {"sql", "SELECT 4 AS four"}});
     CHECK(reply["ok"] == true);  // review is off for api by default
     s->set_review(CommandOrigin::api, true);
-    reply = post("source.add", {{"id", "five"}, {"sql", "SELECT 5 AS five"}}, "api");
+    reply = post("api", "source.add", {{"id", "five"}, {"sql", "SELECT 5 AS five"}});
     CHECK(reply["error"]["code"] == "command.needs_approval");
     CHECK(reply["error"]["approval"].is_string());
-    reply = post("source.add", {{"id", "six"}, {"sql", "SELECT 6 AS six"}, {"dry_run", true}}, "agent");
+    reply = post("agent", "source.add", {{"id", "six"}, {"sql", "SELECT 6 AS six"}, {"dry_run", true}});
     CHECK(reply["result"]["applied"] == false);
 
     const JournalRead read = read_journal(ws + "/journal/commands.jsonl");
     REQUIRE(read.events.size() == lines + 4);  // approved, denied, timed out, the api's add
     CHECK(read.events[lines].ok);
+    CHECK(read.events[lines].origin == CommandOrigin::agent);
     CHECK(read.events[lines + 1].error == "command.denied");
+    CHECK(read.events[lines + 1].origin == CommandOrigin::mcp);
     CHECK(read.events[lines + 2].error == "command.approval_timeout");
     CHECK(read.events[lines + 2].group == "turn-9");
+    CHECK(read.events[lines + 3].origin == CommandOrigin::api);
     s->queue().shutdown();
-    server.stop();
+    for (auto& server : servers) server.second->stop();
     stop.store(true);
     drainer.join();
 }
@@ -352,21 +368,51 @@ TEST_CASE("the stand-in host reviews the origins --review names and prints each 
     CHECK(call_and_decide("source.add", {{"id", "one"}, {"sql", "SELECT 1 AS one"}}, "allow")["ok"] == true);
     CHECK(call_and_decide("source.add", {{"id", "two"}, {"sql", "SELECT 2 AS two"}}, "deny")["error"]["code"] ==
           "command.denied");
-    // The agent origin is not named, so its edit runs at once.
-    CHECK(post("source.add", {{"id", "three"}, {"sql", "SELECT 3 AS three"}}, "agent")["ok"] == true);
     CHECK(post("review.status", json::object(), "mcp")["result"]["spec_edits"] == true);
-    CHECK(post("review.status", json::object(), "agent")["result"]["spec_edits"] == false);
+    // The token is for mcp: a request cannot become agent or api.
+    CHECK(http(port, "POST", "/v0/commands/spec.get", token, "{}", {"X-Caliper-Origin: agent"}).status == 400);
+    CHECK(http(port, "POST", "/v0/commands/spec.get", token, "{}", {"X-Caliper-Origin: api"}).status == 400);
     const acp::ExitStatus status = host->terminate(10000);
     CHECK(status.exited);
     CHECK(status.code == 0);
 
-    // Unknown origins are refused at start.
-    acp::SpawnOptions bad = so;
-    bad.argv.back() = "mcp,robot";
-    std::unique_ptr<acp::Process> refused = acp::Process::spawn(bad, &e);
-    REQUIRE(refused);
-    acp::ExitStatus refused_status;
-    CHECK(refused->wait_for(10000, &refused_status));
-    CHECK(refused_status.code == 2);
+    // A host whose token is for the agent origin, which --review does not
+    // name: the agent's edit runs at once, and its journal line says agent.
+    {
+        const std::string root2 = fresh_dir("review-host-agent");
+        acp::SpawnOptions as_agent;
+        as_agent.argv = {CALIPER_BUILDER_HOST_EXE, "--workspace", root2 + "/workspace", "--api-dir", root2 + "/api",
+                         "--origin", "agent", "--approve", "ask", "--review", "mcp"};
+        std::unique_ptr<acp::Process> agent_host = acp::Process::spawn(as_agent, &e);
+        REQUIRE_MESSAGE(agent_host, e.message);
+        const std::string api2 = root2 + "/api/api.json";
+        for (int i = 0; i < 400 && !fs::exists(api2); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        REQUIRE(fs::exists(api2));
+        const json a2 = json::parse(read_text(api2));
+        auto post2 = [&](const std::string& name, const json& args) {
+            return http(a2["port"].get<int>(), "POST", "/v0/commands/" + name, a2["token"].get<std::string>(),
+                        args.dump(), {}, 30000)
+                .json_body();
+        };
+        CHECK(post2("spec.new", {{"id", "hosted"}})["ok"] == true);
+        CHECK(post2("source.add", {{"id", "three"}, {"sql", "SELECT 3 AS three"}})["ok"] == true);
+        CHECK(post2("review.status", json::object())["result"]["origin"] == "agent");
+        CHECK(post2("review.status", json::object())["result"]["spec_edits"] == false);
+        CHECK(agent_host->terminate(10000).code == 0);
+        CHECK(read_journal(root2 + "/workspace/journal/commands.jsonl").events.back().origin == CommandOrigin::agent);
+    }
+
+    // Unknown origins are refused at start, for --review and for --origin.
+    for (const std::vector<std::string>& extra :
+         {std::vector<std::string>{"--review", "mcp,robot"}, std::vector<std::string>{"--origin", "ui"}}) {
+        acp::SpawnOptions bad;
+        bad.argv = {CALIPER_BUILDER_HOST_EXE, "--workspace", ws, "--api-dir", root + "/api"};
+        bad.argv.insert(bad.argv.end(), extra.begin(), extra.end());
+        std::unique_ptr<acp::Process> refused = acp::Process::spawn(bad, &e);
+        REQUIRE(refused);
+        acp::ExitStatus refused_status;
+        CHECK(refused->wait_for(10000, &refused_status));
+        CHECK(refused_status.code == 2);
+    }
 }
 #endif

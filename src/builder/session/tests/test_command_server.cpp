@@ -5,6 +5,8 @@
 #include <caliper_builder/session/command_server.h>
 #include <caliper_builder/session/session.h>
 
+#include <caliper_builder/commands/journal.h>
+
 #include <doctest/doctest.h>
 
 #include <atomic>
@@ -186,54 +188,88 @@ TEST_CASE("each check of a request answers with its status") {
 }
 
 TEST_CASE("a call that needs approval waits for mcp and agent and answers at once for api") {
-    CommandServerOptions options;
-    options.approval_wait = std::chrono::milliseconds(400);
-    Served sv("server-approval", options);
+    // One session behind a server for each origin a token can have. The mcp
+    // server waits as long as the app does, so the held call is decided on
+    // state, never raced against a clock; only the agent server's short wait
+    // is for the call that nobody decides.
+    Served sv("server-approval");
+    auto extra = [&](CommandOrigin origin, std::chrono::milliseconds wait) {
+        CommandServerOptions o;
+        o.token = generate_session_token();
+        o.origin = origin;
+        o.approval_wait = wait;
+        auto server = std::make_unique<CommandServer>(sv.s->queue(), o);
+        REQUIRE(server->start().ok());
+        return std::make_pair(std::move(server), o.token);
+    };
+    auto api = extra(CommandOrigin::api, std::chrono::milliseconds(120000));
+    auto agent = extra(CommandOrigin::agent, std::chrono::milliseconds(400));
+    auto post_to = [](const std::pair<std::unique_ptr<CommandServer>, std::string>& to, const std::string& name,
+                      const json& args) {
+        return http(to.first->port(), "POST", "/v0/commands/" + name, to.second, args.dump()).json_body();
+    };
     write_text(sv.s->workspace() + "/data/a.csv", "x\n1\n");
     REQUIRE(sv.post("data.import", {{"paths", {"data/a.csv"}}, {"run", false}}).json_body()["ok"] == true);
 
     // api: command.needs_approval with the id, at once.
-    const json now = sv.post("loader.run", {{"id", "a"}}).json_body();
+    const json now = post_to(api, "loader.run", {{"id", "a"}});
     CHECK(now["error"]["code"] == "command.needs_approval");
     CHECK(now["error"]["approval"].is_string());
 
-    // mcp: held until the person approves.
-    std::atomic<bool> answered{false};
-    json held;
-    std::thread caller([&] {
-        held = sv.post("loader.run", {{"id", "a"}}, {"X-Caliper-Origin: mcp"}).json_body();
-        answered.store(true);
-    });
-    std::string approval;
-    for (int i = 0; i < 200 && approval.empty(); ++i) {
-        for (const auto& p : sv.s->registry().pending_approvals())
-            if (p.invocation.origin == CommandOrigin::mcp) approval = p.approval;
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    REQUIRE(!approval.empty());
-    CHECK(!answered.load());
-    sv.s->queue().approve(approval);
-    caller.join();
-    CHECK(held["ok"] == true);
-    CHECK(held["result"]["outputs"][0]["id"] == "table:a");
-
-    // agent: withdrawn after the wait.
-    const json late = sv.post("loader.delete", {{"id", "a"}}, {"X-Caliper-Origin: agent"}).json_body();
-    CHECK(late["error"]["code"] == "command.approval_timeout");
-    // Denied.
-    std::thread denier([&] {
-        for (int i = 0; i < 200; ++i) {
+    // mcp: held until the person decides, first approved, then denied.
+    auto decide_mcp = [&](bool allow) {
+        for (int i = 0; i < 4000; ++i) {
             for (const auto& p : sv.s->registry().pending_approvals())
-                if (p.invocation.origin == CommandOrigin::agent) {
-                    sv.s->queue().deny(p.approval);
-                    return;
+                if (p.invocation.origin == CommandOrigin::mcp) {
+                    if (allow) sv.s->queue().approve(p.approval);
+                    else sv.s->queue().deny(p.approval);
+                    return true;
                 }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
-    });
-    const json denied = sv.post("loader.delete", {{"id", "a"}}, {"X-Caliper-Origin: agent"}).json_body();
+        return false;
+    };
+    bool decided = false;
+    std::thread approver([&] { decided = decide_mcp(true); });
+    const json held = sv.post("loader.run", {{"id", "a"}}).json_body();
+    approver.join();
+    CHECK(decided);
+    CHECK(held["ok"] == true);
+    CHECK(held["result"]["outputs"][0]["id"] == "table:a");
+    std::thread denier([&] { decided = decide_mcp(false); });
+    const json denied = sv.post("loader.delete", {{"id", "a"}}).json_body();
     denier.join();
+    CHECK(decided);
     CHECK(denied["error"]["code"] == "command.denied");
+
+    // agent: withdrawn after the wait.
+    const json late = post_to(agent, "loader.delete", {{"id", "a"}});
+    CHECK(late["error"]["code"] == "command.approval_timeout");
+    api.first->stop();
+    agent.first->stop();
+}
+
+TEST_CASE("the server's origin is fixed when it starts, and X-Caliper-Origin cannot change it") {
+    Served sv("server-origin");
+    {
+        // A server for ui, builder or viewer is refused: no token is theirs.
+        CommandServerOptions o;
+        o.token = generate_session_token();
+        for (CommandOrigin bad : {CommandOrigin::ui, CommandOrigin::builder, CommandOrigin::viewer}) {
+            o.origin = bad;
+            CommandServer refused(sv.s->queue(), o);
+            CHECK(refused.start().code == "server.bad_origin");
+        }
+    }
+    // A call without the header runs under the server's origin, mcp by default.
+    REQUIRE(sv.post("spec.new", {{"id", "fixed"}}).json_body()["ok"] == true);
+    const JournalRead read = read_journal(sv.s->workspace() + "/journal/commands.jsonl");
+    REQUIRE(!read.events.empty());
+    CHECK(read.events.back().origin == CommandOrigin::mcp);
+    // A header that names another origin is refused; the server's own is accepted.
+    CHECK(sv.post("spec.get", json::object(), {"X-Caliper-Origin: agent"}).status == 400);
+    CHECK(sv.post("spec.get", json::object(), {"X-Caliper-Origin: api"}).status == 400);
+    CHECK(sv.post("spec.get", json::object(), {"X-Caliper-Origin: mcp"}).status == 200);
 }
 
 TEST_CASE("connections beyond the bound get 503") {
