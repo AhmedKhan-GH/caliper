@@ -26,6 +26,8 @@
 
 #include "embed/embed_core.h"
 #include "embed/render_stats.h"   // copy counters
+#include "live/live_scene.h"
+#include "live/live_views_scene.h"
 #include "live/live_views_state.h"
 #include "renderer/host_renderer.h"
 #include "tensor_bridge.h"   // colormap_lut
@@ -72,6 +74,7 @@ const char* kind_name(int32_t k) {
         case CALIPER_LIVE_KIND_POINTS:    return "points";
         case CALIPER_LIVE_KIND_SERIES:    return "series";
         case CALIPER_LIVE_KIND_HISTOGRAM: return "histogram";
+        case kKindScene:                  return "scene";
         default:                          return "?";
     }
 }
@@ -146,6 +149,7 @@ void release_payload(CaliperCore* core, View& v, PointsPayload& p) {
 
 // Every GPU resource and handle of a view (telemetry and placement stay).
 void release_typed(CaliperCore* core, View& v) {
+    v.scene.reset();   // a scene view's buffers and targets go back to its layer, then the layer
     HostRenderer* r = core->renderer.get();
     for (void* h : v.pending)
         if (r) r->device_update_release(h);
@@ -513,6 +517,8 @@ bool apply_histogram(View& v, const CaliperLiveSnapshot& s, std::string* why) {
 // Every gate that does not need GPU state, with a specific reason.
 bool validate(CaliperCore* core, const CaliperLiveSnapshot& s, std::string* why) {
     auto no = [&](const std::string& w) { *why = w; return false; };
+    if (s.kind == kKindScene)
+        return no("a scene view takes the scene messages of wire protocol 3.2, not snapshots");
     if (s.kind < CALIPER_LIVE_KIND_HEATMAP || s.kind > CALIPER_LIVE_KIND_HISTOGRAM)
         return no("bad kind " + std::to_string(s.kind) +
                   " (1 heatmap, 2 image, 3 points, 4 series, 5 histogram)");
@@ -1017,6 +1023,13 @@ extern "C" int caliper_core_live_view_info(CaliperCore* core, const char* name,
     } else if (v->kind == CALIPER_LIVE_KIND_POINTS) {
         out->width = v->tex_w;
         out->height = v->tex_h;
+    } else if (v->kind == kKindScene) {
+        if (const SceneView* sv = scene_view(*v)) {
+            out->width = (int32_t)sv->width();
+            out->height = (int32_t)sv->height();
+            out->creates = sv->target_creates();
+            out->count = (int64_t)sv->counts().items;
+        }
     }
     return 1;
 }
@@ -1047,6 +1060,22 @@ extern "C" int caliper_core_live_view_readback(CaliperCore* core, const char* na
             return 0;
         }
         return caliper_core_view_readback(core, name, buf, buf_bytes);
+    }
+    if (v->kind == kKindScene) {
+        SceneView* sv = scene_view(*v);
+        std::vector<uint8_t> px;
+        std::string why;
+        if (!sv || !sv->read_pixels(&px, &why)) {
+            core->fail(std::string("live_view_readback('") + name + "'): " +
+                       (sv ? why : std::string("the scene view draws nothing here")));
+            return 0;
+        }
+        if (buf_bytes < px.size()) {
+            core->fail("live_view_readback: buffer too small (need " + std::to_string(px.size()) + " bytes)");
+            return 0;
+        }
+        std::memcpy(buf, px.data(), px.size());
+        return 1;
     }
     if (v->kind != CALIPER_LIVE_KIND_POINTS) {
         core->fail(std::string("live_view_readback('") + name + "'): a " + kind_name(v->kind) +

@@ -44,6 +44,8 @@
 // dimmed. Without a sink a selection stays in the view.
 #include "live/live_views_state.h"
 
+#include "live/live_scene.h"
+#include "live/live_views_scene.h"
 #include "renderer/host_renderer.h"
 #include "tensor_bridge.h"   // colormap_lut
 
@@ -395,6 +397,9 @@ std::string info_text(const CaliperCore* core, const View& v) {
             std::snprintf(b, sizeof b, "%llu steps  last %s", (unsigned long long)(v.first + v.values.size()),
                           fmt4(v.values.back()).c_str());
             return b;
+        case kKindScene:
+            if (const SceneView* sv = scene_view(v)) return sv->info();
+            return {};
         case CALIPER_LIVE_KIND_HISTOGRAM: {
             double total = 0.0;
             for (float c : v.values) total += c;
@@ -1048,6 +1053,110 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     }
     ImGui::End();
 }
+
+// ---- scene -----------------------------------------------------------------
+// The scene view's offscreen target shown as an image, with the points view's
+// camera gestures: a drag orbits (pans in a 2-D scene), a right, middle, alt or
+// ctrl drag pans, the wheel zooms, and F or a double click fits. The view
+// compiles and submits only when the scene, the camera or the size changed.
+}  // namespace
+
+void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
+    const bool open = begin_window(core, v, ImVec2(360.0f, 300.0f));
+    if (!open) { ImGui::End(); return; }
+    draw_header(core, S, v, kToolPause);
+    under_header(core, S, v);
+    SceneView* sc = scene_view(v);
+    if (sc) {
+        sc->poll();
+        char tel[160], line[320];
+        telemetry(tel, sizeof tel, S, v);
+        const SceneCost& k = sc->cost();
+        std::snprintf(line, sizeof line, "scene %s  compile %.3f ms  submit %.3f ms  %s", tel, k.compile_ms,
+                      k.submit_ms, sc->camera_text().c_str());
+        debug_line(core, line);
+    }
+    if (!sc) {
+        ImGui::TextWrapped("%s", v.scene && !v.scene->notice.empty() ? v.scene->notice.c_str()
+                                                                     : "this scene cannot be drawn here");
+        ImGui::End();
+        return;
+    }
+    if (!sc->notes().empty() && !core->views_bare) {
+        const Look& L = S->look;
+        const std::string t = fit_text(sc->notes().back(), ImGui::GetContentRegionAvail().x);
+        ImGui::PushStyleColor(ImGuiCol_Text, L.faint);
+        ImGui::TextUnformatted(t.c_str());
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered() && sc->notes().size() > 1) {
+            std::string all;
+            for (const std::string& n : sc->notes()) all += n + "\n";
+            ImGui::SetTooltip("%s", all.c_str());
+        }
+    }
+
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    if (avail.x < 4.0f || avail.y < 4.0f) { ImGui::End(); return; }
+    int want_w = std::clamp((int)(avail.x * core->scale), 1, kMaxTarget);
+    int want_h = std::clamp((int)(avail.y * core->scale), 1, kMaxTarget);
+    if (sc->has_target() && std::abs(want_w - (int)sc->width()) <= kHysteresisPx &&
+        std::abs(want_h - (int)sc->height()) <= kHysteresisPx) {
+        want_w = (int)sc->width();
+        want_h = (int)sc->height();
+    }
+
+    // ---- input (an invisible button owns the area so drags never move the window)
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##caliper.scene", avail,
+                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight |
+                               ImGuiButtonFlags_MouseButtonMiddle);
+    const bool hovered = ImGui::IsItemHovered();
+    ImGuiIO& io = ImGui::GetIO();
+    Gesture& g = v.gesture;
+    const bool released = track_gesture(v, io.MousePos, false);
+    const bool valid = ImGui::IsMousePosValid();
+    const float dx = valid ? io.MousePos.x - g.lx : 0.0f, dy = valid ? io.MousePos.y - g.ly : 0.0f;
+    if (valid) {
+        g.lx = io.MousePos.x;
+        g.ly = io.MousePos.y;
+    }
+    const bool drag = (g.down || released) && g.moved && !g.selecting;
+    if (drag && (dx != 0.0f || dy != 0.0f)) {
+        const bool pan = g.button != 0 || g.alt || g.ctrl;
+        if (pan) sc->pan(dx, dy, avail.y);
+        else sc->orbit(dx, dy);
+    }
+    if (released) g.selecting = false;
+    if (hovered && io.MouseWheel != 0.0f) {
+        const float mx = (io.MousePos.x - p0.x) / avail.x * 2.0f - 1.0f;
+        const float my = 1.0f - (io.MousePos.y - p0.y) / avail.y * 2.0f;
+        sc->zoom(io.MouseWheel, mx, my, avail.x, avail.y);
+    }
+    if (((hovered || ImGui::IsWindowFocused()) && ImGui::IsKeyPressed(ImGuiKey_F, false)) ||
+        (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)))
+        sc->fit();
+
+    // ---- GPU: compile and submit when something changed (S->paused freezes the view: the
+    // source holds its messages, so nothing changes but the camera)
+    const uint32_t clear = ImGui::GetColorU32(ImGuiCol_WindowBg) | 0xff000000u;
+    std::string why;
+    if (!sc->render((uint32_t)want_w, (uint32_t)want_h, core->scale, clear, &why)) sc->note(why);
+    v.tex_w = (int)sc->width();
+    v.tex_h = (int)sc->height();
+    v.creates = sc->target_creates();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (const uint64_t id = sc->imgui_texture())
+        dl->AddImage((ImTextureID)id, p0, ImVec2(p0.x + avail.x, p0.y + avail.y));
+
+    v.geo_valid = true;
+    v.geo_area[0] = p0.x; v.geo_area[1] = p0.y; v.geo_area[2] = avail.x; v.geo_area[3] = avail.y;
+    v.geo_ydown = false;
+    std::fill(v.geo_window, v.geo_window + 4, 0.0);
+    v.geo_text = sc->camera_text();
+    ImGui::End();
+}
+
+namespace {
 
 // ---- series ----------------------------------------------------------------
 // Min/max envelope of the series into ~2*buckets points (index order), so a
@@ -1918,6 +2027,7 @@ void draw_view(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         case CALIPER_LIVE_KIND_POINTS:    draw_points(core, S, v); break;
         case CALIPER_LIVE_KIND_SERIES:    draw_series(core, S, v); break;
         case CALIPER_LIVE_KIND_HISTOGRAM: draw_histogram(core, S, v); break;
+        case kKindScene:                  draw_scene(core, S, v); break;
         default: break;
     }
 }

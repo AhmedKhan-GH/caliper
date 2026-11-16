@@ -29,6 +29,11 @@
 
 namespace caliper_live_views {
 
+// The scene view (live_views_scene.h): kind 6 of the view registry, CALIPER_NET_KIND_SCENE of
+// wire protocol 3.2, fed with decoded scene messages instead of snapshots.
+constexpr int32_t kKindScene = 6;
+struct SceneHolder;
+
 // ---- platform helpers (live_views_metal.mm; stubs elsewhere) --------------
 struct BufferInfo {
     bool     ok = false;
@@ -168,6 +173,9 @@ struct View {
     uint64_t    hover_stride = 1;             // >1: hover searched a sample
     bool        draw_failed = false;          // last render-target draw was refused
 
+    // SCENE: its scene view and the layer it draws through (live_views_scene.h).
+    std::shared_ptr<SceneHolder> scene;
+
     // SERIES / HISTOGRAM.
     std::vector<float>  values;
     uint64_t            first = 0;            // series: global index of values[0]
@@ -238,6 +246,7 @@ struct View {
     float  geo_area[4] = {};
     double geo_window[4] = {};
     bool   geo_ydown = false;
+    std::string geo_text;   // more of it in words (a scene's camera), for the UI driver's `where`
 };
 
 }  // namespace caliper_live_views
