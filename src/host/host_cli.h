@@ -10,7 +10,8 @@
 //           [--workspace <dir>]               start the app
 //   caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]
 //               [--hidden] [--workspace <dir>] start the app, <folder> searched first
-//   caliper list [--applets <dir>]...         list the applets in search order
+//   caliper list [--applets <dir>]... [--workspace <dir>]
+//                                             list the applets in search order
 //   caliper check <folder>                    run the pre-load checks on <folder>
 //   caliper install <folder>                  check, then copy into the user folder
 //   caliper new <name> [<dir>]                create an applet from a template
@@ -127,7 +128,7 @@ inline const char* usage_text() {
            "               [--workspace <dir>]\n"
            "       caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]\n"
            "                   [--hidden] [--workspace <dir>]\n"
-           "       caliper list [--applets <dir>]...\n"
+           "       caliper list [--applets <dir>]... [--workspace <dir>]\n"
            "       caliper check <folder>\n"
            "       caliper install <folder>\n"
            "       caliper new <name> [<dir>]\n"
@@ -472,8 +473,8 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
         cl.command != C::Help)
         cl.error = "--url applies only to starting the app and dev";
     if (cl.error.empty() && !cl.workspace.empty() && cl.command != C::Run && cl.command != C::Dev &&
-        cl.command != C::Shot && cl.command != C::Help)
-        cl.error = "--workspace applies only to starting the app, dev and shot";
+        cl.command != C::Shot && cl.command != C::List && cl.command != C::Help)
+        cl.error = "--workspace applies only to starting the app, dev, shot and list";
     if (cl.error.empty() && cl.allow_control && cl.command != C::Serve && cl.command != C::Help) {
         if (cl.command != C::Run && cl.command != C::Dev && cl.command != C::Shot)
             cl.error = "--allow-control applies only to serve, and to the app, dev and shot with --api";
@@ -531,6 +532,9 @@ struct CliContext {
     const char* applet_path_env = nullptr;   // CALIPER_APPLET_PATH
     std::string hub_file;               // serve: where producers find the hub ("" none)
     std::string exe_dir;                // build: the executable's folder, for the SDK search
+    // list: the builder's workspace (workspace_choice), whose applets/ folder
+    // holds spec applets; "" for none. Only read.
+    std::string workspace_dir;
 };
 
 namespace cli_detail {
@@ -749,8 +753,9 @@ inline std::string replace_all(std::string s, const std::string& from,
 inline int run_list(const CommandLine& cl, const CliContext& ctx, std::ostream& out,
                     std::ostream& /*err*/) {
     AppletLoader L(ctx.caps, ctx.data_root);
+    L.set_workspace(ctx.workspace_dir);
     L.scan(applet_search_dirs(cl.applet_dirs, ctx.applet_path_env, ctx.user_dir,
-                              ctx.shipped_dir));
+                              ctx.shipped_dir, ctx.workspace_dir));
     if (L.count() == 0) {
         out << "no applets found\n";
         return 0;

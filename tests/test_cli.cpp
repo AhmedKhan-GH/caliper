@@ -325,6 +325,20 @@ TEST_CASE("cli: list shows every copy in search order, with reasons") {
     CHECK(r.out == expected);
 }
 
+TEST_CASE("cli: list shows the spec applets of the workspace, after the development folders") {
+    TempDir t("list-workspace");
+    CliContext ctx = context(t);
+    const fs::path ws = t.path / "ws";
+    caliper_test::write_spec_applet(ws / "applets" / "board", "board", "local.board", "0.1.0");
+    // Without the workspace the applet is not listed.
+    CHECK(run({"list"}, ctx).out == "no applets found\n");
+    ctx.workspace_dir = ws.string();
+    const Run r = run({"list"}, ctx);
+    CHECK(r.code == 0);
+    INFO(r.out);
+    CHECK(r.out.find("local.board  0.1.0  spec  " + (ws / "applets" / "board").string()) != std::string::npos);
+}
+
 TEST_CASE("cli: --api and --api-port start the app, dev and shot with Caliper API") {
     CHECK_FALSE(parse({}).api);
     auto app = parse({"--api"});
@@ -391,7 +405,7 @@ TEST_CASE("cli: --workspace names the builder's workspace for the app, dev and s
     CHECK(parse({"--workspace="}).error == "--workspace needs a folder");
     CHECK(parse({"--workspace", "--hidden"}).error == "--workspace needs a folder");
     CHECK(parse({"--workspace", "a", "--workspace", "b"}).error == "--workspace is given twice");
-    for (const char* sub : {"list", "info", "serve", "check", "install", "build", "new"}) {
+    for (const char* sub : {"info", "serve", "check", "install", "build", "new"}) {
         CAPTURE(sub);
         std::vector<const char*> args = {sub};
         if (std::string(sub) == "check" || std::string(sub) == "install" || std::string(sub) == "build" ||
@@ -399,8 +413,12 @@ TEST_CASE("cli: --workspace names the builder's workspace for the app, dev and s
             args.push_back("x");
         args.push_back("--workspace");
         args.push_back("/w");
-        CHECK(parse(args).error == "--workspace applies only to starting the app, dev and shot");
+        CHECK(parse(args).error == "--workspace applies only to starting the app, dev, shot and list");
     }
+    // list takes it, for the workspace's spec applets.
+    const auto listed = parse({"list", "--workspace", "/w"});
+    CHECK(listed.error.empty());
+    CHECK(listed.workspace == "/w");
 }
 
 TEST_CASE("cli: the workspace is --workspace, then CALIPER_WORKSPACE, then the default, as absolute paths") {
