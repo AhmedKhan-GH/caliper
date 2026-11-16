@@ -6,6 +6,7 @@
 
 #include "gfx/recording_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
+#include "gfx/shaders/generated/uniforms.h"
 #include "gfx/generated_pipelines.h"
 
 #include <cstdlib>
@@ -18,6 +19,12 @@ using namespace caliper_gfx;
 
 namespace {
 
+// The colormap block of the generated programs (shaders::Cmap), 4,112 bytes, which the arena
+// pads to 4,352.
+constexpr uint32_t kCmapBytes = sizeof(shaders::Cmap);
+constexpr uint32_t kCmapSlice = (kCmapBytes + 255) / 256 * 256;
+static_assert(kCmapBytes == 4112 && kCmapSlice == 4352, "the generated colormap block");
+
 // A program shaped like the scene draws: group 0 the frame block, group 1 the draw block and
 // a colormap block at dynamic offsets, one vertex and one fragment entry.
 const EntryDesc kEntries[] = {
@@ -28,7 +35,7 @@ const EntryDesc kEntries[] = {
 const BindingDesc kBindings[] = {
     {0, 0, BindingType::Uniform, kStageVertex | kStageFragment, true, 48, Format::RGBA8Unorm, 0},
     {1, 0, BindingType::Uniform, kStageVertex | kStageFragment, true, 192, Format::RGBA8Unorm, 1},
-    {1, 1, BindingType::Uniform, kStageVertex, true, 2080, Format::RGBA8Unorm, 2},
+    {1, 1, BindingType::Uniform, kStageVertex, true, kCmapBytes, Format::RGBA8Unorm, 2},
 };
 ProgramDesc quad_program(const BindingDesc* b = kBindings, uint8_t n = 3) {
     ProgramDesc d;
@@ -110,7 +117,7 @@ struct Scene {
 
     // One instanced draw of `n` quads with the given arena offsets.
     DrawRecord draw(DrawList& list, uint32_t n) const {
-        uint8_t frame_block[48] = {}, params[192] = {}, cmap[2080] = {};
+        uint8_t frame_block[48] = {}, params[192] = {}, cmap[kCmapBytes] = {};
         DrawRecord r;
         r.pipeline = pipeline;
         r.groups[0] = g0;
@@ -284,12 +291,12 @@ TEST_CASE("gfx layer: bind groups refuse a binding that is too large, an unalign
 
 TEST_CASE("gfx layer: the draw list's arena hands out 256-byte slices") {
     DrawList list;
-    uint8_t block[2080] = {1, 2, 3};
+    uint8_t block[kCmapBytes] = {1, 2, 3};
     CHECK(list.uniform(block, 192) == 0);
     CHECK(list.uniform(block, 192) == 256);
-    CHECK(list.uniform(block, 2080) == 512);
-    CHECK(list.uniform(block, 48) == 512 + 2304);        // a colormap block takes 2,304 bytes
-    CHECK(list.arena().size == 512 + 2304 + 256);
+    CHECK(list.uniform(block, kCmapBytes) == 512);
+    CHECK(list.uniform(block, 48) == 512 + kCmapSlice);  // a colormap block takes 4,352 bytes
+    CHECK(list.arena().size == 512 + kCmapSlice + 256);
     CHECK(list.arena()[256] == 1);
     CHECK(list.arena()[258] == 3);
     CHECK(list.error().empty());
@@ -585,12 +592,12 @@ TEST_CASE("gfx layer: copies and dispatches are validated like draws") {
     const BindGroup groups[2] = {s.g0, s.g1};
     Texture writes[1] = {t};
     f.dispatch(cs, groups, offsets, 1, 1, 1, writes);
-    // The colormap block reads 2,080 bytes from the frame arena's last slice of 256: refused.
+    // The colormap block reads 4,112 bytes from the frame arena's last slice of 256: refused.
     CHECK(s.gfx.submit(std::move(f)) == 0);
     CHECK(has(s.gfx.last_error(), "uniform arena"));
     Frame ok;
-    uint8_t cmap[2080] = {};
-    const uint32_t ok_offsets[3] = {ok.uniform(block, 48), ok.uniform(block, 192), ok.uniform(cmap, 2080)};
+    uint8_t cmap[kCmapBytes] = {};
+    const uint32_t ok_offsets[3] = {ok.uniform(block, 48), ok.uniform(block, 192), ok.uniform(cmap, kCmapBytes)};
     ok.dispatch(cs, groups, ok_offsets, 1, 1, 1, writes);
     CHECK(s.gfx.submit(std::move(ok)) != 0);
     Frame zero;

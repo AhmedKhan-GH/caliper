@@ -227,7 +227,7 @@ TEST_CASE("gfx/Metal colormap: the texture path's compute form matches map_f32_t
             sh::TexParams tp{kWidth, c.rows, from_import ? kBase : 0u, kWidth};
             const uint32_t offsets[2] = {f.uniform(&tp, sizeof tp), f.uniform(&c.block, sizeof c.block)};
             const BindGroup groups[2] = {group0, group1};
-            const uint16_t* wg = sh::kProgramDescriptions[prog].entries[0].workgroup_size;   // 16 x 16
+            const uint16_t* wg = sh::kProgramDescriptions[prog].entries[0].workgroup_size;   // 16 x 8
             f.dispatch(pipe, groups, offsets, (kWidth + wg[0] - 1) / wg[0], (c.rows + wg[1] - 1) / wg[1], 1);
             const Serial s = gfx->submit(std::move(f));
             REQUIRE_MESSAGE(s != 0, gfx->last_error());

@@ -5,7 +5,7 @@
 // or kVulkanPrograms), keeps one reference to each pipeline and bind group it was handed, uploads
 // the scene core's constant streams once, keeps the class table texture in step with the scene,
 // and owns the buffers of clamped indices and gathered edges. Colormap blocks come from the
-// caller, who derives their keys from the CPU reference (renderer core, step 6).
+// caller, normally colormap_source over a KeyBlockCache of src/host/gfx/colormap_keys.h.
 #pragma once
 
 #include "gfx/gfx.h"
@@ -25,7 +25,7 @@ public:
     using ColormapSource = std::function<void(uint32_t colormap, float vmin, float vmax, caliper_gfx::shaders::Cmap*)>;
 
     // programs: the backend's table, indexed by ProgramId. colormaps may be empty, which leaves
-    // every block's keys and table zero (enough for draws that take no colormap).
+    // every block's levels zero (enough for draws that take no colormap).
     BackendResources(caliper_gfx::Backend& backend, const caliper_gfx::ProgramDesc* programs, ColormapSource colormaps = {});
     ~BackendResources() override;
     BackendResources(const BackendResources&) = delete;

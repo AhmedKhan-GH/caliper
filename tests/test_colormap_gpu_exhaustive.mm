@@ -1,6 +1,6 @@
 // caliper_colormap_gpu_exhaustive: the generated colormap_texture on Metal, created through the
 // graphics layer's Metal backend (so compiled exactly as the layer compiles it, fast math included,
-// and dispatched with its own 16 x 16 workgroup), against the reference map_f32_to_rgba8 for all
+// and dispatched with its own 16 x 8 workgroup), against the reference map_f32_to_rgba8 for all
 // 2^32 input bit patterns on each range of tests/shaders/colormap_cases.h, with the test table
 // (every channel varies, so equal bytes mean an equal level). It is the ctest entry of the same
 // name, label slow, which exits 77 (skipped) unless CALIPER_SLOW_TESTS=1:

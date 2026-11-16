@@ -8,8 +8,9 @@
 //
 //  - kColormap, the heatmap's compute colormap by f32 thresholds that the CPU derives from the
 //    reference map_f32_to_rgba8. Its parameters moved from a uniform buffer per texture to a
-//    dynamic uniform in the frame's arena (group 0); the per-texture resources are group 1. Step 6
-//    replaces the thresholds with the integer keys of design/renderer-core.md. Its workgroup is
+//    dynamic uniform in the frame's arena (group 0); the per-texture resources are group 1.
+//    Migration step 8, the texture path, replaces it with the generated colormap_texture, whose
+//    integer keys come from src/host/gfx/colormap_keys.h (design/renderer-core.md). Its workgroup is
 //    8 x 8 instead of 16 x 16, because a compatibility-mode device allows 128 invocations in a
 //    workgroup; every invocation computes one texel on its own, so no texel changes.
 //  - kPoints, the points of the geometry path as instanced quads. Its positions and values come
