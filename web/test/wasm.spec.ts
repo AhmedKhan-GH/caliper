@@ -123,10 +123,10 @@ test('auto draws each view with the WebAssembly views when they list its kind, a
     expect([imageBad, imageMax]).toEqual([0, 0]);
     const [, , heatBad, heatMax] = (await moduleCheck(page, 'weights', /^weights:1:\d+:\d+$/)).split(':').map(Number);
     expect([heatBad, heatMax]).toEqual([0, 0]);
-    // The histogram holds the producer's bins.
-    const hist = (await state(page, 'weight_hist')).wasmStats as { viewInfo?: string };
-    expect(hist.viewInfo).toMatch(/weight_hist:kind=5,updates=\d+,count=\d+/);
-    expect(Number(/count=(\d+)/.exec(hist.viewInfo!)![1])).toBeGreaterThan(0);
+    // The histogram holds the producer's bins, once its module has published them.
+    const histInfo = async () => String(((await state(page, 'weight_hist')).wasmStats as { viewInfo?: string } | null)?.viewInfo ?? '');
+    await expect.poll(histInfo, { timeout: 30_000, message: 'weight_hist: the module\'s view info' })
+      .toMatch(/weight_hist:kind=5,updates=\d+,count=[1-9]\d*/);
   }
   await page.waitForTimeout(600);
   await page.screenshot({ path: shotPath(info, 'wasm-page'), fullPage: true });
