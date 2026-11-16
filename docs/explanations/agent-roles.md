@@ -22,6 +22,11 @@ format, recorded in the workspace's journal and undoable from the app. Commands 
 such as saving an applet or running a loader, need your approval in the app, whichever role sent them. A change that an
 agent makes to the open spec waits for your review, with its diff, unless you turn review off; the command layer asks,
 so it holds for every agent, including one that would not ask on its own, an agent outside the app over MCP too.
+Caliper tells who sends a command by the token it comes with, not by what the request says. Commands sent with the
+token in Caliper API's file, `api.json`, which is what an agent outside the app reads, are reviewed, and so are those
+of the side chat's agent and the widget agent, which get tokens of their own. Only the session token that the app
+prints when its API starts runs commands without review, and Caliper writes it to no file
+([Caliper API](../references/api.md#who-sends-a-command)).
 
 You review a waiting change on its card, in a strip that opens at the bottom of the window, above the jobs tray, on
 whatever page you are on. The card says who asks (MCP agent, Side chat, Widget agent or API), the command and what it

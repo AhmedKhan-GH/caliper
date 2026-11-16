@@ -362,6 +362,13 @@ or not the agent asks on its own. Three parts are built:
   command and no endpoint approves, so an agent cannot approve itself; undo and redo ask about the destructive commands
   of the steps they touch; and a request can never claim the `ui` or `builder` origin
   ([Command layer](command-layer.md)).
+- **The origin from the token.** Caliper API takes a command's origin from the token that authenticated it, never from
+  `X-Caliper-Origin`, which it ignores (the viewer token aside). The person's session token (`api`) is printed on the
+  start line and written to no file; `api.json` holds the token of outside agents (`mcp`); the side chat's agent and
+  the widget agent's sidecar each get an `agent` token of their own in an API file of their own,
+  `api-agent-<pid>-<n>.json` (mode 0600), which the app revokes and removes when that agent's session ends. An agent
+  that reads a file and calls the API with curl therefore runs as `mcp` or `agent`, and its spec edits wait for review
+  like those that go through `caliper-mcp` (Caliper API, `docs/references/api.md`, under Who sends a command).
 - **Diff previews of spec edits.** Every edit of the open spec takes `dry_run` and returns its change as a diff of the
   canonical TOML without any effect ([Builder session](builder-session.md)).
 - **Review of spec edits.** With review on for an origin, a session setting that is on by default for `agent` and
@@ -648,7 +655,9 @@ claims the right column with `layout_chat_column()`, and calls `draw()` with tha
   line, whether "always allow" options are offered, and whether the chat is open. Never a key, and no address.
 - **Caliper API.** `caliper-mcp` needs the API. **Decision, the user's:** when the app was started without `--api`, the
   chat starts the API when its agent starts, the one case in which the API starts without `--api`: on 127.0.0.1 at a
-  free port, with a new session token and the API file, as `--api` does, and no setting can change the address. It is
+  free port, with new tokens and the API file, as `--api` does, and no setting can change the address. Each agent
+  session gets an API file of its own with an `agent` token (above, under approvals), so the agent is given neither
+  `api.json` nor the person's token. It is
   visible in three places: a line in the conversation ("Caliper API started on 127.0.0.1:<port> for this chat"), an
   Activity line with the address and never the token, and every page's status bar, which shows the API's address
   whenever it runs. It is tied to the chat: when the chat's agent ends (it exits, cannot start, or another agent is
@@ -724,6 +733,21 @@ Waiting for later work:
 
 - The side chat in the builder pane's right column, under Properties (`ChatPane::draw_in()`), which the pane's
   integration connects; the landing page; and a Selection tab above the chat on the live page.
+- Open items of the side chat's Caliper API, found in review and left for a later round:
+  - its life cycle at the edges: a launch that fails after `retire(ending=false)` leaves the API that the chat started
+    running; the ⌘K widget agent's sidecar loses the API when the chat stops the API it started, since the sidecar's
+    token goes with the server; and what closing the pane does to the agent and to the API it started;
+  - a second app on the same app-data folder overwrites `api.json`, and the first app's exit then removes the second
+    app's file;
+  - what Accept on the inline surface expects of `preview.commit` when the preview's edits came from another origin;
+  - timing in tests: a 100 ms frame in `tests/test_app_session.cpp` (about line 327), waits in
+    `src/builder/mcp/tests/test_process.cpp` (about lines 370 and 387), and the crash-report folder that
+    `src/host/builder/tests/test_widget_app.cpp` reads;
+  - the stand-in host, `caliper-builder-host` (`src/builder/session/command_server.cpp`), still takes the origin from
+    `X-Caliper-Origin` with its one token; it is a development tool, not the product, and its owner changes it with
+    the session library;
+  - the stream (`/v3/stream`) takes the person's token only, so an outside agent with `api.json` cannot attach a
+    producer or a viewer; giving the `mcp` token the stream needs a change in the net layer's hub.
 - The review setting per origin in the side chat's settings, and running the spec validator on an agent's own edit of a
   spec file before the person answers.
 - The setting that marks an agent as running on a local model, with the note while a run is live, and the warning when
@@ -767,6 +791,12 @@ Waiting for later work:
 - **The chat on the spec page and the live page,** with ⌘L Chat beside ⌘K Command and the column as a viewport side
   bar after the host's strips.
 - **The chat starts Caliper API when the app runs without it,** on loopback, visibly, and stops it when its agent ends.
+- **The origin is the token's.** Each token has a fixed origin, `X-Caliper-Origin` is ignored rather than refused, so a
+  client written before the change keeps working with the origin of its token, and only the person's token, printed on
+  the start line, runs commands unreviewed.
+- **A command script only where no one watches.** `CALIPER_COMMAND_SCRIPT`, which may claim the `ui` origin and
+  approve, runs only in the hidden app and in `caliper shot`, as `CALIPER_TEST_APPROVALS` does; a visible app refuses
+  it whole and says so on standard error and in Activity.
 - **Review of spec edits in the command layer,** with the diff attached to the pending approval, so that no agent can
   skip it.
 - **One kind of approval card for every agent,** in a strip above the jobs tray on every page, with the REVIEW mark on

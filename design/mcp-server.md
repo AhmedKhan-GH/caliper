@@ -35,7 +35,7 @@ Planned:
 agent (Claude Code, Codex, the app's side chat)
    │ starts, then speaks MCP on stdin and stdout
    ▼
-caliper-mcp ── reads api.json ──► port and session token
+caliper-mcp ── reads api.json ──► port and the mcp token
    │ HTTP/1.1 on 127.0.0.1, one request per call
    ▼
 Caliper API in the running app ──► command queue ──► command layer
@@ -61,7 +61,7 @@ caliper-mcp --version | --help
 | `--api-file <path>` | The API file to read. Without it, `api.json` in the app-data folder, which `CALIPER_DATA_DIR` moves. |
 | `--docs <dir>` | A folder of documentation pages, served as `caliper://docs/...` resources. Usually the `docs` folder of the repository or of an installed copy. |
 | `--sdk <dir>` | A folder that holds the Caliper SDK headers, served as `caliper://sdk/...` resources. Usually the installed SDK prefix. |
-| `--origin mcp` or `agent` | The value of the `X-Caliper-Origin` header of command calls; `mcp` by default. The app passes `agent` when its own side chat runs `caliper-mcp` (see [Changes to the contracts](#changes-to-the-contracts)). The origin of a call is the token's, not the header's: a server refuses a header that names another origin than its token's, so the header only states what the token already says. |
+| `--origin mcp` or `agent` | The value of the `X-Caliper-Origin` header of command calls; `mcp` by default. The app passes `agent` when its own side chat runs `caliper-mcp` (see [Changes to the contracts](#changes-to-the-contracts)). The origin of a call is the token's, not the header's: the app's Caliper API ignores the header, and the stand-in host refuses one that names another origin than its token's, so the header only states what the token already says. |
 | `--command-timeout <seconds>` | How long a command call may take, 1 to 3600 seconds; 130 by default, since a call may wait up to 120 seconds for the person's approval. |
 
 A folder given with `--docs` or `--sdk` must exist; otherwise `caliper-mcp` says so on standard error and exits
@@ -73,7 +73,10 @@ error also exits with 2.
 Every MCP client needs the same three things for a stdio server: the absolute path of the program, its arguments, and
 optionally variables for its environment. `caliper-mcp` needs no variable when the app uses the default app-data
 folder, and `CALIPER_DATA_DIR` (or `--api-file`) when it does not. It never needs a token or a key in its
-configuration: it reads the session token from the API file at run time.
+configuration: it reads a token from the API file at run time. The token in `api.json` is not the person's session
+token: it runs commands as the origin `mcp`, so every spec edit an outside agent makes through `caliper-mcp` waits for
+the person's review in the app, and every destructive command for their approval
+(Caliper API, `docs/references/api.md`, under Who sends a command).
 
 The configuration below follows the public documentation of each agent as it was on 15 November 2026. Neither agent
 was run for this page.
@@ -126,8 +129,9 @@ so without it Codex gives up on a call that the person is about to approve. `cod
 ### The app's side chat
 
 When the app runs an agent over ACP, it sends `caliper-mcp` in `session/new` as a stdio server with an absolute
-`command`, `args` such as `["--api-file", "<the app's API file>", "--origin", "agent", "--docs", "<docs>"]` and an
-empty `env`. The app always names the `caliper-mcp` that ships beside it, never one taken from a workspace.
+`command`, `args` such as `["--api-file", "<this session's API file>", "--origin", "agent", "--docs", "<docs>"]` and
+an empty `env`. The API file is the agent session's own, `api-agent-<pid>-<n>.json`, whose token has the origin
+`agent` and is revoked when the session ends; the agent never gets `api.json` or the person's token. The app always names the `caliper-mcp` that ships beside it, never one taken from a workspace.
 
 ## The protocol
 
@@ -375,7 +379,8 @@ goes at most 16 levels deep and lists at most 5000 files per folder. `caliper-mc
 ### The API file
 
 The app writes `api.json` in its app-data folder while it serves the API, with mode 0600, and removes it when it
-exits. `caliper-mcp` finds it as the app does: `--api-file` when given, otherwise `$CALIPER_DATA_DIR/api.json` when
+exits. Its `token` is the token of outside agents, with the origin `mcp`; the person's own token, which runs commands
+unreviewed, is printed on the app's start line and is in no file. `caliper-mcp` finds it as the app does: `--api-file` when given, otherwise `$CALIPER_DATA_DIR/api.json` when
 the variable is set and not empty, otherwise `api.json` in the app-data folder of the OS
 (Folders and environment variables (`docs/references/environment.md`)). It reads the file strictly: at most 64 KiB,
 `version` 1, `port` 1 to 65535, `url` exactly `http://127.0.0.1:<port>/v0`, and `token` 16 to 256 characters of
@@ -427,7 +432,7 @@ the app's own.
 
 ## Security
 
-- **The session token** is read from the API file and goes only into the `Authorization` header of requests to
+- **The token** is read from the API file and goes only into the `Authorization` header of requests to
   127.0.0.1. It is never printed, logged or put into a tool result, a resource or an error message. As a second guard,
   every line `caliper-mcp` writes, to standard output or standard error, is scrubbed of every token it has read. The
   process tests check that no token ever appears in either stream.

@@ -24,7 +24,7 @@ Caliper starts the agent as a child process and speaks ACP version 1 on its stan
 
 | Option | Meaning |
 |---|---|
-| `--api-file <path>` | Caliper API's file, which gives the loopback address and the session token |
+| `--api-file <path>` | Caliper API's file, which gives the loopback address and a token; the app gives its sidecar a file of its own, whose token has the origin `agent` |
 | `--command-table <path>` | The command table as JSON |
 | `--widget-scopes <path>` | The scope rule below; by default `widget_scopes.json` beside the command table. Without it, widget sessions are refused |
 | `--preset <id>` | A provider preset, which fills the provider and the base URL (below) |

@@ -51,11 +51,15 @@ folder, and sends:
 - `initialize` with protocol version 1, declining the file-system and terminal capabilities, so the agent uses its own
   file and shell tools under its own permission settings;
 - `session/new` with the workspace as `cwd` and one MCP server, named `caliper`: this build's `caliper-mcp` by
-  absolute path, with the arguments `--origin agent --api-file <the app's API file>`. `caliper-mcp` needs Caliper API:
-  when the app was started without `--api`, the side chat starts it then, on 127.0.0.1 at a free port, says so in the
-  conversation ("Caliper API started on 127.0.0.1:<port> for this chat"), in Activity and in the status bar, and stops
-  it when the agent ends ([Started by the side chat](api.md#started-by-the-side-chat)); Commands the agent sends through it
-  reach the command layer with the origin `agent`, so they are validated, journaled, undoable and reviewed;
+  absolute path, with the arguments `--origin agent --api-file <this session's API file>`. `caliper-mcp` needs Caliper
+  API: when the app was started without `--api`, the side chat starts it then, on 127.0.0.1 at a free port, says so in
+  the conversation ("Caliper API started on 127.0.0.1:<port> for this chat"), in Activity and in the status bar, and
+  stops it when the agent ends ([Started by the side chat](api.md#started-by-the-side-chat)). The API file is the
+  session's own, `api-agent-<pid>-<n>.json` in the app-data folder, never `api.json`: its token is the agent's, with the
+  origin `agent`, and the app revokes it and removes the file when the agent's session ends. The origin comes from that
+  token, not from `--origin`, so every command the agent sends through Caliper API, by `caliper-mcp` or by any other
+  client that reads the file, is validated, journaled, undoable and reviewed, and your session token from the start
+  line is in nothing the agent is given;
 - before the session's first message, a block for the assistant (`annotations.audience: ["assistant"]`) that asks the
   agent to change specs through the `caliper` tools and not to ask before calling one, since Caliper asks the person
   itself.

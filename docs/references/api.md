@@ -1,6 +1,6 @@
 # Caliper API
 
-Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](wire-protocol.md), returns a capture of the frame the app draws, runs the commands of the command layer, through which specs, loaders and sources are built with undo, a journal and approvals, and serves the browser viewer of spec applets. It listens on 127.0.0.1 only, behind a session token, and it is off unless the app starts with `--api`, or the [side chat starts it](#started-by-the-side-chat). The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
+Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](wire-protocol.md), returns a capture of the frame the app draws, runs the commands of the command layer, through which specs, loaders and sources are built with undo, a journal and approvals, and serves the browser viewer of spec applets. It listens on 127.0.0.1 only, behind tokens that also say who sends each command, and it is off unless the app starts with `--api`, or the [side chat starts it](#started-by-the-side-chat). The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
 
 !!! note "Status"
     Version 0, built and tested on macOS. A capture works in the app's window on Metal and in the windowless mode, `caliper shot --api`; on the GL and Vulkan renderers the app in its window answers a capture with 501. The command endpoints serve the command layer of the app's builder session, in the app, `caliper dev` and `caliper shot` built with `CALIPER_WITH_BUILDER` (`src/host/builder/app_session.h`, over `src/host/api/session_gateway.h`); a build without the builder answers 404 on them, and `caliper-mcp` reads that as an app with no command layer. The Windows build refuses `--api` for now, as [Caliper CLI](cli.md#on-windows) describes.
@@ -28,14 +28,16 @@ caliper dev build --api --api-port 0
 caliper shot --applets build --launch com.example.my-viewer --frames 216000 --out page.png --api
 ```
 
-When it listens, the process prints one line with the address and the session token, and writes the same in the **API file**:
+When it listens, the process prints the address and **your session token**, and writes the address and a token for outside agents in the **API file**:
 
 ```text
-[api] Caliper API on http://127.0.0.1:7341/v0 with the session token <token> (also in <API file>)
+[api] Caliper API on http://127.0.0.1:7341/v0 with the session token <token> (agents read <API file>, whose commands are reviewed)
 [api] Spec applets in a browser at http://127.0.0.1:7341/v0/spec?token=<viewer token>&applet=<id>
 ```
 
-The second line is the link of the [spec page](#get-v0spec), with the viewer token, which opens that page and nothing else.
+The session token on the first line is yours: commands sent with it run as the origin `api`, without review, and the stream takes it. Caliper writes it to no file, so a program you run that should act without review takes it from this line, for example through an environment variable that you set, such as `CALIPER_API_TOKEN` in the [examples](#examples). The second line is the link of the [spec page](#get-v0spec), with the viewer token, which opens that page and nothing else.
+
+**Commands sent with the API file's token are reviewed.** The API file is what an outside agent reads, through `caliper-mcp` or otherwise, and its token runs commands as the origin `mcp`: each change to the open spec waits for your review in the app, and each command that deletes or overwrites saved data waits for your approval, whatever the request claims ([Who sends a command](#who-sends-a-command)).
 
 The API file is `api.json` in the app-data folder ([Folders and environment variables](environment.md)). The process writes it with mode 0600, so that only its owner can read it, and removes it when it exits, as `caliper serve` does with its hub file. It holds one JSON object:
 
@@ -44,18 +46,20 @@ The API file is `api.json` in the app-data folder ([Folders and environment vari
 | `version` | 1 |
 | `pid` | The process id |
 | `port` | The port the API listens on |
-| `token` | The session token |
+| `token` | The token of outside agents, whose commands run as `mcp` and are reviewed; not your session token, and it does not open the stream |
 | `url` | `http://127.0.0.1:<port>/v0` |
-| `stream_url` | `ws://127.0.0.1:<port>/v3/stream`, without the token |
+| `stream_url` | `ws://127.0.0.1:<port>/v3/stream`, without a token; the stream takes your session token |
 | `spec_url` | `http://127.0.0.1:<port>/v0/spec?token=<viewer token>`, the spec page; a saved spec applet opens at this address with `&applet=<id>` added |
 
-The session token is new for each run, and so is the viewer token, a second token of the same form: 32 characters of `A-Z`, `a-z`, `0-9`, `_` and `-` from 24 random bytes. When the port is taken, the app starts without the API and says so on standard error and in the Activity pane, and `caliper shot` exits with 1.
+Every token is new for each run: your session token, the API file's token, the viewer token and each agent's own. Each has the same form: 32 characters of `A-Z`, `a-z`, `0-9`, `_` and `-` from 24 random bytes. When the port is taken, the app starts without the API and says so on standard error and in the Activity pane, and `caliper shot` exits with 1.
 
 While the API runs, every page's status bar shows its address, such as `api 127.0.0.1:7341`.
 
 ### Started by the side chat
 
-The [side chat](side-chat.md) is the one case in which the API starts without `--api`. The side chat's agent drives Caliper through `caliper-mcp`, which needs the API, so when the app was started without `--api`, the side chat starts the API when its agent starts, at the person's first message. That API follows the same rules as with `--api`: it listens on 127.0.0.1 only, at a free port, behind a new session token, and it writes the API file. No setting can make it listen on another address or a chosen port.
+The [side chat](side-chat.md) is the one case in which the API starts without `--api`. The side chat's agent drives Caliper through `caliper-mcp`, which needs the API, so when the app was started without `--api`, the side chat starts the API when its agent starts, at the person's first message. That API follows the same rules as with `--api`: it listens on 127.0.0.1 only, at a free port, behind new tokens, and it writes the API file. No setting can make it listen on another address or a chosen port.
+
+The side chat's agent does not read `api.json`. Each agent session gets an API file of its own, `api-agent-<pid>-<n>.json` in the app-data folder, with the same keys and mode 0600, whose token runs commands as the origin `agent`, so the agent's changes to the open spec wait for your review. The app revokes that token and removes the file when the agent's session ends, and a restarted agent gets a new one. The widget agent's sidecar gets its own file in the same way, for as long as its target is open.
 
 The start is visible in three places: a line in the conversation, "Caliper API started on 127.0.0.1:<port> for this chat"; an Activity line with the address and never the token; and the status bar. The API is tied to the chat: when the chat's agent ends (it exits, it cannot start, or the person chooses another agent), the side chat stops the API it started, and the app removes the API file. An API that the person started with `--api` is left alone in both directions: the side chat neither starts a second one nor stops it.
 
@@ -72,11 +76,24 @@ Every request gets the checks of the stream ([The upgrade request](wire-protocol
 - The server listens on 127.0.0.1 only.
 - The `Host` header must be `127.0.0.1:<port>` or `localhost:<port>`, with the API's port. Anything else is refused with 403, as a guard against DNS rebinding.
 - An `Origin` header, when the request has one, must be one that the protocol accepts: `null`, an `http` or `https` origin on `127.0.0.1`, `localhost` or `[::1]`, or `vscode-webview://`. Any other origin is refused with 403.
-- The session token, or for the spec page the viewer token, must come with the request. A request carries it in an `Authorization: Bearer <token>` header. A GET may carry it as the query parameter `token` instead, which is how the WebSocket and a link opened in a browser carry it. A POST takes the header only, so a state-changing request never has the token in its address. The token is compared in constant time. A missing or wrong token is refused with 401 and `WWW-Authenticate: Bearer`, and on the stream with 403, as the protocol says.
+- A token must come with the request: your session token, the API file's token, an agent's own token, or for the spec page the viewer token. A request carries it in an `Authorization: Bearer <token>` header. A GET may carry it as the query parameter `token` instead, which is how the WebSocket and a link opened in a browser carry it. A POST takes the header only, so a state-changing request never has the token in its address. The token is compared in constant time with every token the API holds. A missing, wrong or revoked token is refused with 401 and `WWW-Authenticate: Bearer`, and on the stream, which takes your session token only, with 403, as the protocol says.
 
-The API serves nothing beyond its endpoints: no files and no way to run code. The spec page is one page built into the executable, not a file it reads. The commands of the command layer change specs, loaders and sources, which are data; a command that deletes or overwrites saved data, or runs a Python loader, waits for the person's approval in the app, and no endpoint approves or denies. Only `POST /v0/commands/{name}` takes a body, and only after its head passed the checks above; any other request with a body is refused with 413, and launch takes only an applet id in its path that the app's loader lists. A command request is built from its path, its body and the headers `X-Caliper-Origin`, `X-Caliper-Group` and `X-Caliper-Preview` only, so no other header value reaches the command layer or its journal, and the token is never logged. Every response carries `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and the connection closes after it.
+The API serves nothing beyond its endpoints: no files and no way to run code. The spec page is one page built into the executable, not a file it reads. The commands of the command layer change specs, loaders and sources, which are data; a command that deletes or overwrites saved data, or runs a Python loader, waits for the person's approval in the app, and no endpoint approves or denies. Only `POST /v0/commands/{name}` takes a body, and only after its head passed the checks above; any other request with a body is refused with 413, and launch takes only an applet id in its path that the app's loader lists. A command request is built from its path, its body, the origin of its token and the headers `X-Caliper-Group` and `X-Caliper-Preview` only, so no other header value reaches the command layer or its journal, and the token is never logged. Every response carries `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and the connection closes after it.
 
-**The viewer token.** The link of the spec page carries the viewer token, never the session token, because a link is easily copied and kept in a browser's history. A request with the viewer token may only `GET /v0/spec` and `POST /v0/commands/{name}` for the three commands the page reads with, `spec.get`, `applet.list` and `panel.data`; everything else, the other endpoints, the other commands and the stream, is refused with 403. Its commands run from the origin `viewer` whatever the request claims (an `X-Caliper-Origin` other than `viewer` is refused with 400), and the command layer runs only commands that change nothing from that origin, refusing any other with `command.not_allowed`. A request with the session token may also lower itself to the origin `viewer`.
+**The viewer token.** The link of the spec page carries the viewer token, never the session token, because a link is easily copied and kept in a browser's history. A request with the viewer token may only `GET /v0/spec` and `POST /v0/commands/{name}` for the three commands the page reads with, `spec.get`, `applet.list` and `panel.data`; everything else, the other endpoints, the other commands and the stream, is refused with 403. Its commands run from the origin `viewer` (an `X-Caliper-Origin` other than `viewer` is refused with 400), and the command layer runs only commands that change nothing from that origin, refusing any other with `command.not_allowed`.
+
+### Who sends a command
+
+The origin of a command, which decides what is reviewed, comes from the token that the request carries, never from a header:
+
+| Token | Where it is | Origin | Review |
+|---|---|---|---|
+| Your session token | The start line only | `api` | None for spec edits; a command that deletes or overwrites saved data answers `command.needs_approval` at once |
+| The API file's token | `api.json` | `mcp` | Spec edits wait for your review, and destructive commands for your approval |
+| An agent's own token | `api-agent-<pid>-<n>.json`, while that agent's session runs | `agent` | As `mcp` |
+| The viewer token | The spec page's link | `viewer` | Reads only |
+
+`X-Caliper-Origin` is ignored for every token but the viewer token, so a request cannot claim `api`, `ui` or any other origin that its token does not have.
 
 ## Endpoints
 
@@ -124,7 +141,7 @@ A capture waits for the app's frames like every call that needs the frame thread
 
 ### GET /v3/stream
 
-The WebSocket of [wire protocol v3](wire-protocol.md), with the app in the hub role. It is the hub of [`caliper serve`](../guides/run-a-hub.md) on the API's port: producers connect to it and each becomes a session, and viewers list the sessions and attach to one. Everything the protocol states for a hub applies, with its bounds and its flow control. It is served at the protocol's own path, so every client of the protocol attaches to it unchanged: the app's NetSource, `caliper-viewer --url`, the link field of the app's attach pane and the `<caliper-view>` element. The upgrade is checked for its path, `Host`, `Origin` and the `token` parameter in the protocol's order, so a client gives the token in the address:
+The WebSocket of [wire protocol v3](wire-protocol.md), with the app in the hub role. It is the hub of [`caliper serve`](../guides/run-a-hub.md) on the API's port: producers connect to it and each becomes a session, and viewers list the sessions and attach to one. Everything the protocol states for a hub applies, with its bounds and its flow control. It is served at the protocol's own path, so every client of the protocol attaches to it unchanged: the app's NetSource, `caliper-viewer --url`, the link field of the app's attach pane and the `<caliper-view>` element. The upgrade is checked for its path, `Host`, `Origin` and the `token` parameter in the protocol's order, so a client gives the token in the address. The stream takes your session token, from the start line; the API file's token and the agents' tokens do not open it:
 
 ```text
 ws://127.0.0.1:7341/v3/stream?token=<token>
@@ -148,7 +165,7 @@ Runs the command `{name}`, such as `spec.new` or `panel.patch`. The body is the 
 
 | Header | Meaning |
 |---|---|
-| `X-Caliper-Origin` | Who sends the command: `api` (a program, and the default), `mcp` (an outside agent through `caliper-mcp`), `agent` (the app's own agents) or `viewer` (the spec page, which runs reads only). Any other value is refused with 400, so a request never claims the app's own UI. |
+| `X-Caliper-Origin` | Ignored: the origin is the token's ([Who sends a command](#who-sends-a-command)). With the viewer token it must be `viewer` when it is given. |
 | `X-Caliper-Group` | Optional. Commands that share a group undo as one step. |
 | `X-Caliper-Preview` | Optional. The id of a stacked preview, from `preview.begin`: an edit of the open spec applies to the preview instead, and `spec.get` reads it. |
 
@@ -163,7 +180,7 @@ The commands act on the builder session's workspace, the folder of `--workspace`
 
 Everything the command layer refuses comes this way: a name that is not a command (`command.unknown`, so that a 404 always means that the app has no command layer), arguments that fail the command's schema or a body that is JSON but not an object or nests deeper than 64 levels (`command.invalid_args`), a malformed group or preview (`command.invalid_invocation`), and every error of the command itself. Faults of the request keep their HTTP status, as the table under [Errors](#errors) lists: a body that is not JSON is 400, for example.
 
-**Approval.** A command that deletes or overwrites saved data, or runs a Python loader, needs the person's approval in the app when an agent or a program sends it. For the origins `mcp` and `agent`, the request is held while the person decides, for up to 120 seconds, and then answers with the command's result when it was approved, with `command.denied` when it was denied, and with `command.approval_timeout` when nobody decided in time, after which the approval is withdrawn. A client allows at least 130 seconds for such a call; `caliper-mcp` does. For the origin `api`, the request answers at once with `command.needs_approval`, whose error carries the approval id in `approval`, and the program reads the outcome later from `GET /v0/approvals/{id}`:
+**Approval.** A command that deletes or overwrites saved data, or runs a Python loader, needs the person's approval in the app when an agent or a program sends it. For the origins `mcp` and `agent`, the request is held while the person decides, for up to 120 seconds, and then answers with the command's result when it was approved, with `command.denied` when it was denied, and with `command.approval_timeout` when nobody decided in time, after which the approval is withdrawn. A client allows at least 130 seconds for such a call; `caliper-mcp` does. For the origin `api`, your session token's, the request answers at once with `command.needs_approval`, whose error carries the approval id in `approval`, and the program reads the outcome later from `GET /v0/approvals/{id}`:
 
 ```json
 {"id":"api-9","ok":false,"error":{"approval":"ap-3","code":"command.needs_approval","message":"...","where":""}}
@@ -225,8 +242,8 @@ An error is answered with a JSON object `{"error": "<what went wrong>"}`.
 
 | Status | When |
 |---|---|
-| 400 | A launch names something that cannot be an applet id, or an approval lookup something that cannot be an approval id. For a command: `X-Caliper-Origin` is not `api`, `mcp`, `agent` or `viewer` (with the viewer token, not `viewer`), a header that the checks read (`Authorization`, `Content-Length`, `Content-Type`, `X-Caliper-Origin`, `X-Caliper-Group`, `X-Caliper-Preview`) is repeated, `Content-Length` is not a number, or the body is not JSON. |
-| 401 | The session token is missing or wrong. |
+| 400 | A launch names something that cannot be an applet id, or an approval lookup something that cannot be an approval id. For a command: with the viewer token, `X-Caliper-Origin` is given and is not `viewer`; a header that the checks read (`Authorization`, `Content-Length`, `Content-Type`, `X-Caliper-Group`, `X-Caliper-Preview`) is repeated; `Content-Length` is not a number, or the body is not JSON. |
+| 401 | The token is missing, wrong or revoked. |
 | 403 | The `Host` or the `Origin` header is refused, or a request with the viewer token asks for anything but the spec page and its three commands. |
 | 404 | No such endpoint, no applet with that id, or a command endpoint in an app that has no command layer. |
 | 405 | The endpoint takes another method; `Allow` names it. |
@@ -242,38 +259,45 @@ An error is answered with a JSON object `{"error": "<what went wrong>"}`.
 
 ## Examples
 
-With the token in `TOKEN`, from the line the app printed or from the API file:
+With your session token in `CALIPER_API_TOKEN`, copied from the line the app printed, so that these calls run as you, without review:
 
 ```sh
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7341/v0/info
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7341/v0/applets
-curl -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7341/v0/applets/com.example.my-viewer/launch
-curl -o frame.png -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7341/v0/capture.png
+export CALIPER_API_TOKEN=<the session token from the start line>
+curl -H "Authorization: Bearer $CALIPER_API_TOKEN" http://127.0.0.1:7341/v0/info
+curl -H "Authorization: Bearer $CALIPER_API_TOKEN" http://127.0.0.1:7341/v0/applets
+curl -X POST -H "Authorization: Bearer $CALIPER_API_TOKEN" http://127.0.0.1:7341/v0/applets/com.example.my-viewer/launch
+curl -o frame.png -H "Authorization: Bearer $CALIPER_API_TOKEN" http://127.0.0.1:7341/v0/capture.png
 ```
 
-The command layer, from a program and as an outside agent would call it:
+The command layer from your own program, with your session token:
 
 ```sh
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7341/v0/commands
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+curl -H "Authorization: Bearer $CALIPER_API_TOKEN" http://127.0.0.1:7341/v0/commands
+curl -X POST -H "Authorization: Bearer $CALIPER_API_TOKEN" -H "Content-Type: application/json" \
      -d '{"id": "dash", "title": "Dashboard"}' http://127.0.0.1:7341/v0/commands/spec.new
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-     -H "X-Caliper-Origin: mcp" -H "X-Caliper-Group: turn-1" \
-     -d '{"id": "note", "primitive": "text", "options": {"text": "Loss per step"}}' \
-     http://127.0.0.1:7341/v0/commands/panel.create
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+curl -X POST -H "Authorization: Bearer $CALIPER_API_TOKEN" -H "Content-Type: application/json" \
      -d '{"overwrite": true}' http://127.0.0.1:7341/v0/commands/applet.save
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7341/v0/approvals/ap-1
+curl -H "Authorization: Bearer $CALIPER_API_TOKEN" http://127.0.0.1:7341/v0/approvals/ap-1
 ```
 
 The third call answers `command.needs_approval` with its approval id, `ap-1` here, when the applet is saved already; the last one reads what the person decided.
 
-In Python, the token can be read from the API file:
+As an outside agent calls it, with the API file's token: the edit runs as `mcp` and waits for your review in the app, so the call answers once you have approved or denied it.
+
+```sh
+AGENT_TOKEN=$(python3 -c 'import json, pathlib; print(json.loads((pathlib.Path.home() / "Library/Application Support/Caliper/api.json").read_text())["token"])')
+curl -X POST -H "Authorization: Bearer $AGENT_TOKEN" -H "Content-Type: application/json" -H "X-Caliper-Group: turn-1" \
+     -d '{"id": "note", "primitive": "text", "options": {"text": "Loss per step"}}' \
+     http://127.0.0.1:7341/v0/commands/panel.create
+```
+
+In Python, the address can be read from the API file, and your session token from the environment:
 
 ```python
-import json, pathlib, urllib.request
+import json, os, pathlib, urllib.request
 
 api = json.loads((pathlib.Path.home() / "Library/Application Support/Caliper/api.json").read_text())
-req = urllib.request.Request(api["url"] + "/applets", headers={"Authorization": "Bearer " + api["token"]})
+token = os.environ["CALIPER_API_TOKEN"]   # yours, from the start line; api["token"] would be reviewed as mcp
+req = urllib.request.Request(api["url"] + "/applets", headers={"Authorization": "Bearer " + token})
 print(json.load(urllib.request.urlopen(req)))
 ```
