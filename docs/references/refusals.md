@@ -145,3 +145,36 @@ C++ exception, and a restart of Caliper when it was a signal (see
     caused it. Restarts are logged as `restart` and `restart failed`. The
     landing screen reads the statuses every frame, so a mid-session quarantine
     shows up as soon as the host returns to it.
+
+## Spec applets
+
+A [spec applet](manifest.md#spec-applets) has no library, so none of the steps that open or call one applies to it: there is no `dlopen`, no descriptor, no lifecycle hook, and it is never `QUARANTINED`. The loader lists it with the same statuses, `READY`, `REFUSED`, `FAILED` and `SHADOWED`, and chooses among copies of one id by the same rule, whatever their kind.
+
+When the loader lists a spec applet it makes only the cheap checks, in this order: the manifest parses (its messages are the parser's, as for a compiled applet, and include the keys a spec applet refuses), the id is path-safe, the spec file passes the file checks, its `caliper_spec` line is read, then `min_host`, the spec runtime and the spec format version. The first failure wins. The full validation of the spec runs when the applet is launched and in `caliper check`, through the builder's spec library, and its first error becomes the applet's reason.
+
+### Spec applet refusals
+
+| Message template | When it fires | What to do |
+|------------------|---------------|------------|
+| `Requires host {min_host} or newer; this host is {host_version}.` | The manifest sets `[compat].min_host` and the host is older, as for a compiled applet. | Update the host. |
+| `Requires the spec runtime, which this build of Caliper does not have.` | The host was built without the builder (`CALIPER_WITH_BUILDER=OFF`, the default on Windows), so it cannot validate or open a spec. | Use a build of Caliper with the builder. |
+| `Written in spec format {spec_version}; this host reads spec format {host_version} — update Caliper to open it.` | The spec's `caliper_spec` is a later version than this host reads. For an earlier version that the host does not read, the message ends after `{host_version}`. | Open the applet with a newer Caliper. |
+| `A workspace holds spec applets only; a compiled applet is installed in the user applets folder.` | A compiled applet's manifest is in the open workspace's `applets/` folder or one folder below it. Its library is never opened. | Install the compiled applet with `caliper install`, and keep the workspace for spec applets. |
+
+### Spec applet failures
+
+| Message template | When it fires | What to do |
+|------------------|---------------|------------|
+| `spec file {spec} not found next to {manifest_filename}` | The file that `applet.spec` names is not in the manifest's folder. | Put the spec beside its manifest, or correct `applet.spec`. |
+| `spec file {spec} is a symbolic link; a spec applet's spec is a regular file in its folder` | The spec is a symbolic link, wherever it points. The loader never follows one, so a spec cannot lead out of its folder. | Replace the link with the file. |
+| `spec file {spec} is not a regular file` | The spec's name is a folder or another kind of file. | Put the spec file there. |
+| `spec file {spec} is larger than 512 KiB` | The spec is longer than the spec format's limit. | Make the spec smaller. |
+| `spec file {spec} has no line caliper_spec = <version> before its first table` | No top-level `caliper_spec` key comes before the first table header, so the version cannot be read without parsing the file. | Start the spec with `caliper_spec = 0`, as the builder writes it. |
+| `spec file {spec} has a caliper_spec that is not a decimal integer` | The version line's value is not a decimal integer. | Write the version as a decimal integer. |
+| `manifest is larger than 64 KiB` | A manifest one folder down, or in the workspace's folder, is longer than 64 KiB. | Shorten the manifest. |
+| `manifest has a dotted key of more than 32 parts` | Such a manifest has a dotted key of more than 32 parts, which is refused before it is parsed. | Shorten the key. |
+| `{spec}:{line}:{column}: {code}: {message}` | The spec fails the full validation at launch or in `caliper check`: the spec library's first error, with its place in the file, its stable code (such as `spec.unknown_source`) and its sentence. Without a known place it reads `{spec}: {code}: {message} (at {path})`. | Fix the spec as the message says; `caliper check <folder>` prints every error and warning. |
+
+`{spec}` is the spec's file name, `{manifest_filename}` the manifest's, `{spec_version}` and `{host_version}` are spec format versions (the host reads version 0), and `{line}` and `{column}` count from 1.
+
+A spec applet that passes every check stays `READY` when it is launched, because the loader only lists it and the page that draws it is the app's. Until the app draws that page, a launch fails with `A spec applet opens as a page, which this version of Caliper does not draw yet.`, which the Activity pane logs as `launch failed`, and the applet stays `READY`.

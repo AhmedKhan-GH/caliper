@@ -86,6 +86,8 @@ The app, `caliper dev`, `caliper list` and `caliper shot` search these folders, 
 3. The user applets folder: `CALIPER_USER_APPLETS_DIR` when it is set and not empty, otherwise `applets/` under the app-data folder.
 4. The `applets/` folder beside the executable, which holds the applets shipped with the app.
 
+[Spec applets](manifest.md#where-spec-applets-are-found) are found in the same folders and one folder down. A host with a workspace open also searches the workspace's `applets/` folder between items 2 and 3; the app does not open a workspace yet, and the subcommands take none.
+
 Each development folder, from items 1 and 2, is resolved as described in [Build folders](#build-folders). A folder named twice is searched once, at its first position, and empty entries are skipped. When several folders hold copies of one applet id, the host loads the highest version that passes every check, and at equal versions the copy found first; the other copies that pass are `SHADOWED`. [Several copies of one applet](../explanations/compatibility.md#several-copies-of-one-applet) states the rule, and [Folders and environment variables](environment.md) gives the folders on each platform.
 
 ## Build folders
@@ -96,23 +98,24 @@ Each development folder, from items 1 and 2, is resolved as described in [Build 
 
 ### caliper list
 
-Lists every applet in the search folders, without opening any library. Applets are ordered by the position of their folder in the search order, then by id, then from the highest version down. Each applet takes one line, with its status, id, version and folder in columns. A refused, failed or shadowed applet has its reason on the next line, indented under the id:
+Lists every applet in the search folders, without opening any library. Applets are ordered by the position of their folder in the search order, then by id, then from the highest version down. Each applet takes one line, with its status, id, version, kind and folder in columns. The kind is `library` for a compiled applet and `spec` for a [spec applet](manifest.md#spec-applets), whose folder is the applet's own folder. A refused, failed or shadowed applet has its reason on the next line, indented under the id:
 
 ```text
-READY     dev.caliper.pulse-scope  0.1.0  <development folder>
-SHADOWED  dev.caliper.pulse-scope  0.1.0  <user applets folder>
+READY     dev.caliper.pulse-scope  0.1.0  library  <development folder>
+SHADOWED  dev.caliper.pulse-scope  0.1.0  library  <user applets folder>
           Version 0.1.0 in <development folder> is used instead.
-READY     dev.caliper.hello        0.1.0  <applets folder beside the executable>
+READY     local.loss-view          0.1.0  spec     <user applets folder>/loss_view
+READY     dev.caliper.hello        0.1.0  library  <applets folder beside the executable>
 ```
 
-The status is `READY`, `REFUSED`, `FAILED` or `SHADOWED`; the reasons are those in [Refusal messages](refusals.md). Folders are printed as absolute paths. When no folder holds an applet, `list` prints `no applets found`. It always exits with 0.
+The status is `READY`, `REFUSED`, `FAILED` or `SHADOWED`; the reasons are those in [Refusal messages](refusals.md). Folders are printed as absolute paths. `list` makes only the checks of the listing: it reads a spec applet's manifest and the first lines of its spec, and does not validate the spec. When no folder holds an applet, `list` prints `no applets found`. It always exits with 0.
 
 ### caliper check <folder>
 
 Runs the checks that the host makes before it opens a library on every applet in one folder, and only that folder, with this host's capabilities (see `caliper info`). It opens no library. The data-schema check reads the stamps in the app-data folder. The output is the same lines as `list`, then a summary:
 
 ```text
-READY  dev.caliper.pulse-scope  0.1.0  <folder>
+READY  dev.caliper.pulse-scope  0.1.0  library  <folder>
 1 of 1 applets pass the checks
 ```
 
@@ -120,9 +123,21 @@ When `<folder>` is a build folder whose applets are in its `applets/` subfolder 
 
 ```text
 using the applets in <folder>/applets
-READY  dev.caliper.pulse-scope  0.1.0  <folder>/applets
+READY  dev.caliper.pulse-scope  0.1.0  library  <folder>/applets
 1 of 1 applets pass the checks
 ```
+
+`check` validates each [spec applet](manifest.md#spec-applets) that passes the listing checks in full, with the builder's spec library, as a launch does, and prints every error and warning of the validator under it, each with the spec's file name, its line and column, its severity and its stable code. A spec with an error fails, and its first error is its reason; warnings do not fail it. `<folder>` may be the folder of one spec applet, or a folder that holds spec applets one folder down, such as a workspace's `applets/` folder:
+
+```text
+FAILED  local.broken     0.1.0  spec  <folder>/broken
+        broken.spec.toml:9:14: error spec.unknown_source: The binding "nope.loss" names "nope", which is not a source of this spec.
+READY   local.loss-view  0.1.0  spec  <folder>/loss_view
+        loss_view.spec.toml:6:1: warning spec.unused_source: No panel binds the source "metrics", directly or through from.
+1 of 2 applets pass the checks
+```
+
+A host built without the builder lists every spec applet as `REFUSED`, so it does not pass there.
 
 An applet passes when it is `READY` or `SHADOWED`. `check` exits with 0 when every applet passes, and with 1 when any does not, when `<folder>` is not a folder (`caliper: not a folder: <folder>`), or when neither it nor its `applets/` subfolder holds an applet (`caliper: no applets in <folder>`).
 
@@ -136,7 +151,7 @@ The install is all or nothing for the whole folder. Every file and asset folder 
 installed dev.caliper.pulse-scope 0.1.0 in <user applets folder>
 ```
 
-When any applet fails a check, `install` copies nothing, prints `caliper: nothing installed; N of M applets do not pass the checks`, and exits with 1. It also exits with 1 when `<folder>` is the user applets folder itself, when that folder cannot be created, or when a copy fails, which it reports as `caliper: nothing installed; <reason>`. A URL in place of a folder is a usage error (`caliper: install takes a local folder, not <url>`), with exit code 2.
+When any applet fails a check, `install` copies nothing, prints `caliper: nothing installed; N of M applets do not pass the checks`, and exits with 1. `install` does not take spec applets, which live in a workspace: when the folder holds one, it copies nothing, prints `caliper: nothing installed; <id> is a spec applet, which install does not take`, and exits with 1. It also exits with 1 when `<folder>` is the user applets folder itself, when that folder cannot be created, or when a copy fails, which it reports as `caliper: nothing installed; <reason>`. A URL in place of a folder is a usage error (`caliper: install takes a local folder, not <url>`), with exit code 2.
 
 ### caliper new <name> [<dir>]
 

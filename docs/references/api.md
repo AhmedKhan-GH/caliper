@@ -77,10 +77,10 @@ The list of services is shortened here.
 
 ### GET /v0/applets
 
-What `caliper list` prints for the applets the running app found, in the same order: the search order, then the id, then the highest version first. `status` is the word that `caliper list` prints, such as `READY`, `ACTIVE` for the applet whose page is open, `REFUSED` or `SHADOWED`, and `reason` is the text that `caliper list` prints under it, empty for a `READY` applet.
+What `caliper list` prints for the applets the running app found, in the same order: the search order, then the id, then the highest version first. `status` is the word that `caliper list` prints, such as `READY`, `ACTIVE` for the applet whose page is open, `REFUSED` or `SHADOWED`, `kind` is `library` for a compiled applet or `spec` for a [spec applet](manifest.md#spec-applets), and `reason` is the text that `caliper list` prints under it, empty for a `READY` applet.
 
 ```json
-{"applets":[{"folder":"/path/to/build/applets","id":"com.example.my-viewer","reason":"","status":"ACTIVE","version":"0.1.0"}]}
+{"applets":[{"folder":"/path/to/build/applets","id":"com.example.my-viewer","kind":"library","reason":"","status":"ACTIVE","version":"0.1.0"}]}
 ```
 
 ### POST /v0/applets/{id}/launch

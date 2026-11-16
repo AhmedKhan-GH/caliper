@@ -115,8 +115,11 @@ Several copies of one applet id can be installed at once, for example a copy shi
 The host searches in this order:
 
 1. The development folders: the `caliper dev` folder, those given with `--applets <dir>` in order, then those in `CALIPER_APPLET_PATH` (see [Caliper CLI](../references/cli.md#the-search-order)).
-2. The user applets folder.
-3. The `applets/` folder beside the executable, which holds the applets shipped with the app.
+2. The open workspace's `applets/` folder, which holds [spec applets](../references/manifest.md#spec-applets) only, when a workspace is open. The app does not open one yet.
+3. The user applets folder.
+4. The `applets/` folder beside the executable, which holds the applets shipped with the app.
+
+Spec applets and compiled applets share one set of ids, and the copies of one id are compared by the same rule whatever their kind. A spec applet has no library; it passes when its spec file is in place and its `min_host` and spec format version are ones this host meets.
 
 Version decides, and the search order only breaks ties between equal versions, in favour of the copy found first. A development build therefore replaces an installed copy only when its version is at least as high, and a user-installed update replaces a shipped copy without changing the app.
 
