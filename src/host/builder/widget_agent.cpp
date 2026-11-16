@@ -30,6 +30,33 @@ const char* widget_target_kind_name(WidgetTarget::Kind kind) {
     return "panel";
 }
 
+WidgetTarget WidgetTarget::for_selection(std::string panel, caliper_builder::WidgetSelection selection) {
+    WidgetTarget t;
+    t.kind = Kind::selection;
+    t.panel = std::move(panel);
+    t.selection = std::move(selection);
+    return t;
+}
+
+WidgetTarget WidgetTarget::for_dropped_file(std::string loader, std::vector<std::string> catalog, std::string anchor) {
+    WidgetTarget t;
+    t.kind = Kind::dropped_file;
+    t.loader = std::move(loader);
+    t.catalog = std::move(catalog);
+    t.anchor = std::move(anchor);
+    return t;
+}
+
+WidgetTarget WidgetTarget::for_property(std::string panel, std::string source, std::string path) {
+    WidgetTarget t;
+    t.kind = Kind::property;
+    t.panel = std::move(panel);
+    t.source = std::move(source);
+    t.path = std::move(path);
+    t.anchor = "prop:" + t.path;
+    return t;
+}
+
 caliper_builder::WidgetTarget WidgetTarget::to_builder() const {
     caliper_builder::WidgetTarget t;
     switch (kind) {
