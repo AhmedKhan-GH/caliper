@@ -7,10 +7,7 @@
 //    format, and once more with a depth attachment.
 // 2. The colormap by keys, through the generated MSL of the colormap probe, matches the CPU
 //    reference map_f32_to_rgba8 byte for byte on the boundary cases of colormap_cases.h, with
-//    the compiler's fast math on and off.
-//
-// CALIPER_COLORMAP_CASES_OUT=<file> also writes the cases (block, inputs, expected RGBA per
-// range) for the browser test of the same comparison (web/test/shaders.spec.ts).
+//    the compiler's fast math on and off. The keys come from src/host/gfx/colormap_keys.h.
 #define DOCTEST_CONFIG_IMPLEMENT
 #include "../gpu_skip.h"
 #include "colormap_cases.h"
@@ -153,15 +150,7 @@ TEST_CASE("the colormap by keys matches map_f32_to_rgba8 byte for byte through t
     REQUIRE(cmap_at >= 0); REQUIRE(in_at >= 0); REQUIRE(out_at >= 0);
     const std::vector<uint32_t> table = colormap_cases::lut();
     id<MTLCommandQueue> queue = [device() newCommandQueue];
-
-    FILE* out = nullptr;
-    if (const char* path = std::getenv("CALIPER_COLORMAP_CASES_OUT")) {
-        out = std::fopen(path, "wb");
-        REQUIRE(out != nullptr);
-        const auto n = uint32_t(colormap_cases::ranges().size());
-        std::fwrite("CMAPCASE", 1, 8, out);
-        std::fwrite(&n, 4, 1, out);
-    }
+    const auto ranges = colormap_cases::ranges();
     size_t total = 0, keys_seen = 0;
     for (int fast = 0; fast < 2; ++fast) {
         std::string error;
@@ -171,11 +160,11 @@ TEST_CASE("the colormap by keys matches map_f32_to_rgba8 byte for byte through t
         id<MTLComputePipelineState> ps =
             [device() newComputePipelineStateWithFunction:[lib newFunctionWithName:@"cs_colormap_probe"] error:&err];
         REQUIRE(bool(ps));
-        uint64_t seed = 0x9e3779b97f4a7c15ull;
-        for (const auto& r : colormap_cases::ranges()) {
+        for (size_t ri = 0; ri < ranges.size(); ++ri) {
+            const auto& r = ranges[ri];
             INFO("range " << r.name << ", fast math " << (fast ? "on" : "off"));
             const Cmap block = colormap_cases::block(r, table);
-            const std::vector<uint32_t> in = colormap_cases::inputs(r, block, seed++);
+            const std::vector<uint32_t> in = colormap_cases::inputs(r, block, colormap_cases::seed(ri));
             const std::vector<uint32_t> want = colormap_cases::expected(r, in, table);
             const uint32_t sizes[2] = {uint32_t(in.size() * 4), uint32_t(in.size() * 4)};
             id<MTLBuffer> bin = [device() newBufferWithBytes:in.data() length:in.size() * 4 options:MTLResourceStorageModeShared];
@@ -199,20 +188,11 @@ TEST_CASE("the colormap by keys matches map_f32_to_rgba8 byte for byte through t
             CHECK_MESSAGE(bad == 0, bad << " of " << in.size() << " differ, first input 0x" << std::hex << in[first]
                                         << ": got 0x" << got[first] << ", want 0x" << want[first]);
             total += in.size();
-            if (fast == 0) {
+            if (fast == 0)
                 for (int k = 1; k < 256; ++k) keys_seen += (&block.keys[0][0])[k] != 0xffffffffu;
-                if (out) {
-                    const auto n = uint32_t(in.size());
-                    std::fwrite(&block, sizeof(block), 1, out);
-                    std::fwrite(&n, 4, 1, out);
-                    std::fwrite(in.data(), 4, in.size(), out);
-                    std::fwrite(want.data(), 4, want.size(), out);
-                }
-            }
         }
     }
-    if (out) std::fclose(out);
-    MESSAGE(total << " inputs compared over " << colormap_cases::ranges().size() << " ranges, twice; "
+    MESSAGE(total << " inputs compared over " << ranges.size() << " ranges, twice; "
                   << keys_seen << " reachable key edges");
 }
 

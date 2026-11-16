@@ -307,4 +307,107 @@ async function capture(dev, progs, codes, blockB64, fixture) {
   return out;
 }
 
-window.shaderCheck = { device, compileProgram, colormap, capture };
+// ---- the colormap through the texture path's compute form and the points' vertex stage --------
+
+/** Reads back a 256-wide rgba8unorm texture of `rows` rows as packed u32s (base64). */
+async function readTexture(dev, tex, rows) {
+  const rb = dev.createBuffer({ size: 256 * 4 * rows, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const enc = dev.createCommandEncoder();
+  enc.copyTextureToBuffer({ texture: tex }, { buffer: rb, bytesPerRow: 256 * 4 }, [256, rows]);
+  dev.queue.submit([enc.finish()]);
+  await rb.mapAsync(GPUMapMode.READ);
+  const out = new Uint8Array(rb.getMappedRange().slice(0));
+  rb.unmap();
+  rb.destroy();
+  return b64(out);
+}
+
+/**
+ * The texture path's compute form, colormap_texture: inputs (base64 u32s, whole rows of 256)
+ * as a 256-wide image, stored to an rgba8unorm storage texture; returns its texels (base64).
+ */
+async function colormapTexture(dev, prog, code, blockB64, inputsB64) {
+  const block = unb64(blockB64), input = unb64(inputsB64), rows = input.length / 4 / 256;
+  dev.pushErrorScope('validation');
+  const module = dev.createShaderModule({ code });
+  const { groups, layout } = layouts(dev, prog);
+  const pipe = await dev.createComputePipelineAsync({ layout, compute: { module, entryPoint: 'cs_colormap_texture' } });
+  const tp = uniformBuffer(dev, new Uint32Array([256, rows, 0, 256]), 16);
+  const ub = uniformBuffer(dev, block, block.length);
+  const ib = dev.createBuffer({ size: input.length, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  dev.queue.writeBuffer(ib, 0, input);
+  const tex = dev.createTexture({ size: [256, rows], format: 'rgba8unorm', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC });
+  const g0 = dev.createBindGroup({ layout: groups[0], entries: [
+    { binding: 0, resource: { buffer: tp, offset: 0, size: 16 } }, { binding: 1, resource: { buffer: ib } }, { binding: 2, resource: tex.createView() }] });
+  const g1 = dev.createBindGroup({ layout: groups[1], entries: [{ binding: 1, resource: { buffer: ub, offset: 0, size: block.length } }] });
+  const enc = dev.createCommandEncoder();
+  const pass = enc.beginComputePass();
+  pass.setPipeline(pipe);
+  pass.setBindGroup(0, g0, [0]);
+  pass.setBindGroup(1, g1, [0]);
+  pass.dispatchWorkgroups(256 / 8, Math.ceil(rows / 8));
+  pass.end();
+  dev.queue.submit([enc.finish()]);
+  const out = await readTexture(dev, tex, rows);
+  const err = await dev.popErrorScope();
+  if (err) throw new Error(err.message);
+  for (const b of [tp, ub, ib]) b.destroy();
+  tex.destroy();
+  return out;
+}
+
+/**
+ * The vertex-stage colormap of scene_points: input i is the value of a point a pixel wide on the
+ * centre of pixel (i % 256, i / 256) of a target cleared to 0; returns its pixels (base64).
+ */
+async function colormapPoints(dev, prog, code, blockB64, inputsB64) {
+  const block = unb64(blockB64), input = unb64(inputsB64), n = input.length / 4, rows = n / 256;
+  dev.pushErrorScope('validation');
+  const module = dev.createShaderModule({ code });
+  const { groups, layout } = layouts(dev, prog);
+  const pipe = await dev.createRenderPipelineAsync({
+    layout,
+    vertex: { module, entryPoint: 'vs_points', buffers: vertexBuffers(prog, 'vs_points',
+      [{ stride: 12, attrs: [[0, 0]] }, { stride: 4, attrs: [[1, 0]] }, { stride: 0, attrs: [[2, 0]] }]) },
+    fragment: { module, entryPoint: 'fs_points', targets: [{ format: 'rgba8unorm' }] },
+    primitive: { topology: 'triangle-list' },
+  });
+  const frame = new ArrayBuffer(48);
+  new Float32Array(frame).set([256, rows, 1, 1, 1, 1, 0, 0]);
+  const frameBuf = uniformBuffer(dev, frame, 256);
+  const primBuf = uniformBuffer(dev, prim({ mvp: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], color_mode: 1, size_px: 1 }), 256);
+  const cmapBuf = uniformBuffer(dev, block, block.length);
+  const classTable = dev.createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING });
+  const imgValue = dev.createTexture({ size: [1, 1], format: 'r32uint', usage: GPUTextureUsage.TEXTURE_BINDING });
+  const res = { '0,0': { buffer: frameBuf, offset: 0, size: 48 }, '0,1': classTable.createView(),
+                '1,0': { buffer: primBuf, offset: 0, size: 192 }, '1,1': { buffer: cmapBuf, offset: 0, size: block.length },
+                '2,3': imgValue.createView() };
+  const bind = groups.map((l, g) => dev.createBindGroup({ layout: l,
+    entries: prog.bindings.filter((b) => b.group === g).map((b) => ({ binding: b.binding, resource: res[`${g},${b.binding}`] })) }));
+  const offsets = groups.map((_, g) => prog.bindings.filter((b) => b.group === g && b.dynamic).map(() => 0));
+  const centres = new Float32Array(3 * n);
+  for (let i = 0; i < n; i++) {
+    centres[3 * i] = 2 * ((i % 256) + 0.5) / 256 - 1;
+    centres[3 * i + 1] = 1 - 2 * (Math.floor(i / 256) + 0.5) / rows;
+    centres[3 * i + 2] = 0.5;
+  }
+  const pos = vbuf(dev, centres), vals = vbuf(dev, new Uint32Array(input.buffer, input.byteOffset, n));
+  const radius = vbuf(dev, new Float32Array([1, 0, 0, 0]));
+  const target = dev.createTexture({ size: [256, rows], format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+  const enc = dev.createCommandEncoder();
+  const pass = enc.beginRenderPass({ colorAttachments: [{ view: target.createView(), loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }] });
+  pass.setPipeline(pipe);
+  bind.forEach((g, i) => pass.setBindGroup(i, g, offsets[i]));
+  [pos, vals, radius].forEach((b, slot) => pass.setVertexBuffer(slot, b));
+  pass.draw(6, n);
+  pass.end();
+  dev.queue.submit([enc.finish()]);
+  const out = await readTexture(dev, target, rows);
+  const err = await dev.popErrorScope();
+  if (err) throw new Error(err.message);
+  for (const b of [frameBuf, primBuf, cmapBuf, pos, vals, radius]) b.destroy();
+  for (const t of [classTable, imgValue, target]) t.destroy();
+  return out;
+}
+
+window.shaderCheck = { device, compileProgram, colormap, colormapTexture, colormapPoints, capture };

@@ -152,6 +152,15 @@ set_target_properties(caliper_colormap_exhaustive PROPERTIES CXX_STANDARD 17 CXX
 add_test(NAME caliper_colormap_exhaustive COMMAND caliper_colormap_exhaustive)
 set_tests_properties(caliper_colormap_exhaustive PROPERTIES LABELS "slow" SKIP_RETURN_CODE 77 TIMEOUT 1800)
 
+# caliper_colormap_cases <file> writes the colormap's boundary cases, with the C++ reference's
+# RGBA for each input, for the browser rows (web/test/shaders.spec.ts, colormap.spec.ts).
+add_executable(caliper_colormap_cases
+    shaders/colormap_cases_tool.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp)
+target_include_directories(caliper_colormap_cases PRIVATE ${CMAKE_SOURCE_DIR}/src/host ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(caliper_colormap_cases PRIVATE caliper::sdk)
+set_target_properties(caliper_colormap_cases PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+
 # ---------------------------------------------------------------------------
 # The caliper executable's subcommands, run as a user runs them. Each runs and
 # exits without a window (host_cli.h); `caliper dev` and plain `caliper` start

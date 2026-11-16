@@ -111,7 +111,7 @@ TEST_CASE("colormap keys: the integer decision matches map_f32_to_rgba8 byte for
         total += in.size();
         for (uint32_t l = 1; l < 256; ++l) edges += keys_of(c)[l] != cmap::kSentinel;
     }
-    MESSAGE(total << " inputs over " << rs.size() << " ranges, " << edges << " reachable key edges");
+    MESSAGE(total << " inputs over " << rs.size() << " ranges, " << edges << " keys below the sentinel");
 }
 
 TEST_CASE("colormap keys: the float guess chooses comparisons but never the level") {
