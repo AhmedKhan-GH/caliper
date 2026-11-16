@@ -1061,9 +1061,11 @@ std::string WidgetSurface::reply_body() const {
 int WidgetSurface::reply_lines(float card_width, bool row) const {
     // An answer without a change is the card's content: its reply wraps over
     // up to six lines in a panel and four under a row, elided past them, with
-    // Text for the whole of it. Otherwise the reply is one elided line.
+    // Text for the whole of it. So does the reply of a turn cut at its limit,
+    // which says that the change is not finished. Otherwise the reply is one
+    // elided line.
     reply_overflow_ = false;
-    if (!look_ || state_ != WidgetState::preview || edits_ > 0 || reply_.empty()) return 1;
+    if (!look_ || state_ != WidgetState::preview || (edits_ > 0 && !limit_) || reply_.empty()) return 1;
     const SpecLook& L = *look_;
     const float w = std::max(40.0f, card_width);
     ImFont* f = L.ui ? L.ui : ImGui::GetFont();

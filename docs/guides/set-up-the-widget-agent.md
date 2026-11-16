@@ -149,6 +149,10 @@ tag, such as DECLINED or NO PROVIDER, and the actions that help:
   model's name. This can happen with ordinary work too, for example with chemistry or biology data, so you can
   rephrase the request (Rephrase), try it again (Retry), or switch to another model or provider, such as a local model
   (Model). Automatic fallback to another model is off for now.
+- **The agent stopped at its limit.** A request takes at most six model requests. When the agent reaches them
+  before it is done, the card shows LIMIT with the number of edits it made and says that the change is not finished;
+  **Accept** applies those edits as they are, and **Refine** lets the agent finish on the same preview. When a
+  conversation no longer fits the model's context length, the card shows LIMIT too, with what you can do.
 - **The preview is out of date.** The spec changed while the preview was open, for example through the side chat,
   so that the change no longer applies, and the prompt shows CONFLICT. Choose Refine to start again from the current
   spec.
