@@ -19,13 +19,14 @@ Built on this branch, in `src/builder/mcp/` with headers in `src/builder/include
 - the resources under the `caliper://` scheme, with the docs and SDK folders confined;
 - a strict HTTP/1.1 client for 127.0.0.1 only, and the reader of the API file;
 - unit tests, tests that drive `caliper-mcp` as a child process against a fake of Caliper API, and an end-to-end test
-  against the real app.
+  against the real app;
+- the command layer's endpoints in the app's Caliper API, so every tool acts on the running app: the walk-through's
+  example client, `examples/build_a_dashboard/outside_agent.py`, lists the tools, reads the catalog and the open spec
+  and adds a panel, which waits on an approval card ("MCP agent") until the person approves it. The reference page is
+  `docs/references/mcp-server.md`.
 
 Planned:
 
-- The two endpoints of the command layer in Caliper API (`GET /v0/commands` and `POST /v0/commands/{name}`) come
-  when the builder libraries are wired into the app, after sprint 2 merges. Until then only four tools do something
-  against a real app; see [What works against API v0](#what-works-against-api-v0).
 - Progress notifications while a call waits for approval, a Windows version of the HTTP client, and the other items
   under [Open questions](#open-questions).
 
