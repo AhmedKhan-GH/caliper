@@ -263,6 +263,7 @@ def programs_header(programs: list[dict], descs: dict[str, dict], version: str) 
     out.append("    const VertexInputDesc* vertex_inputs; uint8_t vertex_input_count;")
     out.append("    const FragmentOutputDesc* fragment_outputs; uint8_t fragment_output_count;")
     out.append("    const PairDesc* pairs; uint8_t pair_count; bool test_only;")
+    out.append("    bool fast_math;   // the Metal backend compiles the program with fast math (ProgramDesc::fast_math)")
     out.append("};")
     out.append("inline constexpr ProgramDescription kProgramDescriptions[kProgramCount] = {")
     for p in programs:
@@ -275,7 +276,8 @@ def programs_header(programs: list[dict], descs: dict[str, dict], version: str) 
                    + (f"k{c}VertexInputs, {n_in}, " if has_in else "nullptr, 0, ")
                    + (f"k{c}FragmentOutputs, {n_out}, " if n_out else "nullptr, 0, ")
                    + (f"k{c}Pairs, {len(p['pairs'])}, " if p["pairs"] else "nullptr, 0, ")
-                   + ("true" if p.get("test_only") else "false") + "},")
+                   + ("true" if p.get("test_only") else "false") + ", "
+                   + ("true" if p.get("fast_math") else "false") + "},")
     out.append("};\n")
     out.append(f"}}  // namespace {NAMESPACE}\n")
     return "\n".join(out)
@@ -298,7 +300,8 @@ def table_header(backend: str, programs: list[dict], version: str) -> str:
         msl = src if kind == "msl" else "nullptr"
         spv = f"{src}, uint32_t(sizeof({src}))" if kind == "spirv" else "nullptr, 0"
         out.append(f"    {{\"{p['name']}\", kProgramDescriptions[{programs.index(p)}].entries, kProgramDescriptions[{programs.index(p)}].entry_count,")
-        out.append(f"     kProgramDescriptions[{programs.index(p)}].bindings, kProgramDescriptions[{programs.index(p)}].binding_count, {wgsl}, {msl}, {spv}}},")
+        fast = "true" if p.get("fast_math") else "false"
+        out.append(f"     kProgramDescriptions[{programs.index(p)}].bindings, kProgramDescriptions[{programs.index(p)}].binding_count, {wgsl}, {msl}, {spv}, {fast}}},")
     out.append("};\n")
     out.append(f"}}  // namespace {NAMESPACE}\n")
     return "\n".join(out)
@@ -326,6 +329,8 @@ def generate(driver: Path, out_dir: Path, work: Path) -> dict[str, bytes]:
         if p["name"] in names or not re.fullmatch(r"[a-z][a-z0-9_]*", p["name"]):
             raise Error(f"program name {p['name']!r} is repeated or not lowercase with underscores")
         names.add(p["name"])
+        if not isinstance(p.get("fast_math", False), bool):
+            raise Error(f"program {p['name']}: fast_math must be true or false")
         for k in p["outputs"]:
             if k not in OUTPUTS:
                 raise Error(f"{p['name']}: unknown output {k}")
@@ -408,7 +413,8 @@ def generate(driver: Path, out_dir: Path, work: Path) -> dict[str, bytes]:
     for p in programs:
         d = descs[p["name"]]
         listing["programs"].append({
-            "name": p["name"], "test_only": bool(p.get("test_only")), "sources": p["sources"],
+            "name": p["name"], "test_only": bool(p.get("test_only")), "fast_math": bool(p.get("fast_math")),
+            "sources": p["sources"],
             "outputs": p["outputs"], "hand_written": p["hand_written"], "pairs": p["pairs"],
             "msl_version": d["msl_version"], "spirv_version": d["spirv_version"],
             "metal_vertex_buffer_base": d["metal_vertex_buffer_base"],

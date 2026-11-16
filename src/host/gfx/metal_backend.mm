@@ -14,7 +14,8 @@
 //  - Writes to memory that no unfinished submit uses go straight to it (memcpy into a shared
 //    buffer, replaceRegion on a shared texture); otherwise a blit orders them on the queue.
 //  - Programs compile with fast math off, so float results follow IEEE rules as the CPU
-//    references do.
+//    references do, unless the program's description sets fast_math (the colormap's compute
+//    form, whose output no float rounding can change).
 //  - An MTLBuffer of this device is imported by retaining it, and page-aligned host memory by
 //    newBufferWithBytesNoCopy: no copy on either route.
 #include "gfx/metal_backend.h"
@@ -246,11 +247,11 @@ protected:
         grow(libraries_, slot);
         MTLCompileOptions* opts = [MTLCompileOptions new];
         if (@available(macOS 15.0, *)) {
-            opts.mathMode = MTLMathModeSafe;
+            opts.mathMode = d.fast_math ? MTLMathModeFast : MTLMathModeSafe;
         } else {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-            opts.fastMathEnabled = NO;
+            opts.fastMathEnabled = d.fast_math ? YES : NO;
 #pragma clang diagnostic pop
         }
         NSError* err = nil;

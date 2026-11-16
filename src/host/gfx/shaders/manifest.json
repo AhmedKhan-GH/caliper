@@ -1,5 +1,5 @@
 {
-  "comment": "The shader programs of the graphics layer. Each program is its sources concatenated in order, translated by tools/shaders/generate.py. outputs lists what is generated; hand_written names a platform's own version, by its header, which the generator leaves alone. pairs are the vertex and fragment entries the compile checks pair into pipelines.",
+  "comment": "The shader programs of the graphics layer. Each program is its sources concatenated in order, translated by tools/shaders/generate.py. outputs lists what is generated; hand_written names a platform's own version, by its header, which the generator leaves alone. pairs are the vertex and fragment entries the compile checks pair into pipelines. fast_math, false by default, lets the Metal backend compile the program with fast math; only a program whose output no float rounding can change sets it.",
   "programs": [
     {
       "name": "scene_points",
@@ -61,6 +61,7 @@
     },
     {
       "name": "colormap_texture",
+      "fast_math": true,
       "sources": ["common/colormap.wgsl", "compute/colormap_texture.wgsl"],
       "outputs": ["wgsl", "msl", "spirv"],
       "hand_written": {},

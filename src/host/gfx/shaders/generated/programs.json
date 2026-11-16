@@ -4,6 +4,7 @@
     {
       "name": "scene_points",
       "test_only": false,
+      "fast_math": false,
       "sources": [
         "common/decls.wgsl",
         "common/colormap.wgsl",
@@ -226,6 +227,7 @@
     {
       "name": "scene_lines",
       "test_only": false,
+      "fast_math": false,
       "sources": [
         "common/decls.wgsl",
         "common/colormap.wgsl",
@@ -396,6 +398,7 @@
     {
       "name": "scene_mesh",
       "test_only": false,
+      "fast_math": false,
       "sources": [
         "common/decls.wgsl",
         "common/colormap.wgsl",
@@ -669,6 +672,7 @@
     {
       "name": "index_clamp",
       "test_only": false,
+      "fast_math": false,
       "sources": [
         "compute/index_clamp.wgsl"
       ],
@@ -754,6 +758,7 @@
     {
       "name": "edge_gather",
       "test_only": false,
+      "fast_math": false,
       "sources": [
         "compute/edge_gather.wgsl"
       ],
@@ -890,6 +895,7 @@
     {
       "name": "scene_boxes",
       "test_only": false,
+      "fast_math": false,
       "sources": [
         "common/decls.wgsl",
         "common/colormap.wgsl",
@@ -1110,6 +1116,7 @@
     {
       "name": "scene_image",
       "test_only": false,
+      "fast_math": false,
       "sources": [
         "common/decls.wgsl",
         "common/colormap.wgsl",
@@ -1399,6 +1406,7 @@
     {
       "name": "colormap_probe",
       "test_only": true,
+      "fast_math": false,
       "sources": [
         "common/colormap.wgsl",
         "tests/colormap_probe.wgsl"
@@ -1485,6 +1493,7 @@
     {
       "name": "colormap_texture",
       "test_only": false,
+      "fast_math": true,
       "sources": [
         "common/colormap.wgsl",
         "compute/colormap_texture.wgsl"

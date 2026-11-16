@@ -259,17 +259,18 @@ struct ProgramDescription {
     const VertexInputDesc* vertex_inputs; uint8_t vertex_input_count;
     const FragmentOutputDesc* fragment_outputs; uint8_t fragment_output_count;
     const PairDesc* pairs; uint8_t pair_count; bool test_only;
+    bool fast_math;   // the Metal backend compiles the program with fast math (ProgramDesc::fast_math)
 };
 inline constexpr ProgramDescription kProgramDescriptions[kProgramCount] = {
-    {"scene_points", kScenePointsEntries, 4, kScenePointsBindings, 5, kScenePointsVertexInputs, 3, kScenePointsFragmentOutputs, 2, kScenePointsPairs, 4, false},
-    {"scene_lines", kSceneLinesEntries, 3, kSceneLinesBindings, 4, kSceneLinesVertexInputs, 5, kSceneLinesFragmentOutputs, 2, kSceneLinesPairs, 2, false},
-    {"scene_mesh", kSceneMeshEntries, 5, kSceneMeshBindings, 6, kSceneMeshVertexInputs, 9, kSceneMeshFragmentOutputs, 4, kSceneMeshPairs, 4, false},
-    {"index_clamp", kIndexClampEntries, 1, kIndexClampBindings, 3, nullptr, 0, nullptr, 0, nullptr, 0, false},
-    {"edge_gather", kEdgeGatherEntries, 1, kEdgeGatherBindings, 6, nullptr, 0, nullptr, 0, nullptr, 0, false},
-    {"scene_boxes", kSceneBoxesEntries, 4, kSceneBoxesBindings, 4, kSceneBoxesVertexInputs, 8, kSceneBoxesFragmentOutputs, 2, kSceneBoxesPairs, 4, false},
-    {"scene_image", kSceneImageEntries, 6, kSceneImageBindings, 8, nullptr, 0, kSceneImageFragmentOutputs, 5, kSceneImagePairs, 4, false},
-    {"colormap_probe", kColormapProbeEntries, 1, kColormapProbeBindings, 3, nullptr, 0, nullptr, 0, nullptr, 0, true},
-    {"colormap_texture", kColormapTextureEntries, 1, kColormapTextureBindings, 4, nullptr, 0, nullptr, 0, nullptr, 0, false},
+    {"scene_points", kScenePointsEntries, 4, kScenePointsBindings, 5, kScenePointsVertexInputs, 3, kScenePointsFragmentOutputs, 2, kScenePointsPairs, 4, false, false},
+    {"scene_lines", kSceneLinesEntries, 3, kSceneLinesBindings, 4, kSceneLinesVertexInputs, 5, kSceneLinesFragmentOutputs, 2, kSceneLinesPairs, 2, false, false},
+    {"scene_mesh", kSceneMeshEntries, 5, kSceneMeshBindings, 6, kSceneMeshVertexInputs, 9, kSceneMeshFragmentOutputs, 4, kSceneMeshPairs, 4, false, false},
+    {"index_clamp", kIndexClampEntries, 1, kIndexClampBindings, 3, nullptr, 0, nullptr, 0, nullptr, 0, false, false},
+    {"edge_gather", kEdgeGatherEntries, 1, kEdgeGatherBindings, 6, nullptr, 0, nullptr, 0, nullptr, 0, false, false},
+    {"scene_boxes", kSceneBoxesEntries, 4, kSceneBoxesBindings, 4, kSceneBoxesVertexInputs, 8, kSceneBoxesFragmentOutputs, 2, kSceneBoxesPairs, 4, false, false},
+    {"scene_image", kSceneImageEntries, 6, kSceneImageBindings, 8, nullptr, 0, kSceneImageFragmentOutputs, 5, kSceneImagePairs, 4, false, false},
+    {"colormap_probe", kColormapProbeEntries, 1, kColormapProbeBindings, 3, nullptr, 0, nullptr, 0, nullptr, 0, true, false},
+    {"colormap_texture", kColormapTextureEntries, 1, kColormapTextureBindings, 4, nullptr, 0, nullptr, 0, nullptr, 0, false, true},
 };
 
 }  // namespace caliper_gfx::shaders

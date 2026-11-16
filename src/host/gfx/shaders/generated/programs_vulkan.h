@@ -21,23 +21,23 @@ namespace caliper_gfx::shaders {
 
 inline constexpr ProgramDesc kVulkanPrograms[kProgramCount] = {
     {"scene_points", kProgramDescriptions[0].entries, kProgramDescriptions[0].entry_count,
-     kProgramDescriptions[0].bindings, kProgramDescriptions[0].binding_count, nullptr, nullptr, kScenePointsSpirv, uint32_t(sizeof(kScenePointsSpirv))},
+     kProgramDescriptions[0].bindings, kProgramDescriptions[0].binding_count, nullptr, nullptr, kScenePointsSpirv, uint32_t(sizeof(kScenePointsSpirv)), false},
     {"scene_lines", kProgramDescriptions[1].entries, kProgramDescriptions[1].entry_count,
-     kProgramDescriptions[1].bindings, kProgramDescriptions[1].binding_count, nullptr, nullptr, kSceneLinesSpirv, uint32_t(sizeof(kSceneLinesSpirv))},
+     kProgramDescriptions[1].bindings, kProgramDescriptions[1].binding_count, nullptr, nullptr, kSceneLinesSpirv, uint32_t(sizeof(kSceneLinesSpirv)), false},
     {"scene_mesh", kProgramDescriptions[2].entries, kProgramDescriptions[2].entry_count,
-     kProgramDescriptions[2].bindings, kProgramDescriptions[2].binding_count, nullptr, nullptr, kSceneMeshSpirv, uint32_t(sizeof(kSceneMeshSpirv))},
+     kProgramDescriptions[2].bindings, kProgramDescriptions[2].binding_count, nullptr, nullptr, kSceneMeshSpirv, uint32_t(sizeof(kSceneMeshSpirv)), false},
     {"index_clamp", kProgramDescriptions[3].entries, kProgramDescriptions[3].entry_count,
-     kProgramDescriptions[3].bindings, kProgramDescriptions[3].binding_count, nullptr, nullptr, kIndexClampSpirv, uint32_t(sizeof(kIndexClampSpirv))},
+     kProgramDescriptions[3].bindings, kProgramDescriptions[3].binding_count, nullptr, nullptr, kIndexClampSpirv, uint32_t(sizeof(kIndexClampSpirv)), false},
     {"edge_gather", kProgramDescriptions[4].entries, kProgramDescriptions[4].entry_count,
-     kProgramDescriptions[4].bindings, kProgramDescriptions[4].binding_count, nullptr, nullptr, kEdgeGatherSpirv, uint32_t(sizeof(kEdgeGatherSpirv))},
+     kProgramDescriptions[4].bindings, kProgramDescriptions[4].binding_count, nullptr, nullptr, kEdgeGatherSpirv, uint32_t(sizeof(kEdgeGatherSpirv)), false},
     {"scene_boxes", kProgramDescriptions[5].entries, kProgramDescriptions[5].entry_count,
-     kProgramDescriptions[5].bindings, kProgramDescriptions[5].binding_count, nullptr, nullptr, kSceneBoxesSpirv, uint32_t(sizeof(kSceneBoxesSpirv))},
+     kProgramDescriptions[5].bindings, kProgramDescriptions[5].binding_count, nullptr, nullptr, kSceneBoxesSpirv, uint32_t(sizeof(kSceneBoxesSpirv)), false},
     {"scene_image", kProgramDescriptions[6].entries, kProgramDescriptions[6].entry_count,
-     kProgramDescriptions[6].bindings, kProgramDescriptions[6].binding_count, nullptr, nullptr, kSceneImageSpirv, uint32_t(sizeof(kSceneImageSpirv))},
+     kProgramDescriptions[6].bindings, kProgramDescriptions[6].binding_count, nullptr, nullptr, kSceneImageSpirv, uint32_t(sizeof(kSceneImageSpirv)), false},
     {"colormap_probe", kProgramDescriptions[7].entries, kProgramDescriptions[7].entry_count,
-     kProgramDescriptions[7].bindings, kProgramDescriptions[7].binding_count, nullptr, nullptr, kColormapProbeSpirv, uint32_t(sizeof(kColormapProbeSpirv))},
+     kProgramDescriptions[7].bindings, kProgramDescriptions[7].binding_count, nullptr, nullptr, kColormapProbeSpirv, uint32_t(sizeof(kColormapProbeSpirv)), false},
     {"colormap_texture", kProgramDescriptions[8].entries, kProgramDescriptions[8].entry_count,
-     kProgramDescriptions[8].bindings, kProgramDescriptions[8].binding_count, nullptr, nullptr, kColormapTextureSpirv, uint32_t(sizeof(kColormapTextureSpirv))},
+     kProgramDescriptions[8].bindings, kProgramDescriptions[8].binding_count, nullptr, nullptr, kColormapTextureSpirv, uint32_t(sizeof(kColormapTextureSpirv)), true},
 };
 
 }  // namespace caliper_gfx::shaders

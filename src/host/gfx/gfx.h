@@ -255,6 +255,11 @@ struct ProgramDesc {
     const char* msl = nullptr;            // the Metal backend
     const uint32_t* spirv = nullptr;      // the Vulkan backend
     uint32_t spirv_bytes = 0;
+    // The Metal backend compiles every other program with fast math off, so that float results
+    // follow IEEE rules as the CPU references do (positions on pixel centres, lighting, NaN
+    // handling). A program sets this only when no float rounding can change its output: the
+    // colormap's compute form, whose float guess only chooses which integer comparisons run.
+    bool fast_math = false;
 };
 
 // ---- Capabilities and limits -----------------------------------------------------------------
