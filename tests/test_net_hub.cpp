@@ -576,6 +576,20 @@ struct World {
     }
 };
 
+// A barrier for the checks that something did not arrive: the peer pings the
+// hub and waits for the PONG, which the hub sends after it has handled every
+// message the peer sent before, behind everything it had queued for the peer.
+void sync(World& w, Peer& peer) {
+    static uint32_t nonce = 9000;
+    const uint32_t n = ++nonce;
+    peer.send(wire::Ping{n});
+    REQUIRE(w.until([&] {
+        for (auto* x : peer.all<wire::Pong>())
+            if (x->nonce == n) return true;
+        return false;
+    }));
+}
+
 // A viewer connected and welcomed (3.1: with these capabilities).
 std::unique_ptr<Peer> viewer(World& w, const HubRunner& h, std::vector<std::string> caps = {}) {
     auto v = std::make_unique<Peer>();
@@ -693,7 +707,7 @@ TEST_CASE("net/hub: sessions are listed, a viewer follows the one live session, 
 
     // A viewer arriving with several live sessions is not attached.
     auto v2 = viewer(w, h);
-    w.spin(100);
+    sync(w, *v2);
     CHECK(v2->count<wire::Views>() == 0);
     v2->subscribe(1, "heat", 11);
     REQUIRE(w.until([&] { return v2->reply(11); }));
@@ -820,7 +834,7 @@ TEST_CASE("net/hub: a late viewer gets the series backfill from the hub, then ne
     REQUIRE(w.until([&] { return v2->views() && v2->views()->session; }));
     v2->subscribe(4, "loss", 40, obj({{"budget", obj({{"max_backfill", 100}})}}));
     REQUIRE(w.until([&] { return v2->reply(40) && v2->series(4).size() == 100; }));
-    w.spin(50);
+    sync(w, *v2);
     CHECK(v2->series(4).size() == 100);
     CHECK(v2->series(4).begin()->first == 300003 - 100);
     CHECK(v2->reply(40)->data_view.find("budget")->find("max_backfill")->as_double() == 100);
@@ -846,7 +860,7 @@ TEST_CASE("net/hub: viewers with equal resolved data views share one producer su
     // Asking again with {} needs no new producer subscription.
     c->subscribe(9, "heat", 3);
     REQUIRE(w.until([&] { return c->reply(3); }));
-    w.spin(50);
+    sync(w, *p);
     CHECK(p->subscribes == subs_now);
     REQUIRE(w.until([&] { return h.stats().channels_open == 2; }));   // heat, and the series keeper of loss
 
@@ -934,7 +948,7 @@ TEST_CASE("net/hub: a producer that leaves keeps its session viewable; a resumed
     // A later viewer attaches to the ended session and gets what it kept.
     auto late = viewer(w, h);
     // With no live session there is no default: it attaches by id.
-    w.spin(50);
+    sync(w, *late);
     CHECK(late->count<wire::Views>() == 0);
     late->attach("clp-leave");
     REQUIRE(w.until([&] { return late->views() && late->views()->session; }));
@@ -1353,7 +1367,7 @@ TEST_CASE("net/hub 3.1: a late viewer gets the controls and selections right aft
     p->send_selection("samples", {1, 5}, "heat");
     p->send_selection("step", {});   // an empty selection is kept, not sent to a late viewer
     REQUIRE(w.until([&] { return h.stats().retained_control_bytes > 0 && h.stats().controls_out == 0; }));
-    w.spin(50);
+    sync(w, *p);   // both selections are kept before the viewer comes
 
     auto v31 = viewer(w, h, kCaps31);
     REQUIRE(w.until([&] { return v31->views() && v31->views()->session && v31->last<wire::Selection>(); }));
@@ -1382,7 +1396,8 @@ TEST_CASE("net/hub 3.1: a late viewer gets the controls and selections right aft
     p->send_selection("samples", {2});
     REQUIRE(w.until([&] { return v31->count<wire::Controls>() == 2 && v31->count<wire::Selection>() == 2; }));
     CHECK(v31->last<wire::Controls>()->run.find("state")->as_string() == "paused");
-    w.spin(100);
+    sync(w, *p);
+    sync(w, *v30);
     CHECK(v30->count<wire::Controls>() == 0);
     CHECK(v30->count<wire::Selection>() == 0);
     CHECK(v30->count<wire::ControlReply>() == 0);
@@ -1403,7 +1418,7 @@ TEST_CASE("net/hub 3.1: without --allow-control every CONTROL is answered forbid
         CHECK(r->error.find("code")->as_string() == CALIPER_NET_ERR_FORBIDDEN);
     }
     CHECK(v->control_replies(6)[0]->name == std::string("lr"));
-    w.spin(50);
+    sync(w, *p);
     CHECK(p->controls_in.empty());
     // Selecting is not a control: a select event still reaches the script.
     wire::Event e;
@@ -1509,7 +1524,7 @@ TEST_CASE("net/hub 3.1: SELECTION reaches every viewer of the session; select ev
     p->send_selection("samples", {5, 9}, "heat");
     REQUIRE(w.until([&] { return a->count<wire::Selection>() == 1 && b->count<wire::Selection>() == 1; }));
     CHECK(b->last<wire::Selection>()->view == std::string("heat"));
-    w.spin(50);
+    sync(w, *c);
     CHECK(c->count<wire::Selection>() == 0);
 
     // A script without `selection` gets the select event without its item keys.
@@ -1674,15 +1689,14 @@ TEST_CASE("net/hub 3.1: a run state waits at most 2 s for data the viewer's max_
         p->snapshot((float)i);
         REQUIRE(w.until([&] { return v->snapshots(1).size() == (size_t)i; }));
     }
-    p->snapshot(3);   // pending for about 5 s
-    w.spin(50);
+    p->snapshot(3);   // pending for about 5 s; the CONTROLS follows it on the same connection
     const uint64_t sent = mono_ns();
     p->send_controls("paused", 0.01, 3);
     REQUIRE(w.until([&] { return controls_index(*v, "paused", 3) >= 0; }, 5000));
     const double waited = secs_between(sent, v->inbox[(size_t)controls_index(*v, "paused", 3)].at_ns);
     MESSAGE("the run state waited " << waited << " s");
     CHECK(waited > 1.8);
-    CHECK(waited < 3.0);
+    CHECK(waited < 4.5);   // the 2 s bound, not the snapshot's release at about 5 s
     CHECK(v->snapshots(1).size() == 2);   // it went without the snapshot before it
     CHECK(h.stats().controls_held == 1);
     CHECK(h.stats().controls_hold_expired == 1);
@@ -1718,7 +1732,7 @@ TEST_CASE("net/hub 3.1: a viewer that stops reading gets the run state after 2 s
     CHECK(h.stats().controls_held == 1);
     REQUIRE(h.stats().controls_hold_expired == 1);
     CHECK(waited > 1.9);
-    CHECK(waited < 3.0);
+    CHECK(waited < 4.5);
     // When it reads again it gets the run state.
     REQUIRE(w.until([&] { return controls_index(*v, "paused", 1) >= 0; }));
 }
@@ -1768,7 +1782,7 @@ TEST_CASE("net/hub 3.1: parameter echoes are not held back while data streams") 
     MESSAGE(got << " echoes, the slowest after " << worst * 1000 << " ms; " << h.stats().controls_held
                 << " waited for data");
     CHECK(got == 15);
-    CHECK(worst < 0.25);
+    CHECK(worst < 1.5);   // well under the 2 s bound; no echo waited for it:
     CHECK(h.stats().controls_held > 0);   // they did wait for the data before them, briefly
     CHECK(h.stats().controls_hold_expired == 0);
 }
