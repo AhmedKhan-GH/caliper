@@ -1,9 +1,15 @@
 """The built browser viewer that ships inside the package (``caliper/_web/``).
 
-The files come from the ``web/`` package: ``scripts/build_web.py`` builds it
-and copies ``web/dist/*`` here, and the copies are checked in, so installing
-the Python package needs no Node. The viewer page and the widget read them
-through this module only:
+Two kinds of file live there. The required ones (``REQUIRED``) come from the
+``web/`` package: ``scripts/build_web.py`` builds it and copies ``web/dist/*``
+here, and the copies are checked in, so installing the Python package needs
+no Node. The optional ones (``WASM_VIEWS``) are Caliper's own views compiled
+to WebAssembly: build outputs that are not checked in, which CI builds and a
+wheel ships, and which ``scripts/build_wasm.py`` builds or
+``scripts/fetch_wasm.py`` downloads in a checkout. Without them every view
+draws with the element's TypeScript views, and ``caliper.serve()`` says so
+once (``note_missing_views()``). The viewer page and the widget read the
+files through this module only:
 
     name = name_for_url_path(request_path)    # "/" -> "index.html"; ValueError if unsafe
     body = read_asset(name)                    # bytes; AssetMissing (a FileNotFoundError)
@@ -18,19 +24,22 @@ of built assets, for example ``web/dist`` while working on the browser code.
 from __future__ import annotations
 
 import os
+import sys
+import threading
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote
 
 BUILD_COMMAND = "python scripts/build_web.py"
-# The files every build has (fonts and other files the page references come
-# beside them and are found the same way).
+# Required, checked in: the files every build of web/ has (fonts and other
+# files the page references come beside them and are found the same way).
 REQUIRED = ("caliper-view.js", "caliper-widget.js", "caliper-controls-widget.js", "index.html")
-# Caliper's own views compiled to WebAssembly (web/wasm), served beside them:
-# the <caliper-view> element imports the loader from the stream's server and
-# draws with these views the kinds they list, and with its own views without
-# them. Built with the Emscripten SDK, so build_web.py copies them only from
-# an existing build and otherwise keeps the checked-in copies.
+# Optional, built, not checked in: Caliper's own views compiled to WebAssembly
+# (web/wasm), served beside the required files. The <caliper-view> element
+# imports the loader from the stream's server and draws with these views the
+# kinds they list, and with its own views when the loader is not there.
 WASM_VIEWS = ("caliper-views-loader.js", "caliper-views.js", "caliper-views.wasm")
+WASM_BUILD_COMMAND = "python scripts/build_wasm.py"
+WASM_FETCH_COMMAND = "python scripts/fetch_wasm.py"
 
 # An explicit table rather than the mimetypes module, which reads the system's
 # registry (on Windows it can map .js to text/plain, which browsers refuse to
@@ -140,8 +149,38 @@ def name_for_url_path(url_path: str) -> str:
 
 
 def check_assets() -> None:
-    """Raise AssetMissing unless every required asset is present."""
+    """Raise AssetMissing unless every required asset is present. The
+    WebAssembly views are optional; see :func:`missing_views`."""
     root = asset_dir()
     missing = [n for n in REQUIRED if not (root / n).is_file()]
     if missing:
         raise _missing(", ".join(missing), root)
+
+
+def missing_views() -> list[str]:
+    """The files of the WebAssembly views (``WASM_VIEWS``) that are not in the
+    asset folder; [] when the views are there."""
+    root = asset_dir()
+    return [n for n in WASM_VIEWS if not (root / n).is_file()]
+
+
+_noted = False
+_noted_lock = threading.Lock()
+
+
+def note_missing_views(stream=None) -> bool:
+    """Print one line, once per process, when the WebAssembly views are not in
+    the asset folder: that browsers draw with the TypeScript views, and the
+    two commands that put the views there. Returns whether it printed.
+    ``caliper.serve()`` calls it when it starts."""
+    global _noted
+    missing = missing_views()
+    with _noted_lock:
+        if not missing or _noted:
+            return False
+        _noted = True
+    print(f"caliper: the WebAssembly views are not in {asset_dir()}, so browsers draw every view "
+          f"with the TypeScript views; build them with `{WASM_BUILD_COMMAND}` or download CI's "
+          f"build with `{WASM_FETCH_COMMAND}`.",
+          file=stream if stream is not None else sys.stderr, flush=True)
+    return True

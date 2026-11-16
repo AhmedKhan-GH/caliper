@@ -1360,6 +1360,8 @@ def serve(port: int = 0, control: bool = True) -> NetServer:
             _add_route(s)
         caliper._server = s
     print(s.url, flush=True)
+    from ._assets import note_missing_views
+    note_missing_views()
     return s
 
 

@@ -44,7 +44,12 @@ def test_assets_are_found_in_the_source_tree(monkeypatch):
 
 
 def test_the_package_ships_the_wasm_views(monkeypatch):
+    # Optional build outputs: a checkout has them only after build_wasm.py or
+    # fetch_wasm.py. CI, which builds them first, requires them.
     monkeypatch.delenv("CALIPER_WEB_DIR", raising=False)
+    if _assets.missing_views() and os.environ.get("CALIPER_REQUIRE_WEB_VIEWS") != "1":
+        pytest.skip(f"the WebAssembly views are not in {PACKAGE_WEB}; build them with "
+                    f"`{_assets.WASM_BUILD_COMMAND}` or download them with `{_assets.WASM_FETCH_COMMAND}`")
     names = _assets.asset_names()
     for name in _assets.WASM_VIEWS:
         assert name in names
@@ -53,6 +58,56 @@ def test_the_package_ships_the_wasm_views(monkeypatch):
     assert b"export async function mountCaliperViews" in loader
     assert b"export const CALIPER_VIEWS_KINDS" in loader
     assert b"createCaliperViews" in _assets.read_asset("caliper-views.js")
+
+
+def placeholder_web(root: Path) -> Path:
+    web = root / "web"
+    web.mkdir()
+    for name in _assets.REQUIRED:
+        (web / name).write_text("// placeholder")
+    return web
+
+
+def test_the_wasm_views_are_optional(tmp_path, monkeypatch):
+    import io
+    web = placeholder_web(tmp_path)
+    monkeypatch.setenv("CALIPER_WEB_DIR", str(web))
+    monkeypatch.setattr(_assets, "_noted", False)
+    _assets.check_assets()                                   # required ones only
+    assert _assets.missing_views() == list(_assets.WASM_VIEWS)
+    out = io.StringIO()
+    assert _assets.note_missing_views(out) is True
+    assert _assets.note_missing_views(out) is False          # once per process
+    line = out.getvalue()
+    assert line.count("\n") == 1 and str(web) in line
+    assert _assets.WASM_BUILD_COMMAND in line and _assets.WASM_FETCH_COMMAND in line
+    (web / "caliper-views.js").write_text("x")
+    assert _assets.missing_views() == ["caliper-views-loader.js", "caliper-views.wasm"]
+    for name in _assets.WASM_VIEWS:
+        (web / name).write_text("x")
+    assert _assets.missing_views() == []
+    monkeypatch.setattr(_assets, "_noted", False)
+    assert _assets.note_missing_views(io.StringIO()) is False
+
+
+def test_serve_names_the_two_commands_once_when_the_views_are_missing(tmp_path):
+    web = placeholder_web(tmp_path)
+    code = ("import caliper\n"
+            "s = caliper.serve(); caliper.serve(); s.close()\n"
+            "s = caliper.serve(); s.close()\n")
+    env = dict(os.environ, PYTHONPATH=str(REPO / "python"), CALIPER_WEB_DIR=str(web), CALIPER_SESSION="0")
+    r = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, env=env, capture_output=True, text=True,
+                       timeout=120)
+    assert r.returncode == 0, r.stderr
+    notes = [l for l in r.stderr.splitlines() if "WebAssembly views" in l]
+    assert len(notes) == 1, r.stderr
+    assert _assets.WASM_BUILD_COMMAND in notes[0] and _assets.WASM_FETCH_COMMAND in notes[0]
+    for name in _assets.WASM_VIEWS:
+        (web / name).write_text("x")
+    r = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, env=env, capture_output=True, text=True,
+                       timeout=120)
+    assert r.returncode == 0, r.stderr
+    assert "WebAssembly views" not in r.stderr
 
 
 def test_assets_are_found_with_pythonpath(tmp_path):
