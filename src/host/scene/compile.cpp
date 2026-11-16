@@ -833,7 +833,8 @@ std::vector<LabelAnchor> project_labels(const SceneTree& tree, const ViewCamera&
                 else if (b->labels.size() == 1) text = b->labels[0];
                 else if (ids && ids->cpu) {
                     int32_t id;
-                    std::memcpy(&id, static_cast<const uint8_t*>(ids->cpu) + (ids->stride ? k * ids->stride : 0), 4);
+                    // One row stands for every point, whatever its stride (stride_of).
+                    std::memcpy(&id, static_cast<const uint8_t*>(ids->cpu) + k * stride_of(*ids), 4);
                     text = tree.class_label(uint32_t(id));
                 }
                 if (text.empty()) continue;
