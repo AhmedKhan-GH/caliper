@@ -367,6 +367,19 @@ if(APPLE)
     target_link_libraries(caliper_gfx PUBLIC "-framework Metal" "-framework Foundation")
 endif()
 
+# The scene core of the renderer core (design/renderer-core.md, "The scene core"): the scene
+# store, world matrices, cameras, bounds and fitting, compiling scenes into draw lists of the
+# graphics layer (src/host/gfx/gfx.h), and picking. Plain C++17 with no GPU and no backend;
+# nothing uses it yet, and caliper_scene_tests (tests/scene) checks it headless.
+add_library(caliper_scene STATIC
+    src/host/scene/path.cpp
+    src/host/scene/scene_tree.cpp
+)
+target_include_directories(caliper_scene PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_scene PUBLIC caliper::sdk)
+set_target_properties(caliper_scene PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+
 # ============================================================================
 # Metal renderer backend (C2, Apple only)
 # ============================================================================
