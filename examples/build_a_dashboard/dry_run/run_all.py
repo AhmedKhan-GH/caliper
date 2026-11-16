@@ -44,8 +44,8 @@ What every step is given, the convention of hidden_app.py:
     --workspace <folder> --app-data <folder>    with --story
     --url <stream link>          step 4, and step 1 with --story
 
-A step whose --help does not list these options is run with the options it
-had before, where the runner knows them, and the summary says so.
+A step whose --help does not list these options is not run, and the summary
+says which it lacks.
 
 The output folder must be new or empty. It receives:
 
@@ -141,45 +141,26 @@ def catch_signals():
 
 
 class Step:
-    def __init__(self, n, name, title, needs=(), model=False, url=False, after=None, old=None):
+    def __init__(self, n, name, title, needs=(), model=False, url=False, after=None):
         self.n, self.name, self.title = n, name, title
         self.needs = set(needs)     # train, agent, data, mcp, node
         self.model = model          # calls the local model
         self.url = url              # takes a stream's link
         self.after = after          # in the story, the step whose dashboard it continues
-        self.old = old              # the options the script took before the convention
         self.script: Path | None = None
         self.stand_in = False
         self.stream = ""            # the stream the runner gives it: train or producer, or none
-
-
-def old_step3(ctx, work):
-    # Step 3 as first committed: no --size; the window is 1440x900.
-    return (["--caliper", ctx.caliper, "--agent-python", ctx.agent_python, "--out", ctx.captures, "--work", work,
-             "--model", ctx.model], {})
-
-
-def old_step4(ctx, work):
-    # Step 4 as first committed: a build folder, and a stream of its own.
-    argv = ["--build", Path(ctx.caliper).parent, "--agent-python", ctx.agent_python, "--out", ctx.captures,
-            "--work", work, "--size", ctx.size, "--model", ctx.model, "--stream", ctx.stream]
-    return argv + (["--train-python", ctx.train_python] if ctx.stream == "train" else []), {}
-
-
-def old_step5(ctx, work):
-    # Step 5 as first committed: a build folder; the outside agent scripted.
-    return ["--build", Path(ctx.caliper).parent, "--out", ctx.captures, "--work", work, "--size", ctx.size], {}
 
 
 STEPS = [
     Step(1, "step1_train_and_attach", "Train a model and attach the app", needs=("train",), url=True),
     Step(2, "step2_drop_and_build", "Drop the data files and build a dashboard by hand", needs=("data",)),
     Step(3, "step3_cmdk", "Change a panel with ⌘K, accept it and undo it", needs=("data", "agent"), model=True,
-         after=2, old=old_step3),
+         after=2),
     Step(4, "step4_side_chat", "Ask the side chat for the attention entropy per layer", needs=("agent",),
-         model=True, url=True, old=old_step4),
+         model=True, url=True),
     Step(5, "step5_outside_agent", "Let an outside agent add a panel through caliper-mcp", needs=("data", "mcp"),
-         after=2, old=old_step5),
+         after=2),
     Step(6, "step6_save_reopen_browser", "Save, open again and open in a browser", needs=("data", "node"), after=2),
 ]
 
@@ -340,8 +321,8 @@ def listed_options(script: Path, env: dict) -> tuple[set[str] | None, str]:
 
 
 def plan(step: Step, ctx, joined: dict[int, bool], env: dict) -> None:
-    """The command line of one step: the convention's options when the step lists them all, else its old
-    ones; whether it continues the story's workspace; and which stream it is given."""
+    """The command line of one step, in the convention's options, which its --help must list; whether it
+    continues the story's workspace; and which stream it is given."""
     conv: list = ["--caliper", ctx.caliper, "--out", ctx.captures, "--work", ctx.work, "--size", ctx.size]
     if "train" in step.needs:
         conv += ["--train-python", ctx.train_python]
@@ -355,26 +336,17 @@ def plan(step: Step, ctx, joined: dict[int, bool], env: dict) -> None:
         return [] if options is None else [a for a in argv if isinstance(a, str) and a.startswith("--")
                                            and a not in options]
 
-    old_work = ctx.work / f"step{step.n}"     # an old script gets a folder of its own, made new by the runner
     step.problem = broken
     step.interface = "the runner's options"
     step.env = {}
-    step.made = None
     missing = lacking(conv)
     if broken:
         step.argv = []
     elif not missing:
-        step.argv = conv
-    elif step.old and not lacking(step.old(ctx, old_work)[0]):
-        step.argv, step.env = step.old(ctx, old_work)
-        step.interface = "its old options; it lacks " + ", ".join(missing)
-        step.made = old_work
+        step.argv = [str(a) for a in conv]
     else:
-        old_missing = lacking(step.old(ctx, old_work)[0]) if step.old else []
-        step.problem = ("it takes neither the runner's options (it lacks " + ", ".join(missing) + ")" +
-                        (" nor its old ones (it lacks " + ", ".join(old_missing) + ")" if step.old else ""))
+        step.problem = "it does not take the runner's options: it lacks " + ", ".join(missing)
         step.argv = []
-    step.argv = [str(a) for a in step.argv]
     step.story = ""
     step.stream = ""
     takes_url = step.url and not step.problem and (options is None or "--url" in options)
@@ -654,12 +626,7 @@ def where(log: Path) -> str:
 
 
 def sweep(step: Step, ctx) -> list[str]:
-    """Copies the captures that a step with its old options wrote under its own folder into the captures
-    folder, and lists the step's captures."""
-    if step.made is not None and step.made.is_dir():
-        for f in sorted(step.made.rglob(f"step{step.n}-*")):
-            if f.is_file() and f.suffix in (".png", ".json") and not (ctx.captures / f.name).exists():
-                shutil.copyfile(f, ctx.captures / f.name)
+    """The step's captures in the captures folder."""
     return sorted(p.name for p in ctx.captures.glob(f"step{step.n}-*"))
 
 
@@ -737,8 +704,6 @@ def run_job_plainly(steps: list[Step], ctx, env, results: dict, stopped: list, m
                     r.update(status="failed", where=f"the stream ({step.stream}) printed no link")
                     continue
                 argv += ["--url", link]
-            if step.made is not None:
-                step.made.mkdir(parents=True, exist_ok=False)
             log = ctx.logs / f"step{step.n}.log"
             say(f"step {step.n}: started, {step.title[0].lower() + step.title[1:]} ({step.script.name}); "
                 f"log in logs/{log.name}")
