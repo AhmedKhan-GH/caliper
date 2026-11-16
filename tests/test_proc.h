@@ -34,8 +34,18 @@ struct Proc {
         std::vector<char*> argv;
         for (auto& a : argv_s) argv.push_back(a.data());
         argv.push_back(nullptr);
+        // The test's own environment, with each variable of env_add in place
+        // of an inherited one of the same name (ctest sets CALIPER_DATA_DIR
+        // for every entry, and a child's own folder must win over it).
         std::vector<std::string> env_s;
-        for (char** e = environ; *e; ++e) env_s.emplace_back(*e);
+        auto name_of = [](const std::string& kv) { return kv.substr(0, kv.find('=')); };
+        for (char** e = environ; *e; ++e) {
+            const std::string kv(*e);
+            bool replaced = false;
+            for (const auto& a : env_add)
+                if (name_of(a) == name_of(kv)) replaced = true;
+            if (!replaced) env_s.push_back(kv);
+        }
         env_s.insert(env_s.end(), env_add.begin(), env_add.end());
         std::vector<char*> envp;
         for (auto& e : env_s) envp.push_back(e.data());

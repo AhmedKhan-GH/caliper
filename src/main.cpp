@@ -1965,9 +1965,13 @@ int main(int argc, char** argv) {
 
     std::cout << "=== Caliper ===" << std::endl;
 
-    // --hidden or CALIPER_HIDDEN=1: the real app with its window never shown.
+    // --hidden or CALIPER_HIDDEN=1: the real app with its window never shown,
+    // a testing aid, which never uses your own app-data folder: without
+    // CALIPER_DATA_DIR it stops at the first lookup (app_paths.h, THE GUARD).
     const char* hidden_env = std::getenv("CALIPER_HIDDEN");
     const bool hidden = cl.hidden || (hidden_env && std::strcmp(hidden_env, "1") == 0);
+    if (hidden)
+        caliper::app_data_guard(cl.hidden ? "the hidden app (--hidden)" : "the hidden app (CALIPER_HIDDEN=1)");
     CaliperApp app(cl.applet_dirs, hidden);
     app.set_workspace(caliper_host::app_session_options(cl).workspace);
     if (!app.initialize()) {

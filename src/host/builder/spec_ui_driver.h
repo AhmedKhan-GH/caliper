@@ -52,11 +52,17 @@
 //   click <item> [fx fy] a click on a named rectangle of the spec page
 //                        (SpecPage::item_rect: "page:browser") or of the
 //                        builder pane (BuilderPane::item_rect:
-//                        "source:table:metrics", "primitive:series",
+//                        "source:table:metrics", "run:12" (a run of
+//                        metrics in Sources), "runs:all" (its Show all),
+//                        "primitive:series",
 //                        "prop:title", "bar:save", ...),
 //                        at the fractions fx, fy of it (0.5 0.5 by default); a
 //                        negative fraction counts pixels from its right or
 //                        bottom edge
+//   menu <item> [fx fy]  a right click there, such as "panel:loss", which
+//                        opens the panel's menu ("menu:remove" is its Remove
+//                        panel); the page's "remove:<panel>" is the × on a
+//                        panel's strip, which a click works without hovering
 //   drag <item> [fx fy] to <item> [fx fy] [hold]
 //                        a press on the first, a move in steps to the second
 //                        and a release there, or none with `hold`
@@ -244,6 +250,10 @@ public:
             io.AddMouseButtonEvent(0, false);
             mouse_down_ = false;
         }
+        if (right_down_) {
+            io.AddMouseButtonEvent(1, false);
+            right_down_ = false;
+        }
         // After a step of input, frames for the page to act on it and draw
         // its new rectangles, so the next step aims at where things are now.
         if (settle_ > 0) {
@@ -316,6 +326,20 @@ public:
             io.AddMouseButtonEvent(0, true);
             mouse_down_ = true;
             next("clicked " + name);
+            return;
+        }
+        if (s.verb == "menu") {
+            // A right click on a named rectangle: a panel's menu.
+            std::stringstream words(s.arg);
+            std::string name;
+            float fx = 0.5f, fy = 0.5f;
+            words >> name >> fx >> fy;
+            float x = 0, y = 0;
+            if (!item_point(page, name, fx, fy, &x, &y)) return patience("no builder item " + name);
+            io.AddMousePosEvent(x, y);
+            io.AddMouseButtonEvent(1, true);
+            right_down_ = true;
+            next("opened the menu of " + name);
             return;
         }
         if (s.verb == "drag") {
@@ -648,7 +672,7 @@ private:
 
     void next(const std::string& what) {
         const std::string& verb = steps_[at_].verb;
-        if (verb == "click" || verb == "key" || verb == "type" || verb == "drag" || verb == "release" ||
+        if (verb == "click" || verb == "menu" || verb == "key" || verb == "type" || verb == "drag" || verb == "release" ||
             verb == "drop" || verb == "select")
             settle_ = kSettle;
         log_.push_back(what);
@@ -778,7 +802,7 @@ private:
     // When the current step began, and the seconds a step may wait (0: kPatience frames).
     std::chrono::steady_clock::time_point step_start_ = std::chrono::steady_clock::now();
     double patience_s_ = 0.0;
-    bool armed_ = false, shot_requested_ = false, quit_ = false, mouse_down_ = false;
+    bool armed_ = false, shot_requested_ = false, quit_ = false, mouse_down_ = false, right_down_ = false;
     std::vector<ImGuiKey> held_keys_;
     std::vector<std::string> log_;
     std::string error_, facts_;

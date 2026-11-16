@@ -12,6 +12,9 @@
 
 #include "spec_test_workspace.h"
 
+#include "catalog_providers/metrics_catalog.h"
+#include "metrics_store.h"
+
 #include <caliper_builder/spec/format.h>
 
 #include <doctest/doctest.h>
@@ -288,6 +291,187 @@ TEST_CASE("builder pane: dropped files are imported from the builder origin and 
         if (f.path.find("model.pkl") != std::string::npos) pickle = f.code == "loader.pickle_refused";
     }
     CHECK(pickle);
+}
+
+// Metrics in Sources, grouped by run: a real MetricsStore with more metrics
+// than one catalog.list returns, through the app's MetricsCatalog.
+TEST_CASE("builder pane: metrics grouped by run, newest first, the last few until Show all, the filter across runs") {
+    Rig r = rig("pane-metric-runs");
+    MetricsStore store;
+    REQUIRE(store.open(":memory:"));
+    std::vector<std::uint64_t> runs;
+    for (int i = 0; i < 1100; ++i) {
+        const bool base = i == 6;
+        const std::uint64_t run = store.begin_run("sweep", base ? "baseline" : "r" + std::to_string(i));
+        store.scalar(run, "loss", 0, 1.0);
+        if (base) store.scalar(run, "accuracy", 0, 0.5);
+        runs.push_back(run);
+    }
+    MetricsCatalog::Options mo;
+    mo.thread = false;
+    auto metrics = std::make_shared<MetricsCatalog>(store, mo);
+    metrics->refresh_now();
+    REQUIRE(r.s->catalog().add_provider("metrics", metrics).ok());
+    BuilderPane& p = *r.pane;
+    p.update();
+
+    // Every metric is listed, and the tables and tensors are still there,
+    // though one list of metrics is cut at 1000.
+    size_t metric_rows = 0;
+    for (const auto& row : p.sources()) metric_rows += row.group == PaneSource::Group::metric;
+    CHECK(metric_rows == 1101);
+    CHECK(p.find_source("table:run42_metrics"));
+    CHECK(p.find_source("tensor:attn_weights"));
+    const PaneSource* base = p.find_source("metric:" + std::to_string(runs[6]) + "/accuracy");
+    REQUIRE(base);
+    CHECK(base->run == (std::int64_t)runs[6]);
+    CHECK(base->run_name == "baseline");
+    CHECK(base->tag == "accuracy");
+
+    auto run_ids = [&] {
+        std::vector<std::int64_t> ids;
+        for (const auto& it : p.list_items())
+            if (it.kind == PaneListItem::Kind::run) ids.push_back(it.run);
+        return ids;
+    };
+    // The newest five runs, closed, then Show all with every run counted.
+    const std::vector<std::int64_t> newest = {(std::int64_t)runs[1099], (std::int64_t)runs[1098], (std::int64_t)runs[1097],
+                                              (std::int64_t)runs[1096], (std::int64_t)runs[1095]};
+    CHECK(run_ids() == newest);
+    for (const auto& it : p.list_items()) CHECK_FALSE((it.source && it.source->group == PaneSource::Group::metric));
+    REQUIRE((p.list_items().back().kind == PaneListItem::Kind::more));
+    CHECK(p.list_items().back().name == "Show all");
+    CHECK(p.list_items().back().metrics == 1100);
+    // The tables and tensors are listed as before.
+    CHECK(p.visible_sources().size() == 2);
+
+    // A run opens to its metrics, by tag, under it.
+    p.toggle_expanded("run:" + std::to_string(runs[1098]));
+    const auto& items = p.list_items();
+    auto at = std::find_if(items.begin(), items.end(), [&](const PaneListItem& it) {
+        return it.kind == PaneListItem::Kind::run && it.run == (std::int64_t)runs[1098];
+    });
+    REQUIRE(at != items.end());
+    CHECK(at->open);
+    CHECK(at->metrics == 1);
+    REQUIRE((at + 1) != items.end());
+    CHECK(((at + 1)->kind == PaneListItem::Kind::source));
+    CHECK((at + 1)->nested);
+    CHECK((at + 1)->source->key == "metric:" + std::to_string(runs[1098]) + "/loss");
+
+    // Show all lists every run, newest first, and Show fewer goes back.
+    p.set_show_all_runs(true);
+    const auto all = run_ids();
+    CHECK(all.size() == 1100);
+    CHECK(all.front() == (std::int64_t)runs[1099]);
+    CHECK(all.back() == (std::int64_t)runs[0]);
+    CHECK(std::is_sorted(all.rbegin(), all.rend()));
+    CHECK(p.list_items().back().name == "Show fewer");
+    p.set_show_all_runs(false);
+    CHECK(run_ids().size() == 5);
+
+    // The filter searches every run: an old run by its name, open with all
+    // its metrics; a tag in every run; and no Show all while it filters.
+    p.set_filter("baseline");
+    CHECK(run_ids() == std::vector<std::int64_t>{(std::int64_t)runs[6]});
+    REQUIRE(p.visible_sources().size() == 2);
+    CHECK(p.visible_sources()[0]->tag == "accuracy");
+    CHECK(p.visible_sources()[1]->tag == "loss");
+    p.set_filter("accuracy");
+    CHECK(run_ids() == std::vector<std::int64_t>{(std::int64_t)runs[6]});
+    // The table's column matches too.
+    CHECK(p.visible_sources().size() == 2);
+    p.set_filter("loss");
+    CHECK(run_ids().size() == 1100);
+    CHECK((p.list_items().back().kind != PaneListItem::Kind::more));
+    p.set_filter("");
+    CHECK(run_ids().size() == 5);
+
+    // A metric selected inside its run is added as a panel like any row.
+    p.select("metric:" + std::to_string(runs[1098]) + "/loss");
+    REQUIRE(p.add_selected());
+    r.s->queue().drain();
+    p.update();
+    bool bound = false;
+    for (const auto& src : p.open_spec()->spec.sources)
+        bound |= src.catalog && *src.catalog == "metric:" + std::to_string(runs[1098]) + "/loss";
+    CHECK(bound);
+    CHECK(p.open_spec()->spec.panels.size() == 1);
+
+    r.s->catalog().remove_provider("metrics");
+}
+
+namespace {
+// The panel ids of a layout, and whether every split and tab group in it has
+// what it needs (two children, one tab): a removed panel leaves no gap.
+void layout_ids(const spec::LayoutNode& n, std::vector<std::string>& ids, bool& whole) {
+    if (n.kind == spec::LayoutNode::Kind::panel) {
+        ids.push_back(n.panel);
+        return;
+    }
+    if (n.children.size() < (n.kind == spec::LayoutNode::Kind::split ? 2u : 1u)) whole = false;
+    for (const auto& c : n.children) layout_ids(c, ids, whole);
+}
+std::vector<std::string> laid_out(const BuilderPane& p, bool* whole) {
+    std::vector<std::string> ids;
+    *whole = true;
+    if (p.open_spec() && p.open_spec()->spec.layout) layout_ids(*p.open_spec()->spec.layout, ids, *whole);
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+}  // namespace
+
+// The page's × on a panel, its menu's Remove panel and ⌫ all come to
+// remove_panel(): panel.remove as one undo step, from the ui origin on the
+// dashboard page and the builder origin in build mode, which closes the gap
+// in tabs and in a split, and ⌘Z brings the panel back where it was.
+TEST_CASE("builder pane: remove_panel closes the gap in tabs and in a split, one undo step") {
+    Rig r = rig("pane-remove-panel");
+    BuilderPane& p = *r.pane;
+    std::string text = read_text(std::string(CALIPER_SPEC_FIXTURES) + "/dashboard.spec.toml");
+    const std::string split = R"(children = [{ split = "horizontal", children = ["curves", "attention"] }, "rows"])";
+    const size_t at = text.find(split);
+    REQUIRE(at != std::string::npos);
+    text.replace(at, split.size(), R"(children = [{ tabs = ["curves", "attention"] }, "rows"])");
+    cb::CommandInvocation inv;
+    inv.name = "spec.set_text";
+    inv.args = {{"text", text}};
+    inv.origin = cb::CommandOrigin::builder;
+    REQUIRE_MESSAGE(r.s->invoke(inv).ok, "the fixture with tabs");
+    p.set_build_mode(false);
+    p.update();
+    const spec::Spec before = p.open_spec()->spec;
+    bool whole = false;
+    REQUIRE(laid_out(p, &whole) == std::vector<std::string>{"attention", "curves", "rows"});
+
+    // A tab, from the dashboard page: the ui origin, one step.
+    const size_t steps = r.steps();
+    REQUIRE(p.remove_panel("attention"));
+    CHECK_FALSE(p.open_spec()->spec.find_panel("attention"));
+    CHECK(laid_out(p, &whole) == std::vector<std::string>{"curves", "rows"});
+    CHECK(whole);
+    CHECK(r.steps() == steps + 1);
+    CHECK(r.journal().back()["name"] == "panel.remove");
+    CHECK(r.journal().back()["origin"] == "ui");
+    REQUIRE(p.undo());
+    CHECK(p.open_spec()->spec == before);
+
+    // A panel of the split: the tabs take its place.
+    REQUIRE(p.remove_panel("rows"));
+    CHECK(laid_out(p, &whole) == std::vector<std::string>{"attention", "curves"});
+    CHECK(whole);
+    REQUIRE(p.undo());
+    CHECK(p.open_spec()->spec == before);
+
+    // In build mode the same removal is the pane's gesture, from the builder
+    // origin; a panel that is not there is refused before anything is sent.
+    p.set_build_mode(true);
+    REQUIRE(p.remove_panel("curves"));
+    CHECK(r.journal().back()["origin"] == "builder");
+    CHECK_FALSE(p.remove_panel("curves"));
+    CHECK(p.error().code == "spec.unknown_panel");
+    REQUIRE(p.undo());
+    CHECK(p.open_spec()->spec == before);
 }
 
 TEST_CASE("builder pane: the dashboard by hand, one undo step per gesture, equal to the fixture") {

@@ -15,6 +15,7 @@
 
 #include "spec_test_workspace.h"
 
+#include "metrics_store.h"
 #include "open_url.h"
 
 #include <caliper_builder/acp/subprocess.h>
@@ -204,7 +205,12 @@ caliper_builder::acp::RunResult run_app(const std::string& exe, const std::strin
              {"CALIPER_TEST_SPEC_UI", script},
              {"CALIPER_TEST_SPEC_UI_SHOTS", root + "/shots"},
              {"CALIPER_EXIT_AFTER", "150"}};
-    for (auto& e : env) o.env.push_back(e);
+    // A variable of `env` replaces the default of the same name.
+    for (auto& e : env) {
+        auto same = std::find_if(o.env.begin(), o.env.end(), [&](const auto& d) { return d.name == e.name; });
+        if (same != o.env.end()) *same = e;
+        else o.env.push_back(e);
+    }
     o.env_remove = {"CALIPER_API"};
     caliper_builder::acp::RunLimits lim;
     lim.timeout_ms = 200000;
@@ -355,6 +361,124 @@ TEST_CASE("builder app: New dashboard leaves the landing's command line empty" *
         if (e.name == "spec.new" && e.ok && e.origin == caliper_builder::CommandOrigin::ui)
             titles.push_back(e.args.value("title", std::string()));
     CHECK(titles == std::vector<std::string>{"Run 42", "Run 43"});
+}
+
+// Metrics in Sources, grouped by run, in the app's own data folder: twelve
+// runs in its metrics store, a new dashboard, the newest five runs closed
+// with Show all, the newest run opened and its loss made a series panel.
+// CALIPER_TEST_WINDOW sets the window size (1440x900) and CALIPER_TEST_SHOTS
+// a folder for the captures, metric-runs-<collapsed|expanded>-<W>x<H>.png.
+TEST_CASE("builder app: a panel from a metric of a run opened in Sources" * doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const std::string root = app_root(exe, "builder-app-metric-runs");
+    if (root.empty()) return;
+    std::string window = "1440x900", shots = root + "/shots";
+    if (const char* w = std::getenv("CALIPER_TEST_WINDOW"); w && *w) window = w;
+    if (const char* d = std::getenv("CALIPER_TEST_SHOTS"); d && *d) shots = d;
+    std::uint64_t newest = 0;
+    {
+        caliper_host::MetricsStore store;
+        REQUIRE(store.open(root + "/data/metrics.duckdb"));
+        for (int i = 1; i <= 12; ++i) {
+            newest = store.begin_run("sweep", "lr-" + std::to_string(i));
+            for (int step = 0; step < 60; ++step) {
+                store.scalar(newest, "loss", step, 2.0 / (1.0 + 0.05 * i * step));
+                store.scalar(newest, "accuracy", step, 1.0 - 1.0 / (1.0 + 0.04 * i * step));
+            }
+            store.end_run(newest);
+        }
+        store.close();
+    }
+    const std::string run = std::to_string(newest), metric = "metric:" + run + "/loss";
+    const std::string script = "wait 60; page landing; key f3; page spec; pane source " + metric +
+                               "; wait 10; leave; wait 5; shot metric-runs-collapsed-" + window +
+                               "; click run:" + run + "; click source:" + metric +
+                               " 0.6 0.5; click primitive:series; pane focus series; wait 20; leave; wait 10; "
+                               "shot metric-runs-expanded-" + window + "; quit";
+    const auto result = run_app(exe, root, script, {{"CALIPER_WINDOW_SIZE", window}, {"CALIPER_TEST_SPEC_UI_SHOTS", shots}});
+    INFO("stderr tail: " << result.err.substr(result.err.size() > 4000 ? result.err.size() - 4000 : 0));
+    REQUIRE(result.error.ok());
+    if (result.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(result.status.success());
+    CHECK(result.err.find("[ui] done") != std::string::npos);
+    CHECK(std::filesystem::is_regular_file(shots + "/metric-runs-expanded-" + window + ".png"));
+    // The pane added the metric as a source and a series panel over it.
+    bool added = false, panel = false;
+    for (const auto& e : caliper_builder::read_journal(root + "/ws/journal/commands.jsonl").events) {
+        if (e.name == "source.add" && e.ok && e.args.value("catalog", std::string()) == metric) added = true;
+        if (e.name == "panel.create" && e.ok && e.args.value("primitive", std::string()) == "series") panel = true;
+    }
+    CHECK(added);
+    CHECK(panel);
+}
+
+// Removing a panel from the dashboard page, outside build mode: the × on its
+// strip, Remove panel in its menu and ⌫ on the focused panel, each a
+// panel.remove from the ui origin that ⌘Z takes back. The dashboard has a
+// panel beside two tabs. CALIPER_TEST_WINDOW and CALIPER_TEST_SHOTS as above;
+// the capture is panel-remove-hover-<W>x<H>.png, the × on the hovered panel.
+TEST_CASE("builder app: a panel removed with its x, its menu and the delete key, and brought back with undo" *
+          doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const std::string root = app_root(exe, "builder-app-remove-panel");
+    if (root.empty()) return;
+    std::string window = "1440x900", shots = root + "/shots";
+    if (const char* w = std::getenv("CALIPER_TEST_WINDOW"); w && *w) window = w;
+    if (const char* d = std::getenv("CALIPER_TEST_SHOTS"); d && *d) shots = d;
+    std::filesystem::create_directories(root + "/ws/data");
+    {
+        std::ofstream csv(root + "/ws/data/run42_metrics.csv");
+        csv << "step,loss,accuracy\n";
+        for (int i = 0; i < 100; ++i) csv << i << "," << 2.0 / (1 + i) << "," << i / 100.0 << "\n";
+    }
+    {
+        std::ofstream f(root + "/build.jsonl");
+        f << R"({"name":"data.import","args":{"paths":["data/run42_metrics.csv"],"run":true}})" << "\n"
+          << R"({"name":"spec.new","args":{"id":"run42-dashboard","title":"Run 42"}})" << "\n"
+          << R"({"name":"source.add","args":{"id":"metrics","catalog":"table:run42_metrics"}})" << "\n"
+          << R"({"name":"panel.create","args":{"id":"curves","primitive":"series","bind":{"x":"metrics.step","y":["metrics.loss"]}}})"
+          << "\n"
+          << R"({"name":"panel.create","args":{"id":"accuracy","primitive":"series","bind":{"x":"metrics.step","y":["metrics.accuracy"]}}})"
+          << "\n"
+          << R"({"name":"panel.create","args":{"id":"rows","primitive":"table","bind":{"rows":"metrics"}}})" << "\n"
+          << R"({"name":"layout.set","args":{"layout":{"root":"main","nodes":[)"
+          << R"({"id":"main","split":"horizontal","ratio":0.6,"children":["curves","side"]},)"
+          << R"({"id":"side","split":"tabs","children":["accuracy","rows"]}]}}})" << "\n"
+          << R"({"name":"applet.save","args":{"overwrite":true}})" << "\n"
+          << R"({"name":"applet.open","args":{"id":"run42-dashboard"}})" << "\n";
+    }
+    const std::string script =
+        "wait 60; page spec; wait 30; focus curves; wait 10; shot panel-remove-hover-" + window +
+        "; click remove:curves; wait 10; key cmd+z; wait 10; "
+        "menu panel:accuracy; wait 5; click menu:remove; wait 10; key cmd+z; wait 10; "
+        "focus curves; key backspace; wait 10; key cmd+z; wait 10; leave; wait 5; quit";
+    const auto result = run_app(exe, root, script,
+                                {{"CALIPER_COMMAND_SCRIPT", root + "/build.jsonl"}, {"CALIPER_WINDOW_SIZE", window},
+                                 {"CALIPER_TEST_SPEC_UI_SHOTS", shots}});
+    INFO("stderr tail: " << result.err.substr(result.err.size() > 4000 ? result.err.size() - 4000 : 0));
+    REQUIRE(result.error.ok());
+    if (result.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(result.status.success());
+    CHECK(result.err.find("[ui] done") != std::string::npos);
+    CHECK(std::filesystem::is_regular_file(shots + "/panel-remove-hover-" + window + ".png"));
+    // Three removals from the person's ui origin, each taken back by ⌘Z.
+    std::vector<std::string> removed;
+    size_t undone = 0;
+    for (const auto& e : caliper_builder::read_journal(root + "/ws/journal/commands.jsonl").events) {
+        if (e.name == "panel.remove" && e.event == "do" && e.ok) {
+            CHECK(e.origin == caliper_builder::CommandOrigin::ui);
+            removed.push_back(e.args.value("id", std::string()));
+        }
+        if (e.event == "undo" && e.ok) ++undone;
+    }
+    CHECK(removed == std::vector<std::string>{"curves", "accuracy", "curves"});
+    CHECK(undone == 3);
 }
 
 // Open in browser hands the browser only a link of the viewer on this
