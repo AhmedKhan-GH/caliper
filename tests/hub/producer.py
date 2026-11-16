@@ -32,7 +32,9 @@ input and output weights) computed off the network thread.
 With --all-kinds it also streams "units", a points view of the hidden
 units placed by their two output weights and coloured by the class they vote
 for, the larger of the two (its point dim indexes "units" with --selection),
-and "fc1 values", a histogram of the first layer's weights.
+and "fc1 values", a histogram of the first layer's weights whose "out" and
+"in" dims a viewer can index or reduce. "fc1.weight" then also offers the
+source "fc1.grad", the weights' gradient, for a viewer's source menu.
 
 When it exits it prints one JSON line: {"id", "steps", "loss_values",
 "snapshots_sent", "events", "lr", "saves", "selects", "selection"}.
@@ -67,6 +69,27 @@ def heat_view(vid: int, name: str, rows: int, cols: int, row_items: str = "", co
         inn["items"] = col_items
     return {"id": vid, "name": name, "kind": int(W.Kind.HEATMAP), "default": {},
             "sources": [{"name": name, "dtype": "f32", "dims": [out, inn]}]}
+
+
+def apply_index_reduce(a: np.ndarray, dims: list, dv: dict) -> np.ndarray:
+    """The source array `a`, whose axes are `dims` in order, under a resolved
+    data view's index (an integer drops the dim, a range keeps it) and reduce."""
+    ops = {"mean": np.mean, "sum": np.sum, "max": np.max, "min": np.min,
+           "norm": lambda x, axis: np.sqrt(np.sum(x * x, axis=axis))}
+    index, reduce = dv.get("index") or {}, dv.get("reduce") or {}
+    names = [d["name"] for d in dims]
+    for name in list(names):
+        ax = names.index(name)
+        sel = index.get(name)
+        if isinstance(sel, int):
+            a = np.take(a, sel, axis=ax)
+            names.pop(ax)
+        elif isinstance(sel, list):
+            a = np.take(a, range(*sel), axis=ax)
+        elif name in reduce:
+            a = ops[reduce[name]](a, axis=ax)
+            names.pop(ax)
+    return a
 
 
 def pool(a: np.ndarray, rows: int, cols: int) -> np.ndarray:
@@ -351,7 +374,8 @@ class Stream:
     def _derived(self, sub: int, s: dict, view: dict, seq: int, a) -> W.Snapshot:
         """A snapshot of the points view (positions, values) or the histogram (weights)."""
         if view["kind"] == W.Kind.HISTOGRAM:
-            w = np.asarray(a, dtype=np.float32).ravel()
+            src = view["sources"][0]
+            w = np.asarray(apply_index_reduce(np.asarray(a), src["dims"], s["resolved"]), dtype=np.float32).ravel()
             lo, hi = float(w.min()), float(w.max())
             counts, _ = np.histogram(w, bins=32, range=(lo, hi))
             return W.Snapshot(sub, s["view"], seq, time.monotonic_ns(), int(W.Kind.HISTOGRAM), s["resolved"],
@@ -424,8 +448,10 @@ class Stream:
                     s["next"] += len(vals)
                     s["last"] = now
                     continue
+                # The source the data view names (a view may offer several).
+                key = s["resolved"].get("source", s["view"])
                 with self.lock:
-                    seq, a = self.latest.get(s["view"], (0, None))
+                    seq, a = self.latest.get(key, (0, None))
                 if a is None or seq == s["seq"]:
                     continue
                 layout = W.payload_layout(view, s["resolved"])
@@ -473,6 +499,7 @@ def train(stream: Stream, seconds: float, device: str) -> int:
         stream.publish("fc1.weight", w1)
         stream.publish("fc2.weight", w2)
         if "units" in stream.views:
+            stream.publish("fc1.grad", model[0].weight.grad.detach().cpu().numpy())
             stream.publish("units", (w2.T.copy(), np.argmax(w2, axis=0).astype(np.float32)))
             stream.publish("fc1 values", w1)
         time.sleep(0.004)
@@ -515,6 +542,8 @@ def main() -> int:
         if a.selection:
             views[2]["items"] = "step"
         if a.all_kinds:
+            grad = dict(views[0]["sources"][0], name="fc1.grad")
+            views[0]["sources"].append(grad)
             point = {"name": "unit", "size": 64}
             if a.selection:
                 point["items"] = "units"

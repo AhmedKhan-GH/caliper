@@ -2,7 +2,7 @@
 #include "live/live_controls.h"
 
 #include "caliper/live_net.h"
-#include "live/live_views_state.h"   // the views' payload map and geometry (the selection hook)
+#include "live/live_views_state.h"   // the views' payload maps and set_link (linked selections)
 
 #include <imgui_internal.h>   // SeparatorEx
 
@@ -147,7 +147,10 @@ void draw_param(RunControls& rc, const ControlsLook& look, const ControlParam& p
             int64_t lo = (int64_t)std::llround(p.min), hi = (int64_t)std::llround(p.max);
             const ImGuiSliderFlags f = (p.log ? ImGuiSliderFlags_Logarithmic : 0) | ImGuiSliderFlags_AlwaysClamp |
                                        ImGuiSliderFlags_NoInput;
-            if (ImGui::SliderScalar("##v", ImGuiDataType_S64, &v, &lo, &hi, "", f)) rc.set(p.name, Json(v));
+            ImGui::PushStyleColor(ImGuiCol_Text, 0);   // the field beside it writes the value
+            const bool moved = ImGui::SliderScalar("##v", ImGuiDataType_S64, &v, &lo, &hi, "%lld", f);
+            ImGui::PopStyleColor();
+            if (moved) rc.set(p.name, Json(v));
             if (ImGui::IsItemDeactivatedAfterEdit()) rc.set(p.name, Json(v));
             remember("slider:" + p.name);
             ImGui::SameLine(0.0f, 4.0f);
@@ -166,9 +169,14 @@ void draw_param(RunControls& rc, const ControlsLook& look, const ControlParam& p
             // The slider carries no text; the exact value is in its own field beside it.
             ImGui::SetNextItemWidth(kSliderW);
             double lo = p.min, hi = p.max;
+            // The format sets the slider's precision (a log slider treats values
+            // under its last digit as zero), so it carries one, drawn in no ink.
             const ImGuiSliderFlags f = (p.log ? ImGuiSliderFlags_Logarithmic : 0) | ImGuiSliderFlags_AlwaysClamp |
-                                       ImGuiSliderFlags_NoInput;
-            if (ImGui::SliderScalar("##v", ImGuiDataType_Double, &v, &lo, &hi, "", f)) rc.set(p.name, Json(v));
+                                       ImGuiSliderFlags_NoInput | ImGuiSliderFlags_NoRoundToFormat;
+            ImGui::PushStyleColor(ImGuiCol_Text, 0);
+            const bool moved = ImGui::SliderScalar("##v", ImGuiDataType_Double, &v, &lo, &hi, "%.12g", f);
+            ImGui::PopStyleColor();
+            if (moved) rc.set(p.name, Json(v));
             if (ImGui::IsItemDeactivatedAfterEdit()) rc.set(p.name, Json(v));
             remember("slider:" + p.name);
             ImGui::SameLine(0.0f, 4.0f);

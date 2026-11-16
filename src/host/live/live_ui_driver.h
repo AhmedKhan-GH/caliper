@@ -84,7 +84,8 @@ public:
             return;
         }
         if (s.verb == "click" || s.verb == "toggle" || s.verb == "set") {
-            const std::string name = s.verb == "click" ? s.a : "param:" + s.a;
+            // A widget's name may hold spaces (a view's): click takes the rest of the step.
+            const std::string name = s.verb == "click" ? s.a + (s.b.empty() ? "" : " " + s.b) : "param:" + s.a;
             if (phase_ == 0) {
                 const auto& w = bar_widgets();
                 const auto it = w.find(name);
@@ -127,9 +128,10 @@ public:
         if (s.verb == "select") {
             constexpr int kMoves = 8;
             if (phase_ == 0) {
-                const caliper_live_views::View* v = core ? caliper_live_views::find(core, s.a.c_str()) : nullptr;
+                const std::string view = s.a + (s.b.empty() ? "" : " " + s.b);
+                const caliper_live_views::View* v = core ? caliper_live_views::find(core, view.c_str()) : nullptr;
                 if (!v || !v->geo_valid || v->geo_area[2] < 8.0f || v->geo_area[3] < 8.0f) {
-                    if (frames_ > kPatience) fail("view '" + s.a + "' was never drawn");
+                    if (frames_ > kPatience) fail("view '" + view + "' was never drawn");
                     return;
                 }
                 ax_ = v->geo_area[0];
@@ -169,7 +171,7 @@ public:
                 io.AddMouseButtonEvent(0, false);
             } else {
                 io.AddKeyEvent(ImGuiMod_Shift, false);
-                next("select in " + s.a);
+                next("select in " + s.a + (s.b.empty() ? "" : " " + s.b));
                 return;
             }
             ++phase_;
