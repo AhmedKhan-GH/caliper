@@ -1,0 +1,58 @@
+{
+  "clear_reset_path.bin": {
+    "error": "bad_request"
+  },
+  "colors_and_values.bin": {
+    "error": "bad_request"
+  },
+  "colors_rgb.bin": {
+    "error": "bad_request"
+  },
+  "indices_i64.bin": {
+    "error": "bad_request"
+  },
+  "lines_edges.bin": {
+    "error": "unsupported"
+  },
+  "mode_missing.bin": {
+    "error": "bad_request"
+  },
+  "part_arrows.bin": {
+    "error": "unsupported"
+  },
+  "part_unknown.bin": {
+    "error": "bad_request"
+  },
+  "path_dotdot.bin": {
+    "error": "bad_request"
+  },
+  "path_too_deep.bin": {
+    "error": "bad_request"
+  },
+  "positions_4d.bin": {
+    "error": "bad_request"
+  },
+  "positions_length_mismatch.bin": {
+    "close_code": 4000,
+    "reason": "malformed"
+  },
+  "positions_missing.bin": {
+    "error": "bad_request"
+  },
+  "segments_odd.bin": {
+    "error": "bad_request"
+  },
+  "split_piece.bin": {
+    "error": "unsupported"
+  },
+  "strip_lengths_f32.bin": {
+    "error": "bad_request"
+  },
+  "strip_lengths_sum.bin": {
+    "error": "bad_request"
+  },
+  "truncated_mesh.bin": {
+    "close_code": 4000,
+    "reason": "truncated"
+  }
+}

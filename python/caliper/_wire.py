@@ -71,6 +71,8 @@ class MsgType(enum.IntEnum):
     CONTROL = 0x0051
     CONTROL_REPLY = 0x0052
     SELECTION = 0x0060             # 3.1, capability "selection"
+    SCENE_UPDATE = 0x0070          # 3.2 draft, capability "scenes" (see the 3.2 block)
+    SCENE_CLEAR = 0x0072           # 3.2 draft
 
 
 class Kind(enum.IntEnum):          # CaliperLiveKind
@@ -79,6 +81,7 @@ class Kind(enum.IntEnum):          # CaliperLiveKind
     POINTS = 3
     SERIES = 4
     HISTOGRAM = 5
+    SCENE = 6                      # 3.2 draft, capability "scenes" (see the 3.2 block)
 
 
 class DType(enum.IntEnum):         # CaliperDType
@@ -1310,6 +1313,8 @@ def resolve_data_view(view: dict, request: dict | None, *,
     VIEWS message): the request's shape with every default filled in, indices
     normalised and budgets clamped. ``retain`` is the producer's series
     retention. Raises :class:`MessageError` (``bad_data_view``)."""
+    if view.get("kind") == Kind.SCENE:          # 3.2 draft
+        return resolve_scene_data_view(view, request)
     if request is not None and not _obj(request):
         _dv_bad("a data view is a JSON object")
     dv = _merge(request, view.get("default"))
@@ -1458,3 +1463,402 @@ def payload_layout(view: dict, resolved: dict) -> dict:
         c["size"] = min(c["count"], ext)
         order = [r, c]
     return {"extent": [a["size"] for a in order], "axes": order, "tile": tinfo}
+
+
+# ===========================================================================
+# PROTOCOL 3.2 DRAFT: THE SCENES SUBSET
+#
+# Proposals of the 3.2 draft that sprint 2 has not confirmed: the minor 2,
+# the capability "scenes", the kind scene (6), SCENE_UPDATE (0x0070) and
+# SCENE_CLEAR (0x0072), and the limits below; each is one line, here and in
+# the 3.2 block of include/caliper/live_net.h. MsgType.SCENE_UPDATE,
+# MsgType.SCENE_CLEAR and Kind.SCENE are the only lines outside this block.
+# docs/references/wire-protocol-3-2.md states what is built: the parts
+# points, lines (segments and strips) and mesh, SCENE_CLEAR, the VIEWS key
+# "scene" and the default scene data view. Senders keep writing MINOR (1)
+# until 3.2 is confirmed; the 3.2 golden frames carry MINOR_3_2.
+#
+# What this subset does with the rest of the draft, by its versioning rules:
+# a part that is drafted but not built (arrows, boxes, image, camera), a
+# split piece and lines of mode "edges" are answered ERROR "unsupported" and
+# ignored, since reading them as something else would draw the wrong thing;
+# sections and keys it does not build (stamp, class_ids, labels, normals,
+# uvs, texture) are ignored, as every unknown section and key is.
+# ===========================================================================
+MINOR_3_2 = 2
+CAP_SCENES = "scenes"
+PART_POINTS, PART_LINES, PART_MESH = "points", "lines", "mesh"
+LINES_SEGMENTS, LINES_STRIPS = "segments", "strips"
+COLOR_PER_VERTEX, COLOR_PER_STRIP = "vertex", "strip"
+SPACE_3D, SPACE_2D = "3d", "2d"
+PATH_MAX = 255
+PATH_SEGMENTS_MAX = 16
+UNITS_MAX = 15
+MAX_ENTITIES = 1024
+MAX_BATCHES = 2048
+MAX_BATCH_POINTS = 4_194_304
+MAX_BATCH_ITEMS = 1_048_576
+SCENE_DEFAULT_MAX_ITEMS = 100_000
+SCENE_LIMIT_MAX_ITEMS = 1_048_576
+SCENE_DEFAULT_MAX_VERTICES = 1_000_000
+SCENE_LIMIT_MAX_VERTICES = 4_194_304
+SCENE_DEFAULT_MAX_EXTENT = 1024
+SCENE_LIMIT_MAX_EXTENT = 8192
+
+PARTS = (PART_POINTS, PART_LINES, PART_MESH)
+DRAFTED_PARTS = ("arrows", "boxes", "image", "camera")      # in the draft, not built
+UP_AXES_3D = ("+x", "-x", "+y", "-y", "+z", "-z")
+UP_AXES_2D = ("-y", "+y")
+# The sections of each part, in the order a sender writes them.
+PART_SECTIONS = {
+    PART_POINTS: ("positions", "colors", "values", "radii"),
+    PART_LINES: ("positions", "strip_lengths", "colors", "values"),
+    PART_MESH: ("positions", "indices", "colors", "values"),
+}
+# The keys of each part (SCENE_UPDATE metadata beside the common ones).
+PART_KEYS = {
+    PART_POINTS: ("color", "radius", "colormap", "flags", "vmin", "vmax", "stats"),
+    PART_LINES: ("mode", "color_per", "color", "width", "colormap", "flags", "vmin", "vmax",
+                 "stats"),
+    PART_MESH: ("color", "colormap", "flags", "vmin", "vmax", "stats"),
+}
+SCENE_DATA_VIEW = {"entities": {"include": ["**"], "exclude": []},
+                   "budget": {"max_points": DEFAULT_MAX_POINTS,
+                              "max_items": SCENE_DEFAULT_MAX_ITEMS,
+                              "max_vertices": SCENE_DEFAULT_MAX_VERTICES,
+                              "max_extent": SCENE_DEFAULT_MAX_EXTENT}}
+
+_PATH_SEGMENT = re.compile(r"[A-Za-z0-9_.\-]{1,63}")
+
+
+def entity_path_ok(v) -> bool:
+    """An entity path: 0 to 16 segments of [A-Za-z0-9_.-]{1,63} joined by
+    '/', at most 255 bytes, never '.' or '..'. The empty path is the root."""
+    if not isinstance(v, str):
+        return False
+    if v == "":
+        return True
+    if len(v) > PATH_MAX or not v.isascii():
+        return False
+    segs = v.split("/")
+    return len(segs) <= PATH_SEGMENTS_MAX and all(
+        _PATH_SEGMENT.fullmatch(x) is not None and x not in (".", "..") for x in segs)
+
+
+def _unsupported(msg: str):
+    raise MessageError(ERR_UNSUPPORTED, msg)
+
+
+def _rgba(v) -> bool:
+    return isinstance(v, list) and len(v) == 4 and all(_is_int(x) and 0 <= x <= 255 for x in v)
+
+
+def _positive(v) -> bool:
+    return _finite(v) and v > 0
+
+
+def _stats_list(v) -> bool:
+    return isinstance(v, list) and len(v) <= MAX_STATS and all(_stat(x) for x in v)
+
+
+_KEY_CHECKS = {
+    "color": (_rgba, "[r, g, b, a] of integers from 0 to 255"),
+    "radius": (_positive, "a positive number"),
+    "width": (_positive, "a positive number"),
+    "colormap": (_is_int, "an integer"),
+    "flags": (_uint, "an unsigned integer"),
+    "vmin": (_is_num, "a number"),
+    "vmax": (_is_num, "a number"),
+    "stats": (_stats_list, f"at most {MAX_STATS} numbers or nulls"),
+    "mode": (lambda v: v in (LINES_SEGMENTS, LINES_STRIPS, "edges"), "segments or strips"),
+    "color_per": (lambda v: v in (COLOR_PER_VERTEX, COLOR_PER_STRIP, "edge"), "vertex or strip"),
+}
+_DTYPE_NAME = {DType.F32: "f32", DType.F16: "f16", DType.BF16: "bf16", DType.I64: "i64",
+               DType.I32: "i32", DType.U8: "u8"}
+
+
+def _part_section(f: Frame, name: str, dtype: int, shape: tuple):
+    """The section ``name`` of a scene part, or None; ``shape`` holds the
+    rows it must have (None: any) and its rank."""
+    s = f.section(name)
+    if s is None:
+        return None
+    want = "(" + ", ".join("_" if x is None else str(x) for x in shape) + ")"
+    if (s.encoding != Encoding.RAW or s.dtype != dtype or len(s.shape) != len(shape)
+            or any(x is not None and x != y for x, y in zip(shape, s.shape))):
+        _bad(f"{name!r} must be {_DTYPE_NAME[DType(dtype)]} {want}, got dtype {s.dtype} "
+             f"shape {list(s.shape)}")
+    return s
+
+
+def _part_positions(f: Frame, part: str):
+    pos = f.section("positions")
+    if pos is None:
+        _bad(f"a {part} part needs a 'positions' section")
+    _part_section(f, "positions", DType.F32, (None, None))
+    n, d = pos.shape
+    if d not in (2, 3):
+        _bad(f"'positions' is (N, 2) or (N, 3), got {list(pos.shape)}")
+    if n > MAX_BATCH_POINTS:
+        _bad(f"{n} positions, more than {MAX_BATCH_POINTS} in a batch")
+    return pos, n
+
+
+def _colours(f: Frame, rows: int, arrays: dict) -> None:
+    c = _part_section(f, "colors", DType.U8, (rows, 4))
+    v = _part_section(f, "values", DType.F32, (rows,))
+    if c is not None and v is not None:
+        _bad("'colors' and 'values' together")
+    if c is not None:
+        arrays["colors"] = c
+    if v is not None:
+        arrays["values"] = v
+
+
+def _decode_points(f: Frame) -> dict:
+    pos, n = _part_positions(f, PART_POINTS)
+    arrays = {"positions": pos}
+    _colours(f, n, arrays)
+    r = _part_section(f, "radii", DType.F32, (n,))
+    if r is not None:
+        arrays["radii"] = r
+    return arrays
+
+
+def _decode_lines(f: Frame, mode: str, color_per: str | None) -> dict:
+    if mode == "edges":
+        _unsupported("lines of mode 'edges' (index-pair edges) are not built yet")
+    pos, v = _part_positions(f, PART_LINES)
+    arrays = {"positions": pos}
+    if f.section("indices") is not None:
+        _bad(f"lines of mode {mode!r} take no 'indices'")
+    rows = v
+    if mode == LINES_SEGMENTS:
+        if v % 2:
+            _bad(f"segments need an even number of vertices, got {v}")
+        if f.section("strip_lengths") is not None:
+            _bad("segments take no 'strip_lengths'")
+        if color_per not in (None, COLOR_PER_VERTEX):
+            _bad(f"segments take color_per 'vertex', got {color_per!r}")
+    else:
+        sl = _part_section(f, "strip_lengths", DType.I32, (None,))
+        if sl is None:
+            _bad("strips need a 'strip_lengths' section")
+        lens = sl.array()
+        if lens.shape[0] > MAX_BATCH_ITEMS:
+            _bad(f"{lens.shape[0]} strips, more than {MAX_BATCH_ITEMS} in a batch")
+        if lens.size and int(lens.min()) < 1:
+            _bad("every strip length is at least 1")
+        total = int(lens.sum(dtype=np.int64))
+        if total != v:
+            _bad(f"the strip lengths add up to {total}, not to the {v} vertices")
+        arrays["strip_lengths"] = sl
+        if color_per == "edge":
+            _bad("strips take color_per 'vertex' or 'strip'")
+        if color_per == COLOR_PER_STRIP:
+            rows = lens.shape[0]
+    _colours(f, rows, arrays)
+    return arrays
+
+
+def _decode_mesh(f: Frame) -> dict:
+    pos, v = _part_positions(f, PART_MESH)
+    arrays = {"positions": pos}
+    idx = _part_section(f, "indices", DType.I32, (None, 3))
+    if idx is not None:
+        if idx.shape[0] > MAX_BATCH_POINTS:
+            _bad(f"{idx.shape[0]} triangles, more than {MAX_BATCH_POINTS} in a batch")
+        arrays["indices"] = idx
+    elif v % 3:
+        _bad(f"a mesh without 'indices' needs a multiple of 3 vertices, got {v}")
+    _colours(f, v, arrays)
+    return arrays
+
+
+def _part_keys(m: dict, part: str) -> dict:
+    out = {}
+    for key in PART_KEYS[part]:
+        v = m.get(key)
+        if v is None:
+            continue
+        check, what = _KEY_CHECKS[key]
+        if not check(v):
+            _bad(f"{key!r} must be {what}, got {v!r}")
+        out[key] = v
+    return out
+
+
+@dataclass
+class SceneUpdate(_Msg):
+    """3.2 draft: one part of one entity of a scene. ``arrays`` maps section
+    names to arrays (numpy, or :class:`Section` when decoded), written in the
+    part's order (PART_SECTIONS); ``params`` holds the part's keys
+    (PART_KEYS), ``stats`` entries may be None (a non-finite value)."""
+    TYPE: ClassVar[MsgType] = MsgType.SCENE_UPDATE
+    sub: int
+    view: str
+    seq: int
+    stamp_ns: int
+    path: str
+    part: str
+    arrays: dict
+    params: dict = field(default_factory=dict)
+    static: bool = False
+    state: bool = False
+    axes: list | None = None
+    items: str | None = None
+
+    def to_meta(self):
+        meta = {"sub": self.sub, "view": self.view, "seq": self.seq, "stamp_ns": self.stamp_ns,
+                "path": self.path, "part": self.part}
+        for key, v in self.params.items():
+            if v is None:
+                continue
+            if key == "stats":
+                v = [_json_float(x) for x in v]
+            elif key in ("vmin", "vmax", "radius", "width"):
+                v = float(v)
+            elif key == "color":
+                v = [int(x) for x in v]
+            meta[key] = v
+        if self.static:
+            meta["static"] = True
+        if self.state:
+            meta["state"] = True
+        if self.axes is not None:
+            meta["axes"] = list(self.axes)
+        if self.items is not None:
+            meta["items"] = self.items
+        return meta
+
+    def to_sections(self):
+        out = []
+        for name in PART_SECTIONS.get(self.part, ()):
+            a = self.arrays.get(name)
+            if a is not None:
+                out.append(a if isinstance(a, Section) else Section.from_array(name, a))
+        return out
+
+    @classmethod
+    def from_frame(cls, f):
+        m = f.meta
+        sub = _req(m, "sub", _u32, "a uint32")
+        view = _req(m, "view", _name, "a view name")
+        seq = _req(m, "seq", _uint, "an unsigned integer")
+        stamp_ns = _req(m, "stamp_ns", _uint, "an unsigned integer")
+        path = _req(m, "path", entity_path_ok, "an entity path")
+        part = _req(m, "part", _str, "a string")
+        if part in DRAFTED_PARTS:
+            _unsupported(f"the part {part!r} is not built yet")
+        if part not in PARTS:
+            _bad(f"unknown part {part!r}")
+        if m.get("split") is not None:
+            _unsupported("split updates are not built yet")
+        params = _part_keys(m, part)
+        if part == PART_POINTS:
+            arrays = _decode_points(f)
+        elif part == PART_LINES:
+            if "mode" not in params:
+                _bad("a lines part needs 'mode'")
+            arrays = _decode_lines(f, params["mode"], params.get("color_per"))
+        else:
+            arrays = _decode_mesh(f)
+        if "stats" in params:
+            params["stats"] = [math.nan if x is None else float(x) for x in params["stats"]]
+        return cls(sub, view, seq, stamp_ns, path, part, arrays, params,
+                   _opt(m, "static", _bool, "a boolean", False),
+                   _opt(m, "state", _bool, "a boolean", False),
+                   _opt(m, "axes", lambda v: isinstance(v, list), "a list"),
+                   _opt(m, "items", _name, "an item space name"))
+
+
+_CLEAR_PARTS = PARTS + DRAFTED_PARTS + ("transform",)
+
+
+@dataclass
+class SceneClear(_Msg):
+    """3.2 draft: clear entity ``path`` (its subtree too with ``recursive``),
+    only ``parts`` when given; ``reset`` empties the whole scene, static items
+    included, and opens a scene's state for a new subscription (``state``)."""
+    TYPE: ClassVar[MsgType] = MsgType.SCENE_CLEAR
+    sub: int
+    view: str
+    seq: int
+    stamp_ns: int
+    path: str = ""
+    recursive: bool = False
+    parts: list | None = None
+    reset: bool = False
+    static: bool = False
+    state: bool = False
+
+    def to_meta(self):
+        meta = {"sub": self.sub, "view": self.view, "seq": self.seq, "stamp_ns": self.stamp_ns,
+                "path": self.path}
+        for key in ("recursive", "reset", "static", "state"):
+            if getattr(self, key):
+                meta[key] = True
+        if self.parts is not None:
+            meta["parts"] = list(self.parts)
+        return meta
+
+    @classmethod
+    def from_frame(cls, f):
+        m = f.meta
+        c = cls(_req(m, "sub", _u32, "a uint32"), _req(m, "view", _name, "a view name"),
+                _req(m, "seq", _uint, "an unsigned integer"),
+                _req(m, "stamp_ns", _uint, "an unsigned integer"),
+                _req(m, "path", entity_path_ok, "an entity path"),
+                _opt(m, "recursive", _bool, "a boolean", False),
+                _opt(m, "parts", lambda v: isinstance(v, list) and len(v) > 0
+                     and all(x in _CLEAR_PARTS for x in v), "a list of parts"),
+                _opt(m, "reset", _bool, "a boolean", False),
+                _opt(m, "static", _bool, "a boolean", False),
+                _opt(m, "state", _bool, "a boolean", False))
+        if c.reset and c.path != "":
+            _bad("a reset clears the root: its 'path' is \"\"")
+        return c
+
+
+MESSAGES[SceneUpdate.TYPE] = SceneUpdate
+MESSAGES[SceneClear.TYPE] = SceneClear
+__all__ += ["SceneUpdate", "SceneClear", "entity_path_ok", "scene_view_info",
+            "resolve_scene_data_view"]
+
+
+def scene_view_info(entry: dict) -> dict:
+    """The key "scene" of a VIEWS entry of kind scene, checked, with its
+    defaults filled in: {"space", "up", "units"}. A "view_camera" is not
+    built yet and is left out. Raises :class:`MessageError` (bad_request)."""
+    sc = entry.get("scene")
+    if sc is None:
+        sc = {}
+    if not _obj(sc):
+        _bad(f"'scene' must be an object, got {sc!r}")
+    space = sc.get("space", SPACE_3D)
+    if space not in (SPACE_3D, SPACE_2D):
+        _bad(f"scene space {space!r}; expected '3d' or '2d'")
+    up = sc.get("up")
+    axes = UP_AXES_3D if space == SPACE_3D else UP_AXES_2D
+    if up is None:
+        up = "+y" if space == SPACE_3D else "-y"
+    if up not in axes:
+        _bad(f"scene up {up!r}; a {space} scene takes one of {list(axes)}")
+    units = sc.get("units", "m")
+    if not isinstance(units, str) or len(units.encode("utf-8")) > UNITS_MAX:
+        _bad(f"scene units must be a string of at most {UNITS_MAX} bytes, got {units!r}")
+    return {"space": space, "up": up, "units": units}
+
+
+def resolve_scene_data_view(view: dict, request: dict | None) -> dict:
+    """The resolved data view of a scene subscription. Only the default data
+    view is built in this subset: a request that is absent, {}, or the
+    resolved default itself. Raises :class:`MessageError` (bad_data_view)."""
+    if request is not None and not _obj(request):
+        _dv_bad("a data view is a JSON object")
+    if view.get("default") not in (None, {}, SCENE_DATA_VIEW):
+        _dv_bad("a scene's own default data view is not built yet")
+    if request not in (None, {}, SCENE_DATA_VIEW):
+        _dv_bad("only the default data view of a scene is built yet: send {} or none; "
+                "entity filters and budgets come in a later increment")
+    return json.loads(json.dumps(SCENE_DATA_VIEW))

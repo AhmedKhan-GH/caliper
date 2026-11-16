@@ -1,0 +1,71 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 268,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 224,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 112
+  },
+  "meta": {
+    "color": [
+      255,
+      80,
+      80,
+      255
+    ],
+    "part": "points",
+    "path": "current",
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "positions",
+        "shape": [
+          1,
+          3
+        ]
+      }
+    ],
+    "seq": 41,
+    "stamp_ns": 81234567893123,
+    "stats": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      -0.25,
+      -0.25
+    ],
+    "sub": 2,
+    "view": "landscape"
+  },
+  "meta_offset": 28,
+  "name": "v3_2/scene_update_points_color",
+  "section_lengths": [
+    12
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 12,
+      "name": "positions",
+      "offset": 256,
+      "shape": [
+        1,
+        3
+      ],
+      "values": [
+        0.0,
+        0.0,
+        -0.25
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}

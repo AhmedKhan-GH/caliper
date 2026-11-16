@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures" / "wire_v3"
 HEADER_H = ROOT / "include" / "caliper" / "live_net.h"
 PAGE = ROOT / "docs" / "references" / "wire-protocol.md"
+PAGE_32 = ROOT / "docs" / "references" / "wire-protocol-3-2.md"   # the 3.2 draft's built subset
 
 sys.path.insert(0, str(ROOT / "python"))
 from caliper import _wire as w  # noqa: E402
@@ -39,6 +40,8 @@ GEN = _generator()
 VALID_30 = sorted(p.stem for p in FIXTURES.glob("*.bin"))
 VALID_31 = sorted(f"v3_1/{p.stem}" for p in (FIXTURES / "v3_1").glob("*.bin"))
 VALID = VALID_30 + VALID_31
+VALID_32 = sorted(f"v3_2/{p.stem}" for p in (FIXTURES / "v3_2").glob("*.bin"))   # test_wire_32.py
+TYPES_32 = {0x70, 0x72}
 LATER_MINOR = ("ping_future", "unknown_type")
 TYPES_30 = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x10, 0x11, 0x20, 0x21, 0x22, 0x23, 0x24, 0x30,
             0x31, 0x40}
@@ -70,7 +73,7 @@ def test_generator_reproduces_every_file():
 
 
 def test_one_golden_frame_per_message_type():
-    covered = {w.decode_frame((FIXTURES / f"{n}.bin").read_bytes()).type for n in VALID}
+    covered = {w.decode_frame((FIXTURES / f"{n}.bin").read_bytes()).type for n in VALID + VALID_32}
     assert {int(t) for t in w.MsgType} <= covered
 
 
@@ -92,7 +95,7 @@ def test_golden_frames_keep_their_minor():
 def test_31_frames_are_well_formed_for_30():
     """A 3.0 receiver accepts every 3.1 frame: the frame rules did not change,
     the new types are new ids, and the 3.0 types only gained optional keys."""
-    new = {int(t) for t in w.MsgType} - TYPES_30
+    new = {int(t) for t in w.MsgType} - TYPES_30 - TYPES_32
     assert new == {0x50, 0x51, 0x52, 0x60}
     for n in VALID_31:
         f = w.decode_frame((FIXTURES / f"{n}.bin").read_bytes())
@@ -627,13 +630,14 @@ def test_header_matches_codec():
 
 def test_page_tables_match_header():
     page = PAGE.read_text()
+    both = page + PAGE_32.read_text()
     consts = _header_constants()
-    rows = re.findall(r"^\| `0x([0-9a-f]{4})` \| `(\w+)` \|", page, re.M)
+    rows = re.findall(r"^\| `0x([0-9a-f]{4})` \| `(\w+)` \|", both, re.M)
     assert {int(i, 16): n for i, n in rows} == {int(t): t.name.lower() for t in w.MsgType}
     codes = dict(re.findall(r"^\| (\d{4}) \| `(CALIPER_NET_CLOSE_\w+)` \|", page, re.M))
     assert codes and all(consts[n] == int(c) for c, n in codes.items())
     assert set(codes.values()) == {n for n in consts if n.startswith("CALIPER_NET_CLOSE_")}
-    limits = re.findall(r"^\| `(CALIPER_NET_\w+)` \| ([\d,]+)", page, re.M)
+    limits = re.findall(r"^\| `(CALIPER_NET_\w+)` \| ([\d,]+)", both, re.M)
     assert len(limits) >= 25
     for n, v in limits:
         assert consts[n] == int(v.replace(",", "")), n

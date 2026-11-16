@@ -372,6 +372,55 @@ static inline uint32_t caliper_net_align(uint32_t n) {
     return (n + (CALIPER_NET_SECTION_ALIGN - 1u)) & ~(CALIPER_NET_SECTION_ALIGN - 1u);
 }
 
+/* ===========================================================================
+ * PROTOCOL 3.2 DRAFT: THE SCENES SUBSET
+ *
+ * Proposals that sprint 2 has not confirmed: the minor version 2, the
+ * capability "scenes", the kind scene (6), SCENE_UPDATE (0x0070) and
+ * SCENE_CLEAR (0x0072), and the limits below. Each is one line here, so a
+ * renumbering changes one line. docs/references/wire-protocol-3-2.md states
+ * what is built of them: the parts points, lines (segments and strips) and
+ * mesh, SCENE_CLEAR, the VIEWS key "scene" and the default scene data view.
+ * Senders keep writing CALIPER_NET_PROTOCOL_MINOR in their frames until 3.2 is
+ * confirmed; the 3.2 golden frames (tests/fixtures/wire_v3/v3_2) carry
+ * CALIPER_NET_MINOR_3_2. A peer decides by the capability, never the minor.
+ * Every 3.1 message keeps its meaning and encoding.
+ * ===========================================================================*/
+#define CALIPER_NET_MINOR_3_2            2u
+#define CALIPER_NET_CAP_SCENES           "scenes"     /* kind scene and its messages      */
+#define CALIPER_NET_KIND_SCENE           6            /* SCENE_UPDATE and SCENE_CLEAR      */
+#define CALIPER_NET_MSG_SCENE_UPDATE     0x0070u      /* P -> V/H, H -> V   one part of one entity */
+#define CALIPER_NET_MSG_SCENE_CLEAR      0x0072u      /* P -> V/H, H -> V   clear an entity or reset */
+
+/* SCENE_UPDATE "part"; arrows, boxes, image and camera are drafted, not built */
+#define CALIPER_NET_PART_POINTS          "points"
+#define CALIPER_NET_PART_LINES           "lines"
+#define CALIPER_NET_PART_MESH            "mesh"
+/* lines "mode" ("edges" is drafted, not built) and "color_per" */
+#define CALIPER_NET_LINES_SEGMENTS       "segments"   /* vertices 2k and 2k + 1: segment k  */
+#define CALIPER_NET_LINES_STRIPS         "strips"     /* section strip_lengths i32 (S,)     */
+#define CALIPER_NET_COLOR_PER_VERTEX     "vertex"
+#define CALIPER_NET_COLOR_PER_STRIP      "strip"
+/* VIEWS "scene" {"space", "up", "units"} */
+#define CALIPER_NET_SPACE_3D             "3d"
+#define CALIPER_NET_SPACE_2D             "2d"
+
+#define CALIPER_NET_PATH_MAX             255u         /* bytes of an entity path            */
+#define CALIPER_NET_PATH_SEGMENTS_MAX    16u          /* segments of an entity path         */
+#define CALIPER_NET_UNITS_MAX            15u          /* bytes of a scene's unit note       */
+#define CALIPER_NET_MAX_ENTITIES         1024u        /* entities of a scene                */
+#define CALIPER_NET_MAX_BATCHES          2048u        /* batches of a scene                 */
+#define CALIPER_NET_MAX_BATCH_POINTS     4194304u     /* points, line or mesh vertices, triangles */
+#define CALIPER_NET_MAX_BATCH_ITEMS      1048576u     /* line strips of a batch             */
+/* the scene data view's budget: default and largest value of each key
+ * (max_points shares CALIPER_NET_DEFAULT_MAX_POINTS and _LIMIT_MAX_POINTS) */
+#define CALIPER_NET_SCENE_DEFAULT_MAX_ITEMS    100000u
+#define CALIPER_NET_SCENE_LIMIT_MAX_ITEMS      1048576u
+#define CALIPER_NET_SCENE_DEFAULT_MAX_VERTICES 1000000u
+#define CALIPER_NET_SCENE_LIMIT_MAX_VERTICES   4194304u
+#define CALIPER_NET_SCENE_DEFAULT_MAX_EXTENT   1024u
+#define CALIPER_NET_SCENE_LIMIT_MAX_EXTENT     8192u
+
 #ifdef __cplusplus
 }  /* extern "C" */
 #endif

@@ -1,0 +1,37 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 215,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 191,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 36
+  },
+  "meta": {
+    "data_view": {
+      "budget": {
+        "max_extent": 1024,
+        "max_items": 100000,
+        "max_points": 100000,
+        "max_vertices": 1000000
+      },
+      "entities": {
+        "exclude": [],
+        "include": [
+          "**"
+        ]
+      }
+    },
+    "request_id": 9,
+    "sub": 2,
+    "view": "landscape"
+  },
+  "meta_offset": 24,
+  "name": "v3_2/view_reply_scene",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "view_reply"
+}

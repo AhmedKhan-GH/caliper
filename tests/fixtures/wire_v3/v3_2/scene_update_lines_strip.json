@@ -1,0 +1,103 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 404,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 314,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 2,
+    "type": 112
+  },
+  "meta": {
+    "color": [
+      235,
+      235,
+      235,
+      255
+    ],
+    "mode": "strips",
+    "part": "lines",
+    "path": "path",
+    "sections": [
+      {
+        "dtype": 0,
+        "name": "positions",
+        "shape": [
+          4,
+          3
+        ]
+      },
+      {
+        "dtype": 4,
+        "name": "strip_lengths",
+        "shape": [
+          1
+        ]
+      }
+    ],
+    "seq": 40,
+    "stamp_ns": 81234567893423,
+    "stats": [
+      0.0,
+      0.0,
+      -0.5,
+      0.0,
+      -0.5,
+      0.0,
+      -0.25,
+      -0.10000000149011612
+    ],
+    "sub": 2,
+    "view": "landscape",
+    "width": 2.0
+  },
+  "meta_offset": 32,
+  "name": "v3_2/scene_update_lines_strip",
+  "section_lengths": [
+    48,
+    4
+  ],
+  "sections": [
+    {
+      "dtype": 0,
+      "encoding": 0,
+      "length": 48,
+      "name": "positions",
+      "offset": 352,
+      "shape": [
+        4,
+        3
+      ],
+      "values": [
+        -0.5,
+        -0.5,
+        -0.10000000149011612,
+        -0.25,
+        -0.25,
+        -0.15000000596046448,
+        0.0,
+        -0.10000000149011612,
+        -0.20000000298023224,
+        0.0,
+        0.0,
+        -0.25
+      ]
+    },
+    {
+      "dtype": 4,
+      "encoding": 0,
+      "length": 4,
+      "name": "strip_lengths",
+      "offset": 400,
+      "shape": [
+        1
+      ],
+      "values": [
+        4
+      ]
+    }
+  ],
+  "type_name": "scene_update"
+}
