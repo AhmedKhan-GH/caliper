@@ -177,19 +177,24 @@ def session_api_file(servers: Any) -> tuple[bool, Path | None]:
     build's caliper-mcp with `--api-file <the session's own API file>`, whose
     token runs commands as the origin `agent` and which the app revokes when
     the session ends. This sidecar starts no MCP server, so it takes that file
-    from the server's arguments: the first stdio server named `caliper`, or
-    whose program is caliper-mcp, and its `--api-file <path>` or
-    `--api-file=<path>`, an absolute path. The file itself is read and checked
-    like any other API file, when a tool first needs it."""
+    from the server's arguments: the first server named `caliper`, in any
+    form, or whose program is caliper-mcp, and its `--api-file <path>` or
+    `--api-file=<path>`, an absolute path. A Caliper server that gives no
+    usable file, such as one in the HTTP form, which has no command and no
+    arguments, answers (True, None): the session is refused rather than fall
+    back to `api.json`, whose token is the outside agents'. The file itself is
+    read and checked like any other API file, when a tool first needs it."""
     if not isinstance(servers, list):
         return False, None
     for server in servers[:MAX_MCP_SERVERS]:
-        if not isinstance(server, dict) or not isinstance(server.get("command"), str):
+        if not isinstance(server, dict):
             continue
-        name = server.get("name")
-        program = server["command"].replace("\\", "/").rsplit("/", 1)[-1]
-        if name != CALIPER_SERVER_NAME and program not in _CALIPER_MCP_PROGRAMS:
+        command = server.get("command")
+        program = command.replace("\\", "/").rsplit("/", 1)[-1] if isinstance(command, str) else None
+        if server.get("name") != CALIPER_SERVER_NAME and program not in _CALIPER_MCP_PROGRAMS:
             continue
+        if program is None:
+            return True, None   # Caliper's server without a command: no API file to take
         args = server.get("args")
         value = None
         for i, arg in enumerate(args[:MAX_SERVER_ARGS] if isinstance(args, list) else []):

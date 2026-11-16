@@ -112,7 +112,9 @@ def test_a_caliper_server_without_its_api_file_refuses_the_session(tmp_path, two
     try:
         agent.request("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
         for server in ({"name": "caliper", "command": "/opt/caliper/bin/caliper-mcp", "args": ["--origin", "agent"],
-                        "env": []}, caliper_server("relative/api.json")):
+                        "env": []}, caliper_server("relative/api.json"),
+                       # Caliper's server in the HTTP form, which carries no API file at all.
+                       {"name": "caliper", "type": "http", "url": "http://127.0.0.1:1/mcp", "headers": []}):
             response, _ = agent.request("session/new", {"cwd": "/tmp/caliper-test-workspace", "mcpServers": [server]})
             assert response["error"]["code"] == -32602
             assert response["error"]["data"]["code"] == "agent.no_session_api_file"
@@ -139,10 +141,15 @@ def test_the_api_file_of_a_server_list():
                     [caliper_server("/" + "a" * 5000)],
                     [{"name": "caliper", "command": "/bin/caliper-mcp", "args": ["--api-file"]}],
                     [{"name": "caliper", "command": "/bin/caliper-mcp", "args": ["--api-file", 7]}],
-                    [{"name": "files", "command": "/bin/caliper-mcp", "args": []}]):
+                    [{"name": "files", "command": "/bin/caliper-mcp", "args": []}],
+                    # A server named caliper is Caliper's in any form: without a command (HTTP, SSE) it has no
+                    # API file to give, so the session is refused rather than fall back to api.json.
+                    [{"name": "caliper"}],
+                    [{"name": "caliper", "type": "http", "url": "http://127.0.0.1:1/mcp", "headers": []}],
+                    [{"name": "caliper", "type": "sse", "url": "http://127.0.0.1:1/sse", "headers": []}],
+                    [{"name": "caliper", "command": 7, "args": ["--api-file", good]}]):
         assert session_api_file(servers) == (True, None), json.dumps(servers)
     # No Caliper server: the sidecar's own file.
-    for servers in (None, "caliper", [], [{"name": "caliper"}],
-                    [{"name": "other", "command": "/bin/other", "args": ["--api-file", good]}],
-                    [{"name": "caliper", "type": "http", "url": "http://127.0.0.1:1/mcp", "headers": []}]):
+    for servers in (None, "caliper", [], [{"name": "Caliper-docs", "type": "http", "url": "http://127.0.0.1:1/mcp"}],
+                    [{"name": "other", "command": "/bin/other", "args": ["--api-file", good]}]):
         assert session_api_file(servers) == (False, None), json.dumps(servers)

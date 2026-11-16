@@ -293,9 +293,11 @@ the count of edits.
 through the Ollama preset, with no account or key. The side chat sends `session/new` with one MCP server, `caliper`:
 `caliper-mcp` with `--api-file <the session's own API file>`, whose token has the origin `agent`. The agent starts no
 MCP server; it calls Caliper API itself with that file, so its commands run as the origin `agent` and its edits of the
-open spec wait on the approval cards, which the chat mirrors as rows. A session whose Caliper server names no usable
-`--api-file` (an absolute path) is refused with -32602 and `data.code` `agent.no_session_api_file`, rather than run
-with `api.json`, whose token is the origin `mcp`. Without a Caliper server, a session uses `--api-file`.
+open spec wait on the approval cards, which the chat mirrors as rows. Caliper's server is any server named `caliper`,
+in any form, or whose program is `caliper-mcp`. A session whose Caliper server names no usable `--api-file` (an
+absolute path), such as one in the HTTP form, which has no arguments, is refused with -32602 and `data.code`
+`agent.no_session_api_file`, rather than run with `api.json`, whose token is the origin `mcp`. Without a Caliper
+server, a session uses `--api-file`.
 
 Each call of a Caliper command carries the command in `_meta.caliper.command` of its `tool_call` update, such as
 `{"caliper": {"command": "panel.create"}}`, so that the side chat shows it as that command and folds its approval into
