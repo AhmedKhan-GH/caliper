@@ -549,8 +549,8 @@ and [FAQ](https://docs.ollama.com/faq) pages:
    the workspace, for the reason under [Risks](#risks). For an Ollama server elsewhere, opencode takes its
    OpenAI-compatible URL, with `/v1`, in `providers.ollama.settings.baseURL`.
 5. In Caliper, choose the `opencode` preset (or add `opencode acp` as a custom agent), and mark the agent
-   as running on a local model, so that the side chat shows a note while a training run is live
-   ([Widget agent](widget-agent.md#gpu-contention) gives the reasons and the advice).
+   as running on a local model with Local model in the agent picker, so that the side chat shows a note while a
+   training run is live ([Widget agent](widget-agent.md#gpu-contention) gives the reasons and the advice).
 6. Review opencode's `permissions`, and add the `external_directory` rule above to be asked before it leaves the
    workspace.
 
@@ -563,10 +563,22 @@ What is verified and what is not:
   `npm install -g opencode-ai`, while opencode's V2 pages find a local Ollama without configuration and install from
   the `@opencode/cli` package. V2 still accepts the V1 configuration. Ollama's FAQ and its context length page give
   different default context lengths.
-- **Not verified:** nothing was run. Whether opencode passes the `env` of a stdio MCP server as Caliper sends it,
+- **Not verified:** for opencode, nothing was run. Whether opencode passes the `env` of a stdio MCP server as Caliper sends it,
   whether a local model of a given size uses `caliper-mcp`'s 35 tools well (the conformance suite measures the widget
   agent's tasks, not the side chat's), and the whole path on Windows, where Ollama runs as a native application and the
   agent registry lists opencode binaries.
+
+The other worked example, which was run, is Caliper's own agent: `caliper-agent` in its general role as the custom
+command, on the Ollama preset (`--preset ollama --base-url http://127.0.0.1:11434/v1 --model qwen3.8:27b`, from the
+repository's source). It starts no MCP server and calls Caliper API with the API file of the `caliper` server that
+`session/new` hands it, so its commands run as `agent` and wait on the approval cards; it refuses a session whose
+Caliper server names no file. The preset loads the model through Ollama's own chat API with a context of 32,768 tokens
+for this role. **Measured** in the hidden app on 16 November 2026, with the request "Plot attention entropy per layer
+while it trains" over `caliper_attention_producer`'s stream: the turn read the catalog, made a spec with one source
+per layer and a series panel of the six layers' entropy, every edit approved on its card, in about 80 seconds and 7
+model requests of 10,820 to 17,258 prompt tokens, and the app showed the spec page drawing the stream live. The
+model's tool schemas alone are about 10,000 tokens, so the role needs more than 16,384 tokens of context for a turn
+that reads the catalog first. The dry run is `examples/build_a_dashboard/dry_run/step4_side_chat.py`.
 
 ### The handoff from the widget agent
 
@@ -610,8 +622,12 @@ claims the right column with `layout_chat_column()`, and calls `draw()` with tha
   the pane opens quietly; the message waits for the session. `start()` and `session/new` run on a worker thread, and
   shutting a client down runs on another, so the frame thread never waits for an agent.
 - **The conversation.** The person's messages with the chips of a draft; the agent's text, streamed into one message;
-  its thoughts as one line, which a click opens; its tool calls as rows with a status mark, the command's name for a
-  Caliper tool (recognised from the names the agents give MCP tools, such as `mcp__caliper__panel_create`), the title
+  its thoughts as one line, which a click opens (the agent's text with a small subset of Markdown rendered by
+  `chat_markdown.h`: bold, inline code, fenced code blocks, bulleted and numbered lists and paragraphs, everything
+  else, such as headings, links and tables, as plain text with its marks taken out, and the text kept as it came);
+  its tool calls as rows with a status mark, the command's name for a
+  Caliper tool (recognised from the names the agents give MCP tools, such as `mcp__caliper__panel_create`, or from
+  `_meta.caliper.command`, which `caliper-agent` sets since it calls Caliper API itself), the title
   and the status in a word; its plan as rows; its permission requests as cards with the file, the compact diff for a
   `*.spec.toml` (a new panel's primitive and title first, then its other keys and every other change) or the unified
   diff for any other file, Diff for the full diff, and one button per option, `allow_always` only when the setting
@@ -624,7 +640,16 @@ claims the right column with `layout_chat_column()`, and calls `draw()` with tha
   methods and the commands of the preset's hint, and Restart; it never asks for a key and runs no login flow.
 - **No agent.** The four agents by name, each marked NOT FOUND, and one action, Custom command.
 - **The input.** One line, more with Shift or Command and Enter, up to six; Enter sends; the agent picker beside it
-  lists the agents by name, NOT FOUND for those not on PATH, and Custom command.
+  lists the agents by name, NOT FOUND for those not on PATH, Custom command, and Local model, a mark for the chosen
+  agent that says its model runs on this machine.
+- **The local model setting.** Local model in the picker marks the chosen agent as running on a local model, or clears
+  the mark; it is the person's word, since Caliper cannot tell where an agent's model runs. While the app's live
+  session is attached and the chosen agent is marked, the header shows the note "Shared GPU" after the agent's name,
+  framed in bronze as in the widget agent's settings (`chat_gpu_note()`); it gives way after the version and before the
+  name as the header narrows. **Decision:** the mark is kept per agent, by its id, so that switching from opencode on
+  Ollama to a hosted agent drops the note; the custom agent's mark stays with the id `custom` when its command changes.
+  **Decision:** the row is in the picker, beside the choice of the agent it marks, since the chat has no settings
+  panel of its own.
 - **The layout.** The right column is 28 % of the window's width with a minimum of 300 points that grows with the text
   scale; with Selection or Properties open above it, the chat takes 55 % of the column's height with a minimum of 220
   points, and the upper part gives way first. In the pane, the mode, then the version, then the agent's name in the
@@ -656,17 +681,22 @@ claims the right column with `layout_chat_column()`, and calls `draw()` with tha
   parameter). In build mode the builder pane's right column holds Properties above the chat; the page then draws the
   chat with `ChatPane::draw_in()` in the pane's `chat_rect` instead of claiming a column.
 - **The settings.** `side-chat.json` in the app-data folder: the chosen agent, the custom agent's name and command
-  line, whether "always allow" options are offered, and whether the chat is open. Never a key, and no address.
+  line, whether "always allow" options are offered, the agents marked as running on a local model
+  (`local_model_agents`, a list of ids), and whether the chat is open. Never a key, and no address.
 - **Caliper API.** `caliper-mcp` needs the API. **Decision, the user's:** when the app was started without `--api`, the
-  chat starts the API when its agent starts, the one case in which the API starts without `--api`: on 127.0.0.1 at a
-  free port, with new tokens and the API file, as `--api` does, and no setting can change the address. Each agent
+  chat starts the API when its agent starts, one of the two cases in which the API starts without `--api` (the other is
+  the spec page's ⌘O Open in browser, Builder pane, `design/builder-pane.md`): on 127.0.0.1 at a free port, with new
+  tokens and the API file, as `--api` does, and no setting can change the address. Each agent
   session gets an API file of its own with an `agent` token (above, under approvals), so the agent is given neither
   `api.json` nor the person's token. It is
   visible in three places: a line in the conversation ("Caliper API started on 127.0.0.1:<port> for this chat"), an
   Activity line with the address and never the token, and every page's status bar, which shows the API's address
   whenever it runs. It is tied to the chat: when the chat's agent ends (it exits, cannot start, or another agent is
-  chosen), the app stops the API that the chat started and removes the API file; a restart replaces the agent without
-  stopping it. An API started with `--api` is left alone in both directions.
+  chosen), the app stops the API that the chat started and removes the API file, unless Open in browser has given out
+  a link of it since, which keeps it until the app quits (the app counts the API's users, `api_for()` in
+  `src/main.cpp`); a restart replaces the agent without stopping it. Open in browser starts the API only once nothing
+  can refuse its link, and stops an API it alone started when it hands no link over. An API started with `--api` is
+  left alone in both directions.
 - **Approvals.** The chat reads the session's pending approvals each frame while no long command holds the registry,
   and a click on an approval's row outlines its card on the strip in bronze for two seconds (`ApprovalTray::point_to()`).
 - **Ask in chat.** The inline surface's Ask in chat opens the chat with the handoff draft. The bundle is built in the
@@ -735,12 +765,14 @@ and `caliper_side_chat_gpu`, the capture scenario as a process).
 
 Waiting for later work:
 
-- The side chat in the builder pane's right column, under Properties (`ChatPane::draw_in()`), which the pane's
-  integration connects; the landing page; and a Selection tab above the chat on the live page.
+- The side chat on the landing page, and a Selection tab above the chat on the live page. In the builder pane's
+  right column it is built: under Properties, drawn with `ChatPane::draw_in()`.
 - Open items of the side chat's Caliper API, found in review and left for a later round:
   - its life cycle at the edges: a launch that fails after `retire(ending=false)` leaves the API that the chat started
     running; the ⌘K widget agent's sidecar loses the API when the chat stops the API it started, since the sidecar's
-    token goes with the server; and what closing the pane does to the agent and to the API it started;
+    token goes with the server; and what closing the pane does to the agent and to the API it started. An API whose
+    viewer link Open in browser gave out is no longer stopped by the chat's end, so a browser's page keeps working;
+    it stays until the app quits, since nothing tells the app when the page closes;
   - a second app on the same app-data folder overwrites `api.json`, and the first app's exit then removes the second
     app's file;
   - what Accept on the inline surface expects of `preview.commit` when the preview's edits came from another origin;
@@ -751,8 +783,7 @@ Waiting for later work:
     before stays open until it closes.
 - The review setting per origin in the side chat's settings, and running the spec validator on an agent's own edit of a
   spec file before the person answers.
-- The setting that marks an agent as running on a local model, with the note while a run is live, and the warning when
-  a workspace holds an opencode configuration.
+- The warning when a workspace holds an opencode configuration.
 - The packaging of `caliper-mcp` beside the app's executable; a development build finds it in its build tree.
 - `session/load`, `session/resume`, modes and config options in the side chat, images in prompts, and version 2.
 - The Windows implementation of `Process`.
@@ -808,6 +839,8 @@ Waiting for later work:
 - **`_meta` passed through, not interpreted.** The client bounds it and sends it as given, so the widget session's
   fields can change with the sidecar without a change to the client.
 - **A warning, not a refusal, when a workspace configures opencode,** since the configuration may be the person's own.
+- **A local-model mark per agent, set in the picker,** because the app cannot tell where an agent's model runs; with a
+  live run attached, the marked agent's header shows Shared GPU.
 
 ## Risks
 

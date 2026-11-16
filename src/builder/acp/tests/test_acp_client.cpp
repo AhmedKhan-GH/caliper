@@ -254,6 +254,23 @@ TEST_CASE("a turn streams every kind of update") {
     CHECK(message_text(run_turn(c)) == "You said: echo me");
 }
 
+TEST_CASE("a tool call's Caliper command comes from its _meta, when the agent names one") {
+    AcpClient c(stub_options());
+    open_session(c);
+    REQUIRE(c.prompt("command").ok());
+    const auto events = run_turn(c);
+    std::vector<const AcpEvent*> calls;
+    for (const auto& e : events)
+        if (e.kind == AcpEventKind::tool_call || e.kind == AcpEventKind::tool_call_update) calls.push_back(&e);
+    REQUIRE(calls.size() == 3);
+    CHECK(calls[0]->tool_call.id == "call_c");
+    CHECK(calls[0]->tool_call.caliper_command == "catalog.list");
+    CHECK(event_to_json(*calls[0])["tool_call"]["caliper_command"] == "catalog.list");
+    CHECK(calls[1]->tool_call.caliper_command.empty());   // an update without _meta names none
+    CHECK(calls[2]->tool_call.caliper_command.empty());   // not a string
+    CHECK(count(events, AcpEventKind::protocol_fault) == 0);
+}
+
 TEST_CASE("a proposed edit arrives as a diff and waits for permission") {
     AcpClient c(stub_options());
     open_session(c);

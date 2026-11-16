@@ -112,7 +112,9 @@ public:
         std::function<void(const std::string& label, std::function<void()> fn)> run_job;
         std::function<std::string()> info_json;      // the body of GET /v0/info
         std::function<std::string()> applets_json;   // the body of GET /v0/applets
-        std::function<LaunchOutcome(const std::string& id)> launch;
+        // `origin` is the command origin of whoever asked ("ui", "api",
+        // "mcp", "agent"), which a spec applet's applet.open is sent from.
+        std::function<LaunchOutcome(const std::string& id, const std::string& origin)> launch;
         // "" when the app can read its frame back; otherwise why it cannot,
         // which capture.frame answers as capture.unavailable.
         std::string capture_unavailable;
@@ -184,9 +186,15 @@ public:
     // Every command the journal recorded: any of them may have changed the
     // open spec.
     uint64_t journaled() const;
-    // Every applet.open that succeeded, from any origin: the app shows the
-    // spec page for each.
-    uint64_t applets_opened() const;
+    // Every applet.open that succeeded, from any origin, and every spec.new
+    // or spec.open of an agent (the origins agent and mcp) that succeeded:
+    // the app shows the spec page for each, so that the person sees the spec
+    // whose edits they review. The person's own spec.new shows the page by
+    // its own path (SpecPage::take_new()), in build mode.
+    uint64_t specs_opened() const;
+    // Of those, the ones an agent sent (the origins agent and mcp): an
+    // applet.open, a spec.new or a spec.open.
+    uint64_t agent_specs_opened() const;
     // Every applet.save that succeeded: the app lists the workspace's
     // applets again for each.
     uint64_t applets_saved() const;

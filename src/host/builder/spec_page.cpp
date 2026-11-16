@@ -47,6 +47,11 @@ namespace cb = caliper_builder;
 
 namespace {
 
+// The label of ⌘O in the page bar, and what the page says of it while the
+// open spec has unsaved changes.
+constexpr const char* kBrowserLabel = "Open in browser";
+constexpr const char* kBrowserNote = "the browser shows the saved dashboard";
+
 // The data of the open spec's panels through the session, kept off the
 // session while its worker runs a long command (AppSession::worker_busy()):
 // the worker holds the registry's and the store's locks, and only the frame
@@ -132,7 +137,9 @@ struct SpecPage::Impl {
     std::unique_ptr<PageSource> source;
     cb::Session* bound = nullptr;   // the session `source` reads
 
-    uint64_t opens_taken = 0;               // AppSession::applets_opened() at the last take_open()
+    uint64_t opens_taken = 0;               // AppSession::specs_opened() at the last take_open()
+    uint64_t agent_opens_taken = 0;         // AppSession::agent_specs_opened() then
+    bool opened_by_agent = false;           // every open the last take_open() took was an agent's
     std::optional<uint64_t> journal_read;   // AppSession::journaled() when the open spec was last read
 
     std::string title;
@@ -142,10 +149,14 @@ struct SpecPage::Impl {
     bool has_spec = false;
     bool dirty = false;
     bool from_file = false;   // enter_file(): a spec applet's file, not the open spec
+    // The open spec's saved applet in the workspace (applets/<id>/), "" while
+    // it was never saved: what ⌘O Open in browser shows.
+    std::string saved_id;
+    float browser_rect[4] = {0, 0, 0, 0};   // the button, as the last frame drew it
 
-    std::optional<std::future<cb::CommandResult>> request;
+    std::optional<std::future<cb::CommandResult>> request;       // the last applet.open
+    std::optional<std::future<cb::CommandResult>> request_new_f; // the last spec.new, apart, so an open never drops it
     std::string request_error;
-    bool request_is_new = false;   // the request is spec.new, not applet.open
     bool new_done = false;         // a spec.new succeeded since the last take_new()
 
     Seams seams;
@@ -157,6 +168,12 @@ struct SpecPage::Impl {
     std::unique_ptr<InlineWidget> widget;
     bool hidden = false;
     ChatPane* chat = nullptr;   // the side chat, when the app has one
+    // ⌘O Open in browser (set_open_in_browser()), and its last refusal.
+    std::function<std::string(const std::string&)> open_in_browser;
+    std::string browser_why;
+    std::string browser_given;   // the saved dashboard whose link went out
+    // The names of a catalog source's dims, for the builder's Properties.
+    std::function<std::vector<std::string>(const std::string&)> dim_names;
     ApiFiles api_files;         // the sidecar's own API file
     std::string widget_api_file;
 
@@ -234,6 +251,13 @@ struct SpecPage::Impl {
                 widget_api_file.clear();
             }
             widget_revision = settings ? settings->revision() : -1;
+            if (settings) {
+                // The bundle takes at most a quarter of the model's context
+                // length, and no render for a model that reads no images.
+                const AgentCapabilities caps = settings->capabilities();
+                if (caps.context && *caps.context > 0) o.bundle.context_tokens = (std::uint64_t)*caps.context;
+                if (caps.vision && !*caps.vision) o.bundle.vision = false;
+            }
             o.hooks.open_settings = [this] {
                 if (settings) settings->set_open(true);
             };
@@ -320,17 +344,21 @@ struct SpecPage::Impl {
             AppSession* a = &app;
             auto port = std::make_unique<SessionBuilderPort>(
                 *s, [a] { return a->worker_busy(); }, [a] { return a->journaled(); });
+            port->set_dim_names([this](const std::string& id) {
+                return dim_names ? dim_names(id) : std::vector<std::string>();
+            });
             builder = std::make_unique<BuilderPane>(std::move(port));
             builder->set_layout_rule(spec_page_layout_rule);
-            // ⌘K in the builder: a dropped file's row and a property's row
-            // open the inline prompt there, and it is drawn under that row.
+            // ⌘K in the builder: a dropped file's row and a property's row, a
+            // panel's or a spec source's, open the inline prompt there, and it
+            // is drawn under that row.
             BuilderPane::WidgetHooks hooks;
             hooks.open_file = [this, a](const std::string& loader, const std::vector<std::string>& catalog,
                                         const std::string& anchor) {
                 open_widget_target(*a, WidgetTarget::for_dropped_file(loader, catalog, anchor));
             };
-            hooks.open_property = [this, a](const std::string& panel, const std::string& path) {
-                open_widget_target(*a, WidgetTarget::for_property(panel, "", path));
+            hooks.open_property = [this, a](const std::string& panel, const std::string& source, const std::string& path) {
+                open_widget_target(*a, WidgetTarget::for_property(panel, source, path));
             };
             hooks.height = [this](const std::string& anchor, float w) {
                 return widget ? widget->surface().row_height(anchor, w) : 0.0f;
@@ -353,11 +381,42 @@ struct SpecPage::Impl {
             runtime->clear_spec();
             has_spec = false;
             applet_id.clear();
+            saved_id.clear();
             panels = sources = 0;
             return;
         }
         show(open->spec);
         dirty = open->dirty;
+        saved_id = saved_applet(open->path);
+    }
+
+    // The workspace id of a spec saved at `path` (relative to the workspace,
+    // applets/<id>/<file>), "" for one never saved or saved elsewhere.
+    static std::string saved_applet(const std::optional<std::string>& path) {
+        if (!path) return {};
+        const std::filesystem::path p(*path);
+        auto it = p.begin();
+        if (it == p.end() || it->string() != "applets") return {};
+        if (++it == p.end()) return {};
+        return it->string();
+    }
+
+    // ⌘O Open in browser: disabled, with the reason, while there is nothing
+    // the browser's page can show.
+    std::string browser_disabled() const {
+        if (from_file) return "the browser shows the workspace's saved dashboards";
+        if (saved_id.empty()) return "save the dashboard first";
+        return {};
+    }
+    void open_browser() {
+        if (!open_in_browser || !browser_disabled().empty()) return;
+        browser_why = open_in_browser(saved_id);
+        if (browser_why.empty()) browser_given = saved_id;
+    }
+    // ⌘O opens the saved file: once its link is out, and the open spec has
+    // changes since, the page says that the browser shows the saved one.
+    std::string browser_note() const {
+        return dirty && !saved_id.empty() && browser_given == saved_id ? kBrowserNote : std::string();
     }
 
     void show(const cb::spec::Spec& spec) {
@@ -390,9 +449,18 @@ struct SpecPage::Impl {
             const char* key = "Ctrl K";
 #endif
             const float w = ImGui::CalcTextSize(key).x + ImGui::CalcTextSize("Command").x + 32.0f;
-            // ⌘L Chat, then ⌘K Command at the right end.
+            // ⌘O Open in browser, ⌘L Chat, then ⌘K Command at the right end.
             const float cw = chat ? ChatPane::toggle_width() + ImGui::GetStyle().ItemSpacing.x : 0.0f;
-            const float right = ImGui::GetWindowContentRegionMax().x - w - cw - sternbild::metric::pad;
+#ifdef __APPLE__
+            const char* okey = "\xe2\x8c\x98O";   // ⌘O
+#else
+            const char* okey = "Ctrl O";
+#endif
+            const bool browser = open_in_browser && has_spec;
+            const float bw = browser ? ImGui::CalcTextSize(okey).x + ImGui::CalcTextSize(kBrowserLabel).x + 32.0f +
+                                           ImGui::GetStyle().ItemSpacing.x
+                                     : 0.0f;
+            const float right = ImGui::GetWindowContentRegionMax().x - w - cw - bw - sternbild::metric::pad;
             // The builder's items after the title, in the room the right end
             // leaves (only ⌘B Build when it is short); none for a spec
             // applet's file, which the builder does not edit.
@@ -402,6 +470,19 @@ struct SpecPage::Impl {
                 ImGui::SameLine();
             }
             if (right > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(right);
+            browser_rect[2] = browser_rect[3] = 0.0f;
+            if (browser) {
+                const std::string off = browser_disabled();
+                if (sternbild::key_button(okey, kBrowserLabel, off.empty(), off.c_str())) open_browser();
+                const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+                browser_rect[0] = a.x, browser_rect[1] = a.y, browser_rect[2] = b.x - a.x, browser_rect[3] = b.y - a.y;
+                // Why the last try did not reach the browser, or, with unsaved
+                // changes, that the browser shows the saved dashboard.
+                if (off.empty() && ImGui::IsItemHovered()) {
+                    if (!browser_why.empty()) ImGui::SetTooltip("%s", browser_why.c_str());
+                    else if (dirty) ImGui::SetTooltip("%s", kBrowserNote);
+                }
+            }
             if (chat) chat->draw_toggle();
             if (sternbild::key_button(key, "Command")) *command_key = true;
             ImGui::EndMainMenuBar();
@@ -419,6 +500,7 @@ struct SpecPage::Impl {
                 std::snprintf(text, sizeof text, sources == 1 ? "%zu source" : "%zu sources", sources);
                 sternbild::status_item(text);
                 if (dirty) sternbild::status_item("unsaved");
+                if (const std::string note = browser_note(); !note.empty()) sternbild::status_item(note.c_str());
             }
         }
         sternbild::status_bar_end();
@@ -503,6 +585,7 @@ struct SpecPage::Impl {
                 });
                 builder->draw(area, *runtime, look, &focused);
             } else {
+                runtime->set_empty_hint({});
                 runtime->draw(area, look);
                 focus_and_frame();
             }
@@ -552,21 +635,36 @@ SpecPage::~SpecPage() = default;
 bool SpecPage::built() { return true; }
 
 bool SpecPage::take_open(const AppSession& session) {
-    const uint64_t n = session.applets_opened();
+    const uint64_t n = session.specs_opened();
     if (n == impl_->opens_taken) return false;
+    const uint64_t a = session.agent_specs_opened();
+    impl_->opened_by_agent = a - impl_->agent_opens_taken >= n - impl_->opens_taken;
     impl_->opens_taken = n;
+    impl_->agent_opens_taken = a;
     return true;
 }
 
-bool SpecPage::request_open(AppSession& session, const std::string& id) {
+bool SpecPage::opened_by_agent() const { return impl_->opened_by_agent; }
+
+SpecPage::OpenReview SpecPage::open_review(AppSession& session, const std::string& origin) {
+    cb::Session* s = session.session();
+    if (!s) return OpenReview::opens;   // no session yet: no open spec to replace
+    if (!s->review().on(cb::command_origin_from_name(origin).value_or(cb::CommandOrigin::api))) return OpenReview::opens;
+    if (session.worker_busy()) return OpenReview::unknown;
+    const std::optional<cb::OpenSpec> open = s->open_spec();
+    return open && open->dirty ? OpenReview::waits : OpenReview::opens;
+}
+
+bool SpecPage::request_open(AppSession& session, const std::string& id, const std::string& origin) {
     cb::Session* s = session.session();
     if (!s) return false;
     cb::CommandInvocation inv;
     inv.name = "applet.open";
     inv.args = {{"id", id}};
-    inv.origin = cb::CommandOrigin::ui;
+    // From who asked; a name that is not an origin is a program's (api), never
+    // the person's.
+    inv.origin = cb::command_origin_from_name(origin).value_or(cb::CommandOrigin::api);
     impl_->request = s->queue().submit(std::move(inv));
-    impl_->request_is_new = false;
     impl_->request_error.clear();
     return true;
 }
@@ -583,8 +681,7 @@ bool SpecPage::request_new(AppSession& session, const std::string& title) {
     inv.name = "spec.new";
     inv.args = {{"id", id}, {"title", title.empty() ? id : title}};
     inv.origin = cb::CommandOrigin::ui;
-    impl_->request = s->queue().submit(std::move(inv));
-    impl_->request_is_new = true;
+    impl_->request_new_f = s->queue().submit(std::move(inv));
     impl_->request_error.clear();
     return true;
 }
@@ -600,18 +697,37 @@ bool SpecPage::has_open_spec(AppSession& session) {
     return s && !session.worker_busy() && s->open_spec().has_value();
 }
 
+std::string SpecPage::open_title(AppSession& session) {
+    cb::Session* s = session.session();
+    if (!s || session.worker_busy()) return {};
+    const std::optional<cb::OpenSpec> open = s->open_spec();
+    if (!open) return {};
+    const auto& a = open->spec.applet;
+    return a.title && !a.title->empty() ? *a.title : a.id;
+}
+
+bool SpecPage::has_unsaved_spec(AppSession& session) {
+    cb::Session* s = session.session();
+    if (!s || session.worker_busy()) return false;
+    const std::optional<cb::OpenSpec> open = s->open_spec();
+    return open && open->dirty;
+}
+
 bool SpecPage::importing() const { return impl_->builder && impl_->builder->importing(); }
 
-bool SpecPage::request_answered(std::string* error) {
+bool SpecPage::request_answered(std::string* error, bool* was_new) {
     Impl& im = *impl_;
-    if (!im.request) return false;
-    if (im.request->wait_for(std::chrono::seconds(0)) != std::future_status::ready) return false;
-    const cb::CommandResult r = im.request->get();
-    im.request.reset();
-    if (im.request_is_new && r.ok) im.new_done = true;
-    im.request_is_new = false;
-    if (error) *error = r.ok ? std::string() : r.error.code + ": " + r.error.message;
-    return true;
+    for (const bool is_new : {true, false}) {
+        std::optional<std::future<cb::CommandResult>>& f = is_new ? im.request_new_f : im.request;
+        if (!f || f->wait_for(std::chrono::seconds(0)) != std::future_status::ready) continue;
+        const cb::CommandResult r = f->get();
+        f.reset();
+        if (is_new && r.ok) im.new_done = true;
+        if (error) *error = r.ok ? std::string() : r.error.code + ": " + r.error.message;
+        if (was_new) *was_new = is_new;
+        return true;
+    }
+    return false;
 }
 
 void SpecPage::enter(AppSession& session) {
@@ -650,6 +766,10 @@ SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, 
     // order follows only when neither is open.
     const bool command_key = clicked_command || ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_K);
     if (im.chat) im.chat->read_keys();   // ⌘L Chat
+    // ⌘O Open in browser, unless a text field has the keyboard.
+    if (im.open_in_browser && im.has_spec && !ImGui::GetIO().WantTextInput &&
+        ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_O))
+        im.open_browser();
     const bool esc_key = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
     if (im.widget_open() && esc_key) {
         im.widget->surface().escape();
@@ -742,6 +862,23 @@ void SpecPage::set_agent_settings(AgentSettings* settings) {
     if (settings) settings->set_on_change([&im] { im.retire_widget(); });
 }
 
+void SpecPage::set_open_in_browser(std::function<std::string(const std::string&)> open) {
+    impl_->open_in_browser = std::move(open);
+}
+
+void SpecPage::set_dim_names(std::function<std::vector<std::string>(const std::string&)> names) {
+    impl_->dim_names = std::move(names);
+}
+
+std::string SpecPage::browser_note() const { return impl_->browser_note(); }
+
+bool SpecPage::item_rect(const std::string& name, float rect[4]) const {
+    const Impl& im = *impl_;
+    if (name != "page:browser" || im.browser_rect[2] <= 0.0f) return false;
+    for (int i = 0; i < 4; ++i) rect[i] = im.browser_rect[i];
+    return true;
+}
+
 bool SpecPage::widget_action(const std::string& label) {
     if (!impl_->widget) return false;
     WidgetSurface& s = impl_->widget->surface();
@@ -769,6 +906,28 @@ bool SpecPage::panel_rect(const std::string& panel_id, float rect[4]) const {
 
 std::string SpecPage::widget_state() const {
     return impl_->widget ? widget_state_name(impl_->widget->surface().state()) : "idle";
+}
+
+std::string SpecPage::widget_facts() const {
+    if (!impl_->widget) return {};
+    const WidgetSurface& w = impl_->widget->surface();
+    auto one_line = [](std::string t, size_t most) {
+        for (char& c : t)
+            if (c == '\n' || c == '\r') c = ' ';
+        if (t.size() > most) t = t.substr(0, most) + "...";
+        return t;
+    };
+    std::string out = "tag " + (w.tag().empty() ? std::string("none") : w.tag()) + ", " + std::to_string(w.edits()) +
+                      (w.edits() == 1 ? " edit" : " edits");
+    if (!w.model_label().empty()) out += ", model " + w.model_label();
+    if (w.error()) out += ", error " + w.error().code + ": " + one_line(w.error().message, 200);
+    if (!w.turn_input_tokens().empty()) {
+        out += ", tokens in";
+        for (long long t : w.turn_input_tokens()) out += " " + std::to_string(t);
+        out += ", out " + std::to_string(w.turn_output_tokens());
+    }
+    if (!w.reply().empty()) out += ", reply " + one_line(w.reply(), 200);
+    return out;
 }
 
 std::string SpecPage::selection_json() const {
@@ -868,11 +1027,16 @@ SpecPage::SpecPage() : impl_(std::make_unique<Impl>()) {}
 SpecPage::~SpecPage() = default;
 bool SpecPage::built() { return false; }
 bool SpecPage::take_open(const AppSession&) { return false; }
-bool SpecPage::request_open(AppSession&, const std::string&) { return false; }
-bool SpecPage::request_answered(std::string*) { return false; }
+bool SpecPage::opened_by_agent() const { return false; }
+std::string SpecPage::browser_note() const { return {}; }
+bool SpecPage::request_open(AppSession&, const std::string&, const std::string&) { return false; }
+SpecPage::OpenReview SpecPage::open_review(AppSession&, const std::string&) { return OpenReview::opens; }
+bool SpecPage::request_answered(std::string*, bool*) { return false; }
 bool SpecPage::request_new(AppSession&, const std::string&) { return false; }
 bool SpecPage::take_new() { return false; }
 bool SpecPage::has_open_spec(AppSession&) { return false; }
+std::string SpecPage::open_title(AppSession&) { return {}; }
+bool SpecPage::has_unsaved_spec(AppSession&) { return false; }
 bool SpecPage::importing() const { return false; }
 void SpecPage::enter(AppSession&) {}
 SpecPage::Result SpecPage::draw(AppSession&, const char*, JobsTray*, bool) { return {}; }
@@ -889,8 +1053,12 @@ void SpecPage::set_api_files(ApiFiles) {}
 void SpecPage::set_chat(ChatPane*) {}
 void SpecPage::set_agent_settings(AgentSettings*) {}
 bool SpecPage::widget_action(const std::string&) { return false; }
+void SpecPage::set_open_in_browser(std::function<std::string(const std::string&)>) {}
+void SpecPage::set_dim_names(std::function<std::vector<std::string>(const std::string&)>) {}
+bool SpecPage::item_rect(const std::string&, float*) const { return false; }
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
 std::string SpecPage::widget_state() const { return "idle"; }
+std::string SpecPage::widget_facts() const { return {}; }
 std::string SpecPage::selection_json() const { return {}; }
 void SpecPage::set_panel_overlay(PanelOverlay) {}
 const std::string& SpecPage::focused_panel() const { return impl_->focused; }

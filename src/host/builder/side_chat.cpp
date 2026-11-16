@@ -206,6 +206,12 @@ std::string find_caliper_mcp(const std::string& exe_dir) {
     return {};
 }
 
+std::string chat_permission_label(const ChatItem& item) {
+    if (!item.tool.title.empty()) return item.tool.title;
+    if (!item.diff_path.empty()) return item.diff_path;
+    return "Tool call";
+}
+
 std::string caliper_command_of(const acp::ToolCallInfo& call, const std::string& server) {
     // A tool name of the table: "panel_create" -> "panel.create".
     auto command_of_tool = [](const std::string& tool) -> std::string {
@@ -245,6 +251,11 @@ std::string caliper_command_of(const acp::ToolCallInfo& call, const std::string&
         }
         return {};
     };
+    // An agent that calls Caliper API itself (caliper-agent) names the command
+    // in the call's _meta; it counts when the table has it.
+    if (!call.caliper_command.empty())
+        for (const auto& d : caliper_builder::command_table())
+            if (d.name == call.caliper_command) return d.name;
     if (std::string c = from_text(call.title); !c.empty()) return c;
     const json& raw = call.raw_input;
     if (raw.is_object()) {
@@ -478,13 +489,33 @@ std::string SideChat::agent_title() const {
     return a ? a->title : std::string();
 }
 
+std::string chat_gpu_note(bool live_attached, bool local_model) {
+    return live_attached && local_model ? "Shared GPU" : std::string();
+}
+
+bool SideChat::local_model() const {
+    const ChatAgent* a = agent();
+    if (!a) return false;
+    const std::vector<std::string>& marked = options_.settings.local_model_agents;
+    return std::find(marked.begin(), marked.end(), a->id) != marked.end();
+}
+
+std::string SideChat::gpu_note() const {
+    return chat_gpu_note(hooks_.live_attached && hooks_.live_attached(), local_model());
+}
+
 bool SideChat::mode_skips_permission() const {
     return mode_ == "bypassPermissions" || mode_ == "yolo" || mode_ == "agent-full-access";
 }
 
 ChatItem& SideChat::add(ChatItem::Kind kind) {
-    if (items_.size() >= kMaxItems) items_.erase(items_.begin(), items_.begin() + (long)(kMaxItems / 10));
+    if (items_.size() >= kMaxItems) {
+        items_.erase(items_.begin(), items_.begin() + (long)(kMaxItems / 10));
+        // The drawn text of the items that went goes with them.
+        markdown_.erase(markdown_.begin(), markdown_.lower_bound(items_.front().serial));
+    }
     items_.emplace_back();
+    items_.back().serial = ++next_serial_;
     items_.back().kind = kind;
     items_.back().turn = turn_;
     return items_.back();
@@ -545,6 +576,18 @@ Error SideChat::set_custom_agent(const std::string& name, const std::string& lin
     options_.settings.agent.clear();
     choose_agent("custom");
     return {};
+}
+
+bool SideChat::set_local_model(bool on) {
+    const ChatAgent* a = agent();
+    if (!a) return false;
+    std::vector<std::string>& marked = options_.settings.local_model_agents;
+    const auto it = std::find(marked.begin(), marked.end(), a->id);
+    if (on == (it != marked.end())) return true;
+    if (on) marked.push_back(a->id);
+    else marked.erase(it);
+    if (hooks_.settings_changed) hooks_.settings_changed(options_.settings);
+    return true;
 }
 
 void SideChat::set_text(std::string text) { text_ = std::move(text); }
@@ -774,6 +817,7 @@ void merge_tool(acp::ToolCallInfo* into, const acp::ToolCallInfo& from) {
     if (from.has_locations) into->locations = from.locations;
     if (!from.raw_input.is_null()) into->raw_input = from.raw_input;
     if (!from.raw_output.is_null()) into->raw_output = from.raw_output;
+    if (!from.caliper_command.empty()) into->caliper_command = from.caliper_command;
     into->has_title = into->has_title || from.has_title;
     into->has_kind = into->has_kind || from.has_kind;
     into->has_status = into->has_status || from.has_status;
@@ -1222,10 +1266,18 @@ ChatPaneLayout layout_chat_pane(const ChatPaneInput& in, const ChatLayoutMetrics
     const float aw = in.agent.empty() ? 0.0f : std::ceil(measure(in.agent, ChatFont::label));
     const float vw = in.version.empty() ? 0.0f : std::ceil(measure(in.version, ChatFont::mono));
     const float mw = in.mode.empty() ? 0.0f : std::ceil(measure(in.mode, ChatFont::mono));
+    // The GPU note: a framed noun after the agent's name, which gives way
+    // after the version and before the name.
+    const float nw = in.note.empty() ? 0.0f : std::ceil(measure(in.note, ChatFont::tag) + 2.0f * m.button_pad);
     if (aw > 0 && x + aw <= right) {
         out.agent = {x, H.y, aw, H.h};
         x += aw + m.gap;
-        if (vw > 0 && x + vw <= right) {
+        const bool note_fits = nw > 0 && x + nw <= right;
+        if (note_fits) {
+            out.note = {x, by, nw, bh};
+            x += nw + m.gap;
+        }
+        if ((nw == 0 || note_fits) && vw > 0 && x + vw <= right) {
             out.version = {x, H.y, vw, H.h};
             x += vw + 2.0f * m.gap;
             if (mw > 0 && x + mw <= right) out.mode = {x, H.y, mw, H.h};
@@ -1245,6 +1297,7 @@ ChatPaneInput chat_pane_input(const SideChat& chat, const WidgetRect& pane) {
     in.version = chat.agent_info().version;
     in.mode = chat.mode();
     in.tag = chat.tag();
+    in.note = chat.gpu_note();
     in.header_actions = chat.header_actions();
     in.faults = (int)chat.faults().size();
     in.picker = chat.agent() ? chat.agent_title() : std::string("Agent");
@@ -1396,6 +1449,14 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
         draw_tag(dl, L, v2(lay.title.x, lay.title.y), lay.title.h, L.text, upper(in.title));
         if (!lay.agent.empty())
             draw_str(dl, L.ui, L.ui_size, v2(lay.agent.x, lay.agent.y + (lay.agent.h - ui_h) * 0.5f), L.secondary, in.agent);
+        if (!lay.note.empty()) {   // the GPU note, framed in bronze as the widget agent's settings show it
+            const ImRect nr = rr(lay.note);
+            dl->AddRect(nr.Min, nr.Max, L.accent, 0.0f, 0, 1.0f);
+            const ImVec2 e = extent(L.ui, L.small_size, in.note);
+            draw_str(dl, L.ui, L.small_size,
+                     v2(std::round(nr.Min.x + (nr.GetWidth() - e.x) * 0.5f), std::round(nr.Min.y + (nr.GetHeight() - e.y) * 0.5f)),
+                     L.accent, in.note);
+        }
         if (!lay.version.empty())
             draw_str(dl, L.mono, L.mono_size, v2(lay.version.x, lay.version.y + (lay.version.h - mono_h) * 0.5f), L.faint,
                  in.version);
@@ -1449,6 +1510,29 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
             float x0 = x_left, w = w_full;   // a group's members are drawn indented
             const float line = std::round(22.0f * s);
             const float gap = std::round(8.0f * s);
+            // Bold is the text face drawn twice, the second a little to the right.
+            const float bold_dx = std::max(0.5f, std::round(1.2f * s) * 0.5f);
+            // The agent's text as chat_markdown.h lays it out: code on the
+            // plate colour in the mono face, bullets and numbers in the
+            // secondary colour.
+            auto draw_markdown = [&](ImVec2 p, const MdLayout& md) {
+                const float code_line = mono_h + std::round(3.0f * s);
+                for (const MdPlate& pl : md.plates)
+                    cdl->AddRectFilled(v2(p.x + pl.x, p.y + pl.y), v2(p.x + pl.x + pl.w, p.y + pl.y + pl.h), L.plate);
+                for (const MdRun& r : md.runs) {
+                    const float x = p.x + r.x, y = p.y + r.y;
+                    if (r.style == MdStyle::code) {
+                        const float lh = r.block ? code_line : ui_h;
+                        if (!r.block)
+                            cdl->AddRectFilled(v2(x - 1.0f, y + 1.0f), v2(x + r.w + 1.0f, y + ui_h - 1.0f), L.plate);
+                        draw_str(cdl, L.mono, L.mono_size, v2(x, y + std::round((lh - mono_h) * 0.5f)), L.text, r.text);
+                        continue;
+                    }
+                    const ImU32 c = r.marker ? L.secondary : L.text;
+                    draw_str(cdl, L.ui, L.ui_size, v2(x, y), c, r.text);
+                    if (r.style == MdStyle::bold) draw_str(cdl, L.ui, L.ui_size, v2(x + bold_dx, y), c, r.text);
+                }
+            };
             ImGui::Dummy(v2(1.0f, gap));
             // One item: draws with its top-left and returns its height.
             auto place = [&](float h, const std::function<void(ImVec2)>& fn) {
@@ -1513,8 +1597,28 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
                         break;
                     }
                     case ChatItem::Kind::agent: {
-                        const float th = extent(L.ui, L.ui_size, it.text, w).y;
-                        place(th, [&](ImVec2 p) { draw_str(cdl, L.ui, L.ui_size, p, L.text, it.text, w); });
+                        // The agent's text with its Markdown rendered (chat_markdown.h);
+                        // the item keeps the text as the agent sent it.
+                        MdDocument& md = markdown_[it.serial];
+                        // An agent's text only grows, so its size and its end say
+                        // whether it changed, without comparing it whole each frame.
+                        const size_t tail = std::min<size_t>(64, it.text.size());
+                        if (md.text().size() != it.text.size() ||
+                            md.text().compare(md.text().size() - tail, tail, it.text, it.text.size() - tail, tail) != 0)
+                            md.set_text(it.text);
+                        MdMetrics mm;
+                        mm.line = ui_h;
+                        mm.code_line = mono_h + std::round(3.0f * s);
+                        mm.gap = std::round(6.0f * s);
+                        mm.indent = std::round(14.0f * s);
+                        mm.marker = std::round(14.0f * s);
+                        mm.code_pad = std::round(6.0f * s);
+                        mm.bold_extra = bold_dx;
+                        const MdMeasure measure = [&](const std::string& t, MdFont f) {
+                            return f == MdFont::mono ? extent(L.mono, L.mono_size, t).x : extent(L.ui, L.ui_size, t).x;
+                        };
+                        const MdLayout& lay = md.layout(w, mm, measure);
+                        place(lay.height, [&](ImVec2 p) { draw_markdown(p, lay); });
                         break;
                     }
                     case ChatItem::Kind::thought: {
@@ -1582,7 +1686,7 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
                         // cards draw it (diff_card.h) or the unified diff on demand and
                         // for a file that is not a spec, and the agent's options.
                         const bool open = it.answer.empty();
-                        const std::string label = !it.command.empty() ? it.command : it.tool.title;
+                        const std::string label = chat_permission_label(it);
                         const bool compact = !it.compact.empty() && !it.expanded;
                         std::string full;
                         int full_lines = 0;
@@ -1910,6 +2014,27 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
         ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetCursorScreenPos(), v2(ImGui::GetCursorScreenPos().x + cw, ImGui::GetCursorScreenPos().y + 1.0f), L.rule_faint);
         ImGui::Dummy(v2(1.0f, std::round(4.0f * s)));
         if (ImGui::Selectable(chat_action_label(ChatAction::custom), false, 0, v2(cw, std::round(22.0f * s)))) custom_open_ = true;
+        // Local model: the chosen agent's mark, a box filled in bronze while it
+        // is set; the popup stays open so that the mark shows.
+        {
+            const bool can = agent() != nullptr, on = local_model();
+            const float lh = std::round(22.0f * s);
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            if (!can) ImGui::BeginDisabled();
+            if (ImGui::Selectable("##chat.local_model", false, ImGuiSelectableFlags_NoAutoClosePopups, v2(cw, lh)))
+                set_local_model(!on);
+            if (!can) ImGui::EndDisabled();
+            ImDrawList* pdl = ImGui::GetWindowDrawList();
+            const float side = std::round(11.0f * s);
+            const ImVec2 b(p.x + std::round(4.0f * s), std::round(p.y + (lh - side) * 0.5f));
+            pdl->AddRect(b, v2(b.x + side, b.y + side), can ? L.secondary : L.faint, 0.0f, 0, 1.0f);
+            if (on) {
+                const float in = std::round(3.0f * s);
+                pdl->AddRectFilled(v2(b.x + in, b.y + in), v2(b.x + side - in, b.y + side - in), L.accent);
+            }
+            draw_str(pdl, L.ui, L.ui_size, v2(b.x + side + std::round(8.0f * s), p.y + (lh - ui_h) * 0.5f),
+                     !can ? L.faint : on ? L.accent : L.text, "Local model");
+        }
         ImGui::PopFont();
         ImGui::EndPopup();
     }

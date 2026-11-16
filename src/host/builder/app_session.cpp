@@ -138,7 +138,14 @@ struct AppSession::Impl {
         explicit HostBinding(Impl* i) : im(i) {}
         cb::CommandOutput app_info() override { return im->app_info(); }
         cb::CommandOutput app_applets() override { return im->app_applets(); }
-        cb::CommandOutput app_launch(const std::string& id) override { return im->app_launch(id); }
+        // The session always says who asked (app_launch(id, origin) below);
+        // a launch with no origin is refused rather than taken as the person's.
+        cb::CommandOutput app_launch(const std::string&) override {
+            return failed("command.not_available", "app.launch needs the origin of whoever asked.");
+        }
+        cb::CommandOutput app_launch(const std::string& id, cb::CommandOrigin origin) override {
+            return im->app_launch(id, cb::command_origin_name(origin));
+        }
         cb::CommandOutput render_panel(const cb::spec::Spec& spec, const cb::PanelData& data, int width,
                                        int height) override {
             return im->render_panel(spec, data, width, height);
@@ -167,7 +174,8 @@ struct AppSession::Impl {
     std::mutex lines_m;
     std::vector<Line> lines;   // from the journal, any thread
     std::atomic<uint64_t> journaled{0};        // every journaled command
-    std::atomic<uint64_t> applets_opened{0};   // every applet.open that succeeded
+    std::atomic<uint64_t> specs_opened{0};     // every applet.open, and an agent's spec.new or spec.open, that succeeded
+    std::atomic<uint64_t> agent_specs_opened{0};   // of those, the ones an agent sent
     std::atomic<uint64_t> applets_saved{0};    // every applet.save that succeeded
 
     // Caliper API's gateway (command_gateway()), and the pending approvals as
@@ -280,7 +288,11 @@ struct AppSession::Impl {
     // ---- the frame loop ----------------------------------------------------
 
     void note(const cb::JournalEvent& e) {
-        if (e.ok && e.name == "applet.open") applets_opened.fetch_add(1, std::memory_order_acq_rel);
+        const bool agent = e.origin == cb::CommandOrigin::agent || e.origin == cb::CommandOrigin::mcp;
+        if (e.ok && (e.name == "applet.open" || (agent && (e.name == "spec.new" || e.name == "spec.open")))) {
+            if (agent) agent_specs_opened.fetch_add(1, std::memory_order_acq_rel);
+            specs_opened.fetch_add(1, std::memory_order_acq_rel);
+        }
         if (e.ok && e.name == "applet.save") applets_saved.fetch_add(1, std::memory_order_acq_rel);
         journaled.fetch_add(1, std::memory_order_acq_rel);
         Line l;
@@ -416,9 +428,9 @@ struct AppSession::Impl {
         return cb::CommandOutput::ok(std::move(j));
     }
 
-    cb::CommandOutput app_launch(const std::string& id) {
+    cb::CommandOutput app_launch(const std::string& id, const std::string& origin) {
         if (!hooks.launch) return failed("command.not_available", "app.launch is not available here.");
-        const LaunchOutcome o = hooks.launch(id);
+        const LaunchOutcome o = hooks.launch(id, origin);
         if (o.status == 200) {
             json j = parse_object(o.body);
             if (j.is_null()) return failed("app.launch_failed", "The launch gave no result.", "args.id");
@@ -745,7 +757,10 @@ void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderSeam> renderer) {
 
 uint64_t AppSession::journaled() const { return impl_->journaled.load(std::memory_order_acquire); }
 
-uint64_t AppSession::applets_opened() const { return impl_->applets_opened.load(std::memory_order_acquire); }
+uint64_t AppSession::specs_opened() const { return impl_->specs_opened.load(std::memory_order_acquire); }
+uint64_t AppSession::agent_specs_opened() const {
+    return impl_->agent_specs_opened.load(std::memory_order_acquire);
+}
 
 uint64_t AppSession::applets_saved() const { return impl_->applets_saved.load(std::memory_order_acquire); }
 
@@ -795,7 +810,8 @@ bool AppSession::worker_busy() const { return false; }
 bool AppSession::script_running() const { return false; }
 void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderSeam>) {}
 uint64_t AppSession::journaled() const { return 0; }
-uint64_t AppSession::applets_opened() const { return 0; }
+uint64_t AppSession::specs_opened() const { return 0; }
+uint64_t AppSession::agent_specs_opened() const { return 0; }
 uint64_t AppSession::applets_saved() const { return 0; }
 std::shared_ptr<caliper_api::CommandGateway> AppSession::command_gateway() { return nullptr; }
 

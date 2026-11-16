@@ -141,9 +141,14 @@ the builder pane's Sources palette, and the prompt opens under that row for the 
 catalog ids; with no spec open, the preview's `spec.new` from the `ui` origin is undone again by a discard while
 its step is still the top of the undo stack, and Accept leaves it as a step of its own before the change. **A
 property**: ⌘K beside the focused panel's title and each of its options in Properties opens the prompt under that
-row for that one property (`options.colormap`), and the edit is previewed in the panel. Each session's scope is the
-scope rule's for its kind of target. Not built yet: the ⌘K of a source's properties, and the packaging of
-`caliper-agent` with a Python runtime.
+row for that one property (`options.colormap`), and the edit is previewed in the panel. With a spec source selected in
+the builder pane, ⌘K beside what it reads (`catalog`, `from` or `sql`) and beside its transforms (`transform`, the
+list as one property) opens the prompt under that row for that property of the source; the context bundle carries the
+source, its chain and its catalog entry, the property's value and its part of `source.patch`'s schema, and the scope
+is the rule's `source_property`. **Decision:** the transforms are one property, since an edit of the chain usually
+touches more than one step and `source.patch` replaces the list whole. The edit shows as its compact diff under the
+row; the panels that read the source are not redrawn from the preview (an open item below). Each session's scope is
+the scope rule's for its kind of target. Not built yet: the packaging of `caliper-agent` with a Python runtime.
 
 ## The context bundle
 
@@ -253,9 +258,12 @@ discard does. Accept leaves two undo steps for such a file: the new spec, then t
 
 - **Two rounds.** In the first round the model reads the bundle and proposes its edits on the preview. In the second it
   sees their results and, with vision, a render of the preview, and either finishes with one sentence or corrects an
-  edit. A prompt makes at most 3 model requests and 8 tool calls, against 50 requests in the unscoped mode, and asks for
-  at most 8,000 output tokens. A prompt that reaches a limit ends with the stop reason `max_turn_requests`, and the
-  card offers Refine and Ask in chat.
+  edit. A prompt makes at most 6 model requests and 8 tool calls, against 50 requests in the unscoped mode, and asks for
+  at most 8,000 output tokens; the widget prompt asks for the several edits of one change in one reply. A prompt that
+  reaches a limit ends with the stop reason `max_turn_requests`; the card shows LIMIT with its edits and the agent's
+  reply that the change is not finished, Accept applies the edits it shows, and Refine lets the agent finish on the
+  same preview. The budget was 3 requests until a local model, which makes its edits one call at a time, reached it on
+  a selection's table.
 - **Claude: `claude-haiku-5-5` at effort `low`.** Of the four model ids that the sidecar offers, Claude Haiku 5.5 is
   the fastest and the cheapest, it takes adaptive thinking, and it takes the effort `low`; its default effort is
   `medium`, and the provider sets the effort explicitly on every request, as it already does. A widget request is a
@@ -495,7 +503,13 @@ them.
   that nothing reached `do_read()`. A hidden app's store is an in-memory one (`app_key_store()`).
 - **Tests and captures** use an in-memory store, the offline switch and a fake model server on loopback
   (`src/builder/agent/tests/fake_openai_serve.py`, whose `--record` writes the credential each request carried); the
-  hidden app's input driver gained `widget <action>`, `settings open|close|preset|model|until` and `files`.
+  hidden app's input driver gained `widget <action>`, `settings open|close|preset|model|until` and `files`, and for
+  the walk-through's run against a local model `settings list|probe`, `settings until done [<seconds>]` and `until
+  <state> [<seconds>]`: a wait in seconds of wall time, since the hidden app draws about 120 frames a second and the
+  1,800 frames of a step's patience are then about 15 seconds, shorter than a local model's turn. A wait for the
+  surface ends at once on a state that does not change by itself (failed, declined, handoff, conflict, unavailable),
+  and its log line carries what the surface shows: the tag, the edits, the model, the error, each request's prompt
+  tokens and the reply.
 - **A change applies at once.** Every change of the settings (a preset, an address, a model, an effort, a key saved or
   removed, a probe's answer for the current model) ends the inline surface's agent on any page: an open prompt closes
   as Close closes it, so a running turn is cancelled and a preview discarded, and the agent goes with its sidecar and
@@ -714,7 +728,7 @@ page, Widget agent conformance (`docs/references/widget-agent-conformance.md`). 
   numbering of the sidecar.
 - **One run on a local model.** The suite ran once against Qwen 3.8 27B (Q4_K_M) on Ollama 0.40.16, which was already
   running, on loopback with the offline switch, one run of each task: 10 of 12 tasks passed ("partial"), with a median
-  of 16 seconds a task. Tasks 5 and 8 reached the limit of three model requests (the model rendered the panel to check
+  of 16 seconds a task. Tasks 5 and 8 reached the limit of three model requests the budget had then (the model rendered the panel to check
   its edits, or read the spec first and added the source twice), which suggests that a local model may need the
   budget's third request for its closing sentence more often than the design assumed. It is one run on one machine,
   not a guarantee.
@@ -734,7 +748,12 @@ swapping. On a machine with a discrete GPU, the model's weights take video memor
   is attached (`caliper_live::Attachment::attached()`, true while the app holds a training script's stream, until it
   detaches) and the chosen base URL is a loopback address, for Ollama, LM Studio or Custom alike. A test in the hidden app
   attaches to the stream of the producer of the live acceptance test with the Ollama preset chosen and sees the note,
-  then detaches and sees it gone. The side chat's setting and note are not built.
+  then detaches with ⌘D Detach (esc Home keeps the stream attached) and sees it gone.
+- **Built: the side chat's note.** Local model in the side chat's agent picker marks the chosen agent as running on a
+  local model, kept per agent in `side-chat.json` ([ACP integration](acp-integration.md#the-side-chat-as-built)). While
+  the live session is attached and the chosen agent is marked, the chat's header shows the same noun, "Shared GPU"
+  (`chat_gpu_note()`), framed in bronze after the agent's name. A test in the hidden app attaches to the producer's
+  stream, marks the stub agent and sees the note, then detaches and sees it gone.
 - **The advice**, in Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`):
   during a run, use a smaller or more quantized model; keep its context length
   modest, since the context takes memory too; unload the model when done; use a hosted preset while a long run trains;
@@ -769,7 +788,7 @@ For a local server:
 
 ## Limits
 
-- One target for each prompt, 3 model requests and 8 tool calls for each prompt, and 8,000 output tokens per request.
+- One target for each prompt, 6 model requests and 8 tool calls for each prompt, and 8,000 output tokens per request.
 - The bundle's bounds above, 64 recorded invocations per preview, 16 sessions per sidecar, and 30 minutes before an
   unused preview ends.
 - The widget agent cannot create or run loaders, save applets, undo, or replace the spec or its layout; those belong to
@@ -857,12 +876,12 @@ and L six to ten; each figure is rough.
 | 11 | Done: the evaluation of the ACP Python SDK for the sidecar's agent side. The hand-written agent side stays, and the SDK validates every message in the tests ([Widget agent sidecar](byok-agent.md#the-acp-python-sdk)) | None left |
 | 12 | Done: widget sessions in the sidecar: `_meta.caliper.widget`, the scoped tools and their check, the widget system prompt, images and embedded context in prompts, `X-Caliper-Preview` on every call, the turn budget, the handoff and `session/close` | None left |
 | 13 | Done: the context bundle, built from the session with its bounds and cuts, as ACP content blocks with the tool scope and `session/new`'s `_meta` (`build_context_bundle()`); calling it from the inline surface comes with item 14 | None left |
-| 14 | Built: the inline surface on a panel, a selection, a dropped file and a property, the preview drawn in place (a panel or the whole spec), Accept, Reject and Refine, Ask in chat, and the agent over `AcpClient`. Left: the packaging of `caliper-agent` with a Python runtime, and ⌘K on a source's properties | S, 2 days |
+| 14 | Built: the inline surface on a panel, a selection, a dropped file and a property of a panel or a source, the preview drawn in place (a panel or the whole spec), Accept, Reject and Refine, Ask in chat, and the agent over `AcpClient`. The packaging of `caliper-agent` with a Python runtime moved to sprint 5 | None left |
 | 15 | Adopted: Pydantic AI as the provider layer, with the Claude and OpenAI-compatible providers built in the sidecar. The app passes the chosen preset, base URL, model and effort from the widget agent's settings when it starts the sidecar, and places the key only in the sidecar's environment; widget sessions (12) and the probe (16) build on it | None left |
 | 16 | Done: the capability probe and its cache, with the override (`caliper-agent probe`) | None left |
 | 17 | Done: the presets as data, `KeyStore` with one key per provider, the sidecar's `--preset` with its checks and warnings, the scrubbing of every documented key shape, and the settings in the app (`agent_settings.h`) with the agent made from them | None left |
 | 18 | Done: the provider conformance suite (`caliper-agent-conformance`), its scripted and fake-server modes and its reference page | None left |
-| 19 | Done: the GPU contention note of the widget agent ("Shared GPU" in the settings and the ⌘K prompt row). Left: the side chat's setting and note | S, half a day |
+| 19 | Done: the GPU contention note ("Shared GPU" in the widget agent's settings and its ⌘K prompt row, and in the side chat's header with its Local model setting) | None left |
 
 The Windows Credential Manager store, with one entry per provider, is on the [Windows parity](windows-parity.md) page.
 
@@ -875,6 +894,10 @@ These were found in the review of sprint 3's second pull request and left for a 
   and ⌘K opens a prompt there. While the settings are open, neither key should reach the page or the prompt.
 - **A property's prompt anchor lacks its panel.** A prompt opened on a property is anchored to `prop:` and the
   property's path, so after the focus moves to another panel it can draw under that panel's row of the same path. The
-  anchor should name the panel too.
+  anchor should name the panel too. A source's property has the same anchor, so it can draw under another source's
+  `transform` row.
+- **A source's preview is not drawn in its panels.** The whole spec's preview redraws a panel only when the panel's
+  own fragment changed, so an edit of a source shows as its diff under the row and the panels that read the source keep
+  their data until Accept.
 - **A selection outlives its spec.** `SpecRuntime::set_spec()` never clears the selection, so it stays when the spec
   changes or its panel goes. To check with it: the `selecting` flag of a panel entry that a preview replaces.

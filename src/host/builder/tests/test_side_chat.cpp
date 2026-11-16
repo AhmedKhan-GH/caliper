@@ -323,6 +323,91 @@ TEST_CASE("side chat: the opening context goes once, before a session's first me
     CHECK(chat.last_prompt().size() == 1);
 }
 
+TEST_CASE("side chat: the Shared GPU note while a live run is attached and the agent is marked as local") {
+    CHECK(chat_gpu_note(true, true) == "Shared GPU");
+    CHECK(chat_gpu_note(true, false).empty());
+    CHECK(chat_gpu_note(false, true).empty());
+    CHECK(chat_gpu_note(false, false).empty());
+
+    Fixture f("chat-gpu-note");
+    bool live = false;
+    SideChat::Hooks hooks;
+    hooks.live_attached = [&live] { return live; };
+    SideChat::Options o = f.options();
+    // Not marked: no note, live or not.
+    {
+        SideChat chat(o, hooks);
+        CHECK_FALSE(chat.local_model());
+        live = true;
+        CHECK(chat.gpu_note().empty());
+        live = false;
+    }
+    // Marked: the note while the run is attached, and in the header's input.
+    o.settings.local_model_agents = {"custom"};
+    SideChat chat(o, hooks);
+    CHECK(chat.local_model());
+    CHECK(chat.gpu_note().empty());
+    live = true;
+    CHECK(chat.gpu_note() == "Shared GPU");
+    CHECK(chat_pane_input(chat, {0, 0, 600, 400}).note == "Shared GPU");
+    live = false;
+    CHECK(chat.gpu_note().empty());
+    CHECK(chat_pane_input(chat, {0, 0, 600, 400}).note.empty());
+    // The mark is the chosen agent's: another agent's mark is not this one's.
+    o.settings.local_model_agents = {"opencode"};
+    live = true;
+    {
+        SideChat other(o, hooks);
+        CHECK_FALSE(other.local_model());
+        CHECK(other.gpu_note().empty());
+    }
+    // Without the app's hook there is no live run.
+    o.settings.local_model_agents = {"custom"};
+    SideChat alone(o);
+    CHECK(alone.local_model());
+    CHECK(alone.gpu_note().empty());
+    // No agent chosen: nothing is marked.
+    SideChat::Options none = o;
+    none.settings.custom_command.clear();
+    none.settings.agent.clear();
+    SideChat empty(none, hooks);
+    CHECK(empty.agent() == nullptr);
+    CHECK_FALSE(empty.local_model());
+    CHECK(empty.gpu_note().empty());
+}
+
+TEST_CASE("side chat: the Local model setting marks the chosen agent, and the settings change") {
+    Fixture f("chat-local-model");
+    bool live = true;
+    std::vector<ChatSettings> saved;
+    SideChat::Hooks hooks;
+    hooks.live_attached = [&live] { return live; };
+    hooks.settings_changed = [&saved](const ChatSettings& s) { saved.push_back(s); };
+    SideChat::Options o = f.options();
+    o.settings.local_model_agents = {"opencode"};   // another agent's mark stays
+    SideChat chat(o, hooks);
+    REQUIRE(chat.agent() != nullptr);
+    CHECK(chat.gpu_note().empty());
+    REQUIRE(chat.set_local_model(true));
+    CHECK(chat.local_model());
+    CHECK(chat.gpu_note() == "Shared GPU");
+    REQUIRE(saved.size() == 1);
+    CHECK(saved.back().local_model_agents == std::vector<std::string>{"opencode", "custom"});
+    REQUIRE(chat.set_local_model(true));   // marked once
+    CHECK(chat.settings().local_model_agents == std::vector<std::string>{"opencode", "custom"});
+    REQUIRE(chat.set_local_model(false));
+    CHECK_FALSE(chat.local_model());
+    CHECK(chat.gpu_note().empty());
+    CHECK(saved.back().local_model_agents == std::vector<std::string>{"opencode"});
+    // No agent chosen: nothing to mark.
+    SideChat::Options none = o;
+    none.settings.custom_command.clear();
+    none.settings.agent.clear();
+    SideChat empty(none, hooks);
+    CHECK_FALSE(empty.set_local_model(true));
+    CHECK_FALSE(empty.local_model());
+}
+
 TEST_CASE("side chat: a pending command approval of the agent's turn is mirrored in its slot") {
     Fixture f("chat-approvals");
     std::vector<caliper_builder::PendingApproval> pending;
@@ -702,4 +787,52 @@ TEST_CASE("side chat rows: a denied approval or a failed call makes the group an
     const std::vector<ChatItem> failed = {call("a", "layout.set", "completed"), call("b", "layout.set", "failed")};
     CHECK(chat_rows(failed)[0].alert);
     CHECK(chat_rows(failed)[0].expanded);
+}
+
+// caliper-agent as the person's custom agent, on the Ollama preset with a
+// context too small for the general role's tools: the sidecar sends nothing
+// and ends the turn with a message, which the chat must show as the agent's
+// text, followed by the turn's stop word. No model server answers on the port
+// it names, and CALIPER_AGENT_OFFLINE keeps it on this machine.
+TEST_CASE("side chat: caliper-agent's turn that does not fit its context ends with its message in the conversation") {
+    const std::string python = CALIPER_BUILDER_TEST_PYTHON;
+    if (python.empty()) {
+        MESSAGE("skipped: CALIPER_BUILDER_TEST_PYTHON names no interpreter with caliper-agent's dependencies");
+        return;
+    }
+    Fixture f("chat-agent-context");
+    SideChat::Options o = f.options();
+    o.settings.custom_name = "Caliper agent";
+    o.settings.custom_command = "/usr/bin/env 'PYTHONPATH=" + std::string(CALIPER_AGENT_SOURCE) +
+                                "' PYTHONDONTWRITEBYTECODE=1 CALIPER_AGENT_OFFLINE=1 '" + python +
+                                "' -P -m caliper_agent --preset ollama --base-url http://127.0.0.1:9/v1 --model m "
+                                "--context-length 4096";
+    SideChat chat(o);
+    say(chat, "Plot attention entropy per layer while it trains");
+    REQUIRE_MESSAGE(pump_until(chat, [&] { return turn_over(chat) || chat.state() == ChatState::exited ||
+                                                  chat.state() == ChatState::failed; }, 60000),
+                    chat.error().code << " " << chat.error().message);
+    CHECK(chat.agent_info().name == "caliper-agent");
+    const ChatItem* text = find(chat, K::agent, 1);
+    REQUIRE(text);
+    CHECK(text->text.find("no longer fits the model's context of 4,096 tokens") != std::string::npos);
+    CHECK(text->text.find("--context-length") != std::string::npos);
+    // A turn cut short reads as a limit, not as done: the sidecar ends it with
+    // the stop reason max_tokens.
+    const ChatItem* stop = find(chat, K::stop, 1);
+    REQUIRE(stop);
+    CHECK(stop->text == "LIMIT");
+}
+
+// The chat renders an agent's Markdown (chat_markdown.h) as display only: the
+// conversation keeps the text as the agent sent it, marks and all.
+TEST_CASE("side chat: the agent's text is kept as it was sent, Markdown and all") {
+    Fixture f("chat-markdown-kept");
+    SideChat chat(f.options());
+    say(chat, "**Spec** `attention-entropy` and [a link](https://example.org)");
+    REQUIRE(pump_until(chat, [&] { return turn_over(chat); }));
+    const ChatItem* reply = find(chat, K::agent, 1);
+    REQUIRE(reply);
+    CHECK(reply->text == "You said: **Spec** `attention-entropy` and [a link](https://example.org)");
+    CHECK(chat_markdown_plain(reply->text) == "You said: Spec attention-entropy and a link");
 }

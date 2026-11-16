@@ -11,7 +11,13 @@ Methods served (ACP version 1, agent side):
   sidecar assumes of the model (tool calling, vision, the context length and
   where each came from), so the app can size the context bundle; a model
   known to have no tool calling refuses the session with `agent.no_tools`. The `mcpServers` of the request are not started: this
-  agent reaches Caliper through Caliper API itself. With
+  agent reaches Caliper through Caliper API itself. When one of them is
+  Caliper's (the side chat hands caliper-mcp, named `caliper`, with the
+  session's own API file in `--api-file`), the session calls Caliper API with
+  that file, whose token has the origin `agent`, instead of the sidecar's
+  (`caliper_api.session_api_file()`); a Caliper server without a usable
+  `--api-file` refuses the session with `agent.no_session_api_file`, rather
+  than fall back to `api.json`, whose token is another origin's. With
   `_meta.caliper.widget` the session is a widget session (widget.py): one
   target, a tool scope and the app's preview, the widget system prompt, the
   fast default model at low effort, and no `review` option, since the preview
@@ -44,7 +50,7 @@ from pydantic_ai import Agent as GraphAgent
 
 from . import __version__
 from .acp import AUTH_REQUIRED, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, Connection, RpcError
-from .caliper_api import CaliperApi
+from .caliper_api import CaliperApi, session_api_file
 from .keyguard import KeyStatus
 from .loop import REVIEW_DESTRUCTIVE_ONLY, REVIEW_SPEC_CHANGES, SessionState, TurnRunner, build_agent
 from .prompt import WIDGET_SYSTEM_PROMPT
@@ -77,8 +83,11 @@ _BAD_KEY_MESSAGE = ("The API key that Caliper passed is not well formed. Enter t
 
 
 class Session:
-    def __init__(self, state: SessionState) -> None:
+    def __init__(self, state: SessionState, api: CaliperApi) -> None:
         self.state = state
+        # The sidecar's client of Caliper API, or the session's own when
+        # session/new handed it an API file.
+        self.api = api
         self.runner: TurnRunner | None = None
         self.idle = asyncio.Event()
         self.idle.set()
@@ -91,7 +100,8 @@ class Agent:
                  usage_log: str | None = None, key_required: bool = True, commands: list[Command] | None = None,
                  scope_rule: ScopeRule | None = None, refusal: Exception | None = None,
                  provider_meta: dict | None = None, widget_model: str | None = None,
-                 widget_effort: str | None = None) -> None:
+                 widget_effort: str | None = None, widget_requests: int | None = None) -> None:
+        self._widget_requests = widget_requests
         self._usage_log = usage_log
         # Why no provider may run (offline.py): every session/new and
         # session/prompt is then answered with this error.
@@ -134,6 +144,9 @@ class Agent:
     async def aclose(self) -> None:
         if self._provider is not None:
             await self._provider.aclose()
+        for session in self._sessions.values():
+            if session.api is not self._api:
+                await session.api.aclose()
         await self._api.aclose()
 
     # ---- dispatch ------------------------------------------------------------------
@@ -233,9 +246,19 @@ class Agent:
                                {"code": "agent.no_tools", "model": model, "capability": "tools",
                                 "source": caps.sources.get("tools", "default"), "retryable": False})
             caliper_meta["model"] = caps.as_meta(model)
+        caliper_server, api_file = session_api_file(params.get("mcpServers"))
+        if caliper_server and api_file is None:
+            # The session's own file has the agent token; falling back to the
+            # sidecar's (api.json, the token of outside agents) would hide that
+            # its commands run under another origin.
+            raise RpcError(INVALID_PARAMS, "The Caliper MCP server of this session names no API file of its own "
+                                           "(--api-file with an absolute path), so this agent cannot reach Caliper "
+                                           "with the session's own token.", {"code": "agent.no_session_api_file"})
         state = SessionState(id=sid, cwd=cwd.rstrip("/") or "/", settings=Settings(model=model, effort=effort),
                              widget=widget)
-        self._sessions[sid] = Session(state)
+        if self._widget_requests:
+            state.widget_max_requests = self._widget_requests
+        self._sessions[sid] = Session(state, self._api.with_file(api_file) if api_file is not None else self._api)
         result: dict = {"sessionId": sid, "configOptions": self._config_options(state)}
         if widget is not None:
             caliper_meta["widget"] = {"target": widget.target, "scope": list(widget.scope), "preview": widget.preview}
@@ -292,6 +315,8 @@ class Agent:
             except asyncio.TimeoutError:
                 log.warning("a turn did not end within %.0f s of session/close", CLOSE_WAIT_S)
         self._sessions.pop(session.state.id, None)
+        if session.api is not self._api:
+            await session.api.aclose()
         return {}
 
     async def _prompt(self, params: Any) -> dict:
@@ -314,7 +339,7 @@ class Agent:
                                                     else "agent.no_key"})
         assert self._provider is not None
         graph, tools = self._turn_tools(session.state)
-        runner = TurnRunner(self._conn, self._provider, graph, self._api, tools, session.state, self._usage_log)
+        runner = TurnRunner(self._conn, self._provider, graph, session.api, tools, session.state, self._usage_log)
         session.runner = runner
         session.idle.clear()
         try:

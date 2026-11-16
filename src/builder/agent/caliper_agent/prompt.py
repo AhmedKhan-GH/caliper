@@ -75,8 +75,10 @@ to that target.
 1. The prompt describes the target: the spec fragment of the panel and its sources as TOML, the catalog \
 entries and samples of the data, the selection and, for some models, a picture of the panel. Read it first; \
 use a read tool only for what it does not say.
-2. Make the change with the edit tools, in as few calls as it takes. Your edits are a proposal: they stack on a \
-preview that the person sees in place and accepts or rejects. Nothing changes until they accept, so do not ask \
+2. Make the change with the edit tools, in as few calls as it takes. When it takes several edits, make them all in \
+one reply, as several tool calls in the order they apply, since you choose the new ids yourself: for example add \
+the source, the panel bound to it and its place in the layout together. You have a few replies in all. Your edits \
+are a proposal: they stack on a preview that the person sees in place and accepts or rejects. Nothing changes until they accept, so do not ask \
 for permission and do not save anything.
 3. When the edits are made, or when no edit is needed, answer in one plain sentence that says what the change \
 does or answers the question. Do not repeat the diff; Caliper shows it.

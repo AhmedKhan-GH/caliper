@@ -176,8 +176,12 @@
             "description": "The applet's manifest id.",
             "type": "string"
           },
+          "note": {
+            "description": "With PENDING_APPROVAL or PENDING: what the launch waits for, and that spec.get names the open spec once it has opened.",
+            "type": "string"
+          },
           "status": {
-            "description": "The applet's status after the launch, ACTIVE when it opened.",
+            "description": "The applet's status after the launch: ACTIVE when it opened; PENDING_APPROVAL when its open waits for the person's approval, because it would replace the open spec's unsaved changes; PENDING when the app cannot tell yet whether it will.",
             "type": "string"
           },
           "version": {
@@ -193,7 +197,7 @@
         ],
         "type": "object"
       },
-      "summary": "Opens the page of one applet, as a click on its row on the app's landing screen does. The page shown before is closed first, and an attached live session is detached. The id is an applet's manifest id from app.applets."
+      "summary": "Opens the page of one applet, as a click on its row on the app's landing screen does; an attached live session stays attached. The id is an applet's manifest id from app.applets. A compiled applet's page replaces the page shown at once. A dashboard of the workspace opens with an applet.open from your origin, and the page changes only when that has run: when it would replace the open spec's unsaved changes it waits for the person's approval, the status is PENDING_APPROVAL rather than ACTIVE, its note says how to check whether it opened, and if the person denies it nothing changes."
     },
     {
       "agents": true,
@@ -1874,6 +1878,10 @@
             "description": "The spec's canonical JSON form: the TOML tables as JSON objects, as the spec format's JSON Schema describes them.",
             "type": "object"
           },
+          "open": {
+            "description": "True with a spec in the result, the open one or the named applet's; false when no applet is named and no spec is open, and then no other field is given.",
+            "type": "boolean"
+          },
           "path": {
             "description": "Its file, relative to the workspace, or null when it was never saved.",
             "type": [
@@ -1887,15 +1895,11 @@
           }
         },
         "required": [
-          "id",
-          "path",
-          "dirty",
-          "text",
-          "json"
+          "open"
         ],
         "type": "object"
       },
-      "summary": "Returns the open spec as its TOML text and as its canonical JSON form, with its applet id, the file it was saved to or opened from, and whether it has unsaved changes. With applet, it returns that saved spec applet's spec instead, read from its files without opening it. It changes nothing."
+      "summary": "Returns the open spec as its TOML text and as its canonical JSON form, with its applet id, the file it was saved to or opened from, and whether it has unsaved changes. With applet, it returns that saved spec applet's spec instead, read from its files without opening it. When no spec is open and no applet is named, it answers open false and nothing else, which is not an error: make one with spec.new or open one with spec.open or applet.open. It changes nothing."
     },
     {
       "agents": true,

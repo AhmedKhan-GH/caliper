@@ -328,7 +328,9 @@ TEST_CASE("api commands: the table, a read, spec edits and undo over a real sess
     const json listed = command(port, "applet.list", json::object());
     REQUIRE(listed["ok"] == true);
     CHECK(listed["result"]["applets"] == json::array());
-    CHECK(error_code(command(port, "spec.get", json::object())) == "spec.no_open_spec");
+    const json none = command(port, "spec.get", json::object());
+    CHECK(none["ok"] == true);
+    CHECK(none["result"] == json({{"open", false}}));
 
     // Spec edits, which run on the frame thread, with a group from the header.
     CHECK(command(port, "spec.new", {{"id", "dash"}, {"title", "Dash"}}, "mcp", "turn-1")["ok"] == true);

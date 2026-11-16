@@ -303,6 +303,17 @@ TEST_CASE("tools/call checks the tool and its arguments before it looks for the 
     CHECK(tool_error(r)["code"] == "mcp.no_api_file");
     const json no_args = h.request(5, "tools/call", modern({{"name", first_tool}}));
     REQUIRE(no_args.contains("result"));
+
+    // A null on an optional argument is read as the argument left out, as the
+    // command layer reads it, so this call a local model sent passes the check
+    // and goes on to look for the app; a null on a required argument does not.
+    const json nulls = {{"id", "layer0"}, {"catalog", "live:entropy.l0"}, {"sql", nullptr}, {"from", nullptr},
+                        {"transform", nullptr}, {"dry_run", false}};
+    CHECK(tool_error(h.request(6, "tools/call", modern({{"name", "source_add"}, {"arguments", nulls}})))["code"] ==
+          "mcp.no_api_file");
+    CHECK(tool_error(h.request(7, "tools/call",
+                               modern({{"name", "source_add"}, {"arguments", {{"id", nullptr}, {"catalog", "x"}}}})))["code"] ==
+          "command.invalid_args");
 }
 
 TEST_CASE("subscriptions are acknowledged with what the server honours and closed at shutdown") {

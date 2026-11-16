@@ -25,10 +25,12 @@
 #include "host/live/live_views_state.h"   // the views' header look
 #include "host/api/app_api.h"
 #include "host/api/window_captures.h"
+#include "host/open_url.h"
 #include "host/builder/app_hooks.h"
 #include "host/builder/app_providers.h"
 #include "host/builder/approval_cards.h"
 #include "host/builder/chat_pane.h"
+#include "host/builder/save_prompt.h"
 #include "host/builder/spec_page.h"
 #if CALIPER_WITH_BUILDER
 #include "host/builder/agent_settings.h"
@@ -46,6 +48,7 @@
 #include <cmath>
 #include <csignal>
 #include <cstdlib>
+#include <fstream>
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -315,8 +318,9 @@ public:
             // An attached session: claim and apply the newest completed
             // snapshot of every view before the frame draws them (the live
             // core's order: poll, then frame). Never waits on the script. The
-            // spec page keeps polling an attachment, for its live sources.
-            if (page_ == AppPage::Live || (page_ == AppPage::Spec && live_.attached())) live_.poll();
+            // attachment lasts across every page until Detach, so it is
+            // polled on every page, for the catalog's live sources.
+            if (live_.attached()) live_.poll();
             if (autoattach_pid_ > 0 && page_ == AppPage::Landing) autoattach();
             note_live_events();
             note_control_lines();
@@ -327,6 +331,7 @@ public:
             // frame drawn next (window_captures.h).
             if (api_.running()) serve_api();
             session_.frame();
+            save_prompt_.frame(session_);   // "Save changes to <name>?" and what waits on it
             approvals_.frame(session_.session(), session_.worker_busy(), glfwGetTime());
             chat_.frame(session_);   // the side chat polls its agent
             note_spec_applets();
@@ -341,7 +346,9 @@ public:
             // CALIPER_TEST_UI with --hidden: the scripted clicks of a UI test,
             // queued into ImGui before the frame reads its input.
             if (ui_driver_ && page_ == AppPage::Live) feed_ui_driver();
-            if (spec_ui_ && (page_ == AppPage::Spec || page_ == AppPage::Live || page_ == AppPage::Landing)) feed_spec_ui();
+            if (spec_ui_ && (page_ == AppPage::Spec || page_ == AppPage::Live || page_ == AppPage::Landing ||
+                             page_ == AppPage::Applet))
+                feed_spec_ui();
 
             renderer_->new_frame();
 
@@ -362,18 +369,36 @@ public:
                 LandingScreen::Context ctx;
                 ctx.loader = &loader_;
                 ctx.renderer_name = renderer_->name();
-                ctx.launch = [this](int i) { launch_applet(i); };
+                ctx.launch = [this](int i) { launch_from_landing(i); };
                 ctx.restart = [this](int i) { restart_applet(i); };
                 ctx.sessions = &sessions_;
                 ctx.attach = [this](const std::string& s) { attach_session(s); };
                 ctx.after_bars = [this] { jobs_tray_.draw(); };
                 ctx.attach_url = [this](const std::string& u) { attach_stream(u); };
+                // The attached session, which the command bar shows with F5
+                // Live page, the way back to it.
+                LandingScreen::LiveSession live_row;
+                if (live_.attached()) {
+                    live_row.session = live_.status().session;
+                    live_row.script = live_script_;
+                    live_row.ended = !live_.status().alive && !live_.status().pending;
+                    ctx.live = &live_row;
+                    ctx.show_live = [this] { show_live_page(); };
+                }
+                // F6 Dashboard: the session's open spec, the way back to its
+                // page, as F5 is to the live page.
+                ctx.open_spec = open_spec_title();
+                if (!ctx.open_spec.empty()) ctx.show_spec = [this] { open_spec_page(); };
                 ctx.spec_facts = [](const caliper_host::AppletEntry& e, SpecAppletFacts* f) {
                     return caliper_host::SpecPage::facts(e.spec_path, f);
                 };
                 ctx.shown_path = [this](const std::string& p) { return workspace_relative(p); };
+                // F3 New dashboard asks "Save changes to <name>?" first when
+                // the open spec has unsaved changes.
                 if (caliper_host::SpecPage::built())
-                    ctx.new_spec = [this](const std::string& title) { new_spec(title); };
+                    ctx.new_spec = [this](const std::string& title) {
+                        save_prompt_.ask("new dashboard", [this, title] { new_spec(title); });
+                    };
 #if CALIPER_WITH_BUILDER
                 ctx.agent_settings = [this] { agent_settings_.set_open(true); };
 #endif
@@ -390,8 +415,9 @@ public:
                 // Home once, N sec after the spec page opened.
                 if (const char* ha = std::getenv("CALIPER_HOME_AFTER")) {
                     static double page_t0 = -1.0;
+                    static bool fired = false;   // once: a spec page opened later stays
                     if (page_t0 < 0) page_t0 = glfwGetTime();
-                    if (glfwGetTime() - page_t0 >= std::atof(ha)) go_back = true;
+                    if (!fired && glfwGetTime() - page_t0 >= std::atof(ha)) go_back = fired = true;
                 }
                 if (spec_page_.draw(session_, renderer_->name(), &jobs_tray_, esc_home_pressed()).home || go_back)
                     pending_spec_home_ = true;
@@ -403,8 +429,9 @@ public:
                 // training" headlessly (for the SIGSEGV repro).
                 if (const char* ha = std::getenv("CALIPER_HOME_AFTER")) {
                     static double page_t0 = -1.0;
+                    static bool fired = false;   // once: an applet page opened later stays
                     if (page_t0 < 0) page_t0 = glfwGetTime();
-                    if (glfwGetTime() - page_t0 >= std::atof(ha)) go_back = true;
+                    if (!fired && glfwGetTime() - page_t0 >= std::atof(ha)) go_back = fired = true;
                 }
 
                 double now = glfwGetTime();
@@ -443,6 +470,9 @@ public:
                 if (go_back) pending_home_ = active_applet_;
             }
 
+            // "Save changes to <name>?" over whatever page is shown, while open.
+            save_prompt_.draw();
+
 #if CALIPER_WITH_BUILDER
             // The widget agent's settings, over whatever page is shown, in the
             // work area; ⌘, opens them anywhere.
@@ -478,12 +508,17 @@ public:
                 },
                 [this](uint64_t t, int status, const std::string& why) { capture_error(t, status, why); });
 
-            // Deferred detach (esc Home on the live page), for the same reason
-            // as the applet teardown below: the views' textures and imports are
-            // released only after the frame that drew them has been rendered.
+            // Deferred Home and Detach (⌘D) of the live page, for the same
+            // reason as the applet teardown below: the views' textures and
+            // imports are released only after the frame that drew them has
+            // been rendered.
+            if (pending_live_home_) {
+                pending_live_home_ = false;
+                leave_live_page();
+            }
             if (pending_detach_) {
                 pending_detach_ = false;
-                leave_live_page();
+                detach_live();
             }
             // The spec page's textures go after the frame that drew them too.
             if (pending_spec_home_) {
@@ -537,11 +572,12 @@ public:
         cl_ = cl;
         caliper_host::AppSession::Hooks h = caliper_host::app_session_hooks();
         h.applets_json = [this] { return caliper_host::applets_json(loader_); };
-        h.launch = [this](const std::string& id) { return launch_by_id(id); };
+        h.launch = [this](const std::string& id, const std::string& origin) { return launch_by_id(id, origin); };
         if (!renderer_->window_capture_supported())
             h.capture_unavailable = caliper_host::WindowCaptures::unsupported(renderer_->name());
         h.request_capture = [this] { captures_.add(caliper_host::AppSession::kCaptureTicket); };
         h.log = [this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); };
+        save_prompt_.set_log([this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); });
         std::string refused;   // a command script, which only a hidden app runs
         session_.start(caliper_host::app_session_options(cl, hidden_, &refused), std::move(h));
         if (!refused.empty()) {
@@ -570,23 +606,13 @@ public:
         co.settings_path = caliper::app_data_path("side-chat.json");
         co.exe_dir = caliper::executable_dir();
         caliper_host::ChatPane::Hooks chh;
-        // The one case where the API starts without --api: the side chat
-        // starts it for its agent's caliper-mcp, on 127.0.0.1 at a free port
-        // (the server binds loopback only, and no setting chooses another
-        // address), and stops it when the chat's agent ends.
+        // One of the two cases where the API starts without --api: the side
+        // chat starts it for its agent's caliper-mcp, on 127.0.0.1 at a free
+        // port (the server binds loopback only, and no setting chooses
+        // another address), and stops it when the chat's agent ends, unless
+        // Open in browser uses it too (api_for()).
         chh.start_api = [this](std::string* why, std::string* started) -> std::string {
-            if (!api_.running()) {
-                caliper_host::CommandLine c = cl_;
-                c.api_port = 0;
-                start_api(c);
-                if (api_.running()) {
-                    api_for_chat_ = true;
-                    *started = api_address();
-                    landing_.log("api started", *started, "for the side chat");
-                    std::cerr << "[chat] Caliper API started on " << *started << " for the side chat" << std::endl;
-                }
-            }
-            if (!api_.running()) {
+            if (!api_for(ApiUser::chat, started)) {
                 *why = "see Activity";
                 return {};
             }
@@ -596,19 +622,31 @@ public:
         };
         chh.end_api_file = [this](const std::string& file) { api_.revoke_agent_file(file); };
         chh.agent_ended = [this] {
-            if (!api_for_chat_ || !api_.running()) return;
+            api_for_chat_ = false;
+            if (!api_started_here_ || api_for_browser_ || !api_.running()) return;
             const std::string address = api_address();
             api_.stop();
-            api_for_chat_ = false;
+            api_started_here_ = false;
             landing_.log("api stopped", address, "the side chat's agent ended");
             std::cerr << "[chat] Caliper API stopped on " << address << ": the side chat's agent ended" << std::endl;
         };
         chh.show_approval = [this](const std::string& id) { approvals_.point_to(id); };
+        // The header's GPU note: a live run is attached.
+        chh.live_attached = [this] { return live_.attached(); };
         chh.log = [this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); };
         chat_.start(std::move(co), std::move(chh));
         // Every page's status bar shows the API's address while it runs.
-        set_host_status_note([this] { return api_.running() ? "api " + api_address() : std::string(); });
+        set_host_status_note([this] {
+            std::string note = api_.running() ? "api " + api_address() : std::string();
+            if (page_ == AppPage::Applet && !agent_spec_note_.empty())
+                note += (note.empty() ? "" : "  \xc2\xb7  ") + ("dashboard " + agent_spec_note_ + " open");
+            return note;
+        });
         spec_page_.set_chat(&chat_);
+        // ⌘O Open in browser on the spec page, and the names of a live view's
+        // dims for the builder's Properties.
+        spec_page_.set_open_in_browser([this](const std::string& applet) { return open_in_browser(applet); });
+        spec_page_.set_dim_names([this](const std::string& id) { return providers_.dim_names(id); });
         // ⌘K's sidecar gets an API file of its own, with an agent token.
         caliper_host::SpecPage::ApiFiles af;
         af.issue = [this]() -> std::string {
@@ -637,6 +675,96 @@ public:
 #endif
     }
 
+    // Who uses a Caliper API that the app started without --api: the side
+    // chat's agent, or Open in browser.
+    enum class ApiUser { chat, browser };
+
+    // Starts the API for `user` when it does not run, on a free port of
+    // 127.0.0.1 with new tokens and the API file, as --api does, and says so
+    // in Activity and on standard error; `started` gets its address then.
+    // An API the app started is the users' (api_for_chat_, api_for_browser_);
+    // one started with --api is left alone. False when it does not run.
+    bool api_for(ApiUser user, std::string* started) {
+        if (!start_api_here(user, started)) return false;
+        if (api_started_here_) (user == ApiUser::chat ? api_for_chat_ : api_for_browser_) = true;
+        return true;
+    }
+
+    // api_for() without taking the API: it starts it when it does not run,
+    // and the caller takes it once it knows it keeps it.
+    bool start_api_here(ApiUser user, std::string* started) {
+        if (!api_.running()) {
+            caliper_host::CommandLine c = cl_;
+            c.api_port = 0;
+            start_api(c);
+            if (api_.running()) {
+                api_started_here_ = true;
+                *started = api_address();
+                const bool chat = user == ApiUser::chat;
+                landing_.log("api started", *started, chat ? "for the side chat" : "for the browser");
+                std::cerr << (chat ? "[chat]" : "[browser]") << " Caliper API started on " << *started
+                          << (chat ? " for the side chat" : " for the browser") << std::endl;
+            }
+        }
+        return api_.running();
+    }
+
+    // ⌘O Open in browser on the spec page: the saved dashboard `applet` (its
+    // workspace id) in the person's default browser, at the spec page of
+    // Caliper API with the viewer token. Without --api the API starts for
+    // it as for the side chat, and stays until the app quits, since a page
+    // open in a browser keeps reading. A hidden app opens no browser: it
+    // writes the link to the file CALIPER_TEST_OPEN_URL names, and without
+    // that refuses. Whatever can refuse the link is asked before the API
+    // starts, and an API that this request alone started stops again when
+    // no link is handed over. "" when the link went out, or why not. The
+    // token is never written to Activity or standard error.
+    std::string open_in_browser(const std::string& applet) {
+        const char* hook = hidden_ ? std::getenv("CALIPER_TEST_OPEN_URL") : nullptr;
+        if (hidden_ && (!hook || !*hook)) {
+            std::cerr << "[browser] not opened: the app runs hidden, and CALIPER_TEST_OPEN_URL names no file for the link"
+                      << std::endl;
+            landing_.log("browser refused", applet, "the app runs hidden");
+            return "the app runs hidden";
+        }
+        std::string started, why;
+        if (!caliper_host::AppApi::viewer_link_possible(applet, &why)) {
+            landing_.log("browser refused", applet, why);
+            return why;
+        }
+        const bool was_running = api_.running();
+        if (!start_api_here(ApiUser::browser, &started)) return "Caliper API did not start; see Activity";
+        const auto refuse = [&](const std::string& reason) {
+            landing_.log("browser refused", applet, reason);
+            if (!was_running && api_started_here_ && !api_for_chat_ && !api_for_browser_ && api_.running()) {
+                const std::string address = api_address();
+                api_.stop();
+                api_started_here_ = false;
+                landing_.log("api stopped", address, "no link was handed over");
+                std::cerr << "[browser] Caliper API stopped on " << address << ": no link was handed over" << std::endl;
+            }
+            return reason;
+        };
+        const std::string url = api_.viewer_link(applet, &why);
+        if (url.empty()) return refuse(why);
+        if (hook) {
+            std::ofstream out(hook, std::ios::app);
+            if (out) out << url << "\n";
+            out.close();
+            if (!out) return refuse("the test hook's file cannot be written");
+            std::cerr << "[browser] the link of " << applet << " on " << api_address() << " went to CALIPER_TEST_OPEN_URL"
+                      << std::endl;
+        } else if (!caliper_host::open_in_default_browser(url, &why)) {
+            return refuse(why);
+        } else {
+            std::cerr << "[browser] opened " << applet << " on " << api_address() << std::endl;
+        }
+        // A link is out: the API is the browser's too, until the app quits.
+        if (api_started_here_) api_for_browser_ = true;
+        landing_.log("browser", applet, api_address() + (hook ? " (test hook)" : ""));
+        return {};
+    }
+
     void cleanup() {
         // The side chat's agent first, while the API it calls still answers.
         // Then the API: calls still waiting for a frame get 503. Then the
@@ -661,8 +789,10 @@ public:
         loader_.close_all();
         caliper_host::set_dock_hint_sink(nullptr, nullptr);
         // An attached session's views go while the bridge still has the
-        // renderer; the loop ended after rendering the last frame that drew them.
+        // renderer; the loop ended after rendering the last frame that drew
+        // them. Quitting while attached, on any page, is a detach.
         live_.detach();
+        note_live_events();   // "detached"
         // Applets are torn down first (they may release bridge textures while the
         // renderer is still live); THEN drop the renderer from the bridge before
         // renderer teardown, so no bridge thunk touches a destroyed renderer.
@@ -693,49 +823,64 @@ private:
         caliper_host::host_job_system().cancel_all_and_join();
         loader_.teardown(idx);
         active_applet_ = -1;
+        agent_spec_note_.clear();
         page_ = AppPage::Landing;
         glfwSetWindowTitle(window_, "Caliper");
         landing_.log("home", left);
     }
 
-    // The live page's detach, after the frame that drew its views.
+    // Home from the live page, after the frame that drew its views. The
+    // session stays attached, its views polled for the catalog's live
+    // sources, until the person detaches it (⌘D Detach on the live page) or
+    // attaches another; F5 Live page on the landing comes back to it.
     void leave_live_page() {
-        live_.detach();
-        note_live_events();   // "detached"
         page_ = AppPage::Landing;
         glfwSetWindowTitle(window_, "Caliper");
+        landing_.log("home", live_script_);
+    }
+
+    // F5 Live page on the landing (or Enter on the attached session's row of
+    // F4): the live page of the attached session, which never detached.
+    void show_live_page() {
+        if (!live_.attached() || page_ != AppPage::Landing) return;
+        live_frame_t_ = 0.0;
+        page_ = AppPage::Live;
+        set_live_title();
+    }
+
+    // ⌘D Detach on the live page, after the frame that drew its views: the
+    // only way the person ends an attachment, apart from attaching another
+    // session. The live page goes Home; the spec's live sources go offline.
+    void detach_live() {
+        live_.detach();
+        note_live_events();   // "detached"
+        if (page_ == AppPage::Live) {
+            page_ = AppPage::Landing;
+            glfwSetWindowTitle(window_, "Caliper");
+        }
     }
 
     // The spec page, for an applet.open that succeeded: an applet's page goes
     // first, as Home takes it, between two frames. An attached live session
-    // stays attached, so that the spec's live sources keep their data; Home
-    // from the spec page detaches it. Opening another spec applet while the
-    // page shows only changes what it shows.
+    // stays attached on every page, so that the spec's live sources keep
+    // their data. Opening another spec applet while the page shows only
+    // changes what it shows.
     void open_spec_page() {
         if (page_ == AppPage::Applet) leave_applet_page(active_applet_);
         spec_page_.enter(session_);   // reads the open spec
         if (page_ != AppPage::Spec) landing_.log("open", spec_page_.title(), "spec");
         page_ = AppPage::Spec;
         glfwSetWindowTitle(window_, ("Caliper - " + spec_page_.title()).c_str());
-        // The workspace's spec applet that the page shows is ACTIVE.
-        int shown = -1;
-        for (int i = 0; i < loader_.count() && shown < 0; i++)
-            if (loader_.at(i).manifest.kind == caliper_host::AppletKind::Spec &&
-                loader_.at(i).status == caliper_host::AppletStatus::Ready &&
-                workspace_applet_id(loader_.at(i)) == spec_page_.applet_id())
-                shown = i;
-        mark_spec_entry(shown);
+        // The workspace's spec applet that the page shows is ACTIVE, also
+        // when it already was (an agent's open of the dashboard on screen).
+        mark_spec_entry(workspace_spec_entry(spec_page_.applet_id()));
+        agent_spec_note_.clear();
     }
 
-    // Home from the spec page, after the frame that drew it. A live session
-    // kept attached for the spec goes too, as Home from the live page takes
-    // it; the spec page draws none of its views, so it can go at once.
+    // Home from the spec page, after the frame that drew it. An attached
+    // live session stays attached.
     void leave_spec_page() {
         const std::string left = spec_page_.title();
-        if (live_.attached()) {
-            live_.detach();
-            note_live_events();   // "detached"
-        }
         spec_page_.leave();
         mark_spec_entry(-1);
         page_ = AppPage::Landing;
@@ -760,6 +905,47 @@ private:
         landing_.select(idx);
     }
 
+    // A launch from the landing screen (a row, Enter, ⏎ Launch, the command
+    // line): a dashboard of the workspace replaces the open spec, so it asks
+    // "Save changes to <name>?" first when the open spec has unsaved changes,
+    // and the open spec's own dashboard shows its page, unsaved changes and
+    // all, instead of reading its file again. Other applets launch at once.
+    // app.launch and the API's launch never come here: an agent's request is
+    // not the person's.
+    void launch_from_landing(int idx) {
+        if (idx < 0 || idx >= loader_.count()) return;
+        const caliper_host::AppletEntry& a = loader_.at(idx);
+        const std::string ws_id = a.manifest.kind == caliper_host::AppletKind::Spec ? workspace_applet_id(a) : "";
+        if (ws_id.empty()) {
+            launch_applet(idx);
+            return;
+        }
+        save_prompt_.ask(
+            "open " + a.manifest.name,
+            [this, id = a.manifest.id] {
+                const int i = loader_.find(id);
+                if (i >= 0) launch_applet(i);
+            },
+            ws_id, [this] { open_spec_page(); });
+    }
+
+    // The window's close request (its close button, ⌘Q, the input driver's
+    // `close`), which GLFW makes after it has set the close flag: with unsaved
+    // changes in the open spec it asks first, and the window closes after
+    // Save or Don't Save. While the session's worker runs a command the open
+    // spec cannot be read, so the close waits for the command, saying so with
+    // Cancel, and then asks if there is anything to save (save_prompt.h,
+    // hold_close). A hidden app's SIGTERM, CALIPER_EXIT_AFTER and the
+    // driver's `quit` set the flag without a request and never ask.
+    void on_close_request() {
+        if (quit_confirmed_) return;
+        if (save_prompt_.hold_close(session_, [this] {
+                quit_confirmed_ = true;
+                glfwSetWindowShouldClose(window_, GLFW_TRUE);
+            }))
+            glfwSetWindowShouldClose(window_, GLFW_FALSE);
+    }
+
     // The workspace id of a spec applet found in the workspace's applets/
     // folder (its folder's name, which applet.open takes), or "" for one
     // found elsewhere.
@@ -774,12 +960,14 @@ private:
 
     // A launch of a spec applet (a row, Enter, CALIPER_AUTOLAUNCH, app.launch,
     // POST /v0/applets/{id}/launch): its spec is checked, then one in the
-    // workspace opens through the session's applet.open, from the ui origin,
-    // as soon as the session is open, and the page follows that command as
-    // for any origin; one found elsewhere is drawn from its file without
+    // workspace opens through the session's applet.open, from the origin of
+    // who asked (`origin`: "ui" for the person's own launch, else the
+    // app.launch's or the API token's, so that an agent's replacement of
+    // unsaved changes waits on an approval card), as soon as the session is
+    // open, and the page follows that command as for any origin; one found elsewhere is drawn from its file without
     // becoming the open spec. False, with the reason in Activity, when its
     // spec does not validate or its file does not read.
-    bool launch_spec_applet(int idx, std::string* why) {
+    bool launch_spec_applet(int idx, std::string* why, const std::string& origin = "ui") {
         const std::string name = loader_.at(idx).manifest.name;
         landing_.log("launch", name);
         landing_.select(idx);
@@ -792,6 +980,7 @@ private:
         const std::string ws_id = workspace_applet_id(loader_.at(idx));
         if (!ws_id.empty()) {
             pending_spec_open_ = ws_id;
+            pending_spec_origin_ = origin;
             return true;
         }
         if (page_ == AppPage::Applet) leave_applet_page(active_applet_);
@@ -814,7 +1003,7 @@ private:
     void note_spec_applets() {
         if (!pending_spec_open_.empty()) {
             if (session_.session()) {
-                spec_page_.request_open(session_, pending_spec_open_);
+                spec_page_.request_open(session_, pending_spec_open_, pending_spec_origin_);
                 pending_spec_open_.clear();
             } else if (!session_.open_error().empty()) {
                 landing_.log("launch failed", pending_spec_open_, session_.open_error());
@@ -826,16 +1015,27 @@ private:
             }
         }
         std::string error;
-        if (spec_page_.request_answered(&error)) {
-            if (!error.empty()) landing_.log(new_pending_ ? "new failed" : "launch failed", new_pending_ ? "spec.new" : "applet.open", error);
-            if (!error.empty()) new_pending_ = false;
+        bool was_new = false;
+        while (spec_page_.request_answered(&error, &was_new)) {
+            if (error.empty()) continue;
+            landing_.log(was_new ? "new failed" : "launch failed", was_new ? "spec.new" : "applet.open", error);
+            if (was_new) {
+                new_pending_ = false;
+                drop_new_error_ = error;   // a drop that asked for it says why it goes
+            }
         }
-        if (spec_page_.take_open(session_)) open_spec_page();
+        if (spec_page_.take_open(session_)) {
+            // An agent never ends the person's running applet: on a compiled
+            // applet's page its spec opens in the session, and the page stays.
+            if (page_ == AppPage::Applet && spec_page_.opened_by_agent()) note_agent_spec();
+            else open_spec_page();
+        }
         // A new spec (F3 New dashboard, or a drop with none open): the page in build mode.
         if (spec_page_.take_new()) {
             open_spec_page();
             spec_page_.set_build_mode(true);
             new_pending_ = false;
+            drop_new_asked_ = false;   // the drop's new spec is made: it goes into it, wherever the person is now
         }
         if (session_.applets_saved() != applets_saved_ && page_ != AppPage::Applet) {
             applets_saved_ = session_.applets_saved();
@@ -845,9 +1045,53 @@ private:
             const int listed = loader_.rescan_workspace();
             if (listed >= 0) {
                 if (!selected.empty()) landing_.select(loader_.find(selected));
-                if (page_ == AppPage::Spec && !shown.empty()) mark_spec_entry(loader_.find(shown));
+                // The spec the page shows is ACTIVE and the landing's
+                // selection, so that Home returns to its row: also once it
+                // is saved for the first time, which lists it only now.
+                if (page_ == AppPage::Spec) {
+                    const int now = workspace_spec_entry(spec_page_.applet_id());
+                    if (now >= 0) mark_spec_entry(now);
+                    else if (!shown.empty()) mark_spec_entry(loader_.find(shown));
+                }
             }
         }
+    }
+
+    // The session's open spec's title, read again only when the journal
+    // moved and no long command holds the session; "" when none is open.
+    const std::string& open_spec_title() {
+        const uint64_t j = session_.journaled();
+        if (j != open_spec_read_ && !session_.worker_busy()) {
+            open_spec_title_ = caliper_host::SpecPage::open_title(session_);
+            open_spec_read_ = j;
+        }
+        return open_spec_title_;
+    }
+
+    // An agent's spec.new, spec.open or applet.open while the person is on a
+    // compiled applet's page: the page stays, Activity and standard error say
+    // that a dashboard was opened and how to get to it, and the page's status
+    // bar names it until the person leaves the page. The person's own opens
+    // show the spec page as before.
+    void note_agent_spec() {
+        const std::string title = caliper_host::SpecPage::open_title(session_);
+        agent_spec_note_ = title.empty() ? std::string("a dashboard") : title;
+        landing_.log("agent opened", agent_spec_note_, "esc Home, then F6 Dashboard");
+        std::cerr << "[spec] an agent opened " << agent_spec_note_
+                  << "; the applet's page stays (esc Home, then F6 Dashboard)" << std::endl;
+    }
+
+    // The entry of the workspace's spec applet `id` (its folder's name), or -1.
+    int workspace_spec_entry(const std::string& id) const {
+        if (id.empty()) return -1;
+        for (int i = 0; i < loader_.count(); i++) {
+            const caliper_host::AppletEntry& e = loader_.at(i);
+            if (e.manifest.kind == caliper_host::AppletKind::Spec &&
+                (e.status == caliper_host::AppletStatus::Ready || e.status == caliper_host::AppletStatus::Active) &&
+                workspace_applet_id(e) == id)
+                return i;
+        }
+        return -1;
     }
 
     // F3 New dashboard on the landing, or a drop with no open spec: spec.new
@@ -876,7 +1120,10 @@ private:
     // Once per frame: a new spec that waits for the session, then the files
     // dropped. On the spec page they go to its builder (build mode on); on
     // the landing the open spec's page opens first, or a new spec when none
-    // is open; other pages keep their windows and say so in Activity.
+    // is open; on the live page a new spec, beside the attached session's
+    // live sources in the builder's Sources, unless the open spec has
+    // unsaved changes, which takes the files as on the landing; the applet
+    // page keeps its windows and says so in Activity.
     void note_drops() {
         if (new_requested_ && !new_pending_) {
             if (session_.session() && !session_.worker_busy()) {
@@ -897,9 +1144,10 @@ private:
             if (spec_page_.drop_files(session_, paths, &why)) landing_.log("drop", what, "import");
             else landing_.log("drop refused", what, why);
             pending_drops_.erase(pending_drops_.begin());
+            drop_new_asked_ = false;
             return;
         }
-        if (page_ == AppPage::Landing) {
+        if (page_ == AppPage::Landing || page_ == AppPage::Live) {
             session_.ensure_open();
             if (!session_.open_error().empty()) {
                 landing_.log("drop refused", what, session_.open_error());
@@ -907,16 +1155,31 @@ private:
                 return;
             }
             if (!session_.session() || session_.worker_busy() || new_requested_ || new_pending_) return;   // wait
-            if (caliper_host::SpecPage::has_open_spec(session_)) {
+            // One new spec per drop: when its spec.new failed (said in
+            // Activity), the drop goes instead of asking again every frame.
+            if (drop_new_asked_) {
+                landing_.log("drop refused", what,
+                             drop_new_error_.empty() ? std::string("no new spec was made") : drop_new_error_);
+                pending_drops_.clear();
+                drop_new_asked_ = false;
+                drop_new_error_.clear();
+                return;
+            }
+            const bool into_open = page_ == AppPage::Landing ? caliper_host::SpecPage::has_open_spec(session_)
+                                                             : caliper_host::SpecPage::has_unsaved_spec(session_);
+            if (into_open) {
                 open_spec_page();
                 spec_page_.set_build_mode(true);
             } else {
                 new_spec("");
+                drop_new_asked_ = true;
             }
             return;
         }
         landing_.log("drop refused", what, "open a spec to import files");
         pending_drops_.clear();
+        drop_new_asked_ = false;
+        drop_new_error_.clear();
     }
 
     // Caliper API's calls of this frame (api/api_server.h). A capture waits
@@ -939,14 +1202,17 @@ private:
 
     // POST /v0/applets/{id}/launch and the session's app.launch: opens that
     // applet's page as a click on its row does. The page shown goes first, as
-    // Home takes it: an applet is torn down, a live session detached.
+    // Home takes it: an applet is torn down; an attached live session stays
+    // attached.
     void api_launch(const caliper_api::Call& c) {
-        const caliper_host::LaunchOutcome o = launch_by_id(c.applet_id);
+        const caliper_host::LaunchOutcome o = launch_by_id(c.applet_id, c.origin.empty() ? "api" : c.origin);
         if (o.status == 200) api_.reply(c.ticket, 200, o.body);
         else api_.reply_error(c.ticket, o.status, o.body);
     }
 
-    caliper_host::LaunchOutcome launch_by_id(const std::string& id) {
+    // `origin`: who asked, "ui" for the person (and CALIPER_AUTOLAUNCH, the
+    // person's own setting), else the app.launch's or the API token's.
+    caliper_host::LaunchOutcome launch_by_id(const std::string& id, const std::string& origin = "ui") {
         const int i = loader_.find(id);
         if (i < 0)
             return {404, "no applet with the id " + id + " in the search folders (GET /v0/applets lists them)",
@@ -965,10 +1231,32 @@ private:
                             a.status_text,
                         "app.launch_refused"};
             // The page opens with the applet.open that this sends, a frame
-            // or two later.
+            // or two later. One of the workspace that would replace unsaved
+            // changes from an origin under review waits for the person's
+            // approval, and the answer says so rather than "launched"; it
+            // reads the state now, so it claims no more than that.
+            const caliper_host::SpecPage::OpenReview review =
+                workspace_applet_id(a).empty() ? caliper_host::SpecPage::OpenReview::opens
+                                               : caliper_host::SpecPage::open_review(session_, origin);
             std::string why;
-            if (!launch_spec_applet(i, &why)) return {409, id + " failed to launch: " + why, "app.launch_failed"};
+            if (!launch_spec_applet(i, &why, origin)) return {409, id + " failed to launch: " + why, "app.launch_failed"};
             const auto& b = loader_.at(loader_.find(id));
+            if (review == caliper_host::SpecPage::OpenReview::waits)
+                return {200,
+                        caliper_host::launch_pending_json(
+                            b.manifest.id, b.manifest.version, "PENDING_APPROVAL",
+                            "Accepted, not open yet: opening it would replace the open spec's unsaved changes, so it "
+                            "waits for the person's approval in the app. spec.get names the open spec once it has "
+                            "opened; if the person denies it, the open spec stays as it is."),
+                        ""};
+            if (review == caliper_host::SpecPage::OpenReview::unknown)
+                return {200,
+                        caliper_host::launch_pending_json(
+                            b.manifest.id, b.manifest.version, "PENDING",
+                            "Accepted, not open yet: the app is running a long command, so the open waits for it, and "
+                            "then for the person's approval if the open spec has unsaved changes by then. spec.get "
+                            "names the open spec once it has opened."),
+                        ""};
             return {200, caliper_host::launched_json(b.manifest.id, b.manifest.version, false), ""};
         }
         if (loader_.at(i).status != caliper_host::AppletStatus::Ready) {
@@ -1070,17 +1358,68 @@ private:
 
     // ---- Live page (F4 Attach to process) ---------------------------------
 
+    // An attach while a session is attached: the attached one again shows
+    // its live page; another replaces it, the attached one detached first
+    // (one attachment at a time). True when the attach should go on.
+    // One hosted core per process, so the attached session is detached
+    // before another is tried; what it was is kept in `previous`, so that a
+    // failed attach (a stale row, a refusal) can attach it again
+    // (restore_previous), and nothing is lost.
+    struct Previous {
+        bool attached = false;
+        std::string session, url, script;
+        int32_t pid = 0;
+    };
+    bool make_room_for(const std::string& session, Previous* previous) {
+        if (!live_.attached()) return true;
+        if (!session.empty() && session == live_.status().session) {
+            show_live_page();
+            return false;
+        }
+        previous->attached = true;
+        previous->session = live_.status().session;
+        previous->url = live_url_;
+        previous->script = live_script_;
+        previous->pid = live_pid_;
+        live_.detach();
+        note_live_events();   // "detached"
+        return true;
+    }
+
+    // After a failed attach: the session that was attached before, attached
+    // again, on the page shown now.
+    void restore_previous(const Previous& p) {
+        if (!p.attached) return;
+        std::string err;
+        const bool ok = p.url.empty() ? live_.attach(renderer_.get(), p.session, &err)
+                                      : live_.attach_url(renderer_.get(), p.url, &err);
+        if (!ok) {
+            landing_.log("attach failed", p.script, err);
+            return;
+        }
+        caliper_live_views::set_look(live_.core(), house_view_look());
+        const auto& st = live_.status();
+        live_script_ = !st.script.empty() ? st.script : p.script;
+        live_pid_ = st.pid ? st.pid : p.pid;
+        live_url_ = p.url;
+        note_live_events();   // "attached"
+    }
+
     // The landing's Attach (and CALIPER_AUTOATTACH): attach through a hosted
     // core over this window's renderer and open the live page. A refusal (the
     // session went, another viewer holds it, no Metal device) stays on the
     // landing and says why in Activity.
     void attach_session(const std::string& token) {
+        Previous previous;
+        if (!make_room_for(token, &previous)) return;
         const int i = sessions_.find(token);
         const caliper_live::SessionEntry* e = i >= 0 ? &sessions_.sessions()[(size_t)i] : nullptr;
         std::string script = e && !e->script.empty() ? e->script : token;
         std::string err;
         if (!live_.attach(renderer_.get(), token, &err)) {
             landing_.log("attach failed", script, err);
+            std::cerr << "[live] attach failed: " << script << ": " << err << std::endl;
+            restore_previous(previous);
             return;
         }
         caliper_live_views::set_look(live_.core(), house_view_look());
@@ -1099,15 +1438,31 @@ private:
     // The link holds the session token, so only the part before '?' is shown.
     void attach_stream(const std::string& link) {
         const std::string shown = link.substr(0, link.find('?'));
+        // A listed stream's row is matched by its session id; a pasted link
+        // to the attached stream itself shows its page too.
+        const int i = [&] {
+            for (size_t k = 0; k < sessions_.sessions().size(); ++k)
+                if (sessions_.sessions()[k].stream_url == link) return (int)k;
+            return -1;
+        }();
+        if (live_.attached() && link == live_url_) {
+            show_live_page();
+            return;
+        }
+        Previous previous;
+        if (!make_room_for(i >= 0 ? sessions_.sessions()[(size_t)i].session : std::string(), &previous)) return;
         std::string err;
         if (!live_.attach_url(renderer_.get(), link, &err)) {
             landing_.log("attach failed", shown, err);
+            std::cerr << "[live] attach failed: " << shown << ": " << err << std::endl;
+            restore_previous(previous);
             return;
         }
         caliper_live_views::set_look(live_.core(), house_view_look());
         const auto& st = live_.status();
         live_script_ = !st.script.empty() ? st.script : !st.session.empty() ? st.session : shown;
         live_pid_ = st.pid;
+        live_url_ = link;
         live_frame_t_ = 0.0;
         page_ = AppPage::Live;
         set_live_title();
@@ -1123,8 +1478,26 @@ private:
     }
 
     void feed_spec_ui() {
-        spec_ui_->set_page(page_ == AppPage::Spec ? "spec" : page_ == AppPage::Landing ? "landing" : "live");
+        spec_ui_->set_page(page_ == AppPage::Spec      ? "spec"
+                           : page_ == AppPage::Landing ? "landing"
+                           : page_ == AppPage::Applet  ? "applet"
+                                                       : "live");
         spec_ui_->set_drop([this](std::vector<std::string> paths) { on_drop(std::move(paths)); });
+        spec_ui_->set_command_line(landing_.command_text());
+        spec_ui_->set_cards([this] { return approvals_.shown_waiting(); });
+        {
+            const int sel = landing_.selected_index();
+            std::vector<std::string> projects;
+            for (const int i : landing_.project_rows())
+                if (i >= 0 && i < loader_.count()) projects.push_back(loader_.at(i).manifest.id);
+            spec_ui_->set_landing(sel >= 0 && sel < loader_.count() ? loader_.at(sel).manifest.id : std::string(),
+                                  std::move(projects));
+        }
+        spec_ui_->set_save_prompt(&save_prompt_);
+        spec_ui_->set_close([this] {   // as GLFW does: the flag, then the request
+            glfwSetWindowShouldClose(window_, GLFW_TRUE);
+            on_close_request();
+        });
 #if CALIPER_WITH_BUILDER
         spec_ui_->set_agent_settings(&agent_settings_);
 #endif
@@ -1157,13 +1530,14 @@ private:
         const std::string token = e.session;
         std::cerr << "[autoattach] " << token << std::endl;
         landing_.log("autoattach", token);
-        attach_session(token);
+        if (!e.stream_url.empty()) attach_stream(e.stream_url);   // a caliper.serve() stream
+        else attach_session(token);
     }
 
     // The attachment's transitions as Activity rows (and one stderr line
     // each, like [autoattach], for headless runs): attached; session ended
     // (the script exited or died, and the page keeps its last frames);
-    // detached (esc Home).
+    // detached (⌘D Detach, another session attached, or quitting).
     void note_live_events() {
         using Event = caliper_live::Attachment::Event;
         for (const Event ev : live_.take_events()) {
@@ -1177,11 +1551,12 @@ private:
                 case Event::Ended:
                     what = "session ended";
                     landing_.log(what, live_script_, pid + " exited; last frames kept");
-                    set_live_title();
+                    if (page_ == AppPage::Live) set_live_title();
                     break;
                 case Event::Detached:
                     what = "detached";
                     landing_.log(what, live_script_, pid);
+                    live_url_.clear();
                     break;
             }
             std::cerr << "[live] " << what << ": " << live_script_ << " (" << pid << ")"
@@ -1211,24 +1586,35 @@ private:
     // The live page: the session's views as windows on a docked desktop like
     // the applet page's (they tile into the work area on first appearance and
     // can be moved, resized or docked; the layout persists in imgui.ini), under
-    // the same page bar and status bar. esc Home detaches after the frame.
+    // the same page bar and status bar. esc Home goes to the landing with the
+    // session still attached; ⌘D Detach ends the attachment. Both act after
+    // the frame.
     void draw_live_page() {
         const auto& st = live_.status();
         bool go_back = esc_home_pressed();
+        bool detach = ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_D) && !agent_settings_open();
         // Dev hook: CALIPER_HOME_AFTER=<sec>, as on the applet page: Home once,
-        // N sec after the live page opened (a headless detach).
+        // N sec after the live page first opened; the session stays attached,
+        // and the live page opened again (F5) stays.
         if (const char* ha = std::getenv("CALIPER_HOME_AFTER")) {
             static double page_t0 = -1.0;
+            static bool fired = false;
             if (page_t0 < 0) page_t0 = glfwGetTime();
-            if (glfwGetTime() - page_t0 >= std::atof(ha)) go_back = true;
+            if (!fired && glfwGetTime() - page_t0 >= std::atof(ha)) go_back = fired = true;
         }
 
-        // Page bar: esc Home, the script, then its state. The live diamond is
-        // filled and breathes while the script runs and is outlined once it
-        // has gone (SPEC §6.5); SESSION ENDED is in capitals, in parchment, as
-        // the jobs tray writes FAILED (bronze stays for focus and selection).
+        // Page bar: esc Home, ⌘D Detach, the script, then its state. The live
+        // diamond is filled and breathes while the script runs and is
+        // outlined once it has gone (SPEC §6.5); SESSION ENDED is in capitals,
+        // in parchment, as the jobs tray writes FAILED (bronze stays for focus
+        // and selection).
         if (caliper_host::begin_page_bar()) {
             if (sternbild::key_button("esc", "Home")) go_back = true;
+#ifdef __APPLE__
+            if (sternbild::key_button("\xe2\x8c\x98" "D", "Detach")) detach = true;   // ⌘D
+#else
+            if (sternbild::key_button("Ctrl D", "Detach")) detach = true;
+#endif
             ImGui::Separator();
             ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
             ImGui::TextUnformatted(live_script_.c_str());
@@ -1339,7 +1725,8 @@ private:
         live_.draw(area.Min.x, area.Min.y, views_w, area.GetHeight(),
                    ImGui::GetIO().DisplayFramebufferScale.x);
 
-        if (go_back) pending_detach_ = true;
+        if (detach) pending_detach_ = true;
+        else if (go_back) pending_live_home_ = true;
     }
 
     // A failed job (JobView::failed) is kept by the tray until the user
@@ -1424,6 +1811,11 @@ private:
                 if (paths[i] && *paths[i]) list.emplace_back(paths[i]);
             app->on_drop(std::move(list));
         });
+        // The close button and ⌘Q: "Save changes to <name>?" first when the
+        // open spec has unsaved changes (on_close_request).
+        glfwSetWindowCloseCallback(window_, [](GLFWwindow* w) {
+            if (auto* app = static_cast<CaliperApp*>(glfwGetWindowUserPointer(w))) app->on_close_request();
+        });
         return renderer_->init(window_);
     }
 
@@ -1447,16 +1839,29 @@ private:
     caliper_live::Attachment live_;
     std::string live_script_;
     int32_t live_pid_ = 0;
-    bool pending_detach_ = false;     // esc Home on the live page: detach after render
+    bool pending_live_home_ = false;  // esc Home on the live page: the landing after render
+    bool pending_detach_ = false;     // ⌘D Detach on the live page: detach after render
+    std::string live_url_;            // the attached stream's link (attach_stream), "" otherwise
     caliper_host::SpecPage spec_page_;  // the session's open spec (applet.open)
     caliper_host::AppProviders providers_;  // live views, feed channels and metrics as catalog sources
     caliper_host::ApprovalTray approvals_;  // the agents' requests that wait for the person
+    caliper_host::SavePrompt save_prompt_;  // "Save changes to <name>?" before the person's replacement or quit
+    bool quit_confirmed_ = false;           // the person answered the close's question
     caliper_host::ChatPane chat_;           // the side chat, on the spec and live pages
 #if CALIPER_WITH_BUILDER
     caliper_host::AgentSettings agent_settings_;   // the widget agent's settings, a popup over any page
 #endif
     caliper_host::CommandLine cl_;          // for starting Caliper API later, for the chat
-    bool api_for_chat_ = false;             // the API runs because the side chat started it
+    bool api_started_here_ = false;         // the app started the API without --api (api_for())
+    bool api_for_chat_ = false;             // ... and the side chat's agent uses it
+    bool api_for_browser_ = false;          // ... and Open in browser gave its link out
+    // The dashboard an agent opened while a compiled applet's page showed,
+    // which that page's status bar names (note_agent_spec()); "" for none.
+    std::string agent_spec_note_;
+    // The open spec's title for the landing's F6 Dashboard, read again when
+    // the journal moved (open_spec_title()).
+    std::string open_spec_title_;
+    uint64_t open_spec_read_ = ~uint64_t(0);
 
     // The API's address as the status bar and Activity show it: 127.0.0.1:<port>.
     std::string api_address() const {
@@ -1469,9 +1874,12 @@ private:
     bool pending_spec_home_ = false;  // Home on the spec page: leave after render
     std::string workspace_dir_;       // the session's workspace, whose spec applets are listed
     std::string pending_spec_open_;   // a workspace spec applet to open once the session is open
+    std::string pending_spec_origin_ = "ui";   // ... from the origin of who asked for it
     std::vector<std::vector<std::string>> pending_drops_;   // files dropped on the window, in order
     bool new_requested_ = false;      // a new spec waits for the session
     bool new_pending_ = false;        // its spec.new is in the queue
+    bool drop_new_asked_ = false;     // the first pending drop asked for a new spec
+    std::string drop_new_error_;      // why that spec.new failed, for the drop's refusal
     std::string pending_new_title_;
     std::string spec_entry_;          // the manifest id of the spec applet the page shows, or ""
     uint64_t applets_saved_ = 0;      // AppSession::applets_saved() when last listed

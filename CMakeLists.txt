@@ -618,8 +618,11 @@ add_executable(caliper
     # which renders it into an offscreen canvas and writes a PNG.
     src/host/ui/applet_page.cpp
     src/host/shot.cpp
-    # Caliper API v0 for the app and for `caliper shot` (--api).
+    # Caliper API v0 for the app and for `caliper shot` (--api), and the
+    # spec page's Open in browser, which hands the viewer's link to the
+    # default browser.
     src/host/api/app_api.cpp
+    src/host/open_url.cpp
     # caliper build <folder>: CMake against the installed SDK, then check, and
     # the out-of-line part of host_cli.h. Compiled wherever host_cli.h
     # dispatches (here and in caliper_tests).
@@ -850,6 +853,15 @@ if(BUILD_TESTS)
             "${CMAKE_SOURCE_DIR}/scripts/check_host_names_no_applet.py"
             --root "${CMAKE_SOURCE_DIR}")
         set_tests_properties(caliper_host_names_no_applet PROPERTIES LABELS "boundary")
+        # caliper_example_dry_run_cleanup: the build-a-dashboard walk-through's dry
+        # runs delete only the temporary folders they made, keep every folder the
+        # caller names on their failure and interrupt paths, and stop what they
+        # started. A stand-in program takes the app's place; it needs POSIX signals.
+        if(NOT WIN32)
+            add_test(NAME caliper_example_dry_run_cleanup COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_SOURCE_DIR}/examples/build_a_dashboard/dry_run/test_cleanup.py")
+            set_tests_properties(caliper_example_dry_run_cleanup PROPERTIES LABELS "examples" TIMEOUT 300)
+        endif()
     else()
         message(STATUS "Python 3 not found: caliper_host_names_no_applet is not registered")
     endif()
@@ -953,10 +965,33 @@ if(TARGET caliper_builder_session)
             if(TARGET hello_applet)
                 add_dependencies(caliper_app_live_tests hello_applet)
             endif()
-            add_test(NAME caliper_app_live_entropy COMMAND caliper_app_live_tests)
-            set_tests_properties(caliper_app_live_entropy PROPERTIES LABELS "cli;builder;live" TIMEOUT 240
-                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_PRODUCER_EXE=$<TARGET_FILE:caliper_attention_producer>;CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets;CALIPER_AGENT_OFFLINE=1"
-                SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+            # One entry per case: the acceptance case, F4 listing a stream of
+            # caliper.serve() from its stream file, the attachment kept across
+            # Home and the spec page until Detach, a second stream and a
+            # stream that ends, files dropped on the live page, and "Save
+            # changes to <name>?" before F3, an open from the landing and a
+            # close over unsaved changes, and an agent's launch over unsaved
+            # changes held on an approval card.
+            foreach(_case IN ITEMS
+                    "live_entropy|app live: attention entropy per layer*"
+                    "live_f4_stream|app live: F4 lists a caliper.serve() stream*"
+                    "live_home_keeps|app live: the stream stays attached*"
+                    "live_second_stream|app live: a second stream replaces the first*"
+                    "live_drop|app live: files dropped on the live page*"
+                    "save_new|app save: F3 New dashboard over unsaved changes*"
+                    "save_open|app save: opening another dashboard*"
+                    "save_close|app save: closing the window*"
+                    "launch_mcp|app launch: an outside agent's launch*"
+                    "launch_agent|app launch: an in-app agent's launch*"
+                    "launch_reply|app launch: the answer to an outside agent's launch*")
+                string(REPLACE "|" ";" _parts "${_case}")
+                list(GET _parts 0 _name)
+                list(GET _parts 1 _filter)
+                add_test(NAME caliper_app_${_name} COMMAND caliper_app_live_tests "--test-case=${_filter}")
+                set_tests_properties(caliper_app_${_name} PROPERTIES LABELS "cli;builder;live" TIMEOUT 240
+                    ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_PRODUCER_EXE=$<TARGET_FILE:caliper_attention_producer>;CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets;CALIPER_AGENT_OFFLINE=1"
+                    SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
+            endforeach()
         endif()
         if(NOT WIN32)
             add_test(NAME caliper_app_session_hidden

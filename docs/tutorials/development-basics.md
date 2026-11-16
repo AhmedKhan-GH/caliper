@@ -164,29 +164,32 @@ so it looks the same on Metal, Vulkan and GL.
 
 | Pane | Shows |
 |---|---|
-| **Projects** | No projects yet. It lists two ways in. `F2 Open folder` is disabled and says "not yet available" on hover. `F4 Attach to process` lists the live sessions of training scripts running on this machine in the pane (see [Attaching to a training script](#attaching-to-a-training-script)); the pane header counts them, for example `none yet · 1 live session`. |
-| **Instruments** | Every applet the loader found, one row each: name, id, version, tag and status (`READY`, `ACTIVE`, `REFUSED`, `FAILED` or `QUARANTINED`). Click a column header to sort by it; the default is tag, and the choice lasts for the session. Only `READY` rows launch. |
+| **Projects** | Your own work: the dashboards of the open workspace, the spec applets you made with `F3 New dashboard` and saved, one row each with name, id and status, and under them the ways in. With no dashboard the header says `none yet`. `F2 Open folder` is disabled and says "not yet available" on hover. `F3 New dashboard` makes a new dashboard ([Builder pane](../references/builder-pane.md)). `F4 Attach to process` lists the live sessions of training scripts running on this machine in the pane (see [Attaching to a training script](#attaching-to-a-training-script)); the pane header counts them, for example `1 dashboard · 1 live session`. |
+| **Instruments** | Every installed applet the loader found, one row each: name, id, version, tag and status (`READY`, `ACTIVE`, `REFUSED`, `FAILED` or `QUARANTINED`). The workspace's dashboards are under Projects instead. Click a column header to sort by it; the default is tag, and the choice lasts for the session. Only `READY` rows launch. |
 | **Inspector** | The selected applet's manifest: id, version, tag, ABI epoch, minimum host, required and optional services, binary path, status and summary. The `⏎ Launch` button sits at the bottom; when the applet cannot launch it is disabled, with the reason beside it. For an applet quarantined by a C++ exception, `⌘R Restart` takes the reason's place; after a signal it reads `restart Caliper to reload`. |
 | **Activity** | Running jobs with their progress, then the host log, newest first: the renderer chosen, the applet folders scanned, launches, failed launches, failed jobs, quarantines, restarts, returns home, and live sessions attached, ended and detached, with any failed attach and its reason. |
 
 The status bar shows the backend, the GPU, physical memory, the GPU
 working-set budget, and how many applets are installed and unavailable.
 
-The command bar filters the Instruments table as you type: every
-space-separated term must appear, ignoring case, in the applet's name, id or
-tag. When the filter hides the selected row, the selection moves to the top
-match, so Enter always launches the highlighted row. Each keyboard action also
+The command bar filters the Instruments table and the dashboards under
+Projects as you type: every space-separated term must appear, ignoring case,
+in the applet's name, id or tag. When the filter hides the selected row, the
+selection moves to the top match, so Enter always launches the highlighted
+row. Each keyboard action also
 has a button in the bar with its key printed on it:
 
 | Key | Button | Action |
 |---|---|---|
 | ⌘K | `⌘K Command` | Focus the command bar. |
-| ↑ / ↓ | `↑` `↓` | Move the selection in Instruments, while Instruments has focus or while you type in the command bar. The buttons are shown when the bar has room. |
+| ↑ / ↓ | `↑` `↓` | Move the selection through the dashboards under Projects and then Instruments, as one list, while either has focus or while you type in the command bar. The buttons are shown when the bar has room. |
 | Esc | `esc Clear` | Clear the filter and move focus to Instruments. |
 | Enter | `⏎ Launch` (Inspector) | Launch the selected applet. Double-clicking a row does the same. |
 | ⌘1–⌘4 | the pane header | Focus Projects, Instruments, Inspector or Activity. Clicking a pane header does the same. |
 | ⌘R | `⌘R Restart` (Inspector) | Unload and relaunch the selected applet. Offered only for an applet quarantined by a C++ exception. |
-| F4 | `F4 Attach to process` (Projects) | List the live sessions in Projects. In the list, ↑ / ↓ move the selection, Enter (`⏎ Attach`) attaches, and Esc (`esc Back`) returns to the ways in. |
+| F4 | `F4 Attach to process` (Projects) | List the live sessions and streams in Projects. In the list, ↑ / ↓ move the selection, Enter (`⏎ Attach`) attaches, and Esc (`esc Back`) returns to the ways in. |
+| F5 | `F5 Live page` (command bar) | Open the live page of the attached session. Shown only while the app is attached. |
+| F6 | `F6 Dashboard` (command bar) | Open the spec page of the dashboard the builder has open, beside its title: one left with Home, unsaved or not, or one an agent opened while an applet's page showed. Shown only while a dashboard is open. |
 
 On Windows and Linux the keys are Ctrl K, Ctrl R and Ctrl 1–Ctrl 4, and the
 buttons are labelled that way.
@@ -196,7 +199,9 @@ bar at its top holds the `esc Home` button and the applet's name; the status
 bar keeps the backend and GPU and adds the number of running jobs. Esc returns
 to the landing screen only when no text field is being edited and no popup is
 open; otherwise the field or popup gets Esc first. Home lands on the applet's
-row, however it was launched (`CALIPER_AUTOLAUNCH` included).
+row, however it was launched (`CALIPER_AUTOLAUNCH` included); Home from a
+dashboard lands on its row under Projects, also when it was just made and
+saved.
 
 ### Attaching to a training script
 
@@ -204,7 +209,8 @@ A Python script that calls `caliper.show` (or any other view call) opens a
 live session on its first call, and Caliper can attach to it while it runs
 (macOS, Metal renderer; [Watch a PyTorch training run live](live-pytorch.md)
 sets one up). Press F4, or click `F4 Attach to process`, and Projects lists
-the sessions found under `~/Library/Application Support/Caliper/live/`, newest
+the sessions found under `~/Library/Application Support/Caliper/live/`, and
+the streams of `caliper.serve()` found under its `streams/` folder, newest
 first, relisted every second:
 
 | Column | Shows |
@@ -212,10 +218,10 @@ first, relisted every second:
 | **Script** | The script's name |
 | **Pid** | Its process id |
 | **Started** | When the session opened, as a clock time and how long ago |
-| **State** | `running`, `starting` (attach waits for it), `closing`, `viewed by <pid>` (another viewer holds it; one viewer per session) or `protocol v<N>` (another Caliper version) |
+| **State** | `running`, `starting` (attach waits for it), `closing`, `viewed by <pid>` (another viewer holds it; one viewer per session), `protocol v<N>` (another Caliper version), `stream` (a script that streams with `caliper.serve()`) or `attached` (the session this app is attached to; Enter opens its live page) |
 | **Views** | The names of the views the script has shown so far |
 
-Only `running` and `starting` rows attach; the others are faint, and the
+Only `running`, `starting` and `stream` rows attach; the others but `attached` are faint, and the
 `⏎ Attach` button under the table is disabled with the reason beside it. A
 script that was killed leaves its session file behind; the next listing
 removes it and its shared memory, so its row disappears instead of lingering.
@@ -225,17 +231,22 @@ view is a window on the docked desktop, tiled on first appearance; move,
 resize or dock them as on the applet page, and the layout is saved the same
 way. The views show the script's newest GPU snapshots, and the page draws at
 up to 60 fps whatever the display's refresh rate; the script never waits for
-Caliper. The bar at the top holds `esc Home`, the script's name and
-its state: a filled diamond and `live` while it runs. The status bar adds the
+Caliper. The bar at the top holds `esc Home`, `⌘D Detach`, the script's name
+and its state: a filled diamond and `live` while it runs. The status bar adds the
 script's pid, the number of views, the frame rate and the step-to-screen
 latency.
 
 When the script exits, closes its session or is killed, the views keep their last
 frames: the bar shows an outlined diamond and `SESSION ENDED`, the status bar
 and the window title add `session ended`, and Activity logs `session ended`.
-`esc Home` detaches (the script, if it still runs, stops taking snapshots at
-once and keeps training) and returns to the session list. Activity logs
-`attached` and `detached` with the script and its pid.
+`esc Home` returns to the landing screen and keeps the session attached: its
+views stay in the catalog as `live:` sources for a spec, and the command bar
+shows the live diamond, the script's name and `F5 Live page`, which comes back
+to the live page, as F5 does. `⌘D Detach` (⌘D) detaches: the script, if it
+still runs, stops taking snapshots at once and keeps training, and the app
+returns to the landing screen. Attaching another session detaches the
+attached one first. Activity logs `attached` and `detached` with the script
+and its pid.
 
 `CALIPER_AUTOATTACH=<pid>` attaches to that process's session as soon as it is
 listed, for screenshots and headless checks; `CALIPER_HOME_AFTER=<seconds>`

@@ -23,6 +23,7 @@ constexpr uint64_t kNoticeShowNs = 10ull * 1000000000ull;   // and a refusal
 constexpr size_t kMaxLog = 256;
 
 std::map<std::string, WidgetRect> g_widgets;   // the bar's widgets, last frame
+std::string g_state_text;                      // the bar's run state, last frame
 
 void remember(const std::string& name) {
     const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
@@ -56,16 +57,6 @@ bool same_value(const Json& a, const Json& b) {
 std::string reply_error(const ControlReply& r) {
     std::string s = r.error_code.empty() ? "refused" : r.error_code;
     if (!r.error_message.empty()) s += ": " + r.error_message;
-    return s;
-}
-
-std::string state_text(const Controls& c) {
-    std::string s;
-    const std::string& st = c.run_state;
-    if (st == CALIPER_NET_RUN_NONE) s = "no checkpoint yet";
-    else if (st == CALIPER_NET_RUN_STEPPING) s = "stepping, " + std::to_string(c.steps_left) + " left";
-    else s = st;
-    if (c.has_step && st != CALIPER_NET_RUN_NONE) s += " at step " + std::to_string(c.step);
     return s;
 }
 
@@ -229,6 +220,18 @@ void draw_action(RunControls& rc, const ControlsLook& look, const ControlAction&
 
 }  // namespace
 
+// The run object's `step` is the step at which the state last changed (wire
+// protocol 3.1), not the script's current step: a running loop sends no
+// CONTROLS from one step to the next. Only a paused run stands at that step,
+// so only "paused" names it, as the browser's header does.
+std::string run_state_text(const Controls& c) {
+    const std::string& st = c.run_state;
+    if (st == CALIPER_NET_RUN_NONE) return "no checkpoint yet";
+    if (st == CALIPER_NET_RUN_STEPPING) return "stepping, " + std::to_string(c.steps_left) + " left";
+    if (st == CALIPER_NET_RUN_PAUSED && c.has_step) return "paused at step " + std::to_string(c.step);
+    return st;
+}
+
 // ---- RunControls ------------------------------------------------------------------------------
 void RunControls::reset() {
     *this = RunControls();
@@ -311,11 +314,7 @@ void RunControls::update(Source* src, uint64_t now_ns) {
 }
 
 void RunControls::on_controls(const Controls& before) {
-    if (before.run_state != controls_.run_state) {
-        std::string line = "run " + controls_.run_state;
-        if (controls_.has_step) line += " at step " + std::to_string(controls_.step);
-        log_.push_back(line);
-    }
+    if (before.run_state != controls_.run_state) log_.push_back("run " + run_state_text(controls_));
     for (const ControlParam& p : controls_.params) {
         const ControlParam* old = nullptr;
         for (const ControlParam& o : before.params)
@@ -503,6 +502,7 @@ std::vector<std::string> RunControls::take_log() {
 
 // ---- drawing ----------------------------------------------------------------------------
 const std::map<std::string, WidgetRect>& bar_widgets() { return g_widgets; }
+const std::string& bar_state_text() { return g_state_text; }
 
 void draw_run_bar(RunControls& rc, const ControlsLook& look, float width) {
     g_widgets.clear();
@@ -512,7 +512,8 @@ void draw_run_bar(RunControls& rc, const ControlsLook& look, float width) {
     const Controls& c = rc.state();
 
     // The run state, then the run buttons.
-    coloured(look.secondary, rc.have() ? state_text(c).c_str() : "no controls");
+    g_state_text = rc.have() ? run_state_text(c) : "no controls";
+    coloured(look.secondary, g_state_text.c_str());
     ImGui::SameLine(0.0f, st.ItemSpacing.x * 2.0f);
     const bool paused = c.run_state == CALIPER_NET_RUN_PAUSED;
     if (paused) {

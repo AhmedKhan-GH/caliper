@@ -14,6 +14,7 @@
 //     panel or a source with every reference to it (the format has no rename
 //     command, so the pane sends a rename as spec.set_text of the renamed
 //     spec's canonical text).
+//   - The spec text: the line the read-only strip follows after a change.
 //   - The layout tree: a node by its path, a panel placed at an edge of the
 //     whole layout or next to another panel (also on its left, which
 //     layout.place does not offer), and a split's ratio set and snapped.
@@ -51,6 +52,9 @@ struct PaneShape {
     std::optional<int64_t> rows;   // tabular, when the catalog knows it
     std::string dtype;             // tensor; empty when not known
     std::vector<int64_t> dims;     // tensor; -1 for a size that is not fixed
+    // tensor: one name per dim, "" for a dim without one; empty when the
+    // source carries no names (a safetensors tensor) or they are not known
+    std::vector<std::string> names;
     int64_t elements() const;      // the product of dims, or -1
 };
 
@@ -76,6 +80,29 @@ std::map<std::string, PaneShape> pane_source_shapes(const caliper_builder::spec:
 // the source's first i transforms. Empty when the spec has no such source.
 std::vector<PaneShape> pane_transform_shapes(const caliper_builder::spec::Spec& spec, const std::string& source_id,
                                              const caliper_builder::spec::SourceResolver& resolver);
+
+// ---- transform axes ---------------------------------------------------------------------
+
+// The names of a tensor's dims through a source's transforms, set on each
+// shape of pane_transform_shapes(): `names` are the source's own (a live
+// view's dims, one per dim of shapes[0]); a slice with an index and a reduce
+// without keepdims take their axis's name away, other steps keep them.
+// Shapes after a step whose shape is not known get none. Nothing is set when
+// `names` does not match the source's rank.
+void pane_name_dims(std::vector<PaneShape>& shapes, const std::vector<caliper_builder::spec::Transform>& transforms,
+                    const std::vector<std::string>& names);
+// The indices of an axis of `size`: "0–3" for 4, "0" for 1; "" for a
+// size that is not known or 0.
+std::string pane_index_range(int64_t size);
+// An axis as Properties shows it: "axis 1 · 0–3", with the axis's
+// name where the source carries one, "axis 0 layer · 0–3", and
+// "axis 2" alone when its size is not known.
+std::string pane_axis_text(int64_t axis, int64_t size, const std::string& name = {});
+// A slice's index on an axis of `size`, kept within -size to size - 1 (a
+// negative index counts from the end): a value outside is set to the nearer
+// end of 0 to size - 1, and *clamped says it was. Unchanged when the size is
+// not known.
+int64_t pane_clamp_index(int64_t index, int64_t size, bool* clamped);
 
 // ---- primitives, slots and options ------------------------------------------------------
 
@@ -117,6 +144,14 @@ std::optional<std::map<std::string, caliper_builder::spec::SlotValue>> pane_auto
     caliper_builder::spec::Primitive p, const std::string& source_id, const PaneShape& shape,
     const std::string& column = {});
 
+// Why a source does not fit a primitive by these rules, in the source's own
+// terms, for the refusal of a panel that pane_auto_bind() binds nothing for:
+// what the source is, what the primitive takes, and for a tensor with more
+// dimensions than the primitive draws, that Properties slices or reduces it
+// ("attn is f32 4×4×32×32, and a heatmap takes a tensor of two dimensions:
+// slice or reduce it in Properties."). Empty for a text panel.
+std::string pane_fit_hint(caliper_builder::spec::Primitive p, const std::string& source_id, const PaneShape& shape);
+
 // The primitive a dropped source makes when none was chosen: a series for a
 // column, a table with numeric columns after its first, a rank-1 tensor; a
 // table for other tables; a heatmap for a rank-2 tensor, points for
@@ -148,6 +183,15 @@ caliper_builder::spec::Spec pane_rename_panel(const caliper_builder::spec::Spec&
 // that names it and every `from` that derives from it.
 caliper_builder::spec::Spec pane_rename_source(const caliper_builder::spec::Spec& spec, const std::string& from,
                                                const std::string& to);
+
+// ---- the spec text ----------------------------------------------------------------------
+
+// The line of `after` that the read-only text strip brings into view after
+// the open spec's text changed from `before`: the last line that differs,
+// 0-based, found by the lines the two share at their start and at their
+// end; where lines were only taken out, the line now in their place. -1
+// when the texts are equal.
+int pane_text_follow_line(const std::string& before, const std::string& after);
 
 // ---- the layout tree --------------------------------------------------------------------
 

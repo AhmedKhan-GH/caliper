@@ -64,11 +64,12 @@ path, so a file such as `json.py` in a workspace would run as code.
 | `--model <id>` | The model of new sessions; default `claude-opus-5-5` on the Claude API, required for an OpenAI-compatible server. When given, it is a widget session's model on the Claude API too |
 | `--effort <level>` | The effort of new sessions on the Claude API; default `high`. When given, it is a widget session's effort too |
 | `--model-tools yes\|no`, `--model-vision yes\|no` | What an OpenAI-compatible model can do, when the app knows it; default the cached probe, else `yes` until the server says otherwise ([Providers](#providers)) |
-| `--context-length <tokens>` | The model's context length, the person's setting; default the cached probe, else 8,192 for an OpenAI-compatible model and unknown for Claude |
+| `--context-length <tokens>` | The model's context length, the person's setting; default the cached probe, else 8,192 for an OpenAI-compatible model and unknown for Claude; for the Ollama preset the context length the model is loaded with in every session (default 16,384 for widget sessions and 32,768 for the general role) |
 | `--cache-dir <path>` | The folder of the capability cache, `model-capabilities.json`, which `caliper-agent probe` writes |
 | `--widget-scopes <path>` | The widget agent's scope rule; default `widget_scopes.json` beside the command table, else beside the package or in the repository's `src/builder/commands/`. Without one, widget sessions are refused |
 | `--tools <list>` | Only these commands of the general role, as a comma-separated list of names and groups; widget sessions take their scope from the rule |
 | `--no-compaction` | Turns server-side compaction off |
+| `--widget-requests <n>` | The model requests a widget prompt may make, from 1 to 20; default 6 ([The budget](#widget-sessions)) |
 | `--usage-log <path>` | Appends the token counts of each request to a file, for the manual check; no content is written |
 
 `caliper-agent probe` is the same program's second command: it checks a model's tool calling, vision and context
@@ -91,7 +92,7 @@ The sidecar speaks ACP version 1, the version the client speaks.
 | Method | What the sidecar does |
 |---|---|
 | `initialize` | Answers version 1 whatever the client offers first, declares images and embedded context in prompts and `sessionCapabilities.close`, and no session loading or MCP transports, and lists no login method, because the key comes from the app |
-| `session/new` | Creates a session with its own conversation and answers with three config options; the request's `mcpServers` are not started, since the sidecar reaches Caliper through Caliper API itself. With `_meta.caliper.widget` it is a widget session, with two config options and its target, scope and preview echoed in the answer's `_meta` ([Widget sessions](#widget-sessions)) |
+| `session/new` | Creates a session with its own conversation and answers with three config options; the request's `mcpServers` are not started, since the sidecar reaches Caliper through Caliper API itself; when one of them is Caliper's (any server named `caliper`, in any form, or whose program is `caliper-mcp`; the side chat hands `caliper-mcp`, named `caliper`, with the session's own API file), the session calls the API with that file's agent token, and refuses with `agent.no_session_api_file` when it names no usable file, an HTTP server named `caliper` included, rather than fall back to `api.json`. With `_meta.caliper.widget` it is a widget session, with two config options and its target, scope and preview echoed in the answer's `_meta` ([Widget sessions](#widget-sessions)) |
 | `session/set_config_option` | Sets `model`, `effort` or `review`; the value applies from the next model request |
 | `session/prompt` | Runs one turn and answers with its stop reason, and with the turn's token counts in `_meta.caliper.usage`; a widget session's answer adds `_meta.caliper.widget`. Text, embedded text resources, resource links and images are read |
 | `session/cancel` | Stops the running turn, which then answers with the stop reason `cancelled` |
@@ -213,10 +214,17 @@ A widget session is the widget agent's role ([Widget agent](widget-agent.md)), a
   sidecar never begins, commits or discards a preview; `session/cancel` and `session/close` leave it as it is.
 - **The prompt and the defaults.** The widget system prompt (`WIDGET_SYSTEM_PROMPT` in `prompt.py`), fixed like the
   general one; Claude Haiku 5.5 at effort `low` on the Claude API; no `review` config option.
-- **The budget.** At most 3 model requests and 8 tool calls for each prompt, through Pydantic AI's `UsageLimits`
-  (`request_limit`, `tool_calls_limit`), and `max_tokens` of 8,000. A prompt that reaches a limit ends with
-  `max_turn_requests` and a `limit` status that names both limits; none of the calls of a reply that would pass the
-  tool-call limit runs.
+- **The budget.** At most 6 model requests (`--widget-requests` sets another, from 1 to 20) and 8 tool calls for each
+  prompt, through Pydantic AI's `UsageLimits` (`request_limit`, `tool_calls_limit`), and `max_tokens` of 8,000. A
+  prompt that reaches a limit ends with `max_turn_requests`, a `limit` status that names both limits, the edits made
+  and the command of the first call that did not run, and a reply that says the change is not finished: "The change
+  is not finished: the agent stopped at its limit of 6 model requests after 2 edits (source.add, panel.create).
+  Accept applies the edits shown, or Refine lets it finish." The command that was next is named only when the last
+  reply asked for a call that did not run (the tool-call limit); at the request limit every call of the last reply
+  ran and the next one is not known. None of the calls of a reply that would pass the tool-call limit runs. The budget
+  was 3 requests until a run on a local model that makes its edits one call at a time reached it on a selection's
+  table, which takes three edits and a closing sentence; the widget prompt now also asks for the edits of one change
+  in one reply.
 - **The handoff.** The tool `handoff` (`kind` and `reason`) ends the turn after its reply without another request, with a
   `handoff` status and the handoff in the answer ([Widget agent](widget-agent.md#handoff-to-the-side-chat)).
 - **The answer.** `_meta.caliper.widget` of each prompt's answer holds `preview`, `edits` (the edits of this prompt that
@@ -629,6 +637,57 @@ refuses `session/new` with `agent.no_tools`, a model without vision gets no imag
 `_meta.caliper.model` for the app's context bundle. The [Widget agent](widget-agent.md#capabilities-and-degradations)
 page has the details and the decisions.
 
+### Ollama's own chat API and the context length
+
+**Built.** Ollama's OpenAI-compatible endpoint ignores `options.num_ctx`, so a request through it loads the model at
+the context length Ollama chooses; for `qwen3.8:27b` on a 64 GB Mac that was its whole 262,144 tokens, which grew
+Ollama's server from 20 GB to 34 GB and left 12 percent of memory free for one short request. The Ollama preset
+(`chat_api: ollama` in `presets.json`) keeps the OpenAI client and Pydantic AI's OpenAI chat model, and puts
+`OllamaNativeTransport` (`ollama_native.py`) under the client: each chat request goes to `/api/chat`, translated, with
+`options.num_ctx` and `keep_alive: 60s`, and the streamed reply comes back as chat completion chunks (thinking as
+`reasoning`, tool calls with an id made when Ollama sends none, the finish reason and the usage from
+`prompt_eval_count` and `eval_count`). The probe's test calls take the same route, so the probe loads the model as the
+agent will. With it, the same probe left `/api/ps` at a context of 16,384 tokens and 16.5 GB, and 47 percent free.
+
+- **A context length per role.** `presets.json` gives the Ollama preset 16,384 tokens for the widget role and 32,768
+  for the general role. The widget role's first request (ten tools, the bundle and the render) is about 7,000 tokens
+  and the general role's (34 tools) about 11,000, growing with each tool result; the side chat builder measured one
+  general turn growing from 10,820 to 20,341 prompt tokens over five requests. The provider sends the role's length
+  in each request (`extra_body.options.num_ctx`, which the transport takes). The person's setting replaces it: the
+  widget agent's Context length in the app (an override in the cache, read for the widget role only) and
+  `--context-length` (both roles).
+- **No silent truncation.** Ollama 0.40 cuts the front of a prompt longer than `num_ctx`, the person's own request
+  first, unless the request says `truncate: false`, which makes it refuse the request with HTTP 400 ("request (4910
+  tokens) exceeds the available context size (2048 tokens)"). A reply that reaches the end of the context stops there
+  with `done_reason` `length`; it was not shifted in a test with or without `shift: false`, which every request also
+  sends. Where the sidecar chose the context length, the turn estimates each request before it is sent
+  (`estimate_prompt_tokens()`): from the prompt tokens the server counted for the last one, plus what was added since,
+  or, for a session's first request, from the whole request, each kind of content at its own rate (instructions 3.5
+  characters a token, counted once; tool schemas 3.4; the messages' text 1.6, since numbers take a token a digit; 350
+  tokens an image; 200 for the template). A test keeps the estimate at or above Ollama's own counts of recorded ⌘K and
+  side chat requests and within 30 percent of them. When the request would leave less than an eighth of the context
+  (at most 4,096 tokens) for the reply, it sends nothing; otherwise it asks for no more output than the context leaves
+  after the prompt. A request refused as too long, the check's own refusal and a reply cut at the end of the context,
+  tool calls or not, all end the turn with `max_tokens`, which the side chat and the ⌘K prompt show as LIMIT rather
+  than as a finished turn; the first two with a `context_full` status and a message that names the context length and
+  what the person can do. For a server whose context length the sidecar did not choose (LM Studio, Custom, hosted
+  presets), nothing is checked, as before.
+- **The cache note.** For a server on loopback the probe also reads Ollama's `/api/show`, which loads nothing, and
+  keeps the context cache one token takes (`kv_bytes_per_token`: attention layers, key and value heads and their
+  sizes, at 16 bits). The settings tag Context cache about N GB when the context length times that reaches 4 GB. With
+  the preset's own lengths the note covers a person who raises the context length, and an Ollama server reached as
+  Custom, which loads the model at the context Ollama chooses.
+- **A context length only from a reliable source.** The metadata's `context_length` is the most the model takes, not
+  what the server runs it with, so the probe never takes it as the context length. A context length is recorded only
+  where the sidecar chose it (the Ollama preset) or the server states the one in force: for any other server on
+  loopback the probe reads Ollama's `GET /api/ps` after its test calls have loaded the model, and takes the context
+  that the server runs the model with; otherwise the length stays unknown. The no-truncation rule stays off wherever
+  the sidecar did not choose the length, since a number it cannot trust would let it pass requests the server cuts or
+  refuse requests that fit.
+- **Open: compaction for a full context.** Instead of ending the turn when the conversation no longer fits, the
+  sidecar could summarize the earlier conversation and go on, as the Claude API's server-side compaction does. Not
+  built; the person starts again or raises the context length.
+
 ### One run on a local model
 
 During the spike the dashboard prompt of the acceptance test ran once against a local model, as a manual check:
@@ -901,8 +960,8 @@ test's workspace>`. Do not set `CALIPER_AGENT_OFFLINE`, which would refuse the C
 2. In the settings, choose Ollama. The base URL is `http://localhost:11434/v1` in a field, there is no Key row, and
    there is no Remote address tag.
 3. Choose List: the server's models appear as choices. Choose one, then Probe: tool calling and vision say Yes or No
-   (probe), and the context length says 8,192 tokens (assumed), since Ollama reports none. Type the context length
-   you run the model with into its field.
+   (probe), and the context length says 16,384 tokens (preset). Check with `ollama ps` that the model is loaded with
+   that context length.
 4. Change the address to another machine's, such as `http://192.0.2.10:11434/v1`: the tags Remote address and
    Unencrypted appear. Change it back.
 5. Choose a model without tool calling, if you have one, and Probe: the tag says No tool calling, and ⌘K offers only
@@ -947,6 +1006,8 @@ Waiting for later work:
 - A packaged Python runtime with a lock file, so that the app finds the sidecar without `CALIPER_AGENT_PYTHON`.
 - The Windows Credential Manager store, with one entry per provider.
 - Per-message effort and context editing for old captures, both betas.
+- Compaction of a conversation that no longer fits a local model's context length
+  ([Ollama's own chat API and the context length](#ollamas-own-chat-api-and-the-context-length)).
 - `session/load`.
 
 ## Decisions

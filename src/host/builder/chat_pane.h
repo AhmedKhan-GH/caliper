@@ -30,8 +30,12 @@
 //     (Hooks::agent_ended). An API started with --api is left alone.
 //   - The settings. side-chat.json in the app-data folder: the chosen agent's
 //     id, the custom agent's name and command line, whether an agent's
-//     allow_always options are offered, and whether the pane is open. Never a
-//     key: the agent logs in on its own.
+//     allow_always options are offered, the agents marked as running on a
+//     local model (the picker's Local model row), and whether the pane is
+//     open. Never a key: the agent logs in on its own.
+//   - The GPU note. "Shared GPU" in the chat's header while a live run is
+//     attached (Hooks::live_attached) and the chosen agent is marked as
+//     running on a local model (design/widget-agent.md, GPU contention).
 //   - The meeting points. A command approval of the agent's turn is a row in
 //     the conversation that points to its card on the approval cards' strip
 //     (Hooks::show_approval); "Ask in chat" from the ⌘K surface opens the pane
@@ -68,6 +72,9 @@ public:
         std::function<void(const std::string& approval)> show_approval;
         // One Activity line.
         std::function<void(const std::string& event, const std::string& object, const std::string& detail)> log;
+        // A live run is attached (the app's live session): with the agent
+        // marked as running on a local model, the header's GPU note.
+        std::function<bool()> live_attached;
     };
     struct Options {
         std::string settings_path;   // side-chat.json in the app-data folder
@@ -116,6 +123,13 @@ public:
     void focus_input();
     // The chips of the draft in the input (a handoff's context), 0 for none.
     int draft_chips() const;
+    // The header's GPU note ("Shared GPU"), "" for none or before the chat is made.
+    std::string note() const;
+    // The picker's Local model row for the chosen agent, as a click on it
+    // does (SideChat::set_local_model()), and the picker opened on the next
+    // draw; false before the chat is made or with no agent.
+    bool set_local_model(bool on);
+    void open_picker();
 
     // Before the session and the UI context go: stops the agent.
     void shutdown();

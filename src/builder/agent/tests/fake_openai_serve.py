@@ -6,10 +6,13 @@ they start this script with the test interpreter: it serves on a free port of
 closes. Nothing leaves the machine and no key is used.
 
     python -I fake_openai_serve.py [--models a,b] [--context N] [--refuse-tools] [--blind] [--record FILE]
+                                   [--ollama-show]
 
 With --record, each request appends one JSON line to FILE: its method, its
 path and its Authorization header (null when it has none), so that a test can
-check which credential, if any, reached the server.
+check which credential, if any, reached the server. With --ollama-show, it
+answers Ollama's POST /api/show with the metadata of a hybrid 27B model, from
+which the probe reads the context cache a token takes.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fake_openai import FakeOpenAI  # noqa: E402
+from fake_openai import HYBRID_27B_INFO, FakeOpenAI  # noqa: E402
 
 
 def main() -> int:
@@ -30,11 +33,12 @@ def main() -> int:
     parser.add_argument("--refuse-tools", action="store_true", help="refuse every request with tools")
     parser.add_argument("--blind", action="store_true", help="accept images but never name their colour")
     parser.add_argument("--record", help="a file that gets one JSON line per request")
+    parser.add_argument("--ollama-show", action="store_true", help="answer /api/show as Ollama does")
     args = parser.parse_args()
     models = [{"id": m, **({"context_length": args.context} if args.context else {})}
               for m in args.models.split(",") if m] or None
     server = FakeOpenAI(models=models, refuse_tools=args.refuse_tools, vision_mode="blind" if args.blind else "see",
-                        record=args.record)
+                        record=args.record, show=HYBRID_27B_INFO if args.ollama_show else None)
     print(server.base_url, flush=True)
     try:
         sys.stdin.read()

@@ -9,10 +9,12 @@
 // jobs tray's strip above the status bar while it is open.
 //
 // When it opens. Every applet.open that succeeds, from any origin (the
-// person's UI, a command script, Caliper API, an agent over MCP), asks the
-// app to show the page: take_open() is true once for each, read from a
-// counter of the session's journal (AppSession::applets_opened()), and the
-// app leaves the page it shows and enters this one. request_open() is the
+// person's UI, a command script, Caliper API, an agent over MCP), and every
+// spec.new or spec.open of an agent (the side chat's or one over MCP), asks
+// the app to show the page: take_open() is true once for each, read from a
+// counter of the session's journal (AppSession::specs_opened()), and the app
+// leaves the page it shows and enters this one, so that the person sees the
+// spec an agent builds while they review its edits. request_open() is the
 // seam for a list of spec applets, such as the landing screen's later: it
 // sends applet.open from the ui origin through the session's queue, so the
 // page opens by the same path.
@@ -96,16 +98,34 @@ public:
     // False when the builder is not in this build.
     static bool built();
 
-    // True once for each applet.open that succeeded since the last call.
+    // True once for each applet.open, or agent's spec.new or spec.open, that
+    // succeeded since the last call.
     bool take_open(const AppSession& session);
+    // Whether every open that the last true take_open() took was an agent's
+    // (AppSession::agent_specs_opened()), not the person's own.
+    bool opened_by_agent() const;
 
-    // Sends applet.open for the workspace's spec applet `id` from the ui
-    // origin through the session's queue, without waiting; the page opens
-    // when it succeeds. False when the session is not open.
-    bool request_open(AppSession& session, const std::string& id);
-    // The answer of the last request_open(), once it has come: true, with
-    // `error` empty when it succeeded and holding the reason otherwise.
-    bool request_answered(std::string* error);
+    // Sends applet.open for the workspace's spec applet `id` through the
+    // session's queue, without waiting, from `origin`: "ui" for the person's
+    // own launch, or the origin of the agent or program that asked ("api",
+    // "mcp", "agent"), whose replacement of unsaved changes then waits on an
+    // approval card as its own command would. The page opens when it
+    // succeeds. False when the session is not open.
+    bool request_open(AppSession& session, const std::string& id, const std::string& origin = "ui");
+    // What an applet.open from `origin` would meet now, by the command
+    // layer's own condition for replacing an open spec (review on for that
+    // origin, and an open spec with unsaved changes): `opens` at once,
+    // `waits` for the person's approval, or `unknown` while the session's
+    // worker runs a command and the open spec cannot be read. It is the state
+    // at the time of the call; the open runs a frame or two later.
+    enum class OpenReview { opens, waits, unknown };
+    static OpenReview open_review(AppSession& session, const std::string& origin);
+    // An answer of the last request_open() or the last request_new(), once
+    // it has come, one per call (spec.new's first): true, with `error` empty
+    // when it succeeded and holding the reason otherwise, and `was_new` true
+    // for spec.new's. The two are kept apart, so an open sent while a new
+    // spec is on its way never drops the new spec's answer.
+    bool request_answered(std::string* error, bool* was_new = nullptr);
 
     // A new spec from the app (the landing's F3 New dashboard, or a drop with
     // no open spec): spec.new from the ui origin through the session's queue,
@@ -117,6 +137,12 @@ public:
     bool take_new();
     // The session holds an open spec (spec.new or applet.open ran).
     static bool has_open_spec(AppSession& session);
+    // ... and it has changes that are not saved (a new spec that was never
+    // saved has).
+    static bool has_unsaved_spec(AppSession& session);
+    // The open spec's title, or its applet id when it has none; "" when no
+    // spec is open or a long command holds the session.
+    static std::string open_title(AppSession& session);
     // An import from drop_files() still runs.
     bool importing() const;
 
@@ -165,11 +191,36 @@ public:
     // its API token; the next ⌘K makes it again from the settings. The page
     // listens until shutdown(). Null: no settings.
     void set_agent_settings(AgentSettings* settings);
+    // ⌘O Open in browser in the page bar: the saved dashboard the page shows,
+    // in the person's default browser, at the spec page of Caliper API with
+    // a viewer token (api_server.h, THE SPEC PAGE). The app does the opening
+    // (src/main.cpp): `open` gets the dashboard's workspace id and returns ""
+    // once the link has gone to the browser, or why not, which the page keeps
+    // for the button's tooltip. Null leaves the button out. The button is
+    // disabled, with the reason, for a dashboard that was never saved and for
+    // a spec applet's file from outside the workspace.
+    void set_open_in_browser(std::function<std::string(const std::string& applet_id)> open);
+    // Where Properties reads the names of a catalog source's dims, such as a
+    // live view's (AppProviders::dim_names()); none without it.
+    void set_dim_names(std::function<std::vector<std::string>(const std::string& catalog_id)> names);
+    // For the hidden app's input driver: a named rectangle of the page's own
+    // ("page:browser"), in window points, as the last frame drew it.
+    bool item_rect(const std::string& name, float rect[4]) const;
+    // What the page says about ⌘O Open in browser in its status bar: that
+    // the browser shows the saved dashboard, once a link was given out while
+    // the open spec has unsaved changes; "" otherwise. For the input driver.
+    std::string browser_note() const;
     // For the hidden app's input driver (builder/spec_ui_driver.h): a shown
     // panel's rectangle in window points, and the inline surface's state
     // ("idle" before any ⌘K).
     bool panel_rect(const std::string& panel_id, float rect[4]) const;
     std::string widget_state() const;
+    // What the inline surface shows besides its state, for the driver's log:
+    // its tag, its edits, the model, an error's code and message, the input
+    // tokens of each request of the last turn and its output tokens, and the
+    // start of the reply, such as "tag LIMIT, 1 edit, model qwen, reply ...";
+    // "" before any ⌘K.
+    std::string widget_facts() const;
     // Presses the inline surface's action of that label ("Setup", "Accept",
     // ...) when the surface offers it now, as a click on its button does;
     // false otherwise. For the hidden app's input driver.

@@ -2,11 +2,13 @@
 #include "api/app_api.h"
 
 #include "api/spec_page.h"
+#include "open_url.h"
 
 #include "export_service.h"
 #include "negotiation.h"
 #include "net/json.h"
 
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -136,6 +138,37 @@ void AppApi::revoke_agent_file(const std::string& path) {
     }
 }
 
+bool AppApi::viewer_link_possible(const std::string& applet, std::string* why) {
+    auto refuse = [&](const char* reason) {
+        if (why) *why = reason;
+        return false;
+    };
+    if (caliper_api::spec_page_html().empty()) return refuse("this build has no browser viewer");
+    // A workspace id, as applet.save names the folder: nothing to escape,
+    // and never "." or "..".
+    if (!viewer_applet_id(applet)) return refuse("the dashboard's id cannot be a link");
+    return true;
+}
+
+std::string AppApi::viewer_link(const std::string& applet, std::string* why) const {
+    auto refuse = [&](const char* reason) {
+        if (why) *why = reason;
+        return std::string();
+    };
+    if (!viewer_link_possible(applet, why)) return {};
+    if (!server_) return refuse("Caliper API is not running");
+    const std::string base = server_->spec_url();
+    const std::string mark = std::string("?") + CALIPER_NET_TOKEN_PARAM + "=";
+    const size_t at = base.find(mark);
+    if (base.empty() || at == std::string::npos) return refuse("Caliper API has no viewer token");
+    const std::string token = base.substr(at + mark.size());
+    // The link is easily copied and kept in a browser's history: it carries
+    // the viewer token alone.
+    if (token.empty() || token == server_->token() || token == server_->mcp_token())
+        return refuse("the link would carry a token that opens more than the viewer");
+    return base + "&applet=" + applet;
+}
+
 void AppApi::stop() {
     if (!server_) return;
     // Every agent's file and token go with the API.
@@ -144,6 +177,17 @@ void AppApi::stop() {
     server_.reset();
     if (!file_text_.empty()) caliper_net::remove_hub_file(file_, file_text_);
     file_text_.clear();
+}
+
+std::string launch_pending_json(const std::string& id, const std::string& version, const std::string& status,
+                                const std::string& note) {
+    caliper_net::Json j = caliper_net::Json::object();
+    j.set("id", id);
+    j.set("version", version);
+    j.set("status", status);
+    j.set("already_open", false);
+    j.set("note", note);
+    return j.dump();
 }
 
 std::string launched_json(const std::string& id, const std::string& version, bool already_open) {

@@ -16,6 +16,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <memory>
@@ -494,6 +495,230 @@ TEST_CASE("builder pane: the spec text follows the canvas, and the canvas the te
     CHECK(p.text() == p.open_spec()->text);
     p.set_editing(false);
     CHECK(p.text() == p.open_spec()->text);
+}
+
+// The read-only strip follows each change of the open spec: it brings the
+// last line that changed into view, so a panel added at the end of the text
+// or a title changed in the middle shows where it changed.
+TEST_CASE("builder pane: the spec text strip follows the last changed line") {
+    // The helper: the last changed line of the new text, 0-based.
+    CHECK(pane_text_follow_line("a\nb\nc\n", "a\nb\nc\n") == -1);
+    CHECK(pane_text_follow_line("a\nb\nc\n", "a\nB\nc\n") == 1);
+    CHECK(pane_text_follow_line("a\nb\n", "a\nb\nc\nd\n") == 3);
+    CHECK(pane_text_follow_line("a\nb\nc\nd\n", "a\nd\n") == 1);   // lines taken out: where they were
+    CHECK(pane_text_follow_line("", "a\n") == 0);
+
+    Rig r = rig("pane-follow");
+    BuilderPane& p = *r.pane;
+    const auto line_of = [&](const std::string& needle) {
+        const std::string& t = p.text();
+        const size_t at = t.find(needle);
+        REQUIRE(at != std::string::npos);
+        return (int)std::count(t.begin(), t.begin() + (long)at, '\n');
+    };
+    const auto last_line = [&] {
+        const std::string& t = p.text();
+        const size_t end = t.find_last_not_of('\n');
+        return (int)std::count(t.begin(), t.begin() + (long)end, '\n');
+    };
+    // A new panel: its block ends the text.
+    p.select("table:run42_metrics");
+    REQUIRE(p.add_primitive(spec::Primitive::series));
+    CHECK(p.text_follow_line() == last_line());
+    // A second panel, then the first one's title, which is above it.
+    p.select("spec:run42_metrics");
+    REQUIRE(p.add_primitive(spec::Primitive::table));
+    CHECK(p.text_follow_line() == last_line());
+    p.focus_panel("series");
+    REQUIRE(p.set_title("Curves"));
+    CHECK(p.text_follow_line() == line_of("title = \"Curves\""));
+    CHECK(p.text_follow_line() < last_line());
+    // An undo is a change too.
+    REQUIRE(p.undo());
+    CHECK(p.text_follow_line() >= line_of("[[panel]]\nid = \"series\""));
+    CHECK(p.text_follow_line() < line_of("[[panel]]\nid = \"table\""));
+}
+
+// A primitive that the selection does not fit says why in the selection's
+// own terms, after the validator's words: the attention tensor has four
+// dimensions, a heatmap takes two, and Properties slices or reduces it.
+TEST_CASE("builder pane: a primitive that does not fit says what it takes") {
+    Rig r = rig("pane-fit");
+    BuilderPane& p = *r.pane;
+    const size_t sent = p.sent().size();
+    p.select("tensor:attn_weights");
+    std::string why;
+    {
+        const PanePlan& heat = p.primitive_plan(spec::Primitive::heatmap);
+        REQUIRE(heat.refusal);
+        CHECK(heat.refusal.code == "spec.missing_slot");
+        why = heat.refusal.message;
+    }
+    CHECK(why.find("attn_weights is f32 2\xc3\x97" "3\xc3\x97" "8\xc3\x97" "8") != std::string::npos);
+    CHECK(why.find("a heatmap takes a tensor of two dimensions") != std::string::npos);
+    CHECK(why.find("slice or reduce it in Properties") != std::string::npos);
+    CHECK_FALSE(p.add_primitive(spec::Primitive::heatmap));
+    CHECK(p.error().message == why);
+    // A table for a heatmap.
+    p.select("table:run42_metrics");
+    {
+        const PanePlan& t = p.primitive_plan(spec::Primitive::heatmap);
+        REQUIRE(t.refusal);
+        CHECK(t.refusal.message.find("run42_metrics is a table") != std::string::npos);
+        CHECK(t.refusal.message.find("Properties") == std::string::npos);
+    }
+    CHECK(p.sent().size() == sent);
+    // Two slices later, layer 0 and its head 0, the tensor fits.
+    p.select("tensor:attn_weights");
+    REQUIRE(p.add_transform(spec::TransformOp::slice));
+    REQUIRE(p.add_transform(spec::TransformOp::slice));
+    CHECK(p.selected() == "spec:attn_weights");
+    CHECK_FALSE(p.primitive_plan(spec::Primitive::heatmap).refusal);
+    REQUIRE(p.add_primitive(spec::Primitive::heatmap));
+}
+
+// A slice's and a reduce's axis in Properties: each axis of the step's
+// input with its index range, and with its name where the source carries
+// names (a live view's dims; a safetensors tensor has none); a slice's index
+// outside its axis's range is set to the nearer end, and the pane says so.
+TEST_CASE("builder pane: a transform's axes with their ranges and names, and an index kept in its range") {
+    const std::string dot = "\xc2\xb7", dash = "\xe2\x80\x93";
+    const auto ax = [&](int a, int last, const std::string& name = {}) {
+        return "axis " + std::to_string(a) + (name.empty() ? "" : " " + name) + " " + dot + " 0" + dash +
+               std::to_string(last);
+    };
+    // The helpers.
+    CHECK(pane_index_range(4) == "0" + dash + "3");
+    CHECK(pane_index_range(1) == "0");
+    CHECK(pane_index_range(0).empty());
+    CHECK(pane_index_range(-1).empty());
+    CHECK(pane_axis_text(1, 4) == ax(1, 3));
+    CHECK(pane_axis_text(0, 4, "layer") == ax(0, 3, "layer"));
+    CHECK(pane_axis_text(2, -1) == "axis 2");
+    bool clamped = true;
+    CHECK(pane_clamp_index(2, 4, &clamped) == 2);
+    CHECK_FALSE(clamped);
+    CHECK(pane_clamp_index(-1, 4, &clamped) == -1);   // from the end
+    CHECK_FALSE(clamped);
+    CHECK(pane_clamp_index(7, 4, &clamped) == 3);
+    CHECK(clamped);
+    CHECK(pane_clamp_index(-9, 4, &clamped) == 0);
+    CHECK(clamped);
+    CHECK(pane_clamp_index(7, -1, &clamped) == 7);   // a size not known
+    CHECK_FALSE(clamped);
+
+    Rig r = rig("pane-axes");
+    BuilderPane& p = *r.pane;
+    const auto index_of = [&](size_t step) {
+        const spec::Source* src = p.open_spec()->spec.find_source("attn_weights");
+        REQUIRE(src);
+        REQUIRE(step < src->transforms.size());
+        return src->transforms[step].index.value_or(-100);
+    };
+    // The tensor is [2, 3, 8, 8], from a safetensors file: no names.
+    p.select("tensor:attn_weights");
+    REQUIRE(p.add_transform(spec::TransformOp::slice));
+    CHECK(p.transform_axes(0) == std::vector<std::string>{ax(0, 1), ax(1, 2), ax(2, 7), ax(3, 7)});
+    CHECK(p.transform_index_range(0) == "0" + dash + "1");
+    // An index past the axis's end is set to its last index, and said.
+    REQUIRE(p.set_slice_index(0, 7));
+    CHECK(index_of(0) == 1);
+    CHECK(p.transform_note() == "7 is outside 0" + dash + "1");
+    CHECK(p.transform_note_step() == 0);
+    // One within it is taken as it is, and the note goes.
+    REQUIRE(p.set_slice_index(0, 0));
+    CHECK(index_of(0) == 0);
+    CHECK(p.transform_note().empty());
+    // Another axis: its range, and the index kept within it.
+    REQUIRE(p.set_transform_axis(0, 1));
+    CHECK(p.transform_index_range(0) == "0" + dash + "2");
+    REQUIRE(p.set_slice_index(0, 2));
+    REQUIRE(p.set_transform_axis(0, 0));
+    CHECK(index_of(0) == 1);
+    CHECK(p.transform_note() == "2 is outside 0" + dash + "1");
+    // A reduce after the slice sees the slice's result, [3, 8, 8].
+    REQUIRE(p.add_transform(spec::TransformOp::reduce));
+    CHECK(p.transform_axes(1) == std::vector<std::string>{ax(0, 2), ax(1, 7), ax(2, 7)});
+
+    // A source that carries names, as a live view does: each axis is named,
+    // and a slice's index takes its axis's name away.
+    r.port->set_dim_names([](const std::string& id) {
+        return id == "tensor:attn_weights" ? std::vector<std::string>{"layer", "head", "query", "key"}
+                                           : std::vector<std::string>{};
+    });
+    p.focus_source("spec:attn_weights");
+    CHECK(p.transform_axes(0) ==
+          std::vector<std::string>{ax(0, 1, "layer"), ax(1, 2, "head"), ax(2, 7, "query"), ax(3, 7, "key")});
+    CHECK(p.transform_axes(1) == std::vector<std::string>{ax(0, 2, "head"), ax(1, 7, "query"), ax(2, 7, "key")});
+    const std::vector<PaneShape> shapes = p.transform_shapes();
+    REQUIRE(shapes.size() == 3);
+    CHECK(shapes[2].names == std::vector<std::string>{"query", "key"});   // the reduce took head away
+    // Names that do not match the rank are not used.
+    std::vector<PaneShape> odd = shapes;
+    for (auto& sh : odd) sh.names.clear();
+    pane_name_dims(odd, p.open_spec()->spec.find_source("attn_weights")->transforms, {"a", "b"});
+    CHECK(odd[0].names.empty());
+}
+
+// A reduce over several axes keeps them all: a click on an axis in
+// Properties adds it to the list or takes it out, never leaving the list
+// empty, and every chosen axis is highlighted. A slice's axis is one.
+TEST_CASE("builder pane: a reduce's axes toggle in a list, never empty") {
+    Rig r = rig("pane-reduce-axes");
+    BuilderPane& p = *r.pane;
+    const auto axes_of = [&](size_t step) {
+        const spec::Source* src = p.open_spec()->spec.find_source("attn_weights");
+        REQUIRE(src);
+        REQUIRE(step < src->transforms.size());
+        return src->transforms[step].axis;
+    };
+    // The tensor is [2, 3, 8, 8]; a reduce starts on axis 0.
+    p.select("tensor:attn_weights");
+    REQUIRE(p.add_transform(spec::TransformOp::reduce));
+    CHECK(axes_of(0) == std::vector<int64_t>{0});
+    CHECK(p.transform_axes_chosen(0) == std::vector<int64_t>{0});
+    // A click on axis 2 adds it; the reduce is over both.
+    REQUIRE(p.set_transform_axis(0, 2));
+    CHECK(axes_of(0) == std::vector<int64_t>{0, 2});
+    CHECK(p.transform_axes_chosen(0) == std::vector<int64_t>{0, 2});
+    REQUIRE(p.transform_shapes().size() == 2);
+    CHECK(p.transform_shapes()[1].dims == std::vector<int64_t>{3, 8});
+    // A click on a chosen axis takes it out.
+    REQUIRE(p.set_transform_axis(0, 0));
+    CHECK(axes_of(0) == std::vector<int64_t>{2});
+    CHECK(p.transform_axes_chosen(0) == std::vector<int64_t>{2});
+    // The last one stays: a reduce over no axis is not one.
+    const size_t sent = p.sent().size();
+    p.set_transform_axis(0, 2);
+    CHECK(axes_of(0) == std::vector<int64_t>{2});
+    CHECK(p.sent().size() == sent);
+    // A spec written with a list keeps all of its axes through a click.
+    REQUIRE(p.set_transform(0, nlohmann::json{{"op", "reduce"}, {"axis", {1, 3}}, {"fn", "mean"}}));
+    CHECK(p.transform_axes_chosen(0) == std::vector<int64_t>{1, 3});
+    REQUIRE(p.set_transform_axis(0, 0));
+    CHECK(axes_of(0) == std::vector<int64_t>{0, 1, 3});
+    REQUIRE(p.set_transform_axis(0, 1));
+    REQUIRE(p.set_transform_axis(0, 3));
+    CHECK(axes_of(0) == std::vector<int64_t>{0});
+    // A slice's axis is replaced, as before: [3, 8, 8], axis 1 of three.
+    REQUIRE(p.add_transform(spec::TransformOp::slice));
+    REQUIRE(p.set_transform_axis(1, 1));
+    CHECK(axes_of(1) == std::vector<int64_t>{1});
+    CHECK(p.transform_axes_chosen(1) == std::vector<int64_t>{1});
+}
+
+// A new dashboard's empty canvas says how to start in build mode, and
+// nothing more once it has a panel or outside build mode.
+TEST_CASE("builder pane: an empty canvas says how to start") {
+    Rig r = rig("pane-empty");
+    BuilderPane& p = *r.pane;
+    CHECK(p.canvas_hint() == "Drop a data file, or pick a source in Sources");
+    p.set_build_mode(false);
+    CHECK(p.canvas_hint().empty());
+    p.set_build_mode(true);
+    p.select("table:run42_metrics");
+    REQUIRE(p.add_primitive(spec::Primitive::series));
+    CHECK(p.canvas_hint().empty());
 }
 
 TEST_CASE("builder pane: renames reach every reference, and the spec's own title") {

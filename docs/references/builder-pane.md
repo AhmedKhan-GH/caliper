@@ -17,17 +17,35 @@ There are three ways to the pane:
 
 - **A new dashboard.** On the landing screen, F3 New dashboard, the Projects way in, makes a new spec and opens it in
   build mode. Type `new <title>` in the command line and press Enter to give it a title; F3 takes the command line's
-  text as the title too, and a dashboard without one is called Untitled. The spec's applet id is made from the title:
-  its letters and digits in lower case, with one `-` for every other run of characters, such as `run-42` for "Run 42".
+  text as the title too, and a dashboard without one is called Untitled. The command line is empty again afterwards.
+  The spec's applet id is made from the title: its letters and digits in lower case, with one `-` for every other run
+  of characters, such as `run-42` for "Run 42".
 - **Files dropped on the window.** Dropping files from the Finder or a file manager imports them into the workspace.
   On the spec page the pane opens in build mode with the new sources selected; on the landing screen the open spec's
-  page opens in build mode first, or a new Untitled dashboard when no spec is open. Other pages keep their windows and
-  say in Activity that a spec must be open.
+  page opens in build mode first, or a new Untitled dashboard when no spec is open. On the live page a new Untitled
+  dashboard opens in build mode, and Sources lists the files' sources beside the attached session's live sources,
+  which stay attached; when the open spec has unsaved changes, the files go into it instead, as on the landing screen,
+  so that nothing unsaved is replaced. An applet's page keeps its windows and says in Activity that a spec must be
+  open.
 - **An open spec.** ⌘B Build in the page bar (Ctrl+B Build elsewhere) turns build mode on and off for the spec the
   page shows. A spec applet found outside the workspace is drawn from its file and has no Build.
 
-A dashboard is saved with ⌘S Save as a spec applet of the workspace, `applets/<id>/`, and appears in the landing
-screen's list at once.
+A dashboard is saved with ⌘S Save as a spec applet of the workspace, `applets/<id>/`, and appears at once under
+Projects on the landing screen, which selects it when you go Home from it. A saved dashboard opens in a browser with
+⌘O Open in browser in the page bar ([Open in browser](#open-in-browser)).
+
+The open spec stays open when you go Home, with its unsaved changes. Before one of your own actions replaces it or
+closes the app while it has unsaved changes, the app asks "Save changes to <name>?", where the name is the spec's
+title: F3 New dashboard (or `new <title>` and Enter on the command line), opening another dashboard from the landing
+screen, and closing the window or quitting with ⌘Q. ⏎ Save (Enter) saves it as ⌘S does and then goes on, Don't Save
+goes on without saving, and esc Cancel (Esc) leaves everything as it was. While a long command runs on the app's worker,
+such as an agent's query or import, the open spec cannot be read: the action waits for the command, showing "Waiting
+for the running command" with esc Cancel, and then asks if the spec has unsaved changes; it never takes the wait for
+"nothing to save", so closing the window then does not lose unsaved work. Opening the open spec's own dashboard from
+the landing screen shows it with its unsaved changes and does not ask. A drop never replaces a spec with unsaved
+changes (the files go into it), so it does not ask either. An agent that replaces the open spec is reviewed on an
+approval card instead, and Caliper API's and `app.launch`'s launches do not ask. After a replacement, ⌘Z still
+brings the previous spec back with its unsaved changes.
 
 ## Where things are
 
@@ -48,8 +66,9 @@ wide as the chat is outside build mode); each has a minimum that grows with the 
 strip goes first, then the right column, then the left, and the canvas keeps its minimum.
 
 The page bar holds, after Home and the spec's title, ⌘B Build and, in build mode, ⌘T Text, ⌘Z Undo, ⇧⌘Z Redo and ⌘S
-Save, with ⌘L Chat and ⌘K Command at its right end. When the bar is too narrow for them, only Build stays; the others
-keep their keys. The code of the last refused or failed change follows the buttons, with its reason in a tooltip.
+Save, with ⌘O Open in browser, ⌘L Chat and ⌘K Command at its right end. When the bar is too narrow for them, only Build
+stays; the others keep their keys. The code of the last refused or failed change follows the buttons, with its reason
+in a tooltip.
 
 ## Sources
 
@@ -72,13 +91,17 @@ Files that an import refused are listed under Refused, with the file's name and 
 
 Series, Heatmap, Points, Histogram, Table, Image and Text. A click adds a panel of that primitive bound to the selected
 source: a series takes a table's first column as x and its other numeric columns as lines. A primitive that the
-selection does not fit is faint, with the reason in its tooltip, and a click on it changes nothing. A panel always has
-its required slots, so a primitive needs a selection that fits, except Text, which starts with the text "Text".
+selection does not fit is faint, with the reason in its tooltip, and a click on it changes nothing. The reason says what
+the source is and what the primitive takes; for a tensor with more dimensions than the primitive draws, such as a
+four-dimensional attention tensor for a heatmap, it says to slice or reduce it under Transforms in Properties. A panel
+always has its required slots, so a primitive needs a selection that fits, except Text, which starts with the text
+"Text".
 Dragging a primitive onto the canvas places the new panel where it is dropped.
 
 ## The canvas
 
-The canvas draws the spec as the page does outside build mode.
+The canvas draws the spec as the page does outside build mode. While the spec has no panel, it says so, and how to
+start: "No panels", and under it "Drop a data file, or pick a source in Sources".
 
 | Gesture | What it does |
 |---|---|
@@ -106,7 +129,19 @@ With a panel focused, Properties shows:
 
 With a source selected: its id, its catalog id, its shape, and for a tensor its transforms, each with its fields and
 the shape after it. Slice, Reduce and Normalise add one; × removes one. A catalog source that the spec does not read
-yet takes its id here before it is added; its first transform, or the first panel made from it, adds it.
+yet takes its id here before it is added; its first transform, or the first panel made from it, adds it. For a source
+of the open spec, ⌘K beside what it reads and beside its transforms opens the widget agent's prompt for that property
+([Widget agent](widget-agent.md)).
+
+A slice's or a reduce's axis is a choice of every axis of the step's input, each with its index range, such as
+`axis 1 · 0–3` for an axis of 4, and with its name where the source carries names: a live view's dims are named by the
+stream, as in `axis 0 layer · 0–3`, and a step that takes an axis away takes its name with it; a tensor from a
+safetensors file has none. While the shape is not known, as for a live view before its first snapshot, the axis is a
+number. A slice takes one axis, and a click on another moves it there. A reduce takes a list of axes: a click on an
+axis adds it to the list or takes it out, every axis in the list is highlighted, and the last one stays, since a reduce
+over no axis is not one. A slice's index shows its axis's range at the right of the field. An index outside it is set to the nearer
+end, `3` for a `7` typed on an axis of 4, and the field says so in place of the range, `7 is outside 0–3`, until the
+next change of the transforms. A negative index counts from the end, as the spec format says.
 
 With nothing focused (Esc gives a source's focus up): the spec's id, title and description, its numbers of panels and
 sources, and its file.
@@ -119,7 +154,24 @@ Text and numbers apply as you type; ids apply on Enter or when the field is left
 into an editor, and Esc Done back. An edit applies as soon as the text is a valid spec, and the panels follow. While
 it is not, each error's line is marked with its code, the message is in the line's tooltip, the panels keep the last
 valid spec, and other changes wait until the text is fixed or left. A change made on the canvas or in Properties
-shows in the text at once.
+shows in the text at once, and the strip scrolls to the last line that changed when that line is out of view, so a
+new panel's block at the end of the text, or a title changed in the middle of it, comes into view.
+
+## Open in browser
+
+⌘O Open in browser in the page bar opens the saved dashboard that the page shows in your default browser, at the
+browser viewer of [Caliper API](api.md#get-v0spec), which draws it with the layout and the look of the spec page. It
+works in build mode and outside it. The browser shows the dashboard as it was last saved, so save first to show a
+change: while the dashboard has unsaved changes the button's tooltip says "the browser shows the saved dashboard", and
+once its link is out the status bar says so too, after `unsaved`. The button is disabled, with the reason in its
+tooltip, for a dashboard that was never saved and for a spec applet found outside the workspace.
+
+When the app was started without `--api`, the button starts Caliper API as the side chat does: on a free port of
+127.0.0.1 only, with new tokens, said in Activity and shown in the status bar as `api 127.0.0.1:<port>`. It stays on
+until the app quits, since the page in the browser keeps reading the dashboard's data. What would refuse the link, a
+build without the browser viewer or an id that cannot be a link, is asked before the API starts, and when the link
+cannot be handed over all the same, an API started for it alone stops again. What the link carries and who
+can use it is in [Caliper API](api.md#started-by-the-app).
 
 ## Keys
 
@@ -130,6 +182,7 @@ shows in the text at once.
 | ⌘E, Esc | Edit the text, and back |
 | ⌘Z, ⇧⌘Z | Undo and redo, unless a text field has the keyboard |
 | ⌘S | Save |
+| ⌘O | Open the saved dashboard in a browser |
 | ⏎ | Add the selection, in Sources |
 | ⌫ | Remove the focused panel |
 | ⌘K | The inline prompt in the focused panel ([Widget agent](widget-agent.md)) |

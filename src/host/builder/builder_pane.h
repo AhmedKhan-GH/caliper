@@ -109,6 +109,12 @@ public:
     // The undo and redo stacks are not empty.
     virtual bool can_undo() const { return true; }
     virtual bool can_redo() const { return true; }
+    // The names of a catalog source's dims, one per dim, where the source
+    // carries them (a live view's); empty for one that carries none.
+    virtual std::vector<std::string> dim_names(const std::string& catalog_id) const {
+        (void)catalog_id;
+        return {};
+    }
 
 private:
     mutable uint64_t calls_ = 0;
@@ -131,12 +137,17 @@ public:
     uint64_t version() const override;
     bool can_undo() const override;
     bool can_redo() const override;
+    std::vector<std::string> dim_names(const std::string& catalog_id) const override;
+    // Where dim_names() reads the names: the app's live views
+    // (AppProviders::dim_names()); none without it.
+    void set_dim_names(std::function<std::vector<std::string>(const std::string&)> names) { names_ = std::move(names); }
     caliper_builder::Session& session() { return session_; }
 
 private:
     caliper_builder::Session& session_;
     std::function<bool()> busy_;
     std::function<uint64_t()> version_;
+    std::function<std::vector<std::string>(const std::string&)> names_;
 };
 
 // ---- what the pane shows ----------------------------------------------------------------
@@ -253,13 +264,15 @@ public:
 
     // ---- ⌘K: the widget agent's inline surface, which the page owns. The
     // pane offers ⌘K on the rows of the files just dropped (the prompt for
-    // that file's loader and its catalog ids) and beside the focused panel's
-    // title and options (the prompt for that one property), and draws the
-    // surface under the row it is open on ("source:<key>", "prop:<path>").
+    // that file's loader and its catalog ids), beside the focused panel's
+    // title and options, and beside the focused spec source's catalog, from
+    // or SQL and its transforms (the prompt for that one property), and draws
+    // the surface under the row it is open on ("source:<key>", "prop:<path>").
     struct WidgetHooks {
         std::function<void(const std::string& loader, const std::vector<std::string>& catalog,
                            const std::string& anchor)> open_file;
-        std::function<void(const std::string& panel, const std::string& path)> open_property;
+        // A property of a panel (`panel` set) or of a spec source (`source` set).
+        std::function<void(const std::string& panel, const std::string& source, const std::string& path)> open_property;
         std::function<float(const std::string& anchor, float width)> height;   // 0: not open there
         std::function<void(const std::string& anchor, const SpecRect& rect)> draw;
     };
@@ -308,6 +321,30 @@ public:
     bool add_transform(caliper_builder::spec::TransformOp op);
     bool set_transform(size_t index, const nlohmann::json& transform);   // the whole transform, as in source.add
     bool remove_transform(size_t index);
+    // A slice's or a reduce's axis in Properties: every axis of the step's
+    // input as pane_axis_text() writes it ("axis 1 · 0–3", with the dim's
+    // name where the source carries one), one choice each; empty when the
+    // input's shape is not known, and Properties then shows the number.
+    std::vector<std::string> transform_axes(size_t index);
+    // The axes the step uses, as indices into transform_axes(): a slice's
+    // one, every axis of a reduce's list; Properties highlights each.
+    std::vector<int64_t> transform_axes_chosen(size_t index);
+    // A slice's index range on its axis ("0–3"), "" when not known.
+    std::string transform_index_range(size_t index);
+    // A slice's index; one outside its axis's range is set to the nearer end
+    // of it, and transform_note() says so until the next transform edit.
+    bool set_slice_index(size_t index, int64_t value);
+    // A slice's axis, its index kept within the new axis's range the same
+    // way; a reduce's axis is added to its list or taken out of it, never
+    // leaving the list empty.
+    bool set_transform_axis(size_t index, int64_t axis);
+    // "7 is outside 0–3", after an index was set to the end of its range;
+    // "" otherwise. transform_note_step() is the step it is about.
+    const std::string& transform_note() const { return transform_note_; }
+    size_t transform_note_step() const { return transform_note_step_; }
+    // What an empty canvas says in build mode under "No panels": how to
+    // start. "" outside build mode and once the open spec has a panel.
+    std::string canvas_hint() const;
     // The spec's own applet id, title and description (no focus), sent as
     // spec.set_text.
     bool set_spec_id(const std::string& id);
@@ -335,6 +372,11 @@ public:
     const std::vector<caliper_builder::spec::Diagnostic>& diagnostics() const { return diagnostics_; }
     // The draft does not validate, so it is not applied.
     bool draft_pending() const { return editing_ && draft_pending_; }
+    // The line, 0-based, that the read-only strip brings into view at its
+    // next draw: the last line that changed when the open spec's text last
+    // changed (pane_text_follow_line()), or -1. Another spec opened is not a
+    // change to follow.
+    int text_follow_line() const { return text_follow_; }
 
     // ---- history and saving
     bool undo();
@@ -420,7 +462,8 @@ private:
     // The ⌘K control in `r`; true when clicked.
     bool widget_key(const std::string& id, const ImRect& r, bool shown);
     // A property row's ⌘K, and the prompt under the row when it is open there.
-    void property_key(Rows& rows, const ImRect& r, const std::string& panel, const std::string& path);
+    void property_key(Rows& rows, const ImRect& r, const std::string& panel, const std::string& path,
+                      const std::string& source = {});
     bool run_plan(PanePlan plan, const std::string& merge = {});
     PanePlan simulate(std::vector<caliper_builder::CommandInvocation> commands) const;
     caliper_builder::CommandResult send(caliper_builder::CommandInvocation inv, const std::string& group,
@@ -476,6 +519,7 @@ private:
     std::string prefix_;
 
     bool editing_ = false;
+    int text_follow_ = -1;   // text_follow_line()
     std::string draft_;
     bool draft_pending_ = false;
     std::vector<caliper_builder::spec::Diagnostic> diagnostics_;
@@ -490,6 +534,8 @@ private:
     std::map<std::string, PanePlan> primitive_plans_;
     std::map<std::string, std::vector<PaneBindingChoice>> choices_;
     std::optional<std::vector<PaneShape>> shapes_;
+    std::string transform_note_;
+    size_t transform_note_step_ = 0;
     std::map<std::string, PaneShape> spec_shapes_;
 
     DragPayload drag_;

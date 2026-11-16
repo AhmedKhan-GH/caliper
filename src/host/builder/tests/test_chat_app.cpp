@@ -31,6 +31,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cctype>
+#include <cstdio>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -164,7 +165,7 @@ TEST_CASE("chat app: the side chat on the hidden app's spec page, with the cards
         "wait 60; focus rows; wait 3; leave; key escape; wait 10; chat open; wait 10; chat focus; wait 5; shot t-1; "
         "type Add a panel of the learning rate; wait 3; key enter; chat item tool catalog.describe in_progress; "
         "wait 5; shot t-2; touch " + (gates / "turn").string() + "; chat item approval panel.create waiting; "
-        "wait 40; shot t-3; append " + decisions.string() + " approve panel.create agent; chat item stop - DONE; "
+        "cards 1; shot t-3; append " + decisions.string() + " approve panel.create agent; chat item stop - DONE; "
         "wait 10; shot t-4; focus curves; wait 3; leave; key cmd+k; until unavailable; wait 3; "
         "type Build a loader for the validation logs; wait 3; key enter; chat draft; wait 5; shot t-5; "
         "chat focus; wait 3; key enter; wait 30; chat until ready; chat focus; wait 3; "
@@ -194,6 +195,8 @@ TEST_CASE("chat app: the side chat on the hidden app's spec page, with the cards
     CHECK(run.status.success());
     CHECK(run.err.find("[ui] done") != std::string::npos);
     CHECK(run.err.find("[ui] stopped") == std::string::npos);
+    // t-3 waited for the strip to show the card at its full height, not for a time.
+    CHECK(run.err.find("[ui] the approval strip shows 1 waiting card") != std::string::npos);
     for (const char* n : {"t-1", "t-2", "t-3", "t-4", "t-5"}) {
         const Png p = load((shots / (std::string(n) + ".png")).string());
         CHECK_MESSAGE(((p.w == 960 && p.h == 600) || (p.w == 1920 && p.h == 1200)), n);
@@ -351,6 +354,148 @@ TEST_CASE("chat app: plot attention entropy per layer while it trains, from the 
     // The person started the API with --api: the chat neither started nor stopped it.
     CHECK(run.err.find("[chat] Caliper API started") == std::string::npos);
     CHECK(run.err.find("[chat] Caliper API stopped") == std::string::npos);
+}
+
+TEST_CASE("chat app: the Shared GPU note while a live run is attached and the agent is marked as local" *
+          doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const char* producer_exe = std::getenv("CALIPER_TEST_PRODUCER_EXE");
+    const char* applets = std::getenv("CALIPER_TEST_APPLETS");
+    if (!exe || !*exe || !producer_exe || !*producer_exe || !applets || !*applets) {
+        std::printf("caliper_side_chat_app skipped: needs CALIPER_TEST_CALIPER_EXE, CALIPER_TEST_PRODUCER_EXE and "
+                    "CALIPER_TEST_APPLETS\n");
+        return;
+    }
+    const fs::path root = fresh("chat-gpu-note");
+    const fs::path ws = root / "ws", data = root / "data", shots = root / "shots";
+    for (const fs::path& d : {ws, data, shots, root / "apps"}) fs::create_directories(d);
+    // The stub as the person's agent, not marked yet; it never starts, since
+    // no message is sent.
+    {
+        json s = {{"agent", "custom"},
+                  {"custom_name", "Stub agent"},
+                  {"custom_command", "'" + std::string(CALIPER_CHAT_STUB_AGENT) + "'"},
+                  {"open", false}};
+        std::ofstream(data / "side-chat.json") << s.dump();
+    }
+    // The training script's stand-in.
+    acp::SpawnOptions po;
+    po.argv = {producer_exe, "--layers", "2", "--heads", "4", "--tokens", "16", "--hz", "8"};
+    caliper_builder::Error e;
+    std::unique_ptr<acp::Process> producer = acp::Process::spawn(po, &e);
+    REQUIRE_MESSAGE(producer, e.message);
+    std::string out, link;
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (link.empty() && std::chrono::steady_clock::now() < until) {
+        char b[4096];
+        std::size_t got = 0;
+        if (producer->read_stdout(b, sizeof b, &got, 100) == acp::IoStatus::ok) out.append(b, got);
+        if (producer->read_stderr(b, sizeof b, &got, 10) == acp::IoStatus::ok) out.append(b, got);
+        const size_t at = out.find("[producer] hub ");
+        if (at != std::string::npos && out.find('\n', at) != std::string::npos) {
+            const size_t s = at + std::string("[producer] hub ").size();
+            link = out.substr(s, out.find('\n', at) - s);
+        }
+    }
+    REQUIRE_MESSAGE(!link.empty(), out);
+
+    // Attached, the note waits for the mark; marked, it shows; detached (⌘D
+    // Detach on the live page; esc Home keeps the stream attached), it goes.
+    const std::string ui =
+        "page live; chat open; chat until idle; chat note none; chat local on; chat note Shared GPU; wait 5; shot gpu; "
+        "key cmd+d; page landing; chat note none; quit";
+    acp::SpawnOptions o;
+    o.argv = {exe, "--hidden", "--applets", applets, "--url", link, "--workspace", ws.string()};
+    o.env = {{"CALIPER_DATA_DIR", data.string()},
+             {"CALIPER_USER_APPLETS_DIR", (root / "apps").string()},
+             {"CALIPER_WINDOW_SIZE", "960x600"},
+             {"CALIPER_AGENT_OFFLINE", "1"},
+             {"CALIPER_TEST_SPEC_UI", ui},
+             {"CALIPER_TEST_SPEC_UI_SHOTS", shots.string()},
+             {"CALIPER_EXIT_AFTER", "100"}};
+    o.env_remove = {"ANTHROPIC_API_KEY", "OPENAI_API_KEY"};
+    acp::RunLimits lim;
+    lim.timeout_ms = 150000;
+    const auto run = acp::run_process(o, lim);
+    producer->terminate(2000);
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 6000 ? run.err.size() - 6000 : 0));
+    REQUIRE(run.error.ok());
+    if (!metal(run.err)) {
+        std::printf("caliper_side_chat_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(run.status.success());
+    CHECK(run.err.find("[ui] done") != std::string::npos);
+    CHECK(run.err.find("[ui] stopped") == std::string::npos);
+    const size_t marked = run.err.find("[ui] chat local on");
+    const size_t shown = run.err.find("[ui] the chat's note is Shared GPU");
+    REQUIRE(marked != std::string::npos);
+    REQUIRE(shown != std::string::npos);
+    CHECK(marked < shown);
+    CHECK(run.err.find("[ui] the chat's note is none", shown) != std::string::npos);
+    const Png p = load((shots / "gpu.png").string());
+    CHECK(((p.w == 960 && p.h == 600) || (p.w == 1920 && p.h == 1200)));
+    // The mark is kept in the chat's settings, for the chosen agent.
+    const json saved = json::parse(read_file(data / "side-chat.json"), nullptr, false);
+    REQUIRE(saved.is_object());
+    CHECK(saved.value("local_model_agents", json::array()) == json::array({"custom"}));
+}
+
+// A real agent's turn on a local model takes minutes, longer than the
+// kPatience frames a step of the input script waits by default, so the
+// script's `patience <seconds>` sets how long the steps after it may wait.
+TEST_CASE("chat app: a step of the input script waits as long as patience says, then stops the script" *
+          doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    if (!exe || !*exe) {
+        std::printf("caliper_side_chat_app skipped: needs CALIPER_TEST_CALIPER_EXE\n");
+        return;
+    }
+    const fs::path root = fresh("chat-patience");
+    const fs::path ws = root / "ws", data = root / "data";
+    for (const fs::path& d : {ws, data, root / "apps"}) fs::create_directories(d);
+    const fs::path gate = root / "gate", never = root / "never";
+    // The gate appears while the first wait-file waits; nothing ever writes `never`.
+    const std::string ui = "wait 10; patience 0; patience 3; touch " + gate.string() + "; wait-file " +
+                           gate.string() + "; wait-file " + never.string() + "; quit";
+    acp::SpawnOptions o;
+    o.argv = {exe, "--hidden", "--workspace", ws.string()};
+    o.env = {{"CALIPER_DATA_DIR", data.string()},
+             {"CALIPER_USER_APPLETS_DIR", (root / "apps").string()},
+             {"CALIPER_WINDOW_SIZE", "640x400"},
+             {"CALIPER_AGENT_OFFLINE", "1"},
+             {"CALIPER_TEST_SPEC_UI", ui},
+             {"CALIPER_EXIT_AFTER", "20"}};
+    o.env_remove = {"CALIPER_API", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"};
+    acp::RunLimits lim;
+    lim.timeout_ms = 90000;
+    const auto run = acp::run_process(o, lim);
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
+    REQUIRE(run.error.ok());
+    CHECK(run.err.find("[ui] patience 1800 frames") != std::string::npos);
+    CHECK(run.err.find("[ui] patience 3 s") != std::string::npos);
+    CHECK(run.err.find("[ui] found gate") != std::string::npos);
+    // The step stopped on the seconds of `patience`, not on the default of
+    // 1800 frames, whatever the frame rate: its line says how long it waited.
+    const std::string stop = "[ui] stopped: wait-file " + never.string() + ": no file " + never.string() + " (after ";
+    const size_t at = run.err.find(stop);
+    REQUIRE(at != std::string::npos);
+    int frames = -1;
+    double seconds = -1.0;
+    REQUIRE(std::sscanf(run.err.c_str() + at + stop.size(), "%d frames, %lf s)", &frames, &seconds) == 2);
+    CHECK(frames < 1800);
+    CHECK(seconds >= 3.0);
+    CHECK(seconds < 6.0);
+    CHECK(run.status.success());
+
+    // A value that is not a number of seconds stops the script at once.
+    for (auto& v : o.env) {
+        if (v.name == "CALIPER_TEST_SPEC_UI") v.value = "patience soon; quit";
+        if (v.name == "CALIPER_EXIT_AFTER") v.value = "5";
+    }
+    const auto bad = acp::run_process(o, lim);
+    REQUIRE(bad.error.ok());
+    CHECK(bad.err.find("[ui] stopped: patience takes a number of seconds from 0 to 86400") != std::string::npos);
 }
 
 #endif

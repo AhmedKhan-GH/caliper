@@ -23,6 +23,8 @@
 //                  Caliper reviews them
 //   Compare ...    one chunk, a line on stderr, then exits with code 1
 //   report         answers with the prompt's blocks as JSON
+//   summary        with --reply-file <path>: streams that file's text as its
+//                  reply, a few characters at a time
 //   hold           one chunk, then waits for the gate file <gate-dir>/go (or a
 //                  cancel), then ends the turn
 //   copy-api       copies what it was given into <gate-dir>, for a test to
@@ -74,6 +76,7 @@ std::atomic<bool> g_cancelled{false};
 std::atomic<int> g_next_id{5000};
 std::map<int, std::promise<json>> g_waiting;
 std::string g_gate_dir;
+std::string g_reply_file;   // --reply-file: the reply of "summary"
 bool g_embedded = false;
 bool g_image = false;
 
@@ -509,6 +512,21 @@ void run_turn(json id, json prompt) {
     } else if (text == "report") {
         chunk(prompt.dump());
         end_turn(id);
+    } else if (text == "summary" && !g_reply_file.empty()) {
+        // The text of --reply-file, streamed in pieces of a few characters, as a
+        // model's reply arrives.
+        std::ifstream in(g_reply_file, std::ios::binary);
+        std::stringstream ss;
+        ss << in.rdbuf();
+        const std::string reply = ss.str();
+        for (size_t at = 0; at < reply.size();) {
+            size_t end = std::min(reply.size(), at + 24);
+            while (end < reply.size() && ((unsigned char)reply[end] & 0xC0) == 0x80) ++end;
+            chunk(reply.substr(at, end - at));
+            at = end;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        end_turn(id);
     } else {
         chunk("You said: " + text);
         end_turn(id);
@@ -521,6 +539,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--gate-dir" && i + 1 < argc) g_gate_dir = argv[++i];
+        else if (a == "--reply-file" && i + 1 < argc) g_reply_file = argv[++i];
         else if (a == "--embedded-context") g_embedded = true;
         else if (a == "--image") g_image = true;
     }

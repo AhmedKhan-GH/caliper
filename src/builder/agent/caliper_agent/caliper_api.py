@@ -12,7 +12,9 @@ A tool runs by calling Caliper API (contracts sections 8 and 15):
   preview the app opened and its reads see it. A 404 means the app has no
   command layer yet.
 
-The address and the session token come from the API file: `--api-file`, else
+The address and the session token come from the API file: the session's own
+when `session/new` hands one in the arguments of the Caliper MCP server
+(`session_api_file()`, as the side chat does), else `--api-file`, else
 `api.json` in `CALIPER_DATA_DIR`, else in the app-data folder of the OS. The
 file is read when a tool first needs it and again after a refused token (the
 app restarted). It is hostile input: its size is bounded, the token must look
@@ -160,6 +162,55 @@ def read_api_file(path: Path) -> Endpoint:
     return endpoint
 
 
+MAX_MCP_SERVERS = 64
+MAX_SERVER_ARGS = 64
+MAX_PATH_CHARS = 4096
+CALIPER_SERVER_NAME = "caliper"
+_CALIPER_MCP_PROGRAMS = frozenset({"caliper-mcp", "caliper-mcp.exe"})
+
+
+def session_api_file(servers: Any) -> tuple[bool, Path | None]:
+    """Whether `session/new` hands a session Caliper's MCP server, and the API
+    file in that server's arguments (None when it names no usable one).
+
+    The side chat gives its agent one stdio MCP server, named `caliper`: this
+    build's caliper-mcp with `--api-file <the session's own API file>`, whose
+    token runs commands as the origin `agent` and which the app revokes when
+    the session ends. This sidecar starts no MCP server, so it takes that file
+    from the server's arguments: the first server named `caliper`, in any
+    form, or whose program is caliper-mcp, and its `--api-file <path>` or
+    `--api-file=<path>`, an absolute path. A Caliper server that gives no
+    usable file, such as one in the HTTP form, which has no command and no
+    arguments, answers (True, None): the session is refused rather than fall
+    back to `api.json`, whose token is the outside agents'. The file itself is
+    read and checked like any other API file, when a tool first needs it."""
+    if not isinstance(servers, list):
+        return False, None
+    for server in servers[:MAX_MCP_SERVERS]:
+        if not isinstance(server, dict):
+            continue
+        command = server.get("command")
+        program = command.replace("\\", "/").rsplit("/", 1)[-1] if isinstance(command, str) else None
+        if server.get("name") != CALIPER_SERVER_NAME and program not in _CALIPER_MCP_PROGRAMS:
+            continue
+        if program is None:
+            return True, None   # Caliper's server without a command: no API file to take
+        args = server.get("args")
+        value = None
+        for i, arg in enumerate(args[:MAX_SERVER_ARGS] if isinstance(args, list) else []):
+            if arg == "--api-file":
+                value = args[i + 1] if i + 1 < len(args) else None
+                break
+            if isinstance(arg, str) and arg.startswith("--api-file="):
+                value = arg[len("--api-file="):]
+                break
+        if (isinstance(value, str) and value and len(value) <= MAX_PATH_CHARS and "\x00" not in value
+                and os.path.isabs(value)):
+            return True, Path(value)
+        return True, None
+    return False, None
+
+
 def png_size(data: bytes) -> tuple[int, int] | None:
     """The width and height in a PNG's IHDR chunk, or None if it is not a PNG."""
     if len(data) < 24 or not data.startswith(_PNG_SIGNATURE) or data[12:16] != b"IHDR":
@@ -222,11 +273,13 @@ def output_from_envelope(envelope: Any) -> ToolOutput:
 
 
 class CaliperApi:
-    """Calls Caliper API on behalf of the model. One instance per sidecar."""
+    """Calls Caliper API on behalf of the model. One instance per sidecar, and one
+    for each session that `session/new` hands an API file of its own."""
 
     def __init__(self, api_file: Path | None = None, transport: httpx2.AsyncBaseTransport | None = None, *,
                  not_for_agents: frozenset[str] = frozenset()) -> None:
         self._api_file = api_file
+        self._transport = transport
         # The table's commands whose `agents` flag is false (tools.not_for_agents).
         self._not_for_agents = frozenset(not_for_agents)
         self._endpoint: Endpoint | None = None
@@ -239,6 +292,10 @@ class CaliperApi:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+    def with_file(self, api_file: Path) -> "CaliperApi":
+        """A client like this one that reads another API file: a session's own."""
+        return CaliperApi(api_file, self._transport, not_for_agents=self._not_for_agents)
 
     def _path(self) -> Path:
         return self._api_file if self._api_file is not None else default_api_file()

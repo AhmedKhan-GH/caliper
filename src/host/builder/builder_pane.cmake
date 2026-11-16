@@ -63,7 +63,8 @@ if(BUILD_TESTS AND TARGET doctest::doctest)
         target_link_libraries(caliper_builder_pane_tests PRIVATE caliper_spec_page_layout)
     endif()
     if(TARGET caliper AND NOT WIN32)
-        target_sources(caliper_builder_pane_tests PRIVATE ${_pane_dir}/tests/test_builder_app.cpp)
+        target_sources(caliper_builder_pane_tests PRIVATE ${_pane_dir}/tests/test_builder_app.cpp
+            ${CMAKE_SOURCE_DIR}/src/host/open_url.cpp)
         add_dependencies(caliper_builder_pane_tests caliper)
     endif()
     target_include_directories(caliper_builder_pane_tests PRIVATE ${THIRD_PARTY_DIR}/stb

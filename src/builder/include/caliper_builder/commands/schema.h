@@ -44,6 +44,20 @@ Error measure_command_value(const nlohmann::json& value, std::string_view root =
 Error validate_command_value(const nlohmann::json& schema, const nlohmann::json& value,
                              std::string_view root = "args");
 
+// A null on an optional argument counts as the argument's absence: removes
+// from `value`, an object that `schema` describes, every property whose value
+// is null when its object schema does not list it in `required` and the
+// property's own schema does not admit null (its type is not "null" or a list
+// holding it, or its enum does not list null). It follows the schema's
+// properties into nested objects and the items of arrays, at most 32 levels,
+// and leaves alone a required property, a null the schema admits (such as the
+// null of a merge patch, which takes a value away) and the values of
+// additionalProperties. Returns how many properties it removed. The registry
+// calls it before it validates an invocation, so that the journal, the
+// approval cards and the handler see the call as it was understood; clients
+// that check arguments first (caliper-mcp) call it too.
+std::size_t drop_null_optional_args(const nlohmann::json& schema, nlohmann::json* value);
+
 // `open_paths` names the object schemas allowed to stay open, as paths such as
 // "result.json" (properties joined by dots, "[]" for items).
 Error check_closed_command_schema(const nlohmann::json& schema, std::string_view root,

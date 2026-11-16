@@ -249,6 +249,14 @@ TEST_CASE("side chat: a Caliper tool's call names its command, as each agent nam
     CHECK(caliper_command_of(call("panel_create")).empty());
     CHECK(caliper_command_of(call("Edit demo.spec.toml")).empty());
     CHECK(caliper_command_of(call("MCP", {{"server", "other"}, {"tool", "spec_get"}})).empty());
+    // caliper-agent names the command in the call's _meta, whatever the title.
+    acp::ToolCallInfo own = call("panel_create");
+    own.caliper_command = "panel.create";
+    CHECK(caliper_command_of(own) == "panel.create");
+    own.title = "panel.create heads";
+    CHECK(caliper_command_of(own) == "panel.create");
+    own.caliper_command = "panel.no_such";
+    CHECK(caliper_command_of(own).empty());
 }
 
 TEST_CASE("side chat: this build's caliper-mcp is found beside the executable, else in the build tree") {
@@ -256,4 +264,25 @@ TEST_CASE("side chat: this build's caliper-mcp is found beside the executable, e
     CHECK(find_caliper_mcp(dir.string()) == CALIPER_MCP_EXE);   // the build tree's
     fake_program(dir, "caliper-mcp");
     CHECK(find_caliper_mcp(dir.string()) == (dir / "caliper-mcp").string());
+}
+
+// What the person allows on a permission card is the agent's own call, which
+// its file and diff show; a Caliper command named in the call's _meta or its
+// title must not stand in for it, or an agent could make a file write read as
+// a harmless command.
+TEST_CASE("side chat: a permission card shows the agent's own title, never a command the call names") {
+    ChatItem p;
+    p.kind = ChatItem::Kind::permission;
+    p.tool.title = "Edit notes.txt";
+    p.tool.caliper_command = "spec.get";
+    p.command = caliper_command_of(p.tool);
+    REQUIRE(p.command == "spec.get");   // the tool row may show it; the card does not
+    CHECK(chat_permission_label(p) == "Edit notes.txt");
+    p.tool.title = "mcp__caliper__spec_get";
+    CHECK(chat_permission_label(p) == "mcp__caliper__spec_get");
+    p.tool.title.clear();
+    p.diff_path = "notes.txt";
+    CHECK(chat_permission_label(p) == "notes.txt");
+    p.diff_path.clear();
+    CHECK(chat_permission_label(p) == "Tool call");
 }

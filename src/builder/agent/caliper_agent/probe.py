@@ -27,6 +27,22 @@ time and in output tokens:
    names that colour. A 400 that names images means no vision.
 4. For the LM Studio preset only, its own `GET /api/v0/models/<model>`, whose
    `max_context_length` LM Studio documents.
+5. For the Ollama preset and any server on loopback, Ollama's own
+   `POST /api/show`, which reads the model's metadata without loading it: the
+   number of attention layers (every one, or one in `full_attention_interval`
+   for a hybrid model), the key and value heads and their sizes give the bytes
+   of context cache one token takes (`kv_bytes_per_token`, kept with the
+   quirks), from which the app's settings estimate the memory of the context
+   cache. Its `context_length` is the most the model takes, not the context
+   the server runs it with, so it is never taken as the context length. For a
+   server on loopback other than the Ollama preset, after the test calls have
+   loaded the model, Ollama's `GET /api/ps` states the context it runs the
+   model with, and that is the context length; otherwise it stays unknown. A
+   server that is not Ollama answers 404, and nothing is learned.
+
+For the Ollama preset the test calls go to Ollama's own `/api/chat`
+(ollama_native.py) with the context length the agent will use, so the probe
+loads the model as the agent will, and that context length is the answer.
 
 The probe also records where the server put the model's reasoning, if it sent
 any: the `reasoning` field, the `reasoning_content` field, or `<think>` tags in
@@ -59,7 +75,7 @@ from urllib.parse import quote, urlsplit
 import httpx2
 
 from .keyguard import Secret, scrub
-from .offline import OfflineError, check_provider, trust_env
+from .offline import OfflineError, check_provider, is_loopback_host, trust_env
 
 PROBE_VERSION = 1
 PROBE_TIMEOUT_S = 60.0       # one test call, including the model's thinking
@@ -202,8 +218,14 @@ def _context_from_entry(entry: Any) -> int | None:
     return None
 
 
-def _openai_client(base_url: str, key: Secret | None, transport: Any = None):
+def _openai_client(base_url: str, key: Secret | None, transport: Any = None, native: dict | None = None):
     from openai import AsyncOpenAI
+    if native is not None:
+        # Ollama: the test calls go to /api/chat with the preset's context length,
+        # so the probe loads the model as the agent will (ollama_native.py).
+        from .ollama_native import DEFAULT_KEEP_ALIVE, OllamaNativeTransport
+        transport = OllamaNativeTransport(base_url, num_ctx=native["num_ctx"],
+                                          keep_alive=native.get("keep_alive", DEFAULT_KEEP_ALIVE), inner=transport)
     return AsyncOpenAI(base_url=base_url, api_key=key.reveal() if key is not None else "not-needed", max_retries=0,
                        timeout=httpx2.Timeout(PROBE_TIMEOUT_S, connect=CONNECT_TIMEOUT_S),
                        http_client=(httpx2.AsyncClient(transport=transport, trust_env=trust_env())
@@ -328,6 +350,73 @@ async def _lmstudio_context(base_url: str, model: str, transport: Any, result: P
         return None
 
 
+def _kv_bytes_per_token(info: dict) -> int | None:
+    """The bytes of context cache (keys and values at 16 bits) one token takes, from Ollama's model metadata."""
+    arch = info.get("general.architecture")
+    if not isinstance(arch, str) or not arch:
+        return None
+
+    def number(name: str) -> int | None:
+        value = info.get(f"{arch}.{name}")
+        if isinstance(value, list):   # per layer in some models: the largest
+            value = max((v for v in value if isinstance(v, int)), default=None)
+        return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+    layers, kv_heads = number("block_count"), number("attention.head_count_kv")
+    key, value = number("attention.key_length"), number("attention.value_length")
+    if key is None:
+        heads, width = number("attention.head_count"), number("embedding_length")
+        key = value = width // heads if heads and width else None
+    if not layers or not kv_heads or not key:
+        return None
+    interval = number("full_attention_interval") or 1
+    attention_layers = -(-layers // interval)
+    return attention_layers * kv_heads * (key + (value or key)) * 2
+
+
+async def _ollama_context_in_force(base_url: str, model: str, transport: Any) -> int | None:
+    """The context length Ollama runs a loaded model with (`GET /api/ps`), or None: another server answers 404."""
+    parts = urlsplit(base_url.rstrip("/"))
+    root = parts.path[: -len("/v1")] if parts.path.endswith("/v1") else parts.path
+    try:
+        async with httpx2.AsyncClient(transport=transport, timeout=LIST_TIMEOUT_S, trust_env=False) as http:
+            response = await http.get(f"{parts.scheme}://{parts.netloc}{root}/api/ps")
+        if response.status_code != 200 or len(response.content) > (1 << 20):
+            return None
+        loaded = response.json().get("models")
+    except Exception:
+        return None
+    for m in loaded if isinstance(loaded, list) else []:
+        if isinstance(m, dict) and model in (m.get("name"), m.get("model")):
+            value = m.get("context_length")
+            if isinstance(value, int) and not isinstance(value, bool) and 0 < value <= 100_000_000:
+                return value
+    return None
+
+
+async def _ollama_show(base_url: str, model: str, transport: Any, result: ProbeResult) -> int | None:
+    """Ollama's model metadata: fills kv_bytes_per_token, and returns the model's context length."""
+    parts = urlsplit(base_url.rstrip("/"))
+    root = parts.path[: -len("/v1")] if parts.path.endswith("/v1") else parts.path
+    try:
+        async with httpx2.AsyncClient(transport=transport, timeout=LIST_TIMEOUT_S, trust_env=False) as http:
+            response = await http.post(f"{parts.scheme}://{parts.netloc}{root}/api/show", json={"model": model})
+        if response.status_code != 200 or len(response.content) > (16 << 20):
+            return None
+        info = response.json().get("model_info")
+    except Exception:
+        return None
+    if not isinstance(info, dict):
+        return None
+    per_token = _kv_bytes_per_token(info)
+    if per_token is not None:
+        result.quirks["kv_bytes_per_token"] = per_token
+    arch = info.get("general.architecture")
+    context = info.get(f"{arch}.context_length") if isinstance(arch, str) else None
+    return context if isinstance(context, int) and not isinstance(context, bool) and 0 < context <= 100_000_000 \
+        else None
+
+
 async def _probe_tools(client: Any, result: ProbeResult) -> None:
     messages = [{"role": "user", "content": PROBE_TOOL_PROMPT}]
     strict, token_field = True, "max_completion_tokens"
@@ -403,15 +492,16 @@ async def _probe_vision(client: Any, result: ProbeResult, colour: str) -> None:
 
 async def probe_openai_compatible(base_url: str, model: str, key: Secret | None, *, preset: str | None = None,
                                   transport: Any = None, vision: bool = True, list_only: bool = False,
-                                  colour: str | None = None) -> ProbeResult:
-    """Probes one model of an OpenAI-compatible server."""
+                                  colour: str | None = None, native: dict | None = None) -> ProbeResult:
+    """Probes one model of an OpenAI-compatible server; with `native` ({"num_ctx", "keep_alive"}), an Ollama
+    server through its own chat API, with that context length."""
     result = ProbeResult("openai-compatible", base_url, model)
     try:
         check_provider("openai-compatible", base_url=base_url, transport=transport)
     except OfflineError as exc:
         result.error("models", exc.code, str(exc))
         return result
-    client = _openai_client(base_url, key, transport)
+    client = _openai_client(base_url, key, transport, native)
     try:
         entry = await _list_openai_models(client, result)
         if list_only:
@@ -419,13 +509,27 @@ async def probe_openai_compatible(base_url: str, model: str, key: Secret | None,
         context = _context_from_entry(entry)
         if context is None and preset == "lmstudio":
             context = await _lmstudio_context(base_url, model, transport, result)
-        if context is not None:
+        local = native is not None or is_loopback_host(urlsplit(base_url).hostname)
+        if local:
+            # The cache a token takes. The metadata's context length is the most
+            # the model takes, not what the server runs it with, so it is not used.
+            await _ollama_show(base_url, model, transport, result)
+        if native is not None:
+            result.context_length = Capability(native["num_ctx"], "preset",
+                                               "The context length the preset loads the model with.")
+        elif context is not None:
             result.context_length = Capability(context, "server", "Reported by the server's list of models.")
         await _probe_tools(client, result)
         if vision:
             await _probe_vision(client, result, colour or random.choice(sorted(COLOURS)))
         else:
             result.vision = Capability(None, "unknown", "The vision probe was not run.")
+        if local and native is None and context is None:
+            # The test calls loaded the model: Ollama's /api/ps states the context it runs it with.
+            in_force = await _ollama_context_in_force(base_url, model, transport)
+            if in_force is not None:
+                result.context_length = Capability(in_force, "server",
+                                                   "The context the server runs the model with (Ollama's /api/ps).")
         return result
     finally:
         await client.close()

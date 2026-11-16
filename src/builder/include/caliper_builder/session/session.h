@@ -121,6 +121,14 @@ public:
     virtual CommandOutput app_info() = 0;
     virtual CommandOutput app_applets() = 0;
     virtual CommandOutput app_launch(const std::string& id) = 0;
+    // The same with the origin of the app.launch that asked, so that what the
+    // launch does in the workspace (a spec applet's applet.open) is sent from
+    // that origin and reviewed as that origin's own command would be. The
+    // session calls this one; the default ignores the origin.
+    virtual CommandOutput app_launch(const std::string& id, CommandOrigin origin) {
+        (void)origin;
+        return app_launch(id);
+    }
     // Draws one panel of the open spec off screen. The session has found the
     // panel and resolved its data; the host draws `data` and answers
     // {"png_base64", "width", "height"} or panel.render_failed. When `data`

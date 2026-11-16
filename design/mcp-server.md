@@ -19,13 +19,14 @@ Built on this branch, in `src/builder/mcp/` with headers in `src/builder/include
 - the resources under the `caliper://` scheme, with the docs and SDK folders confined;
 - a strict HTTP/1.1 client for 127.0.0.1 only, and the reader of the API file;
 - unit tests, tests that drive `caliper-mcp` as a child process against a fake of Caliper API, and an end-to-end test
-  against the real app.
+  against the real app;
+- the command layer's endpoints in the app's Caliper API, so every tool acts on the running app: the walk-through's
+  example client, `examples/build_a_dashboard/outside_agent.py`, lists the tools, reads the catalog and the open spec
+  and adds a panel, which waits on an approval card ("MCP agent") until the person approves it. The reference page is
+  `docs/references/mcp-server.md`.
 
 Planned:
 
-- The two endpoints of the command layer in Caliper API (`GET /v0/commands` and `POST /v0/commands/{name}`) come
-  when the builder libraries are wired into the app, after sprint 2 merges. Until then only four tools do something
-  against a real app; see [What works against API v0](#what-works-against-api-v0).
 - Progress notifications while a call waits for approval, a Windows version of the HTTP client, and the other items
   under [Open questions](#open-questions).
 
@@ -233,7 +234,7 @@ Output schemas and structured content came with revision 2025-06-18, so every re
 and every tool states its output schema. A client that asks for an older revision is answered with 2025-11-25.
 
 `app.launch` does not mutate the workspace in the command layer's sense, but it tears down the open applet and
-detaches a live session, so it is not read-only in MCP's sense ("does not modify its environment") and its
+changes the page the person sees (an attached live session stays attached), so it is not read-only in MCP's sense ("does not modify its environment") and its
 `readOnlyHint` is false. A client may approve read-only tools without asking, and launching an applet should not be one
 of them.
 
@@ -308,6 +309,11 @@ A successful call becomes a `CallToolResult` with:
   <base64>, "mimeType": "image/png"}`, while `width` and `height` stay in the structured content. The image is
   checked to start with a PNG signature and header. For `capture_frame`, `caliper-mcp` encodes the PNG bytes of the
   endpoint itself and reads the size from the PNG header.
+
+`app_launch` relays the launch's answer as it is. When the app answers `status` `PENDING_APPROVAL` (the dashboard
+would replace the open spec's unsaved changes, so its `applet.open` waits on an approval card) or `PENDING`, the call
+succeeds, and the text block an agent reads holds that status and the `note`, which says the dashboard is not open
+yet and that `spec_get` names the open spec once it is; so an agent checks rather than believes that it opened.
 
 The structured content is checked against the tool's output schema before it is returned, since a client may check
 it too. A result that does not match, which means the app and the table disagree, becomes the tool error
@@ -540,7 +546,7 @@ declarations. `caliper-mcp` passes the schemas through unchanged; see [Open ques
 - **The four v0 tools always use their v0 endpoints**, so they work against every version of the app.
 - **The app's table wins**, and a bad command in it is left out alone, so one fault does not take every tool away.
 - **The output schema is checked before a result is returned**; a mismatch is a tool error that keeps the result.
-- **`app.launch` is not read-only**, because it changes what the person sees and detaches a live session.
+- **`app.launch` is not read-only**, because it changes what the person sees and tears down the open applet.
 - **The API file is read at every call.** It is small, and it makes a restarted app work at the next call with no
   cache to invalidate. The retry after a 401 or a refused connection covers the moment between two reads.
 - **No half-close.** The client keeps its writing side open until the answer arrives, because a server may take the end

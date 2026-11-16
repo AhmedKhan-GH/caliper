@@ -149,6 +149,16 @@ void run_turn(json id, std::string text) {
         update({{"sessionUpdate", "current_mode_update"}, {"currentModeId", "plan"}});
         update({{"sessionUpdate", "future_update_kind"}, {"value", 1}});
         end_turn(id);
+    } else if (word == "command") {
+        // A call of a Caliper command made by the agent itself, which names it
+        // in _meta (caliper-agent does), then one whose _meta is not usable.
+        update({{"sessionUpdate", "tool_call"}, {"toolCallId", "call_c"}, {"title", "catalog_list"}, {"kind", "read"},
+                {"status", "pending"}, {"_meta", {{"caliper", {{"command", "catalog.list"}}}}}});
+        update({{"sessionUpdate", "tool_call_update"}, {"toolCallId", "call_c"}, {"title", "catalog.list"},
+                {"status", "completed"}});
+        update({{"sessionUpdate", "tool_call"}, {"toolCallId", "call_d"}, {"title", "spec_get"}, {"kind", "read"},
+                {"status", "pending"}, {"_meta", {{"caliper", {{"command", 7}}}}}});
+        end_turn(id);
     } else if (word == "edit") {
         json call = edit_tool_call("call_1");
         json tc = call;

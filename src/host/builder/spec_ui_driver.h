@@ -15,12 +15,21 @@
 //   leave                the pointer leaves the window (no hover is left behind)
 //   key <chord>          a press and release of a chord: cmd, shift and one
 //                        key (a letter, a digit, enter, escape, backspace,
-//                        f3, comma), such as "cmd+k" (Ctrl+K off macOS) or
-//                        "cmd+shift+z"
+//                        f3, f4, f5, f6, up, down, comma), such as "cmd+k"
+//                        (Ctrl+K off macOS) or "cmd+shift+z"
 //   type <text>          the text as the keyboard's characters; "\n" is a
 //                        line break
-//   until <state>        wait until the inline surface's state is <state>
-//                        (prompt, running, preview, applied, ...)
+//   until <state> [<seconds>]
+//                        wait until the inline surface's state is <state>
+//                        (prompt, running, preview, applied, ...), for at
+//                        most that many seconds of wall time when given (a
+//                        real model's turn), else kPatience frames; a state
+//                        that does not change by itself (failed, declined,
+//                        handoff, conflict, unavailable) stops the script at
+//                        once when it is not the one waited for, and the stop
+//                        says "a state that does not change by itself", which
+//                        a wait that ran out does not. The log line adds what
+//                        the surface shows (SpecPage::widget_facts())
 //   shot <name>          read the next frame back into <name>.png
 //   chat open|close      the side chat's toggle (chat_pane.h)
 //   chat focus           puts the keyboard into the chat's input
@@ -33,9 +42,18 @@
 //                        ("approval panel.create waiting"), a stop word
 //                        ("stop - DONE")
 //   chat draft           wait until the chat's input holds a handoff's draft
-//   click <item> [fx fy] a click on a builder pane's named rectangle
-//                        (BuilderPane::item_rect: "source:table:metrics",
-//                        "primitive:series", "prop:title", "bar:save", ...),
+//   chat note <text>|none
+//                        wait until the chat's header shows that GPU note
+//   chat local on|off    marks the chosen agent as running on a local model,
+//                        or clears it, as the picker's Local model row does
+//   chat picker          opens the agent picker
+//   cards <n>            wait until the approval cards' strip shows at least n
+//                        waiting cards at its full height (approval_cards.h)
+//   click <item> [fx fy] a click on a named rectangle of the spec page
+//                        (SpecPage::item_rect: "page:browser") or of the
+//                        builder pane (BuilderPane::item_rect:
+//                        "source:table:metrics", "primitive:series",
+//                        "prop:title", "bar:save", ...),
 //                        at the fractions fx, fy of it (0.5 0.5 by default); a
 //                        negative fraction counts pixels from its right or
 //                        bottom edge
@@ -57,7 +75,21 @@
 //   pane source <key>    wait until the builder lists that source and no
 //                        import runs
 //   pane focus <panel>   wait until the builder's focused panel is <panel>
-//   page <name>          wait until the app shows that page (landing, spec, live)
+//   page <name>          wait until the app shows that page (landing, spec,
+//                        live, applet)
+//   browser note <text>|none
+//                        wait until the spec page's note about ⌘O Open in
+//                        browser (SpecPage::browser_note()) is that text, or
+//                        none
+//   command-line <text>|none
+//                        wait until the landing's command line holds that
+//                        text, or nothing
+//   landing selected <applet id>
+//                        wait until the landing's selected row is the applet
+//                        with that manifest id
+//   landing projects <applet id>,...|none
+//                        wait until Projects lists exactly those dashboards
+//                        (manifest ids, in their order), or none
 //   widget <label>       presses the inline surface's action of that label
 //                        ("Setup", "Ask in chat", ...) once the surface offers it,
 //                        through the surface's own act(), as its button does
@@ -65,22 +97,43 @@
 //   settings preset <id> | model <name>
 //                        chooses a preset, or sets the model, as a click on its
 //                        button or Enter in its field does
-//   settings until open | note <text>|none | state <text>|none
+//   settings list | probe
+//                        lists the server's models, or probes the model, as
+//                        List and Probe do
+//   settings until open | note <text>|none | state <text>|none | done [<seconds>]
 //                        wait until the settings are open, show that GPU note,
-//                        or that plain state
+//                        or that plain state, or until no list or probe runs
+//                        (for at most that many seconds of wall time when
+//                        given); `done` logs the capabilities the settings show
 //   files <folder> <prefix> <count>
 //                        wait until the folder holds that many files whose
 //                        names begin with <prefix> (the API's agent files)
 //   touch <path>         creates an empty file (a stub agent's gate)
 //   append <path> <line> appends a line to a file (a test's approval decision)
+//   patience <seconds>   the steps after it wait for their target up to that
+//                        many seconds instead of kPatience frames, such as a
+//                        real agent's turn on a local model; 0 goes back to
+//                        kPatience
+//   save until           wait until "Save changes to <name>?" is open
+//                        (save_prompt.h)
+//   save save|dont-save|cancel
+//                        wait until it is open, then answer it as a click on
+//                        that button does
+//   worker busy|idle     wait until the session's worker runs a command, or
+//                        runs none (a long data.query from a test, say)
+//   close                a request to close the window, as its close button
+//                        and ⌘Q make, which asks first when the open spec
+//                        has unsaved changes
 //   quit                 close the app
-// A step whose target is not there yet waits for it, up to kPatience frames,
-// then the script stops with an error.
+// A step whose target is not there yet waits for it, up to kPatience frames
+// (or the seconds of the last `patience`), then the script stops with an
+// error.
 //
 // Header-only; frame thread. Call feed() once per frame BEFORE ImGui::NewFrame.
 // ============================================================================
 #include "builder/app_session.h"
 #include "builder/chat_pane.h"
+#include "builder/save_prompt.h"
 #include "builder/spec_page.h"
 #include "export_service.h"
 
@@ -93,10 +146,15 @@
 #include <caliper_builder/session/session.h>
 #endif
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <functional>
+#include <optional>
 
 #include <cfloat>
+#include <cstdio>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -156,7 +214,21 @@ public:
     // The page the app shows ("landing", "spec", "live"), and the function
     // a dropped file reaches; the app sets both before each feed().
     void set_page(std::string page) { page_ = std::move(page); }
+    // The landing's command line, for the `command-line` step; the app sets it.
+    void set_command_line(std::string text) { command_line_ = std::move(text); }
+    // The landing's selected row (its manifest id, "" for none) and the
+    // dashboards Projects lists, for the `landing` steps; the app sets them.
+    void set_landing(std::string selected, std::vector<std::string> projects) {
+        landing_selected_ = std::move(selected);
+        landing_projects_ = std::move(projects);
+    }
     void set_drop(std::function<void(std::vector<std::string>)> drop) { drop_ = std::move(drop); }
+    // The waiting cards the approval strip shows (ApprovalTray::shown_waiting()), for `cards`.
+    void set_cards(std::function<int()> cards) { cards_ = std::move(cards); }
+    // "Save changes to <name>?" for the `save` steps, and the window's close
+    // request for `close`; the app sets both.
+    void set_save_prompt(SavePrompt* prompt) { save_prompt_ = prompt; }
+    void set_close(std::function<void()> close) { close_ = std::move(close); }
 #if CALIPER_WITH_BUILDER
     // The widget agent's settings, for the `settings` steps; the app sets them.
     void set_agent_settings(AgentSettings* settings) { settings_ = settings; }
@@ -204,6 +276,18 @@ public:
             } else if (what == "model" && !which.empty()) {
                 settings_->set_model(which);
                 next("settings model " + which);
+            } else if (what == "list" || what == "probe") {
+                if (settings_->busy()) return patience("a list or a probe runs");
+                if (what == "list") settings_->list_models();
+                else settings_->probe(true);
+                next("settings " + what);
+            } else if (what == "until" && which == "done") {
+                if (!started_) started_ = std::chrono::steady_clock::now();
+                // A few frames without a list or a probe running, so the
+                // settings have taken the last answer (AgentSettings::frame()).
+                idle_frames_ = settings_->busy() ? 0 : idle_frames_ + 1;
+                if (idle_frames_ < 3) return patience_for(rest, "a list or a probe runs");
+                next("the settings are done: " + settings_facts());
             } else if (what == "until" && which == "open") {
                 if (!settings_->is_open()) return patience("the settings are closed");
                 next("the settings are open");
@@ -214,7 +298,7 @@ public:
                 if (settings_->state() != want) return patience("the settings' state is " + shown(settings_->state()));
                 next("the settings' state is " + shown(want));
             } else {
-                error_ = "settings takes open, close, preset, model or until open|note|state";
+                error_ = "settings takes open, close, preset, model, list, probe or until open|note|state|done";
             }
 #else
             error_ = "settings: the builder is not in this build";
@@ -349,6 +433,44 @@ public:
             next("page " + s.arg);
             return;
         }
+        if (s.verb == "browser") {
+            std::stringstream words(s.arg);
+            std::string what, rest;
+            words >> what;
+            std::getline(words, rest);
+            while (!rest.empty() && rest.front() == ' ') rest.erase(rest.begin());
+            if (what != "note") return void(error_ = "browser takes note <text>|none");
+            const std::string want = rest == "none" ? std::string() : rest;
+            const std::string now = page.browser_note();
+            if (now != want) return patience("the browser note is " + (now.empty() ? std::string("none") : "\"" + now + "\""));
+            next("the browser note is " + (want.empty() ? std::string("none") : "\"" + want + "\""));
+            return;
+        }
+        if (s.verb == "command-line") {
+            const std::string want = s.arg == "none" ? std::string() : s.arg;
+            if (command_line_ != want)
+                return patience("the command line holds " + (command_line_.empty() ? std::string("nothing") : "\"" + command_line_ + "\""));
+            next("the command line holds " + (want.empty() ? std::string("nothing") : "\"" + want + "\""));
+            return;
+        }
+        if (s.verb == "landing") {
+            std::stringstream words(s.arg);
+            std::string what, want;
+            words >> what >> want;
+            auto shown = [](const std::string& t) { return t.empty() ? std::string("none") : t; };
+            if (what == "selected") {
+                if (landing_selected_ != want) return patience("the landing's selection is " + shown(landing_selected_));
+                next("the landing's selection is " + want);
+            } else if (what == "projects") {
+                std::string listed;
+                for (const auto& id : landing_projects_) listed += (listed.empty() ? "" : ",") + id;
+                if (shown(listed) != want) return patience("Projects lists " + shown(listed));
+                next("Projects lists " + want);
+            } else {
+                error_ = "landing takes selected <applet id> or projects <applet id>,...|none";
+            }
+            return;
+        }
         if (s.verb == "pane") {
 #if CALIPER_WITH_BUILDER
             std::stringstream words(s.arg);
@@ -400,8 +522,23 @@ public:
             io.AddInputCharactersUTF8(text.c_str());
             next("typed " + s.arg);
         } else if (s.verb == "until") {
-            if (page.widget_state() != s.arg) return patience("the surface is " + page.widget_state() + ", not " + s.arg);
-            next("the surface is " + s.arg);
+            std::stringstream words(s.arg);
+            std::string want, seconds;
+            words >> want >> seconds;
+            if (!started_) started_ = std::chrono::steady_clock::now();
+            const std::string now = page.widget_state();
+            const std::string facts = page.widget_facts();
+            if (now != want) {
+                const std::string why = "the surface is " + now + ", not " + want + (facts.empty() ? "" : " (" + facts + ")");
+                // A state that does not change by itself ends the wait.
+                if (now == "failed" || now == "declined" || now == "handoff" || now == "conflict" ||
+                    now == "unavailable")
+                    return void(error_ = "until " + s.arg + ": the surface is " + now + ", not " + want +
+                                         ", a state that does not change by itself" +
+                                         (facts.empty() ? "" : " (" + facts + ")"));
+                return patience_for(seconds, why);
+            }
+            next("the surface is " + want + (facts.empty() ? "" : " (" + facts + ")"));
         } else if (s.verb == "shot") {
             if (!armed_) {
                 facts_ = "surface " + page.widget_state() + ", focus " +
@@ -433,6 +570,20 @@ public:
             } else if (what == "draft") {
                 if (chat->draft_chips() == 0) return patience("the chat has no draft");
                 next("chat draft of " + std::to_string(chat->draft_chips()) + " blocks");
+            } else if (what == "local" && (a == "on" || a == "off")) {
+                if (chat->state() == "none") return patience("the chat is not made yet");
+                if (!chat->set_local_model(a == "on")) return void(error_ = "chat local: the chat has no agent");
+                next("chat local " + a);
+            } else if (what == "picker") {
+                if (chat->state() == "none") return patience("the chat is not made yet");
+                chat->open_picker();
+                next("chat picker");
+            } else if (what == "note") {
+                std::string want = s.arg.substr(std::min(s.arg.size(), std::string("note ").size()));
+                if (want == "none") want.clear();
+                const std::string shown = chat->note().empty() ? std::string("none") : chat->note();
+                if (chat->note() != want) return patience("the chat's note is " + shown);
+                next("the chat's note is " + shown);
             } else if (what == "item") {
                 const std::string cmd = b == "-" ? std::string() : b;
                 if (!chat->has_item(a, cmd, c)) return patience("no chat item " + s.arg);
@@ -450,6 +601,38 @@ public:
             if (s.verb == "append") out << line << "\n";
             if (!out) return void(error_ = s.verb + ": cannot write " + file);
             next(s.verb + " " + std::filesystem::path(file).filename().string());
+        } else if (s.verb == "cards") {
+            if (!cards_) return void(error_ = "cards: the app gave no approval cards");
+            const int want = std::atoi(s.arg.c_str());
+            if (want < 1) return void(error_ = "cards takes a number of cards from 1");
+            const int shown = cards_();
+            if (shown < want) return patience("the approval strip shows " + std::to_string(shown) + " waiting cards");
+            next("the approval strip shows " + std::to_string(shown) + (shown == 1 ? " waiting card" : " waiting cards"));
+        } else if (s.verb == "patience") {
+            char* end = nullptr;
+            const double seconds = std::strtod(s.arg.c_str(), &end);
+            if (s.arg.empty() || !end || *end != '\0' || !(seconds >= 0.0) || seconds > 86400.0)
+                return void(error_ = "patience takes a number of seconds from 0 to 86400");
+            patience_s_ = seconds;
+            next(seconds > 0.0 ? "patience " + s.arg + " s" : "patience " + std::to_string(kPatience) + " frames");
+        } else if (s.verb == "save") {
+            if (!save_prompt_) return void(error_ = "save: the app gave no save prompt");
+            if (!save_prompt_->is_open()) return patience("no Save changes question is open");
+            if (s.arg == "until") {
+                next("Save changes to " + save_prompt_->name() + "? is open");
+            } else if (save_prompt_->answer(s.arg)) {
+                next("answered " + s.arg);
+            } else {
+                error_ = "save takes until, save, dont-save or cancel";
+            }
+        } else if (s.verb == "worker") {
+            if (s.arg != "busy" && s.arg != "idle") return void(error_ = "worker takes busy or idle");
+            if (app.worker_busy() != (s.arg == "busy")) return patience("the worker is not " + s.arg);
+            next("the worker is " + s.arg);
+        } else if (s.verb == "close") {
+            if (!close_) return void(error_ = "close: the app gave no close request");
+            close_();
+            next("asked to close the window");
         } else if (s.verb == "quit") {
             quit_ = true;
             next("quit");
@@ -471,13 +654,48 @@ private:
         log_.push_back(what);
         ++at_;
         frames_ = 0;
+        idle_frames_ = 0;
+        started_.reset();
         armed_ = false;
         drag_frame_ = 0;
+        step_start_ = std::chrono::steady_clock::now();
     }
 
+    // The step's error once it has waited its patience, with how long it
+    // waited in frames and in seconds, so that a log says which limit stopped it.
     void patience(const std::string& why) {
-        if (frames_ > kPatience) error_ = steps_[at_].verb + " " + steps_[at_].arg + ": " + why;
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - step_start_).count();
+        const bool over = patience_s_ > 0.0 ? seconds > patience_s_ : frames_ > kPatience;
+        if (!over) return;
+        char spent[64];
+        std::snprintf(spent, sizeof spent, " (after %d frames, %.1f s)", frames_, seconds);
+        error_ = steps_[at_].verb + " " + steps_[at_].arg + ": " + why + spent;
     }
+
+    // As patience(), for at most `seconds` of wall time since the step began
+    // when it is a number, else kPatience frames.
+    void patience_for(const std::string& seconds, const std::string& why) {
+        const double limit = seconds.empty() ? 0.0 : std::atof(seconds.c_str());
+        if (limit <= 0.0) return patience(why);
+        const double spent = std::chrono::duration<double>(std::chrono::steady_clock::now() - *started_).count();
+        if (spent > limit) error_ = steps_[at_].verb + " " + steps_[at_].arg + ": " + why;
+    }
+
+#if CALIPER_WITH_BUILDER
+    // The capabilities and the state the settings show, for the log.
+    std::string settings_facts() const {
+        const AgentCapabilities c = settings_->capabilities();
+        auto yes_no = [](const std::optional<bool>& v) { return !v ? std::string("unknown") : *v ? "yes" : "no"; };
+        const AgentProbeAnswer& a = settings_->probe_answer();
+        std::string out = "tools " + yes_no(c.tools) + " (" + c.tools_source + "), vision " + yes_no(c.vision) + " (" +
+                          c.vision_source + "), context " + (c.context ? std::to_string(*c.context) : "unknown") +
+                          " (" + c.context_source + "), " + std::to_string(settings_->model_choices().size()) +
+                          " models, state " + (settings_->state().empty() ? std::string("none") : settings_->state());
+        if (!a.failure.empty()) out += ", failure " + a.failure;
+        for (const auto& p : a.problems) out += ", " + p;
+        return out;
+    }
+#endif
 
     // A chord of "cmd", "shift" and one key, joined by '+'.
     void press(const std::string& chord) {
@@ -500,6 +718,16 @@ private:
                 keys.push_back(ImGuiKey_Backspace);
             } else if (p == "f3") {
                 keys.push_back(ImGuiKey_F3);
+            } else if (p == "f4") {
+                keys.push_back(ImGuiKey_F4);
+            } else if (p == "f5") {
+                keys.push_back(ImGuiKey_F5);
+            } else if (p == "f6") {
+                keys.push_back(ImGuiKey_F6);
+            } else if (p == "up") {
+                keys.push_back(ImGuiKey_UpArrow);
+            } else if (p == "down") {
+                keys.push_back(ImGuiKey_DownArrow);
             } else if (p == "comma") {
                 keys.push_back(ImGuiKey_Comma);
             } else if (p.size() == 1 && p[0] >= 'a' && p[0] <= 'z') {
@@ -522,7 +750,9 @@ private:
 #if CALIPER_WITH_BUILDER
         BuilderPane* b = page.builder();
         SpecRect r;
-        if (!b || !b->item_rect(name, &r)) return false;
+        float pr[4];
+        if (page.item_rect(name, pr)) r = SpecRect{pr[0], pr[1], pr[2], pr[3]};
+        else if (!b || !b->item_rect(name, &r)) return false;
         *x = std::round(fx < 0.0f ? r.right() + fx : fx > 1.0f ? r.x + fx : r.x + r.w * fx);
         *y = std::round(fy < 0.0f ? r.bottom() + fy : fy > 1.0f ? r.y + fy : r.y + r.h * fy);
         return true;
@@ -545,6 +775,9 @@ private:
     std::string shots_;
     size_t at_ = 0;
     int frames_ = 0;
+    // When the current step began, and the seconds a step may wait (0: kPatience frames).
+    std::chrono::steady_clock::time_point step_start_ = std::chrono::steady_clock::now();
+    double patience_s_ = 0.0;
     bool armed_ = false, shot_requested_ = false, quit_ = false, mouse_down_ = false;
     std::vector<ImGuiKey> held_keys_;
     std::vector<std::string> log_;
@@ -552,10 +785,16 @@ private:
 #if CALIPER_WITH_BUILDER
     AgentSettings* settings_ = nullptr;
 #endif
-    std::string page_;
+    std::string page_, command_line_, landing_selected_;
+    std::vector<std::string> landing_projects_;
     std::function<void(std::vector<std::string>)> drop_;
+    std::function<int()> cards_;
+    SavePrompt* save_prompt_ = nullptr;
+    std::function<void()> close_;
     float drag_a_[2] = {0, 0}, drag_b_[2] = {0, 0};
     int drag_frame_ = 0;   // the frame of a drag in progress, 0 before its press
+    std::optional<std::chrono::steady_clock::time_point> started_;   // a step's first frame, for a wait in seconds
+    int idle_frames_ = 0;   // frames in a row without a list or a probe running
     static constexpr int kSettle = 3;   // frames after a step of input
     int settle_ = 0;
 };

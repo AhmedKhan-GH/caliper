@@ -260,8 +260,26 @@ struct SessionEntry {
     bool        alive = false;      // the process runs and its session is open
     bool        starting = false;   // the process runs, its control segment is not there yet
     std::vector<std::string> views; // view names, from the session file
+    // A caliper.serve() stream (list_streams): its stream URL with the
+    // session token, ws://127.0.0.1:<port>/v3/stream?token=..., which attaches
+    // it (caliper_core_live_attach_url); "" for a shared-memory session.
+    std::string stream_url;
+    bool        control = false;    // a stream: its viewers may control the script
 };
 bool list_sessions(const std::string& root, std::vector<SessionEntry>* out, std::string* err);
+
+// Stream files (live_session.mm): the streams of caliper.serve() on this
+// machine, <root>/streams/<pid>.json, which python/caliper/_net.py
+// (StreamFile) writes while its server listens. A file is listed only when it
+// is a regular file of this user that no one else can read (mode 0600), of
+// version 1, written on this host (its "host" is this machine's name), by a
+// process that still runs and started before the file's start time (a reused
+// pid's file is stale), with a stream URL on 127.0.0.1 at its port. A file of
+// a process that has gone is removed, as list_sessions reclaims a killed
+// script's session; one of another user or host is left alone. Every entry is
+// alive and has a stream_url.
+bool list_streams(const std::string& root, std::vector<SessionEntry>* out, std::string* err);
+inline std::string streams_dir(const std::string& root) { return root + "/streams"; }
 
 // What a listed session offers a viewer choosing one to attach to. One rule for
 // caliper-viewer's picker and the Caliper app's session list (live_attach.h).
@@ -273,6 +291,7 @@ enum class SessionState {
     Incompatible    // written by another protocol version
 };
 inline SessionState session_state(const SessionEntry& e) {
+    if (!e.stream_url.empty()) return SessionState::Running;   // listed only while its server listens
     if (e.protocol != (int32_t)CALIPER_LIVE_PROTOCOL_VERSION) return SessionState::Incompatible;
     if (e.starting) return SessionState::Starting;
     if (!e.alive) return SessionState::Closing;

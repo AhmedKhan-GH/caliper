@@ -15,15 +15,32 @@
 
 #include "spec_test_workspace.h"
 
+#include "open_url.h"
+
 #include <caliper_builder/acp/subprocess.h>
 #include <caliper_builder/commands/journal.h>
 #include <caliper_builder/spec/format.h>
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
+#include <atomic>
+#include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
+#include <thread>
+#include <vector>
+
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 using namespace spec_test;
 using nlohmann::json;
@@ -88,6 +105,124 @@ std::string acceptance_script(const std::string& data) {
     std::string out;
     for (const auto& s : steps) out += (out.empty() ? "" : "; ") + s;
     return out;
+}
+
+// One HTTP request to 127.0.0.1:<port>; the status and the body, 0 when
+// nothing answered.
+struct Answer {
+    int status = 0;
+    std::string body;
+};
+Answer http(int port, const std::string& method, const std::string& target, const std::string& extra = {},
+            const std::string& body = {}) {
+    Answer a;
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return a;
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+    timeval tv{10, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    if (::connect(fd, (sockaddr*)&addr, sizeof addr) != 0) {
+        ::close(fd);
+        return a;
+    }
+    const std::string req = method + " " + target + " HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(port) +
+                            "\r\nConnection: close\r\n" + extra + "\r\n" + body;
+    (void)::send(fd, req.data(), req.size(), 0);
+    std::string raw;
+    char buf[65536];
+    for (;;) {
+        const ssize_t n = ::recv(fd, buf, sizeof buf, 0);
+        if (n <= 0) break;
+        raw.append(buf, (size_t)n);
+    }
+    ::close(fd);
+    const size_t end = raw.find("\r\n\r\n");
+    if (raw.size() < 12 || end == std::string::npos) return a;
+    a.status = std::atoi(raw.substr(9, 3).c_str());
+    a.body = raw.substr(end + 4);
+    return a;
+}
+
+// The value of `key` in a URL's query, "" when it has none.
+std::string query_value(const std::string& url, const std::string& key) {
+    const size_t q = url.find('?');
+    if (q == std::string::npos) return {};
+    std::string rest = url.substr(q + 1);
+    while (!rest.empty()) {
+        const size_t amp = rest.find('&');
+        const std::string part = rest.substr(0, amp);
+        if (part.rfind(key + "=", 0) == 0) return part.substr(key.size() + 1);
+        if (amp == std::string::npos) break;
+        rest = rest.substr(amp + 1);
+    }
+    return {};
+}
+
+// The token after `mark` in `text`, as the API's start line prints it.
+std::string token_after(const std::string& text, const std::string& mark) {
+    const size_t at = text.find(mark);
+    if (at == std::string::npos) return {};
+    size_t e = at + mark.size();
+    while (e < text.size() && (std::isalnum((unsigned char)text[e]) || text[e] == '_' || text[e] == '-')) ++e;
+    return text.substr(at + mark.size(), e - at - mark.size());
+}
+
+// A workspace with a saved dashboard, run42-dashboard, of one series panel
+// over a CSV table, built by a command script that opens it at the start.
+void saved_dashboard(const std::string& root) {
+    std::filesystem::create_directories(root + "/ws/data");
+    {
+        std::ofstream csv(root + "/ws/data/run42_metrics.csv");
+        csv << "step,loss,accuracy\n";
+        for (int i = 0; i < 100; ++i) csv << i << "," << 2.0 / (1 + i) << "," << i / 100.0 << "\n";
+    }
+    std::ofstream f(root + "/build.jsonl");
+    f << R"({"name":"data.import","args":{"paths":["data/run42_metrics.csv"],"run":true}})" << "\n"
+      << R"({"name":"spec.new","args":{"id":"run42-dashboard","title":"Run 42"}})" << "\n"
+      << R"({"name":"source.add","args":{"id":"metrics","catalog":"table:run42_metrics"}})" << "\n"
+      << R"({"name":"panel.create","args":{"id":"curves","primitive":"series","bind":{"x":"metrics.step","y":["metrics.loss"]}}})"
+      << "\n"
+      << R"({"name":"applet.save","args":{"overwrite":true}})" << "\n"
+      << R"({"name":"applet.open","args":{"id":"run42-dashboard"}})" << "\n";
+}
+
+// One run of the hidden app on root/ws, with root/data and root/apps, the
+// switch every sidecar needs, and `env` and `args` added.
+caliper_builder::acp::RunResult run_app(const std::string& exe, const std::string& root, const std::string& script,
+                                        std::vector<caliper_builder::acp::EnvVar> env = {},
+                                        std::vector<std::string> args = {}) {
+    caliper_builder::acp::SpawnOptions o;
+    o.argv = {exe, "--hidden", "--workspace", root + "/ws"};
+    for (auto& a : args) o.argv.push_back(a);
+    o.env = {{"CALIPER_DATA_DIR", root + "/data"},
+             {"CALIPER_USER_APPLETS_DIR", root + "/apps"},
+             {"CALIPER_WINDOW_SIZE", "1440x900"},
+             {"CALIPER_AGENT_OFFLINE", "1"},
+             {"CALIPER_TEST_SPEC_UI", script},
+             {"CALIPER_TEST_SPEC_UI_SHOTS", root + "/shots"},
+             {"CALIPER_EXIT_AFTER", "150"}};
+    for (auto& e : env) o.env.push_back(e);
+    o.env_remove = {"CALIPER_API"};
+    caliper_builder::acp::RunLimits lim;
+    lim.timeout_ms = 200000;
+    lim.max_output_bytes = 16u << 20;
+    return caliper_builder::acp::run_process(o, lim);
+}
+
+// The test's root folder with the folders run_app() uses; "" when the case
+// cannot run here (it says why).
+std::string app_root(const char* exe, const std::string& name) {
+    if (!exe || !*exe) {
+        std::printf("caliper_builder_app skipped: needs CALIPER_TEST_CALIPER_EXE\n");
+        return {};
+    }
+    const std::string root = fresh_dir(name);
+    for (const auto& d : {root + "/shots", root + "/data", root + "/apps", root + "/ws"})
+        std::filesystem::create_directories(d);
+    return root;
 }
 
 }  // namespace
@@ -170,6 +305,448 @@ TEST_CASE("builder app: the dashboard built by hand in the hidden app, saved and
         if (px) stbi_image_free(px);
         CHECK(((iw == 1440 && ih == 900) || (iw == 2880 && ih == 1800)));
     }
+}
+
+// New dashboard takes the landing's command line as its title, so the line is
+// empty when the person comes back Home: with F3, and with "new <title>" and
+// Enter. The line used to keep the title while it had the keyboard, since the
+// line's own text won over the cleared buffer, and the instruments came back
+// filtered by it.
+TEST_CASE("builder app: New dashboard leaves the landing's command line empty" * doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    if (!exe || !*exe) {
+        std::printf("caliper_builder_app skipped: needs CALIPER_TEST_CALIPER_EXE\n");
+        return;
+    }
+    const char* offline = std::getenv("CALIPER_AGENT_OFFLINE");
+    REQUIRE_MESSAGE((offline && std::string(offline) == "1"), "run this test through ctest, which sets the switch");
+    const std::string root = fresh_dir("builder-app-new");
+    for (const auto& d : {root + "/data", root + "/apps"}) std::filesystem::create_directories(d);
+    const std::string script =
+        "wait 60; page landing; "
+        "key cmd+k; type Run 42; key f3; page spec; wait 10; key escape; page landing; wait 10; command-line none; "
+        // Run 42 was never saved, so the second New dashboard asks first.
+        "key cmd+k; type new Run 43; key enter; save dont-save; page spec; wait 10; key escape; page landing; wait 10; "
+        "command-line none; "
+        "quit";
+    caliper_builder::acp::SpawnOptions o;
+    o.argv = {exe, "--hidden", "--workspace", root + "/ws"};
+    o.env = {{"CALIPER_DATA_DIR", root + "/data"},
+             {"CALIPER_USER_APPLETS_DIR", root + "/apps"},
+             {"CALIPER_WINDOW_SIZE", "1440x900"},
+             {"CALIPER_AGENT_OFFLINE", "1"},
+             {"CALIPER_TEST_SPEC_UI", script},
+             {"CALIPER_EXIT_AFTER", "120"}};
+    caliper_builder::acp::RunLimits lim;
+    lim.timeout_ms = 180000;
+    lim.max_output_bytes = 16u << 20;
+    const auto run = caliper_builder::acp::run_process(o, lim);
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
+    REQUIRE(run.error.ok());
+    if (run.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(run.status.success());
+    CHECK(run.err.find("[ui] done") != std::string::npos);
+    // Both dashboards were made from the person's origin, with their titles.
+    std::vector<std::string> titles;
+    for (const auto& e : caliper_builder::read_journal(root + "/ws/journal/commands.jsonl").events)
+        if (e.name == "spec.new" && e.ok && e.origin == caliper_builder::CommandOrigin::ui)
+            titles.push_back(e.args.value("title", std::string()));
+    CHECK(titles == std::vector<std::string>{"Run 42", "Run 43"});
+}
+
+// Open in browser hands the browser only a link of the viewer on this
+// machine's loopback API, in the characters such a link holds.
+TEST_CASE("builder app: only a link of the browser viewer on loopback goes to the browser") {
+    using caliper_host::viewer_link_openable;
+    CHECK(viewer_link_openable("http://127.0.0.1:7341/v0/spec?token=abc_DEF-123&applet=training-run"));
+    CHECK_FALSE(viewer_link_openable("http://127.0.0.1:7341/v0/info?token=abc"));
+    CHECK_FALSE(viewer_link_openable("http://localhost:7341/v0/spec?token=abc"));
+    CHECK_FALSE(viewer_link_openable("https://127.0.0.1:7341/v0/spec?token=abc"));
+    CHECK_FALSE(viewer_link_openable("http://127.0.0.1:/v0/spec?token=abc"));
+    CHECK_FALSE(viewer_link_openable("http://127.0.0.1:123456/v0/spec?token=abc"));
+    CHECK_FALSE(viewer_link_openable("http://127.0.0.1:7341/v0/spec?token=abc&applet=x;rm"));
+    CHECK_FALSE(viewer_link_openable("http://127.0.0.1:7341/v0/spec?token=a b"));
+    std::string why;
+    CHECK_FALSE(caliper_host::open_in_default_browser("file:///etc/hosts", &why));
+    CHECK(why == "not a link of the browser viewer");
+    // The applet a link names is a workspace's applet id: a lower-case letter,
+    // then lower-case letters, digits, _ or -, 64 at most; never . or ..
+    using caliper_host::viewer_applet_id;
+    CHECK(viewer_applet_id("training-run"));
+    CHECK(viewer_applet_id("a_1"));
+    CHECK(viewer_applet_id(std::string(64, 'a')));
+    const std::vector<std::string> bad_ids = {".", "..", "", "Run", "1run", "-run", "run.42", "run/42",
+                                              std::string(65, 'a')};
+    for (const std::string& bad : bad_ids) {
+        CHECK_FALSE_MESSAGE(viewer_applet_id(bad), bad);
+        CHECK_FALSE_MESSAGE(viewer_link_openable("http://127.0.0.1:7341/v0/spec?token=abc&applet=" + bad), bad);
+    }
+    CHECK_FALSE(viewer_link_openable("http://127.0.0.1:7341/v0/spec?token=abc&applet=run&applet=.."));
+}
+
+// The browser's opener is started with the standard descriptors only: a
+// descriptor of the app that is not marked close-on-exec, such as a listening
+// socket's, never reaches it or the browser it starts.
+TEST_CASE("builder app: the browser's opener gets only the standard descriptors") {
+    const std::string root = fresh_dir("builder-app-opener");
+    const std::string out = root + "/fds.txt";
+    int p[2];
+    REQUIRE(::pipe(p) == 0);
+    // Two descriptors without close-on-exec, as a careless one is, at numbers
+    // the child's own (the listing's directory) never take.
+    REQUIRE(::dup2(p[0], 57) == 57);
+    REQUIRE(::dup2(p[1], 58) == 58);
+    std::string why;
+    REQUIRE_MESSAGE(caliper_host::spawn_detached({"/bin/sh", "-c", "ls /dev/fd > '" + out + "'"}, &why), why);
+    std::string listed;
+    for (int i = 0; i < 200 && listed.find('\n') == std::string::npos; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        listed = std::filesystem::exists(out) ? read_text(out) : std::string();
+    }
+    ::close(57);
+    ::close(58);
+    ::close(p[0]);
+    ::close(p[1]);
+    INFO("the child's descriptors: " << listed);
+    std::vector<std::string> fds;
+    {
+        std::istringstream in(listed);
+        for (std::string f; in >> f;) fds.push_back(f);
+    }
+    REQUIRE_FALSE(fds.empty());
+    CHECK(std::find(fds.begin(), fds.end(), "57") == fds.end());
+    CHECK(std::find(fds.begin(), fds.end(), "58") == fds.end());
+    for (const char* std_fd : {"0", "1", "2"}) CHECK(std::find(fds.begin(), fds.end(), std_fd) != fds.end());
+}
+
+// Home from a dashboard just made and saved: the landing selects that
+// dashboard, not the first instrument, and Projects lists it, the
+// workspace's own dashboard, while Instruments keeps the installed applets.
+TEST_CASE("builder app: Home from a new dashboard selects it and lists it under Projects" * doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    if (!exe || !*exe) {
+        std::printf("caliper_builder_app skipped: needs CALIPER_TEST_CALIPER_EXE\n");
+        return;
+    }
+    const char* offline = std::getenv("CALIPER_AGENT_OFFLINE");
+    REQUIRE_MESSAGE((offline && std::string(offline) == "1"), "run this test through ctest, which sets the switch");
+    const std::string root = fresh_dir("builder-app-home");
+    const std::string data = root + "/files", shots = root + "/shots";
+    for (const auto& d : {shots, root + "/data", root + "/apps"}) std::filesystem::create_directories(d);
+    write_parquet(data + "/run42_metrics.parquet",
+                  "SELECT range AS step, 0.1 + 2.0 * exp(-range / 50.0) AS loss FROM range(100)");
+    const std::string script =
+        "wait 60; page landing; landing projects none; "
+        "key cmd+k; type Training run; key f3; page spec; "
+        "drop " + data + "/run42_metrics.parquet; pane source table:run42_metrics; "
+        "click source:table:run42_metrics 0.6 0.5; click primitive:series; pane focus series; "
+        "key cmd+s; wait 20; key escape; wait 5; key escape; page landing; wait 20; "
+        "landing selected local.training-run; landing projects local.training-run; "
+        "leave; wait 5; shot home; quit";
+    caliper_builder::acp::SpawnOptions o;
+    o.argv = {exe, "--hidden", "--workspace", root + "/ws"};
+    o.env = {{"CALIPER_DATA_DIR", root + "/data"},
+             {"CALIPER_USER_APPLETS_DIR", root + "/apps"},
+             {"CALIPER_WINDOW_SIZE", "1440x900"},
+             {"CALIPER_AGENT_OFFLINE", "1"},
+             {"CALIPER_TEST_SPEC_UI", script},
+             {"CALIPER_TEST_SPEC_UI_SHOTS", shots},
+             {"CALIPER_EXIT_AFTER", "150"}};
+    caliper_builder::acp::RunLimits lim;
+    lim.timeout_ms = 200000;
+    lim.max_output_bytes = 16u << 20;
+    const auto run = caliper_builder::acp::run_process(o, lim);
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
+    REQUIRE(run.error.ok());
+    if (run.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(run.status.success());
+    CHECK(run.err.find("[ui] the landing's selection is local.training-run") != std::string::npos);
+    CHECK(run.err.find("[ui] Projects lists local.training-run") != std::string::npos);
+    CHECK(run.err.find("[ui] done") != std::string::npos);
+    CHECK(std::filesystem::is_regular_file(shots + "/home.png"));
+}
+
+// ⌘O Open in browser on a saved dashboard, in an app started without --api:
+// the app starts Caliper API on loopback as the side chat does, and gives the
+// link of the viewer to the test hook in place of the browser. The link
+// carries the viewer token, never the person's session token or the API
+// file's: it opens the spec page and reads the dashboard, and nothing else.
+// Without the hook, a hidden app refuses, says so, and starts nothing.
+TEST_CASE("builder app: Open in browser gives the viewer's link, with the API it starts, to the test hook" *
+          doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    if (!exe || !*exe) {
+        std::printf("caliper_builder_app skipped: needs CALIPER_TEST_CALIPER_EXE\n");
+        return;
+    }
+    const char* offline = std::getenv("CALIPER_AGENT_OFFLINE");
+    REQUIRE_MESSAGE((offline && std::string(offline) == "1"), "run this test through ctest, which sets the switch");
+    const std::string root = fresh_dir("builder-app-browser");
+    const std::string shots = root + "/shots", link_file = root + "/link.txt", done = root + "/done";
+    for (const auto& d : {shots, root + "/data", root + "/apps"}) std::filesystem::create_directories(d);
+    saved_dashboard(root);
+    auto spawn = [&](bool hook, const std::string& script) {
+        caliper_builder::acp::SpawnOptions o;
+        o.argv = {exe, "--hidden", "--workspace", root + "/ws"};
+        o.env = {{"CALIPER_DATA_DIR", root + "/data"},
+                 {"CALIPER_USER_APPLETS_DIR", root + "/apps"},
+                 {"CALIPER_WINDOW_SIZE", "1440x900"},
+                 {"CALIPER_AGENT_OFFLINE", "1"},
+                 {"CALIPER_COMMAND_SCRIPT", root + "/build.jsonl"},
+                 {"CALIPER_TEST_SPEC_UI", script},
+                 {"CALIPER_TEST_SPEC_UI_SHOTS", shots},
+                 {"CALIPER_EXIT_AFTER", "150"}};
+        if (hook) o.env.push_back({"CALIPER_TEST_OPEN_URL", link_file});
+        o.env_remove = {"CALIPER_API"};
+        caliper_builder::acp::RunLimits lim;
+        lim.timeout_ms = 200000;
+        lim.max_output_bytes = 16u << 20;
+        return caliper_builder::acp::run_process(o, lim);
+    };
+
+    // With the hook: the app runs on while the test opens the link.
+    caliper_builder::acp::RunResult run;
+    std::atomic<bool> ended{false};
+    std::thread app([&] {
+        run = spawn(true, "wait 60; page spec; wait 20; click page:browser; wait 20; leave; wait 5; shot browser; "
+                          "wait-file " + done + "; quit");
+        ended = true;
+    });
+    std::string url;
+    for (int i = 0; i < 1800 && url.empty() && !ended; ++i) {
+        std::ifstream in(link_file);
+        std::string line;
+        if (std::getline(in, line) && line.find("applet=") != std::string::npos) url = line;
+        else std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    // The link: the viewer's page on loopback, for this dashboard.
+    const std::string base = "http://127.0.0.1:";
+    int port = 0;
+    std::string token;
+    if (!url.empty()) {
+        CHECK(url.rfind(base, 0) == 0);
+        port = std::atoi(url.c_str() + base.size());
+        CHECK(url.find("/v0/spec?") != std::string::npos);
+        CHECK(query_value(url, "applet") == "run42-dashboard");
+        token = query_value(url, "token");
+        CHECK(token.size() >= 22);
+        // It opens the page, and reads the dashboard's spec from the viewer origin.
+        const std::string target = url.substr(url.find("/v0/spec"));
+        const Answer page = http(port, "GET", target);
+        CHECK(page.status == 200);
+        CHECK(page.body.find("<html") != std::string::npos);
+        const std::string body = R"({"applet":"run42-dashboard"})";
+        const Answer spec = http(port, "POST", "/v0/commands/spec.get",
+                                 "Authorization: Bearer " + token + "\r\nContent-Type: application/json\r\nContent-Length: " +
+                                     std::to_string(body.size()) + "\r\n",
+                                 body);
+        CHECK(spec.status == 200);
+        CHECK(spec.body.find("\"ok\":true") != std::string::npos);
+        CHECK(spec.body.find("curves") != std::string::npos);
+        // Nothing else: the API's other endpoints refuse it.
+        CHECK(http(port, "GET", "/v0/info?token=" + token).status == 403);
+        CHECK(http(port, "GET", "/v0/applets?token=" + token).status == 403);
+        // It is not the API file's token, which outside agents use; the
+        // file's spec_url is this same viewer link.
+        const json api_file = json::parse(read_text(root + "/data/api.json"), nullptr, false);
+        REQUIRE(api_file.is_object());
+        CHECK(api_file.value("port", 0) == port);
+        CHECK(api_file.value("token", std::string()) != token);
+        CHECK(api_file.value("spec_url", std::string()).find("token=" + token) != std::string::npos);
+    }
+    std::ofstream(done).close();
+    app.join();
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
+    REQUIRE(run.error.ok());
+    if (run.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    REQUIRE_FALSE(url.empty());
+    CHECK(run.status.success());
+    CHECK(run.err.find("[ui] done") != std::string::npos);
+    // The API was started for the browser, on loopback, with the line --api
+    // prints; the person's session token is on that line and not in the link.
+    CHECK(run.err.find("[browser] Caliper API started on 127.0.0.1:" + std::to_string(port)) != std::string::npos);
+    const std::string person = token_after(run.out, "with the session token ");
+    CHECK(person.size() >= 22);
+    CHECK(person != token);
+    CHECK(url.find(person) == std::string::npos);
+    // The token is never written to standard error or into Activity's lines.
+    CHECK(run.err.find(token) == std::string::npos);
+    CHECK(std::filesystem::is_regular_file(shots + "/browser.png"));
+
+    // Without the hook a hidden app opens nothing, says so, and starts no API.
+    std::filesystem::remove(link_file);
+    const auto refused = spawn(false, "wait 60; page spec; wait 20; click page:browser; wait 20; quit");
+    INFO("stderr tail: " << refused.err.substr(refused.err.size() > 4000 ? refused.err.size() - 4000 : 0));
+    CHECK(refused.status.success());
+    CHECK(refused.err.find("[ui] done") != std::string::npos);
+    CHECK(refused.err.find("[browser] not opened: the app runs hidden") != std::string::npos);
+    CHECK(refused.out.find("[api] Caliper API on") == std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(link_file));
+}
+
+// ⌘O Open in browser whose link cannot be handed over (here the test hook's
+// file cannot be written) gives no link out, so it stops the API that it
+// alone started, and its API file goes with it, while the app runs on.
+TEST_CASE("builder app: Open in browser stops the API it started when no link is handed over" *
+          doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const std::string root = app_root(exe, "builder-app-browser-refused");
+    if (root.empty()) return;
+    saved_dashboard(root);
+    const auto run = run_app(exe, root,
+                             "wait 60; page spec; wait 20; click page:browser; wait 20; files " + root +
+                                 "/data api.json 0; quit",
+                             {{"CALIPER_COMMAND_SCRIPT", root + "/build.jsonl"},
+                              {"CALIPER_TEST_OPEN_URL", root + "/no-such-folder/link.txt"}});
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
+    REQUIRE(run.error.ok());
+    if (run.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(run.status.success());
+    CHECK(run.err.find("[browser] Caliper API started on 127.0.0.1:") != std::string::npos);
+    CHECK(run.err.find("[browser] Caliper API stopped on 127.0.0.1:") != std::string::npos);
+    CHECK(run.err.find("[ui] done") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(root + "/data/api.json"));
+}
+
+// An agent that opens the dashboard the spec page already shows keeps its row
+// ACTIVE: the page matches the shown applet's entry whether it is READY or
+// already ACTIVE.
+TEST_CASE("builder app: an agent's applet.open of the dashboard on screen keeps its row ACTIVE" *
+          doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const std::string root = app_root(exe, "builder-app-active");
+    if (root.empty()) return;
+    saved_dashboard(root);
+    const std::string ready = root + "/ready", done = root + "/done";
+    caliper_builder::acp::RunResult run;
+    std::atomic<bool> ended{false};
+    std::thread app([&] {
+        run = run_app(exe, root, "wait 60; page spec; wait 30; touch " + ready + "; wait-file " + done + "; quit",
+                      {{"CALIPER_COMMAND_SCRIPT", root + "/build.jsonl"}}, {"--api", "--api-port", "0"});
+        ended = true;
+    });
+    for (int i = 0; i < 1800 && !ended && !std::filesystem::exists(ready); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::string before, after;
+    bool opened = false;
+    if (std::filesystem::exists(ready)) {
+        const json api = json::parse(read_text(root + "/data/api.json"), nullptr, false);
+        const int port = api.is_object() ? api.value("port", 0) : 0;
+        const std::string auth = "Authorization: Bearer " + (api.is_object() ? api.value("token", std::string()) : "") + "\r\n";
+        const auto status_of = [&] {
+            const Answer a = http(port, "GET", "/v0/applets", auth);
+            const json j = json::parse(a.body, nullptr, false);
+            if (j.is_object() && j.contains("applets"))
+                for (const auto& e : j["applets"])
+                    if (e.value("id", std::string()) == "local.run42-dashboard") return e.value("status", std::string());
+            return std::string("missing");
+        };
+        before = status_of();
+        const std::string body = R"({"id":"run42-dashboard"})";
+        const Answer open = http(port, "POST", "/v0/commands/applet.open",
+                                 auth + "Content-Type: application/json\r\nContent-Length: " +
+                                     std::to_string(body.size()) + "\r\n",
+                                 body);
+        opened = open.status == 200 && open.body.find("\"ok\":true") != std::string::npos;
+        after = status_of();   // a later frame than the one that ran the open
+    }
+    std::ofstream(done).close();
+    app.join();
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
+    REQUIRE(run.error.ok());
+    if (run.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(before == "ACTIVE");
+    CHECK(opened);
+    CHECK(after == "ACTIVE");
+    CHECK(run.status.success());
+    CHECK(run.err.find("[ui] done") != std::string::npos);
+}
+
+// An agent's new dashboard never ends the person's running applet: on a
+// compiled applet's page the spec opens in the session, the page stays, and
+// the app says so; Home, then F6 Dashboard on the landing, shows it. The
+// applet is the first compiled one beside the app.
+TEST_CASE("builder app: an agent's new dashboard leaves the person's applet page" * doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const std::string root = app_root(exe, "builder-app-agent-applet");
+    if (root.empty()) return;
+    // A compiled applet beside the app, whichever the build made: the host
+    // names none, so its id comes from its manifest.
+    std::string applet;
+    std::error_code ec;
+    for (const auto& f : std::filesystem::directory_iterator(std::filesystem::path(exe).parent_path() / "applets", ec)) {
+        if (!applet.empty() || f.path().string().find(".caliper.toml") == std::string::npos) continue;
+        std::istringstream in(read_text(f.path().string()));
+        for (std::string line; std::getline(in, line) && applet.empty();) {
+            const size_t q = line.find('"');
+            if (line.rfind("id", 0) == 0 && q != std::string::npos && line.find('"', q + 1) != std::string::npos)
+                applet = line.substr(q + 1, line.find('"', q + 1) - q - 1);
+        }
+    }
+    if (applet.empty()) {
+        std::printf("caliper_builder_app: the applet page case is not run: no compiled applet beside the app\n");
+        return;
+    }
+    const std::string results = root + "/results.jsonl";
+    std::ofstream(root + "/agent.jsonl")
+        << R"({"name":"spec.new","origin":"agent","args":{"id":"agent-board","title":"Agent board"}})" << "\n";
+    const auto run = run_app(exe, root,
+                             "wait 30; page applet; wait-file " + results + "; wait 30; page applet; leave; wait 5; "
+                             "shot applet; key escape; page landing; wait 10; key f6; page spec; wait 10; shot back; quit",
+                             {{"CALIPER_AUTOLAUNCH", applet},
+                              {"CALIPER_COMMAND_SCRIPT", root + "/agent.jsonl"},
+                              {"CALIPER_COMMAND_RESULTS", results}});
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
+    REQUIRE(run.error.ok());
+    if (run.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(run.status.success());
+    CHECK(read_text(results).find("\"ok\":true") != std::string::npos);
+    CHECK(run.err.find("[spec] an agent opened Agent board; the applet's page stays") != std::string::npos);
+    CHECK(run.err.find("[ui] done") != std::string::npos);
+}
+
+// ⌘O opens the saved file, so once a link is out and the dashboard has
+// unsaved changes, the page says that the browser shows the saved dashboard.
+TEST_CASE("builder app: with unsaved changes the page says the browser shows the saved dashboard" *
+          doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const std::string root = app_root(exe, "builder-app-browser-note");
+    if (root.empty()) return;
+    saved_dashboard(root);
+    const std::string link = root + "/link.txt";
+    const auto run = run_app(exe, root,
+                             "wait 60; page spec; wait 20; browser note none; click page:browser; wait-file " + link +
+                                 "; browser note none; key cmd+b; wait 10; click prop:spec.title; key cmd+a; "
+                                 "type Run 43; key enter; browser note the browser shows the saved dashboard; "
+                                 "leave; wait 5; shot note; quit",
+                             {{"CALIPER_COMMAND_SCRIPT", root + "/build.jsonl"}, {"CALIPER_TEST_OPEN_URL", link}});
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
+    REQUIRE(run.error.ok());
+    if (run.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(run.status.success());
+    CHECK(run.err.find("[ui] the browser note is \"the browser shows the saved dashboard\"") != std::string::npos);
+    CHECK(run.err.find("[ui] done") != std::string::npos);
 }
 
 #endif

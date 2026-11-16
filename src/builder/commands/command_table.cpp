@@ -271,9 +271,12 @@ const Row kRows[] = {
             "version": {"type": "string", "description": "The applet's version."}}}}}})json",
      "{}"},
     {"app.launch", false, false, true,
-     "Opens the page of one applet, as a click on its row on the app's landing screen does. The page shown before "
-     "is closed first, and an attached live session is detached. The id is an applet's manifest id from "
-     "app.applets.",
+     "Opens the page of one applet, as a click on its row on the app's landing screen does; an attached live "
+     "session stays attached. The id is an applet's manifest id from app.applets. A compiled applet's page replaces "
+     "the page shown at once. A dashboard of the workspace opens with an applet.open from your origin, and the page "
+     "changes only when that has run: when it would replace the open spec's unsaved changes it waits for the "
+     "person's approval, the status is PENDING_APPROVAL rather than ACTIVE, its note says how to check whether it "
+     "opened, and if the person denies it nothing changes.",
      R"json({"type": "object", "additionalProperties": false, "required": ["id"],
       "properties": {"id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$", "minLength": 1, "maxLength": 128,
                             "description": "The applet's manifest id, such as com.example.my-viewer, from app.applets."}}})json",
@@ -281,8 +284,9 @@ const Row kRows[] = {
       "properties": {
         "already_open": {"type": "boolean", "description": "Whether the applet's page was already open."},
         "id": {"type": "string", "description": "The applet's manifest id."},
-        "status": {"type": "string", "description": "The applet's status after the launch, ACTIVE when it opened."},
-        "version": {"type": "string", "description": "The applet's version."}}})json",
+        "status": {"type": "string", "description": "The applet's status after the launch: ACTIVE when it opened; PENDING_APPROVAL when its open waits for the person's approval, because it would replace the open spec's unsaved changes; PENDING when the app cannot tell yet whether it will."},
+        "version": {"type": "string", "description": "The applet's version."},
+        "note": {"type": "string", "description": "With PENDING_APPROVAL or PENDING: what the launch waits for, and that spec.get names the open spec once it has opened."}}})json",
      R"json({"id": "com.example.my-viewer"})json"},
 
     // catalog
@@ -503,11 +507,14 @@ const Row kRows[] = {
     {"spec.get", false, false, true,
      "Returns the open spec as its TOML text and as its canonical JSON form, with its applet id, the file it was "
      "saved to or opened from, and whether it has unsaved changes. With applet, it returns that saved spec applet's "
-     "spec instead, read from its files without opening it. It changes nothing.",
+     "spec instead, read from its files without opening it. When no spec is open and no applet is named, it answers "
+     "open false and nothing else, which is not an error: make one with spec.new or open one with spec.open or "
+     "applet.open. It changes nothing.",
      R"json({"type": "object", "additionalProperties": false, "required": [],
       "properties": {"applet": {"$use": "id", "description": "A saved spec applet's id, from applet.list; the open spec when absent."}}})json",
-     R"json({"type": "object", "additionalProperties": false, "required": ["id", "path", "dirty", "text", "json"],
+     R"json({"type": "object", "additionalProperties": false, "required": ["open"],
       "properties": {
+        "open": {"type": "boolean", "description": "True with a spec in the result, the open one or the named applet's; false when no applet is named and no spec is open, and then no other field is given."},
         "id": {"type": "string", "description": "The spec's applet id."},
         "path": {"type": ["string", "null"], "description": "Its file, relative to the workspace, or null when it was never saved."},
         "dirty": {"type": "boolean", "description": "Whether it has changes that are not saved."},

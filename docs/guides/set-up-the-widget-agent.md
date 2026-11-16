@@ -8,10 +8,12 @@ widget agent, share the GPU with a training run, and remove the key again.
 [Agent roles](../explanations/agent-roles.md) explains how the widget agent differs from the side chat.
 
 !!! note "Status"
-    The settings and ⌘K on a panel, on a selection, on a dropped file and on a property are built.
+    The settings and ⌘K on a panel, on a selection, on a dropped file and on a property of a panel or a source are
+    built.
     Until Caliper ships the agent with its own Python runtime, Caliper finds the agent through the environment
-    variable `CALIPER_AGENT_PYTHON`, an interpreter that has `caliper-agent`'s dependencies, and the agent reaches
-    your workspace through Caliper API, so start Caliper with `--api`.
+    variable `CALIPER_AGENT_PYTHON`, an interpreter that has `caliper-agent`'s dependencies, such as a virtual
+    environment where you ran `pip install ./src/builder/agent` in a checkout of Caliper, and the agent reaches your
+    workspace through Caliper API, so start Caliper with `--api`.
 
 ## Open the settings
 
@@ -111,23 +113,27 @@ Beside the model, **Capabilities** shows three answers, each with where it came 
 
 **Probe** checks the model with two short test requests: one asks it to call a tool, and one asks it to name the
 colour of a small picture. For Claude it reads Anthropic's model list instead, and spends no tokens. The context length
-comes from the server where it reports one; Ollama reports none, so Caliper assumes 8,192 tokens there unless you set
-it. Caliper keeps the answers for 30 days.
+comes from the server where it reports one, else Caliper assumes 8,192 tokens; for Ollama it is the preset's own,
+16,384 tokens (see [Use a local model](#use-a-local-model)). Caliper keeps the answers for 30 days.
 
 Each row has **Yes**, **No** and **Auto**, and the context length a field: an answer you set wins over the probe's
 until you choose Auto again. A short tag says when the probe could not answer, such as **Server unreachable**,
 **Timeout** or **Key rejected**.
 
 When the model cannot call tools, the settings show **No tool calling**, and ⌘K offers only Ask in chat. Other tags
-say what is still missing: **No provider**, **No key**, **No model** or **Invalid address**.
+say what is still missing: **No provider**, **No key**, **No model** or **Invalid address**. For a server on your own
+machine, **Context cache about 18 GB** warns that the model's context length would take that much memory (4 GB or
+more), on top of the model itself.
 
 ## Use it
 
 1. Focus a panel and press ⌘K (Ctrl+K on Windows).
 2. Type what you want, for example "Use a linear y axis", and press Return. The prompt row shows the model, as the
    agent reports it.
-3. The panel shows the change as a preview, with the change to the spec beside it. **Accept** applies it as one undo
-   step, **Reject** discards it and leaves nothing behind, and **Refine** lets you add to the request.
+3. The panel shows the change as a preview, with the change to the spec beside it. **Accept** (Return) applies it as
+   one undo step, **Reject** (Escape) discards it and leaves nothing behind, and **Refine** lets you add to the
+   request. To take an accepted change back, press ⌘B for build mode and then ⌘Z, or choose Undo in the page bar
+   there; outside build mode ⌘Z does nothing.
 4. When the request is bigger than one panel, choose **Ask in chat**, which sends it, with what the widget agent knew,
    to the side chat.
 
@@ -144,6 +150,10 @@ tag, such as DECLINED or NO PROVIDER, and the actions that help:
   model's name. This can happen with ordinary work too, for example with chemistry or biology data, so you can
   rephrase the request (Rephrase), try it again (Retry), or switch to another model or provider, such as a local model
   (Model). Automatic fallback to another model is off for now.
+- **The agent stopped at its limit.** A request takes at most six model requests. When the agent reaches them
+  before it is done, the card shows LIMIT with the number of edits it made and says that the change is not finished;
+  **Accept** applies those edits as they are, and **Refine** lets the agent finish on the same preview. When a
+  conversation no longer fits the model's context length, the card shows LIMIT too, with what you can do.
 - **The preview is out of date.** The spec changed while the preview was open, for example through the side chat,
   so that the change no longer applies, and the prompt shows CONFLICT. Choose Refine to start again from the current
   spec.
@@ -151,14 +161,26 @@ tag, such as DECLINED or NO PROVIDER, and the actions that help:
 ## Use a local model
 
 A local model costs nothing per request and keeps your data on your machine, but it uses your computer's GPU and
-memory, and small models do this work less reliably than large ones.
+memory, and small models do this work less reliably than large ones. It is also slower: with `qwen3.8:27b` on an Apple
+M5 Max, a ⌘K request took 5 to 30 seconds in tests, and the first one takes longer while Ollama loads the model.
 
 1. Install a model server, such as Ollama or LM Studio, and download a model that supports tool calling.
 2. In the settings, choose the Ollama or LM Studio preset. Change the address if your server listens elsewhere.
 3. Choose **List**, then the model.
 4. Choose **Probe**. If the model cannot call tools, choose another one.
-5. For Ollama, type the context length you run the model with into the Context length field. Below 8,192 tokens
+5. For LM Studio, type the context length you load the model with into the Context length field. Below 8,192 tokens
    requests may not fit.
+
+**The context length with Ollama.** Ollama loads a model with room for its whole context length unless asked for
+less, and that room, the context cache, takes memory on top of the model: for `qwen3.8:27b`, whose context length is
+262,144 tokens, it is about 18 GB. Caliper therefore asks Ollama for 16,384 tokens for ⌘K and 32,768 tokens for the
+side chat's `caliper-agent`, about 1 GB and 2 GB of cache for that model, and Ollama unloads the model a
+minute after its last request. To change it, type another length into the Context length field (for ⌘K) or give
+`--context-length` to `caliper-agent` (for the side chat); the tag **Context cache about N GB** shows what a large one
+costs. When a conversation no longer fits, Caliper does not send it, and says so. If you reach Ollama through the
+Custom preset instead, Caliper cannot set the length, and you set it yourself: start Ollama with
+`OLLAMA_CONTEXT_LENGTH=16384 ollama serve`, which applies to every model, or make a copy of the model with a
+Modelfile that holds `FROM <model>` and `PARAMETER num_ctx 16384` (`ollama create <name> -f Modelfile`).
 
 [Widget agent conformance](../references/widget-agent-conformance.md) lists how models did on the widget agent's
 test tasks, and shows how to run the tasks against your own model. A server on another computer works too, through
@@ -183,12 +205,18 @@ run take turns on the same GPU and memory:
   high.
 
 On a computer with a separate graphics card, the model's weights take video memory that the run may need, and the
-same advice holds. The side chat runs your own agent, so it shows no such note.
+same advice holds. The side chat runs your own agent, so Caliper cannot tell where its model runs; it shows the same
+note when you mark the agent as running on a local model, as below.
 
 ## Local models in the side chat
 
 The side chat runs your own agent, so it uses whatever model your agent is set up for, local models included.
-ACP integration (`design/acp-integration.md`) sets up opencode with a model served by Ollama as a worked example.
+`caliper-agent` itself can be that agent: give the side chat the custom command that
+[Side chat](../references/side-chat.md#the-agents) shows, with the Ollama preset and your model, and the chat runs on
+the local model with no account. ACP integration (`design/acp-integration.md`) sets up opencode with a model served by
+Ollama as another worked example. When your agent runs a model on this machine, choose **Local model** in the chat's
+agent picker; while a training run is attached, the chat's header then shows **Shared GPU**, and the advice above
+applies ([Side chat](../references/side-chat.md#local-models)).
 
 ## Remove the key
 

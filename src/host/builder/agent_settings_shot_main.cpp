@@ -17,6 +17,9 @@
 //   no-tools   the Ollama preset on a fake server that refuses tools: the
 //              probe finds no tool calling
 //   gpu-note   as local, with a live run attached: the Shared GPU note
+//   large-cache  as local, on a fake Ollama server whose model metadata gives
+//              the cache a token takes, after the person raised the context
+//              length to 262,144 tokens: the cache note
 // Options:
 //   --size WxH         the canvas (1440x900)
 //   --python PATH      the interpreter with caliper-agent's dependencies
@@ -57,7 +60,7 @@ namespace {
 int usage(const char* why) {
     std::fprintf(stderr, "caliper-agent-settings-shot: %s\n", why);
     std::fprintf(stderr,
-                 "usage: caliper-agent-settings-shot --scenario claude|key-set|local|no-tools|gpu-note --out FILE\n"
+                 "usage: caliper-agent-settings-shot --scenario claude|key-set|local|no-tools|gpu-note|large-cache --out FILE\n"
                  "                                   --data-dir DIR [--size WxH] [--python PATH] [--agent-dir DIR]\n"
                  "                                   [--frames N]\n");
     return 2;
@@ -97,7 +100,8 @@ int main(int argc, char** argv) {
         } else return usage(("unknown option " + a).c_str());
         ++i;
     }
-    const bool local = scenario == "local" || scenario == "no-tools" || scenario == "gpu-note";
+    const bool local = scenario == "local" || scenario == "no-tools" || scenario == "gpu-note" ||
+                       scenario == "large-cache";
     if (scenario != "claude" && scenario != "key-set" && !local) return usage("unknown --scenario");
     if (out.empty() || data_dir.empty()) return usage("--out and --data-dir are required");
     if (local && (python.empty() || agent_dir.empty())) return usage("this scenario needs --python and --agent-dir");
@@ -113,6 +117,7 @@ int main(int argc, char** argv) {
         std::string why;
         std::vector<std::string> args = {"--models", "local-small,local-large", "--context", "32768"};
         if (scenario == "no-tools") args = {"--models", "local-text-only", "--refuse-tools"};
+        if (scenario == "large-cache") args = {"--models", "local-small,local-large", "--ollama-show"};
         server = test::FakeModelServer::start(python, agent_dir, args, &why);
         if (!server) return fail("the fake model server: " + why);
     }
@@ -147,6 +152,11 @@ int main(int argc, char** argv) {
         settings.set_model(scenario == "no-tools" ? "local-text-only" : "local-large");
         settings.probe(true);
         if (!settle(settings, 180)) return fail("the probe did not answer");
+        if (scenario == "large-cache") {
+            // As the person typing 262144 into the Context length field.
+            settings.set_override("context_length", "262144");
+            if (!settle(settings, 120)) return fail("the override did not answer");
+        }
     }
 
     std::string why;
@@ -168,6 +178,7 @@ int main(int argc, char** argv) {
                 {"state", settings.state()},
                 {"key", settings.key_status() == AgentSettings::KeyStatus::set ? "set" : "not set"},
                 {"gpu_note", settings.gpu_note()},
+                {"cache_note", settings.cache_note()},
                 {"models", settings.model_choices()},
                 {"shown", shown}};
     canvas->with_context([&] { settings.shutdown(); });

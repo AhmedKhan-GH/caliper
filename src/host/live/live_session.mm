@@ -23,6 +23,7 @@
 #include "caliper/live.h"
 #include "live/live_shm.h"
 #include "live/live_source.h"
+#include "net/json.h"
 
 #include <caliper/tensor.h>
 
@@ -525,6 +526,124 @@ bool list_sessions(const std::string& root, std::vector<SessionEntry>* out, std:
             e.alive = true;   // its process runs; this viewer cannot attach (compatible = 0)
         }
         out->push_back(std::move(e));
+    }
+    std::sort(out->begin(), out->end(), [](const SessionEntry& a, const SessionEntry& b) {
+        return a.start_unix_ms != b.start_unix_ms ? a.start_unix_ms > b.start_unix_ms : a.pid > b.pid;
+    });
+    return true;
+}
+
+namespace {
+
+// One stream file read by the rules of list_streams; false when it is not
+// listed. *reclaim is set when the file is stale (its process has gone, or
+// the pid was reused) and may be removed.
+bool read_stream_file(const std::string& path, const std::string& host, SessionEntry* e, bool* reclaim) {
+    *reclaim = false;
+    constexpr off_t kMaxBytes = 64 * 1024;
+    // A regular file of this user that no one else can read: the stream URL in
+    // it carries the session token. Its type is checked before it is opened,
+    // so a FIFO or a device under that name never blocks the frame thread in
+    // open(), and it is opened without blocking or following a link, then
+    // checked again as the file it opened.
+    struct stat ls{};
+    if (lstat(path.c_str(), &ls) != 0 || !S_ISREG(ls.st_mode) || ls.st_uid != getuid() || (ls.st_mode & 077) != 0 ||
+        ls.st_size <= 0 || ls.st_size > kMaxBytes)
+        return false;
+    const int fd = open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return false;
+    struct stat st{};
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_dev != ls.st_dev || st.st_ino != ls.st_ino ||
+        st.st_uid != getuid() || (st.st_mode & 077) != 0 || st.st_size <= 0 || st.st_size > kMaxBytes) {
+        close(fd);
+        return false;
+    }
+    std::string text((size_t)st.st_size, '\0');
+    const ssize_t n = read(fd, text.data(), text.size());
+    close(fd);
+    if (n != (ssize_t)text.size()) return false;
+    caliper_net::Json j;
+    std::string err;
+    if (!caliper_net::Json::parse(text.data(), text.size(), &j, &err) || !j.is_object()) return false;
+    auto str = [&](const char* k) -> std::string {
+        const caliper_net::Json* v = j.find(k);
+        return v && v->is_string() ? v->as_string() : std::string();
+    };
+    auto u64 = [&](const char* k) -> uint64_t {
+        const caliper_net::Json* v = j.find(k);
+        uint64_t x = 0;
+        return v && v->get_u64(&x) ? x : 0;
+    };
+    if (u64("version") != 1) return false;
+    const uint64_t pid = u64("pid"), port = u64("port");
+    const std::string url = str("stream_url");
+    const std::string session = str("session");
+    if (pid == 0 || pid > INT32_MAX || port == 0 || port > 65535 || session.empty() || session.size() > 128) return false;
+    // Written on this machine: a data folder shared with another machine
+    // holds its files too, whose pids and ports mean nothing here.
+    if (str("host") != host) return false;
+    // A stream on loopback at its own port, nothing else: the token is only
+    // ever sent to 127.0.0.1.
+    const std::string want = "ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=";
+    if (url.compare(0, want.size(), want) != 0 || url.size() == want.size() ||
+        url.find_first_of("&#/ ", want.size()) != std::string::npos)
+        return false;
+    // Its process runs, and started before the file was written (a pid
+    // reused by a later process makes the file stale).
+    const uint64_t start_ms = u64("start_unix_ms");
+    const uint64_t proc_us = proc_start_us((int32_t)pid);
+    if (!pid_alive((int32_t)pid) || (proc_us && start_ms && proc_us > start_ms * 1000ull + 1000000ull)) {
+        *reclaim = true;
+        return false;
+    }
+    e->path = path;
+    e->session = session;
+    e->script = str("script");
+    e->pid = (int32_t)pid;
+    e->protocol = (int32_t)CALIPER_LIVE_PROTOCOL_VERSION;
+    e->start_unix_ms = start_ms;
+    e->alive = true;
+    e->stream_url = url;
+    const caliper_net::Json* c = j.find("control");
+    e->control = c && c->is_bool() && c->as_bool();
+    if (const caliper_net::Json* v = j.find("views"); v && v->is_array())
+        for (const caliper_net::Json& x : v->items())
+            if (x.is_string() && e->views.size() < 256) e->views.push_back(x.as_string());
+    e->view_count = (int32_t)e->views.size();
+    return true;
+}
+
+}  // namespace
+
+bool list_streams(const std::string& root, std::vector<SessionEntry>* out, std::string* err) {
+    out->clear();
+    const std::string dir = streams_dir(root);
+    DIR* d = opendir(dir.c_str());
+    if (!d) {
+        if (errno == ENOENT) return true;   // no script has served here
+        if (err) *err = "opendir('" + dir + "'): " + std::strerror(errno);
+        return false;
+    }
+    std::vector<std::string> names;
+    while (dirent* de = readdir(d)) names.emplace_back(de->d_name);
+    closedir(d);
+    char host_buf[256] = {0};
+    gethostname(host_buf, sizeof host_buf - 1);
+    const std::string host = host_buf;
+    for (const auto& n : names) {
+        const std::string path = dir + "/" + n;
+        const size_t tmp = n.find(".json.tmp.");
+        if (tmp != std::string::npos) {   // an interrupted atomic write
+            const int32_t writer = (int32_t)std::atoi(n.c_str() + tmp + 10);
+            struct stat st{};
+            if (!pid_alive(writer) && lstat(path.c_str(), &st) == 0 && st.st_uid == getuid()) unlink(path.c_str());
+            continue;
+        }
+        if (n.size() < 6 || n.compare(n.size() - 5, 5, ".json") != 0) continue;
+        SessionEntry e;
+        bool reclaim = false;
+        if (read_stream_file(path, host, &e, &reclaim)) out->push_back(std::move(e));
+        else if (reclaim) unlink(path.c_str());
     }
     std::sort(out->begin(), out->end(), [](const SessionEntry& a, const SessionEntry& b) {
         return a.start_unix_ms != b.start_unix_ms ? a.start_unix_ms > b.start_unix_ms : a.pid > b.pid;

@@ -496,6 +496,8 @@ void BuilderPane::draw_body(const ImRect& area, SpecRuntime& runtime, const Spec
         d.plans_text = open_->text;
     }
     if (open_) runtime.set_spec(open_->spec);
+    // An empty canvas says how to start in build mode (canvas_hint()).
+    runtime.set_empty_hint(canvas_hint());
     if (!build_) {
         runtime.draw(area, look);
         return;
@@ -702,7 +704,8 @@ void BuilderPane::draw_body(const ImRect& area, SpecRuntime& runtime, const Spec
                 if (si != d.plans.end() && si->second.refusal) ImGui::SetTooltip("%s", si->second.refusal.message.c_str());
             }
         }
-        // An empty canvas shows the runtime's own state, "No panels".
+        // An empty canvas shows the runtime's own state, "No panels", with
+        // how to start under it (canvas_hint()).
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -1061,8 +1064,10 @@ void BuilderPane::widget_under(const std::string& anchor, float x, float w) {
 }
 
 // A property row's ⌘K: at the right end of its label, shown while the row is
-// under the pointer or its prompt is open; then the prompt under the row.
-void BuilderPane::property_key(Rows& rows, const ImRect& r, const std::string& panel, const std::string& path) {
+// under the pointer or its prompt is open; then the prompt under the row. The
+// property is the panel's, or with `source` given the spec source's.
+void BuilderPane::property_key(Rows& rows, const ImRect& r, const std::string& panel, const std::string& path,
+                               const std::string& source) {
     if (!widget_.open_property) return;
     const std::string anchor = "prop:" + path;
     const SpecLook& L = draw_->look;
@@ -1077,7 +1082,7 @@ void BuilderPane::property_key(Rows& rows, const ImRect& r, const std::string& p
     ImGui::PushID(anchor.c_str());
     // A plate under the key, so that the label's end does not show through.
     if (shown) rows.dl->AddRectFilled(v2(kr.Min.x - 2.0f, r.Min.y), v2(kr.Max.x + 2.0f, r.Min.y + rh), L.ground);
-    if (widget_key("##cmdk.prop", kr, shown)) widget_.open_property(panel, path);
+    if (widget_key("##cmdk.prop", kr, shown)) widget_.open_property(panel, source, path);
     ImGui::PopID();
     ImGui::SetCursorScreenPos(back);
     widget_under(anchor, r.Min.x, r.GetWidth());
@@ -1497,6 +1502,8 @@ void BuilderPane::draw_source_properties(Rows& rows) {
         const ImRect v = rows.label(r, src && src->from ? "From" : "Catalog");
         put(rows.dl, L.mono, L.mono_size, v2(v.Min.x, v.Min.y + (v.GetHeight() - d.mono_h()) * 0.5f), L.text,
              fit(L.mono, L.mono_size, reads, v.GetWidth()));
+        // ⌘K beside what a spec source reads: its catalog, from or SQL.
+        if (src) property_key(rows, r, "", src->catalog ? "catalog" : src->from ? "from" : "sql", src->id);
     }
     const std::vector<PaneShape> shapes = transform_shapes();
     {
@@ -1517,6 +1524,7 @@ void BuilderPane::draw_source_properties(Rows& rows) {
         return;
     }
     rows.section("Transforms");
+    const float transforms_top = ImGui::GetCursorScreenPos().y;
     const size_t n = src ? src->transforms.size() : 0;
     for (size_t i = 0; i < n; ++i) {
         const spec::Transform& t = src->transforms[i];
@@ -1551,17 +1559,34 @@ void BuilderPane::draw_source_properties(Rows& rows) {
         }
         // Its fields.
         json tj = {{"op", spec::to_string(t.op)}};
-        auto field_int = [&](const char* key, const std::optional<int64_t>& value, bool required) {
+        // A number field; `right` is drawn at the row's right end, in the
+        // accent colour when `marked` (a slice's index range, or the note that
+        // an index was set to the end of its range).
+        auto field_int = [&](const char* key, const std::optional<int64_t>& value, bool required,
+                             const std::string& right = {}, bool marked = false) {
             const ImRect fr = rows.next(d.m.row);
             const ImRect v = rows.label(fr, std::string("  ") + key);
             const std::string id = "##" + base + "." + key + "." + src->id;
-            const Field f = text_field(d.bufs, L, id, v, value ? std::to_string(*value) : std::string(), required ? "" : "none", true,
+            ImRect fv = v;
+            if (!right.empty()) {
+                const std::string shown = fit(L.mono, L.mono_size, right, v.GetWidth() * 0.6f);
+                const float rw = extent(L.mono, L.mono_size, shown).x;
+                put(rows.dl, L.mono, L.mono_size, v2(v.Max.x - rw, v.Min.y + (v.GetHeight() - d.mono_h()) * 0.5f),
+                    marked ? L.accent : L.faint, shown);
+                fv = ImRect(v.Min, v2(std::max(v.Min.x + 8.0f, v.Max.x - rw - std::round(10.0f * s)), v.Max.y));
+            }
+            const Field f = text_field(d.bufs, L, id, fv, value ? std::to_string(*value) : std::string(), required ? "" : "none", true,
                                        false, ImGuiInputTextFlags_AutoSelectAll);
             d.item(base + ":" + key, v);
             if (f.activated) begin_gesture(base + "." + src->id);
             if (f.deactivated) end_gesture();
             if (!f.changed) return;
             int64_t x = 0;
+            // A slice's index stays within its axis's range (set_slice_index()).
+            if (t.op == spec::TransformOp::slice && std::string(key) == "index" && parse_int(f.value, &x)) {
+                set_slice_index(i, x);
+                return;
+            }
             json next = json::parse(spec::to_json(*src)["transform"][i].dump());
             if (f.value.empty() && !required) next.erase(key);
             else if (parse_int(f.value, &x)) next[key] = x;
@@ -1620,19 +1645,77 @@ void BuilderPane::draw_source_properties(Rows& rows) {
                 x += w + gap;
             }
         };
+        // A slice's or a reduce's axis: every axis of the step's input, with
+        // its index range and its name where the source carries one, one
+        // choice each; the number alone when the input's shape is not known.
+        auto field_axis = [&](const std::optional<int64_t>& now) {
+            const std::vector<std::string> axes = transform_axes(i);
+            if (axes.empty()) {
+                field_int("axis", now, true);
+                return;
+            }
+            const int64_t rank = (int64_t)axes.size();
+            // Every axis the step uses is highlighted: a reduce's whole list.
+            const std::vector<int64_t> chosen = transform_axes_chosen(i);
+            const float gap = std::round(2.0f * s), pad_w = std::round(10.0f * s);
+            const float avail = rows.x1 - rows.m.pad - (rows.x0 + rows.label_w);
+            int lines = 1;
+            {
+                float x = 0.0f;
+                for (const auto& o : axes) {
+                    const float w = extent(L.mono, L.mono_size, o).x + pad_w;
+                    if (x > 0.0f && x + w > avail) {
+                        ++lines;
+                        x = 0.0f;
+                    }
+                    x += w + gap;
+                }
+            }
+            const ImRect fr = rows.next(d.m.row * (float)lines);
+            const ImRect v = rows.label(ImRect(fr.Min, v2(fr.Max.x, fr.Min.y + d.m.row)), "  axis");
+            d.item(base + ":axis", ImRect(v.Min, v2(v.Max.x, fr.Max.y)));
+            float x = v.Min.x, y = v.Min.y;
+            for (int64_t k = 0; k < rank; ++k) {
+                const std::string& o = axes[(size_t)k];
+                const float w = std::min(extent(L.mono, L.mono_size, o).x + pad_w, avail);
+                if (x > v.Min.x && x + w > v.Min.x + avail) {
+                    x = v.Min.x;
+                    y += d.m.row;
+                }
+                const ImRect c(v2(x, y + std::round(3.0f * s)), v2(x + w, y + d.m.row - std::round(3.0f * s)));
+                ImGui::SetCursorScreenPos(c.Min);
+                ImGui::PushID((base + ":axis:" + std::to_string(k)).c_str());
+                const bool click = ImGui::InvisibleButton("##ax", c.GetSize());
+                const bool ch = ImGui::IsItemHovered();
+                ImGui::PopID();
+                d.item(base + ":axis:" + std::to_string(k), c);
+                const bool on = std::find(chosen.begin(), chosen.end(), k) != chosen.end();
+                if (on) rows.dl->AddRectFilled(c.Min, c.Max, L.plate);
+                else if (ch) rows.dl->AddRectFilled(c.Min, c.Max, L.plate_hover);
+                if (on) rows.dl->AddRectFilled(v2(c.Min.x, c.Max.y - 1.0f), c.Max, L.accent);
+                put(rows.dl, L.mono, L.mono_size, v2(c.Min.x + std::round(5.0f * s), c.Min.y + (c.GetHeight() - d.mono_h()) * 0.5f),
+                    on ? L.text : L.secondary, fit(L.mono, L.mono_size, o, c.GetWidth() - std::round(5.0f * s)));
+                // A click on a reduce's chosen axis takes it out of the list.
+                if (click && (!on || t.op == spec::TransformOp::reduce)) set_transform_axis(i, k);
+                x += w + gap;
+            }
+        };
         const std::optional<int64_t> axis = t.axis.empty() ? std::nullopt : std::optional<int64_t>(t.axis.front());
         switch (t.op) {
-            case spec::TransformOp::slice:
-                field_int("axis", axis, true);
-                if (t.index || !(t.start || t.stop || t.step)) field_int("index", t.index, false);
+            case spec::TransformOp::slice: {
+                field_axis(axis);
+                const bool noted = !transform_note().empty() && transform_note_step() == i;
+                if (t.index || !(t.start || t.stop || t.step))
+                    field_int("index", t.index, false, noted ? transform_note() : transform_index_range(i), noted);
                 if (!t.index) {
                     field_int("start", t.start, false);
                     field_int("stop", t.stop, false);
                     field_int("step", t.step, false);
                 }
                 break;
+            }
             case spec::TransformOp::reduce:
-                field_int("axis", axis, true);
+                field_axis(axis);
                 field_choice("fn", {"mean", "sum", "min", "max", "std", "var", "norm", "argmax", "argmin", "entropy"},
                              t.fn.value_or("mean"));
                 break;
@@ -1661,6 +1744,10 @@ void BuilderPane::draw_source_properties(Rows& rows) {
             x += w + std::round(6.0f * s);
         }
     }
+    // ⌘K beside a spec source's transforms, as one property, and the prompt
+    // under them.
+    if (src) property_key(rows, ImRect(v2(rows.x0, transforms_top), v2(rows.x1, ImGui::GetCursorScreenPos().y)), "",
+                          "transform", src->id);
     if (src) {
         ImGui::Dummy(v2(1.0f, std::round(10.0f * s)));
         const ImRect r = rows.next(d.m.row + std::round(6.0f * s));
@@ -1849,6 +1936,15 @@ void BuilderPane::draw_text_strip(const SpecRect& rect) {
                         }
                         ImGui::Dummy(v2(std::max(1.0f, gutter + extent(L.mono, L.mono_size, line).x), line_h));
                     }
+                }
+                // The last change comes into view: a line below the view ends
+                // it with two lines after, one above starts it.
+                if (text_follow_ >= 0) {
+                    const float y = top_pad + (float)text_follow_ * line_h;
+                    const float top = ImGui::GetScrollY(), view = ImGui::GetWindowHeight();
+                    if (y < top) ImGui::SetScrollY(std::max(0.0f, y - line_h));
+                    else if (y + line_h > top + view) ImGui::SetScrollY(y + 3.0f * line_h - view);
+                    text_follow_ = -1;
                 }
             }
             ImGui::EndChild();

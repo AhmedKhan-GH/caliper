@@ -310,7 +310,7 @@ int run_shot(const CommandLine& cl) {
     {
         AppSession::Hooks h = app_session_hooks();
         h.applets_json = [&] { return applets_json(loader); };
-        h.launch = launch;
+        h.launch = [&launch](const std::string& id, const std::string&) { return launch(id); };
         h.request_capture = [&] { capture_wanted = true; };
         s.session->start(app_session_options(cl, /*scripts_allowed=*/true), std::move(h));   // no window
         // panel.render draws on a canvas that shares this canvas's font atlas.

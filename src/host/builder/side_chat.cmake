@@ -22,7 +22,7 @@ if(NOT TARGET caliper_widget_surface OR NOT TARGET caliper_api_session OR NOT TA
 endif()
 
 set(_chat_dir ${CMAKE_SOURCE_DIR}/src/host/builder)
-add_library(caliper_side_chat STATIC ${_chat_dir}/side_chat.cpp)
+add_library(caliper_side_chat STATIC ${_chat_dir}/side_chat.cpp ${_chat_dir}/chat_markdown.cpp)
 target_include_directories(caliper_side_chat PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_side_chat PUBLIC caliper_widget_surface caliper_builder_acp caliper_builder_commands)
 # A development build finds caliper-mcp in its build tree when it is not
@@ -58,6 +58,7 @@ if(BUILD_TESTS AND TARGET doctest::doctest AND NOT WIN32)
         ${_chat_dir}/tests/test_side_chat.cpp
         ${_chat_dir}/tests/test_side_chat_launch.cpp
         ${_chat_dir}/tests/test_side_chat_layout.cpp
+        ${_chat_dir}/tests/test_chat_markdown.cpp
         ${_chat_dir}/tests/test_chat_shot.cpp)
     target_link_libraries(caliper_side_chat_tests PRIVATE caliper_side_chat caliper_api_session doctest::doctest
         caliper_builder_duckdb)
@@ -65,11 +66,16 @@ if(BUILD_TESTS AND TARGET doctest::doctest AND NOT WIN32)
         ${CMAKE_SOURCE_DIR}/src/host/spec_runtime/tests)
     target_compile_definitions(caliper_side_chat_tests PRIVATE
         CALIPER_SPEC_FIXTURES="${CMAKE_SOURCE_DIR}/src/builder/spec/tests/fixtures"
+        CALIPER_CHAT_FIXTURES="${_chat_dir}/tests/fixtures"
         CALIPER_SPEC_TEST_TMP="${CMAKE_CURRENT_BINARY_DIR}/side-chat-test-tmp"
         CALIPER_CHAT_SHOT_EXE="$<TARGET_FILE:caliper-chat-shot>"
         CALIPER_MCP_EXE="$<TARGET_FILE:caliper-mcp>"
         CALIPER_ACP_STUB_AGENT="$<TARGET_FILE:caliper_acp_stub_agent>"
-        CALIPER_CHAT_STUB_AGENT="$<TARGET_FILE:caliper_chat_stub_agent>")
+        CALIPER_CHAT_STUB_AGENT="$<TARGET_FILE:caliper_chat_stub_agent>"
+        # caliper-agent as the chat's custom agent, from the source; its cases
+        # are skipped without an interpreter that has its dependencies.
+        CALIPER_BUILDER_TEST_PYTHON="${CALIPER_BUILDER_TEST_PYTHON}"
+        CALIPER_AGENT_SOURCE="${CMAKE_SOURCE_DIR}/src/builder/agent")
     set_target_properties(caliper_side_chat_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
     add_dependencies(caliper_side_chat_tests caliper-chat-shot caliper-mcp caliper_acp_stub_agent caliper_chat_stub_agent)
     # Headless: the state machine against the stub agents, the launch, the
