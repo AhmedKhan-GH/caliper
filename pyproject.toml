@@ -48,4 +48,4 @@ CALIPER_WITH_SLANG = "OFF"
 CALIPER_WITH_LLAMA = "OFF"
 
 [tool.pytest.ini_options]
-testpaths = ["python/tests"]
+testpaths = ["python/tests", "tests/demos"]
