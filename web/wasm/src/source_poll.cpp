@@ -112,6 +112,7 @@ int poll_scene(CaliperCore* core, caliper_live::Source& src, PollState& st, Poll
         if (!caliper_live_views::scene_open(core, v.name, info, &why)) {
             v.error = why;
             ++st.errors;
+            src.stop_scene(v.key);   // for good: its messages would only wait
             return 0;
         }
         v.shown = true;

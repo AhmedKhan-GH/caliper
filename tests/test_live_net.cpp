@@ -73,6 +73,7 @@ public:
     std::vector<std::string> hello_caps;      // the capabilities of the last HELLO
     std::map<std::string, uint32_t> sub_of;   // view -> its open subscription
     std::map<std::string, int> subscribes;    // view -> SUBSCRIBEs received for it
+    std::vector<uint32_t> unsubscribed;       // the subs of the UNSUBSCRIBEs received
     std::vector<float> series;                // the retained values of "loss"
     std::vector<std::string> errors;          // ERROR codes the viewer sent
     std::vector<uint16_t> closes;             // close codes of ended connections
@@ -464,6 +465,8 @@ private:
             if (s->view == "attn") rep.data_view = attn_default();
             send(rep);
             if (s->view == "loss" && !series.empty()) send_series(0, series);   // the backfill
+        } else if (auto* un = std::get_if<wire::Unsubscribe>(&m)) {
+            unsubscribed.push_back(un->sub);   // sub_of keeps it: what is in flight still goes
         } else if (auto* p = std::get_if<wire::Ping>(&m)) {
             send(wire::Pong{p->nonce});
         } else if (auto* po = std::get_if<wire::Pong>(&m)) {
@@ -808,6 +811,62 @@ TEST_CASE("live/net: a scene view's error clears once an update applies again") 
     });
     REQUIRE(poll_until(core, [&] { return view_status(core, "world").updates > updates; }));
     CHECK(std::string(view_status(core, "world").error).empty());
+    caliper_core_live_detach(core);
+    caliper_core_shutdown(core);
+}
+
+// A scene view the core refuses for good (its name is taken by an embed v1.2 view) stops its
+// subscription: the source unsubscribes and drops what still arrives, rather than queueing it
+// until the queue's bound and subscribing again, over and over.
+TEST_CASE("live/net: a scene view refused for good unsubscribes instead of queueing its messages") {
+    std::string no_gpu;
+    CaliperCore* core = net_core(320, 240, &no_gpu);
+    if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
+    // An embed v1.2 view named "world", from the host's CPU memory.
+    std::vector<float> px(4 * 4, 0.5f);
+    CaliperTensor t{};
+    t.struct_size = sizeof t;
+    t.data = px.data();
+    t.dtype = CALIPER_DT_F32;
+    t.ndim = 2;
+    t.shape[0] = t.shape[1] = 4;
+    t.strides[0] = 4;
+    t.strides[1] = 1;
+    t.device = CALIPER_DEV_CPU;
+    CaliperViewDesc vd{};
+    vd.struct_size = sizeof vd;
+    vd.name = "world";
+    vd.tensor = &t;
+    vd.vmax = 1.0f;
+    REQUIRE_MESSAGE(caliper_core_view_tensor(core, &vd) == 1, caliper_core_last_error(core));
+    FakeProducer p;
+    p.add_scene();
+    p.start();
+    REQUIRE_MESSAGE(caliper_core_live_attach_url(core, p.url().c_str()) == 1, caliper_core_last_error(core));
+    REQUIRE(poll_until(core, [&] {
+        return p.call([](FakeProducer& f) { return f.sub_of.count("world") + f.sub_of.count("loss"); }) == 2;
+    }));
+    REQUIRE(poll_until(core, [&] { return std::string(view_status(core, "world").error).find("taken") != std::string::npos; }));
+    const uint32_t sub = p.call([](FakeProducer& f) { return f.sub_of.at("world"); });
+    // What still arrives for it is dropped, past the queue's bound too, and asks for nothing.
+    p.call([&](FakeProducer& f) {
+        for (size_t i = 0; i < caliper_live::kSceneQueueMax + 10; ++i) {
+            wire::SceneClear c;
+            c.sub = sub;
+            c.view = "world";
+            c.seq = ++f.seq;
+            c.path = "c/" + std::to_string(i);
+            f.send(c);
+        }
+        f.append({1.0f});   // after them on the connection: once it arrives, so have they
+        return 0;
+    });
+    REQUIRE(poll_until(core, [&] { return view_status(core, "loss").series_total >= 1; }));
+    CHECK(p.call([](FakeProducer& f) { return f.subscribes["world"]; }) == 1);
+    REQUIRE(poll_until(core, [&] {
+        const auto un = p.call([](FakeProducer& f) { return f.unsubscribed; });
+        return std::find(un.begin(), un.end(), sub) != un.end();
+    }));
     caliper_core_live_detach(core);
     caliper_core_shutdown(core);
 }

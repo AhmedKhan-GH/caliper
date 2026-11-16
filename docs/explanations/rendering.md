@@ -468,7 +468,9 @@ While the display is paused, the source keeps the scene's messages (`src/host/li
 view would still show: a reset drops everything before it, a clear drops the waiting updates it removes and the
 clears it covers, and an update replaces the waiting one of its entity part and layer. Resets and clears are never
 dropped. A sender that clears ever new paths could still grow the queue, so past 8,192 messages it empties, the source
-subscribes again on the same subscription, and the queue waits for the sender's new state.
+subscribes again on the same subscription, and the queue waits for the sender's new state. A scene view that the core
+refuses for good, because an embed v1.2 view already has its name, ends its subscription instead, and the source drops
+what still arrives for it.
 
 - **Buffers.** The arrays of a network message are host bytes. Each is written into a buffer of the layer that the view
   owns, one copy that the view counts in its copy counters and its header reports; strip lengths become the scene core's
