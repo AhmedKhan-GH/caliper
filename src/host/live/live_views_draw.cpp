@@ -136,6 +136,29 @@ const ImU32 kSelText = kSelLine;
 
 double now_ms() { return (double)now_ns() * 1e-6; }
 
+// ImGui sizes a face by its line height, CSS by its em: the house mono,
+// Source Code Pro, is 1.257 em from ascent to descent, so CSS 10.5 px is
+// 13.2 ImGui px (sternbild_fonts.h sizes it alike: 15 for CSS 11.9).
+constexpr float kMonoEm = 1.257f;
+
+// The host's mono face, found by the file name it was loaded from, or null.
+ImFont* mono_face() {
+    for (ImFont* f : ImGui::GetIO().Fonts->Fonts)
+        if (std::strstr(f->GetDebugName(), "Code") || std::strstr(f->GetDebugName(), "Mono")) return f;
+    return nullptr;
+}
+
+// A bare view on a page (the browser element's plate): its plots' ticks in
+// the element's 10.5 px mono, as the TypeScript views draw them. Returns
+// whether a font was pushed (pop it after the plot).
+bool push_page_ticks(const CaliperCore* core, const CaliperLiveViewsState* S) {
+    if (!core->views_bare || !S->events) return false;
+    ImFont* f = mono_face();
+    if (!f) return false;
+    ImGui::PushFont(f, 10.5f * kMonoEm);
+    return true;
+}
+
 // The shortest decimal text that reads back as the same double (as
 // JavaScript prints numbers), or null for a non-finite one.
 std::string json_number(double v) {
@@ -1235,6 +1258,7 @@ void draw_series(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     before_plot(S, v);
     ImPlotAxisFlags xf, yf;
     plot_flags(S, v, &xf, &yf);
+    const bool page_ticks = push_page_ticks(core, S);
     if (ImPlot::BeginPlot("##caliper.series", ImVec2(-1, -1), ImPlotFlags_NoLegend)) {
         ImPlot::SetupAxes("step", nullptr, xf, yf);
         if (v.log_y) ImPlot::SetupAxisScale(ImAxis_Y1, ImPlotScale_Log10);
@@ -1327,6 +1351,7 @@ void draw_series(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         plot_geometry(v);
         ImPlot::EndPlot();
     }
+    if (page_ticks) ImGui::PopFont();
     end_plot_input(S, v);
     ImGui::End();
 }
@@ -1355,6 +1380,7 @@ void draw_histogram(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     before_plot(S, v);
     ImPlotAxisFlags xf, yf;
     plot_flags(S, v, &xf, &yf);
+    const bool page_ticks = push_page_ticks(core, S);
     if (ImPlot::BeginPlot("##caliper.histogram", ImVec2(-1, -1), ImPlotFlags_NoLegend)) {
         ImPlot::SetupAxes(nullptr, "count", xf, yf);
         if (v.log_y) ImPlot::SetupAxisScale(ImAxis_Y1, ImPlotScale_Log10);
@@ -1424,6 +1450,7 @@ void draw_histogram(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         plot_geometry(v);
         ImPlot::EndPlot();
     }
+    if (page_ticks) ImGui::PopFont();
     end_plot_input(S, v);
     ImGui::End();
 }
@@ -1528,15 +1555,13 @@ std::vector<int64_t> index_ticks(double lo, double hi, int n) {
 // through the payload axes (a mosaic's per cell), the dims' names, and for a
 // heatmap the colorbar at the right. Cells [x0, x1) x [y0, y1) are in view.
 void draw_cell_axes(const View& v, const TensorView& tv, ImDrawList* dl, float ax, float ay, float aw, float ah,
-                    double x0, double x1, double y0, double y1, float fs, ImFont* font, ImU32 faint_ink,
-                    ImU32 rule_ink) {
+                    double x0, double x1, double y0, double y1, float fs, float text_px, ImFont* font,
+                    ImU32 faint_ink, ImU32 rule_ink) {
     // The given ink, else the browser element's.
     const ImU32 rule = rule_ink ? rule_ink : IM_COL32(0x5a, 0x57, 0x51, 255);
     const ImU32 faint = faint_ink ? faint_ink : IM_COL32(0xa4, 0x9d, 0x8f, 255);
-    ImFont* mono = font;   // else the host's mono face when it loaded one (by its file name), else the current
-    if (!mono)
-        for (ImFont* f : ImGui::GetIO().Fonts->Fonts)
-            if (std::strstr(f->GetDebugName(), "Code") || std::strstr(f->GetDebugName(), "Mono")) { mono = f; break; }
+    ImFont* mono = font ? font : mono_face();   // else the current face
+    // fs sets the layout (10.5 is the browser's), text_px the type's ImGui size.
     const float k = fs / 10.5f;
     dl->AddRect(ImVec2(std::round(ax) - 0.5f, std::round(ay) - 0.5f),
                 ImVec2(std::round(ax + aw) + 0.5f, std::round(ay + ah) + 0.5f), rule);
@@ -1546,8 +1571,8 @@ void draw_cell_axes(const View& v, const TensorView& tv, ImDrawList* dl, float a
         return std::to_string(source_index(a, per == INT64_MAX ? i : i % per));
     };
     auto text = [&](ImVec2 p, const std::string& s, float align_x, float align_y) {
-        const ImVec2 ts = mono ? mono->CalcTextSizeA(fs, FLT_MAX, 0.0f, s.c_str()) : ImGui::CalcTextSize(s.c_str());
-        dl->AddText(mono, fs, ImVec2(p.x - ts.x * align_x, p.y - ts.y * align_y), faint, s.c_str());
+        const ImVec2 ts = mono ? mono->CalcTextSizeA(text_px, FLT_MAX, 0.0f, s.c_str()) : ImGui::CalcTextSize(s.c_str());
+        dl->AddText(mono, text_px, ImVec2(p.x - ts.x * align_x, p.y - ts.y * align_y), faint, s.c_str());
     };
     const float sx = aw / (float)(x1 - x0), sy = ah / (float)(y1 - y0);
     for (int64_t c : index_ticks(std::max(x0 - 0.5, 0.0), std::min(x1 - 0.5, (double)tv.w - 1), std::max(2, (int)(aw / (70 * k))))) {
@@ -1633,7 +1658,11 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
         const float ml = page ? 46.0f * k : 0.0f, mt = page ? 16.0f * k : 0.0f;
         const float mr = page ? (image ? 10.0f : 26.0f) * k : 0.0f;
         const float mb = (page ? 32.0f * k : 0.0f) + (debug ? ImGui::GetTextLineHeightWithSpacing() : 0.0f);
-        const float ax = wp.x + cs.x + ml;
+        // On a page the margins are the element's, from the plate's edges; in
+        // a window, inside its padding.
+        const bool plate = page && core->views_bare;
+        const float pad_x = plate ? 0.0f : st.WindowPadding.x, pad_y = plate ? 0.0f : st.WindowPadding.y;
+        const float ax = wp.x + (plate ? 0.0f : cs.x) + ml;
         // Under the header row of a docked window, and the v1.2 window's
         // diagnostics line in debug.
         ImGuiWindow* cw = ImGui::GetCurrentWindow();
@@ -1645,9 +1674,9 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
             ImGui::SetCursorScreenPos(ImVec2(wp.x + cs.x, wp.y + cs.y + above));
             extra = under_header(core, S, v);
         }
-        const float ay = wp.y + cs.y + above + extra + mt;
-        const float aw = wp.x + ws.x - st.WindowPadding.x - ax - mr;
-        const float ah = wp.y + ws.y - st.WindowPadding.y - ay - mb;
+        const float ay = wp.y + (plate ? 0.0f : cs.y) + above + extra + mt;
+        const float aw = wp.x + ws.x - pad_x - ax - mr;
+        const float ah = wp.y + ws.y - pad_y - ay - mb;
         const ImVec2 m = ImGui::GetIO().MousePos;
         ImGuiIO& io = ImGui::GetIO();
         // A CPU payload's copy, or the MTLBuffer the v1.2 view still imports.
@@ -1817,7 +1846,8 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
             if (page) {
                 const bool house = !core->views_bare;
                 draw_cell_axes(v, *tv, dl, ax, ay, aw, ah, wx0, wx0 + aw / kx, wy0, wy0 + ah / ky, afs,
-                               house ? S->look.mono : nullptr, house ? S->look.faint : 0, house ? S->look.rule : 0);
+                               house ? afs : afs * kMonoEm, house ? S->look.mono : nullptr, house ? S->look.faint : 0,
+                               house ? S->look.rule : 0);
             }
         }
         v.geo_valid = true;
