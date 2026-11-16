@@ -773,6 +773,45 @@ TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's message
     caliper_core_shutdown(core);
 }
 
+// A view's status says "" when its last update succeeded (CaliperLiveViewStatus.error): a scene
+// update the view refuses shows its reason, and the next one it applies clears it.
+TEST_CASE("live/net: a scene view's error clears once an update applies again") {
+    std::string no_gpu;
+    CaliperCore* core = net_core(320, 240, &no_gpu);
+    if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
+    FakeProducer p;
+    p.add_scene();
+    p.start();
+    REQUIRE_MESSAGE(caliper_core_live_attach_url(core, p.url().c_str()) == 1, caliper_core_last_error(core));
+    REQUIRE(poll_until(core, [&] { return p.call([](FakeProducer& f) { return f.sub_of.count("world"); }) == 1; }));
+    p.call([&](FakeProducer& f) {
+        wire::SceneClear reset;
+        reset.sub = f.sub_of.at("world");
+        reset.view = "world";
+        reset.seq = ++f.seq;
+        reset.reset = true;
+        reset.state = true;
+        f.send(reset);
+        // 2-D positions in a 3-D scene: the view refuses the batch.
+        wire::SceneUpdate flat = f.scene_update("flat", CALIPER_NET_PART_POINTS, {}, false);
+        const std::vector<float> xy = {0, 0, 1, 1};
+        flat.arrays.clear();
+        flat.arrays.push_back(wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {2, 2}, xy.data(), xy.size() * 4));
+        f.send(flat);
+        return 0;
+    });
+    REQUIRE(poll_until(core, [&] { return std::string(view_status(core, "world").error).find("flat") != std::string::npos; }));
+    const uint64_t updates = view_status(core, "world").updates;
+    p.call([&](FakeProducer& f) {
+        f.send(f.scene_update("cloud", CALIPER_NET_PART_POINTS, {0, 0, 0, 1, 1, 1}, false));
+        return 0;
+    });
+    REQUIRE(poll_until(core, [&] { return view_status(core, "world").updates > updates; }));
+    CHECK(std::string(view_status(core, "world").error).empty());
+    caliper_core_live_detach(core);
+    caliper_core_shutdown(core);
+}
+
 // ---- the scene queue (live/scene_queue.h) --------------------------------------------------------
 namespace {
 using SceneQ = caliper_live::SceneQueue;
