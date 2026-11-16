@@ -487,8 +487,11 @@ protected:
             [t.texture replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0 withBytes:data bytesPerRow:row_pitch];
             return;
         }
-        id<MTLBuffer> staging = [device_ newBufferWithBytes:data length:(NSUInteger)row_pitch * h
-                                                    options:MTLResourceStorageModeShared];
+        // The caller gives (h - 1) row pitches and one row: no more is read from its memory.
+        const size_t tight = size_t(row_pitch) * (h - 1) + size_t(w) * format_bytes(t.format);
+        id<MTLBuffer> staging = [device_ newBufferWithLength:(NSUInteger)row_pitch * h
+                                                     options:MTLResourceStorageModeShared];
+        std::memcpy(staging.contents, data, tight);
         id<MTLCommandBuffer> cb = [queue_ commandBuffer];
         id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
         [blit copyFromBuffer:staging sourceOffset:0 sourceBytesPerRow:row_pitch sourceBytesPerImage:row_pitch * h
