@@ -254,7 +254,8 @@ The layer offers these pieces:
   passes. A submit returns a serial, and completion is polled. A blocking wait exists only where the backend allows
   one.
 - **Validation.** Every descriptor and every frame is checked against the backend's limits before anything is
-  encoded. One bad draw refuses the whole submit and leaves its targets untouched, and `last_error()` says why.
+  encoded. One bad draw refuses the whole submit and leaves its targets untouched, and `last_error()` says why. A draw
+  may not bind a texture that its own pass renders into.
 - **Readback.** A texture region is read back asynchronously.
 - **Import.** External memory becomes a layer buffer or texture, and the result reports the route: in place, copied
   on the GPU, copied from the host, or refused. `take_stats()` counts the imports, copies and bytes copied, so an info
