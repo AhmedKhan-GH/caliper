@@ -378,7 +378,8 @@ class NativeServer(NetServer):
 
     def __repr__(self) -> str:
         state = "closed" if self.closed else "running"
-        return f"<caliper.NetServer (native sender) {self.url} {state}>"
+        from ._net import redact
+        return f"<caliper.NetServer (native sender) {redact(self.url)} {state}>"
 
 
 class HubConnection:
@@ -391,11 +392,17 @@ class HubConnection:
     connection to the hub only; ``caliper.close()`` ends everything."""
 
     def __init__(self, producer: NativeServer, url: str):
+        from urllib.parse import parse_qs, urlsplit
         self._p = producer
         self.url = url.split("?", 1)[0]
+        self._token = parse_qs(urlsplit(url).query).get(_wire.TOKEN_PARAM, [""])[0]
 
     def _state(self) -> dict:
-        return self._p.nio.upstream()
+        from ._net import redact
+        d = self._p.nio.upstream()
+        if d.get("error"):                           # a native error may quote the link
+            d["error"] = redact(d["error"], self._token)
+        return d
 
     @property
     def state(self) -> str:

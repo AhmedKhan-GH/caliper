@@ -69,6 +69,29 @@ _log = logging.getLogger("caliper.net")
 _log.addHandler(logging.NullHandler())
 _log.propagate = False
 
+
+class _RedactToken(logging.Filter):
+    """The websockets server logs request paths, which carry the session token:
+    a handler attached to "caliper.net" sees them with the token as ``...``."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        clean = redact(msg)
+        if clean != msg:
+            record.msg, record.args = clean, None
+        if record.exc_info and record.exc_info[1] is not None:
+            text = logging.Formatter().formatException(record.exc_info)
+            if redact(text) != text:
+                record.msg = f"{record.msg}\n{redact(text)}"
+                record.exc_info = record.exc_text = None
+        return True
+
+
+_log.addFilter(_RedactToken())
+
 _ORIGIN_LOOPBACK = re.compile(r"(?i)^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?$")
 _ORIGIN_VSCODE = re.compile(r"(?i)^vscode-webview://[^/\s?#@]+$")
 _NOT_BUILT = (b"<!doctype html><meta charset=utf-8><title>Caliper</title>"
@@ -87,6 +110,17 @@ class _Fatal(Exception):
     def __init__(self, code: int, reason: str, error: str | None = None):
         super().__init__(reason)
         self.code, self.reason, self.error = code, reason, error
+
+
+def redact(text: str, token: str | None = None) -> str:
+    """``text`` (a link, or a message that may quote one) with the value of
+    every ``token=`` query parameter, and ``token`` itself when given, written
+    as ``...``: a repr, an error or a log line never repeats the session
+    token, which only the link that serve() prints carries."""
+    out = re.sub(r"(?<=[?&]" + _wire.TOKEN_PARAM + r"=)[^&#\s'\"]*", "...", str(text))
+    if token:
+        out = out.replace(token, "...")
+    return out
 
 
 def origin_ok(origin: str | None) -> bool:
@@ -1315,7 +1349,7 @@ class NetServer:
 
     def __repr__(self) -> str:
         state = "closed" if self.closed else "running"
-        return f"<caliper.NetServer {self.url} {state}>"
+        return f"<caliper.NetServer {redact(self.url)} {state}>"
 
 
 class NetRoute:
@@ -1455,7 +1489,7 @@ def hub_stream_url(url: str | None = None) -> str:
     token = parse_qs(u.query).get(_wire.TOKEN_PARAM, [""])[0]
     if u.scheme not in ("ws", "http") or not u.hostname or not token:
         raise ValueError(f"caliper.connect(): expected ws://127.0.0.1:<port>/v3/stream?token=<token> "
-                         f"or the hub's http:// link, got {src!r}")
+                         f"or the hub's http:// link, got {redact(src)!r}")
     if u.hostname not in ("127.0.0.1", "localhost"):
         raise ValueError("caliper.connect(): the hub must be on this machine (127.0.0.1)")
     port = u.port or 80

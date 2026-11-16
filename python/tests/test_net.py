@@ -1529,3 +1529,49 @@ def test_a_snapshot_over_the_frame_limit_is_not_sent(server, mode):
             await c.expect(w.Snapshot, pump=show, pred=lambda m: m.sub == 1 and m.seq < 10_000)
             assert not any(isinstance(m, w.Snapshot) and m.seq == 10_000 for m in c.inbox)
     run(go())
+
+
+# ---------------------------------------------------------------------------
+# the session token stays out of reprs, errors and logs
+# ---------------------------------------------------------------------------
+def test_the_token_is_not_in_a_repr_or_an_error(server):
+    tok = server.token
+    assert tok in server.url                          # serve() prints the link by design
+    for text in (repr(server), str(server)):
+        assert tok not in text and "token=..." in text
+    with pytest.raises(ValueError) as e:              # a link connect() cannot use
+        caliper.connect(f"ftp://127.0.0.1:1/v3/stream?token={tok}")
+    assert tok not in str(e.value)
+
+    import logging
+    import caliper._net_native as NN
+
+    class Stub:                                       # a hub connection whose native error quotes the link
+        def upstream(self):
+            return {"state": "waiting", "connected": False, "session": "", "url": "",
+                    "error": f"not a ws:// URL: wss://127.0.0.1:1/v3/stream?token={tok}", "attempts": 1,
+                    "connects": 0}
+    hub = NN.HubConnection(types.SimpleNamespace(nio=Stub(), identity={"id": "x"}),
+                           f"ws://127.0.0.1:1/v3/stream?token={tok}")
+    assert tok not in repr(hub) and tok not in str(hub.stats())
+
+    seen = []
+
+    class Keep(logging.Handler):
+        def emit(self, record):
+            seen.append(self.format(record))
+    h = Keep()
+    log = logging.getLogger("caliper.net")
+    log.addHandler(h)
+    old = log.level
+    log.setLevel(logging.DEBUG)
+    try:
+        log.info("GET %s", f"/v3/stream?token={tok}")
+        try:
+            raise RuntimeError(f"rejected ws://127.0.0.1:1/v3/stream?token={tok}")
+        except RuntimeError:
+            log.debug("connection failed", exc_info=True)
+    finally:
+        log.removeHandler(h)
+        log.setLevel(old)
+    assert len(seen) == 2 and not any(tok in s for s in seen), seen
