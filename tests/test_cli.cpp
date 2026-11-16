@@ -354,12 +354,15 @@ TEST_CASE("cli: wrong --api command lines are usage errors") {
     CHECK(parse({"--api=7400"}).error == "--api takes no value; choose the port with --api-port <n>");
 }
 
-TEST_CASE("cli: the usage names --api") {
+TEST_CASE("cli: the usage names --api, --allow-control and --hidden") {
     const std::string u = usage_text();
-    CHECK(u.find("usage: caliper [--applets <dir>]... [--api [--api-port <n>]]") != std::string::npos);
-    CHECK(u.find("caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>]]") !=
+    CHECK(u.find("usage: caliper [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]") !=
           std::string::npos);
-    CHECK(u.find("--out <file.png> [--api [--api-port <n>]]") != std::string::npos);
+    CHECK(u.find("caliper dev <folder> [--applets <dir>]... [--api [--api-port <n>] [--allow-control]] [--hidden]") !=
+          std::string::npos);
+    CHECK(u.find("--out <file.png> [--api [--api-port <n>] [--allow-control]]") != std::string::npos);
+    CHECK(u.find("caliper serve [--port <n>] [--token-file <file>] [--assets <dir>] [--allow-control]") !=
+          std::string::npos);
 }
 
 TEST_CASE("cli: info and list as JSON hold what the text forms print") {
