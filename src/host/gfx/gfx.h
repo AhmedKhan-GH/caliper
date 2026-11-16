@@ -109,6 +109,15 @@ using BindGroup = Handle<struct BindGroupTag>;
 using Readback = Handle<struct ReadbackTag>;
 using Serial = uint64_t;   // one per submit, increasing from 1; 0 is none (a refused submit)
 
+template <class Tag> struct HandleTraits;
+template <> struct HandleTraits<BufferTag> { static constexpr HandleKind kind = HandleKind::Buffer; };
+template <> struct HandleTraits<TextureTag> { static constexpr HandleKind kind = HandleKind::Texture; };
+template <> struct HandleTraits<SamplerTag> { static constexpr HandleKind kind = HandleKind::Sampler; };
+template <> struct HandleTraits<ProgramTag> { static constexpr HandleKind kind = HandleKind::Program; };
+template <> struct HandleTraits<PipelineTag> { static constexpr HandleKind kind = HandleKind::Pipeline; };
+template <> struct HandleTraits<BindGroupTag> { static constexpr HandleKind kind = HandleKind::BindGroup; };
+template <> struct HandleTraits<ReadbackTag> { static constexpr HandleKind kind = HandleKind::Readback; };
+
 inline constexpr uint64_t kHandleSlotBits = 24, kHandleGenerationBits = 36;
 inline constexpr uint64_t kHandleSlotMask = (1ull << kHandleSlotBits) - 1;
 inline constexpr HandleKind handle_kind(uint64_t id) { return HandleKind(id >> 60); }
@@ -478,7 +487,9 @@ public:
 
     const std::string& last_error() const;
     bool alive(uint64_t handle) const;               // a live handle of its kind
-    template <class Tag> bool alive(Handle<Tag> h) const { return alive(h.id); }
+    template <class Tag> bool alive(Handle<Tag> h) const {
+        return handle_kind(h.id) == HandleTraits<Tag>::kind && alive(h.id);
+    }
     void poll();                                     // retires completed work; submit and completed call it
 
 protected:

@@ -345,6 +345,21 @@ target_link_libraries(caliper_api PUBLIC caliper_net)
 set_target_properties(caliper_api PROPERTIES
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
 
+# The graphics layer of the renderer core (src/host/gfx, gfx.h): its backend-neutral core
+# (validation, handles, the uniform arena, frames, serials, readback) and the recording
+# backend that the headless tests use. Portable C++17 with no graphics API and nothing
+# Emscripten cannot compile, so the native backends, the tests and the WebAssembly views
+# share it. On Apple the Metal backend of the layer is added below. No renderer draws
+# through the layer yet.
+add_library(caliper_gfx STATIC
+    src/host/gfx/core.cpp
+    src/host/gfx/recording_backend.cpp
+)
+target_include_directories(caliper_gfx PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_gfx PUBLIC caliper::sdk)
+set_target_properties(caliper_gfx PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+
 # ============================================================================
 # Metal renderer backend (C2, Apple only)
 # ============================================================================
