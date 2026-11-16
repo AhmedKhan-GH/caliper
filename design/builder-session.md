@@ -6,7 +6,7 @@ The builder session is the headless object that binds the four builder libraries
 
 Built on this branch, in `src/builder/session/` with headers in `src/builder/include/caliper_builder/session/`:
 
-- the library `caliper_builder_session`: `Session`, the `SessionHost` interface, the spec edits as pure functions with the conversions between the spec and the command table's forms, a line diff, the catalog provider for loader outputs, the resolved data of a panel, [stacked previews](#stacked-previews) and the [review of spec edits](#review-of-spec-edits);
+- the library `caliper_builder_session`: `Session`, the `SessionHost` interface, the spec edits as pure functions with the conversions between the spec and the command table's forms, a line diff, the catalog provider for loader outputs, the resolved data of a panel, [stacked previews](#stacked-previews), the [review of spec edits](#review-of-spec-edits), and the widget agent's context bundle (`context_bundle.h`, described on the [Widget agent](widget-agent.md#the-context-bundle) page);
 - the library `caliper_builder_session_host`: a strict HTTP/1.1 server for the two command endpoints of Caliper API, with the API file and token helpers;
 - the tool `caliper-builder-host`, the development stand-in for the app's command endpoints;
 - the command table brought in line with the spec format, with a test that keeps it so;

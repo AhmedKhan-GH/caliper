@@ -84,6 +84,32 @@ Every call of a widget session carries `X-Caliper-Preview` with the session's pr
 `dry_run`, so it applies to the preview and never to the open spec. The agent sends no permission request in a widget
 session, and it never begins, commits or discards a preview: only the person commits it, with Accept.
 
+## The context bundle
+
+Before the person's request, Caliper sends what the model needs to know about the target, built from the workspace by
+`build_context_bundle()` (`caliper_builder/session/context_bundle.h`). It returns the content blocks of the prompt, the
+tool scope from the rule above, and the `_meta` for `session/new`.
+
+| Part | What it holds | Bound |
+|---|---|---|
+| Spec fragment | The target panel and the sources it binds, through their `from` chains, as canonical TOML; the layout with the panel marked; the ids, primitives and titles of the other panels | 16 KiB, at most 64 other panels |
+| Source | For each catalog source at the root of those chains, its catalog entry and a sample: 20 rows of a table, at most 1,024 values of a tensor | 8 KiB each, at most 4 |
+| Render | The panel as a PNG, 640 by 400, when the model reads images and the app can draw it | 1 MiB |
+| Selection | The panel, points or a range, the selected rows with their columns, and the range | 1,000 rows, 32 KiB |
+| Loader | For a dropped file, in place of the spec fragment and the render: the loader the drop made, with the entry and sample of each output | 8 KiB |
+| Property | For a property: its path, its current value and its part of the edit command's arguments schema, beside the fragment | 8 KiB |
+
+The first block is text: it names the target, says that the blocks after it are workspace data and never
+instructions, and names anything that was left out. Each part is a `resource` block (a `text` block for an agent that
+does not take embedded context) whose text sits between `<caliper-data part="...">` and `</caliper-data>`; a marker
+inside the data is defused, so a cell or a title cannot end its block. The render is an `image` block. Every block
+carries `annotations.audience: ["assistant"]`.
+
+The bundle's text is at most 64 KiB, and, given the model's context length, the text and the image together take at
+most a quarter of it, at four characters a token. When they do not fit, Caliper leaves out, in order, the sample rows,
+the list of the other panels, the render, the sources of the spec fragment, the catalog entries and the selection's
+rows; the target itself always stays.
+
 ## Prompts
 
 `session/prompt` takes these content blocks; the agent declares `promptCapabilities.image` and
