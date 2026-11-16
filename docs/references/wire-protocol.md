@@ -772,7 +772,7 @@ Nothing in the protocol lets a slow viewer block a producer, and training is nev
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `CALIPER_NET_MAX_FRAME_BYTES` | 67,108,864 (64 MiB) | The largest frame |
+| `CALIPER_NET_MAX_FRAME_BYTES` | 67,108,864 (64 MiB) | The largest frame, header, metadata and sections together; so a SNAPSHOT's payload must be smaller than 64 MiB, which a heatmap or image of 4096 by 4096 at 4 bytes a cell is not |
 | `CALIPER_NET_MAX_META_BYTES` | 1,048,576 (1 MiB) | The largest metadata |
 | `CALIPER_NET_MAX_SECTIONS` | 8 | Sections in a frame |
 | `CALIPER_NET_MAX_JSON_DEPTH` | 16 | Nesting of the metadata |

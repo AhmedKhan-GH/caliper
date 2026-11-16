@@ -221,9 +221,16 @@ struct Asset {
     std::string path;
 };
 
+// Messages that could not be encoded (a frame over CALIPER_NET_MAX_FRAME_BYTES or
+// its metadata over CALIPER_NET_MAX_META_BYTES): counted and not sent.
+std::atomic<uint64_t> g_encode_failed{0};
+
 SharedBytes encode(const wire::Message& m) {
     auto out = std::make_shared<caliper_net::Bytes>();
-    wire::encode(m, out.get());
+    if (!wire::encode(m, out.get())) {
+        g_encode_failed.fetch_add(1, std::memory_order_relaxed);
+        return nullptr;
+    }
     return out;
 }
 
@@ -675,6 +682,7 @@ public:
         d["http_requests"] = http;
         d["refused"] = refused;
         d["overflow_closed"] = st.overflow;
+        d["encode_failed"] = g_encode_failed.load(std::memory_order_relaxed);
         d["series_values"] = values;
         nb::dict s;
         for (auto& [v, n] : totals) s[nb::str(v.c_str())] = n;
@@ -712,7 +720,7 @@ private:
                 if (l.upstream) continue;
                 // what is queued for it goes first, then BYE
                 pump(l, /*final=*/true);
-                if (server_->is_open(id)) server_->send(id, b);
+                if (b && server_->is_open(id)) server_->send(id, b);
             }
         }
         server_->shutdown(CALIPER_NET_CLOSE_GOING_AWAY, 2000);
@@ -839,7 +847,7 @@ private:
         e.code = code;
         e.message = msg;
         e.fatal = true;
-        xsend(l, encode(e));
+        if (SharedBytes b = encode(e)) xsend(l, b);
         xclose(l, close_code, msg.substr(0, 120));
     }
 
@@ -1193,39 +1201,42 @@ private:
             ++l.series_sent;
             return encode(m);
         }
-        Sub* best = nullptr;
-        for (auto& [n, s] : l.subs) {
-            if (!s.snap) continue;
-            if (!final && s.last_sent_ns && now < s.last_sent_ns + s.interval_ns) continue;
-            if (!best || s.last_sent_ns < best->last_sent_ns) best = &s;
+        for (;;) {                                // a snapshot that cannot be encoded is dropped
+            Sub* best = nullptr;
+            for (auto& [n, s] : l.subs) {
+                if (!s.snap) continue;
+                if (!final && s.last_sent_ns && now < s.last_sent_ns + s.interval_ns) continue;
+                if (!best || s.last_sent_ns < best->last_sent_ns) best = &s;
+            }
+            if (!best) return nullptr;
+            std::shared_ptr<const Snap> sn = std::move(best->snap);
+            best->snap.reset();
+            best->last_sent_ns = now;
+            ++l.snapshots_sent;
+            wire::Snapshot m;
+            m.sub = best->sub;
+            m.view = sn->view;
+            m.seq = sn->seq;
+            m.stamp_ns = sn->stamp_ns;
+            m.kind = sn->kind;
+            auto g = groups_.find(best->group);
+            m.data_view = g != groups_.end() ? g->second.data_view : Json::object();
+            m.data = wire::Section::make("data", sn->dtype, sn->shape, sn->data.data(), sn->data.size());
+            if (sn->has_aux)
+                m.aux = wire::Section::make("aux", CALIPER_NET_DTYPE_F32, {(int64_t)(sn->aux.size() / 4)},
+                                            sn->aux.data(), sn->aux.size());
+            m.colormap = sn->colormap;
+            m.flags = sn->flags;
+            m.vmin = sn->vmin;
+            m.vmax = sn->vmax;
+            m.stats = sn->stats;
+            m.axes = sn->axes;
+            m.tile = sn->tile;
+            m.points_dims = sn->points_dims;
+            m.label_count = sn->label_count;
+            if (SharedBytes f = encode(m)) return f;
+            --l.snapshots_sent;
         }
-        if (!best) return nullptr;
-        std::shared_ptr<const Snap> sn = std::move(best->snap);
-        best->snap.reset();
-        best->last_sent_ns = now;
-        ++l.snapshots_sent;
-        wire::Snapshot m;
-        m.sub = best->sub;
-        m.view = sn->view;
-        m.seq = sn->seq;
-        m.stamp_ns = sn->stamp_ns;
-        m.kind = sn->kind;
-        auto g = groups_.find(best->group);
-        m.data_view = g != groups_.end() ? g->second.data_view : Json::object();
-        m.data = wire::Section::make("data", sn->dtype, sn->shape, sn->data.data(), sn->data.size());
-        if (sn->has_aux)
-            m.aux = wire::Section::make("aux", CALIPER_NET_DTYPE_F32, {(int64_t)(sn->aux.size() / 4)},
-                                        sn->aux.data(), sn->aux.size());
-        m.colormap = sn->colormap;
-        m.flags = sn->flags;
-        m.vmin = sn->vmin;
-        m.vmax = sn->vmax;
-        m.stats = sn->stats;
-        m.axes = sn->axes;
-        m.tile = sn->tile;
-        m.points_dims = sn->points_dims;
-        m.label_count = sn->label_count;
-        return encode(m);
     }
 
     // ---- the hub connection's thread ------------------------------------------------------
@@ -1264,7 +1275,7 @@ private:
                         h.capabilities = capabilities();
                         h.software = software_;
                         h.session = hello_id;
-                        client_->send(encode(h));
+                        if (SharedBytes b = encode(h)) client_->send(b);
                     } else if (e.type == T::Message && !helloed) {
                         wire::Message m;
                         const wire::DecodeResult r = wire::decode(e.data.data(), e.data.size(), &m);
@@ -1323,7 +1334,7 @@ private:
                 wire::Bye bye;
                 bye.reason = CALIPER_NET_BYE_SHUTDOWN;
                 bye.message = "the producer is closing";
-                client_->send(encode(bye));
+                if (SharedBytes b = encode(bye)) client_->send(b);
                 client_->close(CALIPER_NET_CLOSE_GOING_AWAY, "shutdown");
             }
             if (up_stop_.load()) {                // let the close go out, briefly

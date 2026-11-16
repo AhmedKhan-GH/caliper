@@ -496,8 +496,13 @@ class Link:
         if best is not None:
             snap, best.snap = best.snap, None
             best.last_sent = now
+            try:
+                frame = self._snapshot_frame(best.sub, snap)
+            except _wire.WireError:              # over the frame limit: counted, not sent
+                self.p.counters["encode_failed"] += 1
+                return self.next_frame(now)
             self.stats["snapshots_sent"] += 1
-            return self._snapshot_frame(best.sub, snap), None
+            return frame, None
         return None, wait
 
     @staticmethod

@@ -347,7 +347,7 @@ class NativeServer(NetServer):
                 "server": {**dict(self.counters), "http_requests": n["http_requests"],
                            "refused": n["refused"]},
                 "producer": {**dict(self.producer.counters), "native_published": n["published"],
-                             "overflow_closed": n["overflow_closed"]},
+                             "overflow_closed": n["overflow_closed"], "encode_failed": n["encode_failed"]},
                 "series": n["series"]}
 
     # -- lifetime ------------------------------------------------------------------------

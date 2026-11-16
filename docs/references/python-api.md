@@ -541,7 +541,11 @@ sampled with a stride, point i being position floor(i × count / size), so the
 sample stays the same while the size does. A pooled or tiled heatmap reports
 the range of its data before pooling, the empty cells left out, for autoscale.
 A data view that breaks a rule is refused with the error `bad_data_view`
-(`DataViewError` in Python), and the view keeps the data view it had.
+(`DataViewError` in Python), and the view keeps the data view it had. So is one
+whose payload would not fit one frame of the protocol with up to 1 MiB of
+metadata: a heatmap or image of more than 16,515,042 cells, 4 bytes each, such
+as 4096 by 4096 (4096 by 4031 fits). Points up to the limit of 1,000,000 with
+labels, and histograms up to 65,536 bins, always fit.
 
 **Default and subscriptions.** The view's default data view is what the window
 and the live session draw, and what a viewer's subscription starts from. Each

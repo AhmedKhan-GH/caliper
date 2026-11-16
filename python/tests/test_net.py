@@ -1455,3 +1455,77 @@ def test_control_queue_is_bounded_for_a_peer_that_never_reads(server):
     assert n == 1 and left == 0
     assert peak <= limit
     assert caliper.show(W, name="w") is False         # still returns at once, nothing attached
+
+
+# ---------------------------------------------------------------------------
+# the frame limit
+# ---------------------------------------------------------------------------
+def test_largest_views_fit_one_frame():
+    """What resolution accepts encodes in one frame with a long head: a heatmap
+    at the largest payload accepted, points at LIMIT_MAX_POINTS with labels
+    and a histogram at MAX_BINS; one cell more than the heatmap does not."""
+    from caliper import _dataview as dv
+    names = {"index": {"layer" * 12 + str(i): [0, 4096, 1] for i in range(6)}}  # metadata of some size
+    rows = dv.MAX_PAYLOAD_BYTES // 4 // 4096
+    cases = [(w.Kind.HEATMAP, np.zeros((rows, 4096), np.float32), None),
+             (w.Kind.POINTS, np.zeros((w.LIMIT_MAX_POINTS, 3), np.float32),
+              np.zeros(w.LIMIT_MAX_POINTS, np.float32)),
+             (w.Kind.HISTOGRAM, np.zeros(w.MAX_BINS, np.float32), None)]
+    for kind, data, aux in cases:
+        _, n = w.encode_parts(w.Snapshot(1, "v" * 63, 2**40, 2**60, kind, names, data, aux=aux,
+                                         stats=[1e30] * w.MAX_STATS))
+        assert n <= w.MAX_FRAME_BYTES, (kind, n)
+    view = {"id": 1, "name": "w", "kind": 1, "default": {},
+            "sources": [{"name": "data", "dtype": "f32",
+                         "dims": [{"name": "row", "size": 4096}, {"name": "col", "size": 4096}]}]}
+    with pytest.raises(dv.DataViewError, match="does not fit one frame"):
+        dv.resolve(view, {"budget": {"max_extent": 4096}})
+    assert dv.resolve(view, {"budget": {"max_extent": 4031}})["budget"]["max_extent"] == 4031
+
+
+def test_a_view_too_large_for_a_frame_is_refused(server):
+    """max_extent 4096 on a 4096 by 4096 weight is refused with bad_data_view,
+    and the connection goes on: the same subscription with a smaller budget
+    gets its snapshots."""
+    W = torch.zeros(4096, 4096)
+    show = lambda: caliper.show(W, name="w", rate=0)  # noqa: E731
+
+    async def go():
+        async with Client(server) as c:
+            r = await c.subscribe(1, "w", {"budget": {"max_extent": 4096}}, pump=show)
+            assert r.error is not None and r.error["code"] == w.ERR_BAD_DATA_VIEW, r.error
+            assert "does not fit one frame" in r.error["message"]
+            r = await c.subscribe(1, "w", {"budget": {"max_extent": 1024}}, pump=show)
+            assert r.error is None
+            s = await c.expect(w.Snapshot, pump=show, pred=lambda m: m.sub == 1)
+            return s.data.shape
+    assert run(go()) == (1024, 1024)
+
+
+def test_a_snapshot_over_the_frame_limit_is_not_sent(server, mode):
+    """A snapshot that cannot be encoded (only possible past resolution, so it
+    is handed to the native sender directly here) is counted and dropped, not
+    sent as an empty message, and the connection goes on."""
+    if mode != "native":
+        pytest.skip("the native sender's publish() is the path past resolution")
+    W = torch.randn(32, 32)
+    show = lambda: caliper.show(W, name="w", rate=0)  # noqa: E731
+    big = np.zeros(w.MAX_FRAME_BYTES // 4 + 1, np.float32)
+
+    async def go():
+        async with Client(server) as c:
+            await c.subscribe(1, "w", pump=show)
+            await c.expect(w.Snapshot, pump=show, pred=lambda m: m.sub == 1)
+            v = server.ring.views["w"]
+            gid = next(iter(v.groups.values())).__dict__["gid"]
+            server.nio.publish(gid, "w", 10_000, 0, int(w.Kind.HEATMAP), "[]", "", 0, 0, 0.0, 1.0, 0, 0,
+                               0, -1, int(w.DType.F32), [big.size, 1], big.ctypes.data, big.nbytes, 0, 0)
+            # the native thread tries to send it and counts the failure
+            deadline = time.monotonic() + 10
+            while not server.stats()["producer"]["encode_failed"] and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert server.stats()["producer"]["encode_failed"] == 1
+            # the connection goes on: an empty message would have failed to decode here
+            await c.expect(w.Snapshot, pump=show, pred=lambda m: m.sub == 1 and m.seq < 10_000)
+            assert not any(isinstance(m, w.Snapshot) and m.seq == 10_000 for m in c.inbox)
+    run(go())
