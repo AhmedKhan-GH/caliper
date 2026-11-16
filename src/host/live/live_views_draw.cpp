@@ -11,30 +11,37 @@
 //              (physical pixels; recreated when it drifts more than 8 px),
 //              redrawn from the imported payload buffer whenever the payload,
 //              the camera or the size changed (zero-copy: the GPU reads the
-//              producer's buffer). 3-D: orbit with left/right drag, pan with
-//              middle drag or shift+drag, wheel zoom. 2-D: drag pans, wheel
-//              zooms about the cursor. Fit button / F key re-fits to the bbox.
-//              Opaque points with depth test in 3-D, so categorical colours stay
-//              exact under overlap. Hover: nearest point under the cursor from
-//              the CPU-visible payload (sampled above 256K points).
-//   SERIES     ImPlot line over step index, auto-fit, min/max decimated above
-//              8192 values, hover tooltip (step, value), latest value in text.
+//              producer's buffer). 3-D: a drag orbits, a right, middle, alt or
+//              ctrl drag pans, the wheel zooms. 2-D: a drag pans, the wheel
+//              zooms about the cursor. A double click, the Fit button or the F
+//              key fits the camera to the bbox. Opaque points with depth test
+//              in 3-D, so categorical colours stay exact under overlap. Hover:
+//              nearest point under the cursor from the CPU-visible payload
+//              (sampled above 256K points).
+//   SERIES     ImPlot line over step index, min/max decimated above 8192
+//              values, hover tooltip (step, value), latest value in text.
 //   HISTOGRAM  ImPlot bars at bin centres, hover tooltip (bin range, count).
-//   HEATMAP / IMAGE  drawn by the v1.2 views; this file appends a one-line
-//              overlay (seq, latency, dropped) and the Pause button to that
-//              window.
+//              Both fit their axes to the data every frame while they follow
+//              it; a drag or the wheel in the plot stops following and keeps
+//              the view, and a double click follows again.
+//   HEATMAP / IMAGE  windows of the v1.2 views; this file draws their image
+//              with pan (a drag), zoom about the pointer (the wheel) and a fit
+//              (a double click), and appends the telemetry line and the Pause
+//              button below it.
+//
+// The gestures are the browser element's (web/src/views), in the app and in
+// the browser alike, and only the plot area takes them, so a drag there never
+// moves a floating window; its title bar still does.
 //
 // EVENTS. When the host set an event sink (set_event_sink: the browser does,
-// and sends them to the producer), every view also selects, picks and
-// reports hovers with the browser element's gestures and details
-// (web/src/views, wire protocol v3 "Events"), in source indices through the
-// snapshot's payload map: a shift-drag selects (points: a lasso, with alt a
-// rectangle; heatmap and image: a block of cells; series: a range of steps;
-// histogram: a range of bins), a shift-click clears the selection, a click
-// picks, and hovers go out at most 30 times a second. In 3-D points a drag
-// orbits and a right, middle, alt or ctrl drag pans. Selected points draw over
-// the others, which are dimmed. Without a sink nothing of this runs, and the
-// native gestures above are unchanged.
+// and sends them to the producer), the selections, picks and hovers of the
+// views leave as events with the browser element's details (wire protocol v3
+// "Events"), in source indices through the snapshot's payload map: a
+// shift-drag selects (points: a lasso, with alt a rectangle; heatmap and
+// image: a block of cells; series: a range of steps; histogram: a range of
+// bins), a shift-click clears the selection, a click picks, and hovers go out
+// at most 30 times a second. Selected points draw over the others, which are
+// dimmed. Without a sink a selection stays in the view.
 #include "live/live_views_state.h"
 
 #include "renderer/host_renderer.h"
@@ -522,7 +529,9 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     const bool hovered = ImGui::IsItemHovered();
     const bool active = ImGui::IsItemActive();
     ImGuiIO& io = ImGui::GetIO();
-    const bool ev = (bool)S->events;
+    // The browser element's gestures, in the app as in the browser; what
+    // people do leaves only through an event sink (emit sends nothing without).
+    const bool ev = true;
     Gesture& g = v.gesture;
     const bool released = ev && track_gesture(v, io.MousePos, v.have_cur && v.cur.pos_cpu);
     if (ev && g.down && g.selecting) {
@@ -824,7 +833,6 @@ void set_follow(CaliperLiveViewsState* S, View& v, bool on) {
 // wheel zooms about the pointer by the browser element's factor (ImPlot's own
 // wheel zoom, a fixed step per event, is off meanwhile).
 void before_plot(CaliperLiveViewsState* S, View& v) {
-    if (!S->events) return;
     const Gesture& g = v.gesture;
     ImGuiIO& io = ImGui::GetIO();
     const ImVec2 m = io.MousePos;
@@ -877,9 +885,9 @@ void before_plot(CaliperLiveViewsState* S, View& v) {
 // The axis flags of a plot: fit while following, never fit y on a log scale
 // (setup_zoom does), and locked while a selection is dragged.
 void plot_flags(const CaliperLiveViewsState* S, const View& v, ImPlotAxisFlags* xf, ImPlotAxisFlags* yf) {
-    const bool ev = (bool)S->events;
-    const ImPlotAxisFlags lock = ev && v.gesture.down && v.gesture.selecting ? ImPlotAxisFlags_Lock : 0;
-    const ImPlotAxisFlags fit = !ev || v.follow ? ImPlotAxisFlags_AutoFit : 0;
+    (void)S;
+    const ImPlotAxisFlags lock = v.gesture.down && v.gesture.selecting ? ImPlotAxisFlags_Lock : 0;
+    const ImPlotAxisFlags fit = v.follow ? ImPlotAxisFlags_AutoFit : 0;
     *xf = fit | lock;
     *yf = (v.log_y ? 0 : fit) | lock;
 }
@@ -901,13 +909,13 @@ void setup_zoom(View& v) {
 
 // Inside the plot, after its items: a double click follows again.
 void after_plot(CaliperLiveViewsState* S, View& v) {
-    if (!S->events) return;
     if (ImPlot::IsPlotHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) set_follow(S, v, true);
 }
 
 // After the plot, drawn or not: ImPlot's own wheel zoom back as it was.
 void end_plot_input(CaliperLiveViewsState* S, View& v) {
-    if (S->events) ImPlot::GetInputMap().ZoomRate = v.zoom_rate_saved;
+    (void)S;
+    ImPlot::GetInputMap().ZoomRate = v.zoom_rate_saved;
 }
 
 // The gesture of a plot (series, histogram) while the host listens for
@@ -989,7 +997,7 @@ void draw_series(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         else
             ImGui::Text("series (no values yet)  %s", tel);
     }
-    const bool ev = (bool)S->events;
+    const bool ev = true;   // gestures everywhere; events only through a sink
     Gesture& g = v.gesture;
     before_plot(S, v);
     ImPlotAxisFlags xf, yf;
@@ -1106,7 +1114,7 @@ void draw_histogram(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         telemetry(tel, sizeof tel, S, v);
         ImGui::Text("histogram bins=%zu [%.4g, %.4g]  %s", B, v.lo, v.hi, tel);
     }
-    const bool ev = (bool)S->events;
+    const bool ev = true;   // gestures everywhere; events only through a sink
     Gesture& g = v.gesture;
     before_plot(S, v);
     ImPlotAxisFlags xf, yf;
@@ -1361,23 +1369,28 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
 
         // The plot area and how cells map onto it: kx and ky screen units per
         // cell across and down, and the cell (wx0, wy0) at the area's top left.
-        // Without an event sink this is views_draw's own layout (the image
-        // scaled to fit, centred horizontally, at the top). With one, the view
-        // pans and zooms like the browser element's heatmap and draws the
-        // image itself: the wheel zooms about the pointer, a drag pans, a
-        // double click fits it again. A bare view on a page (the browser) also
-        // takes the element's layout: axes of row and column indices around
-        // the plot area, a colorbar beside a heatmap, a heatmap stretched to
-        // the area and an image at equal aspect.
-        const ImVec2 img((float)tv->w / core->scale, (float)tv->h / core->scale);
+        // The view pans and zooms like the browser element's heatmap, in the
+        // app as in the browser, and draws the image itself: the wheel zooms
+        // about the pointer, a drag pans, a double click fits it again. The
+        // plot area takes the gestures, so a drag there never moves the
+        // window; the title bar still does. In a native window the info line
+        // stays above the area and the telemetry bar with Pause below it. A
+        // bare view on a page (the browser) also takes the element's layout:
+        // axes of row and column indices around the plot area, a colorbar
+        // beside a heatmap, a heatmap stretched to the area and an image at
+        // equal aspect; elsewhere the fit keeps cells square.
         const ImVec2 cs = ImGui::GetCursorStartPos();
-        const bool ev = (bool)S->events;
-        const bool page = ev && core->views_bare;
+        // The gestures run in the app as in the browser; the element's layout
+        // (axes, colorbar, stretched heatmap) is the page's, where events go
+        // to a producer.
+        const bool ev = true;
+        const bool page = S->events && core->views_bare;
         const bool image = v.kind == CALIPER_LIVE_KIND_IMAGE;
         // Margins of the element's heatmap view: tick labels left and below, a
         // colorbar right of a heatmap (web/src/views/heatmap.ts).
         const float ml = page ? 46.0f : 0.0f, mt = page ? 16.0f : 0.0f;
-        const float mr = page ? (image ? 10.0f : 26.0f) : 0.0f, mb = page ? 32.0f : 0.0f;
+        const float mr = page ? (image ? 10.0f : 26.0f) : 0.0f;
+        const float mb = page ? 32.0f : core->views_bare ? 0.0f : ImGui::GetFrameHeight() + st.ItemSpacing.y;
         const float ax = wp.x + cs.x + ml;
         const float ay = wp.y + cs.y + (core->views_bare ? 0.0f : ImGui::GetTextLineHeightWithSpacing()) + mt;
         const float aw = wp.x + ws.x - st.WindowPadding.x - ax - mr;
@@ -1395,27 +1408,17 @@ void draw_texture_overlay(CaliperCore* core, CaliperLiveViewsState* S, View& v) 
         // page), or a heatmap stretched to the area on a page.
         const double kfit = std::min(aw / W, ah / H);
         const double kxfit = page && !image ? aw / W : kfit, kyfit = page && !image ? ah / H : kfit;
-        double kx, ky, wx0, wy0;
-        if (!ev) {
-            const float sc = (img.x > 0 && img.y > 0) ? std::min(aw / img.x, ah / img.y) : 0.0f;
-            kx = ky = kfit;
-            wx0 = -std::max(0.0, ((double)aw - img.x * sc) * 0.5) / kx;
-            wy0 = 0.0;
-        } else {
-            if (v.zoom_w != tv->w || v.zoom_h != tv->h) v.zoom_fitted = true;   // another payload shape
-            v.zoom_w = tv->w;
-            v.zoom_h = tv->h;
-            if (v.zoom_fitted) {
-                v.zoom_kx = kxfit;
-                v.zoom_ky = kyfit;
-                v.zoom_cx = W * 0.5;
-                v.zoom_cy = H * 0.5;
-            }
-            kx = v.zoom_kx;
-            ky = v.zoom_ky;
-            wx0 = v.zoom_cx - aw * 0.5 / kx;
-            wy0 = v.zoom_cy - ah * 0.5 / ky;
+        if (v.zoom_w != tv->w || v.zoom_h != tv->h) v.zoom_fitted = true;   // another payload shape
+        v.zoom_w = tv->w;
+        v.zoom_h = tv->h;
+        if (v.zoom_fitted) {
+            v.zoom_kx = kxfit;
+            v.zoom_ky = kyfit;
+            v.zoom_cx = W * 0.5;
+            v.zoom_cy = H * 0.5;
         }
+        double kx = v.zoom_kx, ky = v.zoom_ky;
+        double wx0 = v.zoom_cx - aw * 0.5 / kx, wy0 = v.zoom_cy - ah * 0.5 / ky;
         auto at = [&](ImVec2 p, double* cx, double* cy) {
             *cx = wx0 + (p.x - ax) / kx;
             *cy = wy0 + (p.y - ay) / ky;
