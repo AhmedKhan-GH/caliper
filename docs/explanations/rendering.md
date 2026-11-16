@@ -71,8 +71,10 @@ vertex and instance-step buffers (a stride of 0 makes a stream constant), indexe
 the three blend modes, the RG32Uint ID target, completion through the queue's callback and readback through the
 buffer's asynchronous map. It keeps to WebGPU's default limits, and on a compatibility-mode device to that level's
 limits. Shader modules and pipelines are validated by WebGPU asynchronously, so their errors are collected afterwards
-rather than refused at once. The two programs the live views draw are the hand-written WGSL in
-`src/host/renderer/webgpu_programs.h`, to be replaced by the shader generator's table.
+rather than refused at once. Each submit runs in an error scope too, so that a frame the core passed and WebGPU
+refuses is reported in `device_errors()` as `submit <serial>: ...` rather than lost. The two programs the live views
+draw are the hand-written WGSL in `src/host/renderer/webgpu_programs.h`, to be replaced by the shader generator's
+table.
 
 The renderer refuses the rest of the interface: device tensors and imported GPU memory (a browser has neither),
 geometry other than points, and the embed canvas. `web/wasm/README.md` gives the module's build, its size and its

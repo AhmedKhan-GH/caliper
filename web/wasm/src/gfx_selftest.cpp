@@ -20,9 +20,15 @@
 // is submitted: its pipelines and bind groups hold what they need, so the frame draws as if it
 // were alive.
 //
+// Two more frames follow the first, before the readbacks: one whose draw samples the colour target
+// it renders into, which the layer's core refuses; and one whose dispatch binds one buffer as both
+// read-only and read-write storage, which the core passes and WebGPU refuses when it is encoded, so
+// that the backend's error scope around the submit must report it.
+//
 // The report is "ok" or "fail" and then: color, id, depth, fill and copy, the texels that differ
 // in each readback; import, the route label and bytes copied of the colour stream's import;
-// level, core or compatibility; and errors, the device errors the backend collected.
+// own-target, refused or submitted; submit-error, reported or lost; level, core or compatibility;
+// and errors, the device errors the backend collected other than the one expected.
 #include "gfx_selftest.h"
 
 #include "renderer/webgpu_backend.h"
@@ -102,6 +108,40 @@ constexpr gfx::BindingDesc kFillBindings[] = {
 constexpr gfx::ProgramDesc kFill = {"caliper.selftest.fill", kFillEntries, 1, kFillBindings, 2, kFillWgsl,
                                     nullptr, nullptr, 0};
 
+// A draw that reads texel (0, 0) of a texture, over one triangle that covers its target.
+constexpr const char* kSampleWgsl = R"wgsl(
+@group(0) @binding(0) var img: texture_2d<f32>;
+
+@vertex
+fn vs_cover(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    return vec4<f32>(vec2<f32>(f32(i & 1u), f32(i >> 1u)) * 4.0 - 1.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs_load() -> @location(0) vec4<f32> { return textureLoad(img, vec2<i32>(0, 0), 0); }
+)wgsl";
+constexpr gfx::EntryDesc kSampleEntries[] = {{"vs_cover", gfx::kStageVertex, {1, 1, 1}},
+                                             {"fs_load", gfx::kStageFragment, {1, 1, 1}}};
+constexpr gfx::BindingDesc kSampleBindings[] = {
+    {0, 0, gfx::BindingType::Texture, gfx::kStageFragment, false, 0, gfx::Format::RGBA8Unorm}};
+constexpr gfx::ProgramDesc kSample = {"caliper.selftest.sample", kSampleEntries, 2, kSampleBindings, 1, kSampleWgsl,
+                                      nullptr, nullptr, 0};
+
+// A copy from one storage buffer to another; bound to one buffer twice, WebGPU refuses it.
+constexpr const char* kAliasWgsl = R"wgsl(
+@group(0) @binding(0) var<storage, read> src: array<u32>;
+@group(0) @binding(1) var<storage, read_write> dst: array<u32>;
+
+@compute @workgroup_size(1)
+fn cs_copy(@builtin(global_invocation_id) gid: vec3<u32>) { dst[gid.x] = src[gid.x]; }
+)wgsl";
+constexpr gfx::EntryDesc kAliasEntries[] = {{"cs_copy", gfx::kStageCompute, {1, 1, 1}}};
+constexpr gfx::BindingDesc kAliasBindings[] = {
+    {0, 0, gfx::BindingType::Storage, gfx::kStageCompute, false, 4},
+    {0, 1, gfx::BindingType::StorageReadWrite, gfx::kStageCompute, false, 4}};
+constexpr gfx::ProgramDesc kAlias = {"caliper.selftest.alias", kAliasEntries, 1, kAliasBindings, 2, kAliasWgsl,
+                                     nullptr, nullptr, 0};
+
 constexpr uint32_t W = 64, H = 64, FW = 16, FH = 16, CW = 8, CH = 8, kCopyPitch = 256;
 constexpr uint32_t kClear = 0xff201008u;   // r 8, g 16, b 32, a 255
 constexpr float kHalf = 3.0f / 32.0f;      // 3 pixels of 64
@@ -121,16 +161,19 @@ enum { kColor, kId, kDepth, kFillTex, kCopyTex, kReads };
 
 struct State {
     bool running = false;
-    gfx::Program draw_prog, fill_prog;
-    gfx::Pipeline pa, pb, pc, pf;
-    gfx::BindGroup draw_g0, fill_g0, fill_g1;
-    gfx::Buffer verts, idx, corners, centers, half, zs, colors, copy_src;
+    gfx::Program draw_prog, fill_prog, sample_prog, alias_prog;
+    gfx::Pipeline pa, pb, pc, pf, ps, palias;
+    gfx::BindGroup draw_g0, fill_g0, fill_g1, sample_g0, alias_g0;
+    gfx::Buffer verts, idx, corners, centers, half, zs, colors, copy_src, alias;
     gfx::Texture color, id, depth, fill, copy;
     gfx::Readback rb[kReads];
     bool got[kReads] = {};
     std::vector<uint8_t> out[kReads];
     std::string import_path;
     uint64_t import_bytes = 0;
+    bool own_target_refused = false;
+    gfx::Serial alias_serial = 0;
+    int waits = 0;   // polls after the readbacks, while the expected submit error has not arrived
 };
 State S;
 std::vector<SelftestImage> g_images;
@@ -145,13 +188,16 @@ void release_all(gfx::Backend& b) {
     drop(b, S.pb);
     drop(b, S.pc);
     drop(b, S.pf);
+    drop(b, S.ps);
+    drop(b, S.palias);
     drop(b, S.draw_g0);
     drop(b, S.fill_g0);
     drop(b, S.fill_g1);
-    for (gfx::Buffer x : {S.verts, S.idx, S.corners, S.centers, S.half, S.zs, S.colors, S.copy_src}) drop(b, x);
+    drop(b, S.sample_g0);
+    drop(b, S.alias_g0);
+    for (gfx::Buffer x : {S.verts, S.idx, S.corners, S.centers, S.half, S.zs, S.colors, S.copy_src, S.alias}) drop(b, x);
     for (gfx::Texture x : {S.color, S.id, S.depth, S.fill, S.copy}) drop(b, x);
-    drop(b, S.draw_prog);
-    drop(b, S.fill_prog);
+    for (gfx::Program x : {S.draw_prog, S.fill_prog, S.sample_prog, S.alias_prog}) drop(b, x);
     S = State{};
 }
 
@@ -413,6 +459,62 @@ bool gfx_selftest_start(gfx::Backend& b, std::string* why) {
     f.render(std::move(blended));
     if (!b.submit(std::move(f))) return fail("submit");
 
+    // A draw that samples the colour target it renders into: the core refuses the frame.
+    S.sample_prog = b.create_program(kSample);
+    gfx::RenderPipelineDesc sd;
+    sd.program = S.sample_prog;
+    sd.vertex_entry = "vs_cover";
+    sd.fragment_entry = "fs_load";
+    sd.label = "caliper.selftest.sample";
+    S.ps = b.create_render_pipeline(sd);
+    gfx::BindGroupDesc sg;
+    sg.program = S.sample_prog;
+    sg.group = 0;
+    sg.entry_count = 1;
+    sg.entries[0].binding = 0;
+    sg.entries[0].texture = S.color;
+    S.sample_g0 = b.create_bind_group(sg);
+    if (!S.ps || !S.sample_g0) return fail("the sampling draw");
+    {
+        gfx::RenderTarget st;
+        st.color = S.color;
+        st.clear = false;
+        gfx::DrawList own(st);
+        gfx::DrawRecord r;
+        r.pipeline = S.ps;
+        r.groups[0] = S.sample_g0;
+        r.count = 3;
+        own.draw(r);
+        gfx::Frame sf;
+        sf.render(std::move(own));
+        S.own_target_refused = b.submit(std::move(sf)) == 0 &&
+                               b.last_error().find("binds the pass's own colour target") != std::string::npos;
+    }
+    // A dispatch that binds one buffer as read-only and read-write storage: WebGPU refuses it.
+    S.alias_prog = b.create_program(kAlias);
+    gfx::ComputePipelineDesc ad;
+    ad.program = S.alias_prog;
+    ad.entry = "cs_copy";
+    ad.label = "caliper.selftest.alias";
+    S.palias = b.create_compute_pipeline(ad);
+    S.alias = make_buffer(b, nullptr, 256, gfx::kStorage, "selftest.alias");
+    gfx::BindGroupDesc ag;
+    ag.program = S.alias_prog;
+    ag.group = 0;
+    ag.entry_count = 2;
+    ag.entries[0].binding = 0;
+    ag.entries[0].buffer = S.alias;
+    ag.entries[1].binding = 1;
+    ag.entries[1].buffer = S.alias;
+    S.alias_g0 = b.create_bind_group(ag);
+    if (!S.palias || !S.alias || !S.alias_g0) return fail("the aliasing dispatch");
+    {
+        gfx::Frame af;
+        af.dispatch(S.palias, gfx::View<gfx::BindGroup>(&S.alias_g0, 1), {}, 4, 1, 1);
+        S.alias_serial = b.submit(std::move(af));
+        if (!S.alias_serial) return fail("the aliasing dispatch's submit");
+    }
+
     S.rb[kColor] = b.read_texture(S.color, 0, 0, W, H);
     S.rb[kId] = b.read_texture(S.id, 0, 0, W, H);
     S.rb[kDepth] = b.read_texture(S.depth, 0, 0, W, H);
@@ -433,6 +535,18 @@ bool gfx_selftest_poll(gfx::Backend& b, std::string* report) {
         }
     for (bool g : S.got)
         if (!g) return false;
+    // The error of the aliasing dispatch, from the error scope around its submit, and the others.
+    const std::string alias_error = "submit " + std::to_string(S.alias_serial) + ":";
+    std::string errors;
+    bool reported = false, compat = false;
+    if (auto* wb = dynamic_cast<gfx::WebGpuBackend*>(&b)) {
+        compat = wb->compatibility();
+        for (const auto& m : wb->device_errors()) {
+            if (m.compare(0, alias_error.size(), alias_error) == 0) reported = true;
+            else errors += (errors.empty() ? "" : " | ") + m;
+        }
+    }
+    if (!reported && ++S.waits < 240) return false;   // a frame more for the scope's callback
 
     const Expect e = expected();
     auto u32 = [](const std::vector<uint8_t>& v, size_t i) {
@@ -473,19 +587,16 @@ bool gfx_selftest_poll(gfx::Backend& b, std::string* report) {
                 for (uint32_t c = 0; c < 4; ++c)
                     bad_copy += S.out[kCopyTex][(size_t(y) * CW + x) * 4 + c] != copy_byte(x, y, c);
     }
-    std::string errors;
-    bool compat = false;
-    if (auto* wb = dynamic_cast<gfx::WebGpuBackend*>(&b)) {
-        compat = wb->compatibility();
-        for (const auto& m : wb->device_errors()) errors += (errors.empty() ? "" : " | ") + m;
-    }
     const bool ok = bad_color == 0 && bad_id == 0 && bad_depth == 0 && bad_fill == 0 && bad_copy == 0 &&
-                    S.import_path == std::string("copied-from-host") && S.import_bytes == 24 && errors.empty();
+                    S.import_path == std::string("copied-from-host") && S.import_bytes == 24 &&
+                    S.own_target_refused && reported && errors.empty();
     char buf[512];
     std::snprintf(buf, sizeof buf,
-                  "%s color=%lld id=%lld depth=%lld fill=%lld copy=%lld import=%s:%llu level=%s",
+                  "%s color=%lld id=%lld depth=%lld fill=%lld copy=%lld import=%s:%llu own-target=%s submit-error=%s "
+                  "level=%s",
                   ok ? "ok" : "fail", bad_color, bad_id, bad_depth, bad_fill, bad_copy, S.import_path.c_str(),
-                  (unsigned long long)S.import_bytes, compat ? "compatibility" : "core");
+                  (unsigned long long)S.import_bytes, S.own_target_refused ? "refused" : "submitted",
+                  reported ? "reported" : "lost", compat ? "compatibility" : "core");
     *report = buf;
     if (!errors.empty()) *report += " errors=" + errors;
 
