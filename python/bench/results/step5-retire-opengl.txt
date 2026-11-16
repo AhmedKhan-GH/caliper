@@ -1,0 +1,58 @@
+# Renderer core, step 5: retire OpenGL. The references, taken at the step's first commit (2026-11-16)
+
+Taken on the code as it stood before the step (a4327f9a of sprint4-build, the step's base), built in Release
+with the preset release (CALIPER_WITH_SLANG=OFF), on the reference Mac (M-series Max, 18 cores, 64 GB,
+macOS 27, mains power).
+
+The step changes no drawing code of the Metal renderer. It removes the OpenGL renderer, its test environment
+and its build dependencies (GLEW, ImGui's OpenGL backend, find_package(OpenGL)), and makes the app,
+caliper shot and the embedding core refuse with a message where neither Metal nor Vulkan starts. Its
+comparison on Metal is therefore the graphics suite's Metal rows: the same 60 rows, each passing as before.
+No timing is compared, because no timed path changes; the timing reference stays step 0's baseline
+(step0-baseline.txt).
+
+## The whole suite
+
+ctest --test-dir cmake-build-release --output-on-failure --timeout 600
+  49 entries: 47 passed, 2 skipped, 0 failed. The two skipped are caliper_colormap_exhaustive and
+  caliper_colormap_gpu_exhaustive, label slow, which skip unless CALIPER_SLOW_TESTS=1.
+
+Each binary on its own (cmake-build-release/tests):
+  caliper_tests              375 test cases, 375 passed, 2 skipped by doctest's own decorators
+  caliper_gfx_tests           69 test cases, 69 passed, 0 skipped
+  caliper_shader_tests         2 test cases, 2 passed
+  caliper_scene_tests         51 test cases, 51 passed
+  caliper_live_tests          33 test cases, 33 passed
+  caliper_live_views_tests    20 test cases, 20 passed
+  caliper_embed_tests         23 test cases, 23 passed
+  caliper_export_tests        24 test cases, 24 passed
+
+## Which tests draw on which renderer on macOS
+
+The graphics suite (caliper_gfx_tests --list-test-cases) has one environment per renderer:
+
+| Rows | Count | Renderer |
+|---|---|---|
+| gfx/GL | 8 | OpenGL 3.3 core through GLEW, in a hidden GLFW window |
+| gfx: the test process has no Dock icon or menu bar | 1 | Gated on the OpenGL environment |
+| gfx/Metal | 15 | Metal, in a hidden GLFW window |
+| gfx/metal geometry | 3 | Metal |
+| gfx/metal geometry.v1_1 | 13 | Metal |
+| gfx/metal geometry.v1_2 | 5 | Metal |
+| gfx/metal geometry.v1_3 | 6 | Metal |
+| gfx/Metal layer | 6 | The graphics layer's Metal backend on the Metal renderer's device |
+| gfx/Metal colormap | 3 | The same |
+| gfx/Metal scene | 4 | The same |
+| gfx/Metal scene view | 5 | The same |
+
+The 8 OpenGL rows are the CPU-staged matrix (viridis, magma and RdBu f32 mapping, u8 direct with 1, 3 and 4
+channels, update, invalid tensors, alloc_shared), the check that last_device_path reports cpu-staged, and
+the check that a bridge id is the ImGui handle through ImGui's OpenGL backend. The 60 Metal rows are every
+other row; the Vulkan and Vulkan+CUDA rows are compiled on Windows only.
+
+Every other test that draws does so on Metal: the app (caliper_cli_app_hidden, caliper_app_live_controls),
+caliper shot (caliper_cli_shot_temp, caliper_cli_shot_data_dir, caliper_cli_api), the embedding core
+(caliper_embed_tests, caliper_embed_install, caliper_live_tests, caliper_live_views_tests), the export
+service (caliper_export_tests) and the shader programs (caliper_shader_tests, without a window). No test set
+CALIPER_RENDERER, and the app reached OpenGL only when Metal failed to start, so nothing but the graphics
+suite's OpenGL environment drew with OpenGL.
