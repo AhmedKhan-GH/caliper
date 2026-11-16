@@ -143,6 +143,9 @@ struct Spec {
     uint32_t dims = 3;
     bool translucent = false;
     bool overlay = false;
+    EntityId pcam;               // the camera whose pixel space the draw lies in, flat on its image plane
+    bool is_image = false;       // an image's own quad
+    int group = 0, sub = 0;      // the draw order: groups in turn, and within a group images first
     uint32_t colormap = 0;
     float vmin = 0, vmax = 1;
     bool uses_cmap = false;
@@ -352,6 +355,8 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
             Spec s;
             s.model = overlay ? tree.pixel_local(e) : world;
             s.overlay = overlay;
+            s.pcam = pcam;
+            s.is_image = p == Primitive::Image && part == DrawPart::Batch;
             s.dims = dims;
             s.entry.entity = e;
             s.entry.primitive = p;
@@ -625,6 +630,7 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
                         Spec c = base(prim, DrawPart::DepthCloud);
                         c.overlay = false;
                         c.entry.overlay = false;
+                        c.pcam = EntityId{};   // 3-D points, not on the image plane
                         c.dims = 3;
                         c.program = ProgramId::scene_points;
                         c.vs = "vs_depth_points";
@@ -718,10 +724,23 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
     }
 
     // Opaque, then translucent, then a looked-through camera's pixel space; path order within each.
+    // One exception: on a camera's image plane the images come first and then that camera's 2-D
+    // entities, so that an annotation is drawn, and picked, over the image it annotates whether the
+    // image is opaque or translucent. A pixel space with a translucent image therefore draws with the
+    // translucent group, after it; looked through, it is drawn flat over the picture last.
+    std::vector<uint32_t> translucent_planes;   // cameras with a translucent image on their plane
+    for (const Spec& s : specs)
+        if (s.is_image && s.pcam && !s.overlay && s.translucent) translucent_planes.push_back(s.pcam.index);
+    for (Spec& s : specs) {
+        if (s.overlay) s.group = 2;
+        else if (s.pcam)
+            s.group = std::find(translucent_planes.begin(), translucent_planes.end(), s.pcam.index) != translucent_planes.end() ||
+                              s.translucent ? 1 : 0;
+        else s.group = s.translucent ? 1 : 0;
+        s.sub = s.pcam && !s.is_image ? 1 : 0;
+    }
     std::stable_sort(specs.begin(), specs.end(), [](const Spec& a, const Spec& b) {
-        const int ka = (a.overlay ? 2 : 0) + (a.translucent ? 1 : 0);
-        const int kb = (b.overlay ? 2 : 0) + (b.translucent ? 1 : 0);
-        return ka < kb;
+        return a.group != b.group ? a.group < b.group : a.sub < b.sub;
     });
 
     // Colormap blocks, one per colormap and range; draws without a colormap share the first.

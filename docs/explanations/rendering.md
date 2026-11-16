@@ -421,7 +421,10 @@ It holds these parts:
   and binds its arrays as vertex or instance-step buffers at their offsets. An absent array reads a constant at stride
   0. The compiler writes the frame block, each draw's parameter block and the colormap blocks into the draw list's arena,
   and appends the draws: opaque ones first, then translucent ones, each in the byte order of the entity paths. When the
-  view looks through a camera, that camera's pixel space is drawn flat over the picture last. A separate step records
+  view looks through a camera, that camera's pixel space is drawn flat over the picture last. On a camera's image plane
+  the images come first and then that camera's 2-D entities, so that an annotation is drawn, and picked, over the
+  image it annotates even when the image is translucent; a plane that holds a translucent image draws with the
+  translucent ones. A separate step records
   the index clamp of meshes and the edge gather of index-pair edges as compute dispatches. Every primitive compiles:
   points, lines as segments, strips and index-pair edges, arrows, boxes with their faces, meshes, images in 2-D or on a
   camera's image plane with their depth clouds, segmentation, camera frustums and entity axes. The faces of a filled

@@ -14,8 +14,8 @@
 //   cameras   two cameras on posed rigs, drawn as frustums: one with a colour image on its image
 //             plane, one with a depth image and its back-projected cloud
 //   through   the same rigs looked through the first camera: the room projected, and the camera's
-//             pixel space (its image, and 2-D points, boxes and arrows over it) flat over it,
-//             letterboxed to the camera's aspect
+//             pixel space (a translucent image over a quarter of it, and 2-D points, boxes and arrows
+//             over the image) flat over it, letterboxed to the camera's aspect
 //   images    a 2-D scene of a colour, a grey, a u16 depth and a segmentation image, placed by
 //             entity transforms, with 2-D boxes and arrows
 #pragma once
@@ -366,6 +366,7 @@ inline void rigs(Fixture& f, bool pixel_space) {
         for (uint32_t x = 0; x < 32; ++x) px[y * 32 + x] = RGBA(40 + 6 * x, 60 + 7 * y, 160, 255);
     wire::SceneUpdate img = f.update("rig/left/rgb", CALIPER_NET_PART_IMAGE);
     img.params.set("form", Json(CALIPER_NET_FORM_COLOR));
+    if (pixel_space) img.params.set("opacity", Json(0.6));
     img.arrays.push_back(f.section("pixels", CALIPER_NET_DTYPE_U8, {24, 32, 4}, px));
     f.messages.push_back(img);
     f.transform("rig/left/rgb", translate(4, 4, 0));   // a 2-D transform in the camera's pixels
@@ -398,24 +399,24 @@ inline void rigs(Fixture& f, bool pixel_space) {
     f.messages.push_back(depth);
 
     if (!pixel_space) return;
-    // The first camera's pixel space: marks, a box and an arrow in pixels, after the image in the byte
-    // order of the paths, so that they are drawn, and picked, over it.
+    // The first camera's pixel space: marks, a box and an arrow in pixels, drawn and picked over the
+    // translucent image they annotate although "flow" and "marks" come before "rgb" in path order.
     std::vector<float> marks = {8, 8, 56, 8, 56, 40, 8, 40};
     std::vector<uint32_t> mc = {RGBA(255, 60, 60), RGBA(60, 255, 60), RGBA(60, 60, 255), RGBA(255, 255, 255)};
-    wire::SceneUpdate pts = f.update("rig/left/sketch/marks", CALIPER_NET_PART_POINTS);
+    wire::SceneUpdate pts = f.update("rig/left/marks", CALIPER_NET_PART_POINTS);
     pts.params.set("radius", Json(2.5));
     pts.arrays.push_back(f.section("positions", CALIPER_NET_DTYPE_F32, {4, 2}, marks));
     pts.arrays.push_back(f.section("colors", CALIPER_NET_DTYPE_U8, {4, 4}, mc));
     f.messages.push_back(pts);
     std::vector<float> bc = {32, 24}, bh = {10, 6};
-    wire::SceneUpdate box = f.update("rig/left/sketch/roi", CALIPER_NET_PART_BOXES);
+    wire::SceneUpdate box = f.update("rig/left/roi", CALIPER_NET_PART_BOXES);
     box.params.set("color", rgba(RGBA(255, 230, 0)));
     box.params.set("width", Json(4.0));
     box.arrays.push_back(f.section("centers", CALIPER_NET_DTYPE_F32, {1, 2}, bc));
     box.arrays.push_back(f.section("half_sizes", CALIPER_NET_DTYPE_F32, {1, 2}, bh));
     f.messages.push_back(box);
     std::vector<float> ao = {12, 36}, av = {14, -10};
-    wire::SceneUpdate arrow = f.update("rig/left/sketch/flow", CALIPER_NET_PART_ARROWS);
+    wire::SceneUpdate arrow = f.update("rig/left/flow", CALIPER_NET_PART_ARROWS);
     arrow.params.set("color", rgba(RGBA(0, 220, 255)));
     arrow.params.set("width", Json(2.0));
     arrow.arrays.push_back(f.section("origins", CALIPER_NET_DTYPE_F32, {1, 2}, ao));

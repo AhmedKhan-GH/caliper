@@ -602,7 +602,9 @@ TEST_CASE("images: in 2-D at the entity's origin, on a camera's plane in 3-D, an
     run(d, t, cam3, options());
     REQUIRE(d.result.ok);
     CHECK(d.result.skipped == 1);   // the image outside a camera
-    // Opaque: depth quad, depth cloud, frustum (rig/cam), room; translucent: seg.
+    // Opaque: the frustum (rig/cam), the depth cloud (3-D points), room; then, since the camera's
+    // image plane holds a translucent image, the plane's content with the translucent group: the
+    // depth quad and seg, images first in path order.
     std::vector<std::pair<std::string, DrawPart>> got;
     for (size_t i = 0; i < d.list.records().size; ++i) {
         const DrawMapEntry* m = d.map.find(d.rec(i).pick_id);
@@ -611,15 +613,15 @@ TEST_CASE("images: in 2-D at the entity's origin, on a camera's plane in 3-D, an
     REQUIRE(got.size() == 5);
     CHECK(got[0].first == "vs_lines/fs_color");          // rig/cam: the frustum
     CHECK(got[0].second == DrawPart::Frustum);
-    CHECK(got[1].first == "vs_image/fs_image_value");    // rig/cam/depth
-    CHECK(got[2].first == "vs_depth_points/fs_points");
-    CHECK(got[2].second == DrawPart::DepthCloud);
-    CHECK(got[3].first == "vs_points/fs_points");        // room
+    CHECK(got[1].first == "vs_depth_points/fs_points");
+    CHECK(got[1].second == DrawPart::DepthCloud);
+    CHECK(got[2].first == "vs_points/fs_points");        // room
+    CHECK(got[3].first == "vs_image/fs_image_value");    // rig/cam/depth
     CHECK(got[4].first == "vs_image/fs_image_class");    // translucent seg
-    CHECK(d.res.group(d.rec(1).groups[2]).binding == kImageValue);
+    CHECK(d.res.group(d.rec(3).groups[2]).binding == kImageValue);
     CHECK(d.res.group(d.rec(4).groups[2]).binding == kImageClass);
-    CHECK(d.rec(2).instance_count == 64 * 48);
-    CHECK(d.params(2).color_mode == 1);
+    CHECK(d.rec(1).instance_count == 64 * 48);
+    CHECK(d.params(1).color_mode == 1);
     CHECK(d.params(4).color_mode == 4);
     // The frustum's unit corner (1, 1, 1) lands on pixel (W, H) of the plane.
     const CameraMatrices m3 = camera_matrices(cam3, t, 400, 300);
@@ -636,7 +638,7 @@ TEST_CASE("images: in 2-D at the entity's origin, on a camera's plane in 3-D, an
     CHECK(corner.y == doctest::Approx(h[1] / h[3]).epsilon(1e-5));
     // The depth cloud: pixel (x, y) at depth z enters as (x z, y z, z) and lands on the camera ray.
     const double z = 2.0, x = 10.5, y = 20.5;
-    const Vec3 cloud = clip_of(d.params(2).mvp, {x * z, y * z, z});
+    const Vec3 cloud = clip_of(d.params(1).mvp, {x * z, y * z, z});
     const Vec3 ray = transform_point(t.camera_frame(cam), {(x - 32) / 50 * z, (y - 24) / 50 * z, z});
     transform_h(m3.proj * m3.view, ray, h);
     CHECK(cloud.x == doctest::Approx(h[0] / h[3]).epsilon(1e-5));
@@ -784,4 +786,55 @@ TEST_CASE("labels: one class id for every point is read once, not at each point'
     const auto labels = project_labels(t, ViewCamera(o), 400, 300);
     REQUIRE(labels.size() == 3);
     for (const LabelAnchor& a : labels) CHECK_MESSAGE(a.text == "seven", "point ", a.item, ": ", a.text);
+}
+
+TEST_CASE("on a camera's image plane the image is drawn and picked first and its 2-D entities over it") {
+    // A translucent image and a box over it under one camera: "cam/box" comes before "cam/photo" in
+    // the byte order of the paths, and the image is translucent, yet the box is drawn after it, in
+    // 3-D on the image plane, looked through and in the pick pass alike.
+    SceneTree t;
+    REQUIRE(t.set_camera(t.ensure("cam"), pinhole(64, 48, 50)));
+    Batch photo;
+    photo.primitive = Primitive::Image;
+    photo.texture = caliper_gfx::Texture{0x77};
+    photo.image_width = 64;
+    photo.image_height = 48;
+    photo.opacity = 0.5f;
+    REQUIRE(t.set_batch(t.ensure("cam/photo"), photo));
+    Batch box;
+    box.primitive = Primitive::Boxes;
+    box.arrays.push_back(array(Role::Centers, 1, 8, VertexFormat::F32x2));
+    box.arrays.push_back(array(Role::HalfSizes, 1, 8, VertexFormat::F32x2));
+    REQUIRE(t.set_batch(t.ensure("cam/box"), box));
+    Batch room = points3(4);
+    room.bounds.add({-1, -1, -1});
+    room.bounds.add({1, 1, 1});
+    REQUIRE(t.set_batch(t.ensure("room"), room));
+    t.update();
+    FakeResources res;
+    SceneCompiler compiler;
+    CompileOptions o;
+    o.width = 320;
+    o.height = 240;
+    auto order = [&](const ViewCamera& cam, bool pick) {
+        caliper_gfx::DrawList list{caliper_gfx::RenderTarget{caliper_gfx::Texture{1}, {}, caliper_gfx::Texture{2}, 0, true}};
+        DrawMap map;
+        const int32_t window[4] = {152, 112, 16, 16};
+        const CompileResult r = pick ? compiler.compile_pick(t, cam, o, window, res, list, &map)
+                                     : compiler.compile(t, cam, o, res, list, &map);
+        REQUIRE_MESSAGE(r.ok, (r.notes.empty() ? std::string() : r.notes[0]));
+        std::vector<std::string> paths;
+        for (const DrawMapEntry& e : map.entries)
+            if (e.part == DrawPart::Batch) paths.push_back(t.path(e.entity));
+        return paths;
+    };
+    ViewCamera orbit = Orbit{};
+    fit(orbit, t.scene_bounds(), 320.0 / 240.0);
+    ThroughPinhole through;
+    through.camera = t.find("cam");
+    for (const bool pick : {false, true}) {
+        CAPTURE(pick);
+        CHECK(order(orbit, pick) == std::vector<std::string>{"room", "cam/photo", "cam/box"});
+        CHECK(order(ViewCamera(through), pick) == std::vector<std::string>{"room", "cam/photo", "cam/box"});
+    }
 }
