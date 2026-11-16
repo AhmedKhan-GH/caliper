@@ -82,7 +82,7 @@ struct Aabb {
     double lo[3] = {0, 0, 0}, hi[3] = {0, 0, 0};
     bool valid = false;
     void add(Vec3 p);
-    void add(const Aabb& b);
+    void merge(const Aabb& b);
     Vec3 center() const { return {(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5}; }
     Vec3 half_extent() const { return {(hi[0] - lo[0]) * 0.5, (hi[1] - lo[1]) * 0.5, (hi[2] - lo[2]) * 0.5}; }
     double radius() const { return length(half_extent()); }   // of the bounding sphere

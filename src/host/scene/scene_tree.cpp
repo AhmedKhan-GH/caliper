@@ -121,7 +121,7 @@ void Aabb::add(Vec3 p) {
     }
 }
 
-void Aabb::add(const Aabb& b) {
+void Aabb::merge(const Aabb& b) {
     if (!b.valid) return;
     add(Vec3{b.lo[0], b.lo[1], b.lo[2]});
     add(Vec3{b.hi[0], b.hi[1], b.hi[2]});
@@ -780,7 +780,7 @@ Aabb SceneTree::own_batch_bounds(uint32_t index) const {
         const Primitive p = Primitive(k);
         if (!batch(e, p)) continue;
         if (p == Primitive::Image && space_ == Space::k3D) continue;   // drawn only in a pixel space
-        local.add(batch_bounds(e, p));
+        local.merge(batch_bounds(e, p));
     }
     Aabb out = transform_aabb(ents_[index].world, local);
     if (ents_[index].camera.any()) out.add(transform_point(ents_[index].world, {0, 0, 0}));
@@ -797,7 +797,7 @@ Aabb SceneTree::world_bounds(EntityId subtree) const {
         const std::string& pj = ent.path;
         const bool below = subtree.index == 0 || j == subtree.index ||
                            (pj.size() > base.size() && pj.compare(0, base.size(), base) == 0 && pj[base.size()] == '/');
-        if (below) out.add(ent.own_bounds);
+        if (below) out.merge(ent.own_bounds);
     }
     return out;
 }

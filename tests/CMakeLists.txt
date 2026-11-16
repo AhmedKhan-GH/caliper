@@ -123,6 +123,7 @@ set_tests_properties(caliper_tests PROPERTIES ENVIRONMENT
 add_executable(caliper_scene_tests
     scene/scene_main.cpp
     scene/test_scene_store.cpp
+    scene/test_scene_matrices.cpp
 )
 target_link_libraries(caliper_scene_tests PRIVATE doctest::doctest caliper_scene)
 if(TARGET caliper_gfx)
