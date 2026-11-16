@@ -172,11 +172,11 @@ Home detaches the app from the stream; the script keeps training, and the link w
 starts from the landing screen, so press **esc Home** now.
 
 The dry run of this step starts the script, starts the app hidden with `--url` and the link, checks the catalog's
-live sources over Caliper API, writes a capture of the live page and the catalog's live entries to `build/dry_run/`
-(`--out` changes it), and prints one line per check:
+live sources over Caliper API, writes a capture of the live page and the catalog's live entries to
+`build/build_a_dashboard/` (`--out` changes it), and prints one line per check:
 
 ```sh
-python examples/build_a_dashboard/dry_run/step1_train_and_attach.py --python .venv/bin/python --size 1440x900
+python examples/build_a_dashboard/dry_run/step1_train_and_attach.py --train-python .venv/bin/python --size 1440x900
 ```
 
 ## 2. Drop the data files and build a panel by hand
