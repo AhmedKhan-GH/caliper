@@ -99,3 +99,6 @@ python/bench/results/*.png
 python/caliper/_web/caliper-views-loader.js
 python/caliper/_web/caliper-views.js
 python/caliper/_web/caliper-views.wasm
+
+# The shader generator's Naga driver, built by tools/shaders/generate.py
+tools/shaders/naga-driver/target/
