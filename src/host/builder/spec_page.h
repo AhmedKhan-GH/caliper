@@ -203,6 +203,10 @@ public:
     // For the hidden app's input driver: a named rectangle of the page's own
     // ("page:browser"), in window points, as the last frame drew it.
     bool item_rect(const std::string& name, float rect[4]) const;
+    // What the page says about ⌘O Open in browser in its status bar: that
+    // the browser shows the saved dashboard, once a link was given out while
+    // the open spec has unsaved changes; "" otherwise. For the input driver.
+    std::string browser_note() const;
     // For the hidden app's input driver (builder/spec_ui_driver.h): a shown
     // panel's rectangle in window points, and the inline surface's state
     // ("idle" before any ⌘K).

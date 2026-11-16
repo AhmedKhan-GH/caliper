@@ -75,6 +75,10 @@
 //   pane focus <panel>   wait until the builder's focused panel is <panel>
 //   page <name>          wait until the app shows that page (landing, spec,
 //                        live, applet)
+//   browser note <text>|none
+//                        wait until the spec page's note about ⌘O Open in
+//                        browser (SpecPage::browser_note()) is that text, or
+//                        none
 //   command-line <text>|none
 //                        wait until the landing's command line holds that
 //                        text, or nothing
@@ -422,6 +426,19 @@ public:
         if (s.verb == "page") {
             if (page_ != s.arg) return patience("the app shows " + page_ + ", not " + s.arg);
             next("page " + s.arg);
+            return;
+        }
+        if (s.verb == "browser") {
+            std::stringstream words(s.arg);
+            std::string what, rest;
+            words >> what;
+            std::getline(words, rest);
+            while (!rest.empty() && rest.front() == ' ') rest.erase(rest.begin());
+            if (what != "note") return void(error_ = "browser takes note <text>|none");
+            const std::string want = rest == "none" ? std::string() : rest;
+            const std::string now = page.browser_note();
+            if (now != want) return patience("the browser note is " + (now.empty() ? std::string("none") : "\"" + now + "\""));
+            next("the browser note is " + (want.empty() ? std::string("none") : "\"" + want + "\""));
             return;
         }
         if (s.verb == "command-line") {

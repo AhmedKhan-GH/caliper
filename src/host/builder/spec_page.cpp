@@ -47,8 +47,10 @@ namespace cb = caliper_builder;
 
 namespace {
 
-// The label of ⌘O in the page bar.
+// The label of ⌘O in the page bar, and what the page says of it while the
+// open spec has unsaved changes.
 constexpr const char* kBrowserLabel = "Open in browser";
+constexpr const char* kBrowserNote = "the browser shows the saved dashboard";
 
 // The data of the open spec's panels through the session, kept off the
 // session while its worker runs a long command (AppSession::worker_busy()):
@@ -169,6 +171,7 @@ struct SpecPage::Impl {
     // ⌘O Open in browser (set_open_in_browser()), and its last refusal.
     std::function<std::string(const std::string&)> open_in_browser;
     std::string browser_why;
+    std::string browser_given;   // the saved dashboard whose link went out
     // The names of a catalog source's dims, for the builder's Properties.
     std::function<std::vector<std::string>(const std::string&)> dim_names;
     ApiFiles api_files;         // the sidecar's own API file
@@ -408,6 +411,12 @@ struct SpecPage::Impl {
     void open_browser() {
         if (!open_in_browser || !browser_disabled().empty()) return;
         browser_why = open_in_browser(saved_id);
+        if (browser_why.empty()) browser_given = saved_id;
+    }
+    // ⌘O opens the saved file: once its link is out, and the open spec has
+    // changes since, the page says that the browser shows the saved one.
+    std::string browser_note() const {
+        return dirty && !saved_id.empty() && browser_given == saved_id ? kBrowserNote : std::string();
     }
 
     void show(const cb::spec::Spec& spec) {
@@ -467,8 +476,12 @@ struct SpecPage::Impl {
                 if (sternbild::key_button(okey, kBrowserLabel, off.empty(), off.c_str())) open_browser();
                 const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
                 browser_rect[0] = a.x, browser_rect[1] = a.y, browser_rect[2] = b.x - a.x, browser_rect[3] = b.y - a.y;
-                // Why the last try did not reach the browser.
-                if (off.empty() && !browser_why.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", browser_why.c_str());
+                // Why the last try did not reach the browser, or, with unsaved
+                // changes, that the browser shows the saved dashboard.
+                if (off.empty() && ImGui::IsItemHovered()) {
+                    if (!browser_why.empty()) ImGui::SetTooltip("%s", browser_why.c_str());
+                    else if (dirty) ImGui::SetTooltip("%s", kBrowserNote);
+                }
             }
             if (chat) chat->draw_toggle();
             if (sternbild::key_button(key, "Command")) *command_key = true;
@@ -487,6 +500,7 @@ struct SpecPage::Impl {
                 std::snprintf(text, sizeof text, sources == 1 ? "%zu source" : "%zu sources", sources);
                 sternbild::status_item(text);
                 if (dirty) sternbild::status_item("unsaved");
+                if (const std::string note = browser_note(); !note.empty()) sternbild::status_item(note.c_str());
             }
         }
         sternbild::status_bar_end();
@@ -855,6 +869,8 @@ void SpecPage::set_dim_names(std::function<std::vector<std::string>(const std::s
     impl_->dim_names = std::move(names);
 }
 
+std::string SpecPage::browser_note() const { return impl_->browser_note(); }
+
 bool SpecPage::item_rect(const std::string& name, float rect[4]) const {
     const Impl& im = *impl_;
     if (name != "page:browser" || im.browser_rect[2] <= 0.0f) return false;
@@ -1011,6 +1027,7 @@ SpecPage::~SpecPage() = default;
 bool SpecPage::built() { return false; }
 bool SpecPage::take_open(const AppSession&) { return false; }
 bool SpecPage::opened_by_agent() const { return false; }
+std::string SpecPage::browser_note() const { return {}; }
 bool SpecPage::request_open(AppSession&, const std::string&, const std::string&) { return false; }
 SpecPage::OpenReview SpecPage::open_review(AppSession&, const std::string&) { return OpenReview::opens; }
 bool SpecPage::request_answered(std::string*) { return false; }

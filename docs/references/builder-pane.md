@@ -159,8 +159,9 @@ new panel's block at the end of the text, or a title changed in the middle of it
 ⌘O Open in browser in the page bar opens the saved dashboard that the page shows in your default browser, at the
 browser viewer of [Caliper API](api.md#get-v0spec), which draws it with the layout and the look of the spec page. It
 works in build mode and outside it. The browser shows the dashboard as it was last saved, so save first to show a
-change; the button is disabled, with the reason in its tooltip, for a dashboard that was never saved and for a spec
-applet found outside the workspace.
+change: while the dashboard has unsaved changes the button's tooltip says "the browser shows the saved dashboard", and
+once its link is out the status bar says so too, after `unsaved`. The button is disabled, with the reason in its
+tooltip, for a dashboard that was never saved and for a spec applet found outside the workspace.
 
 When the app was started without `--api`, the button starts Caliper API as the side chat does: on a free port of
 127.0.0.1 only, with new tokens, said in Activity and shown in the status bar as `api 127.0.0.1:<port>`. It stays on

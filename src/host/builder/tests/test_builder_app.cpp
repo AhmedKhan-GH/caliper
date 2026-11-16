@@ -706,4 +706,30 @@ TEST_CASE("builder app: an agent's new dashboard leaves the person's applet page
     CHECK(run.err.find("[ui] done") != std::string::npos);
 }
 
+// ⌘O opens the saved file, so once a link is out and the dashboard has
+// unsaved changes, the page says that the browser shows the saved dashboard.
+TEST_CASE("builder app: with unsaved changes the page says the browser shows the saved dashboard" *
+          doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const std::string root = app_root(exe, "builder-app-browser-note");
+    if (root.empty()) return;
+    saved_dashboard(root);
+    const std::string link = root + "/link.txt";
+    const auto run = run_app(exe, root,
+                             "wait 60; page spec; wait 20; browser note none; click page:browser; wait-file " + link +
+                                 "; browser note none; key cmd+b; wait 10; click prop:spec.title; key cmd+a; "
+                                 "type Run 43; key enter; browser note the browser shows the saved dashboard; "
+                                 "leave; wait 5; shot note; quit",
+                             {{"CALIPER_COMMAND_SCRIPT", root + "/build.jsonl"}, {"CALIPER_TEST_OPEN_URL", link}});
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
+    REQUIRE(run.error.ok());
+    if (run.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(run.status.success());
+    CHECK(run.err.find("[ui] the browser note is \"the browser shows the saved dashboard\"") != std::string::npos);
+    CHECK(run.err.find("[ui] done") != std::string::npos);
+}
+
 #endif
