@@ -66,7 +66,9 @@ void Backend::set_programs(const ProgramDesc* table, uint32_t count) {
 
 namespace {
 
+#if defined(__GNUC__) || defined(__clang__)
 std::string fmt(const char* f, ...) __attribute__((format(printf, 1, 2)));
+#endif
 std::string fmt(const char* f, ...) {
     char buf[512];
     va_list ap;
