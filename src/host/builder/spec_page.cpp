@@ -750,6 +750,18 @@ std::string SpecPage::widget_state() const {
     return impl_->widget ? widget_state_name(impl_->widget->surface().state()) : "idle";
 }
 
+std::string SpecPage::selection_json() const {
+    const SpecSelection& sel = impl_->runtime->selection();
+    if (sel.empty()) return {};
+    return nlohmann::json{{"panel", sel.panel},
+                          {"kind", sel.kind == SpecSelection::Kind::points ? "points" : "range"},
+                          {"x0", sel.x0},
+                          {"x1", sel.x1},
+                          {"y0", sel.y0},
+                          {"y1", sel.y1}}
+        .dump();
+}
+
 void SpecPage::set_panel_overlay(PanelOverlay overlay) { impl_->panel_overlay = std::move(overlay); }
 
 const std::string& SpecPage::focused_panel() const { return impl_->focused; }
@@ -856,6 +868,7 @@ void SpecPage::set_agent_settings(AgentSettings*) {}
 bool SpecPage::widget_action(const std::string&) { return false; }
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
 std::string SpecPage::widget_state() const { return "idle"; }
+std::string SpecPage::selection_json() const { return {}; }
 void SpecPage::set_panel_overlay(PanelOverlay) {}
 const std::string& SpecPage::focused_panel() const { return impl_->focused; }
 void SpecPage::focus_panel(const std::string&) {}

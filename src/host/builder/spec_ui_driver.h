@@ -43,6 +43,9 @@
 //                        a press on the first, a move in steps to the second
 //                        and a release there, or none with `hold`
 //   release              lets go of a held drag
+//   selection <path>     writes the page's selection as JSON to <path>
+//                        (SpecPage::selection_json()), once there is one
+//   wait-file <path>     wait until <path> exists (a file a test writes)
 //   select <panel> <fx0> <fx1> [<fy0> <fy1>]
 //                        a shift-drag across a shown panel from the fractions
 //                        (fx0, fy0) to (fx1, fy1) of its rectangle (fy 0.5
@@ -285,6 +288,19 @@ public:
                 io.AddKeyEvent(ImGuiMod_Shift, false);
                 next("selected on " + panel);
             }
+            return;
+        }
+        if (s.verb == "selection") {
+            const std::string sel = page.selection_json();
+            if (sel.empty()) return patience("no selection");
+            std::ofstream(s.arg) << sel << "\n";
+            next("wrote the selection to " + std::filesystem::path(s.arg).filename().string());
+            return;
+        }
+        if (s.verb == "wait-file") {
+            std::error_code ec;
+            if (!std::filesystem::exists(s.arg, ec)) return patience("no file " + s.arg);
+            next("found " + std::filesystem::path(s.arg).filename().string());
             return;
         }
         if (s.verb == "release") {
