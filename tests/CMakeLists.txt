@@ -407,6 +407,11 @@ if(APPLE)
     target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
     set_source_files_properties(gfx/gfx_scene_view.cpp PROPERTIES
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
+    # The colormap by keys through the layer: the texture path's compute form and the points'
+    # vertex stage, from layer and imported buffers, against map_f32_to_rgba8.
+    target_sources(caliper_gfx_tests PRIVATE gfx/gfx_colormap.cpp)
+    set_source_files_properties(gfx/gfx_colormap.cpp PROPERTIES
+        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
 endif()
 
 # On Windows the same §16 matrix runs on the Vulkan backend (CPU-staged path),
