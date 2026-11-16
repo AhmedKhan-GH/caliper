@@ -351,6 +351,9 @@ TEST_CASE("side chat: a pending command approval of the agent's turn is mirrored
     pending.clear();   // the person decided on the approval card
     chat.update();
     CHECK(find(chat, K::approval)->answer == "decided");
+    // The stub's slow turn runs on 200 sleeps of its own, which a loaded
+    // runner stretches past any deadline: the turn is stopped, not waited out.
+    chat.cancel();
     REQUIRE(pump_until(chat, [&] { return turn_over(chat); }));
 }
 
@@ -391,6 +394,9 @@ TEST_CASE("side chat: an approval reissued for changed content keeps its row wai
     pending.clear();
     chat.update();
     CHECK(find(chat, K::approval)->answer == "approved");
+    // The stub's slow turn runs on 200 sleeps of its own, which a loaded
+    // runner stretches past any deadline: the turn is stopped, not waited out.
+    chat.cancel();
     REQUIRE(pump_until(chat, [&] { return turn_over(chat); }));
 }
 

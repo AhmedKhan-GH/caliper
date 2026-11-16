@@ -208,28 +208,28 @@ TEST_CASE("the flat layout refuses hostile forms") {
     auto set = [&](json root, json nodes) {
         return edit(s, "layout.set", {{"layout", {{"root", std::move(root)}, {"nodes", std::move(nodes)}}}});
     };
-    CHECK(set("n1", {node("n1", "vertical", {"a", "zz"})}).error.code == "panel.not_found");
-    CHECK(set("n1", {node("n1", "vertical", {"a", "zz"})}).error.where == "args.layout.nodes[0].children[1]");
+    CHECK(set("n1", json::array({node("n1", "vertical", {"a", "zz"})})).error.code == "panel.not_found");
+    CHECK(set("n1", json::array({node("n1", "vertical", {"a", "zz"})})).error.where == "args.layout.nodes[0].children[1]");
     CHECK(set("zz", json::array()).error.code == "panel.not_found");
-    CHECK(set("a", {node("a", "vertical", {"a", "b"})}).error.code == "layout.invalid");
-    CHECK(set("n1", {node("n1", "vertical", {"a", "b"}), node("n1", "vertical", {"a", "b"})}).error.code == "layout.invalid");
-    CHECK(set("n1", {node("n1", "vertical", {"n2", "n2"}), node("n2", "tabs", {"a"})}).error.code == "layout.invalid");
-    CHECK(set("n1", {node("n1", "vertical", {"a", "n2"}), node("n2", "vertical", {"b", "n1"})}).error.code ==
+    CHECK(set("a", json::array({node("a", "vertical", {"a", "b"})})).error.code == "layout.invalid");
+    CHECK(set("n1", json::array({node("n1", "vertical", {"a", "b"}), node("n1", "vertical", {"a", "b"})})).error.code == "layout.invalid");
+    CHECK(set("n1", json::array({node("n1", "vertical", {"n2", "n2"}), node("n2", "tabs", {"a"})})).error.code == "layout.invalid");
+    CHECK(set("n1", json::array({node("n1", "vertical", {"a", "n2"}), node("n2", "vertical", {"b", "n1"})})).error.code ==
           "layout.invalid");
-    CHECK(set("n1", {node("n1", "vertical", {"a", "b"}), node("n2", "tabs", {"a"})}).error.code == "layout.invalid");
-    CHECK(set("n1", {node("n1", "tabs", {"a", "b"}, 0.5)}).error.code == "layout.invalid");
-    CHECK(set("n1", {node("n1", "vertical", {"a"})}).error.code == "spec.bad_layout");
-    CHECK(set("n1", {node("n1", "vertical", {"a", "a"})}).error.code == "spec.duplicate_placement");
+    CHECK(set("n1", json::array({node("n1", "vertical", {"a", "b"}), node("n2", "tabs", {"a"})})).error.code == "layout.invalid");
+    CHECK(set("n1", json::array({node("n1", "tabs", {"a", "b"}, 0.5)})).error.code == "layout.invalid");
+    CHECK(set("n1", json::array({node("n1", "vertical", {"a"})})).error.code == "spec.bad_layout");
+    CHECK(set("n1", json::array({node("n1", "vertical", {"a", "a"})})).error.code == "spec.duplicate_placement");
     // Deeper than the format's 8 nodes.
     json chain = json::array();
     for (int i = 1; i <= 9; ++i)
         chain.push_back(node(("n" + std::to_string(i)).c_str(), "tabs",
-                             {i < 9 ? json("n" + std::to_string(i + 1)) : json("a")}));
+                             json::array({i < 9 ? json("n" + std::to_string(i + 1)) : json("a")})));
     CHECK(set("n1", chain).error.code == "spec.too_deep");
     // A good one, with a title, round trips.
     json titled = node("n2", "vertical", {"a", "b"}, 0.7);
     titled["title"] = "Both";
-    const SpecEdit good = set("n1", {node("n1", "tabs", {"n2"}), titled});
+    const SpecEdit good = set("n1", json::array({node("n1", "tabs", {"n2"}), titled}));
     REQUIRE(good.error.ok());
     CHECK(good.result["layout"] == json{{"root", "n1"}, {"nodes", {node("n1", "tabs", {"n2"}), titled}}});
     // A panel left out is a warning, not an error.
