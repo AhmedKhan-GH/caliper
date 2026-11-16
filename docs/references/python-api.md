@@ -347,7 +347,16 @@ Start the stream server of this process, print its link,
 | `control` | `bool` | `True` | Whether viewers may pause the run, change parameters and run actions ([Controls](#controls)); `False` shows them read-only |
 
 The server listens on 127.0.0.1 only and makes a new random session token.
-It is one more route: every view call is offered to it, and a view takes a
+While it listens, it writes the stream file `streams/<pid>.json` in
+Caliper's app-data folder (`$CALIPER_DATA_DIR` when set, see
+[Environment](environment.md)), with mode 0600 in a folder of mode 0700: its
+pid, the machine's name, the session id, the script's name, the start time,
+the port, the stream link with its token, `control` and the names of its
+views, which the server rewrites when the views change. The Caliper app lists
+the stream from it in `F4 Attach to process`, so that it attaches without the
+link being pasted. `close()` removes the file; a killed script's file is
+removed by the app's next listing. A file that cannot be written leaves the
+server running, and the printed link still attaches. It is one more route: every view call is offered to it, and a view takes a
 snapshot for it only while a viewer subscribes to that view, once for each
 data view that its subscriptions ask for. Snapshots for the server are computed
 on the device and copied into pinned host memory without waiting; the call

@@ -9,6 +9,7 @@
 #include "live/live_activity.h"
 #include "live/live_shm.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <ctime>
 #include <utility>
@@ -23,6 +24,7 @@ constexpr uint64_t kStatsNs = 1000ull * 1000 * 1000;    // fps / latency over th
 // ---- row text ------------------------------------------------------------------
 
 std::string state_text(const SessionEntry& e) {
+    if (!e.stream_url.empty()) return "stream";   // caliper.serve(), listed while its server listens
     switch (session_state(e)) {
         case SessionState::Incompatible: return "protocol v" + std::to_string(e.protocol);
         case SessionState::Starting:     return "starting";
@@ -72,9 +74,19 @@ bool SessionList::refresh(bool force) {
     const uint64_t t = now_ns();
     if (!force && listed_ns_ && t - listed_ns_ < kRelistNs) return false;
     listed_ns_ = t;
+    // The shared-memory sessions, then the caliper.serve() streams, newest
+    // first together.
     std::string err;
-    if (!list_sessions(root(), &sessions_, &err)) error_ = err;
-    else error_.clear();
+    std::vector<SessionEntry> streams;
+    const std::string r = root();
+    const bool sessions_ok = list_sessions(r, &sessions_, &err);
+    if (!list_streams(r, &streams, sessions_ok ? &err : nullptr)) streams.clear();
+    if (sessions_ok && err.empty()) error_.clear();
+    else error_ = err;
+    for (SessionEntry& e : streams) sessions_.push_back(std::move(e));
+    std::stable_sort(sessions_.begin(), sessions_.end(), [](const SessionEntry& a, const SessionEntry& b) {
+        return a.start_unix_ms != b.start_unix_ms ? a.start_unix_ms > b.start_unix_ms : a.pid > b.pid;
+    });
     return true;
 }
 

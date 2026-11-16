@@ -138,7 +138,10 @@ struct AppSession::Impl {
         explicit HostBinding(Impl* i) : im(i) {}
         cb::CommandOutput app_info() override { return im->app_info(); }
         cb::CommandOutput app_applets() override { return im->app_applets(); }
-        cb::CommandOutput app_launch(const std::string& id) override { return im->app_launch(id); }
+        cb::CommandOutput app_launch(const std::string& id) override { return im->app_launch(id, "ui"); }
+        cb::CommandOutput app_launch(const std::string& id, cb::CommandOrigin origin) override {
+            return im->app_launch(id, cb::command_origin_name(origin));
+        }
         cb::CommandOutput render_panel(const cb::spec::Spec& spec, const cb::PanelData& data, int width,
                                        int height) override {
             return im->render_panel(spec, data, width, height);
@@ -418,9 +421,9 @@ struct AppSession::Impl {
         return cb::CommandOutput::ok(std::move(j));
     }
 
-    cb::CommandOutput app_launch(const std::string& id) {
+    cb::CommandOutput app_launch(const std::string& id, const std::string& origin) {
         if (!hooks.launch) return failed("command.not_available", "app.launch is not available here.");
-        const LaunchOutcome o = hooks.launch(id);
+        const LaunchOutcome o = hooks.launch(id, origin);
         if (o.status == 200) {
             json j = parse_object(o.body);
             if (j.is_null()) return failed("app.launch_failed", "The launch gave no result.", "args.id");

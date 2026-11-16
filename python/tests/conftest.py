@@ -23,6 +23,19 @@ def offscreen256():
     caliper.close()
 
 
+@pytest.fixture(scope="session")
+def _app_data(tmp_path_factory):
+    return str(tmp_path_factory.mktemp("app-data"))
+
+
+@pytest.fixture(autouse=True)
+def _private_app_data(_app_data, monkeypatch):
+    """caliper.serve() writes its stream file into Caliper's app-data folder;
+    the tests keep it in a folder of their own, never the user's (a test that
+    needs another one sets CALIPER_DATA_DIR itself)."""
+    monkeypatch.setenv("CALIPER_DATA_DIR", _app_data)
+
+
 @pytest.fixture(autouse=True)
 def _remove_views(monkeypatch):
     """Record every view a test creates and remove it afterwards."""

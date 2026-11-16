@@ -170,6 +170,17 @@ void AppApi::stop() {
     file_text_.clear();
 }
 
+std::string launch_pending_json(const std::string& id, const std::string& version, const std::string& status,
+                                const std::string& note) {
+    caliper_net::Json j = caliper_net::Json::object();
+    j.set("id", id);
+    j.set("version", version);
+    j.set("status", status);
+    j.set("already_open", false);
+    j.set("note", note);
+    return j.dump();
+}
+
 std::string launched_json(const std::string& id, const std::string& version, bool already_open) {
     caliper_net::Json j = caliper_net::Json::object();
     j.set("id", id);

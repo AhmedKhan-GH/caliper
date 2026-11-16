@@ -251,3 +251,82 @@ TEST_CASE("caliper-mcp drives the real app end to end") {
     CHECK(app_exit.exited);
     CHECK_FALSE(fs::exists(api_file));
 }
+
+TEST_CASE("caliper-mcp's app_launch over unsaved work says that the open waits for the person's approval") {
+    if (kApp.empty()) {
+        std::printf("caliper-mcp end-to-end test skipped: set the CMake variable CALIPER_BUILDER_TEST_APP to a "
+                    "caliper executable to run it\n");
+        MESSAGE("caliper-mcp end-to-end test skipped: CALIPER_BUILDER_TEST_APP is not set");
+        return;
+    }
+    const fs::path work = fs::path(CALIPER_BUILDER_TEST_TMP) / "app-e2e-launch";
+    fs::remove_all(work);
+    const fs::path data = work / "data";
+    fs::create_directories(data);
+    const std::string api_file = (data / "api.json").string();
+    SpawnOptions app_opts;
+    app_opts.argv = {kApp, "--hidden", "--api", "--api-port", "0"};
+    app_opts.env_remove = {"CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_USER_APPLETS_DIR",
+                           "CALIPER_APPLET_PATH"};
+    app_opts.env = {{"CALIPER_DATA_DIR", data.string()}, {"CALIPER_HIDDEN", "1"}, {"CALIPER_AGENT_OFFLINE", "1"}};
+    Error err;
+    std::unique_ptr<Process> app = Process::spawn(app_opts, &err);
+    REQUIRE_MESSAGE(app, "the app did not start: " << err.message);
+    Drain app_out(*app, false);
+    mcp::ApiFileRead endpoint;
+    const auto wait_end = Clock::now() + std::chrono::seconds(60);
+    for (;;) {
+        endpoint = mcp::read_api_file(api_file);
+        if (endpoint.error.ok()) break;
+        ExitStatus early;
+        if (app->try_wait(&early)) FAIL("the app exited before it wrote its API file: " << early.describe());
+        if (Clock::now() > wait_end) FAIL("the app wrote no API file within 60 seconds");
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    SpawnOptions mcp_opts;
+    mcp_opts.argv = {kExe, "--api-file", api_file};
+    mcp_opts.env_remove = {"CALIPER_DATA_DIR"};
+    std::unique_ptr<Process> server = Process::spawn(mcp_opts, &err);
+    REQUIRE_MESSAGE(server, "caliper-mcp did not start: " << err.message);
+    Drain server_err(*server, true);
+    std::string out_log, buf;
+    request(*server, &out_log, &buf, "d", "server/discover", json::object());
+    int n = 0;
+    auto call = [&](const std::string& tool, const json& args) {
+        const json r = request(*server, &out_log, &buf, ++n, "tools/call", {{"name", tool}, {"arguments", args}});
+        INFO(tool << ": " << r.dump());
+        REQUIRE(r.contains("result"));
+        return r["result"];
+    };
+    // The agent saves One, then starts Draft, which it never saves: the open
+    // spec has unsaved changes. Over a saved spec nothing of this asks.
+    CHECK(call("spec_new", {{"id", "one"}, {"title", "One"}})["isError"] == false);
+    CHECK(call("applet_save", json::object())["isError"] == false);
+    CHECK(call("spec_new", {{"id", "draft"}, {"title", "Draft"}})["isError"] == false);
+    // The app lists One once it has read its workspace's applets again.
+    bool listed = false;
+    for (const auto end = Clock::now() + std::chrono::seconds(30); !listed && Clock::now() < end;) {
+        const json applets = call("app_applets", json::object());
+        listed = applets["structuredContent"]["applets"].dump().find("\"local.one\"") != std::string::npos;
+        if (!listed) std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    REQUIRE(listed);
+    // The launch is accepted, and says that it is not open yet and why, in the
+    // structured result and in the text an agent reads.
+    const json launch = call("app_launch", {{"id", "local.one"}});
+    CHECK(launch["isError"] == false);
+    CHECK(launch["structuredContent"]["status"] == "PENDING_APPROVAL");
+    const std::string text = launch["content"][0]["text"].get<std::string>();
+    CHECK(text.find("PENDING_APPROVAL") != std::string::npos);
+    CHECK(text.find("waits for the person's approval") != std::string::npos);
+    MESSAGE("app_launch: " << text);
+    // Nothing has changed: Draft is still the open spec.
+    CHECK(call("spec_get", json::object())["structuredContent"]["id"] == "draft");
+
+    server->close_stdin();
+    ExitStatus mcp_exit;
+    REQUIRE(server->wait_for(10000, &mcp_exit));
+    server_err.join();
+    app->terminate(20000);
+    app_out.join();
+}

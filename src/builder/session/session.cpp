@@ -1684,7 +1684,8 @@ void Session::set_host(std::shared_ptr<SessionHost> host) {
     });
     im.registry->bind("app.launch", [raw](const CommandContext& ctx) {
         auto h = raw->current_host();
-        return h ? h->app_launch(str_arg(ctx.invocation.args, "id")) : fail("command.not_bound", "app.launch needs the app.");
+        return h ? h->app_launch(str_arg(ctx.invocation.args, "id"), ctx.invocation.origin)
+                 : fail("command.not_bound", "app.launch needs the app.");
     });
     im.registry->bind("capture.frame", [raw](const CommandContext&) {
         auto h = raw->current_host();

@@ -187,7 +187,8 @@ has a button in the bar with its key printed on it:
 | Enter | `⏎ Launch` (Inspector) | Launch the selected applet. Double-clicking a row does the same. |
 | ⌘1–⌘4 | the pane header | Focus Projects, Instruments, Inspector or Activity. Clicking a pane header does the same. |
 | ⌘R | `⌘R Restart` (Inspector) | Unload and relaunch the selected applet. Offered only for an applet quarantined by a C++ exception. |
-| F4 | `F4 Attach to process` (Projects) | List the live sessions in Projects. In the list, ↑ / ↓ move the selection, Enter (`⏎ Attach`) attaches, and Esc (`esc Back`) returns to the ways in. |
+| F4 | `F4 Attach to process` (Projects) | List the live sessions and streams in Projects. In the list, ↑ / ↓ move the selection, Enter (`⏎ Attach`) attaches, and Esc (`esc Back`) returns to the ways in. |
+| F5 | `F5 Live page` (command bar) | Open the live page of the attached session. Shown only while the app is attached. |
 
 On Windows and Linux the keys are Ctrl K, Ctrl R and Ctrl 1–Ctrl 4, and the
 buttons are labelled that way.
@@ -207,7 +208,8 @@ A Python script that calls `caliper.show` (or any other view call) opens a
 live session on its first call, and Caliper can attach to it while it runs
 (macOS, Metal renderer; [Watch a PyTorch training run live](live-pytorch.md)
 sets one up). Press F4, or click `F4 Attach to process`, and Projects lists
-the sessions found under `~/Library/Application Support/Caliper/live/`, newest
+the sessions found under `~/Library/Application Support/Caliper/live/`, and
+the streams of `caliper.serve()` found under its `streams/` folder, newest
 first, relisted every second:
 
 | Column | Shows |
@@ -215,10 +217,10 @@ first, relisted every second:
 | **Script** | The script's name |
 | **Pid** | Its process id |
 | **Started** | When the session opened, as a clock time and how long ago |
-| **State** | `running`, `starting` (attach waits for it), `closing`, `viewed by <pid>` (another viewer holds it; one viewer per session) or `protocol v<N>` (another Caliper version) |
+| **State** | `running`, `starting` (attach waits for it), `closing`, `viewed by <pid>` (another viewer holds it; one viewer per session), `protocol v<N>` (another Caliper version), `stream` (a script that streams with `caliper.serve()`) or `attached` (the session this app is attached to; Enter opens its live page) |
 | **Views** | The names of the views the script has shown so far |
 
-Only `running` and `starting` rows attach; the others are faint, and the
+Only `running`, `starting` and `stream` rows attach; the others but `attached` are faint, and the
 `⏎ Attach` button under the table is disabled with the reason beside it. A
 script that was killed leaves its session file behind; the next listing
 removes it and its shared memory, so its row disappears instead of lingering.
@@ -228,17 +230,22 @@ view is a window on the docked desktop, tiled on first appearance; move,
 resize or dock them as on the applet page, and the layout is saved the same
 way. The views show the script's newest GPU snapshots, and the page draws at
 up to 60 fps whatever the display's refresh rate; the script never waits for
-Caliper. The bar at the top holds `esc Home`, the script's name and
-its state: a filled diamond and `live` while it runs. The status bar adds the
+Caliper. The bar at the top holds `esc Home`, `⌘D Detach`, the script's name
+and its state: a filled diamond and `live` while it runs. The status bar adds the
 script's pid, the number of views, the frame rate and the step-to-screen
 latency.
 
 When the script exits, closes its session or is killed, the views keep their last
 frames: the bar shows an outlined diamond and `SESSION ENDED`, the status bar
 and the window title add `session ended`, and Activity logs `session ended`.
-`esc Home` detaches (the script, if it still runs, stops taking snapshots at
-once and keeps training) and returns to the session list. Activity logs
-`attached` and `detached` with the script and its pid.
+`esc Home` returns to the landing screen and keeps the session attached: its
+views stay in the catalog as `live:` sources for a spec, and the command bar
+shows the live diamond, the script's name and `F5 Live page`, which comes back
+to the live page, as F5 does. `⌘D Detach` (⌘D) detaches: the script, if it
+still runs, stops taking snapshots at once and keeps training, and the app
+returns to the landing screen. Attaching another session detaches the
+attached one first. Activity logs `attached` and `detached` with the script
+and its pid.
 
 `CALIPER_AUTOATTACH=<pid>` attaches to that process's session as soon as it is
 listed, for screenshots and headless checks; `CALIPER_HOME_AFTER=<seconds>`

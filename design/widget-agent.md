@@ -748,7 +748,7 @@ swapping. On a machine with a discrete GPU, the model's weights take video memor
   is attached (`caliper_live::Attachment::attached()`, true while the app holds a training script's stream, until it
   detaches) and the chosen base URL is a loopback address, for Ollama, LM Studio or Custom alike. A test in the hidden app
   attaches to the stream of the producer of the live acceptance test with the Ollama preset chosen and sees the note,
-  then detaches and sees it gone.
+  then detaches with ⌘D Detach (esc Home keeps the stream attached) and sees it gone.
 - **Built: the side chat's note.** Local model in the side chat's agent picker marks the chosen agent as running on a
   local model, kept per agent in `side-chat.json` ([ACP integration](acp-integration.md#the-side-chat-as-built)). While
   the live session is attached and the chosen agent is marked, the chat's header shows the same noun, "Shared GPU"

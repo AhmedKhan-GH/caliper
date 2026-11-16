@@ -637,6 +637,7 @@ struct Server::Impl {
             case Route::Launch:
                 call.kind = Call::Kind::Launch;
                 call.applet_id = v.routed.applet_id;
+                call.origin = v.origin;
                 break;
             default:   // the stream path never reaches here (http_door.h)
                 answer_error(c, 404, "no such endpoint in Caliper API v0");

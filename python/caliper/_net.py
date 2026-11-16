@@ -563,6 +563,7 @@ class Link:
 # ===========================================================================
 class _Producer:
     controls = None                            # 3.1: the server's caliper._net_controls.ControlsPort
+    stream_file = None                         # serve()'s StreamFile, told when the view list changes
 
     def __init__(self, ring: NetRing, identity: dict, transport: "NetTransport"):
         self.ring = ring
@@ -692,6 +693,9 @@ class _Producer:
                 del self.hist[st]
             for link in list(self.links):
                 link.views_changed(views)
+            sf = self.stream_file
+            if sf is not None:
+                sf.views(views)
         busy = False
         with ring.lock:
             pend = ring.pending
@@ -1117,6 +1121,8 @@ class NetServer:
     ``close()`` ends every connection with BYE and stops the server; it also
     runs at ``caliper.close()`` and at interpreter exit."""
 
+    _stream_file = None                 # serve()'s StreamFile while it listens
+
     def __init__(self, port: int = 0, *, engine=None, control: bool = True):
         port = int(port)
         if not 0 <= port <= 65535:
@@ -1294,6 +1300,8 @@ class NetServer:
         connection with BYE and stop the server. Idempotent."""
         if self.closed:
             return
+        if self._stream_file is not None:
+            self._stream_file.remove()          # the app stops listing it before it goes
         if self._loop.is_running() and threading.current_thread() is not self._thread:
             try:
                 # gathered series values (moved only if this thread gathered
@@ -1439,10 +1447,123 @@ def serve(port: int = 0, control: bool = True) -> NetServer:
             s = _make_server(port, control)
             _add_route(s)
         caliper._server = s
+        sf = StreamFile(s)
+        s._stream_file = sf
+        s.producer.stream_file = sf
+        sf.write()
     print(s.url, flush=True)
     from ._assets import note_missing_views
     note_missing_views()
     return s
+
+
+# ---------------------------------------------------------------------------
+# the stream file: how the Caliper app on this machine finds serve()'s stream
+# ---------------------------------------------------------------------------
+def app_data_dir() -> str:
+    """Caliper's app-data folder by the app's own rule (src/app_paths.cpp):
+    $CALIPER_DATA_DIR when it is set and not empty, else the folder of the OS."""
+    d = os.environ.get("CALIPER_DATA_DIR")
+    if d:
+        return d
+    home = os.path.expanduser("~")
+    if sys.platform == "darwin":
+        return os.path.join(home, "Library", "Application Support", "Caliper")
+    if os.name == "nt":
+        return os.path.join(os.environ.get("APPDATA") or os.getcwd(), "Caliper")
+    xdg = os.environ.get("XDG_DATA_HOME")
+    return os.path.join(xdg, "caliper") if xdg else os.path.join(home, ".local", "share", "caliper")
+
+
+STREAM_FILE_VERSION = 1
+
+
+class StreamFile:
+    """``<app data>/streams/<pid>.json`` while serve()'s server listens: what
+    the Caliper app's session list (F4 Attach to process) reads to list this
+    stream beside the shared-memory sessions and attach to it without the
+    link being pasted. It holds the server's stream URL with its token, the
+    same token as the link serve() prints, so it is written with mode 0600 in
+    a folder of mode 0700 (the owner only, as the hub file and the API file
+    are), and the app lists it only for the same user on the same machine
+    (``host``), with a live ``pid`` and a stream URL on 127.0.0.1. It is
+    rewritten when the view list changes (the pump thread), and removed when
+    the server closes; a killed script's file is removed by the app's next
+    listing. Writing it is best effort: a failure leaves serve() working, and
+    the link still attaches."""
+
+    def __init__(self, server):
+        self.server = server
+        self.path = os.path.join(app_data_dir(), "streams", f"{os.getpid()}.json")
+        self._lock = threading.Lock()
+        self._views: tuple | None = None
+        self._closed = False
+
+    def _names(self) -> tuple:
+        ring = self.server.ring
+        with ring.lock:
+            return tuple(ring.views)
+
+    def text(self, views: tuple) -> str:
+        s = self.server
+        info = {"version": STREAM_FILE_VERSION, "pid": os.getpid(), "host": _host_name(),
+                "session": s.identity["id"], "script": s.identity["script"],
+                "start_unix_ms": s.identity["start_unix_ms"], "port": s.port,
+                "stream_url": s.stream_url, "control": bool(s.control), "views": list(views)}
+        return json.dumps(info, indent=2, sort_keys=True) + "\n"
+
+    def write(self, views: tuple | None = None) -> bool:
+        """(Re)writes the file atomically; True when it was written."""
+        with self._lock:
+            if self._closed or not self.server.stream_url:
+                return False
+            if views is None:
+                views = self._names()
+            body = self.text(views).encode("utf-8")
+            folder = os.path.dirname(self.path)
+            tmp = f"{self.path}.tmp.{os.getpid()}"
+            try:
+                os.makedirs(folder, mode=0o700, exist_ok=True)
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                try:
+                    os.write(fd, body)
+                finally:
+                    os.close(fd)
+                os.replace(tmp, self.path)
+            except OSError as e:
+                _log.debug("cannot write the stream file %s: %s", self.path, e)
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                return False
+            self._views = views
+            return True
+
+    def views(self, names) -> None:
+        """The view list changed (the pump thread): rewrite when the names did."""
+        names = tuple(names)
+        if names != self._views:
+            self.write(names)
+
+    def remove(self) -> None:
+        """Removes the file and writes no more (idempotent)."""
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            try:
+                os.unlink(self.path)
+            except OSError:
+                pass
+
+
+def _host_name() -> str:
+    import socket
+    try:
+        return socket.gethostname()
+    except OSError:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -1454,15 +1575,7 @@ def hub_file() -> str:
     p = os.environ.get("CALIPER_HUB_FILE")
     if p:
         return p
-    home = os.path.expanduser("~")
-    if sys.platform == "darwin":
-        base = os.path.join(home, "Library", "Application Support", "Caliper")
-    elif os.name == "nt":
-        base = os.path.join(os.environ.get("APPDATA") or os.getcwd(), "Caliper")
-    else:
-        xdg = os.environ.get("XDG_DATA_HOME")
-        base = os.path.join(xdg, "caliper") if xdg else os.path.join(home, ".local", "share", "caliper")
-    return os.path.join(base, "hub.json")
+    return os.path.join(app_data_dir(), "hub.json")
 
 
 def hub_stream_url(url: str | None = None) -> str:

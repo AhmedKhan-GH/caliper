@@ -131,9 +131,10 @@ the bar at the top names the script and its state, and the status bar shows
 its PID, the number of views, the frame rate and the step-to-screen latency.
 The views update at up to 60 fps and the script never waits for Caliper.
 
-`esc Home` detaches and returns to the session list; training carries on, and
-you can attach again. When the script ends, the page keeps the last frames and
-says `SESSION ENDED`. In your own script nothing extra is needed: run it, then
+`esc Home` returns to the landing screen with the session still attached, and
+`F5 Live page` there comes back to it; `⌘D Detach` in the bar detaches, and
+training carries on, so you can attach again. When the script ends, the page
+keeps the last frames and says `SESSION ENDED`. In your own script nothing extra is needed: run it, then
 attach from Caliper.
 
 ## Attach with caliper-viewer
