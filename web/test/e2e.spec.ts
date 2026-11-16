@@ -8,7 +8,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import { expect, gpuPath, REPO, serve, shotPath, WEB, wireModule } from './util.js';
+import { drawn, expect, gpuPath, REPO, serve, shotPath, WEB, wireModule } from './util.js';
 
 const PYTHON = process.env.CALIPER_PYTHON ?? path.join(REPO, '.venv', 'bin', 'python');
 
@@ -65,7 +65,7 @@ test('the viewer page shows every view of the stream', async ({ page, producer }
   // Data keeps arriving: the newest snapshot of a view advances.
   const seq0 = (await state(page, 'weights')).seq as number;
   await expect.poll(async () => (await state(page, 'weights')).seq as number).toBeGreaterThan(seq0);
-  await page.waitForTimeout(400);
+  await drawn(page);
   await page.screenshot({ path: shotPath(info, 'page'), fullPage: true });
   expect(errors).toEqual([]);
 });

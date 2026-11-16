@@ -6,8 +6,9 @@
 // and the highlights must look and behave the same.
 
 import { expect, test, type Browser, type Page } from '@playwright/test';
+import { MSG } from '../src/protocol/messages.js';
 import { HAVE_PYTHON, startProducer, type Producer } from './producer.js';
-import { shotPath } from './util.js';
+import { drawn, shotPath, snapshotsPass } from './util.js';
 
 test.skip(!HAVE_PYTHON, 'needs a Python with numpy and websockets (CALIPER_PYTHON)');
 
@@ -82,8 +83,11 @@ test.describe('run controls and the controls panel', () => {
       // The other page and every header agree.
       await expect.poll(async () => (await state(other.page, 'embedding')).run).toBe(`paused at ${at}`);
       await expect.poll(async () => (await state(page, 'attention')).run).toBe(`paused at ${at}`);
-      await page.waitForTimeout(400);
-      expect((await panelState(page)).controls!.run.step).toBe(at);   // held
+      // Held: the step stays while the other page receives five more snapshots,
+      // one each 50 ms, the time of a training step.
+      await snapshotsPass(other.page, 'caliper-view[view="embedding"]', 5);
+      expect((await panelState(page)).controls!.run.step).toBe(at);
+      await drawn(page);
       await page.screenshot({ path: shotPath(info, 'controls-paused'), fullPage: false });
       await run.locator('.run-step').click();
       await expect.poll(async () => (await panelState(page)).controls?.run.step).toBe(at + 1);
@@ -214,13 +218,27 @@ test.describe('run controls and the controls panel', () => {
       await expect(panel(page).locator(sel).first(), sel).toBeDisabled();
     }
     await expect(panel(page).locator('.run-toggle')).toHaveAttribute('title', 'This viewer may not control the run');
+    // The calls are refused in the page: they resolve with null and no CONTROL
+    // frame leaves it (a frame's type is its bytes 8 and 9), so none reaches
+    // the producer either.
+    const sent = await page.evaluateHandle(() => {
+      const types: number[] = [];
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function (d) {
+        if (ArrayBuffer.isView(d)) types.push(new DataView(d.buffer, d.byteOffset, d.byteLength).getUint16(8, true));
+        else if (d instanceof ArrayBuffer) types.push(new DataView(d).getUint16(8, true));
+        return send.call(this, d);
+      };
+      return types;
+    });
     const r = await page.evaluate(() => Promise.all([
       (document.querySelector('caliper-controls') as HTMLElement & { setParam(n: string, v: unknown): Promise<unknown> }).setParam('lr', 0.01),
       (document.querySelector('caliper-view') as HTMLElement & { pause(): Promise<unknown> }).pause(),
     ]));
     expect(r).toEqual([null, null]);
-    await page.waitForTimeout(300);
+    expect(await sent.evaluate((t, control) => t.filter((x) => x === control).length, MSG.control)).toBe(0);
     expect(prod.controls).toEqual([]);
+    await drawn(page);
     await page.screenshot({ path: shotPath(info, 'controls-read-only') });
   });
 
@@ -243,7 +261,8 @@ test.describe('run controls and the controls panel', () => {
     await expect(panel(page)).toBeHidden();
     const loss = page.locator('caliper-view[view="loss"]');
     await loss.evaluate((el) => el.setAttribute('run-controls', ''));
-    await page.waitForTimeout(300);
+    // The stream goes on (two more snapshots) and still no run bar shows.
+    await snapshotsPass(page, 'caliper-view[view="embedding"]', 2);
     await expect(loss.locator('.run')).toBeHidden();
     expect((await state(page, 'loss')).run).toBeNull();
     expect((await state(page, 'embedding')).status).toBe('connected');
@@ -300,7 +319,7 @@ test.describe('linked selection', () => {
       await expect.poll(async () => (await state(page, 'p')).details).toBe('itemlabelscore330.005910.044');
       expect((await state(page, 'h')).details).toBeNull();
       expect((await events.evaluate((r) => r.length))).toBeGreaterThanOrEqual(2);
-      await page.waitForTimeout(400);
+      await drawn(page, 'caliper-view[view="p"], caliper-view[view="h"]');
       await page.locator('caliper-view[view="p"]').screenshot({ path: shotPath(info, 'linked-points') });
       await page.locator('caliper-view[view="h"]').screenshot({ path: shotPath(info, 'linked-heatmap') });
       // A shift-click clears it everywhere.
@@ -327,7 +346,7 @@ test.describe('linked selection', () => {
     expect(l.items.at(-1)).toBeGreaterThanOrEqual(338);
     expect(l.items.at(-1)).toBeLessThanOrEqual(341);
     await page.mouse.move(10, 10);
-    await page.waitForTimeout(400);
+    await drawn(page, 'caliper-view[view="s"]');
     await page.locator('caliper-view[view="s"]').screenshot({ path: shotPath(info, 'linked-series') });
   });
 });

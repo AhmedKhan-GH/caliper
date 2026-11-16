@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { colormapLut, lutIndex } from '../src/render/colormap.js';
-import { bodyPixels, expect, shotPath, WEB } from './util.js';
+import { bodyPixels, drawn, expect, shotPath, WEB } from './util.js';
 import { HAVE_PYTHON, startProducer, WASM, type Producer } from './producer.js';
 
 test.skip(!HAVE_PYTHON, 'needs a Python with numpy and websockets (CALIPER_PYTHON)');
@@ -44,7 +44,7 @@ async function open(page: Page, prod: Producer, view: string, which: Renderer[])
     const s = (document.getElementById(`${v}-${r}`) as El | null)?.debugState();
     return !!s && s.status === 'connected' && !!s.renderer && (r !== 'wasm' || s.wasmReady) && !!s.area && !!s.window;
   }), [view, which] as const, { timeout: 30_000 });
-  await page.waitForTimeout(600);
+  await drawn(page);
 }
 
 const state = (page: Page, id: string) => page.evaluate((i) => (document.getElementById(i) as El).debugState(), id) as

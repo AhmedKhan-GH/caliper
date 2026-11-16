@@ -191,3 +191,58 @@ export async function bodyPixels(page: Page, selector: string): Promise<{ px: Pi
   const png = await page.screenshot({ clip: box });
   return { px: decodePng(png), box };
 }
+
+// --- waits on what the page has drawn and received --------------------------------
+// Tests wait on frames, events or published state, never on a fixed time: a
+// software adapter on a CI runner draws a frame in a second or more.
+
+type ViewEl = HTMLElement & { debugState(): Record<string, unknown>; settled(): Promise<void> };
+
+/**
+ * Waits until the views matching selector have drawn what they hold. A
+ * TypeScript view draws on demand: settled() resolves once no frame is
+ * pending and the GPU has finished. A WebAssembly view's module draws on every
+ * animation frame and publishes its frame count at the end of a frame: the
+ * count must first change, which a frame that began after this call does, and
+ * pass the module's 30 start-up frames, over which the windows are laid out
+ * (it publishes every 250 ms after them, every 15 frames before); then it must
+ * grow by frames - 1 more.
+ */
+export async function drawn(page: Page, selector = 'caliper-view', frames = 2, timeout = 30_000): Promise<void> {
+  const settled = page.evaluate(async (sel) => {
+    const els = [...document.querySelectorAll(sel)] as ViewEl[];
+    const wasm = (e: ViewEl) => e.debugState().drawer === 'wasm';
+    await Promise.all(els.filter((e) => !wasm(e)).map((e) => e.settled()));
+    return els.map((e) => (wasm(e) ? Number((e.debugState().wasmStats as { frames?: number } | null)?.frames ?? 0) : null));
+  }, selector);
+  // A deadline, not a wait: a view that keeps drawing (turning, say) never settles.
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  const counts = await Promise.race([settled, new Promise<never>((_, no) => {
+    deadline = setTimeout(() => no(new Error(`${selector}: still drawing after ${timeout} ms`)), timeout);
+  })]).finally(() => clearTimeout(deadline));
+  if (counts.every((c) => c === null)) return;
+  const grown = (min: (number | null)[]) => page.waitForFunction(([sel, min]) => {
+    const now = ([...document.querySelectorAll(sel as string)] as ViewEl[])
+      .map((e) => (e.debugState().drawer === 'wasm' ? Number((e.debugState().wasmStats as { frames?: number } | null)?.frames ?? 0) : null));
+    return now.every((n, i) => n === null || (min as (number | null)[])[i] === null || n >= (min as number[])[i]) && now;
+  }, [selector, min] as const, { polling: 'raf', timeout });
+  const first = await (await grown(counts.map((c) => (c === null ? null : Math.max(c + 1, 31))))).jsonValue() as (number | null)[];
+  if (frames > 1) await grown(first.map((c) => (c === null ? null : c + frames - 1)));
+}
+
+/**
+ * Waits until the view has received k more snapshots from its stream (the
+ * TypeScript views' seq, the WebAssembly views' count of applied updates as
+ * the module publishes it).
+ */
+export async function snapshotsPass(page: Page, selector: string, k: number, timeout = 30_000): Promise<void> {
+  const count = (sel: string) => {
+    const s = (document.querySelector(sel) as ViewEl).debugState();
+    return Number(s.drawer === 'wasm' ? s.updates : s.seq);
+  };
+  const n0 = await page.evaluate(count, selector);
+  await page.waitForFunction(([sel, n]) => {
+    const s = (document.querySelector(sel as string) as ViewEl).debugState();
+    return Number(s.drawer === 'wasm' ? s.updates : s.seq) >= (n as number);
+  }, [selector, n0 + k] as const, { polling: 'raf', timeout });
+}

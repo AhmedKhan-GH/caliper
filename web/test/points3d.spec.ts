@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { CAMERA } from '../src/views/camera.js';
 import { PALETTE } from '../src/render/colormap.js';
-import { bodyPixels, expect, shotPath, WEB } from './util.js';
+import { bodyPixels, drawn, expect, shotPath, WEB } from './util.js';
 import { HAVE_PYTHON, startProducer, WASM, type Producer } from './producer.js';
 
 test.skip(!HAVE_PYTHON, 'needs a Python with numpy and websockets (CALIPER_PYTHON)');
@@ -44,7 +44,7 @@ async function open(page: Page, prod: Producer, which: Renderer[], dims = 3): Pr
     return !!s && s.status === 'connected' && !!s.renderer && (id !== 'wasm' || s.wasmReady) &&
       s.dims === dims && (dims === 2 || String(s.box ?? '').includes('x='));
   }), [which, dims] as const, { timeout: 30_000 });
-  await page.waitForTimeout(300);
+  await drawn(page);
 }
 
 const state = (page: Page, id: string) => page.evaluate((i) => (document.getElementById(i) as El).debugState(), id);
@@ -116,19 +116,6 @@ test('a point in front of the target is drawn larger than one behind it, which i
   }
 });
 
-/** The module's frame count, for waits on frames drawn rather than on time; null for the TypeScript view. */
-async function moduleFrames(page: Page, id: string): Promise<number | null> {
-  const st = (await state(page, id)).wasmStats as { frames?: number } | null;
-  return st ? Number(st.frames ?? 0) : null;
-}
-
-/** Waits until the WebAssembly view has drawn k more frames (the TypeScript view applies input at once). */
-async function framesPass(page: Page, id: string, k: number): Promise<void> {
-  const f0 = await moduleFrames(page, id);
-  if (f0 === null) return;
-  await expect.poll(async () => (await moduleFrames(page, id))! - f0, { timeout: 30_000, message: `${id}: frames drawn` })
-    .toBeGreaterThanOrEqual(k);
-}
 
 test('the rotate toggle turns the 3-D view until a drag stops it', async ({ page }, info) => {
   const prod = await producer(['--scene', 'clusters']);
@@ -146,7 +133,9 @@ test('the rotate toggle turns the 3-D view until a drag stops it', async ({ page
       // It turns: the state says so and the azimuth grows, frame by frame.
       await expect.poll(async () => (await state(page, r)).rotate, { timeout: 30_000, message: `${r}: rotate` }).toBe(true);
       await expect.poll(() => az(r), { timeout: 30_000, message: `${r}: azimuth while turning` }).toBeGreaterThan(az0 + 1e-3);
-      await framesPass(page, r, 2);
+      // The TypeScript view applies input at once and turns on every frame; the
+      // module draws two more frames.
+      if (r === 'wasm') await drawn(page, '#wasm', 2);
       const after = await bodyPixels(page, `#${r}`);
       expect(Buffer.compare(Buffer.from(before.px.data), Buffer.from(after.px.data)), r).not.toBe(0);
       // A drag stops it, and the header shows that.
@@ -158,11 +147,11 @@ test('the rotate toggle turns the 3-D view until a drag stops it', async ({ page
       await expect(button).toHaveAttribute('aria-pressed', 'false');
       await expect.poll(async () => (await state(page, r)).rotate, { timeout: 30_000, message: `${r}: rotate after the drag` }).toBe(false);
       // Once the drag's own turn has been drawn, the azimuth stays, however
-      // many frames follow.
-      await framesPass(page, r, 3);
+      // many frames follow: the TypeScript view has no frame pending (it would
+      // while turning), and the module draws five more.
+      await drawn(page, `#${r}`, 3);
       const az1 = await az(r);
-      await framesPass(page, r, 5);
-      await page.waitForTimeout(300);
+      await drawn(page, `#${r}`, 5);
       expect(await az(r), r).toBeCloseTo(az1, 6);
     }
   } finally {
