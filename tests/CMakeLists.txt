@@ -365,6 +365,24 @@ endif()
 add_test(NAME caliper_gfx_tests COMMAND caliper_gfx_tests)
 set_tests_properties(caliper_gfx_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77)
 
+# caliper_shader_tests: the generated shader programs (src/host/gfx/shaders/generated) on
+# Metal, headless. Every MSL program compiles and every entry and checked pair becomes a
+# pipeline, and the colormap by keys matches map_f32_to_rgba8 byte for byte on its boundary
+# cases. Skips (77) without a Metal device, as the gfx suite does.
+if(APPLE)
+    add_executable(caliper_shader_tests
+        shaders/shaders_metal.mm
+        ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp)
+    target_include_directories(caliper_shader_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
+    target_link_libraries(caliper_shader_tests PRIVATE doctest::doctest caliper::sdk
+        "-framework Metal" "-framework Foundation")
+    set_source_files_properties(shaders/shaders_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_target_properties(caliper_shader_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+        OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+    add_test(NAME caliper_shader_tests COMMAND caliper_shader_tests)
+    set_tests_properties(caliper_shader_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 77)
+endif()
+
 # ---------------------------------------------------------------------------
 # caliper_export_tests — caliper.export.v1 battery (Rung E1). Links libcaliper
 # (host_services vends the export service + the composition reaches its g_bridge/
