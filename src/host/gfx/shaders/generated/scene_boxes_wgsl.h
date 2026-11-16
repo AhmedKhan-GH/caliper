@@ -57,9 +57,9 @@ struct PrimParams {        // 192 bytes, the native size
   line_mode: u32,          // 168  native inst_base: 0 segments, 1 arrows
   use_instance_attr: u32,  // 172  as native
   image_mode: u32,         // 176  native inst_attr_base: 0 RGBA, 1 grey
-  pad0: u32,
-  pad1: u32,
-  pad2: u32,
+  att_ref: f32,            // 180  as native: points' depth cues (CompileOptions), 0 for none
+  fade_w0: f32,            // 184  as native
+  fade_w1: f32,            // 188  as native
 };
 @group(1) @binding(0) var<uniform> p: PrimParams;
 
@@ -272,9 +272,9 @@ fn vs_box_wire(in: BoxIn) -> VOut {
 }
 
 // Filled boxes: 6 faces of two triangles, 36 vertices; the first 6 are the face
-// at z = +1, which is all a 2-D box draws. Each normal is an axis vector, so the
 )wgsl"
-R"wgsl(// pose maps it onto a vector parallel to the true normal under any rotation and
+R"wgsl(// at z = +1, which is all a 2-D box draws. Each normal is an axis vector, so the
+// pose maps it onto a vector parallel to the true normal under any rotation and
 // positive scale, and the native normal chain lights a box exactly.
 @vertex
 fn vs_box_solid(in: BoxIn) -> VOut {

@@ -19,9 +19,19 @@ fn vs_points(in: PointIn) -> VOut {
   o.color = item_color(in.color_src);
   if (any_nan3(in.pos)) { o.pos = hidden(); return o; }
   let c = p.mvp * vec4<f32>(in.pos, 1.0);
+  // The live points view's depth cues (CompileOptions, zero for every other
+  // draw): with att_ref a point is nearer larger and farther smaller, clamped
+  // to half and twice its size, and past fade_w0 its colour falls linearly to
+  // half at fade_w1, its hue and alpha kept.
+  var size = p.size_px;
+  if (p.att_ref > 0.0) { size = size * clamp(p.att_ref / max(c.w, 1e-6), 0.5, 2.0); }
+  if (p.fade_w1 > p.fade_w0) {
+    let f = clamp((c.w - p.fade_w0) / (p.fade_w1 - p.fade_w0), 0.0, 1.0);
+    o.color = vec4<f32>(o.color.rgb * (1.0 - 0.5 * f), o.color.a);
+  }
   // Half the size in clip units: size_px as natively, or a radius in scene
   // units projected with the frame's scale, never below half a pixel.
-  var k = (p.size_px / frame.viewport) * c.w;
+  var k = (size / frame.viewport) * c.w;
   if (p.radius_mode == 1u) {
     k = max(in.radius * p.radius_scale * frame.proj_scale, c.w / frame.viewport);
   }

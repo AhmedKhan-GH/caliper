@@ -52,9 +52,9 @@ struct PrimParams {
     uint line_mode;
     uint use_instance_attr;
     uint image_mode;
-    uint pad0_;
-    uint pad1_;
-    uint pad2_;
+    float att_ref;
+    float fade_w0_;
+    float fade_w1_;
 };
 struct VOut {
     metal::float4 pos;
@@ -474,9 +474,9 @@ vertex vs_linesOutput vs_lines(
         float _e88 = p.size_px;
         metal::float4 _e89 = segment_corner(_e83, _e84, in_2.vid, _e88, frame);
         o.pos = _e89;
-        VOut _e90 = o;
 )msl"
-R"msl(        const auto _tmp_1 = _e90;
+R"msl(        VOut _e90 = o;
+        const auto _tmp_1 = _e90;
         return vs_linesOutput { _tmp_1.pos, _tmp_1.color, _tmp_1.uv, _tmp_1.pick, _tmp_1.obj };
     }
     bool _e91 = clip_near(a, b);

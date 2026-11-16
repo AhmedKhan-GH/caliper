@@ -36,7 +36,22 @@ struct CompileOptions {
     double axes_length = 0;                // scene units; 0 is a tenth of the scene's bounding radius
     uint32_t camera_rgba = 0xff000000u | (230u << 16) | (220u << 8) | 220u;   // frustums
     float camera_width_px = 2.0f;
+    // The live points view's depth cues, for points batches drawn at a size in pixels (zero: none,
+    // as for every other view). With point_att_ref > 0 a point is its size times
+    // clamp(point_att_ref / w, kPointAttenMin, kPointAttenMax) wide, w being its clip-space w, the
+    // distance along the view, so that nearer points are larger. With point_fade_w1 >
+    // point_fade_w0 its colour is scaled by 1 up to w = point_fade_w0, falling linearly to
+    // kPointFadeFloor at point_fade_w1 and beyond, so that farther points are dimmer with their hue
+    // and alpha kept; a batch with full_strength is never faded.
+    float point_att_ref = 0.0f;
+    float point_fade_w0 = 0.0f, point_fade_w1 = 0.0f;
 };
+
+// The constants of the depth cues above, written out in src/host/gfx/shaders/scene/points.wgsl and
+// in the TypeScript points view (web/src/render/points-gpu.ts).
+inline constexpr float kPointAttenMin = 0.5f;
+inline constexpr float kPointAttenMax = 2.0f;
+inline constexpr float kPointFadeFloor = 0.5f;
 
 // What a draw is, beyond its batch.
 enum class DrawPart : uint8_t {

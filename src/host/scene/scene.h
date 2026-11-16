@@ -176,6 +176,7 @@ struct Batch {
     float width_px = 2.0f;                    // lines, arrows, box edges, logical pixels
     float size_px = 0.0f;                     // points: logical pixels; 0 by count, as the points view
     PointShape point_shape = PointShape::Disc;
+    bool full_strength = false;               // points: never faded by the view's depth cues (CompileOptions)
 
     LineMode line_mode = LineMode::Segments;
     bool per_edge = false;                    // index-pair edges: colors and values are per edge, not per vertex

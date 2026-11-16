@@ -52,9 +52,9 @@ struct PrimParams {
     uint line_mode;
     uint use_instance_attr;
     uint image_mode;
-    uint pad0_;
-    uint pad1_;
-    uint pad2_;
+    float att_ref;
+    float fade_w0_;
+    float fade_w1_;
 };
 struct VOut {
     metal::float4 pos;
@@ -461,9 +461,9 @@ fragment fs_mesh_flatOutput fs_mesh_flat(
 }
 
 
-struct fs_mesh_texInput {
 )msl"
-R"msl(    metal::float4 color [[user(loc0), center_perspective]];
+R"msl(struct fs_mesh_texInput {
+    metal::float4 color [[user(loc0), center_perspective]];
     metal::float2 uv [[user(loc1), center_perspective]];
     metal::uint2 pick [[user(loc2), flat]];
     metal::float3 obj [[user(loc3), center_perspective]];

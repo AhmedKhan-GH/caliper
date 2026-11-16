@@ -223,6 +223,50 @@ TEST_CASE("points: absent streams read the constant geometry at stride 0; flat c
     CHECK(frame_of(d.list, d.rec(0)).proj_scale[1] > 0);
 }
 
+TEST_CASE("points: the live points view's depth cues reach the parameter blocks, the fade only where a batch "
+          "is not at full strength, and no other draw") {
+    SceneTree t;
+    REQUIRE(t.set_batch(t.ensure("all"), bounded(points3(10))));
+    Batch sel = bounded(points3(4));
+    sel.full_strength = true;
+    REQUIRE(t.set_batch(t.ensure("selection"), sel));
+    REQUIRE(t.set_batch(t.ensure("all"), bounded(lines3(4, LineMode::Segments))));
+    // Without cues every field is zero, the bytes the padding had before.
+    Compiled plain;
+    run(plain, t, fitted_orbit(t, 1), options());
+    REQUIRE(plain.result.ok);
+    REQUIRE(plain.list.records().size == 3);
+    for (size_t i = 0; i < 3; ++i) {
+        CHECK(plain.params(i).att_ref == 0.0f);
+        CHECK(plain.params(i).fade_w0 == 0.0f);
+        CHECK(plain.params(i).fade_w1 == 0.0f);
+    }
+    CompileOptions o = options();
+    o.point_att_ref = 3.0f;
+    o.point_fade_w0 = 3.0f;
+    o.point_fade_w1 = 4.5f;
+    Compiled c;
+    run(c, t, fitted_orbit(t, 1), o);
+    REQUIRE(c.result.ok);
+    REQUIRE(c.list.records().size == 3);
+    int points = 0;
+    for (size_t i = 0; i < 3; ++i) {
+        const DrawMapEntry& e = c.map.entries[c.params(i).pick_id - 1];
+        const std::string path = t.path(e.entity);
+        CAPTURE(path);
+        if (e.primitive != Primitive::Points) {
+            CHECK(c.params(i).att_ref == 0.0f);
+            CHECK(c.params(i).fade_w1 == 0.0f);
+            continue;
+        }
+        ++points;
+        CHECK(c.params(i).att_ref == 3.0f);
+        CHECK(c.params(i).fade_w0 == (path == "selection" ? 0.0f : 3.0f));
+        CHECK(c.params(i).fade_w1 == (path == "selection" ? 0.0f : 4.5f));
+    }
+    CHECK(points == 2);
+}
+
 TEST_CASE("lines as segments: both ends from one positions buffer at offsets 0 and 12, stride 24") {
     SceneTree t;
     Batch b = bounded(lines3(6, LineMode::Segments));

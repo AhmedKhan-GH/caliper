@@ -402,6 +402,11 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
                     }
                     s.params.size_px = (b.size_px > 0 ? b.size_px : default_point_size(n)) * opts.pixel_scale;
                     s.params.point_shape = uint32_t(b.point_shape);
+                    if (opts.point_att_ref > 0.0f) s.params.att_ref = opts.point_att_ref;
+                    if (!b.full_strength && opts.point_fade_w1 > opts.point_fade_w0) {
+                        s.params.fade_w0 = opts.point_fade_w0;
+                        s.params.fade_w1 = opts.point_fade_w1;
+                    }
                     s.count = 6;
                     s.instance_count = uint32_t(n);
                     s.entry.items = n;

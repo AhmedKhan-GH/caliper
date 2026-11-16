@@ -1879,29 +1879,29 @@
           }
         },
         {
-          "name": "pad0",
+          "name": "att_ref",
           "offset": 180,
           "type": {
             "kind": "scalar",
-            "scalar": "u32",
+            "scalar": "f32",
             "size": 4
           }
         },
         {
-          "name": "pad1",
+          "name": "fade_w0",
           "offset": 184,
           "type": {
             "kind": "scalar",
-            "scalar": "u32",
+            "scalar": "f32",
             "size": 4
           }
         },
         {
-          "name": "pad2",
+          "name": "fade_w1",
           "offset": 188,
           "type": {
             "kind": "scalar",
-            "scalar": "u32",
+            "scalar": "f32",
             "size": 4
           }
         }

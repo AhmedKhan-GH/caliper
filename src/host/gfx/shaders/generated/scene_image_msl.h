@@ -52,9 +52,9 @@ struct PrimParams {
     uint line_mode;
     uint use_instance_attr;
     uint image_mode;
-    uint pad0_;
-    uint pad1_;
-    uint pad2_;
+    float att_ref;
+    float fade_w0_;
+    float fade_w1_;
 };
 struct VOut {
     metal::float4 pos;

@@ -53,9 +53,9 @@ struct alignas(16) PrimParams {
     uint32_t line_mode;  // 168
     uint32_t use_instance_attr;  // 172
     uint32_t image_mode;  // 176
-    uint32_t pad0;  // 180
-    uint32_t pad1;  // 184
-    uint32_t pad2;  // 188
+    float att_ref;  // 180
+    float fade_w0;  // 184
+    float fade_w1;  // 188
 };
 static_assert(sizeof(PrimParams) == 192, "PrimParams");
 static_assert(offsetof(PrimParams, mvp) == 0, "PrimParams::mvp");
@@ -79,9 +79,9 @@ static_assert(offsetof(PrimParams, use_instance) == 164, "PrimParams::use_instan
 static_assert(offsetof(PrimParams, line_mode) == 168, "PrimParams::line_mode");
 static_assert(offsetof(PrimParams, use_instance_attr) == 172, "PrimParams::use_instance_attr");
 static_assert(offsetof(PrimParams, image_mode) == 176, "PrimParams::image_mode");
-static_assert(offsetof(PrimParams, pad0) == 180, "PrimParams::pad0");
-static_assert(offsetof(PrimParams, pad1) == 184, "PrimParams::pad1");
-static_assert(offsetof(PrimParams, pad2) == 188, "PrimParams::pad2");
+static_assert(offsetof(PrimParams, att_ref) == 180, "PrimParams::att_ref");
+static_assert(offsetof(PrimParams, fade_w0) == 184, "PrimParams::fade_w0");
+static_assert(offsetof(PrimParams, fade_w1) == 188, "PrimParams::fade_w1");
 
 struct alignas(16) Cmap {
     float vmin;  // 0

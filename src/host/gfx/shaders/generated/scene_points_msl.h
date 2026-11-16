@@ -51,9 +51,9 @@ struct PrimParams {
     uint line_mode;
     uint use_instance_attr;
     uint image_mode;
-    uint pad0_;
-    uint pad1_;
-    uint pad2_;
+    float att_ref;
+    float fade_w0_;
+    float fade_w1_;
 };
 struct VOut {
     metal::float4 pos;
@@ -311,6 +311,7 @@ vertex vs_pointsOutput vs_points(
 ) {
     const PointIn in = { vid_1, iid_1, {}, varyings.pos, varyings.color_src, varyings.radius };
     VOut o = {};
+    float size = {};
     metal::float2 k = {};
     metal::float2 _e3 = quad_corner(in.vid);
     metal::float2 corner = metal::float2((_e3.x * 2.0) - 1.0, _e3.y);
@@ -331,20 +332,39 @@ vertex vs_pointsOutput vs_points(
     metal::float4x4 _e32 = p.mvp;
     metal::float4 c_3 = _e32 * metal::float4(in.pos, 1.0);
     float _e39 = p.size_px;
-    metal::float2 _e42 = frame.viewport;
-    k = (metal::float2(_e39) / _e42) * c_3.w;
-    uint _e50 = p.radius_mode;
-    if (_e50 == 1u) {
-        float _e56 = p.radius_scale;
-        metal::float2 _e60 = frame.proj_scale;
-        metal::float2 _e65 = frame.viewport;
-        k = metal::max((in.radius * _e56) * _e60, metal::float2(c_3.w) / _e65);
+    size = _e39;
+    float _e43 = p.att_ref;
+    if (_e43 > 0.0) {
+        float _e46 = size;
+        float _e49 = p.att_ref;
+        size = _e46 * metal::clamp(_e49 / metal::max(c_3.w, 0.000001), 0.5, 2.0);
     }
-    metal::float2 _e71 = k;
-    metal::float4 _e77 = to_target(metal::float4(c_3.xy + (corner * _e71), c_3.z, c_3.w), frame);
-    o.pos = _e77;
-    VOut _e78 = o;
-    const auto _tmp_1 = _e78;
+    float _e60 = p.fade_w1_;
+    float _e63 = p.fade_w0_;
+    if (_e60 > _e63) {
+        float _e68 = p.fade_w0_;
+        float _e72 = p.fade_w1_;
+        float _e75 = p.fade_w0_;
+        float f = metal::clamp((c_3.w - _e68) / (_e72 - _e75), 0.0, 1.0);
+        metal::float4 _e83 = o.color;
+        float _e92 = o.color.w;
+        o.color = metal::float4(_e83.xyz * (1.0 - (0.5 * f)), _e92);
+    }
+    float _e94 = size;
+    metal::float2 _e97 = frame.viewport;
+    k = (metal::float2(_e94) / _e97) * c_3.w;
+    uint _e105 = p.radius_mode;
+    if (_e105 == 1u) {
+        float _e111 = p.radius_scale;
+        metal::float2 _e115 = frame.proj_scale;
+        metal::float2 _e120 = frame.viewport;
+        k = metal::max((in.radius * _e111) * _e115, metal::float2(c_3.w) / _e120);
+    }
+    metal::float2 _e126 = k;
+    metal::float4 _e132 = to_target(metal::float4(c_3.xy + (corner * _e126), c_3.z, c_3.w), frame);
+    o.pos = _e132;
+    VOut _e133 = o;
+    const auto _tmp_1 = _e133;
     return vs_pointsOutput { _tmp_1.pos, _tmp_1.color, _tmp_1.uv, _tmp_1.pick, _tmp_1.obj };
 }
 
@@ -373,8 +393,8 @@ vertex vs_depth_pointsOutput vs_depth_points(
     VOut o_1 = {};
     bool local = {};
     bool local_1 = {};
-    metal::uint2 size = metal::uint2(img_value.get_width(), img_value.get_height());
-    metal::uint2 px = metal::uint2(naga_mod(iid, size.x), naga_div(iid, size.x));
+    metal::uint2 size_1 = metal::uint2(img_value.get_width(), img_value.get_height());
+    metal::uint2 px = metal::uint2(naga_mod(iid, size_1.x), naga_div(iid, size_1.x));
     metal::uint4 _e12 = img_value.read(metal::uint2(px), 0);
     uint bits_2 = _e12.x;
     metal::float2 _e14 = quad_corner(vid);
@@ -425,7 +445,8 @@ struct fs_pointsInput {
     metal::float4 color [[user(loc0), center_perspective]];
     metal::float2 uv [[user(loc1), center_perspective]];
     metal::uint2 pick [[user(loc2), flat]];
-    metal::float3 obj [[user(loc3), center_perspective]];
+)msl"
+R"msl(    metal::float3 obj [[user(loc3), center_perspective]];
 };
 struct fs_pointsOutput {
     metal::float4 member_2 [[color(0)]];
@@ -452,8 +473,7 @@ fragment fs_pointsOutput fs_points(
 
 
 struct fs_points_pickInput {
-)msl"
-R"msl(    metal::float4 color [[user(loc0), center_perspective]];
+    metal::float4 color [[user(loc0), center_perspective]];
     metal::float2 uv [[user(loc1), center_perspective]];
     metal::uint2 pick [[user(loc2), flat]];
     metal::float3 obj [[user(loc3), center_perspective]];

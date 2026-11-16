@@ -57,9 +57,9 @@ struct PrimParams {        // 192 bytes, the native size
   line_mode: u32,          // 168  native inst_base: 0 segments, 1 arrows
   use_instance_attr: u32,  // 172  as native
   image_mode: u32,         // 176  native inst_attr_base: 0 RGBA, 1 grey
-  pad0: u32,
-  pad1: u32,
-  pad2: u32,
+  att_ref: f32,            // 180  as native: points' depth cues (CompileOptions), 0 for none
+  fade_w0: f32,            // 184  as native
+  fade_w1: f32,            // 188  as native
 };
 @group(1) @binding(0) var<uniform> p: PrimParams;
 
