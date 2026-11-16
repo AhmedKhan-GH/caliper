@@ -185,6 +185,24 @@ the views keep their last pixels, the status says the session ended, and the
 viewer reconnects; a series continues from the values the producer retained.
 When the script ends, the views keep their last pixels.
 
+## Choose what a view shows
+
+A view of a stream may offer more than it draws by default: several sources,
+such as the layers of a model, and dimensions beyond the ones its kind
+draws, such as the heads of an attention map
+([Data views](../references/wire-protocol.md#data-views)). In the app and in
+`caliper-viewer` such a view has a picker under its header, as in the
+browser: a menu of its sources when it has several, and a menu per
+dimension that keeps the dimension (`all`), reduces it (`mean`, `sum`,
+`max`, `min` or `norm`), or picks one index (a field past 256 positions). A
+heatmap that keeps three dimensions shows the first as a mosaic of tiles. A
+view with nothing to choose has no picker.
+
+A choice goes to the script at once; the script computes the new data view
+on its device and only the result travels. The menus then show the data view
+the script resolved, so a choice it refused or clamped returns to what it
+shows. A shared-memory session offers no choices.
+
 ## Control the run and share a selection
 
 A script on protocol 3.1 can take controls from its viewers: it calls a
@@ -202,7 +220,7 @@ The run bar sits under the page bar, above the views:
 | Run state | `running`, `pausing`, `paused`, `stepping, N left` or `no checkpoint yet`, with the step at which the state last changed |
 | Pause, Resume | Pause holds the training loop at its next checkpoint; Resume releases it |
 | Step | Runs one step and pauses again |
-| Parameters | One control per registered parameter, by its type: a slider for a number or an integer with a range (on a log scale when the script asks for one), a field for one without, a box for a boolean, a menu for a choice. Cmd-click a slider to type a value |
+| Parameters | One control per registered parameter, by its type: a slider for a number or an integer with a range (on a log scale when the script asks for one) with a field beside it that shows and takes the exact value, a field for one without a range, a box for a boolean, a menu for a choice |
 | Actions | One button per registered action, then `queued` or `running` while it waits or runs, and its result for 15 s after it finishes, or `FAILED:` and the reason |
 | Right edge | The last refused request and why, for 10 s, or why the controls are off |
 

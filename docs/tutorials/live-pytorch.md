@@ -209,7 +209,7 @@ snapshots dropped while paused.
 
 | View | Interaction and hover |
 |---|---|
-| Heatmap, image | Hover shows the row, column and value (RGBA for images). Small tensors are magnified with nearest sampling, so each cell stays a cell. |
+| Heatmap, image | As in the browser: a heatmap stretched to its plot area with a colorbar beside it, an image at equal aspect, both with axes of source row and column indices titled with the dims' names that follow a pan or a zoom. A drag pans, the wheel zooms, a double click fits. Hover shows the row, column and value (RGBA for images). Cells are sampled nearest once they cover a pixel, so each cell stays a cell. |
 | Points | 3-D: left or right drag orbits, middle drag or shift+drag pans, the wheel zooms, a double click or the F key re-fits. 2-D: drag pans, the wheel zooms about the cursor. Hover marks the nearest point and shows its index, position and label. |
 | Series | A line over the append index; hover shows step and value; the latest value is printed. |
 | Histogram | Bars at bin centres; hover shows the bin range and count. |
