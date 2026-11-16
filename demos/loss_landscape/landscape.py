@@ -98,6 +98,7 @@ class Landscape:
         if not named:
             raise ValueError("the model has no parameter with two or more dimensions to perturb")
         self.names = [n for n, _ in named]
+        self._model, self._params = model, [p for _, p in named]
         self.shapes = [tuple(p.shape) for _, p in named]
         self.sizes = [p.numel() for _, p in named]
         self.size = sum(self.sizes)                 # P, the weights in the plane
@@ -196,8 +197,12 @@ class Landscape:
     # -- weights ---------------------------------------------------------------
     def flat(self, model):
         """The perturbed weights of ``model`` as one vector (P,) on its device."""
-        params = dict(model.named_parameters())
-        return torch.cat([params[n].detach().reshape(-1) for n in self.names])
+        if model is self._model:
+            params = self._params
+        else:
+            named = dict(model.named_parameters())
+            params = [named[n] for n in self.names]
+        return torch.cat([p.detach().reshape(-1) for p in params])
 
     def split(self, flat):
         """Views of ``flat`` (P,) with the shape of each perturbed parameter."""
