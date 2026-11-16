@@ -1379,13 +1379,13 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
                 place(line, [&](ImVec2 p) { draw_tag(cdl, L, p, line, L.faint, "AGENTS"); });
                 for (const ChatAgent& a : agents_) {
                     if (a.custom) continue;
+                    // The name and whether it was found, as the picker shows them; never a command line.
                     place(line, [&](ImVec2 p) {
-                        draw_str(cdl, L.ui, L.ui_size, v2(p.x, p.y + (line - ui_h) * 0.5f), L.secondary, a.title);
-                        std::string needs;
-                        for (const std::string& n : a.needs) needs += (needs.empty() ? "" : " \xC2\xB7 ") + n;   // ·
-                        const float nx = p.x + std::max(std::round(120.0f * s), extent(L.ui, L.ui_size, a.title).x + gap);
-                        draw_str(cdl, L.mono, L.mono_size, v2(nx, p.y + (line - mono_h) * 0.5f), L.faint,
-                             fit(L.mono, L.mono_size, needs, p.x + w - nx));
+                        draw_str(cdl, L.ui, L.ui_size, v2(p.x, p.y + (line - ui_h) * 0.5f), a.found ? L.text : L.secondary, a.title);
+                        const char* word = a.found ? "FOUND" : "NOT FOUND";
+                        const float nw = sternbild::text_tracked_width(L.ui, L.small_size, word, tracking);
+                        const float nx = p.x + std::max(std::round(140.0f * s), extent(L.ui, L.ui_size, a.title).x + gap);
+                        if (nx + nw <= p.x + w) draw_tag(cdl, L, v2(nx, p.y), line, L.faint, word);
                     });
                 }
                 const float bw = std::ceil(2.0f * m.button_pad + extent(L.ui, L.ui_size, chat_action_label(ChatAction::custom)).x +

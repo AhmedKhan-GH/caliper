@@ -608,7 +608,7 @@ claims the right column's lower part with `layout_chat_column()`, and calls `dra
   LIMIT, FAILED).
 - **Login.** When `session/new` answers that the agent needs a login, the pane shows LOGIN with the agent's own login
   methods and the commands of the preset's hint, and Restart; it never asks for a key and runs no login flow.
-- **No agent.** The four agents by name with the programs looked for, and one action, Custom command.
+- **No agent.** The four agents by name, each marked NOT FOUND, and one action, Custom command.
 - **The input.** One line, more with Shift or Command and Enter, up to six; Enter sends; the agent picker beside it
   lists the agents by name, NOT FOUND for those not on PATH, and Custom command.
 - **The layout.** The right column is 28 % of the window's width with a minimum of 300 points that grows with the text
