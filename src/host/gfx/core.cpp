@@ -507,6 +507,7 @@ Backend::~Backend() = default;
 
 const Caps& Backend::caps() const { return core_->caps; }
 const std::string& Backend::last_error() const { return core_->error; }
+bool Backend::refuse(std::string reason) { return core_->fail(std::move(reason)); }
 void Backend::complete(Serial s, double gpu_ms) { core_->sink->complete(s, gpu_ms); }
 std::shared_ptr<CompletionSink> Backend::completion_sink() const { return core_->sink; }
 
@@ -1338,28 +1339,6 @@ Stats Backend::take_stats() {
     Stats r = c.stats;
     r.gpu_ms = c.caps.has(kCapTimestamps) ? c.sink->take_gpu_ms() : -1.0;
     c.stats = Stats{};
-    return r;
-}
-
-UpdateResult Backend::update_texture_from_tensor(Texture, const TensorSource&, const TextureMapping&) {
-    core_->fail("update_texture_from_tensor needs the colormap program of the shader generator (migration step 7)");
-    return {};
-}
-
-UpdateResult Backend::fill_texture_from_buffer(Texture dst, Buffer src, uint64_t offset, uint32_t row_pitch) {
-    if (row_pitch % kCopyRowPitchAlign != 0) {
-        core_->fail("fill_texture_from_buffer: a row pitch that is not a multiple of 256 needs the fill program "
-                    "of the shader generator");
-        return {};
-    }
-    Frame f;
-    f.copy_buffer_to_texture(src, offset, row_pitch, dst);
-    UpdateResult r;
-    r.serial = submit(std::move(f));
-    if (r.serial == 0) return r;
-    r.ok = true;
-    r.route = Route::CopiedOnGpu;
-    r.path = "copy";
     return r;
 }
 

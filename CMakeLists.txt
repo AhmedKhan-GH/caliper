@@ -357,6 +357,7 @@ set_target_properties(caliper_api PROPERTIES
 # (web/wasm, its own Emscripten project); the native renderers keep their own paths for now.
 add_library(caliper_gfx STATIC
     src/host/gfx/core.cpp
+    src/host/gfx/ops.cpp
     src/host/gfx/recording_backend.cpp
 )
 target_include_directories(caliper_gfx PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
@@ -415,7 +416,7 @@ if(APPLE)
         PUBLIC caliper::sdk
                "-framework Metal" "-framework QuartzCore"
                "-framework Foundation" "-framework Cocoa"
-        PRIVATE caliper::ui_stack imgui_backends glfw)
+        PRIVATE caliper::ui_stack imgui_backends glfw caliper_gfx)
     set_source_files_properties(
         src/host/renderer/metal_renderer.mm
         src/host/background_process_mac.mm

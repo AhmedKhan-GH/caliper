@@ -83,7 +83,7 @@ public:
     void window_hints() override {}
 
     // The graphics layer's backend, from init() until shutdown().
-    caliper_gfx::WebGpuBackend* gfx() { return gfx_.get(); }
+    caliper_gfx::WebGpuBackend* gfx() override { return gfx_.get(); }
 
     // ---- instrumentation (not part of HostRenderer) ------------------------
     // Copy texture `tex` (renderer id or ImTextureID) back to tightly packed

@@ -51,16 +51,22 @@
 //     and leaves every target untouched (the geometry service's atomic frame).
 // 14. read_texture returns the region tightly packed, top row first, in the texture's format
 //     (4 bytes a texel for RGBA8, 8 for RG32Uint, 4 for Depth32Float).
-// 15. update_texture_from_tensor and fill_texture_from_buffer are declared with their final
-//     shape; their portable defaults need the colormap and fill programs of the shader
-//     generator, so until then the defaults refuse, except fill_texture_from_buffer when a
-//     plain copy does it (row pitch a multiple of 256).
+// 15. update_texture_from_tensor and fill_texture_from_buffer have portable defaults in ops.cpp,
+//     built from the calls above with the generated programs colormap_texture and fill_texture,
+//     which a backend names with set_programs. A backend without them refuses both, except
+//     fill_texture_from_buffer when a plain copy does it (row pitch a multiple of 256).
 // 16. Override constants are refused (constant_count must be 0): Naga's MSL cannot declare
 //     function constants, so a value that varies goes in a uniform block. The fields stay so
 //     that the descriptor keeps its layout.
 // 17. The layer is used from one thread. Only completion is reported from other threads.
 // 18. The header and src/host/gfx/ build as C++17, the host's standard: View<T>, a pointer
 //     and a count, stands in for the C++20 span.
+// 19. update_texture_from_tensor reads its source from a buffer of the backend or from a tensor
+//     on its device (TensorSource), and TextureMapping carries the colormap's key block instead
+//     of a table and a range: the keys are derived from the CPU reference map_f32_to_rgba8,
+//     which lives with the tensor bridge, so the caller derives them (gfx/colormap_keys.h) and
+//     the layer stays free of it. UpdateResult also says how many bytes the update copied from
+//     the host. A tensor's stream reaches the backend through on_sync_after_stream.
 #pragma once
 
 #include <caliper/tensor.h>
@@ -427,6 +433,18 @@ struct Stats {   // since the last take_stats; the frame's sum feeds the info li
     double encode_cpu_ms = 0, gpu_ms = -1;   // gpu_ms < 0 without kCapTimestamps
 };
 
+// What update_texture_from_tensor reads (decision 19). The data is f32 with channels 1, or u8 with
+// channels 4 (RGBA8 texels; other channel counts are the caller's to expand), w x h texels, the
+// texel at (x, y) at element offset / element size + y * stride_y + x * stride_x, where stride_x is
+// the channel count and stride_y 0 means w * channels. It comes from one of two places:
+//  - buffer: a buffer of this backend, an import or one of its own, read at byte `offset`; its
+//    path label ends in -imported. `tensor`, when given, is read for its stream alone.
+//  - tensor (buffer none): the tensor's data on its device. A CPU tensor's bytes at data + offset
+//    are copied once (path cpu-staged); a CALIPER_DEV_METAL tensor's id<MTLBuffer> is imported in
+//    place for this update and read at `offset` (path compute or blit).
+// A tensor's non-null stream (an id<MTLCommandQueue> on Metal) orders the read after the work
+// the producer committed to it, where the backend can (kCapWaitMetalEvent); `sync` does the same
+// for a producer that signals an event of its own.
 struct TensorSource {
     Buffer buffer; uint64_t offset = 0; uint32_t w = 0, h = 0, channels = 1;
     CaliperDType dtype = CALIPER_DT_F32;
@@ -434,8 +452,19 @@ struct TensorSource {
     const CaliperTensor* tensor = nullptr;
     ExternalSync sync;
 };
-struct TextureMapping { const uint32_t* lut256 = nullptr; float vmin = 0, vmax = 1; };   // ignored for u8 data
-struct UpdateResult { bool ok = false; Route route = Route::Refused; const char* path = "refused"; Serial serial = 0; };
+// The colormap of an f32 update: its key block, the colormap program's uniform block Cmap
+// (gfx/shaders/generated/uniforms.h, 4,112 bytes: the range, the flip and each level's keys and
+// colour), which the caller derives from the CPU reference with gfx/colormap_keys.h (decision 19).
+// Ignored for u8 data.
+struct TextureMapping { const void* cmap = nullptr; uint32_t cmap_bytes = 0; };
+// The route the update's source took and the path label views show: compute, compute-imported,
+// blit, blit-imported or cpu-staged. bytes_copied counts what the update copied from the host
+// (0 on an in-place route); serial is the submit that reads the source, 0 for one that needed
+// none (an upload of host RGBA8 texels, which write_texture orders by itself).
+struct UpdateResult {
+    bool ok = false; Route route = Route::Refused; const char* path = "refused"; Serial serial = 0;
+    uint64_t bytes_copied = 0;
+};
 
 // Backend-private records the core keeps per resource (defined in backend_impl.h).
 struct ProgramInfo;
@@ -443,6 +472,7 @@ struct PipelineInfo;
 struct BindGroupInfo;
 struct BufferInfo;
 struct TextureInfo;
+struct OpsState;
 class Core;
 class CompletionSink;
 
@@ -506,6 +536,13 @@ public:
 
 protected:
     explicit Backend(const Caps& caps);
+    // The backend's table of generated programs (gfx/shaders/generated/programs_<backend>.h),
+    // indexed by shaders::ProgramId, which the operations above run (decision 15).
+    void set_programs(const ProgramDesc* table, uint32_t count);
+    // The ExternalSync that orders a read after the work a producer committed to `stream` (a
+    // CaliperTensor's stream: an id<MTLCommandQueue> on Metal). False where the backend cannot,
+    // and the update then reads without it, as the bridge's caps tell an applet.
+    virtual bool on_sync_after_stream(void* stream, ExternalSync* out) { (void)stream; (void)out; return false; }
 
     // Called by a backend when the submit with this serial completed on the GPU. gpu_ms < 0
     // when unknown. Serials may complete out of order. Completion handlers on other threads
@@ -549,7 +586,9 @@ protected:
     virtual uint64_t on_imgui_texture_id(uint32_t slot) = 0;
 
 private:
+    bool refuse(std::string reason);   // sets last_error(), returns false (core.cpp)
     std::unique_ptr<Core> core_;
+    std::shared_ptr<OpsState> ops_;   // ops.cpp: the operations' programs, pipelines and caches
 };
 
 }  // namespace caliper_gfx

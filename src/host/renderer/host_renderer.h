@@ -7,6 +7,10 @@
 #include <vector>
 struct GLFWwindow;
 
+namespace caliper_gfx {
+class Backend;
+}
+
 namespace caliper_host {
 
 // Host-side resolved draw for caliper.geometry.v1_1. Applet-facing allocation
@@ -154,6 +158,11 @@ public:
     // NULL. The graphics layer's Metal backend (src/host/gfx) runs on both, so its work is
     // ordered with the renderer's by commit order and no second device exists.
     virtual void* native_queue() const { return nullptr; }
+    // The graphics layer's backend (src/host/gfx) that this renderer owns, on its device and queue,
+    // from the start of its window or canvas until shutdown; null where the layer has no backend
+    // here (the Vulkan renderer until Windows parity). The tensor bridge's textures and imports,
+    // and so the embed views and the heatmap and image live views, live in it.
+    virtual caliper_gfx::Backend* gfx() { return nullptr; }
 
     // Which device kind this backend imports on its zero-copy path (spec §3.4).
     // The bridge maps this to active_device_ instead of matching on name(),

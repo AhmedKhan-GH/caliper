@@ -22,6 +22,7 @@
 //    newBufferWithBytesNoCopy: no copy on either route.
 #include "gfx/metal_backend.h"
 #include "gfx/backend_impl.h"
+#include "gfx/shaders/generated/programs_metal.h"
 
 #import <Metal/Metal.h>
 
@@ -30,6 +31,7 @@
 #include <deque>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <unistd.h>
 #include <vector>
 
@@ -193,6 +195,15 @@ public:
         ring_.init(device);
         unified_ = device.hasUnifiedMemory;
         page_ = (uint64_t)getpagesize();
+        set_programs(shaders::kMetalPrograms, shaders::kProgramCount);
+    }
+
+    // The geometry service's adapter (metal_backend.h): a live buffer's or texture's Metal object.
+    id<MTLBuffer> buffer_object(Buffer b) const {
+        return alive(b) && handle_slot(b.id) < buffers_.size() ? buffers_[handle_slot(b.id)] : nil;
+    }
+    id<MTLTexture> texture_object(Texture t) const {
+        return alive(t) && handle_slot(t.id) < textures_.size() ? textures_[handle_slot(t.id)].texture : nil;
     }
 
     ~MetalBackend() override {
@@ -830,6 +841,32 @@ protected:
         return (uint64_t)(__bridge void*)textures_[slot].texture;
     }
 
+    // A producer's queue: a small command buffer on it signals the next value of that queue's
+    // event, after the work the producer committed before, and the update's frame waits for it on
+    // the GPU. No CPU waits, unless no event can be made: then the producer's queue is drained once,
+    // slower and still ordered.
+    bool on_sync_after_stream(void* stream, ExternalSync* out) override {
+        id<MTLCommandQueue> producer = (__bridge id<MTLCommandQueue>)stream;
+        if (producer == nil) return false;
+        @autoreleasepool {
+            QueueEvent& e = producer_events_[stream];
+            if (e.event == nil) e.event = [device_ newSharedEvent];
+            id<MTLCommandBuffer> sig = [producer commandBuffer];
+            if (sig == nil) return false;
+            if (e.event == nil) {
+                [sig commit];
+                [sig waitUntilCompleted];
+                *out = ExternalSync{};
+                return true;
+            }
+            const uint64_t v = ++e.value;
+            [sig encodeSignalEvent:e.event value:v];
+            [sig commit];
+            *out = ExternalSync{ExternalSync::MetalEvent, (__bridge void*)e.event, v};
+            return true;
+        }
+    }
+
 private:
     struct Inflight { Serial serial; id<MTLCommandBuffer> cb; };
     id<MTLDevice> device_;
@@ -847,9 +884,22 @@ private:
     std::vector<id<MTLBuffer>> readbacks_;
     // The command buffer of each resource's last queued write, until it completed.
     std::vector<id<MTLCommandBuffer>> buffer_writes_, texture_writes_;
+    // One event per producer queue that an update was ordered after, with its last signalled value.
+    struct QueueEvent { id<MTLSharedEvent> event = nil; uint64_t value = 0; };
+    std::unordered_map<void*, QueueEvent> producer_events_;
 };
 
 }  // namespace
+
+void* metal_buffer(Backend& b, Buffer buffer) {
+    auto* m = dynamic_cast<MetalBackend*>(&b);
+    return m ? (__bridge void*)m->buffer_object(buffer) : nullptr;
+}
+
+void* metal_texture(Backend& b, Texture texture) {
+    auto* m = dynamic_cast<MetalBackend*>(&b);
+    return m ? (__bridge void*)m->texture_object(texture) : nullptr;
+}
 
 std::unique_ptr<Backend> make_metal_backend(void* mtl_device, void* mtl_command_queue) {
     if (mtl_device == nullptr || mtl_command_queue == nullptr) return nullptr;
