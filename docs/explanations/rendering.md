@@ -472,9 +472,10 @@ static and stamped batches apart, so a clear that is not static leaves a static 
   ([The colormap by keys](#the-colormap-by-keys)).
 - **Drawing.** When the scene, the camera, the size or the clear colour changed, the view compiles the scene and submits
   it, with the index clamp of changed meshes, to an offscreen colour target with a depth target in 3-D, which its
-  window shows as an image; otherwise it submits nothing. On Metal each scene view has a backend of the layer of its
-  own on the renderer's device and queue, so its submits are ordered with the app's frame and its statistics are its
-  own; in a browser it borrows the WebGPU renderer's backend.
+  window shows as an image; otherwise it submits nothing. A frame that fails to compile or that the layer refuses is
+  dropped with its clamps, and the next frame emits them again. On Metal each scene view has a backend of the layer of
+  its own on the renderer's device and queue, so its submits are ordered with the app's frame and its statistics are
+  its own; in a browser it borrows the WebGPU renderer's backend.
 - **Camera.** The orbit about the scene's up axis (pan and zoom in a 2-D scene), fitted once when the scene first has
   bounds and again on F or a double click, with the points view's gestures. It opens at the points view's default
   three-quarter view, azimuth 0.95 and elevation 0.42 radians at the fit's distance times 1.15, which

@@ -89,6 +89,9 @@ public:
     // Emits into frame the index clamp of each mesh batch and the edge gather of each lines batch
     // of index-pair edges whose arrays changed since the last prepare, into buffers the layer owns.
     void prepare(const SceneTree& tree, Resources& res, caliper_gfx::Frame& frame);
+    // The frame of the last prepare() was not submitted (its compile failed or the layer refused
+    // it): its clamps and gathers never ran, so the next prepare() emits them again.
+    void discard_prepared();
     // Compiles the visible entities (after tree.update()) into out, whose target the caller set.
     // out's depth target decides depth testing; a 2-D scene draws without depth in list order.
     CompileResult compile(const SceneTree& tree, const ViewCamera& camera, const CompileOptions& options,
@@ -108,6 +111,7 @@ private:
                       const int32_t* window, Resources& res, caliper_gfx::DrawList& out, DrawMap* map);
     bool is_prepared(uint64_t key, const BatchArray& a, uint64_t seq) const;
     std::unordered_map<uint64_t, Prepared> prepared_;
+    std::vector<uint64_t> fresh_;   // the keys the last prepare() recorded
 };
 
 // The label anchors of the visible points and boxes batches whose positions are CPU-visible,
