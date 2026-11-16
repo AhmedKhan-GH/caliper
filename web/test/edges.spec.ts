@@ -1,6 +1,7 @@
 // The colour of every colormap edge case in both browser renderers, the
-// element's TypeScript views (renderer="ts": WebGPU, or Canvas 2D without an
-// adapter) and Caliper's views compiled to WebAssembly (renderer="wasm"):
+// element's TypeScript views (renderer="ts", which draw with Canvas 2D in every
+// project) and Caliper's views compiled to WebAssembly (renderer="wasm", on
+// WebGPU, in the projects that have an adapter):
 // mock_server.py --edges serves a heatmap and 2-D points coloured by values on
 // each side of every index boundary, NaN, the infinities and zeros, over an
 // increasing, a decreasing and two very wide ranges (one whose width overflows

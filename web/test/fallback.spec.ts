@@ -1,8 +1,8 @@
 // The element without Caliper's WebAssembly views, as in a checkout where
 // neither scripts/build_wasm.py nor scripts/fetch_wasm.py has run: the server
 // answers 404 for caliper-views-loader.js, and renderer="auto" draws every
-// view with the element's own TypeScript views, on WebGPU where there is an
-// adapter and with Canvas 2D otherwise, with no error on the page.
+// view with the element's own TypeScript views, with Canvas 2D also where
+// there is an adapter, with no error on the page.
 
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
@@ -14,7 +14,7 @@ test.skip(!HAVE_PYTHON, 'needs a Python with numpy and websockets (CALIPER_PYTHO
 
 type El = HTMLElement & { debugState(): Record<string, unknown> };
 
-test('auto draws every view with the TypeScript views when the WebAssembly views are missing', async ({ page }, info) => {
+test('auto draws every view with the TypeScript views when the WebAssembly views are missing', async ({ page }) => {
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'caliper-no-views-'));
   const prod = await startProducer([], empty);
   try {
@@ -34,12 +34,10 @@ test('auto draws every view with the TypeScript views when the WebAssembly views
       return [s.view, s.kind, s.drawer, s.renderer] as [string, string, string, string];
     }));
     expect(new Set(got.map((g) => g[1]))).toEqual(new Set(['heatmap', 'image', 'points', 'series', 'histogram']));
-    for (const [view, kind, drawer, renderer] of got) {
+    for (const [view, , drawer, renderer] of got) {
       expect(drawer, view).toBe('ts');
-      // The TypeScript views draw heatmaps, images and points on WebGPU when
-      // there is an adapter, and series and histograms with Canvas 2D always.
-      const gpu = info.project.name !== 'canvas2d' && ['heatmap', 'image', 'points'].includes(kind);
-      expect(renderer, view).toBe(gpu ? 'webgpu' : 'canvas2d');
+      // The TypeScript views draw every kind with Canvas 2D: they have no WebGPU path.
+      expect(renderer, view).toBe('canvas2d');
     }
     // The element asked for the loader, was told it is not there, and fell back.
     expect(loader.length).toBeGreaterThan(0);

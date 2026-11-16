@@ -15,9 +15,10 @@ predictions widget, shows their details, and reaches
 from Python reaches the widget. Run
 in the "metal" mode, where Caliper's WebAssembly views draw all three widgets
 on WebGPU and make the selection, and the "canvas2d" mode, where the
-element's own TypeScript views do. Without the WebAssembly views in the
-package (scripts/build_wasm.py and scripts/fetch_wasm.py put them there), the
-"metal" mode checks the TypeScript views on WebGPU instead and says so.
+element's own TypeScript views do, with Canvas 2D. Without the WebAssembly
+views in the package (scripts/build_wasm.py and scripts/fetch_wasm.py put them
+there), the "metal" mode checks the TypeScript views instead and says so; they
+have no WebGPU path, so they draw with Canvas 2D there too.
 
     CALIPER_HEADLESS_DIR=<scratch> CALIPER_TEST_ARTIFACTS=<shots> \\
     PYTHONPATH=python .venv/bin/python -m pytest --noconftest \\
@@ -155,9 +156,9 @@ def test_live_training_notebook(tmp_path, mode):
             assert set(renderers.values()) == {"wasm"}, renderers
         else:
             print(f"the WebAssembly views are not in {_assets.asset_dir()}: the metal mode checks "
-                  "the TypeScript views on WebGPU")
-            # The TypeScript views: the heatmap and the points on WebGPU, the series with Canvas 2D.
-            assert renderers == {"loss": "canvas2d", "attention": "webgpu", "embedding": "webgpu"}, renderers
+                  "the TypeScript views, which draw with Canvas 2D")
+            # The TypeScript views draw every kind with Canvas 2D, also where WebGPU has an adapter.
+            assert set(renderers.values()) == {"canvas2d"}, renderers
 
         # Each widget draws, and updates while the cell trains. The embedding
         # barely moves during the loss plateau, so for it the view's own count

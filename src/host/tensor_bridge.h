@@ -52,7 +52,6 @@ void map_f32_to_rgba8(const float* src, int w, int h,
 // number of thresholds it has passed. Mode 0 is a range whose width is zero,
 // infinite or NaN, where the reference gives every value index 0. NaN is
 // index 0 in every mode. Writes T[0..255] (T[0] unused) and returns the mode.
-// web/src/render/colormap.ts (colormapThresholds) derives the same.
 uint32_t colormap_thresholds(float vmin, float vmax, float* T);
 
 // Expand a row-major (h,w,c) u8 buffer (c in 1..4) into tightly-packed RGBA8:

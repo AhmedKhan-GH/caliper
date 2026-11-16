@@ -38,13 +38,13 @@ def snapshots_pass(page: Page, view: str, k: int, timeout: float = 60.0) -> None
 
 def drawn(page: Page, view: str, frames: int = 2, timeout: float = 60.0) -> None:
     """Waits until the view has drawn what it holds. The element's own views
-    draw on demand: settled() resolves once no frame is pending and the GPU has
-    finished, and while data keeps arriving faster than a slow machine draws, a
-    frame drawn after this call is enough (its frames count grows). A
-    WebAssembly view's module draws on every animation frame and
-    publishes its frame count at the end of a frame: the count must change,
-    which a frame that began after this call does, and pass the module's 30
-    start-up frames; then it must grow by frames - 1 more."""
+    draw on demand: settled() resolves once no frame is pending, and while data
+    keeps arriving faster than a slow machine draws, a frame drawn after this
+    call is enough (its frames count grows). A WebAssembly view's module draws
+    on every animation frame and publishes its frame count at the end of a
+    frame: the count must change, which a frame that began after this call
+    does, and pass the module's 30 start-up frames; then it must grow by
+    frames - 1 more."""
     count = page.evaluate(f"async (n) => {{ const v = ({FIND})(n); if (v.debugState().drawer === 'wasm')"
                           f" return ({MODULE_FRAMES})(n); {DREW} await drew(v); return null; }}", view)
     if count is None:

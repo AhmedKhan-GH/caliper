@@ -115,8 +115,8 @@ export function paletteLut(): Uint8Array {
  * a zero width, clamped to [0, 1], and the index is t * 255 + 0.5 truncated.
  * A t that is NaN (an infinite or NaN width, or an infinite v over an
  * infinite width) is index 0, as the reference gives it. Every value-to-colour
- * mapping of the browser views goes through this function: lutIndex,
- * colormapInto and the WebGPU heatmap's thresholds (colormapThresholds).
+ * mapping of the element's own views goes through this function: lutIndex
+ * (the points view) and colormapInto (the heatmap).
  */
 export function lutIndexer(vmin: number, vmax: number): (v: number) => number {
   const lo = f(vmin);
@@ -134,69 +134,6 @@ export function lutIndexer(vmin: number, vmax: number): (v: number) => number {
 /** The table index of v for [vmin, vmax] (lutIndexer). */
 export function lutIndex(v: number, vmin: number, vmax: number): number {
   return lutIndexer(vmin, vmax)(v);
-}
-
-/** Floats in their numeric order as unsigned keys (-inf lowest, +inf highest). */
-const kbuf = new DataView(new ArrayBuffer(4));
-function floatKey(x: number): number {
-  kbuf.setFloat32(0, x);
-  const u = kbuf.getUint32(0);
-  return (u & 0x80000000 ? ~u : u | 0x80000000) >>> 0;
-}
-function keyFloat(k: number): number {
-  kbuf.setUint32(0, (k & 0x80000000 ? k & 0x7fffffff : ~k) >>> 0);
-  return kbuf.getFloat32(0);
-}
-
-/**
- * The thresholds a WebGPU shader compares values with to find their index
- * with exact float comparisons, as the native renderers derive them
- * (src/host/tensor_bridge.h, colormap_thresholds): T[k] for k in
- * 1..255 is the first float with index k or more for an increasing range
- * (mode 1), the last one for a decreasing range (mode 2), and the index of v
- * is the number of thresholds it has passed. Mode 0, every value at index 0,
- * for a zero, infinite or NaN width, where the reference maps every value to
- * index 0. NaN is index 0 in every mode.
- */
-export function colormapThresholds(vmin: number, vmax: number): { mode: number; T: Float32Array } {
-  const T = new Float32Array(256);
-  const denom = f(f(vmax) - f(vmin));
-  if (!(denom !== 0) || !Number.isFinite(denom)) return { mode: 0, T };
-  const index = lutIndexer(vmin, vmax);
-  const inc = denom > 0;
-  const loKey = floatKey(-Infinity), hiKey = floatKey(Infinity);
-  for (let k = 1; k < 256; k++) {
-    let lo = loKey, hi = hiKey;
-    if (inc) {
-      while (lo < hi) {
-        const mid = lo + Math.floor((hi - lo) / 2);
-        if (index(keyFloat(mid)) >= k) hi = mid;
-        else lo = mid + 1;
-      }
-    } else {
-      while (lo < hi) {
-        const mid = lo + Math.floor((hi - lo + 1) / 2);
-        if (index(keyFloat(mid)) >= k) lo = mid;
-        else hi = mid - 1;
-      }
-    }
-    T[k] = keyFloat(lo);
-  }
-  return { mode: inc ? 1 : 2, T };
-}
-
-/** The index a shader finds from colormapThresholds, on the CPU (tests). */
-export function thresholdIndex(v: number, th: { mode: number; T: Float32Array }): number {
-  const x = f(v);
-  if (Number.isNaN(x) || th.mode === 0) return 0;
-  let lo = 1, hi = 256;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    const passed = th.mode === 1 ? th.T[mid] <= x : x <= th.T[mid];
-    if (passed) lo = mid + 1;
-    else hi = mid;
-  }
-  return lo - 1;
 }
 
 /** CSS colour of a table entry. */

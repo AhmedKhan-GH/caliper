@@ -1,10 +1,10 @@
 // The heatmap and image live views: a float32 (H, W) array through a colormap
 // over [vmin, vmax], or an (H, W, 4) RGBA image, with pan, zoom, axes of row
-// and column indices, hover and a rectangle selection.
+// and column indices, hover and a rectangle selection, drawn with Canvas 2D
+// (render/heatmap-2d.ts).
 
 import { colormapLut, lutCss } from '../render/colormap.js';
 import { Heatmap2D } from '../render/heatmap-2d.js';
-import { HeatmapGpu } from '../render/heatmap-gpu.js';
 import { COLORMAPS, snapshotRange, type PayloadAxis, type SnapshotMsg } from '../protocol/messages.js';
 import { linkedIn, type LinkAxis, type LiveView, type ViewHost } from './base.js';
 import { heatmapInfo, imageInfo } from './info.js';
@@ -16,7 +16,7 @@ interface Cell { r: number; c: number }
 
 export class HeatmapView implements LiveView {
   private readonly plot = new Plot2D();
-  private readonly r: HeatmapGpu | Heatmap2D;
+  private readonly r = new Heatmap2D();
   private readonly octx: CanvasRenderingContext2D;
   private readonly detach: () => void;
   private snap: SnapshotMsg | null = null;
@@ -35,7 +35,6 @@ export class HeatmapView implements LiveView {
   private linked: { axis: 'rows' | 'columns'; items: readonly number[] } | null = null;
 
   constructor(private readonly host: ViewHost, private readonly image: boolean) {
-    this.r = host.device ? new HeatmapGpu(host.device) : new Heatmap2D();
     this.r.canvas.className = 'data';
     host.body.prepend(this.r.canvas);
     const octx = host.overlay.getContext('2d');
@@ -379,7 +378,7 @@ export class HeatmapView implements LiveView {
     const a = this.plot.area;
     return {
       kind: this.image ? 'image' : 'heatmap',
-      renderer: this.r instanceof HeatmapGpu ? 'webgpu' : 'canvas2d',
+      renderer: 'canvas2d',
       rows: this.rows, cols: this.cols, seq: this.snap?.seq ?? null,
       window: { x0: this.plot.x.lo, x1: this.plot.x.hi, y0: this.plot.y.lo, y1: this.plot.y.hi },
       area: { ...a }, range: [this.lo, this.hi], hover: this.hover, selection: this.selection, frames: this.frames,

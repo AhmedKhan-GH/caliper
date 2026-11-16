@@ -1,9 +1,11 @@
 import { defineConfig } from '@playwright/test';
 
-// Headless Chromium only. Each spec runs once per render path:
+// Headless Chromium only. Each spec runs once per project:
 //   webgpu       WebGPU on the machine's GPU (ANGLE on Metal);
 //   swiftshader  WebGPU on the SwiftShader software adapter, the CI-like case;
-//   canvas2d     WebGPU disabled, so every view falls back to Canvas 2D.
+//   canvas2d     WebGPU disabled, so the WebAssembly views do not draw.
+// The WebAssembly views draw with WebGPU in the first two, and the element's
+// own TypeScript views draw with Canvas 2D in all three.
 // Plain headless Chromium offers a SwiftShader adapter that cannot present a
 // WebGPU canvas, so the WebGPU projects choose their adapter explicitly.
 const base = { browserName: 'chromium' as const, headless: true, viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1 };
@@ -21,11 +23,10 @@ const CI = !!process.env.CI;
 // codec (Node only, skipped on the other projects anyway), controls (the run
 // controls and the panel; their views are drawn by views.spec, wasm.spec and
 // linked.spec) and e2e (the stream page; its views' renderers are checked by
-// views.spec, renderer.spec and fallback.spec). perf measures the software
-// path's frame rate, which on a hosted runner says nothing; it runs there on
-// canvas2d and locally on every project. Without CI every project runs every
-// spec, as before.
-const CI_SWIFTSHADER_SKIPS = ['codec.spec.ts', 'controls.spec.ts', 'e2e.spec.ts', 'perf.spec.ts'];
+// views.spec, renderer.spec and fallback.spec). perf measures the element's
+// own views, which draw with Canvas 2D everywhere, and skips itself outside
+// canvas2d. Without CI every project runs every spec, as before.
+const CI_SWIFTSHADER_SKIPS = ['codec.spec.ts', 'controls.spec.ts', 'e2e.spec.ts'];
 
 export default defineConfig({
   testDir: 'test',
