@@ -255,3 +255,73 @@ TEST_CASE("the scene core's draw lists pass the layer's validation: the surface 
     // The box, the marker, the path and the surface, after the surface's index clamp.
     submit(L, t, fx.camera(t), 4);
 }
+
+TEST_CASE("repeated resets keep the layer's live buffers and bind groups flat") {
+    // A producer state resets the scene and sends its batches again: new entity ids, and new
+    // buffers for the arrays, as the scene view uploads them. The index clamp's and the edge
+    // gather's buffers and bind groups of the batches that went must go with them.
+    Layer L;
+    SceneTree t;
+    SceneCompiler compiler;
+    using Op = RecordingBackend::OpKind;
+    auto live = [&](HandleKind k) { return L.backend.count(Op::Create, k) - L.backend.count(Op::Destroy, k); };
+    auto in = [](Buffer b, Role role, uint64_t count, uint32_t stride, VertexFormat format, uint64_t offset) {
+        BatchArray a;
+        a.role = role;
+        a.buffer = b;
+        a.offset = offset;
+        a.count = count;
+        a.stride = stride;
+        a.format = format;
+        return a;
+    };
+    Buffer arrays;
+    std::vector<size_t> buffers, groups;
+    for (int round = 0; round < 6; ++round) {
+        CAPTURE(round);
+        t.reset();
+        if (arrays) L.backend.release(arrays);
+        BufferDesc d;
+        d.size = 4096;
+        d.usage = kVertex | kIndex | kStorage | kCopyDst;
+        arrays = L.backend.create_buffer(d);
+        REQUIRE(arrays);
+        Batch mesh;
+        mesh.primitive = Primitive::Mesh;
+        mesh.arrays.push_back(in(arrays, Role::Positions, 4, 12, VertexFormat::F32x3, 0));
+        mesh.arrays.push_back(in(arrays, Role::Indices, 2, 12, VertexFormat::S32, 256));
+        mesh.seq = uint64_t(2 * round + 1);
+        Batch edges;
+        edges.primitive = Primitive::Lines;
+        edges.line_mode = LineMode::Edges;
+        edges.arrays.push_back(in(arrays, Role::Positions, 4, 12, VertexFormat::F32x3, 0));
+        edges.arrays.push_back(in(arrays, Role::Indices, 3, 8, VertexFormat::S32, 512));
+        edges.seq = uint64_t(2 * round + 2);
+        REQUIRE(t.set_batch(t.ensure("surface"), bounded(mesh)));
+        REQUIRE(t.set_batch(t.ensure("edges"), bounded(edges)));
+        t.update();
+        Frame frame;
+        compiler.prepare(t, L.res, frame);
+        RenderTarget rt;
+        rt.color = L.color;
+        rt.depth = L.depth;
+        DrawList list(rt);
+        CompileOptions o;
+        o.width = 400;
+        o.height = 300;
+        Orbit cam;
+        cam.distance = 10;
+        DrawMap map;
+        const CompileResult r = compiler.compile(t, ViewCamera(cam), o, L.res, list, &map);
+        REQUIRE_MESSAGE(r.ok, (r.notes.empty() ? std::string() : r.notes[0]));
+        CHECK(list.records().size == 2);
+        frame.render(std::move(list));
+        REQUIRE_MESSAGE(L.backend.submit(std::move(frame)) != 0, L.backend.last_error());
+        buffers.push_back(live(HandleKind::Buffer));
+        groups.push_back(live(HandleKind::BindGroup));
+    }
+    for (size_t i = 1; i < buffers.size(); ++i) {
+        CHECK_MESSAGE(buffers[i] == buffers[0], "live buffers after reset ", i, ": ", buffers[i], ", after the first: ", buffers[0]);
+        CHECK_MESSAGE(groups[i] == groups[0], "live bind groups after reset ", i, ": ", groups[i], ", after the first: ", groups[0]);
+    }
+}

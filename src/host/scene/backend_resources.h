@@ -44,6 +44,7 @@ public:
     caliper_gfx::BindGroup compute_group(ProgramId program, caliper_gfx::View<caliper_gfx::BindEntry> entries) override;
     caliper_gfx::Buffer static_geometry() override { return geometry_; }
     caliper_gfx::Buffer owned_buffer(uint64_t key, uint64_t bytes, uint32_t usage) override;
+    void retain_owned(caliper_gfx::View<uint64_t> keys) override;
     void colormap_block(uint32_t colormap, float vmin, float vmax, caliper_gfx::shaders::Cmap* out) override;
 
 private:
@@ -56,6 +57,8 @@ private:
     std::map<uint32_t, caliper_gfx::Program> program_;
     std::map<std::string, caliper_gfx::Pipeline> pipelines_;
     std::map<std::string, caliper_gfx::BindGroup> groups_;
+    struct Compute { caliper_gfx::BindGroup group; std::vector<caliper_gfx::Buffer> buffers; };
+    std::map<std::string, Compute> compute_;   // compute groups, with the buffers they refer to
     struct Owned { caliper_gfx::Buffer buffer; uint64_t bytes; uint32_t usage; };
     std::map<uint64_t, Owned> owned_;
     caliper_gfx::Buffer geometry_;
