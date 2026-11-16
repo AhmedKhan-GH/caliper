@@ -21,7 +21,9 @@
 #include <string>
 #include <vector>
 
-#include <unistd.h>
+#if !defined(_WIN32)
+#include <unistd.h>   // getloadavg; the load is reported as 0 on Windows
+#endif
 
 using namespace caliper_gfx;
 using colormap_cases::as_bits;
@@ -252,7 +254,9 @@ TEST_CASE("colormap keys: timing — one derivation and one cache hit") {
     auto median = [](std::vector<double> v) { std::sort(v.begin(), v.end()); return v[v.size() / 2]; };
     auto p95 = [](std::vector<double> v) { std::sort(v.begin(), v.end()); return v[size_t(0.95 * (v.size() - 1))]; };
     double load[3] = {};
+#if !defined(_WIN32)
     getloadavg(load, 3);
+#endif
     // The evaluations of the reference that a derivation makes, counted by repeating its searches
     // over the (flipped) keys of -inf to +inf, 0x007fffff to 0xff800000 whether flipped or not,
     // with the derived keys standing in for the reference.

@@ -23,7 +23,9 @@
 #include <thread>
 #include <vector>
 
-#include <unistd.h>
+#if !defined(_WIN32)
+#include <unistd.h>   // getloadavg; the load is reported as 0 on Windows
+#endif
 
 using namespace caliper_gfx;
 
@@ -74,7 +76,9 @@ int main() {
     if (const char* n = std::getenv("CALIPER_EXHAUSTIVE_RANGES"))
         range_count = size_t(std::max(1, std::min(int(ranges.size()), std::atoi(n))));
     double load[3] = {};
+#if !defined(_WIN32)
     getloadavg(load, 3);
+#endif
     std::printf("caliper_colormap_exhaustive: all 2^32 inputs per range, %d threads, load %.2f at the start\n", threads,
                 load[0]);
     std::fflush(stdout);
@@ -123,7 +127,9 @@ int main() {
         std::printf("FAILED: only %zu of %zu ranges ran (CALIPER_EXHAUSTIVE_RANGES)\n", range_count, ranges.size());
         failed = 1;
     }
+#if !defined(_WIN32)
     getloadavg(load, 3);
+#endif
     const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - all).count();
     std::printf("%s: %llu inputs over %zu ranges in %.1f s with %d threads, load %.2f at the end\n",
                 failed ? "FAILED" : "passed", (unsigned long long)total, range_count, s, threads, load[0]);
