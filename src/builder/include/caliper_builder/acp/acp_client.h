@@ -18,6 +18,9 @@
 //   poll()/wait()  take events from a thread-safe queue (the app polls on its
 //                  frame thread, between two frames);
 //   respond_permission() answers a permission request with one of its options;
+//   close_session() sends `session/close` for the session, when the agent
+//                  offers sessionCapabilities.close, and forgets the session;
+//                  the process stays for the next new_session();
 //   cancel()       sends `session/cancel`, answers every open permission request
 //                  as cancelled and waits for the turn to end (an agent that
 //                  does not end it within `cancel_timeout_ms` gets a synthetic
@@ -25,7 +28,7 @@
 //   shutdown()     closes the agent's input, then terminates it after a grace
 //                  period. The destructor calls it.
 //
-// start(), authenticate() and new_session() block for up to
+// start(), authenticate(), new_session() and close_session() block for up to
 // `request_timeout_ms`; call them off the frame thread. Every other function
 // returns at once and may be called from any thread.
 //
@@ -39,7 +42,8 @@
 // acp.version_unsupported, acp.bad_response, acp.auth_required,
 // acp.no_session, acp.turn_active, acp.no_turn, acp.unknown_permission,
 // acp.unknown_option, acp.agent_exited, acp.cancel_unanswered,
-// acp.prompt_failed, acp.declined_method, acp.bad_update, acp.stalled, and
+// acp.prompt_failed, acp.declined_method, acp.bad_update, acp.stalled,
+// acp.unsupported, and
 // the process.* and rpc.* codes of the layers below.
 #include <caliper_builder/acp/jsonrpc.h>
 #include <caliper_builder/acp/subprocess.h>
@@ -229,6 +233,11 @@ public:
     // kMaxSessionMetaDepth and kMaxSessionMetaValues (acp.bad_argument).
     Error new_session(const std::string& cwd, const std::vector<McpServer>& mcp_servers,
                       SessionInfo* session = nullptr, const nlohmann::json& meta = nlohmann::json());
+
+    // Ends the current session with `session/close` (acp.unsupported when the
+    // agent does not offer it, acp.turn_active during a turn); the process
+    // stays, so a new_session() follows without a new start.
+    Error close_session();
 
     Error prompt(const std::string& text);
     Error prompt_blocks(const nlohmann::json& content_blocks);

@@ -835,6 +835,35 @@ Error AcpClient::new_session(const std::string& cwd, const std::vector<McpServer
     return {};
 }
 
+Error AcpClient::close_session() {
+    State& s = *state_;
+    std::string sid;
+    bool offered = false;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (!s.started || !s.peer) return {"acp.not_started", "The agent has not been started."};
+        if (s.agent_gone) return {"acp.agent_exited", "The agent is no longer running."};
+        if (s.session_id.empty()) return {"acp.no_session", "No session has been created."};
+        if (s.turn_active) return {"acp.turn_active", "A turn is running; cancel it before closing the session."};
+        sid = s.session_id;
+        const json& caps = s.agent.capabilities;
+        offered = caps.is_object() && caps.contains("sessionCapabilities") && caps["sessionCapabilities"].is_object() &&
+                  caps["sessionCapabilities"].contains("close");
+    }
+    if (!offered)
+        return {"acp.unsupported", "The agent does not offer session/close.", "session/close"};
+    RpcResult r = s.peer->call_sync("session/close", json{{"sessionId", sid}}, s.options.request_timeout_ms);
+    if (!r.ok()) {
+        if (r.error.code == "rpc.closed")
+            return {"acp.agent_exited", "The agent exited before it answered session/close.", "session/close"};
+        if (r.error.code == "rpc.timeout") return r.error;
+        return {"acp.bad_response", "The agent refused session/close: " + r.error.message, "session/close"};
+    }
+    std::lock_guard<std::mutex> lock(s.mutex);
+    if (s.session_id == sid) s.session_id.clear();
+    return {};
+}
+
 Error AcpClient::prompt(const std::string& text) {
     return prompt_blocks(json::array({{{"type", "text"}, {"text", text}}}));
 }
