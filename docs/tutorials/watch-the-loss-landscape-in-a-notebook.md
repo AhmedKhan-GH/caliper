@@ -105,27 +105,37 @@ says so and the grid is evaluated with one forward pass per point instead.
 
 ## Cost
 
-`python/bench/bench_landscape.py` measures the cost on MPS. It runs the
-notebook's own cells in fresh processes with a viewer attached in another
-process, with and without the landscape, interleaved, and then times the
-surface on its own. On an Apple M5 Max with torch 2.15, at a 1-minute load
-average of 1.9 to 2.5, with `every` at 500 and the Python sender:
+`python/bench/bench_landscape.py --steps 8000 --repeats 3 --diagnose`
+measures the cost on MPS. It runs the notebook's own cells in fresh
+processes, with a viewer attached in another process, with and without the
+landscape, interleaved. Each run's clock stops after `torch.mps.synchronize()`,
+so it includes every kernel the loop queued. On an Apple M5 Max with torch
+2.15, at a 1-minute load average of 1.4 to 2.9, with `every` at 500 and the
+Python sender:
 
 | Row | Measured |
 |---|---|
-| 4,000 steps without the landscape, three runs | 14.32 to 14.90 s |
-| 4,000 steps with it, nine refits, three runs | 14.43 to 14.85 s, 1.01 times as long |
-| One surface, synchronised, under `vmap` | 0.62 s, in either mode |
-| One surface with one forward pass per point | 1.19 to 1.20 s |
+| 8,000 steps with the landscape, 17 surfaces, three runs | 28.02 to 29.19 s |
+| 8,000 steps without it, as the notebook's loop is written, three runs | 28.52 to 28.76 s |
+| 8,000 steps without it, its work committed to the device after every step | 14.38 s |
+| One surface, synchronised, under `vmap` | 0.61 to 0.66 s, in either mode |
+| One surface with one forward pass per point | 1.18 to 1.20 s |
 | A surface's peak memory above what training holds | 575 MB |
 | The buffer of 256 snapshots | 105 MB, allocated at the first snapshot |
-| `scene.lines` and `scene.points` of the path and marker, per step | 17 to 20 µs median, 0.2 ms p99 |
+| The device's time a step: the training step, then with `land.point()` | 1.77 ms, then 2.17 ms |
+| `scene.lines` and `scene.points` of the path and marker, per step | 17 to 18 µs median, 0.2 ms p99 |
 
-The run is barely longer, although nine surfaces take 5.6 s when they run one
-after another, most likely because the training loop's many small kernels
-leave the GPU room for the landscape's work. `land.point()` cost about 0.5 ms
-of host time a step in a run under load. The path and marker calls that follow
-a refit took about 45 ms each in these runs, once per refit.
+Without the landscape, nothing in the loop waits for the device or records an
+event until the loop ends, and the device does almost none of the queued work
+until then: the host finishes its 8,000 steps in 14.2 s and the device needs
+14.4 s more, one after the other. The landscape's calls record events, so with
+it the work reaches the device as the loop runs, and host and device work at
+the same time. The same loop without the landscape, with an event recorded
+after every step, takes 14.38 s. Against that run the landscape makes training
+1.95 to 2.03 times as long. The 17 surfaces account for 10.7 s of that time,
+and the extra forward pass of `land.point()` for about 3.2 s. A surface call
+also holds the host for about 0.28 s while it queues the 41 rows, and the path
+and marker calls right after a refit take about 45 ms.
 
 ## Tests
 
