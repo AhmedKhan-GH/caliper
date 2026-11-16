@@ -323,14 +323,23 @@ SUSPECT_SET = set(SUSPECT)
 # A function name counts only where it is called as a free function: not after
 # '.', '->' or 'X::', and not where a type or a name precedes it (a declaration).
 NOT_A_CALL_AFTER = {".", "->", ">", "*", "&", "~"}
-# Sites read and found harmless, by file and identifier.
+# Sites read and found harmless: file, identifier and a piece of the source line.
 REVIEWED = {
-    ("src/host/net/ws.cpp", "poll"): "Server::poll, a member function, called inside the class",
+    ("src/host/net/ws.cpp", "poll", "ev = poll((int)"),   # Server::poll, called inside the class
 }
 
 
 def rel_of(path: str) -> str:
     return os.path.relpath(path, ROOT)
+
+
+def reviewed(path: str, lineno: int, ident: str) -> bool:
+    try:
+        with open(path, errors="replace") as fh:
+            text = fh.read().splitlines()[lineno - 1]
+    except (OSError, IndexError):
+        return False
+    return any(f == rel_of(path) and i == ident and piece in text for f, i, piece in REVIEWED)
 
 
 def scan_line(tokens: list[str]) -> list[str]:
@@ -390,7 +399,7 @@ def check(unit, standins, keep):
             continue
         for ident in scan_line(TOKENS.findall(line)):
             key = (rel_of(current), ident)
-            if key in REVIEWED or (key, lineno) in seen:
+            if (key, lineno) in seen or reviewed(current, lineno, ident):
                 continue
             seen.add((key, lineno))
             findings.append(("identifier", f"{ident} at {rel_of(current)}:{lineno}"))
