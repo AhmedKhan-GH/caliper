@@ -300,8 +300,10 @@ only where the compiler happens to keep the reference's operations. The keys mak
   for a positive float and `~bits` for a negative one. The reference `map_f32_to_rgba8` is monotone in the value,
   because every IEEE operation in it is, so its level is monotone in the key.
 - **The keys of a range.** For a range (vmin, vmax), the CPU finds by binary search over keys, for every level k from
-  1 to 255, the first key whose reference level is at least k, evaluating `map_f32_to_rgba8` itself, about 6,000 to
-  8,000 times a range. A level that no float reaches gets the sentinel `0xffffffff`. A decreasing range flips every
+  1 to 255, the first key whose reference level is at least k, evaluating `map_f32_to_rgba8` itself 5,900 to 7,900
+  times for the ranges measured, in 65 to 83 microseconds on an M-series Max. A view keeps the blocks it uses, so a
+  range is derived once; a block from the cache costs a few nanoseconds. A level that no float reaches gets the
+  sentinel `0xffffffff`. A decreasing range flips every
   key, so that the level only grows with the key. A degenerate range, an infinite end, an infinite span or a NaN end
   maps every value to level 0, so all its keys are the sentinel.
 - **The decision.** The shader tests NaN on the bits, guesses the level with the usual float formula, and accepts the
