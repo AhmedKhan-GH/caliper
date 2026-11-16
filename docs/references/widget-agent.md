@@ -174,10 +174,12 @@ a boolean `dry_run` and must not delete or overwrite saved data. `spec.set_text`
 `panel.render` leaves the scope when the model cannot read images. A call to any other command is answered as a call to
 an unknown tool and never reaches Caliper.
 
-`history.undo` and `history.redo` are the person's own commands. The agent offers them as tools in no session, general
-or widget; a call the model makes anyway is answered as a call to an unknown tool, and the agent's client of Caliper API
-refuses both with `agent.person_only` before anything is sent. To revert a change, the agent makes an ordinary edit,
-which is reviewed like any other.
+A command whose descriptor in the command table says `"agents": false` is the person's own: today `history.undo` and
+`history.redo`. The agent offers such a command as a tool in no session, general or widget. A call the model makes
+anyway is answered as a call to an unknown tool, and the agent's client of Caliper API refuses it with
+`command.not_allowed`, the command layer's code for the same refusal, before anything is sent. A table without the
+`agents` field opens every command to agents. To revert a change, the agent makes an ordinary edit, which is reviewed
+like any other.
 
 Every call of a widget session carries `X-Caliper-Preview` with the session's preview, and every edit is sent without
 `dry_run`, so it applies to the preview and never to the open spec. The agent sends no permission request in a widget

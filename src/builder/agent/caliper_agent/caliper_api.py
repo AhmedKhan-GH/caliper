@@ -42,7 +42,6 @@ from urllib.parse import quote, urlsplit
 import httpx2
 
 from .keyguard import SCRUBBER, describe_exception
-from .tools import PERSON_ONLY
 
 MAX_API_FILE_BYTES = 64 << 10
 MAX_ARGS_BYTES = 1 << 20
@@ -225,8 +224,11 @@ def output_from_envelope(envelope: Any) -> ToolOutput:
 class CaliperApi:
     """Calls Caliper API on behalf of the model. One instance per sidecar."""
 
-    def __init__(self, api_file: Path | None = None, transport: httpx2.AsyncBaseTransport | None = None) -> None:
+    def __init__(self, api_file: Path | None = None, transport: httpx2.AsyncBaseTransport | None = None, *,
+                 not_for_agents: frozenset[str] = frozenset()) -> None:
         self._api_file = api_file
+        # The table's commands whose `agents` flag is false (tools.not_for_agents).
+        self._not_for_agents = frozenset(not_for_agents)
         self._endpoint: Endpoint | None = None
         self._client = httpx2.AsyncClient(
             transport=transport,
@@ -289,10 +291,12 @@ class CaliperApi:
             return _error("caliper.transport", f"The call to Caliper API failed: {describe_exception(exc)}")
 
     async def _call(self, command: str, args: dict, group: str, preview: str = "") -> ToolOutput:
-        if command in PERSON_ONLY:
-            # Offered to no model (tools.PERSON_ONLY); a call made anyway is not sent.
-            return _error("agent.person_only", f"{command} is the person's own command in Caliper; an agent does not "
-                                               "run it. To revert a change, make an edit that restores it.")
+        if command in self._not_for_agents:
+            # Offered to no model (tools.offered_to_the_model); a call made anyway is
+            # not sent, and is refused with the command layer's own code for it.
+            return _error("command.not_allowed", f"{command} is the person's own tool, so an agent cannot run it; to "
+                                                 "take back a change, send an edit that reverts it, which the person "
+                                                 "reviews.", "origin")
         if command == "app.info":
             return self._plain(await self._send("GET", "/v0/info"))
         if command == "app.applets":

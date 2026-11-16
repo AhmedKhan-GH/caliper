@@ -182,6 +182,10 @@ particular command's schema, so the schemas can change under it.
   current table that is 20 of the 35 tools; `panel.create` alone has 27 optional parameters and can never be strict.
   The others are sent without `strict`. Every input is checked against the full schema either way. Every tool carries
   `eager_input_streaming: true`.
+- **Not for agents.** A command whose `agents` flag is false (today `history.undo` and `history.redo`, the person's
+  own tools) is a tool in no session, general or widget, and the Caliper API client refuses a call to it with
+  `command.not_allowed` before anything is sent, as the command layer would for the origins `agent` and `mcp`. A table
+  without the flag opens every command to agents.
 - **Order.** The tools keep the table's order and never change within a sidecar, so the cached prefix stays the same.
 - **Scope.** A general session may use a subset of the table (`--tools`, a filter over it). A widget session uses its
   tool scope, a subset of the table derived by the rule in `widget_scopes.json` ([Widget sessions](#widget-sessions)),

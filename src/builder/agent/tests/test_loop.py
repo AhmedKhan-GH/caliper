@@ -341,7 +341,7 @@ def test_an_unknown_tool_is_an_error_result(run_agent, caliper):
 
 
 def test_undo_and_redo_are_never_offered_and_a_forced_call_is_not_sent(run_agent, caliper):
-    # Undo and redo are the person's own commands (tools.PERSON_ONLY): no
+    # Undo and redo are the person's own commands (the table's agents flag): no
     # session offers them, and a model that calls one anyway gets the unknown
     # tool's error result, while Caliper receives nothing.
     steps = [message(tool_use("toolu_u", "history_undo", {}), tool_use("toolu_r", "history_redo", {"steps": 1}),

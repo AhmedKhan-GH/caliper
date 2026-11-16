@@ -26,8 +26,8 @@ from caliper_agent.provider import AgentError
 from caliper_agent.schema import MAX_DEPTH, validate
 from caliper_agent.toolset import JsonObjectArgs
 from caliper_agent.udiff import apply_unified_diff
-from caliper_agent.tools import (NOT_FOR_THE_MODEL, PERSON_ONLY, STRICT_UNSUPPORTED, TableError, acp_tool_kind, choose_strict,
-                                 command_name, derive_tools, is_strict_compatible, load_command_table, name_filter, offered_to_the_model,
+from caliper_agent.tools import (NOT_FOR_THE_MODEL, STRICT_UNSUPPORTED, TableError, acp_tool_kind, choose_strict,
+                                 command_name, derive_tools, is_strict_compatible, load_command_table, name_filter, not_for_agents, offered_to_the_model,
                                  parse_command_table, split_type_lists, strip_for_strict, tool_name)
 
 
@@ -45,7 +45,7 @@ def _walk_all(schema):
         yield from _walk_all(sub)
 
 
-def test_undo_and_redo_are_the_persons_own_in_every_session(caliper):
+def test_commands_not_for_agents_are_offered_in_no_session_and_never_sent(caliper):
     import asyncio
 
     from caliper_agent.caliper_api import CaliperApi
@@ -53,30 +53,50 @@ def test_undo_and_redo_are_the_persons_own_in_every_session(caliper):
 
     commands = load_command_table(COMMAND_TABLE)
     by_name = {c.name: c for c in commands}
-    assert PERSON_ONLY == {"history.undo", "history.redo"} and PERSON_ONLY <= set(by_name)
+    # The table's `agents` flag: today false for undo and redo, the person's own.
+    closed = not_for_agents(commands)
+    assert closed == {"history.undo", "history.redo"}
     assert not offered_to_the_model(by_name["history.undo"]) and offered_to_the_model(by_name["history.list"])
     # A general session, one narrowed to the history group, and a widget whose
-    # scope names every command: none offers either.
+    # scope names every command: none offers a command closed to agents.
     rule = ScopeRule.load(COMMAND_TABLE.parent / "widget_scopes.json")
     sessions = {"general": derive_tools(commands), "history": derive_tools(commands, name_filter("history")),
                 "widget": widget_tools(commands, tuple(by_name), vision=True, rule=rule)}
     for session, tools in sessions.items():
-        names = {t.command.name for t in tools}
-        assert not names & PERSON_ONLY, session
+        assert all(t.command.agents for t in tools) and not {t.command.name for t in tools} & closed, session
     assert "history.list" in {t.command.name for t in sessions["history"]}
-    # The tool count the tests compare against follows the same rule.
+    # The tool count the tests compare against follows the flag.
     offered = [c for c in commands if offered_to_the_model(c)]
-    assert general_tool_count() == len(offered) == len([c for c in commands if c.group not in NOT_FOR_THE_MODEL]) - 2
-    # A call made anyway is refused by the sidecar and never reaches Caliper.
-    api = CaliperApi(caliper.api_file)
+    assert general_tool_count() == len(offered) == \
+        len([c for c in commands if c.group not in NOT_FOR_THE_MODEL]) - len(closed)
+    # A call made anyway is refused by the sidecar, with the command layer's
+    # code for it, and never reaches Caliper.
+    api = CaliperApi(caliper.api_file, not_for_agents=closed)
     try:
-        for name in sorted(PERSON_ONLY):
+        for name in sorted(closed):
             out = asyncio.run(api.call(name, {}))
-            assert not out.ok and out.error_code == "agent.person_only", name
+            assert not out.ok and out.error_code == "command.not_allowed", name
         assert asyncio.run(api.call("history.list", {})).ok
     finally:
         asyncio.run(api.aclose())
     assert [c["path"] for c in caliper.commands(dry=None)] == ["/v0/commands/history.list"]
+
+
+def test_the_agents_flag_is_read_from_the_table_generically():
+    def table(**flags):
+        return json.dumps({"version": 0, "commands": [
+            {"name": "a.read", "summary": "Reads.", "args": {"type": "object", "properties": {}}, **flags},
+            {"name": "a.other", "summary": "Other.", "args": {"type": "object", "properties": {}}}]})
+
+    # A table without the key predates it: every command is open to agents.
+    assert [t.command.name for t in derive_tools(parse_command_table(table()))] == ["a.read", "a.other"]
+    assert all(c.agents for c in parse_command_table(table()))
+    # Any command marked false is left out, whatever its name.
+    commands = parse_command_table(table(agents=False))
+    assert not_for_agents(commands) == {"a.read"}
+    assert [t.command.name for t in derive_tools(commands)] == ["a.other"]
+    with pytest.raises(TableError, match="agents is not a boolean"):
+        parse_command_table(table(agents="no"))
 
 
 def test_every_command_of_the_real_table_becomes_a_tool_strict_within_the_limits():

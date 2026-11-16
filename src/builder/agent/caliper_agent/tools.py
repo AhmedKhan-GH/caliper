@@ -67,18 +67,19 @@ PREVIEW_ARG = "dry_run"
 # commits one. review.status is the sidecar's own question to the app.
 NOT_FOR_THE_MODEL = frozenset({"preview", "review"})
 
-# Commands only the person runs, offered to the model in no session, general or
-# widget, and refused by the sidecar before they reach Caliper when a model
-# calls one anyway. Undo and redo are the person's tools: an agent reverts with
-# an ordinary edit, which is reviewed like any other, and the command layer
-# refuses both for the origins agent and mcp too. The command table does not
-# mark such commands yet; when it gets a flag for them, this set comes from it.
-PERSON_ONLY = frozenset({"history.undo", "history.redo"})
 
 
 def offered_to_the_model(command: "Command") -> bool:
-    """Whether any session may offer the command as a tool (NOT_FOR_THE_MODEL, PERSON_ONLY)."""
-    return command.group not in NOT_FOR_THE_MODEL and command.name not in PERSON_ONLY
+    """Whether any session, general or widget, may offer the command as a tool:
+    not in a group of NOT_FOR_THE_MODEL, and open to agents in the table (its
+    `agents` flag, false for the person's own commands such as history.undo and
+    history.redo, which the command layer refuses to the origins agent and mcp)."""
+    return command.group not in NOT_FOR_THE_MODEL and command.agents
+
+
+def not_for_agents(commands: list["Command"]) -> frozenset[str]:
+    """The names of the table's commands whose `agents` flag is false."""
+    return frozenset(c.name for c in commands if not c.agents)
 
 
 class TableError(Exception):
@@ -94,6 +95,7 @@ class Command:
     mutates: bool
     destructive: bool
     frame_thread: bool
+    agents: bool = True   # false: the person's own command, which no agent runs
 
     @property
     def group(self) -> str:
@@ -280,8 +282,8 @@ def _command_from_json(item: Any, index: int) -> Command:
     if not _schema_depth_ok(args) or not _schema_depth_ok(result):
         raise TableError(f"{name}: a schema is nested too deeply.")
     flags = {}
-    for flag in ("mutates", "destructive", "frame_thread"):
-        value = item.get(flag, False)
+    for flag, default in (("mutates", False), ("destructive", False), ("frame_thread", False), ("agents", True)):
+        value = item.get(flag, default)   # a table without `agents` predates it: every command is open to agents
         if not isinstance(value, bool):
             raise TableError(f"{name}: {flag} is not a boolean.")
         flags[flag] = value
@@ -380,8 +382,8 @@ def derive_tools(commands: list[Command], include: Callable[[Command], bool] | N
 
     `include` keeps only the commands it accepts: the seam for a session whose
     role needs fewer tools. The groups of NOT_FOR_THE_MODEL and the commands
-    of PERSON_ONLY are always left out. The strict tools are chosen among those
-    kept.
+    whose `agents` flag is false are always left out (offered_to_the_model).
+    The strict tools are chosen among those kept.
     """
     tools = []
     for c in commands:

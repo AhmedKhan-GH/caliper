@@ -143,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     from .prompt import SYSTEM_PROMPT
     from .scripted import SCRIPT_ENV, ScriptedProvider, load_script
     from .stub_transport import StubTransport
-    from .tools import TableError, derive_tools, load_command_table, name_filter
+    from .tools import TableError, derive_tools, load_command_table, name_filter, not_for_agents
     from .widget import ScopeRule, WidgetError, default_scope_file
 
     table = Path(args.command_table) if args.command_table else _default_command_table()
@@ -236,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
 
     async def serve() -> None:
         conn = Connection(reader, writer)
-        api = CaliperApi(Path(args.api_file) if args.api_file else None)
+        api = CaliperApi(Path(args.api_file) if args.api_file else None, not_for_agents=not_for_agents(commands))
         agent = Agent(conn, provider, key_status, tools, graph, api, default_model=default_model,
                       default_effort=args.effort or DEFAULT_EFFORT, usage_log=args.usage_log,
                       key_required=key_required, commands=commands, scope_rule=scope_rule, refusal=refusal,
