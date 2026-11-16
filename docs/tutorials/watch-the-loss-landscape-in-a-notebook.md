@@ -175,7 +175,9 @@ marker at the current point's pixel, and compares the scene view's area with
 the reference `tests/demos/reference/loss_landscape_app_step299.png` under
 the parity rules of the scene rows: a flat colour exact away from edges, a
 lit pixel of the surface within 2 levels, and a pixel within one pixel of an
-edge either side's colour. Without the reference it writes the capture for a
+edge either side's colour. The scale bar in the area's bottom-right corner,
+an overlay that the view drew after the reference was taken, is left out of
+the comparison; the app reports where it drew it. Without the reference it writes the capture for a
 person to review and skips; `CALIPER_DEMO0_WRITE_REFERENCE=1` writes it as
 the reference. `CALIPER_SCENE_CAPTURE_DIR` keeps the frame and the area.
 
