@@ -200,7 +200,8 @@ view's header, in its title bar, holds the view's name on the left and on the
 right a short summary of what it shows (`64×32  -0.53 … 0.57` for a heatmap,
 `64 points  2-D  values`, `457 steps  last 0.0263` for a series,
 `32 bins  -0.53 … 0.57  n 2048` for a histogram), the tools `pause`, `log`
-for a series or a histogram and `follow` for a series, and a dot: bronze while
+for a series or a histogram, `follow` for a series and `rotate` for 3-D
+points, and a dot: bronze while
 the stream is live and the view has data, an outline while it waits for its
 first data, grey once the script has gone. With `CALIPER_VIEWS_DEBUG=1` a line
 under each header also shows the view's diagnostics: its size and renderer
@@ -210,7 +211,7 @@ snapshots dropped while paused.
 | View | Interaction and hover |
 |---|---|
 | Heatmap, image | As in the browser: a heatmap stretched to its plot area with a colorbar beside it, an image at equal aspect, both with axes of source row and column indices titled with the dims' names that follow a pan or a zoom. A drag pans, the wheel zooms, a double click fits. Hover shows the row, column and value (RGBA for images). Cells are sampled nearest once they cover a pixel, so each cell stays a cell. |
-| Points | 3-D: left or right drag orbits, middle drag or shift+drag pans, the wheel zooms, a double click or the F key re-fits. 2-D: drag pans, the wheel zooms about the cursor. Hover marks the nearest point and shows its index, position and label. |
+| Points | 3-D: the points sit in a box with tick labels on three edges and a faint floor grid; nearer points are larger and points behind the camera's target dimmer. Left or right drag orbits, middle drag or shift+drag pans, the wheel zooms, a double click or the F key re-fits to the default three-quarter view, and `rotate` turns the view until a drag. 2-D: drag pans, the wheel zooms about the cursor. Hover marks the nearest point and shows its index, position and label. |
 | Series | A line over the append index; hover shows step and value; the latest value is printed. |
 | Histogram | Bars at bin centres; hover shows the bin range and count. |
 

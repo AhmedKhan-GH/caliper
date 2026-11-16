@@ -29,6 +29,10 @@ The header shows the run state, such as `running` or `paused at 1200`, whenever 
 
 A linked selection draws the selected points over the others, which are dimmed; marks the rows or columns of a heatmap or image that stand for a selected item with a band, an outline and a bar at the image's edge; and puts markers on a series at the selected steps.
 
+The header's toggles are `log` for a series or a histogram, `follow` for a series, and `rotate` for 3-D points. `rotate` is off until pressed; it turns the view slowly about its vertical axis, and any drag in the view stops it.
+
+3-D points draw inside a box around the data, as both renderers draw it. The box's edges are a wireframe with tick labels and the axis's name on one edge of each axis, and a faint grid lies on the floor, the face across the vertical axis that is behind the data. The back edges and the grid are drawn behind the points and the other edges and the labels in front of them. Nearer points are drawn larger, within a factor of 0.5 to 2 of their size at the camera's target, and points behind the target are dimmed in proportion to their distance, to half their brightness at the far side of the data, with their hue kept. Selected points keep their full colour. The camera starts at the same three-quarter view in both renderers, fitted to the data, and a double click returns to it. 2-D points have no box, cues or `rotate`.
+
 ### Properties and methods
 
 | Member | Meaning |
