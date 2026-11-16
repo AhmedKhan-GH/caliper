@@ -136,6 +136,54 @@ and a ring of per-draw parameter blocks. The Metal backend keeps the equivalent 
 Metal compiles its shaders at run time, and Vulkan embeds SPIR-V built at compile time
 ([Build-time SPIR-V](vulkan-cuda.md#build-time-spir-v)).
 
+## The scene core
+
+The renderer core's scene core is in `src/host/scene/`, in the namespace `caliper_scene` and the library
+`caliper_scene`. It is the one camera and scene model that the views are to share, and it compiles a scene into a draw
+list of the renderer core's graphics layer (`src/host/gfx/`). It is plain C++17 that never calls a GPU. Nothing uses
+it yet: no view, no service and not the browser draws through it, and the points live view keeps its own camera.
+
+It holds these parts:
+
+- **The scene store.** A scene has a space (3-D or 2-D), an up axis and a unit note. Its entities are named by paths
+  of 1 to 16 segments, each of the characters `A-Z a-z 0-9 _ . -`, at most 255 bytes in all, and a scene holds at most
+  1,024 entities with the root among them. They are stored as arrays with each parent before its children. An entity
+  holds an entity transform, a pinhole camera, and one batch of each primitive type. A batch describes arrays in
+  graphics-layer buffers by role (the buffer, byte offset, count, stride and format) and never copies their data.
+  Every part has a stamped layer and a static layer: a clear removes the stamped parts, and a static clear removes both.
+- **World matrices.** One forward pass over the changed subtrees composes each entity's world matrix in double
+  precision. An entity whose world pose is not finite is hidden with its subtree. The children of a camera entity live
+  in the camera's pixel space, on its image plane.
+- **Cameras.** The orbit turns about any of the six axes with a 45° field of view, and its near and far planes follow
+  the bounds as the points view computes them. Azimuth 0 lies along the first of +x, +y and +z that is perpendicular to
+  the up axis. Switching the up axis keeps the target, the distance and the eye position. The 2-D pan and zoom has y up
+  or y down. Looking through a pinhole projects with its intrinsics, letterboxed to the view. The starting camera of a
+  scene and reset are part of a view's camera state. Clip space has x right, y up and depth from 0 at the near plane to
+  1, and matrices are column-major.
+- **Bounds and fitting.** A batch's bounds come from the producer, or else from a scan of its CPU-visible array. They
+  are moved to world space by their eight corners. Fitting frames the bounding sphere with the orbit, or the larger
+  extent with the pan and zoom.
+- **Compiling.** For the visible entities, the compiler chooses each batch's program from the generated program table
+  and binds its arrays as vertex or instance-step buffers at their offsets. An absent array reads a constant at stride
+  0. The compiler writes the frame block, each draw's parameter block and the colormap blocks into the draw list's arena,
+  and appends the draws: opaque ones first, then translucent ones, each in the byte order of the entity paths. When the
+  view looks through a camera, that camera's pixel space is drawn flat over the picture last. A separate step records
+  the index clamp of meshes and the edge gather of index-pair edges as compute dispatches. Every primitive compiles:
+  points, lines as segments, strips and index-pair edges, arrows, boxes with their faces, meshes, images in 2-D or on a
+  camera's image plane with their depth clouds, segmentation, camera frustums and entity axes. Labels are not draws,
+  and the scene core gives their projected anchors instead.
+- **Picking.** The pick pass compiles the same draws with their pick entries into a 16 x 16 `RG32Uint` window around
+  the pointer, which it reaches by zooming clip space. Decoding a read-back window gives the entity, the primitive and
+  the item under the pointer, the world position from the depth, and for an image the pixel.
+
+Its tests are `caliper_scene_tests` (`tests/scene/`). They run headless with no GPU and check the matrices, every
+camera, the fits, compiled draw lists read as data, clears and static items, the limits, and picks decoded from
+synthetic ID texels. They build and run with any preset, for example
+`cmake --build cmake-build-notorch --target caliper_scene_tests` and then `ctest -R caliper_scene_tests` from the build
+folder. The graphics suite's row of a one-entity scene, drawn on Metal and read back byte for byte, has its fixture
+and CPU reference in `tests/scene/scene_row_fixture.h`, and `caliper_scene_tests` checks the compiled draw against that
+reference on the CPU.
+
 ## Why Metal pipelines by queue commit order
 
 The Metal renderer submits tensor operations and the frame's drawing to one `MTLCommandQueue`, and Metal starts the
