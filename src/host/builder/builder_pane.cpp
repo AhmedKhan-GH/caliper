@@ -346,13 +346,23 @@ bool BuilderPane::refuse(Error e) {
     return false;
 }
 
+// True, with error(), when no gesture may run now.
 bool BuilderPane::blocked() {
-    if (!port_->ready()) return refuse(Error("builder.busy", "A loader is running; the change waits until it is done.", ""));
+    if (!port_->ready()) {
+        refuse(Error("builder.busy", "A loader is running; the change waits until it is done.", ""));
+        return true;
+    }
     if (!open_) {
         update();
-        if (!open_) return refuse(Error("spec.no_open_spec", "No spec is open.", ""));
+        if (!open_) {
+            refuse(Error("spec.no_open_spec", "No spec is open.", ""));
+            return true;
+        }
     }
-    if (draft_pending()) return refuse(Error("builder.draft", "The spec text has an edit that does not validate.", "text"));
+    if (draft_pending()) {
+        refuse(Error("builder.draft", "The spec text has an edit that does not validate.", "text"));
+        return true;
+    }
     return false;
 }
 
@@ -489,9 +499,6 @@ PanePlan BuilderPane::plan_new_panel(const std::string& key, const std::string& 
     if (hit.zone == DropZone::edge || hit.zone == DropZone::centre) {
         if (hit.where == "left") {
             // layout.place has no left: the panel is made, then placed.
-            spec::Spec with = s;
-            with.panels.push_back(spec::Panel{});
-            with.panels.back().id = id;
             after_layout = pane_place_next_to(root ? std::optional<spec::LayoutNode>(*root) : std::nullopt, id,
                                               hit.panel, "left");
             if (!after_layout) {
@@ -508,27 +515,12 @@ PanePlan BuilderPane::plan_new_panel(const std::string& key, const std::string& 
         create["place"] = {{"target", focus_panel_}, {"where", "beside"}};
     }
     cmds.push_back(invocation("panel.create", create));
-    if (after_layout) cmds.push_back(invocation("layout.set", {{"layout", nullptr}}));
     plan = simulate(cmds);
-    // layout.set needs the spec with the new panel to flatten its layout.
-    if (after_layout && !plan.refusal) {
-        std::vector<CommandInvocation> without(cmds.begin(), cmds.end() - 1);
-        PanePlan first = simulate(without);
-        if (first.refusal || !first.after) {
-            plan = first;
-        } else {
-            cmds.back().args = {{"layout", cb::layout_to_flat(*after_layout, *first.after)}};
-            plan = simulate(cmds);
-        }
-    } else if (after_layout && plan.refusal && plan.refusal.code == "layout.invalid") {
-        std::vector<CommandInvocation> without(cmds.begin(), cmds.end() - 1);
-        PanePlan first = simulate(without);
-        if (first.refusal || !first.after) {
-            plan = first;
-        } else {
-            cmds.back().args = {{"layout", cb::layout_to_flat(*after_layout, *first.after)}};
-            plan = simulate(cmds);
-        }
+    // A place that panel.create cannot name: the panel is made, then the
+    // layout is set, flattened against the spec with the new panel.
+    if (after_layout && !plan.refusal && plan.after) {
+        cmds.push_back(invocation("layout.set", {{"layout", cb::layout_to_flat(*after_layout, *plan.after)}}));
+        plan = simulate(cmds);
     }
     plan.placed = id;
     plan.focus_panel = id;
