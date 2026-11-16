@@ -13,9 +13,12 @@
 //   wait <frames>        nothing for that many frames
 //   focus <panel>        a click in the middle of a shown panel, which focuses it
 //   leave                the pointer leaves the window (no hover is left behind)
-//   key <chord>          a press and release of "cmd+k" (Ctrl+K off macOS),
-//                        "escape" or "enter"
-//   type <text>          the text as the keyboard's characters
+//   key <chord>          a press and release of a chord: cmd, shift and one
+//                        key (a letter, a digit, enter, escape, backspace,
+//                        f3), such as "cmd+k" (Ctrl+K off macOS) or
+//                        "cmd+shift+z"
+//   type <text>          the text as the keyboard's characters; "\n" is a
+//                        line break
 //   until <state>        wait until the inline surface's state is <state>
 //                        (prompt, running, preview, applied, ...)
 //   shot <name>          read the next frame back into <name>.png
@@ -30,6 +33,23 @@
 //                        ("approval panel.create waiting"), a stop word
 //                        ("stop - DONE")
 //   chat draft           wait until the chat's input holds a handoff's draft
+//   click <item> [fx fy] a click on a builder pane's named rectangle
+//                        (BuilderPane::item_rect: "source:table:metrics",
+//                        "primitive:series", "prop:title", "bar:save", ...),
+//                        at the fractions fx, fy of it (0.5 0.5 by default); a
+//                        negative fraction counts pixels from its right or
+//                        bottom edge
+//   drag <item> [fx fy] to <item> [fx fy] [hold]
+//                        a press on the first, a move in steps to the second
+//                        and a release there, or none with `hold`
+//   release              lets go of a held drag
+//   drop <path> ...      files dropped on the window, through the app's drop
+//                        callback's own function (a hidden window receives no
+//                        real drop)
+//   pane source <key>    wait until the builder lists that source and no
+//                        import runs
+//   pane focus <panel>   wait until the builder's focused panel is <panel>
+//   page <name>          wait until the app shows that page (landing, spec, live)
 //   touch <path>         creates an empty file (a stub agent's gate)
 //   append <path> <line> appends a line to a file (a test's approval decision)
 //   quit                 close the app
@@ -46,8 +66,13 @@
 #include <imgui.h>
 
 #if CALIPER_WITH_BUILDER
+#include "builder/builder_pane.h"
+
 #include <caliper_builder/session/session.h>
 #endif
+
+#include <cmath>
+#include <functional>
 
 #include <cfloat>
 #include <cstdint>
@@ -106,7 +131,12 @@ public:
     }
     void shot_failed(const std::string& why) { error_ = "shot failed: " + why; }
 
-    void feed(const SpecPage& page, AppSession& app, ChatPane* chat = nullptr) {
+    // The page the app shows ("landing", "spec", "live"), and the function
+    // a dropped file reaches; the app sets both before each feed().
+    void set_page(std::string page) { page_ = std::move(page); }
+    void set_drop(std::function<void(std::vector<std::string>)> drop) { drop_ = std::move(drop); }
+
+    void feed(SpecPage& page, AppSession& app, ChatPane* chat = nullptr) {
         if (done()) return;
         ImGuiIO& io = ImGui::GetIO();
         // Releases of the last frame's presses.
@@ -118,6 +148,95 @@ public:
         }
         const Step& s = steps_[at_];
         ++frames_;
+        if (s.verb == "click") {
+            std::stringstream words(s.arg);
+            std::string name;
+            float fx = 0.5f, fy = 0.5f;
+            words >> name >> fx >> fy;
+            float x = 0, y = 0;
+            if (!item_point(page, name, fx, fy, &x, &y)) return patience("no builder item " + name);
+            io.AddMousePosEvent(x, y);
+            io.AddMouseButtonEvent(0, true);
+            mouse_down_ = true;
+            next("clicked " + name);
+            return;
+        }
+        if (s.verb == "drag") {
+            // drag <a> [fx fy] to <b> [fx fy] [hold]
+            std::stringstream words(s.arg);
+            std::vector<std::string> w;
+            for (std::string t; words >> t;) w.push_back(t);
+            size_t to = 0;
+            while (to < w.size() && w[to] != "to") ++to;
+            if (to == 0 || to + 1 >= w.size()) return void(error_ = "drag needs <item> to <item>");
+            const float afx = to >= 3 ? (float)std::atof(w[1].c_str()) : 0.5f, afy = to >= 3 ? (float)std::atof(w[2].c_str()) : 0.5f;
+            const size_t b = to + 1;
+            const bool b_frac = b + 2 < w.size() || (b + 2 == w.size() && w.back() != "hold");
+            const float bfx = b_frac ? (float)std::atof(w[b + 1].c_str()) : 0.5f, bfy = b_frac ? (float)std::atof(w[b + 2].c_str()) : 0.5f;
+            const bool hold = w.back() == "hold";
+            constexpr int kSteps = 14;
+            if (drag_frame_ == 0) {
+                if (!item_point(page, w[0], afx, afy, &drag_a_[0], &drag_a_[1]) ||
+                    !item_point(page, w[b], bfx, bfy, &drag_b_[0], &drag_b_[1]))
+                    return patience("no builder item " + w[0] + " or " + w[b]);
+                io.AddMousePosEvent(drag_a_[0], drag_a_[1]);
+                io.AddMouseButtonEvent(0, true);
+                drag_frame_ = 1;
+            } else if (drag_frame_ <= kSteps) {
+                const float t = (float)drag_frame_ / (float)kSteps;
+                io.AddMousePosEvent(std::round(drag_a_[0] + (drag_b_[0] - drag_a_[0]) * t),
+                                    std::round(drag_a_[1] + (drag_b_[1] - drag_a_[1]) * t));
+                ++drag_frame_;
+            } else if (drag_frame_ == kSteps + 1) {
+                ++drag_frame_;   // one more frame at the target, so the drop's zone is read there
+            } else {
+                if (!hold) io.AddMouseButtonEvent(0, false);
+                next(std::string(hold ? "dragged and held " : "dragged ") + w[0] + " to " + w[b]);
+            }
+            return;
+        }
+        if (s.verb == "release") {
+            io.AddMouseButtonEvent(0, false);
+            next("released");
+            return;
+        }
+        if (s.verb == "drop") {
+            if (!drop_) return void(error_ = "drop: the app gave no drop function");
+            std::stringstream words(s.arg);
+            std::vector<std::string> paths;
+            for (std::string p; words >> p;) paths.push_back(p);
+            drop_(paths);
+            next("dropped " + std::to_string(paths.size()) + " files");
+            return;
+        }
+        if (s.verb == "page") {
+            if (page_ != s.arg) return patience("the app shows " + page_ + ", not " + s.arg);
+            next("page " + s.arg);
+            return;
+        }
+        if (s.verb == "pane") {
+#if CALIPER_WITH_BUILDER
+            std::stringstream words(s.arg);
+            std::string what, arg;
+            words >> what >> arg;
+            BuilderPane* b = page.builder();
+            if (!b) return patience("no builder pane");
+            if (what == "source") {
+                if (b->importing() || !b->find_source(arg)) return patience("the builder does not list " + arg);
+                next("the builder lists " + arg);
+            } else if (what == "focus") {
+                if (b->focused_panel() != arg)
+                    return patience("the builder's focus is " + b->focused_panel() + " (" + b->error().code + " " +
+                                    b->error().message + ")");
+                next("the builder's focus is " + arg);
+            } else {
+                error_ = "unknown pane step " + what;
+            }
+#else
+            error_ = "pane: the builder is not in this build";
+#endif
+            return;
+        }
         if (s.verb == "wait") {
             if (frames_ >= std::atoi(s.arg.c_str())) next("waited " + s.arg + " frames");
         } else if (s.verb == "leave") {
@@ -134,7 +253,16 @@ public:
             press(s.arg);
             if (error_.empty()) next("pressed " + s.arg);
         } else if (s.verb == "type") {
-            io.AddInputCharactersUTF8(s.arg.c_str());
+            std::string text;
+            for (size_t i = 0; i < s.arg.size(); ++i) {
+                if (s.arg[i] == '\\' && i + 1 < s.arg.size() && s.arg[i + 1] == 'n') {
+                    text += '\n';
+                    ++i;
+                } else {
+                    text += s.arg[i];
+                }
+            }
+            io.AddInputCharactersUTF8(text.c_str());
             next("typed " + s.arg);
         } else if (s.verb == "until") {
             if (page.widget_state() != s.arg) return patience("the surface is " + page.widget_state() + ", not " + s.arg);
@@ -202,30 +330,62 @@ private:
         ++at_;
         frames_ = 0;
         armed_ = false;
+        drag_frame_ = 0;
     }
 
     void patience(const std::string& why) {
         if (frames_ > kPatience) error_ = steps_[at_].verb + " " + steps_[at_].arg + ": " + why;
     }
 
+    // A chord of "cmd", "shift" and one key, joined by '+'.
     void press(const std::string& chord) {
         ImGuiIO& io = ImGui::GetIO();
         std::vector<ImGuiKey> keys;
-        if (chord == "cmd+k") {
-            // ImGui swaps Cmd and Ctrl at the event level on macOS
-            // (ConfigMacOSXBehaviors): Super there becomes its Ctrl, the
-            // chord the page reads as ⌘K.
-            keys = {io.ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl, ImGuiKey_K};
-        } else if (chord == "escape") {
-            keys = {ImGuiKey_Escape};
-        } else if (chord == "enter") {
-            keys = {ImGuiKey_Enter};
-        } else {
-            error_ = "unknown key " + chord;
-            return;
+        std::stringstream parts(chord);
+        for (std::string p; std::getline(parts, p, '+');) {
+            if (p == "cmd") {
+                // ImGui swaps Cmd and Ctrl at the event level on macOS
+                // (ConfigMacOSXBehaviors): Super there becomes its Ctrl, the
+                // chord the page reads as ⌘.
+                keys.push_back(io.ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl);
+            } else if (p == "shift") {
+                keys.push_back(ImGuiMod_Shift);
+            } else if (p == "escape") {
+                keys.push_back(ImGuiKey_Escape);
+            } else if (p == "enter") {
+                keys.push_back(ImGuiKey_Enter);
+            } else if (p == "backspace") {
+                keys.push_back(ImGuiKey_Backspace);
+            } else if (p == "f3") {
+                keys.push_back(ImGuiKey_F3);
+            } else if (p.size() == 1 && p[0] >= 'a' && p[0] <= 'z') {
+                keys.push_back((ImGuiKey)(ImGuiKey_A + (p[0] - 'a')));
+            } else if (p.size() == 1 && p[0] >= '0' && p[0] <= '9') {
+                keys.push_back((ImGuiKey)(ImGuiKey_0 + (p[0] - '0')));
+            } else {
+                error_ = "unknown key " + chord;
+                return;
+            }
         }
         for (ImGuiKey k : keys) io.AddKeyEvent(k, true);
-        held_keys_ = keys;
+        // Released in reverse order, the key before its modifiers.
+        held_keys_.assign(keys.rbegin(), keys.rend());
+    }
+
+    // A point of a builder item: fractions of it, or pixels from its far
+    // edge for a negative value.
+    static bool item_point(SpecPage& page, const std::string& name, float fx, float fy, float* x, float* y) {
+#if CALIPER_WITH_BUILDER
+        BuilderPane* b = page.builder();
+        SpecRect r;
+        if (!b || !b->item_rect(name, &r)) return false;
+        *x = std::round(fx < 0.0f ? r.right() + fx : fx > 1.0f ? r.x + fx : r.x + r.w * fx);
+        *y = std::round(fy < 0.0f ? r.bottom() + fy : fy > 1.0f ? r.y + fy : r.y + r.h * fy);
+        return true;
+#else
+        (void)page, (void)name, (void)fx, (void)fy, (void)x, (void)y;
+        return false;
+#endif
     }
 
     static size_t undo_steps(AppSession& app) {
@@ -245,6 +405,10 @@ private:
     std::vector<ImGuiKey> held_keys_;
     std::vector<std::string> log_;
     std::string error_, facts_;
+    std::string page_;
+    std::function<void(std::vector<std::string>)> drop_;
+    float drag_a_[2] = {0, 0}, drag_b_[2] = {0, 0};
+    int drag_frame_ = 0;   // the frame of a drag in progress, 0 before its press
 };
 
 }  // namespace caliper_host

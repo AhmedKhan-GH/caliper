@@ -414,6 +414,12 @@ void LandingScreen::draw(const Context& ctx) {
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_R) && ctx.loader &&
         ctx.loader->restartable(selected_))
         pending_restart_ = selected_;
+    // F3: New dashboard, the Projects way in, titled by the command line's
+    // text (without a leading "new "), from anywhere on the landing.
+    if (ctx.new_spec && ImGui::IsKeyPressed(ImGuiKey_F3, false) && !any_popup_open()) {
+        pending_new_ = true;
+        pending_new_title_ = command_.rfind("new ", 0) == 0 ? command_.substr(4) : command_;
+    }
     // F4: Attach to process, the Projects way in, from anywhere on the landing.
     if (ctx.sessions && ctx.attach && ImGui::IsKeyPressed(ImGuiKey_F4, false) &&
         !any_popup_open())
@@ -438,6 +444,20 @@ void LandingScreen::draw(const Context& ctx) {
     // selected; a row that cannot launch does nothing (the Inspector already
     // says why). From the command line, focus then moves to the table with
     // the filter kept, so ↑↓ can pick another row without the mouse.
+    // "new <title>" and Enter on the command line: a new dashboard.
+    if (enter_requested_ && enter_from_command_ && ctx.new_spec && command_.rfind("new ", 0) == 0) {
+        pending_new_ = true;
+        pending_new_title_ = command_.substr(4);
+        enter_requested_ = enter_from_command_ = false;
+    }
+    if (pending_new_) {
+        pending_new_ = false;
+        command_.clear();
+        std::string title = pending_new_title_;
+        while (!title.empty() && title.front() == ' ') title.erase(title.begin());
+        while (!title.empty() && title.back() == ' ') title.pop_back();
+        ctx.new_spec(title);
+    }
     if (enter_requested_) {
         const bool visible =
             std::find(rows_.begin(), rows_.end(), selected_) != rows_.end();
@@ -849,10 +869,12 @@ void LandingScreen::draw_projects(const Context& ctx) {
         const char* action;
         const char* command;
         bool attach;          // F4: the live sessions
+        bool make;            // F3: a new dashboard
     };
     static const WayIn ways[] = {
-        {"1", "F2", "Open folder", "open <folder>", false},
-        {"2", "F4", "Attach to process", "attach <pid>", true},
+        {"1", "F2", "Open folder", "open <folder>", false, false},
+        {"2", "F3", "New dashboard", "new <title>", false, true},
+        {"3", "F4", "Attach to process", "attach <pid>", true, false},
     };
     const bool can_list = ctx.sessions && ctx.attach;
     ImFont* mono = sternbild::fonts().mono;
@@ -862,7 +884,7 @@ void LandingScreen::draw_projects(const Context& ctx) {
     const float way_row = metric::key_button + 2.0f * ImGui::GetStyle().CellPadding.y;
     const float text_dy = std::floor((metric::key_button - font_size::ui) * 0.5f);
     const float height = std::max(
-        1.0f, std::min(metric::row + way_row * 2.0f + 2.0f,
+        1.0f, std::min(metric::row + way_row * 3.0f + 2.0f,
                        ImGui::GetContentRegionAvail().y));
     if (sternbild::begin_table("##projects", 3, ImVec2(0.0f, height),
                                ImGuiTableFlags_SizingFixedFit)) {
@@ -881,6 +903,12 @@ void LandingScreen::draw_projects(const Context& ctx) {
                 if (sternbild::key_button(w.key, w.action, can_list,
                                           "live sessions are not available in this build"))
                     open_sessions_ = true;
+            } else if (w.make) {
+                if (sternbild::key_button(w.key, w.action, (bool)ctx.new_spec,
+                                          "the builder is not in this build")) {
+                    pending_new_ = true;
+                    pending_new_title_ = command_.rfind("new ", 0) == 0 ? command_.substr(4) : command_;
+                }
             } else {
                 sternbild::key_button(w.key, w.action, false, "not yet available");
             }

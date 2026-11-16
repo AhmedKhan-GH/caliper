@@ -33,6 +33,19 @@
 // caller's ImGui context is current, so it shares that context's font atlas
 // and draws in the house faces the app loaded.
 //
+// Build mode (builder_pane.h, design/builder-pane.md). The page owns one
+// BuilderPane over the session. ⌘B Build in the page bar, after the title,
+// turns it on for the open spec: the pane lays the page out with
+// layout_spec_page() (spec_page_layout.h), draws the runtime on its canvas,
+// Sources and Primitives at the left, Properties at the right with the side
+// chat under it while the chat is open, and the spec text under the canvas,
+// and its other items (⌘T Text, ⌘Z Undo, ⇧⌘Z Redo, ⌘S Save) follow Build in
+// the page bar, before ⌘L Chat and ⌘K Command at the right end. The focused
+// panel is the page's in both modes, so ⌘K opens the inline prompt on the
+// panel focused in build mode too. Files dropped on the window reach
+// drop_files(), which turns build mode on and imports them from the ui
+// origin.
+//
 // Frame thread only. Built with CALIPER_WITH_BUILDER; without it the page is
 // a stub that never opens, so the app builds and behaves as before.
 // ============================================================================
@@ -40,12 +53,14 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 struct SpecAppletFacts;   // ui/landing_screen.h
 
 namespace caliper_host {
 
 class AppSession;
+class BuilderPane;
 class ChatPane;
 class JobsTray;
 class PanelRenderSeam;
@@ -91,6 +106,19 @@ public:
     // `error` empty when it succeeded and holding the reason otherwise.
     bool request_answered(std::string* error);
 
+    // A new spec from the app (the landing's F3 New dashboard, or a drop with
+    // no open spec): spec.new from the ui origin through the session's queue,
+    // with the applet id pane_new_spec_id() derives from `title` among the
+    // workspace's saved applets. request_answered() reports it as it does an
+    // open, and take_new() is true once after it succeeded; the app then
+    // shows the page in build mode. False when the session is not open.
+    bool request_new(AppSession& session, const std::string& title);
+    bool take_new();
+    // The session holds an open spec (spec.new or applet.open ran).
+    static bool has_open_spec(AppSession& session);
+    // An import from drop_files() still runs.
+    bool importing() const;
+
     // Shows the page from the next draw() on, with the session's open spec.
     void enter(AppSession& session);
     // Shows the page with the spec of a spec applet found outside the
@@ -133,6 +161,18 @@ public:
     using PanelOverlay = std::function<void(const std::string& panel_id, const std::string& title, float x, float y,
                                             float w, float h, float strip)>;
     void set_panel_overlay(PanelOverlay overlay);
+    // Build mode, for the open spec the page shows (not for a spec applet's
+    // file drawn from outside the workspace).
+    bool build_mode() const;
+    void set_build_mode(bool on);
+    // Files dropped on the window: build mode on, then data.import of the
+    // paths from the ui origin through the builder pane, which selects the
+    // sources they make. False, with the reason, when the page shows no open
+    // spec or another import still runs.
+    bool drop_files(AppSession& session, const std::vector<std::string>& paths, std::string* why);
+    // The builder pane, once the page has a session; null before and
+    // without the builder. For the hidden app's input driver and tests.
+    BuilderPane* builder();
     // The focused panel's id, "" for none; focus_panel("") gives it up.
     const std::string& focused_panel() const;
     void focus_panel(const std::string& panel_id);

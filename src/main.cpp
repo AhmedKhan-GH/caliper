@@ -325,6 +325,7 @@ public:
             approvals_.frame(session_.session(), session_.worker_busy(), glfwGetTime());
             chat_.frame(session_);   // the side chat polls its agent
             note_spec_applets();
+            note_drops();
             captures_.before_frame(*renderer_, [this](uint64_t t, int status, const std::string& why) {
                 capture_error(t, status, why);
             });
@@ -335,7 +336,7 @@ public:
             // CALIPER_TEST_UI with --hidden: the scripted clicks of a UI test,
             // queued into ImGui before the frame reads its input.
             if (ui_driver_ && page_ == AppPage::Live) feed_ui_driver();
-            if (spec_ui_ && (page_ == AppPage::Spec || page_ == AppPage::Live)) feed_spec_ui();
+            if (spec_ui_ && (page_ == AppPage::Spec || page_ == AppPage::Live || page_ == AppPage::Landing)) feed_spec_ui();
 
             renderer_->new_frame();
 
@@ -366,6 +367,8 @@ public:
                     return caliper_host::SpecPage::facts(e.spec_path, f);
                 };
                 ctx.shown_path = [this](const std::string& p) { return workspace_relative(p); };
+                if (caliper_host::SpecPage::built())
+                    ctx.new_spec = [this](const std::string& title) { new_spec(title); };
                 landing_.draw(ctx);
             } else if (page_ == AppPage::Live) {
                 draw_live_page();
@@ -764,8 +767,17 @@ private:
             }
         }
         std::string error;
-        if (spec_page_.request_answered(&error) && !error.empty()) landing_.log("launch failed", "applet.open", error);
+        if (spec_page_.request_answered(&error)) {
+            if (!error.empty()) landing_.log(new_pending_ ? "new failed" : "launch failed", new_pending_ ? "spec.new" : "applet.open", error);
+            if (!error.empty()) new_pending_ = false;
+        }
         if (spec_page_.take_open(session_)) open_spec_page();
+        // A new spec (F3 New dashboard, or a drop with none open): the page in build mode.
+        if (spec_page_.take_new()) {
+            open_spec_page();
+            spec_page_.set_build_mode(true);
+            new_pending_ = false;
+        }
         if (session_.applets_saved() != applets_saved_ && page_ != AppPage::Applet) {
             applets_saved_ = session_.applets_saved();
             const int sel = landing_.selected_index();
@@ -777,6 +789,75 @@ private:
                 if (page_ == AppPage::Spec && !shown.empty()) mark_spec_entry(loader_.find(shown));
             }
         }
+    }
+
+    // F3 New dashboard on the landing, or a drop with no open spec: spec.new
+    // from the ui origin once the session is open, with an id derived from
+    // the title; note_spec_applets() shows the page in build mode when it
+    // succeeds.
+    void new_spec(const std::string& title) {
+        session_.ensure_open();
+        pending_new_title_ = title.empty() ? std::string("Untitled") : title;
+        new_requested_ = true;
+        landing_.log("new", pending_new_title_, "spec");
+    }
+
+    // Files dropped on the window (GLFW's drop callback, or the hidden input
+    // driver's drop step, which calls this the same way).
+    void on_drop(std::vector<std::string> paths) {
+        if (paths.empty()) return;
+        if (!caliper_host::SpecPage::built()) {
+            landing_.log("drop", std::to_string(paths.size()) + (paths.size() == 1 ? " file" : " files"),
+                         "the builder is not in this build");
+            return;
+        }
+        pending_drops_.push_back(std::move(paths));
+    }
+
+    // Once per frame: a new spec that waits for the session, then the files
+    // dropped. On the spec page they go to its builder (build mode on); on
+    // the landing the open spec's page opens first, or a new spec when none
+    // is open; other pages keep their windows and say so in Activity.
+    void note_drops() {
+        if (new_requested_ && !new_pending_) {
+            if (session_.session() && !session_.worker_busy()) {
+                if (spec_page_.request_new(session_, pending_new_title_)) new_pending_ = true;
+                new_requested_ = false;
+            } else if (!session_.open_error().empty()) {
+                landing_.log("new failed", pending_new_title_, session_.open_error());
+                new_requested_ = false;
+            }
+        }
+        if (pending_drops_.empty()) return;
+        const std::vector<std::string>& paths = pending_drops_.front();
+        const std::string what = paths.size() == 1 ? std::filesystem::path(paths[0]).filename().string()
+                                                    : std::to_string(paths.size()) + " files";
+        if (page_ == AppPage::Spec) {
+            if (!session_.session() || session_.worker_busy() || spec_page_.importing()) return;   // wait
+            std::string why;
+            if (spec_page_.drop_files(session_, paths, &why)) landing_.log("drop", what, "import");
+            else landing_.log("drop refused", what, why);
+            pending_drops_.erase(pending_drops_.begin());
+            return;
+        }
+        if (page_ == AppPage::Landing) {
+            session_.ensure_open();
+            if (!session_.open_error().empty()) {
+                landing_.log("drop refused", what, session_.open_error());
+                pending_drops_.clear();
+                return;
+            }
+            if (!session_.session() || session_.worker_busy() || new_requested_ || new_pending_) return;   // wait
+            if (caliper_host::SpecPage::has_open_spec(session_)) {
+                open_spec_page();
+                spec_page_.set_build_mode(true);
+            } else {
+                new_spec("");
+            }
+            return;
+        }
+        landing_.log("drop refused", what, "open a spec to import files");
+        pending_drops_.clear();
     }
 
     // Caliper API's calls of this frame (api/api_server.h). A capture waits
@@ -974,6 +1055,8 @@ private:
     }
 
     void feed_spec_ui() {
+        spec_ui_->set_page(page_ == AppPage::Spec ? "spec" : page_ == AppPage::Landing ? "landing" : "live");
+        spec_ui_->set_drop([this](std::vector<std::string> paths) { on_drop(std::move(paths)); });
         spec_ui_->feed(spec_page_, session_, &chat_);
         if (spec_ui_->take_shot_request()) captures_.add(caliper_host::SpecUiDriver::kShotTicket);
         for (const std::string& line : spec_ui_->take_log()) std::cerr << "[ui] " << line << std::endl;
@@ -1259,6 +1342,17 @@ private:
         }
         window_ = glfwCreateWindow(ww, wh, "Caliper", nullptr, nullptr);
         if (!window_) return false;
+        // Files dropped on the window (the Finder, a file manager) are
+        // imported into the workspace by the spec page's builder.
+        glfwSetWindowUserPointer(window_, this);
+        glfwSetDropCallback(window_, [](GLFWwindow* w, int count, const char** paths) {
+            auto* app = static_cast<CaliperApp*>(glfwGetWindowUserPointer(w));
+            if (!app || count <= 0) return;
+            std::vector<std::string> list;
+            for (int i = 0; i < count && i < 256; ++i)
+                if (paths[i] && *paths[i]) list.emplace_back(paths[i]);
+            app->on_drop(std::move(list));
+        });
         return renderer_->init(window_);
     }
 
@@ -1301,6 +1395,10 @@ private:
     bool pending_spec_home_ = false;  // Home on the spec page: leave after render
     std::string workspace_dir_;       // the session's workspace, whose spec applets are listed
     std::string pending_spec_open_;   // a workspace spec applet to open once the session is open
+    std::vector<std::vector<std::string>> pending_drops_;   // files dropped on the window, in order
+    bool new_requested_ = false;      // a new spec waits for the session
+    bool new_pending_ = false;        // its spec.new is in the queue
+    std::string pending_new_title_;
     std::string spec_entry_;          // the manifest id of the spec applet the page shows, or ""
     uint64_t applets_saved_ = 0;      // AppSession::applets_saved() when last listed
     caliper_host::AppApi api_;        // Caliper API (--api); not running without it

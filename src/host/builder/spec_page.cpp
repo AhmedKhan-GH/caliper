@@ -6,7 +6,9 @@
 #include "builder/chat_pane.h"
 
 #if CALIPER_WITH_BUILDER
+#include "builder/builder_pane.h"
 #include "builder/panel_renderer.h"
+#include "builder/spec_page_layout.h"
 #include "builder/widget_app.h"
 #include "builder/widget_surface.h"
 #include "applet_spec.h"
@@ -141,6 +143,8 @@ struct SpecPage::Impl {
 
     std::optional<std::future<cb::CommandResult>> request;
     std::string request_error;
+    bool request_is_new = false;   // the request is spec.new, not applet.open
+    bool new_done = false;         // a spec.new succeeded since the last take_new()
 
     Seams seams;
     PanelOverlay panel_overlay;
@@ -151,6 +155,11 @@ struct SpecPage::Impl {
     std::unique_ptr<InlineWidget> widget;
     bool hidden = false;
     ChatPane* chat = nullptr;   // the side chat, when the app has one
+
+    // The builder pane over the bound session (builder_pane.h), made with it;
+    // build mode is its own.
+    std::unique_ptr<BuilderPane> builder;
+    bool building() const { return builder && builder->build_mode() && !from_file; }
 
     void open_widget(AppSession& app, const std::string& panel) {
         if (!bound || from_file) return;
@@ -233,6 +242,14 @@ struct SpecPage::Impl {
         source = s ? std::make_unique<PageSource>(*s, app) : nullptr;
         runtime->set_source(source.get());
         journal_read.reset();
+        builder.reset();
+        if (s) {
+            AppSession* a = &app;
+            auto port = std::make_unique<SessionBuilderPort>(
+                *s, [a] { return a->worker_busy(); }, [a] { return a->journaled(); });
+            builder = std::make_unique<BuilderPane>(std::move(port));
+            builder->set_layout_rule(spec_page_layout_rule);
+        }
     }
 
     // The open spec, read again when the journal recorded a command since.
@@ -286,6 +303,14 @@ struct SpecPage::Impl {
             // ⌘L Chat, then ⌘K Command at the right end.
             const float cw = chat ? ChatPane::toggle_width() + ImGui::GetStyle().ItemSpacing.x : 0.0f;
             const float right = ImGui::GetWindowContentRegionMax().x - w - cw - sternbild::metric::pad;
+            // The builder's items after the title, in the room the right end
+            // leaves (only ⌘B Build when it is short); none for a spec
+            // applet's file, which the builder does not edit.
+            if (builder && has_spec && !from_file) {
+                ImGui::Separator();
+                builder->page_bar(right - ImGui::GetCursorPosX() - 2.0f * sternbild::metric::pad);
+                ImGui::SameLine();
+            }
             if (right > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(right);
             if (chat) chat->draw_toggle();
             if (sternbild::key_button(key, "Command")) *command_key = true;
@@ -311,7 +336,9 @@ struct SpecPage::Impl {
         // the approval cards' above it), then the side chat's column at the
         // right: the spec fills what they leave.
         if (tray) tray->draw();
-        if (chat) chat->draw_column();
+        // In build mode the chat is the builder's right column's lower part,
+        // drawn inside the page (ChatPane::draw_in()); otherwise its own column.
+        if (chat && !building()) chat->draw_column();
         return home;
     }
 
@@ -377,8 +404,18 @@ struct SpecPage::Impl {
             // The page routes ⌘K and Escape (spec_key_action); the surface
             // takes Enter on its card and polls its agent.
             if (widget) widget->frame(look, focused, /*keys=*/false);
-            runtime->draw(area, look);
-            focus_and_frame();
+            if (building()) {
+                // The builder's regions; it draws the runtime on its canvas,
+                // takes the page's focus when the page changed it and gives
+                // its own back.
+                builder->set_chat(chat && chat->open(), [this](const SpecRect& r) {
+                    if (chat) chat->draw_in(r.x, r.y, r.w, r.h);
+                });
+                builder->draw(area, *runtime, look, &focused);
+            } else {
+                runtime->draw(area, look);
+                focus_and_frame();
+            }
         }
         ImGui::End();
     }
@@ -439,9 +476,41 @@ bool SpecPage::request_open(AppSession& session, const std::string& id) {
     inv.args = {{"id", id}};
     inv.origin = cb::CommandOrigin::ui;
     impl_->request = s->queue().submit(std::move(inv));
+    impl_->request_is_new = false;
     impl_->request_error.clear();
     return true;
 }
+
+bool SpecPage::request_new(AppSession& session, const std::string& title) {
+    cb::Session* s = session.session();
+    if (!s) return false;
+    const std::filesystem::path applets = std::filesystem::path(s->workspace()) / "applets";
+    const std::string id = pane_new_spec_id(title, [&](const std::string& x) {
+        std::error_code ec;
+        return std::filesystem::exists(applets / x, ec);
+    });
+    cb::CommandInvocation inv;
+    inv.name = "spec.new";
+    inv.args = {{"id", id}, {"title", title.empty() ? id : title}};
+    inv.origin = cb::CommandOrigin::ui;
+    impl_->request = s->queue().submit(std::move(inv));
+    impl_->request_is_new = true;
+    impl_->request_error.clear();
+    return true;
+}
+
+bool SpecPage::take_new() {
+    const bool r = impl_->new_done;
+    impl_->new_done = false;
+    return r;
+}
+
+bool SpecPage::has_open_spec(AppSession& session) {
+    cb::Session* s = session.session();
+    return s && !session.worker_busy() && s->open_spec().has_value();
+}
+
+bool SpecPage::importing() const { return impl_->builder && impl_->builder->importing(); }
 
 bool SpecPage::request_answered(std::string* error) {
     Impl& im = *impl_;
@@ -449,6 +518,8 @@ bool SpecPage::request_answered(std::string* error) {
     if (im.request->wait_for(std::chrono::seconds(0)) != std::future_status::ready) return false;
     const cb::CommandResult r = im.request->get();
     im.request.reset();
+    if (im.request_is_new && r.ok) im.new_done = true;
+    im.request_is_new = false;
     if (error) *error = r.ok ? std::string() : r.error.code + ": " + r.error.message;
     return true;
 }
@@ -498,6 +569,10 @@ SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, 
         im.command.clear();
         escape = false;
     }
+    // The builder's keys (⌘B, and in build mode ⌘T, ⌘Z, ⇧⌘Z, ⌘S, ⌫), and
+    // its Escape (a drag, the text editor, a source's focus) before the
+    // page's (a panel's focus, then Home).
+    if (im.builder && im.has_spec && !im.from_file && !im.widget_open() && im.builder->keys(escape)) escape = false;
     if (im.command_entered) {
         // Enter on the command input: the found panel's inline prompt.
         im.command_entered = false;
@@ -534,6 +609,29 @@ SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, 
     return r;
 }
 
+bool SpecPage::build_mode() const { return impl_->building(); }
+
+void SpecPage::set_build_mode(bool on) {
+    if (impl_->builder && !impl_->from_file) impl_->builder->set_build_mode(on);
+}
+
+bool SpecPage::drop_files(AppSession& session, const std::vector<std::string>& paths, std::string* why) {
+    Impl& im = *impl_;
+    im.bind(session);
+    if (!im.builder || im.from_file || !im.has_spec) {
+        if (why) *why = "no open spec is shown";
+        return false;
+    }
+    im.builder->set_build_mode(true);
+    if (!im.builder->drop_files(paths)) {
+        if (why) *why = im.builder->error().message;
+        return false;
+    }
+    return true;
+}
+
+BuilderPane* SpecPage::builder() { return impl_->builder.get(); }
+
 void SpecPage::set_seams(Seams seams) { impl_->seams = std::move(seams); }
 
 void SpecPage::set_hidden(bool hidden) { impl_->hidden = hidden; }
@@ -563,8 +661,10 @@ const std::string& SpecPage::focused_panel() const { return impl_->focused; }
 void SpecPage::focus_panel(const std::string& panel_id) { impl_->focused = panel_id; }
 
 void SpecPage::leave() {
-    // An open prompt closes with the page: its preview is discarded.
+    // An open prompt closes with the page: its preview is discarded. The page
+    // opens again out of build mode.
     if (impl_->widget) impl_->widget->surface().close();
+    if (impl_->builder) impl_->builder->set_build_mode(false);
     impl_->focused.clear();
     impl_->runtime->clear_spec();
     impl_->journal_read.reset();
@@ -607,6 +707,7 @@ bool SpecPage::facts(const std::string& spec_path, SpecAppletFacts* out) {
 }
 
 void SpecPage::shutdown() {
+    impl_->builder.reset();
     impl_->widget.reset();   // before the runtime it is attached to
     impl_->runtime.reset();
     impl_->source.reset();
@@ -632,9 +733,20 @@ bool SpecPage::built() { return false; }
 bool SpecPage::take_open(const AppSession&) { return false; }
 bool SpecPage::request_open(AppSession&, const std::string&) { return false; }
 bool SpecPage::request_answered(std::string*) { return false; }
+bool SpecPage::request_new(AppSession&, const std::string&) { return false; }
+bool SpecPage::take_new() { return false; }
+bool SpecPage::has_open_spec(AppSession&) { return false; }
+bool SpecPage::importing() const { return false; }
 void SpecPage::enter(AppSession&) {}
 SpecPage::Result SpecPage::draw(AppSession&, const char*, JobsTray*, bool) { return {}; }
 void SpecPage::set_seams(Seams) {}
+bool SpecPage::build_mode() const { return false; }
+void SpecPage::set_build_mode(bool) {}
+bool SpecPage::drop_files(AppSession&, const std::vector<std::string>&, std::string* why) {
+    if (why) *why = "the builder is not in this build";
+    return false;
+}
+BuilderPane* SpecPage::builder() { return nullptr; }
 void SpecPage::set_hidden(bool) {}
 void SpecPage::set_chat(ChatPane*) {}
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }

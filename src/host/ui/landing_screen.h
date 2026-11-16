@@ -11,7 +11,9 @@
 //   dock space    four panes in ImGui docking, first-run layout built with
 //                 DockBuilder and persisted in the app-data imgui.ini:
 //                   Projects     (empty state; F2 Open folder disabled with
-//                                 the reason "not yet available"; F4 Attach
+//                                 the reason "not yet available"; F3 New
+//                                 dashboard, a new spec in build mode, titled
+//                                 by "new <title>" on the command line; F4 Attach
 //                                 to process opens the live sessions of
 //                                 training scripts here: script, pid, start
 //                                 time, state, views; ↑↓ select, Enter /
@@ -83,6 +85,10 @@ public:
         // A spec applet's facts for the Inspector, from its spec file. Null,
         // or false, leaves the rows that need them out.
         std::function<bool(const caliper_host::AppletEntry&, SpecAppletFacts*)> spec_facts;
+        // F3 New dashboard, the Projects way in: a new spec titled `title`
+        // ("" for one without a title), opened in build mode. The command
+        // line's "new <title>" and Enter does the same. Null disables it.
+        std::function<void(const std::string& title)> new_spec;
         // A file's path as the Inspector shows it: relative to the workspace
         // for a file in it, else with the home folder written "~", as the
         // Activity pane writes paths. Null shows the path as it is.
@@ -147,6 +153,8 @@ private:
     const char* focus_pane_ = nullptr;  // ⌘1–⌘4: pane to focus after the frame
     int pending_launch_ = -1;        // activation, run after the frame is drawn
     int pending_restart_ = -1;       // Restart, run after the frame like a launch
+    bool pending_new_ = false;       // F3 / "new <title>": a new spec after the frame
+    std::string pending_new_title_;
     // F4 Attach to process: Projects lists the live sessions instead of the
     // ways in. The selection is the session token, so a relist keeps it.
     bool attach_mode_ = false;
