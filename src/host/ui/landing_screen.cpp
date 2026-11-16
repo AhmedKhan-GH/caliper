@@ -377,6 +377,11 @@ void LandingScreen::draw(const Context& ctx) {
     // are viewport side bars, so they are submitted before the dock space
     // that fills the work area they leave.
     agent_settings_ = ctx.agent_settings;
+    has_live_ = ctx.live && ctx.show_live;
+    if (has_live_) live_ = *ctx.live;
+    show_live_ = ctx.show_live;
+    // F5: the attached live session's page, from anywhere on the landing.
+    if (has_live_ && ImGui::IsKeyPressed(ImGuiKey_F5, false) && !any_popup_open()) pending_show_live_ = true;
     draw_command_bar();
     draw_status_bar(ctx);
     if (ctx.after_bars) ctx.after_bars();
@@ -510,6 +515,10 @@ void LandingScreen::draw(const Context& ctx) {
         pending_attach_url_.clear();
         if (ctx.attach_url) ctx.attach_url(link);
     }
+    if (pending_show_live_) {
+        pending_show_live_ = false;
+        if (has_live_ && show_live_) show_live_();
+    }
 
     if (focus_pane_) {
         ImGui::SetWindowFocus(focus_pane_);
@@ -630,6 +639,34 @@ void LandingScreen::draw_command_bar() {
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - block_w);
     }
     const float right_x0 = ImGui::GetCursorScreenPos().x;
+    // The attached live session (it stays attached while the landing shows):
+    // the live diamond, filled and breathing while its script runs and
+    // outlined once it has ended, as on the live page; its script; and F5
+    // Live page, the way back to its page.
+    if (has_live_) {
+        ImGui::Dummy(ImVec2(8.0f, ImGui::GetFrameHeight()));
+        const ImVec2 mn = ImGui::GetItemRectMin();
+        const ImVec2 mx = ImGui::GetItemRectMax();
+        const float phase = (float)std::fmod(ImGui::GetTime(), 2.4) / 2.4f;
+        const float alpha = live_.ended ? 1.0f : 0.725f + 0.275f * std::cos(phase * 6.2831853f);
+        sternbild::diamond(ImGui::GetWindowDrawList(),
+                           ImVec2(std::floor((mn.x + mx.x) * 0.5f), std::floor((mn.y + mx.y) * 0.5f)), 4.0f,
+                           sternbild::with_alpha(col::parchment, (int)(255.0f * alpha)), !live_.ended);
+        ImGui::SameLine(0.0f, metric::pad);
+        ImGui::AlignTextToFramePadding();
+        ImGui::PushStyleColor(ImGuiCol_Text, col::secondary);
+        ImGui::TextUnformatted(live_.script.empty() ? live_.session.c_str() : live_.script.c_str());
+        ImGui::PopStyleColor();
+        if (live_.ended) {
+            ImGui::SameLine(0.0f, metric::pad);
+            ImGui::PushStyleColor(ImGuiCol_Text, col::parchment);
+            ImGui::TextUnformatted("SESSION ENDED");
+            ImGui::PopStyleColor();
+        }
+        ImGui::SameLine(0.0f, metric::pad);
+        if (sternbild::key_button("F5", "Live page")) pending_show_live_ = true;
+        ImGui::SameLine(0.0f, metric::gap);
+    }
     if (const int jobs = running_jobs(); jobs > 0) {
         // The live diamond, filled while work runs. Its opacity breathes
         // 100% -> 45% -> 100% over 2.4 s (SPEC §6.5), so liveness reads
@@ -938,6 +975,10 @@ void LandingScreen::draw_projects(const Context& ctx) {
 // attached. ↑↓ move, Enter or a double click attaches, esc goes back to the
 // ways in; under the table the ⏎ Attach plate (disabled with the reason beside
 // it when the row cannot attach) and the esc Back key button.
+bool LandingScreen::attached(const caliper_live::SessionEntry& e) const {
+    return has_live_ && !live_.session.empty() && e.session == live_.session;
+}
+
 void LandingScreen::draw_sessions(const Context& ctx) {
     caliper_live::SessionList& list = *ctx.sessions;
     list.refresh();
@@ -959,7 +1000,7 @@ void LandingScreen::draw_sessions(const Context& ctx) {
     if (sel < 0 && !rows.empty()) {
         sel = 0;
         for (size_t i = 0; i < rows.size(); ++i) {
-            if (caliper_live::can_attach(rows[i])) {
+            if (caliper_live::can_attach(rows[i]) || attached(rows[i])) {
                 sel = (int)i;
                 break;
             }
@@ -1013,7 +1054,8 @@ void LandingScreen::draw_sessions(const Context& ctx) {
         for (int i = 0; i < (int)rows.size(); ++i) {
             const caliper_live::SessionEntry& e = rows[(size_t)i];
             const bool selected = i == sel;
-            const bool can = caliper_live::can_attach(e);
+            const bool here = attached(e);
+            const bool can = here || caliper_live::can_attach(e);
             ImGui::PushID(e.session.c_str());
             ImGui::TableNextRow(ImGuiTableRowFlags_None, metric::row);
 
@@ -1050,8 +1092,8 @@ void LandingScreen::draw_sessions(const Context& ctx) {
             cell_text(started.c_str(), mono, font_size::mono,
                       sternbild::row_text(selected, meta));
             ImGui::TableNextColumn();
-            cell_text(caliper_live::state_text(e).c_str(), ui, font_size::ui,
-                      sternbild::row_text(selected, meta));
+            cell_text(here ? "attached" : caliper_live::state_text(e).c_str(), ui, font_size::ui,
+                      sternbild::row_text(selected, here ? ink : meta));
             ImGui::TableNextColumn();
             cell_text(caliper_live::view_names(e).c_str(), mono, font_size::mono,
                       sternbild::row_text(selected, meta));
@@ -1071,10 +1113,12 @@ void LandingScreen::draw_sessions(const Context& ctx) {
     // row cannot attach, then esc Back.
     ImGui::SetCursorPosY(table_y + table_h + metric::pad);
     const caliper_live::SessionEntry* cur = sel >= 0 ? &rows[(size_t)sel] : nullptr;
-    const bool can = cur && caliper_live::can_attach(*cur);
+    const bool cur_attached = cur && attached(*cur);
+    const bool can = cur && (cur_attached || caliper_live::can_attach(*cur));
     const float button_y = ImGui::GetCursorPosY();
     ImGui::BeginDisabled(!can);
-    if (sternbild::primary_button("Attach", ImVec2(0.0f, kPlate), key(kKeyEnter)))
+    // The attached session's row opens its page, as F5 Live page does.
+    if (sternbild::primary_button(cur_attached ? "Live page" : "Attach", ImVec2(0.0f, kPlate), key(kKeyEnter)))
         attach = true;
     ImGui::EndDisabled();
     ImGui::SameLine(0.0f, metric::gap);
@@ -1123,9 +1167,11 @@ void LandingScreen::draw_sessions(const Context& ctx) {
     }
 
     // A caliper.serve() stream's row attaches by its stream URL, as a pasted
-    // link does; the token in it is never shown.
+    // link does; the token in it is never shown. The attached session's row
+    // shows its page.
     if (attach && can) {
-        if (!cur->stream_url.empty() && ctx.attach_url) pending_attach_url_ = cur->stream_url;
+        if (cur_attached) pending_show_live_ = true;
+        else if (!cur->stream_url.empty() && ctx.attach_url) pending_attach_url_ = cur->stream_url;
         else if (cur->stream_url.empty()) pending_attach_ = cur->session;
     }
     if (back) {

@@ -44,16 +44,20 @@ Each entry also has `alive`, `protocol`, `compatible`, `start_unix_ms` and
 On the landing screen, press F4 or click `F4 Attach to process` in the Projects
 pane. Projects lists the sessions, newest first, relisted every second, with
 the script, PID, start time (clock time and how long ago), state and view
-names of each. The states and which ones attach are those of the table below;
-a row that cannot attach is faint, and the `⏎ Attach` button under the table
-is disabled with the reason beside it. Select a row with ↑ / ↓ and press Enter,
-double-click it, or click `⏎ Attach`; Esc or `esc Back` returns to the ways in.
+names of each. The list also holds the streams of `caliper.serve()` on this
+machine, with the state `stream` (see
+[Attach to a stream by its link](#attach-to-a-stream-by-its-link)). The states
+and which ones attach are those of the table below; a row that cannot attach
+is faint, and the `⏎ Attach` button under the table is disabled with the reason
+beside it. Select a row with ↑ / ↓ and press Enter, double-click it, or click
+`⏎ Attach`; Esc or `esc Back` returns to the ways in. The session the app is
+attached to reads `attached`, and Enter on it opens its live page again.
 
 The session's live page opens:
 
 | Part | Shows |
 |---|---|
-| Bar | `esc Home`, the script's name, and its state: a filled, breathing diamond and `live` while it runs, `waiting for the session to start`, or an outlined diamond and `SESSION ENDED` once it has gone |
+| Bar | `esc Home`, `⌘D Detach`, the script's name, and its state: a filled, breathing diamond and `live` while it runs, `waiting for the session to start`, or an outlined diamond and `SESSION ENDED` once it has gone |
 | Run bar | For a stream only, under the bar: the script's run state, Pause or Resume, Step, its parameters and its actions (see [Control the run and share a selection](#control-the-run-and-share-a-selection)) |
 | Views | One window per view on a grid that fills the page and lays itself out again when the page narrows, each with a header of its name, a summary, its tools and a status dot (see [What you see](../tutorials/live-pytorch.md#what-you-see)); a window you move, resize or dock keeps its place, and that layout is kept in `imgui.ini` |
 | Status bar | The backend and GPU, then the script's pid, the number of views, and the frame rate and step-to-screen latency over the last second |
@@ -65,8 +69,16 @@ landing logs `attached`, `session ended` and `detached` with the script and
 its pid, and `attach failed` with the reason when a session refuses (another
 viewer took it, it closed, or the renderer is not Metal).
 
+The app stays attached when you leave the live page. `esc Home` goes to the
+landing screen with the session still attached, and the spec page and the
+other pages keep it too, so that its views stay in the catalog as `live:`
+sources. The landing's command bar then shows the live diamond, the script's
+name and `F5 Live page`, which returns to the live page, as F5 does. Only
+`⌘D Detach` on the live page, attaching another session or stream, or quitting
+the app ends the attachment (see [Detach](#detach)).
+
 For automation, `CALIPER_AUTOATTACH=<pid>` attaches to that process's session
-as soon as the landing lists it, and `CALIPER_HOME_AFTER=<seconds>` detaches
+as soon as the landing lists it, and `CALIPER_HOME_AFTER=<seconds>` goes Home
 that long after the page opened:
 
 ```sh
@@ -315,11 +327,16 @@ run bar.
 
 ## Detach
 
-In the Caliper app, `esc Home` (or Esc, when no field or popup takes it) drops
-the views, releases the claims on the shared slots and clears the heartbeat,
-then returns to the session list. In `caliper-viewer`, **Detach** in the status
-window does the same. The script stops taking snapshots at once and keeps
-training, and you can attach again from the list. Closing either window
+In the Caliper app, `⌘D Detach` in the live page's bar (⌘D) drops the views,
+releases the claims on the shared slots and clears the heartbeat, or closes
+the stream's connection, then returns to the landing screen; the spec's
+`live:` sources go with it, and its live panels show their offline state.
+`esc Home` does not detach: the session stays attached while you are on the
+landing screen, the spec page or an applet's page, and `F5 Live page` returns
+to it. Attaching another session or stream detaches the attached one first,
+and quitting the app detaches too. In `caliper-viewer`, **Detach** in the
+status window does the same. The script stops taking snapshots at once and
+keeps training, and you can attach again from the list. Closing either window
 detaches the same way. A series
 keeps its values in the session while nobody is attached, so after a re-attach
 the loss curve shows the values from before the detach, followed by the new
@@ -333,7 +350,11 @@ the viewer. The viewer keeps its last frames on screen, adds "session ended" to
 the title and shows "SESSION ENDED" in the status window until you detach or
 close it. The Caliper app does the same on its live page: `SESSION ENDED` in
 the bar, `session ended` in the status bar and the title, and a `session ended`
-row in Activity; `esc Home` then returns to the list.
+row in Activity. The app stays attached to the ended session, on whatever page
+it shows, until you detach or attach another: the landing's command bar shows
+an outlined diamond and `SESSION ENDED` beside the script, and the session's
+`live:` sources keep their last data, so a spec over them shows the run's last
+values.
 
 A killed script (SIGKILL, a crash) looks the same in the viewer and in the app;
 in the measurement, the viewer kept drawing its last frames at 60 fps after the

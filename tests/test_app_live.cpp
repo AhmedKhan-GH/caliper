@@ -7,13 +7,14 @@
 // sources, opens it on the spec page, and checks that the frame and the
 // heatmap panel change from one capture to the next while the stream runs,
 // that the catalog shows the live sources with their shapes and rates, and
-// that after the stream is detached (launching another applet takes it, as
-// Home does) the spec opens again with its live panels offline and the app
-// keeps running. POSIX with Metal only; without Metal the case is skipped.
+// that launching another applet keeps the stream attached. POSIX with Metal
+// only; without Metal the case is skipped.
 //
-// The other case drives the hidden app's landing screen through
-// CALIPER_TEST_SPEC_UI beside a producer: F4 listing a stream from its stream
-// file and Enter attaching it.
+// The other cases drive the hidden app's landing screen and live page through
+// CALIPER_TEST_SPEC_UI beside one or two producers: F4 listing a stream from
+// its stream file, the attachment kept across Home and the spec page until
+// ⌘D Detach, a second stream replacing the first, a stream that ends while
+// the landing shows, and quitting while attached.
 //
 // CALIPER_TEST_SHOTS=<folder> saves the two captures there as
 // live-entropy-a.png and live-entropy-b.png, and CALIPER_TEST_WINDOW=<W>x<H>
@@ -323,6 +324,173 @@ TEST_CASE("app live: F4 lists a caliper.serve() stream from its stream file, and
     CHECK_FALSE(fs::exists(stream_file));
 }
 
+TEST_CASE("app live: the stream stays attached across Home and the spec page until Detach, and a spec over live "
+          "sources keeps its data after Home and back") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("home");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    const std::string shots = env.shots.empty() ? t.str("") : env.shots;
+    Proc producer;
+    const std::string link = start_producer(producer, env);
+    const std::string back_shot = shot_name(env, "home-attached");
+    const std::string live_shot = shot_name(env, "live-detach");
+    const std::string script =
+        "page live;key escape;page landing;wait 10;shot " + back_shot + ";touch " + t.str("home") +
+        ";wait-file " + t.str("spec-ready") + ";page spec;key escape;page landing;touch " + t.str("home2") +
+        ";wait-file " + t.str("back") + ";key escape;page landing;key f5;page live;wait 20;shot " + live_shot + ";touch " +
+        t.str("live2") + ";wait-file " + t.str("detach") + ";key cmd+d;page landing;touch " + t.str("detached");
+    Proc app;
+    REQUIRE(app.start(env.exe,
+                      {"--hidden", "--applets", env.applets, "--url", link, "--api", "--api-port", "0", "--workspace",
+                       t.str("ws")},
+                      app_env(env, t, script, shots)));
+    if (!has_metal(app)) {
+        ::kill(app.pid, SIGTERM);
+        app.wait(30000);
+        return;
+    }
+    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
+    REQUIRE(api.is_object());
+    const uint16_t port = api["port"].get<uint16_t>();
+    const std::string token = start_token(app);
+    REQUIRE(token.size() >= 22);
+
+    // Home from the live page: the stream stays attached, and its sources stay
+    // in the catalog and keep arriving on the landing screen.
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("home")); }, 60000), app.text);
+    std::string updated;
+    REQUIRE(eventually(app, [&] {
+        const auto live = live_entries(port, token);
+        if (!live.count("live:attn.entropy")) return false;
+        updated = live.at("live:attn.entropy").value("updated_at", std::string());
+        return !updated.empty();
+    }));
+    CHECK(eventually(app, [&] {
+        const auto live = live_entries(port, token);
+        return live.count("live:attn.entropy") &&
+               live.at("live:attn.entropy").value("updated_at", std::string()) != updated;
+    }));
+    CHECK(app.text.find("[live] detached") == std::string::npos);
+
+    // A spec over a live source, opened on the spec page, then Home and back:
+    // its panel follows the stream both times.
+    ok(port, token, "spec.new", {{"id", "entropy"}, {"title", "Entropy"}});
+    ok(port, token, "source.add", {{"id", "entropy"}, {"catalog", "live:attn.entropy"}});
+    ok(port, token, "panel.create",
+       {{"id", "heads"}, {"primitive", "heatmap"}, {"title", "Entropy by layer and head"}, {"bind", {{"values", "entropy"}}}});
+    ok(port, token, "applet.save");
+    CHECK(ok(port, token, "applet.open", {{"id", "entropy"}})["title"] == "Entropy");
+    auto renders_change = [&] {
+        const Image a = decode(ok(port, token, "panel.render", {{"id", "heads"}, {"width", 320}, {"height", 200}}));
+        return eventually(app, [&] {
+            const Image b = decode(ok(port, token, "panel.render", {{"id", "heads"}, {"width", 320}, {"height", 200}}));
+            return b.colours() > 16 && b.px != a.px;
+        });
+    };
+    CHECK(renders_change());
+    std::ofstream(t.str("spec-ready")).put('\n');
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("home2")); }, 60000), app.text);
+    CHECK(app.text.find("[live] detached") == std::string::npos);
+    CHECK(live_entries(port, token).count("live:attn.entropy") == 1);
+    CHECK(ok(port, token, "applet.open", {{"id", "entropy"}})["title"] == "Entropy");
+    CHECK(renders_change());
+
+    // F5 on the landing returns to the live page of the attached stream; ⌘D
+    // Detach there ends it, and the spec's live panel goes offline.
+    const Image last_live = decode(ok(port, token, "panel.render", {{"id", "heads"}, {"width", 320}, {"height", 200}}));
+    std::ofstream(t.str("back")).put('\n');
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("live2")); }, 60000), app.text);
+    CHECK(app.text.find("[live] detached") == std::string::npos);
+    std::ofstream(t.str("detach")).put('\n');
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("detached")); }, 60000), app.text);
+    CHECK(app.text.find("[live] detached: attention_train.py") != std::string::npos);
+    CHECK(eventually(app, [&] { return live_entries(port, token).empty(); }));
+    CHECK(ok(port, token, "applet.open", {{"id", "entropy"}})["title"] == "Entropy");
+    const Image offline = decode(ok(port, token, "panel.render", {{"id", "heads"}, {"width", 320}, {"height", 200}}));
+    CHECK(offline.px != last_live.px);
+    REQUIRE(script_ended(app, 30000));
+    CHECK_MESSAGE(app.text.find("[ui] done") != std::string::npos, app.text);
+    ::kill(app.pid, SIGTERM);
+    CHECK_MESSAGE(app.wait(30000) == 0, app.text);
+    ::kill(producer.pid, SIGTERM);
+    CHECK(producer.wait(10000) == 0);
+}
+
+TEST_CASE("app live: a second stream replaces the first; a stream that ends while the person is elsewhere keeps its "
+          "last data; quitting while attached detaches") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("second");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    const std::string shots = env.shots.empty() ? t.str("") : env.shots;
+    Proc first;
+    const std::string link = start_producer(first, env);
+    const std::string ended_shot = shot_name(env, "home-ended");
+    const std::string script = "page live;key escape;page landing;wait-file " + t.str("second-ready") +
+                               ";key f4;wait 10;key enter;page live;wait 10;key escape;page landing;touch " +
+                               t.str("home") + ";wait-file " + t.str("ended") + ";wait 20;shot " + ended_shot +
+                               ";touch " + t.str("shot");
+    Proc app;
+    REQUIRE(app.start(env.exe,
+                      {"--hidden", "--applets", env.applets, "--url", link, "--api", "--api-port", "0", "--workspace",
+                       t.str("ws")},
+                      app_env(env, t, script, shots)));
+    if (!has_metal(app)) {
+        ::kill(app.pid, SIGTERM);
+        app.wait(30000);
+        return;
+    }
+    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
+    REQUIRE(api.is_object());
+    const uint16_t port = api["port"].get<uint16_t>();
+    const std::string token = start_token(app);
+    REQUIRE(token.size() >= 22);
+    REQUIRE(app_says(app, "[live] attached: attention_train.py (pid " + std::to_string(first.pid) + ")"));
+
+    // A second stream, listed by its stream file: Enter on it in F4 detaches
+    // the first and attaches the second.
+    Proc second;
+    start_producer(second, env, t.str("data"));
+    const pid_t second_pid = second.pid;   // Proc::wait() forgets it
+    std::ofstream(t.str("second-ready")).put('\n');
+    REQUIRE_MESSAGE(app_says(app, "[live] attached: attention_train.py (pid " + std::to_string(second_pid) + ")", 60000),
+                    app.text);
+    CHECK(app.text.find("[live] detached: attention_train.py (pid " + std::to_string(first.pid) + ")") !=
+          std::string::npos);
+    const std::string session = "attention-" + std::to_string(second_pid);
+    CHECK(eventually(app, [&] {
+        const auto live = live_entries(port, token);
+        return live.count("live:attn") && live.at("live:attn")["origin"].value("session", std::string()) == session;
+    }));
+
+    // The second stream ends while the landing shows: the session ended, its
+    // sources keep their last data, and nothing detaches.
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("home")); }, 60000), app.text);
+    ::kill(second.pid, SIGTERM);
+    CHECK(second.wait(10000) == 0);
+    REQUIRE_MESSAGE(app_says(app, "[live] session ended: attention_train.py"), app.text);
+    CHECK(live_entries(port, token).count("live:attn") == 1);
+    std::ofstream(t.str("ended")).put('\n');
+    REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("shot")); }, 60000), app.text);
+    const size_t ended_at = app.text.find("[live] session ended");
+    CHECK(app.text.find("[live] detached: attention_train.py (pid " + std::to_string(second_pid) + ")") ==
+          std::string::npos);
+
+    // Quitting while attached detaches on the way out and exits cleanly.
+    ::kill(app.pid, SIGTERM);
+    CHECK_MESSAGE(app.wait(30000) == 0, app.text);
+    CHECK_MESSAGE(app.text.find("[live] detached: attention_train.py (pid " + std::to_string(second_pid) + ")",
+                                ended_at) != std::string::npos,
+                  app.text.substr(ended_at == std::string::npos ? 0 : ended_at));
+    ::kill(first.pid, SIGTERM);
+    CHECK(first.wait(10000) == 0);
+}
+
 TEST_CASE("app live: attention entropy per layer, from a live stream, on the spec page while it trains") {
     const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
     const char* producer_exe = std::getenv("CALIPER_TEST_PRODUCER_EXE");
@@ -464,19 +632,22 @@ TEST_CASE("app live: attention entropy per layer, from a live stream, on the spe
         std::ofstream(fs::path(shots) / "live-entropy-b.png", std::ios::binary) << b.png;
     }
 
-    // Detached: launching another applet takes the stream, as Home does.
-    // Opened again, the spec's live panels are offline and the app runs on.
+    // Launching another applet keeps the stream attached: only Detach on the
+    // live page ends it. The catalog keeps the live sources, which keep
+    // arriving, and the spec opened again draws live data.
     CHECK(ok(port, token, "app.launch", {{"id", "dev.caliper.hello"}})["status"] == "ACTIVE");
-    const auto gone_until = std::chrono::steady_clock::now() + 10s;
-    while (!live_entries(port, token).empty() && std::chrono::steady_clock::now() < gone_until)
-        std::this_thread::sleep_for(100ms);
-    CHECK(live_entries(port, token).empty());
+    CHECK(eventually(app, [&] {
+        const auto e = live_entries(port, token);
+        return e.count("live:attn.entropy") && e.at("live:attn.entropy").value("updated_at", std::string()) != updated_b;
+    }));
+    CHECK(app.text.find("[live] detached") == std::string::npos);
     CHECK(ok(port, token, "applet.open", {{"id", "attention-entropy"}})["title"] == "Attention entropy");
-    const Image offline = decode(ok(port, token, "panel.render", {{"id", "heads"}, {"width", 480}, {"height", 320}}));
-    CHECK(offline.px != heads_b.px);
+    const Image again = decode(ok(port, token, "panel.render", {{"id", "heads"}, {"width", 480}, {"height", 320}}));
+    CHECK(again.colours() > 16);
     const Image page = decode(ok(port, token, "capture.frame"));
     CHECK(page.colours() > 1);
 
+    // Quitting while attached detaches on the way out.
     ::kill(app.pid, SIGTERM);
     CHECK_MESSAGE(app.wait(30000) == 0, app.text);
     CHECK(app.text.find("[live] detached") != std::string::npos);

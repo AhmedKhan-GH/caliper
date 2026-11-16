@@ -315,8 +315,9 @@ public:
             // An attached session: claim and apply the newest completed
             // snapshot of every view before the frame draws them (the live
             // core's order: poll, then frame). Never waits on the script. The
-            // spec page keeps polling an attachment, for its live sources.
-            if (page_ == AppPage::Live || (page_ == AppPage::Spec && live_.attached())) live_.poll();
+            // attachment lasts across every page until Detach, so it is
+            // polled on every page, for the catalog's live sources.
+            if (live_.attached()) live_.poll();
             if (autoattach_pid_ > 0 && page_ == AppPage::Landing) autoattach();
             note_live_events();
             note_control_lines();
@@ -368,6 +369,16 @@ public:
                 ctx.attach = [this](const std::string& s) { attach_session(s); };
                 ctx.after_bars = [this] { jobs_tray_.draw(); };
                 ctx.attach_url = [this](const std::string& u) { attach_stream(u); };
+                // The attached session, which the command bar shows with F5
+                // Live page, the way back to it.
+                LandingScreen::LiveSession live_row;
+                if (live_.attached()) {
+                    live_row.session = live_.status().session;
+                    live_row.script = live_script_;
+                    live_row.ended = !live_.status().alive && !live_.status().pending;
+                    ctx.live = &live_row;
+                    ctx.show_live = [this] { show_live_page(); };
+                }
                 ctx.spec_facts = [](const caliper_host::AppletEntry& e, SpecAppletFacts* f) {
                     return caliper_host::SpecPage::facts(e.spec_path, f);
                 };
@@ -478,12 +489,17 @@ public:
                 },
                 [this](uint64_t t, int status, const std::string& why) { capture_error(t, status, why); });
 
-            // Deferred detach (esc Home on the live page), for the same reason
-            // as the applet teardown below: the views' textures and imports are
-            // released only after the frame that drew them has been rendered.
+            // Deferred Home and Detach (⌘D) of the live page, for the same
+            // reason as the applet teardown below: the views' textures and
+            // imports are released only after the frame that drew them has
+            // been rendered.
+            if (pending_live_home_) {
+                pending_live_home_ = false;
+                leave_live_page();
+            }
             if (pending_detach_) {
                 pending_detach_ = false;
-                leave_live_page();
+                detach_live();
             }
             // The spec page's textures go after the frame that drew them too.
             if (pending_spec_home_) {
@@ -661,8 +677,10 @@ public:
         loader_.close_all();
         caliper_host::set_dock_hint_sink(nullptr, nullptr);
         // An attached session's views go while the bridge still has the
-        // renderer; the loop ended after rendering the last frame that drew them.
+        // renderer; the loop ended after rendering the last frame that drew
+        // them. Quitting while attached, on any page, is a detach.
         live_.detach();
+        note_live_events();   // "detached"
         // Applets are torn down first (they may release bridge textures while the
         // renderer is still live); THEN drop the renderer from the bridge before
         // renderer teardown, so no bridge thunk touches a destroyed renderer.
@@ -698,19 +716,42 @@ private:
         landing_.log("home", left);
     }
 
-    // The live page's detach, after the frame that drew its views.
+    // Home from the live page, after the frame that drew its views. The
+    // session stays attached, its views polled for the catalog's live
+    // sources, until the person detaches it (⌘D Detach on the live page) or
+    // attaches another; F5 Live page on the landing comes back to it.
     void leave_live_page() {
-        live_.detach();
-        note_live_events();   // "detached"
         page_ = AppPage::Landing;
         glfwSetWindowTitle(window_, "Caliper");
+        landing_.log("home", live_script_);
+    }
+
+    // F5 Live page on the landing (or Enter on the attached session's row of
+    // F4): the live page of the attached session, which never detached.
+    void show_live_page() {
+        if (!live_.attached() || page_ != AppPage::Landing) return;
+        live_frame_t_ = 0.0;
+        page_ = AppPage::Live;
+        set_live_title();
+    }
+
+    // ⌘D Detach on the live page, after the frame that drew its views: the
+    // only way the person ends an attachment, apart from attaching another
+    // session. The live page goes Home; the spec's live sources go offline.
+    void detach_live() {
+        live_.detach();
+        note_live_events();   // "detached"
+        if (page_ == AppPage::Live) {
+            page_ = AppPage::Landing;
+            glfwSetWindowTitle(window_, "Caliper");
+        }
     }
 
     // The spec page, for an applet.open that succeeded: an applet's page goes
     // first, as Home takes it, between two frames. An attached live session
-    // stays attached, so that the spec's live sources keep their data; Home
-    // from the spec page detaches it. Opening another spec applet while the
-    // page shows only changes what it shows.
+    // stays attached on every page, so that the spec's live sources keep
+    // their data. Opening another spec applet while the page shows only
+    // changes what it shows.
     void open_spec_page() {
         if (page_ == AppPage::Applet) leave_applet_page(active_applet_);
         spec_page_.enter(session_);   // reads the open spec
@@ -727,15 +768,10 @@ private:
         mark_spec_entry(shown);
     }
 
-    // Home from the spec page, after the frame that drew it. A live session
-    // kept attached for the spec goes too, as Home from the live page takes
-    // it; the spec page draws none of its views, so it can go at once.
+    // Home from the spec page, after the frame that drew it. An attached
+    // live session stays attached.
     void leave_spec_page() {
         const std::string left = spec_page_.title();
-        if (live_.attached()) {
-            live_.detach();
-            note_live_events();   // "detached"
-        }
         spec_page_.leave();
         mark_spec_entry(-1);
         page_ = AppPage::Landing;
@@ -939,7 +975,8 @@ private:
 
     // POST /v0/applets/{id}/launch and the session's app.launch: opens that
     // applet's page as a click on its row does. The page shown goes first, as
-    // Home takes it: an applet is torn down, a live session detached.
+    // Home takes it: an applet is torn down; an attached live session stays
+    // attached.
     void api_launch(const caliper_api::Call& c) {
         const caliper_host::LaunchOutcome o = launch_by_id(c.applet_id);
         if (o.status == 200) api_.reply(c.ticket, 200, o.body);
@@ -1070,11 +1107,26 @@ private:
 
     // ---- Live page (F4 Attach to process) ---------------------------------
 
+    // An attach while a session is attached: the attached one again shows
+    // its live page; another replaces it, the attached one detached first
+    // (one attachment at a time). True when the attach should go on.
+    bool make_room_for(const std::string& session) {
+        if (!live_.attached()) return true;
+        if (!session.empty() && session == live_.status().session) {
+            show_live_page();
+            return false;
+        }
+        live_.detach();
+        note_live_events();   // "detached"
+        return true;
+    }
+
     // The landing's Attach (and CALIPER_AUTOATTACH): attach through a hosted
     // core over this window's renderer and open the live page. A refusal (the
     // session went, another viewer holds it, no Metal device) stays on the
     // landing and says why in Activity.
     void attach_session(const std::string& token) {
+        if (!make_room_for(token)) return;
         const int i = sessions_.find(token);
         const caliper_live::SessionEntry* e = i >= 0 ? &sessions_.sessions()[(size_t)i] : nullptr;
         std::string script = e && !e->script.empty() ? e->script : token;
@@ -1099,6 +1151,18 @@ private:
     // The link holds the session token, so only the part before '?' is shown.
     void attach_stream(const std::string& link) {
         const std::string shown = link.substr(0, link.find('?'));
+        // A listed stream's row is matched by its session id; a pasted link
+        // to the attached stream itself shows its page too.
+        const int i = [&] {
+            for (size_t k = 0; k < sessions_.sessions().size(); ++k)
+                if (sessions_.sessions()[k].stream_url == link) return (int)k;
+            return -1;
+        }();
+        if (live_.attached() && link == live_url_) {
+            show_live_page();
+            return;
+        }
+        if (!make_room_for(i >= 0 ? sessions_.sessions()[(size_t)i].session : std::string())) return;
         std::string err;
         if (!live_.attach_url(renderer_.get(), link, &err)) {
             landing_.log("attach failed", shown, err);
@@ -1108,6 +1172,7 @@ private:
         const auto& st = live_.status();
         live_script_ = !st.script.empty() ? st.script : !st.session.empty() ? st.session : shown;
         live_pid_ = st.pid;
+        live_url_ = link;
         live_frame_t_ = 0.0;
         page_ = AppPage::Live;
         set_live_title();
@@ -1164,7 +1229,7 @@ private:
     // The attachment's transitions as Activity rows (and one stderr line
     // each, like [autoattach], for headless runs): attached; session ended
     // (the script exited or died, and the page keeps its last frames);
-    // detached (esc Home).
+    // detached (⌘D Detach, another session attached, or quitting).
     void note_live_events() {
         using Event = caliper_live::Attachment::Event;
         for (const Event ev : live_.take_events()) {
@@ -1178,11 +1243,12 @@ private:
                 case Event::Ended:
                     what = "session ended";
                     landing_.log(what, live_script_, pid + " exited; last frames kept");
-                    set_live_title();
+                    if (page_ == AppPage::Live) set_live_title();
                     break;
                 case Event::Detached:
                     what = "detached";
                     landing_.log(what, live_script_, pid);
+                    live_url_.clear();
                     break;
             }
             std::cerr << "[live] " << what << ": " << live_script_ << " (" << pid << ")"
@@ -1212,10 +1278,13 @@ private:
     // The live page: the session's views as windows on a docked desktop like
     // the applet page's (they tile into the work area on first appearance and
     // can be moved, resized or docked; the layout persists in imgui.ini), under
-    // the same page bar and status bar. esc Home detaches after the frame.
+    // the same page bar and status bar. esc Home goes to the landing with the
+    // session still attached; ⌘D Detach ends the attachment. Both act after
+    // the frame.
     void draw_live_page() {
         const auto& st = live_.status();
         bool go_back = esc_home_pressed();
+        bool detach = ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_D) && !agent_settings_open();
         // Dev hook: CALIPER_HOME_AFTER=<sec>, as on the applet page: Home once,
         // N sec after the live page opened (a headless detach).
         if (const char* ha = std::getenv("CALIPER_HOME_AFTER")) {
@@ -1224,12 +1293,18 @@ private:
             if (glfwGetTime() - page_t0 >= std::atof(ha)) go_back = true;
         }
 
-        // Page bar: esc Home, the script, then its state. The live diamond is
-        // filled and breathes while the script runs and is outlined once it
-        // has gone (SPEC §6.5); SESSION ENDED is in capitals, in parchment, as
-        // the jobs tray writes FAILED (bronze stays for focus and selection).
+        // Page bar: esc Home, ⌘D Detach, the script, then its state. The live
+        // diamond is filled and breathes while the script runs and is
+        // outlined once it has gone (SPEC §6.5); SESSION ENDED is in capitals,
+        // in parchment, as the jobs tray writes FAILED (bronze stays for focus
+        // and selection).
         if (caliper_host::begin_page_bar()) {
             if (sternbild::key_button("esc", "Home")) go_back = true;
+#ifdef __APPLE__
+            if (sternbild::key_button("\xe2\x8c\x98" "D", "Detach")) detach = true;   // ⌘D
+#else
+            if (sternbild::key_button("Ctrl D", "Detach")) detach = true;
+#endif
             ImGui::Separator();
             ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
             ImGui::TextUnformatted(live_script_.c_str());
@@ -1340,7 +1415,8 @@ private:
         live_.draw(area.Min.x, area.Min.y, views_w, area.GetHeight(),
                    ImGui::GetIO().DisplayFramebufferScale.x);
 
-        if (go_back) pending_detach_ = true;
+        if (detach) pending_detach_ = true;
+        else if (go_back) pending_live_home_ = true;
     }
 
     // A failed job (JobView::failed) is kept by the tray until the user
@@ -1448,7 +1524,9 @@ private:
     caliper_live::Attachment live_;
     std::string live_script_;
     int32_t live_pid_ = 0;
-    bool pending_detach_ = false;     // esc Home on the live page: detach after render
+    bool pending_live_home_ = false;  // esc Home on the live page: the landing after render
+    bool pending_detach_ = false;     // ⌘D Detach on the live page: detach after render
+    std::string live_url_;            // the attached stream's link (attach_stream), "" otherwise
     caliper_host::SpecPage spec_page_;  // the session's open spec (applet.open)
     caliper_host::AppProviders providers_;  // live views, feed channels and metrics as catalog sources
     caliper_host::ApprovalTray approvals_;  // the agents' requests that wait for the person

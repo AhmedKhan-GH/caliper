@@ -5,12 +5,15 @@
         [--out build/dry_run] [--size 1440x900] [--seconds 90]
 
 It does what a person does in step 1, without a window: it starts train.py,
-reads the stream link that the script prints, and starts the app hidden with
-that link on its command line (`caliper --hidden --url <link>`), which opens
-the live page on the stream as F4 and the pasted link do. It then checks, over
-Caliper API, that the catalog lists the stream's views as live sources with
-their shapes and rates, reads the live page back into
-<out>/step1-live-<W>x<H>.png, writes the catalog's live entries to
+waits for the stream link that the script prints, and starts the app hidden
+with the same app-data folder, so that the app lists the script's stream from
+the stream file that caliper.serve() writes. Through the app's input driver it
+presses F4 on the landing screen, reads the session list back into
+<out>/step1-f4-<W>x<H>.png and presses Enter on the stream, which opens its
+live page. It then checks, over Caliper API, that the catalog lists the
+stream's views as live sources with their shapes and rates, reads the live
+page back into <out>/step1-live-<W>x<H>.png, goes Home and checks that the app
+stays attached and the live sources stay, writes the catalog's live entries to
 <out>/step1-catalog.json, and stops both. It prints one line per check and
 exits with 0 when every check passed.
 
@@ -101,7 +104,9 @@ def main() -> int:
     (work / "data").mkdir()
     (work / "user-applets").mkdir()
     ready = work / "ready"
+    home = work / "home"
     shot = f"step1-live-{args.size}"
+    f4_shot = f"step1-f4-{args.size}"
     env = dict(os.environ, CALIPER_AGENT_OFFLINE="1")
     failed: list[str] = []
 
@@ -111,26 +116,31 @@ def main() -> int:
             failed.append(what)
         return ok
 
-    # 1. The training script; it prints its stream link first.
-    train = Proc([args.python, "-u", str(TRAIN), "--seconds", str(args.seconds)], env)
+    # 1. The training script; it prints its stream link first, once its stream
+    # file is in the app-data folder the app reads too.
+    train = Proc([args.python, "-u", str(TRAIN), "--seconds", str(args.seconds)],
+                 dict(env, CALIPER_DATA_DIR=str(work / "data")))
     link = train.find("http://127.0.0.1:", 60)
     if not check(link is not None, "train.py printed its stream link"):
         print("\n".join(train.lines[-20:]))
         train.stop(signal.SIGINT)
         return 1
 
-    # 2. The app, hidden, attached to the stream from its command line. The
-    # input script reads the live page back once the checks below have passed.
+    # 2. The app, hidden, on the same app-data folder. The input script presses
+    # F4 and Enter on the listed stream, reads the live page back once the
+    # checks below have passed, and goes Home.
     app_env = dict(env, CALIPER_DATA_DIR=str(work / "data"),
                    CALIPER_USER_APPLETS_DIR=str(work / "user-applets"),
                    CALIPER_WINDOW_SIZE=args.size,
-                   CALIPER_TEST_SPEC_UI=f"page live;wait-file {ready};wait 30;shot {shot};quit",
+                   CALIPER_TEST_SPEC_UI=(f"page landing;key f4;wait 20;shot {f4_shot};key enter;page live;"
+                                         f"wait-file {ready};wait 30;shot {shot};key escape;page landing;"
+                                         f"touch {home}"),
                    CALIPER_TEST_SPEC_UI_SHOTS=str(out))
-    app = Proc([args.caliper, "--hidden", "--url", link, "--api", "--api-port", "0",
+    app = Proc([args.caliper, "--hidden", "--api", "--api-port", "0",
                 "--workspace", str(work / "ws")], app_env)
     try:
         check(app.find("[api] Caliper API on ", 60) is not None, "the app started Caliper API")
-        check(app.find("[live] attached", 30) is not None, "the app attached to the stream")
+        check(app.find("[live] attached", 60) is not None, "F4 listed the stream and Enter attached the app to it")
         api = json.loads((work / "data" / "api.json").read_text())
 
         # 3. The catalog lists the stream's views as live sources, with their
@@ -154,14 +164,20 @@ def main() -> int:
               f"live:attn.entropy is (layer, head), {(live.get('live:attn.entropy') or {}).get('shape')}")
         (out / "step1-catalog.json").write_text(json.dumps(live, indent=2) + "\n")
 
-        # 4. Let it train a while, then take the capture and quit.
+        # 4. Let it train a while, take the capture and go Home: the app stays
+        # attached, so the live sources stay in the catalog.
         time.sleep(args.settle)
         ready.touch()
-        code = app.p.wait(120)
-        check(app.find("[ui] done", 5) is not None, "the input script read the live page back")
+        check(app.find("[ui] done", 120) is not None, "the input script read the live page back and went Home")
+        listed = command(api["port"], api["token"], "catalog.list", {"kind": "live"})
+        after_home = {e["id"] for e in listed.get("result", {}).get("entries", [])}
+        check(all(i in after_home for i in want), "after Home the catalog still lists the live sources")
+        check(not any(x.startswith("[live] detached") for x in app.lines), "Home did not detach the stream")
+        for name in (f4_shot, shot):
+            png = out / f"{name}.png"
+            check(png.exists() and png.stat().st_size > 10000, f"the capture {png.name} was written")
+        code = app.stop(signal.SIGTERM)
         check(code == 0, f"the app quit with 0 ({code})")
-        png = out / f"{shot}.png"
-        check(png.exists() and png.stat().st_size > 10000, f"the capture {png.name} was written")
     finally:
         app.stop(signal.SIGTERM)
         train.stop(signal.SIGINT)

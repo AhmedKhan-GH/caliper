@@ -148,8 +148,8 @@ open the app on the stream directly, with the link on the command line:
 cmake-build-release/caliper --api --url "http://127.0.0.1:53634/?token=muBx4B8W7oIxM64YErBC62JwGl0KCsN_"
 ```
 
-The live page opens. Its bar reads **esc Home**, `train.py` and a diamond with **live**, with **⌘L Chat** at the
-right. Under it, the run bar says **running at step 1** with **Pause** and **Step**, which hold the training loop at
+The live page opens. Its bar reads **esc Home**, **⌘D Detach**, `train.py` and a diamond with **live**, with
+**⌘L Chat** at the right. Under it, the run bar says **running at step 1** with **Pause** and **Step**, which hold the training loop at
 its next step and run one step at a time. Seven views fill the page:
 
 | View | What it shows |
@@ -171,12 +171,15 @@ The app's catalog now lists the stream's views as live sources, which the side c
 `live:entropy.l3`, each with its rate. A heatmap on the stream carries at most three dimensions and a dashboard's spec
 cannot reshape its data, which is why the script computes the entropy per head itself.
 
-Home detaches the app from the stream; the script keeps training, and the link works again while it runs. Step 2
-starts from the landing screen, so press **esc Home** now.
+The app stays attached to the stream until you detach it with **⌘D Detach**: **esc Home** goes to the landing screen
+with the stream still attached, and its views stay in the catalog as live sources for the steps that follow. The
+landing's command bar then shows the live diamond, `train.py` and **F5 Live page**, which brings the live page back.
+Step 2 starts from the landing screen, so press **esc Home** now.
 
-The dry run of this step starts the script, starts the app hidden with `--url` and the link, checks the catalog's
-live sources over Caliper API, writes a capture of the live page and the catalog's live entries to `build/dry_run/`
-(`--out` changes it), and prints one line per check:
+The dry run of this step starts the script and the app hidden, with one app-data folder for both, presses F4 and
+Enter on the listed stream as a person does, checks the catalog's live sources over Caliper API, goes Home and checks
+that they stay, writes captures of the session list and the live page and the catalog's live entries to
+`build/dry_run/` (`--out` changes it), and prints one line per check:
 
 ```sh
 python examples/build_a_dashboard/dry_run/step1_train_and_attach.py --python .venv/bin/python --size 1440x900
@@ -218,11 +221,12 @@ Press ⌘Z to undo it, and the panel returns to what it was.
 
 Not yet verified by a dry run.
 
-The side chat builds on the live sources, so the app must be attached to the stream again. If `train.py` has
-finished, start it again; it prints a new link. On the landing screen press F4, paste the link and press Enter, as in
-step 1.
+The side chat builds on the live sources, which are there while the app is attached to the stream, as it still is
+from step 1. If `train.py` has finished, the landing's command bar shows `train.py` with **SESSION ENDED** and the
+sources keep their last values; start the script again, and on the landing screen press F4, select the new `train.py`
+row and press Enter, which detaches the ended run and attaches the new one.
 
-On the live page, press ⌘L **Chat**. The side chat opens as the right column of the window. Choose the custom agent of
+Press **F5 Live page** on the landing screen to return to the live page, and press ⌘L **Chat**. The side chat opens as the right column of the window. Choose the custom agent of
 the setup in its agent picker, type "Plot attention entropy per layer while it trains" and press Enter. The agent
 starts, reads the catalog's live sources, and makes a dashboard over them: a new spec, its sources, its panels and
 their layout. Each edit of the open spec waits on an approval card at the bottom of the window, with its diff; choose **Approve** on each. In the

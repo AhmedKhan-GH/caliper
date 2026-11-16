@@ -233,7 +233,7 @@ Output schemas and structured content came with revision 2025-06-18, so every re
 and every tool states its output schema. A client that asks for an older revision is answered with 2025-11-25.
 
 `app.launch` does not mutate the workspace in the command layer's sense, but it tears down the open applet and
-detaches a live session, so it is not read-only in MCP's sense ("does not modify its environment") and its
+changes the page the person sees (an attached live session stays attached), so it is not read-only in MCP's sense ("does not modify its environment") and its
 `readOnlyHint` is false. A client may approve read-only tools without asking, and launching an applet should not be one
 of them.
 
@@ -540,7 +540,7 @@ declarations. `caliper-mcp` passes the schemas through unchanged; see [Open ques
 - **The four v0 tools always use their v0 endpoints**, so they work against every version of the app.
 - **The app's table wins**, and a bad command in it is left out alone, so one fault does not take every tool away.
 - **The output schema is checked before a result is returned**; a mismatch is a tool error that keeps the result.
-- **`app.launch` is not read-only**, because it changes what the person sees and detaches a live session.
+- **`app.launch` is not read-only**, because it changes what the person sees and tears down the open applet.
 - **The API file is read at every call.** It is small, and it makes a restarted app work at the next call with no
   cache to invalidate. The retry after a 401 or a refused connection covers the moment between two reads.
 - **No half-close.** The client keeps its writing side open until the answer arrives, because a server may take the end

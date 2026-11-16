@@ -953,11 +953,15 @@ if(TARGET caliper_builder_session)
             if(TARGET hello_applet)
                 add_dependencies(caliper_app_live_tests hello_applet)
             endif()
-            # One entry per case: the acceptance case, and F4 listing a stream
-            # of caliper.serve() from its stream file.
+            # One entry per case: the acceptance case, F4 listing a stream of
+            # caliper.serve() from its stream file, the attachment kept across
+            # Home and the spec page until Detach, and a second stream and a
+            # stream that ends.
             foreach(_case IN ITEMS
                     "entropy|app live: attention entropy per layer*"
-                    "f4_stream|app live: F4 lists a caliper.serve() stream*")
+                    "f4_stream|app live: F4 lists a caliper.serve() stream*"
+                    "home_keeps|app live: the stream stays attached*"
+                    "second_stream|app live: a second stream replaces the first*")
                 string(REPLACE "|" ";" _parts "${_case}")
                 list(GET _parts 0 _name)
                 list(GET _parts 1 _filter)
