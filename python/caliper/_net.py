@@ -75,6 +75,12 @@ _NOT_BUILT = (b"<!doctype html><meta charset=utf-8><title>Caliper</title>"
               b"<p>The Caliper viewer assets are not built.</p>\n")
 
 
+# The control frames waiting to be sent on one connection (as caliper._netio).
+MAX_CONTROL_FRAMES = 65536
+MAX_CONTROL_BYTES = 16 << 20
+CLOSE_OVERFLOW = 1008                # as the hub closes an overflowing send queue
+
+
 class _Fatal(Exception):
     """Close the connection with ``code`` (after an optional fatal ERROR)."""
 
@@ -258,6 +264,9 @@ class Link:
         self.id = next(_link_ids)
         self.peer = peer
         self.control: collections.deque = collections.deque()
+        self.control_bytes = 0                   # the bytes of the frames in control
+        self.overflow = False                    # past the limits below: closed with 1008
+        self.pong: int | None = None             # the PONG to send, to the latest PING only
         self.subs: dict[int, Sub] = {}
         self.attached = False
         self.follows_default = True
@@ -268,11 +277,29 @@ class Link:
 
     # -- queueing -------------------------------------------------------------
     def queue(self, msg) -> None:
-        self.control.append(_wire.encode(msg))
+        self.push(_wire.encode(msg))
+
+    def push(self, frame) -> bool:
+        """Queue an encoded control frame (from any thread). A peer that keeps
+        sending while it reads nothing fills the queue: past MAX_CONTROL_FRAMES
+        frames or MAX_CONTROL_BYTES bytes it is dropped and the connection is
+        closed with 1008, as the hub closes an overflowing send queue."""
+        if self.overflow:
+            return False
+        if len(self.control) >= MAX_CONTROL_FRAMES or self.control_bytes + len(frame) > MAX_CONTROL_BYTES:
+            self.overflow = True
+            self.control.clear()
+            self.control_bytes = 0
+            self.p.counters["overflow_closed"] += 1
+            self.wake.set()
+            return False
+        self.control.append(frame)
+        self.control_bytes += len(frame)
         self.wake.set()
+        return True
 
     def queue_views(self) -> None:
-        if _VIEWS not in self.control:
+        if _VIEWS not in self.control and not self.overflow:
             self.control.append(_VIEWS)
         self.wake.set()
 
@@ -319,7 +346,8 @@ class Link:
             return
         t = type(msg)
         if t is _wire.Ping:
-            self.queue(_wire.Pong(msg.nonce))
+            self.pong = msg.nonce                # a PING flood leaves one PONG, to the latest
+            self.wake.set()
         elif t is _wire.Pong:
             pass
         elif t is _wire.Subscribe:
@@ -422,11 +450,17 @@ class Link:
 
     # -- outgoing ---------------------------------------------------------------
     def next_frame(self, now: float):
+        if self.overflow:
+            raise _Fatal(CLOSE_OVERFLOW, "control queue full")
+        if self.pong is not None:
+            nonce, self.pong = self.pong, None
+            return _wire.encode(_wire.Pong(nonce)), None
         if self.control:
             item = self.control.popleft()
             if item is _VIEWS:
                 msg = self.p.views_msg(self) if self.attached else _wire.Views([], None)
                 return _wire.encode(msg), None
+            self.control_bytes -= len(item)
             return item, None
         wait = None
         # series before snapshots; every subscription at its own rate
@@ -949,10 +983,14 @@ class _Listener:
             if isinstance(exc, _Fatal):
                 if exc.error and exc.code != _wire.CLOSE_NORMAL:
                     try:
-                        await ws.send(_wire.encode(_wire.Error(_wire.ERR_BAD_REQUEST, exc.error, True)))
+                        await asyncio.wait_for(
+                            ws.send(_wire.encode(_wire.Error(_wire.ERR_BAD_REQUEST, exc.error, True))), 1.0)
                     except Exception:
                         pass
-                await ws.close(exc.code, exc.reason[:120])
+                try:                                 # a peer that reads nothing cannot take the close
+                    await asyncio.wait_for(ws.close(exc.code, exc.reason[:120]), 3.0)
+                except asyncio.TimeoutError:
+                    ws.transport.abort()
             elif exc is not None:
                 raise exc
         await ws.close()
@@ -981,6 +1019,8 @@ class _Listener:
             if isinstance(msg, str):
                 raise _Fatal(_wire.CLOSE_UNSUPPORTED_DATA, "binary frames only")
             link.handle(msg)
+            if link.overflow:
+                raise _Fatal(CLOSE_OVERFLOW, "control queue full")
 
     async def _writer(self, ws, link: Link) -> None:
         mono = time.monotonic
@@ -1197,7 +1237,8 @@ class NetServer:
         links = []
         for ln in list(p.links):
             links.append({"id": ln.id, "peer": ln.peer, "attached": ln.attached,
-                          "subscriptions": len(ln.subs), **dict(ln.stats)})
+                          "subscriptions": len(ln.subs), "control_frames": len(ln.control),
+                          "control_bytes": ln.control_bytes, **dict(ln.stats)})
         with self.ring.lock:
             views = {n: {"id": v.id, "kind": v.kind, "groups": len(v.groups), "seq": v.seq}
                      for n, v in self.ring.views.items()}

@@ -98,6 +98,13 @@ uint64_t now_ns() {
 
 constexpr size_t kRoom = 64 * 1024;          // send the next frame when less than this is queued
 constexpr size_t kMaxControlPerConn = 256;   // messages for Python waiting per connection
+// The control frames waiting to be sent on one connection (replies, state,
+// errors; a PONG is kept apart, at most one). A peer that keeps sending while
+// it reads nothing fills them; past either limit the connection is closed with
+// 1008, as the hub closes a connection whose send queue overflows.
+constexpr size_t kMaxControlFrames = 65536;
+constexpr size_t kMaxControlBytes = 16u << 20;
+constexpr uint16_t kCloseOverflow = 1008;
 constexpr int kMaxPollMs = 50;
 
 // One completed snapshot, owned here (copied out of the caller's memory).
@@ -194,6 +201,10 @@ struct Link {
     bool cap_selection = false;               // 3.1: the peer announced "selection"
     bool may_control = false;                 // 3.1: a CONTROL from it is accepted
     std::deque<SharedBytes> after_views;      // 3.1: frames that follow the next VIEWS
+    size_t control_bytes = 0;                 // the bytes in control and after_views
+    bool overflow = false;                    // past kMaxControlFrames/Bytes: closed with 1008
+    bool pong_pending = false;                // one PONG at most, to the latest PING
+    uint32_t pong_nonce = 0;
     std::map<uint32_t, Sub> subs;
     size_t to_python = 0;                     // its messages waiting in the control queue
     uint64_t frames_out = 0, bytes_out = 0, superseded = 0, snapshots_sent = 0, series_sent = 0;
@@ -376,9 +387,9 @@ public:
         std::lock_guard<std::mutex> g(mu_);
         auto it = links_.find(c);
         if (it == links_.end()) return false;
-        it->second.control.push_back(std::make_shared<caliper_net::Bytes>(frame.begin(), frame.end()));
+        const bool ok = push_control(it->second, std::make_shared<caliper_net::Bytes>(frame.begin(), frame.end()));
         wake_all();
-        return true;
+        return ok;
     }
 
     // 3.1: as send(), but after the VIEWS that the connection waits for, if any
@@ -388,10 +399,10 @@ public:
         auto it = links_.find(c);
         if (it == links_.end()) return false;
         Link& l = it->second;
-        auto b = std::make_shared<caliper_net::Bytes>(frame.begin(), frame.end());
-        (l.views_pending ? l.after_views : l.control).push_back(std::move(b));
+        const bool ok = push_control(l, std::make_shared<caliper_net::Bytes>(frame.begin(), frame.end()),
+                                     l.views_pending);
         wake_all();
-        return true;
+        return ok;
     }
 
     // 3.1: whether a connection still has a snapshot or series values to send
@@ -615,7 +626,8 @@ public:
 
     struct Stats {
         std::vector<std::tuple<uint64_t, bool, size_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t>> ls;
-        uint64_t published = 0, http = 0, refused = 0, values = 0;
+        std::vector<std::pair<size_t, size_t>> queued;    // per connection: control frames and bytes
+        uint64_t published = 0, http = 0, refused = 0, values = 0, overflow = 0;
         std::map<std::string, uint64_t> totals;
     };
     // Called with the GIL released; to_dict() runs with it.
@@ -623,8 +635,12 @@ public:
         Stats st;
         std::lock_guard<std::mutex> g(mu_);
         for (auto& [id, l] : links_)
+        {
             st.ls.emplace_back(id, l.attached, l.subs.size(), l.frames_out, l.bytes_out, l.superseded,
                                l.snapshots_sent, l.series_sent);
+            st.queued.emplace_back(l.control.size() + l.after_views.size(), l.control_bytes);
+        }
+        st.overflow = overflow_closed_;
         st.published = published_;
         st.http = http_requests_;
         st.refused = refused_;
@@ -638,8 +654,12 @@ public:
         const uint64_t published = st.published, http = st.http, refused = st.refused, values = st.values;
         nb::dict d;
         nb::list conns;
+        size_t k = 0;
         for (auto& t : ls) {
             nb::dict c;
+            c["control_frames"] = st.queued[k].first;
+            c["control_bytes"] = st.queued[k].second;
+            ++k;
             c["id"] = std::get<0>(t);
             c["attached"] = std::get<1>(t);
             c["subscriptions"] = std::get<2>(t);
@@ -654,6 +674,7 @@ public:
         d["published"] = published;
         d["http_requests"] = http;
         d["refused"] = refused;
+        d["overflow_closed"] = st.overflow;
         d["series_values"] = values;
         nb::dict s;
         for (auto& [v, n] : totals) s[nb::str(v.c_str())] = n;
@@ -770,7 +791,29 @@ private:
         push_ctl(on ? "attached" : "detached", l.id);
     }
 
-    void queue(Link& l, const wire::Message& m) { l.control.push_back(encode(m)); }
+    void queue(Link& l, const wire::Message& m) {
+        if (SharedBytes b = encode(m)) push_control(l, std::move(b));
+    }
+
+    // Queue a control frame (under mu_). Past kMaxControlFrames or
+    // kMaxControlBytes the queue is dropped and the connection marked, and the
+    // thread that owns its socket closes it with 1008 at its next pump.
+    bool push_control(Link& l, SharedBytes b, bool after_views = false) {
+        if (l.overflow || l.closing) return false;
+        if (l.control.size() + l.after_views.size() >= kMaxControlFrames ||
+            l.control_bytes + b->size() > kMaxControlBytes) {
+            l.overflow = true;
+            ++overflow_closed_;
+            l.control.clear();
+            l.after_views.clear();
+            l.control_bytes = 0;
+            wake_all();
+            return false;
+        }
+        l.control_bytes += b->size();
+        (after_views ? l.after_views : l.control).push_back(std::move(b));
+        return true;
+    }
 
     // 3.1 (under mu_): the server's capabilities, and what a peer announced as
     // the JSON of its "opened" message for Python.
@@ -974,7 +1017,8 @@ private:
             return;
         }
         if (auto* p = std::get_if<wire::Ping>(&m)) {
-            queue(l, wire::Pong{p->nonce});
+            l.pong_pending = true;                // a PING flood leaves one PONG, to the latest
+            l.pong_nonce = p->nonce;
         } else if (std::holds_alternative<wire::Pong>(m) || std::holds_alternative<wire::Unknown>(m)) {
         } else if (auto* a = std::get_if<wire::Attach>(&m)) {
             l.follows_default = false;
@@ -1093,11 +1137,18 @@ private:
     // Send what the connection has room for: control frames, then series,
     // then snapshots, each subscription at its own rate.
     void pump(Link& l, bool final = false) {
+        if (l.overflow && !l.closing) {
+            xclose(l, kCloseOverflow, "control queue full");
+            return;
+        }
         if (l.closing || !xopen(l)) return;
         const uint64_t now = now_ns();
         while (final || xqueued(l) < kRoom) {
             SharedBytes f;
-            if (l.views_pending && l.control.empty()) {
+            if (l.pong_pending) {
+                f = encode(wire::Pong{l.pong_nonce});
+                l.pong_pending = false;
+            } else if (l.views_pending && l.control.empty()) {
                 wire::Views v;
                 if (l.attached) {
                     v.session = l.upstream && !up_session_.empty() ? up_session_ : ident_.id;
@@ -1109,6 +1160,7 @@ private:
             } else if (!l.control.empty()) {
                 f = l.control.front();
                 l.control.pop_front();
+                l.control_bytes -= std::min(l.control_bytes, f->size());
             } else {
                 f = next_data(l, now, final);
             }
@@ -1338,6 +1390,7 @@ private:
     bool allow_control_ = false;              // 3.1: viewers may control
     std::vector<float> scratch_;
     uint64_t published_ = 0, http_requests_ = 0, refused_ = 0, series_values_ = 0;
+    uint64_t overflow_closed_ = 0;            // connections closed for a full control queue
 
     std::mutex cmu_;                          // the queue to Python
     std::condition_variable ccv_;
@@ -1350,6 +1403,8 @@ private:
 NB_MODULE(_netio, m) {
     m.doc() = "The native sender of caliper.serve() (wire protocol v3); internal.";
     m.attr("MAX_CONTROL_PER_CONNECTION") = kMaxControlPerConn;
+    m.attr("MAX_CONTROL_FRAMES") = kMaxControlFrames;
+    m.attr("MAX_CONTROL_BYTES") = kMaxControlBytes;
     using R = nb::call_guard<nb::gil_scoped_release>;
     nb::class_<NetIO>(m, "Server")
         .def(nb::init<int, std::string, std::string, std::string,

@@ -233,8 +233,7 @@ class ControlsPort:
         if self.native:
             self.server.nio.send(link.conn, frame)
         else:
-            link.control.append(frame)
-            link.wake.set()
+            link.push(frame)
 
     def _kick(self) -> None:
         """Make the server's thread flush soon (from any thread)."""

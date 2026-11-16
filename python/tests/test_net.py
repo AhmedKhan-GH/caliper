@@ -1403,3 +1403,55 @@ def test_view_subscribed_while_a_series_ticks_alone(server, device):
             return server.ring.views["h"].seq - n0
     served = run(go())
     assert served >= 10, served
+
+
+# ---------------------------------------------------------------------------
+# a viewer that sends and never reads
+# ---------------------------------------------------------------------------
+def test_control_queue_is_bounded_for_a_peer_that_never_reads(server):
+    """A viewer floods requests that each get a reply (ATTACH to an unknown
+    session) and PINGs, and reads nothing. The server's control queue for it
+    stays within its limits and the connection is closed with 1008 once they
+    are reached; training calls keep returning throughout."""
+    limit = _net.MAX_CONTROL_FRAMES
+    W = torch.randn(64, 64)
+    attach = w.encode(w.Attach("no-such-session"))
+    ping = w.encode(w.Ping(7))
+
+    def conns():
+        return {c["id"]: c for c in server.stats()["connections"]}
+
+    async def go():
+        ws = await connect(server.stream_url, max_size=None, compression=None, ping_interval=None,
+                           close_timeout=1, max_queue=1)
+        await ws.send(w.encode(w.Hello("viewer", software={"name": "flood", "version": "0"})))
+        peak, closed = 0, False
+        for i in range(4 * limit):
+            caliper.show(W, name="w")                 # the training loop goes on
+            try:
+                await ws.send(ping if i % 100 == 0 else attach)
+            except ConnectionClosed:
+                closed = True
+                break
+            if i % 500 == 0:
+                await asyncio.sleep(0)                # let the server's own loop run (Python sender)
+                cs = conns()
+                peak = max([peak] + [c.get("control_frames", 0) for c in cs.values()])
+                if server.stats()["producer"].get("overflow_closed", 0):
+                    closed = True
+                    break
+        deadline = time.monotonic() + 20
+        while not server.stats()["producer"].get("overflow_closed", 0) and time.monotonic() < deadline:
+            caliper.show(W, name="w")
+            await asyncio.sleep(0.01)
+        n = server.stats()["producer"].get("overflow_closed", 0)
+        # the connection goes away on the server's side
+        while conns() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        left = len(conns())
+        ws.transport.abort()
+        return closed, peak, n, left
+    closed, peak, n, left = run(go(), timeout=60)
+    assert n == 1 and left == 0
+    assert peak <= limit
+    assert caliper.show(W, name="w") is False         # still returns at once, nothing attached

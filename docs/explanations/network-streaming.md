@@ -184,7 +184,10 @@ that rate.
 
 SUBSCRIBE, UNSUBSCRIBE, VIEW_REQUEST and EVENT go to Python, because the data
 view engine and the event handlers live there. They are rare, and the native
-sender queues at most 256 of them per connection.
+sender queues at most 256 of them per connection. In the other direction, a
+connection's replies and other control messages wait in a queue of at most
+65,536 messages and 16 MiB on both senders; a viewer that keeps sending requests
+while it reads nothing fills it, and its connection is then closed with 1008.
 
 When the native sender is not built, `caliper.serve()` uses a sender written in
 Python, which encodes and sends on an asyncio thread that holds the GIL, and it

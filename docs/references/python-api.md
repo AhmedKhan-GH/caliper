@@ -370,6 +370,12 @@ subscriptions, data view requests and viewer events, and never host commands.
 The server keeps the last 1,048,576 values of each series whether or not a
 viewer watches it, and sends them first to a viewer that subscribes late.
 
+Each connection's replies and other control messages wait in a queue of at most
+65,536 messages and 16 MiB, and a flood of PINGs leaves one PONG waiting, to the
+latest. Only a viewer that keeps sending requests while it reads nothing can
+fill the queue; this server then closes its connection with code 1008, as the
+hub does with a send queue that overflows. The training loop is not affected.
+
 | Member | Meaning |
 |---|---|
 | `url` | The viewer page's link, with the token |
