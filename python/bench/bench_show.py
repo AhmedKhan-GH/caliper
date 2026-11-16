@@ -27,6 +27,15 @@ thread (every drawn snapshot) and from caliper.live_view_info() sampled at 10 Hz
 attach mode from the viewer's own samples (caliper-viewer --latency-log, same
 CLOCK_UPTIME_RAW clock). Memory: torch.mps.current_allocated_memory and RSS deltas
 over each caliper row.
+
+No window opens unless --visible is given: window mode renders on the in-process
+offscreen canvas (caliper.window(offscreen=True), the same render thread) and
+attach mode starts the viewer with --headless. Each caliper row also reports the
+frame time p50 and p99, the GPU time of an update (p50 and p99) and the copies per
+frame of the drawing process (docs/explanations/rendering.md, "Copy counters and
+frame statistics"): window mode from the core's frame_stats() with
+CALIPER_METAL_STATS set, attach mode from the viewer's --stats windows inside the
+row.
 """
 from __future__ import annotations
 
@@ -38,10 +47,13 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from bench_live import parse_stats_lines, window_stats   # the viewer's --stats windows
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results")
@@ -197,7 +209,13 @@ def main() -> int:
     ap.add_argument("--activate", action="store_true",
                     help="window mode: bring the window to the front (default: behind the terminal)")
     ap.add_argument("--tag", default="", help="suffix of the result file name")
+    ap.add_argument("--visible", action="store_true",
+                    help="a visible window (window mode) or a windowed viewer (attach mode); "
+                         "default: the offscreen canvas or a headless viewer")
+    ap.add_argument("--note", default="", help="added to the header line (machine, build)")
     args = ap.parse_args()
+    if args.mode == "window" and not args.visible:
+        os.environ["CALIPER_METAL_STATS"] = "1"   # the core's frame statistics (read when it is made)
     if args.device == "mps" and not torch.backends.mps.is_available():
         print("no MPS device", file=sys.stderr)
         return 2
@@ -209,19 +227,23 @@ def main() -> int:
         f"({time.strftime('%Y-%m-%d %H:%M:%S')})")
     out(f"torch {torch.__version__}, W {S}x{S} f32 ({S * S * 4 / 2**20:.1f} MB), show(W) every step, "
         f"autoscaled, {secs:g} s per row after {warm:g} s warm-up, load average "
-        f"{' '.join(f'{x:.1f}' for x in os.getloadavg())} (18 cores)")
+        f"{' '.join(f'{x:.1f}' for x in os.getloadavg())} ({os.cpu_count()} cores); "
+        f"{'visible' if args.visible else ('offscreen canvas' if args.mode == 'window' else 'headless viewer')}"
+        f"{(', ' + args.note) if args.note else ''}")
     wl = Workload(dev, S)
     rows = []
 
     win = sess = None
     lat_log = None
     if args.mode == "window":
-        win = caliper.window(900, 600, title="bench_show", activate=args.activate)
-        win.core.set_window_pos(40, 40)
+        win = caliper.window(900, 600, title="bench_show", activate=args.activate,
+                             offscreen=not args.visible)
+        if args.visible:
+            win.core.set_window_pos(40, 40)
     else:
         sess = caliper.session()
         lat_log = tempfile.mktemp(prefix="caliper-bench-lat-", suffix=".txt")
-        sess.launch_viewer(args=("--stats", "--latency-log", lat_log),
+        sess.launch_viewer(args=(() if args.visible else ("--headless",)) + ("--stats", "--latency-log", lat_log),
                            log=lat_log + ".stderr")
         if not sess.wait_attached(15.0):
             out("the viewer did not attach")
@@ -256,6 +278,7 @@ def main() -> int:
         c0 = dict(ring().counters)
         if win is not None:
             win.core.render_stats(True)
+            win.core.frame_stats(True)
         m0, r0 = mps_mem(), rss_mb()
         t_ns0 = time.monotonic_ns()
         info_lat = []
@@ -288,7 +311,18 @@ def main() -> int:
                          info_lat_n=len(info_lat), max_frame_gap_ms=round(st["max_frame_gap_ms"], 1))
             i = caliper.view_info("W")
             extra.update(path=i["path"], imported=i["imported"], creates=i["creates"],
-                         visible_frac=visible_fraction(win.core.occlusion_log(), t_ns0, t_ns1))
+                         visible_frac=visible_fraction(win.core.occlusion_log(), t_ns0, t_ns1)
+                         if args.visible else None)
+            fs = win.core.frame_stats(True)
+            fr = fs["window_frames"]
+            extra.update(frame_ms_p50=round(fs.get("frame_ms_p50", float("nan")), 3),
+                         frame_ms_p99=round(fs.get("frame_ms_p99", float("nan")), 3),
+                         gpu_update_ms_p50=round(fs.get("gpu_update_ms_p50", float("nan")), 4),
+                         gpu_update_ms_p99=round(fs.get("gpu_update_ms_p99", float("nan")), 4),
+                         gpu_frame_ms_p50=round(fs.get("gpu_frame_ms_p50", float("nan")), 4),
+                         copies_per_frame=round(fs["copies"] / fr, 3) if fr else None,
+                         copy_bytes_per_frame=round(fs["copy_bytes"] / fr, 1) if fr else None,
+                         view_copies=i["copies"])
         row(name, s, e, t, extra)
 
     run_steps(wl, warm)
@@ -325,12 +359,14 @@ def main() -> int:
                 viewer_lat = [tuple(float(x) for x in ln.split()) for ln in f if ln.strip()]
         except OSError:
             pass
+        vstats = parse_stats_lines(Path(lat_log + ".stderr"))
         for r in rows:
             if "t_ns" in r:
                 lo, hi = r["t_ns"]
                 xs = [ms for t_ns, ms in viewer_lat if lo <= t_ns <= hi]
                 r.update(lat_ms_med=round(q(xs, 0.5), 2), lat_ms_p95=round(q(xs, 0.95), 2),
                          lat_n=len(xs))
+                r.update(window_stats(vstats, lo, hi, "W"))
                 out("VIEWER " + json.dumps({"row": r["row"], "lat_ms_med": r["lat_ms_med"],
                                             "lat_ms_p95": r["lat_ms_p95"], "lat_n": r["lat_n"]}))
     s, e = run_steps(wl, secs)
@@ -353,6 +389,12 @@ def main() -> int:
             f"{snap} | {r.get('skip_us_med', '-')} | {r.get('snapshots', '-')} | "
             f"{r.get('ring', {}).get('ring_full', '-')} | {lat} | {r.get('d_mps_MB', '-')} | "
             f"{r.get('d_rss_MB', '-')} |")
+    for r in rows:
+        if r.get("frame_ms_p50") is not None:
+            cpf = r.get("copies_per_frame")
+            out(f"  {r['row']}: frame ms p50 {r['frame_ms_p50']:.2f} p99 {r['frame_ms_p99']:.2f}, GPU ms "
+                f"update p50 {r.get('gpu_update_ms_p50')} p99 {r.get('gpu_update_ms_p99')}, frame p50 "
+                f"{r.get('gpu_frame_ms_p50')}, copies per frame {cpf if cpf is not None else '-'}")
     for r in rows:
         if "frames" in r:
             out(f"  {r['row']}: render {r['fps']} fps, drawn {r['drawn']}, errors {r['errors']}, "

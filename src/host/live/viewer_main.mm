@@ -67,6 +67,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <cerrno>
+#include <time.h>
 #include <unistd.h>
 
 #include <cstdio>
@@ -191,6 +192,9 @@ static void print_stats(double t) {
                       (unsigned long long)fc.window_frames);
         render += buf;
     }
+    // When the window ended, in the clock a producer stamps with
+    // (CLOCK_UPTIME_RAW), so a benchmark can keep the windows it measured.
+    render += " now_ns=" + std::to_string(clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
     caliper_host::HostRenderer::FrameStats fs;
     if (caliper_stats::frame_stats(g_core, &fs, true)) {
         char buf[640];
