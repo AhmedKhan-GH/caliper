@@ -176,9 +176,15 @@ It holds these parts:
   the pointer, which it reaches by zooming clip space. Decoding a read-back window gives the entity, the primitive and
   the item under the pointer, the world position from the depth, and for an image the pixel.
 
+The scene core asks a `Resources` object for the handles its records name: pipelines of the generated programs, bind
+groups, the buffer of its constant streams, the buffers it owns for clamped indices and gathered edges, and the
+colormap blocks. `BackendResources` provides them over a backend of the graphics layer and is built when the layer's
+core is part of the build.
+
 Its tests are `caliper_scene_tests` (`tests/scene/`). They run headless with no GPU and check the matrices, every
 camera, the fits, compiled draw lists read as data, clears and static items, the limits, and picks decoded from
-synthetic ID texels. They build and run with any preset, for example
+synthetic ID texels. Where the layer's core is part of the build, they also submit every fixture scene to the layer's
+recording backend, whose validation must accept it. They build and run with any preset, for example
 `cmake --build cmake-build-notorch --target caliper_scene_tests` and then `ctest -R caliper_scene_tests` from the build
 folder. The graphics suite's row of a one-entity scene, drawn on Metal and read back byte for byte, has its fixture
 and CPU reference in `tests/scene/scene_row_fixture.h`, and `caliper_scene_tests` checks the compiled draw against that
