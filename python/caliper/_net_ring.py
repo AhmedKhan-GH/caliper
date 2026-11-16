@@ -325,18 +325,13 @@ class NetRing:
         one of the threads that queue torch work (the training thread, or
         autograd's worker thread on MPS, where backward hooks run); never on
         one of caliper's own threads (pump, network, events), which do no
-        device work: there the tick's snapshots are dropped."""
-        t, self.tick = self.tick, None
-        if t is None:
+        device work: there the tick stays open for the next view call."""
+        t = self.tick
+        if t is None or threading.current_thread().name.startswith("caliper."):
             return
+        self.tick = None
         self.tick_next = max(t.t0 + self.tick_interval, time.perf_counter() + 1e-4)
         self.next_due = self.tick_next
-        if threading.current_thread().name.startswith("caliper."):
-            for p in t.pending:
-                p.stage.busy = False
-            for st, _ in t.chunks:
-                st.held = False
-            return
         ev = None
         if t.mps:
             torch = _torch()
