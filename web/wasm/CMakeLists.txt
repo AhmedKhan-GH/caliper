@@ -87,6 +87,7 @@ add_executable(caliper-views
     src/page_style.cpp
     src/fonts.cpp
     src/gfx_selftest.cpp
+    src/scene_selftest.cpp
 )
 # fonts.cpp embeds the native app's faces from assets/fonts (C23 #embed).
 set_source_files_properties(src/fonts.cpp PROPERTIES
@@ -110,7 +111,7 @@ target_link_options(caliper-views PRIVATE
     -sMAXIMUM_MEMORY=512MB
     -sERROR_ON_UNDEFINED_SYMBOLS=1
     "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString,$stringToNewUTF8,$stringToUTF8OnStack,$stackSave,$stackRestore,$specialHTMLTargets"
-    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_set_toggle,_caliper_views_set_link,_caliper_views_gfx_selftest,_caliper_views_colormap_keys,_caliper_views_destroy"
+    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_set_toggle,_caliper_views_set_link,_caliper_views_gfx_selftest,_caliper_views_scene_selftest,_caliper_views_colormap_keys,_caliper_views_destroy"
     "-sEXPORTED_RUNTIME_METHODS=ccall,UTF8ToString,stringToNewUTF8"
 )
 if(CALIPER_WEB_CLOSURE AND CMAKE_BUILD_TYPE STREQUAL "Release")
