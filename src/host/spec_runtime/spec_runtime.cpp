@@ -834,6 +834,10 @@ PanelData SessionPanelSource::resolve(const spec::Spec& s, std::string_view pane
 
 uint64_t SessionPanelSource::revision() const { return session_.catalog().revision(); }
 
+uint64_t SessionPanelSource::generation(const spec::Spec& s, std::string_view panel_id) {
+    return caliper_builder::panel_generation(s, panel_id, session_.data_sources());
+}
+
 // ---- one panel --------------------------------------------------------------------------
 
 float spec_panel_strip_height(const SpecLook& L, bool show_title, float panel_height) {
@@ -996,6 +1000,7 @@ void SpecRuntime::prepare(Entry& e, const PanelData& data, const spec::Spec* spe
     e.view.fit_frames = 2;
     ++e.view.version;
     e.stale = false;
+    e.generation = data.generation;
 }
 
 void SpecRuntime::set_preview(const spec::Panel& panel, const PanelData& data, const spec::Spec* spec) {
@@ -1024,8 +1029,11 @@ void SpecRuntime::update_only(const SpecLayout* shown) {
     }
     for (auto& kv : entries_) {
         Entry& e = kv.second;
-        if (!e.stale) continue;
         if (shown && !shown->find(kv.first)) continue;   // a hidden tab waits until it shows
+        // A shown panel whose served data has a new generation is resolved
+        // again; the probe reads no data.
+        if (!e.stale && source_ && source_->generation(*spec_, e.panel.id) != e.generation) e.stale = true;
+        if (!e.stale) continue;
         PanelData data;
         if (source_) {
             data = source_->resolve(*spec_, e.panel.id);

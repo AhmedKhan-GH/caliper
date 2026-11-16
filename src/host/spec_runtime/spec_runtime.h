@@ -146,6 +146,15 @@ public:
     virtual caliper_builder::PanelData resolve(const caliper_builder::spec::Spec& spec, std::string_view panel_id) = 0;
     // Grows when the data behind the panels may have changed.
     virtual uint64_t revision() const { return 0; }
+    // The generation of one panel's served data (caliper_builder::
+    // panel_generation()): a shown panel whose generation differs from the
+    // one it was resolved at is resolved again, so a live panel follows its
+    // view without the others being read. 0 for a source without served data.
+    virtual uint64_t generation(const caliper_builder::spec::Spec& spec, std::string_view panel_id) {
+        (void)spec;
+        (void)panel_id;
+        return 0;
+    }
 };
 
 // A source over a builder session: the open spec's panels through
@@ -156,6 +165,7 @@ public:
     explicit SessionPanelSource(caliper_builder::Session& session, caliper_builder::ResolveLimits limits = {});
     caliper_builder::PanelData resolve(const caliper_builder::spec::Spec& spec, std::string_view panel_id) override;
     uint64_t revision() const override;
+    uint64_t generation(const caliper_builder::spec::Spec& spec, std::string_view panel_id) override;
 
 private:
     caliper_builder::Session& session_;
@@ -237,6 +247,7 @@ private:
         caliper_builder::spec::Panel panel;   // the fragment the data was resolved for
         SpecPanelView view;
         bool stale = true;
+        uint64_t generation = 0;   // the served data's, when it was resolved
     };
     void prepare(Entry& e, const caliper_builder::PanelData& data, const caliper_builder::spec::Spec* spec = nullptr);
     void update_only(const SpecLayout* shown);

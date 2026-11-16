@@ -55,6 +55,19 @@ public:
         return inner_.resolve(spec, panel_id);
     }
 
+    // A panel's served generation (live views, feed channels, metrics), the
+    // last one read while a worker runs, so that a frame never waits on it.
+    uint64_t generation(const cb::spec::Spec& spec, std::string_view panel_id) override {
+        std::string id(panel_id);
+        if (app_.worker_busy()) {
+            const auto it = generations_.find(id);
+            return it == generations_.end() ? 0 : it->second;
+        }
+        const uint64_t g = inner_.generation(spec, panel_id);
+        generations_[std::move(id)] = g;
+        return g;
+    }
+
     // The catalog's revision, read only while no worker runs, plus one for
     // each stretch in which a panel could not be resolved because one did, so
     // that those panels are resolved once it is done. Both only grow.
@@ -76,6 +89,7 @@ private:
     mutable uint64_t catalog_ = 0;
     mutable uint64_t retries_ = 0;
     mutable bool missed_ = false;
+    std::map<std::string, uint64_t> generations_;
 };
 
 // panel.render through the runtime's offscreen renderer.
