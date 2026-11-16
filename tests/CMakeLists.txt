@@ -67,6 +67,9 @@ set_target_properties(caliper_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQU
 # The graphics layer's core on its recording backend, with no GPU (src/host/gfx).
 target_sources(caliper_tests PRIVATE test_gfx_layer.cpp)
 target_link_libraries(caliper_tests PRIVATE caliper_gfx)
+# The colormap by keys on the CPU (src/host/gfx/colormap_keys.h) on the boundary sets of
+# tests/shaders/colormap_cases.h, against the reference compiled into this binary.
+target_sources(caliper_tests PRIVATE test_colormap_keys.cpp)
 target_sources(caliper_tests PRIVATE test_loader.cpp)
 # UI recovery after an applet fault (src/host/ui/ui_recovery.h, header-only):
 # headless ImGui/ImPlot/ImPlot3D contexts handed to the throwing fixture.
