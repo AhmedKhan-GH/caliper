@@ -145,6 +145,12 @@ public:
 enum class WidgetState { idle, prompt, running, preview, applied, declined, handoff, unavailable, conflict, failed };
 const char* widget_state_name(WidgetState state);
 
+// The agent's reply as the surface draws it, plain: Markdown emphasis and code
+// marks around words (**bold**, __bold__, *em*, _em_, `code`) are taken out,
+// since the surface draws text as it is; a mark that wraps no word, such as
+// the asterisk of "2 * 3" or the underscores of snake_case, stays.
+std::string widget_plain_reply(std::string text);
+
 // The actions a state offers, in their order on the surface.
 enum class WidgetAction { accept, reject, refine, diff, ask_in_chat, cancel, retry, rephrase, model, setup, close, text };
 const char* widget_action_label(WidgetAction action);   // the noun on the surface

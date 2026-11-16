@@ -222,6 +222,21 @@ TEST_CASE("widget surface: Accept commits the preview as one undo step journaled
     CHECK(r.surface->state() == WidgetState::idle);
 }
 
+TEST_CASE("widget surface: a reply's Markdown emphasis shows as plain text") {
+    // A local model answered "Changed the heatmap colormap from magma to the
+    // diverging **rdbu** colormap." where the prompt asks for one plain sentence;
+    // the surface draws plain text, so the marks showed as they were.
+    Rig r("markdown", script_of({edit_turn({{"options", {{"y_log", false}}}},
+                                           "Set `y_log` to **false**, so the *y axis* is __linear__.")}));
+    r.ask("Use a linear y axis");
+    r.run(800);
+    REQUIRE(r.surface->state() == WidgetState::preview);
+    CHECK(r.surface->reply() == "Set y_log to false, so the y axis is linear.");
+    // Asterisks and underscores that are not emphasis stay.
+    CHECK(widget_plain_reply("2 * 3 = 6, and snake_case_names stay") == "2 * 3 = 6, and snake_case_names stay");
+    CHECK(widget_plain_reply("**bold** and `code`") == "bold and code");
+}
+
 TEST_CASE("widget surface: Reject and Escape discard the preview and leave no trace") {
     Rig r("reject", script_of({linear_turn(), linear_turn()}));
     r.ask("Use a linear y axis");
