@@ -385,3 +385,52 @@ TEST_CASE("a later or invalid version is refused with one error") {
     CHECK(has(parse("caliper_spec = \"0\"\n[applet]\nid = \"a\"\n").diagnostics, "spec.wrong_type", "caliper_spec"));
     CHECK(has(parse("[applet]\nid = \"a\"\n").diagnostics, "spec.missing_key", "caliper_spec"));
 }
+
+TEST_CASE("a spec built in code round trips through both forms") {
+    cs::Spec s;
+    s.applet.id = "built";
+    s.applet.description = std::string("ends with three quotes \"\"\" and a backslash \\");
+    s.x = json::parse(R"({"k": [1, 2.5, "s", true, {"n": {}}], "weird key": {"é": -0.0}})");
+    cs::Source src;
+    src.id = "t";
+    src.catalog = "tensor:t";
+    cs::Transform slice;
+    slice.op = cs::TransformOp::slice;
+    slice.axis = {-1};
+    slice.index = 3;
+    cs::Transform reduce;
+    reduce.op = cs::TransformOp::reduce;
+    reduce.axis = {2};
+    reduce.axis_list = true;  // written as [2]
+    reduce.fn = "var";
+    cs::Transform norm;
+    norm.op = cs::TransformOp::normalise;
+    norm.mode = "minmax";
+    src.transforms = {slice, reduce, norm};
+    s.sources.push_back(src);
+    cs::Source q;
+    q.id = "q";
+    q.sql = "SELECT \"step\", 'v'\nFROM m\n";
+    s.sources.push_back(q);
+    cs::Panel p;
+    p.id = "p";
+    p.primitive = cs::Primitive::series;
+    p.bind["y"] = cs::SlotValue{{"t"}, false};
+    p.options.x_range = std::array<double, 2>{-1e300, 2.5e-7};
+    p.options.x_log = true;
+    p.x = json::parse(R"({"a.b": 1})");
+    s.panels.push_back(p);
+    s.layout = cs::LayoutNode::of_panel("p");
+
+    const std::string toml = cs::to_toml(s);
+    CHECK(toml.rfind("caliper_spec = 0\nlayout = \"p\"\nx = ", 0) == 0);
+    CHECK(toml.find("axis = [2]") != std::string::npos);
+    auto back = parse(toml);
+    REQUIRE_MESSAGE(back.ok(), (dump(back.diagnostics) + toml));
+    CHECK(back.spec == s);
+    CHECK(cs::to_toml(back.spec) == toml);
+    auto from_json = cs::from_json(cs::to_json(s));
+    REQUIRE(from_json.ok());
+    CHECK(from_json.spec == s);
+    CHECK(cs::validate(s).ok());
+}

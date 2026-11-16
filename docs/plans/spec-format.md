@@ -12,54 +12,18 @@ This branch builds the format and its library, and nothing that draws a spec:
 
 These are planned and not built here: the spec runtime that draws a spec in the app, the loader's knowledge of the `kind = "spec"` manifest, the command handlers that edit a spec (`spec.*`, `source.*`, `panel.*`, `layout.*`), and the runtime in the web viewer that reads the canonical JSON. The library is not wired into the app until sprint 2 merges.
 
-## An example
+## Two examples
 
-The example of the contracts, which is also a test fixture:
+The example of the contracts, embedded from its test fixture:
 
 ```toml
-caliper_spec = 0                       # the format version
+--8<-- "src/builder/spec/tests/fixtures/attention-entropy.spec.toml"
+```
 
-[applet]
-id = "attention-entropy"
-title = "Attention entropy"
-description = "Entropy of each attention head while the model trains."
+A dashboard of three panels over one table source and one tensor source, also a test fixture:
 
-[[source]]
-id = "attn"
-catalog = "live:attn.weights"          # a catalog source, shape [layers, heads, tokens, tokens]
-
-[[source]]
-id = "entropy"
-from = "attn"                          # derived from another source of this spec
-  [[source.transform]]
-  op = "reduce"
-  axis = 3
-  fn = "entropy"
-  [[source.transform]]
-  op = "reduce"
-  axis = 2
-  fn = "mean"                          # now [layers, heads]
-
-[[source]]
-id = "loss"
-sql = "SELECT step, loss FROM run42_metrics ORDER BY step"   # DuckDB SQL over catalog tables
-
-[[panel]]
-id = "heat"
-primitive = "heatmap"
-title = "Entropy per layer and head"
-bind = { values = "entropy" }
-options = { colormap = "viridis", x_label = "Head", y_label = "Layer" }
-
-[[panel]]
-id = "loss"
-primitive = "series"
-bind = { x = "loss.step", y = ["loss.loss"] }
-
-[layout]
-split = "horizontal"
-ratio = 0.6
-children = ["heat", "loss"]            # a panel id, or a nested table with split and children, or { tabs = [...] }
+```toml
+--8<-- "src/builder/spec/tests/fixtures/dashboard.spec.toml"
 ```
 
 ## The document
@@ -100,7 +64,7 @@ A source is data that panels bind to. It has an id and exactly one of three form
 |---|---|---|---|---|
 | `id` | id | Yes | | The source's id, which bindings name. |
 | `catalog` | catalog id | One of three | | A catalog source, named by its id `<kind>:<name>`. |
-| `sql` | long text, at most 65,536 characters | One of three | | One read-only `SELECT` over catalog tables, which it names by table name. |
+| `sql` | long text, at most 65,536 characters, not empty | One of three | | One read-only `SELECT` over catalog tables, which it names by table name. |
 | `from` | id | One of three | | Another source of this spec, which this one derives from. |
 | `transform` | array of transform tables | No | none | Tensor transforms, applied in order, in [Tensor transforms](#tensor-transforms). |
 | `x` | table | No | none | Extensions. |
@@ -141,7 +105,7 @@ Each transform changes the dtype and the shape as the contracts say:
 | `reduce` | each reduced axis is removed, or kept with size 1 with `keepdims` | `f32`; `f64` for `f64` input; `i64` for `argmax` and `argmin` |
 | `normalise` | unchanged | `f32`; `f64` for `f64` input |
 
-When the shape of the input is known, through the [source resolver](#the-source-resolver), the validator checks each step: an axis out of range for the rank, an `index` out of range for the axis's size, the same axis twice in a `reduce` and a list of axes for `argmax` are `spec.bad_transform`. When the shape is not known, these checks wait until it is.
+A `reduce` that lists the same axis twice, `argmax` or `argmin` over several axes, and a slice with both `index` and a range are `spec.bad_transform` in any case. When the shape of the input is known, through the [source resolver](#the-source-resolver), the validator also checks each step against it: an axis out of range for the rank, an `index` out of range for the axis's size, and two axes that name the same dimension, such as 1 and −3 of a rank-4 tensor, are `spec.bad_transform`. When the shape is not known, these checks wait until it is.
 
 ### Panels
 
@@ -171,11 +135,11 @@ column    = one or more characters, at most 255, no control characters
 - `"<source>"` names a whole source: a tensor, or a whole table.
 - `"<source>.<column>"` names one column of a tabular source. The source id ends at the first `.`, and everything after it is the column's name, which may itself contain `.` or spaces, as DuckDB column names can.
 
-A binding whose source is not a source of the spec is `spec.unknown_source`. A binding that does not match the grammar, or that names a column of a tensor source, is `spec.bad_binding`. A column that the source does not have, when its columns are known, is `spec.unknown_column`. Every slot takes one binding, except `series.y`, which takes one binding or a list of 1 to 16; a list in any other slot is `spec.wrong_type`, and an empty list is `spec.missing_slot`.
+A binding has at most 320 characters (`spec.string_too_long`). A binding whose source is not a source of the spec is `spec.unknown_source`. A binding that does not match the grammar, or that names a column of a tensor source, is `spec.bad_binding`. A column that the source does not have, when its columns are known, is `spec.unknown_column`. Every slot takes one binding, except `series.y`, which takes one binding or a list of 1 to 16; a list in any other slot is `spec.wrong_type`, and an empty list is `spec.missing_slot`.
 
 ### The primitives
 
-The primitives are the live view types of Caliper LIB plus a table and text, so each has a wire form. In the rules below, a **column** is a binding `"<source>.<column>"` of a tabular source, a **vector** is a column or a rank-1 tensor, and a **numeric column** is a column whose DuckDB type is a number or a boolean. Each rule is checked only when the shapes or columns it needs are known; a slot that breaks one is `spec.slot_mismatch`.
+The primitives are the live view types of Caliper LIB plus a table and text, so each has a wire form. In the rules below, a **column** is a binding `"<source>.<column>"` of a tabular source, a **vector** is a column or a rank-1 tensor, and a **numeric column** is a column whose DuckDB type is a number or a boolean. A column of a text, binary, nested or time type does not fit a numeric slot, and a type name the validator does not recognise is let through. Each rule is checked only when the shapes or columns it needs are known; a slot that breaks one is `spec.slot_mismatch`.
 
 #### series
 
@@ -295,7 +259,7 @@ The layout is a tree of nodes. A node is one of three things:
 | | `title` | text, at most 256 characters, not empty | No | | The tab label, when these tabs are themselves a child of tabs. |
 | | `x` | table | No | none | Extensions. |
 
-The root is the `layout` key, so it is usually a `[layout]` table, but `layout = "<panel>"` is also a valid root. A table with both `split` and `tabs`, or neither, a split with fewer than two children, tabs with none and a `ratio` on a split of more than two children are `spec.bad_layout`. A panel id that is not a panel of the spec is `spec.unknown_panel`, and a panel placed twice is `spec.duplicate_placement`. A panel that the layout does not place is not drawn, and the validator warns with `spec.unplaced_panel`. The tree is at most 8 nodes deep (`spec.too_deep`) and has at most 256 nodes (`spec.too_many`).
+The root is the `layout` key, so it is usually a `[layout]` table, but `layout = "<panel>"` is also a valid root. A table with both `split` and `tabs`, or neither, a split with fewer than two children, tabs with none and a `ratio` on a split of more than two children are `spec.bad_layout`. A panel id that is not a panel of the spec is `spec.unknown_panel`, and a panel placed twice is `spec.duplicate_placement`. A panel that the layout does not place is not drawn, and the validator warns with `spec.unplaced_panel`. A path from the root to a panel passes through at most 8 nodes, the root and the panel included (`spec.too_deep`), and the tree has at most 256 nodes (`spec.too_many`).
 
 A spec with no `layout` places its panels in declaration order: one panel fills the applet, and several are stacked as one vertical split with equal shares.
 
@@ -330,7 +294,7 @@ The canonical TOML writer:
 - writes the keys of each table in a fixed order: `id`, `title`, `description`, `x` in `[applet]`; `id`, `catalog`, `sql`, `from`, `x` in a source; `op`, `axis`, `index`, `start`, `stop`, `step`, `fn`, `keepdims`, `mode`, `x` in a transform; `id`, `primitive`, `title`, `bind`, `options`, `x` in a panel; and `split` or `tabs`, `ratio`, `title`, `children`, `x` in a layout node;
 - writes `bind`, `options`, `x` and nested layout nodes as inline tables on one line, with the keys of `bind`, `options` and `x` in byte order;
 - writes a key only when the `Spec` value holds it, so an explicit default such as `keepdims = false` stays as written;
-- writes strings as basic strings with escapes, or as multi-line basic strings when they hold a line feed; integers in decimal; and floating-point numbers in a form that reads back to the same value, with `.0` when the value is whole, so a range written `[0, 255]` is written back as `[0.0, 255.0]`;
+- writes strings as basic strings with escapes, or as multi-line basic strings when they hold a line feed; integers in decimal; and floating-point numbers in a form that reads back to the same value and always has a `.` or an exponent, so a range written `[0, 255]` is written back as `[0.0, 255.0]`;
 - writes `series.y` as a single string or as a list, as it was given.
 
 The writer does not keep comments, blank lines or the author's key order. That is a recorded limit of version 0: `description` is the place for prose.
@@ -369,8 +333,8 @@ A spec is valid when parsing succeeds and validation reports no error. Warnings 
 | Code | Severity | Stage | When |
 |---|---|---|---|
 | `spec.too_large` | error | parse | The text is longer than 512 KiB. |
-| `spec.syntax` | error | parse | The text is not TOML, or not JSON. |
-| `spec.too_deep` | error | parse, validate | Tables and arrays nest more than 32 levels deep, or the layout more than 8 nodes deep. |
+| `spec.syntax` | error | parse | The text is not TOML, or not JSON, or a JSON object repeats a key. |
+| `spec.too_deep` | error | parse, validate | Tables and arrays nest more than 32 levels deep, a dotted TOML key has more than 32 parts, or the layout is more than 8 nodes deep. |
 | `spec.too_many` | error | parse, validate | A count is over its limit: the values of the document, sources, panels, transforms, `y` bindings, `columns`, the axes of a `reduce`, layout nodes or children. |
 | `spec.string_too_long` | error | parse, validate | A string is longer than its limit. |
 | `spec.wrong_type` | error | parse, validate | A value has the wrong type: a date or time, a `null`, a list in a slot that takes one binding, or any other mismatch. |
@@ -393,7 +357,7 @@ A spec is valid when parsing succeeds and validation reports no error. Warnings 
 | `spec.missing_slot` | error | validate | A required slot is not bound. |
 | `spec.slot_mismatch` | error | validate | A slot's data does not fit it: a tensor where a column is needed or the reverse, the wrong rank, lengths that differ, columns of different sources, or a column that is not numeric. |
 | `spec.bad_transform` | error | validate | A transform does not apply: on a tabular source, an axis or index out of range, a repeated axis, `index` together with a range, or several axes for `argmax` or `argmin`. |
-| `spec.bad_layout` | error | validate | A layout node has the wrong form. |
+| `spec.bad_layout` | error | parse, validate | A layout node has the wrong form. |
 | `spec.unknown_panel` | error | validate | The layout names a panel that the spec does not have. |
 | `spec.duplicate_placement` | error | validate | The layout places a panel twice. |
 | `spec.not_found` | error | patch | The panel or source to patch does not exist. |
@@ -468,12 +432,14 @@ Every size is bounded, and each limit has its error code:
 | `applet.description` | 4,096 characters | `spec.string_too_long` |
 | A catalog id | 256 characters | `spec.string_too_long` |
 | A column name, in a binding or in `columns` | 255 characters | `spec.string_too_long` |
+| A binding | 320 characters | `spec.string_too_long` |
 | `sql` | 65,536 characters | `spec.string_too_long` |
 | `options.text` | 16,384 characters | `spec.string_too_long` |
 | Any other string, such as one inside `x` | 65,536 characters | `spec.string_too_long` |
 | An integer | ±(2^53 − 1) | `spec.out_of_range` |
+| Diagnostics in one report | 256; the rest are dropped | |
 
-The parser checks the text size before it parses, and the value count and nesting before it decodes, so a hostile document costs at most a bounded amount of work.
+The parser checks the text size and the length of dotted TOML keys before it parses, and the value count and nesting before it decodes, so a hostile document costs a bounded amount of work. TOML's dotted keys need the early check because each part is a nested table, which the TOML library would otherwise build and free recursively. Validation follows chains of `from` without recursion and stops walking the layout at its limits.
 
 ### Recorded limits of version 0
 
@@ -488,10 +454,25 @@ The parser checks the text size before it parses, and the value count and nestin
 
 `caliper_builder_spec` follows the rules of the builder libraries: C++17, the namespace `caliper_builder::spec`, and no exceptions across its headers. Its headers are in `caliper_builder/spec/`:
 
-- `spec.h` holds the value types (`Spec`, `Applet`, `Source`, `Transform`, `Panel`, `Options`, `LayoutNode`), the limits as constants and `Diagnostic`.
-- `format.h` holds `parse_toml`, `from_json`, `from_json_text`, `to_toml`, `to_json`, `to_json_text`, the per-item conversions that `panel.create`, `source.add` and `layout.set` need, and `locate`, which maps diagnostics to lines and columns.
-- `validate.h` holds `SourceResolver`, `ResolvedSource`, `validate` and `check_toml`, which parses and validates in one call.
+- `spec.h` holds the value types (`Spec`, `Applet`, `Source`, `Transform`, `Panel`, `Options`, `LayoutNode`), the limits as constants, `Diagnostic` and its JSON form for command results.
+- `format.h` holds `parse_toml`, `from_json`, `from_json_text`, `to_toml`, `to_json`, `to_json_text`, the per-item conversions that `panel.create`, `source.add` and `layout.set` need (`panel_from_json` and the like), and `locate`, which maps diagnostics to lines and columns.
+- `validate.h` holds `SourceResolver`, `ResolvedSource`, `validate`, which also returns a `SourceInfo` for each source, and `check_toml`, which parses and validates in one call.
 - `patch.h` holds `patch_panel` and `patch_source`, which apply an RFC 7386 JSON merge patch to one panel or source and revalidate the spec. A patch that would change the item's id, or that does not decode, is refused and leaves the spec unchanged; otherwise the result holds the patched spec and the full validation, and the command layer decides whether errors elsewhere refuse the change.
+
+## Tests
+
+The tests in `src/builder/spec/tests/` run as the ctest test `builder_spec`. They check:
+
+- the fixtures in `tests/fixtures/`: the contracts' example, the dashboard above, a spec that uses every primitive, option, transform and extension place, and a minimal spec;
+- round trips: TOML to `Spec` to TOML to `Spec` gives an equal `Spec` and the same text, and `Spec` to JSON to `Spec` gives an equal `Spec`, for every fixture and for a spec built in code;
+- the canonical TOML of the contracts' example, line by line;
+- shape propagation through `from` and each transform, and the slot, option and layout rules;
+- every code of the table above at least once, and no code outside it;
+- hostile input: a text over 512 KiB, a 1 MiB string, inline arrays nested 400 deep, a dotted key of 100,000 parts, JSON nested 100,000 deep, 70,000 values, 2,000 unknown keys, cycles in `from`, duplicate ids and a resolver that throws;
+- merge patches, against the examples of RFC 7386 and the refusal rules;
+- the JSON Schema: each valid fixture's canonical JSON and further valid documents pass it, and 41 invalid documents fail both the schema and the library.
+
+The schema test reads the schema through a test-only checker, `tests/schema_check.h`, which implements exactly the keywords the schema uses and refuses a schema that uses any other. The test also writes each document it checks into its build folder, and during development those 49 documents were checked with the reference Python validator, jsonschema 4.26 with draft 2020-12, which agreed on every one.
 
 ## Decisions
 
@@ -504,6 +485,8 @@ The parser checks the text size before it parses, and the value count and nestin
 - **`bins` from 1 to 65,536 with a default of 64,** as in Caliper LIB's `histogram`.
 - **Ranges as `[min, max]` pairs.** One key per range is smaller than separate ends, and a fixed range needs both.
 - **Strict parsing, with the schema as a second, partial check.** The library is the authority; the schema lets a browser or an outside tool check structure without it.
+- **A test-only schema checker rather than a fetched validator.** The C++ validators for nlohmann/json under the licences this repository accepts, pboettch/json-schema-validator and valijson, implement draft 7, not 2020-12, so they would judge this schema by other rules; jsoncons implements 2020-12 but brings its own JSON type under the Boost licence. A checker of exactly the keywords the schema uses, which refuses any other keyword and is itself tested against the draft's rules, cannot skip a rule silently, and adds no dependency. The reference Python validator agreed with it on every test document.
+- **Duplicate keys in JSON are a syntax error,** as they are in TOML, so that a repeated key cannot hide a typo.
 - **Lengths in code points,** so the limits and JSON Schema's `maxLength` agree.
 - **Safe integers only,** so that the JSON form reads the same in a browser.
 - **No dates anywhere, `x` included,** because the JSON form has none.
