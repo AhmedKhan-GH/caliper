@@ -111,7 +111,7 @@ schema is the command's arguments, its output schema the command's result, and i
 review. The list comes from the running app's table, or from the table built into `caliper-mcp` when no app answers,
 so `tools/list` always answers.
 
-A call's arguments are checked against the command's schema before anything is sent, and a fault comes back as a tool
+A call's arguments are checked against the command's schema before anything is sent, with a null on an optional argument read as the argument left out, as the command layer reads it, and a fault comes back as a tool
 error the model can correct. A successful call returns the command's result as structured content and as text, and a
 PNG (`capture_frame`, `panel_render`) as image content. Every failure is a tool error (`isError: true`) with one text
 block that holds `{"error": {"code", "message", "where"}}`: the command layer's own codes, such as `command.denied`

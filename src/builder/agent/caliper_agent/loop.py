@@ -84,7 +84,7 @@ from .caliper_api import CaliperApi, ToolOutput
 from .keyguard import scrub
 from .openai_compat import refusal_kind
 from .provider import AgentError, Provider, Retry, Settings, TurnUsage
-from .schema import validate
+from .schema import drop_null_optionals, validate
 from .tools import PREVIEW_ARG, ToolSpec, acp_tool_kind
 from .toolset import CaliperToolset, invalid_json
 from .udiff import apply_unified_diff
@@ -788,6 +788,8 @@ class TurnRunner:
         group = self._group
         command = spec.command
         sink.tool_started(call_id, spec.name, command.name)
+        # As the command layer reads it: a null on an optional argument is the argument left out.
+        args, _ = drop_null_optionals(args, command.args)
         problem = validate(args, command.args)
         sink.update({"sessionUpdate": "tool_call_update", "toolCallId": call_id,
                      "title": _title(command.name, args), "kind": acp_tool_kind(command), "rawInput": args})

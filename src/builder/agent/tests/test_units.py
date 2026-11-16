@@ -490,3 +490,26 @@ def test_unified_diffs_apply_and_mismatches_are_refused():
     assert apply_unified_diff(old, "--- before\n+++ after\n@@ the diff could not be computed @@\n") is None
     assert apply_unified_diff(old, "--- before\n+++ after\n") is None
     assert apply_unified_diff(old, diff.replace("@@ -1,7", "@@ -1,9")) is None  # counts that disagree
+
+
+def test_a_null_on_an_optional_argument_is_dropped_as_the_command_layer_drops_it():
+    # The call a local model sent: every optional argument of source.add null.
+    from caliper_agent.schema import drop_null_optionals
+    from caliper_agent.tools import load_command_table
+    from conftest import COMMAND_TABLE
+    table = {c.name: c for c in load_command_table(COMMAND_TABLE)}
+    add = table["source.add"].args
+    call = {"id": "layer0", "catalog": "live:entropy.l0", "sql": None, "from": None, "transform": None,
+            "dry_run": False}
+    assert validate(call, add) is not None
+    understood, dropped = drop_null_optionals(call, add)
+    assert dropped == 3 and understood == {"id": "layer0", "catalog": "live:entropy.l0", "dry_run": False}
+    assert validate(understood, add) is None
+    assert call["sql"] is None   # the caller's value is not changed
+    # A required null stays and is refused; nested optional nulls go; a null the schema admits stays.
+    assert drop_null_optionals({"id": None, "catalog": "x"}, add) == ({"id": None, "catalog": "x"}, 0)
+    nested, n = drop_null_optionals({"id": "e", "transform": [{"op": "reduce", "axis": None}, {"op": None}]}, add)
+    assert n == 1 and nested["transform"] == [{"op": "reduce"}, {"op": None}]
+    patch = table["panel.patch"].args
+    kept, n = drop_null_optionals({"id": "loss", "patch": {"title": None, "bind": None}}, patch)
+    assert n == 1 and kept == {"id": "loss", "patch": {"title": None}}
