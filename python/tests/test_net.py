@@ -1313,3 +1313,30 @@ def test_slower_rates_hold_with_ticks(server, device):
     assert 22 <= rate_a <= 31, rate_a
     assert 14 <= rate_20 <= 21, rate_20
     assert rate_b >= 45, rate_b
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_late_view_resumes_after_a_pause(server, device):
+    """A view called after the step's tick has closed is served again after
+    the calls pause for longer than a second (an evaluation, say)."""
+    A = torch.randn(64, 64, device=device)
+    Z = torch.randn(500, 2, device=device)
+
+    def step():
+        time.sleep(0.0005)
+        caliper.show(A, name="first")
+        caliper.points(Z, name="late")
+
+    async def go():
+        async with Client(server) as c:
+            await c.subscribe(1, "first", pump=step)
+            await c.subscribe(2, "late", pump=step)
+            await c.expect(w.Snapshot, pump=step, pred=lambda m: m.sub == 2)
+            time.sleep(1.2)                         # no view calls
+            ring = server.ring
+            n0, t0 = ring.views["late"].seq, time.perf_counter()
+            while time.perf_counter() - t0 < 0.5:
+                step()
+            return (ring.views["late"].seq - n0) / (time.perf_counter() - t0)
+    rate = run(go())
+    assert rate >= 45, rate

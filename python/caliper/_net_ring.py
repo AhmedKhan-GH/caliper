@@ -201,6 +201,7 @@ class NetRing:
         self.tick: Tick | None = None
         self.tick_interval = rate_interval(DEFAULT_RATE_HZ)
         self.tick_next = 0.0                    # perf_counter when the next tick may open
+        self.tick_views: set = set()            # the views the last tick served (see due)
         self._next_id = 1
         self._wake = wake or (lambda: None)
         self.closed = False
@@ -273,7 +274,8 @@ class NetRing:
         if t is None:
             if now < self.tick_next:
                 self.counters["skipped"] += 1
-                self.next_due = self.tick_next
+                if name in self.tick_views:     # the next step began: calls wait for the tick
+                    self.next_due = self.tick_next
                 return False
             if not any(self._group_due(g, v, now, False) for g in list(v.groups.values())):
                 self.counters["rate_limited"] += 1
@@ -286,8 +288,7 @@ class NetRing:
         if self.tick is not None:
             return
         if any(v.groups for v in list(self.views.values())):
-            self.next_due = self.tick_next
-            return
+            return                          # the ticks set next_due
         nd = math.inf
         for v in list(self.views.values()):
             if now - v.seen < OFFER_REFRESH_S:
@@ -340,7 +341,12 @@ class NetRing:
             return
         self.tick = None
         self.tick_next = max(t.t0 + self.tick_interval, time.perf_counter() + 1e-4)
-        self.next_due = self.tick_next
+        # The calls after the tick in its step still reach due(), which keeps
+        # their views counted as called (v.seen), so that a view called after
+        # the tick completed is waited for by the next one; the first call of
+        # a view the tick served (the next step) makes calls wait.
+        self.tick_views = {p.view for p in t.pending}
+        self.next_due = 0.0 if self.tick_views else self.tick_next
         ev = None
         if t.mps:
             torch = _torch()
