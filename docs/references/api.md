@@ -1,6 +1,6 @@
 # Caliper API
 
-Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](wire-protocol.md), returns a capture of the frame the app draws, runs the commands of the command layer, through which specs, loaders and sources are built with undo, a journal and approvals, and serves the browser viewer of spec applets. It listens on 127.0.0.1 only, behind a session token, and it is off unless the app starts with `--api`. The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
+Caliper API is an HTTP interface to the running app. Version 0 lists the applets, launches one, takes data streams over [wire protocol v3](wire-protocol.md), returns a capture of the frame the app draws, runs the commands of the command layer, through which specs, loaders and sources are built with undo, a journal and approvals, and serves the browser viewer of spec applets. It listens on 127.0.0.1 only, behind a session token, and it is off unless the app starts with `--api`, or the [side chat starts it](#started-by-the-side-chat). The server is in `src/host/api/api_server.h`, and `src/host/api/app_api.h` starts it for the app and for `caliper shot`.
 
 !!! note "Status"
     Version 0, built and tested on macOS. A capture works in the app's window on Metal and in the windowless mode, `caliper shot --api`; on the GL and Vulkan renderers the app in its window answers a capture with 501. The command endpoints serve the command layer of the app's builder session, in the app, `caliper dev` and `caliper shot` built with `CALIPER_WITH_BUILDER` (`src/host/builder/app_session.h`, over `src/host/api/session_gateway.h`); a build without the builder answers 404 on them, and `caliper-mcp` reads that as an app with no command layer. The Windows build refuses `--api` for now, as [Caliper CLI](cli.md#on-windows) describes.
@@ -50,6 +50,14 @@ The API file is `api.json` in the app-data folder ([Folders and environment vari
 | `spec_url` | `http://127.0.0.1:<port>/v0/spec?token=<viewer token>`, the spec page; a saved spec applet opens at this address with `&applet=<id>` added |
 
 The session token is new for each run, and so is the viewer token, a second token of the same form: 32 characters of `A-Z`, `a-z`, `0-9`, `_` and `-` from 24 random bytes. When the port is taken, the app starts without the API and says so on standard error and in the Activity pane, and `caliper shot` exits with 1.
+
+While the API runs, every page's status bar shows its address, such as `api 127.0.0.1:7341`.
+
+### Started by the side chat
+
+The [side chat](side-chat.md) is the one case in which the API starts without `--api`. The side chat's agent drives Caliper through `caliper-mcp`, which needs the API, so when the app was started without `--api`, the side chat starts the API when its agent starts, at the person's first message. That API follows the same rules as with `--api`: it listens on 127.0.0.1 only, at a free port, behind a new session token, and it writes the API file. No setting can make it listen on another address or a chosen port.
+
+The start is visible in three places: a line in the conversation, "Caliper API started on 127.0.0.1:<port> for this chat"; an Activity line with the address and never the token; and the status bar. The API is tied to the chat: when the chat's agent ends (it exits, it cannot start, or the person chooses another agent), the side chat stops the API it started, and the app removes the API file. An API that the person started with `--api` is left alone in both directions: the side chat neither starts a second one nor stops it.
 
 ## The windowless mode
 

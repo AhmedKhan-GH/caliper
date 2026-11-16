@@ -7,9 +7,9 @@ reject. This page explains what each role is for, what each costs, how each can 
 data goes, what each may do, and when the widget agent hands a request to the chat.
 
 !!! note "Status"
-    The widget agent's inline prompt works on the app's spec page ([Widget agent](../references/widget-agent.md)). The
-    side chat is built as a component and tested with a stub agent, but is not yet on the app's page
-    ([Side chat](../references/side-chat.md)). The designs are in ACP integration (`design/acp-integration.md`),
+    The widget agent's inline prompt works on the app's spec page ([Widget agent](../references/widget-agent.md)), and
+    the side chat on the spec page and the live page ([Side chat](../references/side-chat.md)); both are tested with
+    test agents, never with a person's agent or key. The designs are in ACP integration (`design/acp-integration.md`),
     Widget agent (`design/widget-agent.md`) and Widget agent sidecar (`design/byok-agent.md`).
 
 ## What the two have in common

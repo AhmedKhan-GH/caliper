@@ -11,9 +11,9 @@ protocol and the agents offered on 15 November 2026, the design of the side chat
 
 **Built on this branch:** the client library `caliper_builder_acp` (a subprocess helper, a JSON-RPC peer and
 `AcpClient`), a stub agent for tests, the headless tool `caliper-acp-harness`, and their tests; and the side chat as a
-host component (`src/host/builder/side_chat.h`) with its capture tool `caliper-chat-shot`, not yet connected to the
-app's page ([The side chat as built](#the-side-chat-as-built)). **Planned:** the side chat in the app and everything
-listed under [what waits](#what-is-built-and-what-waits).
+host component (`src/host/builder/side_chat.h`) with its capture tool `caliper-chat-shot`, on the app's spec page and
+live page (`src/host/builder/chat_pane.h`, [The side chat in the app](#the-side-chat-in-the-app)). **Planned:**
+everything listed under [what waits](#what-is-built-and-what-waits).
 The earlier proposal is the "Agent integration" section of the [applet builder](applet-builder.md) page.
 
 ## The protocol on 15 November 2026
@@ -588,8 +588,8 @@ sees and may edit what goes to their own agent.
 
 `src/host/builder/side_chat.h` holds the pane as a component in the pattern of the inline surface: a state machine
 (`SideChat`), the layout as plain rectangles (`layout_chat_column()` and `layout_chat_pane()`), and its ImGui side
-(`draw()`). It is not connected to the app's page yet; the page owns one `SideChat`, calls `update()` each frame,
-claims the right column's lower part with `layout_chat_column()`, and calls `draw()` with that rectangle.
+(`draw()`). The app owns it through `ChatPane` ([below](#the-side-chat-in-the-app)), which calls `update()` each frame,
+claims the right column with `layout_chat_column()`, and calls `draw()` with that rectangle.
 
 - **States.** No agent, idle, starting, ready, running (with a stalled flag), cancelling, needs login, exited and
   failed. The header shows the state as a tag (STARTING, RUNNING, STALLED, STOPPING, LOGIN, EXITED, FAILED, NO AGENT),
@@ -624,6 +624,44 @@ claims the right column's lower part with `layout_chat_column()`, and calls `dra
 - **Captures.** `caliper-chat-shot` draws a dashboard with the spec runtime beside the pane on the offscreen canvas,
   runs a session, Caliper API's server with the session's command gateway and an API file, and drives the chat with
   `caliper_chat_stub_agent`, a test agent named "Stub agent" that calls Caliper through the `caliper-mcp` it is handed.
+
+### The side chat in the app
+
+`src/host/builder/chat_pane.h` is the app's part: one `ChatPane`, which the app owns and gives to the spec page.
+
+- **Where.** On the spec page and the live page. **Decision:** not on the landing page, whose command bar and
+  Inspector column are its own and which shows no workspace yet; the live page has it because the acceptance case
+  starts there, with a stream attached and nothing built. The chat stays open across the two, so a spec that the
+  agent opens from the live page shows beside the same conversation.
+- **The toggle.** ⌘L Chat (Ctrl+L elsewhere) in the page bar, to the left of ⌘K Command at the right end, outlined in
+  bronze while open; the key works on the two pages. It leaves the place after the title to the builder pane's items
+  (Build, Text, Undo, Redo, Save), whose room ends before ⌘L Chat.
+- **The column.** A viewport side bar at the right, claimed after the page bar, a stream's run bar, the status bar, the
+  jobs tray and the approval cards' strip, so those strips keep their places at the window's edges and every page fills
+  the work area that is left (`layout_chat_page()` gives the rectangles, with the builder's left column as a
+  parameter). In build mode the builder pane's right column holds Properties above the chat; the page then draws the
+  chat with `ChatPane::draw_in()` in the pane's `chat_rect` instead of claiming a column.
+- **The settings.** `side-chat.json` in the app-data folder: the chosen agent, the custom agent's name and command
+  line, whether "always allow" options are offered, and whether the chat is open. Never a key, and no address.
+- **Caliper API.** `caliper-mcp` needs the API. **Decision, the user's:** when the app was started without `--api`, the
+  chat starts the API when its agent starts, the one case in which the API starts without `--api`: on 127.0.0.1 at a
+  free port, with a new session token and the API file, as `--api` does, and no setting can change the address. It is
+  visible in three places: a line in the conversation ("Caliper API started on 127.0.0.1:<port> for this chat"), an
+  Activity line with the address and never the token, and every page's status bar, which shows the API's address
+  whenever it runs. It is tied to the chat: when the chat's agent ends (it exits, cannot start, or another agent is
+  chosen), the app stops the API that the chat started and removes the API file; a restart replaces the agent without
+  stopping it. An API started with `--api` is left alone in both directions.
+- **Approvals.** The chat reads the session's pending approvals each frame while no long command holds the registry,
+  and a click on an approval's row outlines its card on the strip in bronze for two seconds (`ApprovalTray::point_to()`).
+- **Ask in chat.** The inline surface's Ask in chat opens the chat with the handoff draft. The bundle is built in the
+  frame, so it leaves the panel's render out.
+- **Tests.** ctest `caliper_chat_pane`: the settings, the toggle and ⌘L, the column the canvas leaves, Ask in chat, the
+  approval row, the API line and the end hook over a real `AppSession` and a headless ImGui context; ctest
+  `caliper_side_chat_app`: the hidden app's spec page (a turn whose `panel.create` waits on the cards and is approved
+  through the test-only decisions file, Ask in chat, the API started on loopback whatever the settings file says and
+  stopped when the agent ends) and the acceptance case on `caliper_attention_producer`'s stream with a scripted agent
+  (the app started with `--api`, which the chat leaves alone). The hidden app's input driver
+  (`CALIPER_TEST_SPEC_UI`) gained steps for the chat.
 
 ## The manual check with a real agent
 
@@ -681,8 +719,8 @@ and `caliper_side_chat_gpu`, the capture scenario as a process).
 
 Waiting for later work:
 
-- The side chat on the app's page: the Chat toggle in the page bar, the settings that hold the chosen agent and the
-  custom command, and Caliper API started for it, since `caliper-mcp` needs the API file.
+- The side chat in the builder pane's right column, under Properties (`ChatPane::draw_in()`), which the pane's
+  integration connects; the landing page; and a Selection tab above the chat on the live page.
 - The review setting per origin in the side chat's settings, and running the spec validator on an agent's own edit of a
   spec file before the person answers.
 - The setting that marks an agent as running on a local model, with the note while a run is live, and the warning when
@@ -723,6 +761,9 @@ Waiting for later work:
   approvals are decided on the approval cards' strip and shown as one row each.
 - **Restart in one place,** the header, for a stalled, exited, failed or logged-out agent and for a cancel that was
   never answered.
+- **The chat on the spec page and the live page,** with ⌘L Chat beside ⌘K Command and the column as a viewport side
+  bar after the host's strips.
+- **The chat starts Caliper API when the app runs without it,** on loopback, visibly, and stops it when its agent ends.
 - **Review of spec edits in the command layer,** with the diff attached to the pending approval, so that no agent can
   skip it.
 - **One kind of approval card for every agent,** in a strip above the jobs tray on every page, with the REVIEW mark on

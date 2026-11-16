@@ -6,8 +6,22 @@ page gives what Caliper starts, what it hands the agent, and what the pane shows
 explains when to use the side chat and when the widget agent.
 
 !!! note "Status"
-    The side chat is built and tested as a component in `src/host/builder/side_chat.h`, with the capture tool
-    `caliper-chat-shot`. It is not yet on the app's spec page, and its settings are not yet saved by the app.
+    The side chat is on the app's spec page and live page (`src/host/builder/chat_pane.h`, over the component in
+    `src/host/builder/side_chat.h`), and is tested in the hidden app with stub agents. It is not on the landing page,
+    and it does not take the builder pane's right column yet.
+
+## Opening it
+
+⌘L Chat in the page bar (Ctrl+L Chat elsewhere), to the left of ⌘K Command, opens and closes the side chat on the spec
+page and on the live page; it is outlined in bronze while the chat is open. The chat is the right column of the window,
+28 % of its width and at least 300 points, a minimum that grows with the text scale. The page bar, a stream's run bar,
+the status bar, the jobs tray and the approval cards keep their places at the window's edges, and the page's panels or
+views fill what the column leaves. The chat stays open when the page changes, so a spec that the agent opens from the
+live page shows beside the same conversation.
+
+The chat's settings are kept in `side-chat.json` in the app-data folder ([Folders and environment
+variables](environment.md)): the chosen agent, the custom agent's name and command line, whether an agent's "always
+allow" options are offered, and whether the chat is open. They never hold a key.
 
 ## The agents
 
@@ -36,7 +50,10 @@ folder, and sends:
 - `initialize` with protocol version 1, declining the file-system and terminal capabilities, so the agent uses its own
   file and shell tools under its own permission settings;
 - `session/new` with the workspace as `cwd` and one MCP server, named `caliper`: this build's `caliper-mcp` by
-  absolute path, with the arguments `--origin agent --api-file <the app's API file>`. Commands the agent sends through it
+  absolute path, with the arguments `--origin agent --api-file <the app's API file>`. `caliper-mcp` needs Caliper API:
+  when the app was started without `--api`, the side chat starts it then, on 127.0.0.1 at a free port, says so in the
+  conversation ("Caliper API started on 127.0.0.1:<port> for this chat"), in Activity and in the status bar, and stops
+  it when the agent ends ([Started by the side chat](api.md#started-by-the-side-chat)); Commands the agent sends through it
   reach the command layer with the origin `agent`, so they are validated, journaled, undoable and reviewed;
 - before the session's first message, a block for the assistant (`annotations.audience: ["assistant"]`) that asks the
   agent to change specs through the `caliper` tools and not to ask before calling one, since Caliper asks the person
@@ -70,18 +87,18 @@ file it is the unified diff. An agent's "always allow" option is offered only wh
 
 **Command approvals.** A command of the agent that needs your approval, such as an edit of the open spec while review
 is on, is decided on the approval cards at the bottom of the window. The conversation shows one row for it, the
-command and "waiting", and then "decided".
+command and "waiting", and then "decided"; a click on the row outlines its card in bronze for a moment.
 
 **The input** is one line that grows to six with Shift+Enter or Command+Enter; Enter sends. The agent picker beside it
 lists the agents by name, with NOT FOUND for those not on `PATH`, and Custom command.
 
 ## Ask in chat
 
-Ask in chat in the widget agent's prompt opens the side chat with a draft: your request in the input, and above it one
+Ask in chat in the widget agent's prompt on the spec page opens the side chat with a draft: your request in the input, and above it one
 chip for each block of context that goes with it (the target's spec fragment, its sources, the panel's render, the
 widget conversation, the preview's diff marked as not applied, and the target's ids). Nothing is sent until you send
 it; Clear drops the context. The blocks are shaped for the agent when you send: as embedded resources when it accepts
-them and as text otherwise, and the render only when it accepts images.
+them and as text otherwise. The context of a handoff in the app leaves the panel's render out.
 
 ## caliper-chat-shot
 
