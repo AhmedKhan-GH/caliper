@@ -125,8 +125,9 @@ class Log:
         return None
 
 
-def start_stream(children: Children, args, folder: Path) -> tuple[subprocess.Popen, str]:
-    """The script's own live stream: its process and the link the app attaches to."""
+def start_stream(children: Children, args, folder: Path, data: Path) -> tuple[subprocess.Popen, str]:
+    """The script's own live stream: its process and the link the app attaches to. train.py gets the
+    app's data folder, where its stream file goes, never the person's own."""
     if args.stream == "train":
         argv = [args.train_python, "-u", str(TRAIN), "--seconds", str(args.minutes * 60 + 120)]
         want = re.compile(r"(http://127\.0\.0\.1:\S+|ws://127\.0\.0\.1:\S+)")
@@ -136,24 +137,29 @@ def start_stream(children: Children, args, folder: Path) -> tuple[subprocess.Pop
                 "--hz", "8"]
         want = re.compile(r"\[producer\] hub (\S+)")
         name, sig = PRODUCER, signal.SIGTERM
-    log = (folder / "stream.log").open("w")
     proc = children.start(name, argv, stop_signal=sig, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          stdin=subprocess.DEVNULL, env=clean_env())
-    link = ""
+                          stdin=subprocess.DEVNULL, env=dict(clean_env(), CALIPER_DATA_DIR=str(data)))
+    # A thread copies the stream's output to its log, so that the wait for the link below ends at its
+    # deadline even when the stream prints nothing.
+    lines: list[str] = []
+
+    def copy() -> None:
+        with (folder / "stream.log").open("w") as log:
+            for raw in proc.stdout:
+                line = raw.decode("utf-8", "replace")
+                log.write(line)
+                log.flush()
+                lines.append(line)
+
+    threading.Thread(target=copy, daemon=True).start()
     deadline = time.monotonic() + 120
-    while not link and time.monotonic() < deadline:
-        raw = proc.stdout.readline()
-        if not raw:
-            break
-        line = raw.decode("utf-8", "replace")
-        log.write(line)
-        log.flush()
-        m = want.search(line)
+    while time.monotonic() < deadline and proc.poll() is None:
+        m = next((m for m in map(want.search, list(lines)) if m), None)
         if m:
-            link = m.group(1)
-    threading.Thread(target=lambda: [log.write(r.decode("utf-8", "replace")) or log.flush() for r in proc.stdout],
-                     daemon=True).start()
-    return proc, link
+            return proc, m.group(1)
+        time.sleep(0.2)
+    m = next((m for m in map(want.search, list(lines)) if m), None)
+    return proc, m.group(1) if m else ""
 
 
 def agent_command(usage_log: Path | None = None) -> str:
@@ -251,7 +257,7 @@ def one_run(children: Children, args, n: int, work: Path) -> dict:
     if args.url:
         stream, link = None, args.url
     else:
-        stream, link = start_stream(children, args, folder)
+        stream, link = start_stream(children, args, folder, data)
     if not link:
         report["outcome"] = "the stream printed no link"
         return report

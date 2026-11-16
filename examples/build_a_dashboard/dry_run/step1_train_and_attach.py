@@ -4,21 +4,27 @@
         --train-python <a Python with torch and caliper> [--caliper cmake-build-release/caliper] \\
         [--out build/build_a_dashboard] [--work <folder>] [--size 1440x900] [--seconds 90] [--settle 15]
 
-It does what a person does in step 1, without a window: it starts train.py,
-reads the stream link that the script prints, and starts the app hidden with
-that link on its command line (`caliper --hidden --url <link>`), which opens
-the live page on the stream as F4 and the pasted link do. It then checks, over
-Caliper API, that the catalog lists the stream's views as live sources with
-their shapes and rates, reads the live page back into
-<out>/step1-live-<W>x<H>.png, writes the catalog's live entries to
-<out>/step1-catalog.json, and stops both. It prints one line per check and
-exits with 0 when every check passed, 1 when one failed, 2 when something it
-needs is missing, and 130 when it was interrupted.
+It does what a person does in step 1, without a window: it starts train.py
+with the same app-data folder as the app, so that the app lists the script's
+stream from the stream file that caliper.serve() writes there, and starts the
+app hidden. Through the app's input driver it presses F4 on the landing
+screen, reads the session list back into <out>/step1-f4-<W>x<H>.png and presses
+Enter on the stream, which opens its live page. It then checks, over Caliper
+API, that the catalog lists the stream's views as live sources with their
+shapes and rates, lets the model train for --settle seconds, reads the live
+page back into <out>/step1-live-<W>x<H>.png, goes Home and checks that the app
+stays attached and the catalog still lists the live sources, writes the
+catalog's live entries to <out>/step1-catalog.json, and stops both. It prints
+one line per check and exits with 0 when every check passed, 1 when one
+failed, 2 when something it needs is missing, and 130 when interrupted.
 
 With --url it starts no training and attaches to a stream that is already
 running, such as the training run that run_all.py --story starts, and leaves
-that stream running. --workspace and --app-data then name the app's workspace
-and data folder, so that later steps continue in them.
+that stream running: through F4 when the stream's file is in the app-data
+folder (the runner starts train.py on the story's), else with the link on the
+app's command line (`caliper --hidden --url <link>`), as a person may start
+the app. --workspace and --app-data name the app's workspace and data folder,
+so that later steps continue in them.
 
 It needs nothing but the standard library itself; the Python given with
 --train-python runs train.py. The app gets the environment of hidden_app.py
@@ -26,11 +32,6 @@ It needs nothing but the standard library itself; the Python given with
 and never shows a window. The app's files go into a new subfolder of --work,
 or into a temporary folder that is removed at the end. Every process it starts
 is stopped by its pid when the run ends, fails or is interrupted.
-
-The capture waits on the input driver's wait-file step, which gives up after
-1800 frames, about 30 s on the live page. That wait covers the catalog checks
-and --settle, so the script refuses a --settle above 20 s, and stops with a
-message when the catalog checks left too little of the wait for the settle.
 """
 from __future__ import annotations
 
@@ -43,20 +44,14 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from hidden_app import (FAILED, INTERRUPTED, MISSING, OK, Children, Stop, add_options, app_env, caliper_problem,
                         clean_env, work_folder)
 
 HERE = Path(__file__).resolve().parent
 TRAIN = HERE.parent / "train.py"
-
-# The input driver's wait-file step gives up after kPatience frames
-# (src/host/builder/spec_ui_driver.h), about 30 s on the live page. The time
-# from the live page to the capture is the catalog checks plus the settle; it
-# is kept a few seconds under that wait.
-PATIENCE_S = 30.0
-BUDGET_S = 24.0
-MAX_SETTLE_S = 20.0
+WANT = ["live:attn", "live:attn.entropy", "live:loss"] + [f"live:entropy.l{k}" for k in range(4)]
 
 
 class Lines:
@@ -76,19 +71,14 @@ class Lines:
 
     def find(self, prefix: str, timeout: float) -> str | None:
         """The first line that starts with prefix, waiting up to timeout seconds."""
-        hit = self.when(prefix, timeout)
-        return hit[1] if hit else None
-
-    def when(self, prefix: str, timeout: float) -> tuple[float, str] | None:
-        """The first line that starts with prefix and the time it came, waiting up to timeout seconds."""
         end = time.monotonic() + timeout
         while True:
-            for t, line in list(self.lines):
-                if line.startswith(prefix):
-                    return t, line
+            hit = next((x for x in self.texts() if x.startswith(prefix)), None)
+            if hit is not None:
+                return hit
             if self.p.poll() is not None:
                 time.sleep(0.2)                     # the reader may still hold the last lines
-                return next(((t, x) for t, x in list(self.lines) if x.startswith(prefix)), None)
+                return next((x for x in self.texts() if x.startswith(prefix)), None)
             if time.monotonic() >= end:
                 return None
             time.sleep(0.1)
@@ -100,8 +90,30 @@ def command(port: int, token: str, name: str, args: dict) -> dict:
                                  data=json.dumps(args).encode(),
                                  headers={"Authorization": f"Bearer {token}",
                                           "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as r:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=30) as r:
         return json.loads(r.read())
+
+
+def live_sources(api: dict) -> dict[str, dict]:
+    listed = command(api["port"], api["token"], "catalog.list", {"kind": "live"})
+    return {e["id"]: e for e in listed.get("result", {}).get("entries", [])}
+
+
+def listed_stream(data: Path, link: str, timeout: float) -> bool:
+    """Whether the stream at link has its stream file in the app-data folder, where F4 lists it."""
+    port = urlsplit(link).port
+    end = time.monotonic() + timeout
+    while True:
+        for f in (data / "streams").glob("*.json"):
+            try:
+                if json.loads(f.read_text()).get("port") == port:
+                    return True
+            except (OSError, ValueError):
+                pass
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.2)
 
 
 def run(children: Children, args, work: Path, out: Path, check) -> bool:
@@ -110,12 +122,13 @@ def run(children: Children, args, work: Path, out: Path, check) -> bool:
     workspace = Path(args.workspace).resolve() if args.workspace else work / "ws"
     (work / "user-applets").mkdir(exist_ok=True)
     data.mkdir(parents=True, exist_ok=True)
-    ready = work / "ready"                  # in a folder of this run's own, so never one from before
-    shot = f"step1-live-{args.size}"
+    ready, home = work / "ready", work / "home"     # in a folder of this run's own, so never ones from before
+    shot, f4_shot = f"step1-live-{args.size}", f"step1-f4-{args.size}"
     pipes = dict(stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, bufsize=1,
                  errors="replace")
 
-    # 1. The training script; it prints its stream link first.
+    # 1. The training script, on the app's app-data folder; it prints its stream link first, once its
+    # stream file is there.
     train = None
     if args.url:
         link = args.url
@@ -123,39 +136,48 @@ def run(children: Children, args, work: Path, out: Path, check) -> bool:
             return False
     else:
         train = Lines(children.start("train.py", [args.train_python, "-u", str(TRAIN), "--seconds", str(args.seconds)],
-                                     stop_signal=signal.SIGINT, env=clean_env(), **pipes))
+                                     stop_signal=signal.SIGINT, env=dict(clean_env(), CALIPER_DATA_DIR=str(data)),
+                                     **pipes))
         link = train.find("http://127.0.0.1:", 60)
         if not check(link is not None, "train.py printed its stream link"):
             print("\n".join(train.texts()[-20:]))
             return False
+    # caliper.serve() writes its stream file before it prints the link; a given link's is there already.
+    by_f4 = listed_stream(data, link, 2 if args.url else 10)
+    if not args.url:
+        check(by_f4, "train.py's stream file is in the app-data folder, where F4 lists it")
 
-    # 2. The app, hidden, attached to the stream from its command line. The
-    # input script reads the live page back once the checks below have passed.
-    env = app_env(data, work / "user-applets", args.size, f"page live;wait-file {ready};wait 30;shot {shot};quit",
-                  out, exit_after=60 + 60 + args.settle + 60)
-    app = Lines(children.start("the app", [args.caliper, "--hidden", "--url", link, "--api", "--api-port", "0",
-                                           "--workspace", str(workspace)], env=env, **pipes))
+    # 2. The app, hidden. With the stream listed, the input script presses F4 and Enter on it, as a person
+    # does; else the app opens on the link. The settle is a wait in seconds (patience), and after the
+    # live capture the script goes Home.
+    settle_wait = int(args.settle) + 120
+    attach = (f"page landing;key f4;wait 20;shot {f4_shot};key enter;" if by_f4 else "")
+    steps = (f"{attach}page live;patience {settle_wait};wait-file {ready};patience 0;wait 30;shot {shot};"
+             f"key escape;page landing;touch {home}")
+    env = app_env(data, work / "user-applets", args.size, steps, out, exit_after=settle_wait + 240)
+    argv = [args.caliper, "--hidden", "--api", "--api-port", "0", "--workspace", str(workspace)]
+    if not by_f4:
+        argv += ["--url", link]
+    app = Lines(children.start("the app", argv, env=env, **pipes))
     try:
         check(app.find("[api] Caliper API on ", 60) is not None, "the app started Caliper API")
-        check(app.find("[live] attached", 30) is not None, "the app attached to the stream")
-        live_page = app.when("[ui] page live", 30)
-        check(live_page is not None, "the app shows the live page")
+        check(app.find("[live] attached", 60) is not None,
+              "F4 listed the stream and Enter attached the app to it" if by_f4 else "the app attached to the link")
+        check(app.find("[ui] page live", 30) is not None, "the app shows the live page")
         if not check((data / "api.json").is_file(), "the app wrote its API file"):
             return False
         api = json.loads((data / "api.json").read_text())
 
         # 3. The catalog lists the stream's views as live sources, with their
         # shapes once a snapshot arrived and a rate once a few did.
-        want = ["live:attn", "live:attn.entropy", "live:loss"] + [f"live:entropy.l{k}" for k in range(4)]
         live: dict[str, dict] = {}
         end = time.monotonic() + 60
         while time.monotonic() < end:
-            listed = command(api["port"], api["token"], "catalog.list", {"kind": "live"})
-            live = {e["id"]: e for e in listed.get("result", {}).get("entries", [])}
-            if all(i in live and (live[i].get("rate_hz") or 0) > 0 for i in want):
+            live = live_sources(api)
+            if all(i in live and (live[i].get("rate_hz") or 0) > 0 for i in WANT):
                 break
             time.sleep(0.5)
-        for i in want:
+        for i in WANT:
             check(i in live and (live[i].get("rate_hz") or 0) > 0,
                   f"the catalog lists {i} with a rate ({(live.get(i) or {}).get('rate_hz')})")
         attn_shape = (live.get("live:attn") or {}).get("shape")
@@ -165,30 +187,26 @@ def run(children: Children, args, work: Path, out: Path, check) -> bool:
               f"live:attn.entropy is (layer, head), {(live.get('live:attn.entropy') or {}).get('shape')}")
         (out / "step1-catalog.json").write_text(json.dumps(live, indent=2) + "\n")
 
-        # 4. Let it train a while, then take the capture and quit. The settle
-        # must end before the input driver's wait for the ready file gives up.
-        spent = time.monotonic() - live_page[0] if live_page else 0.0
-        fits = spent + args.settle <= BUDGET_S
-        if not check(fits, f"the settle of {args.settle:g} s fits the input driver's wait for the capture, about "
-                           f"{PATIENCE_S:g} s, after {spent:.0f} s of catalog checks"
-                           + ("" if fits else "; give a shorter --settle")):
-            return False
+        # 4. Let it train a while, take the capture and go Home: the app stays
+        # attached, so the live sources stay in the catalog.
         time.sleep(args.settle)
         ready.touch()
         end = time.monotonic() + 120
-        while app.p.poll() is None and time.monotonic() < end and not any(
-                x.startswith("[ui] stopped") for x in app.texts()):
+        while (app.p.poll() is None and time.monotonic() < end and not home.exists()
+               and not any(x.startswith("[ui] stopped") for x in app.texts())):
             time.sleep(0.2)
         stopped = next((x for x in app.texts() if x.startswith("[ui] stopped")), None)
-        check(stopped is None and app.find("[ui] done", 5) is not None,
-              "the input script read the live page back" + (f" ({stopped})" if stopped else ""))
-        try:
-            code = app.p.wait(30) if stopped is None else children.stop(app.p)
-        except subprocess.TimeoutExpired:
-            code = children.stop(app.p)
-        check(code == 0, f"the app quit with 0 ({code})")
-        png = out / f"{shot}.png"
-        check(png.exists() and png.stat().st_size > 10000, f"the capture {png.name} was written")
+        check(home.exists() and stopped is None,
+              "the input script read the live page back and went Home" + (f" ({stopped})" if stopped else ""))
+        if home.exists():
+            after_home = live_sources(api)
+            check(all(i in after_home for i in WANT), "after Home the catalog still lists the live sources")
+            check(not any(x.startswith("[live] detached") for x in app.texts()), "Home did not detach the stream")
+        for name in ([f4_shot] if by_f4 else []) + [shot]:
+            png = out / f"{name}.png"
+            check(png.exists() and png.stat().st_size > 10000, f"the capture {png.name} was written")
+        code = children.stop(app.p)                 # SIGTERM closes the hidden app as its close button does
+        check(code == 0, f"the app closed with 0 ({code})")
         return True
     finally:
         children.stop(app.p)
@@ -204,7 +222,7 @@ def main() -> int:
     add_options(ap, train=True, url=True)
     ap.add_argument("--seconds", type=float, default=90.0, help="how long train.py trains")
     ap.add_argument("--settle", type=float, default=15.0,
-                    help=f"seconds of training the capture waits for after the catalog checks, at most {MAX_SETTLE_S:g}")
+                    help="seconds of training the live capture waits for after the catalog checks")
     args = ap.parse_args()
 
     problems = [caliper_problem(args.caliper)]
@@ -212,10 +230,6 @@ def main() -> int:
         problems.append("give --train-python, or --url of a stream that is already running")
     if bool(args.workspace) != bool(args.app_data):
         problems.append("--workspace and --app-data go together")
-    if args.settle > MAX_SETTLE_S:
-        problems.append(f"--settle {args.settle:g} is more than this script can wait for. The capture waits on the "
-                        f"input driver's wait-file step, which gives up after about {PATIENCE_S:g} s on the live page "
-                        f"and must also cover the catalog checks; give at most {MAX_SETTLE_S:g} s.")
     for problem in filter(None, problems):
         print(f"step 1: {problem}", file=sys.stderr)
         return MISSING

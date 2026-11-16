@@ -27,13 +27,15 @@ outside agent adds to in step 5 and that step 6 saves and reopens. A step that
 does not take the story's options yet runs on its own fixture, and the
 summary says which options it lacks.
 
-The stream. The runner starts the stream that step 4's side chat plots and
-gives step 4 its link: with --stream producer (the default) the test tool
-caliper_attention_producer, which streams the same views as train.py with no
-model and no torch; with --stream train, train.py itself. In the story, step 1
-attaches to a train.py the runner starts, and with --stream train that same
-training run lives on until step 4 and is the side chat's stream, so steps 1
-to 4 are one job and train.py trains beside the local model.
+The stream. Step 1 starts its own train.py on its app-data folder and
+attaches the app to it through F4, as a person does. The runner starts the
+stream that step 4's side chat plots and gives step 4 its link (--url): with
+--stream producer (the default) the test tool caliper_attention_producer,
+which streams the same views as train.py with no model and no torch; with
+--stream train, train.py itself. With --story --stream train, the runner
+starts one train.py on the story's app-data folder before step 1 and gives its
+link to steps 1 and 4: step 1 attaches to it through F4 and step 4 plots it,
+so steps 1 to 4 are one job and train.py trains beside the local model.
 
 What every step is given, the convention of hidden_app.py:
 
@@ -42,7 +44,7 @@ What every step is given, the convention of hidden_app.py:
     --agent-python <python>      steps 3 and 4, which start caliper-agent
     --model <name>               steps 3 and 4, which call the local model
     --workspace <folder> --app-data <folder>    with --story
-    --url <stream link>          step 4, and step 1 with --story
+    --url <stream link>          step 4, and step 1 with --story --stream train
 
 A step whose --help does not list these options is not run, and the summary
 says which it lacks.
@@ -360,8 +362,8 @@ def plan(step: Step, ctx, joined: dict[int, bool], env: dict) -> None:
         else:
             step.story = "the story"
             step.argv += ["--workspace", str(ctx.story_dir / "workspace"), "--app-data", str(ctx.story_dir / "app-data")]
-            if step.url:
-                step.stream = "train" if step.n == 1 else ctx.stream
+            if step.url and (step.n == 4 or ctx.stream == "train"):
+                step.stream = ctx.stream
     if step.n == 4 and not step.stream and takes_url:
         step.stream = ctx.stream                  # step 4 is given the runner's stream in either mode
     joined[step.n] = step.story == "the story"
@@ -646,6 +648,11 @@ def start_stream(kind: str, ctx, env) -> tuple[Watched, str]:
     if kind == "train":
         argv, marker = [ctx.train_python, "-u", str(TRAIN), "--seconds", str(STORY_TRAIN_SECONDS)], str(TRAIN)
         pattern = re.compile(r"^(http://127\.0\.0\.1:\S+)")
+        # Its stream file goes to the story's app-data folder, where step 1's F4 lists it, or to a folder of
+        # the run's own; never to the person's app data.
+        data = ctx.story_dir / "app-data" if ctx.story else ctx.work / "stream-data"
+        data.mkdir(parents=True, exist_ok=True)
+        env = dict(env, CALIPER_DATA_DIR=str(data))
     else:
         exe = ctx.caliper.parent / PRODUCER
         argv, marker = [str(exe), *PRODUCER_ARGS], str(exe)

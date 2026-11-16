@@ -184,16 +184,16 @@ class Scripts(unittest.TestCase):
                              stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, cwd=str(self.base))
         app_pid = None
         if sig is not None:
-            end = time.time() + 60
-            while time.time() < end and not self.started.is_file() and p.poll() is None:
+            end = time.monotonic() + 60
+            while time.monotonic() < end and not self.started.is_file() and p.poll() is None:
                 time.sleep(0.1)
             self.assertTrue(self.started.is_file(), "the stand-in app started")
             app_pid = int(self.started.read_text())
             p.send_signal(sig)
         out, _ = p.communicate(timeout=timeout)
         if app_pid is not None:
-            end = time.time() + 10
-            while time.time() < end and alive(app_pid):
+            end = time.monotonic() + 10
+            while time.monotonic() < end and alive(app_pid):
                 time.sleep(0.1)
             self.assertFalse(alive(app_pid), f"the stand-in app (pid {app_pid}) was stopped:\n{out}")
         return p.returncode, out
@@ -210,6 +210,7 @@ class Scripts(unittest.TestCase):
         return argv + (["--work", str(self.work)] if work else [])
 
     def check_step(self, name):
+        n = name[4]
         code, out = self.run_script(self.step_args(name), "fail")
         self.assertEqual(code, 1, out)
         self.kept()
@@ -222,8 +223,10 @@ class Scripts(unittest.TestCase):
         self.assertEqual(code, 130, out)
         self.kept()
         self.assertEqual(sorted(p.name for p in self.root.iterdir()), [], f"left in the temporary root:\n{out}")
-        # The caller's --work holds each run's folder side by side; none was cleared.
-        self.assertGreaterEqual(len([p for p in self.work.iterdir() if p.is_dir()]), 3)
+        # The two runs with --work made new folders beside the one from before (step<N>, which holds a
+        # marker), and cleared none.
+        made = sorted(p.name for p in self.work.iterdir() if p.is_dir() and p.name.startswith(f"step{n}"))
+        self.assertEqual(made, [f"step{n}", f"step{n}-2", f"step{n}-3"], out)
 
     def test_step1(self):
         self.check_step("step1_train_and_attach.py")
