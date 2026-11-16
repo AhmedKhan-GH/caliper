@@ -13,12 +13,18 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <sstream>
 #include <thread>
+
+#ifndef _WIN32
+#include <csignal>
+#include <sys/types.h>
+#endif
 
 namespace caliper_host {
 
@@ -135,6 +141,11 @@ std::string base_for_cache(const AgentChoice& c) {
     if (c.preset && c.preset->api == "claude") return strip_slashes(c.preset->base_url);
     return c.base_url;
 }
+
+// What a probe's answer belongs to: the base URL and the model it checked,
+// or, for a list, the preset and the base URL.
+std::string probe_key(const AgentChoice& c) { return base_for_cache(c) + " " + model_for_cache(c); }
+std::string list_key(const AgentChoice& c) { return c.preset ? c.preset->id + " " + c.base_url : std::string(); }
 
 // Why the key store could not place a key, as the probe's tag.
 std::string key_failure(const caliper_builder::Error& e) {
@@ -569,14 +580,112 @@ AgentSettingsLayout layout_agent_settings(const AgentSettingsLayoutInput& in, co
 
 // ---- the component ------------------------------------------------------------------------
 
+namespace {
+
+// What the frame thread and a probe's thread share; the thread may outlive
+// the settings.
+struct ProbeShared {
+    std::mutex m;
+    bool done = false;
+    acp::RunResult result;
+    bool cancel = false;     // the settings went or the app quits: end the child
+    std::int64_t pid = 0;    // the child's, while it runs and is not reaped
+};
+
+// Ends a probe's child and the processes it started, at once and without
+// waiting; its thread reaps it.
+void end_child(std::int64_t pid) {
+#ifndef _WIN32
+    if (pid <= 0) return;
+    ::kill(-(pid_t)pid, SIGKILL);   // its own process group
+    ::kill((pid_t)pid, SIGKILL);
+#else
+    (void)pid;
+#endif
+}
+
+// The probe's child, on the probe's own thread: run_process()'s reading loop,
+// which also ends the child when the settings ask it to. While it reads, the
+// child is never reaped, so its pid, published in `shared`, names it alone
+// and shutdown() may signal it from the frame thread; the pid is withdrawn
+// before this thread reaps it.
+void run_probe_child(const std::shared_ptr<ProbeShared>& shared, const acp::SpawnOptions& spawn,
+                     int timeout_ms) {
+    using clock = std::chrono::steady_clock;
+    constexpr std::size_t kMaxOutput = 4u << 20;
+    acp::RunResult r;
+    std::unique_ptr<acp::Process> p = acp::Process::spawn(spawn, &r.error);
+    if (p) {
+        bool cancelled = false;
+        {
+            std::lock_guard<std::mutex> lock(shared->m);
+            shared->pid = p->pid();
+            cancelled = shared->cancel;
+        }
+        p->close_stdin();
+        const auto deadline = clock::now() + std::chrono::milliseconds(timeout_ms);
+        bool out_open = true, err_open = true;
+        std::vector<char> buf(16 * 1024);
+        auto take = [&](acp::IoStatus st, std::size_t got, std::string* sink, bool* truncated, bool* open) {
+            if (st == acp::IoStatus::ok) {
+                const std::size_t room = kMaxOutput > sink->size() ? kMaxOutput - sink->size() : 0;
+                sink->append(buf.data(), std::min(got, room));
+                if (got > room) *truncated = true;
+            } else if (st == acp::IoStatus::eof || st == acp::IoStatus::error) {
+                *open = false;
+            }
+        };
+        while (!cancelled && (out_open || err_open)) {
+            if (clock::now() >= deadline) {
+                r.timed_out = true;
+                break;
+            }
+            std::size_t got = 0;
+            if (out_open) {
+                const acp::IoStatus st = p->read_stdout(buf.data(), buf.size(), &got, 50);
+                take(st, got, &r.out, &r.out_truncated, &out_open);
+            }
+            if (err_open) {
+                got = 0;
+                const acp::IoStatus st = p->read_stderr(buf.data(), buf.size(), &got, out_open ? 0 : 50);
+                take(st, got, &r.err, &r.err_truncated, &err_open);
+            }
+            std::lock_guard<std::mutex> lock(shared->m);
+            cancelled = shared->cancel;
+        }
+        {
+            std::lock_guard<std::mutex> lock(shared->m);
+            shared->pid = 0;
+            cancelled = cancelled || shared->cancel;
+        }
+        if (cancelled || r.timed_out) {
+            r.status = p->terminate(2000);
+        } else {
+            // Both streams closed: the child is ending. Wait for it within the
+            // deadline, and end it if the settings go meanwhile.
+            while (!p->wait_for(50, &r.status)) {
+                bool c = false;
+                {
+                    std::lock_guard<std::mutex> lock(shared->m);
+                    c = shared->cancel;
+                }
+                if (c || clock::now() >= deadline) {
+                    r.timed_out = !c;
+                    r.status = p->terminate(2000);
+                    break;
+                }
+            }
+        }
+    }
+    std::lock_guard<std::mutex> lock(shared->m);
+    shared->result = std::move(r);
+    shared->done = true;
+}
+
+}  // namespace
+
 struct AgentSettings::Runner {
-    // Shared with the probe's thread, which may outlive the surface.
-    struct Shared {
-        std::mutex m;
-        bool done = false;
-        acp::RunResult result;
-    };
-    std::shared_ptr<Shared> shared;
+    std::shared_ptr<ProbeShared> shared;
     bool list_only = false;
     std::string list_key;   // the preset and base URL a list belongs to
     std::string for_key;    // the base URL and model a probe belongs to
@@ -778,19 +887,12 @@ void AgentSettings::run_probe(std::vector<std::string> extra, bool list_only) {
         agent::strip_key_environment(&spawn);
     }
     runner_ = std::make_unique<Runner>();
-    runner_->shared = std::make_shared<Runner::Shared>();
+    runner_->shared = std::make_shared<ProbeShared>();
     runner_->list_only = list_only;
-    runner_->list_key = c.preset->id + " " + c.base_url;
-    runner_->for_key = base_for_cache(c) + " " + model;
+    runner_->list_key = list_key(c);
+    runner_->for_key = probe_key(c);
     const int timeout = options_.probe_timeout_ms;
-    std::thread([shared = runner_->shared, spawn, timeout] {
-        acp::RunLimits limits;
-        limits.timeout_ms = timeout;
-        acp::RunResult r = acp::run_process(spawn, limits);
-        std::lock_guard<std::mutex> lock(shared->m);
-        shared->result = std::move(r);
-        shared->done = true;
-    }).detach();
+    std::thread([shared = runner_->shared, spawn, timeout] { run_probe_child(shared, spawn, timeout); }).detach();
 }
 
 void AgentSettings::list_models() {
@@ -823,13 +925,17 @@ void AgentSettings::frame() {
     std::unique_ptr<Runner> done = std::move(runner_);
     AgentProbeAnswer a = parse_probe_answer(r.out);
     if (!a.ran) a.failure = r.timed_out ? "Timeout" : "No answer";
+    // An answer for a choice that is no longer the current one (the model or
+    // the address changed while it ran) leaves the tags as they are; a list
+    // is still kept under its own preset and address.
+    const AgentChoice c = choice();
     if (done->list_only) {
         if (a.ran) listed_[done->list_key] = a.models;
-        if (!a.problems.empty() || !a.failure.empty()) {
+        if (done->list_key == list_key(c) && (!a.problems.empty() || !a.failure.empty())) {
             answer_.problems = a.problems;
             answer_.failure = a.failure;
         }
-    } else {
+    } else if (done->for_key == probe_key(c)) {
         answer_ = std::move(a);
         answer_for_ = done->for_key;
         bump();   // the widget agent reads the cache again
@@ -838,8 +944,7 @@ void AgentSettings::frame() {
 
 AgentCapabilities AgentSettings::capabilities() const {
     const AgentChoice c = choice();
-    const std::string key = base_for_cache(c) + " " + model_for_cache(c);
-    if (answer_.ran && answer_for_ == key) return answer_.caps;
+    if (answer_.ran && answer_for_ == probe_key(c)) return answer_.caps;
     if (caps_revision_seen_ != revision_) {   // the cache file is read again after a change only
         const double now = options_.now ? options_.now()
                                         : (double)std::chrono::duration_cast<std::chrono::seconds>(
@@ -973,7 +1078,14 @@ AgentSettingsLayoutInput AgentSettings::layout_input(const WidgetRect& area) con
 
 void AgentSettings::shutdown() {
     cancel_key();
-    runner_.reset();   // a probe still running finishes on its own thread
+    if (runner_ && runner_->shared) {
+        // A probe still running: its child, which may hold the key in its
+        // environment, ends now; its thread reaps it. Nothing here waits.
+        std::lock_guard<std::mutex> lock(runner_->shared->m);
+        runner_->shared->cancel = true;
+        end_child(runner_->shared->pid);
+    }
+    runner_.reset();
 }
 
 // ---- the ImGui side -----------------------------------------------------------------------

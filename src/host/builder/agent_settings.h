@@ -40,6 +40,9 @@
 // placed only in its environment by the key store, which also removes every
 // key and endpoint variable of the app's own environment from it; when the
 // store cannot place the key the provider requires, the probe does not run.
+// shutdown() and the destructor end a probe's child at once, without waiting
+// for it (its thread reaps it), and an answer for a choice that is no longer
+// the current one is dropped.
 //
 // Built only with CALIPER_WITH_BUILDER.
 // ============================================================================
@@ -243,9 +246,9 @@ public:
     bool is_open() const { return open_; }
     void set_open(bool open);
     // Grows with every change of the choice or of a key, and with a probe's
-    // answer, so that the widget agent is made again with it. `on_change`
-    // runs on the frame thread after each change (the spec page drops its
-    // widget agent then); one listener, null for none.
+    // answer for the current choice, so that the widget agent is made again
+    // with it. `on_change` runs on the frame thread after each change (the
+    // spec page drops its widget agent then); one listener, null for none.
     int revision() const { return revision_; }
     void set_on_change(std::function<void()> on_change) { on_change_ = std::move(on_change); }
 
@@ -291,11 +294,12 @@ public:
     std::vector<std::string> visible_text() const;
 
     // ---- per frame (frame thread)
-    void frame();   // takes the probe's answer when it has come
+    void frame();   // takes the probe's answer when it has come, if it is still the current choice's
     // The popup in the work area `x, y, w, h`, while open; Escape closes it.
     void draw(float x, float y, float w, float h, const SpecLook& look);
     // ⌘, (Ctrl+, elsewhere) opens it; inside a frame.
     void read_keys();
+    // Ends a probe's child at once and forgets the probe; never waits for it.
     void shutdown();
 
     // The layout input of the surface as it is.

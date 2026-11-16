@@ -28,6 +28,12 @@
 #include <sstream>
 #include <thread>
 
+#ifndef _WIN32
+#include <csignal>
+#include <cerrno>
+#include <sys/types.h>
+#endif
+
 using namespace caliper_host;
 namespace agent = caliper_builder::agent;
 namespace acp = caliper_builder::acp;
@@ -153,6 +159,43 @@ protected:
         return {"keystore.failed", "The store is locked."};
     }
 };
+
+// A stand-in for caliper-agent's probe: a package of the same name under
+// `source`/agent that writes its process id to FAKE_PROBE_PID_FILE, waits
+// until the file FAKE_PROBE_GATE exists (at most ten minutes), then prints
+// FAKE_PROBE_ANSWER as its answer.
+void write_fake_probe(const std::string& source) {
+    const fs::path pkg = fs::path(source) / "agent" / "caliper_agent";
+    fs::create_directories(pkg);
+    std::ofstream(pkg / "__init__.py") << "";
+    std::ofstream(pkg / "__main__.py") << R"(import os, time
+pid_file = os.environ.get("FAKE_PROBE_PID_FILE", "")
+if pid_file:
+    with open(pid_file + ".tmp", "w") as out:
+        out.write(str(os.getpid()))
+    os.replace(pid_file + ".tmp", pid_file)
+gate = os.environ.get("FAKE_PROBE_GATE", "")
+deadline = time.monotonic() + 600
+while gate and not os.path.exists(gate) and time.monotonic() < deadline:
+    time.sleep(0.02)
+print(os.environ.get("FAKE_PROBE_ANSWER", "{}"), flush=True)
+)";
+}
+
+#ifndef _WIN32
+bool alive(long pid) { return pid > 0 && (::kill((pid_t)pid, 0) == 0 || errno == EPERM); }
+#endif
+
+// Waits until `ready()` is true, at most `limit`.
+template <class F>
+bool wait_until(F ready, std::chrono::seconds limit) {
+    const auto deadline = std::chrono::steady_clock::now() + limit;
+    while (!ready()) {
+        if (std::chrono::steady_clock::now() >= deadline) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return true;
+}
 
 }  // namespace
 
@@ -740,6 +783,86 @@ TEST_CASE("agent settings: the probe never passes on a key or an endpoint from t
         CHECK_FALSE(none.busy());
         CHECK(none.probe_answer().failure == "No key");
     }
+}
+
+#ifndef _WIN32
+TEST_CASE("agent settings: the probe's child ends when the app shuts the settings down or they go") {
+    const std::string python = CALIPER_BUILDER_TEST_PYTHON;
+    if (python.empty()) {
+        MESSAGE("caliper_agent_settings_agent skipped: no CALIPER_BUILDER_TEST_PYTHON");
+        return;
+    }
+    const std::string dir = tmp_dir("probe-quit");
+    write_fake_probe(dir + "/src");
+    agent::MemoryKeyStore keys;
+    for (const bool destroy : {false, true}) {
+        CAPTURE(destroy);
+        const std::string pid_file = dir + (destroy ? "/destroy.pid" : "/shutdown.pid");
+        auto s = std::make_unique<AgentSettings>();
+        AgentSettings::Options o = options_in(dir, &keys);
+        o.python = python;
+        o.source = dir + "/src";
+        o.probe_env = {{"CALIPER_AGENT_OFFLINE", "1"}, {"FAKE_PROBE_PID_FILE", pid_file},
+                       {"FAKE_PROBE_GATE", dir + "/never"}};
+        s->start(o);
+        s->choose_preset("ollama");
+        s->set_model("local-model");
+        s->probe(true);
+        REQUIRE(s->busy());
+        REQUIRE(wait_until([&] { return fs::exists(pid_file); }, std::chrono::seconds(60)));
+        const long pid = std::stol(read_text(pid_file));
+        REQUIRE(alive(pid));
+        // The app quits mid-probe (shutdown()), or the settings go: neither
+        // waits for the child, and the child ends.
+        const auto before = std::chrono::steady_clock::now();
+        if (destroy) s.reset();
+        else s->shutdown();
+        CHECK(std::chrono::steady_clock::now() - before < std::chrono::seconds(2));
+        if (!destroy) CHECK_FALSE(s->busy());
+        const bool ended = wait_until([&] { return !alive(pid); }, std::chrono::seconds(30));
+        CHECK(ended);
+        if (!ended) ::kill((pid_t)pid, SIGKILL);   // the test's own child, by its pid
+    }
+}
+#endif
+
+TEST_CASE("agent settings: a late answer for a model no longer chosen leaves the current tags") {
+    const std::string python = CALIPER_BUILDER_TEST_PYTHON;
+    if (python.empty()) {
+        MESSAGE("caliper_agent_settings_agent skipped: no CALIPER_BUILDER_TEST_PYTHON");
+        return;
+    }
+    const std::string dir = tmp_dir("probe-late");
+    write_fake_probe(dir + "/src");
+    agent::MemoryKeyStore keys;
+    AgentSettings s;
+    AgentSettings::Options o = options_in(dir, &keys);
+    o.python = python;
+    o.source = dir + "/src";
+    const std::string gate = dir + "/gate";
+    o.probe_env = {{"CALIPER_AGENT_OFFLINE", "1"},
+                   {"FAKE_PROBE_GATE", gate},
+                   {"FAKE_PROBE_ANSWER", R"({"version": 1, "capabilities": {"tools": {"value": false, "source": "probe"}},
+                                             "errors": [{"code": "probe.unreachable", "message": "x"}]})"}};
+    s.start(o);
+    s.choose_preset("ollama");
+    s.set_model("first-model");
+    s.probe(true);
+    REQUIRE(s.busy());
+    const int revision = s.revision();
+    s.set_model("second-model");   // chosen while the first model's probe runs
+    std::ofstream(gate) << "";
+    settle(s);
+    CHECK(s.probe_answer().problems.empty());
+    CHECK_FALSE(contains(s.visible_text(), "Server unreachable"));
+    CHECK(s.state().empty());
+    CHECK(s.revision() == revision + 1);   // the model's change only
+    // The answer for the model chosen now is taken.
+    s.probe(true);
+    settle(s);
+    CHECK(s.probe_answer().problems == std::vector<std::string>{"Server unreachable"});
+    CHECK(s.capabilities().tools == std::optional<bool>(false));
+    CHECK(s.state() == "No tool calling");
 }
 
 TEST_SUITE_END();
