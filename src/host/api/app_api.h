@@ -30,6 +30,7 @@
 namespace caliper_host {
 
 // True when the command line asks for the API (--api) or CALIPER_API is 1.
+// On Windows, where main() refuses --api, CALIPER_API is ignored.
 bool api_wanted(const CommandLine& cl);
 
 class AppApi {

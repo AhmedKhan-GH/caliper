@@ -52,6 +52,9 @@
 // its window never shown: no Dock icon, no menu bar, no focus (main.cpp).
 // It applies to starting the app and to dev.
 //
+// On Windows, `serve`, `build`, `--api` and `--url` are refused before
+// anything starts, with one message (windows_unavailable below).
+//
 // Exit codes: 0 success; 1 a check failed, nothing was found, or a file
 // operation failed; 2 the command line is wrong (the usage goes to stderr).
 //
@@ -147,6 +150,28 @@ constexpr int kShotMaxSide = 16384;
 
 // The port `caliper serve` listens on without --port.
 constexpr int kDefaultHubPort = 7340;
+
+// ---- what the Windows build refuses for now ------------------------------------
+// The network stream, the hub, Caliper API and `caliper build` compile on
+// Windows, and the in-process tests of the WebSocket layer, the hub and the
+// API run there, but none of them has run on Windows as a process yet, and
+// the network source that --url attaches through is macOS-only, as the live
+// attach is. So the Windows build refuses them before anything starts:
+// main() prints windows_unavailable_message() and exits with 1. The function
+// is pure and platform-neutral, so the tests check it everywhere.
+inline const char* windows_unavailable(const CommandLine& cl) {
+    using C = CommandLine::Command;
+    if (cl.command == C::Serve) return "caliper serve";
+    if (cl.command == C::Build) return "caliper build";
+    if (cl.command != C::Run && cl.command != C::Dev && cl.command != C::Shot) return nullptr;
+    if (cl.api) return "Caliper API (--api)";
+    if (!cl.url.empty()) return "attaching to a stream (--url)";
+    return nullptr;
+}
+
+inline std::string windows_unavailable_message(const char* what) {
+    return std::string(what) + " is not available on Windows yet";
+}
 
 inline CommandLine parse_command_line(int argc, const char* const* argv) {
     using C = CommandLine::Command;

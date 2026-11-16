@@ -19,8 +19,12 @@ namespace caliper_host {
 
 bool api_wanted(const CommandLine& cl) {
     if (cl.api) return true;
+#ifdef _WIN32
+    return false;   // CALIPER_API is ignored on Windows (host_cli.h, windows_unavailable)
+#else
     const char* v = std::getenv("CALIPER_API");
     return v && std::strcmp(v, "1") == 0;
+#endif
 }
 
 bool AppApi::start(const CommandLine& cl, const std::string& capture_unavailable,

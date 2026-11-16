@@ -412,6 +412,30 @@ TEST_CASE("cli: info and list as JSON hold what the text forms print") {
     CHECK(list->at(1).find("reason")->as_string().empty());
 }
 
+TEST_CASE("cli: Windows refuses serve, build, --api and --url with one message, and nothing else") {
+    auto refused = [](std::vector<const char*> args) {
+        const CommandLine cl = parse(args);
+        REQUIRE_MESSAGE(cl.error.empty(), cl.error);
+        const char* what = windows_unavailable(cl);
+        return what ? std::string(what) : std::string();
+    };
+    CHECK(refused({"serve"}) == "caliper serve");
+    CHECK(refused({"serve", "--port", "0", "--allow-control"}) == "caliper serve");
+    CHECK(refused({"build", "/a"}) == "caliper build");
+    CHECK(refused({"--api"}) == "Caliper API (--api)");
+    CHECK(refused({"dev", "/a", "--api", "--api-port", "0"}) == "Caliper API (--api)");
+    CHECK(refused({"shot", "--launch", "x", "--out", "o.png", "--api"}) == "Caliper API (--api)");
+    CHECK(refused({"--url", "ws://127.0.0.1:1/v3/stream?token=t"}) == "attaching to a stream (--url)");
+    for (std::vector<const char*> fine : {std::vector<const char*>{}, {"dev", "/a"}, {"--hidden"},
+                                          {"list"}, {"check", "/a"}, {"install", "/a"}, {"new", "x"},
+                                          {"info"}, {"shot", "--launch", "x", "--out", "o.png"},
+                                          {"--help"}}) {
+        CAPTURE(fine.size());
+        CHECK(refused(fine).empty());
+    }
+    CHECK(windows_unavailable_message("caliper serve") == "caliper serve is not available on Windows yet");
+}
+
 TEST_CASE("cli: build takes one folder and no --applets") {
     auto b = parse({"build", "/a"});
     CHECK(b.error.empty());

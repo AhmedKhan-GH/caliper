@@ -960,6 +960,18 @@ int main(int argc, char** argv) {
         std::fputs(caliper_host::usage_text(), stdout);
         return 0;
     }
+#ifdef _WIN32
+    // What the Windows build refuses for now (host_cli.h), before anything
+    // starts. CALIPER_API, a setting rather than this command line's request,
+    // is said to be ignored, and the app starts without the API.
+    if (const char* what = caliper_host::windows_unavailable(cl)) {
+        std::fprintf(stderr, "caliper: %s\n", caliper_host::windows_unavailable_message(what).c_str());
+        return 1;
+    }
+    if (const char* v = std::getenv("CALIPER_API"); v && std::strcmp(v, "1") == 0)
+        std::fprintf(stderr, "caliper: CALIPER_API is ignored: %s\n",
+                     caliper_host::windows_unavailable_message("Caliper API").c_str());
+#endif
     if (cl.command == Command::Shot) {
         // The applet page drawn into an offscreen canvas and written as a
         // PNG (host/shot.h). No window, no GLFW, no Dock icon.

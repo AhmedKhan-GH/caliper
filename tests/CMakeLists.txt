@@ -254,6 +254,22 @@ if(TARGET caliper)
         ERROR "--api applies only to starting the app, dev and shot")
     caliper_cli_test(hidden_elsewhere ARGS "shot|--hidden|--launch|x|--out|${_cli_work}/x.png" EXIT 2
         ERROR "--hidden applies only to starting the app and dev")
+    # On Windows the pieces that have not run there as a process yet are
+    # refused before anything starts, with exit code 1 and one message
+    # (host_cli.h, windows_unavailable); no window opens and nothing is written.
+    if(WIN32)
+        caliper_cli_test(windows_serve ARGS "serve|--port|0" EXIT 1
+            ERROR "caliper serve is not available on Windows yet")
+        caliper_cli_test(windows_build ARGS "build|${_cli_work}" EXIT 1
+            ERROR "caliper build is not available on Windows yet")
+        caliper_cli_test(windows_api ARGS "--api|--api-port|0" EXIT 1
+            ERROR "Caliper API \\(--api\\) is not available on Windows yet")
+        caliper_cli_test(windows_shot_api
+            ARGS "shot|--launch|dev.caliper.hello|--out|${_cli_work}/x.png|--api" EXIT 1
+            ERROR "Caliper API \\(--api\\) is not available on Windows yet")
+        caliper_cli_test(windows_url ARGS "--url|ws://127.0.0.1:9/v3/stream?token=x" EXIT 1
+            ERROR "attaching to a stream \\(--url\\) is not available on Windows yet")
+    endif()
     if(NOT WIN32)
         add_test(NAME caliper_cli_api
                  COMMAND caliper_tests "--test-case=api: caliper shot --api serves*")

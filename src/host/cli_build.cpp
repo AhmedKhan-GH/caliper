@@ -182,8 +182,9 @@ int run_build(const CommandLine& cl, const CliContext& ctx, std::ostream& out, s
 #ifdef _WIN32
     (void)ctx;
     (void)out;
-    err << "caliper: build is not available on Windows yet; configure and build the folder with CMake "
-           "and the SDK's prefix on CMAKE_PREFIX_PATH, then run caliper check on its build folder\n";
+    err << "caliper: " << windows_unavailable_message("caliper build")
+        << "; configure and build the folder with CMake and the SDK's prefix on CMAKE_PREFIX_PATH, "
+           "then run caliper check on its build folder\n";
     return 1;
 #else
     std::string why;
