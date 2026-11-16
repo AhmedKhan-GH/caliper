@@ -178,3 +178,20 @@ lit pixel of the surface within 2 levels, and a pixel within one pixel of an
 edge either side's colour. Without the reference it writes the capture for a
 person to review and skips; `CALIPER_DEMO0_WRITE_REFERENCE=1` writes it as
 the reference. `CALIPER_SCENE_CAPTURE_DIR` keeps the frame and the area.
+
+Its browser row, `test_capture_browser`, draws the same scene on the viewer
+page of `caliper.serve()` with Caliper's WebAssembly views, in headless
+Chromium through Playwright (`tests/demos/viewer_page.mjs`), on the SwiftShader
+adapter, which needs no GPU, or on the Mac's GPU with
+`CALIPER_DEMO0_WEB_ADAPTER=metal`. It runs where the WebAssembly views are
+built into `python/caliper/_web/` (`scripts/build_wasm.py`), Node is installed
+and `npm ci` has been run in `web/wasm/test` with Playwright's Chromium headless
+shell in its cache, and skips elsewhere; it downloads nothing. CI's Browser
+views workflow has no PyTorch, so the row runs on a developer's Mac. It opens
+the page before training, runs the same 300 steps and the surface at step 299,
+waits until the scene's module has received every message the server sent on
+its connection and has drawn 30 more frames, checks that the path's, the
+marker's and the frame's colours appear exactly, and compares the scene's
+drawing area with `tests/demos/reference/loss_landscape_web_swiftshader_step299.png`
+under the same parity rules. Without the reference it writes the capture and
+skips; `CALIPER_DEMO0_WRITE_WEB_REFERENCE=1` writes it as the reference.

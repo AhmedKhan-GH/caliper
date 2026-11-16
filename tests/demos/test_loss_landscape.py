@@ -37,6 +37,7 @@ import io
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -786,3 +787,123 @@ def test_capture(notebook, tmp_path):
                 app.wait(20)
             except subprocess.TimeoutExpired:
                 app.kill()
+
+
+# ---------------------------------------------------------------------------
+# the browser row: the viewer page in headless Chromium, against a reviewed
+# reference
+# ---------------------------------------------------------------------------
+WEB_VIEWS = REPO / "python" / "caliper" / "_web" / "caliper-views.wasm"
+PLAYWRIGHT = REPO / "web" / "wasm" / "test" / "node_modules" / "playwright-core"
+WEB_ADAPTER = os.environ.get("CALIPER_DEMO0_WEB_ADAPTER", "swiftshader")
+WEB_REFERENCE = Path(__file__).resolve().parent / "reference" / f"loss_landscape_web_{WEB_ADAPTER}_step299.png"
+
+
+@pytest.mark.skipif(not WEB_VIEWS.exists() or shutil.which("node") is None or not PLAYWRIGHT.is_dir(),
+                    reason="needs the WebAssembly views in python/caliper/_web (scripts/build_wasm.py), "
+                           "Node and `npm ci` in web/wasm/test")
+def test_capture_browser(notebook, tmp_path):
+    """The same scene on the viewer page of ``caliper.serve()``, drawn by Caliper's
+    WebAssembly views in headless Chromium (tests/demos/viewer_page.mjs), on
+    SwiftShader unless CALIPER_DEMO0_WEB_ADAPTER is "metal": the notebook's cells
+    on the CPU with fixed seeds and deterministic algorithms for 300 steps with
+    ``every`` at 100, the page open from the start (so its camera fits the
+    static frame), a surface forced at step 299, and the scene's drawing area
+    once its module has received every message the server sent on its
+    connection and drawn 30 more frames. The path's, the marker's and the
+    frame's colours appear exactly, and the area matches the reference under
+    the parity rules. Without a reference the test writes the capture for review
+    and skips: CALIPER_DEMO0_WRITE_WEB_REFERENCE=1 writes it as the reference,
+    which is committed once a person has reviewed it. CALIPER_SCENE_CAPTURE_DIR
+    keeps the area."""
+    Image = pytest.importorskip("PIL.Image")
+    ns = notebook(300)
+    land, server = ns["land"], ns["server"]
+    ns["every"].set(100)
+    page = subprocess.Popen(["node", str(Path(__file__).resolve().parent / "viewer_page.mjs"), server.url,
+                             WEB_ADAPTER], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    lines: list[str] = []
+    threading.Thread(target=lambda: [lines.append(x.rstrip()) for x in page.stdout], daemon=True).start()
+
+    def wait(pred, what, timeout=120.0):
+        end = time.monotonic() + timeout
+        while not pred():
+            assert page.poll() is None or pred(), "\n".join(lines[-20:])
+            assert time.monotonic() < end, f"waited {timeout} s for {what}"
+            time.sleep(0.02)
+
+    def frames_out(lid):
+        return next(c for c in server.stats()["connections"] if c["id"] == lid)["frames_out"]
+
+    def sent_when_idle(lid):
+        """The frames sent on connection ``lid`` once nothing waits to go on it:
+        no scene batch in flight from the device, and on the connection no
+        control message and no scene batch queued, at two reads in a row with
+        the same count."""
+        from caliper import _net_scene
+        route = _net_scene.route_of(server.ring)
+        link = next(ln for ln in server.producer.links if ln.id == lid)
+
+        def idle():
+            try:
+                return not route.busy() and not link.control and (link.scenes is None or all(
+                    not q.state and not q.pending for q in list(link.scenes.subs.values())))
+            except RuntimeError:                                 # changed while read
+                return False
+        prev = None
+        while True:
+            n = frames_out(lid)
+            if idle():
+                if n == prev:
+                    return n
+                prev = n
+            else:
+                prev = None
+            time.sleep(0.05)
+
+    try:
+        wait(lambda: any(x == "READY" or x.split(" ")[0] in ("SKIP", "FAIL") for x in lines), "the page")
+        first = next(x for x in lines if x == "READY" or x.split(" ")[0] in ("SKIP", "FAIL"))
+        if first.startswith("SKIP"):
+            pytest.skip(first[5:])
+        assert first == "READY", first
+        scene = [c["id"] for c in server.stats()["connections"] if c.get("scenes_sent", 0) > 0]
+        assert len(scene) == 1, server.stats()["connections"]   # the scene's module, one connection
+        ns["train"](300)
+        ns["show_surface"]()                                      # a surface forced at step 299
+        assert land.refits[-1] == (299, "path")
+        n = sent_when_idle(scene[0])                              # the run is idle now
+        png = tmp_path / "browser-step299.png"
+        page.stdin.write(f"shot {n} {png}\n")
+        page.stdin.flush()
+        wait(lambda: any(x.startswith("SHOT ") for x in lines), "the capture")
+        shot = json.loads(next(x for x in lines if x.startswith("SHOT "))[5:])
+        assert "error" not in shot or not shot["error"], shot
+        assert frames_out(scene[0]) == n                          # nothing was sent after the count
+        assert shot["drawer"] == "wasm" and not shot["gfxErrors"], shot
+        assert shot["info"].startswith("4 entities"), shot["info"]
+        area = np.asarray(Image.open(png).convert("RGB"))
+        keep_dir = os.environ.get("CALIPER_SCENE_CAPTURE_DIR")
+        if keep_dir:
+            Image.fromarray(area).save(Path(keep_dir) / f"loss-landscape-web-{WEB_ADAPTER}-step299.png")
+        # the flat colours of the path, the marker and the frame, exactly
+        flat = area.reshape(-1, 3)
+        for colour in ((235, 235, 235), MARKER, (120, 120, 120)):
+            assert (flat == np.array(colour)).all(-1).any(), f"no pixel of {colour}"
+        if os.environ.get("CALIPER_DEMO0_WRITE_WEB_REFERENCE") == "1":
+            WEB_REFERENCE.parent.mkdir(exist_ok=True)
+            Image.fromarray(area).save(WEB_REFERENCE)
+        if not WEB_REFERENCE.exists():
+            out = tmp_path / WEB_REFERENCE.name
+            Image.fromarray(area).save(out)
+            pytest.skip(f"no reference yet: review {out} and commit it as "
+                        f"{WEB_REFERENCE.relative_to(REPO)} (CALIPER_DEMO0_WRITE_WEB_REFERENCE=1)")
+        ok, report = parity(area, np.asarray(Image.open(WEB_REFERENCE).convert("RGB")))
+        assert ok, report
+    finally:
+        if page.poll() is None:
+            page.stdin.close()
+            try:
+                page.wait(20)
+            except subprocess.TimeoutExpired:
+                page.kill()
