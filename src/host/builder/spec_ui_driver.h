@@ -43,6 +43,11 @@
 //                        a press on the first, a move in steps to the second
 //                        and a release there, or none with `hold`
 //   release              lets go of a held drag
+//   select <panel> <fx0> <fx1> [<fy0> <fy1>]
+//                        a shift-drag across a shown panel from the fractions
+//                        (fx0, fy0) to (fx1, fy1) of its rectangle (fy 0.5
+//                        when not given): a range on a series panel, a
+//                        rectangle of points on a points panel
 //   drop <path> ...      files dropped on the window, through the app's drop
 //                        callback's own function (a hidden window receives no
 //                        real drop)
@@ -248,6 +253,40 @@ public:
             }
             return;
         }
+        if (s.verb == "select") {
+            std::stringstream words(s.arg);
+            std::string panel;
+            float fx0 = 0.3f, fx1 = 0.6f, fy0 = 0.5f, fy1 = 0.5f;
+            words >> panel >> fx0 >> fx1;
+            if (!(words >> fy0 >> fy1)) fy0 = fy1 = 0.5f;
+            constexpr int kSteps = 12;
+            if (drag_frame_ == 0) {
+                float r[4];
+                if (!page.panel_rect(panel, r)) return patience("panel " + panel + " is not shown");
+                drag_a_[0] = std::round(r[0] + r[2] * fx0);
+                drag_a_[1] = std::round(r[1] + r[3] * fy0);
+                drag_b_[0] = std::round(r[0] + r[2] * fx1);
+                drag_b_[1] = std::round(r[1] + r[3] * fy1);
+                io.AddKeyEvent(ImGuiMod_Shift, true);
+                io.AddMousePosEvent(drag_a_[0], drag_a_[1]);
+                drag_frame_ = 1;
+            } else if (drag_frame_ == 1) {
+                io.AddMouseButtonEvent(0, true);
+                drag_frame_ = 2;
+            } else if (drag_frame_ < kSteps + 2) {
+                const float t = (float)(drag_frame_ - 1) / (float)kSteps;
+                io.AddMousePosEvent(std::round(drag_a_[0] + (drag_b_[0] - drag_a_[0]) * t),
+                                    std::round(drag_a_[1] + (drag_b_[1] - drag_a_[1]) * t));
+                ++drag_frame_;
+            } else if (drag_frame_ == kSteps + 2) {
+                io.AddMouseButtonEvent(0, false);
+                ++drag_frame_;
+            } else {
+                io.AddKeyEvent(ImGuiMod_Shift, false);
+                next("selected on " + panel);
+            }
+            return;
+        }
         if (s.verb == "release") {
             io.AddMouseButtonEvent(0, false);
             next("released");
@@ -384,7 +423,7 @@ private:
     void next(const std::string& what) {
         const std::string& verb = steps_[at_].verb;
         if (verb == "click" || verb == "key" || verb == "type" || verb == "drag" || verb == "release" ||
-            verb == "drop")
+            verb == "drop" || verb == "select")
             settle_ = kSettle;
         log_.push_back(what);
         ++at_;

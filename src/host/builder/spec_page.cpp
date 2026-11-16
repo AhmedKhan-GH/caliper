@@ -29,6 +29,7 @@
 #include <imgui_internal.h>
 
 #include <cctype>
+#include <cmath>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -173,7 +174,34 @@ struct SpecPage::Impl {
     std::unique_ptr<BuilderPane> builder;
     bool building() const { return builder && builder->build_mode() && !from_file; }
 
+    // ⌘K on a panel: the prompt for the panel, or for its selection when it
+    // has one (spec_runtime.h, SpecSelection), with the selected rows.
     void open_widget(AppSession& app, const std::string& panel) {
+        const SpecSelection& sel = runtime->selection();
+        if (!sel.empty() && sel.panel == panel) {
+            if (const PreparedPanel* p = runtime->prepared(panel)) {
+                const SpecSelectionRows rows = spec_selection_rows(*p, sel, 1000);
+                cb::WidgetSelection ws;
+                ws.kind = sel.kind == SpecSelection::Kind::points ? "points" : "range";
+                ws.columns = rows.columns;
+                ws.rows = nlohmann::json::array();
+                for (const auto& row : rows.rows) {
+                    nlohmann::json cells = nlohmann::json::array();
+                    for (double v : row) cells.push_back(std::isfinite(v) ? nlohmann::json(v) : nlohmann::json(nullptr));
+                    ws.rows.push_back(std::move(cells));
+                }
+                const std::string x = rows.columns.empty() ? "x" : rows.columns.front();
+                ws.range = {{x, {sel.x0, sel.x1}}};
+                if (sel.kind == SpecSelection::Kind::points && rows.columns.size() > 1)
+                    ws.range[rows.columns[1]] = {sel.y0, sel.y1};
+                open_widget_target(app, WidgetTarget::for_selection(panel, std::move(ws)));
+                return;
+            }
+        }
+        open_widget_target(app, WidgetTarget::for_panel(panel));
+    }
+
+    void open_widget_target(AppSession& app, const WidgetTarget& target) {
         if (!bound || from_file) return;
         // Settings changed since the agent was made: made again, while closed.
         if (widget && settings && settings->revision() != widget_revision && !widget_open()) drop_widget();
@@ -209,7 +237,7 @@ struct SpecPage::Impl {
             widget->attach(*runtime);
             install_overlay();   // the page's, which calls the widget's
         }
-        widget->surface().open(WidgetTarget::for_panel(panel));
+        widget->surface().open(target);
     }
 
     // The page's command input, which ⌘K opens when no panel is focused:
@@ -278,6 +306,23 @@ struct SpecPage::Impl {
                 *s, [a] { return a->worker_busy(); }, [a] { return a->journaled(); });
             builder = std::make_unique<BuilderPane>(std::move(port));
             builder->set_layout_rule(spec_page_layout_rule);
+            // ⌘K in the builder: a dropped file's row and a property's row
+            // open the inline prompt there, and it is drawn under that row.
+            BuilderPane::WidgetHooks hooks;
+            hooks.open_file = [this, a](const std::string& loader, const std::vector<std::string>& catalog,
+                                        const std::string& anchor) {
+                open_widget_target(*a, WidgetTarget::for_dropped_file(loader, catalog, anchor));
+            };
+            hooks.open_property = [this, a](const std::string& panel, const std::string& path) {
+                open_widget_target(*a, WidgetTarget::for_property(panel, "", path));
+            };
+            hooks.height = [this](const std::string& anchor, float w) {
+                return widget ? widget->surface().row_height(anchor, w) : 0.0f;
+            };
+            hooks.draw = [this](const std::string& anchor, const SpecRect& r) {
+                if (widget) widget->surface().draw_row(anchor, ImRect(ImVec2(r.x, r.y), ImVec2(r.right(), r.bottom())));
+            };
+            builder->set_widget_hooks(std::move(hooks));
         }
     }
 
@@ -597,6 +642,9 @@ SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, 
         im.command_open = false;
         im.command.clear();
         escape = false;
+    } else if (escape && !im.runtime->selection().empty()) {
+        im.runtime->clear_selection();   // the selection goes before the focus
+        escape = false;
     }
     // The builder's keys (⌘B, and in build mode ⌘T, ⌘Z, ⇧⌘Z, ⌘S, ⌫), and
     // its Escape (a drag, the text editor, a source's focus) before the
@@ -621,6 +669,8 @@ SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, 
         case SpecKeyAction::page_command:
             if (im.seams.page_command) {
                 im.seams.page_command();
+            } else if (im.building() && im.builder->open_file_prompt()) {
+                // ⌘K on the row of a file just dropped, selected in Sources.
             } else {
                 im.command_open = true;
                 im.command_focus = true;
