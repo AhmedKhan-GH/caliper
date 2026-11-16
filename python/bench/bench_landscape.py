@@ -1,19 +1,34 @@
 """The cost row of demo 0, the loss landscape (demos/loss_landscape), on MPS:
-the notebook's training run with the landscape at the default N of 500
-against the same run without it, the surface's own time and its peak memory,
-vmap against the loop over perturbed copies, and the per-step cost of the
-path and marker calls.
+the notebook's training run with the landscape at its defaults (a surface
+every 2,000 steps, a path point every 10th step) against the baseline arm
+"committed", the same loop without the landscape whose work reaches the
+device as it runs; the surface's own time and its peak memory; vmap against
+the loop over perturbed copies; and the per-step cost of the path and marker
+calls.
 
-    PYTHONPATH=python .venv/bin/python python/bench/bench_landscape.py [--steps 8000] [--repeats 2]
+    PYTHONPATH=python .venv/bin/python python/bench/bench_landscape.py [--steps 8000] [--repeats 3]
+        [--grid 41] [--diagnose]
+
+The baseline. On MPS, a training loop that never waits for the device and
+records no event leaves its work queued until it ends: the notebook's loop
+without the landscape spends 14 s on the host for 8,000 steps and then 14 s
+more while the device drains, so a wall-clock comparison against that loop
+measures the drain, not the landscape. The landscape's calls record events
+and so let the device work beside the host. Every cost row therefore compares
+against "committed", the loop without the landscape with a timed MPS event
+recorded after every step, which hands its work to the device as it runs; the
+plain loop without it ("plain", --diagnose) is reported for the record only.
 
 Each training run is a fresh process that runs the notebook's own code cells
 (all but the training run, the random-directions cell and the close) with a
 viewer attached in a process of its own, which subscribes to the scene and
 the series and discards what it receives, as a notebook widget would read
-them. The runs alternate, with and without the landscape. Without the
-landscape the loop is the same, with land.point and land.due made no-ops. The
+them. The arms alternate. Without the landscape the loop is the same, with
+land.point and land.due made no-ops. Each run's clock stops after
+torch.mps.synchronize(), so it includes every kernel the loop queued. The
 budget of design/demos.md is at most 1.5 times as long with the landscape.
-Prints one line per row with the 1-minute load average beside it.
+--grid overrides the notebook's 41 points a side. Prints one line per row with
+the 1-minute load average beside it, and each run's measurements as JSON.
 """
 from __future__ import annotations
 
@@ -41,9 +56,13 @@ def notebook(steps: int) -> dict:
     os.environ["CALIPER_NOTEBOOK_STEPS"] = str(steps)
     sys.path.insert(0, str(NOTEBOOK.parent))
     ns = {"__name__": "loss_landscape"}
+    grid = int(os.environ.get("CALIPER_BENCH_GRID", "0"))
     for cell in json.loads(NOTEBOOK.read_text())["cells"]:
         if cell["cell_type"] == "code" and cell["id"] not in ("widgets", "run", "random", "close"):
             exec(compile("".join(cell["source"]), f"{NOTEBOOK.name}:{cell['id']}", "exec"), ns)
+            if cell["id"] == "serve" and grid:                # --grid: another resolution
+                made = ns["Landscape"]
+                ns["Landscape"] = lambda *a, **kw: made(*a, **{**kw, "grid": grid})
     return ns
 
 
@@ -292,7 +311,8 @@ def child(args: list[str]) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--steps", type=int, default=8000)
-    ap.add_argument("--repeats", type=int, default=2)
+    ap.add_argument("--repeats", type=int, default=3)
+    ap.add_argument("--grid", type=int, default=0, help="points a side, instead of the notebook's")
     ap.add_argument("--drain")
     ap.add_argument("--run", choices=["with", "without"])
     ap.add_argument("--mode", choices=["plain", "events", "sync", "bounded"], default="plain")
@@ -301,6 +321,8 @@ def main() -> None:
     ap.add_argument("--surface", action="store_true")
     ap.add_argument("--picture", action="store_true")
     args = ap.parse_args()
+    if args.grid:
+        os.environ["CALIPER_BENCH_GRID"] = str(args.grid)        # read by every child
     if args.drain:
         return drain(args.drain)
     if args.run:
@@ -309,34 +331,37 @@ def main() -> None:
         return surface(600)
     if args.picture:
         return picture(args.steps)
-    times = {"with": [], "without": []}
+    arms = {"landscape": ["--run", "with"], "committed": ["--run", "without", "--mode", "events"]}
+    times = {arm: [] for arm in arms}
     for i in range(args.repeats):
-        for variant in ("without", "with") if i % 2 == 0 else ("with", "without"):
-            r = child(["--run", variant, "--steps", str(args.steps)])
-            times[variant].append(r["seconds"])
+        for arm in ("committed", "landscape") if i % 2 == 0 else ("landscape", "committed"):
+            r = child(arms[arm] + ["--steps", str(args.steps)])
+            times[arm].append(r["seconds"])
             extra = ""
-            if variant == "with":
+            if arm == "landscape":
                 c = r["path_calls_us"]
                 extra = (f"; path+marker calls median {c['median']:.1f} us, p99 {c['p99']:.1f} us,"
-                         f" slowest {max(c['slowest']):.0f} us; {len(r['refits'])} refits,"
-                         f" {r['method']}, share {r['share']:.3f}")
-            print(f"{variant:8s} {args.steps} steps {r['seconds']:7.2f} s to the device's end "
+                         f" slowest {max(c['slowest']):.0f} us; {len(r['refits'])} surfaces at "
+                         f"{r['refits']}, {r['method']}, share {r['share']:.3f}")
+            print(f"{arm:9s} {args.steps} steps {r['seconds']:7.2f} s to the device's end "
                   f"(host loop {r['host_end']:.2f} s, drain {r['drain'] * 1e3:.0f} ms, step "
                   f"{r['step_ms_median']:.2f} ms median; load {r['load'][0]:.1f} to "
                   f"{r['load'][1]:.1f}){extra}", flush=True)
             print("json: " + json.dumps(r), flush=True)
-    ratio = statistics.median(times["with"]) / statistics.median(times["without"])
-    print(f"ratio with / without: {ratio:.3f} (budget 1.5)", flush=True)
+    ratio = statistics.median(times["landscape"]) / statistics.median(times["committed"])
+    print(f"ratio landscape / committed: {ratio:.3f} (budget 1.5); each run "
+          f"{min(times['landscape']) / max(times['committed']):.3f} to "
+          f"{max(times['landscape']) / min(times['committed']):.3f}", flush=True)
     if args.diagnose:
-        base = statistics.median(times["without"])
-        committed = None
-        for variant, mode in (("with", "events"), ("with", "sync"), ("without", "events"),
+        base = statistics.median(times["committed"])
+        for variant, mode in (("without", "plain"), ("with", "events"), ("with", "sync"),
                               ("without", "bounded"), ("with", "bounded")):
             r = child(["--run", variant, "--steps", str(args.steps), "--mode", mode])
             print("json: " + json.dumps(r), flush=True)
-            line = (f"{variant}, {mode}: {r['seconds']:.2f} s to the device's end (host loop "
+            name = {"without": "plain" if mode == "plain" else "without", "with": "landscape"}
+            line = (f"{name[variant]}, {mode}: {r['seconds']:.2f} s to the device's end (host loop "
                     f"{r['host_end']:.2f} s, drain {r['drain'] * 1e3:.0f} ms), "
-                    f"{r['seconds'] - base:+.2f} s against the median plain run without; host "
+                    f"{r['seconds'] - base:+.2f} s against the median committed run; host "
                     f"step {r['step_ms_median']:.2f} ms median")
             if mode == "events":
                 line += (f"; device {r['device_step_ms_when_behind']:.2f} ms a step while behind"
@@ -344,20 +369,12 @@ def main() -> None:
             if variant == "with" and mode in ("events", "sync"):
                 line += (f"; surfaces {sum(r['surface_s']):.2f} s in all ({min(r['surface_s']):.3f}"
                          f" to {max(r['surface_s']):.3f} s each); the host step holding a surface "
-                         f"{min(r['surface_step_ms']):.0f} to {max(r['surface_step_ms']):.0f} ms, "
-                         f"the slowest of the 50 after it {max(r['next50_max_ms']):.1f} ms")
+                         f"{min(r['surface_step_ms']):.0f} to {max(r['surface_step_ms']):.0f} ms")
             if variant == "with" and mode == "events":
                 line += (f"; device lag after a surface {min(r['lag_after_surface_s']):.3f} to "
                          f"{max(r['lag_after_surface_s']):.3f} s, worked off in "
                          f"{min(r['catch_up_steps'])} to {max(r['catch_up_steps'])} steps")
             print(line + f" (load {r['load'][0]:.1f} to {r['load'][1]:.1f})", flush=True)
-            if (variant, mode) == ("without", "events"):
-                committed = r["seconds"]
-        # A plain run without the landscape commits no work to the device until
-        # its last step, so its device runs after its host; with an event after
-        # every step the same loop's work is committed as it goes.
-        print(f"ratio with (median plain) / without (events, work committed every step): "
-              f"{statistics.median(times['with']) / committed:.3f} (budget 1.5)", flush=True)
     s = child(["--surface"])
     fmt = lambda xs: ", ".join(f"{x:.3f}" for x in xs)  # noqa: E731
     print(f"surface: first {fmt(s['first path s'])} s; vmap path {fmt(s['vmap path s'])} s;"
