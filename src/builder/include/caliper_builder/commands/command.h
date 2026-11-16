@@ -7,7 +7,8 @@
 // underscore, the verb matches [a-z][a-z0-9_]*, and the whole name has at most
 // 64 characters, so the tool name `group_verb` maps back to it. An invocation
 // id is up to 128 characters of A-Z a-z 0-9 . _ : - (empty means "assign one");
-// a group or a merge key is 1 to 128 characters of A-Z a-z 0-9 . _ : / -.
+// a group, a merge key or a preview is 1 to 128 characters of
+// A-Z a-z 0-9 . _ : / -.
 // command_invocation_from_json() is strict: an unknown field, a missing name or
 // origin, or a malformed field is "command.invalid_invocation"; arguments
 // nested too deeply or too large are "command.invalid_args", found before they
@@ -69,6 +70,12 @@ struct CommandInvocation {
     CommandOrigin origin = CommandOrigin::ui;
     std::string group;      // empty: none
     std::string merge_key;  // empty: none
+    // The id of a stacked preview of the open spec (Session, preview.begin):
+    // an edit of the open spec applies to the preview instead, and spec.get,
+    // spec.validate and panel.render read it. Commands that do not read or
+    // edit the open spec ignore it. Over Caliper API it is the header
+    // X-Caliper-Preview. Empty: none.
+    std::string preview;
 };
 
 // Checks the id, the name, the group and the merge key, and that `args` is an

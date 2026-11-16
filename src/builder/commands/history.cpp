@@ -74,7 +74,7 @@ void CommandHistory::record(HistoryRecord rec, std::string at) {
     redo_.clear();
     rec.cost = record_cost(rec);
     const CommandInvocation& inv = rec.invocation;
-    if (!undo_.empty()) {
+    if (!undo_.empty() && !sealed_) {
         HistoryStep& top = undo_.back();
         if (!inv.merge_key.empty() && top.id == open_step_ && top.group == inv.group) {
             HistoryRecord& last = top.records.back();
@@ -106,6 +106,7 @@ void CommandHistory::record(HistoryRecord rec, std::string at) {
             return;
         }
     }
+    sealed_ = false;
     HistoryStep step;
     step.id = next_id_++;
     step.group = inv.group;
@@ -121,6 +122,11 @@ void CommandHistory::pass_by() {
     redo_.clear();
     open_step_ = 0;
     enforce();
+}
+
+void CommandHistory::seal() {
+    sealed_ = true;
+    open_step_ = 0;
 }
 
 HistoryStep* CommandHistory::top_undo() { return undo_.empty() ? nullptr : &undo_.back(); }
@@ -156,6 +162,7 @@ void CommandHistory::clear() {
     undo_.clear();
     redo_.clear();
     open_step_ = 0;
+    sealed_ = false;
     bytes_ = 0;
 }
 

@@ -12,7 +12,8 @@
 //      command.handler_failed, and a handler that invokes a command gets
 //      command.reentrant;
 //   4. for a mutating command, writes the journal's do event (also for a
-//      failure or a denial) and files the undo record in the history. A
+//      failure or a denial) and files the undo record in the history, then
+//      runs the handler's follow-ups, if any, as one step of their own. A
 //      handler that reports `no_effect` (a dry run, or an edit that changed
 //      nothing) is treated as a read: no undo step is filed, the redo stack
 //      and merging are kept, and no journal line is written unless the
@@ -61,11 +62,25 @@ struct CommandContext {
 // be undone). `no_effect` says that the command changed nothing, as a dry run
 // does whether it succeeds or fails, so the registry treats it as a read and
 // ignores any undo record.
+//
+// `follow_ups` are invocations that the registry runs after the handler
+// succeeds, in order, as one new undo step (preview.commit returns the edits
+// of the preview it commits). They share one non-empty group, and each names a
+// bound command that mutates, is not destructive and is not a history
+// command, with arguments that pass its schema; all are checked before any
+// runs. They are not sent to the approval policy, because the handler's own
+// invocation was the approval, and they take the ids <id>.1, <id>.2, ...
+// The handler's own invocation is journaled first, then each follow-up that
+// changed something. When one fails, the ones that ran are undone, newest
+// first, none of them is journaled, and the invocation fails with that error.
+// The handler's own undo record and `no_effect` are ignored when it returns
+// follow-ups.
 struct CommandOutput {
     nlohmann::json result = nlohmann::json::object();
     Error error;
     UndoRecord undo;
     bool no_effect = false;
+    std::vector<CommandInvocation> follow_ups;
 
     static CommandOutput ok(nlohmann::json result, UndoRecord undo = UndoRecord::none());
     static CommandOutput fail(Error error);
@@ -143,6 +158,7 @@ private:
     };
 
     CommandResult run(const CommandInvocation& inv, const Entry& entry, const std::vector<std::uint64_t>& steps);
+    CommandResult run_follow_ups(const CommandInvocation& inv, const Entry& entry, CommandOutput& out);
     CommandResult run_history_move(const CommandInvocation& inv, bool undo, const std::vector<std::uint64_t>& steps);
     CommandResult run_history_list(const CommandInvocation& inv);
     std::pair<ApprovalDecision, std::vector<std::uint64_t>> history_decision(const CommandInvocation& inv, bool undo);

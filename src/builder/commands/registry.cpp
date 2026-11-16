@@ -461,6 +461,7 @@ CommandResult CommandRegistry::run(const CommandInvocation& inv, const Entry& en
         result = run_history_list(inv);
     } else {
         CommandOutput out = call(entry, inv, false);
+        if (!out.error && !out.follow_ups.empty()) return run_follow_ups(inv, entry, out);
         // An outcome that changed nothing is a read, even of a mutating command.
         const bool changed = entry.descriptor.mutates && !out.no_effect;
         const bool journal_this = changed || (journal_ && journal_->options().include_read_only);
@@ -489,6 +490,94 @@ CommandResult CommandRegistry::run(const CommandInvocation& inv, const Entry& en
         result = CommandResult::success(inv.id, std::move(out.result));
     }
     if (result.ok && options_.check_results)
+        if (Error err = validate_command_value(entry.descriptor.result, result.result, "result")) {
+            err.code = "command.invalid_result";
+            return CommandResult::failure(inv.id, err);
+        }
+    return result;
+}
+
+CommandResult CommandRegistry::run_follow_ups(const CommandInvocation& inv, const Entry& entry, CommandOutput& out) {
+    const bool journal_parent = entry.descriptor.mutates || (journal_ && journal_->options().include_read_only);
+    auto fail = [&](Error e) {
+        if (journal_parent) journal_do(inv, false, e.code);
+        return CommandResult::failure(inv.id, std::move(e));
+    };
+    auto bad = [&](std::size_t k, const std::string& why) {
+        return fail(Error("command.handler_failed",
+                          "The handler of " + inv.name + " returned a follow-up that cannot run: " + why,
+                          "follow_ups[" + std::to_string(k) + "]"));
+    };
+    // Every follow-up is checked before any runs.
+    std::vector<CommandInvocation>& subs = out.follow_ups;
+    std::vector<const Entry*> entries;
+    const std::string group = subs.front().group;
+    if (group.empty()) return bad(0, "the follow-ups share one non-empty group.");
+    for (std::size_t k = 0; k < subs.size(); ++k) {
+        CommandInvocation& sub = subs[k];
+        sub.id = inv.id.substr(0, 112) + "." + std::to_string(k + 1);
+        if (sub.args.is_null()) sub.args = json::object();
+        if (sub.group != group) return bad(k, "the follow-ups share one non-empty group.");
+        if (Error err = check_command_invocation(sub)) return bad(k, err.message);
+        const auto it = commands_.find(sub.name);
+        if (it == commands_.end() || !it->second.handler) return bad(k, sub.name + " is not a bound command.");
+        const CommandDescriptor& d = it->second.descriptor;
+        if (!d.mutates || d.destructive || is_history(sub.name))
+            return bad(k, sub.name + " does not mutate, is destructive or is a history command.");
+        if (Error err = validate_command_value(d.args, sub.args, "args")) return bad(k, err.where + ": " + err.message);
+        if (wrong_thread(d)) return bad(k, sub.name + " runs only on the app's frame thread.");
+        entries.push_back(&it->second);
+    }
+    std::vector<CommandOutput> outs;
+    for (std::size_t k = 0; k < subs.size(); ++k) {
+        CommandOutput o = call(*entries[k], subs[k], false);
+        if (o.error) {
+            // Undo the follow-ups that ran, newest first, so that a failed
+            // invocation changes nothing.
+            for (std::size_t j = outs.size(); j-- > 0;) {
+                if (outs[j].no_effect || outs[j].undo.kind == UndoRecord::Kind::none) continue;
+                HistoryRecord r;
+                r.invocation = subs[j];
+                r.undo = std::move(outs[j].undo);
+                if (Error again = undo_record(r, inv)) {
+                    history_.clear();
+                    return fail(Error("history.inconsistent",
+                                      subs[k].name + " failed (" + o.error.message + "), and undoing " + subs[j].name +
+                                          " to roll it back failed too (" + again.message +
+                                          "). The history was cleared; the workspace may be partly changed.",
+                                      subs[k].name));
+                }
+            }
+            Error e = o.error;
+            e.message = subs[k].name + " failed: " + e.message;
+            return fail(std::move(e));
+        }
+        outs.push_back(std::move(o));
+    }
+    if (journal_parent) journal_do(inv, true, {});
+    history_.seal();
+    for (std::size_t k = 0; k < subs.size(); ++k) {
+        CommandOutput& o = outs[k];
+        if (o.no_effect) continue;  // a follow-up that changed nothing is a read
+        const std::uint64_t seq = journal_do(subs[k], true, {});
+        if (o.undo.kind == UndoRecord::Kind::none) {
+            history_.pass_by();
+            continue;
+        }
+        HistoryRecord record;
+        record.invocation = subs[k];
+        record.destructive = false;
+        if (o.undo.kind == UndoRecord::Kind::inverse) {
+            const auto inverse = commands_.find(o.undo.inverse_name);
+            record.inverse_destructive = inverse != commands_.end() && inverse->second.descriptor.destructive;
+        }
+        record.undo = std::move(o.undo);
+        if (seq) record.seqs.push_back(seq);
+        record.last = options_.steady_now();
+        history_.record(std::move(record), now_text());
+    }
+    CommandResult result = CommandResult::success(inv.id, std::move(out.result));
+    if (options_.check_results)
         if (Error err = validate_command_value(entry.descriptor.result, result.result, "result")) {
             err.code = "command.invalid_result";
             return CommandResult::failure(inv.id, err);

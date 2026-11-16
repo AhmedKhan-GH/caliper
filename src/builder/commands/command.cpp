@@ -117,8 +117,8 @@ Error check_command_invocation(const CommandInvocation& inv) {
         if (!id_char(c)) return invalid("An invocation id holds only A-Z, a-z, 0-9, '.', '_', ':' and '-'.", "id");
     if (Error err = check_command_name(inv.name)) return err;
     if (!inv.args.is_object()) return invalid("The arguments are a JSON object.", "args");
-    for (const auto* field : {&inv.group, &inv.merge_key}) {
-        const char* where = field == &inv.group ? "group" : "merge_key";
+    for (const auto* field : {&inv.group, &inv.merge_key, &inv.preview}) {
+        const char* where = field == &inv.group ? "group" : field == &inv.merge_key ? "merge_key" : "preview";
         if (field->size() > 128) return invalid(std::string("A ") + where + " has at most 128 characters.", where);
         for (const char c : *field)
             if (!key_char(c))
@@ -134,7 +134,8 @@ json command_invocation_to_json(const CommandInvocation& inv) {
                 {"args", inv.args},
                 {"origin", command_origin_name(inv.origin)},
                 {"group", inv.group.empty() ? json(nullptr) : safe_string(inv.group)},
-                {"merge_key", inv.merge_key.empty() ? json(nullptr) : safe_string(inv.merge_key)}};
+                {"merge_key", inv.merge_key.empty() ? json(nullptr) : safe_string(inv.merge_key)},
+                {"preview", inv.preview.empty() ? json(nullptr) : safe_string(inv.preview)}};
 }
 
 CommandInvocationParse command_invocation_from_json(const json& v) {
@@ -145,7 +146,8 @@ CommandInvocationParse command_invocation_from_json(const json& v) {
     }
     for (const auto& item : v.items()) {
         const std::string& k = item.key();
-        if (k != "id" && k != "name" && k != "args" && k != "origin" && k != "group" && k != "merge_key") {
+        if (k != "id" && k != "name" && k != "args" && k != "origin" && k != "group" && k != "merge_key" &&
+            k != "preview") {
             out.error = invalid("An invocation has no field of this name.", k);
             return out;
         }
@@ -185,13 +187,14 @@ CommandInvocationParse command_invocation_from_json(const json& v) {
         return out;
     }
     inv.origin = *origin;
-    for (const char* k : {"group", "merge_key"}) {
+    for (const char* k : {"group", "merge_key", "preview"}) {
         if (!v.contains(k) || v[k].is_null()) continue;
         if (!v[k].is_string()) {
             out.error = invalid(std::string(k) + " is a string or null.", k);
             return out;
         }
-        (std::string(k) == "group" ? inv.group : inv.merge_key) = v[k].get<std::string>();
+        const std::string key = k;
+        (key == "group" ? inv.group : key == "merge_key" ? inv.merge_key : inv.preview) = v[k].get<std::string>();
     }
     out.error = check_command_invocation(inv);
     return out;

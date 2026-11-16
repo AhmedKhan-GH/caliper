@@ -14,7 +14,8 @@
 //   - with a group equal to the top step's group, it joins that step;
 //   - otherwise it begins a new step.
 // Every record() and pass_by() clears the redo stack; pass_by() is for a
-// mutating command that cannot be undone, and also closes merging. The undo
+// mutating command that cannot be undone, and also closes merging. seal()
+// makes the next record() begin a new step, whatever its group or merge key. The undo
 // stack holds at most max_steps steps, and both stacks at most max_bytes,
 // dropping the oldest undo steps first but never the newest one.
 //
@@ -98,6 +99,7 @@ public:
 
     void record(HistoryRecord record, std::string at);
     void pass_by();
+    void seal();
 
     HistoryStep* top_undo();
     HistoryStep* top_redo();
@@ -132,6 +134,7 @@ private:
     std::vector<HistoryStep> redo_;
     std::uint64_t next_id_ = 1;
     std::uint64_t open_step_ = 0;  // the step that may still take merges
+    bool sealed_ = false;          // the next record begins a new step
     std::size_t bytes_ = 0;
 };
 

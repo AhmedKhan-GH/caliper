@@ -50,6 +50,12 @@ TEST_CASE("an invocation round-trips through JSON") {
     CHECK(back.invocation.group == "turn-7");
     CHECK(back.invocation.merge_key.empty());
 
+    CHECK(j["preview"].is_null());
+    inv.preview = "widget-1";
+    const auto with_preview = cb::command_invocation_from_json(cb::command_invocation_to_json(inv));
+    REQUIRE(with_preview.error.ok());
+    CHECK(with_preview.invocation.preview == "widget-1");
+
     // id and args may be absent.
     const auto minimal = cb::command_invocation_from_json({{"name", "app.info"}, {"origin", "api"}});
     REQUIRE(minimal.error.ok());
@@ -95,6 +101,9 @@ TEST_CASE("a malformed invocation names its fault") {
     j = ok;
     j["merge_key"] = "slider:heat/options.ratio";
     CHECK(cb::command_invocation_from_json(j).error.ok());
+    j = ok;
+    j["preview"] = "has space";
+    CHECK(where(j) == "preview");
     j = ok;
     j["name"] = "Panel.remove";
     CHECK(where(j) == "name");

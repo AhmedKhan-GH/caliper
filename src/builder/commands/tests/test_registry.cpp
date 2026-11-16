@@ -563,3 +563,92 @@ TEST_CASE("read-only commands are journaled only when the journal asks for it") 
     REQUIRE(read.events.size() == 1);
     CHECK(read.events[0].name == "toy.get");
 }
+
+TEST_CASE("a handler's follow-ups run as one new step, journaled after it, and roll back together when one fails") {
+    const fs::path dir = fs::path(CALIPER_BUILDER_TEST_TMP) / "registry-follow-ups";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    const std::string path = (dir / "commands.jsonl").string();
+    auto opened = CommandJournal::open(path);
+    REQUIRE(opened.error.ok());
+    CommandRegistry r;
+    r.set_journal(opened.journal.get());
+    Store s;
+    add_toy(r, s);
+    REQUIRE(r.add(descriptor("toy.wipe", true, true)).ok());  // destructive, unbound
+    REQUIRE(r.add(descriptor("toy.look", false), [](const CommandContext&) { return CommandOutput::ok({}); }).ok());
+    // toy.batch {value}: sets a, b and c to value, value + 1 and value + 2 as
+    // follow-ups; with key "mixed" its follow-ups do not share a group, with
+    // "wipe" one is destructive, with "look" one does not mutate.
+    REQUIRE(r.add(descriptor("toy.batch", true), [](const CommandContext& c) {
+                 const int v = c.invocation.args.value("value", 0);
+                 const std::string key = c.invocation.args.value("key", "");
+                 CommandOutput out = CommandOutput::ok({{"batched", 3}});
+                 for (int k = 0; k < 3; ++k) {
+                     CommandInvocation sub = inv("toy.set", {{"key", std::string(1, char('a' + k))}, {"value", v + k}},
+                                                 CommandOrigin::agent, "batch");
+                     if (key == "mixed" && k == 2) sub.group = "other";
+                     if (key == "wipe" && k == 1) sub.name = "toy.wipe";
+                     if (key == "look" && k == 1) sub.name = "toy.look";
+                     out.follow_ups.push_back(sub);
+                 }
+                 return out;
+             }).ok());
+
+    // An earlier step of the same group stays a step of its own.
+    REQUIRE(r.invoke(inv("toy.set", {{"key", "z"}, {"value", 9}}, CommandOrigin::agent, "batch")).ok);
+    const CommandResult done = r.invoke(inv("toy.batch", {{"value", 10}}));
+    REQUIRE(done.ok);
+    CHECK(done.result == json{{"batched", 3}});
+    CHECK(s.values["a"] == 10);
+    CHECK(s.values["c"] == 12);
+    REQUIRE(state(r).undo.size() == 2);
+    CHECK(state(r).undo[0].count == 3);
+    CHECK(state(r).undo[0].group == "batch");
+    CHECK(state(r).undo[0].origin == CommandOrigin::agent);
+    REQUIRE(r.invoke(inv("history.undo")).ok);
+    CHECK(s.values.count("a") == 0);
+    CHECK(s.values.count("c") == 0);
+    CHECK(s.values["z"] == 9);
+    REQUIRE(r.invoke(inv("history.redo")).ok);
+    CHECK(s.values["b"] == 11);
+
+    // A follow-up that fails undoes the ones that ran, and only the failed
+    // invocation is journaled.
+    REQUIRE(r.add(descriptor("toy.fail", true), [](const CommandContext&) {
+                 return CommandOutput::fail(cb::Error("toy.nope", "It fails."));
+             }).ok());
+    REQUIRE(r.add(descriptor("toy.half", true), [](const CommandContext&) {
+                 CommandOutput out = CommandOutput::ok({});
+                 out.follow_ups.push_back(inv("toy.set", {{"key", "h"}, {"value", 1}}, CommandOrigin::agent, "g"));
+                 out.follow_ups.push_back(inv("toy.fail", {}, CommandOrigin::agent, "g"));
+                 return out;
+             }).ok());
+    const CommandResult half = r.invoke(inv("toy.half"));
+    CHECK(half.error.code == "toy.nope");
+    CHECK(s.values.count("h") == 0);
+    CHECK(state(r).undo.size() == 2);
+
+    // Follow-ups that cannot run are refused before any runs.
+    for (const char* key : {"mixed", "wipe", "look"}) {
+        CAPTURE(key);
+        const CommandResult bad = r.invoke(inv("toy.batch", {{"key", key}, {"value", 50}}));
+        CHECK(bad.error.code == "command.handler_failed");
+        CHECK(s.values["a"] == 10);
+    }
+
+    const auto read = cb::read_journal(path);
+    REQUIRE(read.error.ok());
+    // z, the batch and its three sets, an undo and a redo, the failed half and
+    // the three refused batches.
+    REQUIRE(read.events.size() == 11);
+    CHECK(read.events[1].name == "toy.batch");
+    CHECK(read.events[2].name == "toy.set");
+    CHECK(read.events[2].group == "batch");
+    CHECK(read.events[4].args == json{{"key", "c"}, {"value", 12}});
+    CHECK(read.events[5].event == "undo");
+    CHECK(read.events[5].seqs == std::vector<std::uint64_t>{3, 4, 5});
+    CHECK(read.events[7].name == "toy.half");
+    CHECK_FALSE(read.events[7].ok);
+    CHECK(read.events[7].error == "toy.nope");
+}
