@@ -1,6 +1,6 @@
 """caliper.scene: scenes of points, lines and meshes on the network route.
 
-This is the part of the scene calls that increment 1 of sprint 4 builds, on
+This is the part of the scene calls that is built, on
 the scenes subset of the protocol 3.2 draft (docs/references/wire-protocol-3-2.md):
 ``caliper.scene(name, space=, up=, units=, rate=)`` and, on the scene it
 returns, ``points``, ``lines`` (segments or strips) and ``mesh``, each with
@@ -27,8 +27,8 @@ A call, on the thread that makes it:
   ``.cpu()`` of a device tensor, ``.numpy()``, ``.tolist()`` or
   ``synchronize()``.
 
-The arguments of the full scene API that this increment does not build raise
-NotImplementedError naming the increment that brings them.
+The arguments and calls of the full scene API that are not built yet raise
+NotImplementedError with a message that says so.
 """
 from __future__ import annotations
 
@@ -49,8 +49,12 @@ _CMAPS = {"viridis": 0, "magma": 1, "rdbu": 2}
 DEFAULT_RATE_HZ = 60.0
 META_MARGIN = 4096                       # bytes of metadata a batch frame may need, at most
 PART_ORDER = {_wire.PART_POINTS: 0, _wire.PART_LINES: 1, _wire.PART_MESH: 2}
-LATER = "comes in a later increment of sprint 4 (increment 3)"
-LATER_PICKING = "comes with picking and linked selection in a later increment of sprint 4 (increment 5)"
+
+
+def _not_built(call: str, what: str) -> NotImplementedError:
+    """The error of an argument or call of the scene API that is not built yet."""
+    return NotImplementedError(f"{call} is not built yet ({what})")
+
 
 SCENES: dict[str, "SceneState"] = {}     # name -> the scene (training thread writes; the network
                                          # thread reads its static batches)
@@ -143,9 +147,9 @@ def scene(name: str = "scene", *, space: str = "3d", up=None, units: str = "m", 
     """See caliper.scene."""
     _check_name(name)
     if data_view is not None:
-        raise NotImplementedError(f"caliper.scene(data_view=...): scene data views {LATER}")
+        raise _not_built("caliper.scene(data_view=...)", "scene data views")
     if view_camera is not None:
-        raise NotImplementedError(f"caliper.scene(view_camera=...): the starting camera {LATER}")
+        raise _not_built("caliper.scene(view_camera=...)", "the starting camera")
     if space not in (_wire.SPACE_3D, _wire.SPACE_2D):
         raise ValueError(f"space must be '3d' or '2d', got {space!r}")
     axes = _wire.UP_AXES_3D if space == _wire.SPACE_3D else _wire.UP_AXES_2D
@@ -399,7 +403,7 @@ class Scene:
         s = self._s
         return f"<caliper.Scene {s.name!r} {s.space} up={s.up} units={s.units!r}>"
 
-    # -- the calls of this increment --------------------------------------------
+    # -- the calls that are built ----------------------------------------------
     def points(self, path, positions, *, colors=None, values=None, cmap="viridis", vmin=None,
                vmax=None, class_ids=None, radii=None, labels=None, items=None, static=False,
                rate=None) -> bool:
@@ -408,11 +412,11 @@ class Scene:
         [vmin, vmax] (an open end is computed on the device); ``radii`` (N,)
         or one number, in scene units (default: discs of a few pixels)."""
         if class_ids is not None:
-            raise NotImplementedError(f"scene.points(class_ids=...): the class table {LATER}")
+            raise _not_built("scene.points(class_ids=...)", "the class table")
         if labels is not None:
-            raise NotImplementedError(f"scene.points(labels=...): labels {LATER}")
+            raise _not_built("scene.points(labels=...)", "labels")
         if items is not None:
-            raise NotImplementedError(f"scene.points(items=...): linked selection {LATER_PICKING}")
+            raise _not_built("scene.points(items=...)", "picking and linked selection")
         st = self._s
         _check_path(path)
         iv = _check_static_rate(static, rate)
@@ -445,9 +449,9 @@ class Scene:
         the row count when None), or with one colour, or by ``values``
         through ``cmap``; ``width`` in pixels."""
         if indices is not None:
-            raise NotImplementedError(f"scene.lines(indices=...): index-pair edges {LATER}")
+            raise _not_built("scene.lines(indices=...)", "index-pair edges")
         if color_per == "edge":
-            raise NotImplementedError(f"scene.lines(color_per='edge'): index-pair edges {LATER}")
+            raise _not_built("scene.lines(color_per='edge')", "index-pair edges")
         if color_per not in (None, _wire.COLOR_PER_VERTEX, _wire.COLOR_PER_STRIP):
             raise ValueError(f"color_per must be 'vertex', 'strip' or None, got {color_per!r}")
         st = self._s
@@ -520,9 +524,9 @@ class Scene:
         ``values`` (V,) through ``cmap``; faces are shaded flat. An index out
         of range draws as the last vertex."""
         if normals is not None:
-            raise NotImplementedError(f"scene.mesh(normals=...): smooth shading {LATER}")
+            raise _not_built("scene.mesh(normals=...)", "smooth shading")
         if uvs is not None or texture is not None:
-            raise NotImplementedError(f"scene.mesh(uvs=..., texture=...): textured meshes {LATER}")
+            raise _not_built("scene.mesh(uvs=..., texture=...)", "textured meshes")
         st = self._s
         _check_path(path)
         iv = _check_static_rate(static, rate)
@@ -546,9 +550,9 @@ class Scene:
         spec = _Spec(_wire.PART_MESH, pos, ct, vt, cm, vmin, vmax, params, extra=extra)
         return _log(st, path, spec, static, iv)
 
-    # -- the calls of later increments ------------------------------------------
+    # -- the calls that are not built yet --------------------------------------
     def _later(self, call: str, what: str):
-        raise NotImplementedError(f"scene.{call}(): {what} {LATER}")
+        raise _not_built(f"scene.{call}()", what)
 
     def arrows(self, *a, **kw):
         self._later("arrows", "arrows")
@@ -625,7 +629,7 @@ def _log(st: SceneState, path: str, spec: _Spec, static: bool, iv) -> bool:
     nbytes = _frame_bytes(spec)
     if nbytes + META_MARGIN > _wire.MAX_FRAME_BYTES:
         raise ValueError(f"this batch needs {nbytes} bytes, more than one frame of "
-                         f"{_wire.MAX_FRAME_BYTES >> 20} MiB; split updates {LATER}")
+                         f"{_wire.MAX_FRAME_BYTES >> 20} MiB; split updates are not built yet")
     key = (path, spec.part)
     if key not in st.batches:
         if path not in st.entities and len(st.entities) >= _wire.MAX_ENTITIES:

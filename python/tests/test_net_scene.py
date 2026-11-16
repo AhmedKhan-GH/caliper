@@ -8,8 +8,8 @@ caliper._netio is built) and on the CPU and, where there is one, MPS:
 * a late subscriber receives the static items and the current state, opened
   by SCENE_CLEAR with reset;
 * a rate limit drops a batch and never a static one;
-* every refusal raises, attached or not, and the arguments of later
-  increments raise NotImplementedError;
+* every refusal raises, attached or not, and the arguments that are not
+  built yet raise NotImplementedError;
 * a viewer without the capability "scenes" sees no scene;
 * the calls of demo 0 (the loss landscape) run in their order;
 * the cost of a call with nothing attached stays small."""
@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import re
 import statistics
 import time
 import warnings
@@ -460,10 +461,10 @@ def test_scene_refusals():
     caliper.scene("s")
     with pytest.raises(ValueError, match="keeps its space"):
         caliper.scene("s", space="2d")
-    with pytest.raises(NotImplementedError, match="increment 3"):
-        caliper.scene("s", data_view={})
-    with pytest.raises(NotImplementedError, match="increment 3"):
-        caliper.scene("s", view_camera={"azimuth": 30})
+    for kw in ("data_view", "view_camera"):
+        msg = f"caliper.scene({kw}=...) is not built yet"
+        with pytest.raises(NotImplementedError, match=re.escape(msg)):
+            caliper.scene("s", **{kw: {}})
     assert caliper.scene("s", up="+z").up == "+z"                     # a second call updates up
 
 
@@ -514,24 +515,24 @@ def test_call_refusals():
         with pytest.raises(exc):
             call()
     later = [
-        (lambda: sc.points("p", p3, class_ids=torch.zeros(4)), "increment 3"),
-        (lambda: sc.points("p", p3, labels=["a"] * 4), "increment 3"),
-        (lambda: sc.points("p", p3, items="test"), "increment 5"),
-        (lambda: sc.lines("l", p3, indices=torch.zeros(2, 2)), "increment 3"),
-        (lambda: sc.lines("l", p3, color_per="edge"), "increment 3"),
-        (lambda: sc.mesh("m", p3[:3], normals=torch.zeros(3, 3)), "increment 3"),
-        (lambda: sc.mesh("m", p3[:3], uvs=torch.zeros(3, 2)), "increment 3"),
-        (lambda: sc.mesh("m", p3[:3], texture=torch.zeros(2, 2, 3)), "increment 3"),
-        (lambda: sc.arrows("a", p3, p3), "increment 3"),
-        (lambda: sc.boxes("b"), "increment 3"),
-        (lambda: sc.image("i", torch.zeros(2, 2, 3)), "increment 3"),
-        (lambda: sc.camera("c", width=2, height=2), "increment 3"),
-        (lambda: sc.transform("t"), "increment 3"),
-        (lambda: sc.classes({}), "increment 3"),
-        (lambda: sc.clear(""), "increment 3"),
+        (lambda: sc.points("p", p3, class_ids=torch.zeros(4)), "scene.points(class_ids=...)"),
+        (lambda: sc.points("p", p3, labels=["a"] * 4), "scene.points(labels=...)"),
+        (lambda: sc.points("p", p3, items="test"), "scene.points(items=...)"),
+        (lambda: sc.lines("l", p3, indices=torch.zeros(2, 2)), "scene.lines(indices=...)"),
+        (lambda: sc.lines("l", p3, color_per="edge"), "scene.lines(color_per='edge')"),
+        (lambda: sc.mesh("m", p3[:3], normals=torch.zeros(3, 3)), "scene.mesh(normals=...)"),
+        (lambda: sc.mesh("m", p3[:3], uvs=torch.zeros(3, 2)), "scene.mesh(uvs=..., texture=...)"),
+        (lambda: sc.mesh("m", p3[:3], texture=torch.zeros(2, 2, 3)), "scene.mesh(uvs=..., texture=...)"),
+        (lambda: sc.arrows("a", p3, p3), "scene.arrows()"),
+        (lambda: sc.boxes("b"), "scene.boxes()"),
+        (lambda: sc.image("i", torch.zeros(2, 2, 3)), "scene.image()"),
+        (lambda: sc.camera("c", width=2, height=2), "scene.camera()"),
+        (lambda: sc.transform("t"), "scene.transform()"),
+        (lambda: sc.classes({}), "scene.classes()"),
+        (lambda: sc.clear(""), "scene.clear()"),
     ]
-    for call, inc in later:
-        with pytest.raises(NotImplementedError, match=inc):
+    for call, what in later:
+        with pytest.raises(NotImplementedError, match="^" + re.escape(what + " is not built yet (")):
             call()
 
 

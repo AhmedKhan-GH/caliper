@@ -702,17 +702,19 @@ batch was not kept from its next call.
 applies to each entity part of its subscription, the newest batch replacing
 one still waiting.
 
-Arguments of the full scene API that later increments build raise
-`NotImplementedError`, naming the increment:
+The calls `points`, `lines` and `mesh` are built with the arguments in the
+table above. The calls and arguments below belong to the scene API but are
+not built yet. Each raises `NotImplementedError` with a message that says so,
+for example `scene.lines(indices=...) is not built yet (index-pair edges)`:
 
-| Call or argument | Comes with |
+| Call or argument | What it is for |
 |---|---|
-| `scene.points(class_ids=..., labels=...)` | The class table and labels (increment 3 of sprint 4) |
-| `scene.points(items=...)` | Picking and linked selection (increment 5) |
-| `scene.lines(indices=...)`, `color_per="edge"` | Index-pair edges (increment 3) |
-| `scene.mesh(normals=..., uvs=..., texture=...)` | Smooth shading and textures (increment 3) |
-| `caliper.scene(data_view=..., view_camera=...)` | Scene data views and the starting camera (increment 3) |
-| `scene.arrows`, `boxes`, `image`, `depth`, `segmentation`, `camera`, `transform`, `classes`, `clear` | The other primitives, cameras, entity transforms, the class table and clears (increment 3) |
+| `scene.points(class_ids=..., labels=...)` | The class table and labels |
+| `scene.points(items=...)` | Picking and linked selection |
+| `scene.lines(indices=...)`, `color_per="edge"` | Index-pair edges |
+| `scene.mesh(normals=..., uvs=..., texture=...)` | Smooth shading and textures |
+| `caliper.scene(data_view=..., view_camera=...)` | Scene data views and the starting camera |
+| `scene.arrows`, `boxes`, `image`, `depth`, `segmentation`, `camera`, `transform`, `classes`, `clear` | The other primitives, cameras, entity transforms, the class table and clears |
 
 ## Controls
 
