@@ -46,7 +46,8 @@
 //
 // panel.render needs the spec runtime, which draws a panel off screen; until
 // one is given to set_panel_renderer() (panel_renderer.h), it answers
-// command.not_available.
+// command.not_available. The app gives it one that draws on a canvas sharing
+// the app's font atlas (spec_page.h).
 //
 // The command script, a testing and demo aid: CALIPER_COMMAND_SCRIPT names a
 // file of JSON lines, each an invocation such as {"name": "spec.new", "args":
@@ -81,7 +82,7 @@ class Session;
 
 namespace caliper_host {
 
-class PanelRenderer;   // panel_renderer.h
+class PanelRenderSeam;   // panel_renderer.h
 
 // What the app's navigation answers a launch by manifest id, for POST
 // /v0/applets/{id}/launch and app.launch: status 200 with the body of
@@ -166,7 +167,18 @@ public:
     bool script_running() const;
 
     // The spec runtime's seam for panel.render; null unbinds it.
-    void set_panel_renderer(std::shared_ptr<PanelRenderer> renderer);
+    void set_panel_renderer(std::shared_ptr<PanelRenderSeam> renderer);
+
+    // Counters the spec page (spec_page.h) reads on the frame thread to know
+    // when to look at the session again, without asking it every frame. Any
+    // thread may read them; the journal's observer moves them on the thread
+    // that ran the command.
+    // Every command the journal recorded: any of them may have changed the
+    // open spec.
+    uint64_t journaled() const;
+    // Every applet.open that succeeded, from any origin: the app shows the
+    // spec page for each.
+    uint64_t applets_opened() const;
 
     struct Impl;
 

@@ -156,6 +156,8 @@ struct AppSession::Impl {
 
     std::mutex lines_m;
     std::vector<Line> lines;   // from the journal, any thread
+    std::atomic<uint64_t> journaled{0};        // every journaled command
+    std::atomic<uint64_t> applets_opened{0};   // every applet.open that succeeded
 
     // capture.frame: touched on the frame thread only.
     Capture cap = Capture::none;
@@ -165,7 +167,7 @@ struct AppSession::Impl {
     std::string cap_why;
 
     std::mutex renderer_m;
-    std::shared_ptr<PanelRenderer> renderer;
+    std::shared_ptr<PanelRenderSeam> renderer;
 
     std::thread script;
     std::atomic<bool> script_on{false};
@@ -261,6 +263,8 @@ struct AppSession::Impl {
     // ---- the frame loop ----------------------------------------------------
 
     void note(const cb::JournalEvent& e) {
+        if (e.ok && e.name == "applet.open") applets_opened.fetch_add(1, std::memory_order_acq_rel);
+        journaled.fetch_add(1, std::memory_order_acq_rel);
         Line l;
         l.name = e.name;
         l.origin = cb::command_origin_name(e.origin);
@@ -388,7 +392,7 @@ struct AppSession::Impl {
     }
 
     cb::CommandOutput render_panel(const cb::spec::Spec& spec, const cb::PanelData& data, int width, int height) {
-        std::shared_ptr<PanelRenderer> r;
+        std::shared_ptr<PanelRenderSeam> r;
         {
             std::lock_guard<std::mutex> lock(renderer_m);
             r = renderer;
@@ -584,10 +588,14 @@ bool AppSession::worker_busy() const { return impl_->busy.load(std::memory_order
 
 bool AppSession::script_running() const { return impl_->script_on.load(); }
 
-void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderer> renderer) {
+void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderSeam> renderer) {
     std::lock_guard<std::mutex> lock(impl_->renderer_m);
     impl_->renderer = std::move(renderer);
 }
+
+uint64_t AppSession::journaled() const { return impl_->journaled.load(std::memory_order_acquire); }
+
+uint64_t AppSession::applets_opened() const { return impl_->applets_opened.load(std::memory_order_acquire); }
 
 #else  // !CALIPER_WITH_BUILDER
 
@@ -620,7 +628,9 @@ std::string AppSession::open_error() const { return "the builder is not in this 
 const std::string& AppSession::workspace() const { return impl_->opt.workspace; }
 bool AppSession::worker_busy() const { return false; }
 bool AppSession::script_running() const { return false; }
-void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderer>) {}
+void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderSeam>) {}
+uint64_t AppSession::journaled() const { return 0; }
+uint64_t AppSession::applets_opened() const { return 0; }
 
 #endif
 

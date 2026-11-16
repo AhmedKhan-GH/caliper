@@ -1,8 +1,10 @@
 #pragma once
 // ============================================================================
-// panel_renderer.h: the seam of panel.render (app_session.h). The spec
-// runtime implements PanelRenderer and gives it to
-// AppSession::set_panel_renderer(). The session has already found the panel in
+// panel_renderer.h: the seam of panel.render (app_session.h). The app
+// implements PanelRenderSeam over the spec runtime's OffscreenPanelRenderer
+// (spec_page.h) and gives it to AppSession::set_panel_renderer(). It is not
+// called PanelRenderer, the name of the runtime's own interface
+// (spec_runtime/spec_offscreen.h), which returns a PNG rather than a result. The session has already found the panel in
 // the open spec and resolved its data (caliper_builder::Session::resolve());
 // render_panel() runs on the frame thread, draws that data off screen at
 // width x height pixels and answers {"png_base64", "width", "height"}, or
@@ -15,9 +17,9 @@
 
 namespace caliper_host {
 
-class PanelRenderer {
+class PanelRenderSeam {
 public:
-    virtual ~PanelRenderer() = default;
+    virtual ~PanelRenderSeam() = default;
     virtual caliper_builder::CommandOutput render_panel(const caliper_builder::spec::Spec& spec,
                                                         const caliper_builder::PanelData& data, int width,
                                                         int height) = 0;

@@ -371,7 +371,7 @@ TEST_CASE("app session: shutdown answers waiting commands and closes the journal
 }
 
 namespace {
-struct FakeRenderer final : caliper_host::PanelRenderer {
+struct FakeRenderer final : caliper_host::PanelRenderSeam {
     std::string panel;
     cb::CommandOutput render_panel(const cb::spec::Spec&, const cb::PanelData& data, int width, int height) override {
         panel = data.panel;
