@@ -156,25 +156,45 @@ int run_shot(const CommandLine& cl) {
     const fs::path data_root =
         own_root ? s.temp_root : fs::path(caliper::app_data_location());
 
-    // The applet, found as the app finds it. Scanning reads manifests only.
+    // The applet, found as the app finds it, the workspace's spec applets
+    // included. Scanning reads manifests only and creates nothing.
+    const std::string workspace =
+        workspace_choice(cl, std::getenv("CALIPER_WORKSPACE"), (data_root / "workspace").string()).dir;
     s.loader = std::make_unique<AppletLoader>(host_caps(), (data_root / "data").string());
     AppletLoader& loader = *s.loader;
+    loader.set_workspace(workspace);
     loader.scan(applet_search_dirs(cl.applet_dirs, std::getenv("CALIPER_APPLET_PATH"),
-                                   user_dir, shipped_dir));
-    const int idx = loader.find(id);
-    // An id that no search folder has, written as a workspace's applet id
-    // (no dots), names a spec applet of the workspace: the shot opens it with
-    // applet.open once the workspace is open and a command script, if any,
-    // is done, and draws the spec page (builder/spec_page.h).
-    const bool spec_shot =
-        idx < 0 && SpecPage::built() && std::regex_match(id, std::regex("[a-z][a-z0-9_-]{0,63}"));
-    if (idx < 0 && !spec_shot)
-        return fail("no applet with the id " + id +
-                    " in the search folders (caliper list shows them)");
+                                   user_dir, shipped_dir, workspace));
+    int idx = loader.find(id);
     if (idx >= 0 && loader.at(idx).status != AppletStatus::Ready)
         return fail(id + " cannot be launched (" +
                     applet_status_word(loader.at(idx).status) +
                     "): " + loader.at(idx).status_text);
+    // A spec applet draws the spec page (builder/spec_page.h): one in the
+    // workspace's applets/ folder opens with applet.open under its folder's
+    // name, one found elsewhere is drawn from its file. An id that no search
+    // folder has, written as a workspace's applet id (no dots), names a spec
+    // applet of the workspace that a command script may still build. Either
+    // opens once the workspace is open and the script, if any, is done.
+    std::string spec_id;     // applet.open's id
+    std::string spec_file;   // a spec applet's file outside the workspace
+    if (idx >= 0 && loader.at(idx).manifest.kind == AppletKind::Spec) {
+        if (!loader.check_spec(idx))
+            return fail(id + " failed to launch: " + loader.at(idx).status_text);
+        const fs::path folder(loader.at(idx).folder);
+        std::error_code wec;
+        if (fs::equivalent(folder.parent_path(), fs::path(workspace) / "applets", wec))
+            spec_id = folder.filename().string();
+        else
+            spec_file = loader.at(idx).spec_path;
+        idx = -1;
+    } else if (idx < 0 && SpecPage::built() && std::regex_match(id, std::regex("[a-z][a-z0-9_-]{0,63}"))) {
+        spec_id = id;
+    }
+    const bool spec_shot = !spec_id.empty() || !spec_file.empty();
+    if (idx < 0 && !spec_shot)
+        return fail("no applet with the id " + id +
+                    " in the search folders (caliper list shows them)");
 
     // The stores, the applet's data folder and the display font path resolve
     // under the temporary root from here on.
@@ -363,8 +383,15 @@ int run_shot(const CommandLine& cl) {
         if (spec_waiting) {
             const std::string why = s.session->open_error();
             if (!why.empty()) return fail("cannot open the workspace for " + id + ": " + why);
-            if (!spec_asked && !s.session->script_running())
-                spec_asked = spec_page.request_open(*s.session, id);
+            if (!spec_file.empty() && s.session->session() && !s.session->script_running()) {
+                std::string error;
+                if (!spec_page.enter_file(*s.session, spec_file, &error))
+                    return fail(id + " failed to launch: " + error);
+                spec_waiting = false;
+                spec_frames = 0;
+            } else if (!spec_id.empty() && !spec_asked && !s.session->script_running()) {
+                spec_asked = spec_page.request_open(*s.session, spec_id);
+            }
             std::string error;
             if (spec_page.request_answered(&error) && !error.empty())
                 return fail("no applet with the id " + id + " in the search folders or the workspace (" + error +

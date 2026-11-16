@@ -168,6 +168,7 @@ struct AppSession::Impl {
     std::vector<Line> lines;   // from the journal, any thread
     std::atomic<uint64_t> journaled{0};        // every journaled command
     std::atomic<uint64_t> applets_opened{0};   // every applet.open that succeeded
+    std::atomic<uint64_t> applets_saved{0};    // every applet.save that succeeded
 
     // Caliper API's gateway (command_gateway()), and the pending approvals as
     // the last frame without a worker read them, for its approval lookups.
@@ -280,6 +281,7 @@ struct AppSession::Impl {
 
     void note(const cb::JournalEvent& e) {
         if (e.ok && e.name == "applet.open") applets_opened.fetch_add(1, std::memory_order_acq_rel);
+        if (e.ok && e.name == "applet.save") applets_saved.fetch_add(1, std::memory_order_acq_rel);
         journaled.fetch_add(1, std::memory_order_acq_rel);
         Line l;
         l.name = e.name;
@@ -745,6 +747,8 @@ uint64_t AppSession::journaled() const { return impl_->journaled.load(std::memor
 
 uint64_t AppSession::applets_opened() const { return impl_->applets_opened.load(std::memory_order_acquire); }
 
+uint64_t AppSession::applets_saved() const { return impl_->applets_saved.load(std::memory_order_acquire); }
+
 std::shared_ptr<caliper_api::CommandGateway> AppSession::command_gateway() {
     Impl& im = *impl_;
     {
@@ -792,6 +796,7 @@ bool AppSession::script_running() const { return false; }
 void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderSeam>) {}
 uint64_t AppSession::journaled() const { return 0; }
 uint64_t AppSession::applets_opened() const { return 0; }
+uint64_t AppSession::applets_saved() const { return 0; }
 std::shared_ptr<caliper_api::CommandGateway> AppSession::command_gateway() { return nullptr; }
 
 #endif

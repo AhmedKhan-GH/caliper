@@ -5,6 +5,7 @@
 
 #if CALIPER_WITH_BUILDER
 #include "builder/panel_renderer.h"
+#include "applet_spec.h"
 #include "spec_runtime/spec_offscreen.h"
 #include "spec_runtime/spec_runtime.h"
 #include "ui/applet_page.h"      // begin_page_bar, JobsTray
@@ -22,6 +23,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <future>
+#include <map>
 #include <optional>
 #endif
 
@@ -108,10 +110,12 @@ struct SpecPage::Impl {
     std::optional<uint64_t> journal_read;   // AppSession::journaled() when the open spec was last read
 
     std::string title;
+    std::string applet_id;
     std::string workspace;
     size_t panels = 0, sources = 0;
     bool has_spec = false;
     bool dirty = false;
+    bool from_file = false;   // enter_file(): a spec applet's file, not the open spec
 
     std::optional<std::future<cb::CommandResult>> request;
     std::string request_error;
@@ -130,7 +134,7 @@ struct SpecPage::Impl {
 
     // The open spec, read again when the journal recorded a command since.
     void refresh(AppSession& app) {
-        if (!bound || app.worker_busy()) return;
+        if (from_file || !bound || app.worker_busy()) return;
         const uint64_t j = app.journaled();
         if (journal_read && *journal_read == j) return;
         journal_read = j;
@@ -138,16 +142,22 @@ struct SpecPage::Impl {
         if (!open) {
             runtime->clear_spec();
             has_spec = false;
+            applet_id.clear();
             panels = sources = 0;
             return;
         }
-        runtime->set_spec(open->spec);
-        has_spec = true;
+        show(open->spec);
         dirty = open->dirty;
-        const auto& a = open->spec.applet;
+    }
+
+    void show(const cb::spec::Spec& spec) {
+        runtime->set_spec(spec);
+        has_spec = true;
+        const auto& a = spec.applet;
         title = a.title && !a.title->empty() ? *a.title : a.id;
-        panels = open->spec.panels.size();
-        sources = open->spec.sources.size();
+        applet_id = a.id;
+        panels = spec.panels.size();
+        sources = spec.sources.size();
     }
 
     bool draw_bars(const char* renderer_name, JobsTray* tray) {
@@ -240,9 +250,24 @@ bool SpecPage::request_answered(std::string* error) {
 }
 
 void SpecPage::enter(AppSession& session) {
+    impl_->from_file = false;
     impl_->bind(session);
     impl_->journal_read.reset();
     impl_->refresh(session);
+}
+
+bool SpecPage::enter_file(AppSession& session, const std::string& spec_path, std::string* error) {
+    SpecFile file = read_spec_file(spec_path);
+    if (!file.ok) {
+        if (error) *error = file.reason;
+        return false;
+    }
+    Impl& im = *impl_;
+    im.bind(session);
+    im.from_file = true;
+    im.dirty = false;
+    im.show(file.spec);
+    return true;
 }
 
 SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, JobsTray* tray) {
@@ -259,9 +284,42 @@ void SpecPage::leave() {
     impl_->runtime->clear_spec();
     impl_->journal_read.reset();
     impl_->has_spec = false;
+    impl_->from_file = false;
+    impl_->applet_id.clear();
 }
 
 const std::string& SpecPage::title() const { return impl_->title; }
+
+const std::string& SpecPage::applet_id() const { return impl_->applet_id; }
+
+bool SpecPage::facts(const std::string& spec_path, SpecAppletFacts* out) {
+    // One reading per file and change, on the frame thread.
+    struct Kept {
+        std::filesystem::file_time_type mtime;
+        SpecAppletFacts facts;
+    };
+    static std::map<std::string, Kept> kept;
+    std::error_code ec;
+    const auto mtime = std::filesystem::last_write_time(spec_path, ec);
+    if (ec) return false;
+    auto it = kept.find(spec_path);
+    if (it == kept.end() || it->second.mtime != mtime) {
+        Kept k;
+        k.mtime = mtime;
+        const SpecFile file = read_spec_file(spec_path);
+        if (file.ok) {
+            k.facts.format = file.spec.version;
+            k.facts.panels = file.spec.panels.size();
+            k.facts.sources = file.spec.sources.size();
+        } else {
+            k.facts.error = file.reason;
+        }
+        if (kept.size() > 256) kept.clear();
+        it = kept.insert_or_assign(spec_path, std::move(k)).first;
+    }
+    if (out) *out = it->second.facts;
+    return true;
+}
 
 void SpecPage::shutdown() {
     impl_->runtime.reset();
@@ -291,6 +349,12 @@ void SpecPage::enter(AppSession&) {}
 SpecPage::Result SpecPage::draw(AppSession&, const char*, JobsTray*) { return {}; }
 void SpecPage::leave() {}
 const std::string& SpecPage::title() const { return impl_->title; }
+const std::string& SpecPage::applet_id() const { return impl_->title; }
+bool SpecPage::enter_file(AppSession&, const std::string&, std::string* error) {
+    if (error) *error = "the builder is not in this build";
+    return false;
+}
+bool SpecPage::facts(const std::string&, SpecAppletFacts*) { return false; }
 void SpecPage::shutdown() {}
 std::shared_ptr<PanelRenderSeam> SpecPage::make_panel_renderer() { return nullptr; }
 

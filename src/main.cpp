@@ -100,6 +100,11 @@ public:
     explicit CaliperApp(std::vector<std::string> applet_dirs, bool hidden = false)
         : applet_dirs_(std::move(applet_dirs)), hidden_(hidden) {}
 
+    // The builder session's workspace (app_session_options()), whose
+    // applets/ folder the loader searches for spec applets. Before
+    // initialize(); reading it creates nothing.
+    void set_workspace(std::string dir) { workspace_dir_ = std::move(dir); }
+
     bool initialize() {
         // The hidden window takes the mechanism of the test binaries that open
         // hidden windows (tests/glfw_background.h): the background activation
@@ -217,12 +222,15 @@ public:
         caliper_host::services_set_renderer(renderer_.get());
 
         // Scan for applets in the search order: the development folders
-        // (--applets, then CALIPER_APPLET_PATH), the user applets folder,
-        // then the applets shipped next to the executable. Of several copies
-        // of one id the loader keeps the highest version that passes.
+        // (--applets, then CALIPER_APPLET_PATH), the workspace's spec
+        // applets, the user applets folder, then the applets shipped next to
+        // the executable. Of several copies of one id the loader keeps the
+        // highest version that passes. The workspace's folder is only read,
+        // so a workspace that is not open yet stays uncreated.
+        loader_.set_workspace(workspace_dir_);
         for (const std::string& dir : caliper_host::applet_search_dirs(
                  applet_dirs_, std::getenv("CALIPER_APPLET_PATH"),
-                 caliper::user_applets_dir(), caliper::shipped_applets_dir()))
+                 caliper::user_applets_dir(), caliper::shipped_applets_dir(), workspace_dir_))
             log_scan(dir, loader_.scan(dir));
 
         // Dev hook: CALIPER_AUTOLAUNCH=<manifest id> skips the landing page
@@ -302,9 +310,7 @@ public:
             // frame drawn next (window_captures.h).
             if (api_.running()) serve_api();
             session_.frame();
-            // Every applet.open that succeeded, from any origin, shows the
-            // session's open spec on the spec page (host/builder/spec_page.h).
-            if (spec_page_.take_open(session_)) open_spec_page();
+            note_spec_applets();
             captures_.before_frame(*renderer_, [this](uint64_t t, int status, const std::string& why) {
                 capture_error(t, status, why);
             });
@@ -341,14 +347,24 @@ public:
                 ctx.attach = [this](const std::string& s) { attach_session(s); };
                 ctx.after_bars = [this] { jobs_tray_.draw(); };
                 ctx.attach_url = [this](const std::string& u) { attach_stream(u); };
+                ctx.spec_facts = [](const caliper_host::AppletEntry& e, SpecAppletFacts* f) {
+                    return caliper_host::SpecPage::facts(e.spec_path, f);
+                };
                 landing_.draw(ctx);
             } else if (page_ == AppPage::Live) {
                 draw_live_page();
             } else if (page_ == AppPage::Spec) {
                 // The open spec in the work area the strips leave; Home and
                 // esc go back to the landing after the frame is rendered.
-                const bool esc = esc_home_pressed();
-                if (spec_page_.draw(session_, renderer_->name(), &jobs_tray_).home || esc)
+                bool go_back = esc_home_pressed();
+                // Dev hook: CALIPER_HOME_AFTER=<sec>, as on the other pages:
+                // Home once, N sec after the spec page opened.
+                if (const char* ha = std::getenv("CALIPER_HOME_AFTER")) {
+                    static double page_t0 = -1.0;
+                    if (page_t0 < 0) page_t0 = glfwGetTime();
+                    if (glfwGetTime() - page_t0 >= std::atof(ha)) go_back = true;
+                }
+                if (spec_page_.draw(session_, renderer_->name(), &jobs_tray_).home || go_back)
                     pending_spec_home_ = true;
             } else if (page_ == AppPage::Applet) {
                 bool go_back = esc_home_pressed();
@@ -557,15 +573,119 @@ private:
         if (page_ != AppPage::Spec) landing_.log("open", spec_page_.title(), "spec");
         page_ = AppPage::Spec;
         glfwSetWindowTitle(window_, ("Caliper - " + spec_page_.title()).c_str());
+        // The workspace's spec applet that the page shows is ACTIVE.
+        int shown = -1;
+        for (int i = 0; i < loader_.count() && shown < 0; i++)
+            if (loader_.at(i).manifest.kind == caliper_host::AppletKind::Spec &&
+                loader_.at(i).status == caliper_host::AppletStatus::Ready &&
+                workspace_applet_id(loader_.at(i)) == spec_page_.applet_id())
+                shown = i;
+        mark_spec_entry(shown);
     }
 
     // Home from the spec page, after the frame that drew it.
     void leave_spec_page() {
         const std::string left = spec_page_.title();
         spec_page_.leave();
+        mark_spec_entry(-1);
         page_ = AppPage::Landing;
         glfwSetWindowTitle(window_, "Caliper");
         landing_.log("home", left);
+    }
+
+    // The spec applet the spec page shows is ACTIVE while it shows it, and
+    // READY again after: `idx`, or none for -1. Home returns to its row.
+    void mark_spec_entry(int idx) {
+        for (int i = 0; i < loader_.count(); i++) {
+            caliper_host::AppletEntry& e = loader_.at(i);
+            if (e.manifest.kind == caliper_host::AppletKind::Spec && e.status == caliper_host::AppletStatus::Active)
+                e.status = caliper_host::AppletStatus::Ready;
+        }
+        spec_entry_.clear();
+        if (idx < 0 || idx >= loader_.count()) return;
+        caliper_host::AppletEntry& e = loader_.at(idx);
+        e.status = caliper_host::AppletStatus::Active;
+        e.status_text.clear();
+        spec_entry_ = e.manifest.id;
+        landing_.select(idx);
+    }
+
+    // The workspace id of a spec applet found in the workspace's applets/
+    // folder (its folder's name, which applet.open takes), or "" for one
+    // found elsewhere.
+    std::string workspace_applet_id(const caliper_host::AppletEntry& a) const {
+        if (workspace_dir_.empty() || a.folder.empty()) return {};
+        const std::filesystem::path folder(a.folder);
+        std::error_code ec;
+        if (!std::filesystem::equivalent(folder.parent_path(), std::filesystem::path(workspace_dir_) / "applets", ec))
+            return {};
+        return folder.filename().string();
+    }
+
+    // A launch of a spec applet (a row, Enter, CALIPER_AUTOLAUNCH, app.launch,
+    // POST /v0/applets/{id}/launch): its spec is checked, then one in the
+    // workspace opens through the session's applet.open, from the ui origin,
+    // as soon as the session is open, and the page follows that command as
+    // for any origin; one found elsewhere is drawn from its file without
+    // becoming the open spec. False, with the reason in Activity, when its
+    // spec does not validate or its file does not read.
+    bool launch_spec_applet(int idx, std::string* why) {
+        const std::string name = loader_.at(idx).manifest.name;
+        landing_.log("launch", name);
+        landing_.select(idx);
+        if (!loader_.check_spec(idx)) {
+            *why = loader_.at(idx).status_text;
+            landing_.log("launch failed", name, *why);
+            return false;
+        }
+        session_.ensure_open();
+        const std::string ws_id = workspace_applet_id(loader_.at(idx));
+        if (!ws_id.empty()) {
+            pending_spec_open_ = ws_id;
+            return true;
+        }
+        if (page_ == AppPage::Applet) leave_applet_page(active_applet_);
+        else if (page_ == AppPage::Live) leave_live_page();
+        if (!spec_page_.enter_file(session_, loader_.at(idx).spec_path, why)) {
+            landing_.log("launch failed", name, *why);
+            return false;
+        }
+        landing_.log("open", spec_page_.title(), "spec");
+        page_ = AppPage::Spec;
+        glfwSetWindowTitle(window_, ("Caliper - " + spec_page_.title()).c_str());
+        mark_spec_entry(idx);
+        return true;
+    }
+
+    // Once per frame, after the session's: a pending launch of a workspace
+    // spec applet goes out as applet.open, its refusal goes to Activity,
+    // every applet.open that succeeded, from any origin, shows the spec
+    // page, and every applet.save lists the workspace's applets again, while
+    // no compiled applet runs (the loader moves its entries).
+    void note_spec_applets() {
+        if (!pending_spec_open_.empty()) {
+            if (session_.session()) {
+                spec_page_.request_open(session_, pending_spec_open_);
+                pending_spec_open_.clear();
+            } else if (!session_.open_error().empty()) {
+                landing_.log("launch failed", pending_spec_open_, session_.open_error());
+                pending_spec_open_.clear();
+            }
+        }
+        std::string error;
+        if (spec_page_.request_answered(&error) && !error.empty()) landing_.log("launch failed", "applet.open", error);
+        if (spec_page_.take_open(session_)) open_spec_page();
+        if (session_.applets_saved() != applets_saved_ && page_ != AppPage::Applet) {
+            applets_saved_ = session_.applets_saved();
+            const int sel = landing_.selected_index();
+            const std::string selected = sel >= 0 && sel < loader_.count() ? loader_.at(sel).manifest.id : "";
+            const std::string shown = spec_entry_;
+            const int listed = loader_.rescan_workspace();
+            if (listed >= 0) {
+                if (!selected.empty()) landing_.select(loader_.find(selected));
+                if (page_ == AppPage::Spec && !shown.empty()) mark_spec_entry(loader_.find(shown));
+            }
+        }
     }
 
     // Caliper API's calls of this frame (api/api_server.h). A capture waits
@@ -604,6 +724,22 @@ private:
             const auto& a = loader_.at(i);
             return {200, caliper_host::launched_json(a.manifest.id, a.manifest.version, true), ""};
         }
+        if (loader_.at(i).manifest.kind == caliper_host::AppletKind::Spec) {
+            const auto& a = loader_.at(i);
+            if (page_ == AppPage::Spec && a.status == caliper_host::AppletStatus::Active)
+                return {200, caliper_host::launched_json(a.manifest.id, a.manifest.version, true), ""};
+            if (a.status != caliper_host::AppletStatus::Ready)
+                return {409,
+                        id + " cannot be launched (" + caliper_host::applet_status_word(a.status) + "): " +
+                            a.status_text,
+                        "app.launch_refused"};
+            // The page opens with the applet.open that this sends, a frame
+            // or two later.
+            std::string why;
+            if (!launch_spec_applet(i, &why)) return {409, id + " failed to launch: " + why, "app.launch_failed"};
+            const auto& b = loader_.at(loader_.find(id));
+            return {200, caliper_host::launched_json(b.manifest.id, b.manifest.version, false), ""};
+        }
         if (loader_.at(i).status != caliper_host::AppletStatus::Ready) {
             const auto& a = loader_.at(i);
             return {409,
@@ -629,6 +765,11 @@ private:
 
     void launch_applet(int idx) {
         if (idx < 0 || idx >= loader_.count()) return;
+        if (loader_.at(idx).manifest.kind == caliper_host::AppletKind::Spec) {
+            std::string why;
+            launch_spec_applet(idx, &why);
+            return;
+        }
         const std::string name = loader_.at(idx).manifest.name;
         landing_.log("launch", name);
         // Home returns to this row, however the launch came (a row, Enter,
@@ -1013,6 +1154,10 @@ private:
     bool pending_detach_ = false;     // esc Home on the live page: detach after render
     caliper_host::SpecPage spec_page_;  // the session's open spec (applet.open)
     bool pending_spec_home_ = false;  // Home on the spec page: leave after render
+    std::string workspace_dir_;       // the session's workspace, whose spec applets are listed
+    std::string pending_spec_open_;   // a workspace spec applet to open once the session is open
+    std::string spec_entry_;          // the manifest id of the spec applet the page shows, or ""
+    uint64_t applets_saved_ = 0;      // AppSession::applets_saved() when last listed
     caliper_host::AppApi api_;        // Caliper API (--api); not running without it
     caliper_host::WindowCaptures captures_;   // the API's and the session's captures of the window's frame
     caliper_host::AppSession session_;        // the builder session of the workspace
@@ -1071,6 +1216,9 @@ int main(int argc, char** argv) {
                 (std::filesystem::path(caliper::app_data_location()) / "data").string();
         }
         ctx.applet_path_env = std::getenv("CALIPER_APPLET_PATH");
+        if (cl.command == Command::List)   // the spec applets the app would list
+            ctx.workspace_dir =
+                caliper_host::workspace_choice(cl, std::getenv("CALIPER_WORKSPACE"), caliper::default_workspace_dir()).dir;
         ctx.exe_dir = caliper::executable_dir();   // build: the SDK may be installed beside it
         if (cl.command == Command::Serve) {
             // Producers on this machine find the hub here (0600, removed on exit).
@@ -1095,6 +1243,7 @@ int main(int argc, char** argv) {
     const char* hidden_env = std::getenv("CALIPER_HIDDEN");
     const bool hidden = cl.hidden || (hidden_env && std::strcmp(hidden_env, "1") == 0);
     CaliperApp app(cl.applet_dirs, hidden);
+    app.set_workspace(caliper_host::app_session_options(cl).workspace);
     if (!app.initialize()) {
         std::cerr << "Initialization failed" << std::endl;
         return 1;

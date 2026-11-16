@@ -40,6 +40,8 @@
 #include <memory>
 #include <string>
 
+struct SpecAppletFacts;   // ui/landing_screen.h
+
 namespace caliper_host {
 
 class AppSession;
@@ -71,8 +73,14 @@ public:
     // `error` empty when it succeeded and holding the reason otherwise.
     bool request_answered(std::string* error);
 
-    // Shows the page from the next draw() on.
+    // Shows the page from the next draw() on, with the session's open spec.
     void enter(AppSession& session);
+    // Shows the page with the spec of a spec applet found outside the
+    // workspace, read from `spec_path` and drawn as it is, over the
+    // session's data, without becoming the open spec; an applet.open later
+    // shows the open spec again. False, with the reason, when the file does
+    // not read or validate.
+    bool enter_file(AppSession& session, const std::string& spec_path, std::string* error);
     // One frame of the page, inside an ImGui frame the caller opened.
     Result draw(AppSession& session, const char* renderer_name, JobsTray* tray);
     // After the last frame that drew the page has been rendered: releases
@@ -80,6 +88,13 @@ public:
     void leave();
     // The open spec's title, or its applet id when it has none.
     const std::string& title() const;
+    // The shown spec's applet id ([applet].id), "" when none is shown.
+    const std::string& applet_id() const;
+
+    // What the landing screen's Inspector shows of a spec applet: its format
+    // version and its numbers of panels and sources, read from its spec file
+    // and kept until the file changes. False without the builder.
+    static bool facts(const std::string& spec_path, SpecAppletFacts* out);
 
     // After the renderer has shut down and before the UI context is
     // destroyed: frees what the page made in that context.

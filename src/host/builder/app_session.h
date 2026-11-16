@@ -187,6 +187,9 @@ public:
     // Every applet.open that succeeded, from any origin: the app shows the
     // spec page for each.
     uint64_t applets_opened() const;
+    // Every applet.save that succeeded: the app lists the workspace's
+    // applets again for each.
+    uint64_t applets_saved() const;
 
     // Caliper API's command gateway over this session (api/command_gateway.h),
     // for AppApi::set_command_gateway(), so that the app serves

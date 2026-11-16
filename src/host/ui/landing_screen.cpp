@@ -57,6 +57,7 @@
 namespace {
 
 using caliper_host::AppletEntry;
+using caliper_host::AppletKind;
 using caliper_host::AppletLoader;
 using caliper_host::AppletStatus;
 namespace col = sternbild::col;
@@ -1276,7 +1277,7 @@ void LandingScreen::draw_inspector(const Context& ctx) {
         std::max(metric::row, ImGui::GetContentRegionAvail().y - footer_h);
     if (sternbild::begin_table("##inspector", 2, ImVec2(0.0f, table_h),
                                ImGuiTableFlags_SizingFixedFit)) {
-        draw_inspector_rows(e);
+        draw_inspector_rows(e, ctx);
         sternbild::end_table();
     }
 
@@ -1323,7 +1324,7 @@ void LandingScreen::draw_inspector(const Context& ctx) {
 
 // The Inspector's definition rows: label (small uppercase secondary) left,
 // value right, one row per manifest field, in manifest order.
-void LandingScreen::draw_inspector_rows(const caliper_host::AppletEntry& e) {
+void LandingScreen::draw_inspector_rows(const caliper_host::AppletEntry& e, const Context& ctx) {
     const auto& m = e.manifest;
     ImFont* ui = sternbild::fonts().ui;
     ImFont* mono = sternbild::fonts().mono;
@@ -1365,6 +1366,36 @@ void LandingScreen::draw_inspector_rows(const caliper_host::AppletEntry& e) {
     field("Tag");
     if (m.tag.empty()) cell_text("none", ui, font_size::ui, col::faint);
     else cell_text(m.tag.c_str(), ui, font_size::ui, col::parchment);
+    if (m.kind == AppletKind::Spec) {
+        // A spec applet is data: its kind, its spec's facts and its file, in
+        // place of a library's epoch, services and binary.
+        field("Kind");
+        cell_text("spec", mono, font_size::mono, col::parchment);
+        SpecAppletFacts facts;
+        const bool known = !e.spec_path.empty() && ctx.spec_facts && ctx.spec_facts(e, &facts);
+        if (known && facts.error.empty()) {
+            field("Spec format");
+            cell_text(std::to_string(facts.format).c_str(), mono, font_size::mono, col::parchment);
+            field("Panels");
+            cell_text(std::to_string(facts.panels).c_str(), mono, font_size::mono, col::parchment);
+            field("Sources");
+            cell_text(std::to_string(facts.sources).c_str(), mono, font_size::mono, col::parchment);
+        }
+        field("Min host");
+        mono_value(m.min_host, "none");
+        field("Spec");
+        cell_wrapped(e.spec_path.empty() ? "missing" : e.spec_path.c_str(), mono, font_size::mono, col::faint);
+        field("Status");
+        cell_text(status_word(e.status), ui, font_size::ui, status_colour(e.status));
+        if (!launchable(e) && !e.status_text.empty())
+            cell_wrapped(e.status_text.c_str(), ui, font_size::ui, col::faint);
+        else if (known && !facts.error.empty())
+            cell_wrapped(facts.error.c_str(), ui, font_size::ui, col::faint);
+        field("Summary");
+        if (m.summary.empty()) cell_text("none", ui, font_size::ui, col::faint);
+        else cell_wrapped(m.summary.c_str(), ui, font_size::ui, col::parchment);
+        return;
+    }
     field("ABI epoch");
     cell_text(std::to_string(m.abi_epoch).c_str(), mono, font_size::mono,
               col::parchment);

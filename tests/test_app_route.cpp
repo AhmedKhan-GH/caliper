@@ -281,8 +281,28 @@ TEST_CASE("app route: an agent builds, opens, renders and captures a dashboard i
     const json saved = ok(port, token, "applet.save");
     CHECK(saved["manifest"] == "applets/run42-dashboard/run42-dashboard.caliper.toml");
 
-    // Opening it shows the app's spec page.
+    // The app lists the saved applet at once, as a spec applet.
+    std::string applets_body;
+    INFO("GET /v0/applets: " << applets_body);
+    auto applet_status = [&](const std::string& id) {
+        const Http r = http(port, "GET", "/v0/applets", token);
+        REQUIRE(r.status == 200);
+        applets_body = r.body;
+        const json listed = json::parse(r.body);   // kept alive through the loop
+        for (const json& a : listed["applets"])
+            if (a["id"] == id) return a["status"].get<std::string>();
+        return std::string("absent");
+    };
+    CHECK(applet_status("local.run42-dashboard") == "READY");
+
+    // Opening it shows the app's spec page, and the applet is ACTIVE while
+    // the page shows it.
     CHECK(ok(port, token, "applet.open", {{"id", "run42-dashboard"}})["title"] == "Run 42");
+    CHECK(applet_status("local.run42-dashboard") == "ACTIVE");
+    // A launch of the applet that the page shows finds it open.
+    const Http launched = http(port, "POST", "/v0/applets/local.run42-dashboard/launch", token);
+    REQUIRE_MESSAGE(launched.status == 200, launched.body);
+    CHECK(json::parse(launched.body)["status"] == "ACTIVE");
 
     // One panel, drawn off screen by the spec runtime.
     const Image panel = decode(ok(port, token, "panel.render", {{"id", "attention"}, {"width", 480}, {"height", 320}}));
@@ -374,6 +394,16 @@ TEST_CASE("app route: caliper shot draws a workspace's spec applet on the spec p
     CHECK(w == 640);
     CHECK(h == 400);
     CHECK(img.colours() > 16);
+
+    // The saved applet by its manifest id, which the loader lists from the
+    // workspace's applets/ folder.
+    Proc again;
+    REQUIRE(again.start(exe, {"shot", "--workspace", ws, "--launch", "local.temps-board", "--size", "320x200",
+                              "--frames", "3", "--out", t.str("again.png")},
+                        env));
+    REQUIRE_MESSAGE(again.wait(120000) == 0, again.text);
+    CHECK(again.text.find(": Temperatures at 320x200 after ") != std::string::npos);
+    CHECK(fs::is_regular_file(t.str("again.png")));
 
     // An id that neither the search folders nor the workspace has.
     Proc q;
