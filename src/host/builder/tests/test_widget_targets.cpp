@@ -353,6 +353,36 @@ TEST_CASE("widget targets: a property's edit is previewed in its panel") {
     CHECK(r.undo_steps() == r.steps_before + 1);
 }
 
+TEST_CASE("widget targets: a line whose y is shorter than its x gives NaN in the selection's rows") {
+    PreparedPanel p;
+    p.id = "curves";
+    p.primitive = caliper_builder::spec::Primitive::series;
+    SeriesLine full, ragged;
+    full.name = "full";
+    ragged.name = "ragged";
+    for (int i = 0; i < 4000; ++i) {
+        full.x.push_back(i);
+        full.y.push_back(1.0);
+    }
+    // Fewer steps than the first line, so its values are looked up by x, and
+    // only two values for them.
+    for (int i = 0; i < 3000; ++i) ragged.x.push_back(i);
+    ragged.y = {7.0, 8.0};
+    p.series.lines = {full, ragged};
+    SpecSelection sel;
+    sel.kind = SpecSelection::Kind::range;
+    sel.panel = "curves";
+    sel.x0 = 0.0;
+    sel.x1 = 2999.0;
+    const SpecSelectionRows rows = spec_selection_rows(p, sel, 4000);
+    REQUIRE(rows.rows.size() == 3000);
+    CHECK(rows.rows[0][2] == 7.0);
+    CHECK(rows.rows[1][2] == 8.0);
+    size_t beyond = 0;
+    for (size_t i = 2; i < rows.rows.size(); ++i) beyond += std::isnan(rows.rows[i][2]) ? 0 : 1;
+    CHECK(beyond == 0);   // no value where the line has none
+}
+
 TEST_CASE("widget targets: the runtime's selection gives its rows from the prepared panel") {
     PreparedPanel p;
     p.id = "curves";

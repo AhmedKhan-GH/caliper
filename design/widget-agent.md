@@ -877,5 +877,4 @@ These were found in the review of sprint 3's second pull request and left for a 
   property's path, so after the focus moves to another panel it can draw under that panel's row of the same path. The
   anchor should name the panel too.
 - **A selection outlives its spec.** `SpecRuntime::set_spec()` never clears the selection, so it stays when the spec
-  changes or its panel goes. To check with it: a suspected out-of-bounds read in `spec_selection_rows()` when a
-  line's x and y differ in length, and the `selecting` flag of a panel entry that a preview replaces.
+  changes or its panel goes. To check with it: the `selecting` flag of a panel entry that a preview replaces.

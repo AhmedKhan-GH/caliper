@@ -1210,7 +1210,9 @@ SpecSelectionRows spec_selection_rows(const PreparedPanel& p, const SpecSelectio
                     y = l.y[i];
                 } else {
                     const auto it = std::lower_bound(l.x.begin(), l.x.end(), x);
-                    if (it != l.x.end() && *it == x) y = l.y[(size_t)(it - l.x.begin())];
+                    // A line's y can be shorter than its x: no value there.
+                    const size_t k = (size_t)(it - l.x.begin());
+                    if (it != l.x.end() && *it == x && k < l.y.size()) y = l.y[k];
                 }
                 row.push_back(y);
             }
