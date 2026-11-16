@@ -43,6 +43,17 @@ if(BUILD_TESTS AND NOT WIN32 AND TARGET caliper_builder_session_host AND TARGET 
         CALIPER_ACP_HARNESS="$<TARGET_FILE:caliper-acp-harness>"
         CALIPER_BUILDER_TEST_PYTHON="${CALIPER_BUILDER_TEST_PYTHON}")
     set_tests_properties(builder_agent_e2e PROPERTIES TIMEOUT 300 SKIP_REGULAR_EXPRESSION "builder_agent_e2e skipped")
+
+    # A widget session end to end: the sidecar edits a panel on a stacked
+    # preview of a session that runs in the test, behind the stand-in's server,
+    # and the test commits it from the builder origin
+    # (tests/test_widget_e2e.cpp).
+    caliper_builder_add_tests(agent_widget SOURCES tests/test_widget_e2e.cpp
+        LIBS caliper_builder_session_host caliper_builder_session caliper_builder_acp caliper_builder_duckdb)
+    target_compile_definitions(caliper_builder_agent_widget_tests PRIVATE
+        CALIPER_BUILDER_TEST_PYTHON="${CALIPER_BUILDER_TEST_PYTHON}")
+    set_tests_properties(builder_agent_widget PROPERTIES TIMEOUT 300
+        SKIP_REGULAR_EXPRESSION "builder_agent_widget skipped")
 endif()
 
 if(BUILD_TESTS)
