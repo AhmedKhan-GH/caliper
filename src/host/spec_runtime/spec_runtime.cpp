@@ -303,8 +303,13 @@ void draw_histogram(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
             ImPlot::SetupAxisLimits(ImAxis_X1, H.lo, H.hi, ImPlotCond_Always);
             double lo = 0.0, hi = 1.0;
             if (p.y_log) {
-                if (!fit_limits(ys, true, 0.05, &lo, &hi)) { lo = 0.5; hi = 10.0; }
-                v.y_extent[0] = lo;
+                // Counts on a log axis start under 1, so that a bin of one
+                // value shows as a bar; the ticks start at 1.
+                double top = 1.0;
+                for (double y : ys) top = std::max(top, y);
+                lo = 0.5;
+                hi = std::pow(10.0, std::log10(top) + std::max(0.05, (std::log10(top) - std::log10(lo)) * 0.05));
+                v.y_extent[0] = 1.0;
                 v.y_extent[1] = hi;
             } else {
                 double top = 0.0;

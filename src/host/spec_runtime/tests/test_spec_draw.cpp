@@ -216,6 +216,17 @@ TEST_CASE("draw: a histogram's bars in the plot ink") {
     const Drawn d = draw_one(s, data({f32("values", "w", {64}, v)}, spec::Primitive::histogram));
     const Box b = content(d);
     CHECK(d.img.count(near(d.look.line, 3), b.x0, b.y0, b.x1, b.y1).n > 2000);
+
+    // On a log axis of counts, a bin of one value still shows as a bar.
+    const spec::Spec lg = one_panel(kTensor, "primitive = \"histogram\"\nbind = { values = \"w\" }\n"
+                                             "options = { bins = 4, range = [0.0, 4.0], y_log = true }");
+    std::vector<float> w(10, 0.5f);
+    w.push_back(3.5f);
+    const Drawn l = draw_one(lg, data({f32("values", "w", {11}, w)}, spec::Primitive::histogram));
+    const Box lb = content(l);
+    const int quarter = (lb.x1 - lb.x0) / 4;
+    CHECK(l.img.count(near(l.look.line, 3), lb.x1 - quarter, lb.y0, lb.x1, lb.y1).n > 200);
+    CHECK(l.img.count(near(l.look.line, 3), lb.x0, lb.y0, lb.x0 + quarter + 40, lb.y1).n > 2000);
 }
 
 TEST_CASE("draw: a table shows the expected number of rows") {
