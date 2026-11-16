@@ -38,6 +38,7 @@ __all__ = ["route_of", "SceneRoute", "LinkScenes", "SubQueue"]
 
 _routes_lock = threading.Lock()
 NATIVE_BACKLOG = 2                       # scene frames a native link may have waiting at once
+                                         # (caliper._netio.MAX_SCENE_BYTES is this many frames)
 
 
 def route_of(ring) -> "SceneRoute":
@@ -309,7 +310,9 @@ class SceneRoute:
                         wait = w if wait is None else min(wait, w)
                     break
                 parts, _ = frame
-                link.p.nio.send(link.conn, b"".join(bytes(p) for p in parts))
+                if not link.p.nio.send(link.conn, b"".join(bytes(p) for p in parts)):
+                    link.stats["scenes_refused"] += 1  # the connection is closing: nothing more
+                    break
                 link.stats["scenes_sent"] += 1
                 room -= 1
             else:
