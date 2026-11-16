@@ -28,10 +28,14 @@
 // The report is "ok" or "fail" and then: color, id, depth, fill and copy, the texels that differ
 // in each readback; import, the route label and bytes copied of the colour stream's import;
 // own-target, refused or submitted; submit-error, reported or lost; level, core or compatibility;
-// and errors, the device errors the backend collected other than the one expected.
+// uniforms, "same" when the scene core's fixture compiles here to the arena bytes it compiles to
+// natively (scene/uniform_check.h), else the hash got and the one pinned; and errors, the device
+// errors the backend collected other than the one expected.
 #include "gfx_selftest.h"
 
+#include "gfx/shaders/generated/programs_webgpu.h"
 #include "renderer/webgpu_backend.h"
+#include "scene/uniform_check.h"
 
 #include <cstdio>
 #include <cstring>
@@ -587,17 +591,29 @@ bool gfx_selftest_poll(gfx::Backend& b, std::string* report) {
                 for (uint32_t c = 0; c < 4; ++c)
                     bad_copy += S.out[kCopyTex][(size_t(y) * CW + x) * 4 + c] != copy_byte(x, y, c);
     }
+    // The scene core's uniform bytes here against the native ones.
+    uint64_t uniforms = 0;
+    std::string uwhy;
+    std::string udetail;
+    const bool uok = caliper_scene::uniform_check(b, gfx::shaders::kWebgpuPrograms, &uniforms, &uwhy, &udetail);
+    char utext[96];
+    if (uok && uniforms == caliper_scene::kUniformCheckFnv1a) std::snprintf(utext, sizeof utext, "same");
+    else if (uok) std::snprintf(utext, sizeof utext, "%016llx/%016llx", (unsigned long long)uniforms,
+                                (unsigned long long)caliper_scene::kUniformCheckFnv1a);
+    else std::snprintf(utext, sizeof utext, "failed");
     const bool ok = bad_color == 0 && bad_id == 0 && bad_depth == 0 && bad_fill == 0 && bad_copy == 0 &&
                     S.import_path == std::string("copied-from-host") && S.import_bytes == 24 &&
-                    S.own_target_refused && reported && errors.empty();
-    char buf[512];
+                    S.own_target_refused && reported && errors.empty() && std::string(utext) == "same";
+    char buf[640];
     std::snprintf(buf, sizeof buf,
                   "%s color=%lld id=%lld depth=%lld fill=%lld copy=%lld import=%s:%llu own-target=%s submit-error=%s "
-                  "level=%s",
+                  "level=%s uniforms=%s",
                   ok ? "ok" : "fail", bad_color, bad_id, bad_depth, bad_fill, bad_copy, S.import_path.c_str(),
                   (unsigned long long)S.import_bytes, S.own_target_refused ? "refused" : "submitted",
-                  reported ? "reported" : "lost", compat ? "compatibility" : "core");
+                  reported ? "reported" : "lost", compat ? "compatibility" : "core", utext);
     *report = buf;
+    if (!uok) *report += " uniform_check=" + uwhy;
+    if (uok && uniforms != caliper_scene::kUniformCheckFnv1a) *report += " uniform_detail=" + udetail;
     if (!errors.empty()) *report += " errors=" + errors;
 
     // The pictures, for the captures: the colour target, the ID target as colours (red the pick id,

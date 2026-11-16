@@ -39,11 +39,15 @@
 #include "embed/embed_core.h"
 #include "embed/render_stats.h"
 #include "gfx/colormap_keys.h"      // reference_index: the CPU reference's colormap level
+#include "gfx/metal_backend.h"
+#include "gfx/recording_backend.h"
+#include "gfx/shaders/generated/programs_metal.h"
 #include "gfx/shaders/generated/uniforms.h"
 #include "live/live_points.h"
 #include "live/live_views_state.h"
 #include "renderer/host_renderer.h"
 #include "scene/compile.h"
+#include "scene/uniform_check.h"
 #include "tensor_bridge.h"          // colormap_lut
 
 #define STB_IMAGE_WRITE_STATIC
@@ -1124,6 +1128,28 @@ fragment float4 fs(P in [[stage_in]]) { return float4(1.0); }
     CHECK_MESSAGE(whole_differ == 0, whole_differ, " sprites of whole or half sizes differ from the exact square, the first ",
                   whole_first);
     CHECK_MESSAGE(beyond == 0, beyond, " pixels of fractional sprites differ farther than ", e, " px from the edge");
+}
+
+// One camera, one set of uniform bytes: the scene core's fixture (scene/uniform_check.h) compiles to
+// the same arena bytes against the recording backend and the Metal backend, and to the pinned hash,
+// which the browser module's self-test checks on WebGPU too (web/test/wasm.spec.ts).
+TEST_CASE("gfx/Metal points view: the scene core's uniform bytes are the same on the recording and Metal backends") {
+    Core core;
+    if (!core.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU");
+    std::unique_ptr<caliper_gfx::Backend> metal =
+        caliper_gfx::make_metal_backend(core.core->renderer->native_device(), core.core->renderer->native_queue());
+    REQUIRE(metal);
+    caliper_gfx::RecordingBackend recording;
+    uint64_t hm = 0, hr = 0;
+    std::string why;
+    std::string detail;
+    REQUIRE_MESSAGE(caliper_scene::uniform_check(*metal, caliper_gfx::shaders::kMetalPrograms, &hm, &why, &detail), why);
+    MESSAGE("Metal's blocks: ", detail);
+    REQUIRE_MESSAGE(caliper_scene::uniform_check(recording, caliper_gfx::shaders::kMetalPrograms, &hr, &why), why);
+    MESSAGE("uniform arena hash: Metal ", ref::hex16(hm), ", recording ", ref::hex16(hr), ", pinned ",
+            ref::hex16(caliper_scene::kUniformCheckFnv1a));
+    CHECK(hm == hr);
+    CHECK(hm == caliper_scene::kUniformCheckFnv1a);
 }
 
 // The cost of a redraw by count: the view's CPU time to encode and submit its draw, and the GPU

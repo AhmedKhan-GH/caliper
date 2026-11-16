@@ -70,6 +70,12 @@ target_sources(caliper_view_layer PRIVATE
     ${CALIPER_ROOT}/src/host/scene/pick.cpp
     ${CALIPER_ROOT}/src/host/scene/backend_resources.cpp)
 target_compile_definitions(caliper_view_layer PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
+# The scene core's arithmetic without contraction, as natively (the root CMakeLists.txt's caliper_scene),
+# so that both compute the same uniform bytes; WebAssembly has no fused multiply-add, so this only
+# states it.
+set_source_files_properties(${CALIPER_ROOT}/src/host/scene/scene_tree.cpp ${CALIPER_ROOT}/src/host/scene/camera.cpp
+    ${CALIPER_ROOT}/src/host/scene/compile.cpp ${CALIPER_ROOT}/src/host/scene/pick.cpp
+    ${CALIPER_ROOT}/src/host/scene/backend_resources.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 # The WebGPU port must be named when compiling too: it provides webgpu.h.
 target_compile_options(caliper_view_layer PUBLIC --use-port=emdawnwebgpu)
 

@@ -389,6 +389,12 @@ target_include_directories(caliper_scene PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_scene PUBLIC caliper_gfx caliper::sdk)
 set_target_properties(caliper_scene PROPERTIES
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+# No floating-point contraction: the scene core composes cameras and normal matrices in double, and
+# without fused multiply-adds its arithmetic is the same IEEE sequence natively as in WebAssembly,
+# which has none, so every backend draws from the same uniform bytes (src/host/scene/uniform_check.h).
+if(NOT MSVC)
+    target_compile_options(caliper_scene PRIVATE -ffp-contract=off)
+endif()
 
 # ============================================================================
 # Metal renderer backend (C2, Apple only)
