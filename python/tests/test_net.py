@@ -256,6 +256,51 @@ def test_serve_writes_its_stream_file_for_the_app(mode, tmp_path, monkeypatch):
     assert not path.exists()
 
 
+def test_stream_file_is_never_written_through_a_shared_folder(mode, tmp_path, monkeypatch, capfd):
+    """A streams/ folder that others may enter (a shared or pre-made data
+    folder) gets no stream file: a link planted at the temporary name must
+    not receive the token. The script says why, without the token."""
+    data = tmp_path / "data"
+    streams = data / "streams"
+    streams.mkdir(parents=True)
+    os.chmod(streams, 0o777)
+    target = tmp_path / "planted-target"
+    target.write_text("untouched\n")
+    os.symlink(target, streams / f"{os.getpid()}.json.tmp.{os.getpid()}")
+    monkeypatch.setenv("CALIPER_DATA_DIR", str(data))
+    s = caliper.serve()
+    try:
+        assert target.read_text() == "untouched\n"
+        assert not (streams / f"{os.getpid()}.json").exists()
+        err = capfd.readouterr().err
+        assert "the stream file is not written" in err and "0700" in err
+        assert s.token not in err
+    finally:
+        s.close()
+
+
+def test_stream_file_replaces_a_leftover_without_following_it(mode, tmp_path, monkeypatch):
+    """In a folder of this user's alone, a leftover at the temporary name is
+    removed and the file is made new, never written through."""
+    data = tmp_path / "data"
+    streams = data / "streams"
+    streams.mkdir(parents=True, mode=0o700)
+    os.chmod(streams, 0o700)
+    target = tmp_path / "leftover-target"
+    target.write_text("untouched\n")
+    os.symlink(target, streams / f"{os.getpid()}.json.tmp.{os.getpid()}")
+    monkeypatch.setenv("CALIPER_DATA_DIR", str(data))
+    s = caliper.serve()
+    try:
+        path = streams / f"{os.getpid()}.json"
+        assert path.is_file() and not path.is_symlink()
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert json.loads(path.read_text())["stream_url"] == s.stream_url
+        assert target.read_text() == "untouched\n"
+    finally:
+        s.close()
+
+
 def test_stream_file_failure_leaves_serve_working(mode, tmp_path, monkeypatch):
     blocked = tmp_path / "file"
     blocked.write_text("not a folder")

@@ -540,13 +540,21 @@ namespace {
 // the pid was reused) and may be removed.
 bool read_stream_file(const std::string& path, const std::string& host, SessionEntry* e, bool* reclaim) {
     *reclaim = false;
-    const int fd = open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    constexpr off_t kMaxBytes = 64 * 1024;
+    // A regular file of this user that no one else can read: the stream URL in
+    // it carries the session token. Its type is checked before it is opened,
+    // so a FIFO or a device under that name never blocks the frame thread in
+    // open(), and it is opened without blocking or following a link, then
+    // checked again as the file it opened.
+    struct stat ls{};
+    if (lstat(path.c_str(), &ls) != 0 || !S_ISREG(ls.st_mode) || ls.st_uid != getuid() || (ls.st_mode & 077) != 0 ||
+        ls.st_size <= 0 || ls.st_size > kMaxBytes)
+        return false;
+    const int fd = open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return false;
     struct stat st{};
-    // A regular file of this user that no one else can read: the stream URL in
-    // it carries the session token.
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != getuid() || (st.st_mode & 077) != 0 ||
-        st.st_size <= 0 || st.st_size > 64 * 1024) {
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_dev != ls.st_dev || st.st_ino != ls.st_ino ||
+        st.st_uid != getuid() || (st.st_mode & 077) != 0 || st.st_size <= 0 || st.st_size > kMaxBytes) {
         close(fd);
         return false;
     }
