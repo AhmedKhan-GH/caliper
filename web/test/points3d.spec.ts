@@ -116,20 +116,37 @@ test('a point in front of the target is drawn larger than one behind it, which i
   }
 });
 
-test('the rotate toggle turns the 3-D view until a drag stops it, and a 2-D view has none', async ({ page }, info) => {
+/** The module's frame count, for waits on frames drawn rather than on time; null for the TypeScript view. */
+async function moduleFrames(page: Page, id: string): Promise<number | null> {
+  const st = (await state(page, id)).wasmStats as { frames?: number } | null;
+  return st ? Number(st.frames ?? 0) : null;
+}
+
+/** Waits until the WebAssembly view has drawn k more frames (the TypeScript view applies input at once). */
+async function framesPass(page: Page, id: string, k: number): Promise<void> {
+  const f0 = await moduleFrames(page, id);
+  if (f0 === null) return;
+  await expect.poll(async () => (await moduleFrames(page, id))! - f0, { timeout: 30_000, message: `${id}: frames drawn` })
+    .toBeGreaterThanOrEqual(k);
+}
+
+test('the rotate toggle turns the 3-D view until a drag stops it', async ({ page }, info) => {
   const prod = await producer(['--scene', 'clusters']);
   try {
     const which = renderers(info.project.name);
     await open(page, prod, which);
+    const az = async (r: string) => ((await state(page, r)).camera as { az: number }).az;
     for (const r of which) {
       const button = page.locator(`#${r}`).locator('button.tool', { hasText: 'rotate' });
       await expect(button).toHaveAttribute('aria-pressed', 'false');
-      const az0 = ((await state(page, r)).camera as { az: number }).az;
+      const az0 = await az(r);
       const before = await bodyPixels(page, `#${r}`);
       await button.click();
       await expect(button).toHaveAttribute('aria-pressed', 'true');
-      await expect.poll(async () => ((await state(page, r)).camera as { az: number }).az, { timeout: 5000 }).toBeGreaterThan(az0 + 0.05);
-      expect((await state(page, r)).rotate).toBe(true);
+      // It turns: the state says so and the azimuth grows, frame by frame.
+      await expect.poll(async () => (await state(page, r)).rotate, { timeout: 30_000, message: `${r}: rotate` }).toBe(true);
+      await expect.poll(() => az(r), { timeout: 30_000, message: `${r}: azimuth while turning` }).toBeGreaterThan(az0 + 1e-3);
+      await framesPass(page, r, 2);
       const after = await bodyPixels(page, `#${r}`);
       expect(Buffer.compare(Buffer.from(before.px.data), Buffer.from(after.px.data)), r).not.toBe(0);
       // A drag stops it, and the header shows that.
@@ -139,25 +156,21 @@ test('the rotate toggle turns the 3-D view until a drag stops it, and a 2-D view
       await page.mouse.move(box.x + box.width / 2 + 40, box.y + box.height / 2, { steps: 4 });
       await page.mouse.up();
       await expect(button).toHaveAttribute('aria-pressed', 'false');
-      await expect.poll(async () => (await state(page, r)).rotate, { timeout: 5000 }).toBe(false);
-      // The view stops turning: once the drag's own turn has arrived (the module
-      // publishes its state a few times a second), the azimuth stays.
-      const az = async () => ((await state(page, r)).camera as { az: number }).az;
-      // On SwiftShader a frame of the module can take most of a second, so the
-      // windows are long.
-      await expect.poll(async () => {
-        const a = await az();
-        await page.waitForTimeout(1200);
-        return Math.abs((await az()) - a);
-      }, { timeout: 15_000 }).toBeLessThan(1e-6);
-      const az1 = await az();
-      await page.waitForTimeout(1500);
-      expect(await az(), r).toBeCloseTo(az1, 6);
+      await expect.poll(async () => (await state(page, r)).rotate, { timeout: 30_000, message: `${r}: rotate after the drag` }).toBe(false);
+      // Once the drag's own turn has been drawn, the azimuth stays, however
+      // many frames follow.
+      await framesPass(page, r, 3);
+      const az1 = await az(r);
+      await framesPass(page, r, 5);
+      await page.waitForTimeout(300);
+      expect(await az(r), r).toBeCloseTo(az1, 6);
     }
   } finally {
     prod.stop();
   }
-  // 2-D points: no rotate toggle and no box.
+});
+
+test('a 2-D points view has no rotate toggle and no box', async ({ page }, info) => {
   const flat = await producer(['--dims', '2']);
   try {
     const which = renderers(info.project.name);

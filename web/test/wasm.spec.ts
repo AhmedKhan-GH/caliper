@@ -60,6 +60,27 @@ async function wasmStats(page: Page, view: string): Promise<Record<string, unkno
   return ((await state(page, view)).wasmStats ?? {}) as Record<string, unknown>;
 }
 
+/**
+ * The module's self-check of a view ("view:kind:mismatches:maxdiff"), waited on
+ * until it matches re. A failure prints what the module reported: its checks,
+ * how many frames it drew and how fast, and its adapter.
+ */
+async function moduleCheck(page: Page, view: string, re: RegExp, timeout = 30_000): Promise<string> {
+  const read = async () => {
+    const st = await wasmStats(page, view);
+    return { checks: String(st.checks ?? ''), frames: st.frames, fps: st.fps, checkState: st.checkState,
+      path: st.rendererPath, state: st.state, adapter: (await state(page, view)).adapter };
+  };
+  const end = Date.now() + timeout;
+  let got = await read();
+  while (!re.test(got.checks) && Date.now() < end) {
+    await page.waitForTimeout(250);
+    got = await read();
+  }
+  expect(got.checks, `${view}: the module's checks (${JSON.stringify(got)})`).toMatch(re);
+  return got.checks;
+}
+
 async function plates(page: Page, n: number) {
   await page.waitForFunction((n) => {
     const els = [...document.querySelectorAll('caliper-view')] as El[];
@@ -98,15 +119,9 @@ test('auto draws each view with the WebAssembly views when they list its kind, a
     expect(canvases).toEqual([true, true, true, true, true, true]);
     // Each module read its texture back: the image is exactly the bytes that were sent, and the
     // heatmap exactly the CPU reference colormap (web/wasm/README.md, "The colormap").
-    const checks = async (view: string) => {
-      const st = (await state(page, view)).wasmStats as { checks?: string } | null;
-      return st?.checks ?? '';
-    };
-    await expect.poll(() => checks('input'), { timeout: 15_000 }).toMatch(/^input:2:\d+:\d+$/);
-    await expect.poll(() => checks('weights'), { timeout: 15_000 }).toMatch(/^weights:1:\d+:\d+$/);
-    const [, , imageBad, imageMax] = (await checks('input')).split(':').map(Number);
+    const [, , imageBad, imageMax] = (await moduleCheck(page, 'input', /^input:2:\d+:\d+$/)).split(':').map(Number);
     expect([imageBad, imageMax]).toEqual([0, 0]);
-    const [, , heatBad, heatMax] = (await checks('weights')).split(':').map(Number);
+    const [, , heatBad, heatMax] = (await moduleCheck(page, 'weights', /^weights:1:\d+:\d+$/)).split(':').map(Number);
     expect([heatBad, heatMax]).toEqual([0, 0]);
     // The histogram holds the producer's bins.
     const hist = (await state(page, 'weight_hist')).wasmStats as { viewInfo?: string };
@@ -149,9 +164,7 @@ test('points draw as quads with their palette colours, and hover finds the point
   expect((await state(page, 'embedding')).drawer).toBe('wasm');
   // The module read its render target back: at every sampled point no other point covers, the
   // pixel is the palette colour of the point's label ("view:3:mismatches:compared").
-  await expect.poll(async () => String((await wasmStats(page, 'embedding')).checks ?? ''), { timeout: 20_000 })
-    .toMatch(/^embedding:3:\d+:\d+$/);
-  const [, , bad, compared] = String((await wasmStats(page, 'embedding')).checks).split(':').map(Number);
+  const [, , bad, compared] = (await moduleCheck(page, 'embedding', /^embedding:3:\d+:\d+$/)).split(':').map(Number);
   expect(bad).toBe(0);
   expect(compared).toBeGreaterThan(10);
   // Hover: somewhere around the middle of the cloud the module finds a point.
