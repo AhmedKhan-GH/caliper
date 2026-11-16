@@ -37,7 +37,7 @@ When it listens, the process prints the address and **your session token**, and 
 
 The session token on the first line is yours: commands sent with it run as the origin `api`, without review, and on the stream it may control a run when the app allows control. Caliper writes it to no file, so a program you run that should act without review takes it from this line, for example through an environment variable that you set, such as `CALIPER_API_TOKEN` in the [examples](#examples). The second line is the link of the [spec page](#get-v0spec), with the viewer token, which opens that page and nothing else.
 
-**Commands sent with the API file's token are reviewed.** The API file is what an outside agent reads, through `caliper-mcp` or otherwise, and its token runs commands as the origin `mcp`: each change to the open spec waits for your review in the app, and each command that deletes or overwrites saved data waits for your approval, whatever the request claims ([Who sends a command](#who-sends-a-command)).
+**Commands sent with the API file's token are reviewed.** The API file is what an outside agent reads, through [`caliper-mcp`](mcp-server.md) or otherwise, and its token runs commands as the origin `mcp`: each change to the open spec waits for your review in the app, and each command that deletes or overwrites saved data waits for your approval, whatever the request claims ([Who sends a command](#who-sends-a-command)).
 
 The API file is `api.json` in the app-data folder ([Folders and environment variables](environment.md)). The process writes it with mode 0600, so that only its owner can read it, and removes it when it exits, as `caliper serve` does with its hub file. It holds one JSON object:
 

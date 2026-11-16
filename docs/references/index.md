@@ -45,6 +45,7 @@ The [service catalog](services.md) lists every service id the host serves, with 
 | [Wire protocol v3](wire-protocol.md) | `caliper/live_net.h`, the WebSocket protocol between producers, viewers and the hub |
 | [Browser elements](browser-elements.md) | `<caliper-view>` and `<caliper-controls>`: their attributes, methods and events, and the widgets built on them |
 | [Caliper API](api.md) | The HTTP interface to the running app: its endpoints, its session token and its limits |
+| [MCP server](mcp-server.md) | `caliper-mcp`: what an outside agent needs running, its command line, the configuration of an MCP client, its tools and resources |
 | [Widget agent](widget-agent.md) | `caliper-agent` in its widget role: opening a widget session, its tool scope, its prompts and its answers |
 | [Side chat](side-chat.md) | The pane where your own ACP agent works: the agents it detects, what it starts and hands over, and what it shows |
 | [Builder pane](builder-pane.md) | Building a spec by hand on the spec page: the palettes, the canvas, Properties, the spec text and the keys |
