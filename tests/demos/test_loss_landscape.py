@@ -12,7 +12,7 @@ connection to the notebook's ``caliper.serve()`` decodes every scene batch:
   separately, the path's last point at the current point whenever the path
   is sent (each 10th step and each refit), orthonormal directions, the first
   eleven points of the path after the refit at step 200 against the
-  snapshots' projections in float64, and ``plane share``;
+  snapshots' projections in float64, and ``plane share per refit``;
 * random directions, 100 steps with ``every`` at 50: the filter-normalised
   rows, zero biases and normalisation entries, the centre vertex, a path of
   one point every 10th step that is never redrawn;
@@ -24,18 +24,22 @@ connection to the notebook's ``caliper.serve()`` decodes every scene batch:
 
     PYTHONPATH=python .venv/bin/python -m pytest tests/demos
 
-The capture row of the acceptance waits for the scene view (see
-``test_capture``)."""
+``test_capture``, the capture row, runs where CALIPER_TEST_CALIPER_EXE names the
+Caliper app and Metal draws it."""
 from __future__ import annotations
 
 import asyncio
 import functools
 import importlib.util
+import io
 import json
 import math
+import os
+import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -104,7 +108,7 @@ def notebook(monkeypatch):
             if name in ns:
                 ns[name].remove()
         caliper.remove("landscape")
-        caliper.remove("plane share")
+        caliper.remove("plane share per refit")
         ns["server"].close()
     torch.use_deterministic_algorithms(deterministic)
 
@@ -163,7 +167,7 @@ class Recorder:
 class Viewer:
     """A viewer on a thread of its own, on a real loopback connection: it
     announces scenes and controls, subscribes to the scene ``landscape`` and,
-    once it is listed, the series ``plane share``, and keeps every message it
+    once it is listed, the series ``plane share per refit``, and keeps every message
     decodes."""
 
     def __init__(self, server):
@@ -204,7 +208,7 @@ class Viewer:
                 self.msgs.append(m)
             if isinstance(m, w.Views):
                 names = {v["name"] for v in m.views}
-                for sub, view in ((1, "landscape"), (2, "plane share")):
+                for sub, view in ((1, "landscape"), (2, "plane share per refit")):
                     if view in names and view not in self.subscribed:
                         self.subscribed.add(view)
                         await self.ws.send(w.encode(w.Subscribe(sub, view, 100 + sub, None, None)))
@@ -565,10 +569,169 @@ def test_thinning_rule():
 
 
 # ---------------------------------------------------------------------------
-# the capture row
+# the capture row: the hidden app on Metal, against a reviewed reference
 # ---------------------------------------------------------------------------
-@pytest.mark.skip(reason="the scene view that draws a scene in the browser is not on this branch "
-                         "yet (stream view of sprint 4); the capture of the scene after step 299 "
-                         "in the path's plane, 512 x 512 from the default camera, runs once it is")
-def test_capture():
-    pass
+EXE = os.environ.get("CALIPER_TEST_CALIPER_EXE", "")
+REFERENCE = Path(__file__).resolve().parent / "reference" / "loss_landscape_app_step299.png"
+WINDOW = (1280, 800)
+MARKER = (255, 80, 80)
+
+
+class Where:
+    """The scene view's data area and camera, as the app's UI driver reports
+    them (``where landscape``)."""
+
+    def __init__(self, line: str):
+        f = line.split()
+        self.area = [float(v) for v in f[f.index("area") + 1:f.index("area") + 5]]
+        t = f.index("target")
+        self.target = np.array([float(v) for v in f[t + 1:t + 4]])
+        self.distance = float(f[f.index("distance") + 1])
+        self.azimuth = float(f[f.index("azimuth") + 1])
+        self.elevation = float(f[f.index("elevation") + 1])
+        self.fovy = float(f[f.index("fovy") + 1])
+        p = f.index("target_px")
+        self.target_px = (int(f[p + 1]), int(f[p + 2]))
+
+    def pixel(self, p, k: float):
+        """The frame pixel (x, y) at which world point p is drawn (up is +z)."""
+        u, a = np.array([0.0, 0, 1]), np.array([1.0, 0, 0])
+        b = np.cross(a, u)
+        ce, se = math.cos(self.elevation), math.sin(self.elevation)
+        eye = self.target + ((a * math.cos(self.azimuth) + b * math.sin(self.azimuth)) * ce +
+                             u * se) * self.distance
+        fwd = (self.target - eye) / np.linalg.norm(self.target - eye)
+        side = np.cross(fwd, u)
+        side /= np.linalg.norm(side)
+        up = np.cross(side, fwd)
+        d = np.asarray(p, float) - eye
+        xv, yv, zv = d @ side, d @ up, -(d @ fwd)
+        f = 1.0 / math.tan(self.fovy / 2)
+        nx = f / (self.target_px[0] / self.target_px[1]) * xv / -zv
+        ny = f * yv / -zv
+        ax, ay, aw, ah = self.area
+        return (ax + (nx * 0.5 + 0.5) * aw) * k, (ay + (0.5 - ny * 0.5) * ah) * k
+
+
+def parity(cur, ref):
+    """The parity rules of the scene rows (design/web-geometry.md): away from
+    edges a pixel of a flat colour (the path, the marker, the frame, the
+    background) equals the reference exactly and a lit pixel of the surface
+    within 2 levels; a pixel within one pixel of an edge in the reference may
+    take the colour of either side, within 2 levels."""
+    if cur.shape != ref.shape:
+        return False, f"size {cur.shape} against the reference's {ref.shape}"
+    c, r = cur.astype(np.int32), ref.astype(np.int32)
+    h, w = r.shape[:2]
+    pad = np.pad(r, ((1, 1), (1, 1), (0, 0)), mode="edge")
+    near3 = np.stack([pad[dy:dy + h, dx:dx + w] for dy in range(3) for dx in range(3)])
+    edge = (near3.max(0) - near3.min(0)).max(-1) > 2
+    diff = np.abs(c - r).max(-1)
+    flat = np.zeros((h, w), bool)
+    for colour in ((235, 235, 235), MARKER, (120, 120, 120)):
+        flat |= (r == np.array(colour)).all(-1)
+    either = np.abs(near3 - c[None]).max(-1).min(0)
+    bad = (~edge & ((diff > 2) | (flat & (diff > 0)))) | (edge & (either > 2))
+    return not bad.any(), f"{int(bad.sum())} of {h * w} pixels outside the parity rules, " \
+                          f"largest difference {int(diff.max())}"
+
+
+@pytest.mark.skipif(sys.platform != "darwin" or not EXE or not os.path.exists(EXE),
+                    reason="needs the Caliper app (CALIPER_TEST_CALIPER_EXE) and Metal")
+def test_capture(notebook, tmp_path):
+    """The scene after a surface forced at step 299, in the path's plane: the
+    notebook's cells on the CPU with fixed seeds and deterministic algorithms
+    for 300 steps with ``every`` at 100, the hidden app attached from the start
+    (so its camera fits the static frame), and the frame from Caliper API. The
+    marker is at the current point's projected pixel, and the scene view's
+    area matches the reference under the parity rules. Without a reference the
+    test writes the capture for review and skips: CALIPER_DEMO0_WRITE_REFERENCE=1
+    writes it as the reference, which is committed once a person has reviewed
+    it. CALIPER_SCENE_CAPTURE_DIR keeps the frame and the area."""
+    Image = pytest.importorskip("PIL.Image")
+    ns = notebook(300)
+    land = ns["land"]
+    ns["every"].set(100)
+    data = tmp_path / "app"
+    env = dict(os.environ, CALIPER_DATA_DIR=str(data / "data"),
+               CALIPER_USER_APPLETS_DIR=str(data / "user"),
+               CALIPER_WINDOW_SIZE=f"{WINDOW[0]}x{WINDOW[1]}",
+               CALIPER_TEST_UI="; ".join(["where landscape", "wait 15"] * 4000))
+    for d in ("data", "user"):
+        (data / d).mkdir(parents=True)
+    app = subprocess.Popen([EXE, "--hidden", "--url", ns["server"].stream_url, "--api",
+                            "--api-port", "0"], env=env, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE, text=True)
+    lines: list[str] = []
+    threading.Thread(target=lambda: [lines.append(x.rstrip()) for x in app.stderr],
+                     daemon=True).start()
+
+    def wait(pred, what, timeout=60.0):
+        end = time.monotonic() + timeout
+        while not pred():
+            assert app.poll() is None, "\n".join(lines[-30:])
+            assert time.monotonic() < end, f"waited {timeout} s for {what}"
+            time.sleep(0.02)
+
+    def wheres():
+        return [x for x in lines if x.startswith("[ui] where landscape ")]
+
+    def capture():
+        api = json.loads((data / "data" / "api.json").read_text())
+        url = f"http://127.0.0.1:{api['port']}/v0/capture.png?token={api['token']}"
+        with urllib.request.urlopen(url, timeout=20) as r:
+            return np.asarray(Image.open(io.BytesIO(r.read())).convert("RGB"))
+
+    try:
+        wait(lambda: any(x.startswith("[renderer] ") for x in lines), "the renderer")
+        renderer = next(x for x in lines if x.startswith("[renderer] "))
+        if "metal" not in renderer:
+            pytest.skip(f"the app has no Metal renderer here ({renderer})")
+        wait(lambda: any(c.get("subscriptions", 0) > 0
+                         for c in ns["server"].stats()["connections"]), "the app's subscription")
+        wait(lambda: (data / "data" / "api.json").exists(), "Caliper API")
+        ns["train"](300)
+        ns["show_surface"]()                                  # a surface forced at step 299
+        assert land.refits[-1] == (299, "path")
+        # The app has drawn the final state once two captures, each after a new
+        # frame of the UI driver, agree.
+        prev, n = None, len(wheres())
+        for _ in range(40):
+            wait(lambda: len(wheres()) > n, "a frame of the app")
+            n = len(wheres())
+            img = capture()
+            if prev is not None and np.array_equal(img, prev):
+                break
+            prev = img
+        where = Where(wheres()[-1])
+        k = img.shape[1] / WINDOW[0]
+        ax, ay, aw, ah = (int(round(v * k)) for v in where.area)
+        area = img[ay:ay + ah, ax:ax + aw]
+        keep_dir = os.environ.get("CALIPER_SCENE_CAPTURE_DIR")
+        if keep_dir:
+            Image.fromarray(img).save(Path(keep_dir) / "loss-landscape-app-step299-frame.png")
+            Image.fromarray(area).save(Path(keep_dir) / "loss-landscape-app-step299.png")
+        # The marker, unlit and flat, around the current point's projected pixel
+        # (within 4 points: from the default camera the box's front edge, which
+        # is nearer, crosses the marker's centre).
+        x, y = (int(v) for v in where.pixel(land.current[0].tolist(), k))
+        r = int(4 * k)
+        patch = img[y - r:y + r + 1, x - r:x + r + 1].reshape(-1, 3).astype(int)
+        assert np.abs(patch - np.array(MARKER)).max(1).min() <= 1, "no marker near its point"
+        if os.environ.get("CALIPER_DEMO0_WRITE_REFERENCE") == "1":
+            REFERENCE.parent.mkdir(exist_ok=True)
+            Image.fromarray(area).save(REFERENCE)
+        if not REFERENCE.exists():
+            out = tmp_path / REFERENCE.name
+            Image.fromarray(area).save(out)
+            pytest.skip(f"no reference yet: review {out} and commit it as "
+                        f"{REFERENCE.relative_to(REPO)} (CALIPER_DEMO0_WRITE_REFERENCE=1)")
+        ok, report = parity(area, np.asarray(Image.open(REFERENCE).convert("RGB")))
+        assert ok, report
+    finally:
+        if app.poll() is None:
+            app.terminate()
+            try:
+                app.wait(20)
+            except subprocess.TimeoutExpired:
+                app.kill()
