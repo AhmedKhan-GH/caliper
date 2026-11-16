@@ -93,13 +93,17 @@ jobs:
           node cross_origin.mjs --build ../build --out "$RUNNER_TEMP/shots/cross-origin.png"
       # The element with the fresh module from python/caliper/_web/, and without it
       # (fallback.spec.ts). The webgpu project needs a GPU and is left out.
+      # On a failure the HTML report and a trace of each failed test are kept
+      # (uploaded below); the report never opens a browser.
       - name: Test the web package
         working-directory: web
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
         run: |
           npm ci
           npx playwright install chromium-headless-shell
           node build.mjs --test
-          npx playwright test --project=swiftshader --project=canvas2d
+          npx playwright test --project=swiftshader --project=canvas2d --reporter=list,html --trace=retain-on-failure
       # The TypeScript bundle stays checked in; it must match a fresh build of web/.
       - run: '"$CALIPER_PYTHON" scripts/build_web.py --check --no-install'
       - run: '"$CALIPER_PYTHON" -m pytest --noconftest -q python/tests/test_assets.py python/tests/test_wasm_scripts.py'
@@ -113,12 +117,15 @@ jobs:
             python/caliper/_web/caliper-views.js
             python/caliper/_web/caliper-views.wasm
           if-no-files-found: error
+      # The checks' screenshots, Playwright's HTML report and the failed tests'
+      # traces and screenshots (npx playwright show-trace reads a trace).
       - if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: browser-views-screenshots
+          name: browser-views-report
           path: |
             ${{ runner.temp }}/shots
+            web/playwright-report
             web/test-results
           if-no-files-found: ignore
 
