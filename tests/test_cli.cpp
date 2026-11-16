@@ -108,6 +108,17 @@ std::string slurp(const fs::path& p) {
 
 } // namespace
 
+TEST_CASE("cli: --allow-control applies to serve, and to the app, dev and shot with --api") {
+    CHECK(parse({"serve", "--allow-control"}).allow_control);
+    CHECK_FALSE(parse({"serve"}).allow_control);
+    CHECK(parse({"--api", "--allow-control"}).allow_control);
+    CHECK(parse({"dev", "/a", "--api", "--allow-control"}).error.empty());
+    CHECK(parse({"--allow-control"}).error == "--allow-control needs --api when starting the app, dev or shot");
+    CHECK(parse({"list", "--allow-control"}).error ==
+          "--allow-control applies only to serve, and to the app, dev and shot with --api");
+    CHECK(parse({"serve", "--allow-control=yes"}).error == "--allow-control takes no value");
+}
+
 TEST_CASE("cli: --hidden starts the app or dev with the window never shown") {
     CHECK(parse({"--hidden"}).hidden);
     CHECK(parse({"--hidden"}).command == Command::Run);

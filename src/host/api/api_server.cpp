@@ -342,6 +342,7 @@ bool Server::start(std::string* err) {
     h.port = opt_.port;
     h.token = opt_.token;
     h.software_version = opt_.software_version;
+    h.allow_control = opt_.allow_control;
     h.log = opt_.log;
     h.stream_path = kStreamPath;
     h.stream_alias = kStreamAlias;

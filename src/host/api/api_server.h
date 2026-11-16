@@ -103,6 +103,9 @@ struct Options {
     std::string token;                 // the session token (caliper_net::valid_token)
     std::string info_json;             // the body of GET /v0/info
     std::string software_version;      // the hub's WELCOME software.version
+    // The stream's hub forwards viewers' controls (wire protocol 3.1) only with
+    // this (--allow-control with --api); off by default, as in caliper serve.
+    bool allow_control = false;
     // Not empty: the app cannot read its frame back, and GET /v0/capture.png
     // answers 501 with this reason without asking the frame thread.
     std::string capture_unavailable;

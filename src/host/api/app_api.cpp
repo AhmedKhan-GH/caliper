@@ -35,6 +35,7 @@ bool AppApi::start(const CommandLine& cl, const std::string& capture_unavailable
     o.token = caliper_net::random_token();
     o.info_json = info_json(ctx);
     o.software_version = ctx.caps.version;
+    o.allow_control = cl.allow_control;
     o.capture_unavailable = capture_unavailable;
     o.encode_png = [](const uint8_t* rgba, uint32_t w, uint32_t h, std::string* png) {
         return export_encode_png(rgba, w, h, png);

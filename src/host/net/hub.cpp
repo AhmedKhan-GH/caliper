@@ -138,11 +138,27 @@ struct ViewInfo {
     int64_t kind = 0;
 };
 
+// The latest SELECTION of one item space, as the producer sent it (3.1).
+struct SelectionState {
+    SharedBytes frame;
+    bool empty = true;               // nothing selected: not sent to a late viewer
+};
+
+// A CONTROL forwarded to a producer, waiting for its CONTROL_REPLY (3.1).
+struct ControlRoute {
+    ConnId viewer = 0;
+    uint32_t request_id = 0;         // the viewer's own
+    std::string op;
+    std::optional<std::string> name;
+    uint64_t deadline_ms = 0;        // dropped with `timeout` after this
+};
+
 struct Session {
     std::string id;
     std::string proposed;            // the id the producer asked for
     wire::Identity identity;         // with the id the hub chose
     std::vector<std::string> capabilities;
+    bool controls_cap = false, selection_cap = false, events_cap = false;   // the producer's
     ConnId producer = 0;
     bool live = true;
     uint64_t order = 0;
@@ -156,6 +172,15 @@ struct Session {
     std::map<std::string, History> series;   // by view name
     std::set<ConnId> viewers;        // attached
     uint32_t next_sub = 1, next_request = 1;
+    // 3.1. VIEWS without `items`, for viewers that did not announce `selection`;
+    // the latest CONTROLS and the latest SELECTION of each item space, as the
+    // producer sent them (kept after the session ends); the CONTROL requests
+    // waiting for the producer's reply, by the hub's own request_id.
+    Json views_plain = Json::array();
+    SharedBytes controls;
+    std::map<std::string, SelectionState> selections;
+    std::map<uint32_t, ControlRoute> routes;
+    uint32_t next_control = 1;
 };
 
 struct VSub {
@@ -191,6 +216,12 @@ struct Peer {
     bool in_flight = false;          // a data message is in the send queue
     bool dirty = false;
     uint64_t due_us = 0;             // a rate-limited message is due then
+    // 3.1: what the viewer announced, its coalesced CONTROLS and SELECTIONs
+    // (latest wins while its send queue is full), and its waiting CONTROLs.
+    bool cap_controls = false, cap_selection = false;
+    SharedBytes pending_controls;
+    std::map<std::string, SharedBytes> pending_selections;
+    size_t controls_waiting = 0;
     // producer
     std::string session;
 };
@@ -275,6 +306,8 @@ struct Hub::Impl {
     uint64_t next_channel = 1;
     uint64_t next_order = 1;
     uint64_t snap_bytes = 0, series_bytes = 0;
+    uint64_t meta_bytes = 0;         // 3.1: the CONTROLS and SELECTIONs kept per session
+    uint64_t retained() const { return snap_bytes + series_bytes + meta_bytes; }
     HubStats c;                      // the counters
     mutable std::mutex stats_mu;
     HubStats published;
@@ -410,15 +443,67 @@ struct Hub::Impl {
                 overflow(kv.first);
     }
 
-    wire::Views views_msg(const Session* s) {
+    // VIEWS for one viewer: the item spaces of 3.1 only to a viewer that
+    // announced `selection`.
+    wire::Views views_msg(const Session* s, bool with_items) {
         wire::Views v;
         if (s) {
             v.session = s->id;
-            v.views = s->views;
+            v.views = with_items ? s->views : s->views_plain;
         } else {
             v.views = Json::array();
         }
         return v;
+    }
+
+    // ---- 3.1: CONTROLS and SELECTION to viewers ----------------------------------------
+    // Control messages, sent at once in order; when a viewer's send queue is
+    // full they wait, and a newer CONTROLS (or SELECTION of the same item
+    // space) replaces the waiting one, as the protocol coalesces them.
+    static constexpr size_t kMetaQueueLimit = size_t(256) << 10;
+
+    void offer_controls(Peer& p, const SharedBytes& frame) {
+        if (!p.cap_controls || !frame) return;
+        if (!p.pending_controls && server.queued_bytes(p.conn) < kMetaQueueLimit) {
+            if (!server.send(p.conn, frame)) overflow(p.conn);
+            ++c.controls_out;
+        } else {
+            p.pending_controls = frame;
+        }
+    }
+
+    void offer_selection(Peer& p, const std::string& space, const SharedBytes& frame) {
+        if (!p.cap_selection || !frame) return;
+        if (!p.pending_selections.count(space) && server.queued_bytes(p.conn) < kMetaQueueLimit) {
+            if (!server.send(p.conn, frame)) overflow(p.conn);
+            ++c.selections_out;
+        } else {
+            p.pending_selections[space] = frame;
+        }
+    }
+
+    // In pump(), before data: what waited, once the queue has room.
+    void flush_meta(Peer& p) {
+        if (server.queued_bytes(p.conn) >= kMetaQueueLimit) return;
+        if (p.pending_controls) {
+            if (!server.send(p.conn, p.pending_controls)) overflow(p.conn);
+            p.pending_controls.reset();
+            ++c.controls_out;
+        }
+        for (auto& kv : p.pending_selections) {
+            if (!server.send(p.conn, kv.second)) overflow(p.conn);
+            ++c.selections_out;
+        }
+        p.pending_selections.clear();
+    }
+
+    // Right after the VIEWS of an attachment: the session's latest CONTROLS and
+    // every item space's selection that is not empty.
+    void send_state(Peer& p, const Session& s) {
+        if (p.cap_controls && s.controls) offer_controls(p, s.controls);
+        if (p.cap_selection)
+            for (const auto& kv : s.selections)
+                if (!kv.second.empty) offer_selection(p, kv.first, kv.second.frame);
     }
 
     size_t live_count() const {
@@ -430,7 +515,9 @@ struct Hub::Impl {
     // ---- viewers: attaching ------------------------------------------------------------
     void attach(Peer& p, const std::string& sid) {
         if (p.attached == sid) {   // already there: confirm
-            send(p.conn, views_msg(sid.empty() ? nullptr : &sessions.at(sid)));
+            Session* s = sid.empty() ? nullptr : &sessions.at(sid);
+            send(p.conn, views_msg(s, p.cap_selection));
+            if (s) send_state(p, *s);
             return;
         }
         detach_all(p);
@@ -440,7 +527,8 @@ struct Hub::Impl {
             s = &sessions.at(sid);
             s->viewers.insert(p.conn);
         }
-        send(p.conn, views_msg(s));
+        send(p.conn, views_msg(s, p.cap_selection));
+        if (s) send_state(p, *s);
     }
 
     // Ends every subscription of a viewer and leaves its session (no message).
@@ -449,6 +537,9 @@ struct Hub::Impl {
         for (auto& kv : p.subs) subs.push_back(kv.first);
         for (uint32_t s : subs) end_vsub(p, s);
         p.pending_sub.clear();
+        // The controls and selections of the session it leaves are not sent.
+        p.pending_controls.reset();
+        p.pending_selections.clear();
         auto it = sessions.find(p.attached);
         if (it != sessions.end()) it->second.viewers.erase(p.conn);
         p.attached.clear();
@@ -843,15 +934,23 @@ struct Hub::Impl {
             ++c.events_dropped;
             return;
         }
-        if (std::find(s->capabilities.begin(), s->capabilities.end(), CALIPER_NET_CAP_EVENTS) ==
-                s->capabilities.end() ||
-            server.queued_bytes(s->producer) > kEventQueueLimit) {
+        if (!(s->events_cap || s->selection_cap) || server.queued_bytes(s->producer) > kEventQueueLimit) {
             ++c.events_dropped;
             return;
         }
         Json meta = r.frame.meta;
         meta.erase("sections");
         meta.erase("sub");
+        // 3.1: a selection's item space and ids only to a producer that keeps
+        // linked selections; it reads the rest of the event as before.
+        if (!s->selection_cap) {
+            if (const Json* d = meta.find("detail"); d && d->is_object() && (d->has("space") || d->has("items"))) {
+                Json detail = *d;
+                detail.erase("space");
+                detail.erase("items");
+                meta.set("detail", detail);
+            }
+        }
         if (e.sub) {
             auto it = p.subs.find(*e.sub);
             if (it != p.subs.end())
@@ -864,6 +963,129 @@ struct Hub::Impl {
         }
         send_bytes(s->producer, std::move(b));
         ++c.events_forwarded;
+    }
+
+    // ---- 3.1: controls ----------------------------------------------------------------
+    static constexpr size_t kMaxControlsWaiting = 64;       // per viewer connection
+    static constexpr size_t kMaxRoutes = 1024;              // per session
+    static constexpr uint64_t kReplyWaitMs = 60000;         // a reply the producer owes
+    static constexpr uint64_t kQueuedWaitMs = CALIPER_NET_ACTION_WAIT_MS + kReplyWaitMs;
+
+    // A viewer's CONTROL: forwarded to the producer of its session only when
+    // the hub allows control, else answered here, as "Controls through a hub"
+    // says. Selecting is not a control: select events go on as before.
+    void viewer_control(Peer& p, const wire::Control& ctl) {
+        if (!p.cap_controls) {
+            // CONTROL_REPLY goes only to a peer that announced `controls`.
+            wire::Error e;
+            e.code = CALIPER_NET_ERR_BAD_REQUEST;
+            e.message = "a viewer announces the capability 'controls' before it sends CONTROL";
+            e.in_reply_to = CALIPER_NET_MSG_CONTROL;
+            e.request_id = ctl.request_id;
+            send(p.conn, e);
+            return;
+        }
+        auto refuse = [&](const char* code, const std::string& text) {
+            ++c.controls_refused;
+            control_error(p, ctl.request_id, ctl.op, ctl.name, code, text);
+        };
+        if (!opt.allow_control) {
+            refuse(CALIPER_NET_ERR_FORBIDDEN, "this hub does not allow control; start it with --allow-control");
+            return;
+        }
+        Session* s = session_of(p);
+        if (!s) {
+            refuse(CALIPER_NET_ERR_NOT_ATTACHED, "attach to a session first");
+            return;
+        }
+        if (!s->live || !s->producer) {
+            refuse(CALIPER_NET_ERR_UNSUPPORTED, "session " + s->id + " has ended");
+            return;
+        }
+        if (!s->controls_cap) {
+            refuse(CALIPER_NET_ERR_UNSUPPORTED, "the producer of session " + s->id + " does not take controls");
+            return;
+        }
+        if (p.controls_waiting >= kMaxControlsWaiting || s->routes.size() >= kMaxRoutes) {
+            refuse(CALIPER_NET_ERR_LIMIT, "too many controls wait for the producer's answer");
+            return;
+        }
+        // The hub's own request_id at the producer: viewers' ids may collide.
+        uint32_t up = 0;
+        do {
+            up = s->next_control++;
+        } while (up == 0 || s->routes.count(up));
+        ControlRoute route;
+        route.viewer = p.conn;
+        route.request_id = ctl.request_id;
+        route.op = ctl.op;
+        route.name = ctl.name;
+        route.deadline_ms = monotonic_ms() + kReplyWaitMs;
+        s->routes[up] = route;
+        ++p.controls_waiting;
+        wire::Control fwd = ctl;   // only the keys of its op; never `args`
+        fwd.request_id = up;
+        send(s->producer, fwd);
+        ++c.controls_forwarded;
+    }
+
+    // The producer's answer, routed to the viewer that asked under its own
+    // request_id; the route of a `queued` run stays until the final answer.
+    void producer_control_reply(Session& s, const wire::ControlReply& m) {
+        auto it = s.routes.find(m.request_id);
+        if (it == s.routes.end()) return;
+        ControlRoute route = it->second;
+        const bool queued = m.status == CALIPER_NET_STATUS_QUEUED;
+        if (queued) {
+            it->second.deadline_ms = monotonic_ms() + kQueuedWaitMs;
+        } else {
+            s.routes.erase(it);
+        }
+        auto pt = peers.find(route.viewer);
+        if (pt == peers.end()) return;
+        Peer& v = pt->second;
+        if (!queued && v.controls_waiting) --v.controls_waiting;
+        if (v.closing) return;
+        wire::ControlReply r = m;
+        r.request_id = route.request_id;
+        send(v.conn, r);
+        ++c.control_replies;
+    }
+
+    // The producer's CONTROLS: kept (also after the session ends) and passed
+    // to every viewer of the session that announced `controls`.
+    void producer_controls(Session& s, SharedBytes buf) {
+        if (s.controls) meta_bytes -= s.controls->size();
+        s.controls = buf;
+        meta_bytes += buf->size();
+        for (ConnId v : s.viewers) {
+            auto pt = peers.find(v);
+            if (pt != peers.end() && !pt->second.closing) offer_controls(pt->second, buf);
+        }
+        if (retained() > opt.max_retained_bytes) enforce_budget();
+    }
+
+    // The producer's SELECTION of one item space: kept per space, at most
+    // CALIPER_NET_MAX_ITEM_SPACES spaces per session, and passed to every
+    // viewer of the session that announced `selection`.
+    void producer_selection(Session& s, const wire::Selection& m, SharedBytes buf) {
+        auto it = s.selections.find(m.space);
+        if (it == s.selections.end()) {
+            if (s.selections.size() >= CALIPER_NET_MAX_ITEM_SPACES) {
+                ++c.selections_dropped;
+                return;
+            }
+            it = s.selections.emplace(m.space, SelectionState()).first;
+        }
+        if (it->second.frame) meta_bytes -= it->second.frame->size();
+        it->second.frame = buf;
+        it->second.empty = m.items.size() == 0;
+        meta_bytes += buf->size();
+        for (ConnId v : s.viewers) {
+            auto pt = peers.find(v);
+            if (pt != peers.end() && !pt->second.closing) offer_selection(pt->second, m.space, buf);
+        }
+        if (retained() > opt.max_retained_bytes) enforce_budget();
     }
 
     void on_viewer_message(Peer& p, const wire::DecodeResult& r, wire::Message& m) {
@@ -891,6 +1113,8 @@ struct Hub::Impl {
             viewer_view_request(p, *q);
         } else if (auto* e = std::get_if<wire::Event>(&m)) {
             viewer_event(p, r, *e);
+        } else if (auto* ctl = std::get_if<wire::Control>(&m)) {
+            viewer_control(p, *ctl);
         } else if (std::holds_alternative<wire::Bye>(m)) {
             close(p.conn, CALIPER_NET_CLOSE_NORMAL, "bye");
         } else if (auto* er = std::get_if<wire::Error>(&m)) {
@@ -944,7 +1168,7 @@ struct Hub::Impl {
             s->ended_ms = 0;
             s->resubscribe = true;
             s->identity.script = id.script;
-            s->capabilities = h.capabilities;
+            set_producer_caps(*s, h.capabilities);
             p.role = Peer::Role::Producer;
             p.session = s->id;
             welcome_producer(p, *s);
@@ -978,7 +1202,7 @@ struct Hub::Impl {
         ns.proposed = proposed;
         ns.identity = id;
         ns.identity.id = chosen;
-        ns.capabilities = h.capabilities;
+        set_producer_caps(ns, h.capabilities);
         ns.producer = p.conn;
         ns.order = next_order++;
         Session& s2 = sessions[chosen] = std::move(ns);
@@ -995,18 +1219,41 @@ struct Hub::Impl {
         reconsider_defaults();
     }
 
-    void welcome_producer(Peer& p, Session& s) {
+    static bool has_cap(const std::vector<std::string>& caps, const char* cap) {
+        return std::find(caps.begin(), caps.end(), cap) != caps.end();
+    }
+
+    static void set_producer_caps(Session& s, const std::vector<std::string>& caps) {
+        s.capabilities = caps;
+        s.controls_cap = has_cap(caps, CALIPER_NET_CAP_CONTROLS);
+        s.selection_cap = has_cap(caps, CALIPER_NET_CAP_SELECTION);
+        s.events_cap = has_cap(caps, CALIPER_NET_CAP_EVENTS);
+    }
+
+    // The hub's WELCOME. 3.1: it announces `controls` and `selection`, and to a
+    // client that announced `controls` it says whether it takes (to a viewer)
+    // or forwards (to a producer) controls: only with allow_control.
+    wire::Welcome hub_welcome(bool client_has_controls) {
         wire::Welcome w;
         w.role = CALIPER_NET_ROLE_HUB;
+        w.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION};
         Json sw = Json::object();
         sw.set("name", "caliper-hub");
         sw.set("version", opt.software_version);
         w.software = sw;
+        if (client_has_controls) w.control = opt.allow_control;
+        return w;
+    }
+
+    void welcome_producer(Peer& p, Session& s) {
+        wire::Welcome w = hub_welcome(s.controls_cap);
         w.session = s.identity.to_json();
         send(p.conn, w);
     }
 
     // The producer connection is gone or replaced: no producer subscription remains.
+    // The producer connection is gone or replaced: no producer subscription
+    // remains, and the CONTROL requests that waited for it are answered.
     void drop_upstream(Session& s) {
         for (auto& kv : s.channels) {
             kv.second.up_sub = 0;
@@ -1016,6 +1263,34 @@ struct Hub::Impl {
         s.by_up_sub.clear();
         s.by_up_request.clear();
         s.producer = 0;
+        std::map<uint32_t, ControlRoute> routes;
+        routes.swap(s.routes);
+        for (auto& kv : routes)
+            answer_route(kv.second, CALIPER_NET_ERR_UNSUPPORTED,
+                         "the session's producer disconnected before it answered");
+    }
+
+    // A CONTROL_REPLY with an error to the viewer of a route (3.1).
+    void answer_route(const ControlRoute& r, const char* code, const std::string& text) {
+        auto pt = peers.find(r.viewer);
+        if (pt == peers.end()) return;
+        if (pt->second.controls_waiting) --pt->second.controls_waiting;
+        if (pt->second.closing) return;
+        control_error(pt->second, r.request_id, r.op, r.name, code, text);
+    }
+
+    void control_error(Peer& p, uint32_t request_id, const std::string& op, const std::optional<std::string>& name,
+                       const char* code, const std::string& text) {
+        wire::ControlReply r;
+        r.request_id = request_id;
+        r.op = op;
+        r.status = CALIPER_NET_STATUS_ERROR;
+        r.name = name;
+        Json e = Json::object();
+        e.set("code", code);
+        e.set("message", text.substr(0, CALIPER_NET_TEXT_MAX));
+        r.error = e;
+        send(p.conn, r);
     }
 
     void end_session(Session& s) {
@@ -1082,6 +1357,9 @@ struct Hub::Impl {
         for (auto& kv : s.channels) ids.push_back(kv.first);
         for (uint64_t cid : ids) destroy_channel(s, cid);
         for (auto& kv : s.series) series_bytes -= kv.second.v.size() * sizeof(float);
+        forget_meta(s);
+        for (auto& kv : s.routes) answer_route(kv.second, CALIPER_NET_ERR_UNSUPPORTED, "the session is gone");
+        s.routes.clear();
         if (s.producer) {
             auto pt = peers.find(s.producer);
             if (pt != peers.end()) pt->second.role = Peer::Role::Retired;
@@ -1091,9 +1369,46 @@ struct Hub::Impl {
         for (ConnId v : viewers) {
             auto pt = peers.find(v);
             if (pt == peers.end() || pt->second.closing) continue;
-            send(v, views_msg(nullptr));
+            send(v, views_msg(nullptr, false));
         }
         reconsider_defaults();
+    }
+
+    // VIEWS without the item spaces of 3.1 (`items` on a view and on a dim),
+    // for a viewer that did not announce `selection`.
+    static Json strip_items(const Json& views) {
+        Json out = Json::array();
+        for (const Json& v : views.items()) {
+            Json e = v;
+            e.erase("items");
+            if (const Json* srcs = v.find("sources"); srcs && srcs->is_array()) {
+                Json ns = Json::array();
+                for (const Json& src : srcs->items()) {
+                    Json sc = src;
+                    if (const Json* dims = src.find("dims"); dims && dims->is_array()) {
+                        Json nd = Json::array();
+                        for (const Json& d : dims->items()) {
+                            Json dc = d;
+                            dc.erase("items");
+                            nd.push(dc);
+                        }
+                        sc.set("dims", nd);
+                    }
+                    ns.push(sc);
+                }
+                e.set("sources", ns);
+            }
+            out.push(e);
+        }
+        return out;
+    }
+
+    void forget_meta(Session& s) {
+        if (s.controls) meta_bytes -= s.controls->size();
+        s.controls.reset();
+        for (auto& kv : s.selections)
+            if (kv.second.frame) meta_bytes -= kv.second.frame->size();
+        s.selections.clear();
     }
 
     void producer_views(Session& s, const wire::Views& m) {
@@ -1121,6 +1436,7 @@ struct Hub::Impl {
             }
         }
         s.views = list;
+        s.views_plain = strip_items(list);
         s.view_index = index;
         s.have_views = true;
         // After a resume: subscribe again for every channel someone still wants.
@@ -1152,12 +1468,17 @@ struct Hub::Impl {
             Channel& in = s.channels[cid] = std::move(ch);
             if (!subscribe_upstream(s, in)) s.channels.erase(cid);
         }
-        // The viewers attached to the session hear the new list.
-        std::vector<uint8_t> b;
-        if (wire::encode(views_msg(&s), &b)) {
+        // The viewers attached to the session hear the new list, with the item
+        // spaces only when they announced `selection`.
+        for (bool with_items : {true, false}) {
+            std::vector<uint8_t> b;
+            if (!wire::encode(views_msg(&s, with_items), &b)) continue;
             auto shared = std::make_shared<const Bytes>(std::move(b));
-            for (ConnId v : s.viewers)
+            for (ConnId v : s.viewers) {
+                auto pt = peers.find(v);
+                if (pt == peers.end() || pt->second.cap_selection != with_items) continue;
                 if (!server.send(v, shared)) overflow(v);
+            }
         }
         if (s.views.size() != before) broadcast_sessions();
     }
@@ -1261,7 +1582,7 @@ struct Hub::Impl {
             v->pending = snap;
             mark_dirty(k.conn);
         }
-        if (snap_bytes + series_bytes > opt.max_retained_bytes) enforce_budget();
+        if (retained() > opt.max_retained_bytes) enforce_budget();
     }
 
     void producer_series(Session& s, const wire::Series& m) {
@@ -1295,7 +1616,7 @@ struct Hub::Impl {
         h.stamp_ns = std::max(h.stamp_ns, m.stamp_ns);
         // Bounded: series_retain values, and no growth past the byte budget.
         size_t cap = opt.series_retain;
-        if (snap_bytes + series_bytes + (h.v.size() - before) * sizeof(float) > opt.max_retained_bytes)
+        if (retained() + (h.v.size() - before) * sizeof(float) > opt.max_retained_bytes)
             cap = std::max(kSeriesKeep, std::min(cap, before));
         while (h.v.size() > cap) {
             h.v.pop_front();
@@ -1306,13 +1627,13 @@ struct Hub::Impl {
             if (kv.second.view != ch->view) continue;
             for (const SubKey& k : kv.second.members) mark_dirty(k.conn);
         }
-        if (snap_bytes + series_bytes > opt.max_retained_bytes) enforce_budget();
+        if (retained() > opt.max_retained_bytes) enforce_budget();
     }
 
     // Over the byte budget: ended sessions go first (the oldest), then the
     // last snapshots of channels nobody watches (the least recently used).
     void enforce_budget() {
-        while (snap_bytes + series_bytes > opt.max_retained_bytes) {
+        while (retained() > opt.max_retained_bytes) {
             if (ended_count() > 0) {
                 evict_oldest_ended();
                 continue;
@@ -1348,6 +1669,12 @@ struct Hub::Impl {
             producer_views(s, *v);
         } else if (auto* q = std::get_if<wire::ViewReply>(&m)) {
             producer_reply(s, *q);
+        } else if (std::holds_alternative<wire::Controls>(m)) {
+            producer_controls(s, std::move(buf));
+        } else if (auto* sel = std::get_if<wire::Selection>(&m)) {
+            producer_selection(s, *sel, std::move(buf));
+        } else if (auto* cr = std::get_if<wire::ControlReply>(&m)) {
+            producer_control_reply(s, *cr);
         } else if (auto* pi = std::get_if<wire::Ping>(&m)) {
             send(p.conn, wire::Pong{pi->nonce});
         } else if (std::holds_alternative<wire::Pong>(m)) {
@@ -1377,13 +1704,9 @@ struct Hub::Impl {
             return;
         }
         p.role = Peer::Role::Viewer;
-        wire::Welcome w;
-        w.role = CALIPER_NET_ROLE_HUB;
-        Json sw = Json::object();
-        sw.set("name", "caliper-hub");
-        sw.set("version", opt.software_version);
-        w.software = sw;
-        send(p.conn, w);
+        p.cap_controls = has_cap(h.capabilities, CALIPER_NET_CAP_CONTROLS);
+        p.cap_selection = has_cap(h.capabilities, CALIPER_NET_CAP_SELECTION);
+        send(p.conn, hub_welcome(p.cap_controls));
         send(p.conn, sessions_msg());
         reconsider_defaults();
     }
@@ -1432,6 +1755,10 @@ struct Hub::Impl {
         Peer& p = pt->second;
         if (p.role == Peer::Role::Viewer) {
             detach_all(p);
+            // Its waiting controls get no answer: nobody would read it.
+            for (auto& kv : sessions)
+                for (auto it = kv.second.routes.begin(); it != kv.second.routes.end();)
+                    it = it->second.viewer == conn ? kv.second.routes.erase(it) : std::next(it);
         } else if (p.role == Peer::Role::Producer) {
             auto it = sessions.find(p.session);
             if (it != sessions.end() && it->second.producer == conn) end_session(it->second);
@@ -1460,6 +1787,9 @@ struct Hub::Impl {
                     pt->second.in_flight = false;
                     pt->second.dirty = true;
                 }
+                // CONTROLS and SELECTIONs that waited for room (3.1).
+                if (pt != peers.end() && (pt->second.pending_controls || !pt->second.pending_selections.empty()))
+                    pt->second.dirty = true;
                 break;
             }
             case Event::Type::Pong:
@@ -1476,7 +1806,9 @@ struct Hub::Impl {
     // longest first, each at most at its max_rate.
     void pump(Peer& p, uint64_t now) {
         p.due_us = 0;
-        if (p.in_flight || p.closing) return;
+        if (p.closing) return;
+        if (p.pending_controls || !p.pending_selections.empty()) flush_meta(p);   // control messages first
+        if (p.in_flight) return;
         Session* s = session_of(p);
         if (!s) return;
         VSub* best = nullptr;
@@ -1579,6 +1911,16 @@ struct Hub::Impl {
                 send(p.conn, wire::Ping{++p.nonce});
             }
         }
+        // CONTROL requests whose answer never came (3.1).
+        for (auto& kv : sessions)
+            for (auto it = kv.second.routes.begin(); it != kv.second.routes.end();) {
+                if (it->second.deadline_ms > ms) {
+                    ++it;
+                    continue;
+                }
+                answer_route(it->second, CALIPER_NET_ERR_TIMEOUT, "the producer did not answer in time");
+                it = kv.second.routes.erase(it);
+            }
         if (ms - last_expire_ms >= 100) {
             last_expire_ms = ms;
             for (;;) {
@@ -1627,6 +1969,8 @@ struct Hub::Impl {
         }
         st.retained_snapshot_bytes = snap_bytes;
         st.retained_series_bytes = series_bytes;
+        st.retained_control_bytes = meta_bytes;
+        for (auto& kv : sessions) st.controls_waiting += kv.second.routes.size();
         const DoorStats& d = door->stats();
         st.refused_host = d.refused_host;
         st.refused_origin = d.refused_origin;

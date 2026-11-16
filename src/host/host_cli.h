@@ -33,7 +33,9 @@
 //
 // `caliper serve` runs the hub (net/hub.h) on 127.0.0.1 until SIGINT or
 // SIGTERM; it needs no window, renderer or GPU either. --port, --token-file
-// and --assets apply only to it.
+// and --assets apply only to it. `--allow-control` lets the hub forward
+// viewers' controls (wire protocol 3.1) to their session's script: with serve,
+// and with --api for the stream of Caliper API. Off without it.
 //
 // `--api` serves Caliper API v0 (api/api_server.h) on 127.0.0.1 while the app
 // runs: with no subcommand, with dev, and with shot, whose offscreen canvas
@@ -90,6 +92,7 @@ struct CommandLine {
     bool api = false;                       // --api
     int api_port = -1;                      // --api-port; -1: caliper_api::kDefaultPort
     bool hidden = false;                    // --hidden: the app's window is never shown
+    bool allow_control = false;             // --allow-control: the hub forwards controls
     std::string error;                      // set: print it and the usage, exit 2
 
     // shot's options, with their defaults.
@@ -111,7 +114,7 @@ inline const char* usage_text() {
            "       caliper info\n"
            "       caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]\n"
            "                    [--frames <N>] --out <file.png> [--api [--api-port <n>]]\n"
-           "       caliper serve [--port <n>] [--token-file <file>] [--assets <dir>]\n"
+           "       caliper serve [--port <n>] [--token-file <file>] [--assets <dir>] [--allow-control]\n"
            "       caliper --help\n";
 }
 
@@ -227,6 +230,15 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             break;
         }
         if (shot_option) continue;
+        // Controls through the hub (serve, or the stream of --api): a flag.
+        if (arg == "--allow-control") {
+            cl.allow_control = true;
+            continue;
+        }
+        if (arg.rfind("--allow-control=", 0) == 0) {
+            cl.error = "--allow-control takes no value";
+            return cl;
+        }
         // The hidden window (a testing aid): a flag.
         if (arg == "--hidden") {
             cl.hidden = true;
@@ -374,6 +386,12 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
     if (cl.error.empty() && cl.hidden && cl.command != C::Run && cl.command != C::Dev &&
         cl.command != C::Help)
         cl.error = "--hidden applies only to starting the app and dev";
+    if (cl.error.empty() && cl.allow_control && cl.command != C::Serve && cl.command != C::Help) {
+        if (cl.command != C::Run && cl.command != C::Dev && cl.command != C::Shot)
+            cl.error = "--allow-control applies only to serve, and to the app, dev and shot with --api";
+        else if (!cl.api)
+            cl.error = "--allow-control needs --api when starting the app, dev or shot";
+    }
     return cl;
 }
 
@@ -976,6 +994,7 @@ inline int run_serve(const CommandLine& cl, const CliContext& ctx, std::ostream&
                      std::ostream& err) {
     caliper_net::HubOptions o;
     o.port = (uint16_t)(cl.port >= 0 ? cl.port : kDefaultHubPort);
+    o.allow_control = cl.allow_control;
     o.assets_dir = cl.assets_dir;
     o.software_version = ctx.caps.version;
     if (!cl.token_file.empty()) {
@@ -1015,6 +1034,8 @@ inline int run_serve(const CommandLine& cl, const CliContext& ctx, std::ostream&
     if (!hub_text.empty()) out << " (address and token in " << ctx.hub_file << ")";
     out << "\n";
     if (!cl.assets_dir.empty()) out << "serving the viewer page from " << cl.assets_dir << "\n";
+    out << (cl.allow_control ? "controls are forwarded to the scripts (--allow-control)\n"
+                             : "controls are not forwarded; start with --allow-control to allow them\n");
     out << "stop with Ctrl-C" << std::endl;
 
     cli_detail::serving_hub().store(&hub);

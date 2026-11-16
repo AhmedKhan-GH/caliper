@@ -42,9 +42,27 @@
 // sessions go after ended_ttl_ms, beyond max_ended_sessions (the oldest
 // first), or when retained data passes max_retained_bytes.
 //
+// PROTOCOL 3.1. The hub announces `controls` and `selection`. It keeps the
+// latest CONTROLS of each session and the latest SELECTION of each item space
+// (at most CALIPER_NET_MAX_ITEM_SPACES), also after the session ends, passes
+// them to every viewer of the session that announced the capability, and
+// sends them to a viewer right after the VIEWS of an attachment; a newer one
+// replaces one still waiting for a slow viewer. VIEWS reach a viewer without
+// `selection` with the item spaces removed, and a select event reaches a
+// producer without `selection` without them. A viewer's CONTROL goes to the
+// producer of its own session only with allow_control (--allow-control, off
+// by default), under a request_id of the hub's, and the CONTROL_REPLY comes
+// back to that viewer under its own; without allow_control, unattached, or
+// for an ended session or a producer without `controls`, the hub answers
+// itself (forbidden, not_attached, unsupported). WELCOME's `control` tells a
+// viewer, and a producer, which it is. Waiting controls are bounded per viewer
+// and per session, and answered `unsupported` when the producer goes and
+// `timeout` when no answer comes.
+//
 // SECURITY. 127.0.0.1 only, the session token, the Host and Origin checks of
-// http_door.h. The hub forwards data and events; it never runs anything a
-// message names and carries no host command.
+// http_door.h. The hub forwards data, events and, when allowed, controls that
+// name what a script registered; it never runs anything a message names and
+// carries no host command.
 //
 // EMBEDDED. A server with endpoints of its own (Caliper API, api/
 // api_server.h) runs a hub on its port: it mounts the stream at another path
@@ -70,6 +88,9 @@ struct HubOptions {
     std::string token;                 // the session token (valid_token())
     std::string assets_dir;            // serve the viewer page from here; "" serves a note
     std::string software_version;      // WELCOME software.version
+    // 3.1: forward viewers' CONTROL to the producer of their session. Off by
+    // default: every CONTROL is then answered `forbidden` (--allow-control).
+    bool allow_control = false;
 
     // Bounds. Each is documented in docs/guides/run-a-hub.md.
     size_t max_viewers = 256;          // viewer connections
@@ -116,10 +137,15 @@ struct HubStats {
     size_t viewer_subscriptions = 0;
     uint64_t retained_snapshot_bytes = 0;   // latest snapshots kept
     uint64_t retained_series_bytes = 0;     // series values kept
+    uint64_t retained_control_bytes = 0;    // 3.1: CONTROLS and SELECTIONs kept
     uint64_t queued_bytes = 0;              // unsent bytes over every connection
     uint64_t snapshots_in = 0, snapshots_out = 0, snapshots_superseded = 0;
     uint64_t series_in = 0, series_out = 0, series_values_out = 0;
     uint64_t events_forwarded = 0, events_dropped = 0;
+    // 3.1
+    uint64_t controls_forwarded = 0, controls_refused = 0, control_replies = 0;
+    uint64_t controls_out = 0, selections_out = 0, selections_dropped = 0;
+    size_t controls_waiting = 0;            // CONTROLs waiting for the producer's answer
     uint64_t refused_host = 0, refused_origin = 0, refused_token = 0, refused_full = 0;
     uint64_t http_files = 0, http_not_found = 0;
     uint64_t sessions_evicted = 0;

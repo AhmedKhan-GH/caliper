@@ -23,6 +23,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -118,10 +119,32 @@ public:
         REQUIRE(wire::encode(m, &b));
         client_.send(b.data(), b.size());
     }
-    void hello_viewer() {
+    void hello_viewer(std::vector<std::string> caps = {}) {
         wire::Hello h;
         h.role = CALIPER_NET_ROLE_VIEWER;
+        h.capabilities = std::move(caps);
         send(h);
+    }
+    // 3.1: CONTROL from this viewer.
+    void control(uint32_t request_id, const std::string& op, const std::string& name = {}, Json value = Json()) {
+        wire::Control c;
+        c.request_id = request_id;
+        c.op = op;
+        if (!name.empty()) c.name = name;
+        c.value = value;
+        send(c);
+    }
+    std::vector<const wire::ControlReply*> control_replies(uint32_t request_id) const {
+        std::vector<const wire::ControlReply*> v;
+        for (auto* r : all<wire::ControlReply>())
+            if (r->request_id == request_id) v.push_back(r);
+        return v;
+    }
+    // The position of the first message of a type in the inbox, -1 when none.
+    int first_index(uint16_t type) const {
+        for (size_t i = 0; i < inbox.size(); ++i)
+            if (inbox[i].type == type) return (int)i;
+        return -1;
     }
     void poll(int ms = 0) {
         for (auto& e : client_.poll(ms)) {
@@ -246,6 +269,12 @@ public:
     int subscribes = 0, unsubscribes = 0;
     uint64_t seq = 0;
     bool send_views_on_welcome = true;
+    // 3.1
+    std::vector<std::string> caps = {CALIPER_NET_CAP_EVENTS};
+    std::optional<wire::Welcome> welcome;
+    bool send_controls_on_welcome = false;         // CONTROLS right after VIEWS
+    std::vector<wire::Control> controls_in;        // the CONTROLs the hub forwarded
+    std::vector<uint32_t> queued_runs;             // request ids of runs answered `queued`
 
     FakeProducer(const std::string& sid, uint64_t pid, uint64_t start = 1763200000000ull) {
         id.id = sid;
@@ -257,7 +286,7 @@ public:
     void hello() {
         wire::Hello h;
         h.role = CALIPER_NET_ROLE_PRODUCER;
-        h.capabilities = {CALIPER_NET_CAP_EVENTS};
+        h.capabilities = caps;
         h.session = id.to_json();
         send(h);
     }
@@ -292,9 +321,34 @@ public:
         return views;
     }
 
+    // With `selection` announced (3.1), the rows of "heat" index the item space
+    // "samples" and the series "loss" the space "step".
     void send_views() {
         wire::Views v;
         v.views = views_json();
+        if (std::find(caps.begin(), caps.end(), CALIPER_NET_CAP_SELECTION) != caps.end()) {
+            Json with = Json::array();
+            for (const Json& e : v.views.items()) {
+                Json x = e;
+                if (x.find("name")->as_string() == "loss") {
+                    x.set("items", "step");
+                } else {
+                    Json src = x.find("sources")->at(0);
+                    Json dims = Json::array();
+                    for (size_t i = 0; i < src.find("dims")->size(); ++i) {
+                        Json d = src.find("dims")->at(i);
+                        if (i == 0) d.set("items", "samples");
+                        dims.push(d);
+                    }
+                    src.set("dims", dims);
+                    Json srcs = Json::array();
+                    srcs.push(src);
+                    x.set("sources", srcs);
+                }
+                with.push(x);
+            }
+            v.views = with;
+        }
         send(v);
     }
 
@@ -365,9 +419,27 @@ protected:
     void on(Msg& msg) override {
         if (auto* w = std::get_if<wire::Welcome>(&msg.m)) {
             welcomed = true;
+            welcome = *w;
             wire::Identity got;
             if (wire::Identity::parse(w->session, &got)) chosen = got.id;
             if (send_views_on_welcome) send_views();
+            if (send_controls_on_welcome) send_controls("running", 0.001);
+        } else if (auto* c = std::get_if<wire::Control>(&msg.m)) {
+            // As a script would: pause/resume/step at once, set with the
+            // clamped value, run queued and finished later (finish_run).
+            controls_in.push_back(*c);
+            wire::ControlReply r;
+            r.request_id = c->request_id;
+            r.op = c->op;
+            r.name = c->name;
+            if (c->op == CALIPER_NET_OP_RUN) {
+                r.status = CALIPER_NET_STATUS_QUEUED;
+                queued_runs.push_back(c->request_id);
+            } else {
+                r.status = CALIPER_NET_STATUS_OK;
+                if (c->op == CALIPER_NET_OP_SET) r.value = Json(std::min(0.1, c->value.as_double()));
+            }
+            send(r);
         } else if (auto* s = std::get_if<wire::Subscribe>(&msg.m)) {
             ++subscribes;
             subs.erase(s->sub);
@@ -428,6 +500,42 @@ protected:
             byes.push_back(b->reason);
         }
     }
+
+public:
+    // 3.1: the run state and one parameter, "lr".
+    void send_controls(const char* state, double lr) {
+        wire::Controls c;
+        c.run.set("state", state);
+        Json param = Json::object();
+        param.set("name", "lr");
+        param.set("type", CALIPER_NET_PARAM_NUMBER);
+        param.set("value", lr);
+        param.set("min", 1e-05);
+        param.set("max", 0.1);
+        c.params.push(param);
+        Json action = Json::object();
+        action.set("name", "save");
+        action.set("running", false);
+        action.set("queued", !queued_runs.empty());
+        c.actions.push(action);
+        send(c);
+    }
+    void send_selection(const std::string& space, std::vector<uint64_t> items, const std::string& view = {}) {
+        wire::Selection sel;
+        sel.space = space;
+        for (uint64_t i : items) sel.items.push(i);
+        if (!view.empty()) sel.view = view;
+        send(sel);
+    }
+    void finish_run(uint32_t request_id, const std::string& message) {
+        wire::ControlReply r;
+        r.request_id = request_id;
+        r.op = CALIPER_NET_OP_RUN;
+        r.status = CALIPER_NET_STATUS_OK;
+        r.name = std::string("save");
+        r.message = message;
+        send(r);
+    }
 };
 
 // ---- pumping every client -------------------------------------------------------------------
@@ -452,20 +560,23 @@ struct World {
     }
 };
 
-// A viewer connected and welcomed.
-std::unique_ptr<Peer> viewer(World& w, const HubRunner& h) {
+// A viewer connected and welcomed (3.1: with these capabilities).
+std::unique_ptr<Peer> viewer(World& w, const HubRunner& h, std::vector<std::string> caps = {}) {
     auto v = std::make_unique<Peer>();
     REQUIRE(v->connect(h.url()));
     w.add(v.get());
     REQUIRE(w.until([&] { return v->open; }));
-    v->hello_viewer();
+    v->hello_viewer(std::move(caps));
     REQUIRE(w.until([&] { return v->count<wire::Welcome>() == 1 && v->sessions(); }));
     return v;
 }
 
 std::unique_ptr<FakeProducer> producer(World& w, const HubRunner& h, const std::string& id, uint64_t pid,
-                                       uint64_t start = 1763200000000ull) {
+                                       uint64_t start = 1763200000000ull, std::vector<std::string> caps = {},
+                                       bool controls_on_welcome = false) {
     auto p = std::make_unique<FakeProducer>(id, pid, start);
+    if (!caps.empty()) p->caps = std::move(caps);
+    p->send_controls_on_welcome = controls_on_welcome;
     REQUIRE(p->connect(h.url()));
     w.add(p.get());
     REQUIRE(w.until([&] { return p->welcomed; }));
@@ -1194,6 +1305,254 @@ TEST_CASE("net/hub: the token and the hub file") {
     caliper_net::remove_hub_file(hf, text);
     CHECK_FALSE(fs::exists(hf));
     fs::remove_all(dir, ec);
+}
+
+// ============================================================================
+// Protocol 3.1 through the hub: controls and linked selection.
+namespace {
+const std::vector<std::string> kCaps31 = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION};
+const std::vector<std::string> kProducer31 = {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_CONTROLS,
+                                              CALIPER_NET_CAP_SELECTION};
+
+bool has_items_key(const Json& views) {
+    for (const Json& v : views.items()) {
+        if (v.has("items")) return true;
+        if (const Json* srcs = v.find("sources"))
+            for (const Json& src : srcs->items())
+                for (const Json& d : src.find("dims")->items())
+                    if (d.has("items")) return true;
+    }
+    return false;
+}
+}  // namespace
+
+TEST_CASE("net/hub 3.1: a late viewer gets the controls and selections right after VIEWS; a 3.0 viewer neither") {
+    HubRunner h;
+    World w;
+    auto p = producer(w, h, "clp-31", 1, 1763200000000ull, kProducer31, true);
+    // The hub announces both capabilities, and tells the producer it forwards no control.
+    REQUIRE(p->welcome);
+    CHECK(p->welcome->capabilities == kCaps31);
+    CHECK(p->welcome->control == false);
+    p->send_selection("samples", {1, 5}, "heat");
+    p->send_selection("step", {});   // an empty selection is kept, not sent to a late viewer
+    REQUIRE(w.until([&] { return h.stats().retained_control_bytes > 0 && h.stats().controls_out == 0; }));
+    w.spin(50);
+
+    auto v31 = viewer(w, h, kCaps31);
+    REQUIRE(w.until([&] { return v31->views() && v31->views()->session && v31->last<wire::Selection>(); }));
+    const wire::Welcome* wel = v31->last<wire::Welcome>();
+    CHECK(wel->capabilities == kCaps31);
+    CHECK(wel->control == false);
+    // VIEWS (with the item spaces), then CONTROLS, then the one non-empty SELECTION.
+    const int iv = v31->first_index(CALIPER_NET_MSG_VIEWS), ic = v31->first_index(CALIPER_NET_MSG_CONTROLS),
+              is = v31->first_index(CALIPER_NET_MSG_SELECTION);
+    CHECK(iv >= 0);
+    CHECK(ic > iv);
+    CHECK(is > ic);
+    CHECK(has_items_key(v31->views()->views));
+    CHECK(v31->last<wire::Controls>()->params.at(0).find("name")->as_string() == "lr");
+    CHECK(v31->count<wire::Selection>() == 1);
+    CHECK(v31->last<wire::Selection>()->space == "samples");
+
+    // A 3.0 viewer: no CONTROLS, no SELECTION, no item spaces, no `control`.
+    auto v30 = viewer(w, h);
+    REQUIRE(w.until([&] { return v30->views() && v30->views()->session; }));
+    CHECK_FALSE(v30->last<wire::Welcome>()->control.has_value());
+    CHECK_FALSE(has_items_key(v30->views()->views));
+
+    // A newer state reaches the 3.1 viewer only.
+    p->send_controls("paused", 0.01);
+    p->send_selection("samples", {2});
+    REQUIRE(w.until([&] { return v31->count<wire::Controls>() == 2 && v31->count<wire::Selection>() == 2; }));
+    CHECK(v31->last<wire::Controls>()->run.find("state")->as_string() == "paused");
+    w.spin(100);
+    CHECK(v30->count<wire::Controls>() == 0);
+    CHECK(v30->count<wire::Selection>() == 0);
+    CHECK(v30->count<wire::ControlReply>() == 0);
+}
+
+TEST_CASE("net/hub 3.1: without --allow-control every CONTROL is answered forbidden and none reaches the script") {
+    HubRunner h;
+    World w;
+    auto p = producer(w, h, "clp-ro", 1, 1763200000000ull, kProducer31, true);
+    auto v = viewer(w, h, kCaps31);
+    REQUIRE(w.until([&] { return v->views() && v->views()->session; }));
+    v->control(5, CALIPER_NET_OP_PAUSE);
+    v->control(6, CALIPER_NET_OP_SET, "lr", Json(0.5));
+    REQUIRE(w.until([&] { return v->control_replies(5).size() == 1 && v->control_replies(6).size() == 1; }));
+    for (uint32_t id : {5u, 6u}) {
+        const wire::ControlReply* r = v->control_replies(id)[0];
+        CHECK(r->status == CALIPER_NET_STATUS_ERROR);
+        CHECK(r->error.find("code")->as_string() == CALIPER_NET_ERR_FORBIDDEN);
+    }
+    CHECK(v->control_replies(6)[0]->name == std::string("lr"));
+    w.spin(50);
+    CHECK(p->controls_in.empty());
+    // Selecting is not a control: a select event still reaches the script.
+    wire::Event e;
+    e.view = "heat";
+    e.type = CALIPER_NET_EVENT_SELECT;
+    e.detail = obj({{"space", "samples"}, {"items", Json::array()}});
+    v->send(e);
+    REQUIRE(w.until([&] { return p->events.size() == 1; }));
+    CHECK(p->events[0].detail.has("space"));
+}
+
+TEST_CASE("net/hub 3.1: with --allow-control a CONTROL goes to its session's script and the reply to its viewer") {
+    HubOptions o;
+    o.allow_control = true;
+    HubRunner h(o);
+    World w;
+    auto pa = producer(w, h, "clp-a", 1, 1, kProducer31, true);
+    auto pb = producer(w, h, "clp-b", 2, 2, kProducer31, true);
+    CHECK(pa->welcome->control == true);
+    auto va = viewer(w, h, kCaps31);
+    auto vb = viewer(w, h, kCaps31);
+    CHECK(va->last<wire::Welcome>()->control == true);
+    // Not attached yet (two live sessions): the hub answers itself.
+    va->control(1, CALIPER_NET_OP_PAUSE);
+    REQUIRE(w.until([&] { return va->control_replies(1).size() == 1; }));
+    CHECK(va->control_replies(1)[0]->error.find("code")->as_string() == CALIPER_NET_ERR_NOT_ATTACHED);
+    va->attach("clp-a");
+    vb->attach("clp-a");
+    REQUIRE(w.until([&] { return va->views() && va->views()->session && vb->views() && vb->views()->session; }));
+
+    // set: forwarded under the hub's own request id, answered with the clamped value.
+    va->control(7, CALIPER_NET_OP_SET, "lr", Json(0.5));
+    REQUIRE(w.until([&] { return va->control_replies(7).size() == 1; }));
+    REQUIRE(pa->controls_in.size() == 1);
+    CHECK(pa->controls_in[0].op == CALIPER_NET_OP_SET);
+    CHECK(pa->controls_in[0].name == std::string("lr"));
+    CHECK(pa->controls_in[0].value.as_double() == 0.5);
+    CHECK(pb->controls_in.empty());   // only the script of the viewer's own session
+    const wire::ControlReply* r = va->control_replies(7)[0];
+    CHECK(r->status == CALIPER_NET_STATUS_OK);
+    CHECK(r->value.as_double() == 0.1);
+
+    // Two viewers with the same request id: distinct ids at the script, each
+    // reply back to its own viewer, the queued run and its final answer too.
+    va->control(9, CALIPER_NET_OP_RUN, "save");
+    vb->control(9, CALIPER_NET_OP_RUN, "save");
+    REQUIRE(w.until([&] { return pa->queued_runs.size() == 2; }));
+    CHECK(pa->queued_runs[0] != pa->queued_runs[1]);
+    REQUIRE(w.until([&] { return va->control_replies(9).size() == 1 && vb->control_replies(9).size() == 1; }));
+    CHECK(va->control_replies(9)[0]->status == CALIPER_NET_STATUS_QUEUED);
+    pa->finish_run(pa->queued_runs[0], "first");
+    pa->finish_run(pa->queued_runs[1], "second");
+    REQUIRE(w.until([&] { return va->control_replies(9).size() == 2 && vb->control_replies(9).size() == 2; }));
+    const std::string ma = *va->control_replies(9)[1]->message, mb = *vb->control_replies(9)[1]->message;
+    CHECK(ma != mb);
+    CHECK((ma == "first" || ma == "second"));
+    REQUIRE(w.until([&] { return h.stats().controls_waiting == 0; }));
+
+    // A viewer that did not announce `controls` gets an ERROR, not a CONTROL_REPLY.
+    auto plain = viewer(w, h);
+    plain->attach("clp-a");
+    REQUIRE(w.until([&] { return plain->views() && plain->views()->session; }));
+    plain->control(3, CALIPER_NET_OP_PAUSE);
+    REQUIRE(w.until([&] { return plain->last<wire::Error>(); }));
+    CHECK(plain->last<wire::Error>()->in_reply_to == (uint32_t)CALIPER_NET_MSG_CONTROL);
+    CHECK(plain->count<wire::ControlReply>() == 0);
+
+    // A 3.0 script (no `controls`): the hub answers unsupported, and its
+    // WELCOME carries no `control`.
+    auto p30 = producer(w, h, "clp-30", 3, 3);
+    CHECK_FALSE(p30->welcome->control.has_value());
+    va->attach("clp-30");
+    REQUIRE(w.until([&] { return va->views() && va->views()->session == std::string("clp-30"); }));
+    va->control(11, CALIPER_NET_OP_PAUSE);
+    REQUIRE(w.until([&] { return va->control_replies(11).size() == 1; }));
+    CHECK(va->control_replies(11)[0]->error.find("code")->as_string() == CALIPER_NET_ERR_UNSUPPORTED);
+    CHECK(p30->count<wire::Control>() == 0);
+}
+
+TEST_CASE("net/hub 3.1: SELECTION reaches every viewer of the session; select events keep their items for a 3.1 script") {
+    HubRunner h;
+    World w;
+    auto p = producer(w, h, "clp-sel", 1, 1, kProducer31);
+    auto other = producer(w, h, "clp-other", 2, 2, kProducer31);
+    auto a = viewer(w, h, kCaps31);
+    auto b = viewer(w, h, kCaps31);
+    auto c = viewer(w, h, kCaps31);
+    a->attach("clp-sel");
+    b->attach("clp-sel");
+    c->attach("clp-other");
+    REQUIRE(w.until([&] { return a->views() && b->views() && c->views() && c->views()->session; }));
+    // The script's selection after a's select event goes to a and b, not c.
+    wire::Event e;
+    e.view = "heat";
+    e.type = CALIPER_NET_EVENT_SELECT;
+    Json items = Json::array();
+    items.push(5);
+    items.push(9);
+    e.detail = obj({{"rows", Json::array()}, {"space", "samples"}, {"items", items}});
+    a->send(e);
+    REQUIRE(w.until([&] { return p->events.size() == 1; }));
+    CHECK(p->events[0].detail.find("items")->size() == 2);
+    p->send_selection("samples", {5, 9}, "heat");
+    REQUIRE(w.until([&] { return a->count<wire::Selection>() == 1 && b->count<wire::Selection>() == 1; }));
+    CHECK(b->last<wire::Selection>()->view == std::string("heat"));
+    w.spin(50);
+    CHECK(c->count<wire::Selection>() == 0);
+
+    // A script without `selection` gets the select event without its item keys.
+    auto p30 = producer(w, h, "clp-30sel", 3, 3);
+    a->attach("clp-30sel");
+    REQUIRE(w.until([&] { return a->views() && a->views()->session == std::string("clp-30sel"); }));
+    a->send(e);
+    REQUIRE(w.until([&] { return p30->events.size() == 1; }));
+    CHECK_FALSE(p30->events[0].detail.has("space"));
+    CHECK_FALSE(p30->events[0].detail.has("items"));
+    CHECK(p30->events[0].detail.has("rows"));
+
+    // At most 16 item spaces per session are kept.
+    for (int i = 0; i < 20; ++i) p->send_selection("space" + std::to_string(i), {1});
+    REQUIRE(w.until([&] { return h.stats().selections_dropped == 5; }));
+}
+
+TEST_CASE("net/hub 3.1: an ended session keeps its controls visible and refuses controls; waiting ones are answered") {
+    HubOptions o;
+    o.allow_control = true;
+    HubRunner h(o);
+    World w;
+    auto p = producer(w, h, "clp-end", 1, 1, kProducer31, true);
+    auto v = viewer(w, h, kCaps31);
+    REQUIRE(w.until([&] { return v->views() && v->views()->session && v->last<wire::Controls>(); }));
+    // A run the script queued, then the script goes.
+    v->control(4, CALIPER_NET_OP_RUN, "save");
+    REQUIRE(w.until([&] { return v->control_replies(4).size() == 1; }));
+    p->close(1000);
+    REQUIRE(w.until([&] { return v->control_replies(4).size() == 2; }));
+    CHECK(v->control_replies(4)[1]->error.find("code")->as_string() == CALIPER_NET_ERR_UNSUPPORTED);
+    REQUIRE(w.until([&] { return find_session(*v, "clp-end") && find_session(*v, "clp-end")->state == "ended"; }));
+    // A late viewer of the ended session still sees its last controls.
+    auto late = viewer(w, h, kCaps31);
+    late->attach("clp-end");
+    REQUIRE(w.until([&] { return late->views() && late->views()->session && late->last<wire::Controls>(); }));
+    CHECK(late->last<wire::Controls>()->params.at(0).find("name")->as_string() == "lr");
+    late->control(8, CALIPER_NET_OP_RESUME);
+    REQUIRE(w.until([&] { return late->control_replies(8).size() == 1; }));
+    CHECK(late->control_replies(8)[0]->error.find("code")->as_string() == CALIPER_NET_ERR_UNSUPPORTED);
+    CHECK(h.stats().controls_waiting == 0);
+}
+
+TEST_CASE("net/hub 3.1: controls waiting for a script are bounded per viewer") {
+    HubOptions o;
+    o.allow_control = true;
+    HubRunner h(o);
+    World w;
+    auto p = producer(w, h, "clp-mute", 1, 1, kProducer31, true);
+    auto v = viewer(w, h, kCaps31);
+    REQUIRE(w.until([&] { return v->views() && v->views()->session; }));
+    // The fake script answers each run `queued` and never finishes it, so
+    // every route stays open.
+    for (uint32_t i = 1; i <= 64; ++i) v->control(1000 + i, CALIPER_NET_OP_RUN, "save");
+    REQUIRE(w.until([&] { return v->count<wire::ControlReply>() == 64; }));
+    v->control(2000, CALIPER_NET_OP_PAUSE);
+    REQUIRE(w.until([&] { return v->control_replies(2000).size() == 1; }));
+    CHECK(v->control_replies(2000)[0]->error.find("code")->as_string() == CALIPER_NET_ERR_LIMIT);
+    CHECK(h.stats().controls_waiting == 64);
 }
 
 // The relay's latency and throughput: a 512 x 512 f32 heatmap (1 MiB) at 60 Hz
