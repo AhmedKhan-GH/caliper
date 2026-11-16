@@ -16,5 +16,5 @@ const src = url.toString();
 
 const byId = (id: string) => document.getElementById(id) as HTMLElement;
 mountViewer(connect(src), {
-  grid: byId('grid'), script: byId('script'), state: byId('state'), empty: byId('empty'),
+  grid: byId('grid'), controls: byId('controls'), script: byId('script'), state: byId('state'), empty: byId('empty'),
 }, (el) => el.setAttribute('src', src));

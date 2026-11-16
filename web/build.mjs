@@ -1,7 +1,8 @@
-// Builds the three files of the browser package into dist/:
-//   caliper-view.js    the <caliper-view> element and connect(src)
-//   caliper-widget.js  the anywidget module of caliper.widget()
-//   index.html         the viewer page, with its fonts and script inlined
+// Builds the four files of the browser package into dist/:
+//   caliper-view.js              the <caliper-view> and <caliper-controls> elements and connect(src)
+//   caliper-widget.js            the anywidget module of caliper.widget()
+//   caliper-controls-widget.js   the anywidget module of the controls panel (caliper.controls())
+//   index.html                   the viewer page, with its fonts and script inlined
 // and, with --test, the test harness bundle into test-dist/.
 //
 // The fonts are WOFF 1.0 wrappers of the unmodified IBM Plex Sans Condensed
@@ -25,6 +26,7 @@ const common = { bundle: true, format: 'esm', target: 'es2022', minify: true, le
 
 await esbuild.build({ ...common, entryPoints: [at('src/index.ts')], outfile: path.join(dist, 'caliper-view.js') });
 await esbuild.build({ ...common, entryPoints: [at('src/widget.ts')], outfile: path.join(dist, 'caliper-widget.js') });
+await esbuild.build({ ...common, entryPoints: [at('src/controls-widget.ts')], outfile: path.join(dist, 'caliper-controls-widget.js') });
 
 const page = await esbuild.build({
   ...common, banner: {}, entryPoints: [at('src/page/main.ts')], write: false, external: ['./caliper-view.js'],
@@ -50,8 +52,8 @@ if (process.argv.includes('--test')) {
   });
 }
 
-const sizes = ['caliper-view.js', 'caliper-widget.js', 'index.html'].map((f) => {
+const sizes = ['caliper-view.js', 'caliper-widget.js', 'caliper-controls-widget.js', 'index.html'].map((f) => {
   const buf = fs.readFileSync(path.join(dist, f));
-  return `${f.padEnd(18)} ${String(buf.length).padStart(8)} bytes  ${String(zlib.gzipSync(buf, { level: 9 }).length).padStart(7)} gzipped`;
+  return `${f.padEnd(27)} ${String(buf.length).padStart(8)} bytes  ${String(zlib.gzipSync(buf, { level: 9 }).length).padStart(7)} gzipped`;
 });
 console.log(sizes.join('\n'));

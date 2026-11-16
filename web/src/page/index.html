@@ -32,10 +32,13 @@
   .state[data-state="connected"] .dot { background: var(--bronze); border-color: var(--bronze); }
   .state[data-state="ended"] .dot { background: var(--rule); border-color: var(--rule); }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 16px; padding: 20px 24px 28px; }
+  .controls { display: block; padding: 20px 24px 0; }
+  .controls[hidden] { display: none; }
   .empty { margin: 0; padding: 48px 24px; text-align: center; color: var(--faint); }
   @media (max-width: 600px) {
     .bar { padding: 0 16px; gap: 12px; }
     .grid { padding: 16px; gap: 12px; }
+    .controls { padding: 16px 16px 0; }
   }
 </style>
 </head>
@@ -45,6 +48,7 @@
   <span class="script" id="script"></span>
   <span class="state" id="state" data-state="connecting" role="status"><span class="dot"></span><span class="text">connecting</span></span>
 </header>
+<caliper-controls class="controls" id="controls" hidden></caliper-controls>
 <main class="grid" id="grid"></main>
 <p class="empty" id="empty">Connecting to the stream.</p>
 <script type="module">/*@SCRIPT@*/</script>
