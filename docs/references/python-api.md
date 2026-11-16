@@ -2,7 +2,8 @@
 
 Caliper LIB is the `caliper` Python package: `import caliper` gives a PyTorch script live views of its tensors. This page
 lists every public call of the `caliper` package (version 0.1.0, Python 3.12,
-macOS arm64) and of `caliper.live`. The source of truth is
+macOS arm64) and of `caliper.live`. The package needs macOS 14 (Sonoma) or
+later on Apple silicon, and its wheel is tagged `macosx_14_0_arm64`. The source of truth is
 `python/caliper/__init__.py`; the design is in
 [Live streaming](../explanations/live-streaming.md), and
 [Watch a PyTorch training run live](../tutorials/live-pytorch.md) walks through
@@ -373,6 +374,13 @@ subscriptions, data view requests and viewer events, and never host commands.
 The server keeps the last 1,048,576 values of each series whether or not a
 viewer watches it, and sends them first to a viewer that subscribes late.
 
+This implementation limits the replies and other control messages waiting to be
+sent on one connection to 65,536 messages and 16 MiB, and keeps one PONG
+waiting, to the latest PING. Only a viewer that keeps sending requests while it
+reads nothing reaches the limit; the server then closes its connection with code
+1008, as the hub does with a send queue that overflows. The training loop is not
+affected. These are limits of Caliper LIB's server, not rules of the protocol.
+
 | Member | Meaning |
 |---|---|
 | `url` | The viewer page's link, with the token |
@@ -538,7 +546,9 @@ sampled with a stride, point i being position floor(i × count / size), so the
 sample stays the same while the size does. A pooled or tiled heatmap reports
 the range of its data before pooling, the empty cells left out, for autoscale.
 A data view that breaks a rule is refused with the error `bad_data_view`
-(`DataViewError` in Python), and the view keeps the data view it had.
+(`DataViewError` in Python), and the view keeps the data view it had. So is one
+whose payload would not fit one frame of the protocol, such as a heatmap or image
+of 4096 by 4096; its message names the largest `max_extent` that fits.
 
 **Default and subscriptions.** The view's default data view is what the window
 and the live session draw, and what a viewer's subscription starts from. Each

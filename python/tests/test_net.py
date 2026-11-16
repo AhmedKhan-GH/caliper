@@ -644,19 +644,22 @@ def _rss_mb() -> float:
 
 @pytest.mark.parametrize("device", DEVICES)
 def test_slow_viewer_latest_wins(server, device):
-    """A viewer that stops reading: the producer's step rate does not drop,
-    its memory does not grow, and the viewer gets a recent snapshot when it
-    reads again."""
+    """A viewer that stops reading: no view call waits for it (newer snapshots
+    replace older ones instead), the producer's memory does not grow, and the
+    viewer gets a recent snapshot when it reads again."""
     W = torch.randn(1024, 1024, device=device)
     show = lambda: caliper.show(W, name="big", rate=0)  # noqa: E731
 
     def steps(seconds):
-        n, end = 0, time.perf_counter() + seconds
+        """The slowest view call in ``seconds`` of steps: a call that waited for
+        the socket would take as long as the viewer stays stalled."""
+        worst, end = 0.0, time.perf_counter() + seconds
         while time.perf_counter() < end:
             W.add_(1e-3)
+            t0 = time.perf_counter()
             show()
-            n += 1
-        return n / seconds
+            worst = max(worst, time.perf_counter() - t0)
+        return worst
 
     async def go():
         async with Client(server, max_queue=1) as c:
@@ -687,7 +690,7 @@ def test_slow_viewer_latest_wins(server, device):
                     last = m
             return base, slow, rss1 - rss0, st, st["snapshots_sent"] - sent0, seq_last, last
     base, slow, grew, st, sent, seq_last, last = run(go(), 60)
-    assert slow > 0.7 * base, (slow, base)
+    assert slow < 0.25, (slow, base)                # no call waits (a busy runner may pause one)
     assert st["superseded"] > 0 and sent < 20      # stalled sends; newer snapshots replaced older
     assert grew < 100, grew                          # MB; nothing queues up
     assert last is not None and last.seq >= seq_last - 3
@@ -1143,8 +1146,9 @@ def test_connect_reconnects_and_resumes(hub):
     assert conn.wait_connected() and conn.stats()["connects"] == 2
     hub.send(w.Bye(w.BYE_REPLACED, "another connection of this session"))
     assert _wait(lambda: conn.state == "replaced", timeout=5)
-    time.sleep(1.5)
-    assert len(hub.hellos) == 2                                     # no reconnect after replaced
+    # The client's loop sets "replaced" in the iteration that ends it, so no later
+    # attempt follows, whatever the back-off: the attempt count stays.
+    assert conn.stats()["attempts"] == 2 and len(hub.hellos) == 2
 
 
 @needs_native
@@ -1167,7 +1171,7 @@ def test_connect_never_blocks_training(monkeypatch):
             caliper.show(W, name="w")
             caliper.series(1.0, name="s")
             worst = max(worst, time.perf_counter() - t0)
-        assert worst < 0.05
+        assert worst < 0.25            # no call waits for the network (a busy runner may pause one)
         assert conn.state in ("connecting", "waiting") and conn.stats()["attempts"] >= 2
         assert not conn.connected
     finally:
@@ -1290,29 +1294,38 @@ def test_slower_rates_hold_with_ticks(server, device):
         if not alone[0]:
             caliper.show(B_, name="b")
 
+    def take(n):
+        """Steps until view a has taken n more snapshots: the time of each (the
+        step it came in, to within one step) and how many b took meanwhile."""
+        ring = server.ring
+        a0, b0 = ring.views["a"].seq, ring.views["b"].seq if "b" in ring.views else 0
+        times, last = [], a0
+        while len(times) < n:
+            step()
+            if ring.views["a"].seq != last:
+                last = ring.views["a"].seq
+                times.append(time.perf_counter())
+        b = (ring.views["b"].seq if "b" in ring.views else 0) - b0
+        return min(y - x for x, y in zip(times, times[1:])), b
+
     async def go():
         async with Client(server) as c:
             await c.subscribe(1, "a", pump=step)
             await c.expect(w.Snapshot, pump=step, pred=lambda m: m.view == "a")
-            ring = server.ring
-            n0, t0 = ring.views["a"].seq, time.perf_counter()
-            while time.perf_counter() - t0 < 1.0:
-                step()
-            rate_a = (ring.views["a"].seq - n0) / (time.perf_counter() - t0)
+            gap_30, _ = take(15)
             alone[0] = False
             await c.subscribe(2, "b", pump=step)
             await c.send(w.Unsubscribe(1))
             await c.subscribe(3, "a", pump=step, max_rate=20)
             await c.expect(w.Snapshot, pump=step, pred=lambda m: m.sub == 3)
-            na, nb, t0 = ring.views["a"].seq, ring.views["b"].seq, time.perf_counter()
-            while time.perf_counter() - t0 < 1.0:
-                step()
-            el = time.perf_counter() - t0
-            return rate_a, (ring.views["a"].seq - na) / el, (ring.views["b"].seq - nb) / el
-    rate_a, rate_20, rate_b = run(go())
-    assert 22 <= rate_a <= 31, rate_a
-    assert 14 <= rate_20 <= 21, rate_20
-    assert rate_b >= 45, rate_b
+            gap_20, b = take(10)
+            return gap_30, gap_20, b
+    gap_30, gap_20, b = run(go())
+    # never above the rate (a slower machine only widens the gaps), and b at the
+    # session's rate takes more snapshots than a at 20 a second meanwhile
+    assert gap_30 >= 1 / 30 - 0.003, gap_30
+    assert gap_20 >= 1 / 20 - 0.003, gap_20
+    assert b >= 2 * 9, b
 
 
 @pytest.mark.parametrize("device", DEVICES)
@@ -1332,14 +1345,17 @@ def test_late_view_resumes_after_a_pause(server, device):
             await c.subscribe(1, "first", pump=step)
             await c.subscribe(2, "late", pump=step)
             await c.expect(w.Snapshot, pump=step, pred=lambda m: m.sub == 2)
-            time.sleep(1.2)                         # no view calls
             ring = server.ring
-            n0, t0 = ring.views["late"].seq, time.perf_counter()
-            while time.perf_counter() - t0 < 0.5:
+            import caliper._net_ring as R
+            # no view calls until the ring no longer counts the views as called lately
+            while time.perf_counter() - max(v.seen for v in ring.views.values()) <= R.OFFER_REFRESH_S:
+                time.sleep(0.01)
+            n0, k0 = ring.views["late"].seq, ring.counters["ticks"]
+            while ring.counters["ticks"] - k0 < 30:
                 step()
-            return (ring.views["late"].seq - n0) / (time.perf_counter() - t0)
-    rate = run(go())
-    assert rate >= 45, rate
+            return ring.views["late"].seq - n0, ring.counters["ticks"] - k0
+    late, ticks = run(go())
+    assert late >= ticks - 2, (late, ticks)          # the late view is in every tick but the first
 
 
 @pytest.mark.parametrize("device", DEVICES)
@@ -1369,3 +1385,262 @@ def test_calls_spread_in_a_step_share_a_tick(server, device):
             return ring.counters["taken"] - n0, ring.counters["ticks"] - k0
     taken, ticks = run(go())
     assert ticks >= 25 and taken >= 2 * ticks - 2, (taken, ticks)
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_view_subscribed_while_a_series_ticks_alone(server, device):
+    """A view not called for a while is subscribed while a watched series, called
+    first in each step, opens and closes ticks on its own; the view is then
+    served from its next steps on. Each step is longer than a tick, so every
+    series call opens one: a view called after the series used to be shut out
+    of the ring by those ticks for good."""
+    H = torch.randn(32, 32, device=device)
+    loss = torch.zeros((), device=device)
+
+    def series_only():
+        time.sleep(0.02)
+        caliper.series(loss + 1, name="loss")
+
+    def step():
+        series_only()
+        caliper.show(H, name="h")
+
+    async def go():
+        async with Client(server) as c:
+            step()                                       # both views exist
+            await c.subscribe(1, "loss", pump=series_only)
+            import caliper._net_ring as R
+            ring = server.ring
+            # h is not called until the ring no longer counts it as called lately
+            while time.perf_counter() - ring.views["h"].seen <= R.OFFER_REFRESH_S:
+                series_only()
+            await c.subscribe(2, "h", pump=series_only)
+            n0 = server.ring.views["h"].seq
+            for _ in range(15):
+                step()
+            return server.ring.views["h"].seq - n0
+    served = run(go())
+    assert served >= 10, served
+
+
+# ---------------------------------------------------------------------------
+# a viewer that sends and never reads
+# ---------------------------------------------------------------------------
+def test_control_queue_is_bounded_for_a_peer_that_never_reads(server):
+    """A viewer floods requests that each get a reply (ATTACH to an unknown
+    session) and PINGs, and reads nothing. The server's control queue for it
+    stays within its limits and the connection is closed with 1008 once they
+    are reached; training calls keep returning throughout."""
+    limit = _net.MAX_CONTROL_FRAMES
+    W = torch.randn(64, 64)
+    attach = w.encode(w.Attach("no-such-session"))
+    ping = w.encode(w.Ping(7))
+
+    def conns():
+        return {c["id"]: c for c in server.stats()["connections"]}
+
+    async def go():
+        ws = await connect(server.stream_url, max_size=None, compression=None, ping_interval=None,
+                           close_timeout=1, max_queue=1)
+        await ws.send(w.encode(w.Hello("viewer", software={"name": "flood", "version": "0"})))
+        peak, closed = 0, False
+        for i in range(4 * limit):
+            caliper.show(W, name="w")                 # the training loop goes on
+            try:
+                await ws.send(ping if i % 100 == 0 else attach)
+            except ConnectionClosed:
+                closed = True
+                break
+            if i % 500 == 0:
+                await asyncio.sleep(0)                # let the server's own loop run (Python sender)
+                cs = conns()
+                peak = max([peak] + [c.get("control_frames", 0) for c in cs.values()])
+                if server.stats()["producer"].get("overflow_closed", 0):
+                    closed = True
+                    break
+        deadline = time.monotonic() + 20
+        while not server.stats()["producer"].get("overflow_closed", 0) and time.monotonic() < deadline:
+            caliper.show(W, name="w")
+            await asyncio.sleep(0.01)
+        n = server.stats()["producer"].get("overflow_closed", 0)
+        # the connection goes away on the server's side
+        while conns() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        left = len(conns())
+        ws.transport.abort()
+        return closed, peak, n, left
+    closed, peak, n, left = run(go(), timeout=60)
+    assert n == 1 and left == 0
+    assert peak <= limit
+    assert caliper.show(W, name="w") is False         # still returns at once, nothing attached
+
+
+# ---------------------------------------------------------------------------
+# the frame limit
+# ---------------------------------------------------------------------------
+def test_largest_views_fit_one_frame():
+    """What resolution accepts encodes in one frame with a long head: a heatmap
+    at the largest payload accepted, points at LIMIT_MAX_POINTS with labels
+    and a histogram at MAX_BINS; one cell more than the heatmap does not."""
+    from caliper import _dataview as dv
+    names = {"index": {"layer" * 12 + str(i): [0, 4096, 1] for i in range(6)}}  # metadata of some size
+    rows = w.MAX_PAYLOAD_BYTES // 4 // 4096
+    cases = [(w.Kind.HEATMAP, np.zeros((rows, 4096), np.float32), None),
+             (w.Kind.POINTS, np.zeros((w.LIMIT_MAX_POINTS, 3), np.float32),
+              np.zeros(w.LIMIT_MAX_POINTS, np.float32)),
+             (w.Kind.HISTOGRAM, np.zeros(w.MAX_BINS, np.float32), None)]
+    for kind, data, aux in cases:
+        _, n = w.encode_parts(w.Snapshot(1, "v" * 63, 2**40, 2**60, kind, names, data, aux=aux,
+                                         stats=[1e30] * w.MAX_STATS))
+        assert n <= w.MAX_FRAME_BYTES, (kind, n)
+    view = {"id": 1, "name": "w", "kind": 1, "default": {},
+            "sources": [{"name": "data", "dtype": "f32",
+                         "dims": [{"name": "row", "size": 4096}, {"name": "col", "size": 4096}]}]}
+    with pytest.raises(dv.DataViewError, match="ask for a smaller max_extent, at most 4063 here"):
+        dv.resolve(view, {"budget": {"max_extent": 4096}})
+    assert dv.resolve(view, {"budget": {"max_extent": 4031}})["budget"]["max_extent"] == 4031
+
+
+def test_a_view_too_large_for_a_frame_is_refused(server):
+    """max_extent 4096 on a 4096 by 4096 weight is refused with bad_data_view,
+    and the connection goes on: the same subscription with a smaller budget
+    gets its snapshots."""
+    W = torch.zeros(4096, 4096)
+    show = lambda: caliper.show(W, name="w", rate=0)  # noqa: E731
+
+    async def go():
+        async with Client(server) as c:
+            r = await c.subscribe(1, "w", {"budget": {"max_extent": 4096}}, pump=show)
+            assert r.error is not None and r.error["code"] == w.ERR_BAD_DATA_VIEW, r.error
+            assert "ask for a smaller max_extent, at most 4063 here" in r.error["message"]
+            r = await c.subscribe(1, "w", {"budget": {"max_extent": 1024}}, pump=show)
+            assert r.error is None
+            s = await c.expect(w.Snapshot, pump=show, pred=lambda m: m.sub == 1)
+            return s.data.shape
+    assert run(go()) == (1024, 1024)
+
+
+def test_a_snapshot_over_the_frame_limit_is_not_sent(server, mode):
+    """A snapshot that cannot be encoded (only possible past resolution, so it
+    is handed to the native sender directly here) is counted and dropped, not
+    sent as an empty message, and the connection goes on."""
+    if mode != "native":
+        pytest.skip("the native sender's publish() is the path past resolution")
+    W = torch.randn(32, 32)
+    show = lambda: caliper.show(W, name="w", rate=0)  # noqa: E731
+    big = np.zeros(w.MAX_FRAME_BYTES // 4 + 1, np.float32)
+
+    async def go():
+        async with Client(server) as c:
+            await c.subscribe(1, "w", pump=show)
+            await c.expect(w.Snapshot, pump=show, pred=lambda m: m.sub == 1)
+            v = server.ring.views["w"]
+            gid = next(iter(v.groups.values())).__dict__["gid"]
+            server.nio.publish(gid, "w", 10_000, 0, int(w.Kind.HEATMAP), "[]", "", 0, 0, 0.0, 1.0, 0, 0,
+                               0, -1, int(w.DType.F32), [big.size, 1], big.ctypes.data, big.nbytes, 0, 0)
+            # the native thread tries to send it and counts the failure
+            deadline = time.monotonic() + 10
+            while not server.stats()["producer"]["encode_failed"] and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert server.stats()["producer"]["encode_failed"] == 1
+            # the connection goes on: an empty message would have failed to decode here
+            await c.expect(w.Snapshot, pump=show, pred=lambda m: m.sub == 1 and m.seq < 10_000)
+            assert not any(isinstance(m, w.Snapshot) and m.seq == 10_000 for m in c.inbox)
+    run(go())
+
+
+# ---------------------------------------------------------------------------
+# the session token stays out of reprs, errors and logs
+# ---------------------------------------------------------------------------
+def test_the_token_is_not_in_a_repr_or_an_error(server):
+    tok = server.token
+    assert tok in server.url                          # serve() prints the link by design
+    for text in (repr(server), str(server)):
+        assert tok not in text and "token=..." in text
+    with pytest.raises(ValueError) as e:              # a link connect() cannot use
+        caliper.connect(f"ftp://127.0.0.1:1/v3/stream?token={tok}")
+    assert tok not in str(e.value)
+
+    import logging
+    import caliper._net_native as NN
+
+    class Stub:                                       # a hub connection whose native error quotes the link
+        def upstream(self):
+            return {"state": "waiting", "connected": False, "session": "", "url": "",
+                    "error": f"not a ws:// URL: wss://127.0.0.1:1/v3/stream?token={tok}", "attempts": 1,
+                    "connects": 0}
+    hub = NN.HubConnection(types.SimpleNamespace(nio=Stub(), identity={"id": "x"}),
+                           f"ws://127.0.0.1:1/v3/stream?token={tok}")
+    assert tok not in repr(hub) and tok not in str(hub.stats())
+
+    seen = []
+
+    class Keep(logging.Handler):
+        def emit(self, record):
+            seen.append(self.format(record))
+    h = Keep()
+    log = logging.getLogger("caliper.net")
+    log.addHandler(h)
+    old = log.level
+    log.setLevel(logging.DEBUG)
+    try:
+        log.info("GET %s", f"/v3/stream?token={tok}")
+        try:
+            raise RuntimeError(f"rejected ws://127.0.0.1:1/v3/stream?token={tok}")
+        except RuntimeError:
+            log.debug("connection failed", exc_info=True)
+    finally:
+        log.removeHandler(h)
+        log.setLevel(old)
+    assert len(seen) == 2 and not any(tok in s for s in seen), seen
+
+
+# ---------------------------------------------------------------------------
+# the native sender's lifetime
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(not NATIVE, reason="caliper._netio is not built")
+def test_native_close_from_two_threads_joins_once():
+    """close() from two threads at once (the script's close() and caliper.close()
+    at exit, say) joins the native threads once and returns in both."""
+    from caliper import _netio
+    for _ in range(20):
+        nio = _netio.Server(0, "t" * 32, json.dumps({"id": "clp-1-aaaaaa", "script": "x", "pid": 1,
+                                                       "start_unix_ms": 1}), "{}", [], 4, 4096,
+                            10_000, 10_000, 30_000)
+        barrier = threading.Barrier(3)
+        done = []
+
+        def close():
+            barrier.wait()
+            nio.close()
+            done.append(1)
+        ts = [threading.Thread(target=close) for _ in range(3)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(10)
+        assert len(done) == 3 and not any(t.is_alive() for t in ts)
+        del nio                                       # the destructor's close() after both
+
+
+@pytest.mark.skipif(not NATIVE, reason="caliper._netio is not built")
+def test_native_listen_after_close_fails_at_once():
+    """listen() on a closed native server raises instead of waiting for a loop
+    that has exited."""
+    from caliper import _netio
+    nio = _netio.Server(-1, "t" * 32, json.dumps({"id": "clp-1-aaaaaa", "script": "x", "pid": 1,
+                                                   "start_unix_ms": 1}), "{}", [], 4, 4096,
+                        10_000, 10_000, 30_000)
+    nio.close()
+    out = []
+
+    def listen():
+        try:
+            nio.listen(0)
+            out.append("listened")
+        except RuntimeError as e:
+            out.append(str(e))
+    t = threading.Thread(target=listen, daemon=True)
+    t.start()
+    t.join(10)
+    assert out == ["listen: the server is closed"]

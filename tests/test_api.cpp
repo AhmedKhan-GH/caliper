@@ -534,8 +534,9 @@ TEST_CASE("api: a call the frame thread does not answer times out, and waiting c
     ::send(a, get.data(), (int)get.size(), 0);
     ::send(b, get.data(), (int)get.size(), 0);
     const auto t0 = std::chrono::steady_clock::now();
-    while (app.server->stats().pending < 2 && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(2))
+    while (app.server->stats().pending < 2 && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(10))
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    REQUIRE(app.server->stats().pending == 2);
     Response busy = http(port, "GET", "/v0/applets", bearer());
     CHECK(busy.status == 503);
     CHECK(busy.headers["retry-after"] == "1");
@@ -563,8 +564,9 @@ TEST_CASE("api: stopping answers the calls still waiting with 503") {
     const std::string get = "GET /v0/capture.png?token=" + kToken + " HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(port) + "\r\n\r\n";
     ::send(a, get.data(), (int)get.size(), 0);
     const auto t0 = std::chrono::steady_clock::now();
-    while (app->server->stats().pending < 1 && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(2))
+    while (app->server->stats().pending < 1 && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(10))
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    REQUIRE(app->server->stats().pending == 1);
     app.reset();
     const Response r = parse_response(read_all(a));
     api_close(a);
@@ -834,6 +836,16 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
         REQUIRE_MESSAGE(at != std::string::npos, v.text);
         CHECK(std::atoi(v.text.c_str() + at + std::strlen("received view=heat kind=heatmap updates=")) > 0);
         CHECK(prod.subscribes >= 1);
+        // A bad link fails the viewer, and nothing it prints repeats the token.
+        for (const std::string bad : {"ws:///v3/stream?token=", "ws://127.0.0.1:99999/v3/stream?token="}) {
+            Proc b;
+            REQUIRE(b.start(viewer, {"--headless", "--url", bad + token, "--exit-after", "3",
+                                     "--data-dir", t.str("viewer-data")}, {}));
+            const int bad_code = b.wait(30000);
+            CHECK_MESSAGE(bad_code == 2, b.text);
+            CHECK_MESSAGE(b.text.find(token) == std::string::npos, b.text);
+            CHECK_MESSAGE(b.text.find(bad.substr(0, bad.find('?'))) != std::string::npos, b.text);
+        }
     } else {
         MESSAGE("CALIPER_TEST_VIEWER_EXE is not set: the native viewer's attach through /v3/stream is not run");
     }

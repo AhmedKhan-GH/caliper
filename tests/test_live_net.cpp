@@ -31,6 +31,7 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -74,6 +75,7 @@ public:
     std::vector<std::string> errors;          // ERROR codes the viewer sent
     std::vector<uint16_t> closes;             // close codes of ended connections
     std::vector<std::string> byes;            // BYE reasons the viewer sent
+    std::vector<uint32_t> pongs;              // nonces of the viewer's PONGs
     uint64_t seq = 0;
 
     // ---- 3.1 ------------------------------------------------------------------
@@ -461,6 +463,8 @@ private:
             if (s->view == "loss" && !series.empty()) send_series(0, series);   // the backfill
         } else if (auto* p = std::get_if<wire::Ping>(&m)) {
             send(wire::Pong{p->nonce});
+        } else if (auto* po = std::get_if<wire::Pong>(&m)) {
+            pongs.push_back(po->nonce);
         } else if (auto* vr = std::get_if<wire::ViewRequest>(&m)) {
             // Resolved as asked, the source named or the first.
             view_requests.push_back(*vr);
@@ -518,10 +522,31 @@ private:
 
 // ---- the viewer side ------------------------------------------------------------------------
 
-CaliperCore* net_core(int W, int H, std::string* why) {
+// The core's log lines (CaliperCoreDesc::log_fn), for a test that waits on one.
+struct LogLines {
+    std::mutex mu;
+    std::vector<std::string> lines;
+    static void fn(void* self, int, const char* m) {
+        auto* l = static_cast<LogLines*>(self);
+        std::lock_guard<std::mutex> g(l->mu);
+        l->lines.push_back(m);
+    }
+    bool has(const std::string& s) {
+        std::lock_guard<std::mutex> g(mu);
+        for (const auto& x : lines)
+            if (x.find(s) != std::string::npos) return true;
+        return false;
+    }
+};
+
+CaliperCore* net_core(int W, int H, std::string* why, LogLines* log = nullptr) {
     CaliperCoreDesc d{};
     d.struct_size = sizeof d;
     d.renderer = CALIPER_RENDERER_DEFAULT;
+    if (log) {
+        d.log_fn = &LogLines::fn;
+        d.userdata = log;
+    }
     CaliperCore* core = caliper_core_create(&d);
     REQUIRE(core != nullptr);
     CaliperCanvasDesc c{};
@@ -585,6 +610,32 @@ std::vector<uint8_t> map_ref(const std::vector<float>& v, int W, int H, int32_t 
     return out;
 }
 
+// Waits until `done` holds without polling the core, so nothing is drawn meanwhile.
+bool wait_until(const std::function<bool()>& done, int ms = 10000) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (std::chrono::steady_clock::now() < end) {
+        if (done()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return done();
+}
+
+// The producer pings the viewer and waits for the PONG, which the viewer's
+// network thread sends only after it has handled every message the producer
+// sent before the PING: then those snapshots sit in its slots and any ERROR
+// it sent back has reached the producer.
+bool viewer_caught_up(FakeProducer& p) {
+    static uint32_t nonce = 7000;
+    const uint32_t n = ++nonce;
+    p.call([n](FakeProducer& f) {
+        f.send(wire::Ping{n});
+        return 0;
+    });
+    return wait_until([&] {
+        return p.call([n](FakeProducer& f) { return std::count(f.pongs.begin(), f.pongs.end(), n) > 0; });
+    });
+}
+
 // Polls and draws until `done` holds (the producer runs on its own thread).
 bool poll_until(CaliperCore* core, const std::function<bool()>& done, int ms = 5000) {
     const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
@@ -634,6 +685,17 @@ TEST_CASE("live/net: stream links are checked and normalised") {
     CHECK_FALSE(caliper_live::parse_stream_url("ws://127.0.0.1:9/other?token=" + tok, &u, &err));
     CHECK_FALSE(caliper_live::parse_stream_url("wss://127.0.0.1:9/v3/stream?token=" + tok, &u, &err));
     CHECK_FALSE(caliper_live::parse_stream_url("ws://127.0.0.1:9/v3/stream?token=" + tok + "&session=a/b", &u, &err));
+    // No error repeats the token, whatever is wrong with the link.
+    for (const std::string bad : {"ftp://127.0.0.1:9/v3/stream?token=", "ws:///v3/stream?token=",
+                                  "ws://127.0.0.1:99999/v3/stream?token=", "http://127.0.0.1:0/?token=",
+                                  "ws://[::1]:9/v3/stream?token=", "ws://10.0.0.2:9/v3/stream?token=",
+                                  "ws://127.0.0.1:9/other?token=", "wss://127.0.0.1:9/v3/stream?token="}) {
+        CAPTURE(bad);
+        err.clear();
+        CHECK_FALSE(caliper_live::parse_stream_url(bad + tok, &u, &err));
+        CHECK_FALSE(err.empty());
+        CHECK(err.find(tok) == std::string::npos);
+    }
 }
 
 TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's messages in order through the app's "
@@ -860,7 +922,7 @@ TEST_CASE("live/net: a producer streams a heatmap, an image, points, a series an
                       1.0, CALIPER_NET_SNAP_RAW);
         return 0;
     });
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));   // all four arrive before the next poll
+    REQUIRE(viewer_caught_up(p));   // all four are in the viewer's slots before the next poll
     REQUIRE(poll_until(core, [&] {
         return readback(core, "heat", 8, HH) ==
                map_ref(std::vector<float>((size_t)8 * HH, 0.8f), 8, HH, CALIPER_NET_COLORMAP_VIRIDIS, 0.0f, 1.0f);
@@ -920,6 +982,14 @@ TEST_CASE("live/net: refusals and bad links fail the attach with the reason") {
     CHECK(why.find("loopback") != std::string::npos);
     why = refused("ws://127.0.0.1:" + port + "/v3/stream?token=short");
     CHECK(why.find("token") != std::string::npos);
+    // What the app's attach pane and caliper-viewer print for a bad link
+    // (caliper_core_last_error) never repeats its token.
+    for (const std::string bad : {std::string("ws:///v3/stream?token="), std::string("ws://127.0.0.1:99999/v3/stream?token="),
+                                  "ftp://127.0.0.1:" + port + "/v3/stream?token=", std::string("ws://[::1]:9/v3/stream?token=")}) {
+        why = refused(bad + p.token);
+        CHECK_FALSE(why.empty());
+        CHECK(why.find(p.token) == std::string::npos);
+    }
     CHECK(caliper_core_live_attach_url(core, nullptr) == 0);
     CHECK(caliper_core_live_poll(core) == -1);   // nothing attached
 
@@ -1056,7 +1126,7 @@ TEST_CASE("live/net: the native source announces controls and selection, and a s
         return 0;
     });
     REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 1; }));
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    REQUIRE(viewer_caught_up(p));   // an ERROR or a close for any frame above would be in by now
     caliper_core_live_poll(core);
     CHECK(status(core).client_alive == 1);
     CHECK(p.call([](FakeProducer& f) { return f.errors.empty() && f.closes.empty() && f.hellos == 1; }));
@@ -1228,7 +1298,8 @@ TEST_CASE("live/net: a select event names its item space and items, and the SELE
 
 TEST_CASE("live/net: a bad frame closes with the decoder's code, a bad message is answered with ERROR") {
     std::string no_gpu;
-    CaliperCore* core = net_core(64, 64, &no_gpu);
+    LogLines log;
+    CaliperCore* core = net_core(64, 64, &no_gpu, &log);
     if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
     FakeProducer p;
     p.start();
@@ -1267,7 +1338,9 @@ TEST_CASE("live/net: a bad frame closes with the decoder's code, a bad message i
     }));
     CHECK(p.call([](FakeProducer& f) { return f.closes.back(); }) == CALIPER_NET_CLOSE_UNSUPPORTED_MAJOR);
     REQUIRE(poll_until(core, [&] { return status(core).client_alive == 0; }));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    // The source gave up for good: it says why, and its thread then ends
+    // without another attempt, whatever its back-off.
+    REQUIRE(poll_until(core, [&] { return log.has("live: the server speaks another major version of the protocol"); }));
     CHECK(p.call([](FakeProducer& f) { return f.hellos; }) == 1);   // no reconnect
 
     // A text message closes with 1003.
@@ -1417,10 +1490,13 @@ TEST_CASE("live/app: clicks on the run bar and a shift-drag in a view reach the 
     REQUIRE(driver.error().empty());
     caliper_live::RunControls* rc = a.controls();
     // Let the last echoes arrive.
-    for (int i = 0; i < 600 && !(rc->details() && rc->action_result("save")); ++i) {
+    const auto echoes_by = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!(rc->details() && rc->action_result("save")) && std::chrono::steady_clock::now() < echoes_by) {
         host.frame(a, nullptr);
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
+    REQUIRE(rc->details());
+    REQUIRE(rc->action_result("save"));
     const auto in = p.call([](FakeProducer& f) { return f.controls_in; });
     REQUIRE(in.size() == 3);
     CHECK(in[0].op == "pause");
@@ -1479,10 +1555,14 @@ TEST_CASE("live/app: against a server that refuses controls the bar's clicks sen
     REQUIRE(driver.done());
     REQUIRE(driver.error().empty());
     caliper_live::RunControls* rc = a.controls();
-    for (int i = 0; i < 300 && !rc->details(); ++i) {
+    // The selection's details come back after the select event, so a control
+    // sent before it would have reached the script by then.
+    const auto details_by = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!rc->details() && std::chrono::steady_clock::now() < details_by) {
         host.frame(a, nullptr);
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
+    REQUIRE(rc->details());
     CHECK(p.call([](FakeProducer& f) { return f.controls_in.size(); }) == 0);
     CHECK(rc->state().run_state == "running");
     CHECK(rc->why_not(CALIPER_NET_OP_PAUSE).find("does not let this viewer control") != std::string::npos);

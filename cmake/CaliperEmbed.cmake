@@ -137,8 +137,11 @@ install(EXPORT CaliperEmbedTargets NAMESPACE caliper::
 write_basic_package_version_file(
     "${CMAKE_BINARY_DIR}/caliper-embed-config-version.cmake"
     VERSION ${CALIPER_EMBED_PACKAGE_VERSION} COMPATIBILITY SameMajorVersion)
+# The config records the library's minimum macOS (CMAKE_OSX_DEPLOYMENT_TARGET).
+configure_file("${CMAKE_SOURCE_DIR}/cmake/caliper-embed-config.cmake"
+    "${CMAKE_BINARY_DIR}/caliper-embed-config.cmake" @ONLY)
 install(FILES
-    "${CMAKE_SOURCE_DIR}/cmake/caliper-embed-config.cmake"
+    "${CMAKE_BINARY_DIR}/caliper-embed-config.cmake"
     "${CMAKE_BINARY_DIR}/caliper-embed-config-version.cmake"
     DESTINATION lib/cmake/caliper-embed COMPONENT embed)
 install(FILES LICENSE NOTICE DESTINATION share/caliper-embed COMPONENT embed)

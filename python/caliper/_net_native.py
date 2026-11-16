@@ -291,6 +291,11 @@ class NativeServer(NetServer):
             try:
                 busy = p.busy()
                 self._idle = not busy
+                if not busy and p.busy():
+                    # queued between the check and the flag, by a call whose wake
+                    # saw the pump busy: poll instead of waiting IDLE_MS
+                    self._idle = False
+                    busy = True
                 msgs = nio.control(POLL_MS if busy else IDLE_MS)
                 self._idle = False
                 for kind, conn, frame in msgs:
@@ -349,7 +354,8 @@ class NativeServer(NetServer):
                 "connections": n["connections"], "views": views, "ring": dict(self.ring.counters),
                 "server": {**dict(self.counters), "http_requests": n["http_requests"],
                            "refused": n["refused"]},
-                "producer": {**dict(self.producer.counters), "native_published": n["published"]},
+                "producer": {**dict(self.producer.counters), "native_published": n["published"],
+                             "overflow_closed": n["overflow_closed"], "encode_failed": n["encode_failed"]},
                 "series": n["series"]}
 
     # -- lifetime ------------------------------------------------------------------------
@@ -380,7 +386,8 @@ class NativeServer(NetServer):
 
     def __repr__(self) -> str:
         state = "closed" if self.closed else "running"
-        return f"<caliper.NetServer (native sender) {self.url} {state}>"
+        from ._net import redact
+        return f"<caliper.NetServer (native sender) {redact(self.url)} {state}>"
 
 
 class HubConnection:
@@ -393,11 +400,17 @@ class HubConnection:
     connection to the hub only; ``caliper.close()`` ends everything."""
 
     def __init__(self, producer: NativeServer, url: str):
+        from urllib.parse import parse_qs, urlsplit
         self._p = producer
         self.url = url.split("?", 1)[0]
+        self._token = parse_qs(urlsplit(url).query).get(_wire.TOKEN_PARAM, [""])[0]
 
     def _state(self) -> dict:
-        return self._p.nio.upstream()
+        from ._net import redact
+        d = self._p.nio.upstream()
+        if d.get("error"):                           # a native error may quote the link
+            d["error"] = redact(d["error"], self._token)
+        return d
 
     @property
     def state(self) -> str:

@@ -84,6 +84,10 @@ public:
     const Json* find(const std::string& key) const;   // nullptr when absent
     bool has(const std::string& key) const { return find(key) != nullptr; }
     Json& set(const std::string& key, Json v);       // replaces an existing member
+    // An object of these members in their order, where a repeated name keeps
+    // its first position and its last value, as the reader's rule; in
+    // O(n log n) for n members, where n calls of set() take O(n^2).
+    static Json object_of(std::vector<Member> members);
     void erase(const std::string& key);
 
     // The canonical encoding (see above).

@@ -66,6 +66,11 @@ async function measure(page: import('@playwright/test').Page, n: number) {
 }
 
 test('points: frame rate while orbiting', async ({ harness: page }, info) => {
+  // Not on swiftshader in CI (playwright.config.ts): a hosted runner without a
+  // GPU and with few cores draws 100,000 points in SwiftShader at well under one
+  // frame a second (1.6 s a frame on a 18-core Mac), so the measurement says
+  // nothing and outlasts any timeout. It runs there locally, and the webgpu
+  // project measures the GPU.
   test.setTimeout(120_000);
   const runs = [await measure(page, 100_000)];
   if (info.project.name === 'canvas2d') runs.push(await measure(page, 20_000));

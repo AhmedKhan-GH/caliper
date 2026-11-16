@@ -15,7 +15,7 @@ transformer that learns to classify synthetic token sequences, with nothing to
 download. The excerpts below come from it; run the notebook itself for the full
 version.
 
-Prereqs: Apple Silicon, macOS 14 or later, Python 3.12, PyTorch with MPS, and
+Prereqs: Apple Silicon, macOS 14 (Sonoma) or later, Python 3.12, PyTorch with MPS, and
 JupyterLab or VS Code with its Jupyter extension. [Watch a PyTorch training run
 live](live-pytorch.md) introduces the view calls in a plain script, and
 [Network streaming](../explanations/network-streaming.md) explains the design

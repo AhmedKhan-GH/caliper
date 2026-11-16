@@ -54,11 +54,12 @@ renderer makes on its own device and queue:
   those thresholds, so the GPU's rounding cannot change a colour.
 - **Points.** A points payload is imported into the layer through `HostRenderer::import_host_allocation`. A browser
   cannot wrap host memory, so the layer copies it and reports the route `copied-from-host` with the bytes copied. Each
-  point is an instanced quad of the native point size, with the native colour rule and depth test, because WebGPU
-  draws a point as one pixel. The positions and values are instance-step vertex buffers bound at the draw's byte
-  offsets and the colour table is part of the draw's uniform block, so no storage buffer is read in a vertex stage,
-  which a WebGPU device in compatibility mode would refuse. Released buffers are kept by the layer and reused for
-  the next snapshot of the same capacity.
+  point is an instanced quad of the native point size, with the native depth test, because WebGPU draws a point as
+  one pixel. A value-coloured point takes the colour index `map_f32_to_rgba8` gives its value, through the same
+  thresholds as the heatmap, and in 3-D the points draw the live points view's depth cues. The positions and values
+  are instance-step vertex buffers bound at the draw's byte offsets and the colour table and thresholds are part of
+  the draw's uniform block, so no storage buffer is read in a vertex stage, which a WebGPU device in compatibility
+  mode would refuse. Released buffers are kept by the layer and reused for the next snapshot of the same capacity.
 - **Lifetimes.** The layer destroys a released texture once the last submit that used it has completed, and keeps
   its view to the end of the frame, after ImGui's backend has dropped the bind groups it made while recording that
   frame. Readbacks for the module's own checks go through the layer's asynchronous readback.

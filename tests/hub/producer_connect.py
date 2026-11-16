@@ -29,7 +29,8 @@ import caliper
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--seconds", type=float, default=20)
+    ap.add_argument("--seconds", type=float, default=20, help="the longest the script trains")
+    ap.add_argument("--stop-file", help="train until this file exists (or --seconds pass)")
     ap.add_argument("--controls", action="store_true", help="take the controls of protocol 3.1")
     a = ap.parse_args()
     import torch
@@ -53,7 +54,7 @@ def main() -> int:
     model = torch.nn.Sequential(torch.nn.Linear(32, 64), torch.nn.ReLU(), torch.nn.Linear(64, 2)).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
     end = time.monotonic() + a.seconds
-    while time.monotonic() < end:
+    while time.monotonic() < end and not (a.stop_file and os.path.exists(a.stop_file)):
         if lr is not None:
             caliper.step(steps)
             for group in opt.param_groups:

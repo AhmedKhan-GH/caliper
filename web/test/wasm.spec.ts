@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { colormapLut, lutIndex } from '../src/render/colormap.js';
-import { decodePng, expect, REPO, serve, shotPath, WEB, wireModule } from './util.js';
+import { decodePng, drawn, expect, REPO, roundTrip, serve, shotPath, WEB, wireModule } from './util.js';
 
 const PYTHON = process.env.CALIPER_PYTHON ?? path.join(REPO, '.venv', 'bin', 'python');
 const WASM = process.env.CALIPER_WASM_DIR ?? path.join(REPO, 'python', 'caliper', '_web');
@@ -68,6 +68,27 @@ async function wasmStats(page: Page, view: string): Promise<Record<string, unkno
   return ((await state(page, view)).wasmStats ?? {}) as Record<string, unknown>;
 }
 
+/**
+ * The module's self-check of a view ("view:kind:mismatches:maxdiff"), waited on
+ * until it matches re. A failure prints what the module reported: its checks,
+ * how many frames it drew and how fast, and its adapter.
+ */
+async function moduleCheck(page: Page, view: string, re: RegExp, timeout = 30_000): Promise<string> {
+  const read = async () => {
+    const st = await wasmStats(page, view);
+    return { checks: String(st.checks ?? ''), frames: st.frames, fps: st.fps, checkState: st.checkState,
+      path: st.rendererPath, state: st.state, adapter: (await state(page, view)).adapter };
+  };
+  // Checked on every animation frame until it matches; past the deadline the
+  // expectation below says what the module reported.
+  await page.waitForFunction(([v, src]) => new RegExp(src).test(String(((document.querySelector(`caliper-view[view="${v}"]`) as El)
+    .debugState().wasmStats as { checks?: string } | null)?.checks ?? '')), [view, re.source] as const, { polling: 'raf', timeout })
+    .catch(() => undefined);
+  const got = await read();
+  expect(got.checks, `${view}: the module's checks (${JSON.stringify(got)})`).toMatch(re);
+  return got.checks;
+}
+
 async function plates(page: Page, n: number) {
   await page.waitForFunction((n) => {
     const els = [...document.querySelectorAll('caliper-view')] as El[];
@@ -106,27 +127,21 @@ test('auto draws each view with the WebAssembly views when they list its kind, a
     expect(canvases).toEqual([true, true, true, true, true, true]);
     // Each module read its texture back: the image is exactly the bytes that were sent, and the
     // heatmap exactly the CPU reference colormap (web/wasm/README.md, "The colormap").
-    const checks = async (view: string) => {
-      const st = (await state(page, view)).wasmStats as { checks?: string } | null;
-      return st?.checks ?? '';
-    };
-    await expect.poll(() => checks('input'), { timeout: 15_000 }).toMatch(/^input:2:\d+:\d+$/);
-    await expect.poll(() => checks('weights'), { timeout: 15_000 }).toMatch(/^weights:1:\d+:\d+$/);
-    const [, , imageBad, imageMax] = (await checks('input')).split(':').map(Number);
+    const [, , imageBad, imageMax] = (await moduleCheck(page, 'input', /^input:2:\d+:\d+$/)).split(':').map(Number);
     expect([imageBad, imageMax]).toEqual([0, 0]);
-    const [, , heatBad, heatMax] = (await checks('weights')).split(':').map(Number);
+    const [, , heatBad, heatMax] = (await moduleCheck(page, 'weights', /^weights:1:\d+:\d+$/)).split(':').map(Number);
     expect([heatBad, heatMax]).toEqual([0, 0]);
     // The graphics layer drew, on the device asked for, and WebGPU reported no error to it.
     const st = (await state(page, 'weights')).wasmStats as { gfxReady?: number; featureLevel?: string; gfxErrors?: string };
     expect(st.gfxReady).toBe(1);
     expect(st.featureLevel).toBe(COMPAT ? 'compatibility' : 'core');
     expect(st.gfxErrors).toBe('');
-    // The histogram holds the producer's bins.
-    const hist = (await state(page, 'weight_hist')).wasmStats as { viewInfo?: string };
-    expect(hist.viewInfo).toMatch(/weight_hist:kind=5,updates=\d+,count=\d+/);
-    expect(Number(/count=(\d+)/.exec(hist.viewInfo!)![1])).toBeGreaterThan(0);
+    // The histogram holds the producer's bins, once its module has published them.
+    const histInfo = async () => String(((await state(page, 'weight_hist')).wasmStats as { viewInfo?: string } | null)?.viewInfo ?? '');
+    await expect.poll(histInfo, { timeout: 30_000, message: 'weight_hist: the module\'s view info' })
+      .toMatch(/weight_hist:kind=5,updates=\d+,count=[1-9]\d*/);
   }
-  await page.waitForTimeout(600);
+  await drawn(page);
   await page.screenshot({ path: shotPath(info, 'wasm-page'), fullPage: true });
   expect(errors).toEqual([]);
 });
@@ -148,9 +163,9 @@ test('the header picker sets the WebAssembly view\'s data view, and the stream\'
     sel.dispatchEvent(new Event('change'));
   });
   // The module's VIEW_REQUEST is answered; the reply (not the request) sets the element's data view.
-  await expect.poll(async () => JSON.stringify((await state(page, 'attention')).dataView), { timeout: 10_000 }).toContain('"head":5');
+  await roundTrip.poll(async () => JSON.stringify((await state(page, 'attention')).dataView)).toContain('"head":5');
   expect(before).not.toContain('"head":5');
-  await page.waitForTimeout(400);
+  await drawn(page, 'caliper-view[view="attention"]');
   await page.locator('caliper-view[view="attention"]').screenshot({ path: shotPath(info, 'wasm-picker') });
 });
 
@@ -162,9 +177,7 @@ test('points draw as quads with their palette colours, and hover finds the point
   expect((await state(page, 'embedding')).drawer).toBe('wasm');
   // The module read its render target back: at every sampled point no other point covers, the
   // pixel is the palette colour of the point's label ("view:3:mismatches:compared").
-  await expect.poll(async () => String((await wasmStats(page, 'embedding')).checks ?? ''), { timeout: 20_000 })
-    .toMatch(/^embedding:3:\d+:\d+$/);
-  const [, , bad, compared] = String((await wasmStats(page, 'embedding')).checks).split(':').map(Number);
+  const [, , bad, compared] = (await moduleCheck(page, 'embedding', /^embedding:3:\d+:\d+$/)).split(':').map(Number);
   expect(bad).toBe(0);
   expect(compared).toBeGreaterThan(10);
   // Hover: somewhere around the middle of the cloud the module finds a point.
@@ -174,7 +187,8 @@ test('points draw as quads with their palette colours, and hover finds the point
   for (let k = 0; k < 40 && found < 0; ++k) {
     const r = 4 + k * 3, a = k * 0.9;
     await page.mouse.move(box.x + box.width / 2 + r * Math.cos(a), box.y + box.height / 2 + r * Math.sin(a));
-    await page.waitForTimeout(300);
+    // The module publishes what it hovers at the end of a frame: one that began after the move.
+    await drawn(page, 'caliper-view[view="embedding"]', 1);
     found = await hover();
   }
   expect(found).toBeGreaterThanOrEqual(0);
@@ -194,13 +208,16 @@ test('100,000 points orbit at an interactive rate on the GPU', async ({ page }, 
     const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
     await page.mouse.move(cx, cy);
     await page.mouse.down();
+    // The time the module takes to draw 180 frames while the mouse drags,
+    // each move sent once the page has handled the last.
     const f0 = await frames();
     const t0 = Date.now();
-    for (let k = 0; Date.now() - t0 < 3000; ++k) {
+    let f = f0;
+    for (let k = 0; f < f0 + 180; ++k) {
       await page.mouse.move(cx + 120 * Math.sin(k / 20), cy + 60 * Math.cos(k / 27));
-      await page.waitForTimeout(8);
+      f = await frames();
     }
-    const fps = ((await frames()) - f0) / ((Date.now() - t0) / 1000);
+    const fps = (f - f0) / ((Date.now() - t0) / 1000);
     await page.mouse.up();
     console.log(`${info.project.name} wasm points 100000: ${fps.toFixed(1)} frames per second while orbiting`);
     expect(fps).toBeGreaterThan(30);
@@ -337,6 +354,10 @@ interface Geo { area: number[]; window: number[]; yDown: boolean; selected: numb
 
 /** Where view's data is on the page: its geometry from the module, and its canvas. */
 async function geometry(page: Page, view: string) {
+  // Past the module's 30 start-up frames the windows are laid out, and the
+  // module publishes every 250 ms instead of every 15 frames.
+  await page.waitForFunction((v) => Number(((document.querySelector(`caliper-view[view="${v}"]`) as El)
+    .debugState().wasmStats as { frames?: number } | null)?.frames ?? 0) > 30, view, { polling: 'raf', timeout: 30_000 });
   await expect.poll(async () => JSON.parse(String((await wasmStats(page, view)).geometry ?? '{}'))[view] ?? null,
     { timeout: 10_000 }).not.toBeNull();
   const geo = JSON.parse(String((await wasmStats(page, view)).geometry))[view] as Geo;
@@ -383,7 +404,7 @@ async function fixedPage(page: Page): Promise<Server> {
 const selects = (page: Page) => page.evaluate(() => (window as unknown as { selects: unknown[] }).selects);
 /** The producer's last event of a type for a view, once it has arrived. */
 async function received(srv: Server, view: string, type: string, count = 1) {
-  await expect.poll(() => srv.events.filter((e) => e.view === view && e.type === type).length, { timeout: 10_000 })
+  await roundTrip.poll(() => srv.events.filter((e) => e.view === view && e.type === type).length)
     .toBeGreaterThanOrEqual(count);
   return srv.events.filter((e) => e.view === view && e.type === type).at(-1)!;
 }
@@ -443,7 +464,7 @@ test.describe('selections in the WebAssembly views', () => {
       await expect.poll(async () => (await selects(page)).at(-1)).toEqual(rect);
       expect((await received(srv, 'p', 'select')).detail).toEqual(rect.detail);
       expect((await state(page, 'p')).selected).toBe(2);
-      await page.waitForTimeout(300);
+      await drawn(page, 'caliper-view[view="p"]');
       await page.locator('caliper-view[view="p"]').screenshot({ path: shotPath(info, 'wasm-points-selection') });
       await shiftDrag(page, p.at(-0.2, -0.02), p.at(-0.2, -0.02), false, [p.at(0.3, -0.02), p.at(0.3, 0.3), p.at(-0.2, 0.3)]);
       await expect.poll(async () => (await selects(page)).at(-1)).toEqual({ view: 'p', type: 'select', detail: { indices: [0], row_ids: [0] } });
@@ -467,7 +488,7 @@ test.describe('selections in the WebAssembly views', () => {
       await page.mouse.up();
       await expect.poll(async () => (await geometry(page, 'p')).geo.window[0]).toBeLessThan(z[0]);
       // A fast drag, one movement and the release right after it, pans by all of it.
-      await page.waitForTimeout(300);
+      await drawn(page, 'caliper-view[view="p"]', 2);
       const g1 = await geometry(page, 'p');
       const [w0, w1] = g1.geo.window;
       const q = g1.at((w0 + w1) / 2, (g1.geo.window[2] + g1.geo.window[3]) / 2);
@@ -501,7 +522,7 @@ test.describe('selections in the WebAssembly views', () => {
       expect(ev.detail.steps[1]).toBeGreaterThanOrEqual(399);
       expect(ev.detail.steps[1]).toBeLessThanOrEqual(401);
       expect((await received(srv, 's', 'select')).detail).toEqual(ev.detail);
-      await page.waitForTimeout(300);
+      await drawn(page, 'caliper-view[view="s"]');
       await page.locator('caliper-view[view="s"]').screenshot({ path: shotPath(info, 'wasm-series-selection') });
 
       await expect.poll(async () => (await state(page, 'hist')).info).toBe('10 bins  -5 … 5  n 91');
@@ -512,7 +533,7 @@ test.describe('selections in the WebAssembly views', () => {
       await shiftDrag(page, g.at(-2.7, 3), g.at(0.4, 3));
       await expect.poll(async () => (await selects(page)).at(-1)).toEqual({ view: 'hist', type: 'select', detail: { range: [-3, 1] } });
       expect((await received(srv, 'hist', 'select')).detail).toEqual({ range: [-3, 1] });
-      await page.waitForTimeout(300);
+      await drawn(page, 'caliper-view[view="hist"]');
       await page.locator('caliper-view[view="hist"]').screenshot({ path: shotPath(info, 'wasm-histogram-selection') });
     } finally {
       srv.proc.kill();
@@ -549,7 +570,7 @@ test.describe('pan and zoom in the WebAssembly views', () => {
       // Magnified, every pixel of a cell has the cell's colour (nearest sampling);
       // the pointer moves off the view first, so that no tooltip covers the cell.
       await page.mouse.move(2, 2);
-      await page.waitForTimeout(200);
+      await drawn(page, 'caliper-view[view="h"]', 2);
       const box = (await page.locator('caliper-view[view="h"] .body .wasm canvas').boundingBox())!;
       const png = decodePng(await page.screenshot({ clip: box }));
       const lut = colormapLut('viridis');
@@ -598,9 +619,10 @@ test.describe('pan and zoom in the WebAssembly views', () => {
       await page.mouse.move(c.x + 80, c.y, { steps: 4 });
       await page.mouse.up();
       await expect.poll(async () => (await win(page, 's')).x0).toBeLessThan(z.x0);
-      await page.waitForTimeout(400);   // the pan has landed
+      // Once the pan has landed, the view holds however many frames follow.
+      await drawn(page, 'caliper-view[view="s"]', 2);
       const held = await win(page, 's');
-      await page.waitForTimeout(500);
+      await drawn(page, 'caliper-view[view="s"]', 5);
       expect(await win(page, 's')).toEqual(held);
       await page.mouse.dblclick(c.x, c.y);
       await expect.poll(async () => (await state(page, 's')).follow).toBe(true);
@@ -639,15 +661,19 @@ test('data view changes and resizes do not grow what the module holds', async ({
   // every change makes the heatmap a new texture; each width makes the points
   // a new render target.
   const views = [{ source: 'attn', index: { layer: 0, head: 0 } }, { source: 'attn', index: { layer: 0, query: 0 } }];
+  const shapes = ['32×32 ', '8×32 '];   // the heatmap's rows and columns in its header, for each data view
   const churn = async (n: number) => {
     for (let i = 0; i < n; i++) {
       await page.evaluate(([dv, w]) => {
         (document.querySelector('caliper-view[view="attention"]') as El).dataView = dv;
         (document.querySelector('caliper-view[view="embedding"]') as HTMLElement).style.width = `${w}px`;
       }, [views[i % 2], 560 + (i % 2) * 64] as const);
-      await page.waitForTimeout(60);
+      // Until the module has made the heatmap's texture of this shape (its
+      // header says so), and drawn a frame at the new width.
+      await page.waitForFunction((want) => String((document.querySelector('caliper-view[view="attention"]') as El)
+        .debugState().info ?? '').startsWith(want), shapes[i % 2], { polling: 'raf', timeout: 10_000 });
     }
-    await page.waitForTimeout(500);
+    await drawn(page, 'caliper-view[view="attention"], caliper-view[view="embedding"]', 5);
   };
   const held = async () => {
     const a = await wasmStats(page, 'attention'), e = await wasmStats(page, 'embedding');

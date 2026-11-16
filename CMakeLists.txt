@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.18...4.2)
+# Every Apple binary is built for macOS 14.0 (Sonoma) or later; it must be set
+# before project(). cmake/CaliperMacOSTarget.cmake says why 14.0.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CaliperMacOSTarget.cmake)
 project(caliper CXX C)
 
 if(APPLE)

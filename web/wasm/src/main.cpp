@@ -109,7 +109,8 @@ struct Page {
     std::vector<uint8_t> check_expect;
     std::string check_view;
     int check_kind = 0;
-    uint64_t check_next = 90;             // the frame of the next check
+    uint64_t check_next = 10;             // the frame of the next check
+    double last_publish = 0.0;            // when the counters were last published (ms)
 
     std::string selftest;                 // the graphics layer's self-test: "" or its report
 
@@ -236,12 +237,24 @@ void publish() {
             char b[640];
             std::snprintf(b, sizeof b,
                           "%s\"%s\":{\"area\":[%.9g,%.9g,%.9g,%.9g],\"window\":[%.17g,%.17g,%.17g,%.17g],"
-                          "\"yDown\":%s,\"selected\":%.0f,\"hover\":%lld,\"cols\":%d,\"follow\":%s,\"log\":%s}",
+                          "\"yDown\":%s,\"selected\":%.0f,\"hover\":%lld,\"cols\":%d,\"follow\":%s,\"log\":%s",
                           geo.size() > 1 ? "," : "", v->name.c_str(), v->geo_area[0], v->geo_area[1],
                           v->geo_area[2], v->geo_area[3], v->geo_window[0], v->geo_window[1], v->geo_window[2],
                           v->geo_window[3], v->geo_ydown ? "true" : "false", sel, (long long)v->hover_item, cols,
                           v->follow ? "true" : "false", v->log_y ? "true" : "false");
             geo += b;
+            // A points view: its camera, the rotate toggle, the depth cues and
+            // the box's tick labels (digits, signs, dots, e, = and separators).
+            if (v->kind == CALIPER_LIVE_KIND_POINTS) {
+                std::snprintf(b, sizeof b,
+                              ",\"dims\":%d,\"camera\":[%.9g,%.9g,%.9g,%.9g],\"rotate\":%s,\"cues\":%s,\"box\":\"",
+                              v->dims, v->cam.az, v->cam.el, v->cam.dist, v->cam.radius,
+                              v->auto_rotate ? "true" : "false", v->depth_cues ? "true" : "false");
+                geo += b;
+                if (v->dims == 3) geo += v->box_labels;
+                geo += "\"";
+            }
+            geo += "}";
         }
     geo += "}";
     put("geometry", geo.c_str());
@@ -309,8 +322,11 @@ void finish_check(Page::Check c) {
 // A points view with categorical labels: its render target read back, and at
 // the pixel under each of up to 256 sampled points that no other point covers
 // in front of it (later in draw order in 2-D, nearer in 3-D), the palette
-// colour of its label. Records mismatches and, in maxdiff, how many points were
-// compared. False when there is nothing to check yet.
+// colour of its label. With the depth cues of 3-D points, only points in front
+// of the camera's target are compared, which the fade leaves at full strength,
+// and a neighbour covers a point within the largest size the cues may draw.
+// Records mismatches and, in maxdiff, how many points were compared. False when
+// there is nothing to check yet.
 bool start_points_check(caliper_live_views::View& v) {
     if (!v.have_cur || !v.cur.pos_cpu || !v.cur.aux_cpu || !v.view_rid || v.dirty) return false;
     const int W = v.tex_w, H = v.tex_h;
@@ -323,18 +339,25 @@ bool start_points_check(caliper_live_views::View& v) {
             for (int k = 0; k < 4; ++k) acc += P[k * 4 + r] * V[c * 4 + k];
             M[c * 4 + r] = acc;
         }
-    struct Proj { float x, y, z; bool ok; };
+    struct Proj { float x, y, z, w; bool ok; };
     std::vector<Proj> pr(n);
     const float* pos = (const float*)v.cur.pos_cpu;
     for (uint64_t i = 0; i < n; ++i) {
         const float x = pos[3 * i], y = pos[3 * i + 1], z = pos[3 * i + 2];
         const float cw = M[3] * x + M[7] * y + M[11] * z + M[15];
-        if (!(cw > 1e-9f)) { pr[i] = {0, 0, 0, false}; continue; }
+        if (!(cw > 1e-9f)) { pr[i] = {0, 0, 0, 0, false}; continue; }
         pr[i] = {((M[0] * x + M[4] * y + M[8] * z + M[12]) / cw * 0.5f + 0.5f) * (float)W,
                  (0.5f - (M[1] * x + M[5] * y + M[9] * z + M[13]) / cw * 0.5f) * (float)H,
-                 (M[2] * x + M[6] * y + M[10] * z + M[14]) / cw, true};
+                 (M[2] * x + M[6] * y + M[10] * z + M[14]) / cw, cw, true};
     }
-    const float half = 0.5f * caliper_live_views::point_size_px(n, g.core->scale) + 1.0f;
+    // Half the side a point is drawn with, plus a pixel: with the depth cues
+    // its size follows its distance, as the renderer draws it.
+    const bool cues = v.dims == 3 && v.depth_cues;
+    const float side = caliper_live_views::point_size_px(n, g.core->scale);
+    auto half_of = [&](const Proj& p) {
+        const float k = cues ? std::clamp(v.cam.dist / p.w, caliper_host::kPointAttenMin, caliper_host::kPointAttenMax) : 1.0f;
+        return 0.5f * side * k + 1.0f;
+    };
     struct Want { int px, py; uint32_t rgba; };
     auto wants = std::make_shared<std::vector<Want>>();
     const float* aux = (const float*)v.cur.aux_cpu;
@@ -344,10 +367,12 @@ bool start_points_check(caliper_live_views::View& v) {
     for (uint64_t i = 0; i < n && wants->size() < 256; i += stride) {
         const Proj& a = pr[i];
         if (!a.ok || a.x < 1 || a.y < 1 || a.x >= W - 1 || a.y >= H - 1 || a.z < 0 || a.z > 1) continue;
+        if (cues && a.w > v.cam.dist) continue;   // dimmed by the fade
         bool covered = false;
         for (uint64_t j = 0; j < n && !covered; ++j) {
             if (j == i || !pr[j].ok) continue;
-            if (std::fabs(pr[j].x - a.x) > 2 * half || std::fabs(pr[j].y - a.y) > 2 * half) continue;
+            const float h = half_of(pr[j]) + 1.0f;   // a pixel more for rounding
+            if (std::fabs(pr[j].x - a.x) > h || std::fabs(pr[j].y - a.y) > h) continue;
             covered = v.dims == 2 ? j > i : (pr[j].z <= a.z + 1e-6f);
         }
         if (covered) continue;
@@ -639,13 +664,22 @@ void frame() {
     if (g.frames == 30) { g.t_mark = t1; g.frames_mark = g.frames; }
     if (g.frames > 30 && t1 > g.t_mark)
         g.fps = (double)(g.frames - g.frames_mark) * 1000.0 / (t1 - g.t_mark);
-    // From frame 90 on, one texture view is checked every 30 frames.
+    // From frame 10 on (past the start-up frames that create the pipelines),
+    // one view is checked every 5 frames, so that the checks do not wait on a
+    // frame rate: on a software adapter a frame can take most of a second.
     if (!g.check_pending && g.frames >= g.check_next) {
-        g.check_next = g.frames + 30;
+        g.check_next = g.frames + 5;
         start_check();
     }
     send_infos();
-    if (g.frames % 15 == 0 || g.publish_soon) publish();
+    // The counters every 15 frames, and past the start-up frames every 250 ms
+    // as well when frames are slower. Not sooner: the views' windows are laid
+    // out over the first frames, and a page reads the first geometry published
+    // as the settled one.
+    if (g.frames % 15 == 0 || g.publish_soon || (g.frames > 30 && t1 - g.last_publish >= 250.0)) {
+        publish();
+        g.last_publish = t1;
+    }
     g.publish_soon = false;
 }
 

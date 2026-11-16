@@ -563,7 +563,9 @@ class NotebookSession:
             if extra > 0:
                 self.page.set_viewport_size({"width": size["width"],
                                              "height": min(max_height, size["height"] + extra + 8)})
-                self.page.wait_for_timeout(300)
+                # Two animation frames: laid out and painted at the new size.
+                self.page.evaluate("() => new Promise((ok) => requestAnimationFrame(() =>"
+                                   " requestAnimationFrame(() => ok(null))))")
         written = [out_png]
         self.page.screenshot(path=str(out_png), animations="allow")
         if outputs:

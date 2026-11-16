@@ -473,7 +473,12 @@ class Stream:
                 pass
 
 
-def train(stream: Stream, seconds: float, device: str) -> int:
+def told_to_stop(path: str | None) -> bool:
+    """--stop-file: the test ends the script by creating the file, not a timer."""
+    return path is not None and os.path.exists(path)
+
+
+def train(stream: Stream, seconds: float, device: str, stop_file: str | None = None) -> int:
     import torch
     torch.manual_seed(int(os.getpid()) % 1000)
     x = torch.randn(4096, 32, device=device)
@@ -482,7 +487,7 @@ def train(stream: Stream, seconds: float, device: str) -> int:
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
     end = time.monotonic() + seconds
     steps = 0
-    while time.monotonic() < end and not stream.closed.is_set():
+    while time.monotonic() < end and not stream.closed.is_set() and not told_to_stop(stop_file):
         if steps == 1:
             stream.start()   # connect once the model trains, so a listed session streams at once
         idx = torch.randint(0, x.shape[0], (256,), device=device)
@@ -523,7 +528,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--hub-file", required=True)
     ap.add_argument("--id", required=True)
-    ap.add_argument("--seconds", type=float, default=20)
+    ap.add_argument("--seconds", type=float, default=20, help="the longest the script trains")
+    ap.add_argument("--stop-file", help="train until this file exists (or --seconds pass)")
     ap.add_argument("--bench", action="store_true")
     ap.add_argument("--rate", type=float, default=60)
     ap.add_argument("--controls", action="store_true", help="take the controls of protocol 3.1")
@@ -559,7 +565,7 @@ def main() -> int:
     else:
         import torch
         device = "mps" if torch.backends.mps.is_available() else "cpu"
-        steps = train(stream, a.seconds, device)
+        steps = train(stream, a.seconds, device, a.stop_file)
     time.sleep(0.3)   # let the last values go out
     stream.stop()
     print(json.dumps({"id": a.id, "steps": steps, "loss_values": len(stream.loss),

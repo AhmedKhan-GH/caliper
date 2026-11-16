@@ -33,7 +33,11 @@
 // protocol's flow control: a slow viewer never blocks a producer). A send that
 // would take the queue past Options::max_queued_bytes is refused (false) and
 // queues nothing. Queued payloads are shared_ptr buffers, so one encoded
-// snapshot sent to many server connections is stored once.
+// snapshot sent to many server connections is stored once. A peer's ping is
+// answered with one pong; while it waits unsent, a newer ping's pong replaces
+// it, and a pong that would take the queue past max_queued_bytes closes the
+// connection with 1008 instead, so a peer that pings and never reads cannot
+// grow the queue.
 //
 // LIMITS. A message (all fragments together) larger than max_message_bytes
 // closes the connection with 1009; the default is the protocol's
@@ -74,6 +78,7 @@ enum : uint16_t {
     kCloseUnsupportedData = 1003,
     kCloseNoStatus = 1005,          // reported: the peer's close carried no code
     kCloseAbnormal = 1006,          // reported: the TCP connection ended without a close
+    kClosePolicy = 1008,            // a peer's ping when the send queue is full
     kCloseTooBig = 1009,            // a message over max_message_bytes
 };
 

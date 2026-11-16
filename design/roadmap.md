@@ -74,20 +74,19 @@ If agents need to see the screen sooner, the capture service moves earlier, not 
 
 [Streaming and embedding](streaming-and-embedding.md) gives the plan for what remains of using Caliper from other programs. The surfaces come in this order: Python scripts and notebooks, the web viewer, C++ embedding, Rust bindings and Swift. Data streaming is the only way Caliper reaches a browser.
 
-Built so far: the minimal embedding package; network streaming over wire protocol v3 (`docs/references/wire-protocol.md`), with data views, `caliper.serve()`, the notebook widgets and, from version 3.1, controls that let a viewer pause and step the training loop, change registered parameters and run registered actions; the Caliper app and `caliper-viewer` attached to a stream by its link; the hub, `caliper serve`, with `caliper.connect()`; and the browser views, where Caliper's own view layer, compiled to WebAssembly and drawn through WebGPU, draws every live view kind and the views written for the browser in TypeScript draw where WebGPU is absent. Network streaming (`docs/explanations/network-streaming.md`) describes the design and links the references.
+Built so far: the minimal embedding package; network streaming over wire protocol v3 (`docs/references/wire-protocol.md`), with data views, `caliper.serve()`, the notebook widgets and, from version 3.1, controls that let a viewer pause and step the training loop, change registered parameters and run registered actions; the Caliper app and `caliper-viewer` attached to a stream by its link; the hub, `caliper serve`, with `caliper.connect()`; and the browser views, where Caliper's own view layer, compiled to WebAssembly and drawn through WebGPU, draws every live view kind and the views written for the browser in TypeScript draw where WebGPU is absent. Network streaming (`docs/explanations/network-streaming.md`) describes the design and links the references. Measured on a quiet machine against the commit-matched control, streaming costs `python/bench/bench_net.py`'s training loop 1 to 2.5 % of its throughput for one view with one or two viewers (a 1024 by 1024 heatmap 1.8 %, the loss series 1 %, 100,000 points 2 to 2.5 %), 3 to 4.6 % for all three together, and at most 1 % with no viewer; the table is in Cost of streaming, in that page.
 
 Still to do, in this order:
 
-1. Confirm the cost of streaming under 3 % on a quiet machine. Its measurement is in Cost of streaming, in `docs/explanations/network-streaming.md`.
-2. Interventions on a model, such as ablating a head or steering along a direction, after the controls of wire protocol 3.1 (`docs/references/wire-protocol.md`). They come with the inspector work.
-3. The rest of the web viewer's order in [The web viewer](streaming-and-embedding.md#the-web-viewer):
+1. Interventions on a model, such as ablating a head or steering along a direction, after the controls of wire protocol 3.1 (`docs/references/wire-protocol.md`). They come with the inspector work.
+2. The rest of the web viewer's order in [The web viewer](streaming-and-embedding.md#the-web-viewer):
     1. For the views that are built: the clipboard and multi-touch in the canvas, a CI job for the module's checks, and testing in Safari, Firefox and on Windows.
     2. Every built-in view: points are built; the geometry path and ImPlot3D remain.
     3. The whole Caliper interface in a browser, with the landing screen, docking and the panes, storage in the browser's file system, DuckDB's WebAssembly build, and cross-origin isolation so that the page can use threads.
     4. Applets in the browser, through the split into computation and interface that [Phase 2](#phase-2-promote-proven-features) settles.
     5. The same WebGPU backend as the native fallback through Dawn, as [Renderers](#renderers) describes.
-4. WebTransport beside the WebSocket, and the dedicated security review that comes before any session leaves the machine.
-5. Then the rest of C++ embedding, Rust bindings and Swift.
+3. WebTransport beside the WebSocket, and the dedicated security review that comes before any session leaves the machine.
+4. Then the rest of C++ embedding, Rust bindings and Swift.
 
 ## Data and Cloud
 

@@ -13,8 +13,8 @@ theme:
   name: material
   # Icons, fonts and the stylesheet live outside docs/, which holds documents only.
   custom_dir: docs-theme
-  logo: assets/caliper-icon.svg
-  favicon: assets/caliper-icon.svg
+  logo: assets/caliper-icon-minerals.svg
+  favicon: assets/caliper-icon-minerals.svg
   font: false
   palette:
     scheme: slate

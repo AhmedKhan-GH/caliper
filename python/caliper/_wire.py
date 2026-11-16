@@ -1277,6 +1277,42 @@ def _dv_bad(msg: str):
     raise MessageError(ERR_BAD_DATA_VIEW, msg)
 
 
+# A SNAPSHOT is one frame of at most MAX_FRAME_BYTES, and its head may take
+# the fixed header, a section table of MAX_SECTIONS entries, metadata of up to
+# MAX_META_BYTES and each section's alignment padding; this is what is left
+# for its payload. Only a heatmap or an image (4 bytes a cell: float32, or
+# RGBA8) near LIMIT_MAX_EXTENT on both sides can exceed it: points at
+# LIMIT_MAX_POINTS with labels take 16 MB and a histogram at MAX_BINS 256 KiB.
+MAX_PAYLOAD_BYTES = (MAX_FRAME_BYTES - MAX_META_BYTES - HEADER_BYTES
+                     - MAX_SECTIONS * (4 + SECTION_ALIGN - 1))
+
+
+def payload_frame_error(kind, max_extent: int, extent_for) -> str | None:
+    """The data view rule that follows from MAX_FRAME_BYTES, shared by this
+    reference resolver and Caliper LIB's (caliper._dataview): None when the
+    payload of a data view fits one frame, else the refusal's message, which
+    names the largest ``max_extent`` that would fit. ``kind`` is a Kind or its
+    name; ``extent_for(m)`` returns the payload's extent with ``max_extent``
+    ``m`` (and may raise when that budget breaks another rule)."""
+    if kind not in (Kind.HEATMAP, Kind.IMAGE, "heatmap", "image"):
+        return None
+
+    def fits(m: int) -> bool:
+        try:
+            return 4 * math.prod(extent_for(m)) <= MAX_PAYLOAD_BYTES
+        except Exception:
+            return False
+    extent = extent_for(max_extent)
+    if 4 * math.prod(extent) <= MAX_PAYLOAD_BYTES:
+        return None
+    lo, hi = 1, max_extent
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        lo, hi = (mid, hi) if fits(mid) else (lo, mid - 1)
+    return (f"a {extent[0]} by {extent[1]} payload is too large to send in one frame; "
+            f"ask for a smaller max_extent, at most {lo} here")
+
+
 def _merge(request: dict | None, default: dict | None) -> dict:
     """Members the request leaves out come from the view's default data view;
     budget members are merged one by one."""
@@ -1408,6 +1444,11 @@ def resolve_data_view(view: dict, request: dict | None, *,
     if tile is not None:
         out["tile"] = tile
     payload_layout(view, out)                    # the result must fit the hard limits
+    if "max_extent" in rbudget:
+        err = payload_frame_error(kind, rbudget["max_extent"], lambda m: payload_layout(
+            view, dict(out, budget=dict(rbudget, max_extent=m)))["extent"])
+        if err is not None:
+            _dv_bad(err)
     return out
 
 

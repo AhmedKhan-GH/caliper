@@ -117,10 +117,21 @@ struct Gesture {
     bool rect = false;               // points: shift + alt selects a rectangle
 };
 
+// The 3-D points camera's default, the same in every renderer
+// (web/src/views/camera.ts, CAMERA): a three-quarter view from azimuth kCamAz
+// and elevation kCamEl (radians; the eye at target + dist * (cos el cos az,
+// sin el, cos el sin az)), at the distance that fits the data's bounding
+// sphere into the narrower field of view with kCamFit to spare, for the box's
+// labels. The rotate tool turns the azimuth at kRotateRate radians a second.
+constexpr float kCamAz = 0.95f;
+constexpr float kCamEl = 0.42f;
+constexpr float kCamFit = 1.15f;
+constexpr float kRotateRate = 0.35f;
+
 struct Camera {
     // 3-D orbit around (tx,ty,tz); 2-D: centre (tx,ty), half height half_h.
     float tx = 0.0f, ty = 0.0f, tz = 0.0f;
-    float dist = 3.0f, az = 0.785398f, el = 0.5f;
+    float dist = 3.0f, az = kCamAz, el = kCamEl;
     float radius = 1.0f;
     float half_h = 1.0f;
 };
@@ -164,6 +175,17 @@ struct View {
     float       bbox[6] = {};                 // xmin,xmax,ymin,ymax,zmin,zmax (stats)
     bool        fit_pending = true;
     Camera      cam;
+    // 3-D: turning slowly about the up axis (the header's rotate tool, off
+    // until pressed; any drag stops it), and the depth cues (nearer points
+    // larger, farther points dimmer; on unless set_toggle "depth" turns them
+    // off). The data's box, for the frame around the points, per update, and
+    // the box's tick labels last frame (tests).
+    bool        auto_rotate = false;
+    bool        depth_cues = true;
+    float       box[6] = {};
+    bool        have_box = false;
+    uint64_t    box_for = ~0ull;
+    std::string box_labels;
     bool        dirty = true;                 // redraw the render target this frame
     // hover cache
     float       hover_mx = -1e30f, hover_my = -1e30f;
@@ -303,8 +325,9 @@ void window_after(CaliperCore* core, const std::string& name);
 // appears, so a view that appears never takes a click from the page.
 constexpr ImGuiWindowFlags kWindowFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoFocusOnAppearing;
 
-// A header toggle of view `name`, set by the page: "follow" (series) or
-// "log" (series, histogram). False: no such view or toggle. The views report
+// A header toggle of view `name`, set by the page: "follow" (series), "log"
+// (series, histogram) or "rotate" (points), or "depth", the depth cues of 3-D
+// points, which no header shows. False: no such view or toggle. The views report
 // their own changes of a toggle to the sink as type "toggle" with detail
 // {"name": ..., "on": ...}, which a host keeps from the producer.
 bool set_toggle(CaliperCore* core, const char* name, const char* toggle, bool on);

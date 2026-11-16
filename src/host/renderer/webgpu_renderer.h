@@ -132,8 +132,17 @@ private:
         std::function<void(std::vector<uint8_t>)> done;
     };
 
+    // The colour thresholds of a points draw's range (colormap_thresholds), for kPoints.
+    struct PointThresholds {
+        uint32_t key[2] = {};   // the bits of vmin and vmax
+        uint32_t mode = 0;
+        float T[256] = {};
+        bool valid = false;
+    };
+
     Tex* find(uint64_t id);
     void free_tex(Tex& t);
+    const PointThresholds& point_thresholds(float vmin, float vmax);
     bool init_layer();
     caliper_gfx::Pipeline points_pipeline(bool depth_target, uint32_t depth_flags, bool cmap);
     void configure_surface(int w, int h);
@@ -155,6 +164,8 @@ private:
     caliper_gfx::Pipeline points_pipes_[10] = {};   // [(depth target ? 1 + flags : 0) * 2 + colormap]
     caliper_gfx::BindGroup cmap_frame_group_, points_group_;
     caliper_gfx::Buffer zero16_;                    // the stride-0 value stream of a flat draw
+    PointThresholds point_th_[4];                   // the last ranges' thresholds, in turn
+    uint32_t point_th_next_ = 0;
 
     std::unordered_map<uint64_t, Tex> tex_;
     std::unordered_map<uint64_t, Alloc> allocs_;

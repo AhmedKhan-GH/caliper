@@ -89,6 +89,7 @@ function render({ model, el }) {
     socket.onmessage = (event) => {
       if (typeof event.data === "string") return;
       received += 1;
+      host.dataset.received = String(received);   // for the checks, which wait on frames received
       draw(event.data);
     };
     socket.onclose = () => {
@@ -97,7 +98,10 @@ function render({ model, el }) {
   }
 
   const timer = setInterval(() => {
-    if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ received }));
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ received }));
+      host.dataset.reported = String(received);   // the count the server has been sent
+    }
   }, 1000);
 
   model.on("change:src", () => socket && socket.close());

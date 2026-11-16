@@ -69,10 +69,39 @@ _log = logging.getLogger("caliper.net")
 _log.addHandler(logging.NullHandler())
 _log.propagate = False
 
+
+class _RedactToken(logging.Filter):
+    """The websockets server logs request paths, which carry the session token:
+    a handler attached to "caliper.net" sees them with the token as ``...``."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        clean = redact(msg)
+        if clean != msg:
+            record.msg, record.args = clean, None
+        if record.exc_info and record.exc_info[1] is not None:
+            text = logging.Formatter().formatException(record.exc_info)
+            if redact(text) != text:
+                record.msg = f"{record.msg}\n{redact(text)}"
+                record.exc_info = record.exc_text = None
+        return True
+
+
+_log.addFilter(_RedactToken())
+
 _ORIGIN_LOOPBACK = re.compile(r"(?i)^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?$")
 _ORIGIN_VSCODE = re.compile(r"(?i)^vscode-webview://[^/\s?#@]+$")
 _NOT_BUILT = (b"<!doctype html><meta charset=utf-8><title>Caliper</title>"
               b"<p>The Caliper viewer assets are not built.</p>\n")
+
+
+# The control frames waiting to be sent on one connection (as caliper._netio).
+MAX_CONTROL_FRAMES = 65536
+MAX_CONTROL_BYTES = 16 << 20
+CLOSE_OVERFLOW = 1008                # as the hub closes an overflowing send queue
 
 
 class _Fatal(Exception):
@@ -81,6 +110,17 @@ class _Fatal(Exception):
     def __init__(self, code: int, reason: str, error: str | None = None):
         super().__init__(reason)
         self.code, self.reason, self.error = code, reason, error
+
+
+def redact(text: str, token: str | None = None) -> str:
+    """``text`` (a link, or a message that may quote one) with the value of
+    every ``token=`` query parameter, and ``token`` itself when given, written
+    as ``...``: a repr, an error or a log line never repeats the session
+    token, which only the link that serve() prints carries."""
+    out = re.sub(r"(?<=[?&]" + _wire.TOKEN_PARAM + r"=)[^&#\s'\"]*", "...", str(text))
+    if token:
+        out = out.replace(token, "...")
+    return out
 
 
 def origin_ok(origin: str | None) -> bool:
@@ -259,6 +299,9 @@ class Link:
         self.id = next(_link_ids)
         self.peer = peer
         self.control: collections.deque = collections.deque()
+        self.control_bytes = 0                   # the bytes of the frames in control
+        self.overflow = False                    # past the limits below: closed with 1008
+        self.pong: int | None = None             # the PONG to send, to the latest PING only
         self.subs: dict[int, Sub] = {}
         self.attached = False
         self.follows_default = True
@@ -269,11 +312,29 @@ class Link:
 
     # -- queueing -------------------------------------------------------------
     def queue(self, msg) -> None:
-        self.control.append(_wire.encode(msg))
+        self.push(_wire.encode(msg))
+
+    def push(self, frame) -> bool:
+        """Queue an encoded control frame (from any thread). A peer that keeps
+        sending while it reads nothing fills the queue: past MAX_CONTROL_FRAMES
+        frames or MAX_CONTROL_BYTES bytes it is dropped and the connection is
+        closed with 1008, as the hub closes an overflowing send queue."""
+        if self.overflow:
+            return False
+        if len(self.control) >= MAX_CONTROL_FRAMES or self.control_bytes + len(frame) > MAX_CONTROL_BYTES:
+            self.overflow = True
+            self.control.clear()
+            self.control_bytes = 0
+            self.p.counters["overflow_closed"] += 1
+            self.wake.set()
+            return False
+        self.control.append(frame)
+        self.control_bytes += len(frame)
         self.wake.set()
+        return True
 
     def queue_views(self) -> None:
-        if _VIEWS not in self.control:
+        if _VIEWS not in self.control and not self.overflow:
             self.control.append(_VIEWS)
         self.wake.set()
 
@@ -320,7 +381,8 @@ class Link:
             return
         t = type(msg)
         if t is _wire.Ping:
-            self.queue(_wire.Pong(msg.nonce))
+            self.pong = msg.nonce                # a PING flood leaves one PONG, to the latest
+            self.wake.set()
         elif t is _wire.Pong:
             pass
         elif t is _wire.Subscribe:
@@ -426,11 +488,17 @@ class Link:
 
     # -- outgoing ---------------------------------------------------------------
     def next_frame(self, now: float):
+        if self.overflow:
+            raise _Fatal(CLOSE_OVERFLOW, "control queue full")
+        if self.pong is not None:
+            nonce, self.pong = self.pong, None
+            return _wire.encode(_wire.Pong(nonce)), None
         if self.control:
             item = self.control.popleft()
             if item is _VIEWS:
                 msg = self.p.views_msg(self) if self.attached else _wire.Views([], None)
                 return _wire.encode(msg), None
+            self.control_bytes -= len(item)
             return item, None
         wait = None
         # series before snapshots; every subscription at its own rate
@@ -473,8 +541,13 @@ class Link:
         if best is not None:
             snap, best.snap = best.snap, None
             best.last_sent = now
+            try:
+                frame = self._snapshot_frame(best.sub, snap)
+            except _wire.WireError:              # over the frame limit: counted, not sent
+                self.p.counters["encode_failed"] += 1
+                return self.next_frame(now)
             self.stats["snapshots_sent"] += 1
-            return self._snapshot_frame(best.sub, snap), None
+            return frame, None
         return None, wait
 
     @staticmethod
@@ -977,10 +1050,14 @@ class _Listener:
             if isinstance(exc, _Fatal):
                 if exc.error and exc.code != _wire.CLOSE_NORMAL:
                     try:
-                        await ws.send(_wire.encode(_wire.Error(_wire.ERR_BAD_REQUEST, exc.error, True)))
+                        await asyncio.wait_for(
+                            ws.send(_wire.encode(_wire.Error(_wire.ERR_BAD_REQUEST, exc.error, True))), 1.0)
                     except Exception:
                         pass
-                await ws.close(exc.code, exc.reason[:120])
+                try:                                 # a peer that reads nothing cannot take the close
+                    await asyncio.wait_for(ws.close(exc.code, exc.reason[:120]), 3.0)
+                except asyncio.TimeoutError:
+                    ws.transport.abort()
             elif exc is not None:
                 raise exc
         await ws.close()
@@ -1009,6 +1086,8 @@ class _Listener:
             if isinstance(msg, str):
                 raise _Fatal(_wire.CLOSE_UNSUPPORTED_DATA, "binary frames only")
             link.handle(msg)
+            if link.overflow:
+                raise _Fatal(CLOSE_OVERFLOW, "control queue full")
 
     async def _writer(self, ws, link: Link) -> None:
         mono = time.monotonic
@@ -1226,7 +1305,8 @@ class NetServer:
         links = []
         for ln in list(p.links):
             links.append({"id": ln.id, "peer": ln.peer, "attached": ln.attached,
-                          "subscriptions": len(ln.subs), **dict(ln.stats)})
+                          "subscriptions": len(ln.subs), "control_frames": len(ln.control),
+                          "control_bytes": ln.control_bytes, **dict(ln.stats)})
         with self.ring.lock:
             views = {n: {"id": v.id, "kind": v.kind, "groups": len(v.groups), "seq": v.seq}
                      for n, v in self.ring.views.items()}
@@ -1298,7 +1378,7 @@ class NetServer:
 
     def __repr__(self) -> str:
         state = "closed" if self.closed else "running"
-        return f"<caliper.NetServer {self.url} {state}>"
+        return f"<caliper.NetServer {redact(self.url)} {state}>"
 
 
 class NetRoute:
@@ -1441,7 +1521,7 @@ def hub_stream_url(url: str | None = None) -> str:
     token = parse_qs(u.query).get(_wire.TOKEN_PARAM, [""])[0]
     if u.scheme not in ("ws", "http") or not u.hostname or not token:
         raise ValueError(f"caliper.connect(): expected ws://127.0.0.1:<port>/v3/stream?token=<token> "
-                         f"or the hub's http:// link, got {src!r}")
+                         f"or the hub's http:// link, got {redact(src)!r}")
     if u.hostname not in ("127.0.0.1", "localhost"):
         raise ValueError("caliper.connect(): the hub must be on this machine (127.0.0.1)")
     port = u.port or 80

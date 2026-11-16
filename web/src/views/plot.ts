@@ -196,7 +196,8 @@ export function drawAxes(ctx: CanvasRenderingContext2D, p: Plot2D, o: AxisOption
   ctx.restore();
 }
 
-function fmtTick(v: number, step: number): string {
+/** A tick's label: fixed decimals to the step, or exponential far from 1. */
+export function fmtTick(v: number, step: number): string {
   if (Math.abs(v) >= 1e5 || (Math.abs(v) < 1e-3 && v !== 0)) return fmt(v, 3);
   const decimals = Math.max(0, -Math.floor(Math.log10(step) + 1e-9));
   return v.toFixed(Math.min(6, decimals));

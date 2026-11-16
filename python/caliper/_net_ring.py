@@ -347,8 +347,11 @@ class NetRing:
         # The calls after the tick in its step still reach due(), which keeps
         # their views counted as called (v.seen), so that a view called after
         # the tick completed is waited for by the next one; the first call of
-        # a view the tick served (the next step) makes calls wait.
-        self.tick_views = {p.view for p in t.pending}
+        # a view or a series the tick served (the next step) makes calls wait.
+        # A tick of series values alone counts too: else the views called
+        # after the series in each step would never reach the ring again.
+        self.tick_views = {p.view for p in t.pending} | \
+            {x.name for x in t.served if isinstance(x, SeriesState)}
         self.next_due = 0.0 if self.tick_views else self.tick_next
         ev = None
         if t.mps:
@@ -505,6 +508,8 @@ class NetRing:
         s.seen = now
         if s.watched:
             if self.tick is None and now < self.tick_next and s.nref < SERIES_CAPACITY:
+                if name in self.tick_views:  # the next step began: calls wait for the tick
+                    self.next_due = self.tick_next
                 return True                  # the common step: until the next tick
             self._tick_series(s, now)
         elif s.nref >= SERIES_CHUNK or now - s.flush_t >= SERIES_IDLE_FLUSH_S:

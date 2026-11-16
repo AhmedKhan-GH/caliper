@@ -100,14 +100,38 @@ jobs:
           "$RUNNER_TEMP/caliper_colormap_cases" "$RUNNER_TEMP/colormap_cases.bin"
           echo "CALIPER_COLORMAP_CASES=$RUNNER_TEMP/colormap_cases.bin" >> "$GITHUB_ENV"
       # The element with the fresh module from python/caliper/_web/, and without it
-      # (fallback.spec.ts). The webgpu project needs a GPU and is left out.
-      - name: Test the web package
+      # (fallback.spec.ts). The webgpu project needs a GPU and is left out. The
+      # swiftshader project runs first and on its own, one test at a time, and
+      # only the specs that draw with WebGPU; the canvas2d project runs after it,
+      # also when it failed, with every spec, the protocol and round-trip specs
+      # among them (playwright.config.ts sets both from CI). Each step logs the
+      # runner's cores, and Playwright's first line the workers it uses.
+      # On a failure the HTML report and a trace of each failed test are kept
+      # (uploaded below); the report never opens a browser.
+      - name: Build the web package for its tests
+        id: web-build
         working-directory: web
         run: |
           npm ci
           npx playwright install chromium-headless-shell
           node build.mjs --test
-          npx playwright test --project=swiftshader --project=canvas2d
+      - name: Test the web package on SwiftShader
+        working-directory: web
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/swiftshader
+        run: |
+          echo "This runner has $(sysctl -n hw.ncpu) cores."
+          npx playwright test --project=swiftshader --reporter=list,html --trace=retain-on-failure --output=test-results/swiftshader
+      - name: Test the web package on Canvas 2D
+        if: ${{ !cancelled() && steps.web-build.outcome == 'success' }}
+        working-directory: web
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/canvas2d
+        run: |
+          echo "This runner has $(sysctl -n hw.ncpu) cores."
+          npx playwright test --project=canvas2d --reporter=list,html --trace=retain-on-failure --output=test-results/canvas2d
       # The TypeScript bundle stays checked in; it must match a fresh build of web/.
       - run: '"$CALIPER_PYTHON" scripts/build_web.py --check --no-install'
       - run: '"$CALIPER_PYTHON" -m pytest --noconftest -q python/tests/test_assets.py python/tests/test_wasm_scripts.py'
@@ -121,12 +145,15 @@ jobs:
             python/caliper/_web/caliper-views.js
             python/caliper/_web/caliper-views.wasm
           if-no-files-found: error
+      # The checks' screenshots, Playwright's HTML report and the failed tests'
+      # traces and screenshots (npx playwright show-trace reads a trace).
       - if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: browser-views-screenshots
+          name: browser-views-report
           path: |
             ${{ runner.temp }}/shots
+            web/playwright-report
             web/test-results
           if-no-files-found: ignore
 
@@ -171,6 +198,8 @@ jobs:
           for f in caliper-views-loader.js caliper-views.js caliper-views.wasm; do
             echo "$listing" | grep -q "caliper/_web/$f\$" || { echo "the wheel lacks $f"; exit 1; }
           done
+      # The wheel's tag and every extension and executable in it say macOS 14.0.
+      - run: python3 scripts/check_macos_min.py 14.0 "$RUNNER_TEMP"/dist/caliper-*.whl
       - uses: actions/upload-artifact@v6
         with:
           name: caliper-wheel

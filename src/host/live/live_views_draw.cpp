@@ -431,7 +431,7 @@ std::string fit_text(const std::string& s, float w) {
     return {};
 }
 
-enum Tool : unsigned { kToolPause = 1, kToolLog = 2, kToolFollow = 4 };
+enum Tool : unsigned { kToolPause = 1, kToolLog = 2, kToolFollow = 4, kToolRotate = 8 };
 
 // A header tool: a word in a thin outlined box, as the browser element's
 // tool buttons; bronze while pressed. True when clicked.
@@ -455,7 +455,8 @@ float tool_width(const char* text) { return ImGui::CalcTextSize(text).x + 12.0f;
 
 // The view's header, as the browser element's: the name on the left (ImGui's
 // title bar draws it), then on the right a compact info string, the tools
-// (pause for every view, log for plots, follow for a series) and a status
+// (pause for every view, log for plots, follow for a series, rotate for 3-D
+// points) and a status
 // dot: bronze while the stream is live and the view has data, an outline
 // while it waits for its first data, grey once the stream has ended. The
 // header lives in the window's title bar; in a docked window, whose tab
@@ -507,6 +508,7 @@ void draw_header(CaliperCore* core, CaliperLiveViewsState* S, View& v, unsigned 
         {kToolPause, "##caliper.tool.pause", S->paused ? "paused" : "pause", S->paused},
         {kToolLog, "##caliper.tool.log", "log", v.log_y},
         {kToolFollow, "##caliper.tool.follow", "follow", v.follow},
+        {kToolRotate, "##caliper.tool.rotate", "rotate", v.auto_rotate},
     };
     float tools_w = 0.0f;
     for (const T& t : all)
@@ -525,6 +527,9 @@ void draw_header(CaliperCore* core, CaliperLiveViewsState* S, View& v, unsigned 
                 } else if (t.bit == kToolFollow) {
                     set_follow(S, v, !v.follow);
                     if (v.follow) v.fit_once = true;
+                } else if (t.bit == kToolRotate) {
+                    v.auto_rotate = !v.auto_rotate;
+                    emit(S, v, "toggle", Detail().text("name", "rotate").flag("on", v.auto_rotate).str());
                 }
             }
             x += tool_width(t.text) + 4.0f;
@@ -581,7 +586,7 @@ struct Pick {
 // whose drawn square covers the cursor wins (front-most first), else the one
 // nearest in screen distance within `radius` px. Sampled above kHoverBudget.
 Pick pick_point(const View& v, const float mvp[16], ImVec2 p0, ImVec2 sz, ImVec2 m,
-                float half_px, float radius, uint64_t* stride_out) {
+                float half_px, float att_ref, float radius, uint64_t* stride_out) {
     Pick best;
     const float* P = (const float*)v.cur.pos_cpu;
     const uint64_t n = v.cur.n;
@@ -601,7 +606,11 @@ Pick pick_point(const View& v, const float mvp[16], ImVec2 p0, ImVec2 sz, ImVec2
         const float sx = p0.x + (cx / cw * 0.5f + 0.5f) * sz.x;
         const float sy = p0.y + (0.5f - cy / cw * 0.5f) * sz.y;
         const float dx = sx - m.x, dy = sy - m.y;
-        if (std::fabs(dx) <= half_px && std::fabs(dy) <= half_px) {
+        // With the depth cues a point is drawn larger or smaller by its distance.
+        const float half = att_ref > 0.0f
+            ? (half_px - 1.0f) * std::clamp(att_ref / cw, caliper_host::kPointAttenMin, caliper_host::kPointAttenMax) + 1.0f
+            : half_px;
+        if (std::fabs(dx) <= half && std::fabs(dy) <= half) {
             if (bucket > 0 || nz < key) { bucket = 0; key = nz; best = {(int64_t)i, sx, sy}; }
             continue;
         }
@@ -735,11 +744,268 @@ uint32_t dimmed(uint32_t c, uint32_t ground) {
     return out;
 }
 
+// ---- the box around 3-D points ------------------------------------------------
+// An ImPlot3D-style frame around the data, so a still image reads in depth:
+// the box's twelve edges, tick marks and labels on one silhouette edge of
+// each axis with the axis's name, and a faint grid on the floor, the face
+// across the up axis that lies behind the data. The back layer (the edges
+// between two faces turned away from the camera, and the grid) is drawn
+// under the points' image, whose ground is transparent in 3-D, and the front
+// layer (every other edge, the ticks and the labels) over it: everything in
+// the box is in front of its back faces and behind its front faces, so the
+// order gives the depth without a depth buffer. web/src/views/box3d.ts draws
+// the same frame for the TypeScript views.
+struct BoxInk {
+    ImU32 edge, back, grid, tick, text;
+    ImFont* font;
+    float font_px, k;   // the type's ImGui size; the layout's scale (10.5 px = 1)
+};
+
+struct Clip4 { float x, y, z, w; };
+
+Clip4 clip_of(const float m[16], V3 p) {
+    return {m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12], m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13],
+            m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14], m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15]};
+}
+
+ImVec2 screen_of(const Clip4& c, ImVec2 p0, ImVec2 sz) {
+    return ImVec2(p0.x + (c.x / c.w * 0.5f + 0.5f) * sz.x, p0.y + (0.5f - c.y / c.w * 0.5f) * sz.y);
+}
+
+// A segment's part in front of the near plane (clip z >= 0), on screen.
+bool clip_segment(Clip4 a, Clip4 b, ImVec2 p0, ImVec2 sz, ImVec2* sa, ImVec2* sb) {
+    if (a.z < 0.0f && b.z < 0.0f) return false;
+    auto lerp = [](const Clip4& p, const Clip4& q, float t) {
+        return Clip4{p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t, p.z + (q.z - p.z) * t, p.w + (q.w - p.w) * t};
+    };
+    if (a.z < 0.0f) a = lerp(a, b, a.z / (a.z - b.z));
+    else if (b.z < 0.0f) b = lerp(b, a, b.z / (b.z - a.z));
+    if (!(a.w > 1e-9f) || !(b.w > 1e-9f)) return false;
+    *sa = screen_of(a, p0, sz);
+    *sb = screen_of(b, p0, sz);
+    return true;
+}
+
+// Round ticks in [lo, hi], about n of them (web/src/views/plot.ts, ticks()).
+std::vector<double> nice_ticks(double lo, double hi, int n, double* step_out) {
+    std::vector<double> out;
+    *step_out = 1.0;
+    if (!(hi > lo) || !std::isfinite(lo) || !std::isfinite(hi)) return out;
+    const double raw = (hi - lo) / std::max(1, n);
+    const double mag = std::pow(10.0, std::floor(std::log10(raw)));
+    const double r = raw / mag;
+    const double step = (r < 1.5 ? 1 : r < 3 ? 2 : r < 7 ? 5 : 10) * mag;
+    *step_out = step;
+    for (double t = std::ceil(lo / step) * step; t <= hi + step * 1e-9 && out.size() < 32; t += step)
+        out.push_back(std::fabs(t) < step * 1e-9 ? 0.0 : t);
+    return out;
+}
+
+// A tick's label as the browser's axes print it (plot.ts, fmtTick).
+std::string tick_text(double v, double step) {
+    char b[48];
+    if (std::fabs(v) >= 1e5 || (std::fabs(v) < 1e-3 && v != 0.0)) {
+        std::snprintf(b, sizeof b, "%.2e", v);   // JavaScript's toExponential(2), "e+05" as "e5"
+        const std::string s = b;
+        const size_t e = s.find('e');
+        if (e == std::string::npos) return s;
+        std::string mant = s.substr(0, e), ex = s.substr(e + 1);
+        const bool neg = !ex.empty() && ex[0] == '-';
+        if (!ex.empty() && (ex[0] == '+' || ex[0] == '-')) ex.erase(0, 1);
+        while (ex.size() > 1 && ex[0] == '0') ex.erase(0, 1);
+        return mant + "e" + (neg ? "-" : "") + ex;
+    }
+    const int decimals = std::min(6, std::max(0, (int)-std::floor(std::log10(step) + 1e-9)));
+    std::snprintf(b, sizeof b, "%.*f", decimals, v);
+    return b;
+}
+
+// The box's frame for one frame: its corners in clip space, which faces are
+// turned towards the camera, the edge of each axis that carries its labels
+// and that axis's ticks.
+struct BoxFrame {
+    float b[6] = {};
+    float m[16] = {};
+    Clip4 corner[8] = {};
+    bool front[3][2] = {};
+    int label_edge[3] = {-1, -1, -1};
+    std::vector<double> ticks[3];
+    double step[3] = {1.0, 1.0, 1.0};
+    int floor_side = 0;
+    ImVec2 centre;
+};
+
+int corner_index(int a, int at, int a1, int u, int a2, int w) {
+    int bits[3];
+    bits[a] = at;
+    bits[a1] = u;
+    bits[a2] = w;
+    return bits[0] | (bits[1] << 1) | (bits[2] << 2);
+}
+
+V3 box_point(const float b[6], int a, double t, int a1, int u, int a2, int w) {
+    float c[3];
+    c[a] = (float)t;
+    c[a1] = b[2 * a1 + u];
+    c[a2] = b[2 * a2 + w];
+    return {c[0], c[1], c[2]};
+}
+
+BoxFrame box_frame(const float box[6], V3 eye, const float mvp[16], ImVec2 p0, ImVec2 sz) {
+    BoxFrame f;
+    std::memcpy(f.b, box, sizeof f.b);
+    std::memcpy(f.m, mvp, sizeof f.m);
+    for (int i = 0; i < 8; ++i)
+        f.corner[i] = clip_of(mvp, V3{box[(i & 1) ? 1 : 0], box[(i & 2) ? 3 : 2], box[(i & 4) ? 5 : 4]});
+    const float e[3] = {eye.x, eye.y, eye.z};
+    for (int a = 0; a < 3; ++a) {
+        f.front[a][0] = e[a] < box[2 * a];       // the face at the low end faces -a
+        f.front[a][1] = e[a] > box[2 * a + 1];
+    }
+    // The floor: the low face across the up axis, or the high one when the
+    // camera is below the box, whichever is behind the data.
+    f.floor_side = eye.y < box[2] ? 1 : 0;
+    const Clip4 cc = clip_of(mvp, V3{0.5f * (box[0] + box[1]), 0.5f * (box[2] + box[3]), 0.5f * (box[4] + box[5])});
+    f.centre = cc.w > 1e-9f ? screen_of(cc, p0, sz) : ImVec2(p0.x + sz.x * 0.5f, p0.y + sz.y * 0.5f);
+    for (int a = 0; a < 3; ++a) {
+        const int a1 = (a + 1) % 3, a2 = (a + 2) % 3;
+        float best = 0.0f, len = 0.0f;
+        for (int k = 0; k < 4; ++k) {
+            const int u = k & 1, w = k >> 1;
+            if ((int)f.front[a1][u] + (int)f.front[a2][w] != 1) continue;   // a silhouette edge
+            const Clip4 A = f.corner[corner_index(a, 0, a1, u, a2, w)], B = f.corner[corner_index(a, 1, a1, u, a2, w)];
+            if (A.z < 0.0f || B.z < 0.0f || !(A.w > 1e-9f) || !(B.w > 1e-9f)) continue;
+            const ImVec2 sa = screen_of(A, p0, sz), sb = screen_of(B, p0, sz);
+            // x and z label their lowest silhouette edge on screen, y its leftmost.
+            const float key = a == 1 ? -(sa.x + sb.x) : sa.y + sb.y;
+            if (f.label_edge[a] < 0 || key > best) {
+                best = key;
+                f.label_edge[a] = k;
+                len = std::hypot(sb.x - sa.x, sb.y - sa.y);
+            }
+        }
+        if (f.label_edge[a] >= 0 && len < 24.0f) f.label_edge[a] = -1;   // too short to label
+        // About one tick every 50 px along the edge.
+        const int n = f.label_edge[a] >= 0 ? std::clamp((int)std::floor(len / 50.0f), 3, 8) : 4;
+        f.ticks[a] = nice_ticks(box[2 * a], box[2 * a + 1], n, &f.step[a]);
+    }
+    return f;
+}
+
+// The back layer: the grid on the floor at the x and z ticks, and the back edges.
+void draw_box_back(ImDrawList* dl, const BoxFrame& f, ImVec2 p0, ImVec2 sz, const BoxInk& ink) {
+    ImVec2 sa, sb;
+    const int fs = f.floor_side;
+    for (int ax : {0, 2}) {
+        const int other = ax == 0 ? 2 : 0;
+        for (double t : f.ticks[ax]) {
+            const V3 a = box_point(f.b, ax, t, 1, fs, other, 0);
+            const V3 b = box_point(f.b, ax, t, 1, fs, other, 1);
+            if (clip_segment(clip_of(f.m, a), clip_of(f.m, b), p0, sz, &sa, &sb)) dl->AddLine(sa, sb, ink.grid, 1.0f);
+        }
+    }
+    for (int a = 0; a < 3; ++a) {
+        const int a1 = (a + 1) % 3, a2 = (a + 2) % 3;
+        for (int k = 0; k < 4; ++k) {
+            const int u = k & 1, w = k >> 1;
+            if (f.front[a1][u] || f.front[a2][w]) continue;
+            if (clip_segment(f.corner[corner_index(a, 0, a1, u, a2, w)], f.corner[corner_index(a, 1, a1, u, a2, w)],
+                             p0, sz, &sa, &sb))
+                dl->AddLine(sa, sb, ink.back, 1.0f);
+        }
+    }
+}
+
+// The front layer: the other edges, the ticks and their labels pointing away
+// from the box's centre, and each axis's name beyond them; a label that would
+// overlap the one before it is left out. `labels` gets the labels drawn, as
+// "x=-4|0|4;y=...;z=..." (box3d.ts reports the same).
+void draw_box_front(ImDrawList* dl, const BoxFrame& f, ImVec2 p0, ImVec2 sz, const BoxInk& ink, std::string* labels) {
+    ImVec2 sa, sb;
+    labels->clear();
+    for (int a = 0; a < 3; ++a) {
+        const int a1 = (a + 1) % 3, a2 = (a + 2) % 3;
+        for (int k = 0; k < 4; ++k) {
+            const int u = k & 1, w = k >> 1;
+            if (!f.front[a1][u] && !f.front[a2][w]) continue;
+            if (clip_segment(f.corner[corner_index(a, 0, a1, u, a2, w)], f.corner[corner_index(a, 1, a1, u, a2, w)],
+                             p0, sz, &sa, &sb))
+                dl->AddLine(sa, sb, ink.edge, 1.0f);
+        }
+    }
+    auto size_of = [&](const char* t) {
+        return ink.font ? ink.font->CalcTextSizeA(ink.font_px, FLT_MAX, 0.0f, t) : ImGui::CalcTextSize(t);
+    };
+    for (int a = 0; a < 3; ++a) {
+        const int k = f.label_edge[a];
+        if (k < 0) continue;
+        const int a1 = (a + 1) % 3, a2 = (a + 2) % 3, u = k & 1, w = k >> 1;
+        const ImVec2 ea = screen_of(f.corner[corner_index(a, 0, a1, u, a2, w)], p0, sz);
+        const ImVec2 eb = screen_of(f.corner[corner_index(a, 1, a1, u, a2, w)], p0, sz);
+        const ImVec2 mid((ea.x + eb.x) * 0.5f, (ea.y + eb.y) * 0.5f);
+        float dx = mid.x - f.centre.x, dy = mid.y - f.centre.y;
+        const float dlen = std::hypot(dx, dy);
+        if (dlen > 1e-3f) { dx /= dlen; dy /= dlen; } else { dx = 0.0f; dy = 1.0f; }
+        const float al_x = 0.5f - 0.5f * dx, al_y = 0.5f - 0.5f * dy;
+        float reach = 0.0f;
+        ImVec2 last_min(1e30f, 1e30f), last_max(-1e30f, -1e30f);
+        std::string drawn;
+        for (double t : f.ticks[a]) {
+            const Clip4 c = clip_of(f.m, box_point(f.b, a, t, a1, u, a2, w));
+            if (!(c.w > 1e-9f) || c.z < 0.0f) continue;
+            const ImVec2 s = screen_of(c, p0, sz);
+            dl->AddLine(s, ImVec2(s.x + dx * 4.0f * ink.k, s.y + dy * 4.0f * ink.k), ink.tick, 1.0f);
+            const std::string text = tick_text(t, f.step[a]);
+            const ImVec2 ts = size_of(text.c_str());
+            const ImVec2 at(s.x + dx * 7.0f * ink.k - ts.x * al_x, s.y + dy * 7.0f * ink.k - ts.y * al_y);
+            const ImVec2 bmax(at.x + ts.x, at.y + ts.y);
+            if (at.x < last_max.x + 3.0f && bmax.x > last_min.x - 3.0f && at.y < last_max.y && bmax.y > last_min.y)
+                continue;
+            dl->AddText(ink.font, ink.font_px, at, ink.text, text.c_str());
+            drawn += (drawn.empty() ? "" : "|") + text;
+            last_min = at;
+            last_max = bmax;
+            reach = std::max(reach, std::fabs(dx) * ts.x + std::fabs(dy) * ts.y);
+        }
+        if (!drawn.empty()) *labels += std::string(labels->empty() ? "" : ";") + "xyz"[a] + "=" + drawn;
+        const char name[2] = {"xyz"[a], 0};
+        const ImVec2 ns = size_of(name);
+        const float off = 7.0f * ink.k + reach + 8.0f * ink.k;
+        dl->AddText(ink.font, ink.font_px, ImVec2(mid.x + dx * off - ns.x * al_x, mid.y + dy * off - ns.y * al_y),
+                    ink.text, name);
+    }
+}
+
+// The data's box: the producer's bbox, else the payload's own extent (cached
+// per update). False before the first data.
+bool points_box(View& v, float out[6]) {
+    if (v.has_bbox) {
+        std::memcpy(out, v.bbox, 6 * sizeof(float));
+        return true;
+    }
+    if (!v.have_cur || !v.cur.pos_cpu) return false;
+    if (v.box_for != v.updates) {
+        v.box_for = v.updates;
+        float lo[3] = {INFINITY, INFINITY, INFINITY}, hi[3] = {-INFINITY, -INFINITY, -INFINITY};
+        const float* P = (const float*)v.cur.pos_cpu;
+        const uint64_t n = v.cur.n, stride = n > (4u << 20) ? (n + (4u << 20) - 1) / (4u << 20) : 1;
+        for (uint64_t i = 0; i < n; i += stride) {
+            const float* q = P + 3 * i;
+            if (!std::isfinite(q[0]) || !std::isfinite(q[1]) || !std::isfinite(q[2])) continue;
+            for (int k = 0; k < 3; ++k) { lo[k] = std::min(lo[k], q[k]); hi[k] = std::max(hi[k], q[k]); }
+        }
+        v.have_box = lo[0] <= hi[0];
+        for (int k = 0; k < 3; ++k) { v.box[2 * k] = lo[k]; v.box[2 * k + 1] = hi[k]; }
+    }
+    if (v.have_box) std::memcpy(out, v.box, 6 * sizeof(float));
+    return v.have_box;
+}
+
 void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     HostRenderer* r = core->renderer.get();
     const bool open = begin_window(core, v, ImVec2(320.0f, 260.0f));
     if (!open) { ImGui::End(); return; }
-    draw_header(core, S, v, kToolPause);
+    draw_header(core, S, v, kToolPause | (v.dims == 3 ? kToolRotate : 0u));
     under_header(core, S, v);
     {
         char tel[160], line[220];
@@ -806,6 +1072,16 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         g.lx = io.MousePos.x;
         g.ly = io.MousePos.y;
     }
+    // Any drag stops the slow turn, which the page hears for its header toggle.
+    if (v.auto_rotate && (g.down || released) && g.moved) {
+        v.auto_rotate = false;
+        emit(S, v, "toggle", Detail().text("name", "rotate").flag("on", false).str());
+    }
+    if (v.auto_rotate && v.dims == 3 && v.have_cur) {
+        c.az += std::min(io.DeltaTime, 0.1f) * kRotateRate;
+        v.dirty = true;
+        v.hover_dirty = true;
+    }
     const bool drag = (g.down || released) && g.moved && !g.selecting;
     if (drag && (dx != 0.0f || dy != 0.0f)) {
         const bool pan = g.button != 0 || g.alt || g.ctrl;
@@ -853,6 +1129,11 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     camera_matrices(v, aspect, V, P);
     mul_cm(P, V, mvp);
     const float half_px = 0.5f * point_size_px(v.have_cur ? v.cur.n : 0, core->scale) / core->scale + 1.0f;
+    // The depth cues of 3-D points (HostGeomDraw): sizes relative to the size
+    // at the camera's target, and the points behind the target dimmed towards
+    // the far side of the data's bounding sphere.
+    const bool cues = v.dims == 3 && v.depth_cues;
+    const float att_ref = cues ? c.dist : 0.0f;
 
     // ---- a finished gesture: a selection, a cleared selection or a pick
     if (released && v.have_cur && v.cur.pos_cpu) {
@@ -874,7 +1155,7 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
             }
             if (!g.moved) {
                 uint64_t stride = 1;
-                const Pick pk = pick_point(v, mvp, p0, avail, io.MousePos, half_px, 8.0f, &stride);
+                const Pick pk = pick_point(v, mvp, p0, avail, io.MousePos, half_px, att_ref, 8.0f, &stride);
                 if (pk.idx >= 0) emit(S, v, "pick", point_detail(v, pk.idx));
             }
         }
@@ -907,7 +1188,10 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     // ---- GPU: redraw the render target when something changed
     // The plot clears to the window's ground, as the browser's points view
     // draws on its plate, so the dimmed rest of a selection stays visible.
+    // In 3-D the ground is transparent, so the box's back layer, drawn before
+    // the image, shows behind the points.
     const uint32_t clear = ImGui::GetColorU32(ImGuiCol_WindowBg) | 0xff000000u;
+    const uint32_t ground = v.dims == 3 ? (clear & 0x00ffffffu) : clear;
     if (v.dirty) {
         bool ok;
         if (v.have_cur) {
@@ -922,6 +1206,7 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
             d[0].size_px = point_size_px(v.cur.n, core->scale);
             if (v.cur.aux) {
                 d[0].color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+                d[0].exact_colormap = true;   // each value's colour exactly as map_f32_to_rgba8
                 d[0].attr_alloc = v.cur.aux->rid;
                 d[0].attr_offset = v.cur.aux_off;
                 d[0].lut256 = v.lut;
@@ -931,12 +1216,19 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                 d[0].color_mode = CALIPER_GEOM_COLOR_FLAT;
                 d[0].flat_rgba = kFlat;
             }
+            if (cues) {
+                d[0].att_ref = att_ref;
+                d[0].fade_w0 = c.dist;
+                d[0].fade_w1 = c.dist + c.radius;
+            }
             // A selection: every point dimmed, then the selected ones over
-            // them in their own colours (depth test less-equal lets them win).
+            // them in their own colours (depth test less-equal lets them win),
+            // at full strength: no fade.
             uint32_t dim_lut[256];
             uint32_t count = 1;
             if (ev && v.sel_count && stage_selection(core, v)) {
                 d[1] = d[0];
+                d[1].fade_w0 = d[1].fade_w1 = 0.0f;
                 d[1].pos_alloc = v.sel_draw.pos->rid;
                 d[1].pos_offset = 0;
                 d[1].vertex_count = v.sel_draw.n;
@@ -953,7 +1245,7 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                 }
                 count = 2;
             }
-            ok = r->geom_draw_primitives(v.view_rid, V, P, d, count, clear);
+            ok = r->geom_draw_primitives(v.view_rid, V, P, d, count, ground);
             if (ok) {
                 void* h = r->geom_draw_retain_last();
                 if (v.cur.last_draw) r->device_update_release(v.cur.last_draw);
@@ -965,15 +1257,50 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                 }
             }
         } else {
-            ok = r->geom_draw_primitives(v.view_rid, V, P, nullptr, 0, clear);
+            ok = r->geom_draw_primitives(v.view_rid, V, P, nullptr, 0, ground);
         }
         v.dirty = false;   // a refused draw is not retried every frame (it logs)
         v.draw_failed = !ok;
     }
     if (v.draw_failed) ImGui::TextUnformatted("points draw refused by the renderer (see log)");
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    // 3-D: the box's back layer under the points, its front layer over them.
+    float bx[6];
+    const bool boxed = v.dims == 3 && points_box(v, bx);
+    BoxFrame frame;
+    BoxInk ink{};
+    if (boxed) {
+        frame = box_frame(bx, eye_of(c), mvp, p0, avail);
+        const bool house = !core->views_bare;
+        const Look& L = S->look;
+        // The browser element's inks on a page (web/src/views/box3d.ts), the host's in a window.
+        const ImU32 rule = house ? L.rule : IM_COL32(0x5a, 0x57, 0x51, 255);
+        ink.edge = rule;
+        ink.tick = rule;
+        ink.back = (rule & 0x00ffffffu) | (150u << 24);
+        ink.grid = (rule & 0x00ffffffu) | (70u << 24);
+        ink.text = house ? L.faint : IM_COL32(0xa4, 0x9d, 0x8f, 255);
+        const float afs = core->views_bare ? 10.5f
+                          : L.mono_size > 0.0f ? L.mono_size - 1.0f
+                                               : std::max(10.5f, ImGui::GetFontSize() * 0.85f);
+        ink.k = afs / 10.5f;
+        ink.font = house ? L.mono : mono_face();
+        ink.font_px = house ? afs : afs * kMonoEm;
+        if (!ink.font) {
+            ink.font = ImGui::GetFont();
+            ink.font_px = ImGui::GetFontSize();
+        }
+        dl->PushClipRect(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), true);
+        draw_box_back(dl, frame, p0, avail, ink);
+        dl->PopClipRect();
+    }
     dl->AddImage((ImTextureID)r->tex_imtexture_id(v.view_rid), p0,
                  ImVec2(p0.x + avail.x, p0.y + avail.y));
+    if (boxed) {
+        dl->PushClipRect(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), true);
+        draw_box_front(dl, frame, p0, avail, ink, &v.box_labels);
+        dl->PopClipRect();
+    }
 
     // Where the data is: the area, and for 2-D the window of x and y it shows.
     v.geo_valid = true;
@@ -1018,7 +1345,7 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         } else {
             const ImVec2 m = io.MousePos;
             if (v.hover_dirty || m.x != v.hover_mx || m.y != v.hover_my) {
-                const Pick pk = pick_point(v, mvp, p0, avail, m, half_px, 8.0f, &v.hover_stride);
+                const Pick pk = pick_point(v, mvp, p0, avail, m, half_px, att_ref, 8.0f, &v.hover_stride);
                 v.hover_idx = pk.idx;
                 v.hover_sx = pk.sx;
                 v.hover_sy = pk.sy;

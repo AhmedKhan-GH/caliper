@@ -166,47 +166,120 @@ Python:
 
 | Thread | What it does | The GIL |
 |---|---|---|
-| The training thread | For each subscribed view that is due: reduce the snapshot on the device (pool a heatmap, sample points), queue a non-blocking copy into pinned host memory, record a `torch.mps.Event`. For a series: keep each value, and move gathered values to the host 30 times a second while a viewer watches | Held: about 65 µs per snapshot and 1.5 µs per series call. A call between due times returns after a clock check |
-| The pump (`caliper.net`, Python) | Waits in native code. Wakes for a request from a viewer, for the training thread, or every 4 ms while snapshots are in flight; polls their events, which needs the GIL; hands each completed snapshot to the native sender | Held about 20 µs per snapshot. The native sender copies the snapshot with the GIL released |
-| The native sender (C++, `caliper._netio`) | Listens on 127.0.0.1, checks upgrades, serves the viewer page, runs the handshake, pings and time-outs, keeps the latest snapshot per subscription and the retained series, computes heatmap and points stats from the payload, encodes and sends | Never |
+| The training thread | For each subscribed view that is due: reduce the snapshot on the device (pool a heatmap, sample points) and queue a non-blocking copy into pinned host memory. The views that are due take their snapshots together, in a **tick** at the session's rate of 60 a second, with the series values gathered since the last tick, and one `torch.mps.Event` recorded when the tick closes covers all of their copies | Held: per tick, about 140 µs for a 1024 by 1024 heatmap, 120 µs for 100,000 points and 100 µs for a series' values. A call between ticks returns after a clock check, in 1 to 2 µs for a series, which keeps its value, and under 1 µs for the others |
+| The pump (`caliper.net`, Python) | Waits in native code. Wakes for a request from a viewer, when a tick closes, or every 4 ms while a tick's copies are in flight; polls the tick's event, which needs the GIL; hands each completed snapshot to the native sender | Held about 60 µs per snapshot. The native sender copies the snapshot with the GIL released |
+| The native sender (C++, `caliper._netio`) | Listens on 127.0.0.1, checks upgrades, serves the viewer page, runs the handshake, pings and time-outs, keeps the latest snapshot per subscription and the retained series, computes heatmap and points stats from the payload (with NEON on arm64), encodes and sends | Never |
+
+A tick opens at the first view call after it is due and closes as soon as
+every subscribed view called in the last second has its snapshot, which is
+right after the step's last view call. It also closes when a view it already
+holds is called again, because the next step began, and at the first call
+after it has been open for a second. So the view calls of one step share a tick
+in any order and however far apart in the step they are, with series calls
+between them. Recording an event commits torch's command buffer, so the tick
+keeps the commits at 60 a second however many views a viewer watches. A view
+called with a lower rate, or a subscription with a lower `max_rate`, joins only
+the ticks its rate allows, every second one at 30 a second, and never exceeds
+that rate.
 
 SUBSCRIBE, UNSUBSCRIBE, VIEW_REQUEST and EVENT go to Python, because the data
 view engine and the event handlers live there. They are rare, and the native
-sender queues at most 256 of them per connection.
+sender queues at most 256 of them per connection. In the other direction, a
+connection's replies and other control messages wait in a bounded queue on both
+senders, and a viewer that fills it by sending requests while it reads nothing
+loses its connection; the [Python API](../references/python-api.md#serve)
+states the limits.
 
 When the native sender is not built, `caliper.serve()` uses a sender written in
 Python, which encodes and sends on an asyncio thread that holds the GIL, and it
 says so once. `python scripts/build_netio.py` builds the native sender in a few
 seconds from `python/src/_netio.cpp` and `src/host/net`.
 
-The table gives throughput as a percentage of the commit-matched control (see
-[Live streaming](live-streaming.md#sync)), for `bench_net.py`'s workload on MPS
-at 60 snapshots per second: the median of three runs of ten interleaved pairs,
-with the runs' medians in brackets. Each viewer is a process of its own. The
-machine was shared with other builds, at load averages from 3 to 15.
+### What it costs
 
-| Views called every step | One viewer | Two viewers |
-|---|---|---|
-| 1024 by 1024 heatmap | 96.4 % (93.3 to 97.0) | 96.0 % (93.8 to 96.1) |
-| Series of the loss | 96.8 % (88.9 to 98.6) | 97.6 % (97.1 to 97.7) |
-| 100,000 points | 95.2 % (94.4 to 97.5) | 96.3 % (94.7 to 97.3) |
-| All three | 94.3 % (94.2 to 95.7) | 92.9 % (91.3 to 93.5) |
+The table gives throughput as a percentage of a reference, for the workload of
+`python/bench/bench_net.py` on MPS: a small CNN at about 2,000 steps per second
+that calls its views every step, with a 1024 by 1024 weight, the loss and
+100,000 3-D points with 4-class labels, at 60 snapshots per second unless the
+row says otherwise. With viewers the reference is the commit-matched control
+(see [Live streaming](live-streaming.md#sync)); with no viewer it is the plain
+loop. Each figure is the median of 24 interleaved pairs of one-second segments
+from three runs of `python/bench/bench_net_pairs.py`, with the runs' medians in
+brackets and the step-time p99 against the reference's.
+The runs were made with no other heavy job on the machine, at 1-minute load
+averages from 1.8 to 7.8; a few pairs of the first run ran at up to 15 when
+another job started, and the all-three row has only the first two runs, because
+another build started during the third run's all-three arms. Each viewer is a
+process of its own.
 
-The sender written in Python measured 92.7 % for the heatmap, 90.7 % for the
-points and 85.6 % for all three with one viewer, in one run at load averages
-from 8 to 15. With no viewer, a heatmap or points call costs what it costs
-without a server, 0.13 µs, and the loop runs at 99.5 to 106 % of the same loop
-without calls. A series call costs 0.2 µs for a number and 0.5 µs for a tensor,
-because its values are kept for viewers that come later.
+| Views called every step | No viewer | One viewer | Two viewers |
+|---|---|---|---|
+| 1024 by 1024 heatmap | 99.7 % (99.7, 99.6, 99.4) | 98.2 % (98.7, 97.0, 97.6), p99 690 µs against 600 | 98.1 % (98.1, 98.4, 95.5), p99 693 µs against 628 |
+| Series of the loss | 192 % (172, 192, 194) | 99.0 % (100.0, 98.8, 99.0), p99 604 µs against 594 | 98.9 % (97.5, 99.5, 98.1), p99 600 µs against 586 |
+| 100,000 points | 100.0 % (100.3, 100.0, 100.0) | 98.0 % (97.9, 98.4, 98.0), p99 679 µs against 637 | 97.5 % (96.3, 98.0, 96.5), p99 658 µs against 618 |
+| 100,000 points at `rate=30` | 100.0 % (103.6, 99.8, 100.3) | 96.7 % (95.2, 97.1, 96.9), p99 632 µs against 590 | 96.2 % (95.5, 96.5, 96.5), p99 649 µs against 608 |
+| All three | 191 % (184, 191, 191) | 97.0 % (96.5, 97.0), p99 705 µs against 581 | 95.4 % (95.4, 95.5), p99 747 µs against 700 |
 
-Most of the remaining cost has two measured parts. The training thread's own
-work for the snapshots and series values takes about 2 % of the loop's time for
-all three views at 1,700 steps per second, timed call by call. Each snapshot
-also commits torch's command buffer with its event, about 150 commits per
-second for all three views against the control's 60, and events recorded at
-300 Hz instead of 60 Hz cost the control 3 % by themselves. Both grow with the
-snapshots per second. The pump's wake-ups were no measurable part: polling
-every 4, 8 or 12 ms gave the same throughput.
+So on a quiet machine one view costs this loop 1 to 2.5 % of its throughput and
+all three together 3 to 4.6 %, with one viewer or two. The training thread's own
+work, timed below, is 0.6 to 0.8 % of the loop's time for one view and 1.4 to
+1.6 % for all three; the rest is the work of the pump, the native sender and the
+viewer processes on the same machine.
+
+The series and all-three rows with no viewer run faster than the plain loop. A
+series keeps its values for viewers that come later and moves them to the host
+every 64 values with an event, about 25 times a second here, and each event
+commits torch's command buffer, which this workload needs to run at full speed
+(the control shows the same effect). Leaving out the plain loop's long stalls
+(the mean of the steps shorter than 3 ms), the series costs nothing measurable
+(100.0 %) and all three views 1 % without a viewer. A heatmap or points call
+with no viewer costs what it costs without a server, 0.1 µs.
+
+A lower rate does not make the points cheaper here. At `rate=30` the points
+take half the snapshots, but their ticks are then the only commits, 31 a second
+against the control's 60, and this workload runs slower with fewer commits. The
+default rate of the points therefore stays the session's 60 a second.
+
+### Where the time goes
+
+Timed part by part on the training thread with one viewer, the ticks aligned,
+per tick (60 times a second), with the events recorded against the control's.
+These timings come from the same benchmark in 8 to 24 interleaved rounds at
+load averages of 8 or less, taken before the last two fixes to the pump and to
+the ticks, which do not change this path:
+
+| | Heatmap 1024 by 1024 | 100,000 points | Series |
+|---|---|---|---|
+| Reduction on the device | 45 to 51 µs: the pooling to 512 by 512 and the range of the whole tensor | 15 to 19 µs: nothing runs on the device, since the default budget is 100,000 points and nothing is sampled | |
+| Copy into pinned memory | 60 to 64 µs: the payload and its range | 50 to 65 µs: the points, and the labels cast to float32 in the same copy | 83 µs: the step's values stacked and copied |
+| The event and the enqueue | 16 to 18 µs | 19 to 24 µs | 21 µs |
+| All of it | 140 to 156 µs | 112 to 131 µs | 104 µs per tick, and 1 to 2 µs per call between ticks |
+| Events per second, against the control's | 58 against 58 | 58 against 58 | 58 against 58 |
+| The pump's thread time per snapshot | 73 to 79 µs | 117 µs (331 µs before the native stats used NEON) | |
+
+Nothing waits for the device: the only `torch.mps.synchronize` in a measured
+segment is the benchmark's own at its end. To find what the points cost
+beyond the training thread's share, they were measured with each part removed
+in turn, before the pump's lost wake was fixed, when the full path measured
+89.9 to 98.6 % (it now measures 97.5 to 98 %). With the labels already float32,
+or with no labels, nothing changed. Without the copies into pinned memory the
+loop measured 98.6 to 99.9 %, and without handing snapshots to the native sender
+99.6 to 99.8 %, in the same rounds. So the rest is the delivery: copying 1.6 MB per snapshot out of pinned
+memory, its stats, encoding, sending and decoding in the viewer process, about
+96 MB a second, on other threads and processes of the same machine. The native
+sender's stats were the largest part of the pump's work for the points and now
+use NEON, which cut it from 331 to 117 µs per snapshot. The same variants for
+the heatmap and the series stayed within the noise.
+
+Not pursued, as later work: handing the pinned buffer itself to the native
+sender, which would copy it on its own thread and free it after sending, instead
+of the pump copying it; recording completed snapshots from the training thread
+at the next tick, so that the pump no longer takes the GIL to poll events; a
+default rate that follows a view's payload size rather than its kind; the same
+ticks for the shared-memory route, whose `SnapshotRing` still records one event
+per snapshot; and the sender written in Python, which was not measured again
+after the ticks (before them it measured 92.7 % for the heatmap and 90.7 % for
+the points with one viewer).
 
 ## Security
 

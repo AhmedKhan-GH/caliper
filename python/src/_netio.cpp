@@ -104,6 +104,13 @@ uint64_t now_ns() {
 
 constexpr size_t kRoom = 64 * 1024;          // send the next frame when less than this is queued
 constexpr size_t kMaxControlPerConn = 256;   // messages for Python waiting per connection
+// The control frames waiting to be sent on one connection (replies, state,
+// errors; a PONG is kept apart, at most one). A peer that keeps sending while
+// it reads nothing fills them; past either limit the connection is closed with
+// 1008, as the hub closes a connection whose send queue overflows.
+constexpr size_t kMaxControlFrames = 65536;
+constexpr size_t kMaxControlBytes = 16u << 20;
+constexpr uint16_t kCloseOverflow = 1008;
 constexpr int kMaxPollMs = 50;
 
 // One completed snapshot, owned here (copied out of the caller's memory).
@@ -201,6 +208,10 @@ struct Link {
     bool cap_scenes = false;                  // 3.2 draft: the peer announced "scenes"
     bool may_control = false;                 // 3.1: a CONTROL from it is accepted
     std::deque<SharedBytes> after_views;      // 3.1: frames that follow the next VIEWS
+    size_t control_bytes = 0;                 // the bytes in control and after_views
+    bool overflow = false;                    // past kMaxControlFrames/Bytes: closed with 1008
+    bool pong_pending = false;                // one PONG at most, to the latest PING
+    uint32_t pong_nonce = 0;
     std::map<uint32_t, Sub> subs;
     size_t to_python = 0;                     // its messages waiting in the control queue
     uint64_t frames_out = 0, bytes_out = 0, superseded = 0, snapshots_sent = 0, series_sent = 0;
@@ -217,9 +228,16 @@ struct Asset {
     std::string path;
 };
 
+// Messages that could not be encoded (a frame over CALIPER_NET_MAX_FRAME_BYTES or
+// its metadata over CALIPER_NET_MAX_META_BYTES): counted and not sent.
+std::atomic<uint64_t> g_encode_failed{0};
+
 SharedBytes encode(const wire::Message& m) {
     auto out = std::make_shared<caliper_net::Bytes>();
-    wire::encode(m, out.get());
+    if (!wire::encode(m, out.get())) {
+        g_encode_failed.fetch_add(1, std::memory_order_relaxed);
+        return nullptr;
+    }
     return out;
 }
 
@@ -262,6 +280,8 @@ public:
         std::future<std::string> f = done.get_future();
         {
             std::lock_guard<std::mutex> g(mu_);
+            // Once the native loop has exited nothing would answer the promise.
+            if (loop_done_) throw std::runtime_error("listen: the server is closed");
             listen_port_ = port;
             listen_done_ = &done;
         }
@@ -287,11 +307,13 @@ public:
             up_attempts_ = 0;
             up_replaced_ = false;
         }
+        std::lock_guard<std::mutex> j(up_join_mu_);
         up_stop_ = false;
         up_thread_ = std::thread([this] { up_loop(); });
     }
 
     void disconnect_upstream() {
+        std::lock_guard<std::mutex> j(up_join_mu_);    // two threads never join it at once
         if (!up_thread_.joinable()) return;
         up_stop_ = true;
         {
@@ -324,10 +346,10 @@ public:
     // ---- Python-thread calls (the GIL is released around them) ----------------------
     void close() {
         disconnect_upstream();
-        if (stop_.exchange(true)) {
-            if (thread_.joinable()) thread_.join();
-            return;
-        }
+        // close() may come from two threads at once (the script's close() and
+        // caliper.close() at exit, say): one of them joins, the other waits.
+        std::lock_guard<std::mutex> j(join_mu_);
+        stop_ = true;
         server_->wake();
         if (thread_.joinable()) thread_.join();
         std::lock_guard<std::mutex> g(cmu_);
@@ -385,9 +407,9 @@ public:
         std::lock_guard<std::mutex> g(mu_);
         auto it = links_.find(c);
         if (it == links_.end()) return false;
-        it->second.control.push_back(std::make_shared<caliper_net::Bytes>(frame.begin(), frame.end()));
+        const bool ok = push_control(it->second, std::make_shared<caliper_net::Bytes>(frame.begin(), frame.end()));
         wake_all();
-        return true;
+        return ok;
     }
 
     // 3.1: as send(), but after the VIEWS that the connection waits for, if any
@@ -397,10 +419,10 @@ public:
         auto it = links_.find(c);
         if (it == links_.end()) return false;
         Link& l = it->second;
-        auto b = std::make_shared<caliper_net::Bytes>(frame.begin(), frame.end());
-        (l.views_pending ? l.after_views : l.control).push_back(std::move(b));
+        const bool ok = push_control(l, std::make_shared<caliper_net::Bytes>(frame.begin(), frame.end()),
+                                     l.views_pending);
         wake_all();
-        return true;
+        return ok;
     }
 
     // 3.2 draft: the frames a connection still has waiting before its data (Python
@@ -642,7 +664,8 @@ public:
 
     struct Stats {
         std::vector<std::tuple<uint64_t, bool, size_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t>> ls;
-        uint64_t published = 0, http = 0, refused = 0, values = 0;
+        std::vector<std::pair<size_t, size_t>> queued;    // per connection: control frames and bytes
+        uint64_t published = 0, http = 0, refused = 0, values = 0, overflow = 0;
         std::map<std::string, uint64_t> totals;
     };
     // Called with the GIL released; to_dict() runs with it.
@@ -650,8 +673,12 @@ public:
         Stats st;
         std::lock_guard<std::mutex> g(mu_);
         for (auto& [id, l] : links_)
+        {
             st.ls.emplace_back(id, l.attached, l.subs.size(), l.frames_out, l.bytes_out, l.superseded,
                                l.snapshots_sent, l.series_sent);
+            st.queued.emplace_back(l.control.size() + l.after_views.size(), l.control_bytes);
+        }
+        st.overflow = overflow_closed_;
         st.published = published_;
         st.http = http_requests_;
         st.refused = refused_;
@@ -665,8 +692,12 @@ public:
         const uint64_t published = st.published, http = st.http, refused = st.refused, values = st.values;
         nb::dict d;
         nb::list conns;
+        size_t k = 0;
         for (auto& t : ls) {
             nb::dict c;
+            c["control_frames"] = st.queued[k].first;
+            c["control_bytes"] = st.queued[k].second;
+            ++k;
             c["id"] = std::get<0>(t);
             c["attached"] = std::get<1>(t);
             c["subscriptions"] = std::get<2>(t);
@@ -681,6 +712,8 @@ public:
         d["published"] = published;
         d["http_requests"] = http;
         d["refused"] = refused;
+        d["overflow_closed"] = st.overflow;
+        d["encode_failed"] = g_encode_failed.load(std::memory_order_relaxed);
         d["series_values"] = values;
         nb::dict s;
         for (auto& [v, n] : totals) s[nb::str(v.c_str())] = n;
@@ -718,11 +751,12 @@ private:
                 if (l.upstream) continue;
                 // what is queued for it goes first, then BYE
                 pump(l, /*final=*/true);
-                if (server_->is_open(id)) server_->send(id, b);
+                if (b && server_->is_open(id)) server_->send(id, b);
             }
         }
         server_->shutdown(CALIPER_NET_CLOSE_GOING_AWAY, 2000);
         std::lock_guard<std::mutex> g(mu_);
+        loop_done_ = true;                    // a later listen() fails at once
         if (listen_done_) {
             listen_done_->set_value("closed");
             listen_done_ = nullptr;
@@ -797,7 +831,29 @@ private:
         push_ctl(on ? "attached" : "detached", l.id);
     }
 
-    void queue(Link& l, const wire::Message& m) { l.control.push_back(encode(m)); }
+    void queue(Link& l, const wire::Message& m) {
+        if (SharedBytes b = encode(m)) push_control(l, std::move(b));
+    }
+
+    // Queue a control frame (under mu_). Past kMaxControlFrames or
+    // kMaxControlBytes the queue is dropped and the connection marked, and the
+    // thread that owns its socket closes it with 1008 at its next pump.
+    bool push_control(Link& l, SharedBytes b, bool after_views = false) {
+        if (l.overflow || l.closing) return false;
+        if (l.control.size() + l.after_views.size() >= kMaxControlFrames ||
+            l.control_bytes + b->size() > kMaxControlBytes) {
+            l.overflow = true;
+            ++overflow_closed_;
+            l.control.clear();
+            l.after_views.clear();
+            l.control_bytes = 0;
+            wake_all();
+            return false;
+        }
+        l.control_bytes += b->size();
+        (after_views ? l.after_views : l.control).push_back(std::move(b));
+        return true;
+    }
 
     // 3.1 (under mu_): the server's capabilities, and what a peer announced as
     // the JSON of its "opened" message for Python.
@@ -825,7 +881,7 @@ private:
         e.code = code;
         e.message = msg;
         e.fatal = true;
-        xsend(l, encode(e));
+        if (SharedBytes b = encode(e)) xsend(l, b);
         xclose(l, close_code, msg.substr(0, 120));
     }
 
@@ -1004,7 +1060,8 @@ private:
             return;
         }
         if (auto* p = std::get_if<wire::Ping>(&m)) {
-            queue(l, wire::Pong{p->nonce});
+            l.pong_pending = true;                // a PING flood leaves one PONG, to the latest
+            l.pong_nonce = p->nonce;
         } else if (std::holds_alternative<wire::Pong>(m) || std::holds_alternative<wire::Unknown>(m)) {
         } else if (auto* a = std::get_if<wire::Attach>(&m)) {
             l.follows_default = false;
@@ -1123,11 +1180,18 @@ private:
     // Send what the connection has room for: control frames, then series,
     // then snapshots, each subscription at its own rate.
     void pump(Link& l, bool final = false) {
+        if (l.overflow && !l.closing) {
+            xclose(l, kCloseOverflow, "control queue full");
+            return;
+        }
         if (l.closing || !xopen(l)) return;
         const uint64_t now = now_ns();
         while (final || xqueued(l) < kRoom) {
             SharedBytes f;
-            if (l.views_pending && l.control.empty()) {
+            if (l.pong_pending) {
+                f = encode(wire::Pong{l.pong_nonce});
+                l.pong_pending = false;
+            } else if (l.views_pending && l.control.empty()) {
                 wire::Views v;
                 if (l.attached) {
                     v.session = l.upstream && !up_session_.empty() ? up_session_ : ident_.id;
@@ -1140,6 +1204,7 @@ private:
             } else if (!l.control.empty()) {
                 f = l.control.front();
                 l.control.pop_front();
+                l.control_bytes -= std::min(l.control_bytes, f->size());
             } else {
                 f = next_data(l, now, final);
             }
@@ -1172,39 +1237,42 @@ private:
             ++l.series_sent;
             return encode(m);
         }
-        Sub* best = nullptr;
-        for (auto& [n, s] : l.subs) {
-            if (!s.snap) continue;
-            if (!final && s.last_sent_ns && now < s.last_sent_ns + s.interval_ns) continue;
-            if (!best || s.last_sent_ns < best->last_sent_ns) best = &s;
+        for (;;) {                                // a snapshot that cannot be encoded is dropped
+            Sub* best = nullptr;
+            for (auto& [n, s] : l.subs) {
+                if (!s.snap) continue;
+                if (!final && s.last_sent_ns && now < s.last_sent_ns + s.interval_ns) continue;
+                if (!best || s.last_sent_ns < best->last_sent_ns) best = &s;
+            }
+            if (!best) return nullptr;
+            std::shared_ptr<const Snap> sn = std::move(best->snap);
+            best->snap.reset();
+            best->last_sent_ns = now;
+            ++l.snapshots_sent;
+            wire::Snapshot m;
+            m.sub = best->sub;
+            m.view = sn->view;
+            m.seq = sn->seq;
+            m.stamp_ns = sn->stamp_ns;
+            m.kind = sn->kind;
+            auto g = groups_.find(best->group);
+            m.data_view = g != groups_.end() ? g->second.data_view : Json::object();
+            m.data = wire::Section::make("data", sn->dtype, sn->shape, sn->data.data(), sn->data.size());
+            if (sn->has_aux)
+                m.aux = wire::Section::make("aux", CALIPER_NET_DTYPE_F32, {(int64_t)(sn->aux.size() / 4)},
+                                            sn->aux.data(), sn->aux.size());
+            m.colormap = sn->colormap;
+            m.flags = sn->flags;
+            m.vmin = sn->vmin;
+            m.vmax = sn->vmax;
+            m.stats = sn->stats;
+            m.axes = sn->axes;
+            m.tile = sn->tile;
+            m.points_dims = sn->points_dims;
+            m.label_count = sn->label_count;
+            if (SharedBytes f = encode(m)) return f;
+            --l.snapshots_sent;
         }
-        if (!best) return nullptr;
-        std::shared_ptr<const Snap> sn = std::move(best->snap);
-        best->snap.reset();
-        best->last_sent_ns = now;
-        ++l.snapshots_sent;
-        wire::Snapshot m;
-        m.sub = best->sub;
-        m.view = sn->view;
-        m.seq = sn->seq;
-        m.stamp_ns = sn->stamp_ns;
-        m.kind = sn->kind;
-        auto g = groups_.find(best->group);
-        m.data_view = g != groups_.end() ? g->second.data_view : Json::object();
-        m.data = wire::Section::make("data", sn->dtype, sn->shape, sn->data.data(), sn->data.size());
-        if (sn->has_aux)
-            m.aux = wire::Section::make("aux", CALIPER_NET_DTYPE_F32, {(int64_t)(sn->aux.size() / 4)},
-                                        sn->aux.data(), sn->aux.size());
-        m.colormap = sn->colormap;
-        m.flags = sn->flags;
-        m.vmin = sn->vmin;
-        m.vmax = sn->vmax;
-        m.stats = sn->stats;
-        m.axes = sn->axes;
-        m.tile = sn->tile;
-        m.points_dims = sn->points_dims;
-        m.label_count = sn->label_count;
-        return encode(m);
     }
 
     // ---- the hub connection's thread ------------------------------------------------------
@@ -1243,7 +1311,7 @@ private:
                         h.capabilities = capabilities();
                         h.software = software_;
                         h.session = hello_id;
-                        client_->send(encode(h));
+                        if (SharedBytes b = encode(h)) client_->send(b);
                     } else if (e.type == T::Message && !helloed) {
                         wire::Message m;
                         const wire::DecodeResult r = wire::decode(e.data.data(), e.data.size(), &m);
@@ -1303,7 +1371,7 @@ private:
                 wire::Bye bye;
                 bye.reason = CALIPER_NET_BYE_SHUTDOWN;
                 bye.message = "the producer is closing";
-                client_->send(encode(bye));
+                if (SharedBytes b = encode(bye)) client_->send(b);
                 client_->close(CALIPER_NET_CLOSE_GOING_AWAY, "shutdown");
             }
             if (up_stop_.load()) {                // let the close go out, briefly
@@ -1346,6 +1414,8 @@ private:
     ConnId next_up_id_ = ConnId(1) << 62;     // never a server connection id
     int listen_port_ = 0;
     std::promise<std::string>* listen_done_ = nullptr;
+    bool loop_done_ = false;                  // the native loop has exited (under mu_)
+    std::mutex join_mu_, up_join_mu_;         // one thread at a time joins thread_, up_thread_
 
     std::unique_ptr<caliper_net::Server> server_;
     std::thread thread_;
@@ -1372,6 +1442,7 @@ private:
     bool allow_control_ = false;              // 3.1: viewers may control
     std::vector<float> scratch_;
     uint64_t published_ = 0, http_requests_ = 0, refused_ = 0, series_values_ = 0;
+    uint64_t overflow_closed_ = 0;            // connections closed for a full control queue
 
     std::mutex cmu_;                          // the queue to Python
     std::condition_variable ccv_;
@@ -1384,6 +1455,8 @@ private:
 NB_MODULE(_netio, m) {
     m.doc() = "The native sender of caliper.serve() (wire protocol v3); internal.";
     m.attr("MAX_CONTROL_PER_CONNECTION") = kMaxControlPerConn;
+    m.attr("MAX_CONTROL_FRAMES") = kMaxControlFrames;
+    m.attr("MAX_CONTROL_BYTES") = kMaxControlBytes;
     using R = nb::call_guard<nb::gil_scoped_release>;
     nb::class_<NetIO>(m, "Server")
         .def(nb::init<int, std::string, std::string, std::string,

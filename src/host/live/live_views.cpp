@@ -731,6 +731,11 @@ bool set_toggle(CaliperCore* core, const char* name, const char* toggle, bool on
     } else if (std::strcmp(toggle, "log") == 0 && plot) {
         v->log_y = on;
         v->fit_once = true;   // a new scale: fit y once, as the browser views do
+    } else if (std::strcmp(toggle, "rotate") == 0 && v->kind == CALIPER_LIVE_KIND_POINTS) {
+        v->auto_rotate = on;
+    } else if (std::strcmp(toggle, "depth") == 0 && v->kind == CALIPER_LIVE_KIND_POINTS) {
+        v->depth_cues = on;
+        v->dirty = true;
     } else {
         return false;
     }
@@ -839,7 +844,9 @@ void fit_points(View& v, float aspect) {
         c.radius = r;
         const float half_fovy = 22.5f * 3.14159265f / 180.0f;
         const float half_fovx = std::atan(std::tan(half_fovy) * aspect);
-        c.dist = r / std::sin(std::min(half_fovy, half_fovx)) * 1.05f;
+        c.dist = r / std::sin(std::min(half_fovy, half_fovx)) * kCamFit;
+        c.az = kCamAz;   // the default three-quarter view, as every renderer
+        c.el = kCamEl;
     } else {
         float hh = std::max(ey, ex / aspect);
         if (!(hh > 1e-12f) || !std::isfinite(hh)) hh = 1.0f;

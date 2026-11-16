@@ -44,6 +44,17 @@ void map_f32_to_rgba8(const float* src, int w, int h,
                       const uint32_t* lut256, float vmin, float vmax,
                       uint8_t* dst);
 
+// The thresholds that give map_f32_to_rgba8's index with exact float
+// comparisons alone, for GPU shaders whose division is not exact (WGSL allows
+// 2.5 ULP of error; Metal's default fast math too): for k in 1..255, T[k] is
+// the first float whose index is k or more for an increasing range (mode 1),
+// the last one for a decreasing range (mode 2), and the index of v is the
+// number of thresholds it has passed. Mode 0 is a range whose width is zero,
+// infinite or NaN, where the reference gives every value index 0. NaN is
+// index 0 in every mode. Writes T[0..255] (T[0] unused) and returns the mode.
+// web/src/render/colormap.ts (colormapThresholds) derives the same.
+uint32_t colormap_thresholds(float vmin, float vmax, float* T);
+
 // Expand a row-major (h,w,c) u8 buffer (c in 1..4) into tightly-packed RGBA8:
 //   c==1 -> gray replicated to RGB, a=255;  c==3 -> RGB, a=255;  c==4 -> copy.
 void expand_u8_to_rgba8(const uint8_t* src, int w, int h, int c, uint8_t* dst);

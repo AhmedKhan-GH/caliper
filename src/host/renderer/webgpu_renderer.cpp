@@ -17,10 +17,11 @@
 //                      reports as the route copied-from-host.
 //   Render targets     an RGBA8 texture and a Depth32Float texture, cleared by
 //                      an empty draw list.
-//   Points             one DrawList per call: per draw a 1,120-byte uniform
-//                      block (matrix, colour rule and table) in the list's
-//                      arena, the positions and values bound as instance-step
-//                      vertex buffers at the draw's byte offsets.
+//   Points             one DrawList per call: per draw a 2,160-byte uniform
+//                      block (matrix, colour rule, table and thresholds, depth
+//                      cues) in the list's arena, the positions and values
+//                      bound as instance-step vertex buffers at the draw's
+//                      byte offsets.
 //   Readback           read_texture, handed over once the layer has it
 //                      (release_retired).
 #include "webgpu_renderer.h"
@@ -31,7 +32,7 @@
 
 #include <emscripten/emscripten.h>
 
-#include "tensor_bridge.h"   // map_f32_to_rgba8: the colormap's reference
+#include "tensor_bridge.h"   // colormap_thresholds, from the colormap's reference
 
 #include <caliper/services/geometry_v1_1.h>   // CALIPER_GEOM_*
 
@@ -46,70 +47,22 @@ namespace prog = webgpu_programs;
 
 namespace {
 
-// The colormap's thresholds (webgpu_programs.h, kColormap). The shader gives
-// exactly the bytes of the CPU reference map_f32_to_rgba8 (tensor_bridge.cpp)
-// on every adapter: WGSL allows a division 2.5 ULP of error and lets an
-// implementation assume no NaN or infinity, so recomputing idx = clamp((v -
-// vmin)/(vmax - vmin), 0, 1) * 255 + 0.5 on the GPU differed from the
-// reference by one level for a few texels on Metal. Instead the CPU finds, for
-// each index k in 1..255, the threshold T[k]: the first float at which the
-// reference gives index k or more (the last one, for a decreasing range). The
-// reference is monotone in v, because every IEEE operation in it is, so the
-// index of v is the number of thresholds it has passed, which the shader finds
-// with a binary search of exact float comparisons. mode 0 is a flat range
-// (vmax == vmin: index 0), 1 an increasing and 2 a decreasing one; NaN takes
-// index 0, tested on the bits.
-
-// Floats in their numeric order as unsigned keys (-inf lowest, +inf highest).
-uint32_t float_key(float f) {
-    uint32_t u;
-    std::memcpy(&u, &f, 4);
-    return (u & 0x80000000u) ? ~u : (u | 0x80000000u);
-}
-float key_float(uint32_t k) {
-    const uint32_t u = (k & 0x80000000u) ? (k & 0x7fffffffu) : ~k;
-    float f;
-    std::memcpy(&f, &u, 4);
-    return f;
-}
-
-// The reference's index of v, from the reference itself (an identity LUT).
-int reference_index(float v, float vmin, float vmax) {
-    static uint32_t ident[256];
-    static bool init = false;
-    if (!init) {
-        for (uint32_t i = 0; i < 256; ++i) ident[i] = i;
-        init = true;
-    }
-    uint8_t out[4];
-    caliper_host::map_f32_to_rgba8(&v, 1, 1, ident, vmin, vmax, out);
-    return out[0];
-}
-
-// T[1..255] for [vmin, vmax] (T[0] unused) and the mode, as the shader reads them.
-uint32_t colormap_thresholds(float vmin, float vmax, float* T) {
-    const float denom = vmax - vmin;
-    if (!(denom != 0.0f)) return 0u;
-    const bool inc = denom > 0.0f;
-    const uint32_t lo_key = float_key(-INFINITY), hi_key = float_key(INFINITY);
-    T[0] = 0.0f;
-    for (int k = 1; k < 256; ++k) {
-        uint32_t lo = lo_key, hi = hi_key;
-        if (inc) {   // the first v with index >= k (+inf has 255)
-            while (lo < hi) {
-                const uint32_t mid = lo + (hi - lo) / 2;
-                if (reference_index(key_float(mid), vmin, vmax) >= k) hi = mid; else lo = mid + 1;
-            }
-        } else {     // the last v with index >= k (-inf has 255)
-            while (lo < hi) {
-                const uint32_t mid = lo + (hi - lo + 1) / 2;
-                if (reference_index(key_float(mid), vmin, vmax) >= k) lo = mid; else hi = mid - 1;
-            }
-        }
-        T[k] = key_float(lo);
-    }
-    return inc ? 1u : 2u;
-}
+// The colormap's thresholds (webgpu_programs.h, kColormap and kPoints). The
+// shaders give exactly the bytes of the CPU reference map_f32_to_rgba8
+// (tensor_bridge.cpp) on every adapter: WGSL allows a division 2.5 ULP of
+// error and lets an implementation assume no NaN or infinity, so recomputing
+// idx = clamp((v - vmin)/(vmax - vmin), 0, 1) * 255 + 0.5 on the GPU differed
+// from the reference by one level for a few texels on Metal. Instead the CPU
+// finds, for each index k in 1..255, the threshold T[k]: the first float at
+// which the reference gives index k or more (the last one, for a decreasing
+// range), with colormap_thresholds (tensor_bridge.h), which the Metal renderer
+// shares. The reference is monotone in v, because every IEEE operation in it
+// is, so the index of v is the number of thresholds it has passed, which the
+// shader finds with a binary search of exact float comparisons. mode 0 is a
+// range whose width vmax - vmin is zero, infinite or NaN, where the reference
+// maps every value to index 0 (t is 0 or NaN), 1 an increasing and 2 a
+// decreasing one; NaN takes index 0, tested on the bits. The points shader
+// colours by value the same way.
 
 WGPUStringView sv(const char* s) { return WGPUStringView{s, WGPU_STRLEN}; }
 
@@ -605,6 +558,23 @@ gfx::Pipeline WebGpuRenderer::points_pipeline(bool depth_target, uint32_t depth_
     return points_pipes_[slot];
 }
 
+const WebGpuRenderer::PointThresholds& WebGpuRenderer::point_thresholds(float vmin, float vmax) {
+    // The thresholds change with the range only, and computing them takes some 8,000 reference
+    // evaluations, so the last few ranges keep theirs; the range is compared by its bits.
+    uint32_t key[2];
+    std::memcpy(&key[0], &vmin, 4);
+    std::memcpy(&key[1], &vmax, 4);
+    for (auto& e : point_th_)
+        if (e.valid && e.key[0] == key[0] && e.key[1] == key[1]) return e;
+    PointThresholds& e = point_th_[point_th_next_];
+    point_th_next_ = (point_th_next_ + 1) % (uint32_t)(sizeof point_th_ / sizeof point_th_[0]);
+    e.mode = colormap_thresholds(vmin, vmax, e.T);
+    e.key[0] = key[0];
+    e.key[1] = key[1];
+    e.valid = true;
+    return e;
+}
+
 bool WebGpuRenderer::geom_draw_primitives(uint64_t view_tex, const float* view16, const float* proj16,
                                           const HostGeomDraw* draws, uint32_t count,
                                           uint32_t clear_rgba) {
@@ -621,7 +591,7 @@ bool WebGpuRenderer::geom_draw_primitives(uint64_t view_tex, const float* view16
     target.clear_rgba = clear_rgba;
     target.clear = true;
     gfx::DrawList list(target);
-    list.reserve(count, (size_t)count * 1280);
+    list.reserve(count, (size_t)count * 2304);   // each 2,160-byte block padded to 256
     float mvp[16];
     mul4(proj16, view16, mvp);
     // Every draw is checked and recorded before anything is submitted, so a refusal leaves the
@@ -656,7 +626,17 @@ bool WebGpuRenderer::geom_draw_primitives(uint64_t view_tex, const float* view16
         pp.size_px = d.size_px > 0.0f ? d.size_px : 1.0f;
         pp.viewport[0] = (float)t.w;
         pp.viewport[1] = (float)t.h;
-        if (cmap) std::memcpy(pp.lut, d.lut256, sizeof pp.lut);
+        pp.att_ref = d.att_ref;
+        pp.fade_w[0] = d.fade_w0;
+        pp.fade_w[1] = d.fade_w1;
+        if (cmap) {
+            std::memcpy(pp.lut, d.lut256, sizeof pp.lut);
+            // Every value-coloured draw takes map_f32_to_rgba8's exact index (d.exact_colormap
+            // is the Metal renderer's switch; this one always does).
+            const PointThresholds& th = point_thresholds(d.vmin, d.vmax);
+            pp.cmap_mode = th.mode;
+            if (th.mode) std::memcpy(pp.th, th.T, sizeof pp.th);
+        }
         gfx::DrawRecord r;
         r.pipeline = points_pipeline(t.depth.id != 0, d.depth_flags, cmap);
         if (!r.pipeline) return geom_fail("pipeline creation failed");
