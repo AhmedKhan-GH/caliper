@@ -13,6 +13,9 @@
 // It is one JSON object {"version": 1, "pid", "port", "token", "url",
 // "stream_url"}.
 //
+// The command layer's endpoints are served once set_command_gateway() gives
+// the server a gateway; take() then also hands their requests to it.
+//
 // The caller answers the calls of the frame thread itself (main.cpp, shot.cpp):
 // applets with applets_json() (host_cli.h), launch by its own navigation, and
 // capture by reading back a frame it drew: shot reads its offscreen canvas at
@@ -65,10 +68,20 @@ public:
         if (server_) server_->reply_capture(ticket, w, h, std::move(rgba));
     }
 
+    // The command layer behind POST /v0/commands/{name} (api/command_gateway.h;
+    // api/session_gateway.h makes one over the app's builder session). Set it
+    // on the frame thread once the session is open, and clear it with nullptr
+    // before the session closes. It is kept across stop() and start().
+    void set_command_gateway(std::shared_ptr<caliper_api::CommandGateway> gateway) {
+        gateway_ = gateway;
+        if (server_) server_->set_command_gateway(std::move(gateway));
+    }
+
     const std::string& file() const { return file_; }
 
 private:
     std::unique_ptr<caliper_api::Server> server_;
+    std::shared_ptr<caliper_api::CommandGateway> gateway_;
     std::string file_, file_text_;
 };
 

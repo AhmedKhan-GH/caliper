@@ -46,6 +46,7 @@ bool AppApi::start(const CommandLine& cl, const std::string& capture_unavailable
     };
     o.log = [](const std::string& line) { std::cerr << "[api] " << line << std::endl; };
     auto server = std::make_unique<caliper_api::Server>(std::move(o));
+    server->set_command_gateway(gateway_);
     if (!server->start(err)) {
         if (cl.api_port < 0)
             *err += "; is another Caliper running with --api? Choose a port with --api-port";
