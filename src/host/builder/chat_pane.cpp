@@ -224,6 +224,12 @@ void ChatPane::draw_column() {
     ImGui::End();
 }
 
+void ChatPane::draw_in(float x, float y, float w, float h) {
+    Impl& im = *impl_;
+    if (!im.started || !im.settings.open || !im.chat || w < 1.0f || h < 1.0f) return;
+    im.chat->draw(ImRect(x, y, x + w, y + h), house_spec_look());
+}
+
 std::string ChatPane::state() const {
     return impl_->chat ? chat_state_name(impl_->chat->state()) : std::string("none");
 }
@@ -284,6 +290,7 @@ void ChatPane::draw_toggle() {}
 float ChatPane::toggle_width() { return 0.0f; }
 void ChatPane::read_keys() {}
 void ChatPane::draw_column() {}
+void ChatPane::draw_in(float, float, float, float) {}
 std::string ChatPane::state() const { return "none"; }
 bool ChatPane::has_item(const std::string&, const std::string&, const std::string&) const { return false; }
 void ChatPane::focus_input() {}

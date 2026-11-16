@@ -96,6 +96,11 @@ public:
     // After the page's bars and strips, before its content: the right
     // column as a viewport side bar, with the chat in it, while open.
     void draw_column();
+    // The chat in a rectangle the page gives, in its current window, while
+    // open: in build mode the builder pane's right column holds Properties
+    // above and the chat below (BuilderPaneLayout::chat_rect), and the page
+    // calls this in place of draw_column().
+    void draw_in(float x, float y, float w, float h);
 
     // For the hidden app's input driver (spec_ui_driver.h): the chat's state
     // ("none" before it is made), whether it has an item of a kind (with a
