@@ -14,6 +14,7 @@
 #include "net/wire.h"
 #include "net/ws.h"
 #include "test_proc.h"
+#include "test_temp.h"
 
 #define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
@@ -344,11 +345,10 @@ struct FakeApp {
     uint16_t port() const { return server->port(); }
 };
 
+// A new folder of this run's own (test_temp.h), removed when the case ends.
 struct TempDir {
     fs::path path;
-    explicit TempDir(const std::string& name) : path(fs::temp_directory_path() / ("caliper-api-" + name)) {
-        std::error_code ec;
-        fs::remove_all(path, ec);
+    explicit TempDir(const std::string& name) : path(caliper_test::unique_temp_path("caliper-api-" + name)) {
         fs::create_directories(path);
     }
     ~TempDir() {
