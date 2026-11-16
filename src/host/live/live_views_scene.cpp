@@ -8,7 +8,10 @@
 #include "live/live_scene.h"
 #include "renderer/host_renderer.h"
 
-#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+#if defined(__EMSCRIPTEN__)
+#include "gfx/shaders/generated/programs_webgpu.h"
+#include "renderer/webgpu_renderer.h"
+#elif defined(__APPLE__)
 #include "gfx/metal_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
 #endif
@@ -29,11 +32,19 @@ namespace {
 // The layer's backend for a new scene view and the backend's table of programs. On Metal each
 // scene view owns a backend of its own on the renderer's device and queue, so that its submits are
 // ordered with the renderer's frame by commit order and its statistics (the info line's GPU time,
-// the frame's encode time) are its own.
+// the frame's encode time) are its own. In a browser the view borrows the WebGPU renderer's
+// backend, which a module instance's views share (an element mounts one view per instance).
 bool make_backend(CaliperCore* core, SceneHolder* h, caliper_gfx::Backend** out,
                   const caliper_gfx::ProgramDesc** programs) {
     caliper_host::HostRenderer* r = core->renderer.get();
-#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+#if defined(__EMSCRIPTEN__)
+    if (caliper_gfx::Backend* b = r ? static_cast<caliper_host::WebGpuRenderer*>(r)->gfx() : nullptr) {
+        *out = b;
+        *programs = caliper_gfx::shaders::kWebgpuPrograms;
+        return true;
+    }
+    h->notice = "scenes need the graphics layer's WebGPU backend, which has not started";
+#elif defined(__APPLE__)
     if (r && r->native_device() && r->native_queue()) {
         h->gfx = caliper_gfx::make_metal_backend(r->native_device(), r->native_queue());
         if (h->gfx) {
@@ -45,7 +56,7 @@ bool make_backend(CaliperCore* core, SceneHolder* h, caliper_gfx::Backend** out,
     h->notice = "scenes need the Metal renderer";
 #else
     (void)r;
-    h->notice = "scenes need the graphics layer's WebGPU backend, which this build does not have";
+    h->notice = "scenes need the Metal renderer or a browser with WebGPU";
 #endif
     (void)out;
     (void)programs;

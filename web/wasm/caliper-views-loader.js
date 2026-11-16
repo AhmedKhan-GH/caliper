@@ -6,7 +6,7 @@
 //   const handle = await mountCaliperViews(container, {
 //     src,          // 'ws://127.0.0.1:<port>/v3/stream?token=<token>'
 //     view,         // the view to show; '' or absent: every view of the session
-//     kind,         // 'heatmap' | 'image' | 'points' | 'series' | 'histogram', optional
+//     kind,         // 'heatmap' | 'image' | 'points' | 'series' | 'histogram' | 'scene', optional
 //     height,       // CSS pixels, optional (default: fill the container)
 //     header,       // false: the page shows the view's name itself, so the view has no title bar
 //     assetBase,    // where caliper-views.js and .wasm are; default: beside this file
@@ -34,8 +34,9 @@
 // (never looked up in the document), so a container inside a shadow root works.
 
 // The live view kinds these views draw. A page draws the other kinds itself
-// (the <caliper-view> element uses its TypeScript views for them).
-export const CALIPER_VIEWS_KINDS = Object.freeze(['heatmap', 'image', 'points', 'series', 'histogram']);
+// (the <caliper-view> element uses its TypeScript views for them). A scene
+// (the protocol 3.2 draft) is drawn by these views only.
+export const CALIPER_VIEWS_KINDS = Object.freeze(['heatmap', 'image', 'points', 'series', 'histogram', 'scene']);
 
 const compiled = new Map();   // assetBase -> Promise<{ factory, wasm }>
 

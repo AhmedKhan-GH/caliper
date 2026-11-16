@@ -2,6 +2,7 @@
 #include "net_source.h"
 
 #include "live/live_series_ring.h"
+#include "live/scene_queue.h"
 
 #include "caliper/live.h"       // CALIPER_LIVE_KIND_*, CALIPER_LIVE_SNAP_*
 #include "caliper/live_net.h"
@@ -148,6 +149,7 @@ void NetSource::close(const char* reason) {
 void NetSource::on_open() {
     wire::Hello h;
     h.role = CALIPER_NET_ROLE_VIEWER;
+    h.capabilities = {CALIPER_NET_CAP_SCENES};   // the 3.2 draft: this viewer draws scenes
     Json sw = Json::object();
     sw.set("name", "caliper-views");
     sw.set("version", "0.1");
@@ -198,6 +200,15 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
         set_state("closed: the server sent a text message");
         return;
     }
+    // A scene message is kept for the frame's poll, so it is decoded from a copy of its
+    // frame that lives as long as the message (the callback's bytes do not).
+    std::shared_ptr<std::vector<uint8_t>> keep;
+    uint16_t type = 0;
+    if (n >= 10) std::memcpy(&type, data + 8, 2);
+    if (type == CALIPER_NET_MSG_SCENE_UPDATE || type == CALIPER_NET_MSG_SCENE_CLEAR) {
+        keep = std::make_shared<std::vector<uint8_t>>(data, data + n);
+        data = keep->data();
+    }
     wire::Message msg;
     const wire::DecodeResult r = wire::decode(data, n, &msg);
     if (r.status == wire::DecodeResult::Status::BadFrame) {
@@ -212,6 +223,13 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
         e.message = r.message;
         e.in_reply_to = r.type;
         send_msg(e);
+        // A scene message this viewer does not build is ignored, and its view says so.
+        if (r.type == CALIPER_NET_MSG_SCENE_UPDATE && r.error_code == CALIPER_NET_ERR_UNSUPPORTED) {
+            uint64_t sub = 0;
+            const Json* s = r.frame.meta.find("sub");
+            if (View* v = s && s->get_u64(&sub) ? by_sub((uint32_t)sub) : nullptr)
+                caliper_live::scene_queue_push(v->scene, caliper_live::SceneItem{nullptr, "ignored: " + r.message});
+        }
         return;
     }
 
@@ -253,6 +271,8 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
                 v.id = vi.id;
                 v.name = vi.name;
                 v.kind = (int32_t)vi.kind;
+                for (size_t i = 0; i < m.list.size() && i < m.views.size(); ++i)
+                    if (m.list[i].name == vi.name) v.offer = m.views.at(i);
                 if (opt_.kind && v.kind != opt_.kind) {
                     v.error = "the view's kind is " + std::to_string(v.kind) + ", not " +
                               std::to_string(opt_.kind);
@@ -335,6 +355,23 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
                                             (const float*)m.values.data, (uint64_t)m.values.count());
             v->series_stamp = m.stamp_ns;
             ++v->series_seq;
+        } else if constexpr (std::is_same_v<T, wire::SceneUpdate> || std::is_same_v<T, wire::SceneClear>) {
+            View* v = by_sub(m.sub);
+            if (!v || v->kind != CALIPER_NET_KIND_SCENE) return;
+            if constexpr (std::is_same_v<T, wire::SceneUpdate>) {
+                // Sections this viewer does not build (stamp, normals, class ids, ...) are ignored.
+                std::string ignored;
+                for (const wire::Section& sec : r.frame.sections)
+                    if (!m.array(sec.name)) ignored += (ignored.empty() ? "" : ", ") + sec.name;
+                if (!ignored.empty())
+                    caliper_live::scene_queue_push(
+                        v->scene, caliper_live::SceneItem{nullptr, "ignored in " + (m.path.empty() ? std::string("the root") : m.path) +
+                                                                       " " + m.part + ": " + ignored});
+            }
+            caliper_live::SceneItem item;
+            item.keep = keep;
+            item.msg = std::move(m);
+            caliper_live::scene_queue_push(v->scene, std::move(item));
         } else if constexpr (std::is_same_v<T, wire::Ping>) {
             wire::Pong pong;
             pong.nonce = m.nonce;
@@ -469,6 +506,22 @@ bool NetSource::take(uint64_t key, uint64_t after_seq, caliper_live::Snapshot* o
     s.map = &v->shown.map;
     *out = s;
     out->stamp_ns = clock_.to_viewer(s.stamp_ns);
+    return true;
+}
+
+bool NetSource::data_view_of(uint64_t key, Json* resolved, Json* offer) {
+    View* v = by_id(key);
+    if (!v) return false;
+    if (resolved && !v->data_view.empty()) Json::parse(v->data_view.data(), v->data_view.size(), resolved, nullptr);
+    if (offer) *offer = v->offer;
+    return true;
+}
+
+bool NetSource::take_scene(uint64_t key, std::vector<caliper_live::SceneItem>* out) {
+    View* v = by_id(key);
+    if (!v || v->kind != CALIPER_NET_KIND_SCENE || v->scene.empty()) return false;
+    for (auto& it : v->scene) out->push_back(std::move(it));
+    v->scene.clear();
     return true;
 }
 

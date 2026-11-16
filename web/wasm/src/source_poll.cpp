@@ -2,8 +2,11 @@
 #include "source_poll.h"
 
 #include "caliper/live.h"
+#include "caliper/live_net.h"
 #include "caliper/live_views.h"
+#include "live/live_views_scene.h"   // scene views (kind 6) and their messages
 #include "live/live_views_state.h"   // set_payload_map
+#include "net/wire.h"
 
 #include <algorithm>
 
@@ -95,6 +98,52 @@ void reconcile(CaliperCore* core, PollState& st, const std::vector<caliper_live:
     st.views = std::move(next);
 }
 
+// A scene view: opened with the scene's description from VIEWS, then fed the
+// source's messages in order, as live_core.cpp does for the app. While the
+// display is paused the source holds them.
+int poll_scene(CaliperCore* core, caliper_live::Source& src, PollState& st, PolledView& v) {
+    namespace wire = caliper_net::wire;
+    if (!v.shown) {
+        if (!v.error.empty()) return 0;
+        wire::SceneView info{CALIPER_NET_SPACE_3D, "+y", "m"};
+        caliper_net::Json offer;
+        std::string why;
+        if (src.data_view_of(v.key, nullptr, &offer)) wire::scene_view_info(offer, &info, &why);
+        if (!caliper_live_views::scene_open(core, v.name, info, &why)) {
+            v.error = why;
+            ++st.errors;
+            return 0;
+        }
+        v.shown = true;
+    }
+    if (caliper_core_live_paused(core)) return 0;
+    std::vector<caliper_live::SceneItem> items;
+    if (!src.take_scene(v.key, &items)) return 0;
+    caliper_live_views::scene_begin_round(core, v.name);
+    int applied = 0;
+    for (const caliper_live::SceneItem& it : items) {
+        std::string why;
+        bool ok = true;
+        if (const auto* u = std::get_if<wire::SceneUpdate>(&it.msg)) {
+            ok = caliper_live_views::scene_apply(core, v.name, *u, &why);
+            v.seq = u->seq;
+            ++applied;
+        } else if (const auto* c = std::get_if<wire::SceneClear>(&it.msg)) {
+            ok = caliper_live_views::scene_apply(core, v.name, *c, &why);
+            ++applied;
+        } else {
+            caliper_live_views::scene_note(core, v.name, std::get<std::string>(it.msg));
+        }
+        if (!ok) {
+            ++st.errors;
+            v.error = why;
+        }
+    }
+    v.updates += (uint64_t)applied;
+    st.updates += (uint64_t)applied;
+    return applied;
+}
+
 }  // namespace
 
 int poll_source(CaliperCore* core, caliper_live::Source& src, PollState& st) {
@@ -106,6 +155,10 @@ int poll_source(CaliperCore* core, caliper_live::Source& src, PollState& st) {
 
     int applied = 0;
     for (auto& v : st.views) {
+        if (v.kind == (uint32_t)caliper_live_views::kKindScene) {
+            applied += poll_scene(core, src, st, v);
+            continue;
+        }
         caliper_live::Snapshot s;
         if (!src.take(v.key, v.seq, &s)) continue;
         if (!apply(core, v, s, st.relative_stamps)) {

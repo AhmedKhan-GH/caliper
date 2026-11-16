@@ -34,6 +34,8 @@
 #include "caliper/live_net.h"   // CALIPER_NET_BYE_NORMAL
 #include "caliper/live_views.h"
 #include "embed/embed_core.h"
+#include "live/live_scene.h"         // a scene view's facts
+#include "live/live_views_scene.h"
 #include "live/live_views_state.h"   // the points check reads the view's camera and payload
 #include "host_services.h"
 #include "renderer/webgpu_renderer.h"
@@ -147,6 +149,7 @@ int32_t kind_of(const std::string& k) {
     if (k == "points") return CALIPER_LIVE_KIND_POINTS;
     if (k == "series") return CALIPER_LIVE_KIND_SERIES;
     if (k == "histogram") return CALIPER_LIVE_KIND_HISTOGRAM;
+    if (k == "scene") return caliper_live_views::kKindScene;   // the protocol 3.2 draft
     return 0;
 }
 
@@ -498,6 +501,16 @@ std::string facts(const caliper_live_views::View& v) {
             for (float c : v.values) total += c;
             std::snprintf(b, sizeof b, "{\"kind\":\"histogram\",\"bins\":%zu,\"lo\":%s,\"hi\":%s,\"total\":%s}",
                           v.values.size(), num(v.lo).c_str(), num(v.hi).c_str(), num(total).c_str());
+            return b;
+        }
+        case caliper_live_views::kKindScene: {
+            const caliper_live_views::SceneView* sv = caliper_live_views::scene_view(v);
+            if (!sv) return v.scene ? "{\"kind\":\"scene\",\"notice\":" + caliper_net::Json(v.scene->notice).dump() + "}"
+                                    : std::string();
+            const caliper_live_views::SceneCounts c = sv->counts();
+            std::snprintf(b, sizeof b, "{\"kind\":\"scene\",\"entities\":%u,\"items\":%llu,\"copied\":%llu,\"gpu_ms\":%s}",
+                          c.entities, (unsigned long long)c.items, (unsigned long long)c.bytes_last,
+                          num(sv->cost().gpu_ms).c_str());
             return b;
         }
         default:

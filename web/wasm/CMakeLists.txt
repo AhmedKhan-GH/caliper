@@ -56,6 +56,17 @@ target_include_directories(caliper_view_layer PUBLIC
     ${TP}/imgui
     ${TP}/imgui/backends
     ${TP}/implot)
+# The scene view of the live views (src/host/live/live_scene.h) and what it draws through: the
+# scene core over the graphics layer's WebGPU backend, which the renderer owns.
+target_sources(caliper_view_layer PRIVATE
+    ${CALIPER_ROOT}/src/host/live/live_views_scene.cpp
+    ${CALIPER_ROOT}/src/host/live/live_scene.cpp
+    ${CALIPER_ROOT}/src/host/scene/path.cpp
+    ${CALIPER_ROOT}/src/host/scene/scene_tree.cpp
+    ${CALIPER_ROOT}/src/host/scene/camera.cpp
+    ${CALIPER_ROOT}/src/host/scene/compile.cpp
+    ${CALIPER_ROOT}/src/host/scene/pick.cpp
+    ${CALIPER_ROOT}/src/host/scene/backend_resources.cpp)
 target_compile_definitions(caliper_view_layer PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
 # The WebGPU port must be named when compiling too: it provides webgpu.h.
 target_compile_options(caliper_view_layer PUBLIC --use-port=emdawnwebgpu)
