@@ -120,6 +120,9 @@ struct SpecPage::Impl {
     std::optional<std::future<cb::CommandResult>> request;
     std::string request_error;
 
+    Seams seams;
+    std::string focused;   // the focused panel's id, "" for none
+
     // The session the page reads: a new one (the workspace opened, or the
     // session closed) gets a new source.
     void bind(AppSession& app) {
@@ -209,8 +212,33 @@ struct SpecPage::Impl {
                                        ImGuiWindowFlags_NoScrollWithMouse;
         const bool open = ImGui::Begin("##caliper_spec_page", nullptr, flags);
         ImGui::PopStyleVar(3);
-        if (open) runtime->draw(area, house_spec_look());
+        if (open) {
+            runtime->draw(area, house_spec_look());
+            focus_and_frame();
+        }
         ImGui::End();
+    }
+
+    // A click inside a shown panel focuses it, and the focused panel gets a
+    // bronze frame, the palette's colour for focus. A panel that is no longer
+    // shown loses the focus.
+    void focus_and_frame() {
+        const SpecLayout& layout = runtime->layout();
+        const bool clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+                             ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+        const ImVec2 mouse = ImGui::GetMousePos();
+        bool still_shown = false;
+        for (const auto& lp : layout.panels) {
+            const ImRect r(ImVec2(lp.rect.x, lp.rect.y), ImVec2(lp.rect.right(), lp.rect.bottom()));
+            if (clicked && r.Contains(mouse)) focused = lp.id;
+            if (lp.id == focused) still_shown = true;
+        }
+        if (!still_shown) focused.clear();
+        for (const auto& lp : layout.panels) {
+            if (lp.id != focused) continue;
+            ImGui::GetWindowDrawList()->AddRect(ImVec2(lp.rect.x, lp.rect.y),
+                                                ImVec2(lp.rect.right(), lp.rect.bottom()), sternbild::col::bronze);
+        }
     }
 };
 
@@ -270,17 +298,43 @@ bool SpecPage::enter_file(AppSession& session, const std::string& spec_path, std
     return true;
 }
 
-SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, JobsTray* tray) {
+SpecPage::Result SpecPage::draw(AppSession& session, const char* renderer_name, JobsTray* tray, bool escape) {
     Impl& im = *impl_;
     im.bind(session);
     im.refresh(session);
     Result r;
     r.home = im.draw_bars(renderer_name, tray);
     im.draw_spec();
+    // ⌘K and Escape (spec_key_action). ImGuiMod_Ctrl is the Command key on
+    // macOS, as on the landing screen.
+    const bool command_key = ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_K);
+    switch (spec_key_action(command_key, escape, !im.focused.empty())) {
+        case SpecKeyAction::panel_prompt:
+            if (im.seams.panel_prompt) im.seams.panel_prompt(im.focused);
+            break;
+        case SpecKeyAction::page_command:
+            if (im.seams.page_command) im.seams.page_command();
+            break;
+        case SpecKeyAction::unfocus:
+            im.focused.clear();
+            break;
+        case SpecKeyAction::home:
+            r.home = true;
+            break;
+        case SpecKeyAction::none:
+            break;
+    }
     return r;
 }
 
+void SpecPage::set_seams(Seams seams) { impl_->seams = std::move(seams); }
+
+const std::string& SpecPage::focused_panel() const { return impl_->focused; }
+
+void SpecPage::focus_panel(const std::string& panel_id) { impl_->focused = panel_id; }
+
 void SpecPage::leave() {
+    impl_->focused.clear();
     impl_->runtime->clear_spec();
     impl_->journal_read.reset();
     impl_->has_spec = false;
@@ -337,6 +391,7 @@ std::shared_ptr<PanelRenderSeam> SpecPage::make_panel_renderer() {
 // Without the builder there is no session and no spec: the page never opens.
 struct SpecPage::Impl {
     std::string title;
+    std::string focused;
 };
 
 SpecPage::SpecPage() : impl_(std::make_unique<Impl>()) {}
@@ -346,7 +401,10 @@ bool SpecPage::take_open(const AppSession&) { return false; }
 bool SpecPage::request_open(AppSession&, const std::string&) { return false; }
 bool SpecPage::request_answered(std::string*) { return false; }
 void SpecPage::enter(AppSession&) {}
-SpecPage::Result SpecPage::draw(AppSession&, const char*, JobsTray*) { return {}; }
+SpecPage::Result SpecPage::draw(AppSession&, const char*, JobsTray*, bool) { return {}; }
+void SpecPage::set_seams(Seams) {}
+const std::string& SpecPage::focused_panel() const { return impl_->focused; }
+void SpecPage::focus_panel(const std::string&) {}
 void SpecPage::leave() {}
 const std::string& SpecPage::title() const { return impl_->title; }
 const std::string& SpecPage::applet_id() const { return impl_->title; }

@@ -15,6 +15,7 @@
 #include "api/command_gateway.h"
 #include "builder/app_session.h"
 #include "builder/panel_renderer.h"
+#include "builder/spec_page.h"
 #include "job_system.h"
 #include "test_temp.h"
 #ifndef _WIN32
@@ -643,6 +644,17 @@ TEST_CASE("app session: an agent's spec edit is held with its diff in the pendin
     CHECK(held.get().ok);
     CHECK(s.open_spec()->spec.panels.size() == 1);
     CHECK(json::parse(gateway->approval_json(id))["state"] == "decided");
+}
+
+TEST_CASE("spec page: Command K and Escape have one meaning each, by whether a panel has the focus") {
+    using caliper_host::spec_key_action;
+    using A = caliper_host::SpecKeyAction;
+    CHECK(spec_key_action(true, false, true) == A::panel_prompt);    // the inline prompt in the panel
+    CHECK(spec_key_action(true, false, false) == A::page_command);   // the page's command input
+    CHECK(spec_key_action(false, true, true) == A::unfocus);         // Escape gives the focus up first
+    CHECK(spec_key_action(false, true, false) == A::home);           // then goes Home
+    CHECK(spec_key_action(false, false, true) == A::none);
+    CHECK(spec_key_action(true, true, true) == A::panel_prompt);     // both in one frame: the command key
 }
 
 TEST_CASE("app session: Caliper API's gateway opens the default workspace on the first command") {

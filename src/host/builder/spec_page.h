@@ -37,6 +37,7 @@
 // a stub that never opens, so the app builds and behaves as before.
 // ============================================================================
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -47,6 +48,22 @@ namespace caliper_host {
 class AppSession;
 class JobsTray;
 class PanelRenderSeam;
+
+// How the spec page routes ⌘K (Ctrl K elsewhere) and Escape, one meaning
+// each. ⌘K opens the command input of the page: with a panel focused, the
+// inline prompt inside that panel, which is the widget agent's surface;
+// with none, the page's own command input, as ⌘K opens the landing screen's.
+// Escape first gives the panel's focus up, and goes Home only when no panel
+// has it. A text field that has the keyboard, such as an open prompt, takes
+// Escape before the page does (the app's Escape test leaves it alone then).
+// A click inside a panel focuses it, and the page draws its frame in bronze.
+enum class SpecKeyAction { none, panel_prompt, page_command, unfocus, home };
+
+inline SpecKeyAction spec_key_action(bool command_key, bool escape, bool panel_focused) {
+    if (command_key) return panel_focused ? SpecKeyAction::panel_prompt : SpecKeyAction::page_command;
+    if (escape) return panel_focused ? SpecKeyAction::unfocus : SpecKeyAction::home;
+    return SpecKeyAction::none;
+}
 
 class SpecPage {
 public:
@@ -82,7 +99,20 @@ public:
     // not read or validate.
     bool enter_file(AppSession& session, const std::string& spec_path, std::string* error);
     // One frame of the page, inside an ImGui frame the caller opened.
-    Result draw(AppSession& session, const char* renderer_name, JobsTray* tray);
+    // `escape`: Escape was pressed and nothing else of the app takes it.
+    Result draw(AppSession& session, const char* renderer_name, JobsTray* tray, bool escape = false);
+
+    // What ⌘K opens (spec_key_action): the inline prompt inside the focused
+    // panel, which the widget agent's surface sets, and the page's command
+    // input. Unset, ⌘K does nothing there yet.
+    struct Seams {
+        std::function<void(const std::string& panel_id)> panel_prompt;
+        std::function<void()> page_command;
+    };
+    void set_seams(Seams seams);
+    // The focused panel's id, "" for none; focus_panel("") gives it up.
+    const std::string& focused_panel() const;
+    void focus_panel(const std::string& panel_id);
     // After the last frame that drew the page has been rendered: releases
     // the page's textures and forgets the spec.
     void leave();
