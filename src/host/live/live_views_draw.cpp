@@ -1276,8 +1276,8 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
 // The scale bar in the bottom-right corner of the picture at p0 of `size`
 // logical pixels: a bar kScaleBarThickness thick with end ticks kScaleBarTick
 // tall, kScaleBarMargin in from the edges, its length above it in the small
-// text, over a translucent band of the window's background.
-void draw_scale_bar(ImDrawList* dl, const Look& L, ImVec2 p0, ImVec2 size, const caliper_scene::ScaleBar& b) {
+// text, over a translucent band of the window's background. Returns the band.
+ImRect draw_scale_bar(ImDrawList* dl, const Look& L, ImVec2 p0, ImVec2 size, const caliper_scene::ScaleBar& b) {
     const float th = (float)caliper_scene::kScaleBarThickness, tick = (float)caliper_scene::kScaleBarTick;
     const float x1 = std::floor(p0.x + size.x - (float)caliper_scene::kScaleBarMargin);
     const float y1 = std::floor(p0.y + size.y - (float)caliper_scene::kScaleBarMargin);
@@ -1289,13 +1289,14 @@ void draw_scale_bar(ImDrawList* dl, const Look& L, ImVec2 p0, ImVec2 size, const
     const float ty = std::floor(y1 - tick - 2.0f - ts.y);
     const ImVec4 bg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
     const float pad = 4.0f;
-    dl->AddRectFilled(ImVec2(std::min(x0, tx) - pad, ty - 2.0f), ImVec2(std::max(x1, tx + ts.x) + pad, y1 + pad),
-                      ImGui::GetColorU32(ImVec4(bg.x, bg.y, bg.z, 0.6f)), 3.0f);
+    const ImRect band(ImVec2(std::min(x0, tx) - pad, ty - 2.0f), ImVec2(std::max(x1, tx + ts.x) + pad, y1 + pad));
+    dl->AddRectFilled(band.Min, band.Max, ImGui::GetColorU32(ImVec4(bg.x, bg.y, bg.z, 0.6f)), 3.0f);
     dl->AddRectFilled(ImVec2(x0, y1 - th), ImVec2(x1, y1), L.text);
     dl->AddRectFilled(ImVec2(x0, y1 - tick), ImVec2(x0 + th, y1), L.text);
     dl->AddRectFilled(ImVec2(x1 - th, y1 - tick), ImVec2(x1, y1), L.text);
     dl->AddText(ImVec2(tx, ty), L.text, b.label.c_str());
     if (L.small_size > 0.0f) ImGui::PopFont();
+    return band;
 }
 }  // namespace
 
@@ -1400,14 +1401,19 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (const uint64_t id = sc->imgui_texture())
         dl->AddImage((ImTextureID)id, p0, ImVec2(p0.x + avail.x, p0.y + avail.y));
-    if (const caliper_scene::ScaleBar bar = sc->scale_bar(avail.x, avail.y); bar.visible)
-        draw_scale_bar(dl, S->look, p0, avail, bar);
+    std::string bar_text;   // where the bar is, for the UI driver's `where`
+    if (const caliper_scene::ScaleBar bar = sc->scale_bar(avail.x, avail.y); bar.visible) {
+        const ImRect band = draw_scale_bar(dl, S->look, p0, avail, bar);
+        char t[96];
+        std::snprintf(t, sizeof t, " scale_bar %.2f %.2f %.2f %.2f", band.Min.x, band.Min.y, band.Max.x, band.Max.y);
+        bar_text = t;
+    }
 
     v.geo_valid = true;
     v.geo_area[0] = p0.x; v.geo_area[1] = p0.y; v.geo_area[2] = avail.x; v.geo_area[3] = avail.y;
     v.geo_ydown = false;
     std::fill(v.geo_window, v.geo_window + 4, 0.0);
-    v.geo_text = sc->camera_text();
+    v.geo_text = sc->camera_text() + bar_text;
     ImGui::End();
 }
 

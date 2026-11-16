@@ -640,6 +640,9 @@ class Where:
         self.fovy = float(f[f.index("fovy") + 1])
         p = f.index("target_px")
         self.target_px = (int(f[p + 1]), int(f[p + 2]))
+        # The scale bar's band in points, which the view draws over its picture, if any.
+        s = f.index("scale_bar") if "scale_bar" in f else -1
+        self.scale_bar = [float(v) for v in f[s + 1:s + 5]] if s >= 0 else None
 
     def pixel(self, p, k: float):
         """The frame pixel (x, y) at which world point p is drawn (up is +z)."""
@@ -661,12 +664,13 @@ class Where:
         return (ax + (nx * 0.5 + 0.5) * aw) * k, (ay + (0.5 - ny * 0.5) * ah) * k
 
 
-def parity(cur, ref):
+def parity(cur, ref, ignore=None):
     """The parity rules of the scene rows (design/web-geometry.md): away from
     edges a pixel of a flat colour (the path, the marker, the frame, the
     background) equals the reference exactly and a lit pixel of the surface
     within 2 levels; a pixel within one pixel of an edge in the reference may
-    take the colour of either side, within 2 levels."""
+    take the colour of either side, within 2 levels. Pixels where ``ignore``
+    is true are left out."""
     if cur.shape != ref.shape:
         return False, f"size {cur.shape} against the reference's {ref.shape}"
     c, r = cur.astype(np.int32), ref.astype(np.int32)
@@ -680,6 +684,8 @@ def parity(cur, ref):
         flat |= (r == np.array(colour)).all(-1)
     either = np.abs(near3 - c[None]).max(-1).min(0)
     bad = (~edge & ((diff > 2) | (flat & (diff > 0)))) | (edge & (either > 2))
+    if ignore is not None:
+        bad &= ~ignore
     return not bad.any(), f"{int(bad.sum())} of {h * w} pixels outside the parity rules, " \
                           f"largest difference {int(diff.max())}"
 
@@ -778,7 +784,15 @@ def test_capture(notebook, tmp_path):
             Image.fromarray(area).save(out)
             pytest.skip(f"no reference yet: review {out} and commit it as "
                         f"{REFERENCE.relative_to(REPO)} (CALIPER_DEMO0_WRITE_REFERENCE=1)")
-        ok, report = parity(area, np.asarray(Image.open(REFERENCE).convert("RGB")))
+        # The scale bar is an overlay of the view layer, drawn over the picture
+        # since the reference was taken, and checked by its own tests: its band
+        # is left out of the comparison.
+        ignore = np.zeros(area.shape[:2], bool)
+        if where.scale_bar:
+            x0, y0, x1, y1 = where.scale_bar
+            ignore[max(0, int((y0 - where.area[1]) * k) - 1):int(math.ceil((y1 - where.area[1]) * k)) + 1,
+                   max(0, int((x0 - where.area[0]) * k) - 1):int(math.ceil((x1 - where.area[0]) * k)) + 1] = True
+        ok, report = parity(area, np.asarray(Image.open(REFERENCE).convert("RGB")), ignore)
         assert ok, report
     finally:
         if app.poll() is None:

@@ -14,7 +14,8 @@
 //   toggle <param>        a click on a boolean parameter's box
 //   select <view>         a shift-drag across the top quarter of the view's image or plot area
 //   where <view>          logs the view's data area (x y w h in points), the framebuffer's
-//                         pixels per point and the view's own geometry text (a scene's camera)
+//                         pixels per point and the view's own geometry text (a scene's camera,
+//                         and its scale bar's band as "scale_bar x0 y0 x1 y1" in points)
 //   leave                 the pointer leaves the window (no hover is left behind)
 //   wait <frames>         nothing for that many frames
 //   state <run state>     wait until the run state is <run state> (paused, running, ...)
