@@ -77,9 +77,10 @@ std::string refused(const std::string& id, const char* code, const char* message
 class SessionGateway final : public CommandGateway {
 public:
     explicit SessionGateway(caliper_builder::Session& session)
-        : session_(session), table_(dump(caliper_builder::command_table_to_json())) {}
+        : session_(session), table_(dump(caliper_builder::command_table_to_json())), agent_table_(agent_table()) {}
 
     std::string table_json() const override { return table_; }
+    std::string agent_table_json() const override { return agent_table_; }
 
     std::unique_ptr<PendingCommand> submit(CommandRequest request) override {
         try {
@@ -104,6 +105,17 @@ public:
 private:
     caliper_builder::Session& session_;
     const std::string table_;
+    const std::string agent_table_;
+
+    // The table without the commands agents may not run (`agents: false`).
+    static std::string agent_table() {
+        json table = caliper_builder::command_table_to_json();
+        json kept = json::array();
+        for (auto& c : table["commands"])
+            if (c.value("agents", true)) kept.push_back(std::move(c));
+        table["commands"] = std::move(kept);
+        return dump(table);
+    }
 };
 
 }  // namespace

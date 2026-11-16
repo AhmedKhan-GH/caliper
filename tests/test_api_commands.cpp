@@ -31,6 +31,7 @@
 #include <map>
 #include <memory>
 #include <sstream>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -299,6 +300,29 @@ TEST_CASE("api commands: the table, a read, spec edits and undo over a real sess
     const Response table = get(port, "/v0/commands");
     REQUIRE(table.status == 200);
     CHECK(table.value() == caliper_builder::command_table_to_json());
+    // An agent's token, mcp or agent, is shown the table without the commands
+    // it may not run (`agents: false`: history.undo and history.redo).
+    auto names_of = [](const json& t) {
+        std::set<std::string> n;
+        for (const auto& c : t["commands"]) n.insert(c["name"].get<std::string>());
+        return n;
+    };
+    const std::set<std::string> all = names_of(table.value());
+    CHECK(all.count("history.undo") == 1);
+    CHECK(all.count("history.redo") == 1);
+    for (const std::string origin : {"mcp", "agent"}) {
+        CAPTURE(origin);
+        const Response t = read_response(send_request(port, "GET", "/v0/commands", bearer(origin)));
+        REQUIRE(t.status == 200);
+        std::set<std::string> expected;
+        const json full = caliper_builder::command_table_to_json();   // kept alive for the loop
+        for (const auto& c : full["commands"])
+            if (c.value("agents", true)) expected.insert(c["name"].get<std::string>());
+        CHECK(names_of(t.value()) == expected);
+        CHECK(names_of(t.value()).count("history.undo") == 0);
+        CHECK(names_of(t.value()).count("history.redo") == 0);
+        CHECK(names_of(t.value()).size() == all.size() - 2);
+    }
 
     // A read.
     const json listed = command(port, "applet.list", json::object());

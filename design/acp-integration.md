@@ -747,9 +747,6 @@ Waiting for later work:
   - timing in tests: a 100 ms frame in `tests/test_app_session.cpp` (about line 327), waits in
     `src/builder/mcp/tests/test_process.cpp` (about lines 370 and 387), and the crash-report folder that
     `src/host/builder/tests/test_widget_app.cpp` reads;
-  - the stand-in host, `caliper-builder-host` (`src/builder/session/command_server.cpp`), still takes the origin from
-    `X-Caliper-Origin` with its one token; it is a development tool, not the product, and its owner changes it with
-    the session library;
   - revoking an agent's token refuses its next requests and upgrades, but a stream connection that the token opened
     before stays open until it closes.
 - The review setting per origin in the side chat's settings, and running the spec validator on an agent's own edit of a

@@ -62,6 +62,11 @@ public:
     // The descriptor table, {"version": 0, "commands": [...]}, for
     // GET /v0/commands. On the server's thread.
     virtual std::string table_json() const = 0;
+    // The table an agent's token (mcp or agent) is shown: without the
+    // commands whose descriptor says `agents: false`, such as history.undo
+    // and history.redo, which the command layer refuses to those origins.
+    // The whole table unless a gateway says otherwise. On the server's thread.
+    virtual std::string agent_table_json() const { return table_json(); }
     // Hands one command to the command layer. On the frame thread.
     virtual std::unique_ptr<PendingCommand> submit(CommandRequest request) = 0;
     // {"approval": id, "state": "pending" | "decided" | "unknown",

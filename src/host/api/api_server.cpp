@@ -340,6 +340,9 @@ Verdict check(const HttpRequest& r, const TokenTable& tokens, bool command_layer
             return v;
         }
     }
+    // The token decides who asks, on every route: the command table an
+    // agent's token is shown, and a command's origin below.
+    v.origin = token_origin;
     const std::string length = trim(r.header("content-length"));
     if (rt == Route::Command) {
         for (const char* h : {"authorization", "content-length", "content-type", "x-caliper-group",
@@ -575,7 +578,9 @@ struct Server::Impl {
                         {"Referrer-Policy", "no-referrer"}});
                 return;
             case Route::Commands:
-                answer(c, 200, "application/json", gw->table_json());
+                // An agent's token is not shown the person's own commands.
+                answer(c, 200, "application/json",
+                       v.origin == "mcp" || v.origin == "agent" ? gw->agent_table_json() : gw->table_json());
                 return;
             case Route::Command: {
                 // check() passed: the Content-Length is a number of at most 1 MiB.

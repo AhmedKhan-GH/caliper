@@ -151,7 +151,7 @@ ws://127.0.0.1:7341/v3/stream?token=<token>
 
 ### GET /v0/commands
 
-The command layer's descriptor table: every command with its summary, the JSON Schema of its arguments and of its result, examples, and whether it mutates, is destructive or runs on the frame thread. It is the table that `caliper-mcp` and `caliper-agent` turn into tools.
+The command layer's descriptor table: every command with its summary, the JSON Schema of its arguments and of its result, examples, and whether it mutates, is destructive, runs on the frame thread or may be sent by an agent (`agents`). It is the table that `caliper-mcp` and `caliper-agent` turn into tools. Requested with the API file's token or an agent's own, it leaves out the commands with `agents` false, `history.undo` and `history.redo`, which are yours: the command layer refuses them to those tokens with `command.not_allowed`, and an agent reverts a change with an edit that you review.
 
 ```json
 {"commands":[{"args":{"additionalProperties":false,"properties":{},"required":[],"type":"object"},"destructive":false,"examples":[{}],"frame_thread":false,"mutates":false,"name":"applet.list","result":{"...":"..."},"summary":"..."}],"version":0}
@@ -188,7 +188,7 @@ Everything the command layer refuses comes this way: a name that is not a comman
 
 A held request waits without blocking anything else: the stream, the other endpoints and other commands are served meanwhile. Spec edits from `mcp` and `agent` are reviewed by default and therefore wait too.
 
-The app shows each pending approval to the person as a card, in a strip at the bottom of the window above the jobs tray, on every page: who asks (MCP agent, Side chat, Widget agent or API), the command and its target, the change of a spec edit as its changed keys with the validator's warnings and the full diff on demand, what a destructive command would lose, the time left before a held request times out, and Approve and Deny. On the spec page the panel an edit changes is marked REVIEW. The app's Activity lists each request when it starts waiting and when it is decided, times out or is withdrawn. Only the person decides there; a test of the hidden app decides through `CALIPER_TEST_APPROVALS` ([Host variables](environment.md#host-variables)).
+The app shows each pending approval to the person as a card, in a strip at the bottom of the window above the jobs tray, on every page: who asks (MCP agent, Side chat, Widget agent or API), the command and its target, the change of a spec edit as its changed keys with the validator's warnings and the full diff on demand, what a destructive command would lose, the time left before a held request times out, and Approve and Deny. On the spec page the panel an edit changes is marked REVIEW. The app's Activity lists each request when it starts waiting and when it is decided, times out or is withdrawn. When what a card showed changes while a held request waits, such as the content an overwrite would write, an approval no longer holds: the card is replaced by a new one for the new content, and the request keeps waiting on it. Only the person decides there; a test of the hidden app decides through `CALIPER_TEST_APPROVALS` ([Host variables](environment.md#host-variables)).
 
 ### GET /v0/approvals/{id}
 
