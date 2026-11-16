@@ -382,7 +382,7 @@ The web viewer reads the canonical JSON and draws a spec with the same primitive
 
 - The primitives are the live view types plus table and text, which have wire forms.
 - The browser runtime implements the three tensor transforms; a producer may also compute them as a data view and send only the result.
-- A `sql` source runs where the tables are, in the app or later in a hub, and its result travels as a table. A page that `caliper.serve()` serves from a script has no DuckDB, so it cannot run one; that is a recorded limit until the serving modes say which of them run SQL.
+- A `sql` source has two routes to the browser. In the first, the query runs where the data lives, in the producer, the app or a hub, and its result travels as a table. This is the default of version 0. In the second, the query runs in the page with DuckDB-WASM, the official WebAssembly build of DuckDB, over data loaded into the page. That is the later path, and the format needs no change for it, because a spec says what to query and not where. A page that `caliper.serve()` serves from a script runs a `sql` source only once one of the two routes exists for it.
 - The JSON form holds no dates, no `null`, no non-finite numbers and no integers that JavaScript cannot read exactly, and its keys outside `x` are ASCII.
 
 ## The manifest of a spec applet
@@ -501,4 +501,4 @@ The schema test reads the schema through a test-only checker, `tests/schema_chec
 - Section 6 lets a split hold several children with one `ratio`, without saying what the ratio means for more than two. The fix: `ratio` is allowed only with exactly two children.
 - Section 2 gives workspace applet ids an `_`, which a manifest id may not hold. The fix: `applet.save` maps `_` to `-` and refuses a clash.
 - The manifest's `[compat].abi_epoch` is required today, which a spec applet cannot meet. The fix: the loader will not require it for `kind = "spec"`.
-- The web viewer has no DuckDB, so a `sql` source needs a server that holds the tables. This is recorded as a limit rather than fixed.
+- A `sql` source runs in the browser by one of two routes: the query runs where the data lives and the result is streamed, which is the default of version 0, or it runs in the page with DuckDB-WASM, which is the later path. Neither route is built yet.
