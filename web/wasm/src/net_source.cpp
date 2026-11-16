@@ -190,6 +190,19 @@ void NetSource::subscribe(View& v) {
     send_msg(s);
 }
 
+// The scene's queue passed its bound while the display was paused and was emptied: a SUBSCRIBE
+// on the same sub replaces the subscription, and the sender answers with the scene's state,
+// whose reset the queue waits for (live/scene_queue.h).
+void NetSource::resubscribe(View& v) {
+    v.request_id = next_request_++;
+    wire::Subscribe s;
+    s.sub = v.sub;
+    s.view = v.name;
+    s.request_id = v.request_id;
+    s.max_rate = opt_.max_rate;
+    send_msg(s);
+}
+
 void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
     last_rx_ms_ = now_ms();
     ++messages_;
@@ -228,7 +241,8 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
             uint64_t sub = 0;
             const Json* s = r.frame.meta.find("sub");
             if (View* v = s && s->get_u64(&sub) ? by_sub((uint32_t)sub) : nullptr)
-                caliper_live::scene_queue_push(v->scene, caliper_live::SceneItem{nullptr, "ignored: " + r.message});
+                if (caliper_live::scene_queue_push(v->scene, caliper_live::SceneItem{nullptr, "ignored: " + r.message}))
+                    resubscribe(*v);
         }
         return;
     }
@@ -363,15 +377,16 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
                 std::string ignored;
                 for (const wire::Section& sec : r.frame.sections)
                     if (!m.array(sec.name)) ignored += (ignored.empty() ? "" : ", ") + sec.name;
-                if (!ignored.empty())
+                if (!ignored.empty() &&
                     caliper_live::scene_queue_push(
                         v->scene, caliper_live::SceneItem{nullptr, "ignored in " + (m.path.empty() ? std::string("the root") : m.path) +
-                                                                       " " + m.part + ": " + ignored});
+                                                                       " " + m.part + ": " + ignored}))
+                    resubscribe(*v);
             }
             caliper_live::SceneItem item;
             item.keep = keep;
             item.msg = std::move(m);
-            caliper_live::scene_queue_push(v->scene, std::move(item));
+            if (caliper_live::scene_queue_push(v->scene, std::move(item))) resubscribe(*v);
         } else if constexpr (std::is_same_v<T, wire::Ping>) {
             wire::Pong pong;
             pong.nonce = m.nonce;
@@ -519,9 +534,9 @@ bool NetSource::data_view_of(uint64_t key, Json* resolved, Json* offer) {
 
 bool NetSource::take_scene(uint64_t key, std::vector<caliper_live::SceneItem>* out) {
     View* v = by_id(key);
-    if (!v || v->kind != CALIPER_NET_KIND_SCENE || v->scene.empty()) return false;
-    for (auto& it : v->scene) out->push_back(std::move(it));
-    v->scene.clear();
+    if (!v || v->kind != CALIPER_NET_KIND_SCENE || v->scene.items.empty()) return false;
+    for (auto& it : v->scene.items) out->push_back(std::move(it));
+    v->scene.items.clear();
     return true;
 }
 

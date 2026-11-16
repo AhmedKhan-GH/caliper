@@ -464,6 +464,12 @@ order (`src/host/live/live_views_scene.h`): the parts points, lines as segments 
 of entities and parts, and the reset that opens a scene's state for a new subscription. The view keeps each entity's
 static and stamped batches apart, so a clear that is not static leaves a static batch drawn.
 
+While the display is paused, the source keeps the scene's messages (`src/host/live/scene_queue.h`), only what the
+view would still show: a reset drops everything before it, a clear drops the waiting updates it removes and the
+clears it covers, and an update replaces the waiting one of its entity part and layer. Resets and clears are never
+dropped. A sender that clears ever new paths could still grow the queue, so past 8,192 messages it empties, the source
+subscribes again on the same subscription, and the queue waits for the sender's new state.
+
 - **Buffers.** The arrays of a network message are host bytes. Each is written into a buffer of the layer that the view
   owns, one copy that the view counts in its copy counters and its header reports; strip lengths become the scene core's
   break mask, and per-strip colours or values are expanded to their vertices on the way. A batch replaced by one of the
