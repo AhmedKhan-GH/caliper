@@ -518,7 +518,7 @@ bool apply_histogram(View& v, const CaliperLiveSnapshot& s, std::string* why) {
 bool validate(CaliperCore* core, const CaliperLiveSnapshot& s, std::string* why) {
     auto no = [&](const std::string& w) { *why = w; return false; };
     if (s.kind == kKindScene)
-        return no("a scene view takes the scene messages of wire protocol 3.2, not snapshots");
+        return no("bad kind 6 for a snapshot: a scene view takes the scene messages of wire protocol 3.2");
     if (s.kind < CALIPER_LIVE_KIND_HEATMAP || s.kind > CALIPER_LIVE_KIND_HISTOGRAM)
         return no("bad kind " + std::to_string(s.kind) +
                   " (1 heatmap, 2 image, 3 points, 4 series, 5 histogram)");
