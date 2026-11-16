@@ -62,9 +62,15 @@
 //                        ("Setup", "Ask in chat", ...) once the surface offers it,
 //                        through the surface's own act(), as its button does
 //   settings open|close  the widget agent's settings (agent_settings.h)
+//   settings preset <id> | model <name>
+//                        chooses a preset, or sets the model, as a click on its
+//                        button or Enter in its field does
 //   settings until open | note <text>|none | state <text>|none
 //                        wait until the settings are open, show that GPU note,
 //                        or that plain state
+//   files <folder> <prefix> <count>
+//                        wait until the folder holds that many files whose
+//                        names begin with <prefix> (the API's agent files)
 //   touch <path>         creates an empty file (a stub agent's gate)
 //   append <path> <line> appends a line to a file (a test's approval decision)
 //   quit                 close the app
@@ -192,6 +198,12 @@ public:
             if (what == "open" || what == "close") {
                 settings_->set_open(what == "open");
                 next("settings " + what);
+            } else if (what == "preset" && !which.empty()) {
+                settings_->choose_preset(which);
+                next("settings preset " + which);
+            } else if (what == "model" && !which.empty()) {
+                settings_->set_model(which);
+                next("settings model " + which);
             } else if (what == "until" && which == "open") {
                 if (!settings_->is_open()) return patience("the settings are closed");
                 next("the settings are open");
@@ -202,7 +214,7 @@ public:
                 if (settings_->state() != want) return patience("the settings' state is " + shown(settings_->state()));
                 next("the settings' state is " + shown(want));
             } else {
-                error_ = "settings takes open, close or until open|note|state";
+                error_ = "settings takes open, close, preset, model or until open|note|state";
             }
 #else
             error_ = "settings: the builder is not in this build";
@@ -295,6 +307,21 @@ public:
             if (sel.empty()) return patience("no selection");
             std::ofstream(s.arg) << sel << "\n";
             next("wrote the selection to " + std::filesystem::path(s.arg).filename().string());
+            return;
+        }
+        if (s.verb == "files") {
+            std::stringstream words(s.arg);
+            std::string folder, prefix;
+            int want = -1;
+            words >> folder >> prefix >> want;
+            if (folder.empty() || prefix.empty() || want < 0) return void(error_ = "files takes <folder> <prefix> <count>");
+            int n = 0;
+            std::error_code ec;
+            for (std::filesystem::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
+                if (it->path().filename().string().rfind(prefix, 0) == 0) ++n;
+            const std::string what = std::to_string(n) + (n == 1 ? " file " : " files ") + prefix + "*";
+            if (n != want) return patience(what);
+            next(what);
             return;
         }
         if (s.verb == "wait-file") {

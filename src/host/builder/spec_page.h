@@ -159,8 +159,11 @@ public:
     // (builder/widget_app.h).
     void set_hidden(bool hidden);
     // The widget agent's settings (agent_settings.h): the inline surface's
-    // Setup and Model open them, its agent is made from them, and it is made
-    // again after they change while the surface is closed. Null: no settings.
+    // Setup and Model open them, and its agent is made from them. A change
+    // applies at once, on any page: the open prompt closes (a running turn is
+    // cancelled, a preview discarded) and the agent goes with its sidecar and
+    // its API token; the next ⌘K makes it again from the settings. The page
+    // listens until shutdown(). Null: no settings.
     void set_agent_settings(AgentSettings* settings);
     // For the hidden app's input driver (builder/spec_ui_driver.h): a shown
     // panel's rectangle in window points, and the inline surface's state

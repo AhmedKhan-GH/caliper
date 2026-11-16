@@ -242,9 +242,12 @@ public:
 
     bool is_open() const { return open_; }
     void set_open(bool open);
-    // Grows with every change of the choice or of a key, so that the widget
-    // agent is made again with it.
+    // Grows with every change of the choice or of a key, and with a probe's
+    // answer, so that the widget agent is made again with it. `on_change`
+    // runs on the frame thread after each change (the spec page drops its
+    // widget agent then); one listener, null for none.
     int revision() const { return revision_; }
+    void set_on_change(std::function<void()> on_change) { on_change_ = std::move(on_change); }
 
     // ---- the choice
     const AgentSettingsData& data() const { return data_; }
@@ -300,6 +303,7 @@ public:
 
 private:
     void changed();
+    void bump();   // the revision grows and the listener runs
     void save();
     void run_probe(std::vector<std::string> extra, bool list_only);
 
@@ -307,6 +311,7 @@ private:
     AgentSettingsData data_;
     bool open_ = false, focus_ = false;
     int revision_ = 0;
+    std::function<void()> on_change_;
     bool key_editing_ = false;
     std::string key_text_;
     std::string key_problem_;

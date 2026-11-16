@@ -599,8 +599,13 @@ void AgentSettings::set_open(bool open) {
 }
 
 void AgentSettings::changed() {
-    ++revision_;
     save();
+    bump();
+}
+
+void AgentSettings::bump() {
+    ++revision_;
+    if (on_change_) on_change_();
 }
 
 void AgentSettings::save() {
@@ -689,8 +694,8 @@ bool AgentSettings::save_key() {
     }
     key_problem_.clear();
     key_editing_ = false;
-    ++revision_;   // the key's row and the widget agent; nothing is written to the settings file
     if (options_.log) options_.log("key", c.preset ? c.preset->name : c.account, "set");
+    bump();   // the key's row and the widget agent; nothing is written to the settings file
     return true;
 }
 
@@ -708,8 +713,8 @@ bool AgentSettings::remove_key() {
         key_problem_ = "Not removed";
         return false;
     }
-    ++revision_;
     if (options_.log) options_.log("key", c.preset ? c.preset->name : c.account, "removed");
+    bump();   // the widget agent's sidecar, which holds the key, ends now
     return true;
 }
 
@@ -827,7 +832,7 @@ void AgentSettings::frame() {
     } else {
         answer_ = std::move(a);
         answer_for_ = done->for_key;
-        ++revision_;   // the widget agent reads the cache again
+        bump();   // the widget agent reads the cache again
     }
 }
 

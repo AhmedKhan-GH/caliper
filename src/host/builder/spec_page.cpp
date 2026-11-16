@@ -168,6 +168,20 @@ struct SpecPage::Impl {
     }
     AgentSettings* settings = nullptr;   // the widget agent's settings, when the app has them
     int widget_revision = -1;            // the settings' revision the widget's agent was made with
+    AppSession* app = nullptr;           // the app's session, from the last bind()
+
+    // A changed setting applies at once: the inline prompt closes as Close
+    // closes it (a running turn is cancelled, a preview discarded) while its
+    // session is the app's, and is forgotten without a command otherwise; then
+    // the agent goes, so its sidecar ends with the key in its environment and
+    // its token is revoked. The next ⌘K makes the agent from the settings.
+    void retire_widget() {
+        if (!widget) return;
+        if (bound && app && app->session() == bound) widget->surface().close();
+        else widget->surface().abandon();
+        drop_widget();
+        if (runtime) install_overlay();
+    }
 
     // The builder pane over the bound session (builder_pane.h), made with it;
     // build mode is its own.
@@ -203,8 +217,9 @@ struct SpecPage::Impl {
 
     void open_widget_target(AppSession& app, const WidgetTarget& target) {
         if (!bound || from_file) return;
-        // Settings changed since the agent was made: made again, while closed.
-        if (widget && settings && settings->revision() != widget_revision && !widget_open()) drop_widget();
+        // Settings changed since the agent was made (set_agent_settings()
+        // retires it at each change; this catches a change it did not see).
+        if (widget && settings && settings->revision() != widget_revision) retire_widget();
         if (!widget) {
             InlineWidget::Options o;
             o.session = bound;
@@ -285,6 +300,7 @@ struct SpecPage::Impl {
     // The session the page reads: a new one (the workspace opened, or the
     // session closed) gets a new source.
     void bind(AppSession& app) {
+        this->app = &app;
         if (workspace.empty()) workspace = folder_name(app.workspace());
         cb::Session* s = app.session();
         if (s == bound) return;
@@ -719,7 +735,12 @@ void SpecPage::set_api_files(ApiFiles files) { impl_->api_files = std::move(file
 
 void SpecPage::set_chat(ChatPane* chat) { impl_->chat = chat; }
 
-void SpecPage::set_agent_settings(AgentSettings* settings) { impl_->settings = settings; }
+void SpecPage::set_agent_settings(AgentSettings* settings) {
+    Impl& im = *impl_;
+    if (im.settings) im.settings->set_on_change(nullptr);
+    im.settings = settings;
+    if (settings) settings->set_on_change([&im] { im.retire_widget(); });
+}
 
 bool SpecPage::widget_action(const std::string& label) {
     if (!impl_->widget) return false;
@@ -822,6 +843,8 @@ void SpecPage::shutdown() {
     // with a prompt open; then it goes, before the runtime it is attached to.
     if (impl_->widget) impl_->widget->surface().abandon();
     impl_->drop_widget();
+    if (impl_->settings) impl_->settings->set_on_change(nullptr);
+    impl_->settings = nullptr;
     impl_->builder.reset();
     impl_->runtime.reset();
     impl_->source.reset();
