@@ -58,6 +58,7 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -284,6 +285,8 @@ private:
     WidgetLayout layout_in(const WidgetRect& panel, float strip, bool row) const;
     void draw_block(const WidgetRect& panel, float strip, const ImRect& band, bool row);
     void drop_preview();
+    std::uint64_t top_undo_step(std::string* label);
+    void undo_own_step(std::uint64_t step);
     void end_session();
     void reset_turn();
     void enter(WidgetState s);
@@ -324,7 +327,11 @@ private:
     bool focus_input_ = false;
     std::string shown_panel_;       // the panel the sink shows a preview in
     bool shown_spec_ = false;       // the sink shows the whole spec's preview
-    bool created_spec_ = false;     // the preview needed a spec.new, which a discard undoes
+    // The undo step of the spec.new the preview needed (history.list's id
+    // right after it), which a discard undoes while it is the top step; 0 for
+    // none. pending_undo_: that step, once the session is free again.
+    std::uint64_t created_step_ = 0;
+    std::uint64_t pending_undo_ = 0;
     mutable bool reply_overflow_ = false;   // an answer longer than its card's lines: Text shows it all
     struct Sink;
     std::unique_ptr<WidgetPreviewSink> runtime_sink_;

@@ -266,6 +266,68 @@ TEST_CASE("widget targets: a dropped file with no open spec gets a spec.new, whi
     CHECK(r.surface->edits() == 2);
     r.surface->reject();
     CHECK(!r.s->open_spec());   // undone with the preview
+    CHECK(r.undo_steps() == r.steps_before);
+}
+
+namespace {
+
+WidgetScriptTurn validation_plot() {
+    WidgetScriptTurn plot;
+    plot.steps = {edit(100, "source.add", {{"id", "val"}, {"catalog", "table:validation"}}),
+                  edit(200, "panel.create",
+                       {{"id", "val_loss"}, {"primitive", "series"}, {"bind", {{"x", "val.step"}, {"y", {"val.val_loss"}}}}}),
+                  message(300, "A plot of the validation loss.")};
+    plot.end_at = milliseconds(400);
+    return plot;
+}
+
+}  // namespace
+
+TEST_CASE("widget targets: a discard undoes only its own spec.new, never a step committed after it") {
+    Rig r("file-nospec-later", {validation_plot()}, /*with_spec=*/false);
+    r.ask(WidgetTarget::for_dropped_file("validation", {"table:validation"}, "source:table:validation"),
+          "Plot the validation loss");
+    REQUIRE(r.surface->state() == WidgetState::preview);
+    REQUIRE(r.s->open_spec());
+    // Another step lands on the new spec while the preview is open (the
+    // person, the side chat, a program over Caliper API).
+    ok(*r.s, "source.add", {{"id", "later"}, {"catalog", "table:validation"}});
+    const size_t steps = r.undo_steps();
+    REQUIRE(steps == r.steps_before + 2);   // the spec.new, then the later step
+    r.surface->reject();
+    CHECK(r.surface->state() == WidgetState::idle);
+    // The later step stays, and so does the spec it needs.
+    REQUIRE(r.s->open_spec());
+    CHECK(r.s->open_spec()->spec.find_source("later") != nullptr);
+    CHECK(r.undo_steps() == steps);
+}
+
+TEST_CASE("widget targets: a dropped file's preview undoes its spec.new when the surface goes, as a discard does") {
+    Rig r("file-nospec-gone", {validation_plot()}, /*with_spec=*/false);
+    r.ask(WidgetTarget::for_dropped_file("validation", {"table:validation"}, "source:table:validation"),
+          "Plot the validation loss");
+    REQUIRE(r.surface->state() == WidgetState::preview);
+    REQUIRE(r.s->open_spec());
+    r.surface.reset();   // the page drops its widget (a settings change, a ⌘K with another agent)
+    CHECK(!r.s->open_spec());
+    CHECK(r.undo_steps() == r.steps_before);
+}
+
+TEST_CASE("widget targets: Accept on a dropped file with no open spec leaves two undo steps, the spec.new and the change") {
+    Rig r("file-nospec-accept", {validation_plot()}, /*with_spec=*/false);
+    r.ask(WidgetTarget::for_dropped_file("validation", {"table:validation"}, "source:table:validation"),
+          "Plot the validation loss");
+    REQUIRE(r.surface->state() == WidgetState::preview);
+    r.surface->accept();
+    CHECK(r.surface->state() == WidgetState::applied);
+    CHECK(r.undo_steps() == r.steps_before + 2);
+    REQUIRE(r.s->open_spec());
+    CHECK(r.s->open_spec()->spec.find_panel("val_loss"));
+    ok(*r.s, "history.undo");   // the change
+    REQUIRE(r.s->open_spec());
+    CHECK(r.s->open_spec()->spec.panels.empty());
+    ok(*r.s, "history.undo");   // the spec.new
+    CHECK(!r.s->open_spec());
 }
 
 TEST_CASE("widget targets: a property's edit is previewed in its panel") {

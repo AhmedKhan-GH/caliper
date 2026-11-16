@@ -157,10 +157,17 @@ WidgetSurface::WidgetSurface(WidgetSession& session, WidgetAgent& agent, Hooks h
 }
 
 WidgetSurface::~WidgetSurface() {
-    // A preview left open would be dropped by the session's idle time; drop
-    // it now, and end the agent's session.
+    // As a discard does: the preview goes, with the spec.new it needed while
+    // that is still the top step, and the agent's session ends. With the
+    // session busy, the frame thread leaves it alone: the session's idle time
+    // drops the preview, and the new spec stays.
     if (state_ == WidgetState::running) agent_.cancel();
-    if (!preview_.empty()) session_.run("preview.discard", {{"id", preview_}});
+    const std::uint64_t own = created_step_ ? created_step_ : pending_undo_;
+    if ((!preview_.empty() || !pending_discards_.empty() || own) && session_.ready()) {
+        for (const std::string& id : pending_discards_) session_.run("preview.discard", {{"id", id}});
+        if (!preview_.empty()) session_.run("preview.discard", {{"id", preview_}});
+        undo_own_step(own);
+    }
     if (session_open_) agent_.close();
     if (runtime_) detach();
 }
@@ -244,7 +251,10 @@ bool WidgetSurface::ensure_preview() {
         if (sid.size() > 64) sid.resize(64);
         const CommandResult n = session_.run("spec.new", {{"id", sid}, {"title", target_.loader}});
         if (n.ok) {
-            created_spec_ = true;
+            // Its step, by the id history.list gives the top step now.
+            std::string label;
+            const std::uint64_t step = top_undo_step(&label);
+            created_step_ = label == "spec.new" ? step : 0;
             r = session_.run("preview.begin", args);
         }
     }
@@ -445,8 +455,32 @@ void WidgetSurface::drop_preview() {
     full_diff_.clear();
     show_full_diff_ = false;
     clear_shown();
-    if (created_spec_ && session_.ready()) session_.run("history.undo", json::object());   // the spec.new it made
-    created_spec_ = false;
+    if (created_step_) {   // the spec.new it made
+        if (session_.ready()) undo_own_step(created_step_);
+        else pending_undo_ = created_step_;
+    }
+    created_step_ = 0;
+}
+
+// The top undo step's id and label (its first command), from history.list;
+// 0 when there is none.
+std::uint64_t WidgetSurface::top_undo_step(std::string* label) {
+    const CommandResult r = session_.run("history.list", {{"limit", 1}});
+    if (!r.ok || !r.result.contains("undo") || !r.result["undo"].is_array() || r.result["undo"].empty()) return 0;
+    const json& top = r.result["undo"][0];
+    if (label) *label = top.value("label", std::string());
+    return top.value("id", std::uint64_t(0));
+}
+
+// Undoes the preview's own spec.new only while its step is the top one: a
+// step committed after it (the person, the side chat, a program over Caliper
+// API) is never undone in its place, and the new spec then stays. The list
+// and the undo run on the frame thread with the session free, and every
+// other origin's commands reach the session through the queue, which the app
+// drains between two frames, so nothing commits between them.
+void WidgetSurface::undo_own_step(std::uint64_t step) {
+    if (step == 0) return;
+    if (top_undo_step(nullptr) == step) session_.run("history.undo", json::object());
 }
 
 void WidgetSurface::end_session() {
@@ -477,7 +511,7 @@ void WidgetSurface::accept() {
     // The preview ended with the commit; the panel draws the open spec again.
     preview_.clear();
     edits_ = 0;
-    created_spec_ = false;
+    created_step_ = 0;   // the new spec stays, a step of its own before the change
     clear_shown();
     end_session();
     enter(WidgetState::applied);
@@ -591,7 +625,8 @@ void WidgetSurface::abandon() {
     diff_.clear();
     full_diff_.clear();
     show_full_diff_ = false;
-    created_spec_ = false;
+    created_step_ = 0;
+    pending_undo_ = 0;
     clear_shown();
     end_session();
     text_.clear();
@@ -622,6 +657,8 @@ void WidgetSurface::update() {
     if (session_.ready()) {
         for (const std::string& id : pending_discards_) session_.run("preview.discard", {{"id", id}});
         pending_discards_.clear();
+        undo_own_step(pending_undo_);
+        pending_undo_ = 0;
         if (!pending_turn_.empty() && state_ == WidgetState::running) {
             const std::string t = pending_turn_;
             pending_turn_.clear();
