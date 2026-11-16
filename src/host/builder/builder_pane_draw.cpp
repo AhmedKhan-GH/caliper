@@ -254,7 +254,9 @@ Field text_field(std::map<std::string, std::string>& bufs, const SpecLook& L, co
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, 0);
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, 0);
     ImGui::PushStyleColor(ImGuiCol_Text, L.text);
-    ImGui::PushStyleColor(ImGuiCol_TextDisabled, L.faint);
+    // A placeholder (an unset value, or the data's extent for an unset
+    // range) is dimmer than any value, so it never reads as one.
+    ImGui::PushStyleColor(ImGuiCol_TextDisabled, sternbild::with_alpha(L.faint, 110));
     ImGui::PushStyleColor(ImGuiCol_TextSelectedBg, sternbild::with_alpha(L.accent, 90));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, v2(0.0f, 1.0f));
@@ -310,35 +312,82 @@ bool flag_box(const SpecLook& L, const char* id, const ImRect& r, bool on) {
 
 // ---- the page bar and the keys ------------------------------------------------------------
 
-void BuilderPane::page_bar() {
-    // ⌘ is the Command key on macOS; ImGuiMod_Ctrl maps to it there.
-    const char* cmd = "\xE2\x8C\x98";
+namespace {
+
+// The key a chord shows: ⌘ on macOS, Ctrl elsewhere.
+std::string chord(const char* key, bool shift = false) {
+#ifdef __APPLE__
+    return std::string(shift ? "\xE2\x87\xA7" : "") + "\xE2\x8C\x98" + key;
+#else
+    return std::string(shift ? "Shift " : "") + "Ctrl " + key;
+#endif
+}
+
+struct BarItem {
+    const char* name;
+    std::string key;
+    const char* label;
+};
+
+std::vector<BarItem> bar_items(bool build) {
+    std::vector<BarItem> items = {{"bar:build", chord("B"), "Build"}};
+    if (build) {
+        items.push_back({"bar:text", chord("T"), "Text"});
+        items.push_back({"bar:undo", chord("Z"), "Undo"});
+        items.push_back({"bar:redo", chord("Z", true), "Redo"});
+        items.push_back({"bar:save", chord("S"), "Save"});
+    }
+    return items;
+}
+
+// A key button's width as sternbild::key_button lays it out, measured with
+// the current context's faces.
+float bar_button_width(const BarItem& it) {
+    const ImGuiStyle& st = ImGui::GetStyle();
+    return ImGui::CalcTextSize(it.key.c_str()).x + ImGui::CalcTextSize(it.label).x + 2.0f * st.FramePadding.x + 14.0f;
+}
+
+}  // namespace
+
+float BuilderPane::page_bar_width() const {
+    float w = 0.0f;
+    for (const auto& it : bar_items(build_)) w += bar_button_width(it) + 6.0f;
+    return w;
+}
+
+void BuilderPane::page_bar(float max_width) {
     if (!draw_) draw_ = std::make_unique<Draw>();
     for (auto it = draw_->items.begin(); it != draw_->items.end();) {
         if (it->first.rfind("bar:", 0) == 0) it = draw_->items.erase(it);
         else ++it;
     }
-    if (sternbild::key_button((std::string(cmd) + "B").c_str(), "Build")) set_build_mode(!build_);
-    if (draw_) {
+    // Where the bar is too narrow for all of them, only Build stays; the
+    // others keep their keys.
+    std::vector<BarItem> items = bar_items(build_);
+    if (max_width > 0.0f && page_bar_width() > max_width) items.resize(1);
+    for (size_t i = 0; i < items.size(); ++i) {
+        const BarItem& it = items[i];
+        if (i) ImGui::SameLine(0.0f, 6.0f);
+        bool enabled = true, on = false;
+        if (std::string(it.name) == "bar:build") on = build_;
+        else if (std::string(it.name) == "bar:text") on = text_open_;
+        else if (std::string(it.name) == "bar:undo") enabled = can_undo();
+        else if (std::string(it.name) == "bar:redo") enabled = can_redo();
+        else if (std::string(it.name) == "bar:save") enabled = open_.has_value();
+        const bool clicked = sternbild::key_button(it.key.c_str(), it.label, enabled);
         const ImRect r(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-        draw_->item("bar:build", r);
-        if (build_) ImGui::GetWindowDrawList()->AddRect(r.Min, r.Max, sternbild::col::bronze, 0.0f, 0, 1.0f);
-    }
-    if (!build_) return;
-    auto bar_button = [&](const std::string& key, const char* label, const char* name, bool enabled, bool on) {
-        ImGui::SameLine(0.0f, 6.0f);
-        const bool clicked = sternbild::key_button(key.c_str(), label, enabled);
-        const ImRect r(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-        if (draw_) draw_->item(name, r);
+        draw_->item(it.name, r);
         if (on) ImGui::GetWindowDrawList()->AddRect(r.Min, r.Max, sternbild::col::bronze, 0.0f, 0, 1.0f);
-        return clicked;
-    };
-    if (bar_button(std::string(cmd) + "T", "Text", "bar:text", true, text_open_)) text_open_ = !text_open_;
-    if (bar_button(std::string(cmd) + "Z", "Undo", "bar:undo", can_undo(), false)) undo();
-    if (bar_button("\xE2\x87\xA7" + std::string(cmd) + "Z", "Redo", "bar:redo", can_redo(), false)) redo();
-    if (bar_button(std::string(cmd) + "S", "Save", "bar:save", open_.has_value(), false)) save();
+        if (!clicked) continue;
+        const std::string name = it.name;
+        if (name == "bar:build") set_build_mode(!build_);
+        else if (name == "bar:text") text_open_ = !text_open_;
+        else if (name == "bar:undo") undo();
+        else if (name == "bar:redo") redo();
+        else if (name == "bar:save") save();
+    }
     // The last refusal or failure: its code, with the message in its tooltip.
-    if (error_ && error_.code != "builder.nothing") {
+    if (build_ && error_ && error_.code != "builder.nothing") {
         ImGui::SameLine(0.0f, 14.0f);
         ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::faint);
         ImGui::TextUnformatted(error_.code.c_str());
@@ -556,19 +605,26 @@ void BuilderPane::draw(const ImRect& area, SpecRuntime& runtime, const SpecLook&
             for (const auto& x : lay.splits)
                 if (x.path == d.divider) shown = &x;
         if (shown) {
+            // The divider, three pixels wide while it is held or under the
+            // pointer, and the ratio beside the pointer on the first child's
+            // side, clear of the strips.
             const SpecRect g = shown->divider;
-            ol->AddRectFilled(v2(g.x, g.y), v2(g.right(), g.bottom()), look.accent);
+            const float grow = 1.0f;
+            ol->AddRectFilled(v2(g.x - (shown->horizontal ? grow : 0.0f), g.y - (shown->horizontal ? 0.0f : grow)),
+                              v2(g.right() + (shown->horizontal ? grow : 0.0f), g.bottom() + (shown->horizontal ? 0.0f : grow)),
+                              look.accent);
             if (d.dividing) {
                 char buf[16];
                 std::snprintf(buf, sizeof buf, "%.2f", d.divider_ratio);
                 const ImVec2 ts = extent(look.mono, look.mono_size, buf);
                 const float pad = std::round(5.0f * s);
-                ImVec2 p = shown->horizontal ? v2(g.x + pad * 2.0f, mouse.y - ts.y - pad * 3.0f)
-                                             : v2(mouse.x + pad * 3.0f, g.y + pad * 2.0f);
+                const ImVec2 p = shown->horizontal ? v2(g.x - pad * 3.0f - ts.x, std::round(mouse.y - ts.y * 0.5f))
+                                                   : v2(std::round(mouse.x + pad * 3.0f), g.y - pad * 3.0f - ts.y);
                 const ImRect box(v2(p.x - pad, p.y - pad * 0.5f), v2(p.x + ts.x + pad, p.y + ts.y + pad * 0.5f));
                 ol->AddRectFilled(box.Min, box.Max, look.deep);
                 ol->AddRect(box.Min, box.Max, look.accent, 0.0f, 0, 1.0f);
                 put(ol, look.mono, look.mono_size, p, look.text, buf);
+                d.item("ratio", box);
             }
         }
         // Where a drop lands.
@@ -854,19 +910,6 @@ void BuilderPane::draw_primitives(const SpecRect& rect) {
             const std::string noun = pane_primitive_noun(p);
             put(dl, L.ui, L.ui_size, v2(r.Min.x + pad + std::round(18.0f * s), r.Min.y + (row - d.ui_h()) * 0.5f),
                  fits ? L.text : L.faint, noun);
-            // The slots it takes, in mono; the required first.
-            std::string slots;
-            int listed = 0;
-            for (const auto& sl : pane_slots(p)) {
-                if (++listed > 3) break;
-                if (!slots.empty()) slots += " ";
-                slots += sl.name;
-                if (sl.required) slots += "*";
-            }
-            const float sw = r.GetWidth() * 0.55f;
-            const std::string shown = fit(L.mono, L.mono_size, slots, sw);
-            put(dl, L.mono, L.mono_size,
-                 v2(r.Max.x - pad - extent(L.mono, L.mono_size, shown).x, r.Min.y + (row - d.mono_h()) * 0.5f), L.faint, shown);
             if (hovered && !fits && !plan.refusal.message.empty()) ImGui::SetTooltip("%s", plan.refusal.message.c_str());
             if (clicked && drag_.kind == DragPayload::Kind::none) {
                 const float dx = io.MousePos.x - d.press_at.x, dy = io.MousePos.y - d.press_at.y;

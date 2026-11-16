@@ -336,8 +336,11 @@ public:
 
     // ---- the ImGui side (frame thread; builder_pane_draw.cpp)
     // The page bar's items: ⌘B Build, and in build mode ⌘T Text, ⌘Z Undo,
-    // ⇧⌘Z Redo and ⌘S Save as key buttons, each doing what its key does.
-    void page_bar();
+    // ⇧⌘Z Redo and ⌘S Save as key buttons, each doing what its key does
+    // (Ctrl off macOS), then the last refusal's code. With `max_width` and
+    // less room than page_bar_width(), only Build is drawn.
+    void page_bar(float max_width = 0.0f);
+    float page_bar_width() const;
     // The keys of build mode, before the page's own: ⌘B, ⌘T, ⌘Z, ⇧⌘Z, ⌘S,
     // ⌫ on the focused panel, Escape (a drag, a draft, the focus). True when
     // the pane took Escape.

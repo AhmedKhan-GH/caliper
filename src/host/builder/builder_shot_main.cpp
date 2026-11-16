@@ -317,7 +317,15 @@ int main(int argc, char** argv) {
                 ImGui::TextUnformatted(title.c_str());
                 ImGui::PopStyleColor();
                 ImGui::Separator();
-                pane.page_bar();
+                // As the app's page bar: the pane's items after the title,
+                // and ⌘K Command at the right end.
+                const char* key = "\xe2\x8c\x98K";
+                const float command_w = ImGui::CalcTextSize(key).x + ImGui::CalcTextSize("Command").x + 32.0f;
+                const float right = ImGui::GetWindowContentRegionMax().x - command_w - sternbild::metric::pad;
+                pane.page_bar(right - ImGui::GetCursorPosX() - 16.0f);
+                ImGui::SameLine();
+                if (right > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(right);
+                sternbild::key_button(key, "Command");
                 ImGui::EndMainMenuBar();
             }
         }
