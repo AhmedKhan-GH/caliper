@@ -561,7 +561,7 @@ target_include_directories(libcaliper PUBLIC
 # through this target (its own comment: "link this TARGET instead of compiling
 # src/app_paths.cpp by path"). PUBLIC so the caliper exe gets it transitively —
 # the exe no longer compiles app_paths.cpp by path (below).
-# PRIVATE = CALIPER_CORE_LIBS (GL/frameworks/GLEW/GLFW only), NOT the exe's full
+# PRIVATE = CALIPER_CORE_LIBS (frameworks/GLFW/ImGui GLFW backend only), NOT the exe's full
 # CALIPER_DEPENDENCY_LIBS: a static lib's private deps still propagate as
 # link-only, so the full list would drag the chrome widgets (node editor, text
 # editor, ImTerm) into every embedder, including the Python extension.

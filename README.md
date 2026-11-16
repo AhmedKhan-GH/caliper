@@ -74,7 +74,6 @@ it, and [SDK package](docs/references/sdk-package.md) describes the package.
 - **Git** (for submodule management)
 - **CMake 3.25 or later** and **Ninja** (the presets use the Ninja generator; configuring without a preset needs CMake 3.18)
 - **A C++20 compiler** for the host and the applets
-- **OpenGL**, which the host uses as its fallback renderer and which the build still requires
 
 ### Windows
 - **Visual Studio 2022** (MSVC v143)
@@ -172,8 +171,7 @@ caliper/
 ## Dependencies
 
 **System:**
-- OpenGL (fallback renderer)
-- Metal on macOS; the Vulkan loader on Windows (loaded at run time)
+- Metal on macOS; the Vulkan loader on Windows (loaded at run time). There is no fallback renderer yet: where neither starts, Caliper refuses with a message that says why
 
 **Submodules (built from source):**
 - [GLFW](https://github.com/glfw/glfw) - Window management
@@ -185,7 +183,6 @@ caliper/
 - [ImGuiColorTextEdit](https://github.com/BalazsJako/ImGuiColorTextEdit) - Text editor widget
 - [ImTerm](https://github.com/Organic-Code/ImTerm) - Terminal widget
 - [ImGuiFileDialog](https://github.com/aiekick/ImGuiFileDialog) - File dialog
-- [GLEW](https://github.com/nigels-com/glew) - OpenGL loader (downloaded and extracted on Windows)
 - [DuckDB](https://github.com/duckdb/duckdb) - The host's query engine
 - [llama.cpp](https://github.com/ggerganov/llama.cpp) - GGUF inference, used by the archived opengllama applet
 - [slang](https://github.com/MikePopoloski/slang) - SystemVerilog front end
@@ -223,7 +220,7 @@ Everything is handled by git submodules and CMake. Run `git submodule update --i
 |-------|----------|
 | **CUDA not available** | Check the configure output for the `CUDA support` line. `USE_CUDA` turns itself OFF when CMake finds no CUDA toolkit. Check that the CUDA DLLs sit next to the executable in `cmake-build-release/`. |
 | **Submodules missing** | Run `git submodule update --init --recursive` |
-| **OpenGL not found** | Update graphics drivers |
+| **The Metal renderer could not start** or **the Vulkan renderer could not start** | The message gives the reason. Caliper needs a working Metal device on macOS or a Vulkan driver on Windows, and has no fallback renderer until the WebGPU fallback through Dawn lands. On Windows, update the graphics driver; a remote desktop session may have no Vulkan |
 | **LibTorch download fails** | Check internet; manually download the archive from the PyTorch website and extract it to the folder named in the LibTorch section |
 | **Wrong LibTorch variant** | Delete the LibTorch folder and configure again; see the LibTorch section |
 | **MPS not available** | Ensure Apple Silicon Mac, Metal compiler available (`xcrun --find metal`) |
@@ -269,7 +266,6 @@ Caliper uses the following open-source libraries. Their license texts can be fou
 | [ImGuiColorTextEdit](https://github.com/BalazsJako/ImGuiColorTextEdit) | MIT | 2017 BalazsJako | Use, modify, and distribute freely provided the license notice is included. |
 | [ImTerm](https://github.com/Organic-Code/ImTerm) | MIT | 2018 Lucas Lazare | Use, modify, and distribute freely provided the license notice is included. |
 | [ImGuiFileDialog](https://github.com/aiekick/ImGuiFileDialog) | MIT | 2018-2025 Stephane Cuillerdier (Aiekick) | Use, modify, and distribute freely provided the license notice is included. |
-| [GLEW](https://github.com/nigels-com/glew) | BSD 3-Clause / MIT | 2002-2007 Milan Ikits, Marcelo E. Magallon, Lev Povalahev | Use, modify, and distribute freely provided the license notice is included and the project name is not used for endorsement. |
 | [DuckDB](https://github.com/duckdb/duckdb) | MIT | 2018-2026 Stichting DuckDB Foundation | Use, modify, and distribute freely provided the license notice is included. |
 | [LibTorch](https://pytorch.org) | BSD 3-Clause | 2016 Facebook Inc. | Use, modify, and distribute freely provided the license notice is included and the project name is not used for endorsement. |
 | [llama.cpp](https://github.com/ggerganov/llama.cpp) | MIT | The ggml authors | Use, modify, and distribute freely provided the license notice is included. |

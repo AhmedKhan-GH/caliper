@@ -17,7 +17,7 @@
 #
 # libcaliper is a static library over a dozen static libraries of its own
 # (caliper_host_lib, the Metal or Vulkan backend, DuckDB, ImGui, ImPlot,
-# ImPlot3D, ImGuiFileDialog, GLFW, GLEW). The package does not ship those
+# ImPlot3D, ImGuiFileDialog, GLFW). The package does not ship those
 # archives. caliper_embed links all of them into one shared library that
 # exports only the C functions the three headers declare, so an embedder links
 # one file, needs none of the libraries or frameworks behind it, and keeps its

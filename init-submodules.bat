@@ -46,14 +46,11 @@ REM Mirror of init-submodules.sh: each submodule updates individually because
 REM a single `git submodule update --init --recursive --force` aborts at the
 REM first submodule whose pinned commit is missing from its remote, leaving
 REM everything after it un-initialized. Some pins in this repo reference
-REM commits that were never pushed upstream (locally-generated GLEW sources,
-REM a llama.cpp fork commit) — tolerate those and fall back to the remote's
-REM default branch rather than failing the whole setup.
+REM commits that were never pushed upstream (a llama.cpp fork commit) —
+REM tolerate those and fall back to the remote's default branch rather than
+REM failing the whole setup.
 echo Initializing submodules...
 for /f "tokens=2" %%P in ('git config -f .gitmodules --get-regexp "path$"') do call :init_one "%%P"
-
-REM Skip GLEW source generation on Windows (using pre-built binaries)
-echo Skipping GLEW source generation on Windows (using pre-built binaries)
 
 echo.
 echo Submodule initialization complete!
