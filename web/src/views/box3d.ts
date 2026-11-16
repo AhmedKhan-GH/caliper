@@ -104,7 +104,8 @@ export class BoxFrame {
         }
       }
       if (this.labelEdge[ax] >= 0 && len < 24) this.labelEdge[ax] = -1;   // too short to label
-      const n = this.labelEdge[ax] >= 0 ? Math.max(2, Math.min(6, Math.floor(len / 70))) : 4;
+      // About one tick every 50 px along the edge.
+      const n = this.labelEdge[ax] >= 0 ? Math.max(3, Math.min(8, Math.floor(len / 50))) : 4;
       this.ticks.push(ticks(b[2 * ax], b[2 * ax + 1], n));
     }
   }
