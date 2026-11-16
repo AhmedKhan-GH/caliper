@@ -156,6 +156,9 @@ struct ToolCallInfo {
     std::vector<ToolLocation> locations;
     nlohmann::json raw_input;
     nlohmann::json raw_output;
+    // The Caliper command the call runs, from `_meta.caliper.command`, which an
+    // agent that calls Caliper API itself (caliper-agent) sets; "" otherwise.
+    std::string caliper_command;
 };
 
 struct PlanEntry {

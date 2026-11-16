@@ -563,10 +563,22 @@ What is verified and what is not:
   `npm install -g opencode-ai`, while opencode's V2 pages find a local Ollama without configuration and install from
   the `@opencode/cli` package. V2 still accepts the V1 configuration. Ollama's FAQ and its context length page give
   different default context lengths.
-- **Not verified:** nothing was run. Whether opencode passes the `env` of a stdio MCP server as Caliper sends it,
+- **Not verified:** for opencode, nothing was run. Whether opencode passes the `env` of a stdio MCP server as Caliper sends it,
   whether a local model of a given size uses `caliper-mcp`'s 35 tools well (the conformance suite measures the widget
   agent's tasks, not the side chat's), and the whole path on Windows, where Ollama runs as a native application and the
   agent registry lists opencode binaries.
+
+The other worked example, which was run, is Caliper's own agent: `caliper-agent` in its general role as the custom
+command, on the Ollama preset (`--preset ollama --base-url http://127.0.0.1:11434/v1 --model qwen3.8:27b`, from the
+repository's source). It starts no MCP server and calls Caliper API with the API file of the `caliper` server that
+`session/new` hands it, so its commands run as `agent` and wait on the approval cards; it refuses a session whose
+Caliper server names no file. The preset loads the model through Ollama's own chat API with a context of 32,768 tokens
+for this role. **Measured** in the hidden app on 16 November 2026, with the request "Plot attention entropy per layer
+while it trains" over `caliper_attention_producer`'s stream: the turn read the catalog, made a spec with one source
+per layer and a series panel of the six layers' entropy, every edit approved on its card, in about 80 seconds and 7
+model requests of 10,820 to 17,258 prompt tokens, and the app showed the spec page drawing the stream live. The
+model's tool schemas alone are about 10,000 tokens, so the role needs more than 16,384 tokens of context for a turn
+that reads the catalog first. The dry run is `examples/build_a_dashboard/dry_run/step4_side_chat.py`.
 
 ### The handoff from the widget agent
 
@@ -610,8 +622,12 @@ claims the right column with `layout_chat_column()`, and calls `draw()` with tha
   the pane opens quietly; the message waits for the session. `start()` and `session/new` run on a worker thread, and
   shutting a client down runs on another, so the frame thread never waits for an agent.
 - **The conversation.** The person's messages with the chips of a draft; the agent's text, streamed into one message;
-  its thoughts as one line, which a click opens; its tool calls as rows with a status mark, the command's name for a
-  Caliper tool (recognised from the names the agents give MCP tools, such as `mcp__caliper__panel_create`), the title
+  its thoughts as one line, which a click opens (the agent's text with a small subset of Markdown rendered by
+  `chat_markdown.h`: bold, inline code, fenced code blocks, bulleted and numbered lists and paragraphs, everything
+  else, such as headings, links and tables, as plain text with its marks taken out, and the text kept as it came);
+  its tool calls as rows with a status mark, the command's name for a
+  Caliper tool (recognised from the names the agents give MCP tools, such as `mcp__caliper__panel_create`, or from
+  `_meta.caliper.command`, which `caliper-agent` sets since it calls Caliper API itself), the title
   and the status in a word; its plan as rows; its permission requests as cards with the file, the compact diff for a
   `*.spec.toml` (a new panel's primitive and title first, then its other keys and every other change) or the unified
   diff for any other file, Diff for the full diff, and one button per option, `allow_always` only when the setting

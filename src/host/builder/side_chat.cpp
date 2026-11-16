@@ -245,6 +245,11 @@ std::string caliper_command_of(const acp::ToolCallInfo& call, const std::string&
         }
         return {};
     };
+    // An agent that calls Caliper API itself (caliper-agent) names the command
+    // in the call's _meta; it counts when the table has it.
+    if (!call.caliper_command.empty())
+        for (const auto& d : caliper_builder::command_table())
+            if (d.name == call.caliper_command) return d.name;
     if (std::string c = from_text(call.title); !c.empty()) return c;
     const json& raw = call.raw_input;
     if (raw.is_object()) {
@@ -801,6 +806,7 @@ void merge_tool(acp::ToolCallInfo* into, const acp::ToolCallInfo& from) {
     if (from.has_locations) into->locations = from.locations;
     if (!from.raw_input.is_null()) into->raw_input = from.raw_input;
     if (!from.raw_output.is_null()) into->raw_output = from.raw_output;
+    if (!from.caliper_command.empty()) into->caliper_command = from.caliper_command;
     into->has_title = into->has_title || from.has_title;
     into->has_kind = into->has_kind || from.has_kind;
     into->has_status = into->has_status || from.has_status;
@@ -1493,6 +1499,29 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
             float x0 = x_left, w = w_full;   // a group's members are drawn indented
             const float line = std::round(22.0f * s);
             const float gap = std::round(8.0f * s);
+            // Bold is the text face drawn twice, the second a little to the right.
+            const float bold_dx = std::max(0.5f, std::round(1.2f * s) * 0.5f);
+            // The agent's text as chat_markdown.h lays it out: code on the
+            // plate colour in the mono face, bullets and numbers in the
+            // secondary colour.
+            auto draw_markdown = [&](ImVec2 p, const MdLayout& md) {
+                const float code_line = mono_h + std::round(3.0f * s);
+                for (const MdPlate& pl : md.plates)
+                    cdl->AddRectFilled(v2(p.x + pl.x, p.y + pl.y), v2(p.x + pl.x + pl.w, p.y + pl.y + pl.h), L.plate);
+                for (const MdRun& r : md.runs) {
+                    const float x = p.x + r.x, y = p.y + r.y;
+                    if (r.style == MdStyle::code) {
+                        const float lh = r.block ? code_line : ui_h;
+                        if (!r.block)
+                            cdl->AddRectFilled(v2(x - 1.0f, y + 1.0f), v2(x + r.w + 1.0f, y + ui_h - 1.0f), L.plate);
+                        draw_str(cdl, L.mono, L.mono_size, v2(x, y + std::round((lh - mono_h) * 0.5f)), L.text, r.text);
+                        continue;
+                    }
+                    const ImU32 c = r.marker ? L.secondary : L.text;
+                    draw_str(cdl, L.ui, L.ui_size, v2(x, y), c, r.text);
+                    if (r.style == MdStyle::bold) draw_str(cdl, L.ui, L.ui_size, v2(x + bold_dx, y), c, r.text);
+                }
+            };
             ImGui::Dummy(v2(1.0f, gap));
             // One item: draws with its top-left and returns its height.
             auto place = [&](float h, const std::function<void(ImVec2)>& fn) {
@@ -1557,8 +1586,27 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
                         break;
                     }
                     case ChatItem::Kind::agent: {
-                        const float th = extent(L.ui, L.ui_size, it.text, w).y;
-                        place(th, [&](ImVec2 p) { draw_str(cdl, L.ui, L.ui_size, p, L.text, it.text, w); });
+                        // The agent's text with its Markdown rendered (chat_markdown.h);
+                        // the item keeps the text as the agent sent it.
+                        MarkdownCache& md = markdown_[idx];
+                        if (md.text != it.text || md.width != w || md.scale != s) {
+                            MdMetrics mm;
+                            mm.line = ui_h;
+                            mm.code_line = mono_h + std::round(3.0f * s);
+                            mm.gap = std::round(6.0f * s);
+                            mm.indent = std::round(14.0f * s);
+                            mm.marker = std::round(14.0f * s);
+                            mm.code_pad = std::round(6.0f * s);
+                            mm.bold_extra = bold_dx;
+                            const MdMeasure measure = [&](const std::string& t, MdFont f) {
+                                return f == MdFont::mono ? extent(L.mono, L.mono_size, t).x : extent(L.ui, L.ui_size, t).x;
+                            };
+                            md.layout = layout_chat_markdown(chat_markdown_blocks(it.text), w, mm, measure);
+                            md.text = it.text;
+                            md.width = w;
+                            md.scale = s;
+                        }
+                        place(md.layout.height, [&](ImVec2 p) { draw_markdown(p, md.layout); });
                         break;
                     }
                     case ChatItem::Kind::thought: {

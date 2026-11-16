@@ -350,6 +350,9 @@ CommandResult CommandRegistry::invoke(CommandInvocation inv) {
     if (it == commands_.end())
         return CommandResult::failure(inv.id, Error("command.unknown", "No command is named " + inv.name + ".", "name"));
     const Entry& entry = it->second;
+    // A null on an optional argument is the argument left out, so the policy,
+    // the review, the journal and the handler see the call as it is understood.
+    drop_null_optional_args(entry.descriptor.args, &inv.args);
     // The arguments first: a caller learns that its call is malformed even
     // from an app that has no handler for the command yet.
     if (Error err = validate_command_value(entry.descriptor.args, inv.args, "args")) {
@@ -583,6 +586,7 @@ CommandResult CommandRegistry::run_follow_ups(const CommandInvocation& inv, cons
         const auto it = commands_.find(sub.name);
         if (it == commands_.end() || !it->second.handler) return bad(k, sub.name + " is not a bound command.");
         const CommandDescriptor& d = it->second.descriptor;
+        drop_null_optional_args(d.args, &sub.args);
         if (!d.mutates || d.destructive || is_history(sub.name))
             return bad(k, sub.name + " does not mutate, is destructive or is a history command.");
         if (Error err = validate_command_value(d.args, sub.args, "args")) return bad(k, err.where + ": " + err.message);

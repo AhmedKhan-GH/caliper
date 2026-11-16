@@ -9,10 +9,12 @@
 // jobs tray's strip above the status bar while it is open.
 //
 // When it opens. Every applet.open that succeeds, from any origin (the
-// person's UI, a command script, Caliper API, an agent over MCP), asks the
-// app to show the page: take_open() is true once for each, read from a
-// counter of the session's journal (AppSession::applets_opened()), and the
-// app leaves the page it shows and enters this one. request_open() is the
+// person's UI, a command script, Caliper API, an agent over MCP), and every
+// spec.new or spec.open of an agent (the side chat's or one over MCP), asks
+// the app to show the page: take_open() is true once for each, read from a
+// counter of the session's journal (AppSession::specs_opened()), and the app
+// leaves the page it shows and enters this one, so that the person sees the
+// spec an agent builds while they review its edits. request_open() is the
 // seam for a list of spec applets, such as the landing screen's later: it
 // sends applet.open from the ui origin through the session's queue, so the
 // page opens by the same path.
@@ -96,7 +98,8 @@ public:
     // False when the builder is not in this build.
     static bool built();
 
-    // True once for each applet.open that succeeded since the last call.
+    // True once for each applet.open, or agent's spec.new or spec.open, that
+    // succeeded since the last call.
     bool take_open(const AppSession& session);
 
     // Sends applet.open for the workspace's spec applet `id` from the ui

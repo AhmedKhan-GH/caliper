@@ -211,10 +211,12 @@ note when you mark the agent as running on a local model, as below.
 ## Local models in the side chat
 
 The side chat runs your own agent, so it uses whatever model your agent is set up for, local models included.
-ACP integration (`design/acp-integration.md`) sets up opencode with a model served by Ollama as a worked example.
-When your agent runs a model on this machine, choose **Local model** in the chat's agent picker; while a training run
-is attached, the chat's header then shows **Shared GPU**, and the advice above applies
-([Side chat](../references/side-chat.md#local-models)).
+`caliper-agent` itself can be that agent: give the side chat the custom command that
+[Side chat](../references/side-chat.md#the-agents) shows, with the Ollama preset and your model, and the chat runs on
+the local model with no account. ACP integration (`design/acp-integration.md`) sets up opencode with a model served by
+Ollama as another worked example. When your agent runs a model on this machine, choose **Local model** in the chat's
+agent picker; while a training run is attached, the chat's header then shows **Shared GPU**, and the advice above
+applies ([Side chat](../references/side-chat.md#local-models)).
 
 ## Remove the key
 

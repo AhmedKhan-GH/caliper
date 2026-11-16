@@ -143,6 +143,36 @@ TEST_CASE("an agent's spec edit waits for the person's review with its diff, and
     CHECK(f.s->registry().pending_approvals().empty());
 }
 
+// A local model sent source.add with each optional argument null. The
+// command layer reads such a null as an argument left out, so the call is
+// held for review and runs, and the card, the journal and the handler see it
+// without the nulls. A null on a required argument is still refused.
+TEST_CASE("an agent's call with null optional arguments is reviewed and runs as if they were left out") {
+    Fixture f("review-nulls");
+    const std::size_t lines = f.lines();
+    const json call = {{"id", "lr"}, {"catalog", "table:metrics"}, {"sql", nullptr}, {"from", nullptr},
+                       {"transform", nullptr}, {"dry_run", false}};
+    const CommandResult parked = invoke(*f.s, "source.add", call, kAgent, "turn-1");
+    REQUIRE_MESSAGE(parked.error.code == "command.needs_approval", parked.error.code << " " << parked.error.message);
+    const auto pending = f.s->registry().pending_approvals();
+    REQUIRE(pending.size() == 1);
+    const json understood = {{"id", "lr"}, {"catalog", "table:metrics"}, {"dry_run", false}};
+    CHECK(pending[0].invocation.args == understood);
+    const std::string diff = pending[0].review["diff"].get<std::string>();
+    CHECK(diff.find("+id = \"lr\"") != std::string::npos);
+    CHECK(diff.find("null") == std::string::npos);
+    REQUIRE(f.s->registry().approve(parked.approval).ok);
+    CHECK(f.s->open_spec()->spec.find_source("lr") != nullptr);
+    const JournalRead read = f.journal();
+    REQUIRE(read.events.size() == lines + 1);
+    CHECK(read.events.back().name == "source.add");
+    CHECK(read.events.back().args == understood);
+
+    // A null on a required argument is refused as before, and not journaled as a change.
+    CHECK(err(*f.s, "source.add", {{"id", nullptr}, {"catalog", "table:metrics"}}, kAgent) == "command.invalid_args");
+    CHECK(f.s->registry().pending_approvals().empty());
+}
+
 TEST_CASE("a dry run, an edit of a preview, an edit that changes nothing and one that fails need no review") {
     Fixture f("review-exempt");
     const std::size_t lines = f.lines();

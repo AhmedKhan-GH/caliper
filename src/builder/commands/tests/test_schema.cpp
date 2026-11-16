@@ -1,5 +1,6 @@
 // Tests of the built-in schema validator: each keyword, the paths of faults,
 // the subset check, the closed-schema rules and hostile values.
+#include <caliper_builder/commands/command_table.h>
 #include <caliper_builder/commands/schema.h>
 
 #include <doctest/doctest.h>
@@ -239,4 +240,66 @@ TEST_CASE("hostile values: deep nesting and huge arrays are refused without recu
     // A schema the validator was never meant to see does not throw.
     const json broken = {{"type", "array"}, {"minItems", "three"}};
     CHECK(cb::validate_command_value(broken, json::array()).code == "command.bad_schema");
+}
+
+// A null on an optional argument counts as its absence (design/command-layer.md,
+// Arguments): a local model sent source.add with every optional argument
+// null, which validation refused, and it had to try again.
+namespace {
+const json& args_of(const std::string& name) {
+    for (const auto& d : cb::command_table())
+        if (d.name == name) return d.args;
+    static const json none;
+    FAIL("no command " << name);
+    return none;
+}
+}  // namespace
+
+TEST_CASE("a null on an optional argument is dropped before validation, and nothing else is") {
+    // The call as a local model sent it: the optional sql, from and transform null.
+    json call = {{"id", "layer0"}, {"catalog", "live:entropy.l0"}, {"sql", nullptr}, {"from", nullptr},
+                 {"transform", nullptr}, {"dry_run", false}};
+    const json& add = args_of("source.add");
+    CHECK(fault(add, call) == "args.from");   // refused as it came
+    CHECK(cb::drop_null_optional_args(add, &call) == 3);
+    CHECK(call == json({{"id", "layer0"}, {"catalog", "live:entropy.l0"}, {"dry_run", false}}));
+    CHECK(fault(add, call) == "ok");
+
+    // A null on a required argument stays, and is refused as before.
+    json no_id = {{"id", nullptr}, {"catalog", "live:entropy.l0"}};
+    CHECK(cb::drop_null_optional_args(add, &no_id) == 0);
+    CHECK(no_id["id"].is_null());
+    CHECK(fault(add, no_id) == "args.id");
+
+    // Nested: an optional field of an item goes, a required one stays.
+    json nested = {{"id", "e"}, {"catalog", "live:attn"},
+                   {"transform", json::array({{{"op", "reduce"}, {"axis", -1}, {"fn", "entropy"}, {"keepdims", nullptr}},
+                                              {{"op", nullptr}, {"axis", nullptr}}})}};
+    CHECK(cb::drop_null_optional_args(add, &nested) == 2);
+    CHECK(nested["transform"][0] == json({{"op", "reduce"}, {"axis", -1}, {"fn", "entropy"}}));
+    CHECK(nested["transform"][1] == json({{"op", nullptr}}));
+    CHECK(fault(add, nested) == "args.transform[1].op");
+
+    // Where the schema admits null, null is a value and stays: in panel.patch it
+    // takes the title away. A null for an object that admits none goes.
+    json patch = {{"id", "loss"}, {"patch", {{"title", nullptr}, {"bind", nullptr}, {"options", {{"y_log", nullptr}}}}}};
+    const json& panel_patch = args_of("panel.patch");
+    CHECK(cb::drop_null_optional_args(panel_patch, &patch) == 1);
+    CHECK(patch == json({{"id", "loss"}, {"patch", {{"title", nullptr}, {"options", {{"y_log", nullptr}}}}}}));
+    CHECK(fault(panel_patch, patch) == "ok");
+
+    // Schemas by hand: an enum that lists null keeps it, the values of
+    // additionalProperties are left alone, and a schema with no type admits null.
+    const json s = {{"type", "object"},
+                    {"properties", {{"mode", {{"enum", json::array({"a", nullptr})}}},
+                                    {"any", json::object()},
+                                    {"n", {{"type", "integer"}}},
+                                    {"map", {{"type", "object"}, {"additionalProperties", {{"type", "string"}}}}}}}};
+    json v = {{"mode", nullptr}, {"any", nullptr}, {"n", nullptr}, {"map", {{"k", nullptr}}}};
+    CHECK(cb::drop_null_optional_args(s, &v) == 1);
+    CHECK(v == json({{"mode", nullptr}, {"any", nullptr}, {"map", {{"k", nullptr}}}}));
+    // Not an object: nothing to do.
+    json scalar = nullptr;
+    CHECK(cb::drop_null_optional_args(s, &scalar) == 0);
+    CHECK(cb::drop_null_optional_args(s, nullptr) == 0);
 }

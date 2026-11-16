@@ -105,6 +105,11 @@ public:
     void point_to(const std::string& approval_id);
     // Before the session closes: the cards go, and nothing is read again.
     void close();
+    // How many waiting cards the strip drew at its full height in its last
+    // frame: 0 while it is closed, still opening or growing. The hidden app's
+    // input script waits on it (spec_ui_driver.h, `cards`), so that a capture
+    // of a card does not depend on the strip's delays.
+    int shown_waiting() const;
 
     struct Impl;
 
