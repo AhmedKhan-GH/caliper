@@ -118,7 +118,7 @@ Caliper's own Metal backend on macOS and Vulkan backend on Windows stay the norm
 3. Write each shader once and translate it for each backend. This is decided: the source is WGSL, translated to MSL and SPIR-V by Naga, with the generated sources committed, as [Renderer core](renderer-core.md#one-shader-source) describes.
 4. Keep one version of each graphics service. In sprint 4 the tensor bridge, the geometry service and the export service each collapse to one version, the embedding library's two kinds of tensor views become one, and the ABI epoch is bumped once, from 2 to 3, with every applet in this repository updated in the same changes, as the user decided. Applets and embedding hosts outside this repository stop loading until they are rebuilt against the new SDK, and whether to update them is the user's decision.
 
-Caliper then maintains three backends: Metal, Vulkan and WebGPU. The Vulkan backend of the layer comes with [Windows parity](windows-parity.md); until then the Windows app draws its ImGui pages and refuses textures and geometry, unless the user chooses one of the other options in [Renderer core](renderer-core.md#open-decisions). The renderers that exist today are described in [Rendering](../explanations/rendering.md).
+Caliper then maintains three backends: Metal, Vulkan and WebGPU. The Vulkan backend of the layer comes with [Windows parity](windows-parity.md); until then the Windows app draws its ImGui pages and refuses textures and geometry, unless the user chooses one of the other options in [Renderer core](renderer-core.md#open-decisions). The renderers that exist today are described in Rendering (`docs/explanations/rendering.md`).
 
 ## Windows parity
 
