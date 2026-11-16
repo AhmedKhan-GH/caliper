@@ -15,7 +15,7 @@
 //   leave                the pointer leaves the window (no hover is left behind)
 //   key <chord>          a press and release of a chord: cmd, shift and one
 //                        key (a letter, a digit, enter, escape, backspace,
-//                        f3), such as "cmd+k" (Ctrl+K off macOS) or
+//                        f3, comma), such as "cmd+k" (Ctrl+K off macOS) or
 //                        "cmd+shift+z"
 //   type <text>          the text as the keyboard's characters; "\n" is a
 //                        line break
@@ -50,6 +50,13 @@
 //                        import runs
 //   pane focus <panel>   wait until the builder's focused panel is <panel>
 //   page <name>          wait until the app shows that page (landing, spec, live)
+//   widget <label>       presses the inline surface's action of that label
+//                        ("Setup", "Ask in chat", ...) once the surface offers it,
+//                        through the surface's own act(), as its button does
+//   settings open|close  the widget agent's settings (agent_settings.h)
+//   settings until open | note <text>|none | state <text>|none
+//                        wait until the settings are open, show that GPU note,
+//                        or that plain state
 //   touch <path>         creates an empty file (a stub agent's gate)
 //   append <path> <line> appends a line to a file (a test's approval decision)
 //   quit                 close the app
@@ -66,6 +73,7 @@
 #include <imgui.h>
 
 #if CALIPER_WITH_BUILDER
+#include "builder/agent_settings.h"
 #include "builder/builder_pane.h"
 
 #include <caliper_builder/session/session.h>
@@ -135,6 +143,10 @@ public:
     // a dropped file reaches; the app sets both before each feed().
     void set_page(std::string page) { page_ = std::move(page); }
     void set_drop(std::function<void(std::vector<std::string>)> drop) { drop_ = std::move(drop); }
+#if CALIPER_WITH_BUILDER
+    // The widget agent's settings, for the `settings` steps; the app sets them.
+    void set_agent_settings(AgentSettings* settings) { settings_ = settings; }
+#endif
 
     void feed(SpecPage& page, AppSession& app, ChatPane* chat = nullptr) {
         if (done()) return;
@@ -154,6 +166,41 @@ public:
         }
         const Step& s = steps_[at_];
         ++frames_;
+        if (s.verb == "widget") {
+            if (!page.widget_action(s.arg)) return patience("the surface offers no " + s.arg);
+            next("pressed " + s.arg);
+            return;
+        }
+        if (s.verb == "settings") {
+#if CALIPER_WITH_BUILDER
+            if (!settings_) return void(error_ = "settings: the app has no widget agent settings");
+            std::stringstream words(s.arg);
+            std::string what, which, rest;
+            words >> what >> which;
+            std::getline(words, rest);
+            while (!rest.empty() && rest.front() == ' ') rest.erase(rest.begin());
+            const std::string want = rest == "none" ? std::string() : rest;
+            auto shown = [](const std::string& t) { return t.empty() ? std::string("none") : t; };
+            if (what == "open" || what == "close") {
+                settings_->set_open(what == "open");
+                next("settings " + what);
+            } else if (what == "until" && which == "open") {
+                if (!settings_->is_open()) return patience("the settings are closed");
+                next("the settings are open");
+            } else if (what == "until" && which == "note") {
+                if (settings_->gpu_note() != want) return patience("the settings' note is " + shown(settings_->gpu_note()));
+                next("the settings' note is " + shown(want));
+            } else if (what == "until" && which == "state") {
+                if (settings_->state() != want) return patience("the settings' state is " + shown(settings_->state()));
+                next("the settings' state is " + shown(want));
+            } else {
+                error_ = "settings takes open, close or until open|note|state";
+            }
+#else
+            error_ = "settings: the builder is not in this build";
+#endif
+            return;
+        }
         if (s.verb == "click") {
             std::stringstream words(s.arg);
             std::string name;
@@ -278,6 +325,9 @@ public:
                 facts_ = "surface " + page.widget_state() + ", focus " +
                          (page.focused_panel().empty() ? std::string("none") : page.focused_panel()) + ", undo " +
                          std::to_string(undo_steps(app)) + (chat ? ", chat " + chat->state() : std::string());
+#if CALIPER_WITH_BUILDER
+                if (settings_) facts_ += std::string(", settings ") + (settings_->is_open() ? "open" : "closed");
+#endif
                 shot_requested_ = true;
                 armed_ = true;
             } else if (frames_ > kPatience) {
@@ -368,6 +418,8 @@ private:
                 keys.push_back(ImGuiKey_Backspace);
             } else if (p == "f3") {
                 keys.push_back(ImGuiKey_F3);
+            } else if (p == "comma") {
+                keys.push_back(ImGuiKey_Comma);
             } else if (p.size() == 1 && p[0] >= 'a' && p[0] <= 'z') {
                 keys.push_back((ImGuiKey)(ImGuiKey_A + (p[0] - 'a')));
             } else if (p.size() == 1 && p[0] >= '0' && p[0] <= '9') {
@@ -415,6 +467,9 @@ private:
     std::vector<ImGuiKey> held_keys_;
     std::vector<std::string> log_;
     std::string error_, facts_;
+#if CALIPER_WITH_BUILDER
+    AgentSettings* settings_ = nullptr;
+#endif
     std::string page_;
     std::function<void(std::vector<std::string>)> drop_;
     float drag_a_[2] = {0, 0}, drag_b_[2] = {0, 0};

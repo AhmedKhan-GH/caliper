@@ -544,8 +544,10 @@ AgentSettingsLayout layout_in_window(const AgentSettingsLayoutInput& in, const A
 
 AgentSettingsLayout layout_agent_settings(const AgentSettingsLayoutInput& in, const AgentSettingsMetrics& m,
                                           const WidgetMeasure& measure) {
-    // A share of the work area's width; as tall as its content, up to the
-    // area, centred in it.
+    // One placement rule at every size: a share of the work area's width,
+    // centred across it; the top at a fixed share of its height from its top
+    // edge; as tall as the content, moving up only when the content would
+    // pass the area's bottom margin.
     const WidgetRect& A = in.area;
     const float w = std::round(std::max(std::min(m.min_w, A.w - 2 * m.margin), std::min(A.w * m.share_w, A.w - 2 * m.margin)));
     const float avail = std::max(0.0f, A.h - 2 * m.margin);
@@ -553,7 +555,9 @@ AgentSettingsLayout layout_agent_settings(const AgentSettingsLayoutInput& in, co
     float bottom = 0;
     layout_in_window(in, m, measure, {x, A.y + m.margin, w, avail}, &bottom);
     const float h = std::round(std::min(avail, bottom - (A.y + m.margin) + m.pad));
-    return layout_in_window(in, m, measure, {x, std::round(A.y + (A.h - h) * 0.5f), w, h}, &bottom);
+    float top = A.y + std::max(m.margin, std::round(A.h * m.top_share));
+    if (top + h > A.bottom() - m.margin) top = std::max(A.y + m.margin, A.bottom() - m.margin - h);
+    return layout_in_window(in, m, measure, {x, std::round(top), w, h}, &bottom);
 }
 
 // ---- the component ------------------------------------------------------------------------
@@ -1016,13 +1020,8 @@ bool field(const SpecLook& L, const WidgetRect& r, const char* id, std::string* 
 }  // namespace
 
 void AgentSettings::read_keys() {
-    ImGuiIO& io = ImGui::GetIO();
-#ifdef __APPLE__
-    const bool mod = io.KeySuper;
-#else
-    const bool mod = io.KeyCtrl;
-#endif
-    if (mod && ImGui::IsKeyPressed(ImGuiKey_Comma, false)) set_open(!open_);
+    // ImGuiMod_Ctrl is the Command key on macOS, as the page's ⌘K reads it.
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Comma)) set_open(!open_);
 }
 
 void AgentSettings::draw(float x, float y, float w, float h, const SpecLook& L) {

@@ -1125,6 +1125,9 @@ private:
     void feed_spec_ui() {
         spec_ui_->set_page(page_ == AppPage::Spec ? "spec" : page_ == AppPage::Landing ? "landing" : "live");
         spec_ui_->set_drop([this](std::vector<std::string> paths) { on_drop(std::move(paths)); });
+#if CALIPER_WITH_BUILDER
+        spec_ui_->set_agent_settings(&agent_settings_);
+#endif
         spec_ui_->feed(spec_page_, session_, &chat_);
         if (spec_ui_->take_shot_request()) captures_.add(caliper_host::SpecUiDriver::kShotTicket);
         for (const std::string& line : spec_ui_->take_log()) std::cerr << "[ui] " << line << std::endl;

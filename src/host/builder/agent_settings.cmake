@@ -17,7 +17,10 @@
 #                                 server; skipped without
 #                                 CALIPER_BUILDER_TEST_PYTHON) and
 #                                 caliper_agent_settings_gpu (the shot tool as
-#                                 a process)
+#                                 a process); caliper_agent_settings_app (the
+#                                 hidden app: ⌘K's Setup opens the settings, and
+#                                 the Shared GPU note while the producer's
+#                                 stream is attached)
 if(NOT TARGET caliper_widget_surface)
     return()
 endif()
@@ -43,11 +46,15 @@ endif()
 if(BUILD_TESTS AND TARGET doctest::doctest AND NOT WIN32)
     add_executable(caliper_agent_settings_tests
         ${_settings_dir}/tests/test_main.cpp
-        ${_settings_dir}/tests/test_agent_settings.cpp)
-    target_link_libraries(caliper_agent_settings_tests PRIVATE caliper_widget_surface doctest::doctest)
-    target_include_directories(caliper_agent_settings_tests PRIVATE ${THIRD_PARTY_DIR}/stb)
+        ${_settings_dir}/tests/test_agent_settings.cpp
+        ${_settings_dir}/tests/test_agent_settings_app.cpp)
+    target_link_libraries(caliper_agent_settings_tests PRIVATE caliper_widget_surface doctest::doctest
+        caliper_builder_duckdb)
+    target_include_directories(caliper_agent_settings_tests PRIVATE ${THIRD_PARTY_DIR}/stb
+        ${CMAKE_SOURCE_DIR}/src/host/spec_runtime/tests)
     target_compile_definitions(caliper_agent_settings_tests PRIVATE
         CALIPER_SPEC_TEST_TMP="${CMAKE_CURRENT_BINARY_DIR}/agent-settings-test-tmp"
+        CALIPER_SPEC_FIXTURES="${CMAKE_SOURCE_DIR}/src/builder/spec/tests/fixtures"
         CALIPER_BUILDER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/src/builder"
         CALIPER_BUILDER_TEST_PYTHON="${CALIPER_BUILDER_TEST_PYTHON}"
         CALIPER_AGENT_SETTINGS_SHOT_EXE="$<TARGET_FILE:caliper-agent-settings-shot>")
@@ -66,4 +73,17 @@ if(BUILD_TESTS AND TARGET doctest::doctest AND NOT WIN32)
     # system's key store: the switch keeps caliper-agent offline.
     set_tests_properties(caliper_agent_settings caliper_agent_settings_agent caliper_agent_settings_gpu
         PROPERTIES ENVIRONMENT "CALIPER_AGENT_OFFLINE=1")
+    if(TARGET caliper)
+        add_dependencies(caliper_agent_settings_tests caliper)
+        set(_settings_app_env "CALIPER_AGENT_OFFLINE=1;CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>")
+        if(APPLE AND TARGET caliper_net)
+            # caliper_attention_producer is defined later, under the same condition.
+            add_dependencies(caliper_agent_settings_tests caliper_attention_producer)
+            list(APPEND _settings_app_env "CALIPER_TEST_PRODUCER_EXE=$<TARGET_FILE:caliper_attention_producer>"
+                "CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets")
+        endif()
+        add_test(NAME caliper_agent_settings_app COMMAND caliper_agent_settings_tests --test-suite=app)
+        set_tests_properties(caliper_agent_settings_app PROPERTIES LABELS "builder;widget;cli" TIMEOUT 400
+            ENVIRONMENT "${_settings_app_env}" SKIP_REGULAR_EXPRESSION "caliper_agent_settings_app skipped")
+    endif()
 endif()

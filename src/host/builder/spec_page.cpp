@@ -671,6 +671,19 @@ void SpecPage::set_chat(ChatPane* chat) { impl_->chat = chat; }
 
 void SpecPage::set_agent_settings(AgentSettings* settings) { impl_->settings = settings; }
 
+bool SpecPage::widget_action(const std::string& label) {
+    if (!impl_->widget) return false;
+    WidgetSurface& s = impl_->widget->surface();
+    std::vector<WidgetAction> offered = s.row_actions();
+    for (WidgetAction a : s.card_actions()) offered.push_back(a);
+    for (WidgetAction a : offered) {
+        if (label != widget_action_label(a)) continue;
+        s.act(a);
+        return true;
+    }
+    return false;
+}
+
 bool SpecPage::panel_rect(const std::string& panel_id, float rect[4]) const {
     for (const auto& lp : impl_->runtime->layout().panels)
         if (lp.id == panel_id) {
@@ -790,6 +803,7 @@ void SpecPage::set_hidden(bool) {}
 void SpecPage::set_api_files(ApiFiles) {}
 void SpecPage::set_chat(ChatPane*) {}
 void SpecPage::set_agent_settings(AgentSettings*) {}
+bool SpecPage::widget_action(const std::string&) { return false; }
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
 std::string SpecPage::widget_state() const { return "idle"; }
 void SpecPage::set_panel_overlay(PanelOverlay) {}

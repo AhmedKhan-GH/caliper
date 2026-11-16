@@ -167,6 +167,10 @@ public:
     // ("idle" before any ⌘K).
     bool panel_rect(const std::string& panel_id, float rect[4]) const;
     std::string widget_state() const;
+    // Presses the inline surface's action of that label ("Setup", "Accept",
+    // ...) when the surface offers it now, as a click on its button does;
+    // false otherwise. For the hidden app's input driver.
+    bool widget_action(const std::string& label);
     // Draws over each shown panel in the panel's own window after its
     // content, as the page's overlay does the focus frame, with the panel's
     // id, the title its strip shows, its rectangle and its title strip's

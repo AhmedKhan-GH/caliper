@@ -163,6 +163,7 @@ struct AgentSettingsMetrics {
     float column = 400;    // the narrowest capabilities column
     float min_w = 560;
     float share_w = 0.62f;   // of the work area's width; the height is the content's
+    float top_share = 0.12f; // the window's top, as a share of the work area's height from its top
     float margin = 24;     // between the window and the work area's edges
     static AgentSettingsMetrics for_text_scale(float s);
 };

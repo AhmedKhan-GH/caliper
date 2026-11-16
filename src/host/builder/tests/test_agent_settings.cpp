@@ -313,6 +313,7 @@ TEST_CASE("agent settings: the app's agent from the settings, and its environmen
     const std::string dir = tmp_dir("app");
     agent::KeyStore* keys = app_key_store(true);   // a hidden app's: in memory
     REQUIRE(keys != nullptr);
+    CHECK(dynamic_cast<agent::MemoryKeyStore*>(keys) != nullptr);   // never the system's store
     CHECK(keys == app_key_store(true));
     AppWidgetEnv env;
     env.hidden = true;
@@ -506,6 +507,17 @@ TEST_CASE("agent settings: the layout at two sizes") {
         else CHECK(L.caps.y >= L.model.bottom());
         CHECK(L.warnings.size() == 2);
         CHECK(L.note.empty());   // another machine's GPU: no note
+        // One placement: the top at 12 % of the work area's height, whatever
+        // the content, while it fits.
+        AgentSettingsLayoutInput fewer = in;
+        fewer.warnings = 0;
+        fewer.efforts.clear();
+        const AgentSettingsLayout F = layout_agent_settings(fewer, AgentSettingsMetrics::for_text_scale(1.0f), measure);
+        if (w >= 1440) {
+            CHECK(L.window.y == doctest::Approx(30 + std::round((h - 60) * 0.12f)));
+            CHECK(F.window.y == doctest::Approx(L.window.y));
+            CHECK(F.window.h <= L.window.h);
+        }
         // On this machine, with a live run: the note under the presets.
         AgentSettingsLayoutInput local = in;
         local.note = true;
