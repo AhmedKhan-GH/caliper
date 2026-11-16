@@ -426,7 +426,16 @@ void WidgetSurface::on_agent(const WidgetAgentEvent& e) {
     if (state_ != WidgetState::running) return;   // a turn the surface has left
     switch (e.kind) {
         case K::progress: progress_ = e.text; break;
-        case K::thought: append_bounded(&thought_, e.text, kMaxThought); break;
+        case K::thought: {
+            // The agent's summarized thinking shows as the progress line: its
+            // latest line, until the next tool call names a command.
+            append_bounded(&thought_, e.text, kMaxThought);
+            const std::string t = trimmed(thought_);
+            const size_t nl = t.find_last_of('\n');
+            const std::string line = trimmed(nl == std::string::npos ? t : t.substr(nl + 1));
+            if (!line.empty()) progress_ = line.size() > 160 ? line.substr(0, 160) : line;
+            break;
+        }
         case K::message: append_bounded(&reply_, e.text, kMaxReply); break;
         case K::finished: finish_turn(e); break;
         case K::failed:
@@ -1040,14 +1049,16 @@ float WidgetSurface::reserve(const SpecPanelFrame& f) const {
         .band;
 }
 
-void WidgetSurface::frame(const SpecLook& look, const std::string& focused) {
-    look_ = &look;
+void WidgetSurface::frame(const SpecLook& look, const std::string& focused, bool keys) {
+    if (!look_) look_ = std::make_unique<SpecLook>();
+    *look_ = look;
     if (!focused.empty()) focused_ = focused;
     if (ImGui::GetCurrentContext()) {
-        // ⌘K on macOS (ImGui maps Cmd to its Ctrl there), Ctrl+K elsewhere.
-        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_K) && !focused_.empty())
+        // ⌘K on macOS (ImGui maps Cmd to its Ctrl there), Ctrl+K elsewhere,
+        // and Escape, unless the page routes them itself (keys false).
+        if (keys && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_K) && !focused_.empty())
             open(WidgetTarget::for_panel(focused_));
-        else if (state_ != WidgetState::idle && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        else if (keys && state_ != WidgetState::idle && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
             escape();
         else if ((state_ == WidgetState::preview || state_ == WidgetState::handoff) && !ImGui::GetIO().WantTextInput &&
                  (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)))
@@ -1143,6 +1154,7 @@ void WidgetSurface::overlay(const SpecPanelFrame& f) {
         ImGui::PushStyleColor(ImGuiCol_FrameBgActive, 0);
         ImGui::PushStyleColor(ImGuiCol_Text, L.text);
         ImGui::PushStyleColor(ImGuiCol_TextSelectedBg, sternbild::with_alpha(L.accent, 90));
+        ImGui::PushStyleColor(ImGuiCol_NavCursor, 0);   // the row's own outline marks the focus
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, v2(0, 1));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
         ImGui::PushFont(L.ui, L.ui_size);
@@ -1156,7 +1168,7 @@ void WidgetSurface::overlay(const SpecPanelFrame& f) {
                                               resize_callback, &text_);
         ImGui::PopFont();
         ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor(5);
+        ImGui::PopStyleColor(6);
         ImGui::PopItemWidth();
         if (entered) {
             submit();
@@ -1178,8 +1190,27 @@ void WidgetSurface::overlay(const SpecPanelFrame& f) {
             x += 2.0f * half + std::round(6.0f * s);
         }
         const std::string label = fit(L.mono, L.mono_size, in.status, st.Max.x - x);
+        // The model is the one place to choose it: a click lists the models
+        // the session offers, when it offers a choice.
+        const std::vector<WidgetModelChoice> choices = running ? std::vector<WidgetModelChoice>() : agent_.models();
+        bool hovered = false;
+        if (choices.size() > 1) {
+            ImGui::SetCursorScreenPos(st.Min);
+            if (ImGui::InvisibleButton("##widget.model", st.GetSize())) ImGui::OpenPopup("##widget.models");
+            hovered = ImGui::IsItemHovered();
+        }
         draw_text(dl, L.mono, L.mono_size, v2(x, st.Min.y + (st.GetHeight() - mono_h) * 0.5f),
-             state_ == WidgetState::unavailable ? L.secondary : L.faint, label);
+                  state_ == WidgetState::unavailable ? L.secondary : hovered ? L.text : L.faint, label);
+        if (hovered) {
+            const float tw = text_extent(L.mono, L.mono_size, label).x;
+            const float uy = std::round(st.Min.y + (st.GetHeight() + mono_h) * 0.5f);
+            dl->AddRectFilled(v2(x, uy), v2(x + tw, uy + 1.0f), L.text);
+        }
+        if (ImGui::BeginPopup("##widget.models")) {
+            for (const WidgetModelChoice& c : choices)
+                if (ImGui::Selectable(c.name.c_str(), c.current) && !c.current) agent_.set_model(c.value);
+            ImGui::EndPopup();
+        }
     }
     for (size_t i = 0; i < lay.row_buttons.size() && i < in.row_actions.size(); ++i) button(lay.row_buttons[i], in.row_actions[i]);
 

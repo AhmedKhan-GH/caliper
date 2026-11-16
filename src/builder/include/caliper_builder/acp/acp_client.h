@@ -28,7 +28,8 @@
 //   shutdown()     closes the agent's input, then terminates it after a grace
 //                  period. The destructor calls it.
 //
-// start(), authenticate(), new_session() and close_session() block for up to
+// start(), authenticate(), new_session(), set_config_option() and
+// close_session() block for up to
 // `request_timeout_ms`; call them off the frame thread. Every other function
 // returns at once and may be called from any thread.
 //
@@ -233,6 +234,11 @@ public:
     // kMaxSessionMetaDepth and kMaxSessionMetaValues (acp.bad_argument).
     Error new_session(const std::string& cwd, const std::vector<McpServer>& mcp_servers,
                       SessionInfo* session = nullptr, const nlohmann::json& meta = nlohmann::json());
+
+    // Sets one of the session's config options (`session/set_config_option`),
+    // such as its model, and gives the options as the agent answers them.
+    Error set_config_option(const std::string& config_id, const std::string& value,
+                            nlohmann::json* config_options = nullptr);
 
     // Ends the current session with `session/close` (acp.unsupported when the
     // agent does not offer it, acp.turn_active during a turn); the process

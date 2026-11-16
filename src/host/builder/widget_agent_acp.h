@@ -62,6 +62,10 @@ struct AcpWidgetAgentOptions {
     bool key_required = true;
     int request_timeout_ms = 60000;
     int cancel_timeout_ms = 10000;
+    // Shown in the prompt row instead of the session's model and effort:
+    // "Scripted" when the sidecar plays a test script, so that no capture
+    // credits a model that did not run.
+    std::string label;
 };
 
 class AcpWidgetAgent : public WidgetAgent {
@@ -78,6 +82,10 @@ public:
     void close() override;
     bool poll(WidgetAgentEvent* out) override;
     std::string model_label() const override;
+    std::vector<WidgetModelChoice> models() const override;
+    void set_model(const std::string& value) override;
+    // The model choices of session/new's configOptions.
+    static std::vector<WidgetModelChoice> models_from_config(const nlohmann::json& config_options);
 
     // The session's _meta as start() sends it.
     static nlohmann::json session_meta(const WidgetTarget& target, const std::string& preview,
@@ -103,6 +111,8 @@ private:
     std::deque<WidgetAgentEvent> events_;
     std::string session_;    // the open session's id; events of others are dropped
     std::string label_;
+    nlohmann::json config_;  // the session's config options
+    std::string model_;      // the model the person chose, for this session and the later ones
     int generation_ = 0;     // grows at each start() and close()
     bool stop_ = false;
     std::thread thread_;

@@ -95,6 +95,13 @@ struct WidgetAgentEvent {
 
 const char* widget_agent_event_name(WidgetAgentEvent::Kind kind);
 
+// One model the agent's session offers (its `model` config option).
+struct WidgetModelChoice {
+    std::string value;   // the option's value, such as claude-haiku-5-5
+    std::string name;    // its name, such as Claude Haiku 5.5
+    bool current = false;
+};
+
 class WidgetAgent {
 public:
     virtual ~WidgetAgent() = default;
@@ -120,6 +127,12 @@ public:
     virtual bool poll(WidgetAgentEvent* out) = 0;
     // The model and effort shown in the prompt row, once known.
     virtual std::string model_label() const { return {}; }
+    // The models the open session offers, once it has started; empty when
+    // the agent offers no choice.
+    virtual std::vector<WidgetModelChoice> models() const { return {}; }
+    // Chooses a model for the open session and the later ones; the new label
+    // arrives as a started event.
+    virtual void set_model(const std::string& value) { (void)value; }
 };
 
 // ---- the scripted agent --------------------------------------------------------------
@@ -148,6 +161,7 @@ struct WidgetScript {
     std::string model = "Scripted";
     std::string effort;
     std::chrono::milliseconds start_after{0};   // from start() to started
+    std::vector<WidgetModelChoice> models;      // what models() offers once started
     std::vector<WidgetScriptTurn> turns;        // one per prompt, in order; past the last, a turn that only replies
     bool available = true;                      // a provider is set up
 };
@@ -173,6 +187,8 @@ public:
     void close() override;
     bool poll(WidgetAgentEvent* out) override;
     std::string model_label() const override;
+    std::vector<WidgetModelChoice> models() const override;
+    void set_model(const std::string& value) override;
 
     // What the surface asked, for the tests.
     const std::vector<std::string>& prompts() const { return prompts_; }

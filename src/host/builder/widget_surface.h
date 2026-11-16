@@ -249,9 +249,10 @@ public:
     // there; detach() takes them off.
     void attach(SpecRuntime& runtime);
     void detach();
-    // Reads ⌘K (Ctrl+K) on `focused` (or the panel last clicked) and Escape,
-    // then update(). `look` sizes the band.
-    void frame(const SpecLook& look, const std::string& focused = {});
+    // Reads ⌘K (Ctrl+K) on `focused` (or the panel last clicked) and Escape
+    // unless `keys` is false (a page that routes them itself), Enter on the
+    // card, then update(). `look` sizes the band.
+    void frame(const SpecLook& look, const std::string& focused = {}, bool keys = true);
     // The band the surface keeps under a panel's strip.
     float reserve(const SpecPanelFrame& frame) const;
     // Draws the surface inside the target panel's band; for any panel,
@@ -303,7 +304,7 @@ private:
 
     // ImGui side
     SpecRuntime* runtime_ = nullptr;
-    const SpecLook* look_ = nullptr;
+    std::unique_ptr<SpecLook> look_;   // the look of the last frame()
     std::string focused_;
     bool focus_input_ = false;
     std::string shown_panel_;       // the panel the sink shows a preview in
@@ -336,7 +337,9 @@ public:
 
     WidgetSurface& surface() { return *surface_; }
     void attach(SpecRuntime& runtime) { surface_->attach(runtime); }
-    void frame(const SpecLook& look, const std::string& focused = {}) { surface_->frame(look, focused); }
+    void frame(const SpecLook& look, const std::string& focused = {}, bool keys = true) {
+        surface_->frame(look, focused, keys);
+    }
     void overlay(const SpecPanelFrame& frame) { surface_->overlay(frame); }
 
 private:

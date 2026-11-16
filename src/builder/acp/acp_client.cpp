@@ -835,6 +835,36 @@ Error AcpClient::new_session(const std::string& cwd, const std::vector<McpServer
     return {};
 }
 
+Error AcpClient::set_config_option(const std::string& config_id, const std::string& value, json* config_options) {
+    State& s = *state_;
+    std::string sid;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (!s.started || !s.peer) return {"acp.not_started", "The agent has not been started."};
+        if (s.agent_gone) return {"acp.agent_exited", "The agent is no longer running."};
+        if (s.session_id.empty()) return {"acp.no_session", "No session has been created."};
+        sid = s.session_id;
+    }
+    if (config_id.empty() || config_id.size() > 256 || value.size() > 4096)
+        return {"acp.bad_argument", "A config option needs an id and a value of bounded size."};
+    RpcResult r = s.peer->call_sync("session/set_config_option",
+                                    json{{"sessionId", sid}, {"configId", config_id}, {"value", value}},
+                                    s.options.request_timeout_ms);
+    if (!r.ok()) {
+        if (r.error.code == "rpc.closed")
+            return {"acp.agent_exited", "The agent exited before it answered session/set_config_option.",
+                    "session/set_config_option"};
+        if (r.error.code == "rpc.timeout") return r.error;
+        return {"acp.bad_response", "The agent refused session/set_config_option: " + r.error.message,
+                "session/set_config_option"};
+    }
+    if (config_options) {
+        const auto co = r.result.is_object() ? r.result.find("configOptions") : r.result.end();
+        *config_options = (r.result.is_object() && co != r.result.end() && co->is_array()) ? *co : json();
+    }
+    return {};
+}
+
 Error AcpClient::close_session() {
     State& s = *state_;
     std::string sid;

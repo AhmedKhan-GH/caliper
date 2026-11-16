@@ -200,6 +200,24 @@ TEST_CASE("widget agent over ACP: a prompt, a refinement and Accept through the 
     CHECK(r.surface->diff()[0].kind == WidgetDiffLine::Kind::removed);
     CHECK(r.s->open_spec()->text == r.before);   // the edit is on the preview only
 
+    // The session offers its models; choosing one goes through
+    // session/set_config_option and the row's label follows.
+    const auto choices = r.agent->models();
+    REQUIRE(choices.size() > 1);
+    std::string other, other_name;
+    for (const auto& c : choices)
+        if (!c.current && other.empty()) {
+            other = c.value;
+            other_name = c.name;
+        }
+    REQUIRE(!other.empty());
+    r.agent->set_model(other);
+    for (int i = 0; i < 500 && r.surface->model_label().find(other_name) == std::string::npos; ++i) {
+        r.surface->update();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(r.surface->model_label().find(other_name) != std::string::npos);
+
     r.surface->refine();
     r.surface->set_text("Call it Training curves");
     r.surface->submit();

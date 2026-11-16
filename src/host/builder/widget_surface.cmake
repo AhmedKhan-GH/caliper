@@ -19,13 +19,23 @@ set(_widget_dir ${CMAKE_SOURCE_DIR}/src/host/builder)
 add_library(caliper_widget_surface STATIC
     ${_widget_dir}/widget_agent.cpp
     ${_widget_dir}/widget_agent_acp.cpp
+    ${_widget_dir}/widget_app.cpp
     ${_widget_dir}/widget_surface.cpp)
+# Where the app finds caliper-agent's package and the command table until the
+# sidecar is packaged with a Python runtime (widget_app.h); only this file.
+set_source_files_properties(${_widget_dir}/widget_app.cpp PROPERTIES
+    COMPILE_DEFINITIONS "CALIPER_WIDGET_AGENT_SOURCE=\"${CMAKE_SOURCE_DIR}/src/builder\"")
 target_include_directories(caliper_widget_surface PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_widget_surface PUBLIC caliper_spec_runtime caliper_builder_session caliper_builder_acp
     caliper_builder_agent)
 set_target_properties(caliper_widget_surface PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 if(NOT MSVC)
     target_compile_options(caliper_widget_surface PRIVATE -Wall -Wextra)
+endif()
+
+# The app's spec page owns an InlineWidget (spec_page.cpp).
+if(TARGET caliper)
+    target_link_libraries(caliper PRIVATE caliper_widget_surface)
 endif()
 
 add_executable(caliper-widget-shot ${_widget_dir}/widget_shot_main.cpp)

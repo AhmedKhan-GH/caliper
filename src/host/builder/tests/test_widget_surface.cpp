@@ -575,3 +575,27 @@ TEST_CASE("widget surface: InlineWidget, the page's one object, owns the session
     CHECK(s->open_spec()->text == before);
     s->close();
 }
+
+TEST_CASE("widget surface: the agent's thoughts show as the progress line, and a model is chosen from the row") {
+    WidgetScriptTurn thinking = linear_turn();
+    thinking.steps.insert(thinking.steps.begin(),
+                          step(50, WidgetScriptStep::Kind::thought, "Reading the panel.\nThe y axis is on a log scale"));
+    WidgetScript script = script_of({thinking, linear_turn()});
+    script.models = {{"claude-haiku-5-5", "Claude Haiku 5.5", false}, {"claude-opus-5-5", "Claude Opus 5.5", false}};
+    script.model = "Claude Haiku 5.5";
+    Rig r("models", script);
+    CHECK(r.agent->models().empty());   // nothing to choose before a session
+    r.ask("Use a linear y axis");
+    r.run(150);   // started at 100 ms, the thought at 150 ms
+    REQUIRE(r.surface->state() == WidgetState::running);
+    CHECK(r.surface->progress() == "The y axis is on a log scale");
+    r.run(500);   // spec.get, then the edit: a command name replaces the thought
+    REQUIRE(r.surface->state() == WidgetState::preview);
+    const auto choices = r.agent->models();
+    REQUIRE(choices.size() == 2);
+    CHECK(choices[0].current);
+    r.agent->set_model("claude-opus-5-5");
+    r.surface->update();
+    CHECK(r.surface->model_label() == "Claude Opus 5.5");
+    CHECK(r.agent->models()[1].current);
+}

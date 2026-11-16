@@ -73,7 +73,7 @@ bool AcpWidgetAgent::running() const {
 
 std::string AcpWidgetAgent::model_label() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return label_;
+    return label_.empty() ? options_.label : label_;
 }
 
 json AcpWidgetAgent::session_meta(const WidgetTarget& target, const std::string& preview,
@@ -107,6 +107,66 @@ std::string AcpWidgetAgent::label_from_config(const json& config) {
     }
     if (model.empty()) return {};
     return effort.empty() ? model : model + " \xC2\xB7 " + effort;   // ·
+}
+
+std::vector<WidgetModelChoice> AcpWidgetAgent::models_from_config(const json& config) {
+    std::vector<WidgetModelChoice> out;
+    if (!config.is_array()) return out;
+    for (const json& o : config) {
+        if (!o.is_object() || o.value("id", "") != "model") continue;
+        const std::string current = o.contains("currentValue") && o["currentValue"].is_string()
+                                        ? o["currentValue"].get<std::string>()
+                                        : std::string();
+        for (const json& v : o.value("options", json::array())) {
+            if (!v.is_object() || !v.contains("value") || !v["value"].is_string()) continue;
+            WidgetModelChoice c;
+            c.value = v["value"].get<std::string>();
+            c.name = v.contains("name") && v["name"].is_string() ? v["name"].get<std::string>() : c.value;
+            c.current = c.value == current;
+            out.push_back(std::move(c));
+        }
+    }
+    return out;
+}
+
+std::vector<WidgetModelChoice> AcpWidgetAgent::models() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (session_.empty()) return {};
+    return models_from_config(config_);
+}
+
+void AcpWidgetAgent::set_model(const std::string& value) {
+    int gen = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        model_ = value;
+        gen = generation_;
+    }
+    post([this, gen, value] {
+        std::shared_ptr<acp::AcpClient> client;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (gen != generation_ || stop_ || session_.empty()) return;   // applied at the next start
+            client = client_;
+        }
+        json config;
+        if (caliper_builder::Error e = client->set_config_option("model", value, &config)) {
+            WidgetAgentEvent ev;
+            ev.kind = WidgetAgentEvent::Kind::progress;
+            ev.text = e.code;
+            push(std::move(ev));
+            return;
+        }
+        WidgetAgentEvent ev;
+        ev.kind = WidgetAgentEvent::Kind::started;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (config.is_array()) config_ = config;
+            if (options_.label.empty()) label_ = label_from_config(config_);
+            ev.model = label_;
+        }
+        push(std::move(ev));
+    });
 }
 
 void AcpWidgetAgent::start(const WidgetTarget& target, const std::string& preview, const std::vector<std::string>& scope) {
@@ -166,15 +226,27 @@ void AcpWidgetAgent::start(const WidgetTarget& target, const std::string& previe
         if (!client->session_id().empty() && !client->turn_active()) (void)client->close_session();
         acp::SessionInfo info;
         if (caliper_builder::Error e = client->new_session(options_.cwd, {}, &info, meta)) return failed(e);
+        // The model the person chose before goes to every later session.
+        std::string chosen;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            chosen = model_;
+        }
+        if (!chosen.empty()) {
+            json config;
+            if (!client->set_config_option("model", chosen, &config) && config.is_array())
+                info.config_options = config;
+        }
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (gen != generation_ || stop_) return;   // closed meanwhile: close() follows in the queue
             session_ = info.id;
-            label_ = label_from_config(info.config_options);
+            label_ = options_.label.empty() ? label_from_config(info.config_options) : options_.label;
+            config_ = info.config_options;
         }
         WidgetAgentEvent e;
         e.kind = WidgetAgentEvent::Kind::started;
-        e.model = label_from_config(info.config_options);
+        e.model = options_.label.empty() ? label_from_config(info.config_options) : options_.label;
         push(std::move(e));
     });
 }

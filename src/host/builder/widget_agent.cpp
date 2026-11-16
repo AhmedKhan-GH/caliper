@@ -92,6 +92,24 @@ std::string ScriptedWidgetAgent::model_label() const {
     return script_.effort.empty() ? script_.model : script_.model + " · " + script_.effort;
 }
 
+std::vector<WidgetModelChoice> ScriptedWidgetAgent::models() const {
+    if (!started_) return {};
+    std::vector<WidgetModelChoice> out = script_.models;
+    for (auto& m : out) m.current = m.name == script_.model;
+    return out;
+}
+
+void ScriptedWidgetAgent::set_model(const std::string& value) {
+    for (const auto& m : script_.models)
+        if (m.value == value) script_.model = m.name;
+    if (!open_) return;
+    WidgetAgentEvent e;
+    e.kind = WidgetAgentEvent::Kind::started;
+    e.model = script_.model;
+    e.effort = script_.effort;
+    events_.push_back(std::move(e));
+}
+
 void ScriptedWidgetAgent::start(const WidgetTarget&, const std::string& preview, const std::vector<std::string>& scope) {
     scopes_.push_back(scope);
     if (open_) close();
