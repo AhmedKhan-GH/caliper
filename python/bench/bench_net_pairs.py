@@ -13,7 +13,7 @@ with no viewer it is the plain loop, since a call then does no device work.
 
 Kinds: heatmap-1024 (show of a 1024 x 1024 weight), series (the loss), points-100k
 (100,000 3-D points with 4-class labels), all (the three), all-heavy30 (the three,
-the heatmap and the points with rate=30). Each viewer is net_client.py in its
+the heatmap and the points with rate=30), points-100k-r30 (the points with rate=30). Each viewer is net_client.py in its
 own process, subscribed throughout. The workload is bench_net.py's.
 
 A pair counts only when the 1-minute load average, read before and after it,
@@ -44,7 +44,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 KINDS = {"heatmap-1024": ["W"], "series": ["loss"], "points-100k": ["emb100k"],
-         "all": ["W", "loss", "emb100k"], "all-heavy30": ["W30", "loss", "emb100k30"]}
+         "all": ["W", "loss", "emb100k"], "all-heavy30": ["W30", "loss", "emb100k30"],
+         "points-100k-r30": ["emb100k30"]}
 DEFAULT_ARMS = [f"{k}:{n}" for k in ("heatmap-1024", "series", "points-100k", "all") for n in (1, 2)] + \
                ["all-heavy30:1", "all-heavy30:2"] + [f"{k}:0" for k in ("heatmap-1024", "series", "points-100k", "all")]
 TRIM_US = 3000.0
