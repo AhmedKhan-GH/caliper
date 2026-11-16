@@ -32,7 +32,7 @@ The scene core turns a scene's entities into a draw list, the graphics layer tak
 
 Every draw also has a pick variant, whose fragment stage writes the pick identity instead of a colour (see [Picking](#picking)), and indexed meshes and index-pair edges depend on one compute module, the index clamp and its edge gather.
 
-The geometry service is not one of these draws. It keeps its vertex-pulling program, which reads the storage buffers of group 3, and its one-pixel hardware lines, because its byte-exact rows and its index-clamp contract depend on them; only its points become instanced quads ([Renderer core](renderer-core.md)). In a browser it therefore runs on a default device and not on a compatibility device, where its capability bit stays unset.
+The geometry service is not one of these draws, and it does not come to the browser: the renderer core's migration deletes it once its applets have moved to the scene service, as the user decided, and applets' scenes then use these same draws ([Scenes](scenes.md#the-scene-service-for-applets)). Its vertex pulling from the storage buffers of group 3 was the only reader of storage buffers in the vertex stage, so the graphics layer drops that capability and group 3 with it, and every draw on this page runs on a compatibility device too.
 
 ## WebGPU limits that shape the design
 
@@ -47,14 +47,14 @@ The geometry service is not one of these draws. It keeps its vertex-pulling prog
 | Uniform binding size | 65,536 bytes | 16,384 bytes | The largest uniform binding is the 2,080-byte colormap block |
 | Dynamic uniform buffers per pipeline layout | 8 | 8 | Two are used, the parameter block and the colormap block |
 | Uniform offset alignment | 256 bytes | 256 bytes | Each 192-byte parameter block takes a 256-byte slot, and each colormap block 2,304 bytes |
-| Bind groups | 4 | 4 | Scene draws use three; group 3 belongs to the geometry service |
+| Bind groups | 4 | 4 | Scene draws use three; group 3, which the geometry service used, stays free |
 | Bind groups plus vertex buffers | 24 | 24 | At most nine are used |
 | Vertex buffers | 8 | 8 | A mesh uses six |
 | Vertex attributes | 16 | 16 | A mesh uses nine |
 | Vertex buffer stride | 2,048 bytes | 2,048 bytes | Strides here are 0 to 64 bytes |
 | Inter-stage variables | 16 | 15 | Four are used: colour, UV, the pick identity and the entity-space position |
 | Buffer size | 268,435,456 bytes (256 MiB) | the same | One array of one batch must fit one buffer |
-| Storage binding size | 134,217,728 bytes (128 MiB) | the same | Binds only the geometry service's sources and the index clamp's input |
+| Storage binding size | 134,217,728 bytes (128 MiB) | the same | Binds only the index clamp's and the edge gather's inputs |
 | 2-D texture side | 8,192 | 4,096 | The largest image side the viewer accepts |
 | Colour attachments | 8 | 4 | One is used per pass |
 | Flat interpolation | any sampling | `either` only | Chromium refused a flat output with the default sampling on a compatibility device: "The interpolation sampling (First) ... is not supported in compatibility mode". The pick identity is `@interpolate(flat, either)` |
@@ -91,7 +91,7 @@ The layout is the one of [Renderer core](renderer-core.md):
 | 1 | 0 | `PrimParams`, 192 bytes in a 256-byte slot, dynamic offset | vertex, fragment | per draw |
 | 1 | 1 | `Cmap`, 2,080 bytes: the range, the flip, 258 keys and the 256-entry table, dynamic offset | vertex, fragment | per colormap and range |
 | 2 | 0 to 3 | The image of a textured draw and its sampler | fragment; vertex as well for depth points | per image |
-| 3 | | The geometry service's storage buffers, for its vertex pulling only | vertex | never bound by scene draws |
+| 3 | | None. The geometry service's storage buffers were bound here for its vertex pulling, and the group goes with it | | never bound by scene draws |
 
 `PrimParams` keeps the native block's size and the offset of every field whose meaning survives: the combined transform, the normal matrix, `vertex_count`, the colour and shade modes, the flat colour, the range, `size_px`, `use_instance` and `use_instance_attr`. The element bases of vertex pulling have no meaning when buffers are bound at offsets, so their slots carry what the quad pipelines need: the pick identity, the radius and shape of points, the line mode and the image mode. One CPU function fills the block for every backend, so the matrices and modes that the shaders read are the same bytes everywhere. Renderer core's shader generator owns the final layout and emits its C++ struct. A frame's blocks live in the frame's uniform arena, written once a frame for the slots that changed.
 
@@ -117,11 +117,11 @@ An arrow is one instance of nine vertices: a shaft quad and a flat triangular he
 
 ### Boxes
 
-A box is an instance of the unit cube, or of the unit square in 2-D. Its center, half sizes and rotation quaternion are instance attributes at their offsets in the batch's arrays, and the vertex stage turns them into the column-major 4 × 4 pose that an instance pose of the geometry service holds: translation, rotation, then the half sizes as scale. The pose is applied first, as `mvp · (pose · v)`, and never folded into `mvp`. Edges are 12 segment quads, 4 in 2-D. With `fill`, the faces are 12 triangles, 2 in 2-D, drawn translucent with alpha blending and depth test only. A face's normal is an axis vector, so the pose maps it onto a vector parallel to the true normal under any rotation and positive scale, and the native normal chain lights a face exactly when lighting is asked for; boxes need none of the rigidity check that general instanced meshes need under Lambert lighting. Labels are text that the view layer draws over the image at anchors that the scene core projects.
+A box is an instance of the unit cube, or of the unit square in 2-D. Its center, half sizes and rotation quaternion are instance attributes at their offsets in the batch's arrays, and the vertex stage turns them into the column-major 4 × 4 pose that a mesh's instance pose holds: translation, rotation, then the half sizes as scale. The pose is applied first, as `mvp · (pose · v)`, and never folded into `mvp`. Edges are 12 segment quads, 4 in 2-D. With `fill`, the faces are 12 triangles, 2 in 2-D, drawn translucent with alpha blending and depth test only. A face's normal is an axis vector, so the pose maps it onto a vector parallel to the true normal under any rotation and positive scale, and the native normal chain lights a face exactly when lighting is asked for; boxes need none of the rigidity check that general instanced meshes need under Lambert lighting. Labels are text that the view layer draws over the image at anchors that the scene core projects.
 
 ### Meshes
 
-A mesh binds its positions, normals, colour source and UVs as vertex buffers and its indices as a `uint32` index buffer for `drawIndexed`. With normals, lighting is the native per-vertex headlight, with the normal matrix computed on the CPU. Without normals, faces are flat: the fragment stage lights each face from the cross product of the derivatives of its entity-space position, on both sides. A textured mesh samples its image with the geometry service's fixed sampler: linear, clamped to the edge, without mipmaps. A mesh with instance poses takes them and its per-instance values as the geometry service's instanced records do; without them, an identity pose is bound at stride 0.
+A mesh binds its positions, normals, colour source and UVs as vertex buffers and its indices as a `uint32` index buffer for `drawIndexed`. With normals, lighting is the native per-vertex headlight, with the normal matrix computed on the CPU. Without normals, faces are flat: the fragment stage lights each face from the cross product of the derivatives of its entity-space position, on both sides. A textured mesh samples its image with a fixed sampler, the geometry service's: linear, clamped to the edge, without mipmaps. A mesh with instance poses binds them and its per-instance colours or values as instance-step attributes, and transforms its normals by the cofactor of each pose's upper 3 × 3 ([Scenes](scenes.md#primitives)); without them, an identity pose is bound at stride 0.
 
 Index values come from the producer and cannot be checked without reading them. A hardware index fetch cannot clamp, and WebGPU either discards a draw with an index out of range or reads it as an invalid memory reference, so a small compute pass copies a batch's indices into an index buffer that the layer owns, each clamped to the last vertex, once per batch update. This keeps the geometry service's index-clamp contract for scenes.
 
@@ -189,7 +189,7 @@ The same backend compiles natively against Dawn, which offers the same `webgpu.h
 - There is no 4 GiB heap and no GPU process, so a copy is a staging write within the process.
 - Native code may block on the queue, where the browser allows only callbacks.
 - The surface is the app's window, presented explicitly, where the browser presents the canvas when the frame returns to its event loop.
-- Native adapters offer higher limits. The backend keeps to the defaults on both, so one path is tested, and its fit to compatibility mode lets Dawn's backends for older graphics APIs draw scenes on machines without Metal or Vulkan, which the OpenGL fallback served until the renderer core retires it; the geometry service stays unavailable there.
+- Native adapters offer higher limits. The backend keeps to the defaults on both, so one path is tested, and its fit to compatibility mode lets Dawn's backends for older graphics APIs draw scenes on machines without Metal or Vulkan, which the OpenGL fallback served until the renderer core retires it.
 
 ## Shader sources
 
@@ -792,7 +792,7 @@ The total is 24 builder days. The native fallback through Dawn is sized in [Rend
 - **Lines.** Joins are not mitred, and wide alpha-blended strips darken where segments overlap.
 - **Transparency.** Translucent draws are not sorted.
 - **Picking.** A hover answer arrives one or two frames late.
-- **The geometry service.** It needs a default device, so a compatibility device shows scenes but not the service's applets.
+- **Applets.** An applet's scene reaches a browser only through the hub, copied, and only where it is wire-capable ([Scenes](scenes.md#wire-capable-scenes)).
 - **The index clamp of large meshes.** The clamp pass as drafted dispatches one row of workgroups of 64 indices, which passes WebGPU's limit of 65,535 workgroups in one dimension above 4,194,240 indices, about 1.4 million triangles. The built pass needs the grid-stride loop that the edge gather already has, before a mesh at the limit of [Scenes](scenes.md) can be drawn.
 - **Browsers.** Only Chromium was used for checks. Safari and Firefox are untested, as in the spike.
 - **Performance.** No frame time in this page was measured; the frame-time test sets the target.
@@ -806,7 +806,7 @@ The total is 24 builder days. The native fallback through Dawn is sized in [Rend
 - **Depth and segmentation textures hold bits.** The integer decision then sees NaN and infinite depths as they are.
 - **Lines as screen-space quads with extended ends and no joins; arrow heads flat in screen space.** Both keep their width in pixels and fit one instanced draw.
 - **Index-pair edges gathered into the segment streams, decided by the user.** A compute gather keeps `vs_lines` unchanged and the vertex stage free of storage buffers, at 24 to 32 bytes per edge, where fetching both ends by index in the vertex stage would need a new variant and a positions texture per batch.
-- **Box poses built in the vertex stage from center, half sizes and rotation.** The arrays bind as they arrive, and the pose is the matrix of an instance of the geometry service.
+- **Box poses built in the vertex stage from center, half sizes and rotation.** The arrays bind as they arrive, and the pose is the matrix of a mesh's instance pose.
 - **Flat faces from derivatives for meshes without normals.** Scenes asks for flat faces, and derivatives give them without duplicating vertices.
 - **The scene core's pick pass, 16 × 16 pixels.** It is exact for every primitive at a CPU cost independent of the item count.
 - **Mesh indices clamped by a compute pass.** WebGPU does not define an out-of-range index the way the native clamp does.

@@ -8,7 +8,7 @@ Nothing on this page is built. It rests on these built pieces, and on one planne
 
 - **The points live view** of Caliper LIB, `caliper.points`. A snapshot is one copy on torch's own stream into a CPU-readable shared slot, and the native view draws the slot in place. The points primitive of a scene is this view with many entities.
 - **Protocol v2**, the shared-memory session between a script and the Caliper app (Live streaming (`docs/explanations/live-streaming.md`)), and **wire protocol 3.1** on the sprint 2 branch, with data views, events, controls and linked selection.
-- **The geometry service**, `caliper.geometry.v1` to `v1_3` (`docs/references/service-geometry-v1.md`): points, lines and triangles, depth views, textured meshes and instanced transforms, drawn in place from imported allocations on Metal and on Vulkan with CUDA.
+- **The geometry service**, `caliper.geometry.v1` to `v1_3` (`docs/references/service-geometry-v1.md`): points, lines and triangles, depth views, textured meshes and instanced transforms, drawn in place from imported allocations on Metal and on Vulkan with CUDA. The scene service for applets replaces it, as the user decided ([The scene service for applets](#the-scene-service-for-applets)).
 - **Sprint 3's spec format**, which reserves the panel primitive name `scene` and the catalog kind `recording`.
 - **The renderer core**, planned and built first in sprint 4: a graphics layer that each backend implements once, and a scene core that every view uses.
 
@@ -86,7 +86,7 @@ An entity transform maps the entity's space into its parent's. It is given in on
 | Form | Values | Meaning |
 |---|---|---|
 | Parts | `translation`, 3 f32; `rotation`, a unit quaternion in the order x y z w; `scale`, 1 or 3 f32. Each part is optional | A point p maps to T · R · S · p: scaled, then rotated, then translated |
-| Matrix | One 4 x 4 f32 matrix | Stored column-major, the layout of the geometry service's instance poses |
+| Matrix | One 4 x 4 f32 matrix | Stored column-major, the layout of a mesh's instance poses |
 
 The world pose of an entity is the product of the transforms down its path, M<sub>1</sub> · M<sub>2</sub> · … · M<sub>n</sub>, from the root's child to the entity. A missing transform is the identity. The view normalises a quaternion and hides an entity whose world pose is not finite, saying so in the entity's hover. In a 2-D scene the transform takes a translation of 2 numbers, a rotation of one angle in radians, counter-clockwise when y is up, and a scale of 1 or 2 numbers, and is stored as the same 4 x 4 matrix.
 
@@ -122,17 +122,19 @@ N is the number of items and D the dimension of positions: 3 in a 3-D scene, 2 i
 
 | Primitive | Arrays | Optional | Defaults | Limit per batch |
 |---|---|---|---|---|
-| points | `positions` f32 (N, D) | `colors`; `values` f32 (N,) with a colormap and range; `class_ids` i32 (N,); `radii` f32 (N,) or one, in scene units; `labels` | Discs of 5, 3 or 2 pixels by count, as the points view draws, in flat light grey | N ≤ 4,194,304 |
-| lines | `positions` f32 (V, D) | `strip_lengths` i32 (S,), which makes strips, or `indices` i32 (E, 2), which makes [index-pair edges](#index-pair-edges); `colors` per vertex (V, 4), per strip (S, 4), per edge (E, 4) or one; `values` f32 per vertex, per strip or per edge, with a colormap and range; `width` in pixels | Segments: vertices 2k and 2k + 1 form segment k. Width 2 pixels | V ≤ 4,194,304, S ≤ 1,048,576, E ≤ 4,194,304 |
+| points | `positions` f32 (N, D) | `colors`; `values` f32 (N,) with a colormap and range; `class_ids` i32 (N,); `radii` f32 (N,) or one, in scene units; `labels`; `blend` | Discs of 5, 3 or 2 pixels by count, as the points view draws, in flat light grey | N ≤ 4,194,304 |
+| lines | `positions` f32 (V, D) | `strip_lengths` i32 (S,), which makes strips, or `indices` i32 (E, 2), which makes [index-pair edges](#index-pair-edges); `colors` per vertex (V, 4), per strip (S, 4), per edge (E, 4) or one; `values` f32 per vertex, per strip or per edge, with a colormap and range; `width` in pixels; `blend` | Segments: vertices 2k and 2k + 1 form segment k. Width 2 pixels | V ≤ 4,194,304, S ≤ 1,048,576, E ≤ 4,194,304 |
 | arrows | `origins` f32 (N, D), `vectors` f32 (N, D) | `colors`; `values` with a colormap; `width` in pixels | Width 2 pixels; the head is a fifth of the arrow's length | N ≤ 1,048,576 |
 | boxes | `centers` f32 (N, D), `half_sizes` f32 (N, D) | `rotations` f32 (N, 4), quaternions, 3-D only; `colors`; `class_ids`; `labels`; `fill`; `width` | Edges only, 2 pixels wide. 2-D boxes are axis-aligned and may be given as corners `(x0, y0, x1, y1)`, converted on the device | N ≤ 1,048,576 |
-| mesh | `positions` f32 (V, D) | `indices` i32 (T, 3); `normals` f32 (V, 3); one of `colors` (V, 4), `values` (V,) with a colormap, or `uvs` f32 (V, 2) with a `texture` image | Without indices, each three vertices form a triangle. Without normals, faces are shaded flat. Flat light grey | V ≤ 4,194,304, T ≤ 4,194,304 |
+| mesh | `positions` f32 (V, D) | `indices` i32 (T, 3); `normals` f32 (V, 3); one of `colors` (V, 4), `values` (V,) with a colormap, or `uvs` f32 (V, 2) with a `texture` image; `instance_poses` f32 (N, 4, 4), with `instance_colors` (N, 4) or `instance_values` (N,) through the mesh's colormap | Without indices, each three vertices form a triangle. Without normals, faces are shaded flat. Flat light grey. Without instance poses, one instance at the entity's pose | V ≤ 4,194,304, T ≤ 4,194,304, N ≤ 1,048,576 |
 | image, colour | u8 (H, W, 3 or 4) or (H, W); floats in [0, 1] are converted on the device | `opacity` | Opacity 1; a missing alpha is 255 | H, W ≤ 8,192 |
 | image, depth | f32 or u16 (H, W) | `scale` (scene units per stored unit); a colormap and range; `cloud` | Scale 1 for f32 and 0.001 for u16, which reads millimetres as metres. `cloud` true under a camera | H, W ≤ 8,192 |
 | image, segmentation | Integer class ids (H, W) | `opacity` | Opacity 0.5 | H, W ≤ 8,192 |
 | image, encoded | JPEG or PNG bytes, one video frame each | `opacity` | | 16 MiB |
 
 A colour is u8 (N, 3) or (N, 4), floats in [0, 1] converted to u8 on the device, or one colour for all as a tuple of 3 or 4 integers from 0 to 255 or floats from 0 to 1. An item's colour comes from `colors`, else from `values` through the colormap, else from its class id, else from the default. `colors` and `values` together are refused. A colormap is one of the three of `caliper.show`, `viridis`, `magma` and `rdbu`, and an open end of the range is computed on the device, as for points today.
+
+`blend` is `"normal"`, the default, or `"additive"`. Additive points and lines are drawn after the opaque batches with the depth test on and depth writes off, adding their colour, so that a dense cloud or a bundle of trajectories brightens where it overlaps and the order of its items does not matter. A mesh with `instance_poses` is drawn once per pose, each pose applied before the entity's world pose, and its normals are transformed by the cofactor of each pose's upper 3 × 3, which lights any invertible pose correctly. `instance_colors` or `instance_values` colour each instance and take the place of the mesh's own colours. Both are additions to the shared contracts, made when the scene service replaced the geometry service, because each is a general feature of a scene model that the applets' draws needed. [Wire protocol 3.2](wire-protocol-3-2.md) carries them as a `blend` key of the points and lines parts and as instance arrays of the mesh part.
 
 Labels are host strings: one per item or one for all, at most 4,096 per batch and 63 bytes each. Where an item has no label, its class label is shown. The view draws at most 512 labels at once, the nearest to the camera first.
 
@@ -156,7 +158,7 @@ The producer retains every static item: it makes one device-side copy at the cal
 | Entities in a scene | 1,024 | Each entity costs at least one draw and one per-draw uniform, and 1,024 draws a frame stay cheap on every backend, the browser's included. Many objects of one kind belong in one batch |
 | Batches in a scene | 2,048 | Sizes the scene's directory in shared memory |
 | Points, line vertices, index-pair edges, mesh vertices and triangles in a batch | 4,194,304 | 48 MiB of positions per slot, and three slots per batch; for edges, the gathered positions stay within WebGPU's 128 MiB storage binding |
-| Boxes, arrows and line strips in a batch | 1,048,576 | Each draws several quads or triangles |
+| Boxes, arrows, line strips and mesh instances in a batch | 1,048,576 | Each draws several quads or triangles |
 | Labels | 4,096 per batch, 63 bytes each, 512 drawn at once | Labels are host strings drawn with ImGui every frame |
 | Class table | 4,096 entries, ids 0 to 65,535 | Fits a small lookup texture |
 | Image side | 8,192 pixels | The default 2-D texture limit of WebGPU |
@@ -238,15 +240,17 @@ Each call raises `ValueError` for a path outside the grammar, a shape, dtype or 
 
 ```python
 scene.points(path, positions, *, colors=None, values=None, cmap="viridis", vmin=None, vmax=None,
-             class_ids=None, radii=None, labels=None, items=None, static=False, rate=None)
+             class_ids=None, radii=None, labels=None, items=None, blend="normal", static=False, rate=None)
 scene.lines(path, positions, *, indices=None, strip_lengths=None, colors=None, values=None,
-            cmap="viridis", vmin=None, vmax=None, color_per=None, width=2.0, static=False, rate=None)
+            cmap="viridis", vmin=None, vmax=None, color_per=None, width=2.0, blend="normal", static=False,
+            rate=None)
 scene.arrows(path, origins, vectors, *, colors=None, values=None, cmap="viridis", vmin=None,
              vmax=None, width=2.0, static=False, rate=None)
 scene.boxes(path, centers=None, half_sizes=None, *, corners=None, rotations=None, colors=None,
             class_ids=None, labels=None, fill=False, width=2.0, items=None, static=False, rate=None)
 scene.mesh(path, positions, indices=None, *, normals=None, colors=None, values=None, cmap="viridis",
-           vmin=None, vmax=None, uvs=None, texture=None, static=False, rate=None)
+           vmin=None, vmax=None, uvs=None, texture=None, instance_poses=None, instance_colors=None,
+           instance_values=None, static=False, rate=None)
 ```
 
 | Argument | Type | Default | Meaning |
@@ -262,6 +266,9 @@ scene.mesh(path, positions, indices=None, *, normals=None, colors=None, values=N
 | `width` | `float` | 2.0 | Line, arrow and box-edge width in pixels |
 | `texture` | tensor (H, W, 3 or 4) | `None` | The mesh's texture, sampled at `uvs` |
 | `items` | `str` or `None` | `None` | The item space of protocol 3.1 whose items the rows of this batch are, for linked selection |
+| `blend` | `str` | `"normal"` | Points and lines: `"normal"` or `"additive"` |
+| `instance_poses` | tensor (N, 4, 4) or (N, 16) | `None` | Mesh: one pose per instance, given in the usual row and column sense and stored column-major |
+| `instance_colors`, `instance_values` | tensor (N, 4) or (N,) | `None` | Mesh: a colour or a value through `cmap` per instance |
 
 ```python
 scene.image(path, image, *, opacity=1.0, static=False, rate=None)
@@ -400,7 +407,7 @@ Caliper LIB offers each call to every open route, as it does for the other views
 
 | Route | Metal with MPS | Vulkan with CUDA |
 |---|---|---|
-| An applet in the host, drawing its own tensors through the geometry service | Zero-copy: the imported allocation is drawn in place | Zero-copy for tensors in the exportable pool |
+| An applet in the host, drawing its own tensors through the scene service | Zero-copy: the imported allocation is drawn in place | Zero-copy for tensors in the exportable pool, once the Vulkan backend of the graphics layer lands |
 | Caliper LIB's in-process window or canvas | One copy on torch's stream into a Caliper-made shared `MTLBuffer` slot; the graphics layer imports the slot and draws it with no further copy | Not built: Caliper LIB runs on macOS only. Planned as on Metal, the slot being exportable device memory |
 | The shared-memory session to the Caliper app | One copy on torch's stream into a slot of the session's shared memory; the app imports the slot and draws it with no further copy | Not built. Planned with the Windows session of [Windows parity](windows-parity.md): the directory in named shared memory and the slots in exportable CUDA memory, imported in the app through Vulkan external memory |
 | The network: `caliper.serve()`, the hub | The data view is computed on the device and copied into pinned host memory without waiting; the bytes cross the socket, and the viewer uploads them into its own GPU memory | The same |
@@ -463,7 +470,7 @@ Transforms, cameras, class tables and clears always travel whole. Encoded frames
 
 ### The scene core and the graphics layer
 
-The native scene view is the scene core compiling entities into a draw list for the graphics layer, both planned in [Renderer core](renderer-core.md). It calls no backend, and it is not a second drawing path beside the geometry service: the geometry service, which the renderer core's migration collapses into one version, stays the applets' way to draw in 3-D and becomes another client of the same layer. The browser runs the same scene core over the layer's WebGPU backend, which [Web geometry](web-geometry.md) plans.
+The native scene view is the scene core compiling entities into a draw list for the graphics layer, both planned in [Renderer core](renderer-core.md). It calls no backend, and it is the one drawing path for scenes: applets reach the same view through the scene service, which replaces the geometry service ([Applets](#applets)). The browser runs the same scene core over the layer's WebGPU backend, which [Web geometry](web-geometry.md) plans.
 
 The points live view becomes a scene of one entity in the scene core. Today it calls the host renderer directly, `HostRenderer::geom_draw_primitives` with the host-internal draw record, which carries a raw 256-entry colour table that the public record lacks. Its camera is the right-handed orbit with +y up, a 45° field of view and clip z in [0, 1]. It picks on the CPU from the CPU-visible payload. Platform details reach into it in several places, which the layer's import capability replaces: `bind_buffer` in `src/host/live/live_views.cpp` has one branch for an imported `MTLBuffer`, one for a renderer that copies host memory (the browser's) and one that stages a CPU payload into a new Metal buffer and refuses on any other renderer; the Metal helpers in `live_views_metal.mm`; and the `mtl_buffer` field of the snapshot in `live_source.h`. The WebGPU renderer of the sprint 2 branch draws points only.
 
@@ -473,13 +480,13 @@ Points and lines are instanced quads on every backend, so the 1-pixel line limit
 
 | Primitive | Draw of the graphics layer | Colour | Notes |
 |---|---|---|---|
-| points | An instanced quad per point, expanded in the vertex stage to a disc of its radius in scene units, or of a pixel size | Per-instance RGBA, a value through the colormap, a class colour, or flat | Depth tested and written in 3-D; the disc is cut in the fragment stage with a hard edge, so that points keep depth writes and exact colours |
-| lines, segments | An instanced quad per segment: instance k reads vertices 2k and 2k + 1 as two instance attributes of one buffer (stride 24, offsets 0 and 12), expanded to `width` pixels | Per vertex or flat | |
+| points | An instanced quad per point, expanded in the vertex stage to a disc of its radius in scene units, or of a pixel size | Per-instance RGBA, a value through the colormap, a class colour, or flat | Depth tested and written in 3-D; the disc is cut in the fragment stage with a hard edge, so that points keep depth writes and exact colours; an additive batch is drawn after the opaque ones with depth writes off and additive blending |
+| lines, segments | An instanced quad per segment: instance k reads vertices 2k and 2k + 1 as two instance attributes of one buffer (stride 24, offsets 0 and 12), expanded to `width` pixels | Per vertex or flat | Lines, arrows and box edges are drawn with a small constant depth offset toward the camera, so that an edge lying on a mesh wins over the surface. Additive lines are drawn as additive points are |
 | lines, strips | An instanced quad per vertex pair: instance k reads vertices k and k + 1 (stride 12, offsets 0 and 12). A per-vertex break mask, computed on the producer's device from `strip_lengths`, hides the quads that would join two strips | Per vertex (per-strip colours are expanded on the device) or flat | |
 | lines, index-pair edges | The segment draw, after the edge gather has written each edge's two ends into one stream (stride 24, offsets 0 and 12 in 3-D), so that instance k is edge k | Per vertex as gathered, per edge bound at both ends, or flat | The gather also clamps the indices |
 | arrows | The shaft as a line quad, and the head as a flat triangle in screen space, oriented in the vertex stage from the origin and the vector | Per instance | |
 | boxes | An instanced unit cube or square: 12 or 4 edges as line quads, and with `fill` 12 or 2 translucent triangles. Centre, half sizes and rotation are instance attributes that the vertex stage turns into a matrix | Per instance or class colour | Labels in the overlay |
-| mesh | Indexed triangles, with vertex buffers for positions, normals and colours, values or UVs | Vertex RGBA, colormap, texture or flat | A per-vertex headlight with normals, as the geometry service lights; flat faces from fragment derivatives without; drawn two-sided |
+| mesh | Indexed triangles, with vertex buffers for positions, normals and colours, values or UVs; with instance poses, instanced, the pose and the instance colour source as instance-step attributes | Vertex RGBA, colormap, texture or flat | A per-vertex headlight with normals, as the geometry service lit; flat faces from fragment derivatives without; drawn two-sided; with instance poses, normals go through the cofactor of each pose |
 | image, colour | A textured quad on the camera's image plane in 3-D, or at the entity's origin in 2-D | Texture, linear filtering | |
 | image, depth | A textured quad through the colormap; with `cloud`, also instanced point quads whose vertex stage reads the depth texture at its pixel and back-projects it through the intrinsics | Colormap | No CPU work for the cloud |
 | image, segmentation | A textured quad over an integer texture, sampled nearest, coloured from the class table in the fragment stage | Class colours at `opacity` | |
@@ -503,9 +510,9 @@ From the graphics layer:
 
 From the scene core: the entity tree and its world matrices; the cameras, that is the orbit with any of the six up axes, 2-D pan and zoom with y down or up, and looking through a pinhole; bounds from the per-axis bounds the producer computes on the device, transformed to world space, and fitting; picking; and the compilation of batches into draws, opaque first, then translucent in entity order.
 
-### What the geometry service lacks
+### Applets
 
-Scenes do not need a change to the geometry service, because they do not draw through it. For the record, a scene uses five things that the service's applets cannot ask for today: lines wider than 1 pixel, per-instance colours, integer textures with a class table, label overlays and picking. Once the layer exists, the service's one version could give applets wide lines and per-instance RGBA by appending to its draw record, when an applet asks for them, as [Renderer core](renderer-core.md#one-version-of-each-graphics-service) plans for the growth of a graphics service.
+Applets draw scenes too. The scene service gives them this page's model through the applet ABI and replaces the geometry service, as the user decided; [The scene service for applets](#the-scene-service-for-applets) specifies it, and its scenes are drawn by this same view.
 
 ### Picking, hover and selection
 
@@ -525,6 +532,302 @@ What a pick, hover or select must report travels in the event of protocol 3.1, w
 
 The controls of protocol 3.1, pause, resume, step, parameters and actions, belong to the session, so they work unchanged with scenes; a run paused at its checkpoint holds its scene where the checkpoint left it. A scene's events reach Python as the events of every view do: through the `on_event` and `events()` of `caliper.serve()` and the notebook widget's `selection`, with the detail above. The script can set the selection of an item space, and every scene batch that maps the space highlights it. The shared-memory session has no channel from the viewer back to the script apart from the heartbeat, so the Caliper app attached through it shows hovers and selections without the script receiving them; a script that needs them is attached through `caliper.serve()`. A person's camera movement is never sent to the script, and there is no camera event; the script only sets [the starting camera](#the-starting-camera). Interventions through a scene, such as dragging an entity to set a parameter, need typed arguments in the key that 3.1 reserves for them and are not part of this sprint.
 
+## The scene service for applets
+
+An applet draws in 3-D through the scene service, `caliper.scene.v1`, which offers the scene model of this page to the applet ABI: scenes with a space, an up axis and units; entity paths; entity transforms; points, lines as segments, strips and index-pair edges, arrows, boxes, meshes and images in their colour, depth and segmentation forms; pinhole cameras; clears and static items; the class table; the starting camera; and the scale bar. It replaces the geometry service, as the user decided, and [Renderer core](renderer-core.md#migration) orders the steps that build it, move the applets onto it and delete the geometry service. Nothing of it is built.
+
+The model is the one Caliper LIB logs, with four differences that follow from where an applet runs. Arrays name memory the applet already has, an imported allocation or a `CaliperTensor`, instead of a tensor in a Python process. An applet's updates carry no stamps of a script's timelines, because an applet has none. There are no rate limits or data views, because the applet draws in its own process at its own cadence and decides what to set. Encoded JPEG and PNG frames are not offered, because an applet holds pixels, not files.
+
+### The service and its version
+
+The service id is `caliper.scene.v1`, declared in `sdk/include/caliper/services/scene_v1.h`. It is one table, as every graphics service is from sprint 4 on ([One version of each graphics service](renderer-core.md#one-version-of-each-graphics-service)): within an ABI epoch it grows only by appending members, which its `struct_size` guards, and each record below grows only by appending fields, which the record's own `struct_size` guards. An incompatible change is an epoch change. Every member is called on the frame thread only, the thread that runs the applet's `frame`, as for the tensor bridge.
+
+### Naming an array
+
+Every array of a batch is one `CaliperSceneArray`. It names where the bytes are, as the geometry service's sources did with an allocation and a byte offset, and how to read them:
+
+| Field | Meaning |
+|---|---|
+| `source` | `CALIPER_SCENE_SRC_ALLOC`: an imported allocation, read in place. `CALIPER_SCENE_SRC_TENSOR`: a `CaliperTensor`. `CALIPER_SCENE_SRC_NONE`: the optional array is absent |
+| `alloc`, `offset` | With `SRC_ALLOC`: a `CaliperAllocId` from the tensor bridge's `import_allocation`, the same id space the bridge's textures use, and the byte offset of row 0 inside it, a multiple of 4 |
+| `count` | The number of rows: points, vertices, strips, edges, triangles, boxes, instances or pixels |
+| `dtype`, `components` | The `CaliperDType` of one component, and the components per row: 1, 2, 3, 4 or 16 |
+| `stride` | The bytes from one row to the next, at most 2,048; 0 means packed. A stride lets an applet bind one column of a wider array without a copy |
+| `tensor` | With `SRC_TENSOR`: a CPU tensor, copied at the call so that the applet may free it on return, or a device tensor of the host's backend (`CALIPER_DEV_METAL` today), imported in place as the bridge imports it |
+
+An `SRC_ALLOC` array is imported through the graphics layer's `import_buffer` once per allocation and bound as a vertex, instance or index source at its offset, so the scene view draws the applet's memory in place and the zero-copy route of the geometry service is kept: the info line reports the route that ran, and the copy counters of the migration's step 0 read 0 on it. Index arrays may sit at any 4-byte offset: the index clamp binds the 256-byte-aligned offset below and starts at the remainder, so nothing is copied. Each role takes the dtypes and component counts that [Primitives](#primitives) gives after Caliper LIB's conversion: f32 positions, radii, values and depths, u8 colours and colour images, i32 indices and class ids, and u16 class ids and depths. Caliper LIB casts other dtypes on the device; the service converts nothing, so an applet gives these.
+
+### The table
+
+```c
+#define CALIPER_SCENE_V1 "caliper.scene.v1"
+
+#define CALIPER_SCENE_CAP_DRAW     (1u << 0)  /* the host draws scenes: it has a backend of the graphics layer */
+#define CALIPER_SCENE_CAP_IN_PLACE (1u << 1)  /* SRC_ALLOC arrays are read in place; without it, copied at each call */
+
+typedef uint64_t CaliperSceneId;      /* 0 = none */
+typedef uint64_t CaliperSceneToken;   /* one accepted update of one part; 0 = refused */
+
+enum { CALIPER_SCENE_SRC_NONE = 0, CALIPER_SCENE_SRC_ALLOC = 1, CALIPER_SCENE_SRC_TENSOR = 2 };
+typedef struct CaliperSceneArray {    /* 48 bytes */
+    uint32_t source, dtype;
+    CaliperAllocId alloc;  uint64_t offset;
+    uint64_t count;
+    uint32_t components, stride;
+    const CaliperTensor* tensor;
+} CaliperSceneArray;
+
+enum { CALIPER_SCENE_COLOR_DEFAULT = 0, CALIPER_SCENE_COLOR_FLAT, CALIPER_SCENE_COLOR_RGBA,
+       CALIPER_SCENE_COLOR_VALUES, CALIPER_SCENE_COLOR_CLASS };
+enum { CALIPER_SCENE_PER_ITEM = 0, CALIPER_SCENE_PER_VERTEX, CALIPER_SCENE_PER_STRIP, CALIPER_SCENE_PER_EDGE };
+typedef struct CaliperSceneColor {    /* 72 bytes */
+    uint32_t kind;                    /* CALIPER_SCENE_COLOR_* */
+    uint32_t per;                     /* lines: what the array belongs to; else PER_ITEM */
+    uint32_t flat_rgba;               /* FLAT: r | g<<8 | b<<16 | a<<24 */
+    int32_t  colormap;                /* VALUES: CaliperColormap */
+    float    vmin, vmax;              /* VALUES: the range; vmin == vmax maps every value to level 0 */
+    CaliperSceneArray array;          /* RGBA: u8 x4; VALUES: f32 x1; CLASS: i32 or u16 x1 */
+} CaliperSceneColor;
+
+typedef struct CaliperScenePixels {   /* an image held in an array */
+    CaliperSceneArray data;           /* count = width * height; components = channels */
+    uint32_t width, height;           /* at most 8,192 each */
+    uint32_t row_pitch, reserved;     /* bytes per image row; 0 = packed */
+} CaliperScenePixels;
+
+/* Flags of the records below. */
+#define CALIPER_SCENE_STATIC    (1u << 0)  /* setup: a clear of the scene's live data leaves it */
+#define CALIPER_SCENE_ADDITIVE  (1u << 1)  /* points and lines: additive blending */
+#define CALIPER_SCENE_FILL      (1u << 2)  /* boxes: translucent faces */
+#define CALIPER_SCENE_CLOUD     (1u << 3)  /* depth images: also the back-projected cloud */
+#define CALIPER_SCENE_MATRIX    (1u << 4)  /* transforms: use matrix, not the parts */
+#define CALIPER_SCENE_RUB       (1u << 5)  /* cameras: x right, y up, looking along -z */
+#define CALIPER_SCENE_RECURSIVE (1u << 6)  /* clear: the whole subtree */
+#define CALIPER_SCENE_VIEW_NO_HEADER (1u << 0)  /* view: the header's controls in the context menu */
+
+typedef struct CaliperScenePoints {
+    uint32_t struct_size, flags;              /* STATIC, ADDITIVE */
+    CaliperSceneArray positions;              /* f32 (N, D) */
+    CaliperSceneColor color;                  /* per point */
+    CaliperSceneArray radii;                  /* f32 (N, 1) in scene units, or SRC_NONE */
+    float radius;                             /* one radius in scene units; 0: a pixel size */
+    float size_px;                            /* disc diameter in logical pixels; 0: by count, as the points view */
+    const char* const* labels;                /* label_count strings, or NULL */
+    uint32_t label_count, reserved;           /* 0, 1 (one for all) or N */
+} CaliperScenePoints;
+
+enum { CALIPER_SCENE_SEGMENTS = 0, CALIPER_SCENE_STRIPS, CALIPER_SCENE_EDGES };
+typedef struct CaliperSceneLines {
+    uint32_t struct_size, flags;              /* STATIC, ADDITIVE */
+    uint32_t mode;  float width_px;           /* width 0: 2 pixels */
+    CaliperSceneArray positions;              /* f32 (V, D) */
+    CaliperSceneArray strip_lengths;          /* STRIPS: i32 (S, 1) */
+    CaliperSceneArray indices;                /* EDGES: i32 (E, 2) */
+    CaliperSceneColor color;                  /* per vertex, strip or edge */
+} CaliperSceneLines;
+
+typedef struct CaliperSceneArrows {
+    uint32_t struct_size, flags;
+    float width_px;  uint32_t reserved;
+    CaliperSceneArray origins, vectors;       /* f32 (N, D) each */
+    CaliperSceneColor color;                  /* per arrow */
+} CaliperSceneArrows;
+
+typedef struct CaliperSceneBoxes {
+    uint32_t struct_size, flags;              /* STATIC, FILL */
+    float width_px;  uint32_t label_count;
+    CaliperSceneArray centers, half_sizes;    /* f32 (N, D) each */
+    CaliperSceneArray rotations;              /* f32 (N, 4) quaternions x y z w, 3-D only, or SRC_NONE */
+    CaliperSceneColor color;                  /* per box, class colours included */
+    const char* const* labels;
+} CaliperSceneBoxes;
+
+typedef struct CaliperSceneMesh {
+    uint32_t struct_size, flags;
+    CaliperSceneArray positions;              /* f32 (V, D) */
+    CaliperSceneArray indices;                /* i32 (T, 3), or SRC_NONE: rows 3k to 3k + 2 */
+    CaliperSceneArray normals;                /* f32 (V, 3): the headlight; SRC_NONE: flat faces */
+    CaliperSceneColor color;                  /* per vertex */
+    CaliperSceneArray uvs;                    /* f32 (V, 2), with texture */
+    CaliperScenePixels texture;               /* u8 (H, W, 3 or 4), or data SRC_NONE */
+    CaliperSceneArray instance_poses;         /* f32 (N, 16) column-major, or SRC_NONE */
+    CaliperSceneColor instance_color;         /* per instance; DEFAULT: the mesh's own colour */
+} CaliperSceneMesh;
+
+enum { CALIPER_SCENE_IMAGE_COLOR = 0, CALIPER_SCENE_IMAGE_DEPTH, CALIPER_SCENE_IMAGE_SEGMENTATION };
+typedef struct CaliperSceneImage {
+    uint32_t struct_size, flags;              /* STATIC, CLOUD */
+    uint32_t form;  float opacity;            /* opacity < 0: the form's default */
+    CaliperScenePixels pixels;                /* COLOR u8 x1, 3 or 4; DEPTH f32 or u16; SEGMENTATION i32 or u16 */
+    float depth_scale;  int32_t colormap;     /* DEPTH; depth_scale 0: 1 for f32, 0.001 for u16 */
+    float vmin, vmax;                         /* DEPTH */
+} CaliperSceneImage;
+
+typedef struct CaliperSceneTransform {
+    uint32_t struct_size, flags;              /* STATIC, MATRIX */
+    float translation[3];
+    float rotation[4];                        /* x y z w; in 2-D, rotation[0] is the angle in radians */
+    float scale[3];
+    float matrix[16];                         /* column-major, with MATRIX */
+} CaliperSceneTransform;
+
+typedef struct CaliperScenePinhole {
+    uint32_t struct_size, flags;              /* STATIC, RUB */
+    uint32_t width, height;                   /* the image size in pixels */
+    float fx, fy, cx, cy;                     /* cx or cy NaN: the image centre */
+    float plane_distance;                     /* 0: a twentieth of the scene's bounding radius */
+} CaliperScenePinhole;
+
+typedef struct CaliperSceneClass { uint32_t id, rgba; const char* label; } CaliperSceneClass;
+
+#define CALIPER_SCENE_VIEW_TARGET    (1u << 0)
+#define CALIPER_SCENE_VIEW_DISTANCE  (1u << 1)
+#define CALIPER_SCENE_VIEW_AZIMUTH   (1u << 2)
+#define CALIPER_SCENE_VIEW_ELEVATION (1u << 3)
+typedef struct CaliperSceneViewCamera {
+    uint32_t struct_size, given;              /* CALIPER_SCENE_VIEW_*; what is not given comes from the fit */
+    float target[3], distance, azimuth_deg, elevation_deg;
+    const char* entity;                       /* look through this entity's camera instead, or NULL */
+} CaliperSceneViewCamera;
+
+enum { CALIPER_SCENE_UP_DEFAULT = 0, CALIPER_SCENE_UP_POS_X, CALIPER_SCENE_UP_NEG_X, CALIPER_SCENE_UP_POS_Y,
+       CALIPER_SCENE_UP_NEG_Y, CALIPER_SCENE_UP_POS_Z, CALIPER_SCENE_UP_NEG_Z };
+typedef struct CaliperSceneDesc {
+    uint32_t struct_size;
+    uint32_t space;                           /* 0: 3-D, 1: 2-D */
+    uint32_t up;                              /* CALIPER_SCENE_UP_*; DEFAULT is +y in 3-D and -y in 2-D */
+    uint32_t reserved;
+    const char* name;                         /* 1 to 63 bytes, unique within the applet */
+    const char* units;                        /* at most 15 bytes; NULL: "m" */
+} CaliperSceneDesc;
+
+enum { CALIPER_SCENE_EVENT_HOVER = 1, CALIPER_SCENE_EVENT_HOVER_END, CALIPER_SCENE_EVENT_PICK,
+       CALIPER_SCENE_EVENT_SELECT };
+enum { CALIPER_SCENE_POINTS = 1, CALIPER_SCENE_LINES, CALIPER_SCENE_ARROWS, CALIPER_SCENE_BOXES,
+       CALIPER_SCENE_MESH, CALIPER_SCENE_IMAGE };
+typedef struct CaliperSceneEvent {
+    uint32_t struct_size, kind;               /* CALIPER_SCENE_EVENT_* */
+    const char* view;                         /* the view's key */
+    const char* entity;                       /* the entity path; NULL in an empty SELECT, which clears */
+    uint32_t primitive, has_position;         /* CALIPER_SCENE_POINTS ... */
+    uint64_t item;                            /* HOVER, PICK: the row of the batch's arrays */
+    float position[3];                        /* the hit's world position, when has_position */
+    uint32_t pixel[2];                        /* images: the pixel */
+    const uint64_t* items;                    /* SELECT: item_count rows of this entity and primitive */
+    uint64_t item_count;
+} CaliperSceneEvent;                          /* strings and items are valid until the next poll_event */
+
+typedef struct CaliperSceneV1 {
+    uint32_t struct_size;
+    uint32_t (*caps)(void);
+    CaliperSceneId (*create)(const CaliperSceneDesc* desc);
+    void (*remove)(CaliperSceneId scene);
+    CaliperSceneToken (*points)(CaliperSceneId scene, const char* path, const CaliperScenePoints* b);
+    CaliperSceneToken (*lines)(CaliperSceneId scene, const char* path, const CaliperSceneLines* b);
+    CaliperSceneToken (*arrows)(CaliperSceneId scene, const char* path, const CaliperSceneArrows* b);
+    CaliperSceneToken (*boxes)(CaliperSceneId scene, const char* path, const CaliperSceneBoxes* b);
+    CaliperSceneToken (*mesh)(CaliperSceneId scene, const char* path, const CaliperSceneMesh* b);
+    CaliperSceneToken (*image)(CaliperSceneId scene, const char* path, const CaliperSceneImage* b);
+    bool (*transform)(CaliperSceneId scene, const char* path, const CaliperSceneTransform* t);
+    bool (*camera)(CaliperSceneId scene, const char* path, const CaliperScenePinhole* c);
+    bool (*classes)(CaliperSceneId scene, const CaliperSceneClass* table, uint32_t count, uint32_t flags);
+    bool (*clear)(CaliperSceneId scene, const char* path, uint32_t flags);   /* RECURSIVE, STATIC */
+    bool (*view_camera)(CaliperSceneId scene, const CaliperSceneViewCamera* c);   /* NULL: the fit */
+    bool (*retired)(CaliperSceneId scene, CaliperSceneToken token);
+    bool (*view)(CaliperSceneId scene, const char* key, float width, float height, uint32_t flags);
+    bool (*poll_event)(CaliperSceneId scene, CaliperSceneEvent* out);
+    const char* (*last_error)(void);
+} CaliperSceneV1;
+```
+
+Each record means what the Caliper LIB call of the same name means in [The scene's calls](#the-scenes-calls), with the defaults given there, and the rules of [Primitives](#primitives), [Entity transforms](#entity-transforms), [Cameras and the camera's pixel space](#cameras-and-the-cameras-pixel-space), [The class table](#the-class-table), [Clearing and static items](#clearing-and-static-items) and [The starting camera](#the-starting-camera) apply unchanged. A colour's range is given by the applet, because the service computes nothing on the device. `remove` releases the scene and its imports once the last frame that read them completed.
+
+### Frames, atomicity and memory stability
+
+- **When an applet may update.** Only on the frame thread, during its `frame` or its `draw_ui`. A worker thread hands its slots to the frame thread, as the geometry service's applets do today.
+- **One frame, together.** Every call made between two frames takes effect together in the next picture: the host compiles each changed scene once, after the applet's frame returns and before the ImGui pass. A later call at the same path and primitive in the same frame replaces an earlier one.
+- **Refusal per part.** A refused call returns 0 or false, changes nothing of that part, leaves the previous batch drawn, and states its reason in `last_error` and in one `caliper.log.v1` line. The other calls of the frame still apply. The geometry service refused a whole frame, because its frame was a clear and a list of draws, and a refusal after the clear would have left a blank picture; a scene keeps every part it holds, so a refused part cannot blank the picture, and refusing the frame's other parts would protect nothing.
+- **The spatial half of memory stability.** An `SRC_ALLOC` array is read in place whenever the view redraws: when data, the camera or the size changes, and for each pick. Its bytes must therefore not be rewritten while its batch is current, nor after the batch is replaced or cleared until `retired` returns true for the token of the update that set it, which happens once the last frame that read it completed. `retired` never blocks. An applet's triple-buffered slots fit this: it writes a slot, sets the batch from it, keeps the token with the slot, and writes the slot again only once that token has retired.
+- **The temporal half.** The producer must have finished writing an array before the call, by draining its device, as for the geometry service: the service orders nothing after a producer that is still writing.
+- **Without in-place import.** Where `CALIPER_SCENE_CAP_IN_PLACE` is unset, on the Dawn fallback, an `SRC_ALLOC` array is copied at the call, its info line says so, and its token retires at once.
+- **A `SRC_TENSOR` array** on the CPU is copied at the call. A device tensor follows the rules of `SRC_ALLOC`.
+
+### The view in the applet's window
+
+`view(scene, key, width, height, flags)` draws the scene view as one ImGui item in the applet's current window, at the cursor and at the given logical size, or in the rest of the content region when a size is 0. It is the same scene view that the Caliper app shows for a script's scene: the picture, the header with the fit button, the Y up and Z up switch and the display menu, orbit, pan and zoom by mouse and keys, the hover tooltip, labels, the axes mark and the scale bar. The host remembers each view's camera, up mode and display options under the applet's id and the view's key, as for every view, and the key also lets one scene be shown in two views with two cameras; `NULL` takes the scene's name. It returns true when the picture drew. The flag `CALIPER_SCENE_VIEW_NO_HEADER` moves the header's controls into the picture's context menu, for a small view.
+
+The service hands out no texture id: the picture exists only as this item and through export. This is the choice between three forms, and the reason is that the shared camera, the up-axis switch, picking and the overlays come for nothing only if the host owns the view's input, while an applet's layout stays the applet's. An offscreen texture that the applet draws with `ImGui::Image`, as the geometry service's views were, would leave every applet to write its own camera and picking again, as each one does today. A view that the host places in a window of its own would take the layout away from applets that put two views side by side or a view beside their controls.
+
+### Events
+
+`poll_event` returns the next event of the scene's views, oldest first, once per call, and false when none is left; the applet calls it in its frame. A hover reports the item under the pointer when it changes, and a hover end when the pointer leaves every item. A click reports a pick. A rectangle or lasso reports one select event for each entity and primitive it caught, with the rows, at most 32,768 in all, and an empty select clears. An item is the row of the batch's arrays: a point, a segment, strip segment or edge, an arrow, a box, a mesh instance (or the triangle's first vertex when the mesh has no instances), or an image's pixel. Picks and hovers come from the scene core's pick pass, exact for every primitive and a frame or two late. A lasso projects the points and box centres that the CPU can read, as for every scene; an `SRC_ALLOC` array in memory the CPU cannot read, such as an MPS tensor's private storage, is selected by a rectangle from a readback of the pick target, and the lasso is unavailable for it, as on the planned Windows session.
+
+### Capabilities and refusals
+
+Two capability bits remain, because a backend can truly lack each: `CALIPER_SCENE_CAP_DRAW`, unset where the host has no backend of the graphics layer, as on Windows until the Vulkan backend lands, where `create` returns 0 with that reason; and `CALIPER_SCENE_CAP_IN_PLACE`, unset on the Dawn fallback, which copies. Every primitive, instancing, textures, picking and the overlays are present wherever the first bit is set, so no bit marks them.
+
+A call is refused for the reasons Caliper LIB raises `ValueError` for, read from host metadata only: a path outside the grammar; a part the entity cannot hold (a primitive at a camera entity, a camera at an entity with primitives, 3-D data under a camera, an image outside a camera in a 3-D scene); a limit of [Limits](#limits) exceeded; a dtype, component count or row count that does not fit the role or the batch; an allocation that is not live; an offset that is not a multiple of 4; a window that leaves its allocation, checked without overflow; a stride above 2,048; and a record whose `struct_size` is below the first version's. Index values are not checked, because that would read the device; the index-clamp contract holds as for every scene.
+
+### What an applet's scene gains
+
+An applet that moves from the geometry service to the scene service deletes its camera code, its picking code and its fallback ladder, and gains, from the host and with no code of its own:
+
+- the shared camera: orbit, pan, zoom, fit, reset to the starting camera, and looking through a pinhole;
+- the up-axis switch;
+- picking and hover through the pick pass, with events back to the applet, exact for every primitive and with no CPU copy of the data;
+- depth testing, the headlight on meshes with normals and flat faces without, and the ground grid and axes mark that follow the up axis;
+- the scale bar in the scene's units, labels, and hovers that name the entity, the item and its class;
+- export through the scene, at any size ([Export](#export));
+- recordings, scrubbing and drawing in a browser, where the scene is wire-capable ([Wire-capable scenes](#wire-capable-scenes)).
+
+### Export
+
+`caliper.export.v1` draws a scene instead of geometry records. `view_png(path, width, height, scene, camera)` renders the scene offscreen at the requested size through the scene core, with the given starting camera or, when it is `NULL`, the camera of the scene's first view, reads it back with the graphics layer's `read_texture`, and writes the PNG and its sidecar as today; `begin_sequence`, `frame` and `end_sequence` take the scene in the same way. A second export of one scene and camera is byte-identical on the same backend. The export capability bit follows `CALIPER_SCENE_CAP_DRAW`.
+
+### Wire-capable scenes
+
+An applet's scene is the same model that protocol 3.2 carries, so the host can send it where a script's scene goes. A scene is wire-capable when every array can be read by the host and fits the wire: the host can read it back (an `SRC_ALLOC` array on a backend that copies buffers back, which Metal does, or a CPU tensor), and each batch is within the limits of a frame and of the receiving viewer's data view. The host then reads the arrays back in a job, never on the frame thread, packs strided columns into rows, and encodes the scene's parts as protocol 3.2 messages for the app's recorder and for a hub that relays the app's views. A recorded applet scene opens in the scrubber like any recorded scene, in the app and in a browser, and a browser attached to that hub draws it under the parity rules of [Web geometry](web-geometry.md). Native-only are zero-copy, since every array that leaves the process is copied; the applet's events, since a pick in a browser reaches no applet in this sprint; and the applet's cadence, since the host sends at most at the view's rate. [Sprint 4](sprint-4.md) sizes this, 3 builder days, with the app's recorder in its increment 9.
+
+### The C++ sugar
+
+`caliper.hpp` wraps the table. `caliper::Scene` is created from the `Host` and a description, removes its scene when destroyed, and is falsy without `CALIPER_SCENE_CAP_DRAW`. `caliper::SceneArray::alloc(ref, dtype, count, components, stride)` takes the `(alloc, offset)` reference that the exportable pool's `to_bridge` returns, and `caliper::SceneArray::tensor(t)` takes a `CaliperTensor`. Each record has a builder with the defaults of Caliper LIB, such as `caliper::Points().positions(a).values(v, CALIPER_CMAP_MAGMA, lo, hi).size_px(3).additive()`. `scene.points(path, p)` and the other primitive calls return the token; `caliper::SlotTokens` keeps the tokens of a pool's slots and says when a slot may be written again; `scene.view(key, size)` draws the view item; and `scene.events()` iterates the queued events. The torch adapter gains `adapters::scene_array(pool, tensor)`, which imports an exportable tensor and returns its array.
+
+### Tests
+
+Headless tests of the service run on the graphics layer's recording backend in both CI lanes: each record compiles to the expected draw list, every refusal above is hit with its reason, tokens retire after the frames that read them, and a scene removed with live imports releases them. Capture rows draw one fixture applet scene on Metal against references under the parity rules. An applet built against the installed SDK draws a scene, logs its events and exports it, in the SDK's install test.
+
+### From the geometry service
+
+The geometry service drew a fixed menu of draws into an offscreen texture, with the camera, the state and the order chosen by the applet for every draw. The scene model describes what is drawn and leaves the drawing to the view. Each capability of the geometry service is covered by the scene model as it is, covered after an addition that is a general feature of a scene model in its own right, or dropped, with the applet adapted:
+
+| Geometry service | In the scene model | What changes, and who loses what |
+|---|---|---|
+| Points of a pixel size (`draw_points`, the points topology) | Points with `size_px` | Covered. Discs with a hard edge instead of hardware points, so the pixels change |
+| One-pixel hardware lines, line strips, indexed or not | Lines as segments, strips and index-pair edges | Covered. Quads one pixel wide or wider replace the hardware rule; the rows that depended on it, such as crossing lines with masked ends, are rewritten under the parity rules |
+| Triangles, indexed or not | Meshes | Covered |
+| Triangle strips | None | Dropped. No applet draws one, and a scene model describes surfaces as indexed triangles; an applet with a strip writes its indices on its device |
+| Flat colour, per-vertex RGBA, per-vertex values through the shared colormaps | Colours, `colors` and `values` | Covered. The colormap decides by integer keys and matches the reference byte for byte |
+| Textured meshes: UVs and a bridge texture, with the fixed linear clamped sampler | Meshes with `uvs` and a `texture` image | Covered, with one change: the texture is an image array, not a bridge texture id, so that the scene is wire-capable. `twin_scope` colormaps its field into an RGBA image on its device, one gather in torch, before it sets the mesh |
+| The headlight, per vertex, from normals, `0.30 + 0.70 · max(n · l, 0)` | Meshes with `normals` | Covered as it is |
+| Unlit triangles | Meshes without normals are shaded flat | Dropped. No applet draws unlit triangles, and flat faces are the scene model's rule |
+| Opaque and alpha blending, chosen per draw | Opacity from the colours, translucent batches after opaque ones | Covered by the scene's rule instead of per-draw state |
+| Additive blending | `blend="additive"` for points and lines | Covered after an addition: additive batches draw after the opaque ones with the depth test on and depth writes off, so dense clouds and trajectories brighten where they overlap and their order does not matter. It is a general feature of point clouds and trails, and five applets draw additive points |
+| Views with or without depth; depth test and write chosen per draw | Every view has depth; opaque batches test and write, translucent and additive ones test only | Changed. Points that the geometry service drew without any depth test now test against the scene's other batches, which changes nothing when they are alone. Lines, arrows and box edges gain a small constant depth offset toward the camera, so that an edge lying on a mesh, such as a wireframe, wins over the surface: a general rule of the scene model, added because quads, unlike hardware lines, do not rasterise at exactly the surface's depth |
+| A model matrix per draw | Entity transforms | Covered |
+| Camera matrices owned by the applet | The view's camera, its starting camera and the shared controls | Dropped. Every applet loses its own orbit code and the freedom to set any projection each frame, and gains the shared camera |
+| Instanced draws: (N, 16) poses and a per-instance value through the colormap | Meshes with `instance_poses` and `instance_colors` or `instance_values` | Covered after an addition: many copies of one shape is a general feature. Normals are transformed by the cofactor of each pose's upper 3 × 3, which is exact for any invertible pose |
+| The rigidity gate on lit instanced draws, with its tolerance | None | Dropped, because nothing needs it: the cofactor lights every invertible pose correctly, so no pose is refused, and the host no longer reads the instance matrices back before a frame, which on Metal cost a blit and a wait |
+| The index-clamp contract | The same contract | Covered as it is |
+| One atomic gated frame: every gate before encoding, the whole frame refused with its pixels untouched | Refusal per part, with the previous part kept; every accepted call of a frame appears together | Changed, as [Frames, atomicity and memory stability](#frames-atomicity-and-memory-stability) explains |
+| The memory-stability contract, in place until the view's next draw, drained before the call | The same two halves, with tokens that say when bytes may be rewritten | Covered |
+| An offscreen view as a bridge texture id, shown with `ImGui::Image` | The view item | Changed: no texture id is handed out |
+| The refusal of a geometry view named as a texture | None | Not needed, because no view texture is handed out |
+| Four caps bits, one per revision | `CALIPER_SCENE_CAP_DRAW` and `CALIPER_SCENE_CAP_IN_PLACE` | Changed |
+| Export drawing geometry records | Export drawing a scene | Changed |
+| Byte-exact rows against a CPU reference | Rows under the parity rules | Changed, as below |
+
+**The change of contract.** The geometry service's rows compare every pixel with one CPU reference, byte for byte, with lit pixels within 2 levels, and they depend on hardware points and lines and on state the applet chose per draw. The rows of the graphics suite that replace them are written for the scene service and follow the parity rules of [Web geometry](web-geometry.md#parity-with-the-native-renderers) natively as in a browser: a pixel whose colour a lookup decides away from edges (a flat colour, an RGBA colour, a class colour, a value through the colormap by keys, a texel sampled nearest) is byte-exact; a pixel within one pixel of an edge may take either side; lit pixels may differ by 2 levels, and blended and linearly sampled ones by 1. The rows keep the geometry rows' fixtures where they still apply. The colormap rows, the texture path's rows and the graphics layer's own rows stay byte-exact. Export is deterministic, a second export of one scene being byte-identical, but no longer byte-exact against a CPU reference for every pixel. This is a real change of the graphics contract, which the user accepted in choosing a scene service for applets.
+
 ## Changes to the shared contracts
 
 - **The up axis of a 2-D scene.** The contracts give an up axis to 3-D scenes only. A 2-D scene also takes one, `"-y"` (the default, image pixels) or `"+y"` (plots), because an image overlay and a plot need opposite conventions.
@@ -532,6 +835,7 @@ The controls of protocol 3.1, pause, resume, step, parameters and actions, belon
 - **2-D entity transforms.** In a 2-D scene an entity transform takes 2 numbers of translation, one angle and 1 or 2 numbers of scale, stored as the same 4 x 4 matrix.
 - **The depth scale** is in scene units per stored unit, which is metres per unit in a scene whose unit is the metre.
 - **Additive arrays.** Points take `labels`; arrows and box edges take a `width`; a mesh in a 2-D scene takes positions (V, 2), which gives filled 2-D shapes; lines take `indices` (E, 2) and `values`.
+- **Additive blending and instanced meshes.** Points and lines take `blend`, and a mesh takes `instance_poses` with `instance_colors` or `instance_values`, so that the scene model covers what applets drew through the geometry service ([From the geometry service](#from-the-geometry-service)).
 
 ## Decisions
 
@@ -552,6 +856,13 @@ The controls of protocol 3.1, pause, resume, step, parameters and actions, belon
 - **Separate `depth` and `segmentation` calls** rather than a form argument of `image`, because each form has its own options.
 - **The shared-memory protocol keeps version 2.** Its append-only rules allow the additions, and a viewer from before refuses only the new views.
 - **A scale bar from the scene's `units`.** Decided by the user. It is measured at the orbit target and says so, because perspective has no single scale; it hides through a pinhole, whose picture has no depth to measure at; and it applies prefixes only to the units it recognises, so that free text is never rewritten.
+- **A scene service for applets, replacing the geometry service.** Decided by the user. Applets get the scene model, its camera, picking, overlays and export through one service instead of a fixed menu of draws with their own cameras, at about 25.5 builder days of migration in place of about 8.5 for moving the geometry service onto the graphics layer and giving it one version, with eight applets rewritten, seven from the geometry service and one from ImPlot3D, the geometry service deleted and the graphics contract for applets changed from byte-exact rows to the parity rules; [Renderer core](renderer-core.md#migration) gives the steps.
+- **The view as an ImGui item that the host draws in the applet's window.** The host then owns the input, so the camera, the switch, picking and the overlays come for nothing, and the applet keeps its layout. No texture id is handed out.
+- **Refusal per part, not per frame.** A scene keeps every part it holds, so a refused part cannot blank the picture, and the parts that were accepted still apply.
+- **Tokens for memory stability.** An applet learns without waiting when the bytes of a replaced batch may be rewritten, which fits the triple-buffered slots the applets already use.
+- **Arrays name allocations or tensors, with the dtypes the model draws.** The service then converts nothing on the device, and an allocation is drawn in place through the same ids as the tensor bridge's.
+- **Additive blending and instanced meshes added to the scene model; triangle strips, unlit triangles, per-draw depth state, applet-owned camera matrices and the rigidity gate dropped.** The additions are general features of a scene model that applets need; what is dropped belongs to a fixed-function draw menu, not to a description of a scene, and no applet loses a picture it needs.
+- **A texture is an image array, not a bridge texture id.** The scene then stays wire-capable, and an applet that colours a field colormaps it on its device.
 
 ## Left to sprint 5
 
