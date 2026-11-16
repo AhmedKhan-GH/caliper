@@ -591,6 +591,48 @@ TEST_CASE("widget surface: InlineWidget, the page's one object, owns the session
     s->close();
 }
 
+TEST_CASE("widget surface: InlineWidget sizes the context bundle to the model's context length and vision") {
+    // The app gives the widget agent's settings to the bundle (spec_page.cpp):
+    // a small context length cuts parts, and a model without vision gets no render.
+    auto bundle_of = [](const std::string& name, caliper_builder::ContextBundleOptions bundle) {
+        const std::string root = fresh_dir("widget-inline-" + name);
+        auto s = dashboard_workspace(root + "/ws", root + "/data");
+        auto t = std::chrono::steady_clock::now();
+        InlineWidget::Options o;
+        o.session = s.get();
+        o.bundle = bundle;
+        auto agent = std::make_unique<ScriptedWidgetAgent>(
+            script_of({linear_turn()}), [&s](caliper_builder::CommandInvocation inv) { return s->invoke(std::move(inv)); },
+            [&t] { return t; });
+        ScriptedWidgetAgent* seen = agent.get();
+        o.agent = std::move(agent);
+        o.hooks.now = [&t] { return t; };
+        std::pair<std::vector<std::string>, std::string> out;
+        {
+            InlineWidget w(std::move(o));
+            REQUIRE(w.surface().open(WidgetTarget::for_panel("curves")));
+            w.surface().set_text("Use a linear y axis");
+            w.surface().submit();
+            out.first = w.surface().bundle_cuts();
+            REQUIRE(seen->contexts().size() == 1);
+            out.second = seen->contexts()[0].dump();
+            w.surface().close();
+        }
+        s->close();
+        return out;
+    };
+    caliper_builder::ContextBundleOptions whole;
+    const auto [whole_cuts, whole_text] = bundle_of("whole", whole);
+    CHECK(whole_cuts.empty());
+    caliper_builder::ContextBundleOptions small;
+    small.context_tokens = 1200;   // a quarter is 300 tokens
+    small.vision = false;
+    const auto [small_cuts, small_text] = bundle_of("small", small);
+    CHECK_FALSE(small_cuts.empty());
+    CHECK(small_text.size() < whole_text.size());
+    CHECK(small_text.find("\"image\"") == std::string::npos);
+}
+
 TEST_CASE("widget surface: the agent's thoughts show as the progress line, and a model is chosen from the row") {
     WidgetScriptTurn thinking = linear_turn();
     thinking.steps.insert(thinking.steps.begin(),
