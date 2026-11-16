@@ -778,6 +778,23 @@ std::string SpecPage::widget_state() const {
     return impl_->widget ? widget_state_name(impl_->widget->surface().state()) : "idle";
 }
 
+std::string SpecPage::widget_facts() const {
+    if (!impl_->widget) return {};
+    const WidgetSurface& w = impl_->widget->surface();
+    auto one_line = [](std::string t, size_t most) {
+        for (char& c : t)
+            if (c == '\n' || c == '\r') c = ' ';
+        if (t.size() > most) t = t.substr(0, most) + "...";
+        return t;
+    };
+    std::string out = "tag " + (w.tag().empty() ? std::string("none") : w.tag()) + ", " + std::to_string(w.edits()) +
+                      (w.edits() == 1 ? " edit" : " edits");
+    if (!w.model_label().empty()) out += ", model " + w.model_label();
+    if (w.error()) out += ", error " + w.error().code + ": " + one_line(w.error().message, 200);
+    if (!w.reply().empty()) out += ", reply " + one_line(w.reply(), 200);
+    return out;
+}
+
 std::string SpecPage::selection_json() const {
     const SpecSelection& sel = impl_->runtime->selection();
     if (sel.empty()) return {};
@@ -898,6 +915,7 @@ void SpecPage::set_agent_settings(AgentSettings*) {}
 bool SpecPage::widget_action(const std::string&) { return false; }
 bool SpecPage::panel_rect(const std::string&, float*) const { return false; }
 std::string SpecPage::widget_state() const { return "idle"; }
+std::string SpecPage::widget_facts() const { return {}; }
 std::string SpecPage::selection_json() const { return {}; }
 void SpecPage::set_panel_overlay(PanelOverlay) {}
 const std::string& SpecPage::focused_panel() const { return impl_->focused; }
