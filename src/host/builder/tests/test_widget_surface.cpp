@@ -539,3 +539,39 @@ TEST_CASE("widget surface: the compact diff names changed, added and removed key
     for (const auto& l : widget_compact_diff(a, b, "curves", 20))
         if (l.key == "title") CHECK(l.after.size() <= 22);
 }
+
+TEST_CASE("widget surface: InlineWidget, the page's one object, owns the session adapter, the agent and the surface") {
+    const std::string root = fresh_dir("widget-inline");
+    auto s = dashboard_workspace(root + "/ws", root + "/data");
+    const std::string before = s->open_spec()->text;
+    auto t = std::chrono::steady_clock::now();
+    bool busy = false;
+    InlineWidget::Options o;
+    o.session = s.get();
+    o.busy = [&busy] { return busy; };
+    o.agent = std::make_unique<ScriptedWidgetAgent>(
+        script_of({linear_turn()}), [&s](caliper_builder::CommandInvocation inv) { return s->invoke(std::move(inv)); },
+        [&t] { return t; });
+    o.hooks.now = [&t] { return t; };
+    std::string preview;
+    {
+        InlineWidget w(std::move(o));
+        REQUIRE(w.surface().open(WidgetTarget::for_panel("curves")));
+        w.surface().set_text("Use a linear y axis");
+        busy = true;   // the page's worker holds the session: nothing runs yet
+        w.surface().submit();
+        CHECK(w.surface().preview_id().empty());
+        busy = false;
+        for (int i = 0; i < 20; ++i) {
+            t += milliseconds(50);
+            w.surface().update();
+        }
+        REQUIRE(w.surface().state() == WidgetState::preview);
+        preview = w.surface().preview_id();
+        CHECK(s->preview(preview).edits == 1);
+    }
+    // Dropping the object discards its open preview.
+    CHECK(s->preview(preview).error);
+    CHECK(s->open_spec()->text == before);
+    s->close();
+}

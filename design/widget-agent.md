@@ -111,9 +111,9 @@ from the `ui` origin when the first prompt is submitted, `preview.discard` on Re
 failure, and `preview.commit` from the `ui` origin on Accept; what needs the session waits while a long command holds
 it. The spec runtime keeps a band of the panel free for it (`SpecRuntime::set_reserve()`) and marks a preview's strip.
 `caliper-widget-shot` drives the surface through a scripted scenario offscreen and writes a PNG at each state. The
-page's side is one object and two calls: own a `WidgetSurface`, call `attach()` on the spec runtime once, then
-`frame()` each frame before the runtime draws, which reads ⌘K (Ctrl+K on Windows) on the focused panel and Escape,
-and `overlay()` from the runtime's overlay. Not built yet: the selection, dropped-file and property entry points in
+page's side is one object and two calls: own an `InlineWidget` (the session adapter, the agent and the surface), call
+`attach()` on the spec runtime once, then `frame()` each frame before the runtime draws, which reads ⌘K (Ctrl+K on
+Windows) on the focused panel and Escape, and `overlay()` from the runtime's overlay when the page has one of its own. Not built yet: the selection, dropped-file and property entry points in
 the app, the dashed frame of a new panel, the thoughts, the choice of model from the settings (the label shows what
 the session's config options report), and the packaging of `caliper-agent` with a Python runtime.
 

@@ -37,6 +37,7 @@
 #include <filesystem>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 using namespace caliper_host;
@@ -108,6 +109,7 @@ struct AcpRig {
         o.argv = {CALIPER_BUILDER_TEST_PYTHON, "-P", "-m", "caliper_agent", "--command-table",
                   builder + "/commands/command_table.json", "--api-file", api_file};
         o.env = {{"ANTHROPIC_API_KEY", kFakeKey},
+                 {"CALIPER_AGENT_OFFLINE", "1"},
                  {"CALIPER_AGENT_TEST_SCRIPT", script},
                  {"PYTHONPATH", builder + "/agent"},
                  {"PYTHONDONTWRITEBYTECODE", "1"}};
@@ -115,10 +117,19 @@ struct AcpRig {
         o.cwd = ws;
         o.keys = nullptr;
         o.key_required = false;
-        // The guard: only the scripted model, never the real API.
-        bool scripted = false;
-        for (const auto& v : o.env) scripted = scripted || (v.name == "CALIPER_AGENT_TEST_SCRIPT" && v.value == script);
+        // The guards: only the scripted model, never the real API. The
+        // sidecar inherits this process's environment, which ctest gives the
+        // offline switch, and gets both switches in its own.
+        bool scripted = false, offline = false;
+        for (const auto& v : o.env) {
+            scripted = scripted || (v.name == "CALIPER_AGENT_TEST_SCRIPT" && v.value == script);
+            offline = offline || (v.name == "CALIPER_AGENT_OFFLINE" && v.value == "1");
+        }
         REQUIRE(scripted);
+        REQUIRE(offline);
+        const char* inherited = std::getenv("CALIPER_AGENT_OFFLINE");
+        REQUIRE_MESSAGE(inherited, "run this test through ctest, which sets CALIPER_AGENT_OFFLINE=1");
+        REQUIRE(std::string(inherited) == "1");
         REQUIRE(o.keys == nullptr);
         REQUIRE(std::filesystem::is_regular_file(script));
         agent = std::make_unique<AcpWidgetAgent>(o);
@@ -251,6 +262,41 @@ TEST_CASE("widget agent over ACP: a refusal, a handoff and Reject" * doctest::te
     REQUIRE(r.chats.size() == 1);
     CHECK(r.chats[0].request == "Write a loader for the validation logs");
     CHECK(r.s->open_spec()->text == r.before);
+}
+
+TEST_CASE("widget agent over ACP: the sidecar inherits the offline switch and refuses a real provider" * doctest::test_suite("agent")) {
+    if (skipped()) return;
+    // The child's environment has the switch: started with the fake key and
+    // without the script switch, the sidecar would build the Claude provider
+    // on its real transport, and it refuses session/new instead because
+    // CALIPER_AGENT_OFFLINE is set, which it can only know from the
+    // environment it inherited from this process. No prompt is ever sent, so
+    // no model request could be made even without the guard.
+    const char* inherited = std::getenv("CALIPER_AGENT_OFFLINE");
+    REQUIRE_MESSAGE(inherited, "run this test through ctest, which sets CALIPER_AGENT_OFFLINE=1");
+    const std::string root = fresh_dir("widget-acp-offline");
+    const std::string builder = CALIPER_BUILDER_SOURCE_DIR;
+    std::string api;   // a Caliper API file on loopback that nothing serves; no command is called
+    REQUIRE(caliper_builder::write_api_file(root + "/api", 9, caliper_builder::generate_session_token(), &api).ok());
+    AcpWidgetAgentOptions o;
+    o.argv = {CALIPER_BUILDER_TEST_PYTHON, "-P", "-m", "caliper_agent", "--command-table",
+              builder + "/commands/command_table.json", "--api-file", api};
+    o.env = {{"ANTHROPIC_API_KEY", kFakeKey}, {"PYTHONPATH", builder + "/agent"}, {"PYTHONDONTWRITEBYTECODE", "1"}};
+    o.env_remove = {"CALIPER_AGENT_TEST_SCRIPT", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CALIPER_DATA_DIR"};
+    o.cwd = root;
+    o.key_required = false;
+    AcpWidgetAgent agent(o);
+    agent.start(WidgetTarget::for_panel("curves"), "widget-offline", {});
+    WidgetAgentEvent e;
+    bool got = false;
+    for (int i = 0; i < 3000 && !got; ++i) {
+        got = agent.poll(&e);
+        if (!got) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE(got);
+    INFO(e.error.code << ": " << e.error.message);
+    CHECK(e.kind == WidgetAgentEvent::Kind::failed);
+    CHECK(e.error.message.find("CALIPER_AGENT_OFFLINE") != std::string::npos);
 }
 
 TEST_CASE("widget agent over ACP: the key store strips the test switch, so it never reaches a real key" * doctest::test_suite("agent")) {

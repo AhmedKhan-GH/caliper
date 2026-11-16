@@ -65,6 +65,10 @@ if(BUILD_TESTS AND TARGET doctest::doctest)
     set_tests_properties(caliper_widget_surface caliper_widget_surface_gpu caliper_widget_surface_agent
         PROPERTIES LABELS "builder;widget")
     set_tests_properties(caliper_widget_surface_gpu PROPERTIES TIMEOUT 300)
+    # No test of the surface may reach a model off this machine: with the
+    # switch, caliper-agent refuses to build a real provider client.
+    set_tests_properties(caliper_widget_surface caliper_widget_surface_gpu caliper_widget_surface_agent
+        PROPERTIES ENVIRONMENT "CALIPER_AGENT_OFFLINE=1")
     set_tests_properties(caliper_widget_surface_agent PROPERTIES TIMEOUT 300
         SKIP_REGULAR_EXPRESSION "caliper_widget_surface_agent skipped")
 endif()
