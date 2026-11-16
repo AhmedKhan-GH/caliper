@@ -282,7 +282,7 @@ void caliper_embed_views_draw(CaliperCore* core) {
                             v.last_update_ms);
             const ImVec2 avail = ImGui::GetContentRegionAvail();
             const float s = std::min(avail.x / img.x, avail.y / img.y);
-            if (s > 0.0f) {
+            if (s > 0.0f && !v.drawn_by_live) {
                 const ImVec2 sz(img.x * s, img.y * s);
                 const float pad = (avail.x - sz.x) * 0.5f;      // center horizontally
                 if (pad > 0.0f) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + pad);

@@ -616,6 +616,21 @@ void set_event_sink(CaliperCore* core, EventSink sink) {
     if (core) state(core)->events = std::move(sink);
 }
 
+bool set_toggle(CaliperCore* core, const char* name, const char* toggle, bool on) {
+    View* v = core ? find(core, name) : nullptr;
+    if (!v || !toggle) return false;
+    const bool plot = v->kind == CALIPER_LIVE_KIND_SERIES || v->kind == CALIPER_LIVE_KIND_HISTOGRAM;
+    if (std::strcmp(toggle, "follow") == 0 && plot) {
+        v->follow = on;
+    } else if (std::strcmp(toggle, "log") == 0 && plot) {
+        v->log_y = on;
+        v->fit_once = true;   // a new scale: fit y once, as the browser views do
+    } else {
+        return false;
+    }
+    return true;
+}
+
 bool set_payload_map(CaliperCore* core, const char* name, const caliper_live::PayloadMap& map) {
     View* v = core ? find(core, name) : nullptr;
     if (!v) return false;

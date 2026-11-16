@@ -88,6 +88,7 @@ struct Gesture {
     bool shift = false, alt = false, ctrl = false;
     int button = 0;                  // ImGuiMouseButton of the press
     float x0 = 0.0f, y0 = 0.0f;      // press position (screen)
+    float lx = 0.0f, ly = 0.0f;      // the pointer when the drag last moved the view
     double d0x = 0.0, d0y = 0.0, d1x = 0.0, d1y = 0.0;   // drag ends in data coordinates
     std::vector<float> lasso;        // points: the lasso (x, y pairs, screen)
     bool rect = false;               // points: shift + alt selects a rectangle
@@ -170,6 +171,23 @@ struct View {
     int64_t sel_rows = 0, sel_cols = 0;   // the payload size it was made on
     // SERIES / HISTOGRAM: the selected steps [s0, s1) or bins [b0, b1), s1 == s0: none.
     int64_t sel_s0 = 0, sel_s1 = 0;
+    // HEATMAP / IMAGE pan and zoom: the cell at the centre of the area (cx, cy)
+    // and the screen units per cell (k). fitted: follow the fit to the area.
+    bool    zoom_fitted = true;
+    double  zoom_cx = 0.0, zoom_cy = 0.0, zoom_k = 1.0;
+    int     zoom_w = 0, zoom_h = 0;       // the payload size the zoom was made on
+    // SERIES / HISTOGRAM: follow (the axes fit the data every frame) or keep
+    // the user's pan and zoom, and a log scale for y. fit_once: fit next frame.
+    bool    follow = true, log_y = false, fit_once = false;
+    bool    log_fit_now = false;          // fit a log y axis to the positive values this frame
+    bool    pan_pending = false;          // a drag that stopped following: pan by it next frame
+    float   pan_dx = 0.0f, pan_dy = 0.0f;
+    bool    zoom_limits = false;          // set these limits (x0, x1, y0, y1) this frame
+    double  zoom_lim[4] = {};
+    float   zoom_rate_saved = 0.0f;       // ImPlot's own wheel zoom, off while the view zooms
+    // The item last hovered, for tests: a point's index, a series step, a
+    // histogram bin, or a cell row * columns + column; -1 for none.
+    int64_t hover_item = -1;
     // POINTS: one flag per point of the current sample (empty: no selection),
     // and the selected points' copy that is drawn over the dimmed rest.
     std::vector<uint8_t> selected;
@@ -204,6 +222,11 @@ namespace caliper_live_views {
 View* find(CaliperCore* core, const char* name);
 // The host's event sink (empty: no selections, no events). Creates the state.
 void set_event_sink(CaliperCore* core, EventSink sink);
+// A header toggle of view `name`, set by the page: "follow" (series) or
+// "log" (series, histogram). False: no such view or toggle. The views report
+// their own changes of a toggle to the sink as type "toggle" with detail
+// {"name": ..., "on": ...}, which a host keeps from the producer.
+bool set_toggle(CaliperCore* core, const char* name, const char* toggle, bool on);
 // How the last applied snapshot of view `name` maps onto its source; the
 // host calls it right after caliper_core_live_apply. False: no such view.
 bool set_payload_map(CaliperCore* core, const char* name, const caliper_live::PayloadMap& map);

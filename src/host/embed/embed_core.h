@@ -52,6 +52,10 @@ struct TensorView {
     // handed to ImGui as FirstUseEver so the user may move/resize freely.
     bool             placed = false;
     float            pos_x = 0.0f, pos_y = 0.0f, size_x = 0.0f, size_y = 0.0f;
+
+    // The typed live view of the same name draws the image itself (its pan
+    // and zoom, src/host/live/live_views_draw.cpp); the window stays ours.
+    bool             drawn_by_live = false;
 };
 }  // namespace caliper_embed_views
 
