@@ -3081,6 +3081,102 @@ TEST_CASE("gfx/metal geometry.v1_3: instance-gate refusals leave the view untouc
     bk.bridge->release_allocation(pos_alloc);
     bk.bridge->geom_release_view(view);
 }
+
+// Geometry draw cost by count (docs/explanations/testing.md, the timing rows): one
+// draw_primitives frame of N additive, colormapped points pulled in place from
+// imported buffers, by N, then frames of K draw records of 1,000 points each, by
+// K. "call" is the frame-thread time inside draw_primitives (gates, encode,
+// commit), "done" adds the wait for the GPU, and "gpu" is the command buffer's
+// GPU time (GPUEndTime - GPUStartTime); each is the mean over the iterations,
+// with the worst "done" beside it. Prints numbers only, like the Vulkan+CUDA
+// timing rows, and checks that no draw counted a copy (the copy counters,
+// HostRenderer::note_copy). Bounded: at most 64 MiB of buffers and a few
+// hundred draws.
+TEST_CASE("gfx/metal geometry: timing — draws by count") {
+    if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
+    Backend bk = metal_backend();
+    REQUIRE((bk.bridge->geom_caps() & CALIPER_GEOM_CAP_PRIMITIVES));
+    using clk = std::chrono::steady_clock;
+    const auto us = [](clk::time_point a, clk::time_point b) {
+        return std::chrono::duration<double, std::micro>(b - a).count();
+    };
+    const uint64_t kMaxN = 4000000;
+    std::vector<float> pos((size_t)kMaxN * 3), attr((size_t)kMaxN);
+    uint32_t seed = 12345u;
+    for (size_t i = 0; i < (size_t)kMaxN; ++i) {
+        for (int k = 0; k < 3; ++k) {
+            seed = seed * 1664525u + 1013904223u;
+            pos[i * 3 + k] = (float)(seed >> 8) / 8388608.0f - 1.0f;   // [-1, 1)
+        }
+        attr[i] = (float)(i % 1000) / 999.0f;
+    }
+    id<MTLBuffer> pos_buf = device_buffer(pos.data(), pos.size() * sizeof(float));
+    id<MTLBuffer> attr_buf = device_buffer(attr.data(), attr.size() * sizeof(float));
+    REQUIRE((pos_buf != nil)); REQUIRE((attr_buf != nil));
+    CaliperAllocId pos_alloc = bk.bridge->import_allocation(
+        (__bridge void*)pos_buf, pos.size() * sizeof(float), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    CaliperAllocId attr_alloc = bk.bridge->import_allocation(
+        (__bridge void*)attr_buf, attr.size() * sizeof(float), CALIPER_ALLOC_HANDLE_MTLBUFFER);
+    REQUIRE(pos_alloc != 0); REQUIRE(attr_alloc != 0);
+    const int W = 512, H = 512;
+    CaliperTextureId view = bk.bridge->geom_create_view_ex(W, H, 0);
+    REQUIRE(view != 0);
+    const CaliperGeomCamera cam = identity_cam();
+    const auto draw_of = [&](uint64_t first, uint64_t n) {
+        CaliperGeomDraw d{};
+        d.pos_alloc = pos_alloc; d.pos_offset = first * 12u; d.vertex_count = n;
+        d.attr_alloc = attr_alloc; d.attr_offset = first * 4u;
+        d.topology = CALIPER_GEOM_TOPO_POINTS;
+        d.color_mode = CALIPER_GEOM_COLOR_COLORMAP;
+        d.shade_mode = CALIPER_GEOM_SHADE_UNLIT;
+        d.blend_mode = CALIPER_GEOM_BLEND_ADDITIVE;
+        d.colormap = CALIPER_CMAP_VIRIDIS;
+        d.vmin = 0.0f; d.vmax = 1.0f; d.size_px = 1.0f;
+        for (int i = 0; i < 4; ++i) d.model[i * 4 + i] = 1.0f;
+        return d;
+    };
+    const uint64_t copies0 = bk.renderer->copy_count().copies;
+    // One timed series: `iters` frames of the given draw records.
+    const auto run = [&](const std::vector<CaliperGeomDraw>& draws, int iters, const std::string& label) {
+        REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, draws.data(), (uint32_t)draws.size(),
+                                                sizeof(CaliperGeomDraw), 0xFF000000u));   // warm-up
+        bk.renderer->device_update_release(bk.renderer->geom_draw_retain_last());
+        double call = 0, done = 0, done_max = 0, gpu = 0;
+        int gpu_n = 0;
+        for (int i = 0; i < iters; ++i) {
+            const auto t0 = clk::now();
+            REQUIRE(bk.bridge->geom_draw_primitives(view, &cam, draws.data(), (uint32_t)draws.size(),
+                                                    sizeof(CaliperGeomDraw), 0xFF000000u));
+            const auto t1 = clk::now();
+            id<MTLCommandBuffer> cb = (__bridge_transfer id<MTLCommandBuffer>)bk.renderer->geom_draw_retain_last();
+            REQUIRE((cb != nil));
+            [cb waitUntilCompleted];
+            const auto t2 = clk::now();
+            call += us(t0, t1);
+            done += us(t0, t2);
+            done_max = std::max(done_max, us(t0, t2));
+            const double g = (cb.GPUEndTime - cb.GPUStartTime) * 1e6;
+            if (g > 0) { gpu += g; ++gpu_n; }
+        }
+        MESSAGE(label << " [" << std::string(bk.renderer->last_device_path()) << "]: call "
+                << call / iters << " us, done " << done / iters << " us (max " << done_max
+                << "), gpu " << (gpu_n ? gpu / gpu_n : 0.0) << " us, " << iters << " frames");
+    };
+    for (uint64_t n : {1000ull, 100000ull, 1000000ull, 4000000ull}) {
+        const int iters = n >= 1000000 ? 20 : 100;
+        run({draw_of(0, n)}, iters, std::to_string(n) + " points in 1 draw");
+    }
+    for (int k : {1, 16, 256}) {
+        std::vector<CaliperGeomDraw> draws;
+        for (int i = 0; i < k; ++i) draws.push_back(draw_of((uint64_t)i * 1000u, 1000));
+        run(draws, 100, std::to_string(k) + " draws of 1000 points");
+    }
+    CHECK(bk.renderer->copy_count().copies == copies0);   // every draw read the imports in place
+
+    bk.bridge->release_allocation(attr_alloc);
+    bk.bridge->release_allocation(pos_alloc);
+    bk.bridge->geom_release_view(view);
+}
 #endif  // CALIPER_HAVE_METAL
 
 // ===========================================================================
