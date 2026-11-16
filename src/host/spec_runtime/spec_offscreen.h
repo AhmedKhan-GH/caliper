@@ -11,8 +11,11 @@
 // When another ImGui context is current as it is made (the app's, between
 // two frames), its contexts share that context's font atlas, so the house
 // faces of sternbild::fonts() draw in both; otherwise it loads the house
-// faces itself. Every call puts the caller's contexts back as they were, so
-// the app can render a panel between two of its frames on the frame thread.
+// faces itself, and sternbild::fonts() points into its atlas while it lives.
+// So without a current context only one canvas may exist at a time; a second
+// is refused, and its maker draws with the first. Every call puts the
+// caller's contexts back as they were, so the app can render a panel between
+// two of its frames on the frame thread.
 //
 // OffscreenPanelRenderer draws one panel of a spec from resolved data and
 // encodes it as PNG: the function behind panel.render, which the app plugs
@@ -70,6 +73,7 @@ private:
     SpecLook look_;
     int w_ = 0, h_ = 0;
     bool canvas_ = false;
+    bool owns_fonts_ = false;   // loaded the house faces into its own atlas
 };
 
 // A PNG image of one panel.
@@ -90,18 +94,21 @@ public:
 
 // Draws the panel alone over the whole canvas, in its title strip and
 // frame, as the runtime draws it in a spec, and encodes the last of three
-// frames as PNG. The canvas is made on the first call and resized for each.
+// frames as PNG. It draws on `canvas` when one is given (which must outlive
+// it), else on a canvas of its own, made on the first call; the canvas is
+// resized for each call.
 class OffscreenPanelRenderer : public PanelRenderer {
 public:
-    explicit OffscreenPanelRenderer(float text_scale = 1.0f, PrepareLimits limits = {});
+    explicit OffscreenPanelRenderer(SpecOffscreen* canvas = nullptr, float text_scale = 1.0f, PrepareLimits limits = {});
     ~OffscreenPanelRenderer() override;
     PanelPng render_panel(const caliper_builder::spec::Spec& spec, const caliper_builder::PanelData& data, int width,
                           int height) override;
 
 private:
+    SpecOffscreen* shared_ = nullptr;
     float text_scale_;
     PrepareLimits limits_;
-    std::unique_ptr<SpecOffscreen> canvas_;
+    std::unique_ptr<SpecOffscreen> own_;
 };
 
 // The result of panel.render from a PanelPng: {"png_base64", "width",

@@ -17,6 +17,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cctype>
 #include <cstring>
 
 // The live views' categorical palette and point sizes (live_views_draw.cpp),
@@ -76,6 +77,19 @@ std::vector<int64_t> index_ticks(double lo, double hi, int n) {
     const double step = std::max(1.0, std::round((r < 1.5 ? 1 : r < 3 ? 2 : r < 7 ? 5 : 10) * mag));
     for (double t = std::ceil(lo / step) * step; t <= hi + step * 1e-9 && out.size() < 64; t += step)
         out.push_back((int64_t)std::llround(t));
+    return out;
+}
+
+// About n round ticks in [lo, hi] (steps of 1, 2 or 5 times a power of ten).
+std::vector<double> nice_ticks(double lo, double hi, int n) {
+    std::vector<double> out;
+    if (!(hi > lo) || !std::isfinite(lo) || !std::isfinite(hi)) return out;
+    const double raw = (hi - lo) / std::max(1, n);
+    const double mag = std::pow(10.0, std::floor(std::log10(raw)));
+    const double r = raw / mag;
+    const double step = (r < 1.5 ? 1 : r < 3 ? 2 : r < 7 ? 5 : 10) * mag;
+    for (double t = std::ceil(lo / step - 1e-9) * step; t <= hi + step * 1e-9 && out.size() < 32; t += step)
+        out.push_back(std::fabs(t) < step * 1e-9 ? 0.0 : t);
     return out;
 }
 
@@ -173,13 +187,16 @@ void setup_log_ticks(ImAxis axis, double lo, double hi) {
     const bool decades_only = d1 - d0 > 4;
     std::vector<double> v;
     std::vector<std::string> text;
-    for (int d = d0; d <= d1 && v.size() < 48; ++d)
-        for (double m : {1.0, 2.0, 5.0}) {
-            if (decades_only && m != 1.0) continue;
+    // Every whole multiple of a decade gets a grid line, so the spacing reads
+    // as a log axis; 1, 2 and 5 carry labels.
+    for (int d = d0; d <= d1 && v.size() < 160; ++d)
+        for (int m = 1; m <= 9; ++m) {
             const double t = m * std::pow(10.0, d);
             if (t < lo || t > hi) continue;
+            const bool label = decades_only ? m == 1 : (m == 1 || m == 2 || m == 5);
+            if (decades_only && d1 - d0 > 12 && m != 1) continue;
             v.push_back(t);
-            text.push_back(spec_fmt4(t));
+            text.push_back(label ? spec_fmt4(t) : std::string());
         }
     if (v.empty()) return;
     std::vector<const char*> labels;
@@ -215,18 +232,25 @@ void draw_series(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
             if (!fit_limits(xs, p.x_log, 0.0, &v.x_extent[0], &v.x_extent[1])) v.x_extent[0] = v.x_extent[1] = 0.0;
             if (!fit_limits(ys, p.y_log, 0.05, &v.y_extent[0], &v.y_extent[1])) v.y_extent[0] = v.y_extent[1] = 0.0;
         }
-        if (p.x_log) setup_log_ticks(ImAxis_X1, p.has_x_range ? p.x_range[0] : v.x_extent[0], p.has_x_range ? p.x_range[1] : v.x_extent[1]);
-        if (p.y_log) setup_log_ticks(ImAxis_Y1, p.has_y_range ? p.y_range[0] : v.y_extent[0], p.has_y_range ? p.y_range[1] : v.y_extent[1]);
-        if (p.has_x_range) {
-            ImPlot::SetupAxisLimits(ImAxis_X1, p.x_range[0], p.x_range[1], ImPlotCond_Always);
+        // A fixed range on a log axis whose end is not above zero takes that
+        // end from the data instead.
+        double xr[2] = {p.x_range[0], p.x_range[1]}, yr[2] = {p.y_range[0], p.y_range[1]};
+        if (p.x_log && p.has_x_range && xr[0] <= 0.0) xr[0] = v.x_extent[0] > 0.0 ? v.x_extent[0] : xr[1] * 1e-3;
+        if (p.y_log && p.has_y_range && yr[0] <= 0.0) yr[0] = v.y_extent[0] > 0.0 ? v.y_extent[0] : yr[1] * 1e-3;
+        const bool x_fixed = p.has_x_range && xr[1] > xr[0] && (!p.x_log || xr[0] > 0.0);
+        const bool y_fixed = p.has_y_range && yr[1] > yr[0] && (!p.y_log || yr[0] > 0.0);
+        if (p.x_log) setup_log_ticks(ImAxis_X1, x_fixed ? xr[0] : v.x_extent[0], x_fixed ? xr[1] : v.x_extent[1]);
+        if (p.y_log) setup_log_ticks(ImAxis_Y1, y_fixed ? yr[0] : v.y_extent[0], y_fixed ? yr[1] : v.y_extent[1]);
+        if (x_fixed) {
+            ImPlot::SetupAxisLimits(ImAxis_X1, xr[0], xr[1], ImPlotCond_Always);
         } else if (fit) {
             std::vector<double> xs;
             for (const auto& l : S.lines) xs.insert(xs.end(), l.x.begin(), l.x.end());
             double lo, hi;
             if (fit_limits(xs, p.x_log, 0.0, &lo, &hi)) ImPlot::SetupAxisLimits(ImAxis_X1, lo, hi, ImPlotCond_Always);
         }
-        if (p.has_y_range) {
-            ImPlot::SetupAxisLimits(ImAxis_Y1, p.y_range[0], p.y_range[1], ImPlotCond_Always);
+        if (y_fixed) {
+            ImPlot::SetupAxisLimits(ImAxis_Y1, yr[0], yr[1], ImPlotCond_Always);
         } else if (fit) {
             std::vector<double> ys;
             for (const auto& l : S.lines) ys.insert(ys.end(), l.y.begin(), l.y.end());
@@ -237,8 +261,8 @@ void draw_series(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
             const SeriesLine& l = S.lines[i];
             if (l.y.empty()) continue;
             ImPlotSpec spec;
-            spec.LineColor = ImGui::ColorConvertU32ToFloat4(legend ? spec_palette_color(i) : L.line);
-            spec.LineWeight = 1.0f * L.text_scale;
+            spec.LineColor = ImGui::ColorConvertU32ToFloat4(v.key ? v.key->color(l.name) : spec_palette_color(i));
+            spec.LineWeight = 1.25f * L.text_scale;
             ImPlot::PlotLine(l.name.c_str(), l.x.data(), l.y.data(), (int)l.y.size(), spec);
         }
         // Hover: the nearest step of each line, by name and value.
@@ -317,7 +341,21 @@ void draw_grid(SpecPanelView& v, const ImRect& c, const SpecLook& L, SpecTexture
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float afs = L.mono_size - 1.0f;   // the live views' axes in a window
     const float k = afs / 10.5f;
-    const float ml = 46.0f * k, mt = 16.0f * k, mr = (image ? 10.0f : 26.0f) * k, mb = 32.0f * k;
+    // A heatmap's colorbar carries the values of its ends and of round steps
+    // between them, right of the bar.
+    std::vector<double> bar_ticks;
+    std::vector<std::string> bar_labels;
+    float bar_label_w = 0.0f;
+    if (!image) {
+        const float est_h = c.GetHeight() - 48.0f * k;
+        bar_ticks = nice_ticks(G.vmin, G.vmax, std::max(2, (int)(est_h / (48.0f * k))));
+        for (double t : bar_ticks) {
+            bar_labels.push_back(spec_fmt4(t));
+            bar_label_w = std::max(bar_label_w, text_size(L.mono, afs, bar_labels.back()).x);
+        }
+    }
+    const float ml = 46.0f * k, mt = 16.0f * k, mb = 32.0f * k;
+    const float mr = image ? 10.0f * k : 26.0f * k + (bar_labels.empty() ? 0.0f : 6.0f * k + bar_label_w);
     float ax = c.Min.x + ml, ay = c.Min.y + mt;
     float aw = c.GetWidth() - ml - mr, ah = c.GetHeight() - mt - mb;
     if (aw < 4.0f || ah < 4.0f || G.rows <= 0 || G.cols <= 0) return;
@@ -343,7 +381,8 @@ void draw_grid(SpecPanelView& v, const ImRect& c, const SpecLook& L, SpecTexture
         if (magnify && pio.DrawCallback_SetSamplerLinear) dl->AddCallback(pio.DrawCallback_SetSamplerLinear, nullptr);
     }
     // The frame, the ticks at cell centres, labelled with source indices.
-    dl->AddRect(ImVec2(ax - 0.5f, ay - 0.5f), ImVec2(ax + aw + 0.5f, ay + ah + 0.5f), L.rule);
+    // The frame on the pixels around the area, never over its cells.
+    dl->AddRect(ImVec2(ax - 1.0f, ay - 1.0f), ImVec2(ax + aw + 1.0f, ay + ah + 1.0f), L.rule);
     const float sx = aw / (float)W, sy = ah / (float)H;
     for (int64_t col : index_ticks(0.0, W - 1, std::max(2, (int)(aw / (70 * k))))) {
         const float x = std::round(ax + (float)(col + 0.5) * sx) + 0.5f;
@@ -371,13 +410,21 @@ void draw_grid(SpecPanelView& v, const ImRect& c, const SpecLook& L, SpecTexture
     if (!image) {
         // The colorbar: the colormap from its top (index 255) to its bottom.
         const uint32_t* lut = spec_colormap_lut(G.colormap);
-        const float bx = ax + aw + 8.0f * k, bw = 8.0f * k;
+        const float bx = std::round(ax + aw + 8.0f * k), bw = std::round(8.0f * k);
         const int n = std::max(2, (int)std::floor(ah));
         for (int i = 0; i < n; ++i) {
             const int idx = (int)std::lround(255.0 * (1.0 - (double)i / (n - 1)));
-            dl->AddRectFilled(ImVec2(bx, ay + i * ah / n), ImVec2(bx + bw, ay + (i + 1) * ah / n + 0.5f), (ImU32)lut[idx]);
+            dl->AddRectFilled(ImVec2(bx, ay + i * ah / n), ImVec2(bx + bw, ay + (i + 1) * ah / n), (ImU32)lut[idx]);
         }
-        dl->AddRect(ImVec2(bx - 0.5f, ay - 0.5f), ImVec2(bx + bw + 0.5f, ay + ah + 0.5f), L.rule);
+        dl->AddRect(ImVec2(bx - 1.0f, ay - 1.0f), ImVec2(bx + bw + 1.0f, ay + ah + 1.0f), L.rule);
+        const double span = (double)G.vmax - (double)G.vmin;
+        for (size_t i = 0; i < bar_ticks.size() && span > 0.0; ++i) {
+            const float y = std::round(ay + ah * (float)(1.0 - (bar_ticks[i] - G.vmin) / span)) + 0.5f;
+            dl->AddLine(ImVec2(bx + bw + 0.5f, y), ImVec2(bx + bw + 3.5f * k, y), L.rule);
+            const ImVec2 ts = text_size(L.mono, afs, bar_labels[i]);
+            text_at(dl, L.mono, afs, ImVec2(bx + bw + 6.0f * k, std::clamp(y - ts.y * 0.5f, ay - ts.y * 0.5f, ay + ah - ts.y * 0.5f)),
+                    L.faint, bar_labels[i]);
+        }
     }
     // Hover: the cell under the pointer, by its indices and value.
     const ImVec2 m = ImGui::GetIO().MousePos;
@@ -451,6 +498,7 @@ void draw_points3d(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
     const float key = points_key_width(P, L);
     const ImRect plot(c.Min, ImVec2(c.Max.x - key, c.Max.y));
     push_plot3d_style(L);
+    ImPlot3D::PushStyleVar(ImPlot3DStyleVar_ViewScaleFactor, 1.3f);
     if (ImPlot3D::BeginPlot("##spec.points3d", plot.GetSize(),
                             ImPlot3DFlags_NoTitle | ImPlot3DFlags_NoLegend | ImPlot3DFlags_NoMouseText |
                                 ImPlot3DFlags_NoMenus)) {
@@ -485,6 +533,7 @@ void draw_points3d(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
         ImPlot3D::PlotScatter("##points", P.x.data(), P.y.data(), P.z.data(), (int)P.x.size(), spec);
         ImPlot3D::EndPlot();
     }
+    ImPlot3D::PopStyleVar();
     pop_plot3d_style();
     if (key > 0.0f) draw_points_key(P, ImRect(ImVec2(plot.Max.x + 4.0f, c.Min.y), c.Max), L);
 }
@@ -495,18 +544,39 @@ void draw_table(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
     if (ncols <= 0) return;
     ImGui::SetCursorScreenPos(c.Min);
     if (sternbild::begin_table("##spec.table", ncols, c.GetSize(), ImGuiTableFlags_SizingFixedFit)) {
-        // Each column as wide as its head and its widest cell among the first
-        // rows, with room on the right left empty, as a register reads.
-        const float pad = std::round(18.0f * L.text_scale);
+        // The columns share the panel's width in proportion to their widest
+        // cell among the first rows (or their head), so a narrow column of
+        // figures stays narrower than a column of names.
+        const float pad = std::round(24.0f * L.text_scale);
         for (int i = 0; i < ncols; ++i) {
             const std::string head = (T.numeric[(size_t)i] ? ">" : "") + T.columns[(size_t)i];
             float w = text_size(L.ui, L.small_size, T.columns[(size_t)i]).x * 1.25f;
             for (size_t r = 0; r < std::min<size_t>(T.cells.size(), 200); ++r)
                 w = std::max(w, text_size(L.mono, L.mono_size, T.cells[r][(size_t)i]).x);
-            ImGui::TableSetupColumn(head.c_str(), ImGuiTableColumnFlags_WidthFixed, std::round(w + pad));
+            ImGui::TableSetupColumn(head.c_str(), ImGuiTableColumnFlags_WidthStretch, std::round(w + pad));
         }
         ImGui::TableSetupScrollFreeze(0, 1);
         sternbild::table_header_row();
+        // A column that a series also draws carries its colour key: a swatch
+        // beside its head.
+        if (v.key) {
+            ImGuiTable* table = ImGui::GetCurrentTable();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const float sw = std::round(7.0f * L.text_scale);
+            for (int i = 0; i < ncols && table; ++i) {
+                ImU32 col;
+                if (!v.key->find(T.columns[(size_t)i], &col)) continue;
+                const ImGuiTableColumn& tc = table->Columns[i];
+                std::string upper = T.columns[(size_t)i];
+                for (char& ch : upper) ch = (char)std::toupper((unsigned char)ch);
+                const float size = sternbild::font_size::ui_small;
+                const float lw = sternbild::text_tracked_width(sternbild::fonts().ui, size, upper.c_str(),
+                                                               sternbild::metric::tracking * size);
+                const float cy = std::round((table->RowPosY1 + table->RowPosY2) * 0.5f);
+                const float x = T.numeric[(size_t)i] ? tc.WorkMaxX - lw - sw - 6.0f : tc.WorkMinX + lw + 6.0f;
+                dl->AddRectFilled(ImVec2(x, cy - sw * 0.5f), ImVec2(x + sw, cy + sw * 0.5f), col);
+            }
+        }
         ImGui::PushFont(L.mono, L.mono_size);
         ImGuiListClipper clip;
         clip.Begin((int)T.cells.size());
@@ -536,9 +606,10 @@ void draw_text(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
     float y = c.Min.y;
     if (!X.text.empty()) {
         ImFont* f = font_or_current(L.ui);
-        const float size = L.ui_size;
-        dl->AddText(f, size, ImVec2(c.Min.x, y), L.text, X.text.c_str(), nullptr, c.GetWidth());
-        y += f->CalcTextSizeA(size, FLT_MAX, c.GetWidth(), X.text.c_str()).y + 8.0f * L.text_scale;
+        const float size = std::round(L.ui_size * (X.has_value ? 1.0f : 1.25f));
+        const float wrap = std::min(c.GetWidth(), f->CalcTextSizeA(size, FLT_MAX, 0.0f, "0").x * 80.0f);
+        dl->AddText(f, size, ImVec2(c.Min.x, y), X.has_value ? L.secondary : L.text, X.text.c_str(), nullptr, wrap);
+        y += f->CalcTextSizeA(size, FLT_MAX, wrap, X.text.c_str()).y + 8.0f * L.text_scale;
     }
     if (X.has_value) {
         const float big = std::round(L.mono_size * 2.6f);
@@ -586,7 +657,35 @@ SpecLook house_spec_look(float text_scale) {
     return l;
 }
 
-ImU32 spec_palette_color(size_t i) { return (ImU32)caliper_live_views::kPalette[i % 16]; }
+ImU32 spec_palette_color(size_t i) {
+    static const ImU32 kHouse[] = {sternbild::col::vehicle, sternbild::col::dog, sternbild::col::bird,
+                                   sternbild::col::cat, sternbild::col::other};
+    constexpr size_t n = sizeof(kHouse) / sizeof(kHouse[0]);
+    return i < n ? kHouse[i] : (ImU32)caliper_live_views::kPalette[(i - n) % 16];
+}
+
+void SpecColorKey::reset(const spec::Spec& s) {
+    index_.clear();
+    for (const auto& p : s.panels) {
+        if (p.primitive != spec::Primitive::series) continue;
+        const auto y = p.bind.find("y");
+        if (y == p.bind.end()) continue;
+        for (const auto& b : y->second.bindings) color(spec_binding_name(s, b));
+    }
+}
+
+ImU32 SpecColorKey::color(const std::string& name) {
+    auto it = index_.find(name);
+    if (it == index_.end()) it = index_.emplace(name, index_.size()).first;
+    return spec_palette_color(it->second);
+}
+
+bool SpecColorKey::find(const std::string& name, ImU32* out) const {
+    const auto it = index_.find(name);
+    if (it == index_.end()) return false;
+    *out = spec_palette_color(it->second);
+    return true;
+}
 
 // ---- textures -----------------------------------------------------------------------
 
@@ -665,16 +764,20 @@ SpecPanelFrame draw_spec_panel(SpecPanelView& view, const ImRect& rect, const Sp
 
     // The title strip: the title on the left, the info string in mono on the
     // right, cut first when they meet.
-    const float hh = std::min(rect.GetHeight(), std::round(L.ui_size + 9.0f * s));
+    // A tab has no strip: its tab carries the title and the tab bar its info.
+    const float hh = view.show_title ? std::min(rect.GetHeight(), std::round(L.ui_size + 9.0f * s)) : 0.0f;
     f.header = ImRect(rect.Min, ImVec2(rect.Max.x, rect.Min.y + hh));
-    dl->AddRectFilled(f.header.Min, f.header.Max, L.plate);
-    dl->AddRectFilled(ImVec2(rect.Min.x, f.header.Max.y - 1.0f), ImVec2(rect.Max.x, f.header.Max.y), L.rule_faint);
     const float pad = std::round(8.0f * s);
+    if (hh > 0.0f) {
+        dl->AddRectFilled(f.header.Min, f.header.Max, L.plate);
+        dl->AddRectFilled(ImVec2(rect.Min.x, f.header.Max.y - 1.0f), ImVec2(rect.Max.x, f.header.Max.y), L.rule_faint);
+    }
     const float avail = rect.GetWidth() - 2.0f * pad;
-    const std::string title = fit_text(L.ui, L.ui_size, view.data.title, avail);
+    const std::string title = hh > 0.0f ? fit_text(L.ui, L.ui_size, view.data.title, avail) : std::string();
     const ImVec2 ts = text_size(L.ui, L.ui_size, title);
-    text_at(dl, L.ui, L.ui_size, ImVec2(rect.Min.x + pad, rect.Min.y + (hh - ts.y) * 0.5f), L.text, title);
-    if (view.data.state.ready() && !view.data.info.empty()) {
+    if (!title.empty())
+        text_at(dl, L.ui, L.ui_size, ImVec2(rect.Min.x + pad, rect.Min.y + (hh - ts.y) * 0.5f), L.text, title);
+    if (hh > 0.0f && view.data.state.ready() && !view.data.info.empty()) {
         const float left = rect.Min.x + pad + ts.x + 14.0f * s, right = rect.Max.x - pad;
         const std::string info = fit_text(L.mono, L.mono_size, view.data.info, right - left);
         if (!info.empty()) {
@@ -735,6 +838,7 @@ void SpecRuntime::set_spec(const spec::Spec& s) {
     // are shared, so any change of a source marks every panel.
     const bool sources_changed = !spec_ || spec_->sources != s.sources;
     spec_ = s;
+    key_.reset(s);
     std::map<std::string, Entry> kept;
     for (const auto& p : s.panels) {
         auto it = entries_.find(p.id);
@@ -853,6 +957,21 @@ void SpecRuntime::draw_tabs(const SpecLayoutTabs& t, const SpecLook& L) {
                 label);
         x = p1.x + 1.0f;
     }
+    // The shown tab's info string, when the tab is a panel, at the bar's right.
+    const std::string shown = t.path.empty() ? std::to_string(t.active) : t.path + "." + std::to_string(t.active);
+    for (const auto& lp : layout_.panels) {
+        if (lp.path != shown || !lp.tab) continue;
+        auto pv = previews_.find(lp.id);
+        auto it = entries_.find(lp.id);
+        const Entry* e = pv != previews_.end() ? &pv->second : it != entries_.end() ? &it->second : nullptr;
+        if (!e || !e->view.data.state.ready() || e->view.data.info.empty()) break;
+        const float right = b.x - std::round(8.0f * s), left = x + 14.0f * s;
+        const std::string info = fit_text(L.mono, L.mono_size, e->view.data.info, right - left);
+        if (info.empty()) break;
+        const ImVec2 is = text_size(L.mono, L.mono_size, info);
+        text_at(dl, L.mono, L.mono_size, ImVec2(right - is.x, a.y + (t.bar.h - is.y) * 0.5f), L.faint, info);
+        break;
+    }
 }
 
 void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
@@ -879,6 +998,8 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
         auto it = entries_.find(lp.id);
         if (!preview && it == entries_.end()) continue;
         Entry& e = preview ? pv->second : it->second;
+        e.view.key = &key_;
+        e.view.show_title = !lp.tab;
         const ImRect r(ImVec2(lp.rect.x, lp.rect.y), ImVec2(lp.rect.right(), lp.rect.bottom()));
         if (r.GetWidth() < 1.0f || r.GetHeight() < 1.0f) continue;
         // Each panel in its own child window: its own ids, clipping and

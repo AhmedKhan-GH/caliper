@@ -3,6 +3,7 @@
 #include "spec_runtime/spec_layout.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <numeric>
 
@@ -38,7 +39,7 @@ std::string first_panel(const spec::LayoutNode& n) {
 std::string tab_label(const spec::LayoutNode& n, const spec::Spec& s) {
     if (n.kind != spec::LayoutNode::Kind::panel && n.title && !n.title->empty()) return *n.title;
     const std::string id = first_panel(n);
-    if (const spec::Panel* p = find_panel(s, id)) return spec_panel_title(*p);
+    if (const spec::Panel* p = find_panel(s, id)) return spec_panel_title(s, *p);
     return id;
 }
 
@@ -52,11 +53,12 @@ struct Placer {
     const SpecTabChoice& choice;
     SpecLayout out;
 
-    void place(const spec::LayoutNode& n, const SpecRect& r, const std::string& path, int depth) {
+    void place(const spec::LayoutNode& n, const SpecRect& r, const std::string& path, int depth,
+               bool tab_child = false) {
         if (depth > 64) return;   // the format allows 8; a guard, not a rule
         switch (n.kind) {
             case spec::LayoutNode::Kind::panel:
-                out.panels.push_back({n.panel, path, r});
+                out.panels.push_back({n.panel, path, r, tab_child});
                 return;
             case spec::LayoutNode::Kind::tabs: {
                 if (n.children.empty()) return;
@@ -70,7 +72,7 @@ struct Placer {
                 const int active = t.active;
                 out.tabs.push_back(std::move(t));
                 const SpecRect body{r.x, r.y + bar_h, r.w, std::max(0.0f, r.h - bar_h)};
-                place(n.children[(size_t)active], body, child_path(path, (size_t)active), depth + 1);
+                place(n.children[(size_t)active], body, child_path(path, (size_t)active), depth + 1, true);
                 return;
             }
             case spec::LayoutNode::Kind::split: {
@@ -120,8 +122,71 @@ const SpecLayoutPanel* SpecLayout::find(const std::string& id) const {
     return nullptr;
 }
 
-std::string spec_panel_title(const spec::Panel& panel) {
-    return panel.title && !panel.title->empty() ? *panel.title : panel.id;
+std::string spec_binding_name(const spec::Spec& s, const std::string& binding) {
+    const size_t dot = binding.find('.');
+    if (dot != std::string::npos) return binding.substr(dot + 1);
+    for (const auto& src : s.sources) {
+        if (src.id != binding) continue;
+        if (src.catalog) {
+            const size_t colon = src.catalog->find(':');
+            return colon == std::string::npos ? *src.catalog : src.catalog->substr(colon + 1);
+        }
+        if (src.sql) {
+            // A query goes by the first table it reads, its FROM's name.
+            const std::string& q = *src.sql;
+            for (size_t i = 0; i + 4 <= q.size(); ++i) {
+                const bool word = (i == 0 || !std::isalnum((unsigned char)q[i - 1])) &&
+                                  std::toupper((unsigned char)q[i]) == 'F' && std::toupper((unsigned char)q[i + 1]) == 'R' &&
+                                  std::toupper((unsigned char)q[i + 2]) == 'O' && std::toupper((unsigned char)q[i + 3]) == 'M' &&
+                                  i + 4 < q.size() && std::isspace((unsigned char)q[i + 4]);
+                if (!word) continue;
+                size_t a = i + 4;
+                while (a < q.size() && std::isspace((unsigned char)q[a])) ++a;
+                size_t b = a;
+                while (b < q.size() && (std::isalnum((unsigned char)q[b]) || q[b] == '_')) ++b;
+                if (b > a) return q.substr(a, b - a);
+                break;
+            }
+        }
+        return src.id;   // a derived source goes by its own id
+    }
+    return binding;
+}
+
+std::string spec_panel_title(const spec::Spec& s, const spec::Panel& panel) {
+    if (panel.title && !panel.title->empty()) return *panel.title;
+    auto bound = [&](const char* slot) -> const spec::SlotValue* {
+        const auto it = panel.bind.find(slot);
+        return it == panel.bind.end() || it->second.bindings.empty() ? nullptr : &it->second;
+    };
+    auto name = [&](const char* slot) { return spec_binding_name(s, bound(slot)->bindings.front()); };
+    switch (panel.primitive) {
+        case spec::Primitive::series:
+            if (const spec::SlotValue* y = bound("y")) {
+                std::string t;
+                for (const auto& b : y->bindings) t += (t.empty() ? "" : ", ") + spec_binding_name(s, b);
+                return t;
+            }
+            break;
+        case spec::Primitive::points:
+            if (bound("positions")) return name("positions");
+            if (bound("x") && bound("y")) return name("y") + " by " + name("x");
+            break;
+        case spec::Primitive::heatmap:
+        case spec::Primitive::histogram:
+        case spec::Primitive::image:
+            if (bound("values")) return name("values");
+            break;
+        case spec::Primitive::table:
+            if (bound("rows")) return name("rows");
+            break;
+        case spec::Primitive::text:
+            if (bound("value")) return name("value");
+            return "Text";
+    }
+    std::string t = spec::to_string(panel.primitive);
+    if (!t.empty()) t[0] = (char)(t[0] - 'a' + 'A');
+    return t;
 }
 
 SpecRect spec_layout_min_size(const spec::LayoutNode& n, const SpecLayoutMetrics& m) {

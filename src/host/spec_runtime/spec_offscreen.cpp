@@ -19,6 +19,12 @@ namespace caliper_host {
 
 namespace spec = caliper_builder::spec;
 
+namespace {
+// The canvas whose atlas sternbild::fonts() points into, when one loaded the
+// house faces itself.
+SpecOffscreen* g_font_owner = nullptr;
+}  // namespace
+
 // The caller's contexts, put back on destruction.
 struct SpecOffscreen::Saved {
     ImGuiContext* imgui = ImGui::GetCurrentContext();
@@ -36,10 +42,14 @@ std::unique_ptr<SpecOffscreen> SpecOffscreen::create(int width, int height, floa
         if (why) *why = "the canvas size " + std::to_string(width) + "x" + std::to_string(height) + " is out of range";
         return nullptr;
     }
+    Saved saved;
+    if (!saved.imgui && g_font_owner) {
+        if (why) *why = "another offscreen canvas holds the house faces; draw with that one";
+        return nullptr;
+    }
     std::unique_ptr<SpecOffscreen> c(new SpecOffscreen());
     c->w_ = width;
     c->h_ = height;
-    Saved saved;
     // A shared atlas when another context is current: the house faces of
     // sternbild::fonts() live in it.
     ImFontAtlas* shared = saved.imgui ? ImGui::GetIO().Fonts : nullptr;
@@ -56,6 +66,8 @@ std::unique_ptr<SpecOffscreen> SpecOffscreen::create(int width, int height, floa
         sternbild::FontPaths fonts = sternbild::default_font_paths();
         fonts.display_font.clear();   // the wordmark's face; a spec has no wordmark
         sternbild::load_fonts(fonts);
+        c->owns_fonts_ = true;
+        g_font_owner = c.get();
     } else if (sternbild::fonts().ui) {
         io.FontDefault = sternbild::fonts().ui;
     }
@@ -81,6 +93,7 @@ std::unique_ptr<SpecOffscreen> SpecOffscreen::create(int width, int height, floa
 }
 
 SpecOffscreen::~SpecOffscreen() {
+    if (g_font_owner == this) g_font_owner = nullptr;
     if (!imgui_) return;
     Saved saved;
     ImGui::SetCurrentContext(imgui_);
@@ -164,8 +177,8 @@ bool SpecOffscreen::render(int frames, const std::function<void(const ImRect&)>&
 
 // ---- panel.render ---------------------------------------------------------------------
 
-OffscreenPanelRenderer::OffscreenPanelRenderer(float text_scale, PrepareLimits limits)
-    : text_scale_(text_scale), limits_(limits) {}
+OffscreenPanelRenderer::OffscreenPanelRenderer(SpecOffscreen* canvas, float text_scale, PrepareLimits limits)
+    : shared_(canvas), text_scale_(text_scale), limits_(limits) {}
 
 OffscreenPanelRenderer::~OffscreenPanelRenderer() = default;
 
@@ -178,7 +191,8 @@ PanelPng OffscreenPanelRenderer::render_panel(const spec::Spec& s, const caliper
         return out;
     }
     std::string why;
-    if (!canvas_) canvas_ = SpecOffscreen::create(width, height, text_scale_, &why);
+    if (!shared_ && !own_) own_ = SpecOffscreen::create(width, height, text_scale_, &why);
+    SpecOffscreen* const canvas_ = shared_ ? shared_ : own_.get();
     if (!canvas_) {
         out.error = "The panel cannot be drawn off screen: " + why + ".";
         return out;
@@ -187,8 +201,11 @@ PanelPng OffscreenPanelRenderer::render_panel(const spec::Spec& s, const caliper
         out.error = "The size " + std::to_string(width) + "x" + std::to_string(height) + " cannot be drawn.";
         return out;
     }
+    SpecColorKey key;
+    key.reset(s);
     SpecPanelView view;
     view.data = prepare_panel(s, *panel, data, limits_);
+    view.key = &key;
     std::vector<uint8_t> rgba;
     const bool drawn = canvas_->render(
         3, [&](const ImRect& area) { draw_spec_panel(view, area, canvas_->look(), canvas_->textures()); }, &rgba, &why);

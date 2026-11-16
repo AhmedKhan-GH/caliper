@@ -83,8 +83,23 @@ struct SpecLook {
 // The house look: the Sternbild faces from sternbild::fonts() and its tokens.
 SpecLook house_spec_look(float text_scale = 1.0f);
 
-// The colour of line `i` of several: the live views' categorical palette.
+// The data palette: the house's class pigments in their fixed order, then
+// the live views' categorical palette.
 ImU32 spec_palette_color(size_t i);
+
+// One colour key for a spec: every name a series draws gets the next colour
+// of the palette the first time it appears, in the order of the spec's
+// panels and bindings, and keeps it in every panel, so `loss` is one colour
+// in a series and in a table's head.
+class SpecColorKey {
+public:
+    void reset(const caliper_builder::spec::Spec& spec);
+    ImU32 color(const std::string& name);              // assigns a new name the next colour
+    bool find(const std::string& name, ImU32* out) const;
+
+private:
+    std::map<std::string, size_t> index_;
+};
 
 // RGBA8 textures the runtime draws heatmaps and images with, as ImGui user
 // textures: the renderer's ImGui backend creates, updates and destroys them
@@ -143,6 +158,8 @@ private:
 // One panel ready to draw: its data and the texture of a heatmap or image.
 struct SpecPanelView {
     PreparedPanel data;
+    SpecColorKey* key = nullptr;    // the spec's colour key; null: colours by position
+    bool show_title = true;         // false for a tab, whose label carries it
     ImTextureData* texture = nullptr;
     int fit_frames = 2;          // frames that fit the axes to the data
     double x_extent[2] = {0, 0}, y_extent[2] = {0, 0};   // the data's, for log ticks
@@ -213,6 +230,7 @@ private:
     std::map<std::string, Entry> entries_;
     std::map<std::string, Entry> previews_;
     SpecTabChoice tabs_;
+    SpecColorKey key_;
     SpecLayout layout_;
     std::function<void(const SpecPanelFrame&)> overlay_;
 };

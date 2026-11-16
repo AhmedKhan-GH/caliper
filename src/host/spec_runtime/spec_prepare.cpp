@@ -2,6 +2,7 @@
 // (spec_prepare.h).
 #include "spec_runtime/spec_prepare.h"
 
+#include "spec_runtime/spec_layout.h"   // spec_panel_title, spec_binding_name
 #include "tensor_bridge.h"   // colormap_lut, map_f32_to_rgba8: the live views' colours
 
 #include <caliper/services/tensor_bridge_v1.h>
@@ -59,8 +60,14 @@ double cell_number(const json& c) {
     return kNaN;
 }
 
-// The name a binding draws under: its column, or its source.
-std::string slot_name(const SlotData& s) { return s.kind == SlotData::Kind::column ? s.column : s.source; }
+// The spec the panel being prepared belongs to, for the names of bindings.
+thread_local const spec::Spec* g_spec = nullptr;
+
+// The name a binding draws under: its column, or its source's name.
+std::string slot_name(const SlotData& s) {
+    if (s.kind == SlotData::Kind::column) return s.column;
+    return g_spec ? spec_binding_name(*g_spec, s.source) : s.source;
+}
 
 // A vector slot (a column, or a rank-1 tensor) as doubles. False when it is
 // neither.
@@ -206,7 +213,7 @@ void prepare_series(PreparedPanel& p, const PanelData& d, const PrepareLimits& l
             const TensorData& t = ys->tensor;
             const int64_t rows = t.shape()[0], cols = t.shape()[1];
             for (int64_t r = 0; r < rows && raw.size() < 64; ++r) {
-                Raw line{ys->source + "[" + std::to_string(r) + "]", {}};
+                Raw line{slot_name(*ys) + "[" + std::to_string(r) + "]", {}};
                 line.y.reserve((size_t)cols);
                 for (int64_t c = 0; c < cols; ++c) line.y.push_back(t.element((uint64_t)(r * cols + c)));
                 raw.push_back(std::move(line));
@@ -572,13 +579,48 @@ void prepare_table(PreparedPanel& p, const PanelData& d, const PrepareLimits& li
     T.truncated = v->truncated || shown < T.total_rows;
     if (shown < T.total_rows) p.bounds.push_back("table cut from " + std::to_string(T.total_rows) + " to " +
                                                   std::to_string(shown) + " rows");
+    // Each numeric column in one format, so its figures line up: integers in
+    // full, other numbers with the decimals that give the largest five
+    // significant digits, and an exponent beyond 1e9 or below 1e-6.
+    std::vector<std::string> formats(T.columns.size());
+    for (size_t c = 0; c < T.columns.size(); ++c) {
+        if (!T.numeric[c]) continue;
+        bool integral = true;
+        double big = 0.0;
+        for (size_t r = 0; r < shown; ++r) {
+            const json& row = v->values[r];
+            if (!row.is_array() || c >= row.size() || !row[c].is_number()) continue;
+            const double x = row[c].get<double>();
+            if (!std::isfinite(x)) continue;
+            if (!row[c].is_number_integer() && x != std::floor(x)) integral = false;
+            big = std::max(big, std::fabs(x));
+        }
+        if (integral && big < 1e15) formats[c] = "%.0f";
+        else if (big >= 1e9 || (big > 0.0 && big < 1e-6)) formats[c] = "%.4e";
+        else {
+            const int d = big > 0.0 ? std::clamp(4 - (int)std::floor(std::log10(big)), 0, 8) : 4;
+            formats[c] = "%." + std::to_string(d) + "f";
+        }
+    }
     T.cells.reserve(shown);
     for (size_t r = 0; r < shown; ++r) {
         const json& row = v->values[r];
         std::vector<std::string> cells;
         cells.reserve(T.columns.size());
-        for (size_t c = 0; c < T.columns.size(); ++c)
-            cells.push_back(row.is_array() && c < row.size() ? cell_text(row[c], lim.max_cell_chars) : std::string());
+        for (size_t c = 0; c < T.columns.size(); ++c) {
+            if (!row.is_array() || c >= row.size()) {
+                cells.emplace_back();
+                continue;
+            }
+            const json& cell = row[c];
+            if (!formats[c].empty() && cell.is_number() && std::isfinite(cell.get<double>())) {
+                char b[64];
+                std::snprintf(b, sizeof b, formats[c].c_str(), cell.get<double>());
+                cells.emplace_back(b);
+            } else {
+                cells.push_back(cell_text(cell, lim.max_cell_chars));
+            }
+        }
         T.cells.push_back(std::move(cells));
     }
     if (T.columns.empty()) {
@@ -699,9 +741,13 @@ PanelState panel_state_for_error(const std::string& code, const std::string& det
 
 PreparedPanel prepare_panel(const spec::Spec& s, const spec::Panel& panel, const PanelData& d,
                             const PrepareLimits& lim) {
+    struct SpecScope {
+        explicit SpecScope(const spec::Spec* s) { g_spec = s; }
+        ~SpecScope() { g_spec = nullptr; }
+    } scope(&s);
     PreparedPanel p;
     p.id = panel.id;
-    p.title = panel.title && !panel.title->empty() ? *panel.title : panel.id;
+    p.title = spec_panel_title(s, panel);
     p.primitive = panel.primitive;
     const spec::Options& o = panel.options;
     p.x_label = o.x_label.value_or("");

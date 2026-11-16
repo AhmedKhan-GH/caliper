@@ -47,6 +47,7 @@ struct SpecLayoutPanel {
     std::string id;
     std::string path;
     SpecRect rect;
+    bool tab = false;   // a tab of a tabs node, whose label carries its title
 };
 
 // A tabs node: its strip, its labels in order and the tab shown.
@@ -72,8 +73,8 @@ using SpecTabChoice = std::map<std::string, int>;
 SpecRect spec_layout_min_size(const caliper_builder::spec::LayoutNode& node, const SpecLayoutMetrics& m);
 
 // The rectangles of the layout `root` in `area`. A tab's label is its
-// panel's title (or id), or a nested node's title, else the title of the
-// first panel inside it.
+// panel's title (spec_panel_title), or a nested node's title, else the title
+// of the first panel inside it.
 SpecLayout compute_spec_layout(const caliper_builder::spec::LayoutNode& root, const caliper_builder::spec::Spec& spec,
                                const SpecRect& area, const SpecLayoutMetrics& m, const SpecTabChoice& tabs = {});
 
@@ -83,7 +84,15 @@ SpecLayout compute_spec_layout(const caliper_builder::spec::LayoutNode& root, co
 // minimums. Whole pixels that sum to the length.
 std::vector<float> spec_layout_shares(float length, const std::vector<float>& mins, double ratio);
 
-// The text of a panel's title: its title, else its id.
-std::string spec_panel_title(const caliper_builder::spec::Panel& panel);
+// The title a panel is shown under: its title, else the names of what it
+// draws, never its bare id: the y columns of a series ("loss, accuracy"),
+// "value by step" for points over two columns, the source's catalog name for
+// a whole source ("run42_metrics"; a derived or SQL source by its spec id),
+// the value of a text panel, else the primitive ("Text").
+std::string spec_panel_title(const caliper_builder::spec::Spec& spec, const caliper_builder::spec::Panel& panel);
+
+// The name a binding draws under: its column, or its source's name as
+// spec_panel_title() names a whole source.
+std::string spec_binding_name(const caliper_builder::spec::Spec& spec, const std::string& binding);
 
 }  // namespace caliper_host
