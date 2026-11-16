@@ -283,6 +283,11 @@ class NativeServer(NetServer):
             try:
                 busy = p.busy()
                 self._idle = not busy
+                if not busy and p.busy():
+                    # queued between the check and the flag, by a call whose wake
+                    # saw the pump busy: poll instead of waiting IDLE_MS
+                    self._idle = False
+                    busy = True
                 msgs = nio.control(POLL_MS if busy else IDLE_MS)
                 self._idle = False
                 for kind, conn, frame in msgs:
