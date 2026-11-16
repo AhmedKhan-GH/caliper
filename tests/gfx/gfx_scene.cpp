@@ -14,6 +14,8 @@
 //   flat-shaded faces may differ by 2 levels.
 // - The pick row draws the same scene's pick variants into the 16 x 16 ID window around a pixel
 //   on the surface, on the marker and on the path, and decodes the texels with the Picker.
+// - The timing row (CALIPER_GFX_SCENE_BENCH=1) reports the scene core's compile time and the
+//   layer's CPU encode time for the surface scene and for 1,000 entities.
 //
 // CALIPER_GFX_CAPTURE_DIR=<folder> writes first-scene-points.png (scaled up eight times) and
 // first-scene-surface.png there. Compiled as Objective-C++ with ARC on Apple.
@@ -706,6 +708,86 @@ TEST_CASE("gfx/Metal scene: the pick pass finds the surface, the marker and the 
         MESSAGE(what, " at (", i, ", ", j, "): entity ", sc.tree.path(hit->entity), ", item ", hit->item, ", depth ",
                 hit->depth);
     }
+}
+
+TEST_CASE("gfx/Metal scene: timing — compile and encode of the surface scene and of 1,000 entities") {
+    if (std::getenv("CALIPER_GFX_SCENE_BENCH") == nullptr) return;
+    SurfaceScene sc;
+    if (!sc.init()) CALIPER_SKIP_NO_GPU("no Metal device");
+    Backend& gfx = *sc.rig.gfx;
+    auto median = [](std::vector<double> v) {
+        std::sort(v.begin(), v.end());
+        return v[v.size() / 2];
+    };
+    auto run = [&](const char* name, const SceneTree& t, const ViewCamera& cam, const CompileOptions& o, SceneCompiler& comp) {
+        const int kWarm = 5, kRuns = 20;
+        std::vector<double> compile_ms, submit_ms;
+        size_t draws = 0;
+        for (int k = 0; k < kWarm + kRuns; ++k) {
+            const auto t0 = std::chrono::steady_clock::now();
+            DrawList list(sc.target());
+            DrawMap map;
+            const CompileResult r = comp.compile(t, cam, o, *sc.rig.res, list, &map);
+            const auto t1 = std::chrono::steady_clock::now();
+            REQUIRE_MESSAGE(r.ok, (r.notes.empty() ? std::string() : r.notes[0]));
+            draws = list.records().size;
+            caliper_gfx::Frame f;
+            f.render(std::move(list));
+            const Serial s = gfx.submit(std::move(f));
+            const auto t2 = std::chrono::steady_clock::now();
+            REQUIRE_MESSAGE(s != 0, gfx.last_error());
+            gfx.wait(s);                     // outside the timed region
+            if (k >= kWarm) {
+                compile_ms.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+                submit_ms.push_back(std::chrono::duration<double, std::milli>(t2 - t1).count());
+            }
+        }
+        double load[3] = {};
+        getloadavg(load, 3);
+        std::printf("[gfx-scene-bench] %s: %zu draws; compile median %.3f ms; submit (validate + encode + commit) "
+                    "median %.3f ms; %d runs; load %.2f\n",
+                    name, draws, median(compile_ms), median(submit_ms), kRuns, load[0]);
+        std::fflush(stdout);
+    };
+    sc.draw();   // the index clamp, once
+    gfx.wait(gfx.last_use(sc.color));
+    run("surface scene", sc.tree, sc.camera, sc.fx.options(), sc.compiler);
+
+    // 1,000 entities on a 10 x 10 x 10 grid, a third each of points, segments and small meshes
+    // coloured through the colormap, all reading arrays of the surface row's buffer.
+    SceneTree many(Space::k3D);
+    const scene_fixtures::SurfaceRowFixture& fx = sc.fx;
+    using A = scene_fixtures::SurfaceRowFixture;
+    for (int k = 0; k < 1000; ++k) {
+        char name[16];
+        std::snprintf(name, sizeof name, "e%04d", k);
+        const EntityId e = many.ensure(name);
+        REQUIRE(bool(e));
+        REQUIRE(many.set_transform(e, translation({3.0 * (k % 10), 3.0 * ((k / 10) % 10), 3.0 * (k / 100)})));
+        Batch b;
+        if (k % 3 == 0) {
+            b.primitive = Primitive::Points;
+            b.arrays = {A::array(Role::Positions, sc.data, fx.off_path, 16, 12, VertexFormat::F32x3)};
+            b.size_px = 4;
+        } else if (k % 3 == 1) {
+            b.primitive = Primitive::Lines;
+            b.arrays = {A::array(Role::Positions, sc.data, fx.off_box, 16, 12, VertexFormat::F32x3)};
+        } else {
+            b.primitive = Primitive::Mesh;
+            b.arrays = {A::array(Role::Positions, sc.data, fx.off_positions, 18, 12, VertexFormat::F32x3),
+                        A::array(Role::Values, sc.data, fx.off_values, 18, 4, VertexFormat::F32)};
+            b.vmin = fx.vmin;
+            b.vmax = fx.vmax;
+        }
+        b.bounds.add({-1, -1, -1});
+        b.bounds.add({1, 1, 1});
+        REQUIRE(many.set_batch(e, b));
+    }
+    many.update();
+    ViewCamera mcam = Orbit{};
+    fit(mcam, many.scene_bounds(), 1.0);
+    SceneCompiler mcomp;
+    run("1,000 entities", many, mcam, sc.fx.options(), mcomp);
 }
 
 #endif  // CALIPER_HAVE_METAL
