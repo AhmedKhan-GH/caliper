@@ -25,6 +25,7 @@
 
 #include "live/live_clock.h"
 #include "live/live_source.h"
+#include "live/scene_queue.h"
 #include "net/json.h"
 
 #include <cstdint>
@@ -133,7 +134,7 @@ private:
         float no_stats[1] = {0.0f};
         // scene (kind 6)
         caliper_net::Json offer;      // its VIEWS entry
-        std::deque<caliper_live::SceneItem> scene;
+        caliper_live::SceneQueue scene;
     };
 
     View* by_sub(uint32_t sub);
@@ -141,6 +142,7 @@ private:
     void send(const std::vector<uint8_t>& frame);
     template <class M> void send_msg(const M& m);
     void subscribe(View& v);
+    void resubscribe(View& v);
     void set_state(const std::string& s);
 
     Options opt_;

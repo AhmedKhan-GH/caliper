@@ -201,7 +201,7 @@ struct NetView {
     std::deque<SeriesDelta> pending;
     uint64_t pending_end = 0;   // the largest end among the queued deltas
     uint64_t series_stamp = 0;  // stamp_ns of the newest SERIES message
-    std::deque<SceneItem> scene;   // a scene view's messages, for take_scene (scene_queue.h)
+    SceneQueue scene;              // a scene view's messages, for take_scene (scene_queue.h)
 
     // Frame thread only (series).
     id<MTLBuffer> ring = nil;
@@ -403,8 +403,8 @@ public:
         std::deque<SceneItem> got;
         {
             std::lock_guard<std::mutex> g(mu_);
-            if (v->scene.empty()) return false;
-            got.swap(v->scene);
+            if (v->scene.items.empty()) return false;
+            got.swap(v->scene.items);
         }
         for (auto& it : got) out->push_back(std::move(it));
         return true;
@@ -786,14 +786,29 @@ private:
                 ignored = "ignored in " + (u->path.empty() ? std::string("the root") : u->path) + " " + u->part +
                           ": " + ignored;
         }
-        std::lock_guard<std::mutex> g(mu_);
-        if (!ignored.empty()) scene_queue_push(v.scene, SceneItem{nullptr, ignored});
-        SceneItem item;
-        item.keep = keep;
-        if (auto* u = std::get_if<wire::SceneUpdate>(&msg)) item.msg = std::move(*u);
-        else item.msg = std::move(std::get<wire::SceneClear>(msg));
-        scene_queue_push(v.scene, std::move(item));
-        ++v.seq;
+        bool again = false;
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            if (!ignored.empty()) again = scene_queue_push(v.scene, SceneItem{nullptr, ignored});
+            SceneItem item;
+            item.keep = keep;
+            if (auto* u = std::get_if<wire::SceneUpdate>(&msg)) item.msg = std::move(*u);
+            else item.msg = std::move(std::get<wire::SceneClear>(msg));
+            again = scene_queue_push(v.scene, std::move(item)) || again;
+            ++v.seq;
+        }
+        if (again) resubscribe(v);
+    }
+
+    // The scene's queue passed its bound while the display was paused and was emptied: a
+    // SUBSCRIBE on the same sub replaces the subscription, and the sender answers with the
+    // scene's state, whose reset the queue waits for.
+    void resubscribe(const NetView& v) {
+        wire::Subscribe s;
+        s.sub = v.sub;
+        s.view = v.name;
+        s.request_id = next_request_++;
+        send(s);
     }
 
     void scene_note(const Json& meta, const std::string& text) {
@@ -802,8 +817,12 @@ private:
         if (!sub || !sub->get_u64(&s)) return;
         const auto it = by_sub_.find((uint32_t)s);
         if (it == by_sub_.end() || it->second->kind != CALIPER_NET_KIND_SCENE) return;
-        std::lock_guard<std::mutex> g(mu_);
-        scene_queue_push(it->second->scene, SceneItem{nullptr, text});
+        bool again = false;
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            again = scene_queue_push(it->second->scene, SceneItem{nullptr, text});
+        }
+        if (again) resubscribe(*it->second);
     }
 
     void on_welcome(const wire::Welcome& w) {
