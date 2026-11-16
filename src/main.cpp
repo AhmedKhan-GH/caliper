@@ -672,6 +672,14 @@ public:
     // An API the app started is the users' (api_for_chat_, api_for_browser_);
     // one started with --api is left alone. False when it does not run.
     bool api_for(ApiUser user, std::string* started) {
+        if (!start_api_here(user, started)) return false;
+        if (api_started_here_) (user == ApiUser::chat ? api_for_chat_ : api_for_browser_) = true;
+        return true;
+    }
+
+    // api_for() without taking the API: it starts it when it does not run,
+    // and the caller takes it once it knows it keeps it.
+    bool start_api_here(ApiUser user, std::string* started) {
         if (!api_.running()) {
             caliper_host::CommandLine c = cl_;
             c.api_port = 0;
@@ -685,9 +693,7 @@ public:
                           << (chat ? " for the side chat" : " for the browser") << std::endl;
             }
         }
-        if (!api_.running()) return false;
-        if (api_started_here_) (user == ApiUser::chat ? api_for_chat_ : api_for_browser_) = true;
-        return true;
+        return api_.running();
     }
 
     // ⌘O Open in browser on the spec page: the saved dashboard `applet` (its
@@ -696,8 +702,10 @@ public:
     // it as for the side chat, and stays until the app quits, since a page
     // open in a browser keeps reading. A hidden app opens no browser: it
     // writes the link to the file CALIPER_TEST_OPEN_URL names, and without
-    // that refuses. "" when the link went out, or why not. The token is
-    // never written to Activity or standard error.
+    // that refuses. Whatever can refuse the link is asked before the API
+    // starts, and an API that this request alone started stops again when
+    // no link is handed over. "" when the link went out, or why not. The
+    // token is never written to Activity or standard error.
     std::string open_in_browser(const std::string& applet) {
         const char* hook = hidden_ ? std::getenv("CALIPER_TEST_OPEN_URL") : nullptr;
         if (hidden_ && (!hook || !*hook)) {
@@ -707,31 +715,40 @@ public:
             return "the app runs hidden";
         }
         std::string started, why;
-        if (!api_for(ApiUser::browser, &started)) return "Caliper API did not start; see Activity";
-        const std::string url = api_.viewer_link(applet, &why);
-        if (url.empty()) {
+        if (!caliper_host::AppApi::viewer_link_possible(applet, &why)) {
             landing_.log("browser refused", applet, why);
             return why;
         }
+        const bool was_running = api_.running();
+        if (!start_api_here(ApiUser::browser, &started)) return "Caliper API did not start; see Activity";
+        const auto refuse = [&](const std::string& reason) {
+            landing_.log("browser refused", applet, reason);
+            if (!was_running && api_started_here_ && !api_for_chat_ && !api_for_browser_ && api_.running()) {
+                const std::string address = api_address();
+                api_.stop();
+                api_started_here_ = false;
+                landing_.log("api stopped", address, "no link was handed over");
+                std::cerr << "[browser] Caliper API stopped on " << address << ": no link was handed over" << std::endl;
+            }
+            return reason;
+        };
+        const std::string url = api_.viewer_link(applet, &why);
+        if (url.empty()) return refuse(why);
         if (hook) {
             std::ofstream out(hook, std::ios::app);
-            out << url << "\n";
+            if (out) out << url << "\n";
             out.close();
-            if (!out) {
-                landing_.log("browser refused", applet, "the test hook's file cannot be written");
-                return "the test hook's file cannot be written";
-            }
-            landing_.log("browser", applet, api_address() + " (test hook)");
+            if (!out) return refuse("the test hook's file cannot be written");
             std::cerr << "[browser] the link of " << applet << " on " << api_address() << " went to CALIPER_TEST_OPEN_URL"
                       << std::endl;
-            return {};
+        } else if (!caliper_host::open_in_default_browser(url, &why)) {
+            return refuse(why);
+        } else {
+            std::cerr << "[browser] opened " << applet << " on " << api_address() << std::endl;
         }
-        if (!caliper_host::open_in_default_browser(url, &why)) {
-            landing_.log("browser refused", applet, why);
-            return why;
-        }
-        landing_.log("browser", applet, api_address());
-        std::cerr << "[browser] opened " << applet << " on " << api_address() << std::endl;
+        // A link is out: the API is the browser's too, until the app quits.
+        if (api_started_here_) api_for_browser_ = true;
+        landing_.log("browser", applet, api_address() + (hook ? " (test hook)" : ""));
         return {};
     }
 

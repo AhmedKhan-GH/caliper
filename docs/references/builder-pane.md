@@ -162,7 +162,9 @@ applet found outside the workspace.
 
 When the app was started without `--api`, the button starts Caliper API as the side chat does: on a free port of
 127.0.0.1 only, with new tokens, said in Activity and shown in the status bar as `api 127.0.0.1:<port>`. It stays on
-until the app quits, since the page in the browser keeps reading the dashboard's data. What the link carries and who
+until the app quits, since the page in the browser keeps reading the dashboard's data. What would refuse the link, a
+build without the browser viewer or an id that cannot be a link, is asked before the API starts, and when the link
+cannot be handed over all the same, an API started for it alone stops again. What the link carries and who
 can use it is in [Caliper API](api.md#started-by-the-app).
 
 ## Keys

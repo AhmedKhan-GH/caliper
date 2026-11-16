@@ -189,6 +189,42 @@ void saved_dashboard(const std::string& root) {
       << R"({"name":"applet.open","args":{"id":"run42-dashboard"}})" << "\n";
 }
 
+// One run of the hidden app on root/ws, with root/data and root/apps, the
+// switch every sidecar needs, and `env` and `args` added.
+caliper_builder::acp::RunResult run_app(const std::string& exe, const std::string& root, const std::string& script,
+                                        std::vector<caliper_builder::acp::EnvVar> env = {},
+                                        std::vector<std::string> args = {}) {
+    caliper_builder::acp::SpawnOptions o;
+    o.argv = {exe, "--hidden", "--workspace", root + "/ws"};
+    for (auto& a : args) o.argv.push_back(a);
+    o.env = {{"CALIPER_DATA_DIR", root + "/data"},
+             {"CALIPER_USER_APPLETS_DIR", root + "/apps"},
+             {"CALIPER_WINDOW_SIZE", "1440x900"},
+             {"CALIPER_AGENT_OFFLINE", "1"},
+             {"CALIPER_TEST_SPEC_UI", script},
+             {"CALIPER_TEST_SPEC_UI_SHOTS", root + "/shots"},
+             {"CALIPER_EXIT_AFTER", "150"}};
+    for (auto& e : env) o.env.push_back(e);
+    o.env_remove = {"CALIPER_API"};
+    caliper_builder::acp::RunLimits lim;
+    lim.timeout_ms = 200000;
+    lim.max_output_bytes = 16u << 20;
+    return caliper_builder::acp::run_process(o, lim);
+}
+
+// The test's root folder with the folders run_app() uses; "" when the case
+// cannot run here (it says why).
+std::string app_root(const char* exe, const std::string& name) {
+    if (!exe || !*exe) {
+        std::printf("caliper_builder_app skipped: needs CALIPER_TEST_CALIPER_EXE\n");
+        return {};
+    }
+    const std::string root = fresh_dir(name);
+    for (const auto& d : {root + "/shots", root + "/data", root + "/apps", root + "/ws"})
+        std::filesystem::create_directories(d);
+    return root;
+}
+
 }  // namespace
 
 TEST_CASE("builder app: the dashboard built by hand in the hidden app, saved and opened again" *
@@ -551,6 +587,33 @@ TEST_CASE("builder app: Open in browser gives the viewer's link, with the API it
     CHECK(refused.err.find("[browser] not opened: the app runs hidden") != std::string::npos);
     CHECK(refused.out.find("[api] Caliper API on") == std::string::npos);
     CHECK_FALSE(std::filesystem::exists(link_file));
+}
+
+// ⌘O Open in browser whose link cannot be handed over (here the test hook's
+// file cannot be written) gives no link out, so it stops the API that it
+// alone started, and its API file goes with it, while the app runs on.
+TEST_CASE("builder app: Open in browser stops the API it started when no link is handed over" *
+          doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const std::string root = app_root(exe, "builder-app-browser-refused");
+    if (root.empty()) return;
+    saved_dashboard(root);
+    const auto run = run_app(exe, root,
+                             "wait 60; page spec; wait 20; click page:browser; wait 20; files " + root +
+                                 "/data api.json 0; quit",
+                             {{"CALIPER_COMMAND_SCRIPT", root + "/build.jsonl"},
+                              {"CALIPER_TEST_OPEN_URL", root + "/no-such-folder/link.txt"}});
+    INFO("stderr tail: " << run.err.substr(run.err.size() > 4000 ? run.err.size() - 4000 : 0));
+    REQUIRE(run.error.ok());
+    if (run.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(run.status.success());
+    CHECK(run.err.find("[browser] Caliper API started on 127.0.0.1:") != std::string::npos);
+    CHECK(run.err.find("[browser] Caliper API stopped on 127.0.0.1:") != std::string::npos);
+    CHECK(run.err.find("[ui] done") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(root + "/data/api.json"));
 }
 
 #endif

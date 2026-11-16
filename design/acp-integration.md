@@ -694,8 +694,9 @@ claims the right column with `layout_chat_column()`, and calls `draw()` with tha
   whenever it runs. It is tied to the chat: when the chat's agent ends (it exits, cannot start, or another agent is
   chosen), the app stops the API that the chat started and removes the API file, unless Open in browser has given out
   a link of it since, which keeps it until the app quits (the app counts the API's users, `api_for()` in
-  `src/main.cpp`); a restart replaces the agent without stopping it. An API started with `--api` is left alone in both
-  directions.
+  `src/main.cpp`); a restart replaces the agent without stopping it. Open in browser starts the API only once nothing
+  can refuse its link, and stops an API it alone started when it hands no link over. An API started with `--api` is
+  left alone in both directions.
 - **Approvals.** The chat reads the session's pending approvals each frame while no long command holds the registry,
   and a click on an approval's row outlines its card on the strip in bronze for two seconds (`ApprovalTray::point_to()`).
 - **Ask in chat.** The inline surface's Ask in chat opens the chat with the handoff draft. The bundle is built in the
