@@ -161,7 +161,9 @@ Everything the command layer refuses comes this way: a name that is not a comman
 {"id":"api-9","ok":false,"error":{"approval":"ap-3","code":"command.needs_approval","message":"...","where":""}}
 ```
 
-A held request waits without blocking anything else: the stream, the other endpoints and other commands are served meanwhile. The app does not show pending approvals to the person yet, so for now a request held for approval ends with `command.approval_timeout`, and one from `api` stays pending; spec edits from `mcp` and `agent` are reviewed by default and therefore wait too.
+A held request waits without blocking anything else: the stream, the other endpoints and other commands are served meanwhile. Spec edits from `mcp` and `agent` are reviewed by default and therefore wait too.
+
+The app shows each pending approval to the person as a card, in a strip at the bottom of the window above the jobs tray, on every page: who asks (MCP agent, Side chat, Widget agent or API), the command and its target, the change of a spec edit as its changed keys with the validator's warnings and the full diff on demand, what a destructive command would lose, the time left before a held request times out, and Approve and Deny. On the spec page the panel an edit changes is marked REVIEW. The app's Activity lists each request when it starts waiting and when it is decided, times out or is withdrawn. Only the person decides there; a test of the hidden app decides through `CALIPER_TEST_APPROVALS` ([Host variables](environment.md#host-variables)).
 
 ### GET /v0/approvals/{id}
 

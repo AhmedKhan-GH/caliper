@@ -376,15 +376,70 @@ Caliper does not ask itself: with the app reviewing its spec edits and holding i
 permission request and no dry run for them, and the call waits in Caliper until the person decides there. Against an
 app without `review.status`, it asks as before. The side chat follows the same rule: command approvals come from the
 command layer and permission requests from the agent's own tools, and the pane, which is not built yet, will show both
-as one kind of card. An agent that asks before a Caliper command it is about to send would make two cards for one
+as one kind of card; the command approvals' cards are built (below). An agent that asks before a Caliper command it is about to send would make two cards for one
 change, so the side chat's opening prompt, planned with the pane, will ask it not to.
 
-What remains, so that no agent can skip them:
+The app's API server serves the command endpoints and holds a call from `agent` or `mcp` while the person decides,
+and the app shows each pending approval as a card, so an outside agent's change over MCP waits in the app for the
+person and lands when they approve it.
 
-1. **The held approval in the app.** The app's API server serves the command endpoints and holds approvals as the
-   stand-in host does; this comes with the wiring after sprint 2.
-2. **The cards.** The side chat shows each pending approval with its review and the validator's warnings, as the
-   previous section describes, and its settings set the review per origin.
+**The approval cards, as built** (`src/host/builder/approval_cards.h`). One card for each pending approval, whatever
+the origin, says:
+
+- who asks, the origin as a noun: MCP agent, Side chat (the `agent` origin), Widget agent (the `agent` origin with a
+  stacked preview, which only the widget agent sends) or API;
+- what, the command and its target: "panel.patch · Loss and accuracy", with a panel's title, a source's, loader's or
+  applet's id, "layout", a file's name or a number of steps;
+- for a spec edit, its review: the compact diff of the inline surface, one line per changed key with the old value
+  struck through and the new one, folding into "+N" past four lines, a new panel's keys with its primitive and title
+  first, the validator's warnings on a line of their own, and the full unified diff behind Diff, in a popup above
+  the card;
+- for a destructive command, what it loses, as a noun phrase: "Applet run42-dashboard overwritten", "Loader rows and
+  its tables deleted", "Tables of loader rows replaced", "2 steps undone";
+- the time left before the held call times out, from the queue (`CommandQueue::approval_time_left()`); an `api` call
+  waits without a limit and shows none;
+- Approve and Deny, which go through the session's queue, `approve(id)` and `deny(id)`, whose decision runs at the
+  next drain on the frame thread. They have no keys, so that a keystroke meant for another pane never decides.
+
+The cards sit in a strip at the window's bottom edge, above the jobs tray, on every page. It is a viewport side bar,
+like the tray, so it takes its own space and covers no panel, and it waits as the tray does before it takes its space
+(0.5 seconds) and before it gives it back (2 seconds), so a request decided at once moves nothing; while it is open,
+its height changes only after the same delays. The cards stand side by side, oldest first, since the oldest times out
+first, between 340 and 620 points wide each at text scale 1, with "Approvals" and the count of waiting requests at the
+left; those that do not fit fold into "+N" at the right end, which lists them all with their own Approve and Deny.
+The strip takes at most 40 % of the window's height; as it shrinks, the compact lines past the first fold, then the
+warnings line goes. A decided card stays two seconds with its outcome: APPROVED, DENIED, TIMED OUT, CONFLICT (approved,
+and the change no longer applied) or FAILED. On the spec page, a panel that a waiting edit changes carries a bronze
+REVIEW tag after its title, with the time left, and a bronze rule under its strip, drawn by the page's overlay like a
+preview's tag. Each request writes one Activity line when it starts waiting and one when it is decided, times out or
+is withdrawn, with its origin ("mcp approval", "panel.patch · Loss and accuracy", "waiting"), beside the line the
+journal gives the command itself.
+
+The cards read the session's pending list on the frame thread at most every 100 ms and never while a long command
+holds the registry, build a card once for each new approval (its compact diff from the edit made again on the open
+spec, or from the review's unified diff when it no longer applies), and read the time left each frame. The side chat
+will draw the same cards in its pane: the logic (`ApprovalCards`) and the layout (`layout_approval_strip()`, plain
+rectangles tested at two window sizes with one, three and eight cards) do not depend on a page.
+
+Decided while building them:
+
+- **No Approve all for one agent's turn.** The command layer has no safe notion of a turn: a group is the agent's own
+  label, which an agent could keep for ever, and a held call answers before the agent sends its next edit, so one turn
+  never has two cards at once. A turn approved as a whole is a stacked preview, which the widget agent already uses.
+- **The edit is not drawn in place on the spec page in this slice.** The runtime's `set_preview()` would show it, but
+  only `panel.patch` has a panel to draw it in (a new panel's dashed frame is not built, and layout and source edits
+  touch several), the inline surface owns the same seam on the same page, and the card's compact diff already names
+  every changed key. The REVIEW mark points at the panel instead.
+- **A strip at the bottom, above the jobs tray, not a column.** The tray is where the host shows what is waiting; a
+  strip of cards side by side shows several requests at once without narrowing every panel, and the side chat's own
+  column will show its cards in place.
+- **A test decides through a file only a hidden app reads.** With `--hidden`, `CALIPER_TEST_APPROVALS` names a file of
+  lines such as `approve panel.create mcp` or `deny applet.save`, applied to the oldest waiting card that matches
+  through the same path as the buttons. The app ignores the variable when it is not hidden, and nothing over Caliper
+  API or MCP decides, so an agent still cannot approve its own request.
+
+What remains: the side chat's own cards for the permission requests of an agent's tools, beside these, and the review
+setting per origin in its settings.
 
 What the command layer cannot enforce is an agent's own file and shell tools, which act outside Caliper. The agent's
 own permission settings govern them (Claude Code's and Codex's modes, Gemini CLI's modes, opencode's `permissions`
@@ -551,13 +606,18 @@ Built on this branch, in `src/builder/acp/` and `src/builder/include/caliper_bui
 - The optional `_meta` of `AcpClient::new_session()`, bounded and passed through unchanged.
 - In the command layer, the review of spec edits for the origins `agent` and `mcp`, with the diff on each pending
   approval, and `review.status`, which `caliper-agent` reads so that it does not ask twice.
+- In the app, the approval cards of every pending approval, with their tests: the logic over a real session with
+  review on, the layout, and an outside agent's `panel.create` through the real `caliper-mcp` held in the hidden app,
+  approved and landed (ctest `caliper_approval_cards` and `caliper_approval_cards_app`). See
+  [Approvals and diffs for every agent](#approvals-and-diffs-for-every-agent).
 - Tests: the peer over in-process pipes, the subprocess helper, the client against every stub script, and the harness
   end to end (ctest `builder_acp` and `builder_acp_harness`).
 
 Waiting for later work:
 
 - The side chat itself, its cards and diagnostics, after sprint 2 merges.
-- The spec diff cards in the side chat, the review setting per origin in its settings, and the opening prompt.
+- The side chat's cards for its agent's permission requests (its command approvals are the app's approval cards), the
+  review setting per origin in its settings, and the opening prompt.
 - `opencode` in `known_agents()`, the setting that marks an agent as running on a local model, and the warning when a
   workspace holds an opencode configuration.
 - Receiving a handoff from the widget agent, with the bundle shaped by the agent's prompt capabilities.
@@ -591,6 +651,9 @@ Waiting for later work:
   agent is added by its command.
 - **Review of spec edits in the command layer,** with the diff attached to the pending approval, so that no agent can
   skip it.
+- **One kind of approval card for every agent,** in a strip above the jobs tray on every page, with the REVIEW mark on
+  the panel an edit changes; no Approve all for a turn ([Approvals and diffs for every
+  agent](#approvals-and-diffs-for-every-agent)).
 - **No second prompt for one change.** An agent that knows Caliper reviews a call, as `caliper-agent` learns from
   `review.status`, does not ask the person again; the command layer's card is the one that counts.
 - **`_meta` passed through, not interpreted.** The client bounds it and sends it as given, so the widget session's

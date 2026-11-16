@@ -76,6 +76,7 @@ In this mode the app starts as the test binaries that open hidden windows do ([T
 - The app reads and writes no `imgui.ini`, so every run shows the layout of a first run and the saved layout is left alone. Set `CALIPER_DATA_DIR` as well to keep the stores and the API file out of the app-data folder.
 - SIGINT and SIGTERM close the window as a click on its close button would, so the full teardown runs and the API file is removed. `CALIPER_EXIT_AFTER` works as usual.
 - `CALIPER_TEST_UI` plays scripted clicks, typing and drags into the live page, only in this mode ([Host variables](environment.md#host-variables)). With `--url`, a test attaches the hidden app to a stream and drives its run bar and its views as a person would.
+- `CALIPER_TEST_APPROVALS` names a file of decisions on the approval cards, such as `approve panel.create mcp`, only in this mode ([Host variables](environment.md#host-variables)), so a test approves or denies an agent's held request as the person would.
 
 At start-up the app prints one line to standard error that says the window is not shown, with its visibility, its focus, whether the background policy holds and the framebuffer's size:
 

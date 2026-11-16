@@ -22,8 +22,18 @@ Both act on Caliper through its command layer. A change to a spec is a command, 
 format, recorded in the workspace's journal and undoable from the app. Commands that delete or overwrite saved data,
 such as saving an applet or running a loader, need your approval in the app, whichever role sent them. A change that an
 agent makes to the open spec waits for your review, with its diff, unless you turn review off; the command layer asks,
-so it holds for every agent, including one that would not ask on its own. The two roles
-share one journal and one undo history, and their commands run one at a time in one order. What an agent builds is
+so it holds for every agent, including one that would not ask on its own, an agent outside the app over MCP too.
+
+You review a waiting change on its card, in a strip that opens at the bottom of the window, above the jobs tray, on
+whatever page you are on. The card says who asks (MCP agent, Side chat, Widget agent or API), the command and what it
+acts on, such as "panel.patch · Loss and accuracy", and the change: for a spec, each changed key with its old value
+struck through and its new one, the validator's warnings, and the whole diff behind Diff; for saved data, what would be
+lost, such as "Applet run42-dashboard overwritten". It shows how long the agent still waits, two minutes at most, and
+the panel the change touches carries a REVIEW mark on the spec page. Approve applies the change as the card showed it,
+or refuses it if the spec changed meanwhile so that it would mean something else; Deny tells the agent no; and a
+request nobody decides in time is withdrawn. Activity lists each request when it starts waiting and when it ends.
+
+The two roles share one journal and one undo history, and their commands run one at a time in one order. What an agent builds is
 data (specs and loaders), never code that runs in Caliper's process; the [trust model](trust-model.md) explains why
 that matters.
 
