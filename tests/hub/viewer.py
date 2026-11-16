@@ -112,6 +112,58 @@ async def watch(url: str, session: str | None, seconds: float, *, max_rate: floa
     return out
 
 
+async def control(url: str, session: str, lr: float, seconds: float = 8.0) -> dict:
+    """Protocol 3.1 through a hub: announce `controls` and `selection`, attach
+    to `session`, wait for its CONTROLS, then set the parameter "lr" and run
+    the action "save". Returns what came back: WELCOME's `control`, the
+    replies by request id, and the parameter as the last CONTROLS shows it."""
+    import websockets
+    out = {"control": None, "capabilities": [], "replies": {1: [], 2: []}, "lr": None, "pending": None,
+           "controls": 0, "errors": []}
+    async with websockets.connect(url, compression=None, max_size=W.MAX_FRAME_BYTES, ping_interval=None) as ws:
+        await ws.send(W.encode(W.Hello(W.ROLE_VIEWER, [W.CAP_CONTROLS, W.CAP_SELECTION],
+                                       {"name": "hub-e2e-viewer", "version": "1"})))
+        await ws.send(W.encode(W.Attach(session)))
+        sent = False
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            try:
+                msg = W.decode(await asyncio.wait_for(ws.recv(), max(0.0, end - time.monotonic())))
+            except asyncio.TimeoutError:
+                break
+            if isinstance(msg, W.Welcome):
+                out["control"], out["capabilities"] = msg.control, msg.capabilities
+            elif isinstance(msg, W.Controls):
+                out["controls"] += 1
+                lr = next((p for p in msg.params if p["name"] == "lr"), None)
+                if lr is not None:
+                    out["lr"], out["pending"] = lr["value"], lr.get("pending")
+                if not sent:
+                    sent = True
+                    await ws.send(W.encode(W.Control(1, W.OP_SET, "lr", lr_value(lr))))
+                    await ws.send(W.encode(W.Control(2, W.OP_RUN, "save")))
+            elif isinstance(msg, W.ControlReply):
+                out["replies"].setdefault(msg.request_id, []).append(
+                    {"status": msg.status, "value": msg.value, "message": msg.message,
+                     "error": (msg.error or {}).get("code")})
+            elif isinstance(msg, W.Ping):
+                await ws.send(W.encode(W.Pong(msg.nonce)))
+            elif isinstance(msg, W.Error):
+                out["errors"].append(f"error {msg.code}: {msg.message}")
+            r1, r2 = out["replies"][1], out["replies"][2]
+            done_set = r1 and (r1[-1]["status"] == W.STATUS_ERROR or out["lr"] == r1[-1]["value"])
+            done_run = r2 and r2[-1]["status"] != W.STATUS_QUEUED
+            if done_set and done_run:
+                break
+        await ws.send(W.encode(W.Bye(W.BYE_NORMAL, "done")))
+    return out
+
+
+def lr_value(param) -> float:
+    """The value the e2e check sets: half the parameter's maximum."""
+    return (param or {}).get("max", 0.1) / 2
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--hub-file", required=True)

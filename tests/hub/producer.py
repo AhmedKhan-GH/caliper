@@ -16,8 +16,14 @@ and a network thread sends what its subscriptions ask for, at their rate.
 With --bench it streams one 512 x 512 heatmap, "bench", at --rate snapshots
 per second instead of training.
 
+With --controls it takes the controls of protocol 3.1 as a script that calls
+a checkpoint once per training step does: it announces `controls`, registers
+the parameter "lr" (the optimiser's learning rate) and the action "save", and
+pauses, resumes and steps at its checkpoint. A parameter value it accepts is
+set, and a queued action runs, at the next checkpoint, on the training thread.
+
 When it exits it prints one JSON line: {"id", "steps", "loss_values",
-"snapshots_sent", "events"}.
+"snapshots_sent", "events", "lr", "saves"}.
 """
 from __future__ import annotations
 
@@ -60,13 +66,120 @@ def pool(a: np.ndarray, rows: int, cols: int) -> np.ndarray:
     return out
 
 
+class ScriptControls:
+    """The run state, the parameter "lr" and the action "save" of protocol 3.1,
+    as a script registers them. handle() runs on the network thread and
+    answers a CONTROL; checkpoint() runs on the training thread once per step
+    and applies what was accepted. Both send CONTROLS when anything changes."""
+
+    def __init__(self, stream: "Stream"):
+        self.stream = stream
+        self.lock = threading.Lock()
+        self.state, self.step, self.steps_left = W.RUN_NONE, 0, 0
+        self.lr = {"name": "lr", "type": W.PARAM_NUMBER, "value": 1e-3, "min": 1e-5, "max": 0.1,
+                   "log": True, "help": "the learning rate"}
+        self.save = {"name": "save", "running": False, "queued": False, "help": "save a checkpoint"}
+        self.waiting: list[int] = []        # request ids answered `queued`
+        self.saves = 0
+
+    def message(self) -> W.Controls:
+        with self.lock:
+            run = {"state": self.state, "step": self.step}
+            if self.state == W.RUN_STEPPING:
+                run["steps_left"] = self.steps_left
+            return W.Controls(run, [dict(self.lr)], [dict(self.save)])
+
+    # -- the network thread -------------------------------------------------------
+    def handle(self, m: W.Control) -> W.ControlReply:
+        def error(code, text):
+            return W.ControlReply(m.request_id, m.op, W.STATUS_ERROR, m.name, error={"code": code, "message": text})
+        with self.lock:
+            if m.op == W.OP_SET:
+                if m.name != "lr":
+                    return error(W.ERR_UNKNOWN_CONTROL, f"no parameter {m.name!r}")
+                try:
+                    v = W.param_value(self.lr, m.value)
+                except W.MessageError as e:
+                    return error(e.code, e.message)
+                if self.state == W.RUN_NONE:
+                    self.lr["value"] = v
+                else:
+                    self.lr["pending"] = v
+                return W.ControlReply(m.request_id, m.op, W.STATUS_OK, m.name, value=v)
+            if m.op == W.OP_RUN:
+                if m.name != "save":
+                    return error(W.ERR_UNKNOWN_CONTROL, f"no action {m.name!r}")
+                self.save["queued"] = True
+                self.waiting.append(m.request_id)
+                return W.ControlReply(m.request_id, m.op, W.STATUS_QUEUED, m.name)
+            if self.state == W.RUN_NONE and m.op in (W.OP_PAUSE, W.OP_STEP):
+                return error(W.ERR_UNSUPPORTED, "the script has called no checkpoint yet")
+            if m.op == W.OP_PAUSE and self.state in (W.RUN_RUNNING, W.RUN_STEPPING):
+                self.state = W.RUN_PAUSING
+            elif m.op == W.OP_RESUME:
+                self.state = W.RUN_RUNNING
+            elif m.op == W.OP_STEP:
+                self.state, self.steps_left = W.RUN_STEPPING, m.count or 1
+            return W.ControlReply(m.request_id, m.op, W.STATUS_OK)
+
+    # -- the training thread ------------------------------------------------------
+    def checkpoint(self, step: int, opt) -> None:
+        changed = False
+        with self.lock:
+            self.step = step
+            if self.state == W.RUN_NONE:
+                self.state, changed = W.RUN_RUNNING, True
+        while True:
+            changed |= self._apply(opt)
+            with self.lock:
+                if self.state == W.RUN_STEPPING:
+                    self.steps_left -= 1
+                    changed = True
+                    if self.steps_left <= 0:
+                        self.state = W.RUN_PAUSED
+                elif self.state == W.RUN_PAUSING:
+                    self.state, changed = W.RUN_PAUSED, True
+                paused = self.state == W.RUN_PAUSED
+            if changed:
+                self.stream.post(self.message())
+                changed = False
+            if not paused or self.stream.closed.is_set():
+                return
+            time.sleep(0.01)    # waits in the checkpoint until resume or step
+
+    def _apply(self, opt) -> bool:
+        with self.lock:
+            pending = self.lr.pop("pending", None)
+            if pending is not None:
+                self.lr["value"] = pending
+            run = self.save["queued"]
+            if run:
+                self.save["queued"], self.save["running"] = False, True
+            waiting, self.waiting = self.waiting, []
+        if pending is not None:
+            for g in opt.param_groups:
+                g["lr"] = pending
+        if run:
+            self.stream.post(self.message())
+            self.saves += 1
+            text = f"saved at step {self.step}"
+            with self.lock:
+                self.save["running"] = False
+            for rid in waiting:
+                self.stream.post(W.ControlReply(rid, W.OP_RUN, W.STATUS_OK, "save", message=text))
+        return pending is not None or run
+
+
 class Stream:
     """The producer side of one connection to a hub (network thread)."""
 
-    def __init__(self, url: str, identity: dict, views: list):
+    def __init__(self, url: str, identity: dict, views: list, controls: bool = False):
         self.url = url
         self.identity = identity
         self.views = {v["name"]: v for v in views}
+        self.controls = ScriptControls(self) if controls else None
+        self.hub_controls = False           # the hub announced `controls`
+        self.outbox: list = []               # control messages from the training thread
         self.lock = threading.Lock()
         self.latest: dict[str, tuple[int, np.ndarray]] = {}   # view -> (seq, array)
         self.loss: list[float] = []
@@ -96,6 +209,14 @@ class Stream:
         if self.wake is not None:
             self.loop.call_soon_threadsafe(self.wake.set)
 
+    # Any thread: a control message (CONTROLS, CONTROL_REPLY) to send next.
+    def post(self, msg) -> None:
+        if isinstance(msg, W.Controls) and not self.hub_controls:
+            return
+        with self.lock:
+            self.outbox.append(W.encode(msg))
+        self._poke()
+
     # -- the network thread ---------------------------------------------------------
     def start(self) -> None:
         self.thread.start()
@@ -120,13 +241,17 @@ class Stream:
         self.wake = asyncio.Event()
         async with websockets.connect(self.url, compression=None, max_size=W.MAX_FRAME_BYTES,
                                       ping_interval=None) as ws:
-            await ws.send(W.encode(W.Hello(W.ROLE_PRODUCER, [W.CAP_EVENTS],
+            caps = [W.CAP_EVENTS] + ([W.CAP_CONTROLS] if self.controls else [])
+            await ws.send(W.encode(W.Hello(W.ROLE_PRODUCER, caps,
                                            {"name": "hub-e2e-producer", "version": "1"},
                                            self.identity)))
             welcome = W.decode(await ws.recv())
             assert isinstance(welcome, W.Welcome) and welcome.role == W.ROLE_HUB, welcome
             self.identity = dict(welcome.session)
+            self.hub_controls = bool(self.controls) and W.CAP_CONTROLS in welcome.capabilities
             await ws.send(W.encode(W.Views(list(self.views.values()))))
+            if self.hub_controls:
+                await ws.send(W.encode(self.controls.message()))
             reader = asyncio.ensure_future(self._reader(ws))
             try:
                 await self._writer(ws)
@@ -157,6 +282,9 @@ class Stream:
                 await ws.send(W.encode(reply))
             elif isinstance(msg, W.Event):
                 self.events += 1
+            elif isinstance(msg, W.Control) and self.controls is not None:
+                await ws.send(W.encode(self.controls.handle(msg)))
+                await ws.send(W.encode(self.controls.message()))
             elif isinstance(msg, W.Ping):
                 await ws.send(W.encode(W.Pong(msg.nonce)))
             elif isinstance(msg, W.Bye):
@@ -190,6 +318,10 @@ class Stream:
     async def _writer(self, ws) -> None:
         while not self.done:
             self.wake.clear()
+            with self.lock:
+                out, self.outbox = self.outbox, []
+            for frame in out:
+                await ws.send(frame)
             now = time.monotonic()
             wait = 0.05
             for sub, s in list(self.subs.items()):
@@ -251,6 +383,8 @@ def train(stream: Stream, seconds: float, device: str) -> int:
         loss.backward()
         opt.step()
         steps += 1
+        if stream.controls is not None:
+            stream.controls.checkpoint(steps, opt)
         stream.append(float(loss.item()))
         stream.publish("fc1.weight", model[0].weight.detach().cpu().numpy())
         stream.publish("fc2.weight", model[2].weight.detach().cpu().numpy())
@@ -278,6 +412,7 @@ def main() -> int:
     ap.add_argument("--seconds", type=float, default=20)
     ap.add_argument("--bench", action="store_true")
     ap.add_argument("--rate", type=float, default=60)
+    ap.add_argument("--controls", action="store_true", help="take the controls of protocol 3.1")
     a = ap.parse_args()
     identity = {"id": a.id, "script": os.path.basename(__file__), "pid": os.getpid(),
                 "start_unix_ms": int(time.time() * 1000)}
@@ -286,7 +421,7 @@ def main() -> int:
     else:
         views = [heat_view(1, "fc1.weight", 64, 32), heat_view(2, "fc2.weight", 2, 64),
                  {"id": 3, "name": "loss", "kind": int(W.Kind.SERIES), "sources": []}]
-    stream = Stream(hub_address(a.hub_file), identity, views)
+    stream = Stream(hub_address(a.hub_file), identity, views, controls=a.controls)
     if a.bench:
         stream.start()
         steps = bench(stream, a.seconds, a.rate)
@@ -297,7 +432,9 @@ def main() -> int:
     time.sleep(0.3)   # let the last values go out
     stream.stop()
     print(json.dumps({"id": a.id, "steps": steps, "loss_values": len(stream.loss),
-                      "snapshots_sent": stream.snapshots_sent, "events": stream.events}), flush=True)
+                      "snapshots_sent": stream.snapshots_sent, "events": stream.events,
+                      "lr": stream.controls.lr["value"] if stream.controls else None,
+                      "saves": stream.controls.saves if stream.controls else 0}), flush=True)
     return 0
 
 

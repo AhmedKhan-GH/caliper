@@ -16,7 +16,13 @@ Python environment with torch, numpy and websockets. It checks, in order:
 5. The shorter script exits: its session is listed as ended, and a viewer that
    attaches afterwards still gets its last snapshots and its whole loss series.
 6. The hub's resident memory, sampled throughout, stays flat.
-7. SIGTERM stops the hub with exit code 0, it removes its hub file, and no
+7. Protocol 3.1 controls. Script e2e-a registers the parameter "lr" and the
+   action "save"; a viewer that announced `controls` sees them through the hub
+   but its CONTROLs are answered `forbidden`, since the hub runs without
+   --allow-control. A second hub started with --allow-control forwards them:
+   the script sets "lr" at its next checkpoint and runs "save", and both
+   answers reach the viewer.
+8. SIGTERM stops the hub with exit code 0, it removes its hub file, and no
    process this script started is left.
 
 With --bench it then measures the relay with a 512 x 512 heatmap at 60 Hz to
@@ -93,8 +99,8 @@ def main() -> int:
     procs: list[subprocess.Popen] = []
     rss: list[tuple[float, float]] = []
 
-    def spawn(args, log):
-        p = subprocess.Popen(args, env=env, stdout=open(os.path.join(work, log), "w"),
+    def spawn(args, log, extra_env=None):
+        p = subprocess.Popen(args, env=dict(env, **(extra_env or {})), stdout=open(os.path.join(work, log), "w"),
                              stderr=subprocess.STDOUT)
         procs.append(p)
         return p
@@ -117,7 +123,7 @@ def main() -> int:
 
         # 2. two scripts
         pa = spawn([sys.executable, os.path.join(HERE, "producer.py"), "--hub-file", hub_file, "--id", "e2e-a",
-                    "--seconds", "48"], "producer-a.log")
+                    "--seconds", "48", "--controls"], "producer-a.log")
         pb = spawn([sys.executable, os.path.join(HERE, "producer.py"), "--hub-file", hub_file, "--id", "e2e-b",
                     "--seconds", "26"], "producer-b.log")
         listed = {}
@@ -194,7 +200,10 @@ def main() -> int:
         if a.bench:
             bench(spawn, url, hub_file, work)
 
-        # 7. stop
+        # 7. controls (protocol 3.1): refused by this hub, forwarded by one with --allow-control
+        controls(spawn, url, caliper, work)
+
+        # 8. stop
         pa.terminate()
         hub.send_signal(signal.SIGTERM)
         try:
@@ -217,6 +226,57 @@ def main() -> int:
             shutil.rmtree(work, ignore_errors=True)
     print(f"{'all checks pass' if not FAILED else str(len(FAILED)) + ' checks failed'}", flush=True)
     return 0 if not FAILED else 1
+
+
+def controls(spawn, url: str, caliper: str, work: str) -> None:
+    r = asyncio.run(viewer.control(url, "e2e-a", 0.05, seconds=6.0))
+    check("controls" in r["capabilities"] and r["control"] is False,
+          f"the hub announces controls and says this viewer may not control: {r['capabilities']} {r['control']}")
+    check(r["controls"] >= 1 and r["lr"] == 0.001,
+          f"the viewer sees the script's run state and its parameter lr = {r['lr']}")
+    refused = [x for k in (1, 2) for x in r["replies"][k]]
+    check(len(refused) == 2 and all(x["error"] == "forbidden" for x in refused),
+          f"without --allow-control both CONTROLs are answered forbidden: {r['replies']}")
+
+    hub_file2 = os.path.join(work, "hub2.json")
+    hub2 = spawn([caliper, "serve", "--port", "0", "--allow-control"], "hub2.log", {"CALIPER_HUB_FILE": hub_file2})
+    t0 = time.monotonic()
+    while not os.path.exists(hub_file2) and time.monotonic() - t0 < 10:
+        time.sleep(0.05)
+    time.sleep(0.1)
+    with open(hub_file2) as f:
+        h2 = json.load(f)
+    url2 = f"{h2['stream_url']}?token={h2['token']}"
+    pc = spawn([sys.executable, os.path.join(HERE, "producer.py"), "--hub-file", hub_file2, "--id", "e2e-ctl",
+                "--seconds", "12", "--controls"], "producer-ctl.log")
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < 30:
+        if any(s["id"] == "e2e-ctl" for s in asyncio.run(viewer.sessions(url2))):
+            break
+        time.sleep(0.3)
+    r = asyncio.run(viewer.control(url2, "e2e-ctl", 0.05, seconds=8.0))
+    check(r["control"] is True, f"a hub started with --allow-control says the viewer may control: {r['control']}")
+    set_r, run_r = r["replies"][1], r["replies"][2]
+    check(len(set_r) == 1 and set_r[0]["status"] == "ok" and set_r[0]["value"] == 0.05,
+          f"setting lr to 0.05 is accepted: {set_r}")
+    check(r["lr"] == 0.05 and r["pending"] is None, f"and set at the script's next checkpoint: lr = {r['lr']}")
+    check([x["status"] for x in run_r] == ["queued", "ok"] and (run_r[-1]["message"] or "").startswith("saved at step"),
+          f"running save is queued, then answered with its result: {run_r}")
+    try:
+        pc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        pass
+    with open(os.path.join(work, "producer-ctl.log")) as f:
+        tail = [l for l in f.read().splitlines() if l.startswith("{")]
+    done = json.loads(tail[-1]) if tail else {}
+    check(done.get("lr") == 0.05 and done.get("saves") == 1,
+          f"the script trained with the new rate and saved once: {done}")
+    hub2.send_signal(signal.SIGTERM)
+    try:
+        code = hub2.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        code = None
+    check(code == 0 and not os.path.exists(hub_file2), f"the second hub stops cleanly ({code})")
 
 
 def bench(spawn, url: str, hub_file: str, work: str) -> None:
