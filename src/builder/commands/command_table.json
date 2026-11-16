@@ -9,6 +9,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {}
       ],
@@ -76,6 +77,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {}
       ],
@@ -157,6 +159,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "change",
       "examples": [
         {
           "id": "com.example.my-viewer"
@@ -232,6 +235,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {
           "kind": "tensor",
@@ -507,6 +511,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {
           "id": "live:attn.weights"
@@ -791,6 +796,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {
           "count": [
@@ -1058,6 +1064,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {
           "limit": 100,
@@ -1154,6 +1161,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "change",
       "examples": [
         {
           "paths": [
@@ -1253,6 +1261,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {}
       ],
@@ -1347,6 +1356,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {
           "id": "run42-metrics"
@@ -1470,6 +1480,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "change",
       "examples": [
         {
           "run": true,
@@ -1533,6 +1544,7 @@
         "type": "object"
       },
       "destructive": true,
+      "effect": "change",
       "examples": [
         {
           "id": "run42-metrics",
@@ -1584,6 +1596,7 @@
         "type": "object"
       },
       "destructive": true,
+      "effect": "change",
       "examples": [
         {
           "id": "run42-metrics"
@@ -1673,6 +1686,7 @@
         "type": "object"
       },
       "destructive": true,
+      "effect": "change",
       "examples": [
         {
           "id": "run42-metrics"
@@ -1734,6 +1748,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "change",
       "examples": [
         {
           "description": "Entropy of each attention head while the model trains.",
@@ -1783,6 +1798,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "change",
       "examples": [
         {
           "path": "applets/attention-entropy/attention-entropy.spec.toml"
@@ -1856,6 +1872,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {}
       ],
@@ -1924,6 +1941,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "edit",
       "examples": [
         {
           "text": "caliper_spec = 0\n[applet]\nid = \"loss\"\ntitle = \"Loss\"\n[[source]]\nid = \"loss\"\nsql = \"SELECT step, loss FROM run42_metrics ORDER BY step\"\n[[panel]]\nid = \"loss\"\nprimitive = \"series\"\nbind = { x = \"loss.step\", y = [\"loss.loss\"] }\n[layout]\nchildren = [\"loss\"]\n"
@@ -2001,6 +2019,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {}
       ],
@@ -2215,6 +2234,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "edit",
       "examples": [
         {
           "from": "attn",
@@ -2447,6 +2467,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "edit",
       "examples": [
         {
           "id": "entropy",
@@ -2667,6 +2688,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "edit",
       "examples": [
         {
           "id": "loss"
@@ -2979,6 +3001,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "edit",
       "examples": [
         {
           "bind": {
@@ -3339,6 +3362,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "edit",
       "examples": [
         {
           "id": "heat",
@@ -3640,6 +3664,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "edit",
       "examples": [
         {
           "id": "heat"
@@ -3734,6 +3759,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {
           "height": 400,
@@ -3800,6 +3826,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {
           "applet": "run42-dashboard",
@@ -3961,6 +3988,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "edit",
       "examples": [
         {
           "panel": "loss",
@@ -4198,6 +4226,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "edit",
       "examples": [
         {
           "layout": {
@@ -4388,6 +4417,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {
           "id": "widget-1",
@@ -4447,6 +4477,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {
           "id": "widget-1"
@@ -4543,6 +4574,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "edit",
       "examples": [
         {
           "id": "widget-1"
@@ -4623,6 +4655,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {
           "id": "widget-1"
@@ -4673,6 +4706,7 @@
         "type": "object"
       },
       "destructive": true,
+      "effect": "change",
       "examples": [
         {
           "id": "attention-entropy"
@@ -4725,6 +4759,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "change",
       "examples": [
         {
           "id": "attention-entropy"
@@ -4790,6 +4825,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {}
       ],
@@ -4851,6 +4887,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {}
       ],
@@ -4898,6 +4935,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {}
       ],
@@ -4946,6 +4984,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "change",
       "examples": [
         {
           "steps": 1
@@ -5044,6 +5083,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "change",
       "examples": [
         {
           "steps": 1
@@ -5142,6 +5182,7 @@
         "type": "object"
       },
       "destructive": false,
+      "effect": "read",
       "examples": [
         {
           "limit": 20

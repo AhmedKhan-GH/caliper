@@ -51,7 +51,7 @@ void check_pane(const ChatPaneLayout& lay, const WidgetRect& pane, const ChatLay
     CHECK(pane.contains(lay.input_row));
     CHECK(lay.header.y == pane.y);
     CHECK(lay.header.h == m.header);
-    CHECK(lay.conversation.y == lay.header.bottom());
+    CHECK(lay.conversation.y == (lay.banner.empty() ? lay.header.bottom() : lay.banner.bottom()));
     CHECK(lay.input_row.bottom() == doctest::Approx(pane.bottom() - m.pad));
     CHECK(lay.conversation.bottom() <= lay.input_row.y);
     CHECK(lay.input_row.contains(lay.picker));
@@ -59,7 +59,7 @@ void check_pane(const ChatPaneLayout& lay, const WidgetRect& pane, const ChatLay
     CHECK(lay.input_row.contains(lay.send));
     check_no_overlap({lay.picker, lay.input, lay.send});
     std::vector<WidgetRect> head = {lay.title};
-    for (const WidgetRect* r : {&lay.agent, &lay.note, &lay.version, &lay.mode, &lay.tag, &lay.faults})
+    for (const WidgetRect* r : {&lay.permission, &lay.agent, &lay.note, &lay.version, &lay.mode, &lay.tag, &lay.faults})
         if (!r->empty()) head.push_back(*r);
     for (const WidgetRect& b : lay.header_buttons) head.push_back(b);
     for (const WidgetRect& r : head) CHECK(lay.header.contains(r));
@@ -314,4 +314,67 @@ TEST_CASE("side chat layout: the page with the chat open and closed, under the s
             CHECK(closed.left.w == open.left.w);
         }
     }
+}
+
+TEST_CASE("side chat layout: Caliper's mode keeps its place after the title, and Allow all's banner sits under the header") {
+    const ChatLayoutMetrics m = ChatLayoutMetrics::for_text_scale(1.0f);
+    ChatPaneInput in = pane_input({0, 0, 560, 600});
+    in.agent = "Claude Code";
+    in.version = "0.107.0";
+    in.picker = "Claude Code";
+    in.permission = "Accept edits";
+    ChatPaneLayout lay = layout_chat_pane(in, m, fake_measure());
+    check_pane(lay, in.pane, m);
+    REQUIRE_FALSE(lay.permission.empty());
+    CHECK(lay.permission.x > lay.title.right());
+    CHECK(lay.agent.x > lay.permission.right());
+    CHECK(lay.banner.empty());
+    // The agent's details give way first; the mode stays.
+    for (float w = 560; w >= m.min_width; w -= 8) {
+        in.pane = {0, 0, w, 600};
+        lay = layout_chat_pane(in, m, fake_measure());
+        INFO("width " << w);
+        check_pane(lay, in.pane, m);
+        CHECK_FALSE(lay.permission.empty());
+    }
+    // Allow all: the banner and its End under the header, and the conversation under them.
+    in.pane = {0, 0, 560, 600};
+    in.permission = "Allow all";
+    in.allow_all = true;
+    lay = layout_chat_pane(in, m, fake_measure());
+    check_pane(lay, in.pane, m);
+    REQUIRE_FALSE(lay.banner.empty());
+    CHECK(lay.banner.y == lay.header.bottom());
+    CHECK(lay.conversation.y == lay.banner.bottom());
+    CHECK(lay.banner_end.right() <= lay.banner.right());
+}
+
+TEST_CASE("side chat rows: an APPLIED row of a run's command follows its group without breaking it") {
+    std::vector<ChatItem> items;
+    auto tool = [&](const std::string& id) {
+        ChatItem t;
+        t.kind = ChatItem::Kind::tool;
+        t.command = "panel.patch";
+        t.tool.id = id;
+        t.tool.status = "completed";
+        items.push_back(t);
+    };
+    auto applied = [&](std::uint64_t seq) {
+        ChatItem a;
+        a.kind = ChatItem::Kind::applied;
+        a.command = "panel.patch";
+        a.seq = seq;
+        items.push_back(a);
+    };
+    tool("c1");
+    applied(7);
+    tool("c2");
+    applied(8);
+    const std::vector<ChatRow> rows = chat_rows(items);
+    REQUIRE(rows.size() == 3);
+    CHECK(rows[0].kind == ChatRow::Kind::group);
+    CHECK(rows[0].count == 2);
+    CHECK(rows[1].kind == ChatRow::Kind::item);
+    CHECK(items[rows[1].item].seq == 7);
+    CHECK(items[rows[2].item].seq == 8);
 }

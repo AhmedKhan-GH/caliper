@@ -15,7 +15,7 @@
 //   leave                the pointer leaves the window (no hover is left behind)
 //   key <chord>          a press and release of a chord: cmd, shift and one
 //                        key (a letter, a digit, enter, escape, backspace,
-//                        f3, f4, f5, f6, up, down, comma), such as "cmd+k"
+//                        tab, f3, f4, f5, f6, up, down, comma), such as "cmd+k"
 //                        (Ctrl+K off macOS) or "cmd+shift+z"
 //   type <text>          the text as the keyboard's characters; "\n" is a
 //                        line break
@@ -47,6 +47,13 @@
 //   chat local on|off    marks the chosen agent as running on a local model,
 //                        or clears it, as the picker's Local model row does
 //   chat picker          opens the agent picker
+//   chat mode <mode>     wait until the chat's header shows Caliper's mode
+//                        for its agent: ask, accept_edits, read_only, allow_all
+//   chat allow-all on|off
+//                        Allow all for this session on, or off, as its menu
+//                        item and the banner's End do
+//   chat undo <command>  the Undo of the newest APPLIED row of that command,
+//                        as its button does, once it is the newest step
 //   cards <n>            wait until the approval cards' strip shows at least n
 //                        waiting cards at its full height (approval_cards.h)
 //   click <item> [fx fy] a click on a named rectangle of the spec page
@@ -106,6 +113,13 @@
 //   settings list | probe
 //                        lists the server's models, or probes the model, as
 //                        List and Probe do
+//   settings perm <chat|mcp> <mode>
+//                        sets the mode of the side chat's agent or of mcp
+//                        clients (ask, accept_edits, read_only), as a click on
+//                        its button in Permissions does
+//   settings rules <n>   wait until Permissions lists n saved rules
+//   settings revoke <agent> <command>
+//                        Revoke of that saved rule, as its button does
 //   settings until open | note <text>|none | state <text>|none | done [<seconds>]
 //                        wait until the settings are open, show that GPU note,
 //                        or that plain state, or until no list or probe runs
@@ -307,8 +321,25 @@ public:
             } else if (what == "until" && which == "state") {
                 if (settings_->state() != want) return patience("the settings' state is " + shown(settings_->state()));
                 next("the settings' state is " + shown(want));
+            } else if (what == "perm" && (which == "chat" || which == "mcp") && !rest.empty()) {
+                if (!settings_->has_permissions()) return patience("the settings have no Permissions yet");
+                settings_->set_permission_mode(which, rest);
+                if (settings_->permission_mode(which) != rest)
+                    return void(error_ = "settings perm: the mode of " + which + " is " + settings_->permission_mode(which));
+                next("settings perm " + which + " " + rest);
+            } else if (what == "rules" && !which.empty()) {
+                const size_t n = settings_->saved_rules().size();
+                if (std::to_string(n) != which) return patience("the settings list " + std::to_string(n) + " saved rules");
+                next("the settings list " + which + " saved rules");
+            } else if (what == "revoke" && !which.empty() && !rest.empty()) {
+                const auto rules = settings_->saved_rules();
+                if (std::find(rules.begin(), rules.end(), std::make_pair(which, rest)) == rules.end())
+                    return patience("no saved rule " + which + " " + rest);
+                settings_->revoke_rule(which, rest);
+                next("settings revoke " + which + " " + rest);
             } else {
-                error_ = "settings takes open, close, preset, model, list, probe or until open|note|state|done";
+                error_ = "settings takes open, close, preset, model, list, probe, perm, rules, revoke or until "
+                         "open|note|state|done";
             }
 #else
             error_ = "settings: the builder is not in this build";
@@ -608,6 +639,21 @@ public:
                 const std::string shown = chat->note().empty() ? std::string("none") : chat->note();
                 if (chat->note() != want) return patience("the chat's note is " + shown);
                 next("the chat's note is " + shown);
+            } else if (what == "mode" && !a.empty()) {
+                const std::string word = a == "ask"            ? "Ask"
+                                         : a == "accept_edits" ? "Accept edits"
+                                         : a == "read_only"    ? "Read only"
+                                         : a == "allow_all"    ? "Allow all"
+                                                               : a;
+                if (chat->permission_mode() != word) return patience("the chat's mode is " + chat->permission_mode());
+                next("the chat's mode is " + word);
+            } else if (what == "allow-all" && (a == "on" || a == "off")) {
+                if (chat->state() == "none") return patience("the chat is not made yet");
+                chat->set_allow_all(a == "on");
+                next("chat allow-all " + a);
+            } else if (what == "undo" && !a.empty()) {
+                if (!chat->undo_applied(a)) return patience("no APPLIED " + a + " to undo");
+                next("chat undo " + a);
             } else if (what == "item") {
                 const std::string cmd = b == "-" ? std::string() : b;
                 if (!chat->has_item(a, cmd, c)) return patience("no chat item " + s.arg);
@@ -740,6 +786,8 @@ private:
                 keys.push_back(ImGuiKey_Enter);
             } else if (p == "backspace") {
                 keys.push_back(ImGuiKey_Backspace);
+            } else if (p == "tab") {
+                keys.push_back(ImGuiKey_Tab);
             } else if (p == "f3") {
                 keys.push_back(ImGuiKey_F3);
             } else if (p == "f4") {

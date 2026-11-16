@@ -59,6 +59,8 @@ CommandDescriptor make_history(const char* name, const char* summary, json args,
     d.mutates = mutates;
     d.destructive = false;
     d.frame_thread = true;
+    // Moving the history changes the workspace; listing it reads.
+    d.effect = mutates ? CommandEffect::change : CommandEffect::read;
     return d;
 }
 
@@ -234,6 +236,11 @@ void CommandRegistry::set_approval_check(ApprovalCheck check) {
     check_ = std::move(check);
 }
 
+void CommandRegistry::set_approval_notes(ApprovalNotes notes) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    notes_ = std::move(notes);
+}
+
 void CommandRegistry::set_journal(CommandJournal* journal) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     journal_ = journal;
@@ -286,9 +293,20 @@ ApprovalDecision CommandRegistry::ask_policy(const CommandDescriptor& d, const C
     }
 }
 
-std::uint64_t CommandRegistry::journal_do(const CommandInvocation& inv, bool ok, const std::string& error) {
+ApprovalNote CommandRegistry::ask_notes(const CommandDescriptor& d, const CommandInvocation& inv) {
+    if (!notes_) return {};
+    try {
+        return notes_(d, inv);
+    } catch (...) {
+        return {};
+    }
+}
+
+std::uint64_t CommandRegistry::journal_do(const CommandInvocation& inv, bool ok, const std::string& error,
+                                          const std::string& allowed_by) {
     if (!journal_) return 0;
     JournalEvent e;
+    e.allowed_by = allowed_by;
     e.ts = now_text();
     e.origin = inv.origin;
     e.name = inv.name;
@@ -383,15 +401,18 @@ CommandResult CommandRegistry::invoke(CommandInvocation inv) {
 
     ApprovalDecision decision;
     std::vector<std::uint64_t> steps;
+    ApprovalNote note;
     if (inv.name == "history.undo" || inv.name == "history.redo") {
         std::tie(decision, steps) = history_decision(inv, inv.name == "history.undo");
     } else {
         decision = ask_policy(entry.descriptor, inv);
+        note = ask_notes(entry.descriptor, inv);
     }
     if (decision == ApprovalDecision::deny)
-        return finish_refused(inv, entry, "command.denied", inv.name + " was denied by the approval policy.");
+        return finish_refused(inv, entry, "command.denied",
+                              note.message.empty() ? inv.name + " was denied by the approval policy." : note.message);
     if (decision == ApprovalDecision::ask) return park(inv, entry, std::move(steps));
-    return run(inv, entry, steps);
+    return run(inv, entry, steps, note.allowed_by);
 }
 
 CommandResult CommandRegistry::park(const CommandInvocation& inv, const Entry& entry, std::vector<std::uint64_t> steps) {
@@ -517,7 +538,7 @@ std::size_t CommandRegistry::cancel_pending() {
 }
 
 CommandResult CommandRegistry::run(const CommandInvocation& inv, const Entry& entry,
-                                   const std::vector<std::uint64_t>& steps) {
+                                   const std::vector<std::uint64_t>& steps, const std::string& allowed_by) {
     CommandResult result;
     if (inv.name == "history.undo" || inv.name == "history.redo") {
         result = run_history_move(inv, inv.name == "history.undo", steps);
@@ -530,10 +551,10 @@ CommandResult CommandRegistry::run(const CommandInvocation& inv, const Entry& en
         const bool changed = entry.descriptor.mutates && !out.no_effect;
         const bool journal_this = changed || (journal_ && journal_->options().include_read_only);
         if (out.error) {
-            if (journal_this) journal_do(inv, false, out.error.code);
+            if (journal_this) journal_do(inv, false, out.error.code, allowed_by);
             return CommandResult::failure(inv.id, out.error);
         }
-        const std::uint64_t seq = journal_this ? journal_do(inv, true, {}) : 0;
+        const std::uint64_t seq = journal_this ? journal_do(inv, true, {}, allowed_by) : 0;
         if (changed) {
             if (out.undo.kind == UndoRecord::Kind::none) {
                 history_.pass_by();

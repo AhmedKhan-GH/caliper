@@ -692,6 +692,43 @@ void SideChat::note(const std::string& tag, const std::string& line) {
     n.lines = {line};
 }
 
+void SideChat::applied(std::uint64_t seq, const std::string& command, const std::string& allowed_by) {
+    ChatItem& a = add(ChatItem::Kind::applied);
+    a.seq = seq;
+    a.command = command;
+    // What allowed it, as the header names modes and the cards name rules.
+    a.text = allowed_by == "accept_edits"   ? "Accept edits"
+             : allowed_by == "allow_all"    ? "Allow all"
+             : allowed_by == "session_rule" ? "Rule for this session"
+             : allowed_by == "saved_rule"   ? "Saved rule"
+                                            : allowed_by;
+}
+
+bool SideChat::undo_applied(std::uint64_t serial) {
+    for (ChatItem& it : items_) {
+        if (it.serial != serial || it.kind != ChatItem::Kind::applied || !it.answer.empty()) continue;
+        if (!hooks_.can_undo || !hooks_.undo || !hooks_.can_undo(it.seq)) return false;
+        hooks_.undo(it.seq);
+        it.answer = "undone";
+        return true;
+    }
+    return false;
+}
+
+std::string SideChat::permission_word() const { return hooks_.permission_mode ? hooks_.permission_mode() : std::string(); }
+
+void SideChat::cycle_permission_mode() {
+    if (!hooks_.set_permission_mode) return;
+    const std::string now = permission_word();
+    hooks_.set_permission_mode(now == "Ask" ? "accept_edits" : now == "Accept edits" ? "read_only" : "ask");
+}
+
+void SideChat::set_allow_all(bool on) {
+    if (!hooks_.set_permission_mode) return;
+    if (on) hooks_.set_permission_mode("allow_all");
+    else if (permission_word() == "Allow all") hooks_.set_permission_mode("");
+}
+
 void SideChat::finish_start() {
     if (!job_) return;
     {
@@ -1050,7 +1087,7 @@ std::vector<ChatRow> chat_rows(const std::vector<ChatItem>& items, const std::ma
         g.key = it.tool.id;
         g.command = key;
         g.caliper = !it.command.empty();
-        std::vector<size_t> waiting;
+        std::vector<size_t> waiting;   // waiting approvals and APPLIED rows, shown after the group
         std::map<std::string, int> outcomes;   // a decided approval's answer, counted
         bool failed = false, running = false, pending = false, stopped = false;
         size_t j = i;
@@ -1064,6 +1101,8 @@ std::vector<ChatRow> chat_rows(const std::vector<ChatItem>& items, const std::ma
                 stopped = stopped || st == "cancelled";
                 running = running || st == "in_progress";
                 pending = pending || st.empty() || st == "pending";
+            } else if (m.kind == ChatItem::Kind::applied && g.caliper && m.command == key) {
+                waiting.push_back(j);   // its own row, with Undo, after the group
             } else if (m.kind == ChatItem::Kind::approval && g.caliper && m.command == key) {
                 if (m.answer.empty()) {
                     waiting.push_back(j);
@@ -1099,7 +1138,7 @@ std::vector<ChatRow> chat_rows(const std::vector<ChatItem>& items, const std::ma
         }
         for (size_t w : waiting) {
             ChatRow r;
-            r.kind = ChatRow::Kind::waiting_approval;
+            r.kind = items[w].kind == ChatItem::Kind::applied ? ChatRow::Kind::item : ChatRow::Kind::waiting_approval;
             r.item = w;
             out.push_back(std::move(r));
         }
@@ -1244,6 +1283,12 @@ ChatPaneLayout layout_chat_pane(const ChatPaneInput& in, const ChatLayoutMetrics
     const float tw = std::ceil(measure(upper(in.title), ChatFont::tag));
     out.title = {H.x + m.pad, H.y, tw, H.h};
     float x = out.title.right() + 2.0f * m.gap;
+    // Caliper's mode keeps its place after the title: the agent's details give way first.
+    if (!in.permission.empty()) {
+        const float pw = std::ceil(measure(in.permission, ChatFont::label) + 2.0f * m.button_pad + m.picker_mark);
+        out.permission = {x, by, pw, bh};
+        x += pw + 2.0f * m.gap;
+    }
     float right = H.right() - m.pad;
     for (size_t i = in.header_actions.size(); i-- > 0;) {
         const float w = button_width(in.header_actions[i], out.keys, m, measure);
@@ -1284,7 +1329,13 @@ ChatPaneLayout layout_chat_pane(const ChatPaneInput& in, const ChatLayoutMetrics
         }
     }
 
-    const float top = H.bottom();
+    float top = H.bottom();
+    if (in.allow_all) {
+        out.banner = {P.x, top, P.w, m.row};
+        const float ew = std::ceil(measure("End", ChatFont::label) + 2.0f * m.button_pad);
+        out.banner_end = {P.right() - m.pad - ew, std::round(top + (m.row - m.button) * 0.5f), ew, m.button};
+        top = out.banner.bottom();
+    }
     const float bottom = in.chips.empty() ? out.input_row.y - m.pad : out.chips.y - m.gap;
     out.conversation = {P.x, top, P.w, std::max(0.0f, bottom - top)};
     return out;
@@ -1296,6 +1347,8 @@ ChatPaneInput chat_pane_input(const SideChat& chat, const WidgetRect& pane) {
     in.agent = chat.agent_title();
     in.version = chat.agent_info().version;
     in.mode = chat.mode();
+    in.permission = chat.permission_word();
+    in.allow_all = in.permission == "Allow all";
     in.tag = chat.tag();
     in.note = chat.gpu_note();
     in.header_actions = chat.header_actions();
@@ -1447,6 +1500,23 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
         dl->AddRectFilled(h.Min, h.Max, L.plate);
         dl->AddRectFilled(v2(h.Min.x, h.Max.y - 1.0f), h.Max, L.rule);
         draw_tag(dl, L, v2(lay.title.x, lay.title.y), lay.title.h, L.text, upper(in.title));
+        if (!lay.permission.empty()) {
+            // Caliper's mode for the agent, framed; bronze while it lets
+            // commands run without a card. A click opens its menu.
+            const ImRect pr = rr(lay.permission);
+            ImGui::SetCursorScreenPos(pr.Min);
+            if (ImGui::InvisibleButton("##chat.permission", pr.GetSize())) mode_menu_open_ = true;
+            const bool hov = ImGui::IsItemHovered();
+            const bool loose = in.permission == "Allow all" || in.permission == "Accept edits";
+            if (hov) dl->AddRectFilled(pr.Min, pr.Max, L.plate_hover);
+            dl->AddRect(pr.Min, pr.Max, in.permission == "Allow all" ? L.accent : L.rule, 0.0f, 0, 1.0f);
+            draw_str(dl, L.ui, L.ui_size, v2(pr.Min.x + m.button_pad, pr.Min.y + (pr.GetHeight() - ui_h) * 0.5f),
+                     loose ? L.accent : L.text, in.permission);
+            // The menu's mark, ▾ as the picker's.
+            const float t = std::round(3.0f * s);
+            const ImVec2 c = v2(std::round(pr.Max.x - m.button_pad * 0.5f - t), std::round(pr.GetCenter().y));
+            dl->AddTriangleFilled(v2(c.x - t, c.y - t * 0.5f), v2(c.x + t, c.y - t * 0.5f), v2(c.x, c.y + t * 0.6f), L.faint);
+        }
         if (!lay.agent.empty())
             draw_str(dl, L.ui, L.ui_size, v2(lay.agent.x, lay.agent.y + (lay.agent.h - ui_h) * 0.5f), L.secondary, in.agent);
         if (!lay.note.empty()) {   // the GPU note, framed in bronze as the widget agent's settings show it
@@ -1491,6 +1561,20 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
                              lay.keys, L))
                 act(a);
         }
+    }
+
+    // ---- Allow all's banner: it stays while the session runs without cards
+    if (!lay.banner.empty()) {
+        const ImRect b = rr(lay.banner);
+        dl->AddRectFilled(b.Min, b.Max, L.deep);
+        dl->AddRectFilled(v2(b.Min.x, b.Min.y), v2(b.Min.x + std::round(3.0f * s), b.Max.y), L.accent);
+        dl->AddRectFilled(v2(b.Min.x, b.Max.y - 1.0f), b.Max, L.accent);
+        const float x = b.Min.x + m.pad + draw_tag(dl, L, v2(b.Min.x + m.pad, b.Min.y), b.GetHeight(), L.accent, "ALLOW ALL") +
+                        2.0f * m.gap;
+        const std::string what = fit(L.ui, L.ui_size, "This session only",
+                                     lay.banner_end.x - m.gap - x);
+        draw_str(dl, L.ui, L.ui_size, v2(x, b.Min.y + (b.GetHeight() - ui_h) * 0.5f), L.secondary, what);
+        if (house_button("##chat.allow_all.end", rr(lay.banner_end), "End", "", false, false, L)) set_allow_all(false);
     }
 
     // ---- the conversation
@@ -1806,6 +1890,33 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
                         });
                         break;
                     }
+                    case ChatItem::Kind::applied: {
+                        // A command that ran without a card: what allowed it, and Undo
+                        // while it is the newest step.
+                        place(line, [&](ImVec2 p) {
+                            const bool undone = !it.answer.empty();
+                            const bool can = !undone && hooks_.can_undo && hooks_.can_undo(it.seq);
+                            const float tw = draw_tag(cdl, L, p, line, undone ? L.faint : L.accent, "APPLIED");
+                            float x = p.x + tw + gap;
+                            const float uw = std::ceil(2.0f * m.button_pad + extent(L.ui, L.ui_size, "Undo").x);
+                            const float right = p.x + w - (undone ? extent(L.mono, L.mono_size, "undone").x : uw) - gap;
+                            const std::string cmd = fit(L.mono, L.mono_size, it.command, right - x);
+                            draw_str(cdl, L.mono, L.mono_size, v2(x, p.y + (line - mono_h) * 0.5f), undone ? L.secondary : L.text, cmd);
+                            x += extent(L.mono, L.mono_size, cmd).x + gap;
+                            if (x < right)
+                                draw_str(cdl, L.ui, L.small_size, v2(x, p.y + (line - small_h) * 0.5f), L.faint,
+                                         fit(L.ui, L.small_size, it.text, right - x));
+                            if (undone) {
+                                const float ww = extent(L.mono, L.mono_size, "undone").x;
+                                draw_str(cdl, L.mono, L.mono_size, v2(p.x + w - ww, p.y + (line - mono_h) * 0.5f), L.faint, "undone");
+                            } else if (house_button("##applied.undo", ImRect(v2(p.x + w - uw, p.y + (line - m.button) * 0.5f),
+                                                                            v2(p.x + w, p.y + (line + m.button) * 0.5f)),
+                                                    "Undo", "", false, false, L, can)) {
+                                undo_applied(it.serial);
+                            }
+                        });
+                        break;
+                    }
                     case ChatItem::Kind::notice: {
                         // The tag, the error or the exit status, and the lines: the
                         // agent's stderr tail or its login methods. Restart is in the header.
@@ -1950,6 +2061,12 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, v2(0, 2));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
         ImGui::PushFont(L.ui, L.ui_size);
+        // Shift-Tab while the input has the keyboard cycles Caliper's mode,
+        // and the keyboard stays in the input.
+        if (input_active_ && ImGui::IsKeyChordPressed(ImGuiMod_Shift | ImGuiKey_Tab)) {
+            cycle_permission_mode();
+            focus_input_ = true;
+        }
         if (focus_input_ && usable) {
             ImGui::SetKeyboardFocusHere();
             focus_input_ = false;
@@ -1961,6 +2078,10 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
             ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CtrlEnterForNewLine |
                 ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_NoHorizontalScroll,
             resize_callback, &text_);
+        input_active_ = ImGui::IsItemActive();
+        // While the input has the keyboard, Tab is the chat's (Shift-Tab
+        // above), not ImGui's tabbing to another widget.
+        if (input_active_) ImGui::SetKeyOwner(ImGuiKey_Tab, ImGui::GetItemID());
         ImGui::PopFont();
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor(5);
@@ -1979,6 +2100,46 @@ void SideChat::draw(const ImRect& pane_rect, const SpecLook& L) {
             act(a);
     }
     dl->PopClipRect();
+
+    // ---- Caliper's mode menu: the three modes, and Allow all under a rule
+    if (mode_menu_open_) {
+        ImGui::OpenPopup("##chat.modes");
+        mode_menu_open_ = false;
+    }
+    ImGui::SetNextWindowPos(v2(lay.permission.x, lay.permission.bottom() + 2.0f), ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, v2(m.pad, m.pad));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, L.deep);
+    ImGui::PushStyleColor(ImGuiCol_Border, L.rule);
+    if (ImGui::BeginPopup("##chat.modes")) {
+        ImGui::PushFont(L.ui, L.ui_size);
+        const float cw = std::round(240.0f * s), lh = std::round(22.0f * s);
+        const std::string now = permission_word();
+        const char* names[] = {"ask", "accept_edits", "read_only"};
+        const char* words[] = {"Ask", "Accept edits", "Read only"};
+        for (int i = 0; i < 3; ++i) {
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            if (ImGui::Selectable((std::string("##mode.") + names[i]).c_str(), now == words[i], 0, v2(cw, lh)) &&
+                hooks_.set_permission_mode)
+                hooks_.set_permission_mode(names[i]);
+            draw_str(ImGui::GetWindowDrawList(), L.ui, L.ui_size, v2(p.x + std::round(4.0f * s), p.y + (lh - ui_h) * 0.5f),
+                     now == words[i] ? L.accent : L.text, words[i]);
+        }
+        ImGui::Dummy(v2(1.0f, std::round(4.0f * s)));
+        const ImVec2 r = ImGui::GetCursorScreenPos();
+        ImGui::GetWindowDrawList()->AddRectFilled(r, v2(r.x + cw, r.y + 1.0f), L.rule_faint);
+        ImGui::Dummy(v2(1.0f, std::round(4.0f * s)));
+        {
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const bool on = now == "Allow all";
+            if (ImGui::Selectable("##mode.allow_all", on, 0, v2(cw, lh))) set_allow_all(!on);
+            draw_str(ImGui::GetWindowDrawList(), L.ui, L.ui_size, v2(p.x + std::round(4.0f * s), p.y + (lh - ui_h) * 0.5f),
+                     L.accent, on ? "End Allow all" : "Allow all for this session");
+        }
+        ImGui::PopFont();
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar();
 
     // ---- the picker's list: the agents found, the others in the faint tone, and the custom command
     if (picker_open_) {

@@ -6,6 +6,7 @@ add_library(caliper_builder_commands STATIC
     command_table.cpp
     history.cpp
     journal.cpp
+    permissions.cpp
     queue.cpp
     registry.cpp
     schema.cpp
@@ -29,4 +30,5 @@ caliper_builder_add_tests(commands
         tests/test_queue.cpp
         tests/test_command_table.cpp
         tests/test_worked.cpp
+        tests/test_permissions.cpp
     LIBS caliper_builder_commands caliper_builder_catalog)

@@ -2,8 +2,10 @@
 // The command journal (design/command-layer.md, The journal): append-only
 // JSON Lines at <workspace>/journal/commands.jsonl, one event per line:
 //   {"seq", "ts", "origin", "name", "args", "ok", "group", "event"}
-// with "error" (the code) when ok is false and "seqs" (the seq of every do
-// event of the step) on undo and redo events.
+// with "error" (the code) when ok is false, "seqs" (the seq of every do
+// event of the step) on undo and redo events, and "allowed_by" on a do event
+// that ran without the person's card because the agent's mode or a rule
+// allowed what would otherwise have asked (permissions.h).
 //
 // CommandJournal::append() gives each event the next seq, which continues
 // after the journal is reopened and across rotation; redacts the arguments
@@ -63,6 +65,10 @@ struct JournalEvent {
     std::string event = "do";   // "do", "undo" or "redo"
     std::string error;          // the error code when ok is false
     std::vector<std::uint64_t> seqs;  // undo and redo events
+    // A do event that ran without a card because a mode or a rule allowed it:
+    // "accept_edits", "allow_all", "session_rule" or "saved_rule"; empty
+    // otherwise.
+    std::string allowed_by;
 };
 
 nlohmann::json journal_event_to_json(const JournalEvent& event);

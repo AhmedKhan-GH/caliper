@@ -88,9 +88,10 @@ folder, and sends:
 
 ## The pane
 
-The pane is the lower part of the right column, under Selection and Properties. Its header shows CHAT, the agent's
-name, Shared GPU when it applies (see [Local models](#local-models)), its version and its mode, the state as a tag, a
-FAULTS chip when the agent sent messages Caliper dropped, and Restart when the agent must start again.
+The pane is the lower part of the right column, under Selection and Properties. Its header shows CHAT, Caliper's
+mode for the agent (see [Modes](#modes)), the agent's name, Shared GPU when it applies (see
+[Local models](#local-models)), its version and its own mode, the state as a tag, a FAULTS chip when the agent sent
+messages Caliper dropped, and Restart when the agent must start again.
 
 | Tag | State | Action |
 |---|---|---|
@@ -132,8 +133,30 @@ status, such as "source.add ×9 · approved · done"; a click opens it to show e
 failed call or an approval that was denied, timed out or failed says so in bronze and is open from the start. A lone
 call without an approval is a plain row.
 
-**The input** is one line that grows to six with Shift+Enter or Command+Enter; Enter sends. The agent picker beside it
+**The input** is one line that grows to six with Shift+Enter or Command+Enter; Enter sends; Shift+Tab changes
+Caliper's mode. The agent picker beside it
 lists the agents by name, with NOT FOUND for those not on `PATH`, Custom command, and Local model.
+
+## Modes
+
+Caliper decides which of the agent's commands wait for your card, whatever the agent itself asks. The mode is the
+framed word after CHAT in the header; a click on it opens its menu, and Shift+Tab, while the input has the keyboard,
+moves through the first three:
+
+| Mode | What the agent's commands do |
+|---|---|
+| Ask | Edits of the open spec and commands that delete or overwrite saved data or run a Python loader wait for your card. This is the default. |
+| Accept edits | Edits of the open spec apply at once; everything else that asked still asks. |
+| Read only | The agent can read and propose (dry runs, edits of a preview); every other change is refused, and the agent is told why. |
+| Allow all | Only from the menu's last item, Allow all for this session: nothing waits for a card, except an overwrite of a saved applet or the replacement of a spec with unsaved changes. A banner, ALLOW ALL with End, stays under the header while it is on. It is never saved and ends when the agent's session ends. |
+
+A command that runs without a card because of the mode or a rule shows as an APPLIED row with what allowed it, and
+Undo, which takes it back while it is the newest change. An approval card of the chat's agent offers Allow once,
+Allow always for this session, Always allow `<command>` and Deny; Always allow is saved for this agent. The settings
+(⌘,) set the saved mode of the side chat and of `caliper-mcp`'s clients and list the saved rules under Permissions,
+each with Revoke; they are kept in `agent-permissions.json` in the app-data folder, which only you can read and write.
+That file is no protection against an agent that has its own access to your files, which can change it as it can
+change any of them. The widget agent (⌘K) is not affected: its changes always wait in its preview for Accept.
 
 ## Local models
 

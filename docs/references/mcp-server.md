@@ -119,6 +119,13 @@ when you denied the card and `command.approval_timeout` when nobody decided with
 `caliper-mcp`'s own, such as `mcp.no_api_file` when the app is not running with the API on and
 `mcp.app_unreachable` when nothing answers on the file's port.
 
+What waits for you depends on the mode you give `caliper-mcp`'s clients in the app's settings (⌘,, under
+Permissions): Ask, the default, holds spec edits and destructive commands for your card; Accept edits applies an edit
+of the open spec at once, still journaled and undoable; Read only lets reads, dry runs and edits of a preview through
+and refuses every other change with `command.denied`. A card can also allow its command for the rest of the app's run
+or always (until you revoke it in the settings). The mode is the app's, applied by the command layer to the API file's
+token; nothing a client sends can choose or change it. A tool's annotations stay as the table's flags say.
+
 ## Resources
 
 | URI | What |

@@ -159,7 +159,7 @@ TEST_CASE("a descriptor is checked: name, summary, schemas and examples") {
     CHECK(j["name"] == "toy.set");
     CHECK(j["examples"].size() == 1);
     CHECK(j["mutates"] == false);
-    CHECK(j.size() == 9);
+    CHECK(j.size() == 10);
 
     CommandDescriptor bad = d;
     bad.name = "toy";

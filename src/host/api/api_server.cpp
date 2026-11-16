@@ -267,7 +267,8 @@ bool token_ok(const HttpRequest& r, const std::string& token, bool query_ok) {
     return caliper_net::wire::token_equal(q, token);
 }
 
-std::string TokenTable::find(const HttpRequest& r, bool query_ok) const {
+std::string TokenTable::find(const HttpRequest& r, bool query_ok, std::string* client) const {
+    if (client) client->clear();
     // The token the request presents: the first Authorization header's
     // "Bearer <token>", else, when query_ok, the query parameter.
     std::string presented;
@@ -285,8 +286,13 @@ std::string TokenTable::find(const HttpRequest& r, bool query_ok) const {
     if (presented.empty()) return {};
     // Every entry is compared, in constant time each, whichever matches.
     std::string origin;
-    for (const auto& e : entries)
-        if (!e.first.empty() && caliper_net::wire::token_equal(presented, e.first) && origin.empty()) origin = e.second;
+    for (size_t i = 0; i < entries.size(); ++i) {
+        const auto& e = entries[i];
+        if (!e.first.empty() && caliper_net::wire::token_equal(presented, e.first) && origin.empty()) {
+            origin = e.second;
+            if (client && i < clients.size()) *client = clients[i];
+        }
+    }
     return origin;
 }
 
@@ -322,7 +328,8 @@ Verdict check(const HttpRequest& r, const TokenTable& tokens, bool command_layer
         v.message = std::string(r.path) + " takes " + v.routed.allow;
         return v;
     }
-    const std::string token_origin = tokens.find(r, r.method == "GET");
+    std::string token_client;
+    const std::string token_origin = tokens.find(r, r.method == "GET", &token_client);
     if (token_origin.empty()) {
         v.status = 401;
         v.message = r.method == "GET" ? "the session token is missing or wrong"
@@ -341,8 +348,9 @@ Verdict check(const HttpRequest& r, const TokenTable& tokens, bool command_layer
         }
     }
     // The token decides who asks, on every route: the command table an
-    // agent's token is shown, and a command's origin below.
+    // agent's token is shown, and a command's origin and client below.
     v.origin = token_origin;
+    v.client = token_client;
     const std::string length = trim(r.header("content-length"));
     if (rt == Route::Command) {
         for (const char* h : {"authorization", "content-length", "content-type", "x-caliper-group",
@@ -612,6 +620,7 @@ struct Server::Impl {
                 layer.request.name = v.routed.name;
                 layer.request.args = r.body;
                 layer.request.origin = v.origin;
+                layer.request.client = v.client;
                 layer.request.group = r.header("x-caliper-group");
                 layer.request.preview = r.header("x-caliper-preview");
                 layer.request.approval_wait_ms =
@@ -799,8 +808,12 @@ TokenTable Server::tokens() const {
     t.entries.push_back({opt_.token, "api"});
     if (!opt_.mcp_token.empty()) t.entries.push_back({opt_.mcp_token, "mcp"});
     if (!opt_.viewer_token.empty()) t.entries.push_back({opt_.viewer_token, "viewer"});
+    t.clients.resize(t.entries.size());
     std::lock_guard<std::mutex> g(issued_mu_);
-    for (const auto& e : issued_) t.entries.push_back(e);
+    for (const auto& e : issued_) {
+        t.entries.push_back({e.token, e.origin});
+        t.clients.push_back(e.client);
+    }
     return t;
 }
 
@@ -817,15 +830,16 @@ caliper_net::HubOptions::StreamAccess Server::stream_access(const std::string& p
     return A::kRefused;   // the viewer token, a revoked or an unknown one
 }
 
-std::string Server::issue_token(const std::string& origin) {
+std::string Server::issue_token(const std::string& origin, const std::string& client) {
     if (origin != "agent" && origin != "mcp") return {};
+    if (client.size() > 32 || client.find_first_not_of("abcdefghijklmnopqrstuvwxyz") != std::string::npos) return {};
     std::lock_guard<std::mutex> g(issued_mu_);
     for (;;) {
         std::string t = caliper_net::random_token();
         bool taken = t == opt_.token || t == opt_.mcp_token || t == opt_.viewer_token;
-        for (const auto& e : issued_) taken = taken || e.first == t;
+        for (const auto& e : issued_) taken = taken || e.token == t;
         if (taken) continue;
-        issued_.push_back({t, origin});
+        issued_.push_back({t, origin, client});
         return t;
     }
 }
@@ -833,7 +847,7 @@ std::string Server::issue_token(const std::string& origin) {
 void Server::revoke_token(const std::string& token) {
     std::lock_guard<std::mutex> g(issued_mu_);
     for (auto it = issued_.begin(); it != issued_.end();)
-        it = it->first == token ? issued_.erase(it) : it + 1;
+        it = it->token == token ? issued_.erase(it) : it + 1;
 }
 
 Server::~Server() { stop(); }

@@ -36,6 +36,13 @@
 //   - The GPU note. "Shared GPU" in the chat's header while a live run is
 //     attached (Hooks::live_attached) and the chosen agent is marked as
 //     running on a local model (design/widget-agent.md, GPU contention).
+//   - Caliper's mode. The header's mode word, its menu, Shift-Tab and Allow
+//     all's banner (side_chat.h) read and set the session's mode for the
+//     side chat's agent (Session::agent_mode()); the agent's session ends with
+//     its token, and Allow all and this session's rules with it
+//     (Session::end_chat_session()). An edit a mode or a rule let run is an
+//     APPLIED row, from AppSession::take_applied(), whose Undo sends the
+//     person's history.undo while it is the newest step.
 //   - The meeting points. A command approval of the agent's turn is a row in
 //     the conversation that points to its card on the approval cards' strip
 //     (Hooks::show_approval); "Ask in chat" from the ⌘K surface opens the pane
@@ -130,6 +137,14 @@ public:
     // draw; false before the chat is made or with no agent.
     bool set_local_model(bool on);
     void open_picker();
+    // Caliper's mode for the chat's agent as its header shows it ("Ask",
+    // "Accept edits", "Read only", "Allow all"), "" before the chat is made;
+    // Allow all turned on or off as its own menu item does; and Undo of the
+    // newest APPLIED row of a command, as its button does (false when it is
+    // not the newest step).
+    std::string permission_mode() const;
+    void set_allow_all(bool on);
+    bool undo_applied(const std::string& command);
 
     // Before the session and the UI context go: stops the agent.
     void shutdown();

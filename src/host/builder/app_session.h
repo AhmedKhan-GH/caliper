@@ -41,8 +41,9 @@
 // Activity. Every command the journal records, that is every mutating command
 // that ran or was denied (not a dry run), becomes one Activity line, with the
 // event "<origin> command" (ui, builder, agent, mcp or api), its name as the
-// object and, when it failed, its error code as the detail, and one
-// "[session]" line on standard error.
+// object and, when it failed, its error code as the detail, or what let it
+// run without a card ("allowed by accept_edits"), and one "[session]" line on
+// standard error.
 //
 // panel.render needs the spec runtime, which draws a panel off screen; until
 // one is given to set_panel_renderer() (panel_renderer.h), it answers
@@ -136,6 +137,9 @@ public:
         double capture_timeout_s = 5.0;   // a read-back that never arrives fails then
         std::string script;        // CALIPER_COMMAND_SCRIPT
         std::string results;       // CALIPER_COMMAND_RESULTS
+        // The saved agent permissions (Session's SessionOptions::
+        // permissions_file): agent-permissions.json in the app-data folder.
+        std::string permissions_file;
     };
 
     // The ticket under which the app's WindowCaptures serves the session's
@@ -198,6 +202,18 @@ public:
     // Every applet.save that succeeded: the app lists the workspace's
     // applets again for each.
     uint64_t applets_saved() const;
+
+    // The commands that ran without a card because an agent's mode or a rule
+    // allowed them (the journal's allowed_by), since the last call, the
+    // newest 64 at most: the side chat shows its agent's as APPLIED rows.
+    // Frame thread.
+    struct Applied {
+        uint64_t seq = 0;          // the journal's seq
+        std::string name;          // the command
+        std::string origin;        // agent or mcp
+        std::string allowed_by;    // accept_edits, allow_all, session_rule, saved_rule
+    };
+    std::vector<Applied> take_applied();
 
     // Caliper API's command gateway over this session (api/command_gateway.h),
     // for AppApi::set_command_gateway(), so that the app serves

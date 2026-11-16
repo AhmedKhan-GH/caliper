@@ -927,6 +927,56 @@ json expand(const json& v, const std::map<std::string, json>& fragments, std::ve
     return v;
 }
 
+// What each command does (CommandEffect, design/command-layer.md, Agent
+// permissions), by which an agent's mode decides it. Every command of the
+// table is listed here; one that is not is a fault of the build, so a new
+// command cannot go without a class. When in doubt a command is `change`,
+// which asks.
+using E = CommandEffect;
+const std::pair<const char*, CommandEffect> kEffects[] = {
+    {"app.info", E::read},
+    {"app.applets", E::read},
+    {"app.launch", E::change},  // changes the page the app shows, and may replace the open spec
+    {"catalog.list", E::read},
+    {"catalog.describe", E::read},
+    {"catalog.sample", E::read},
+    {"data.query", E::read},
+    {"data.import", E::change},
+    {"loader.list", E::read},
+    {"loader.describe", E::read},
+    {"loader.create", E::change},
+    {"loader.update", E::change},
+    {"loader.run", E::change},
+    {"loader.delete", E::change},
+    {"spec.new", E::change},  // replaces the open spec
+    {"spec.open", E::change},
+    {"spec.get", E::read},
+    {"spec.set_text", E::edit},
+    {"spec.validate", E::read},
+    {"source.add", E::edit},
+    {"source.patch", E::edit},
+    {"source.remove", E::edit},
+    {"panel.create", E::edit},
+    {"panel.patch", E::edit},
+    {"panel.remove", E::edit},
+    {"panel.render", E::read},
+    {"panel.data", E::read},
+    {"layout.place", E::edit},
+    {"layout.set", E::edit},
+    {"preview.begin", E::read},  // a proposal: the workspace does not change
+    {"preview.diff", E::read},
+    {"preview.commit", E::edit},
+    {"preview.discard", E::read},
+    {"applet.save", E::change},
+    {"applet.open", E::change},
+    {"applet.list", E::read},
+    {"review.status", E::read},
+    {"capture.frame", E::read},
+    {"history.undo", E::change},
+    {"history.redo", E::change},
+    {"history.list", E::read},
+};
+
 struct Table {
     std::vector<CommandDescriptor> commands;
     std::vector<std::string> errors;
@@ -956,6 +1006,18 @@ Table build() {
             t.commands.push_back(std::move(d));
         }
         for (auto& d : history_command_descriptors()) t.commands.push_back(std::move(d));
+        for (auto& d : t.commands) {
+            const auto* e = std::find_if(std::begin(kEffects), std::end(kEffects),
+                                         [&](const auto& x) { return d.name == x.first; });
+            if (e == std::end(kEffects))
+                t.errors.push_back(d.name + " has no effect: say whether it reads, edits the open spec or changes "
+                                            "something else (kEffects).");
+            else
+                d.effect = e->second;
+        }
+        for (const auto& e : kEffects)
+            if (std::none_of(t.commands.begin(), t.commands.end(), [&](const CommandDescriptor& d) { return d.name == e.first; }))
+                t.errors.push_back(std::string(e.first) + " has an effect but is not in the table.");
     } catch (const std::exception& e) {
         t.errors.push_back(std::string("The table could not be built: ") + e.what());
     }

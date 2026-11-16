@@ -655,3 +655,59 @@ TEST_CASE("api commands: the origin is the token's, whatever X-Caliper-Origin cl
     CHECK(app.server->issue_token("api").empty());
     CHECK(app.server->issue_token("ui").empty());
 }
+
+TEST_CASE("api commands: an agent's mode follows its token's client, and no request sets a mode or a rule") {
+    SessionApp app;
+    const uint16_t port = app.port();
+    app.session->set_review(caliper_builder::CommandOrigin::agent, true);
+    app.session->set_review(caliper_builder::CommandOrigin::mcp, true);
+    const std::string chat = app.server->issue_token("agent", "chat");
+    const std::string widget = app.server->issue_token("agent", "widget");
+    REQUIRE_FALSE(chat.empty());
+    CHECK(app.server->issue_token("agent", "Chat!").empty());
+    REQUIRE(command(port, "spec.new", {{"id", "dash"}})["ok"] == true);   // the person's token
+    auto post = [&](const std::string& token, const std::string& name, const json& args, const std::string& extra = {}) {
+        const std::string body = args.dump();
+        return send_request(port, "POST", "/v0/commands/" + name,
+                            "Authorization: Bearer " + token + "\r\nContent-Type: application/json\r\nContent-Length: " +
+                                std::to_string(body.size()) + "\r\n" + extra,
+                            body);
+    };
+    const json text = {{"id", "a"}, {"primitive", "text"}, {"options", {{"text", "A"}}}};
+
+    // The chat's token under Accept edits: the edit applies at once.
+    REQUIRE(app.session->set_agent_mode(caliper_builder::AgentPrincipal::chat, caliper_builder::AgentMode::accept_edits).ok());
+    json env = read_response(post(chat, "panel.create", text)).value();
+    INFO(env.dump());
+    CHECK(env["ok"] == true);
+    // The widget agent's token is not governed by it, even when the request claims the chat's client.
+    json w = text;
+    w["id"] = "b";
+    const int held = post(widget, "panel.create", w, "X-Caliper-Client: chat\r\n");
+    const std::string id = app.pending_approval("panel.create", "agent");
+    REQUIRE_FALSE(id.empty());
+    app.session->queue().deny(id);
+    CHECK(error_code(read_response(held).value()) == "command.denied");
+    // An argument cannot name a client either: the schema refuses it.
+    json named = text;
+    named["id"] = "c";
+    named["client"] = "chat";
+    CHECK(error_code(read_response(post(widget, "panel.create", named)).value()) == "command.invalid_args");
+
+    // mcp clients under Read only: refused with the plain message.
+    REQUIRE(app.session->set_agent_mode(caliper_builder::AgentPrincipal::mcp, caliper_builder::AgentMode::read_only).ok());
+    env = command(port, "panel.remove", {{"id", "a"}}, "mcp");
+    CHECK(error_code(env) == "command.denied");
+    CHECK(env["error"]["message"].get<std::string>().find("Read only") != std::string::npos);
+
+    // No command and no endpoint sets a mode or a rule, for any token.
+    for (const std::string& token : {chat, widget, kMcpToken, kToken}) {
+        CHECK(error_code(read_response(post(token, "permissions.set", {{"mode", "allow_all"}})).value()) ==
+              "command.unknown");
+        CHECK(read_response(send_request(port, "GET", "/v0/permissions", "Authorization: Bearer " + token + "\r\n"))
+                  .status == 404);
+    }
+    CHECK(app.session->agent_mode(caliper_builder::AgentPrincipal::chat) == caliper_builder::AgentMode::accept_edits);
+    CHECK(app.session->agent_mode(caliper_builder::AgentPrincipal::mcp) == caliper_builder::AgentMode::read_only);
+    CHECK(app.session->saved_agent_rules().empty());
+}
