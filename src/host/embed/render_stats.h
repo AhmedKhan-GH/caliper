@@ -118,4 +118,10 @@ inline bool frame_copies(CaliperCore* core, FrameCopies* out, bool reset_window)
     return true;
 }
 
+// The renderer's frame-time and GPU-time statistics (CALIPER_METAL_STATS on
+// Metal); false when the backend records none or they are off.
+inline bool frame_stats(CaliperCore* core, caliper_host::HostRenderer::FrameStats* out, bool reset_window) {
+    return core && core->renderer && out && core->renderer->frame_stats(out, reset_window);
+}
+
 }  // namespace caliper_stats

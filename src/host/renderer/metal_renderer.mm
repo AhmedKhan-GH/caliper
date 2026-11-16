@@ -30,10 +30,15 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <unordered_map>
 
 namespace caliper_host {
@@ -590,6 +595,7 @@ public:
                 [canvas_enc_ endEncoding];
                 if (canvas_mode_ == CANVAS_WINDOW && canvas_drawable_ != nil)
                     [canvas_cmd_ presentDrawable:canvas_drawable_];
+                stats_gpu_time(canvas_cmd_, kGpuFrame);
                 [canvas_cmd_ commit];
                 // Offscreen readback must observe THIS frame, so drain it (no
                 // swapchain to pace us). Window mode presents and rides on.
@@ -601,6 +607,7 @@ public:
             canvas_enc_ = nil;
             canvas_cmd_ = nil;
             canvas_drawable_ = nil;
+            stats_frame();
         }
     }
 
@@ -637,6 +644,7 @@ public:
 
     void canvas_shutdown() override {
         if (!canvas_ready_) return;
+        stats_print();
         ImGui_ImplMetal_Shutdown();
         [events_ removeAllObjects]; events_ = nil; event_values_.clear();
         depth_textures_.clear();
@@ -732,6 +740,7 @@ public:
                 [frame_enc_ endEncoding];
                 copy_for_capture();                // before present, in the same command buffer
                 [frame_cmd_ presentDrawable:drawable_];
+                stats_gpu_time(frame_cmd_, kGpuFrame);
                 [frame_cmd_ commit];
             } else if (frame_cmd_) {
                 [frame_cmd_ commit];               // nothing to draw; flush
@@ -739,6 +748,7 @@ public:
             frame_enc_ = nil;
             frame_cmd_ = nil;
             drawable_ = nil;
+            stats_frame();
         }
     }
 
@@ -820,6 +830,7 @@ public:
     }
 
     void shutdown() override {
+        stats_print();
         cap_buf_ = nil;
         cap_state_->store(kCapNone);
         ImGui_ImplMetal_Shutdown();
@@ -869,6 +880,7 @@ public:
              mipmapLevel:0
                withBytes:data
              bytesPerRow:(NSUInteger)w * 4];
+        stats_update("cpu-staged");   // the copy is counted by the caller that staged it
         return true;
     }
 
@@ -1145,10 +1157,12 @@ public:
                         vertexStart:0 vertexCount:(NSUInteger)count];
             }
             [enc endEncoding];
+            stats_gpu_time(cb, kGpuDraw);
             [cb commit];   // no CPU wait: same-queue_ commit order covers the frame's
                            // sampling; producer (MPS) writes are already CPU-drained
                            // before publish (the geometry.v1 sync contract).
             last_device_path_ = "points-imported";
+            stats_update(last_device_path_);
             last_geom_cb_ = cb;   // geom_draw_retain_last() target (never waited)
             return true;
         }
@@ -1518,8 +1532,10 @@ public:
                      instanceCount:(e.use_instance ? e.n_inst : 1)];
             }
             [re endEncoding];
+            stats_gpu_time(cb, kGpuDraw);
             [cb commit];
             last_device_path_ = "primitives-imported";
+            stats_update(last_device_path_);
             last_geom_cb_ = cb;   // geom_draw_retain_last() target (never waited)
             return true;
         }
@@ -1565,7 +1581,128 @@ public:
         }
     }
 
+    // CALIPER_METAL_STATS: the window's frame times, GPU times and updates by
+    // path (HostRenderer::FrameStats). false while the variable is unset.
+    bool frame_stats(FrameStats* out, bool reset_window) override {
+        if (!stats_on_ || out == nullptr) return false;
+        StatSamples gpu;
+        {
+            std::lock_guard<std::mutex> lk(gpu_times_->mu);
+            gpu = gpu_times_->window;
+            if (reset_window) gpu_times_->window = StatSamples{};
+        }
+        *out = FrameStats{};
+        out->frames = stats_window_.frames;
+        stats_fill(stats_window_.frame_ms, &out->frame_ms_p50, &out->frame_ms_p99, &out->frame_ms_max);
+        out->update_gpu_n = stats_fill(gpu.update_gpu_ms, &out->update_gpu_ms_p50, &out->update_gpu_ms_p99,
+                                       &out->update_gpu_ms_max);
+        out->draw_gpu_n = stats_fill(gpu.draw_gpu_ms, &out->draw_gpu_ms_p50, &out->draw_gpu_ms_p99,
+                                     &out->draw_gpu_ms_max);
+        out->frame_gpu_n = stats_fill(gpu.frame_gpu_ms, &out->frame_gpu_ms_p50, &out->frame_gpu_ms_p99,
+                                      &out->frame_gpu_ms_max);
+        for (const auto& kv : stats_window_.updates) out->updates.emplace_back(kv.first, kv.second);
+        if (reset_window) stats_window_ = StatSamples{};
+        return true;
+    }
+
 private:
+    // ---- CALIPER_METAL_STATS (docs/explanations/rendering.md, "Copy counters
+    // and frame statistics"): frame times, GPU times from the command buffers'
+    // GPUStartTime and GPUEndTime, and updates by path, over a window that
+    // frame_stats() resets and over the whole run, which shutdown prints in one
+    // line beside the renderer's copy count. Read once at construction; while
+    // unset nothing is recorded and no completion handler is added. ----
+    struct StatSamples {
+        std::vector<float> frame_ms, update_gpu_ms, draw_gpu_ms, frame_gpu_ms;
+        std::map<std::string, uint64_t> updates;
+        uint64_t frames = 0;
+    };
+    // GPU times arrive on Metal's completion threads: guarded, and shared with
+    // the handlers so that a late one never touches a destroyed renderer.
+    struct GpuTimes {
+        std::mutex mu;
+        StatSamples window, run;   // only the *_gpu_ms vectors are used
+    };
+    enum GpuKind { kGpuUpdate, kGpuDraw, kGpuFrame };
+    static constexpr size_t kStatsRunCap = size_t(1) << 20;   // samples kept per series for the run
+
+    static std::vector<float>& gpu_series(StatSamples& s, GpuKind kind) {
+        return kind == kGpuUpdate ? s.update_gpu_ms : kind == kGpuDraw ? s.draw_gpu_ms : s.frame_gpu_ms;
+    }
+    // Before the command buffer is committed.
+    void stats_gpu_time(id<MTLCommandBuffer> cb, GpuKind kind) {
+        if (!stats_on_ || cb == nil) return;
+        std::shared_ptr<GpuTimes> g = gpu_times_;
+        [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+            const double ms = (done.GPUEndTime - done.GPUStartTime) * 1000.0;
+            if (!(ms > 0.0)) return;   // unknown (0) or failed
+            std::lock_guard<std::mutex> lk(g->mu);
+            gpu_series(g->window, kind).push_back((float)ms);
+            std::vector<float>& run = gpu_series(g->run, kind);
+            if (run.size() < kStatsRunCap) run.push_back((float)ms);
+        }];
+    }
+    void stats_update(const char* path) {
+        if (!stats_on_ || path == nullptr) return;
+        ++stats_window_.updates[path];
+        ++stats_run_.updates[path];
+    }
+    // At the end of every frame (render, canvas_render).
+    void stats_frame() {
+        if (!stats_on_) return;
+        const auto now = std::chrono::steady_clock::now();
+        if (stats_last_frame_ != std::chrono::steady_clock::time_point{}) {
+            const float ms = std::chrono::duration<float, std::milli>(now - stats_last_frame_).count();
+            stats_window_.frame_ms.push_back(ms);
+            if (stats_run_.frame_ms.size() < kStatsRunCap) stats_run_.frame_ms.push_back(ms);
+        }
+        stats_last_frame_ = now;
+        ++stats_window_.frames;
+        ++stats_run_.frames;
+    }
+    // Nearest-rank p50, p99 and maximum of v (as CALIPER_VULKAN_STATS); the count.
+    static uint64_t stats_fill(std::vector<float> v, double* p50, double* p99, double* mx) {
+        if (v.empty()) { *p50 = *p99 = *mx = 0.0; return 0; }
+        std::sort(v.begin(), v.end());
+        const auto at = [&](double q) { return (double)v[(size_t)(q * (double)(v.size() - 1))]; };
+        *p50 = at(0.5);
+        *p99 = at(0.99);
+        *mx = v.back();
+        return v.size();
+    }
+    // The run's summary, once, at shutdown.
+    void stats_print() {
+        if (!stats_on_ || stats_printed_) return;
+        stats_printed_ = true;
+        StatSamples gpu;
+        {
+            std::lock_guard<std::mutex> lk(gpu_times_->mu);
+            gpu = gpu_times_->run;
+        }
+        double f50, f99, fmx, u50, u99, umx, d50, d99, dmx, g50, g99, gmx;
+        stats_fill(stats_run_.frame_ms, &f50, &f99, &fmx);
+        const uint64_t un = stats_fill(gpu.update_gpu_ms, &u50, &u99, &umx);
+        const uint64_t dn = stats_fill(gpu.draw_gpu_ms, &d50, &d99, &dmx);
+        const uint64_t gn = stats_fill(gpu.frame_gpu_ms, &g50, &g99, &gmx);
+        std::string upd;
+        for (const auto& kv : stats_run_.updates)
+            upd += " " + kv.first + " " + std::to_string(kv.second);
+        const CopyCount c = copy_count();
+        std::fprintf(stderr,
+                     "[metal] stats: %llu frames, ms p50 %.2f p99 %.2f max %.2f; updates%s; "
+                     "gpu ms update p50 %.3f p99 %.3f max %.3f (%llu), view draw p50 %.3f p99 %.3f "
+                     "max %.3f (%llu), frame p50 %.3f p99 %.3f max %.3f (%llu); copies %llu (%llu bytes)\n",
+                     (unsigned long long)stats_run_.frames, f50, f99, fmx, upd.empty() ? " none" : upd.c_str(),
+                     u50, u99, umx, (unsigned long long)un, d50, d99, dmx, (unsigned long long)dn, g50, g99,
+                     gmx, (unsigned long long)gn, (unsigned long long)c.copies, (unsigned long long)c.bytes);
+    }
+
+    const bool stats_on_ = std::getenv("CALIPER_METAL_STATS") != nullptr;
+    bool stats_printed_ = false;
+    StatSamples stats_window_, stats_run_;   // frame thread: frame times, updates, frames
+    std::shared_ptr<GpuTimes> gpu_times_ = std::make_shared<GpuTimes>();
+    std::chrono::steady_clock::time_point stats_last_frame_{};
+
     // Offscreen canvas target: renderable AND host-readable (unified memory).
     // RGBA8 so canvas_read_pixels hands back RGBA with no swizzle. Rebuilt on
     // resize; the old texture is ARC-released.
@@ -1792,10 +1929,12 @@ private:
         // retains src, lutbuf, and dst until the GPU retires it (default,
         // non-`unretained` encoding), so lifetime is free too. Test readbacks
         // retire the queue themselves (debug_readback_rgba8).
+        stats_gpu_time(cb, kGpuUpdate);
         [cb commit];
         last_update_cb_ = cb;   // device_update_wait() target (never waited here)
 
         last_device_path_ = imported ? "compute-imported" : "compute";
+        stats_update(last_device_path_);
         return true;
     }
 
@@ -1826,10 +1965,12 @@ private:
             destinationLevel:0
            destinationOrigin:MTLOriginMake(0, 0, 0)];
         [blit endEncoding];
+        stats_gpu_time(cb, kGpuUpdate);
         [cb commit];   // no CPU wait (M1): same-queue commit order + retention
         last_update_cb_ = cb;   // device_update_wait() target (never waited here)
 
         last_device_path_ = imported ? "blit-imported" : "blit";
+        stats_update(last_device_path_);
         return true;
     }
 

@@ -33,6 +33,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -1341,6 +1342,65 @@ TEST_CASE("live_views/copies: the browser's host import counts one copy per buff
     CHECK(v.last.copies == 2);
     caliper_live_views_shutdown(&core);
     CHECK(r->allocs.empty());
+}
+
+// Frame statistics (CALIPER_METAL_STATS, read when the renderer is made): frame
+// times, the GPU time of each update and of each view draw, and the updates by
+// path, over a window that a read resets. Without the variable nothing is kept.
+TEST_CASE("live_views/frame stats: CALIPER_METAL_STATS records frame and GPU times by path") {
+    {
+        Core off(64, 48);
+        if (!off.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << off.err());
+        caliper_host::HostRenderer::FrameStats fs;
+        CHECK_FALSE(caliper_stats::frame_stats(off.core, &fs, false));   // off by default
+    }
+    setenv("CALIPER_METAL_STATS", "1", 1);
+    {
+        Core c(320, 240);
+        REQUIRE(c.gpu);
+        id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
+        const int W = 64, H = 32, N = 300;
+        std::vector<float> r = ramp(W, H);
+        id<MTLBuffer> hb = shared_buffer(dev, 0, r.data(), r.size() * 4);
+        CaliperTensor th = tensor(ptr(hb), CALIPER_DT_F32, {H, W}, CALIPER_DEV_METAL);
+        CaliperLiveSnapshot sh = snap("hm", CALIPER_LIVE_KIND_HEATMAP, &th);
+        std::vector<float> pos(N * 3, 0.1f);
+        for (int i = 0; i < N; ++i) pos[3 * i] = (float)i / N - 0.5f;
+        id<MTLBuffer> pb = shared_buffer(dev, 0, pos.data(), pos.size() * 4);
+        CaliperTensor tp = tensor(ptr(pb), CALIPER_DT_F32, {N, 3}, CALIPER_DEV_METAL);
+        CaliperLiveSnapshot sp = snap("pts", CALIPER_LIVE_KIND_POINTS, &tp);
+        caliper_host::HostRenderer::FrameStats fs;
+        REQUIRE(caliper_stats::frame_stats(c.core, &fs, true));   // a fresh window
+        for (int i = 0; i < 5; ++i) {
+            REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &sh) == 1, c.err());
+            REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &sp) == 1, c.err());
+            c.frames(1);
+        }
+        CHECK(wait_read_done(c, "hm"));
+        // GPU times arrive on Metal's completion threads: give them a moment.
+        for (int i = 0; i < 200; ++i) {
+            REQUIRE(caliper_stats::frame_stats(c.core, &fs, false));
+            if (fs.update_gpu_n >= 5 && fs.draw_gpu_n >= 1 && fs.frame_gpu_n >= 4) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        REQUIRE(caliper_stats::frame_stats(c.core, &fs, true));
+        CHECK(fs.frames >= 5);
+        CHECK(fs.frame_ms_p50 > 0.0);
+        CHECK(fs.frame_ms_p99 >= fs.frame_ms_p50);
+        CHECK(fs.frame_ms_max >= fs.frame_ms_p99);
+        CHECK(fs.update_gpu_n >= 5);
+        CHECK(fs.update_gpu_ms_p50 > 0.0);
+        CHECK(fs.draw_gpu_n >= 1);
+        CHECK(fs.frame_gpu_n >= 4);
+        std::map<std::string, uint64_t> upd(fs.updates.begin(), fs.updates.end());
+        CHECK(upd["compute-imported"] >= 5);
+        CHECK(upd["primitives-imported"] >= 1);
+        // The read reset the window.
+        REQUIRE(caliper_stats::frame_stats(c.core, &fs, false));
+        CHECK(fs.frames == 0);
+        CHECK(fs.updates.empty());
+    }
+    unsetenv("CALIPER_METAL_STATS");
 }
 
 TEST_CASE("live_clock: producer stamps map into the viewer's clock from the fastest message") {

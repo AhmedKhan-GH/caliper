@@ -2,6 +2,8 @@
 #include <caliper/tensor.h>
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 struct GLFWwindow;
 
@@ -297,6 +299,27 @@ public:
         copy_count_.bytes += bytes;
     }
     CopyCount copy_count() const { return copy_count_; }
+
+    // Frame-time and GPU-time statistics, recorded only when switched on
+    // (CALIPER_METAL_STATS on Metal; the Vulkan backend prints its own
+    // CALIPER_VULKAN_STATS line). Over the window since the last reset:
+    // frame time is the interval between the ends of consecutive frames; GPU
+    // times come from the command buffers' GPU start and end times, for
+    // device texture updates, for view draws (geometry render targets) and
+    // for the frame's own pass. Percentiles are nearest-rank. false: this
+    // backend records none, or they are off.
+    struct FrameStats {
+        uint64_t frames = 0;
+        double   frame_ms_p50 = 0.0, frame_ms_p99 = 0.0, frame_ms_max = 0.0;
+        uint64_t update_gpu_n = 0;
+        double   update_gpu_ms_p50 = 0.0, update_gpu_ms_p99 = 0.0, update_gpu_ms_max = 0.0;
+        uint64_t draw_gpu_n = 0;
+        double   draw_gpu_ms_p50 = 0.0, draw_gpu_ms_p99 = 0.0, draw_gpu_ms_max = 0.0;
+        uint64_t frame_gpu_n = 0;
+        double   frame_gpu_ms_p50 = 0.0, frame_gpu_ms_p99 = 0.0, frame_gpu_ms_max = 0.0;
+        std::vector<std::pair<std::string, uint64_t>> updates;   // updates by path, sorted by path
+    };
+    virtual bool frame_stats(FrameStats* /*out*/, bool /*reset_window*/) { return false; }
 
 private:
     CopyCount copy_count_;
