@@ -36,9 +36,11 @@ Plan: [Platform candidates](platform-candidates.md).
 
 ## Phase 3: agent-built panels
 
-A command layer with undo, a catalog of every data source, a spec runtime with about six primitives (series, heatmap, points, mesh, table, histogram), a spec applet kind in the loader, and an MCP server so Claude Code or Codex can build and check panels.
+Someone drops data into the app, makes loaders and builds visuals from inside the app: by hand in a WYSIWYG builder pane, through an agent in the app's agent pane, or from an agent outside the app over MCP. Everything built is data, a spec or a loader. The parts are a command layer with undo, a journal and approvals; loaders that turn dropped files into sources; a catalog of every source; a spec format with seven primitives (series, heatmap, points, histogram, table, image, text) and its runtime; a spec applet kind in the loader; the MCP server `caliper-mcp`; and an agent pane with two backends, the user's own agent over ACP and the user's own Claude API key (BYOK).
 
-Plan: [Applet builder](applet-builder.md).
+Built as libraries and tools under `src/builder/`, with tests, and not yet wired into the app: the spec format and its validator, the loaders and their readers, the catalog, the command layer, the session that binds them, `caliper-mcp`, the ACP client and the BYOK sidecar `caliper-agent`. Still to do, in the app: the command endpoints of Caliper API, the spec runtime and the spec applet kind, drag and drop, the builder pane and the agent pane.
+
+Plan: [Builder overview](builder-overview.md), which links to the page of each part; [Applet builder](applet-builder.md) is the earlier proposal.
 
 ## Phase 4: the registry
 
@@ -122,7 +124,7 @@ Windows parity follows the macOS sprints; [Windows parity](windows-parity.md) gi
 
 ## Not now
 
-A WYSIWYG editor inside the app, an agent inside the app, Lua or WebAssembly applets, third-party native applets, and accounts. Accounts belong to Caliper Cloud, not the desktop app ([Data and Cloud](data-and-cloud.md)).
+Lua or WebAssembly applets, third-party native applets, and accounts. Accounts belong to Caliper Cloud, not the desktop app ([Data and Cloud](data-and-cloud.md)).
 
 Linux is not planned for now.
 
