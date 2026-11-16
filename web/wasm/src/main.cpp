@@ -216,12 +216,24 @@ void publish() {
             char b[640];
             std::snprintf(b, sizeof b,
                           "%s\"%s\":{\"area\":[%.9g,%.9g,%.9g,%.9g],\"window\":[%.17g,%.17g,%.17g,%.17g],"
-                          "\"yDown\":%s,\"selected\":%.0f,\"hover\":%lld,\"cols\":%d,\"follow\":%s,\"log\":%s}",
+                          "\"yDown\":%s,\"selected\":%.0f,\"hover\":%lld,\"cols\":%d,\"follow\":%s,\"log\":%s",
                           geo.size() > 1 ? "," : "", v->name.c_str(), v->geo_area[0], v->geo_area[1],
                           v->geo_area[2], v->geo_area[3], v->geo_window[0], v->geo_window[1], v->geo_window[2],
                           v->geo_window[3], v->geo_ydown ? "true" : "false", sel, (long long)v->hover_item, cols,
                           v->follow ? "true" : "false", v->log_y ? "true" : "false");
             geo += b;
+            // A points view: its camera, the rotate toggle, the depth cues and
+            // the box's tick labels (digits, signs, dots, e, = and separators).
+            if (v->kind == CALIPER_LIVE_KIND_POINTS) {
+                std::snprintf(b, sizeof b,
+                              ",\"dims\":%d,\"camera\":[%.9g,%.9g,%.9g,%.9g],\"rotate\":%s,\"cues\":%s,\"box\":\"",
+                              v->dims, v->cam.az, v->cam.el, v->cam.dist, v->cam.radius,
+                              v->auto_rotate ? "true" : "false", v->depth_cues ? "true" : "false");
+                geo += b;
+                if (v->dims == 3) geo += v->box_labels;
+                geo += "\"";
+            }
+            geo += "}";
         }
     geo += "}";
     put("geometry", geo.c_str());
@@ -289,8 +301,11 @@ void finish_check(Page::Check c) {
 // A points view with categorical labels: its render target read back, and at
 // the pixel under each of up to 256 sampled points that no other point covers
 // in front of it (later in draw order in 2-D, nearer in 3-D), the palette
-// colour of its label. Records mismatches and, in maxdiff, how many points were
-// compared. False when there is nothing to check yet.
+// colour of its label. With the depth cues of 3-D points, only points in front
+// of the camera's target are compared, which the fade leaves at full strength,
+// and a neighbour covers a point within the largest size the cues may draw.
+// Records mismatches and, in maxdiff, how many points were compared. False when
+// there is nothing to check yet.
 bool start_points_check(caliper_live_views::View& v) {
     if (!v.have_cur || !v.cur.pos_cpu || !v.cur.aux_cpu || !v.view_rid || v.dirty) return false;
     const int W = v.tex_w, H = v.tex_h;
@@ -303,18 +318,20 @@ bool start_points_check(caliper_live_views::View& v) {
             for (int k = 0; k < 4; ++k) acc += P[k * 4 + r] * V[c * 4 + k];
             M[c * 4 + r] = acc;
         }
-    struct Proj { float x, y, z; bool ok; };
+    struct Proj { float x, y, z, w; bool ok; };
     std::vector<Proj> pr(n);
     const float* pos = (const float*)v.cur.pos_cpu;
     for (uint64_t i = 0; i < n; ++i) {
         const float x = pos[3 * i], y = pos[3 * i + 1], z = pos[3 * i + 2];
         const float cw = M[3] * x + M[7] * y + M[11] * z + M[15];
-        if (!(cw > 1e-9f)) { pr[i] = {0, 0, 0, false}; continue; }
+        if (!(cw > 1e-9f)) { pr[i] = {0, 0, 0, 0, false}; continue; }
         pr[i] = {((M[0] * x + M[4] * y + M[8] * z + M[12]) / cw * 0.5f + 0.5f) * (float)W,
                  (0.5f - (M[1] * x + M[5] * y + M[9] * z + M[13]) / cw * 0.5f) * (float)H,
-                 (M[2] * x + M[6] * y + M[10] * z + M[14]) / cw, true};
+                 (M[2] * x + M[6] * y + M[10] * z + M[14]) / cw, cw, true};
     }
-    const float half = 0.5f * caliper_live_views::point_size_px(n, g.core->scale) + 1.0f;
+    const bool cues = v.dims == 3 && v.depth_cues;
+    const float grow = cues ? caliper_host::kPointAttenMax : 1.0f;
+    const float half = 0.5f * caliper_live_views::point_size_px(n, g.core->scale) * grow + 1.0f;
     struct Want { int px, py; uint32_t rgba; };
     auto wants = std::make_shared<std::vector<Want>>();
     const float* aux = (const float*)v.cur.aux_cpu;
@@ -324,6 +341,7 @@ bool start_points_check(caliper_live_views::View& v) {
     for (uint64_t i = 0; i < n && wants->size() < 256; i += stride) {
         const Proj& a = pr[i];
         if (!a.ok || a.x < 1 || a.y < 1 || a.x >= W - 1 || a.y >= H - 1 || a.z < 0 || a.z > 1) continue;
+        if (cues && a.w > v.cam.dist) continue;   // dimmed by the fade
         bool covered = false;
         for (uint64_t j = 0; j < n && !covered; ++j) {
             if (j == i || !pr[j].ok) continue;

@@ -25,13 +25,23 @@
 #include <imgui.h>
 #include <imgui_internal.h>          // ImGui::FindWindowByName: where a view's window is
 
+// The PNG writer for the screenshots of CALIPER_TEST_SHOTS, private to this file.
+#define STB_IMAGE_WRITE_STATIC
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#include "../third_party/stb/stb_image_write.h"
+#pragma clang diagnostic pop
+
 #import <Metal/Metal.h>
 
 #include <time.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <set>
@@ -157,6 +167,43 @@ bool has(const std::string& s, const char* sub) { return s.find(sub) != std::str
 // ---------------------------------------------------------------------------
 // The ground a points view clears its plot to (the window's background
 // colour): the most common pixel of its render target.
+// Whether p is one of the n colours scaled by a factor in [0.5, 1] with its
+// hue kept, as the depth fade draws a point behind the camera's target.
+static bool dimmed_of(uint32_t p, const uint32_t* colours, int n) {
+    const int r = (int)(p & 255), g = (int)((p >> 8) & 255), b = (int)((p >> 16) & 255);
+    for (int i = 0; i < n; ++i) {
+        const uint32_t c = colours[i];
+        const int cr = (int)(c & 255), cg = (int)((c >> 8) & 255), cb = (int)((c >> 16) & 255);
+        const int cm = std::max({cr, cg, cb});
+        if (cm == 0) continue;
+        const double f = (double)std::max({r, g, b}) / cm;
+        if (f < 0.49 || f > 1.0) continue;
+        if (std::fabs(r - cr * f) <= 1.5 && std::fabs(g - cg * f) <= 1.5 && std::fabs(b - cb * f) <= 1.5) return true;
+    }
+    return false;
+}
+
+// The 3-D scene of the screenshots (web/test/scene.ts makes the same points):
+// eight classes in clusters at different depths, placed by golden-ratio
+// sequences so that every renderer draws the same points.
+static void cluster_scene(int n, std::vector<float>* pos, std::vector<float>* lab) {
+    pos->resize((size_t)3 * n);
+    lab->resize((size_t)n);
+    auto frac = [](double x) { return x - std::floor(x); };
+    for (int i = 0; i < n; ++i) {
+        const int k = i % 8, j = i / 8;
+        const double a = 2.0 * M_PI * k / 8.0;
+        const double cx = 4.0 * std::cos(a), cy = 2.2 * ((k % 3) - 1), cz = 4.0 * std::sin(a);
+        const double u = frac((j + 0.37 * k) * 0.6180339887498949), v = frac((j + 0.53 * k) * 0.7548776662466927),
+                     w = frac((j + 0.29 * k) * 0.5698402909980532);
+        const double r = 0.95 * std::cbrt(u), th = 2.0 * M_PI * v, ph = std::acos(1.0 - 2.0 * w);
+        (*pos)[3 * i] = (float)(cx + r * std::sin(ph) * std::cos(th));
+        (*pos)[3 * i + 1] = (float)(cy + r * std::cos(ph));
+        (*pos)[3 * i + 2] = (float)(cz + r * std::sin(ph) * std::sin(th));
+        (*lab)[i] = (float)k;
+    }
+}
+
 static uint32_t ground_of(const std::vector<uint8_t>& px) {
     std::map<uint32_t, int> counts;
     for (size_t i = 0; i + 4 <= px.size(); i += 4) {
@@ -478,10 +525,175 @@ TEST_CASE("live_views/points: 3-D continuous colormap and CPU-staged payloads dr
         ++fg;
         in_lut += lut_colours.count(p) ? 1 : 0;
     }
-    MESSAGE("3-D cloud: " << fg << " foreground px, " << in_lut << " in the magma LUT");
+    // With the depth cues, the points behind the camera's target are dimmed
+    // with their hue kept: every lit pixel is a LUT colour, exact or scaled.
+    int dimmed = 0;
+    for (size_t i = 0; i < px.size(); i += 4) {
+        uint32_t p;
+        std::memcpy(&p, &px[i], 4);
+        if (p != bg && !lut_colours.count(p) && dimmed_of(p, lut, 256)) ++dimmed;
+    }
+    MESSAGE("3-D cloud: " << fg << " foreground px, " << in_lut << " exact and " << dimmed
+                          << " dimmed magma colours");
     CHECK(fg > 100);
-    CHECK(in_lut == fg);   // opaque points: every lit pixel is an exact LUT colour
+    CHECK(in_lut > 0);
+    CHECK(dimmed > 0);
+    CHECK(in_lut + dimmed == fg);   // opaque points: no other colour
+    // The depth cues off: every lit pixel is an exact LUT colour.
+    REQUIRE(caliper_live_views::set_toggle(c.core, "cloud", "depth", false));
+    c.frames(2);
+    px = readback(c.core, "cloud", vi.width, vi.height);
+    fg = in_lut = 0;
+    for (size_t i = 0; i < px.size(); i += 4) {
+        uint32_t p;
+        std::memcpy(&p, &px[i], 4);
+        if (p == bg) continue;
+        ++fg;
+        in_lut += lut_colours.count(p) ? 1 : 0;
+    }
+    CHECK(fg > 100);
+    CHECK(in_lut == fg);
     CHECK(caliper_core_live_view_read_done(c.core, "cloud") == 1);
+}
+
+TEST_CASE("live_views/points: 3-D points draw a box with ticks, nearer points larger and farther ones "
+          "dimmer with their hue kept, and turn with the rotate toggle until a drag") {
+    Core c(640, 480);
+    if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
+    // Eight anchors at the box's corners (label 2), one point in front of the
+    // centre as the default camera sees it (label 1) and one behind it (label 3).
+    std::vector<float> pos, lab;
+    for (int i = 0; i < 8; ++i) {
+        pos.insert(pos.end(), {(i & 1) ? 1.0f : -1.0f, (i & 2) ? 1.0f : -1.0f, (i & 4) ? 1.0f : -1.0f});
+        lab.push_back(2.0f);
+    }
+    pos.insert(pos.end(), {0.45f, 0.45f, 0.45f});
+    lab.push_back(1.0f);
+    pos.insert(pos.end(), {-0.45f, -0.45f, -0.45f});
+    lab.push_back(3.0f);
+    const int N = (int)lab.size();
+    CaliperTensor tp = tensor(pos.data(), CALIPER_DT_F32, {N, 3}, CALIPER_DEV_CPU);
+    CaliperTensor tl = tensor(lab.data(), CALIPER_DT_F32, {N}, CALIPER_DEV_CPU);
+    const float stats[8] = {0, 7, -1, 1, -1, 1, -1, 1};   // aux min/max, then the bbox
+    CaliperLiveSnapshot s = snap("box3", CALIPER_LIVE_KIND_POINTS, &tp);
+    s.aux = &tl;
+    s.label_count = 8;
+    s.stats = stats;
+    s.stats_count = 8;
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &s) == 1, c.err());
+    c.frames(4);
+    caliper_live_views::View* pv = caliper_live_views::find(c.core, "box3");
+    REQUIRE(pv != nullptr);
+    // The default three-quarter camera, as every renderer's.
+    CHECK(pv->cam.az == doctest::Approx(caliper_live_views::kCamAz));
+    CHECK(pv->cam.el == doctest::Approx(caliper_live_views::kCamEl));
+    // The box: tick labels on x, y and z.
+    MESSAGE("box labels: " << pv->box_labels);
+    CHECK(pv->box_labels.find("x=") != std::string::npos);
+    CHECK(pv->box_labels.find("y=") != std::string::npos);
+    CHECK(pv->box_labels.find("z=") != std::string::npos);
+    CHECK(pv->box_labels == "x=-1.0|-0.5|0.0|0.5|1.0;y=-1.0|-0.5|0.0|0.5|1.0;z=-1.0|-0.5|0.0|0.5|1.0");
+
+    CaliperLiveViewInfo vi = info(c.core, "box3");
+    std::vector<uint8_t> px = readback(c.core, "box3", vi.width, vi.height);
+    REQUIRE(!px.empty());
+    // The ground is transparent in 3-D (the box's back layer shows through it).
+    int ground = 0, near = 0, far_exact = 0, far_dim = 0;
+    uint32_t far_colour = 0;
+    const uint32_t red = caliper_live_views::kPalette[3];
+    for (size_t i = 0; i < px.size(); i += 4) {
+        uint32_t p;
+        std::memcpy(&p, &px[i], 4);
+        if ((p >> 24) == 0) ++ground;
+        if (p == caliper_live_views::kPalette[1]) ++near;
+        if (p == red) ++far_exact;
+        else if ((p >> 24) == 255 && dimmed_of(p, &red, 1)) { ++far_dim; far_colour = p; }
+    }
+    char hex[16];
+    std::snprintf(hex, sizeof hex, "%06x", (unsigned)(far_colour & 0xffffffu));
+    MESSAGE("near point " << near << " px, far point " << far_dim << " px dimmed to rgb " << hex << " (abgr)");
+    CHECK(ground > 0);
+    CHECK(near > 0);                 // in front of the target: full strength
+    CHECK(far_exact == 0);           // behind it: dimmed
+    CHECK(far_dim > 0);
+    CHECK(near > far_dim);           // and nearer is larger
+    // The depth cues off: the far point in its exact colour, the two the same size.
+    REQUIRE(caliper_live_views::set_toggle(c.core, "box3", "depth", false));
+    c.frames(2);
+    px = readback(c.core, "box3", vi.width, vi.height);
+    int near2 = 0, far2 = 0;
+    for (size_t i = 0; i < px.size(); i += 4) {
+        uint32_t p;
+        std::memcpy(&p, &px[i], 4);
+        near2 += p == caliper_live_views::kPalette[1];
+        far2 += p == red;
+    }
+    CHECK(far2 > 0);
+    CHECK(near2 == far2);
+    REQUIRE(caliper_live_views::set_toggle(c.core, "box3", "depth", true));
+
+    // The rotate toggle turns the view until a drag in it.
+    REQUIRE(caliper_live_views::set_toggle(c.core, "box3", "rotate", true));
+    const float az0 = pv->cam.az;
+    for (int i = 0; i < 6; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        c.frames(1);
+    }
+    CHECK(pv->cam.az > az0);
+    auto send = [&](CaliperEventType type, float x, float y, int down) {
+        CaliperInputEvent e{};
+        e.struct_size = sizeof e;
+        e.type = type;
+        e.x = x;
+        e.y = y;
+        e.button = 0;
+        e.down = down;
+        caliper_core_event(c.core, &e);
+    };
+    const float cx = pv->geo_area[0] + pv->geo_area[2] * 0.5f, cy = pv->geo_area[1] + pv->geo_area[3] * 0.5f;
+    send(CALIPER_EVENT_MOUSE_MOVE, cx, cy, 0);
+    c.frames(1);
+    send(CALIPER_EVENT_MOUSE_BUTTON, cx, cy, 1);
+    c.frames(1);
+    send(CALIPER_EVENT_MOUSE_MOVE, cx + 30.0f, cy, 0);
+    c.frames(1);
+    send(CALIPER_EVENT_MOUSE_BUTTON, cx + 30.0f, cy, 0);
+    c.frames(2);
+    CHECK_FALSE(pv->auto_rotate);
+    const float az1 = pv->cam.az;
+    c.frames(4);
+    CHECK(pv->cam.az == az1);
+}
+
+TEST_CASE("live_views/points: screenshots of a 3-D cluster scene from three angles (CALIPER_TEST_SHOTS)") {
+    const char* dir = std::getenv("CALIPER_TEST_SHOTS");
+    if (!dir || !*dir) return;
+    Core c(900, 640);
+    if (!c.gpu) CALIPER_SKIP_NO_GPU("no embeddable Metal GPU: " << c.err());
+    std::vector<float> pos, lab;
+    cluster_scene(3000, &pos, &lab);
+    CaliperTensor tp = tensor(pos.data(), CALIPER_DT_F32, {3000, 3}, CALIPER_DEV_CPU);
+    CaliperTensor tl = tensor(lab.data(), CALIPER_DT_F32, {3000}, CALIPER_DEV_CPU);
+    CaliperLiveSnapshot s = snap("clusters", CALIPER_LIVE_KIND_POINTS, &tp);
+    s.aux = &tl;
+    s.label_count = 8;
+    s.vmin = 0.0f;
+    s.vmax = 7.0f;
+    REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &s) == 1, c.err());
+    c.frames(4);
+    caliper_live_views::View* pv = caliper_live_views::find(c.core, "clusters");
+    REQUIRE(pv != nullptr);
+    const struct { const char* name; float daz, del; } angles[] = {{"a", 0.0f, 0.0f}, {"b", 1.6f, 0.0f}, {"c", -0.9f, 0.55f}};
+    for (const auto& a : angles) {
+        pv->cam.az = caliper_live_views::kCamAz + a.daz;
+        pv->cam.el = caliper_live_views::kCamEl + a.del;
+        pv->dirty = true;
+        c.frames(3);
+        std::vector<uint8_t> canvas(900 * 640 * 4);
+        REQUIRE(caliper_core_read_pixels(c.core, canvas.data(), 900 * 4) == 1);
+        const std::string file = std::string(dir) + "/native-" + a.name + ".png";
+        CHECK(stbi_write_png(file.c_str(), 900, 640, 4, canvas.data(), 900 * 4) != 0);
+    }
 }
 
 TEST_CASE("live_views/series: ring wrap copies the window oldest first") {
