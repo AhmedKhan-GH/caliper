@@ -52,7 +52,7 @@ cmake --build build
 | Target | What it gives |
 |---|---|
 | `caliper::sdk` | The headers under `include/caliper/`. It compiles nothing. |
-| `caliper::ui_stack` | A static library compiled inside the applet's build from the pinned sources, with position-independent code and the host's UI-stack definitions. It holds no GLFW, GLEW or ImGui backend, because an applet draws into the host's ImGui context and never talks to a window or a graphics API. |
+| `caliper::ui_stack` | A static library compiled inside the applet's build from the pinned sources, with position-independent code and the host's UI-stack definitions. It holds no GLFW or ImGui backend, because an applet draws into the host's ImGui context and never talks to a window or a graphics API. |
 | `caliper::sdk_testing` | The fixture host and doctest, for an applet's own tests without a window. See [C++ sugar](sugar.md). |
 
 The UI stack ships as sources rather than prebuilt libraries because a prebuilt static library would tie every applet to the compiler, standard library, build type and runtime library of the SDK build: on Windows a Release `/MD` library does not link into a Debug applet, and ImGuiFileDialog uses the STL. Compiling the sources with the applet's own toolchain avoids that, and the UI-stack hash names the commits, the `imconfig.h` and the definitions they were compiled from. The cost is a few seconds of compile time in each applet build folder.

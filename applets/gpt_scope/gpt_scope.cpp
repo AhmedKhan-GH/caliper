@@ -1416,7 +1416,7 @@ void GPTScopeApplet::draw_ui() {
                     ? "zero-copy (imported pool)"
                     : (probe_on_dev && !st->head_stage_cpu)
                           ? "GPU-resident (Metal, zero CPU staging)"
-                          : "CPU-staged (GL fallback)");
+                          : "CPU-staged");
         } else {
             ImGui::TextDisabled("waiting for the first probe…");
         }

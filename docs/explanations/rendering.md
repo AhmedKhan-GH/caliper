@@ -13,7 +13,7 @@ pixels without a CPU round trip, and what each path costs, is in [Zero-copy tens
 
 Applets render only through ImGui and ImPlot. A tensor crosses to the renderer as a [`CaliperTensor`](../references/tensor.md),
 and what comes back is an opaque `CaliperTextureId`. The host keeps a table from that id to the backend's own handle,
-so the id is never a raw OpenGL, Metal or Vulkan object. Because the contract hides the backend, swapping or adding
+so the id is never a raw Metal or Vulkan object. Because the contract hides the backend, swapping or adding
 one needs no epoch bump and no applet rebuild.
 
 The seam is `HostRenderer` (`src/host/renderer/host_renderer.h`), a host-internal interface the ABI never sees. Each
@@ -25,16 +25,37 @@ backend is its own translation unit, and the host picks one at startup.
 |---|---|---|---|
 | Metal | Default on macOS | A compute pass (f32 with a colormap) or a blit (u8) reads the MPS `MTLBuffer` in place | No CPU staging. Apple-only translation unit |
 | Vulkan with CUDA interop | Default on Windows | A CUDA kernel writes the Vulkan image directly; see [the update ladder](#the-update-ladder-on-windows) | Details in [Vulkan and CUDA on Windows](vulkan-cuda.md). Windows-only translation unit |
-| OpenGL 3.3 core | `CALIPER_RENDERER=gl`, or the only backend on other platforms | The bridge colormaps on the CPU and uploads the result | The fallback, loaded through GLEW. `tex_update_from_device` always returns `false` |
 | WebGPU | The browser views (`web/wasm`) | A WGSL compute pass colormaps the host-memory snapshot into the texture | Browser only; see [the WebGPU backend](#the-webgpu-backend) |
 
-`core_select_renderer()` in `src/host/core_lifecycle.cpp` picks the default: Metal on macOS and Vulkan on Windows.
-`CALIPER_RENDERER=gl` selects OpenGL on either. If the native backend fails to initialize (no driver, a remote
-desktop session), `src/main.cpp` recreates the window with OpenGL. Every backend produces the same pixels
-for the same tensor: the gfx test suite runs one matrix per backend and compares each readback byte for byte against
-the CPU reference conversion (`map_f32_to_rgba8` and `expand_u8_to_rgba8`). The suite has an environment for OpenGL,
-for Metal, for Vulkan (the CPU-staged rows, which run on any Vulkan driver) and for Vulkan with CUDA (the device
-rows, which run when the paired CUDA device is the only one in the machine).
+`core_select_renderer()` in `src/host/core_lifecycle.cpp` picks the platform's backend: Metal on macOS and Vulkan on
+Windows. There is no fallback renderer; [No fallback renderer](#no-fallback-renderer) says what happens where the
+backend cannot start. Every backend produces the same pixels for the same tensor: the gfx test suite runs one matrix
+per backend and compares each readback byte for byte against the CPU reference conversion (`map_f32_to_rgba8` and
+`expand_u8_to_rgba8`). The suite has an environment for Metal, for Vulkan (the CPU-staged rows, which run on any
+Vulkan driver) and for Vulkan with CUDA (the device rows, which run when the paired CUDA device is the only one in the
+machine).
+
+## No fallback renderer
+
+Caliper draws with Metal on macOS and Vulkan on Windows, and has no fallback renderer until the WebGPU fallback through
+Dawn lands. The OpenGL renderer that used to take over has been removed. Where the platform's renderer cannot start,
+for example on a virtual machine or in a remote session without a working GPU, or with a broken driver, Caliper
+refuses with one message that names the renderer and why it could not start:
+
+- **The app** prints `caliper: the Metal renderer could not start (<reason>), and there is no fallback renderer until
+  the WebGPU fallback through Dawn lands` (Vulkan on Windows) and exits with 1.
+- **`caliper shot`** prints `caliper: shot cannot draw offscreen: ` followed by the same text, and exits with 1.
+- **Caliper Embed** refuses to attach a canvas: `caliper_core_attach_canvas` returns 0 and `caliper_core_last_error`
+  holds `attach_canvas: ` followed by the same text. The core stays usable.
+
+The reason is the backend's own, such as `no Metal device` or `no Vulkan device with a graphics queue`; each start
+failure of the Metal and Vulkan backends records one (`HostRenderer::start_error()`). `CALIPER_RENDERER=gl`, which used
+to choose OpenGL, is refused before any renderer is made: the app and `shot` print
+`CALIPER_RENDERER=gl asks for the OpenGL renderer, which was removed; unset it, and Caliper draws with Metal on macOS
+and Vulkan on Windows`, after their prefixes, and `caliper_core_create` returns `NULL` and sends the same text to the
+embedder's log. Linux has no renderer at all, and each of the three says so. [Refusal messages](../references/refusals.md#renderer-refusals)
+lists the messages, and the test variable `CALIPER_TEST_RENDERER_FAIL=1` makes the start fail so that the refusals can
+be tested on a machine whose GPU works.
 
 ## The WebGPU backend
 
@@ -79,9 +100,9 @@ table.
 The renderer refuses the rest of the interface: device tensors and imported GPU memory (a browser has neither),
 geometry other than points, and the embed canvas. `web/wasm/README.md` gives the module's build, its size and its
 checks. The same backend is planned as the native fallback through Dawn, chosen only when the Metal or Vulkan
-renderer is unavailable, and the OpenGL fallback is to be retired once it covers that case.
+renderer is unavailable; until it lands there is [no fallback renderer](#no-fallback-renderer).
 
-The host's own screens carry no raw OpenGL either. The landing screen, the launch flow and the dashboards are drawn
+The host's own screens make no graphics API calls either. The landing screen, the launch flow and the dashboards are drawn
 with ImGui, so they look the same on every backend.
 
 ## The pixel-space contract
@@ -89,7 +110,8 @@ with ImGui, so they look the same on every backend.
 Applets never issue graphics calls. They describe what to draw in ImGui terms and hand tensors to the bridge, and the
 host owns the window, the contexts and every GPU call. A tensor becomes a texture through
 [`caliper.tensor_bridge.v1`](../references/service-tensor-bridge-v1.md). That service is the one place where the backend
-difference lives: device compute or blit on Metal and Vulkan, CPU staging on OpenGL. The applet runs the same code on
+difference lives: device compute or blit on Metal and Vulkan, and CPU staging for a CPU tensor or a renderer without
+the device path. The applet runs the same code on
 every backend.
 
 ## The update ladder on Windows

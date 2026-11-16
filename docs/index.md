@@ -2,7 +2,7 @@
 
 Caliper is a desktop application that draws live graphics from tensors that stay on the GPU. A host program owns the window, the renderer and the frame loop. Applets are shared libraries that the host loads at run time. An applet supplies ImGui user interface and compute, and talks to the host through a frozen C ABI and a set of named service tables.
 
-Tensors reach the screen without a trip through the CPU on the Metal and Vulkan paths. The OpenGL path is a fallback that stages tensor data through the CPU inside the host. A Python package can open a live session from a running training script and show it in the Caliper viewer.
+Tensors reach the screen without a trip through the CPU on the Metal and Vulkan paths. There is no fallback renderer yet: where neither Metal nor Vulkan starts, Caliper refuses with a message that says why. A Python package can open a live session from a running training script and show it in the Caliper viewer.
 
 Caliper is built from source. This version of the repository is host 0.6.0, SDK 0.1.0 and ABI epoch 2.
 
@@ -20,7 +20,6 @@ Caliper is built from source. This version of the repository is host 0.6.0, SDK 
 |---|---|---|
 | Metal and MPS | macOS default | Metal processes accepted MPS buffers directly, without host staging. |
 | Vulkan and CUDA | Windows default | A CUDA kernel writes a tensor update straight into the Vulkan image, with no copy. |
-| OpenGL 3.3 | Fallback on every platform | The host stages tensor uploads through the CPU. |
 
 [Rendering](explanations/rendering.md) explains how the host chooses a backend, and [`caliper.tensor_bridge.v1`](references/service-tensor-bridge-v1.md) lists what each backend accepts.
 

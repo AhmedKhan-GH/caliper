@@ -72,8 +72,7 @@ for removing the copy and the pass.
 
 ### CPU staging
 
-When no device path applies, the bridge converts on the CPU and uploads, as on OpenGL. This is also the path for CPU
-tensors.
+When no device path applies, the bridge converts on the CPU and uploads. This is also the path for CPU tensors.
 
 ### `alloc_shared` and imported allocations
 
@@ -81,7 +80,7 @@ tensors.
 buffer the tensor's memory and returns its CUDA pointer. The applet's kernels write the texture's memory directly, and
 the update runs the buffer-to-image pass with no copy. An optimally tiled image cannot alias linear buffer memory the
 way a unified-memory buffer can back a Metal texture, so zero-copy here means zero copies of the data, not zero GPU
-work. Without interop (OpenGL, or CUDA unpaired) `alloc_shared` falls back to a CPU vector.
+work. Without interop (CUDA unpaired) `alloc_shared` falls back to a CPU vector.
 
 An [imported allocation](zero-copy.md#imported-allocations) is a block the applet exported with
 `cuMemCreate` and a shareable handle. `import_allocation` imports it into Vulkan with `VkImportMemoryWin32HandleInfoKHR`
@@ -169,8 +168,9 @@ Each message prints once per process. Two environment variables change the backe
   `[vulkan] stats: N frames, ms p50 .. p99 .. max ..; updates direct .. buffer ..; kernel waits on a frame ..; retire
   blocks .. (.. ms total)`.
 
-`CALIPER_RENDERER=gl` selects the OpenGL backend. See [Verify on Windows hardware](../guides/verify-on-windows.md) for
-the full procedure.
+There is no fallback renderer: when Vulkan cannot start, the app refuses with a message that names the reason
+([No fallback renderer](rendering.md#no-fallback-renderer)). See [Verify on Windows hardware](../guides/verify-on-windows.md)
+for the full procedure.
 
 ## Measured costs
 

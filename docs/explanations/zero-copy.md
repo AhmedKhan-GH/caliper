@@ -57,13 +57,13 @@ of paths, the synchronization with semaphores and the measured costs are in
 The host stays free of the CUDA toolkit. It loads the CUDA driver API from `nvcuda.dll` at run time, and the Vulkan
 loader comes from the GPU driver.
 
-### The OpenGL fallback
+### CPU tensors
 
-On the OpenGL backend, or for any CPU tensor, the bridge stages through host memory. It colormaps on the CPU into an
-RGBA scratch buffer and uploads once with `glTexSubImage2D`. The ABI, the textures and the tests are the same, and
-only the copy that the other paths avoid is there. Windows also falls back to this path when Vulkan initialization or
-interop fails at run time. The applet code and the on-screen result are identical, and the cost is the copy. The worst
-case is a working slow path, never a broken one.
+For any CPU tensor, the bridge stages through host memory. It colormaps on the CPU into an RGBA scratch buffer and
+uploads it once. The ABI, the textures and the tests are the same, and only the copy that the other paths avoid is
+there. Windows also takes this path when Vulkan starts but CUDA interop does not pair. The applet code and the
+on-screen result are identical, and the cost is the copy. Where Metal or Vulkan cannot start at all, there is no
+fallback renderer: Caliper refuses with a message that says why ([No fallback renderer](rendering.md#no-fallback-renderer)).
 
 ## Data crossings per path
 
@@ -76,7 +76,7 @@ case is a working slow path, never a broken one.
 | Vulkan with CUDA, `alloc_shared` | 0 | 0 | The applet's kernels write the texture's own buffer; a Vulkan pass converts it |
 | Vulkan with CUDA, tensor in an exportable pool | 0 | 0 | The bridge imports the pool block once; the pass reads it at a byte offset |
 | Metal and Vulkan with CUDA, imported geometry (`geometry.v1` to `v1_3`) | 0 | 0 | Indexed triangles, lines and points are vertex-pulled in place from imported buffers |
-| OpenGL, or any CPU tensor | 1 (staging) | 0 | The bridge converts on the CPU and uploads |
+| Any CPU tensor | 1 (staging) | 0 | The bridge converts on the CPU and uploads |
 
 `alloc_shared` differs by platform. On Vulkan it returns a device-backed tensor, so a CUDA kernel can write the
 texture's memory in place. On Metal it returns a CPU vector in unified memory: that is zero-copy for CPU writers,
@@ -103,7 +103,7 @@ auto ct = caliper::adapters::stream_to_tensor(t, caps);
   path.
 
 Metal always grants the stream-ordered rung. Vulkan grants it when the device exports timeline semaphores; where it
-does not, the handoff stays synchronous and adapters keep draining. OpenGL does not grant it.
+does not, the handoff stays synchronous and adapters keep draining.
 
 Three findings shape the adapter:
 

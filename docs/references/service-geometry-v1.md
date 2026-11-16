@@ -19,12 +19,12 @@ and geometry sources are addressed as `(CaliperAllocId, byte offset)`, reusing t
 v1.2 import machinery, caches, gates, and lifecycle as-is.
 
 !!! info "Platform support"
-    **Points (`v1`):** Metal and Vulkan; on OpenGL the caps bit is unset. **Primitives
+    **Points (`v1`):** Metal and Vulkan. **Primitives
     (`v1_1`), textures on meshes (`v1_2`) and instanced transforms (`v1_3`):**
     Metal and Vulkan with CUDA, each byte-exact against one shared CPU reference
     (the gfx test suite runs the same rows on both backends). On a backend
-    without the path (the OpenGL fallback, or a host that doesn't vend the
-    revision) the matching **caps bit is unset and every entry point is inert**.
+    without the path (a host that doesn't vend the revision, or has no
+    renderer bound) the matching **caps bit is unset and every entry point is inert**.
     Ship your fallback (see the worked example below). That is the degradation
     ladder, not a bug: an absent capability means a CPU path, never a wrong
     image.
@@ -350,7 +350,7 @@ outside `[0, 1]` are defined by the clamp-to-edge sampler, not a gate.
 
 ### Honest ladder
 
-When caps bit 2 is absent (the GL fallback, or a host vending only v1/v1_1),
+When caps bit 2 is absent (a backend without the path, or a host vending only v1/v1_1),
 `has_textured()` is false and the textured path is inert — the applet ladders
 down to a per-vertex colour fallback (`COLORMAP` or `VERTEX_RGBA` over the same
 field, the field sampled at vertex resolution instead of texture resolution) and
@@ -395,7 +395,7 @@ LAMBERT-instanced draw are **refused whole-frame** (never silently mis-lit) by g
 (`1e-4f`) — part of the byte-exact contract, not a tunable. UNLIT instanced draws
 never touch normals and are unrestricted.
 
-**Honest ladder.** When caps bit 3 is absent (GL fallback, or a host vending only
+**Honest ladder.** When caps bit 3 is absent (a backend without the path, or a host vending only
 v1/v1_1/v1_2), `has_instanced()` is false and the instanced path is inert — the
 applet ladders down to a non-instanced fallback (draw the hero unit alone, or N
 plain draws) and says so; never a wrong image, never a false status line. The

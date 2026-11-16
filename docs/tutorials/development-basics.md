@@ -7,7 +7,7 @@ loop. Read this before [Your first applet](first-applet.md).
 ## The mental model
 
 When your applet runs, **the host is already a living program**: it owns the
-window, the renderer (Metal on macOS, Vulkan on Windows, GL fallback), the ImGui/ImPlot/ImPlot3D
+window, the renderer (Metal on macOS, Vulkan on Windows), the ImGui/ImPlot/ImPlot3D
 contexts, the job system, the metrics/artifacts/data stores, and the docked
 desktop. You write **one shared library** that the host loads at runtime.
 Your code contributes exactly three things:

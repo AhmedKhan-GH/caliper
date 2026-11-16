@@ -80,9 +80,9 @@ caliper_core_shutdown(core);
 
 | Function | Purpose |
 |---|---|
-| `caliper_core_create(desc)` | Create the core. Returns `NULL` for a second live core, an unsupported renderer or a renderer failure. |
+| `caliper_core_create(desc)` | Create the core. Returns `NULL` for a second live core, a renderer this platform does not build, or `CALIPER_RENDERER=gl`. The renderer starts at `attach_canvas`. |
 | `caliper_core_shutdown(core)` | Tear down in reverse order of create. Safe on `NULL`. |
-| `caliper_core_attach_canvas(core, native_view, desc)` | Attach the one canvas. `native_view` is ignored (pass `NULL`) for `CALIPER_CANVAS_OFFSCREEN`. Returns 1, or 0 with `last_error` set. |
+| `caliper_core_attach_canvas(core, native_view, desc)` | Attach the one canvas. `native_view` is ignored (pass `NULL`) for `CALIPER_CANVAS_OFFSCREEN`. Returns 1, or 0 with `last_error` set, which names the renderer and why when it could not start. |
 | `caliper_core_frame(core)` | Run one frame: clear, draw the loaded applet under the crash guard, composite and present or store. |
 | `caliper_core_event(core, event)` | Feed one input event. A no-op before a canvas exists. |
 | `caliper_core_load_applet(core, manifest_id)` | Load and launch an applet. Any loaded applet is torn down first, so reloading the same id restarts it and a failed launch leaves no applet loaded. An unknown id is refused without disturbing the running applet. |
@@ -158,9 +158,13 @@ those canvases and never paints applet pixels.
   running `embed_host` on each platform. Automated byte-exactness rides the
   offscreen `read_pixels` tests, which pass on both backends, and
   `caliper_embed_install` runs `embed_host` in its offscreen mode.
-- **GL is not an embed target.** GL's context ownership is GLFW-coupled. A core whose resolved
-  backend is GL refuses at `attach_canvas` with "embed requires Metal or
-  Vulkan".
+- **No fallback renderer.** The core embeds Metal on macOS and Vulkan on
+  Windows. When that renderer cannot start, `attach_canvas` returns 0 and
+  `last_error` names it and why, as in "attach_canvas: the Metal renderer could
+  not start (no Metal device), and there is no fallback renderer until the
+  WebGPU fallback through Dawn lands"; the core stays usable. With
+  `CALIPER_RENDERER=gl`, which asks for the removed OpenGL renderer,
+  `caliper_core_create` returns `NULL` ([Refusal messages](refusals.md#renderer-refusals)).
 
 All calls except the any-thread services below belong to one thread, the one
 that calls `caliper_core_frame`.
@@ -410,15 +414,15 @@ for 1.2 accepts 1.4, and a request for 2 refuses it. In the core build
 ### One shared library
 
 `libcaliper` is a static library over a dozen more: `caliper_host_lib`, the
-Metal or Vulkan backend, DuckDB, ImGui, ImPlot, ImPlot3D, ImGuiFileDialog,
-GLFW and GLEW. Shipping those archives would make every embedder link all of
+Metal or Vulkan backend, DuckDB, ImGui, ImPlot, ImPlot3D, ImGuiFileDialog and
+GLFW. Shipping those archives would make every embedder link all of
 them and would put their symbols beside the embedder's own copies of the same
 libraries. The package ships one shared library instead, `caliper_embed`,
 built from `libcaliper` and everything behind it, which exports only the C
 functions that `embed.h`, `live.h` and `live_views.h` declare (56 on macOS).
 Everything else stays inside it: an embedder keeps its own ImGui, GLFW or
 DuckDB apart from the core's, and the frameworks the core needs (Metal,
-QuartzCore, Cocoa, IOKit, CoreVideo, OpenGL) are load commands of the library
+QuartzCore, Cocoa, IOKit, CoreVideo) are load commands of the library
 rather than link items of the embedder.
 
 `cmake/CaliperEmbed.cmake` reads the export list from the three headers at
@@ -539,7 +543,7 @@ sets `CALIPER_BUILD_PYTHON` ON and `CALIPER_WITH_TORCH`,
 | List | Contents | Linked by |
 |---|---|---|
 | `CALIPER_DEPENDENCY_LIBS` | Everything the `caliper` exe and the gfx and export tests link: the UI chrome widgets (imgui-node-editor, ImGuiColorTextEdit, ImTerm), DuckDB and the rest. `TORCH_LIBRARIES` is no longer appended in either branch; applets and torch tests link `"${TORCH_LIBRARIES}"` themselves. | the `caliper` exe |
-| `CALIPER_CORE_LIBS` | Only what the sources of `libcaliper` and the GL/Metal backends need: `OpenGL::GL`, `-framework Cocoa`, `-framework IOKit`, `-framework CoreVideo` (Apple), `libglew_static`, `glfw`. | libcaliper, `PRIVATE` |
+| `CALIPER_CORE_LIBS` | Only what the sources of `libcaliper` and the Metal and Vulkan backends need: `-framework Cocoa`, `-framework IOKit`, `-framework CoreVideo` (Apple), `glfw` and `imgui_backends`, which holds ImGui's GLFW backend. | libcaliper, `PRIVATE` |
 
 The split matters because `libcaliper` is a static library: its private
 dependencies still propagate to every embedder as link-only items, so the full

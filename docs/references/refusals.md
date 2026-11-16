@@ -145,3 +145,22 @@ C++ exception, and a restart of Caliper when it was a signal (see
     caused it. Restarts are logged as `restart` and `restart failed`. The
     landing screen reads the statuses every frame, so a mid-session quarantine
     shows up as soon as the host returns to it.
+
+## Renderer refusals
+
+Caliper draws with Metal on macOS and Vulkan on Windows and has no fallback renderer until the WebGPU fallback through
+Dawn lands ([No fallback renderer](../explanations/rendering.md#no-fallback-renderer)). These refusals come before any
+applet loads.
+
+| Message template | Who prints it | When it fires |
+|------------------|---------------|---------------|
+| `caliper: the {renderer} renderer could not start ({reason}), and there is no fallback renderer until the WebGPU fallback through Dawn lands` | The app (`caliper`, `caliper dev`) on standard error, then exit code 1 | The platform's renderer failed to start on its window. |
+| `caliper: shot cannot draw offscreen: the {renderer} renderer could not start ({reason}), and there is no fallback renderer until the WebGPU fallback through Dawn lands` | `caliper shot`, then exit code 1 | The renderer failed to make its offscreen canvas. |
+| `attach_canvas: the {renderer} renderer could not start ({reason}), and there is no fallback renderer until the WebGPU fallback through Dawn lands` | Caliper Embed, as `caliper_core_last_error` after `caliper_core_attach_canvas` returns 0 | The renderer failed to make the canvas. The core stays usable. |
+| `CALIPER_RENDERER=gl asks for the OpenGL renderer, which was removed; unset it, and Caliper draws with Metal on macOS and Vulkan on Windows` | The app and `shot` after their prefixes (`caliper: `, `caliper: shot cannot draw offscreen: `), exit code 1; Caliper Embed after `caliper_core_create: `, in the embedder's log, and `caliper_core_create` returns `NULL` | `CALIPER_RENDERER=gl` is set. |
+| `this platform has no renderer: Caliper draws with Metal on macOS and Vulkan on Windows` | The same three, with the same prefixes | Neither Metal nor Vulkan is built, as on Linux. |
+
+`{renderer}` is `Metal` or `Vulkan`. `{reason}` is the backend's own, such as `no Metal device`, `no Vulkan loader`,
+`no Vulkan device with a graphics queue` or `ImGui's Metal backend did not start`, and is
+`CALIPER_TEST_RENDERER_FAIL=1 made its start fail` when that test variable forces the failure. When the app cannot
+create its window, the reason is `GLFW could not create a window`.

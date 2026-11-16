@@ -54,19 +54,20 @@ renderer reports says which path ran.
 |---|---|---|
 | Metal (macOS default) | A device compute pass (f32 with a colormap) or a blit (u8) reads the MPS `MTLBuffer` in place | None |
 | Vulkan with CUDA (Windows default) | First, a CUDA kernel that reads the tensor and writes the Vulkan image (`direct-cmap`, `direct-blit`). Then, a copy into a shared buffer and a Vulkan pass (`compute`, `blit`). Then, CPU staging | None on the first two rungs; no in-VRAM copy on the direct rung |
-| OpenGL (`CALIPER_RENDERER=gl`) | The bridge converts on the CPU and uploads | The bridge stages; the applet never touches a pixel. `tex_update_from_device` always returns `false` |
+| Any CPU tensor | The bridge converts on the CPU and uploads | The bridge stages; the applet never touches a pixel |
 
 Each path is tested by uploading known tensors, reading the texture back and comparing byte for byte against the CPU
-reference. The `caliper_gfx_tests` suite has an environment per backend: OpenGL, Metal, Vulkan (CPU-staged rows) and
-Vulkan with CUDA (device rows). The `compute` path is exact against `map_f32_to_rgba8` at ragged sizes such as 4 by 4,
+reference. The `caliper_gfx_tests` suite has an environment per backend: Metal, Vulkan (CPU-staged rows) and Vulkan
+with CUDA (device rows). The `compute` path is exact against `map_f32_to_rgba8` at ragged sizes such as 4 by 4,
 5 by 3 and 17 by 9, and the `blit` path against `expand_u8_to_rgba8`. The Windows ladder is described in
 [Vulkan and CUDA on Windows](../explanations/vulkan-cuda.md).
 
 !!! note "One tensor cannot be both"
-    A single tensor is either zero-copy on Metal or accepted on OpenGL, not both. The OpenGL bridge's active device is
-    CPU, so it rejects an MPS tensor as a foreign device. The exemplar hands the training-device tensor first. If the
-    create returns `0`, as on a non-Metal renderer, it relocates the tensor to CPU and the bridge stages it. The
-    applet does no pixel work on either path. The bridge's own accept or reject drives the choice.
+    A single tensor is either zero-copy on the device path or staged from the CPU, not both. A bridge whose renderer
+    has no device path for the tensor, such as Vulkan without paired CUDA interop, has CPU as its active device, so it
+    rejects a device tensor as a foreign device. The exemplar hands the training-device tensor first. If the create
+    returns `0`, it relocates the tensor to CPU and the bridge stages it. The applet does no pixel work on either path.
+    The bridge's own accept or reject drives the choice.
 
 ### Lifecycle: create once, update after
 
@@ -95,14 +96,14 @@ transition. Free it with `free_shared`. What it returns depends on the backend:
   memory in place, and the update runs the buffer-to-image pass with no copy.
 - **Metal** returns a CPU vector in unified memory. That is zero-copy for CPU writers. A device writer still goes
   through `update_texture`. The Metal `alloc_shared` is not device-backed.
-- **OpenGL**, and Vulkan without paired interop, return a CPU vector.
+- **Vulkan without paired interop** returns a CPU vector.
 
 ### `CaliperTextureId` lifetime
 
 `CaliperTextureId` is a `uint64_t`, opaque to applets: `0` is invalid, and it is compare-only. Never interpret or
 dereference it, because its representation is internal to the backend. Its value can be cast directly to `ImTextureID`
-for `ImGui::Image`, because the host hands out the ImGui-compatible handle for each backend: the texture name on
-OpenGL, the `id<MTLTexture>` pointer on Metal and the descriptor set on Vulkan. Ids from `texture_from_tensor*` are
+for `ImGui::Image`, because the host hands out the ImGui-compatible handle for each backend: the `id<MTLTexture>`
+pointer on Metal and the descriptor set on Vulkan. Ids from `texture_from_tensor*` are
 freed with `release_texture`, and ids from `alloc_shared` with `free_shared`.
 
 ### Sync model

@@ -135,7 +135,8 @@ pixels. Display never throttles training, training never blocks display.
 Rules that bite: MPS tensors must be `contiguous()` with
 `storage_offset() == 0` (fresh results of GPU ops are; views may not be —
 see [adapters](../references/adapters.md)). And degrade gracefully — if the
-bridge rejects device tensors (GL fallback), flip an atomic so the worker
+bridge rejects device tensors (a renderer without the device path, such as
+Vulkan without paired CUDA interop), flip an atomic so the worker
 hands over CPU tensors from the next step:
 
 ```cpp

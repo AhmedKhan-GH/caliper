@@ -31,9 +31,8 @@ The `hello` applet and `throwing_applet` are built first, because the loader tes
 
 `caliper_gfx_tests` (`tests/gfx/gfx_main.cpp`) checks the path from a tensor to a texture and the geometry path. It opens a hidden window, so it needs a graphical session. Every case reads the texture back from the GPU and compares it byte for byte with a CPU reference, which is the same reference the staged upload path uses.
 
-The suite runs once per backend that the platform offers:
+The suite runs on the backend that the platform offers:
 
-- OpenGL runs everywhere, as the fallback.
 - Metal runs on macOS when a Metal device is present. It also covers the device paths, built from raw `MTLBuffer` allocations: the compute path for `f32` with a lookup table, the blit path for `u8`, stream-ordered updates, imported allocations and their gates, and the geometry service.
 - Vulkan runs on Windows with the CPU-staged path. Cases that need CUDA hardware run only when a CUDA device is present.
 
@@ -76,6 +75,8 @@ The app itself takes the same mechanism with `--hidden` or `CALIPER_HIDDEN=1` ([
 The entries named `caliper_cli_*` (label `cli`) run the `caliper` executable as a user runs it, through `tests/cli_run.cmake`: each checks the exit code and what the run printed. They run with `CALIPER_APPLET_PATH` unset, the user applets folder in the build tree, and `CALIPER_DATA_DIR` on a folder of their own that must still not exist after the run, which proves that the read-only subcommands create nothing in the app-data folder. `caliper_cli_new_builds` (labels `cli` and `sdk`) configures, builds and tests the project that `caliper new` writes against this build's installed SDK.
 
 `caliper_cli_shot_temp` and `caliper_cli_shot_data_dir` (labels `cli` and `shot`) run [`caliper shot`](../references/cli.md#caliper-shot) on the `hello` fixture through `tests/shot_run.cmake`, and `caliper_png_check` checks that the image has the requested size and is not one flat colour. The first runs without `CALIPER_DATA_DIR` and checks that the temporary data folder is gone afterwards and that nothing was created under `HOME`; the second runs with it and checks that the applet's data folder is there and that no `imgui.ini` was written. Without a GPU both are reported as skipped, unless `CALIPER_REQUIRE_GPU=1` makes that a failure.
+
+Caliper has no fallback renderer ([No fallback renderer](rendering.md#no-fallback-renderer)), and four entries check the refusals where the renderer cannot start, on any machine and with no GPU: `caliper_cli_app_no_renderer` and `caliper_cli_shot_no_renderer` run the app hidden and `caliper shot` with the test variable `CALIPER_TEST_RENDERER_FAIL=1`, which makes the Metal or Vulkan renderer's start fail, and `caliper_cli_app_renderer_gl` and `caliper_cli_shot_renderer_gl` run them with `CALIPER_RENDERER=gl`. Each checks the exact message and exit code 1, and that the run left at most the empty data folder. The `embed/refusal` cases of `caliper_embed_tests` check the same for Caliper Embed: `caliper_core_attach_canvas` returns 0 with the message in `caliper_core_last_error`, and `caliper_core_create` refuses `CALIPER_RENDERER=gl` with the message in the embedder's log.
 
 ## Where the tests keep data
 

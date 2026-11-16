@@ -63,7 +63,7 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 
 | Variable | What it does | Read in |
 |---|---|---|
-| `CALIPER_RENDERER=gl` | Selects the OpenGL fallback instead of Metal or Vulkan. Any other value leaves the platform default. An embedding host that asks for the default renderer honours it too. | `src/host/core_lifecycle.cpp` |
+| `CALIPER_RENDERER=gl` | Refused: the OpenGL renderer it chose was removed. The app and `caliper shot` exit with 1, and an embedding host that asks for the default renderer gets no core ([No fallback renderer](../explanations/rendering.md#no-fallback-renderer)). Any other value leaves the platform's renderer, Metal on macOS and Vulkan on Windows. | `src/host/core_lifecycle.cpp` |
 | `CALIPER_VULKAN_NO_DIRECT` | Set to any value, it turns off the [direct path](../explanations/vulkan-cuda.md#the-direct-image-path), where a CUDA kernel writes the Vulkan image, so updates use the buffer path. | `src/host/renderer/vulkan_renderer.cpp` |
 | `CALIPER_VULKAN_STATS` | Set to any value, the Vulkan renderer prints one summary line at shutdown with frame times and the count of direct and buffer updates. | `src/host/renderer/vulkan_renderer.cpp` |
 | `CALIPER_METAL_STATS` | Set to any value, the Metal renderer records frame times, the GPU time of each update, view draw and frame, and the updates by path, and prints one summary line at shutdown with its copy count ([Copy counters and frame statistics](../explanations/rendering.md#copy-counters-and-frame-statistics)). `caliper-viewer --stats` sets it. | `src/host/renderer/metal_renderer.mm` |
@@ -89,6 +89,7 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 |---|---|---|
 | `CALIPER_REQUIRE_GPU=1` | A skip for want of a GPU becomes a failure. | `tests/gpu_skip.h` |
 | `CALIPER_TEST_FORCE_NO_GPU=1` | The device suites behave as if there were no GPU. | `tests/gpu_skip.h` |
+| `CALIPER_TEST_RENDERER_FAIL=1` | The Metal or Vulkan renderer's start (`init` or `canvas_init`) fails before it touches a device, with the reason `CALIPER_TEST_RENDERER_FAIL=1 made its start fail`, so the refusals of the app, `caliper shot` and Caliper Embed can be tested on a machine whose GPU works. | `src/host/renderer/host_renderer.h` |
 | `CALIPER_TEST_APPLET_DIR=<folder>` | Runs the headless acceptance case of `caliper_tests` on the applets in that folder: each is negotiated, opened, checked, created and destroyed with the capabilities the `caliper` executable advertises. Without it the case is skipped. | `tests/test_applet_acceptance.cpp` |
 | `CALIPER_THROWING_WHERE` | Chooses where the test applet fails: `create`, `initialize`, `frame`, `frame-fault`, `frame-imgui`, `frame-imgui-fault`, `cleanup`, `job`, `job-fault` or `none`. The crash-guard and UI-recovery tests set it. | `tests/fixtures/throwing_applet/throwing_applet.cpp` |
 | `CALIPER_GFX_CAPTURE_DIR=<folder>` | `caliper_gfx_tests` writes PNG captures of the graphics layer's rows, the colormap rows, the scene core's rows and the scene view's rows to that folder (for example `layer_quad.png`, `colormap-keys-texture-ramp.png`, `first-scene-surface.png` and `scene-view-row.png`). Without it nothing is written. | `tests/gfx/gfx_layer.cpp`, `tests/gfx/gfx_colormap.cpp`, `tests/gfx/gfx_scene.cpp`, `tests/gfx/gfx_scene_view.cpp` |
@@ -132,8 +133,8 @@ The `caliper` executable writes these to stderr and, for the renderer, to the Ac
 
 | Line | Meaning |
 |---|---|
-| `[renderer] metal`, `[renderer] vulkan` or `[renderer] gl` | The backend that initialised. The Activity pane shows the same name as a `renderer` entry. |
-| `[renderer] <name> init failed; falling back to gl` | The default backend failed to initialise, for example when there is no Vulkan driver, and the host recreated its window for OpenGL. |
+| `[renderer] metal` or `[renderer] vulkan` | The backend that initialised. The Activity pane shows the same name as a `renderer` entry. |
+| `caliper: the Vulkan renderer could not start (<reason>), and there is no fallback renderer until the WebGPU fallback through Dawn lands` | The platform's backend failed to start, for example when there is no Vulkan driver, and the app exits with 1 (Metal on macOS). [No fallback renderer](../explanations/rendering.md#no-fallback-renderer) gives the other refusals. |
 | `[autolaunch] <id>` | `CALIPER_AUTOLAUNCH` matched an applet and launched it. |
 
 On Windows the Vulkan renderer reports how each tensor update travelled. Each distinct message prints once, as `[vulkan] device path: <message>`:

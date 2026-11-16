@@ -19,7 +19,7 @@ A newer push to the same branch cancels a Build run still in progress.
 **macOS** runs on `macos-15` (Apple Silicon). It uses the arm64 libtorch archive and is the lane where the Metal backend and the MPS test cases are exercised. `scripts/check_macos_min.py` fails the lane unless the `caliper` executable, the viewer, the embed library and everything built against the installed packages say macOS 14.0 as their minimum, and the Browser views workflow checks the wheel's platform tag and the extensions in it the same way.
 
 **Windows** runs on `windows-latest` with MSVC. The setup is CPU only:
-- libtorch is the CPU archive, and GLEW the prebuilt zip;
+- libtorch is the CPU archive;
 - Vulkan comes through volk, with no SDK, and glslang is fetched and built in the tree;
 - `USE_CUDA` falls back when no CUDA toolkit is found.
 
@@ -32,6 +32,7 @@ Each lane runs these steps:
 4. **Build** with `cmake --build cmake-build-release --parallel`. The core build compiles no applets.
 5. **Test** with `ctest --test-dir cmake-build-release --output-on-failure --timeout 600`.
    - The GPU suites (gfx, export, embed, torch) skip when the runner has no usable device, and ctest reports them as skipped.
+   - The Windows runner has no GPU, and Caliper has no fallback renderer until the WebGPU fallback through Dawn lands, so every test there that needs a renderer skips and says why: `caliper_gfx_tests` (`no Vulkan ICD`), the drawing cases of `caliper_export_tests` and `caliper_embed_tests`, `caliper_cli_shot_temp` and `caliper_cli_shot_data_dir` (`run skipped: no GPU`), and the offscreen run of `caliper_embed_install` (`headless run skipped: no GPU`). The refusal tests (`caliper_cli_app_no_renderer`, `caliper_cli_shot_no_renderer`, `caliper_cli_app_renderer_gl`, `caliper_cli_shot_renderer_gl` and the `embed/refusal` cases) need no GPU and run on both lanes.
    - Set `CALIPER_REQUIRE_GPU=1` in a lane that must have a GPU, to turn those skips into failures.
 6. **On failure,** upload `Testing/Temporary/LastTest.log` as an artifact.
 7. **Build the applets against the installed SDK** with `scripts/build_applets_against_sdk.sh`, which installs the SDK from the core build and builds `examples/hello`, `examples/sine_scope` and every scope in its own build folder, with only `-DCMAKE_PREFIX_PATH` pointing at the SDK, as a developer outside the repository would. The Windows lane skips `embed_scope` and `gpt_scope`, because they need curl and zlib, which Windows provides only inside the core build.
@@ -46,7 +47,7 @@ The web package's Playwright tests run in two steps on a hosted macOS runner wit
 
 ## Caches
 
-**libtorch and GLEW.** Cached with `actions/cache`. The key includes `LIBTORCH_VERSION`, set at the top of `build.yml`. That version must match `PYTORCH_VERSION` in `cmake/Dependencies.cmake`, so bumping one without the other misses the cache instead of reusing a stale archive.
+**libtorch.** Cached with `actions/cache`. The key includes `LIBTORCH_VERSION`, set at the top of `build.yml`. That version must match `PYTORCH_VERSION` in `cmake/Dependencies.cmake`, so bumping one without the other misses the cache instead of reusing a stale archive.
 
 **Compiled objects.** Every compile runs through [sccache](https://github.com/mozilla/sccache), which stores each object in the GitHub Actions cache (`SCCACHE_GHA_ENABLED`). A run recompiles only translation units whose preprocessed source, flags or compiler changed.
 

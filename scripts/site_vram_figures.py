@@ -154,8 +154,8 @@ def nvidia():
     text(123, 272, "SYSTEM RAM", "t", "middle")
     for k in range(3):
         rect(46, 286 + k * 36, 154, 26, "memdie", 2)
-    text(44, 420, "used only by the OpenGL", "n")
-    text(44, 436, "fallback, which stages here", "n")
+    text(44, 420, "where a CPU tensor is", "n")
+    text(44, 436, "staged before its upload", "n")
     # PCIe: the lanes from the root complex to the GPU's edge.
     bus(214, 330, 205, 8, 3, "lane")
     text(257, 194, "PCIE", "k", "middle")

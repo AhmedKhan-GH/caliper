@@ -32,7 +32,7 @@ The terms below are used across these pages with one meaning each.
 
 **UI stack.** The pinned ImGui, ImPlot, ImPlot3D and ImGuiFileDialog sources that the host and every applet are built against. The exact versions are part of the ABI epoch, because applets write raw ImGui.
 
-**HostRenderer.** The host's internal rendering interface, with Metal, Vulkan and OpenGL implementations behind it. Applets never see it. See [Rendering](../explanations/rendering.md).
+**HostRenderer.** The host's internal rendering interface, with Metal, Vulkan and WebGPU implementations behind it. Applets never see it. See [Rendering](../explanations/rendering.md).
 
 **`CaliperTextureId`.** An opaque 64-bit texture handle returned by the tensor bridge and the geometry service. It converts to an `ImTextureID` and is never a raw graphics handle.
 
