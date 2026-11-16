@@ -98,6 +98,12 @@ TEST_CASE("agent settings app: a changed setting ends the widget agent at once, 
         std::printf("caliper_agent_settings_app skipped: needs CALIPER_TEST_CALIPER_EXE\n");
         return;
     }
+    if (std::string(CALIPER_BUILDER_TEST_PYTHON).empty()) {
+        // Not a skip of the whole entry: the other cases still count.
+        std::printf("caliper_agent_settings_app: the settings-change case is not run: it needs "
+                    "CALIPER_BUILDER_TEST_PYTHON for the agent the second ⌘K makes\n");
+        return;
+    }
     const char* offline = std::getenv("CALIPER_AGENT_OFFLINE");
     REQUIRE_MESSAGE((offline && std::string(offline) == "1"), "run this test through ctest, which sets the switch");
     const std::string root = fresh_dir("agent-settings-change");
