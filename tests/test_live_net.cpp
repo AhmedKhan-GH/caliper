@@ -22,6 +22,8 @@
 #include "live/live_controls.h"
 #include "live/live_ui_driver.h"
 #include "live/live_net_source.h"      // parse_stream_url
+#include "live/live_scene.h"           // the scene view (protocol 3.2 draft)
+#include "live/live_views_scene.h"
 #include "live/live_views_state.h"     // kPalette (the exact categorical colours)
 #include "net/wire.h"
 #include "net/ws.h"
@@ -168,6 +170,36 @@ public:
         s.flags = flags;
         s.stats = std::move(stats);
         send(s);
+    }
+
+    // "world" (add_scene): a scene of the protocol 3.2 draft, 3-D with +z up.
+    void add_scene() {
+        Json v = Json::object();
+        v.set("id", 7);
+        v.set("name", "world");
+        v.set("kind", CALIPER_NET_KIND_SCENE);
+        v.set("sources", Json::array());
+        Json sc = Json::object();
+        sc.set("space", CALIPER_NET_SPACE_3D);
+        sc.set("up", "+z");
+        sc.set("units", "m");
+        v.set("scene", sc);
+        views.push(v);
+    }
+    wire::SceneUpdate scene_update(const std::string& path, const char* part, const std::vector<float>& pos,
+                                   bool is_static) {
+        wire::SceneUpdate u;
+        u.sub = sub_of.at("world");
+        u.view = "world";
+        u.seq = ++seq;
+        u.stamp_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+        u.path = path;
+        u.part = part;
+        u.is_static = is_static;
+        if (std::string(part) == CALIPER_NET_PART_LINES) u.params.set("mode", CALIPER_NET_LINES_SEGMENTS);
+        u.arrays.push_back(wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {(int64_t)pos.size() / 3, 3},
+                                               pos.data(), pos.size() * 4));
+        return u;
     }
 
     // "attn" (add_attention): attention maps of 4 heads, 8 queries by 6 keys.
@@ -604,6 +636,78 @@ TEST_CASE("live/net: stream links are checked and normalised") {
     CHECK_FALSE(caliper_live::parse_stream_url("ws://127.0.0.1:9/v3/stream?token=" + tok + "&session=a/b", &u, &err));
 }
 
+TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's messages in order through the app's "
+          "source, notes a part it does not build, and draws") {
+    std::string no_gpu;
+    CaliperCore* core = net_core(320, 240, &no_gpu);
+    if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
+    FakeProducer p;
+    p.add_scene();
+    p.start();
+    REQUIRE_MESSAGE(caliper_core_live_attach_url(core, p.url().c_str()) == 1, caliper_core_last_error(core));
+    REQUIRE(poll_until(core, [&] { return p.call([](FakeProducer& f) { return f.sub_of.count("world"); }) == 1; }));
+    const std::vector<std::string> caps = p.call([](FakeProducer& f) { return f.hello_caps; });
+    CHECK(std::find(caps.begin(), caps.end(), CALIPER_NET_CAP_SCENES) != caps.end());
+
+    // The state of a subscription, then two updates of one part (the newer wins wherever they
+    // are taken), and a part this viewer does not build.
+    const std::vector<float> frame = {-1, -1, -1, 1, 1, 1}, a = {0, 0, 0, 1, 0, 0}, b = {0, 0, 0, 0, 1, 0, 0, 0, 1};
+    p.call([&](FakeProducer& f) {
+        wire::SceneClear reset;
+        reset.sub = f.sub_of.at("world");
+        reset.view = "world";
+        reset.seq = ++f.seq;
+        reset.path = "";
+        reset.reset = true;
+        reset.state = true;
+        f.send(reset);
+        wire::SceneUpdate fr = f.scene_update("", CALIPER_NET_PART_LINES, frame, true);
+        fr.state = true;
+        f.send(fr);
+        f.send(f.scene_update("cloud", CALIPER_NET_PART_POINTS, a, false));
+        f.send(f.scene_update("cloud", CALIPER_NET_PART_POINTS, b, false));
+        wire::SceneUpdate arrows = f.scene_update("arrows", CALIPER_NET_PART_POINTS, a, false);
+        std::vector<uint8_t> bytes;
+        REQUIRE(wire::encode(arrows, &bytes));
+        // The same frame with the part "arrows": the codec refuses to write it, so it is patched.
+        const std::string from = "\"part\":\"points\"", to = "\"part\":\"arrows\"";
+        auto at = std::search(bytes.begin(), bytes.end(), from.begin(), from.end());
+        REQUIRE(at != bytes.end());
+        std::copy(to.begin(), to.end(), at);
+        f.send_raw(bytes);
+        return 0;
+    });
+    caliper_live_views::SceneView* sv = nullptr;
+    REQUIRE(poll_until(core, [&] {
+        sv = caliper_live_views::scene_view(core, "world");
+        return sv && sv->counts().batches == 2 && !sv->notes().empty() && sv->has_target();
+    }));
+    CHECK(sv->tree().up() == caliper_scene::Axis::PosZ);
+    const caliper_scene::Batch* cloud = sv->tree().batch(sv->tree().find("cloud"), caliper_scene::Primitive::Points);
+    REQUIRE(cloud != nullptr);
+    CHECK(cloud->count() == 3);   // the newer update
+    CHECK(sv->tree().batch_static(sv->tree().root(), caliper_scene::Primitive::Lines));
+    CHECK_MESSAGE(sv->notes().back().find("arrows") != std::string::npos, sv->notes().back());
+    REQUIRE(poll_until(core, [&] {
+        const auto errs = p.call([](FakeProducer& f) { return f.errors; });
+        return std::find(errs.begin(), errs.end(), CALIPER_NET_ERR_UNSUPPORTED) != errs.end();
+    }));
+    // The view in the registry: kind 6, its items, its target and a readback of it.
+    CaliperLiveViewInfo vi = view_info(core, "world");
+    CHECK(vi.kind == CALIPER_NET_KIND_SCENE);
+    CHECK(vi.count == 3 + 1);
+    CHECK(std::string(vi.path) == "copied-from-host");
+    REQUIRE(vi.width > 0);
+    std::vector<uint8_t> px((size_t)vi.width * vi.height * 4);
+    CHECK(caliper_core_live_view_readback(core, "world", px.data(), px.size()) == 1);
+    // One copy per uploaded array: the frame's and the cloud's positions.
+    caliper_stats::ViewCopies vc{};
+    REQUIRE(caliper_stats::view_copies(core, "world", &vc));
+    CHECK(vc.total.bytes >= (frame.size() + b.size()) * 4);
+    caliper_core_live_detach(core);
+    caliper_core_shutdown(core);
+}
+
 TEST_CASE("live/net: a producer streams a heatmap, an image, points, a series and a histogram to "
           "an offscreen core attached by URL") {
     std::string no_gpu;
@@ -903,7 +1007,7 @@ TEST_CASE("live/net: the native source announces controls and selection, and a s
     REQUIRE(rc != nullptr);
     REQUIRE(poll_until(core, [&] { return rc->have() && rc->state().run_state == "running"; }));
     CHECK(p.call([](FakeProducer& f) { return f.hello_caps; }) ==
-          std::vector<std::string>{CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION});
+          std::vector<std::string>{CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_SCENES});
     CHECK(rc->access().allowed);
     CHECK(rc->why_not(CALIPER_NET_OP_PAUSE).empty());
     REQUIRE(rc->state().params.size() == 1);
