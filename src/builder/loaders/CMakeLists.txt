@@ -65,3 +65,24 @@ if(TARGET caliper_builder_loaders_tests)
         target_compile_definitions(caliper_builder_loaders_tests PRIVATE CALIPER_BUILDER_HAVE_ZLIB=1)
     endif()
 endif()
+
+# The Python loader. CALIPER_BUILDER_TEST_PYTHON names an interpreter with numpy
+# (and pyarrow, for the Parquet path), such as a `uv venv` in the worktree. When
+# it is empty, loader_host.py's own tests are reported as skipped.
+set(CALIPER_BUILDER_LOADER_HOST_PY "${CMAKE_CURRENT_SOURCE_DIR}/../../../python/caliper/loader_host.py")
+set(CALIPER_BUILDER_TEST_PYTHON "" CACHE FILEPATH
+    "A Python interpreter with numpy for the Python loader tests; empty skips the tests that run Python")
+if(BUILD_TESTS AND NOT WIN32)
+    if(CALIPER_BUILDER_TEST_PYTHON)
+        add_test(NAME builder_loaders_python_host
+            COMMAND "${CALIPER_BUILDER_TEST_PYTHON}" -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_loader_host.py"
+                    "${CALIPER_BUILDER_LOADER_HOST_PY}" "${CMAKE_CURRENT_BINARY_DIR}/test-tmp/loader_host")
+    else()
+        message(STATUS "caliper_builder: CALIPER_BUILDER_TEST_PYTHON is not set; the Python loader tests that run Python are skipped")
+        add_test(NAME builder_loaders_python_host
+            COMMAND "${CMAKE_COMMAND}" -E echo
+                    "Skipped: CALIPER_BUILDER_TEST_PYTHON is not set, so loader_host.py is not tested.")
+        set_tests_properties(builder_loaders_python_host PROPERTIES
+            SKIP_REGULAR_EXPRESSION "Skipped: CALIPER_BUILDER_TEST_PYTHON")
+    endif()
+endif()
