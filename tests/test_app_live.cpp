@@ -46,6 +46,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <future>
 #include <thread>
 #include <vector>
 
@@ -760,6 +761,41 @@ bool lists(SaveApp& a, const std::string& id) {
 }
 
 }  // namespace
+
+TEST_CASE("app save: closing the window while a command runs on the session's worker still asks Save changes once "
+          "it ends") {
+    const Env env = test_env();
+    if (!env.ok) return;
+    TempDir t("save-busy");
+    fs::create_directories(t.str("data"));
+    fs::create_directories(t.str("user-applets"));
+    const std::string script = "wait-file " + t.str("c0") + ";worker busy;close;wait 20;touch " + t.str("c1") +
+                               ";worker idle;save until;touch " + t.str("c2") + ";save cancel;wait 10;touch " +
+                               t.str("c3");
+    SaveApp a;
+    if (!a.start(env, t, script, t.str(""))) return;
+    ok(a.port, a.token, "spec.new", {{"id", "draft"}, {"title", "Draft"}});
+    // A query that keeps the worker busy until its own time limit, as an
+    // agent's data.query, data.import or loader.run does.
+    auto query = std::async(std::launch::async, [&] {
+        return http(a.port, "POST", "/v0/commands/data.query", a.token,
+                    json{{"sql", "SELECT count(*) FROM range(100000000000) t(i) WHERE i % 7 = 3"},
+                         {"timeout_ms", 6000}}.dump());
+    });
+    go_on(t, "c0");
+    // Closed while the worker runs: the app does not quit; it waits for the
+    // command, then asks about the unsaved spec.
+    a.reach(t, "c1");
+    CHECK(::kill(a.app.pid, 0) == 0);
+    CHECK(app_says(a.app, "[save] Save changes to Draft? waiting", 30000));
+    a.reach(t, "c2");
+    a.reach(t, "c3");
+    CHECK(::kill(a.app.pid, 0) == 0);   // Cancel: it runs on
+    CHECK(a.spec()["id"] == "draft");
+    CHECK(query.get().status == 200);
+    ::kill(a.app.pid, SIGTERM);
+    CHECK_MESSAGE(a.app.wait(30000) == 0, a.app.text);
+}
 
 TEST_CASE("app launch: an outside agent's launch of a dashboard over unsaved changes waits on an approval card; "
           "over a saved spec, and with the person's own token, it opens at once") {

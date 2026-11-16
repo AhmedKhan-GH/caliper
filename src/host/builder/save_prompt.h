@@ -59,46 +59,75 @@ public:
     using Log = std::function<void(const std::string& event, const std::string& object, const std::string& detail)>;
     void set_log(Log log) { log_ = std::move(log); }
 
-    // True, with the open spec's applet id and its name (its title, else its
-    // id), when the session's open spec has changes that are not saved; a
-    // new spec that was never saved has. False without the builder, before
-    // the session opens, and while its worker runs a command.
-    static bool unsaved(AppSession& app, std::string* id = nullptr, std::string* name = nullptr) {
+    // Whether the session's open spec has changes that are not saved: `no`
+    // (nothing open, or saved; also without the builder and before the
+    // session opens), `yes`, with its applet id and its name (its title, else
+    // its id), or `unknown` while the session's worker runs a command and
+    // the open spec cannot be read. A new spec that was never saved has
+    // unsaved changes. `unknown` is never "nothing to save".
+    enum class Unsaved { no, yes, unknown };
+    static Unsaved state(AppSession& app, std::string* id = nullptr, std::string* name = nullptr) {
 #if CALIPER_WITH_BUILDER
         caliper_builder::Session* s = app.session();
-        if (!s || app.worker_busy()) return false;
+        if (!s) return Unsaved::no;
+        if (app.worker_busy()) return Unsaved::unknown;
         const std::optional<caliper_builder::OpenSpec> open = s->open_spec();
-        if (!open || !open->dirty) return false;
+        if (!open || !open->dirty) return Unsaved::no;
         if (id) *id = open->spec.applet.id;
         if (name) *name = open->spec.applet.title.value_or(open->spec.applet.id);
-        return true;
+        return Unsaved::yes;
 #else
         (void)app, (void)id, (void)name;
-        return false;
+        return Unsaved::no;
 #endif
     }
 
     // One of the person's actions that would replace or close the open spec:
     // `go` runs at the next frame() when the open spec has no unsaved
     // changes, or after Save or Don't Save; Cancel drops it. While the
-    // session's worker runs a command the check waits for it. False, and
-    // `go` dropped, while another question is open.
-    bool ask(std::string what, std::function<void()> go) {
+    // session's worker runs a command the check waits for it, and after a
+    // few frames the question says so, with Cancel. When the open spec
+    // turns out to have unsaved changes and its applet id is `keep_id`,
+    // `keep` runs instead of the question (opening the open spec's own
+    // dashboard shows it, changes and all). False, and `go` dropped, while
+    // another question is open.
+    bool ask(std::string what, std::function<void()> go, std::string keep_id = {}, std::function<void()> keep = nullptr) {
         if (state_ != State::idle) return false;
         what_ = std::move(what);
         go_ = std::move(go);
+        keep_id_ = std::move(keep_id);
+        keep_ = std::move(keep);
         error_.clear();
+        waited_ = 0;
         state_ = State::checking;
         return true;
     }
 
+    // The window's close request: true when the close must be held, because
+    // a question is open already, or the open spec has unsaved changes or
+    // cannot be read while the worker runs a command, in which case the
+    // question is asked (once the worker is done) and `quit` runs after Save
+    // or Don't Save, or at once if nothing turned out to be unsaved.
+    bool hold_close(AppSession& app, std::function<void()> quit) {
+        if (state_ != State::idle) return true;
+        if (state(app) == Unsaved::no) return false;
+        ask("quit", std::move(quit));
+        return true;
+    }
+
     bool is_open() const { return state_ == State::asking || state_ == State::saving; }
+    // Waiting for the session's worker before it can ask, shown with Cancel.
+    bool waiting_for_worker() const { return state_ == State::checking && waited_ > kShowWaitFrames; }
     bool waiting() const { return state_ != State::idle; }
     const std::string& name() const { return name_; }
 
     // The answer, as a click on its button: "save", "dont-save" or "cancel".
     // False when no question is open, a save runs, or the answer is unknown.
     bool answer(const std::string& a) {
+        if (state_ == State::checking && a == "cancel") {   // while it waits for the worker
+            pending_ = Answer::cancel;
+            return true;
+        }
         if (state_ != State::asking) return false;
         if (a == "save") pending_ = Answer::save;
         else if (a == "dont-save") pending_ = Answer::dont_save;
@@ -110,11 +139,32 @@ public:
     // Between two frames: decides a waiting check, acts on the answer, reads
     // the save's result, and runs `go`.
     void frame(AppSession& app) {
+        if (state_ == State::checking && pending_ == Answer::cancel) {
+            pending_ = Answer::none;
+            say("cancel", "Cancel: " + what_ + " is not done");
+            state_ = State::idle;
+            go_ = nullptr;
+            keep_ = nullptr;
+            return;
+        }
         if (state_ == State::checking) {
-            if (app.session() && app.worker_busy()) return;   // the open spec cannot be read yet
             std::string id;
-            if (!unsaved(app, &id, &name_)) {
+            const Unsaved u = state(app, &id, &name_);
+            if (u == Unsaved::unknown) {   // the open spec cannot be read yet: wait, never "nothing to save"
+                if (++waited_ == kShowWaitFrames + 1)
+                    say("wait", "Waiting for the running command before " + what_ + ", then asks about unsaved changes");
+                return;
+            }
+            if (u == Unsaved::no) {
                 finish();
+                return;
+            }
+            if (keep_ && !keep_id_.empty() && id == keep_id_) {
+                state_ = State::idle;
+                std::function<void()> keep = std::move(keep_);
+                go_ = nullptr;
+                keep_ = nullptr;
+                keep();
                 return;
             }
             state_ = State::asking;
@@ -156,7 +206,7 @@ public:
     // Inside the ImGui frame, after the page: the modal question while open.
     void draw() {
         static const char* const kId = "##save_changes";
-        if (!is_open()) return;
+        if (!is_open() && !waiting_for_worker()) return;
         if (!ImGui::IsPopupOpen(kId)) ImGui::OpenPopup(kId);
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.4f),
@@ -171,6 +221,20 @@ public:
                                        ImGuiWindowFlags_AlwaysAutoResize;
         if (ImGui::BeginPopupModal(kId, nullptr, flags)) {
             if (sternbild::fonts().ui) ImGui::PushFont(sternbild::fonts().ui, sternbild::font_size::ui);
+            if (waiting_for_worker()) {
+                // Before the question: the open spec cannot be read while the
+                // worker runs a command. Cancel drops the action.
+                const char* waiting = "Waiting for the running command";
+                ImGui::TextUnformatted(waiting);
+                ImGui::Dummy(ImVec2(std::max(360.0f, ImGui::CalcTextSize(waiting).x), sternbild::metric::pad));
+                if (sternbild::key_button("esc", "Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+                    answer("cancel");
+                if (sternbild::fonts().ui) ImGui::PopFont();
+                ImGui::EndPopup();
+                ImGui::PopStyleVar(2);
+                ImGui::PopStyleColor(3);
+                return;
+            }
             const std::string question = "Save changes to " + name_ + "?";
             ImGui::TextUnformatted(question.c_str());
             ImGui::Dummy(ImVec2(std::max(360.0f, ImGui::CalcTextSize(question.c_str()).x), sternbild::metric::pad));
@@ -206,6 +270,7 @@ private:
         state_ = State::idle;
         std::function<void()> go = std::move(go_);
         go_ = nullptr;
+        keep_ = nullptr;
         if (go) go();
     }
 
@@ -235,10 +300,12 @@ private:
         if (log_) log_(event, name_, what_);
     }
 
+    static constexpr int kShowWaitFrames = 10;   // a short wait shows nothing
     State state_ = State::idle;
     Answer pending_ = Answer::none;
-    std::string what_, name_, error_;
-    std::function<void()> go_;
+    std::string what_, name_, error_, keep_id_;
+    std::function<void()> go_, keep_;
+    int waited_ = 0;                             // frames the check has waited for the worker
     Log log_;
 #if CALIPER_WITH_BUILDER
     std::optional<std::future<caliper_builder::CommandResult>> request_;

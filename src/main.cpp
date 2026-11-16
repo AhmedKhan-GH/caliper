@@ -893,36 +893,30 @@ private:
             launch_applet(idx);
             return;
         }
-        std::string open_id;
-        if (caliper_host::SavePrompt::unsaved(session_, &open_id) && open_id == ws_id) {
-            open_spec_page();
-            return;
-        }
-        save_prompt_.ask("open " + a.manifest.name, [this, id = a.manifest.id] {
-            const int i = loader_.find(id);
-            if (i >= 0) launch_applet(i);
-        });
+        save_prompt_.ask(
+            "open " + a.manifest.name,
+            [this, id = a.manifest.id] {
+                const int i = loader_.find(id);
+                if (i >= 0) launch_applet(i);
+            },
+            ws_id, [this] { open_spec_page(); });
     }
 
     // The window's close request (its close button, ⌘Q, the input driver's
     // `close`), which GLFW makes after it has set the close flag: with unsaved
     // changes in the open spec it asks first, and the window closes after
-    // Save or Don't Save. A hidden app's SIGTERM, CALIPER_EXIT_AFTER and the
-    // driver's `quit` set the flag without a request and never ask; nor does
-    // a close while the session's worker runs a command, so quitting never
-    // waits on it.
+    // Save or Don't Save. While the session's worker runs a command the open
+    // spec cannot be read, so the close waits for the command, saying so with
+    // Cancel, and then asks if there is anything to save (save_prompt.h,
+    // hold_close). A hidden app's SIGTERM, CALIPER_EXIT_AFTER and the
+    // driver's `quit` set the flag without a request and never ask.
     void on_close_request() {
         if (quit_confirmed_) return;
-        if (save_prompt_.waiting()) {   // the question already open stays
+        if (save_prompt_.hold_close(session_, [this] {
+                quit_confirmed_ = true;
+                glfwSetWindowShouldClose(window_, GLFW_TRUE);
+            }))
             glfwSetWindowShouldClose(window_, GLFW_FALSE);
-            return;
-        }
-        if (!caliper_host::SavePrompt::unsaved(session_)) return;
-        glfwSetWindowShouldClose(window_, GLFW_FALSE);
-        save_prompt_.ask("quit", [this] {
-            quit_confirmed_ = true;
-            glfwSetWindowShouldClose(window_, GLFW_TRUE);
-        });
     }
 
     // The workspace id of a spec applet found in the workspace's applets/
