@@ -301,6 +301,8 @@ ApprovalCard ApprovalCards::make_card(cb::Session& s, const cb::PendingApproval&
     const spec::Spec* before = open ? &open->spec : nullptr;
     c.what = approval_what(inv, before);
     c.loss = approval_loss(inv, before);
+    c.invocation = inv;
+    c.rules = s.approval_offers_rules(inv);
     if (!p.review.is_object()) return c;
     c.review = true;
     c.loss.clear();
@@ -400,6 +402,28 @@ bool ApprovalCards::decide(const std::string& id, bool approve) {
     return false;
 }
 
+bool ApprovalCards::decide_rule(const std::string& id, bool saved) {
+    if (!session_) return false;
+    for (ApprovalCard& c : cards_) {
+        if (c.id != id || c.state != ApprovalState::waiting || !c.rules) continue;
+        const cb::Error e = session_->allow_always(c.invocation, saved ? cb::RuleScope::saved : cb::RuleScope::session);
+        if (e) {
+            std::ostream& o = hooks_.err ? *hooks_.err : std::cerr;
+            o << "[approval] " << c.name << ": no rule added: " << e.code << std::endl;
+            return false;
+        }
+        if (hooks_.log)
+            hooks_.log(saved ? "rule saved" : "rule for this session", c.name, c.origin == "mcp" ? "mcp" : "side chat");
+        std::ostream& o = hooks_.err ? *hooks_.err : std::cerr;
+        o << "[approval] " << c.id << " " << c.name << " (" << c.origin << ") "
+          << (saved ? "rule saved" : "rule for this session") << std::endl;
+        return decide(id, true);
+    }
+    return false;
+}
+
+bool ApprovalCards::allow_always(const std::string& id, bool saved) { return decide_rule(id, saved); }
+
 bool ApprovalCards::approve(const std::string& id) { return decide(id, true); }
 
 bool ApprovalCards::deny(const std::string& id) { return decide(id, false); }
@@ -435,16 +459,18 @@ void ApprovalCards::apply_decisions() {
         char verb[16] = "", name[72] = "", origin[16] = "";
         const int got = std::sscanf(it->c_str(), "%15s %71s %15s", verb, name, origin);
         const std::string v = verb;
-        if (got < 2 || (v != "approve" && v != "deny")) {
+        if (got < 2 || (v != "approve" && v != "deny" && v != "session" && v != "always")) {
             std::ostream& o = hooks_.err ? *hooks_.err : std::cerr;
             o << "[approval] decision line ignored: " << *it << std::endl;
             it = decisions_waiting_.erase(it);
             continue;
         }
         std::string id;
+        bool rules = false;
         for (const ApprovalCard& c : cards_)
             if (c.state == ApprovalState::waiting && c.name == name && (got < 3 || c.origin == origin)) {
                 id = c.id;
+                rules = c.rules;
                 break;
             }
         if (id.empty()) {
@@ -452,7 +478,16 @@ void ApprovalCards::apply_decisions() {
             continue;
         }
         it = decisions_waiting_.erase(it);
-        decide(id, v == "approve");
+        if (v == "session" || v == "always") {
+            if (!rules) {
+                std::ostream& o = hooks_.err ? *hooks_.err : std::cerr;
+                o << "[approval] decision line ignored, the card offers no rule: " << v << " " << name << std::endl;
+                continue;
+            }
+            decide_rule(id, v == "always");
+        } else {
+            decide(id, v == "approve");
+        }
     }
 }
 
@@ -475,6 +510,8 @@ ApprovalLayoutMetrics ApprovalLayoutMetrics::for_text_scale(float s) {
 namespace {
 
 constexpr const char* kApprove = "Approve";
+constexpr const char* kAllowOnce = "Allow once";
+constexpr const char* kAllowSession = "Allow always for this session";
 constexpr const char* kDeny = "Deny";
 constexpr const char* kDiff = "Diff";
 constexpr const char* kLabel = "APPROVALS";
@@ -515,6 +552,8 @@ ApprovalStripLayout layout_approval_strip(const ApprovalLayoutInput& in, const A
     bool any_multi = false;
     int lines = 1;
     bool warn = false;
+    bool rules = false;   // a shown card has the row of rule answers
+    for (int i = 0; i < shown; ++i) rules = rules || in.cards[(size_t)i].rules;
     for (int i = 0; i < shown; ++i) {
         const ApprovalCardShape& c = in.cards[(size_t)i];
         if (c.decided || !c.review) continue;
@@ -523,7 +562,8 @@ ApprovalStripLayout layout_approval_strip(const ApprovalLayoutInput& in, const A
         warn = warn || c.warnings;
     }
     auto card_h = [&](int body, bool w) {
-        return m.gap + m.line + m.line * (float)body + (w ? m.line : 0.0f) + m.gap + m.button + m.gap;
+        return m.gap + m.line + m.line * (float)body + (w ? m.line : 0.0f) + m.gap + m.button + m.gap +
+               (rules ? m.button + m.gap : 0.0f);
     };
     float cap = in.window_h > 0.0f ? std::floor(in.window_h * m.max_share) : 1e9f;
     if (in.max_height > 0.0f) cap = std::min(cap, in.max_height);
@@ -584,7 +624,8 @@ ApprovalStripLayout layout_approval_strip(const ApprovalLayoutInput& in, const A
         // right end; when they do not fit, they share the row.
         if (!c.decided) {
             const float by = cl.card.bottom() - m.gap - m.button;
-            float aw = button_w(kApprove), dw = button_w(kDeny), fw = c.review ? button_w(kDiff) : 0.0f;
+            float aw = button_w(c.rules ? kAllowOnce : kApprove), dw = button_w(kDeny),
+                  fw = c.review ? button_w(kDiff) : 0.0f;
             const float need = aw + m.gap + dw + (c.review ? m.gap + fw : 0.0f);
             if (need > iw) {
                 const int k = c.review ? 3 : 2;
@@ -595,12 +636,25 @@ ApprovalStripLayout layout_approval_strip(const ApprovalLayoutInput& in, const A
             cl.approve = {ix, by, aw, m.button};
             cl.deny = {cl.approve.right() + m.gap, by, dw, m.button};
             if (c.review) cl.diff = {std::max(cl.deny.right() + m.gap, ix + iw - fw), by, fw, m.button};
+            // The rule answers in a row of their own above: for this session,
+            // then always; they share the row when both do not fit.
+            if (c.rules) {
+                const float ry = by - m.gap - m.button;
+                float sw = button_w(kAllowSession), lw = button_w(approval_always_label(c.what_command).c_str());
+                if (sw + m.gap + lw > iw) sw = lw = std::floor((iw - m.gap) * 0.5f);
+                cl.session = {ix, ry, sw, m.button};
+                cl.always = {cl.session.right() + m.gap, ry, lw, m.button};
+            }
         }
         L.cards.push_back(cl);
         x += card_w + m.gap;
     }
     return L;
 }
+
+const char* approval_approve_label(bool rules) { return rules ? kAllowOnce : kApprove; }
+const char* approval_session_label() { return kAllowSession; }
+std::string approval_always_label(const std::string& command) { return "Always allow " + command; }
 
 ApprovalLayoutInput approval_layout_input(const ApprovalCards& cards, float width, float window_h) {
     ApprovalLayoutInput in;
@@ -614,6 +668,8 @@ ApprovalLayoutInput approval_layout_input(const ApprovalCards& cards, float widt
         s.diff_lines = (int)c.diff.size();
         s.warnings = !c.warnings.empty();
         s.decided = c.state != ApprovalState::waiting && c.state != ApprovalState::deciding;
+        s.rules = c.rules && !s.decided;
+        s.what_command = c.name;
         in.cards.push_back(std::move(s));
     }
     return in;
@@ -818,8 +874,13 @@ void ApprovalTray::Impl::draw_card(const SpecLook& L, ImDrawList* dl, ImVec2 o, 
     if (waiting) {
         const bool enabled = c.state == ApprovalState::waiting;
         ImGui::PushID(c.id.c_str());
-        if (card_button(L, dl, rr(cl.approve, o), kApprove, true, enabled)) cards.approve(c.id);
+        if (card_button(L, dl, rr(cl.approve, o), c.rules ? kAllowOnce : kApprove, true, enabled)) cards.approve(c.id);
         if (card_button(L, dl, rr(cl.deny, o), kDeny, false, enabled)) cards.deny(c.id);
+        if (!cl.session.empty() && card_button(L, dl, rr(cl.session, o), kAllowSession, false, enabled))
+            cards.allow_always(c.id, false);
+        if (!cl.always.empty() &&
+            card_button(L, dl, rr(cl.always, o), approval_always_label(c.name).c_str(), false, enabled))
+            cards.allow_always(c.id, true);
         if (!cl.diff.empty() && card_button(L, dl, rr(cl.diff, o), kDiff, false, true, diff_open == c.id)) {
             diff_open = diff_open == c.id ? std::string() : c.id;
             if (!diff_open.empty()) ImGui::OpenPopup("##approval.diff");

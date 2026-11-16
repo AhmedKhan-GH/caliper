@@ -144,6 +144,12 @@ TEST_CASE("the default API file follows CALIPER_DATA_DIR") {
     const std::string os_default = default_api_file_path();
     CHECK(os_default != (dir / "api.json").string());
     if (!os_default.empty()) CHECK(fs::path(os_default).filename() == "api.json");
+    // A test or hidden run without CALIPER_DATA_DIR reads no API file of your
+    // own app (src/app_paths.h, THE GUARD), and says why.
+    setenv("CALIPER_TEST_API_FILE_GUARD", "1", 1);
+    CHECK(default_api_file_path().empty());
+    CHECK(read_api_file(default_api_file_path()).error.message.find("a test or hidden run") != std::string::npos);
+    unsetenv("CALIPER_TEST_API_FILE_GUARD");
     if (before) setenv("CALIPER_DATA_DIR", saved.c_str(), 1);
     else unsetenv("CALIPER_DATA_DIR");
 #endif

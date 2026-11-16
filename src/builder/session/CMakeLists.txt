@@ -69,6 +69,7 @@ caliper_builder_add_tests(session
         tests/test_served_sources.cpp
         tests/test_command_server.cpp
         tests/test_acceptance.cpp
+        tests/test_agent_modes.cpp
     LIBS caliper_builder_session caliper_builder_session_host caliper_builder_acp caliper_builder_duckdb)
 if(TARGET caliper_builder_session_tests)
     # The HTTP acceptance test runs the stand-in host as a child process.

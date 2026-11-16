@@ -71,6 +71,18 @@
 // approvals), and a click on the row calls Hooks::show_approval, which points
 // at the card.
 //
+// Caliper's mode for the agent (design/command-layer.md, Agent permissions;
+// the command layer applies it, never the agent). The header shows it as a
+// word after the title (Hooks::permission_mode): Ask, Accept edits, Read
+// only or Allow all. A click on it opens its menu: the three modes, and under
+// a rule, Allow all for this session, the one deliberate way to turn it on.
+// Shift-Tab cycles Ask, Accept edits and Read only while the chat's input has
+// the keyboard; it never reaches Allow all, and from Allow all it goes back
+// to Ask. While Allow all is on, a banner under the header says so with End.
+// An edit that a mode or a rule let run without a card (the journal's
+// allowed_by) is an APPLIED row, with what allowed it and Undo, which undoes
+// it as the person while it is the newest step of the history.
+//
 // Labels are nouns, as the UI principles ask: Send, Cancel, Restart, Custom
 // command, Clear; states are tags: RUNNING, STALLED, EXITED, LOGIN, FAILED,
 // NO AGENT, PERMISSION, APPROVAL, PLAN, THOUGHT, and the stop words DONE,
@@ -271,7 +283,7 @@ std::string chat_stop_word(const std::string& stop_reason, const caliper_builder
 std::string chat_tool_status_word(const std::string& status);
 
 struct ChatItem {
-    enum class Kind { person, agent, thought, tool, plan, permission, approval, stop, notice };
+    enum class Kind { person, agent, thought, tool, plan, permission, approval, stop, notice, applied };
     Kind kind = Kind::agent;
     int turn = 0;
     std::uint64_t serial = 0;   // unique in the conversation and growing, also after its oldest items go
@@ -285,13 +297,14 @@ struct ChatItem {
     std::uint64_t permission = 0;
     std::vector<caliper_builder::acp::PermissionOption> options;   // the options offered
     std::string answer;    // permission: the option's name, or "withdrawn"; approval: its outcome (approved,
-                           // denied, timed out, failed) or "decided"; "" while it waits
+                           // denied, timed out, failed) or "decided"; "" while it waits; applied: "undone" or ""
     std::string diff;      // permission, tool: the unified diff of its diff content
     std::string diff_path; // the diff's file
     // permission: the compact diff of a spec file's edit (chat_compact_diff()),
     // empty for any other file, whose card shows the unified diff.
     std::vector<WidgetDiffLine> compact;
     std::string approval;  // approval: its id
+    std::uint64_t seq = 0; // applied: the journal seq of the command that ran without a card
     bool expanded = false; // thought: shown in full; permission: the full diff instead of the compact one
 };
 
@@ -362,6 +375,17 @@ public:
         // A live run is attached (the app's live session): the GPU note's
         // condition with the agent's local-model mark. None: no live run.
         std::function<bool()> live_attached;
+        // Caliper's mode for this chat's agent, as the header's word ("Ask",
+        // "Accept edits", "Read only", "Allow all"); "" or none hides it.
+        std::function<std::string()> permission_mode;
+        // Sets it: "ask", "accept_edits", "read_only", or "allow_all" from
+        // its own menu item only; "" ends Allow all, back to the saved mode.
+        std::function<void(const std::string& mode)> set_permission_mode;
+        // Whether the command journaled under `seq` is the newest step of the
+        // history, and undoing it as the person (history.undo from ui), only
+        // while it still is.
+        std::function<bool(std::uint64_t seq)> can_undo;
+        std::function<void(std::uint64_t seq)> undo;
     };
 
     SideChat(Options options, Hooks hooks = {});
@@ -392,6 +416,18 @@ public:
     // A line of the app's in the conversation, under a tag, such as the
     // Caliper API that the app started for the chat.
     void note(const std::string& tag, const std::string& line);
+    // A command of this agent that ran without a card because a mode or a
+    // rule allowed it: an APPLIED row with Undo.
+    void applied(std::uint64_t seq, const std::string& command, const std::string& allowed_by);
+    // Undo of the APPLIED row of that serial, as its button does; false when
+    // it is not the newest step.
+    bool undo_applied(std::uint64_t serial);
+    // Shift-Tab: Ask, Accept edits, Read only, Ask; Allow all goes to Ask.
+    void cycle_permission_mode();
+    // Allow all on or off, as its menu item and the banner's End do.
+    void set_allow_all(bool on);
+    // The header's mode word, "" for none.
+    std::string permission_word() const;
 
     // ---- per frame: the start worker, the agent's events and the mirrored approvals
     void update();
@@ -478,6 +514,8 @@ private:
     // ImGui side
     bool picker_open_ = false;
     bool focus_input_ = false;
+    bool input_active_ = false;    // the input had the keyboard last frame (Shift-Tab)
+    bool mode_menu_open_ = false;
     bool custom_open_ = false;
     std::string custom_line_, custom_name_;
     caliper_builder::Error custom_error_;
@@ -560,6 +598,8 @@ struct ChatPaneInput {
     std::string agent;                // the agent's name
     std::string version;              // its version, or ""
     std::string mode;                 // the agent's mode, or ""
+    std::string permission;           // Caliper's mode for the agent ("Accept edits"), or ""
+    bool allow_all = false;           // the Allow all banner under the header
     std::string tag;                  // the state's tag, or ""
     std::string note;                 // the GPU note, or ""
     std::vector<ChatAction> header_actions;
@@ -576,6 +616,8 @@ struct ChatPaneLayout {
     WidgetRect agent;                 // empty when collapsed
     WidgetRect version;               // empty when collapsed or none
     WidgetRect mode;                  // empty when collapsed or none
+    WidgetRect permission;            // Caliper's mode, framed, after the title; empty when none
+    WidgetRect banner, banner_end;    // Allow all's strip under the header and its End; empty when off
     WidgetRect note;                  // the GPU note after the agent's name; empty when collapsed or none
     WidgetRect tag;                   // empty when none
     WidgetRect faults;                // empty when none
@@ -593,7 +635,8 @@ struct ChatPaneLayout {
     bool keys = true;                 // the buttons show their keys
 };
 
-// Lays the pane out. What collapses first as it narrows: the agent's mode and
+// Lays the pane out. Caliper's mode keeps its place after the title. What
+// collapses first as it narrows: the agent's mode and
 // then its version in the header, then the GPU note, then the agent's name in the header, then the picker's name
 // (the ▾ mark stays), then the buttons' keys; in the header the faults chip,
 // then the state's tag, give way to the buttons when they need the room; the

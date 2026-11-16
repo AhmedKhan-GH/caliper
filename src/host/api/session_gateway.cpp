@@ -142,6 +142,8 @@ RequestInvocation request_invocation(CommandRequest request) {
     r.invocation.name = std::move(request.name);
     r.invocation.args = std::move(args);
     r.invocation.origin = *origin;
+    // The token's client names an agent the app started; only an agent token has one.
+    if (*origin == CommandOrigin::agent) r.invocation.client = std::move(request.client);
     r.invocation.group = std::move(request.group);
     r.invocation.preview = std::move(request.preview);
     r.options.wait_for_approval = request.approval_wait_ms > 0;

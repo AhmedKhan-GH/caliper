@@ -358,6 +358,15 @@ result; denied, the tool error `command.denied`; after the app's limit, `command
 cancels the call, `caliper-mcp` closes the connection. There is no tool and no endpoint that approves, so an agent
 cannot approve its own request.
 
+What waits depends on the mode the person gives `mcp` clients in the app (Ask by default, Accept edits, Read only),
+and on the rules a card's answer adds ([Command layer](command-layer.md), Agent permissions). The command layer
+applies them to the origin `mcp`; `caliper-mcp` needs no change for them, sends no `_meta` or header that could
+select one, and offers no tool that reads or sets them. A call that Read only refuses is the tool error
+`command.denied` with the command layer's message. The table's `effect` (`read`, `edit`, `change`) is read with the
+other flags when `caliper-mcp` parses the app's table; its annotations stay `readOnlyHint` from `mutates` and
+`destructiveHint` from `destructive`. Allow all is the side chat's agent's only, so no `mcp` client runs without
+cards.
+
 ## Resources
 
 | URI | What | MIME type |

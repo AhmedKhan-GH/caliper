@@ -91,9 +91,11 @@ public:
     const std::string& file() const { return file_; }
 
     // An API file for one agent session, with a new token of the origin
-    // agent; its path, or "" with the reason when the API is not running or
-    // the file cannot be written.
-    std::string issue_agent_file(std::string* why);
+    // agent for `client` ("chat" for the side chat's agent, "widget" for the
+    // widget agent's sidecar; Server::issue_token()), whose commands the
+    // command layer governs by that agent's mode; its path, or "" with the
+    // reason when the API is not running or the file cannot be written.
+    std::string issue_agent_file(std::string* why, const std::string& client);
     // Revokes that file's token and removes the file.
     void revoke_agent_file(const std::string& path);
 

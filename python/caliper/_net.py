@@ -1460,19 +1460,46 @@ def serve(port: int = 0, control: bool = True) -> NetServer:
 # ---------------------------------------------------------------------------
 # the stream file: how the Caliper app on this machine finds serve()'s stream
 # ---------------------------------------------------------------------------
+class AppDataRefused(RuntimeError):
+    """A test or hidden run asked for the app-data folder without a data folder
+    of its own (app_data_dir())."""
+
+
+def _test_run_reason() -> str:
+    """Why this process is a test or hidden run, "" when it is not, by the
+    app's rule (src/app_paths.h, THE GUARD): CALIPER_HIDDEN=1, or a
+    CALIPER_TEST_* variable that is set and not empty, such as the
+    CALIPER_TEST_RUN=1 that ctest and the package's own tests set."""
+    if os.environ.get("CALIPER_HIDDEN") == "1":
+        return "the hidden app (CALIPER_HIDDEN=1)"
+    for k in sorted(os.environ):
+        if k.startswith("CALIPER_TEST_") and os.environ[k]:
+            return f"a test run ({k} is set)"
+    return ""
+
+
 def app_data_dir() -> str:
     """Caliper's app-data folder by the app's own rule (src/app_paths.cpp):
-    $CALIPER_DATA_DIR when it is set and not empty, else the folder of the OS."""
+    $CALIPER_DATA_DIR when it is set and not empty, else the folder of the OS.
+    A test or hidden run never gets the folder of the OS: it raises
+    AppDataRefused, so that serve() and connect() fail with that message
+    rather than writing into your own app-data folder."""
     d = os.environ.get("CALIPER_DATA_DIR")
     if d:
         return d
     home = os.path.expanduser("~")
     if sys.platform == "darwin":
-        return os.path.join(home, "Library", "Application Support", "Caliper")
-    if os.name == "nt":
-        return os.path.join(os.environ.get("APPDATA") or os.getcwd(), "Caliper")
-    xdg = os.environ.get("XDG_DATA_HOME")
-    return os.path.join(xdg, "caliper") if xdg else os.path.join(home, ".local", "share", "caliper")
+        folder = os.path.join(home, "Library", "Application Support", "Caliper")
+    elif os.name == "nt":
+        folder = os.path.join(os.environ.get("APPDATA") or os.getcwd(), "Caliper")
+    else:
+        xdg = os.environ.get("XDG_DATA_HOME")
+        folder = os.path.join(xdg, "caliper") if xdg else os.path.join(home, ".local", "share", "caliper")
+    why = _test_run_reason()
+    if why:
+        raise AppDataRefused(f"caliper: {why} has no data folder of its own and would use your app-data "
+                             f"folder {folder}; set CALIPER_DATA_DIR to a folder of its own")
+    return folder
 
 
 STREAM_FILE_VERSION = 1

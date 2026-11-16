@@ -102,7 +102,7 @@ std::string AppApi::file_json(const std::string& token) const {
     return j.dump() + "\n";
 }
 
-std::string AppApi::issue_agent_file(std::string* why) {
+std::string AppApi::issue_agent_file(std::string* why, const std::string& client) {
     if (!server_) {
         if (why) *why = "Caliper API is not running";
         return {};
@@ -113,7 +113,11 @@ std::string AppApi::issue_agent_file(std::string* why) {
     const long pid = (long)getpid();
 #endif
     AgentFile f;
-    f.token = server_->issue_token("agent");
+    f.token = server_->issue_token("agent", client);
+    if (f.token.empty()) {
+        if (why) *why = "the agent's token could not be made";
+        return {};
+    }
     f.path = (std::filesystem::path(data_folder_) /
               ("api-agent-" + std::to_string(pid) + "-" + std::to_string(++agent_files_made_) + ".json"))
                  .string();

@@ -107,6 +107,8 @@ The origin of a command, which decides what is reviewed, comes from the token th
 
 `X-Caliper-Origin` is ignored for every token but the viewer token, so a request cannot claim `api`, `ui` or any other origin that its token does not have.
 
+**Agent permissions.** The side chat's agent and the clients of the API file's token each have a mode that you set in the app: Ask (the review above), Accept edits (an edit of the open spec applies at once, still journaled and undoable), Read only (reads, dry runs and edits of a preview run; every other change answers `command.denied` with a message that says so), and for the side chat's agent only, Allow all for its session, which is never saved. A card can also allow its command for the session or always. The app tells the side chat's agent from the widget agent's sidecar by the token it issued each of them, never by anything a request carries; the widget agent, your own session token and the viewer token are not governed by a mode. No endpoint and no command reads or sets a mode or a rule: only the app's own interface does. An overwrite of a saved applet and the replacement of a spec with unsaved changes still wait for your card in every mode, and a rule never lets a Python loader run.
+
 ## Endpoints
 
 ### GET /v0/info
@@ -167,10 +169,10 @@ ws://127.0.0.1:7341/v3/stream?token=<token>
 
 ### GET /v0/commands
 
-The command layer's descriptor table: every command with its summary, the JSON Schema of its arguments and of its result, examples, and whether it mutates, is destructive, runs on the frame thread or may be sent by an agent (`agents`). It is the table that `caliper-mcp` and `caliper-agent` turn into tools. Requested with the API file's token or an agent's own, it leaves out the commands with `agents` false, `history.undo` and `history.redo`, which are yours: the command layer refuses them to those tokens with `command.not_allowed`, and an agent reverts a change with an edit that you review.
+The command layer's descriptor table: every command with its summary, the JSON Schema of its arguments and of its result, examples, whether it mutates, is destructive, runs on the frame thread or may be sent by an agent (`agents`), and what it does (`effect`: `read` for a read or a proposal, `edit` for an edit of the open spec, `change` for anything else that changes something), by which an agent's mode decides it. It is the table that `caliper-mcp` and `caliper-agent` turn into tools. Requested with the API file's token or an agent's own, it leaves out the commands with `agents` false, `history.undo` and `history.redo`, which are yours: the command layer refuses them to those tokens with `command.not_allowed`, and an agent reverts a change with an edit that you review.
 
 ```json
-{"commands":[{"args":{"additionalProperties":false,"properties":{},"required":[],"type":"object"},"destructive":false,"examples":[{}],"frame_thread":false,"mutates":false,"name":"applet.list","result":{"...":"..."},"summary":"..."}],"version":0}
+{"commands":[{"agents":true,"args":{"additionalProperties":false,"properties":{},"required":[],"type":"object"},"destructive":false,"effect":"read","examples":[{}],"frame_thread":false,"mutates":false,"name":"applet.list","result":{"...":"..."},"summary":"..."}],"version":0}
 ```
 
 The list is shortened here.
@@ -204,7 +206,7 @@ Everything the command layer refuses comes this way: a name that is not a comman
 
 A held request waits without blocking anything else: the stream, the other endpoints and other commands are served meanwhile. Spec edits from `mcp` and `agent` are reviewed by default and therefore wait too.
 
-The app shows each pending approval to the person as a card, in a strip at the bottom of the window above the jobs tray, on every page: who asks (MCP agent, Side chat, Widget agent or API), the command and its target, the change of a spec edit as its changed keys with the validator's warnings and the full diff on demand, what a destructive command would lose, the time left before a held request times out, and Approve and Deny. On the spec page the panel an edit changes is marked REVIEW. The app's Activity lists each request when it starts waiting and when it is decided, times out or is withdrawn. When what a card showed changes while a held request waits, such as the content an overwrite would write, an approval no longer holds: the card is replaced by a new one for the new content, and the request keeps waiting on it. Only the person decides there; a test of the hidden app decides through `CALIPER_TEST_APPROVALS` ([Host variables](environment.md#host-variables)).
+The app shows each pending approval to the person as a card, in a strip at the bottom of the window above the jobs tray, on every page: who asks (MCP agent, Side chat, Widget agent or API), the command and its target, the change of a spec edit as its changed keys with the validator's warnings and the full diff on demand, what a destructive command would lose, the time left before a held request times out, and Approve and Deny. A card of the side chat's agent or of the API file's token whose command can become a rule offers Allow once, Allow always for this session and Always allow `<command>` instead of Approve. On the spec page the panel an edit changes is marked REVIEW. The app's Activity lists each request when it starts waiting and when it is decided, times out or is withdrawn. When what a card showed changes while a held request waits, such as the content an overwrite would write, an approval no longer holds: the card is replaced by a new one for the new content, and the request keeps waiting on it. Only the person decides there; a test of the hidden app decides through `CALIPER_TEST_APPROVALS` ([Host variables](environment.md#host-variables)).
 
 ### GET /v0/approvals/{id}
 

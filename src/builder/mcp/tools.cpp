@@ -177,6 +177,10 @@ ToolTableBuild parse_app_command_table(const json& body) {
         // An app that predates the flag sends none; its commands are agents'.
         const auto agents = c.find("agents");
         if (agents != c.end() && agents->is_boolean()) d.agents = agents->get<bool>();
+        // What it does, for an agent's mode; an app that predates it sends none (unset, read as change).
+        const auto effect = c.find("effect");
+        if (effect != c.end() && effect->is_string())
+            d.effect = command_effect_from_name(effect->get<std::string>()).value_or(CommandEffect::unset);
         descriptors.push_back(std::move(d));
     }
     out = build_tool_table(std::move(descriptors), "app");

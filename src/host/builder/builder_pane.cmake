@@ -56,8 +56,10 @@ if(BUILD_TESTS AND TARGET doctest::doctest)
         ${_pane_dir}/tests/test_builder_pane.cpp
         ${_pane_dir}/tests/test_builder_pane_layout.cpp
         ${_pane_dir}/tests/test_builder_shot.cpp)
+    # caliper_catalog_providers (added later, with the same session library):
+    # the metrics of a real MetricsStore in Sources, grouped by run.
     target_link_libraries(caliper_builder_pane_tests PRIVATE caliper_builder_pane doctest::doctest caliper_builder_duckdb
-        caliper_builder_acp caliper_widget_surface)
+        caliper_builder_acp caliper_widget_surface caliper_catalog_providers)
     if(TARGET caliper_spec_page_layout)
         target_sources(caliper_builder_pane_tests PRIVATE ${_pane_dir}/tests/test_spec_page_layout.cpp)
         target_link_libraries(caliper_builder_pane_tests PRIVATE caliper_spec_page_layout)

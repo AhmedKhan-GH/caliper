@@ -1,6 +1,9 @@
 #include "app_paths.h"
 
+#include <atomic>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <system_error>
 
@@ -9,8 +12,11 @@
 #  include <windows.h>
 #  include <shlobj.h>
 #elif defined(__APPLE__)
+#  include <crt_externs.h>
 #  include <mach-o/dyld.h>
 #  include <cstdint>
+#else
+#  include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -48,18 +54,106 @@ fs::path os_app_data_dir() {
     return base;
 }
 
-// CALIPER_DATA_DIR when it is set and not empty, else the OS default; read
-// once, at the first lookup. Creates nothing.
-const std::string& default_app_data_dir() {
-    static const std::string dir = [] {
+// The process's environment, as `name=value` strings. A dynamic library on
+// macOS (the Python extension links this file) has no `environ` of its own.
+char** environment() {
+#ifdef _WIN32
+    return _environ;
+#elif defined(__APPLE__)
+    return *_NSGetEnviron();
+#else
+    return environ;
+#endif
+}
+
+// The guard's marker (app_data_guard()); a string literal, set before threads.
+std::atomic<const char*> g_guard_what{nullptr};
+
+// Why the environment makes this a test or hidden run, "" when it does not:
+// CALIPER_HIDDEN=1, or the first CALIPER_TEST_* variable that is not empty.
+std::string guard_reason_from_environment() {
+    if (const char* h = std::getenv("CALIPER_HIDDEN"); h && std::strcmp(h, "1") == 0)
+        return "the hidden app (CALIPER_HIDDEN=1)";
+    static const char kPrefix[] = "CALIPER_TEST_";
+    for (char** e = environment(); e && *e; ++e) {
+        const char* kv = *e;
+        if (std::strncmp(kv, kPrefix, sizeof(kPrefix) - 1) != 0) continue;
+        const char* eq = std::strchr(kv, '=');
+        if (!eq || eq[1] == '\0') continue;
+        return "a test run (" + std::string(kv, eq) + " is set)";
+    }
+    return {};
+}
+
+// The default folder and whether it was given explicitly (CALIPER_DATA_DIR),
+// read once, at the first lookup. Creates nothing.
+struct DefaultDir {
+    std::string path;
+    bool given = false;
+};
+
+const DefaultDir& resolved_default() {
+    static const DefaultDir dir = [] {
         if (const char* env = std::getenv("CALIPER_DATA_DIR"); env && *env)
-            return fs::path(env).string();
-        return os_app_data_dir().string();
+            return DefaultDir{fs::path(env).string(), true};
+        return DefaultDir{os_app_data_dir().string(), false};
     }();
     return dir;
 }
 
+// CALIPER_DATA_DIR when it is set and not empty, else the OS default, which a
+// test or hidden run refuses (THE GUARD, app_paths.h): it says why on standard
+// error and ends the process with exit code 1, before anything is created.
+// Whether `path` is `root` or lies under it, by their lexically normal
+// absolute forms and, where they exist, with links resolved.
+bool is_or_under(const fs::path& path, const fs::path& root) {
+    std::error_code ec;
+    fs::path p = fs::weakly_canonical(fs::absolute(path, ec), ec);
+    if (ec) p = fs::absolute(path, ec).lexically_normal();
+    ec.clear();
+    fs::path r = fs::weakly_canonical(fs::absolute(root, ec), ec);
+    if (ec) r = fs::absolute(root, ec).lexically_normal();
+    auto pi = p.begin();
+    for (auto ri = r.begin(); ri != r.end(); ++ri, ++pi) {
+        if (ri->empty()) continue;   // a trailing separator
+        if (pi == p.end() || *pi != *ri) return false;
+    }
+    return !r.empty();
+}
+
+const std::string& default_app_data_dir() {
+    const DefaultDir& dir = resolved_default();
+    // In a test or hidden run the folder must be one of the run's own: not
+    // the OS default because none was given, and not a folder given inside it.
+    if (!dir.given || is_or_under(dir.path, os_app_data_dir())) {
+        const std::string why = app_data_guard_reason();
+        if (!why.empty()) {
+            std::fprintf(stderr,
+                         dir.given ? "caliper: %s was given a data folder inside your app-data folder, %s; set "
+                                     "CALIPER_DATA_DIR to a folder of its own\n"
+                                   : "caliper: %s has no data folder of its own and would use your "
+                                     "app-data folder %s; set CALIPER_DATA_DIR to a folder of its own\n",
+                         why.c_str(), dir.path.c_str());
+            std::fflush(stdout);
+            std::fflush(stderr);
+            // No static destructors: other threads may be running.
+            std::_Exit(1);
+        }
+    }
+    return dir.path;
+}
+
 } // anonymous namespace
+
+void app_data_guard(const char* what) {
+    g_guard_what.store(what && *what ? what : "a test or hidden run");
+}
+
+std::string app_data_guard_reason() {
+    if (const char* what = g_guard_what.load()) return what;
+    static const std::string from_env = guard_reason_from_environment();
+    return from_env;
+}
 
 // Embed v1.1 override root. Empty => no override (the OS default is used). The
 // caliper exe never sets this, so its default path resolution is unchanged.

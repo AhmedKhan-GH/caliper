@@ -15,7 +15,7 @@
 //   leave                the pointer leaves the window (no hover is left behind)
 //   key <chord>          a press and release of a chord: cmd, shift and one
 //                        key (a letter, a digit, enter, escape, backspace,
-//                        f3, f4, f5, f6, up, down, comma), such as "cmd+k"
+//                        tab, f3, f4, f5, f6, up, down, comma), such as "cmd+k"
 //                        (Ctrl+K off macOS) or "cmd+shift+z"
 //   type <text>          the text as the keyboard's characters; "\n" is a
 //                        line break
@@ -47,16 +47,29 @@
 //   chat local on|off    marks the chosen agent as running on a local model,
 //                        or clears it, as the picker's Local model row does
 //   chat picker          opens the agent picker
+//   chat mode <mode>     wait until the chat's header shows Caliper's mode
+//                        for its agent: ask, accept_edits, read_only, allow_all
+//   chat allow-all on|off
+//                        Allow all for this session on, or off, as its menu
+//                        item and the banner's End do
+//   chat undo <command>  the Undo of the newest APPLIED row of that command,
+//                        as its button does, once it is the newest step
 //   cards <n>            wait until the approval cards' strip shows at least n
 //                        waiting cards at its full height (approval_cards.h)
 //   click <item> [fx fy] a click on a named rectangle of the spec page
 //                        (SpecPage::item_rect: "page:browser") or of the
 //                        builder pane (BuilderPane::item_rect:
-//                        "source:table:metrics", "primitive:series",
+//                        "source:table:metrics", "run:12" (a run of
+//                        metrics in Sources), "runs:all" (its Show all),
+//                        "primitive:series",
 //                        "prop:title", "bar:save", ...),
 //                        at the fractions fx, fy of it (0.5 0.5 by default); a
 //                        negative fraction counts pixels from its right or
 //                        bottom edge
+//   menu <item> [fx fy]  a right click there, such as "panel:loss", which
+//                        opens the panel's menu ("menu:remove" is its Remove
+//                        panel); the page's "remove:<panel>" is the × on a
+//                        panel's strip, which a click works without hovering
 //   drag <item> [fx fy] to <item> [fx fy] [hold]
 //                        a press on the first, a move in steps to the second
 //                        and a release there, or none with `hold`
@@ -100,6 +113,13 @@
 //   settings list | probe
 //                        lists the server's models, or probes the model, as
 //                        List and Probe do
+//   settings perm <chat|mcp> <mode>
+//                        sets the mode of the side chat's agent or of mcp
+//                        clients (ask, accept_edits, read_only), as a click on
+//                        its button in Permissions does
+//   settings rules <n>   wait until Permissions lists n saved rules
+//   settings revoke <agent> <command>
+//                        Revoke of that saved rule, as its button does
 //   settings until open | note <text>|none | state <text>|none | done [<seconds>]
 //                        wait until the settings are open, show that GPU note,
 //                        or that plain state, or until no list or probe runs
@@ -244,6 +264,10 @@ public:
             io.AddMouseButtonEvent(0, false);
             mouse_down_ = false;
         }
+        if (right_down_) {
+            io.AddMouseButtonEvent(1, false);
+            right_down_ = false;
+        }
         // After a step of input, frames for the page to act on it and draw
         // its new rectangles, so the next step aims at where things are now.
         if (settle_ > 0) {
@@ -297,8 +321,25 @@ public:
             } else if (what == "until" && which == "state") {
                 if (settings_->state() != want) return patience("the settings' state is " + shown(settings_->state()));
                 next("the settings' state is " + shown(want));
+            } else if (what == "perm" && (which == "chat" || which == "mcp") && !rest.empty()) {
+                if (!settings_->has_permissions()) return patience("the settings have no Permissions yet");
+                settings_->set_permission_mode(which, rest);
+                if (settings_->permission_mode(which) != rest)
+                    return void(error_ = "settings perm: the mode of " + which + " is " + settings_->permission_mode(which));
+                next("settings perm " + which + " " + rest);
+            } else if (what == "rules" && !which.empty()) {
+                const size_t n = settings_->saved_rules().size();
+                if (std::to_string(n) != which) return patience("the settings list " + std::to_string(n) + " saved rules");
+                next("the settings list " + which + " saved rules");
+            } else if (what == "revoke" && !which.empty() && !rest.empty()) {
+                const auto rules = settings_->saved_rules();
+                if (std::find(rules.begin(), rules.end(), std::make_pair(which, rest)) == rules.end())
+                    return patience("no saved rule " + which + " " + rest);
+                settings_->revoke_rule(which, rest);
+                next("settings revoke " + which + " " + rest);
             } else {
-                error_ = "settings takes open, close, preset, model, list, probe or until open|note|state|done";
+                error_ = "settings takes open, close, preset, model, list, probe, perm, rules, revoke or until "
+                         "open|note|state|done";
             }
 #else
             error_ = "settings: the builder is not in this build";
@@ -316,6 +357,20 @@ public:
             io.AddMouseButtonEvent(0, true);
             mouse_down_ = true;
             next("clicked " + name);
+            return;
+        }
+        if (s.verb == "menu") {
+            // A right click on a named rectangle: a panel's menu.
+            std::stringstream words(s.arg);
+            std::string name;
+            float fx = 0.5f, fy = 0.5f;
+            words >> name >> fx >> fy;
+            float x = 0, y = 0;
+            if (!item_point(page, name, fx, fy, &x, &y)) return patience("no builder item " + name);
+            io.AddMousePosEvent(x, y);
+            io.AddMouseButtonEvent(1, true);
+            right_down_ = true;
+            next("opened the menu of " + name);
             return;
         }
         if (s.verb == "drag") {
@@ -584,6 +639,21 @@ public:
                 const std::string shown = chat->note().empty() ? std::string("none") : chat->note();
                 if (chat->note() != want) return patience("the chat's note is " + shown);
                 next("the chat's note is " + shown);
+            } else if (what == "mode" && !a.empty()) {
+                const std::string word = a == "ask"            ? "Ask"
+                                         : a == "accept_edits" ? "Accept edits"
+                                         : a == "read_only"    ? "Read only"
+                                         : a == "allow_all"    ? "Allow all"
+                                                               : a;
+                if (chat->permission_mode() != word) return patience("the chat's mode is " + chat->permission_mode());
+                next("the chat's mode is " + word);
+            } else if (what == "allow-all" && (a == "on" || a == "off")) {
+                if (chat->state() == "none") return patience("the chat is not made yet");
+                chat->set_allow_all(a == "on");
+                next("chat allow-all " + a);
+            } else if (what == "undo" && !a.empty()) {
+                if (!chat->undo_applied(a)) return patience("no APPLIED " + a + " to undo");
+                next("chat undo " + a);
             } else if (what == "item") {
                 const std::string cmd = b == "-" ? std::string() : b;
                 if (!chat->has_item(a, cmd, c)) return patience("no chat item " + s.arg);
@@ -648,7 +718,7 @@ private:
 
     void next(const std::string& what) {
         const std::string& verb = steps_[at_].verb;
-        if (verb == "click" || verb == "key" || verb == "type" || verb == "drag" || verb == "release" ||
+        if (verb == "click" || verb == "menu" || verb == "key" || verb == "type" || verb == "drag" || verb == "release" ||
             verb == "drop" || verb == "select")
             settle_ = kSettle;
         log_.push_back(what);
@@ -716,6 +786,8 @@ private:
                 keys.push_back(ImGuiKey_Enter);
             } else if (p == "backspace") {
                 keys.push_back(ImGuiKey_Backspace);
+            } else if (p == "tab") {
+                keys.push_back(ImGuiKey_Tab);
             } else if (p == "f3") {
                 keys.push_back(ImGuiKey_F3);
             } else if (p == "f4") {
@@ -778,7 +850,7 @@ private:
     // When the current step began, and the seconds a step may wait (0: kPatience frames).
     std::chrono::steady_clock::time_point step_start_ = std::chrono::steady_clock::now();
     double patience_s_ = 0.0;
-    bool armed_ = false, shot_requested_ = false, quit_ = false, mouse_down_ = false;
+    bool armed_ = false, shot_requested_ = false, quit_ = false, mouse_down_ = false, right_down_ = false;
     std::vector<ImGuiKey> held_keys_;
     std::vector<std::string> log_;
     std::string error_, facts_;

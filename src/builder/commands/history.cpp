@@ -191,6 +191,7 @@ HistoryStepSummary CommandHistory::summarize(const HistoryStep& step) {
     s.group = step.group;
     s.origin = step.origin;
     s.at = step.at;
+    for (const auto& r : step.records) s.seqs.insert(s.seqs.end(), r.seqs.begin(), r.seqs.end());
     return s;
 }
 

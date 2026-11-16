@@ -35,6 +35,7 @@
 #if CALIPER_WITH_BUILDER
 #include "host/builder/agent_settings.h"
 #include "host/builder/widget_app.h"
+#include <caliper_builder/session/session.h>
 #include "host/spec_runtime/spec_runtime.h"
 #endif
 #include "host/builder/spec_ui_driver.h"
@@ -618,7 +619,7 @@ public:
             }
             // The agent's own API file, with a token of the origin agent for
             // this session: never the person's token, nor the API file's.
-            return api_.issue_agent_file(why);
+            return api_.issue_agent_file(why, "chat");
         };
         chh.end_api_file = [this](const std::string& file) { api_.revoke_agent_file(file); };
         chh.agent_ended = [this] {
@@ -651,7 +652,7 @@ public:
         caliper_host::SpecPage::ApiFiles af;
         af.issue = [this]() -> std::string {
             std::string why;
-            return api_.running() ? api_.issue_agent_file(&why) : std::string();
+            return api_.running() ? api_.issue_agent_file(&why, "widget") : std::string();
         };
         af.revoke = [this](const std::string& file) { api_.revoke_agent_file(file); };
         spec_page_.set_api_files(std::move(af));
@@ -671,6 +672,39 @@ public:
             ao.log = [this](const std::string& e, const std::string& o, const std::string& d) { landing_.log(e, o, d); };
             agent_settings_.start(std::move(ao));
             spec_page_.set_agent_settings(&agent_settings_);
+            // Its Permissions section: the modes of the side chat's agent and
+            // of mcp clients, and the saved rules, through the session as the
+            // person's own UI (design/command-layer.md, Agent permissions).
+            namespace cb = caliper_builder;
+            caliper_host::AgentPermissionHooks ph;
+            auto who_of = [](const std::string& who) {
+                return who == "mcp" ? cb::AgentPrincipal::mcp : cb::AgentPrincipal::chat;
+            };
+            ph.mode = [this, who_of](const std::string& who) -> std::string {
+                cb::Session* s = session_.session();
+                if (!s) return "ask";
+                // The saved mode: Allow all is the chat's session's, above it, and not here.
+                return cb::agent_mode_name(s->saved_agent_mode(who_of(who)));
+            };
+            ph.set_mode = [this, who_of](const std::string& who, const std::string& mode) {
+                cb::Session* s = session_.session();
+                const auto m = cb::agent_mode_from_name(mode);
+                if (!s || !m || *m == cb::AgentMode::allow_all) return;
+                const cb::Error e = s->set_agent_mode(who_of(who), *m);
+                landing_.log(e ? "mode not set" : (who == "mcp" ? "mcp mode" : "side chat mode"), cb::agent_mode_label(*m),
+                             e ? e.code : "");
+            };
+            ph.rules = [this]() {
+                std::vector<std::pair<std::string, std::string>> out;
+                if (cb::Session* s = session_.session())
+                    for (const cb::AgentRule& r : s->saved_agent_rules()) out.push_back({r.agent, r.command});
+                return out;
+            };
+            ph.revoke = [this](const std::string& agent, const std::string& command) {
+                if (cb::Session* s = session_.session(); s && s->revoke_agent_rule({agent, command}))
+                    landing_.log("rule revoked", command, agent);
+            };
+            agent_settings_.set_permissions(std::move(ph));
         }
 #endif
     }
@@ -1965,9 +1999,13 @@ int main(int argc, char** argv) {
 
     std::cout << "=== Caliper ===" << std::endl;
 
-    // --hidden or CALIPER_HIDDEN=1: the real app with its window never shown.
+    // --hidden or CALIPER_HIDDEN=1: the real app with its window never shown,
+    // a testing aid, which never uses your own app-data folder: without
+    // CALIPER_DATA_DIR it stops at the first lookup (app_paths.h, THE GUARD).
     const char* hidden_env = std::getenv("CALIPER_HIDDEN");
     const bool hidden = cl.hidden || (hidden_env && std::strcmp(hidden_env, "1") == 0);
+    if (hidden)
+        caliper::app_data_guard(cl.hidden ? "the hidden app (--hidden)" : "the hidden app (CALIPER_HIDDEN=1)");
     CaliperApp app(cl.applet_dirs, hidden);
     app.set_workspace(caliper_host::app_session_options(cl).workspace);
     if (!app.initialize()) {

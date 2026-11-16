@@ -49,7 +49,9 @@
 //
 // A test-only way to decide: a hidden app (--hidden) whose environment names
 // a file in CALIPER_TEST_APPROVALS reads decisions from it, one line each,
-// "approve <command> [<origin>]" or "deny <command> [<origin>]", applied to
+// "approve <command> [<origin>]" or "deny <command> [<origin>]", or, for a
+// card that offers rules, "session <command> [<origin>]" (Allow always for
+// this session) or "always <command> [<origin>]" (Always allow), applied to
 // the oldest waiting card that matches through the same path as the buttons.
 // The app reads the variable only when hidden; nothing over Caliper API or
 // MCP can decide, so an agent cannot approve its own request.
@@ -170,6 +172,10 @@ struct ApprovalCard {
     std::vector<std::string> panels;      // the open spec's panels the edit changes or removes
     std::optional<std::chrono::milliseconds> time_left;   // none: the call waits without a limit
     ApprovalState state = ApprovalState::waiting;
+    // The card offers Allow once, Allow always for this session and Always
+    // allow <command> (Session::approval_offers_rules()).
+    bool rules = false;
+    caliper_builder::CommandInvocation invocation;   // the parked call, whose command a rule names
     std::string error;                    // conflict, failed: the command's error code
     double decided_at = 0.0;              // when the card learnt its outcome
 };
@@ -208,6 +214,10 @@ public:
     // card is not waiting.
     bool approve(const std::string& id);
     bool deny(const std::string& id);
+    // Allow always for this session (`saved` false) or Always allow (true):
+    // the rule is added for the card's own command through the session, then
+    // the card is approved. False when the card is not waiting or offers no rule.
+    bool allow_always(const std::string& id, bool saved);
 
     // The waiting cards, oldest first, then the decided ones still kept.
     const std::vector<ApprovalCard>& cards() const { return cards_; }
@@ -222,6 +232,7 @@ private:
     void settle(caliper_builder::Session& s, ApprovalCard& card, double now);
     void apply_decisions();
     bool decide(const std::string& id, bool approve);
+    bool decide_rule(const std::string& id, bool saved);
     void line(const ApprovalCard& card, const std::string& detail);
 
     Hooks hooks_;
@@ -262,6 +273,8 @@ struct ApprovalCardShape {
     int diff_lines = 0;
     bool warnings = false;
     bool decided = false;     // an outcome line and no buttons
+    bool rules = false;       // a row of the two rule answers above the buttons
+    std::string what_command; // the command a rule names, for the Always allow label
 };
 
 struct ApprovalLayoutInput {
@@ -283,6 +296,7 @@ struct ApprovalCardLayout {
     bool diff_folded = false;
     WidgetRect warnings;      // empty when none or no room
     WidgetRect approve, deny, diff;   // the buttons; empty when decided (diff: without a review)
+    WidgetRect session, always;       // the rule answers, a row above; empty without rules
 };
 
 struct ApprovalStripLayout {
@@ -303,6 +317,12 @@ struct ApprovalStripLayout {
 // compact lines past the first fold, then the warnings row goes.
 ApprovalStripLayout layout_approval_strip(const ApprovalLayoutInput& in, const ApprovalLayoutMetrics& m,
                                           const WidgetMeasure& measure);
+
+// The labels of a card's answers: "Approve" or, with rules, "Allow once";
+// "Allow always for this session"; "Always allow <command>".
+const char* approval_approve_label(bool rules);
+const char* approval_session_label();
+std::string approval_always_label(const std::string& command);
 
 // The layout input of the cards for a window.
 ApprovalLayoutInput approval_layout_input(const ApprovalCards& cards, float width, float window_h);

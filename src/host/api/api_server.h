@@ -152,10 +152,13 @@ bool token_ok(const caliper_net::HttpRequest& r, const std::string& token, bool 
 
 // The tokens the server accepts, each with its origin: "api", "mcp", "agent"
 // or "viewer". find() compares the request's token with every entry in
-// constant time and answers its origin, or "" for a missing or unknown token.
+// constant time and answers its origin, or "" for a missing or unknown token,
+// and gives the token's client in *client: which agent the app issued it for
+// ("chat", "widget"), from `clients` at the entry's index, "" when none.
 struct TokenTable {
     std::vector<std::pair<std::string, std::string>> entries;   // token, origin
-    std::string find(const caliper_net::HttpRequest& r, bool query_ok) const;
+    std::vector<std::string> clients;                           // by entry; shorter means ""
+    std::string find(const caliper_net::HttpRequest& r, bool query_ok, std::string* client = nullptr) const;
 };
 
 // The checks of a plain request after the door's Host check, in this order:
@@ -176,6 +179,7 @@ struct Verdict {
     std::string message;   // for the JSON error body
     Routed routed;
     std::string origin;    // Command: "api", "mcp", "agent" or "viewer"
+    std::string client;    // the token's client ("chat", "widget"), "" for none
     bool viewer = false;   // the request carries the viewer token
     // Command: the request came with the token and a Content-Length within
     // kMaxCommandBody, so its body is read even when a later check (415, the
@@ -268,7 +272,11 @@ public:
 
     // A new token with the origin "agent" or "mcp" ("" for any other origin),
     // accepted until revoke_token(); any thread, while the server runs or not.
-    std::string issue_token(const std::string& origin);
+    // `client` names the agent the app issued it for ("chat" for the side
+    // chat's agent, "widget" for the widget agent's sidecar): its commands
+    // carry it (CommandRequest::client), so the command layer applies that
+    // agent's mode; no request can name another (0 to 32 of a-z).
+    std::string issue_token(const std::string& origin, const std::string& client = {});
     // Ends an issued token: a request that carries it is then 401.
     void revoke_token(const std::string& token);
     std::string base_url() const;      // http://127.0.0.1:<port>/v0
@@ -309,7 +317,10 @@ private:
     caliper_net::HubOptions::StreamAccess stream_access(const std::string& presented) const;
     Options opt_;
     mutable std::mutex issued_mu_;
-    std::vector<std::pair<std::string, std::string>> issued_;   // issue_token()'s, token and origin
+    struct Issued {
+        std::string token, origin, client;
+    };
+    std::vector<Issued> issued_;   // issue_token()'s
     std::shared_ptr<CommandGateway> gateway_;
     std::unique_ptr<Impl> impl_;
 };

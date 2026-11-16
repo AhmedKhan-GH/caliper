@@ -143,7 +143,6 @@ int run_shot(const CommandLine& cl) {
     // a temporary one.
     const std::string user_dir = caliper::user_applets_dir();
     const std::string shipped_dir = caliper::shipped_applets_dir();
-    const std::string user_data_folder = caliper::app_data_location();   // the API file's
     const char* data_env = std::getenv("CALIPER_DATA_DIR");
     const bool own_root = !(data_env && *data_env);
 
@@ -329,7 +328,9 @@ int run_shot(const CommandLine& cl) {
         // first request on.
         s.api->set_command_gateway(s.session->command_gateway());
         std::string why;
-        if (!s.api->start(cl, "", user_data_folder, std::cout, &why))
+        // The API file goes into the data folder above, so a shot without
+        // CALIPER_DATA_DIR never replaces the running app's api.json.
+        if (!s.api->start(cl, "", data_root.string(), std::cout, &why))
             return fail("cannot start Caliper API: " + why);
         g_stop = 0;
         old_int = std::signal(SIGINT, shot_on_signal);

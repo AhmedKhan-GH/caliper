@@ -128,7 +128,7 @@ struct AppSession::Impl {
     enum class State { idle, opening, opened, ready, failed, closed };
     enum class Capture { none, armed, ready, failed };
     struct Line {
-        std::string name, origin, error;
+        std::string name, origin, error, allowed_by;
         bool ok = true;
     };
 
@@ -173,6 +173,7 @@ struct AppSession::Impl {
 
     std::mutex lines_m;
     std::vector<Line> lines;   // from the journal, any thread
+    std::vector<AppSession::Applied> applied;   // under lines_m: what a mode or a rule let run, the newest 64
     std::atomic<uint64_t> journaled{0};        // every journaled command
     std::atomic<uint64_t> specs_opened{0};     // every applet.open, and an agent's spec.new or spec.open, that succeeded
     std::atomic<uint64_t> agent_specs_opened{0};   // of those, the ones an agent sent
@@ -227,6 +228,7 @@ struct AppSession::Impl {
             const auto t0 = Clock::now();
             cb::SessionOptions so;
             so.journal.on_append = [this](const cb::JournalEvent& e) { note(e); };
+            so.permissions_file = opt.permissions_file;
             cb::Session::Open o = cb::Session::open(opt.workspace, std::move(so));
             std::lock_guard<std::mutex> lock(m);
             open_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
@@ -300,8 +302,13 @@ struct AppSession::Impl {
         l.origin = cb::command_origin_name(e.origin);
         l.ok = e.ok;
         l.error = e.error;
+        l.allowed_by = e.allowed_by;
         std::lock_guard<std::mutex> lock(lines_m);
         lines.push_back(std::move(l));
+        if (e.ok && !e.allowed_by.empty()) {
+            applied.push_back({e.seq, e.name, cb::command_origin_name(e.origin), e.allowed_by});
+            if (applied.size() > 64) applied.erase(applied.begin());
+        }
     }
 
     void flush_lines() {
@@ -313,8 +320,10 @@ struct AppSession::Impl {
         for (const Line& l : ls) {
             // The origin leads, so it stays in view when a long path widens
             // the OBJECT column; DETAIL holds the error code of a failure.
-            log(l.origin + " command", l.name, l.ok ? std::string() : l.error);
-            say("command " + l.name + " (" + l.origin + ")" + (l.ok ? std::string() : ": " + l.error));
+            // A command a mode or a rule let run without a card says what did.
+            const std::string detail = !l.ok ? l.error : l.allowed_by.empty() ? std::string() : "allowed by " + l.allowed_by;
+            log(l.origin + " command", l.name, detail);
+            say("command " + l.name + " (" + l.origin + ")" + (detail.empty() ? std::string() : ": " + detail));
         }
     }
 
@@ -764,6 +773,13 @@ uint64_t AppSession::agent_specs_opened() const {
 
 uint64_t AppSession::applets_saved() const { return impl_->applets_saved.load(std::memory_order_acquire); }
 
+std::vector<AppSession::Applied> AppSession::take_applied() {
+    std::lock_guard<std::mutex> lock(impl_->lines_m);
+    std::vector<Applied> out;
+    out.swap(impl_->applied);
+    return out;
+}
+
 std::shared_ptr<caliper_api::CommandGateway> AppSession::command_gateway() {
     Impl& im = *impl_;
     {
@@ -813,6 +829,7 @@ uint64_t AppSession::journaled() const { return 0; }
 uint64_t AppSession::specs_opened() const { return 0; }
 uint64_t AppSession::agent_specs_opened() const { return 0; }
 uint64_t AppSession::applets_saved() const { return 0; }
+std::vector<AppSession::Applied> AppSession::take_applied() { return {}; }
 std::shared_ptr<caliper_api::CommandGateway> AppSession::command_gateway() { return nullptr; }
 
 #endif

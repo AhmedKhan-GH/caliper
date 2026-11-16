@@ -14,7 +14,11 @@
 //   - Sources (left, upper): the catalog's sources grouped by kind, and the
 //     open spec's own sources, each with its name and its shape or columns in
 //     the terse style of the panel headers; a filter; a tabular source's
-//     columns as children. Dragging a source or a column onto the canvas or
+//     columns as children. Metrics are grouped by run, newest first, each run
+//     opening to its metrics, the newest kPaneRunsShown runs until Show all;
+//     the filter searches every run. The catalog is listed per kind, so that
+//     metrics never crowd the other kinds out of a list cut at its limit.
+//     Dragging a source or a column onto the canvas or
 //     onto a panel's slot is the main gesture; select, then Add (⏎) is the
 //     other way.
 //   - Primitives (left, lower): the seven primitives as nouns. Adding one
@@ -164,8 +168,29 @@ struct PaneSource {
     std::string shape_text;   // pane_shape_text(shape)
     std::string spec_id;      // the spec source's id; for a catalog row, the spec source that reads it unchanged
     int transforms = 0;       // a spec source's transforms
+    // A metric's run and tag, from its catalog origin; run -1 for other rows.
+    std::int64_t run = -1;
+    std::string run_name, experiment, tag;
 };
 const char* pane_group_label(PaneSource::Group g);   // "Spec", "Tables", "Tensors", "Live", "Feeds", "Metrics"
+
+// One line of the Sources list as it is drawn. Metrics are grouped by run:
+// a run's line, newest run (highest id) first, opens to its metrics; only
+// the newest kPaneRunsShown runs are listed until "Show all", and a filter
+// searches every run. Every other row is a source line, as are a run's
+// metrics, which are nested under it.
+struct PaneListItem {
+    enum class Kind { source, run, more };
+    Kind kind = Kind::source;
+    const PaneSource* source = nullptr;   // source: the row
+    bool nested = false;                  // source: a metric under its run
+    std::int64_t run = -1;                // run
+    std::string name;                     // run: its name, or "Run <id>"; more: the label
+    std::string experiment;               // run
+    int metrics = 0;                      // run: its metrics; more: the runs in all
+    bool open = false;                    // run: its metrics are shown
+};
+constexpr size_t kPaneRunsShown = 5;
 
 // What is dragged.
 struct DragPayload {
@@ -246,12 +271,25 @@ public:
 
     // ---- Sources
     const std::vector<PaneSource>& sources() const { return rows_; }
-    std::vector<const PaneSource*> visible_sources() const;   // the filter applied
+    // The list as drawn (PaneListItem), made again only when the rows, the
+    // filter, an expansion or Show all changed, never every frame.
+    const std::vector<PaneListItem>& list_items() const;
+    std::vector<const PaneSource*> visible_sources() const;   // the source lines of list_items()
     const PaneSource* find_source(const std::string& key) const;
     const std::string& filter() const { return filter_; }
-    void set_filter(std::string text) { filter_ = std::move(text); }
+    void set_filter(std::string text) {
+        if (text != filter_) items_dirty_ = true;
+        filter_ = std::move(text);
+    }
+    // A row's columns, or a run's metrics ("run:<id>").
     bool expanded(const std::string& key) const { return expanded_.count(key) != 0; }
     void toggle_expanded(const std::string& key);
+    // Every run listed, not only the newest kPaneRunsShown.
+    bool show_all_runs() const { return show_all_runs_; }
+    void set_show_all_runs(bool on) {
+        if (on != show_all_runs_) items_dirty_ = true;
+        show_all_runs_ = on;
+    }
     // The selection: one row, or one column of a tabular row. Selecting a
     // row focuses it in Properties.
     const std::string& selected() const { return selected_; }
@@ -352,6 +390,16 @@ public:
     bool set_spec_description(const std::string& description);
     // Removes the focused panel, or the focused spec source.
     bool remove_focused();
+    // Removes the panel `id` with panel.remove, one undo step: the page's ×
+    // on a panel's strip, its menu's Remove panel and ⌫ on the dashboard
+    // page. In build mode it is the pane's gesture, from the builder origin
+    // as Remove in Properties; on the dashboard page, outside build mode, it
+    // is the person's command from the ui origin.
+    bool remove_panel(const std::string& id);
+    // A rectangle of the canvas that a control of the page drew over a
+    // panel this frame (the × on its strip): a press there neither focuses
+    // nor drags the panel. Cleared as draw() begins.
+    void claim_canvas(const SpecRect& r) { claims_.push_back(r); }
     // The ratio of the split at `path` (SpecLayoutSplit::path).
     bool set_ratio(const std::string& path, double ratio);
 
@@ -414,8 +462,9 @@ public:
     void page_bar(float max_width = 0.0f);
     float page_bar_width() const;
     // The keys of build mode, before the page's own: ⌘B, ⌘T, ⌘Z, ⇧⌘Z, ⌘S,
-    // ⌫ on the focused panel, Escape (a drag, a draft, the focus). True when
-    // the pane took Escape.
+    // ⌫ on the focused panel, Escape (a drag, a draft, the focus); outside
+    // build mode only ⌘B, ⌘Z and ⇧⌘Z, so that a panel removed from the
+    // dashboard page comes back. True when the pane took Escape.
     bool keys(bool escape);
     // The regions of `area` this frame: the layout rule's, which is
     // compute_builder_pane_layout() unless the page gives its own
@@ -472,6 +521,9 @@ private:
     bool blocked();
     void reread();
     void refresh_catalog();
+    // catalog.list of one kind into catalog_; for metrics, a list that is cut
+    // at the limit is listed again by the next digit of the name.
+    void list_kind(const std::string& kind, const std::string& prefix, int depth);
     void rebuild_rows();
     void invalidate_caches();
     std::string next_group();
@@ -506,6 +558,9 @@ private:
     std::vector<PaneSource> rows_;
     std::string filter_;
     std::set<std::string> expanded_;
+    bool show_all_runs_ = false;
+    mutable std::vector<PaneListItem> items_;
+    mutable bool items_dirty_ = true;
     std::string selected_, selected_column_;
     std::vector<std::string> fresh_;
     std::map<std::string, std::string> fresh_loaders_;   // catalog id -> the loader the drop made
@@ -529,6 +584,8 @@ private:
 
     caliper_builder::Error error_;
     std::vector<caliper_builder::CommandInvocation> sent_;
+    caliper_builder::CommandOrigin origin_ = caliper_builder::CommandOrigin::builder;   // send()'s
+    std::vector<SpecRect> claims_;   // claim_canvas()
 
     // Caches, dropped whenever the open spec, the catalog or the selection change.
     std::map<std::string, PanePlan> primitive_plans_;

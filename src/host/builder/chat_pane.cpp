@@ -114,11 +114,29 @@ struct ChatPane::Impl {
     std::vector<caliper_builder::PendingApproval> pending;   // as read while the registry was free
     std::optional<ChatDraft> draft;   // a handoff that came before the chat was made
     caliper_builder::Session* session = nullptr;   // the app's, as of the last frame
+    bool busy = false;        // a long command holds the session's registry this frame
     std::string agent_file;   // the API file of the agent's session, with its own agent token
 
+    // The agent's session ends with its token: Allow all and the rules of
+    // this session go with it (Session::end_chat_session()).
     void end_agent_file() {
         if (!agent_file.empty() && hooks.end_api_file) hooks.end_api_file(agent_file);
+        if (!agent_file.empty() && session) session->end_chat_session();
         agent_file.clear();
+    }
+
+    void log(const std::string& event, const std::string& object, const std::string& detail) {
+        if (hooks.log) hooks.log(event, object, detail);
+    }
+
+    // Whether the newest undo step holds the command journaled under `seq`;
+    // never while a long command holds the registry.
+    bool top_step_holds(std::uint64_t seq) const {
+        if (!session || busy) return false;
+        const auto state = session->registry().history_state(1);
+        if (state.undo.empty()) return false;
+        const auto& seqs = state.undo.front().seqs;
+        return std::find(seqs.begin(), seqs.end(), seq) != seqs.end();
     }
 
     void save() {
@@ -156,9 +174,38 @@ struct ChatPane::Impl {
             settings.chat = s;
             save();
         };
+        // Caliper's mode for the agent, which the command layer applies to the
+        // commands of this chat's token (permissions.h); only the person's
+        // own UI changes it, here and in the settings.
+        h.permission_mode = [this]() -> std::string {
+            if (!session) return {};
+            return caliper_builder::agent_mode_label(session->agent_mode(caliper_builder::AgentPrincipal::chat));
+        };
+        h.set_permission_mode = [this](const std::string& name) {
+            namespace cb = caliper_builder;
+            // "" ends Allow all: the saved mode beneath it holds again.
+            const auto mode = name.empty() && session ? std::optional<cb::AgentMode>(session->saved_agent_mode(cb::AgentPrincipal::chat))
+                                                      : cb::agent_mode_from_name(name);
+            if (!session || !mode) return;
+            const caliper_builder::Error e = session->set_agent_mode(caliper_builder::AgentPrincipal::chat, *mode);
+            log(e ? "mode not set" : "side chat mode", caliper_builder::agent_mode_label(*mode), e ? e.code : "");
+        };
+        h.can_undo = [this](std::uint64_t seq) { return top_step_holds(seq); };
+        // Run at once on the frame thread, right after the check, so that no
+        // command queued meanwhile becomes the step it takes back.
+        h.undo = [this](std::uint64_t seq) {
+            if (!top_step_holds(seq)) return;
+            caliper_builder::CommandInvocation inv;
+            inv.name = "history.undo";
+            inv.origin = caliper_builder::CommandOrigin::ui;   // the person's own Undo
+            const caliper_builder::CommandResult r = session->invoke(std::move(inv));
+            if (!r.ok) log("undo failed", "history.undo", r.error.code);
+        };
         h.before_start = [this](ChatEnvironment* env) -> caliper_builder::Error {
             if (!hooks.start_api) return {"chat.no_api", "Caliper API is not running."};
             end_agent_file();   // a restart's agent gets a new token; the old one ends
+            // The saved rules that apply are this agent's.
+            if (session && chat) session->set_chat_agent(chat->settings().agent);
             std::string why, started;
             const std::string file = hooks.start_api(&why, &started);
             if (file.empty()) return {"chat.no_api", "Caliper API did not start: " + why};
@@ -203,9 +250,13 @@ void ChatPane::frame(AppSession& app) {
         im.make(app);
     }
     im.session = app.session();
+    im.busy = app.worker_busy();
     if (!im.chat) return;
     // The pending approvals, read only while no long command holds the registry.
     if (caliper_builder::Session* s = app.session(); s && !app.worker_busy()) im.pending = s->registry().pending_approvals();
+    // The agent's commands that a mode or a rule let run without a card.
+    for (const AppSession::Applied& a : app.take_applied())
+        if (a.origin == "agent" && !im.agent_file.empty()) im.chat->applied(a.seq, a.name, a.allowed_by);
     im.chat->update();
 }
 
@@ -278,7 +329,8 @@ std::string ChatPane::state() const {
 
 bool ChatPane::has_item(const std::string& kind, const std::string& command, const std::string& status) const {
     if (!impl_->chat) return false;
-    static const char* kinds[] = {"person", "agent", "thought", "tool", "plan", "permission", "approval", "stop", "notice"};
+    static const char* kinds[] = {"person", "agent", "thought", "tool", "plan", "permission", "approval", "stop", "notice",
+                                  "applied"};
     for (const ChatItem& it : impl_->chat->items()) {
         if (kind != kinds[(int)it.kind]) continue;
         if (!command.empty() && it.command != command) continue;
@@ -286,6 +338,7 @@ bool ChatPane::has_item(const std::string& kind, const std::string& command, con
             const std::string st = it.kind == ChatItem::Kind::tool         ? it.tool.status
                                    : it.kind == ChatItem::Kind::approval  ? (it.answer.empty() ? "waiting" : it.answer)
                                    : it.kind == ChatItem::Kind::permission ? (it.answer.empty() ? "open" : it.answer)
+                                   : it.kind == ChatItem::Kind::applied    ? (it.answer.empty() ? "applied" : it.answer)
                                                                            : it.text;
             if (st != status) continue;
         }
@@ -306,6 +359,21 @@ bool ChatPane::set_local_model(bool on) { return impl_->chat && impl_->chat->set
 
 void ChatPane::open_picker() {
     if (impl_->chat) impl_->chat->open_picker();
+}
+
+std::string ChatPane::permission_mode() const { return impl_->chat ? impl_->chat->permission_word() : std::string(); }
+
+void ChatPane::set_allow_all(bool on) {
+    if (impl_->chat) impl_->chat->set_allow_all(on);
+}
+
+bool ChatPane::undo_applied(const std::string& command) {
+    if (!impl_->chat) return false;
+    const auto& items = impl_->chat->items();
+    for (auto it = items.rbegin(); it != items.rend(); ++it)
+        if (it->kind == ChatItem::Kind::applied && it->command == command && it->answer.empty())
+            return impl_->chat->undo_applied(it->serial);
+    return false;
 }
 
 void ChatPane::shutdown() {
@@ -349,6 +417,9 @@ int ChatPane::draft_chips() const { return 0; }
 std::string ChatPane::note() const { return {}; }
 bool ChatPane::set_local_model(bool) { return false; }
 void ChatPane::open_picker() {}
+std::string ChatPane::permission_mode() const { return {}; }
+void ChatPane::set_allow_all(bool) {}
+bool ChatPane::undo_applied(const std::string&) { return false; }
 void ChatPane::shutdown() {}
 
 #endif

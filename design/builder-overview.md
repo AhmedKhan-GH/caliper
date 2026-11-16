@@ -162,6 +162,15 @@ Each page records its own decisions. These hold across the parts:
 - **Loopback only.** Agents reach the app through Caliper API on 127.0.0.1 with the session token, and the stream socket never carries commands.
 - **JSON values** in these libraries are nlohmann/json; the wire protocol keeps its own strict reader.
 
+## Next
+
+These are planned for the round after this one and not started:
+
+- **The Data view.** A node graph of sources, transforms and panel slots, built on imgui-node-editor, where dragging a source or a transform onto a slot binds it.
+- **Empty optional arguments.** An empty string on an optional argument of a command counts as the argument left out, as a null already does.
+- **The Ollama preset offered.** The widget agent's settings offer the Ollama preset when Ollama is running on this machine.
+- **The documented setup builds the native sender and the WebAssembly views**, so that a person who follows it has both.
+
 ## Reserved for later work
 
 The primitive name `scene`, for 3-D scenes, and the catalog kind `recording`, for recorded sessions, are reserved and not built ([Spec format](spec-format.md#reserved-names), [Catalog](catalog.md#reserved-names)).

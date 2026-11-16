@@ -78,6 +78,11 @@ Live, Feeds and Metrics. Each row has the source's name and, in mono, its shape:
 its transforms. A table opens with the triangle at its left to show its columns and their types. The filter line
 narrows the list by name, id or column.
 
+Metrics are grouped by run, newest first. Each run is one line with its name, its number of metrics and its id; a click
+opens it to its metrics, each named by its tag and used like any other row. Sources lists the newest five runs, and
+Show all after them lists every run. The filter searches every run, by the run's name, its experiment, or a metric's
+tag, and opens the runs it finds. Every kind of source is listed, however many metrics the store holds.
+
 A click selects a row or a column and shows it in Properties. Dragging a row or a column onto the canvas makes a panel
 there, of the primitive that suits the data: a series for a column or a table with numeric columns, a heatmap for a
 rank-2 tensor, points for `[n, 2]` and `[n, 3]`, an image for `[H, W, 3]` and `[H, W, 4]`, a table for other tables,
@@ -109,6 +114,15 @@ start: "No panels", and under it "Drop a data file, or pick a source in Sources"
 | Dragging a panel's title strip | Moves the panel: onto another panel's left, right, top or bottom edge, beside or above or below it; onto its centre, into tabs with it; onto the band along the canvas's border, at that edge of the whole layout. |
 | Dragging the rule between two panels | Changes their split's share, in hundredths, shown beside the pointer while it moves. A split of more than two panels shares its space equally and does not move. |
 | ⌫ | Removes the focused panel. |
+
+A panel can be removed in build mode and on the dashboard page outside it, in three ways: the × at the right end of
+its title strip, shown while the pointer is over the panel (at its top right corner for a panel in tabs); Remove panel
+in the menu that a right click on the panel opens; and ⌫ or Delete on the focused panel, unless a text field, the
+command input or the inline prompt has the keyboard. Each is one `panel.remove`, one undo step, from the `builder`
+origin in build mode, as Remove in Properties, and from the `ui` origin on the dashboard page; the layout closes the
+gap, and ⌘Z brings the panel back where it was, on the dashboard page too. None of them is offered while the inline
+prompt is open or a ⌘K preview is shown, since a preview's panels are only proposed: Accept or Reject it first. A
+dashboard drawn from a file outside the workspace offers none of them.
 
 While something is dragged, the rectangle where it would land is outlined in bronze; a drop that would not fit is
 outlined in grey with the reason in a tooltip, and nothing changes when it is released. A source held over a panel
@@ -180,11 +194,11 @@ can use it is in [Caliper API](api.md#started-by-the-app).
 | ⌘B | Build mode on or off |
 | ⌘T | The spec text |
 | ⌘E, Esc | Edit the text, and back |
-| ⌘Z, ⇧⌘Z | Undo and redo, unless a text field has the keyboard |
+| ⌘Z, ⇧⌘Z | Undo and redo, unless a text field has the keyboard; on the dashboard page too |
 | ⌘S | Save |
 | ⌘O | Open the saved dashboard in a browser |
 | ⏎ | Add the selection, in Sources |
-| ⌫ | Remove the focused panel |
+| ⌫, Delete | Remove the focused panel; on the dashboard page too |
 | ⌘K | The inline prompt in the focused panel ([Widget agent](widget-agent.md)) |
 | ⌘L | The side chat ([Side chat](side-chat.md)) |
 | Esc | Cancels a drag, leaves the editor, gives up a source's focus, then a panel's, then goes Home |
