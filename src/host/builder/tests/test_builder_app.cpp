@@ -23,12 +23,14 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -345,6 +347,39 @@ TEST_CASE("builder app: only a link of the browser viewer on loopback goes to th
         CHECK_FALSE_MESSAGE(viewer_link_openable("http://127.0.0.1:7341/v0/spec?token=abc&applet=" + bad), bad);
     }
     CHECK_FALSE(viewer_link_openable("http://127.0.0.1:7341/v0/spec?token=abc&applet=run&applet=.."));
+}
+
+// The browser's opener is started with the standard descriptors only: a
+// descriptor of the app that is not marked close-on-exec, such as a listening
+// socket's, never reaches it or the browser it starts.
+TEST_CASE("builder app: the browser's opener gets only the standard descriptors") {
+    const std::string root = fresh_dir("builder-app-opener");
+    const std::string out = root + "/fds.txt";
+    int p[2];
+    REQUIRE(::pipe(p) == 0);
+    const int kept = ::dup2(p[0], 57);   // not close-on-exec, as a careless descriptor is
+    REQUIRE(kept == 57);
+    std::string why;
+    REQUIRE_MESSAGE(caliper_host::spawn_detached({"/bin/sh", "-c", "ls /dev/fd > '" + out + "'"}, &why), why);
+    std::string listed;
+    for (int i = 0; i < 200 && listed.find('\n') == std::string::npos; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        listed = std::filesystem::exists(out) ? read_text(out) : std::string();
+    }
+    ::close(57);
+    ::close(p[0]);
+    ::close(p[1]);
+    INFO("the child's descriptors: " << listed);
+    std::vector<std::string> fds;
+    {
+        std::istringstream in(listed);
+        for (std::string f; in >> f;) fds.push_back(f);
+    }
+    REQUIRE_FALSE(fds.empty());
+    CHECK(std::find(fds.begin(), fds.end(), "57") == fds.end());
+    for (const char* std_fd : {"0", "1", "2"}) CHECK(std::find(fds.begin(), fds.end(), std_fd) != fds.end());
+    // Only the three, and the listing's own directory: none of this process's.
+    CHECK(fds.size() <= 4);
 }
 
 // Home from a dashboard just made and saved: the landing selects that

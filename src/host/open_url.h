@@ -11,6 +11,7 @@
 // never through a shell, and the call does not wait for the browser.
 // ============================================================================
 #include <string>
+#include <vector>
 
 namespace caliper_host {
 
@@ -23,6 +24,14 @@ bool viewer_link_openable(const std::string& url);
 // an applet id (the spec format's): a lower-case letter, then at most 63
 // lower-case letters, digits, _ or -. So never "." or "..".
 bool viewer_applet_id(const std::string& id);
+
+// Starts argv[0] (an absolute path on macOS, looked up on PATH elsewhere)
+// without waiting for it, with only the standard descriptors, each on
+// /dev/null (POSIX_SPAWN_CLOEXEC_DEFAULT on macOS, closefrom on glibc), the
+// default signal mask and dispositions, in a process group of its own; it is
+// reaped off the calling thread. False, with the reason, when it cannot be
+// started. Not on Windows.
+bool spawn_detached(const std::vector<std::string>& argv, std::string* why);
 
 // Opens `url` in the default browser; false, with the reason, when the link
 // is not one viewer_link_openable() takes or the browser cannot be started.
