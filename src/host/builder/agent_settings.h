@@ -160,9 +160,9 @@ struct AgentSettingsMetrics {
     float button_pad = 10; // inside a button, left and right
     float label = 120;     // the label column
     float field = 280;     // the narrowest field
-    float column = 320;    // the narrowest capabilities column
-    float min_w = 560, min_h = 420;
-    float share_w = 0.62f, share_h = 0.78f;   // of the work area
+    float column = 400;    // the narrowest capabilities column
+    float min_w = 560;
+    float share_w = 0.62f;   // of the work area's width; the height is the content's
     float margin = 24;     // between the window and the work area's edges
     static AgentSettingsMetrics for_text_scale(float s);
 };

@@ -477,7 +477,8 @@ TEST_CASE("agent settings: the layout at two sizes") {
     s.choose_preset("lmstudio");
     s.set_base_url("http://192.0.2.10:1234/v1");   // two warnings
     const WidgetMeasure measure = [](const std::string& t, WidgetFont) { return 8.0f * (float)t.size(); };
-    for (const auto& [w, h] : std::vector<std::pair<float, float>>{{1440, 900}, {2560, 1440}, {900, 640}}) {
+    for (const auto& size : std::vector<std::pair<float, float>>{{1440, 900}, {2560, 1440}, {900, 640}}) {
+        const float w = size.first, h = size.second;
         CAPTURE(w);
         const AgentSettingsLayoutInput in = s.layout_input({0, 30, w, h - 60});
         const AgentSettingsLayout L = layout_agent_settings(in, AgentSettingsMetrics::for_text_scale(1.0f), measure);

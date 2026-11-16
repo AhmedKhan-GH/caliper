@@ -388,18 +388,18 @@ AgentSettingsMetrics AgentSettingsMetrics::for_text_scale(float s) {
     m.field = r(m.field);
     m.column = r(m.column);
     m.min_w = r(m.min_w);
-    m.min_h = r(m.min_h);
     m.margin = r(m.margin);
     return m;
 }
 
-AgentSettingsLayout layout_agent_settings(const AgentSettingsLayoutInput& in, const AgentSettingsMetrics& m,
-                                          const WidgetMeasure& measure) {
+namespace {
+
+// The rows inside a window whose x, y and width are given; `bottom` gets the
+// content's lowest edge.
+AgentSettingsLayout layout_in_window(const AgentSettingsLayoutInput& in, const AgentSettingsMetrics& m,
+                                     const WidgetMeasure& measure, const WidgetRect& window, float* bottom) {
     AgentSettingsLayout L;
-    const WidgetRect& A = in.area;
-    const float w = std::max(std::min(m.min_w, A.w - 2 * m.margin), std::min(A.w * m.share_w, A.w - 2 * m.margin));
-    const float h = std::max(std::min(m.min_h, A.h - 2 * m.margin), std::min(A.h * m.share_h, A.h - 2 * m.margin));
-    L.window = {std::round(A.x + (A.w - w) * 0.5f), std::round(A.y + (A.h - h) * 0.5f), std::round(w), std::round(h)};
+    L.window = window;
     const WidgetRect& W = L.window;
     auto bw = [&](const std::string& label) { return std::round(measure(label, WidgetFont::label) + 2 * m.button_pad); };
 
@@ -536,7 +536,24 @@ AgentSettingsLayout layout_agent_settings(const AgentSettingsLayoutInput& in, co
         cy += m.line + m.gap;
     }
     L.caps.h = cy - L.caps.y;
+    *bottom = std::max(y, cy);
     return L;
+}
+
+}  // namespace
+
+AgentSettingsLayout layout_agent_settings(const AgentSettingsLayoutInput& in, const AgentSettingsMetrics& m,
+                                          const WidgetMeasure& measure) {
+    // A share of the work area's width; as tall as its content, up to the
+    // area, centred in it.
+    const WidgetRect& A = in.area;
+    const float w = std::round(std::max(std::min(m.min_w, A.w - 2 * m.margin), std::min(A.w * m.share_w, A.w - 2 * m.margin)));
+    const float avail = std::max(0.0f, A.h - 2 * m.margin);
+    const float x = std::round(A.x + (A.w - w) * 0.5f);
+    float bottom = 0;
+    layout_in_window(in, m, measure, {x, A.y + m.margin, w, avail}, &bottom);
+    const float h = std::round(std::min(avail, bottom - (A.y + m.margin) + m.pad));
+    return layout_in_window(in, m, measure, {x, std::round(A.y + (A.h - h) * 0.5f), w, h}, &bottom);
 }
 
 // ---- the component ------------------------------------------------------------------------
@@ -800,6 +817,12 @@ AgentCapabilities AgentSettings::capabilities() const {
                                               std::chrono::system_clock::now().time_since_epoch())
                                               .count();
         caps_cached_ = read_cached_capabilities(options_.cache_dir, base_for_cache(c), model_for_cache(c), now);
+        // Every model the Claude preset offers calls tools and reads images,
+        // as the sidecar assumes without a probe.
+        if (c.preset && c.preset->api == "claude") {
+            if (!caps_cached_.tools) caps_cached_.tools = true, caps_cached_.tools_source = "known";
+            if (!caps_cached_.vision) caps_cached_.vision = true, caps_cached_.vision_source = "known";
+        }
         caps_revision_seen_ = revision_;
     }
     return caps_cached_;
@@ -1129,12 +1152,22 @@ void AgentSettings::draw(float x, float y, float w, float h, const SpecLook& L) 
     const AgentCapabilities caps = capabilities();
     text_at(dl, L.ui, L.small_size, ImVec2(lay.caps_title.x, lay.caps_title.y), L.faint, "Capabilities");
     const bool can_probe = c.preset && !busy() && !options_.python.empty() && !model_for_cache(c).empty();
+    // A row's name, then its value and, where it fits before the row's first
+    // control, where the value came from.
+    const float name_w = extent(L.ui, L.ui_size, "Context length").x + m.gap * 2;
+    auto value_text = [&](const WidgetRect& row, float end, const std::string& value, const std::string& source) {
+        const float vx = row.x + name_w;
+        const float vw = extent(L.ui, L.ui_size, value).x;
+        if (vx + vw > end) return;
+        text_at(dl, L.ui, L.ui_size, ImVec2(vx, row.y + ty), L.text, value);
+        const float sx = vx + vw + m.gap;
+        if (source != "unknown" && sx + extent(L.ui, L.small_size, source).x <= end)
+            text_at(dl, L.ui, L.small_size, ImVec2(sx, row.y + ty), L.faint, source);
+    };
     auto cap_row = [&](const WidgetRect& row, const std::vector<WidgetRect>& buttons, const char* name,
                        const std::string& value, const std::string& source, const char* key, const json& over) {
         text_at(dl, L.ui, L.ui_size, ImVec2(row.x, row.y + ty), L.secondary, name);
-        const float vx = row.x + std::round(m.label * 1.1f);
-        text_at(dl, L.ui, L.ui_size, ImVec2(vx, row.y + ty), L.text, value);
-        text_at(dl, L.ui, L.small_size, ImVec2(vx + extent(L.ui, L.ui_size, value).x + m.gap, row.y + ty), L.faint, source);
+        value_text(row, (buttons.empty() ? row.right() : buttons[0].x) - m.gap, value, source);
         const std::string current = over.is_boolean() ? (over.get<bool>() ? "yes" : "no") : "auto";
         const char* values[] = {"yes", "no", "auto"};
         const char* labels[] = {"Yes", "No", "Auto"};
@@ -1150,11 +1183,7 @@ void AgentSettings::draw(float x, float y, float w, float h, const SpecLook& L) 
     {
         const WidgetRect& row = lay.context;
         text_at(dl, L.ui, L.ui_size, ImVec2(row.x, row.y + ty), L.secondary, "Context length");
-        const float vx = row.x + std::round(m.label * 1.1f);
-        const std::string value = tokens_text(caps.context);
-        text_at(dl, L.ui, L.ui_size, ImVec2(vx, row.y + ty), L.text, value);
-        text_at(dl, L.ui, L.small_size, ImVec2(vx + extent(L.ui, L.ui_size, value).x + m.gap, row.y + ty), L.faint,
-                source_text(caps.context_source));
+        value_text(row, lay.context_field.x - m.gap, tokens_text(caps.context), source_text(caps.context_source));
         if (field(L, lay.context_field, "##settings.context", &context_text_,
                   ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_EnterReturnsTrue) &&
             !context_text_.empty() && can_probe)
