@@ -257,7 +257,7 @@ Caliper is licensed under the [Apache License 2.0](LICENSE), the host and the SD
 
 ## Third-party licenses
 
-Caliper uses the following open-source libraries. Their license texts can be found in the respective directories under `third_party/` and `assets/fonts/`. The libraries that CMake fetches at configure time carry their own license files in their source trees.
+Caliper uses the following open-source libraries. Their license texts can be found in the respective directories under `third_party/` and `assets/fonts/`, and beside the JavaScript libraries the docs site's roadmap page loads, under `docs-theme/assets/roadmap/vendor/`. The libraries that CMake fetches at configure time carry their own license files in their source trees.
 
 | Library | License | Copyright | Permits |
 |---|---|---|---|
@@ -287,6 +287,9 @@ Caliper uses the following open-source libraries. Their license texts can be fou
 | [glslang](https://github.com/KhronosGroup/glslang) | BSD 3-Clause (with other permissive licenses for some files) | The Khronos Group and contributors | Use, modify, and distribute freely provided the license notices are included. |
 | [IBM Plex Sans Condensed](https://github.com/IBM/plex) | SIL OFL 1.1 | 2017 IBM Corp. | Use, embed, and redistribute freely; the font may not be sold on its own. |
 | [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) | SIL OFL 1.1 | 2010, 2012 Adobe Systems Incorporated | Use, embed, and redistribute freely; the font may not be sold on its own. |
+| [Cytoscape.js](https://github.com/cytoscape/cytoscape.js) | MIT | 2016-2026 The Cytoscape Consortium | Use, modify, and distribute freely provided the license notice is included. |
+| [elkjs](https://github.com/kieler/elkjs) | EPL 2.0 (dual-licensed EPL 2.0 or GPL 3.0 or later; used under EPL 2.0) | 2017-2021 Kiel University and others | Use, modify, and distribute provided the license text is included and changes to the files are published under the same license. |
+| [cytoscape-elk](https://github.com/cytoscape-contrib/cytoscape-elk) | MIT | 2016-2018, 2020 The Cytoscape Consortium | Use, modify, and distribute freely provided the license notice is included. |
 
 ## Acknowledgments
 
