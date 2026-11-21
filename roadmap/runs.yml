@@ -25,6 +25,7 @@ features:
     status: planned
     summary: A local database keeps the runs that the metrics and artifacts stores record as a history that outlives each session.
     depends_on: [RUN-01, RUN-02]
+    sprint: 5
     issue: null
 
   - id: RUN-04
@@ -32,6 +33,7 @@ features:
     status: planned
     summary: A browser in the app lists the stored runs and opens any of them.
     depends_on: [RUN-03]
+    sprint: 5
     issue: null
     draft: true
 

@@ -68,9 +68,12 @@
           "uniqueItems": true
         },
         "sprint": {
-          "description": "The sprint that builds or built the feature, when one is named.",
-          "type": ["integer", "null"],
-          "minimum": 1
+          "description": "The sprint that builds or built the feature, when one is named: a whole sprint as a number, such as 5, or a point sprint as a quoted string, such as \"3.2\".",
+          "anyOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "string", "pattern": "^[1-9][0-9]*\\.[0-9]+$" },
+            { "type": "null" }
+          ]
         },
         "docs": {
           "description": "For a shipped feature, the docs page that describes it, from the repository root, with an optional anchor.",

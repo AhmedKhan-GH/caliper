@@ -57,7 +57,7 @@ features:
     status: shipped
     summary: caliper check runs the host's pre-load checks on every applet in one folder, without opening any library, and reports whether each is ready.
     depends_on: [COR-06]
-    docs: docs/references/cli.md#caliper-check-folder
+    docs: docs/references/cli.md#caliper-check
     issue: null
 
   - id: COR-08
@@ -81,7 +81,7 @@ features:
     status: shipped
     summary: caliper build configures and builds an applet's folder against the installed SDK with CMake, then runs the checks of caliper check on the result.
     depends_on: [COR-04, COR-07]
-    docs: docs/references/cli.md#caliper-build-folder
+    docs: docs/references/cli.md#caliper-build
     issue: null
 
   - id: COR-11
@@ -97,7 +97,7 @@ features:
     status: shipped
     summary: caliper install checks a local folder of applets and, when every one passes, copies them into the user applets folder in one all-or-nothing step.
     depends_on: [COR-07]
-    docs: docs/references/cli.md#caliper-install-folder
+    docs: docs/references/cli.md#caliper-install
     issue: null
 
   - id: COR-13

@@ -18,7 +18,7 @@ features:
     status: shipped
     summary: The spec validator checks a spec against the format and reports each error and warning with a stable code, a line and a column.
     depends_on: [SPC-01]
-    docs: docs/references/cli.md#caliper-check-folder
+    docs: docs/references/cli.md#caliper-check
     design: design/spec-format.md#validation
     issue: null
 
@@ -90,6 +90,7 @@ features:
     status: planned
     summary: The Data view is a node graph of sources, transforms and panel slots, in which dragging a source or a transform onto a slot binds it.
     depends_on: [SPC-07]
+    sprint: "3.2"
     design: design/builder-overview.md#next
     issue: null
     draft: true
@@ -99,6 +100,7 @@ features:
     status: planned
     summary: Spec version 1 adds a scene primitive, so that a panel can show a scene and, later, a recording bound to a cursor.
     depends_on: [SPC-01, REN-11]
+    sprint: 5
     issue: null
     draft: true
 
@@ -107,6 +109,7 @@ features:
     status: planned
     summary: Custom controls let a spec declare its own controls beyond the options of the fixed primitives.
     depends_on: [SPC-01, STR-03]
+    sprint: 5
     issue: null
     draft: true
 

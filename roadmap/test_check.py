@@ -243,6 +243,15 @@ class CheckTest(unittest.TestCase):
         self.assertIn("warning", warnings[0])
         self.assertIn("COR-01", warnings[0])
 
+    def test_point_sprint(self):
+        errors, _, _ = self.run_check(edit={"core": ("    sprint: 4\n", '    sprint: "3.2"\n')})
+        self.assertEqual(errors, [])
+
+    def test_unquoted_point_sprint(self):
+        # Unquoted, 3.2 is a YAML float, which the schema refuses.
+        errors, _, _ = self.run_check(edit={"core": ("    sprint: 4\n", "    sprint: 3.2\n")})
+        self.assertError(errors, "COR-03", "schema")
+
     def test_decision_edge_is_never_redundant(self):
         extra = RENDERING.replace("      - COR-03\n",
                                   "      - COR-03\n      - REN-02\n      - REN-03\n") + """\
@@ -308,6 +317,11 @@ class BuildTest(unittest.TestCase):
     def test_parse_headings(self):
         slugs = [s for _, _, s in build.parse_headings(GUIDE)]
         self.assertEqual(slugs, ["the-guide", "first-part", "code-and-link", "first-part_1"])
+
+    def test_html_placeholder_is_left_out_of_the_slug(self):
+        # MkDocs reads <folder> outside backticks as an HTML tag and drops it, as on cli.md.
+        headings = build.parse_headings("### caliper check <folder>\n\n## The `<folder>` form\n")
+        self.assertEqual([s for _, _, s in headings], ["caliper-check", "the-folder-form"])
 
     def test_output_files(self):
         self.run_build()

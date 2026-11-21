@@ -43,8 +43,13 @@ _ATX = re.compile(r"^\s{0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$")
 
 
 def heading_text(raw):
-    """The text of a heading as MkDocs slugs it: inline code and link syntax removed."""
-    text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", raw)
+    """The text of a heading as MkDocs slugs it: inline code, link syntax and HTML tags removed.
+
+    A placeholder such as `<folder>` outside backticks is an HTML tag to Markdown, so MkDocs
+    leaves it out of the heading's text and its slug.
+    """
+    text = re.sub(r"(?<!`)<[A-Za-z/][^<>`]*>(?!`)", "", raw)
+    text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
     text = re.sub(r"!?\[([^\]]*)\]\[[^\]]*\]", r"\1", text)
     text = text.replace("`", "")
     text = re.sub(r"(\*\*|__)(.+?)\1", r"\2", text)
@@ -209,7 +214,7 @@ def pillar_page(pillar):
             line = '- <span class="roadmap-id">%s</span> [%s](%s.md). %s' % (
                 f["id"], f["title"], f["id"].lower(), f["summary"].strip())
             if f["sprint"]:
-                line += " Sprint %d." % f["sprint"]
+                line += " Sprint %s." % f["sprint"]
             lines.append(line)
         lines.append("")
     return "\n".join(lines)
