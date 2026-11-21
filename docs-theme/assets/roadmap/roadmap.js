@@ -6,7 +6,7 @@
   var NODE_W = 200, NODE_H = 44, ROW = 52, LANE_PAD = 14, COLLAPSED_H = 100, MIN_LANE_H = 110, MAX_ROWS = 4, COL_GAP = 16, LAYER_GAP = 56, FIT_PAD = 24;
   var STATUS_LABEL = { shipped: "Shipped on main", built: "Built on a branch", planned: "Planned", idea: "Idea", decision: "Decision to settle" };
   var STATUS_RANK = { shipped: 0, built: 1, planned: 2, idea: 2, decision: 2 };
-  var MEDIA = "(min-width: 45em)";
+  var MEDIA = "not all and (max-width: 44.9375em)";  // the complement of the narrow-screen rule in roadmap.css
 
   function el(tag, cls, text) {
     var e = document.createElement(tag);
@@ -29,9 +29,10 @@
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.json();
       }).then(function (data) {
-        return Promise.all([
+        var fonts = document.fonts && document.fonts.load ? Promise.all([
           document.fonts.load('12px "Plex Condensed"'), document.fonts.load('11px "Source Code Pro"')
-        ]).catch(function () {}).then(function () { return data; });
+        ]) : Promise.resolve();
+        return fonts.catch(function () {}).then(function () { return data; });
       }).then(function (data) {
         instance = build(mount, data);
       }).catch(function (err) {
@@ -367,14 +368,30 @@
       });
       cy.on("mouseover", "node.feat", function (e) { stage.style.cursor = "pointer"; showTip(e.target); });
       cy.on("mouseout", "node.feat", function () { stage.style.cursor = ""; hideTipSoon(); });
-      // A tap on a feature focuses it; a tap anywhere else, an edge included, clears the focus.
+      // A tap on a feature focuses it; a tap anywhere else, an edge included, clears the focus. The
+      // camera moves to the focus only once a double-click can no longer follow, so that the second
+      // click lands on the same feature, and a double-click opens the feature of its first click.
+      var DBL_MS = 400, lastTap = null, showTimer = 0;
       cy.on("tap", function (e) {
-        var t = e.target;
-        if (t !== cy && t.isNode() && t.hasClass("feat")) { setFocus(t); api.show(t.predecessors().nodes().union(t.successors().nodes()).union(t).filter(".feat"), t); }
-        else clearFocus();
+        var t = e.target, now = Date.now(), p = e.renderedPosition || { x: 0, y: 0 };
+        if (lastTap && now - lastTap.time < DBL_MS && Math.abs(p.x - lastTap.x) < 8 && Math.abs(p.y - lastTap.y) < 8) return;
+        clearTimeout(showTimer);
+        if (t !== cy && t.isNode() && t.hasClass("feat")) {
+          lastTap = { node: t, time: now, x: p.x, y: p.y };
+          setFocus(t);
+          showTimer = setTimeout(function () {
+            api.show(t.predecessors().nodes().union(t.successors().nodes()).union(t).filter(".feat"), t);
+          }, DBL_MS);
+        } else {
+          lastTap = null;
+          clearFocus();
+        }
       });
-      cy.on("dbltap", "node.feat", function (e) {
-        var d = nodeById[e.target.id()];
+      cy.on("dbltap", function (e) {
+        var t = lastTap && Date.now() - lastTap.time < 2 * DBL_MS ? lastTap.node : e.target;
+        if (t === cy || !t.isNode() || !t.hasClass("feat")) return;
+        clearTimeout(showTimer);
+        var d = nodeById[t.id()];
         if (d) location.assign(new URL(d.url, location.href).href);
       });
       var zoomBy = function (f) {

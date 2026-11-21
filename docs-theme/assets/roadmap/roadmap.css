@@ -146,6 +146,6 @@
 .roadmap-error { margin: 0; padding: 1rem; border: 1px solid var(--rm-plate-rule); border-radius: 6px; background: var(--rm-plate); }
 
 /* Narrow screens use the Pillars list below the graph instead. */
-@media (max-width: 45em) {
+@media (max-width: 44.9375em) {
   .roadmap-graph { display: none; }
 }
