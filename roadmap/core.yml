@@ -1,0 +1,201 @@
+# yaml-language-server: $schema=schema.json
+prefix: COR
+title: Core runtime and SDK
+order: 1
+summary: This pillar covers the host, the frozen applet ABI and its service ids, the SDK package and manifests, and the caliper subcommands, and it plans the move of applets out of the core repository and their distribution.
+features:
+  - id: COR-01
+    title: The host
+    status: shipped
+    summary: The host is the native application that loads applets, serves them framework services through a frozen C ABI, draws the interface and names no applet itself.
+    depends_on: []
+    docs: docs/explanations/architecture.md#layers
+    issue: null
+
+  - id: COR-02
+    title: ABI epoch 2
+    status: shipped
+    summary: ABI epoch 2 is the frozen C header that defines the contract between the host and every applet, and its epoch changes only when the contract breaks.
+    depends_on: []
+    docs: docs/references/abi.md
+    issue: null
+
+  - id: COR-03
+    title: The 19 service ids
+    status: shipped
+    summary: The 19 service ids are 11 services and their additive revisions, which an applet obtains by id from the host and which the host refuses to serve when it lacks the capability.
+    depends_on: [COR-02]
+    docs: docs/references/services.md#the-ids
+    issue: null
+
+  - id: COR-04
+    title: The SDK package
+    status: shipped
+    summary: The SDK package is the caliper-sdk CMake package, which installs the headers, the pinned UI stack and caliper_add_applet() so that an applet builds outside the Caliper source tree.
+    depends_on: [COR-03]
+    docs: docs/references/sdk-package.md
+    issue: null
+
+  - id: COR-05
+    title: Applet manifests
+    status: shipped
+    summary: An applet manifest is a TOML file beside each applet that declares its identity, ABI epoch, minimum host version and required services, and the host parses it before it loads any code.
+    depends_on: [COR-02]
+    docs: docs/references/manifest.md#schema
+    issue: null
+
+  - id: COR-06
+    title: Applets loaded from outside the repository
+    status: shipped
+    summary: The host searches development folders, the user applets folder and the app in a fixed order, chooses one copy of each applet id and checks its manifest before opening the library.
+    depends_on: [COR-01, COR-05]
+    docs: docs/references/cli.md#the-search-order
+    issue: null
+
+  - id: COR-07
+    title: caliper check
+    status: shipped
+    summary: caliper check runs the host's pre-load checks on every applet in one folder, without opening any library, and reports whether each is ready.
+    depends_on: [COR-06]
+    docs: docs/references/cli.md#caliper-check-folder
+    issue: null
+
+  - id: COR-08
+    title: caliper shot
+    status: shipped
+    summary: caliper shot draws one applet's page without a window, as the app draws it, and writes the last frame as a PNG.
+    depends_on: [COR-06]
+    docs: docs/references/cli.md#caliper-shot
+    issue: null
+
+  - id: COR-09
+    title: caliper dev
+    status: shipped
+    summary: caliper dev starts the app with an applet's build folder searched first, so that a rebuilt applet loads without being installed.
+    depends_on: [COR-06]
+    docs: docs/references/cli.md#starting-the-app
+    issue: null
+
+  - id: COR-10
+    title: caliper build
+    status: shipped
+    summary: caliper build configures and builds an applet's folder against the installed SDK with CMake, then runs the checks of caliper check on the result.
+    depends_on: [COR-04, COR-07]
+    docs: docs/references/cli.md#caliper-build-folder
+    issue: null
+
+  - id: COR-11
+    title: caliper serve
+    status: shipped
+    summary: caliper serve runs the hub of wire protocol v3 without a window or a GPU, so that producers connect to it and viewers attach to their sessions.
+    depends_on: [STR-06]
+    docs: docs/references/cli.md#caliper-serve
+    issue: null
+
+  - id: COR-12
+    title: caliper install
+    status: shipped
+    summary: caliper install checks a local folder of applets and, when every one passes, copies them into the user applets folder in one all-or-nothing step.
+    depends_on: [COR-07]
+    docs: docs/references/cli.md#caliper-install-folder
+    issue: null
+
+  - id: COR-13
+    title: The in-tree applets
+    status: shipped
+    summary: The in-tree applets are nine applets under applets/ and the tutorial examples, and each builds on its own against the installed SDK rather than in the core build.
+    depends_on: [COR-04]
+    docs: docs/references/applets.md
+    issue: null
+
+  - id: COR-14
+    title: The inspector's general parts as core services
+    status: planned
+    summary: This work moves the inspector applet's general pieces into core services, each in its own commit with tests, while the inspector's own panes stay in the applet.
+    depends_on: [INT-05, INT-20]
+    design: design/roadmap.md#phase-1-one-core-with-versioned-applets
+    issue: null
+
+  - id: COR-15
+    title: The acceptance test
+    status: planned
+    summary: The acceptance test checks that the inspector and two existing scopes each build from their own repository against the installed SDK, load into a released Caliper, and that two versions of one applet resolve correctly.
+    depends_on: [COR-04, COR-06, COR-14]
+    design: design/roadmap.md#phase-1-one-core-with-versioned-applets
+    issue: null
+
+  - id: COR-16
+    title: A caliper-applets repository
+    status: planned
+    summary: A caliper-applets repository holds the first-party scopes with their history, the inspector moves to a repository of its own, and CALIPER_BUILD_APPLETS goes away.
+    depends_on: [COR-15]
+    design: design/applets-outside-the-core.md#moving-the-applets-out
+    issue: null
+
+  - id: COR-17
+    title: Signed shipped applets
+    status: planned
+    summary: Shipped applets sit in the app bundle's PlugIns folder and are signed with the app, so that the bundle is never written after it ships.
+    depends_on: [COR-13, PLT-04]
+    design: design/applets-outside-the-core.md#signing-on-macos
+    issue: null
+    draft: true
+
+  - id: COR-18
+    title: The applet registry
+    status: planned
+    summary: The applet registry holds an index of releases per platform and ABI epoch, and it gives the app a Browse tab, install by id and version, and publishing by pull request.
+    depends_on: [COR-17, COR-19, COR-24]
+    design: design/registry.md
+    issue: null
+    draft: true
+
+  - id: COR-19
+    title: .caliperapp bundles
+    status: idea
+    summary: A .caliperapp bundle is a folder that holds an applet with per-platform binaries, with manifest keys for platforms, authors, licence and runtimes.
+    depends_on: [COR-05]
+    design: design/roadmap.md#undecided
+    issue: null
+
+  - id: COR-20
+    title: Hot reload
+    status: idea
+    summary: Hot reload would reload a rebuilt applet in the running app, and it needs entry points such as save_state, load_state, on_suspend and on_resume.
+    depends_on: [COR-09]
+    design: design/applets-outside-the-core.md#hot-reload
+    issue: null
+
+  - id: COR-21
+    title: SDK conformance
+    status: idea
+    summary: SDK conformance would add a conformance checker and a set of reference applets built against each SDK release.
+    depends_on: [COR-16]
+    design: design/roadmap.md#undecided
+    issue: null
+    draft: true
+
+  - id: COR-22
+    title: Applets in separate processes
+    status: idea
+    summary: Applets in separate processes would run each applet in a process of its own, apart from the host, instead of as a library loaded into it.
+    depends_on: [COR-06]
+    design: design/roadmap.md#undecided
+    issue: null
+    draft: true
+
+  - id: COR-23
+    title: Signed third-party applets
+    status: idea
+    summary: Signed third-party applets need a signing policy for applets built outside Caliper, so that a notarized host accepts them without weakening library validation.
+    depends_on: [COR-17, COR-24]
+    design: design/applets-outside-the-core.md#signing-on-macos
+    issue: null
+    draft: true
+
+  - id: COR-24
+    title: The registry's order
+    status: decision
+    summary: This decision sets how the applet registry, custom views and signed third-party applets are ordered against each other.
+    depends_on: []
+    issue: null

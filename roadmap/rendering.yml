@@ -1,0 +1,261 @@
+# yaml-language-server: $schema=schema.json
+prefix: REN
+title: Rendering and 3-D
+order: 2
+summary: "This pillar covers how Caliper turns tensors and 3-D data into pixels: the Metal, Vulkan and OpenGL renderers, the geometry services, the graphics layer and scene core, and the scene features planned on them."
+features:
+  - id: REN-01
+    title: Metal renderer
+    status: shipped
+    summary: The Metal renderer is the default on macOS and reads PyTorch's MPS buffers in place with a compute pass or a blit, so a tensor reaches a texture without a CPU copy.
+    depends_on: []
+    docs: docs/explanations/rendering.md#backends
+    issue: null
+
+  - id: REN-02
+    title: Vulkan renderer with CUDA
+    status: shipped
+    summary: The Vulkan renderer with CUDA interop is the default on Windows and writes the Vulkan image directly from a CUDA kernel, with timeline semaphores for synchronization.
+    depends_on: []
+    docs: docs/explanations/vulkan-cuda.md
+    issue: null
+
+  - id: REN-03
+    title: OpenGL fallback
+    status: shipped
+    summary: The OpenGL fallback draws where neither Metal nor Vulkan is available and stages tensors through the CPU, so it is the slow path and says so.
+    depends_on: []
+    docs: docs/explanations/zero-copy.md#the-opengl-fallback
+    issue: null
+
+  - id: REN-04
+    title: geometry.v1
+    status: shipped
+    summary: caliper.geometry.v1 draws instanced points from vertex data that an applet exports once from device memory, into an offscreen view texture, with no copy of the data.
+    depends_on: [REN-08]
+    docs: docs/references/service-geometry-v1.md#calipergeometryv1-instanced-points
+    issue: null
+
+  - id: REN-05
+    title: geometry.v1_1
+    status: shipped
+    summary: caliper.geometry.v1_1 adds general primitives (triangles, lines and indexed draws), depth views and one atomic gated frame to the geometry service.
+    depends_on: [REN-04]
+    docs: docs/references/service-geometry-v1.md#calipergeometryv1_1-general-primitives
+    issue: null
+
+  - id: REN-06
+    title: geometry.v1_2
+    status: shipped
+    summary: caliper.geometry.v1_2 adds textures on meshes, drawn with a colour mode that samples an imported texture.
+    depends_on: [REN-05]
+    docs: docs/references/service-geometry-v1.md#calipergeometryv1_2-textures-on-meshes
+    issue: null
+
+  - id: REN-07
+    title: geometry.v1_3
+    status: shipped
+    summary: caliper.geometry.v1_3 adds instanced transforms, so one mesh draws many times with a transform for each instance.
+    depends_on: [REN-06]
+    docs: docs/references/service-geometry-v1.md#calipergeometryv1_3-instanced-transforms
+    issue: null
+
+  - id: REN-08
+    title: Zero-copy from torch
+    status: shipped
+    summary: "A PyTorch tensor on MPS or CUDA reaches the screen without a host copy: the renderer reads or imports its device memory, and a ladder of synchronization modes orders the work."
+    depends_on: [REN-01, REN-02]
+    docs: docs/explanations/zero-copy.md#how-a-tensor-reaches-a-texture
+    issue: null
+
+  - id: REN-09
+    title: The graphics layer
+    status: built
+    summary: The graphics layer, an internal C++ layer shaped like WebGPU, holds buffers, textures, pipelines, draw lists and a uniform arena, validates every frame, and has a Metal backend.
+    depends_on: [REN-01]
+    sprint: 4
+    branch: sprint4-pr1-main2
+    issue: null
+
+  - id: REN-10
+    title: WGSL shaders through Naga
+    status: built
+    summary: Scene shaders are written once in WGSL, and a generator with a pinned Naga translates them into the programs that each backend of the graphics layer loads.
+    depends_on: [REN-09]
+    sprint: 4
+    branch: sprint4-pr1-main2
+    issue: null
+
+  - id: REN-11
+    title: The scene core
+    status: built
+    summary: "The scene core is the one camera and scene model of the views: an entity tree with cameras, bounds and fitting, which it compiles into a draw list of the graphics layer, with a pick pass."
+    depends_on: [REN-10]
+    sprint: 4
+    branch: sprint4-pr1-main2
+    issue: null
+
+  - id: REN-12
+    title: The scene view
+    status: built
+    summary: The scene view is a live view of kind scene that draws the points, lines and meshes of a protocol 3.2 scene through the scene core, in the app and in the browser, with an orbit camera.
+    depends_on: [REN-11, REN-14, STR-09]
+    sprint: 4
+    branch: sprint4-pr1-main2
+    issue: null
+
+  - id: REN-13
+    title: WebGPU backend of the graphics layer
+    status: built
+    summary: The WebGPU backend of the graphics layer runs in the browser, so the WebAssembly views draw scenes through the same layer as the native renderers.
+    depends_on: [REN-10, EMB-04]
+    sprint: 4
+    branch: sprint4-pr1-main2
+    issue: null
+
+  - id: REN-14
+    title: Colormap by keys
+    status: built
+    summary: A colormap is decided by integer comparisons against keys derived once from the CPU reference, so every shader and adapter gives the same colours as the reference.
+    depends_on: [REN-13]
+    sprint: 4
+    branch: sprint4-pr1-main2
+    issue: null
+
+  - id: REN-15
+    title: Picking
+    status: built
+    summary: Picking draws the scene's entity and item ids into a small ID texture around the cursor and decodes them to name the entity and item under it.
+    depends_on: [REN-11]
+    sprint: 4
+    branch: sprint4-pr1-main2
+    issue: null
+
+  - id: REN-16
+    title: Every applet on the scene service
+    status: planned
+    summary: The applets that draw in 3-D, such as FieldScope, FlowScope, MeshScope, SculptScope and TwinScope, draw through a scene service that replaces the geometry service, which is then removed.
+    depends_on: [REN-12, REN-15]
+    sprint: 4
+    design: design/roadmap.md#renderers
+    issue: null
+
+  - id: REN-17
+    title: The end of OpenGL
+    status: planned
+    summary: The GLEW OpenGL fallback is removed, and where neither Metal nor Vulkan starts, the app says so and exits instead of drawing through the CPU.
+    depends_on: [REN-03]
+    sprint: 4
+    design: design/roadmap.md#renderers
+    issue: null
+
+  - id: REN-18
+    title: Mesh files
+    status: planned
+    summary: Mesh files in glTF, OBJ and STL format load through the loaders into mesh sources of a scene, instead of each script reading them by hand.
+    depends_on: [REN-11, SPC-03]
+    sprint: 5
+    issue: null
+
+  - id: REN-19
+    title: URDF
+    status: planned
+    summary: One call in Caliper LIB turns a URDF robot description into scene entities, with a link per entity and its meshes and joint transforms.
+    depends_on: [REN-18]
+    sprint: 5
+    issue: null
+
+  - id: REN-20
+    title: Trails
+    status: planned
+    summary: A trail view shows the last N steps of an entity's positions, such as a path or a gripper, in place of only the latest.
+    depends_on: [REN-11, STR-12]
+    sprint: 5
+    issue: null
+
+  - id: REN-21
+    title: More shapes
+    status: planned
+    summary: Capsules, cylinders and planes join the scene's ellipsoids and boxes, each drawn from its parameters rather than sent as a mesh.
+    depends_on: [REN-11]
+    sprint: 5
+    issue: null
+
+  - id: REN-22
+    title: More colormaps
+    status: planned
+    summary: More colormaps join the built-in ones, each decided by keys like the first set.
+    depends_on: [REN-14]
+    sprint: 5
+    issue: null
+    draft: true
+
+  - id: REN-23
+    title: Saved viewpoints
+    status: planned
+    summary: A named camera position is kept with a view, in recordings and in spec applets, so that a chosen angle can be returned to and shared.
+    depends_on: [REN-12]
+    sprint: 5
+    issue: null
+    draft: true
+
+  - id: REN-24
+    title: A scale pass
+    status: planned
+    summary: This step checks the limits and costs of the scene core and scene view on larger scenes.
+    depends_on: [REN-12]
+    sprint: 5
+    issue: null
+    draft: true
+
+  - id: REN-25
+    title: The Dawn fallback
+    status: planned
+    summary: The WebGPU backend also serves as the native fallback through Dawn, chosen only when Metal or Vulkan is unavailable, and draws through Direct3D, OpenGL ES or SwiftShader.
+    depends_on: [REN-13]
+    design: design/roadmap.md#renderers
+    issue: null
+
+  - id: REN-26
+    title: Slice planes
+    status: planned
+    summary: A slice plane cuts a 3-D field along an axis and is dragged within the scene; the slice is computed on the device and drawn on a textured quad.
+    depends_on: [REN-11, STR-10]
+    sprint: 6
+    issue: null
+    draft: true
+
+  - id: REN-27
+    title: Isosurfaces
+    status: planned
+    summary: An isosurface is the surface where a field equals a chosen value; a marching-cubes kernel on the device sends it as a mesh that the scene draws.
+    depends_on: [REN-26]
+    sprint: 6
+    issue: null
+
+  - id: REN-28
+    title: Volumes
+    status: idea
+    summary: Volume rendering would ray-march 3-D fields, and it is left out so far because it needs a transfer function and sampling choices on every backend.
+    depends_on: [REN-26]
+    design: design/roadmap.md#undecided
+    issue: null
+    draft: true
+
+  - id: REN-29
+    title: MSAA
+    status: idea
+    summary: Multisample anti-aliasing would smooth the edges of the scene view's drawing, and it is not yet decided.
+    depends_on: [REN-09]
+    design: design/roadmap.md#undecided
+    issue: null
+    draft: true
+
+  - id: REN-30
+    title: Thick lines
+    status: idea
+    summary: Thick lines and ribbons would draw with a width in pixels, which WebGPU does not offer natively, and they are not yet decided.
+    depends_on: [REN-11]
+    design: design/roadmap.md#undecided
+    issue: null
+    draft: true

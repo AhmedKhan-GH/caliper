@@ -1,0 +1,189 @@
+# yaml-language-server: $schema=schema.json
+prefix: SPC
+title: Builder and specs
+order: 4
+summary: This pillar covers building dashboards from data inside the app, with specs, loaders, a catalog of sources, a command layer and a builder pane. It also covers the later work on custom views and on promoting proven applet features into the core.
+features:
+  - id: SPC-01
+    title: The spec format
+    status: shipped
+    summary: The spec format describes a dashboard as text, with sources, panels built from seven primitives, bindings and a layout, in a TOML form and a canonical JSON form.
+    depends_on: []
+    docs: docs/references/manifest.md#spec-applets
+    design: design/spec-format.md
+    issue: null
+
+  - id: SPC-02
+    title: The spec validator
+    status: shipped
+    summary: The spec validator checks a spec against the format and reports each error and warning with a stable code, a line and a column.
+    depends_on: [SPC-01]
+    docs: docs/references/cli.md#caliper-check-folder
+    design: design/spec-format.md#validation
+    issue: null
+
+  - id: SPC-03
+    title: Loaders
+    status: shipped
+    summary: Loaders turn dropped files into sources, reading tabular, array, image and audio formats, refusing pickle files and running a Python loader out of process for other formats.
+    depends_on: []
+    docs: docs/references/builder-pane.md#sources
+    design: design/loaders.md
+    issue: null
+
+  - id: SPC-04
+    title: The catalog
+    status: shipped
+    summary: The catalog lists every source a spec can use, from loader outputs, live views, feed channels and metrics, and describes and samples each one.
+    depends_on: [SPC-03]
+    docs: docs/references/builder-pane.md#sources
+    design: design/catalog.md
+    issue: null
+
+  - id: SPC-05
+    title: The command layer
+    status: shipped
+    summary: The command layer is a table of typed commands with undo, a journal, approvals and previews, served to programs through Caliper API.
+    depends_on: []
+    docs: docs/references/api.md#get-v0commands
+    design: design/command-layer.md
+    issue: null
+
+  - id: SPC-06
+    title: Builder sessions
+    status: shipped
+    summary: A builder session binds the spec, loaders, catalog and commands for one workspace folder, which the app, caliper dev and caliper shot each hold.
+    depends_on: [SPC-01, SPC-04, SPC-05]
+    docs: docs/references/cli.md#the-workspace
+    design: design/builder-session.md
+    issue: null
+
+  - id: SPC-07
+    title: The builder pane
+    status: shipped
+    summary: The builder pane lets a person build a spec by hand on the app's spec page, with source and primitive palettes, a canvas, properties and the spec text.
+    depends_on: [SPC-06, SPC-08]
+    docs: docs/references/builder-pane.md
+    design: design/builder-pane.md
+    issue: null
+
+  - id: SPC-08
+    title: Spec applets
+    status: shipped
+    summary: A spec applet is a folder with a manifest and a spec and no library, which the loader lists, validates and the app draws as a page without running applet code.
+    depends_on: [SPC-02, COR-05]
+    docs: docs/references/manifest.md#spec-applets
+    design: design/spec-format.md#the-manifest-of-a-spec-applet
+    issue: null
+
+  - id: SPC-09
+    title: Removing panels
+    status: shipped
+    summary: A panel is removed from a dashboard with the cross on its title strip, a menu entry or the delete key, as one undoable step.
+    depends_on: [SPC-07]
+    docs: docs/references/builder-pane.md#the-canvas
+    design: design/builder-pane.md#gestures-and-commands
+    issue: null
+
+  - id: SPC-10
+    title: The Data view node graph
+    status: planned
+    summary: The Data view is a node graph of sources, transforms and panel slots, in which dragging a source or a transform onto a slot binds it.
+    depends_on: [SPC-07]
+    design: design/builder-overview.md#next
+    issue: null
+    draft: true
+
+  - id: SPC-11
+    title: Spec version 1 with scenes
+    status: planned
+    summary: Spec version 1 adds a scene primitive, so that a panel can show a scene and, later, a recording bound to a cursor.
+    depends_on: [SPC-01, REN-11]
+    issue: null
+    draft: true
+
+  - id: SPC-12
+    title: Custom controls
+    status: planned
+    summary: Custom controls let a spec declare its own controls beyond the options of the fixed primitives.
+    depends_on: [SPC-01, STR-03]
+    issue: null
+    draft: true
+
+  - id: SPC-13
+    title: The reshape step
+    status: planned
+    summary: The reshape step adds a tensor transform for reshaping and stacking, to be built only if real use needs it, since a stream carries at most three dimensions per heatmap view.
+    depends_on: [SPC-01]
+    sprint: 5
+    design: design/spec-format.md#tensor-transforms
+    issue: null
+    draft: true
+
+  - id: SPC-14
+    title: Custom WGSL views
+    status: planned
+    summary: Custom WGSL views let a spec or an applet supply its own shader for a view, which the rule that applets supply no shaders does not allow today.
+    depends_on: [REN-10, SPC-21, COR-24]
+    sprint: 7
+    design: design/roadmap.md#open-questions
+    issue: null
+    draft: true
+
+  - id: SPC-15
+    title: Custom WebAssembly views
+    status: planned
+    summary: Custom WebAssembly views let a spec or an applet supply its own view compiled to WebAssembly, drawn in the app and in a browser.
+    depends_on: [EMB-04, SPC-21, COR-24]
+    sprint: 7
+    design: design/streaming-and-embedding.md#applets-in-the-browser
+    issue: null
+    draft: true
+
+  - id: SPC-16
+    title: The capture service
+    status: planned
+    summary: The capture service gives every applet screenshots, scripted runs and recordings through one host interface, starting from what caliper shot already does.
+    depends_on: [COR-08]
+    design: design/platform-candidates.md#findings-about-existing-services
+    issue: null
+
+  - id: SPC-17
+    title: The layout grid
+    status: planned
+    summary: The layout grid sizes panes as shares of the window with minimums tied to the text scale, as plain rectangles that tests check without a window.
+    depends_on: []
+    design: design/platform-candidates.md#candidates
+    issue: null
+
+  - id: SPC-18
+    title: Tours
+    status: planned
+    summary: A host tour service steps through the regions of an applet from a data file, outlining each region as it goes.
+    depends_on: []
+    design: design/platform-candidates.md#candidates
+    issue: null
+
+  - id: SPC-19
+    title: The Python sidecar
+    status: planned
+    summary: A sidecar service starts a Python process beside an applet, with a version handshake, a cache version that triggers a rebuild and a synthetic-data mode.
+    depends_on: []
+    design: design/platform-candidates.md#candidates
+    issue: null
+
+  - id: SPC-20
+    title: The viz components
+    status: planned
+    summary: The caliper viz components add an annotation scene for geometry, colour by value with a key, and a catalog tree, promoted from applet code into the SDK.
+    depends_on: []
+    design: design/platform-candidates.md#candidates
+    issue: null
+
+  - id: SPC-21
+    title: WebAssembly and third-party applets
+    status: decision
+    summary: This decision sets how sprint 7's custom views relate to the roadmap's Not now list, which names WebAssembly and third-party applets, and to Phase 2's split of applets into a native computation and a WebAssembly interface.
+    depends_on: []
+    design: design/roadmap.md#not-now
+    issue: null

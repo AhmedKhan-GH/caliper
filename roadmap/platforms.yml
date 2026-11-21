@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=schema.json
+prefix: PLT
+title: Platforms and distribution
+order: 9
+summary: This pillar covers the platforms Caliper runs on and how it is built, tested, signed and packaged for them, including the steps that bring Windows level with macOS.
+features:
+  - id: PLT-01
+    title: macOS on Metal
+    status: shipped
+    summary: macOS is the primary platform, where the host draws with its own Metal renderer and takes tensors from torch on MPS without a copy.
+    depends_on: []
+    docs: docs/explanations/rendering.md#backends
+    issue: null
+
+  - id: PLT-02
+    title: Windows on Vulkan and CUDA
+    status: shipped
+    summary: On Windows the host draws with a Vulkan renderer and moves CUDA tensors to it through interop, with fallbacks when the fast path is unavailable.
+    depends_on: []
+    docs: docs/explanations/vulkan-cuda.md
+    issue: null
+
+  - id: PLT-03
+    title: Continuous integration
+    status: shipped
+    summary: Continuous integration builds and tests the core on macOS and on windows-latest, builds the applets and packages against the installed SDK, and checks that the host names no applet.
+    depends_on: []
+    docs: docs/guides/ci.md
+    issue: null
+
+  - id: PLT-04
+    title: A signed and notarized build
+    status: planned
+    summary: A signed and notarized macOS build carries the first-party applets inside the app bundle.
+    depends_on: [PLT-01]
+    sprint: 5
+    design: design/applets-outside-the-core.md#signing-on-macos
+    issue: null
+    draft: true
+
+  - id: PLT-05
+    title: Windows build and test baseline
+    status: planned
+    summary: The Windows baseline runs full CI on windows-latest for every package and subcommand and runs the graphics, export and embed suites on Windows hardware with no skipped GPU rows.
+    depends_on: [PLT-02, PLT-03]
+    docs: docs/guides/verify-on-windows.md
+    design: design/windows-parity.md#1-build-and-test-baseline
+    issue: null
+
+  - id: PLT-06
+    title: The applet platform on Windows
+    status: planned
+    summary: The applet platform on Windows gets applet loading with the right DLL search directories, the libtorch pin with its CUDA variant, install over a loaded DLL, a console entry point, and caliper shot and caliper build.
+    depends_on: [PLT-05, COR-08, COR-10]
+    design: design/windows-parity.md#2-the-applet-platform
+    issue: null
+
+  - id: PLT-07
+    title: Caliper LIB on Windows
+    status: planned
+    summary: Caliper LIB gets Windows wheels built with MSVC, a local session on named shared memory with CUDA tensors, and the in-process window on Vulkan.
+    depends_on: [PLT-05, STR-01]
+    design: design/windows-parity.md#3-caliper-lib
+    issue: null
+
+  - id: PLT-08
+    title: Streaming, the hub and Caliper API on Windows
+    status: planned
+    summary: Windows gets the app's network source, the caliper serve hub and Caliper API v0 on Winsock, bound to 127.0.0.1, with their refusals lifted once their tests run there.
+    depends_on: [PLT-05, STR-06, AGT-01]
+    design: design/windows-parity.md#4-streaming-the-hub-and-caliper-api
+    issue: null
+
+  - id: PLT-09
+    title: The web viewer and notebooks on Windows
+    status: planned
+    summary: The web viewer is checked in Chrome and Edge and the notebook widget in JupyterLab and Visual Studio Code on Windows.
+    depends_on: [PLT-07, PLT-08, EMB-01, STR-07]
+    design: design/windows-parity.md#5-the-web-viewer-and-notebooks
+    issue: null
+
+  - id: PLT-10
+    title: Caliper Embed on Windows
+    status: planned
+    summary: The installed caliper-embed package runs on Windows hardware with Win32 hosting in a window and offscreen, and it gains hosting examples for WPF, WinForms and Qt.
+    depends_on: [PLT-05, EMB-07]
+    design: design/windows-parity.md#6-caliper-embed
+    issue: null
+
+  - id: PLT-11
+    title: Renderer fallbacks on Windows
+    status: planned
+    summary: Windows gets the WebGPU backend through Dawn as the native fallback on Direct3D 12, Direct3D 11 and SwiftShader, and the GLEW OpenGL fallback is retired.
+    depends_on: [PLT-05, REN-25]
+    design: design/windows-parity.md#7-renderer-fallbacks
+    issue: null
+    draft: true
+
+  - id: PLT-12
+    title: Signing and packaging on Windows
+    status: planned
+    summary: Windows gets Authenticode signing of the app, the CLI entry point and the first-party applet DLLs, an installer, and a winget package that puts the CLI on the path.
+    depends_on: [PLT-06, COR-17]
+    design: design/windows-parity.md#8-signing-packaging-and-distribution
+    issue: null
+    draft: true
+
+  - id: PLT-13
+    title: The builder's agents on Windows
+    status: planned
+    summary: Windows gets process spawning, the caliper-mcp HTTP client and a Credential Manager key store, so that the side chat and the widget agent run there.
+    depends_on: [PLT-08, AGT-03, AGT-05]
+    design: design/windows-parity.md#9-the-builders-agents
+    issue: null
+
+  - id: PLT-14
+    title: Linux arm64
+    status: planned
+    summary: Linux arm64 is a build of the core and its tools for Linux on arm64.
+    depends_on: [PLT-15]
+    issue: null
+    draft: true
+
+  - id: PLT-15
+    title: Linux arm64 timing
+    status: decision
+    summary: This decision sets when the Linux arm64 build starts.
+    depends_on: []
+    issue: null
