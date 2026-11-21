@@ -31,6 +31,9 @@ extra:
 # Generates the roadmap's pages and data files from the registry in roadmap/.
 hooks:
   - roadmap/build.py
+# A local `mkdocs serve` rebuilds when the registry changes.
+watch:
+  - roadmap
 plugins:
   - search
   - awesome-nav
