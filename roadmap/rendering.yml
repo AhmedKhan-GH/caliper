@@ -146,7 +146,6 @@ features:
     summary: The GLEW OpenGL fallback is removed, and where neither Metal nor Vulkan starts, the app says so and exits instead of drawing through the CPU.
     depends_on: [REN-03]
     sprint: 4
-    design: design/roadmap.md#renderers
     issue: null
 
   - id: REN-18

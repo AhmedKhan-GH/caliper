@@ -145,7 +145,7 @@ features:
     title: The applet registry
     status: planned
     summary: The applet registry holds an index of releases per platform and ABI epoch, and it gives the app a Browse tab, install by id and version, and publishing by pull request.
-    depends_on: [COR-17, COR-19, COR-24]
+    depends_on: [COR-17, COR-24]
     design: design/registry.md
     issue: null
     draft: true

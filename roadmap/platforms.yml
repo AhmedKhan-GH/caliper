@@ -58,7 +58,7 @@ features:
   - id: PLT-07
     title: Caliper LIB on Windows
     status: planned
-    summary: Caliper LIB gets Windows wheels built with MSVC, a local session on named shared memory with CUDA tensors, and the in-process window on Vulkan.
+    summary: Caliper LIB gets Windows wheels built with MSVC, its network transport is verified and measured on CUDA, and its in-process window runs on Vulkan.
     depends_on: [PLT-05, STR-01]
     design: design/windows-parity.md#3-caliper-lib
     issue: null
@@ -90,7 +90,7 @@ features:
   - id: PLT-11
     title: Renderer fallbacks on Windows
     status: planned
-    summary: Windows gets the WebGPU backend through Dawn as the native fallback on Direct3D 12, Direct3D 11 and SwiftShader, and the GLEW OpenGL fallback is retired.
+    summary: Windows gets the WebGPU backend through Dawn as the native fallback, drawing through Direct3D 12, Direct3D 11 or SwiftShader when Vulkan is unavailable.
     depends_on: [PLT-05, REN-25]
     design: design/windows-parity.md#7-renderer-fallbacks
     issue: null
@@ -100,10 +100,9 @@ features:
     title: Signing and packaging on Windows
     status: planned
     summary: Windows gets Authenticode signing of the app, the CLI entry point and the first-party applet DLLs, an installer, and a winget package that puts the CLI on the path.
-    depends_on: [PLT-06, COR-17]
+    depends_on: [PLT-06]
     design: design/windows-parity.md#8-signing-packaging-and-distribution
     issue: null
-    draft: true
 
   - id: PLT-13
     title: The builder's agents on Windows
