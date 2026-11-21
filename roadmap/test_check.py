@@ -162,7 +162,23 @@ class CheckTest(unittest.TestCase):
 
     def test_shipped_without_docs(self):
         errors, _, _ = self.run_check(edit={"core": ("docs: docs/guide.md\n", "docs: null\n")})
-        self.assertError(errors, "COR-02")
+        self.assertError(errors, "COR-02", "docs")
+
+    def test_yaml_extension_is_reported(self):
+        root = make_repo(self.tmp)
+        (root / "roadmap" / "extra.yaml").write_text(RENDERING.replace("REN", "EXT"))
+        errors, _, _ = check.run_checks(root)
+        self.assertError(errors, "extra.yaml", ".yml")
+
+    def test_pillar_missing_from_the_graph_page_list(self):
+        root = make_repo(self.tmp)
+        (root / "docs" / "roadmap").mkdir()
+        (root / "docs" / "roadmap" / "index.md").write_text("# Roadmap\n\n- [Core](core.md)\n")
+        (root / "docs" / "roadmap" / ".nav.yml").write_text(
+            "nav:\n  - index.md\n  - core.md\n  - rendering.md\n")
+        errors, _, _ = check.run_checks(root)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertError(errors, "rendering.yml", "index.md", "rendering.md")
 
     def test_missing_docs_page(self):
         errors, _, _ = self.run_check(edit={"core": ("docs: docs/guide.md\n",
@@ -393,6 +409,93 @@ class BuildTest(unittest.TestCase):
         first = build.generate(self.root)
         second = build.generate(self.root)
         self.assertEqual(first, second)
+
+    def test_ids_sort_by_number(self):
+        path = self.root / "roadmap" / "rendering.yml"
+        path.write_text(path.read_text() + """\
+  - id: REN-100
+    title: The hundredth
+    status: planned
+    summary: Comes last.
+    depends_on: []
+    issue: null
+  - id: REN-99
+    title: The ninety-ninth
+    status: planned
+    summary: Comes before the hundredth.
+    depends_on: []
+    issue: null
+""", encoding="utf-8")
+        pillars, _ = build.load_registry(self.root)
+        self.assertEqual([f["id"] for f in pillars[1]["features"]], ["REN-01", "REN-99", "REN-100"])
+        graph = json.loads(dict((u, c) for u, c, _ in build.generate(self.root))["roadmap/graph.json"])
+        self.assertEqual([n["id"] for n in graph["nodes"]][-3:], ["REN-01", "REN-99", "REN-100"])
+
+
+class EscapingTest(unittest.TestCase):
+    """Registry text reaches the pages as typed, whatever Markdown or HTML characters it holds."""
+
+    SHOWN = "Pipes | &lt;folder&gt; *stars* [brackets] snake_case"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        core = CORE.replace("title: The ABI",
+                            'title: "Pipes | <folder> *stars* [brackets] snake_case"')
+        core = core.replace("summary: The frozen header.",
+                            'summary: "Reads a | b and <folder> as text, with *x* and [y]."')
+        self.root = make_repo(self._tmp.name, {"core": core, "rendering": RENDERING})
+
+    def render(self, src_uri):
+        import markdown
+        pages = {uri: text for uri, text, _ in build.generate(self.root)}
+        body = pages[src_uri].split("---\n", 2)[2]
+        return markdown.markdown(body, extensions=["tables", "admonition"])
+
+    def test_feature_page(self):
+        page = self.render("roadmap/cor-02.md")
+        self.assertIn("<h1>%s</h1>" % self.SHOWN, page)
+        self.assertIn("Reads a | b and &lt;folder&gt; as text, with *x* and [y].", page)
+        self.assertEqual(page.count("<tr>"), 11)  # the header and ten rows
+
+    def test_a_dependent_page_keeps_its_table_rows(self):
+        page = self.render("roadmap/cor-03.md")  # COR-03 depends on COR-02
+        self.assertEqual(page.count("<tr>"), 11)
+        self.assertIn(self.SHOWN + "</a>", page)
+
+    def test_pillar_page(self):
+        page = self.render("roadmap/core.md")
+        self.assertIn(self.SHOWN + "</a>", page)
+        self.assertNotIn("<em>", page)
+
+
+class HookTest(unittest.TestCase):
+    """The MkDocs hook adds every generated file of the real registry to the site."""
+
+    def test_on_files(self):
+        try:
+            from mkdocs.config.defaults import MkDocsConfig
+            from mkdocs.structure.files import Files, InclusionLevel
+        except ImportError:
+            self.skipTest("MkDocs is not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "docs").mkdir()
+            config = MkDocsConfig()
+            # Named under hooks, as in mkdocs.yml, and run through MkDocs's own event.
+            config.load_dict({"site_name": "Test", "docs_dir": tmp + "/docs",
+                              "site_dir": tmp + "/site", "site_url": "https://example.org/docs/",
+                              "hooks": [str(HERE / "build.py")]})
+            errors, _ = config.validate()
+            self.assertEqual(errors, [])
+            files = config.plugins.on_files(Files([]), config=config)
+            uris = {f.src_uri: f for f in files}
+            pillars, features = build.load_registry(build.ROOT)
+            self.assertEqual(len(uris), len(pillars) + len(features) + 2)
+            self.assertEqual(uris["roadmap/cor-01.md"].inclusion, InclusionLevel.NOT_IN_NAV)
+            self.assertNotEqual(uris["roadmap/core.md"].inclusion, InclusionLevel.NOT_IN_NAV)
+            site = json.loads(uris["roadmap.json"].content_string)["site"]
+            self.assertEqual(site, "https://example.org/docs/")
+            self.assertIn("nodes", json.loads(uris["roadmap/graph.json"].content_string))
 
 
 if __name__ == "__main__":

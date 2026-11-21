@@ -6,6 +6,7 @@ otherwise. Warnings are printed with the word warning and do not change the exit
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -79,6 +80,8 @@ def run_checks(root):
         files = build.read_files(root)
     except build.RegistryError as err:
         return [str(err)], [], ""
+    for extra in sorted((root / "roadmap").glob("*.yaml")):
+        errors.append("roadmap/%s: -: pillar files end in .yml, so this file is not read" % extra.name)
     schema = json.loads((root / "roadmap" / "schema.json").read_text(encoding="utf-8"))
     validator = jsonschema.Draft202012Validator(schema)
 
@@ -112,6 +115,22 @@ def run_checks(root):
         orders.setdefault(data["order"], name)
         if _has_todo({k: v for k, v in data.items() if k != "features"}):
             errors.append("%s: -: contains TODO" % name)
+
+    # The graph page's pillar list, which narrow screens show instead of the graph, and the
+    # section's navigation are written by hand; each must name every pillar page.
+    for rel in ("docs/roadmap/index.md", "docs/roadmap/.nav.yml"):
+        path = root / rel
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for name, _ in valid:
+            page = Path(name).stem + ".md"
+            if rel.endswith(".md"):
+                found = "](%s)" % page in text
+            else:
+                found = re.search(r"^\s*-\s*%s\s*$" % re.escape(page), text, re.M)
+            if not found:
+                errors.append("%s: -: %s does not list the pillar page %s" % (name, rel, page))
 
     features = {}
     for name, data in valid:

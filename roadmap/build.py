@@ -8,6 +8,7 @@ Standard library plus PyYAML and Markdown only, because it runs inside `mkdocs b
 """
 
 import argparse
+import html
 import json
 import os
 import re
@@ -19,7 +20,18 @@ from markdown.extensions.toc import slugify
 
 REGISTRY = Path(__file__).resolve().parent
 ROOT = REGISTRY.parent
-DEFAULT_SITE = "https://ahmedkhan-gh.github.io/caliper/docs/"
+
+
+def _site_url():
+    """The docs site's address from mkdocs.yml, for the script; inside MkDocs the config gives it."""
+    try:
+        with open(ROOT / "mkdocs.yml", encoding="utf-8") as f:
+            return (yaml.safe_load(f) or {}).get("site_url") or "/"
+    except (OSError, yaml.YAMLError):
+        return "/"
+
+
+DEFAULT_SITE = _site_url()
 GITHUB = "https://github.com/AhmedKhan-GH/caliper"
 
 STATUS_ORDER = ["shipped", "built", "planned", "idea", "decision"]
@@ -34,6 +46,21 @@ FEATURE_KEYS = ["id", "title", "status", "summary", "depends_on", "sprint", "doc
 
 class RegistryError(Exception):
     """The registry cannot be loaded; the message names the file and the id."""
+
+
+def id_key(fid):
+    """Sorts ids by prefix and then by number, so that COR-99 comes before COR-100."""
+    prefix, _, number = fid.partition("-")
+    return (prefix, int(number) if number.isdigit() else 0, fid)
+
+
+_MD_SPECIAL = re.compile(r"([\\`*_\[\]|#])")
+
+
+def md(text):
+    """Registry text for a Markdown page: HTML-like text such as <folder> shows as typed, and
+    Markdown characters, the table's pipe included, are escaped."""
+    return _MD_SPECIAL.sub(r"\\\1", html.escape(str(text).strip(), quote=False))
 
 
 # Headings
@@ -145,32 +172,28 @@ def load_registry(root):
             if fid in features:
                 raise RegistryError("%s: %s: duplicate id" % (name, fid))
             feature = {key: raw.get(key) for key in FEATURE_KEYS}
-            feature["depends_on"] = sorted(raw.get("depends_on") or [])
+            feature["depends_on"] = sorted(raw.get("depends_on") or [], key=id_key)
             feature["draft"] = bool(raw.get("draft"))
             feature["pillar"] = pillar["prefix"]
             feature["file"] = name
             feature["unblocks"] = []
             features[fid] = feature
             pillar["features"].append(feature)
-        pillar["features"].sort(key=lambda f: f["id"])
+        pillar["features"].sort(key=lambda f: id_key(f["id"]))
         pillars.append(pillar)
     pillars.sort(key=lambda p: (p["order"], p["prefix"]))
-    for fid in sorted(features):
+    for fid in sorted(features, key=id_key):
         for dep in features[fid]["depends_on"]:
             if dep not in features:
                 raise RegistryError("%s: %s: depends_on %s, which does not exist"
                                     % (features[fid]["file"], fid, dep))
             features[dep]["unblocks"].append(fid)
     for feature in features.values():
-        feature["unblocks"].sort()
+        feature["unblocks"].sort(key=id_key)
     return pillars, features
 
 
 # Pages
-
-def _cell(text):
-    return text.replace("|", "\\|")
-
 
 def _heading_link(root, base_dir, ref, kind, base):
     """Markdown link for a docs or design reference, texted by its page heading."""
@@ -190,19 +213,19 @@ def _heading_link(root, base_dir, ref, kind, base):
     elif kind == "design":
         target = "%s/blob/main/%s" % (base, ref)
     else:
-        return _cell(ref)  # not a page path (a placeholder); no link
-    return "[%s](%s)" % (_cell(text), target)
+        return md(ref)  # not a page path (a placeholder); no link
+    return "[%s](%s)" % (md(text), target)
 
 
 def _feature_links(ids, features):
     if not ids:
         return "None"
-    return "<br>".join("[%s](%s.md) (`%s`)" % (features[i]["title"], i.lower(), i) for i in ids)
+    return "<br>".join("[%s](%s.md) (`%s`)" % (md(features[i]["title"]), i.lower(), i) for i in ids)
 
 
 def pillar_page(pillar):
-    lines = ["---", "template: roadmap.html", "---", "", "# " + pillar["title"], "",
-             pillar["summary"].strip(), "",
+    lines = ["---", "template: roadmap.html", "---", "", "# " + md(pillar["title"]), "",
+             md(pillar["summary"]), "",
              "The [roadmap graph](index.md) shows how these features depend on features in "
              "other pillars.", ""]
     for status in STATUS_ORDER:
@@ -212,7 +235,7 @@ def pillar_page(pillar):
         lines += ["## " + SECTION_TITLES[status], ""]
         for f in items:
             line = '- <span class="roadmap-id">%s</span> [%s](%s.md). %s' % (
-                f["id"], f["title"], f["id"].lower(), f["summary"].strip())
+                f["id"], md(f["title"]), f["id"].lower(), md(f["summary"]))
             if f["sprint"]:
                 line += " Sprint %s." % f["sprint"]
             lines.append(line)
@@ -222,12 +245,12 @@ def pillar_page(pillar):
 
 def feature_page(feature, pillars_by_prefix, features, root, base):
     pillar = pillars_by_prefix[feature["pillar"]]
-    lines = ["---", "template: roadmap.html", "---", "", "# " + feature["title"], ""]
+    lines = ["---", "template: roadmap.html", "---", "", "# " + md(feature["title"]), ""]
     if feature["draft"]:
         lines += ['!!! note "Draft"',
                   "    The dependencies of this entry are a first draft and still need "
                   "checking.", ""]
-    lines += [feature["summary"].strip(), ""]
+    lines += [md(feature["summary"]), ""]
     docs = (_heading_link(root, "roadmap", feature["docs"], "docs", base)
             if feature["docs"] else "None")
     design = (_heading_link(root, "roadmap", feature["design"], "design", base)
@@ -240,7 +263,7 @@ def feature_page(feature, pillars_by_prefix, features, root, base):
         ("Id", "`%s`" % feature["id"]),
         ("Status", '<span class="roadmap-badge roadmap-badge--%s">%s</span>'
          % (feature["status"], BADGE_LABELS[feature["status"]])),
-        ("Pillar", "[%s](%s.md)" % (pillar["title"], pillar["slug"])),
+        ("Pillar", "[%s](%s.md)" % (md(pillar["title"]), pillar["slug"])),
         ("Sprint", str(feature["sprint"]) if feature["sprint"] else "None"),
         ("Depends on", _feature_links(feature["depends_on"], features)),
         ("Unblocks", _feature_links(feature["unblocks"], features)),
@@ -259,16 +282,16 @@ def _dump(obj):
 def graph_json(pillars, features):
     order = {p["prefix"]: p["order"] for p in pillars}
     nodes = []
-    for f in sorted(features.values(), key=lambda f: (order[f["pillar"]], f["id"])):
+    for f in sorted(features.values(), key=lambda f: (order[f["pillar"]], id_key(f["id"]))):
         nodes.append({"id": f["id"], "title": f["title"], "status": f["status"],
                       "pillar": f["pillar"], "summary": f["summary"], "sprint": f["sprint"],
                       "draft": f["draft"], "url": f["id"].lower() + "/"})
     edges = []
-    for f in sorted(features.values(), key=lambda f: f["id"]):
+    for f in sorted(features.values(), key=lambda f: id_key(f["id"])):
         for dep in f["depends_on"]:
             edges.append({"id": "%s>%s" % (dep, f["id"]), "source": dep, "target": f["id"],
                           "draft": f["draft"]})
-    edges.sort(key=lambda e: (e["target"], e["source"]))
+    edges.sort(key=lambda e: (id_key(e["target"]), id_key(e["source"])))
     return _dump({
         "pillars": [{"prefix": p["prefix"], "title": p["title"], "slug": p["slug"],
                      "order": p["order"], "url": p["slug"] + "/"} for p in pillars],
@@ -288,7 +311,7 @@ def registry_json(pillars, features, site):
              "sprint": f["sprint"], "docs": f["docs"], "branch": f["branch"],
              "design": f["design"], "issue": f["issue"], "draft": f["draft"],
              "url": "%sroadmap/%s/" % (site, f["id"].lower())}
-            for f in sorted(features.values(), key=lambda f: f["id"])]})
+            for f in sorted(features.values(), key=lambda f: id_key(f["id"]))]})
 
 
 def generate(root, site=DEFAULT_SITE):
@@ -300,7 +323,7 @@ def generate(root, site=DEFAULT_SITE):
     out = []
     for p in pillars:
         out.append(("roadmap/%s.md" % p["slug"], pillar_page(p), True))
-    for fid in sorted(features):
+    for fid in sorted(features, key=id_key):
         out.append(("roadmap/%s.md" % fid.lower(),
                     feature_page(features[fid], by_prefix, features, root, GITHUB), False))
     out.append(("roadmap/graph.json", graph_json(pillars, features), True))
