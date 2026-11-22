@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=schema.json
 prefix: INT
-title: Interpretability and interventions
+title: Interpretability and Interventions
 order: 7
 summary: This pillar covers the tools for looking inside a model while it runs, GPTScope and the inspector, and the planned interventions that change a model's computation during a run.
 features:
@@ -23,7 +23,7 @@ features:
     issue: null
 
   - id: INT-03
-    title: Head views
+    title: Head Views
     status: shipped
     scope: peripheral
     summary: The head views plot each attention head by mean attended distance and entropy, and draw the attention matrix of a selected head as a texture.
@@ -32,7 +32,7 @@ features:
     issue: null
 
   - id: INT-04
-    title: Controls for experiments
+    title: Controls for Experiments
     status: shipped
     scope: core
     summary: Protocol 3.1 controls let a viewer pause, step and resume a running script, change its registered parameters and run its registered actions, which an interpretability run uses to repeat an experiment.
@@ -50,7 +50,7 @@ features:
     issue: null
 
   - id: INT-06
-    title: Inspector tensor view
+    title: Inspector Tensor View
     status: built
     scope: peripheral
     summary: The tensor view draws a tensor at its true shape, zooms down to single cells by sampling the visible region, and lets a person read and edit cells, rows and columns.
@@ -59,7 +59,7 @@ features:
     issue: null
 
   - id: INT-07
-    title: Inspector 3-D model view
+    title: Inspector 3-D Model View
     status: built
     scope: peripheral
     summary: The 3-D model view draws every tensor of a model as a panel sized to its shape and textured with its heatmap, grouped and stacked by layer.
@@ -68,7 +68,7 @@ features:
     issue: null
 
   - id: INT-08
-    title: App-to-script requests
+    title: App-to-Script Requests
     status: built
     scope: core
     summary: A script serves requests over a socket next to its session, so the app can ask it to run a task, stream events back, cancel it and fetch tensor values in binary chunks.
@@ -77,7 +77,7 @@ features:
     issue: null
 
   - id: INT-09
-    title: Language models run from the app
+    title: Language Models Run from the App
     status: built
     scope: peripheral
     summary: An example script loads a small language model with MLX and serves the inspector's requests, with generation, a tensor list, sampled views and in-memory weight edits.
@@ -134,7 +134,7 @@ features:
     issue: null
 
   - id: INT-15
-    title: J-space Trace pane
+    title: J-Space Trace Pane
     status: built
     scope: peripheral
     summary: The Trace pane reads a model through a Jacobian lens as it generates, showing the J-space grid and the attention patterns token by token, with a playback clock and the whole run as a tape.
@@ -143,7 +143,7 @@ features:
     issue: null
 
   - id: INT-16
-    title: Induction metrics
+    title: Induction Metrics
     status: planned
     scope: peripheral
     summary: Induction metrics score each attention head for induction behaviour and show the scores in GPTScope.
@@ -152,7 +152,7 @@ features:
     issue: null
 
   - id: INT-17
-    title: Activation patching in GPTScope
+    title: Activation Patching in GPTScope
     status: planned
     scope: peripheral
     summary: Activation patching in GPTScope lets a person replace activations of one run with those of another and see the effect on the model's output.
@@ -161,7 +161,7 @@ features:
     issue: null
 
   - id: INT-18
-    title: MLX support
+    title: MLX Support
     status: planned
     scope: peripheral
     summary: Support for MLX lets the interpretability tools read activations and apply interventions on models written in MLX.
@@ -169,7 +169,7 @@ features:
     issue: null
 
   - id: INT-19
-    title: JAX support
+    title: JAX Support
     status: planned
     scope: peripheral
     summary: Support for JAX lets the interpretability tools read activations and apply interventions on models written in JAX.
@@ -177,7 +177,7 @@ features:
     issue: null
 
   - id: INT-20
-    title: Interventions and the inspector
+    title: Interventions and the Inspector
     status: decision
     scope: peripheral
     summary: This decision sets when the inspector branch, which already holds a J-space Trace pane and J-space interventions, merges, and how those interventions become the general intervention API of sprint 6.
@@ -185,7 +185,7 @@ features:
     issue: null
 
   - id: INT-21
-    title: Interventions from the viewer
+    title: Interventions from the Viewer
     status: planned
     scope: peripheral
     summary: A person picks a head in the attention view and ablates it, or turns a selection in an embedding into a steering direction, from the viewer.
@@ -194,7 +194,7 @@ features:
     issue: null
 
   - id: INT-22
-    title: nnsight and TransformerLens adapters
+    title: nnsight and TransformerLens Adapters
     status: planned
     scope: peripheral
     summary: A model wrapped in nnsight or TransformerLens offers its intervention points to Caliper through an adapter.
@@ -203,7 +203,7 @@ features:
     issue: null
 
   - id: INT-23
-    title: Head ablation demo
+    title: Head Ablation Demo
     status: planned
     scope: peripheral
     summary: A demo finds which attention head a model relies on to find a class marker, by ablating heads live and watching the accuracy.
@@ -212,7 +212,7 @@ features:
     issue: null
 
   - id: INT-24
-    title: OpenGLlama applet
+    title: OpenGLlama Applet
     status: idea
     scope: peripheral
     summary: OpenGLlama could return as an applet of its own beside the inspector.
@@ -220,7 +220,7 @@ features:
     issue: null
 
   - id: INT-25
-    title: Point picking in ThoughtSpace
+    title: Point Picking in ThoughtSpace
     status: idea
     scope: peripheral
     summary: A person could pick a point in ThoughtSpace's constellation and see its token and depth.
@@ -228,7 +228,7 @@ features:
     issue: null
 
   - id: INT-26
-    title: Learned projection in ThoughtSpace
+    title: Learned Projection in ThoughtSpace
     status: idea
     scope: peripheral
     summary: ThoughtSpace could offer a learned projection of the residual stream beside its fixed one.
@@ -245,7 +245,7 @@ features:
     issue: null
 
   - id: INT-28
-    title: Vocabulary embedding view
+    title: Vocabulary Embedding View
     status: built
     scope: peripheral
     summary: A 3-D view draws every row of a model's embedding table as a point, grouped by token kind, so that a person can orbit the vocabulary and read a token by hovering its point.
@@ -254,7 +254,7 @@ features:
     issue: null
 
   - id: INT-29
-    title: Token trajectories
+    title: Token Trajectories
     status: built
     scope: peripheral
     summary: A 3-D view draws each token of a run as a path up the model's layers and marks the layer from which the lens settles on the next token.
@@ -272,7 +272,7 @@ features:
     issue: null
 
   - id: INT-31
-    title: Interpretability example scripts
+    title: Interpretability Example Scripts
     status: built
     scope: peripheral
     summary: Two example scripts reproduce published interpretability measurements live in Caliper, finding induction heads in one small language model and a truth direction in another.
@@ -281,7 +281,7 @@ features:
     issue: null
 
   - id: INT-32
-    title: J-space interventions
+    title: J-Space Interventions
     status: built
     scope: peripheral
     summary: The inspector reads a running language model through a Jacobian lens and intervenes in its J-space across a band of layers, by ablating, removing or swapping lens directions or injecting a scaled direction, with intact and intervened runs sampled alike.
@@ -290,7 +290,7 @@ features:
     issue: null
 
   - id: INT-33
-    title: Interventions in the Trace pane
+    title: Interventions in the Trace Pane
     status: planned
     scope: peripheral
     summary: The Trace pane drives the intervention API, so that a person intervenes from the trace view on any model that the API supports and compares the run before and after.

@@ -18,7 +18,7 @@ import check  # noqa: E402
 
 CORE = """\
 prefix: COR
-title: Core runtime
+title: Core Runtime
 order: 1
 summary: The host and its ABI.
 features:
@@ -60,7 +60,7 @@ order: 2
 summary: Drawing scenes.
 features:
   - id: REN-01
-    title: Scene core
+    title: Scene Core
     status: planned
     scope: core
     summary: Holds the scene.
@@ -756,7 +756,7 @@ class BuildTest(unittest.TestCase):
         self.assertTrue((self.out / "roadmap.json").is_file())
 
         pillar = (self.out / "roadmap" / "core.md").read_text()
-        self.assertTrue(pillar.startswith("---\ntemplate: roadmap.html\n---\n\n# Core runtime\n"))
+        self.assertTrue(pillar.startswith("---\ntemplate: roadmap.html\n---\n\n# Core Runtime\n"))
         self.assertIn("The [roadmap graph](index.md) shows how these features depend on "
                       "features in other pillars.", pillar)
         self.assertLess(pillar.index("## Shipped"), pillar.index("## Built"))
@@ -769,10 +769,10 @@ class BuildTest(unittest.TestCase):
         self.assertIn("| Field | Value |", page)
         self.assertIn('| Status | <span class="roadmap-badge roadmap-badge--built">Built</span> |',
                       page)
-        self.assertIn("| Pillar | [Core runtime](core.md) |", page)
+        self.assertIn("| Pillar | [Core Runtime](core.md) |", page)
         self.assertIn("| Sprint | 4 |", page)
         self.assertIn("| Depends on | [ABI](cor-02.md) (`COR-02`) |", page)
-        self.assertIn("| Unblocks | [Scene core](ren-01.md) (`REN-01`) |", page)
+        self.assertIn("| Unblocks | [Scene Core](ren-01.md) (`REN-01`) |", page)
         self.assertIn("| Docs | None |", page)
         self.assertIn("| Branches | `feature/packaging` |", page)
         self.assertIn("| Design | [The plan page, The plan]"

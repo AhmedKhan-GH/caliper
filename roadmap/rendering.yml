@@ -5,7 +5,7 @@ order: 2
 summary: "This pillar covers how Caliper turns tensors and 3-D data into pixels: the Metal, Vulkan and OpenGL renderers, the geometry services, the graphics layer and scene core, and the scene features planned on them."
 features:
   - id: REN-01
-    title: Metal renderer
+    title: Metal Renderer
     status: shipped
     scope: supporting
     summary: The Metal renderer is the default on macOS and reads PyTorch's MPS buffers in place with a compute pass or a blit, so a tensor reaches a texture without a CPU copy.
@@ -14,7 +14,7 @@ features:
     issue: null
 
   - id: REN-02
-    title: Vulkan renderer with CUDA
+    title: Vulkan Renderer with CUDA
     status: shipped
     scope: supporting
     summary: The Vulkan renderer with CUDA interop is the default on Windows and writes the Vulkan image directly from a CUDA kernel, with timeline semaphores for synchronization.
@@ -23,7 +23,7 @@ features:
     issue: null
 
   - id: REN-03
-    title: OpenGL fallback
+    title: OpenGL Fallback
     status: shipped
     scope: supporting
     summary: The OpenGL fallback draws where neither Metal nor Vulkan is available and stages tensors through the CPU, so it is the slow path and says so.
@@ -68,7 +68,7 @@ features:
     issue: null
 
   - id: REN-08
-    title: Zero-copy from torch
+    title: Zero-Copy from Torch
     status: shipped
     scope: core
     summary: "A PyTorch tensor on MPS or CUDA reaches the screen without a host copy: the renderer reads or imports its device memory, and a ladder of synchronization modes orders the work."
@@ -77,7 +77,7 @@ features:
     issue: null
 
   - id: REN-09
-    title: Graphics layer
+    title: Graphics Layer
     status: built
     scope: core
     summary: The graphics layer, an internal C++ layer shaped like WebGPU, holds buffers, textures, pipelines, draw lists and a uniform arena, validates every frame, and has a Metal backend.
@@ -87,7 +87,7 @@ features:
     issue: null
 
   - id: REN-10
-    title: WGSL shaders through Naga
+    title: WGSL Shaders Through Naga
     status: built
     scope: core
     summary: Scene shaders are written once in WGSL, and a generator with a pinned Naga translates them into the programs that each backend of the graphics layer loads.
@@ -97,7 +97,7 @@ features:
     issue: null
 
   - id: REN-11
-    title: Scene core
+    title: Scene Core
     status: built
     scope: core
     summary: "The scene core is the one camera and scene model of the views: an entity tree with cameras, bounds and fitting, which it compiles into a draw list of the graphics layer, with a pick pass."
@@ -107,7 +107,7 @@ features:
     issue: null
 
   - id: REN-12
-    title: Scene view
+    title: Scene View
     status: built
     scope: core
     summary: The scene view is a live view of kind scene that draws the points, lines and meshes of a protocol 3.2 scene through the scene core, in the app and in the browser, with an orbit camera.
@@ -117,7 +117,7 @@ features:
     issue: null
 
   - id: REN-13
-    title: WebGPU backend of the graphics layer
+    title: WebGPU Backend of the Graphics Layer
     status: built
     scope: core
     summary: The WebGPU backend of the graphics layer runs in the browser, so the WebAssembly views draw scenes through the same layer as the native renderers.
@@ -127,7 +127,7 @@ features:
     issue: null
 
   - id: REN-14
-    title: Colormap by keys
+    title: Colormap by Keys
     status: built
     scope: core
     summary: A colormap is decided by integer comparisons against keys derived once from the CPU reference, so every shader and adapter gives the same colours as the reference.
@@ -147,7 +147,7 @@ features:
     issue: null
 
   - id: REN-16
-    title: Applets on the scene service
+    title: Applets on the Scene Service
     status: planned
     scope: supporting
     summary: EmbedScope, GPTScope, InstanceScope, MeshScope and TwinScope draw through the scene service, export draws scenes, and the geometry service is deleted, so that every 3-D applet of the repository draws through one scene model.
@@ -167,7 +167,7 @@ features:
     issue: null
 
   - id: REN-18
-    title: Mesh files
+    title: Mesh Files
     status: planned
     scope: core
     summary: Mesh files in glTF, OBJ and STL format load through the loaders into mesh sources of a scene, instead of each script reading them by hand.
@@ -194,7 +194,7 @@ features:
     issue: null
 
   - id: REN-21
-    title: More shapes
+    title: More Shapes
     status: planned
     scope: core
     summary: Capsules, cylinders, planes and ellipsoids join the scene's boxes, each drawn from its parameters.
@@ -203,7 +203,7 @@ features:
     issue: null
 
   - id: REN-22
-    title: More colormaps
+    title: More Colormaps
     status: planned
     scope: core
     summary: About twelve scientific colormaps from matplotlib and Crameri's tables join the built-in ones, checked by the exact colour tests.
@@ -212,7 +212,7 @@ features:
     issue: null
 
   - id: REN-23
-    title: Saved viewpoints
+    title: Saved Viewpoints
     status: planned
     scope: core
     summary: Saved viewpoints keep a view's camera in views, recordings and spec applets, so that a person returns to the same angle.
@@ -221,7 +221,7 @@ features:
     issue: null
 
   - id: REN-24
-    title: Scale pass
+    title: Scale Pass
     status: planned
     scope: supporting
     summary: A scale pass measures and tunes scenes with millions of points, long recordings and many entities in Chromium, WebKit and Firefox, against the budgets and level of detail.
@@ -230,7 +230,7 @@ features:
     issue: null
 
   - id: REN-25
-    title: Dawn fallback
+    title: Dawn Fallback
     status: planned
     scope: supporting
     summary: The WebGPU backend also serves as the native fallback through Dawn, chosen only when Metal or Vulkan is unavailable, and draws through Direct3D, OpenGL ES or SwiftShader.
@@ -239,7 +239,7 @@ features:
     issue: null
 
   - id: REN-26
-    title: Slice planes
+    title: Slice Planes
     status: planned
     scope: core
     summary: A slice plane cuts a 3-D field along an axis and is dragged within the scene; the slice is computed on the device and drawn on a textured quad.
@@ -275,7 +275,7 @@ features:
     issue: null
 
   - id: REN-30
-    title: Thick lines and ribbons
+    title: Thick Lines and Ribbons
     status: idea
     scope: core
     summary: Thick lines and ribbons would draw with a width in pixels, which WebGPU does not offer natively, and they are not yet decided.
@@ -284,7 +284,7 @@ features:
     issue: null
 
   - id: REN-31
-    title: Renderer baseline and counters
+    title: Renderer Baseline and Counters
     status: built
     scope: supporting
     summary: Copy counters, frame-time statistics on Metal and benchmark rows record a baseline before the renderer core's migration, so that every later step is measured against it.
@@ -294,7 +294,7 @@ features:
     issue: null
 
   - id: REN-32
-    title: Points view on the scene core
+    title: Points View on the Scene Core
     status: built
     scope: core
     summary: The points live view draws as a scene of one entity through the scene core, with its pixels checked against references from the old path, which is deleted.
@@ -304,7 +304,7 @@ features:
     issue: null
 
   - id: REN-33
-    title: Texture path on the graphics layer
+    title: Texture Path on the Graphics Layer
     status: built
     scope: core
     summary: Heatmaps, images, the tensor bridge's textures and the embed views update their textures through the graphics layer with the colormap decided by keys, and the Vulkan renderer is reduced to the window, the canvas and ImGui.
@@ -315,7 +315,7 @@ features:
     issue: null
 
   - id: REN-34
-    title: Scene model additions
+    title: Scene Model Additions
     status: planned
     scope: core
     summary: The scene model gains additive points and lines, meshes drawn many times from instance poses, and a depth offset that lets edges win over the surface they lie on, natively and in a browser.
@@ -324,7 +324,7 @@ features:
     issue: null
 
   - id: REN-35
-    title: Scene service for applets
+    title: Scene Service for Applets
     status: planned
     scope: supporting
     summary: The scene service offers the scene model to applets through the ABI, with the shared camera, the up-axis switch, the scale bar and picks returned as events, and the particle applets FieldScope, FlowScope and SculptScope draw through it.
@@ -333,7 +333,7 @@ features:
     issue: null
 
   - id: REN-36
-    title: Final renderer seam
+    title: Final Renderer Seam
     status: planned
     scope: supporting
     summary: HostRenderer is reduced to the window, the frame loop, the canvas, window capture and the graphics layer, once every applet draws through the scene service.
@@ -342,7 +342,7 @@ features:
     issue: null
 
   - id: REN-37
-    title: Arrows and boxes in scenes
+    title: Arrows and Boxes in Scenes
     status: built
     scope: core
     summary: Scenes draw arrows and boxes, with rotations, colours or values through a colormap, class ids, labels, optional fill and a corner form in 2-D.
@@ -352,7 +352,7 @@ features:
     issue: null
 
   - id: REN-38
-    title: Images in scenes
+    title: Images in Scenes
     status: built
     scope: core
     summary: A scene shows colour, depth and segmentation images on a camera's image plane and draws a depth image as a point cloud projected back through the camera; encoded images are not drawn yet.
@@ -362,7 +362,7 @@ features:
     issue: null
 
   - id: REN-39
-    title: Pinhole cameras in scenes
+    title: Pinhole Cameras in Scenes
     status: built
     scope: core
     summary: A scene holds pinhole cameras drawn as frustums, with 2-D items in each camera's pixel space, and a person can look through a camera.
@@ -372,7 +372,7 @@ features:
     issue: null
 
   - id: REN-40
-    title: Entity transforms
+    title: Entity Transforms
     status: built
     scope: core
     summary: Each entity of a scene carries a transform, as translation, rotation and scale or as a matrix, that composes down its path in 2-D and 3-D scenes.
@@ -382,7 +382,7 @@ features:
     issue: null
 
   - id: REN-41
-    title: Class table and labels
+    title: Class Table and Labels
     status: built
     scope: core
     summary: A scene's class table gives each class id a label and a colour for points, boxes and segmentation, and items may carry labels of their own.
@@ -392,7 +392,7 @@ features:
     issue: null
 
   - id: REN-42
-    title: Index-pair edges
+    title: Index-Pair Edges
     status: built
     scope: core
     summary: Lines can be given as pairs of indices into a positions array, so that graph edges, bonds and skeletons reuse their points instead of repeating them.
@@ -402,7 +402,7 @@ features:
     issue: null
 
   - id: REN-43
-    title: Up-axis switch
+    title: Up-Axis Switch
     status: built
     scope: core
     summary: Every 3-D view has a switch between Y up and Z up that changes only the camera's basis, never the data, and is remembered with the view.
@@ -412,7 +412,7 @@ features:
     issue: null
 
   - id: REN-44
-    title: Scale bar
+    title: Scale Bar
     status: built
     scope: core
     summary: A scene view shows a scale bar in the scene's units, measured at the orbit target in 3-D and exact in 2-D.
@@ -422,7 +422,7 @@ features:
     issue: null
 
   - id: REN-45
-    title: Starting camera of a scene
+    title: Starting Camera of a Scene
     status: built
     scope: core
     summary: A script sets the camera a scene view opens on with view_camera, by a target, a distance and angles or by a camera entity.
@@ -432,7 +432,7 @@ features:
     issue: null
 
   - id: REN-46
-    title: Scene selection and events
+    title: Scene Selection and Events
     status: built
     scope: core
     summary: Hover, click, rectangle and lasso work in a scene, natively and in a browser, picks and selections reach the script through caliper.serve() and the widget's selection, and a selection links to the other views.
@@ -443,7 +443,7 @@ features:
     issue: null
 
   - id: REN-47
-    title: Following an entity
+    title: Following an Entity
     status: planned
     scope: core
     summary: The camera of a scene view follows a chosen entity, such as a gripper, as it moves, while the person orbits around it.
@@ -452,7 +452,7 @@ features:
     issue: null
 
   - id: REN-48
-    title: Keypoint skeletons
+    title: Keypoint Skeletons
     status: planned
     scope: core
     summary: The class table of a scene holds keypoints and their connections, so that skeletons draw with names and colours.
@@ -461,7 +461,7 @@ features:
     issue: null
 
   - id: REN-49
-    title: Line widths in world units
+    title: Line Widths in World Units
     status: planned
     scope: core
     summary: Lines in a scene take a width in world units as well as in pixels.
@@ -470,7 +470,7 @@ features:
     issue: null
 
   - id: REN-50
-    title: Orthographic projection and preset views
+    title: Orthographic Projection and Preset Views
     status: planned
     scope: core
     summary: A 3-D view switches between perspective and orthographic projection and takes top, front, side and three-quarter presets, for measuring shapes without perspective.
@@ -479,7 +479,7 @@ features:
     issue: null
 
   - id: REN-51
-    title: Text log view
+    title: Text Log View
     status: planned
     scope: core
     summary: A text log view lists logged lines with their levels, drawn natively and, in a browser, in the page itself.
@@ -488,7 +488,7 @@ features:
     issue: null
 
   - id: REN-52
-    title: Bar chart view
+    title: Bar Chart View
     status: planned
     scope: core
     summary: A bar chart view draws a labelled array of bars, natively and, in a browser, in Canvas 2D.
@@ -497,7 +497,7 @@ features:
     issue: null
 
   - id: REN-53
-    title: Vulkan backend of the graphics layer
+    title: Vulkan Backend of the Graphics Layer
     status: planned
     scope: core
     summary: The graphics layer gains a Vulkan backend with the CUDA path, so that bridge textures, scenes and export, which Windows refuses until then, draw on Windows through the same layer as on macOS.
@@ -505,7 +505,7 @@ features:
     issue: null
 
   - id: REN-54
-    title: Structure from motion demo
+    title: Structure from Motion Demo
     status: planned
     scope: peripheral
     summary: A demo reconstructs a scene from the frames of a short film and shows the cameras, their images and the point cloud, with the shot chosen to suit it.
@@ -514,7 +514,7 @@ features:
     issue: null
 
   - id: REN-55
-    title: Robot arm demo
+    title: Robot Arm Demo
     status: planned
     scope: peripheral
     summary: A demo loads a robot arm from its URDF and shows it following a target, with the gripper followed and trailed.
@@ -523,7 +523,7 @@ features:
     issue: null
 
   - id: REN-56
-    title: Detection boxes demo
+    title: Detection Boxes Demo
     status: planned
     scope: peripheral
     summary: A demo shows a detection model's boxes, classes and scores over the images they were found in.
@@ -532,7 +532,7 @@ features:
     issue: null
 
   - id: REN-57
-    title: Flow field demo
+    title: Flow Field Demo
     status: planned
     scope: peripheral
     summary: A demo shows where a neural surrogate's error concentrates inside a 3-D flow, with slice planes and isosurfaces.
@@ -541,7 +541,7 @@ features:
     issue: null
 
   - id: REN-58
-    title: Culling flag
+    title: Culling Flag
     status: idea
     scope: supporting
     summary: Geometry draws could take a flag that turns face culling on or off.
@@ -549,7 +549,7 @@ features:
     issue: null
 
   - id: REN-59
-    title: Exportable Vulkan image pool
+    title: Exportable Vulkan Image Pool
     status: idea
     scope: supporting
     summary: The Vulkan renderer could keep a pool of exportable images for zero-copy sharing.
@@ -557,7 +557,7 @@ features:
     issue: null
 
   - id: REN-60
-    title: Device-backed shared allocation on Metal
+    title: Device-Backed Shared Allocation on Metal
     status: idea
     scope: supporting
     summary: The alloc_shared call could be backed by device memory on Metal.
@@ -565,7 +565,7 @@ features:
     issue: null
 
   - id: REN-61
-    title: Camera paths and fly mode
+    title: Camera Paths and Fly Mode
     status: idea
     scope: core
     summary: A scene view could play its camera along a recorded path and offer a fly mode for moving through a scene.
@@ -573,7 +573,7 @@ features:
     issue: null
 
   - id: REN-62
-    title: Gizmos and scene editing
+    title: Gizmos and Scene Editing
     status: idea
     scope: core
     summary: Gizmos could let a person move and edit the entities of a scene in its view.
@@ -581,7 +581,7 @@ features:
     issue: null
 
   - id: REN-63
-    title: Lights and materials
+    title: Lights and Materials
     status: idea
     scope: core
     summary: Scenes could carry lights and materials beyond the fixed shading they have today.
@@ -589,7 +589,7 @@ features:
     issue: null
 
   - id: REN-64
-    title: Tensor bridge service
+    title: Tensor Bridge Service
     status: shipped
     scope: peripheral
     summary: caliper.tensor_bridge.v1 to v1_2 turn a CaliperTensor into a live texture in the same frame, with a handoff ordered on the stream and imported device allocations.
@@ -598,7 +598,7 @@ features:
     issue: null
 
   - id: REN-65
-    title: Export service
+    title: Export Service
     status: shipped
     scope: peripheral
     summary: caliper.export.v1 draws a draw list again offscreen at any resolution into a pixel-exact PNG with a JSON provenance file, and into frame sequences.
@@ -607,7 +607,7 @@ features:
     issue: null
 
   - id: REN-66
-    title: Torch adapter
+    title: Torch Adapter
     status: shipped
     scope: core
     summary: torch.hpp turns a torch tensor into a CaliperTensor, refuses a tensor it cannot share rather than copying it, and applies the rules of MPS and CUDA.
@@ -616,7 +616,7 @@ features:
     issue: null
 
   - id: REN-67
-    title: Exportable pool
+    title: Exportable Pool
     status: shipped
     scope: core
     summary: ExportablePool allocates the tensors that the renderer draws in place, and an allocation registry tracks the allocations the host can import.
@@ -625,7 +625,7 @@ features:
     issue: null
 
   - id: REN-68
-    title: OBJ loader and orbit camera
+    title: OBJ Loader and Orbit Camera
     status: shipped
     scope: supporting
     summary: Two adapters give an applet an OBJ mesh loader and an orbit camera with picking under the cursor.
@@ -634,7 +634,7 @@ features:
     issue: null
 
   - id: REN-69
-    title: WebGPU renderer for browser views
+    title: WebGPU Renderer for Browser Views
     status: shipped
     scope: core
     summary: The WebGPU renderer draws the browser views of the WebAssembly module, with a colormap pass whose thresholds come from the CPU reference and instanced quads for points.

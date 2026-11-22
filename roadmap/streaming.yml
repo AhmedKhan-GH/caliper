@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=schema.json
 prefix: STR
-title: Live data, streaming and recordings
+title: Live Data, Streaming and Recordings
 order: 3
 summary: This pillar covers how a running script's tensors reach a viewer, over shared memory or a network stream, through the hub and into notebooks. It also covers the wire protocol and how a session will be recorded and replayed.
 features:
@@ -14,7 +14,7 @@ features:
     issue: null
 
   - id: STR-02
-    title: Wire protocol v3
+    title: Wire Protocol v3
     status: shipped
     scope: core
     summary: Wire protocol v3 defines the binary frames of a live stream over a WebSocket, including the session handshake, view subscriptions, snapshots, series deltas and data views.
@@ -23,7 +23,7 @@ features:
     issue: null
 
   - id: STR-03
-    title: Protocol 3.1 controls
+    title: Protocol 3.1 Controls
     status: shipped
     scope: core
     summary: The controls of protocol 3.1 let a viewer pause, resume and step a training loop, change registered parameters, run registered actions and share a selection between views.
@@ -32,7 +32,7 @@ features:
     issue: null
 
   - id: STR-04
-    title: Live streaming
+    title: Live Streaming
     status: shipped
     scope: core
     summary: Snapshots of a script's tensors are copied on the device into shared memory, and a viewer process on the same machine samples them at its own pace, so the script never waits for the display.
@@ -41,7 +41,7 @@ features:
     issue: null
 
   - id: STR-05
-    title: Network streaming
+    title: Network Streaming
     status: shipped
     scope: core
     summary: caliper.serve sends a script's live views over a WebSocket to a notebook widget or a browser tab, reducing each snapshot on the device and letting the latest snapshot win.
@@ -68,7 +68,7 @@ features:
     issue: null
 
   - id: STR-08
-    title: Data views
+    title: Data Views
     status: shipped
     scope: core
     summary: A data view tells the producer which part of a large tensor to send, such as a slice, a reduction or a downsample, so the reduction runs on the device and only the result travels.
@@ -77,7 +77,7 @@ features:
     issue: null
 
   - id: STR-09
-    title: Wire protocol 3.2
+    title: Wire Protocol 3.2
     status: built
     scope: core
     summary: Wire protocol 3.2 adds the scene, text and bar view kinds, timelines and stamps, the scene messages for points, lines, arrows, boxes, meshes, images, cameras, transforms, class tables and clears, and the recording and cursor messages, in the C++, Python and TypeScript codecs.
@@ -97,7 +97,7 @@ features:
     issue: null
 
   - id: STR-11
-    title: Loss landscape demo
+    title: Loss Landscape Demo
     status: built
     scope: core
     summary: Demo 0 is a notebook that streams the loss surface around a model's current weights as a mesh, with the optimizer's path across it, recomputed on the device while the model trains.
@@ -129,7 +129,7 @@ features:
     issue: null
 
   - id: STR-14
-    title: Record button
+    title: Record Button
     status: planned
     scope: peripheral
     summary: A Record button in the app's session toolbar starts and stops writing the attached session to a recording file kept in the workspace.
@@ -138,7 +138,7 @@ features:
     issue: null
 
   - id: STR-15
-    title: Recordings through the hub
+    title: Recordings Through the Hub
     status: planned
     scope: peripheral
     summary: caliper serve records each producer session it relays and serves recording files and folders as ended sessions, each viewer with its own cursor.
@@ -156,7 +156,7 @@ features:
     issue: null
 
   - id: STR-17
-    title: Security review
+    title: Security Review
     status: planned
     scope: supporting
     summary: This step is a dedicated review of the stream's security, which must finish before any session leaves the local machine.
@@ -165,7 +165,7 @@ features:
     issue: null
 
   - id: STR-18
-    title: Several viewers per session
+    title: Several Viewers per Session
     status: planned
     scope: core
     summary: A live session over shared memory is read by one viewer today, and this work lets several viewers read the same session by giving each reader its own claims.
@@ -182,7 +182,7 @@ features:
     issue: null
 
   - id: STR-20
-    title: Shared memory on Windows
+    title: Shared Memory on Windows
     status: planned
     scope: supporting
     summary: Named shared memory through CreateFileMapping carries the local live session on Windows, with CUDA tensors copied on the device without blocking training.
@@ -191,7 +191,7 @@ features:
     issue: null
 
   - id: STR-21
-    title: Shared memory on Linux
+    title: Shared Memory on Linux
     status: planned
     scope: peripheral
     summary: This work carries the local live session over POSIX shared memory on Linux arm64.
@@ -199,7 +199,7 @@ features:
     issue: null
 
   - id: STR-22
-    title: ROS 2 import
+    title: ROS 2 Import
     status: planned
     scope: peripheral
     summary: ROS 2 recordings in MCAP open in Caliper, with transforms, point clouds, images and markers decoded into scene entities and named frames translated into the entity tree.
@@ -219,7 +219,7 @@ features:
     issue: null
 
   - id: STR-24
-    title: Scenes through shared memory
+    title: Scenes Through Shared Memory
     status: planned
     scope: core
     summary: The shared-memory session gains a scene layout, so that a script attached to the app on the same machine sends its scenes with in-place import from the slots.
@@ -228,7 +228,7 @@ features:
     issue: null
 
   - id: STR-25
-    title: Scene data views
+    title: Scene Data Views
     status: planned
     scope: core
     summary: A scene data view reduces a scene on the producer's device, beyond the default view, so that only the part a viewer needs travels.
@@ -237,7 +237,7 @@ features:
     issue: null
 
   - id: STR-26
-    title: Recording reader in the browser
+    title: Recording Reader in the Browser
     status: planned
     scope: peripheral
     summary: A reader written in TypeScript opens a recording file in the browser viewer, through a page address with ?recording=, with no server behind it.
@@ -246,7 +246,7 @@ features:
     issue: null
 
   - id: STR-27
-    title: Scrubber in the browser
+    title: Scrubber in the Browser
     status: planned
     scope: peripheral
     summary: The browser viewer scrubs a recording opened from a file, with the same cursor and timelines as the scrubber in the app.
@@ -255,7 +255,7 @@ features:
     issue: null
 
   - id: STR-28
-    title: Recording export to Parquet
+    title: Recording Export to Parquet
     status: planned
     scope: peripheral
     summary: caliper export --to parquet writes a recording's series and tables as Parquet files for analysis in other tools.
@@ -264,7 +264,7 @@ features:
     issue: null
 
   - id: STR-29
-    title: Recordings in the workspace
+    title: Recordings in the Workspace
     status: planned
     scope: peripheral
     summary: Recordings made in the app are written into the workspace, listed in its tables and offered in the catalog as sources of the kind recording.
@@ -273,7 +273,7 @@ features:
     issue: null
 
   - id: STR-30
-    title: Training run demo
+    title: Training Run Demo
     status: planned
     scope: peripheral
     summary: A demo records a training run with its class table, item space and lasso selection and scrubs it, as the acceptance of timelines and recordings.
@@ -282,7 +282,7 @@ features:
     issue: null
 
   - id: STR-31
-    title: Applet scenes in recordings and the hub
+    title: Applet Scenes in Recordings and the Hub
     status: planned
     scope: peripheral
     summary: Scenes that applets draw through the scene service are recorded with a session and travel through the hub like a script's scenes.
@@ -291,7 +291,7 @@ features:
     issue: null
 
   - id: STR-32
-    title: Events over shared memory
+    title: Events over Shared Memory
     status: planned
     scope: core
     summary: A small ring buffer carries events from the app back to a script attached through shared memory, as the network route already does.
@@ -300,7 +300,7 @@ features:
     issue: null
 
   - id: STR-33
-    title: Robot run demo
+    title: Robot Run Demo
     status: planned
     scope: peripheral
     summary: A demo opens a recorded robot run and shows where along it a model's prediction drifts.
@@ -309,7 +309,7 @@ features:
     issue: null
 
   - id: STR-34
-    title: Data views of tables
+    title: Data Views of Tables
     status: planned
     scope: core
     summary: A data view for a table tells the producer which rows to send, as data views of tensors already do for slices and reductions.
@@ -317,7 +317,7 @@ features:
     issue: null
 
   - id: STR-35
-    title: Zoom as a data view
+    title: Zoom as a Data View
     status: planned
     scope: core
     summary: A zoom or a selection that needs more detail than a snapshot holds becomes a request for another data view, which the producer computes.
@@ -333,7 +333,7 @@ features:
     issue: null
 
   - id: STR-37
-    title: Smaller Caliper LIB wheel
+    title: Smaller Caliper LIB Wheel
     status: idea
     scope: supporting
     summary: A build of Caliper LIB without the metrics and artifacts stores could make the wheel smaller.
@@ -341,7 +341,7 @@ features:
     issue: null
 
   - id: STR-38
-    title: Foxglove bridge source
+    title: Foxglove Bridge Source
     status: idea
     scope: peripheral
     summary: Caliper could read a live source that speaks the Foxglove bridge protocol, so that robotics tools that serve it stream into the views.
@@ -349,7 +349,7 @@ features:
     issue: null
 
   - id: STR-39
-    title: Recordings in generic MCAP viewers
+    title: Recordings in Generic MCAP Viewers
     status: idea
     scope: peripheral
     summary: A decoder for Caliper's additions to MCAP could let generic MCAP viewers open Caliper recordings.
@@ -357,7 +357,7 @@ features:
     issue: null
 
   - id: STR-40
-    title: Distributed training in one view
+    title: Distributed Training in One View
     status: idea
     scope: peripheral
     summary: The streams of a training run spread over several GPUs and machines could combine into one view.
@@ -365,7 +365,7 @@ features:
     issue: null
 
   - id: STR-41
-    title: Feed service
+    title: Feed Service
     status: shipped
     scope: peripheral
     summary: caliper.feed.v1 gives applets telemetry channels of the machine from ring buffers that the host owns, read without blocking and with every lost sample counted.
@@ -383,7 +383,7 @@ features:
     issue: null
 
   - id: STR-43
-    title: Attaching from the app
+    title: Attaching from the App
     status: shipped
     scope: core
     summary: The app lists the live sessions and streams on the machine, attaches to one from the landing screen or with --url, and shows it on the live page.
@@ -410,7 +410,7 @@ features:
     issue: null
 
   - id: STR-46
-    title: Own window and offscreen canvas
+    title: Own Window and Offscreen Canvas
     status: shipped
     scope: core
     summary: caliper.window and caliper.offscreen open a window in the script's own process or a synchronous offscreen canvas as a route for the view calls.
@@ -419,7 +419,7 @@ features:
     issue: null
 
   - id: STR-47
-    title: Clock exchange
+    title: Clock Exchange
     status: idea
     scope: supporting
     summary: The wire protocol could gain a clock exchange, so that a viewer can show a stream's absolute latency.
