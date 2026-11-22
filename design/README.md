@@ -47,3 +47,4 @@ Both fail with a configuration error when run from inside `design/` or with an a
 | [Hosted Runs](hosted-runs.md) | The model runner: the commands that start, fork, stop and list managed runs, the review card, the child processes and the run sources |
 | [Web Geometry](web-geometry.md) | What remains of scenes in the browser: pipelines, encoded frames, budgets and lost devices, parity rows, and the fallback without WebGPU |
 | [Producer Runtime](producer-runtime.md) | The graphics layer without a window in the training process: the framework adapter, the sync points, the read-only rule, the budget per step and the measurements of its design spike |
+| [GPU Programs](gpu-programs.md) | The interfaces of GPU programs: the program and stage declarations of spec version 1, the stage and program commands, the sandbox, the cadence, the wire path to the script, the program status and events, and the first intervention |

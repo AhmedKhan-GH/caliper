@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=schema.json
+title: GPU Programs plan page
+kind: page
+source: design/gpu-programs.md
+summary: The plan page design/gpu-programs.md, read heading by heading; each plan heading has an entry
+  or is listed as holding no feature.
+not_features:
+- Status
+- Open Points
+entries:
+- heading: Spec Additions
+  item: Spec version 1 gains the top-level keys program, stage and provenance.
+  ids:
+  - SPC-14
+- heading: Program Declaration
+  item: A program declares its WGSL source, its read-only inputs by tensor name, one output and its limits.
+  ids:
+  - SPC-14
+- heading: Geometry Output
+  item: A geometry output writes named arrays and a count that the script publishes as a scene batch on one entity.
+  ids:
+  - SPC-14
+- heading: Pixels Output
+  item: A pixels output writes an RGBA8 image that the script publishes as the live view program.<id>.
+  ids:
+  - SPC-14
+- heading: Frame Uniform
+  item: A program may declare the uniform caliper, which holds the step, the pass index and the output sizes.
+  ids:
+  - SPC-14
+- heading: Stage Declaration
+  item: A material or vertex stage replaces one function of the draw of a scene entity in the viewer.
+  ids:
+  - SPC-14
+- heading: Provenance
+  item: The key provenance marks a spec from someone else, whose programs wait for a review of their hash.
+  ids:
+  - SPC-23
+- heading: Commands
+  item: Eleven commands for stages, programs and interventions join the command layer and the MCP tool table.
+  ids:
+  - SPC-05
+  - AGT-02
+- heading: Stage Commands
+  item: The commands stage.set and stage.remove edit the stages of the open spec, and stage.check compiles a source.
+  ids:
+  - SPC-14
+  - SPC-05
+- heading: Program Commands
+  item: The commands program.create, program.patch and program.remove edit programs, and program.status reads their state.
+  ids:
+  - SPC-14
+  - SPC-05
+- heading: Command Errors
+  item: The stage and program commands answer with fixed error codes.
+  ids:
+  - SPC-05
+- heading: Sandbox
+  item: The same sandbox checks run in the editor, in the producer runtime and in the viewer.
+  ids:
+  - SPC-14
+- heading: Check Order
+  item: The sandbox checks the declaration, the provenance, the source, the compile, the bindings, the imports, the memory and the layer, in that order.
+  ids:
+  - SPC-14
+- heading: Time Watchdog
+  item: A watchdog stops a program or a stage that goes over its GPU time limit.
+  ids:
+  - SPC-14
+- heading: Host Errors
+  item: The hosts of programs and stages report fixed error codes in the status and the events.
+  ids:
+  - SPC-14
+- heading: Cadence
+  item: The runtime runs programs every N steps, with N from the measured pass cost and step time, so that training keeps 95 percent of its speed.
+  ids:
+  - SPC-14
+  - REN-31
+- heading: Wire Path
+  item: A program reaches the script in a new PROGRAM message, and its outputs return as scene updates and snapshots.
+  ids:
+  - SPC-14
+  - STR-03
+- heading: Program Messages
+  item: The messages PROGRAM and PROGRAM_STATE, under the capability programs, install programs and carry their status.
+  ids:
+  - SPC-14
+- heading: Attachment
+  item: The app keeps the programs of the attached script equal to the programs of the open spec.
+  ids:
+  - SPC-14
+- heading: Output Route
+  item: The script publishes each output through the publish path of caliper.scene or caliper.show.
+  ids:
+  - SPC-14
+- heading: Program Status
+  item: The command program.status and the message PROGRAM_STATE carry one status item for each program and stage.
+  ids:
+  - SPC-14
+- heading: Program Events
+  item: The event kind program reports a program or a stage that compiled, was refused or stopped.
+  ids:
+  - AGT-21
+- heading: Producer Runtime Interface
+  item: A C interface and two Python files fix where the producer runtime meets the native module and the wire path.
+  ids:
+  - SPC-14
+- heading: Viewer Stage Interface
+  item: The scene compiler takes the compiled stages of an entity through one interface.
+  ids:
+  - SPC-14
+- heading: Interventions
+  item: The first intervention, ablate, sets a module's output or one head to zero at a step boundary.
+  ids:
+  - INT-10
+  - INT-11
+- heading: Intervention Points
+  item: Each module is an intervention point, and an attention module with a head count also gives one point for each head.
+  ids:
+  - INT-10
+- heading: Intervention Commands
+  item: The commands intervene.points, intervene.set, intervene.clear and intervene.list act on the attached script.
+  ids:
+  - INT-10
+  - INT-11
+- heading: Intervention Effect
+  item: The commands that set or clear an intervention have the effect run, with its card and rules.
+  ids:
+  - AGT-17
+  - AGT-06
+- heading: Toggle Control
+  item: A toggle control binds intervene:<point> and ablates the point while it is on.
+  ids:
+  - SPC-12
+  - INT-11
+- heading: Intervention Wire
+  item: The ops of the interventions use the CONTROL and CONTROLS messages under the capability interventions.
+  ids:
+  - STR-03
+- heading: Intervention Errors
+  item: The intervention commands answer with fixed error codes.
+  ids:
+  - INT-10
+- heading: Acceptance Test
+  item: A test through caliper-mcp builds a geometry program, a pixels program, a material stage and an ablation toggle on a managed run.
+  ids:
+  - SPC-14
+  - INT-11
