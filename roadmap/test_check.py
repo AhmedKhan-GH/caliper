@@ -579,7 +579,8 @@ class BuildTest(unittest.TestCase):
         self.assertIn("| Design | [The plan page, The plan]"
                       "(https://github.com/AhmedKhan-GH/caliper/blob/main/design/plan.md"
                       "#the-plan) |", page)
-        self.assertTrue(page.rstrip().endswith("Back to the [roadmap graph](index.md)."))
+        self.assertTrue(page.rstrip().endswith(
+            'Back to the [roadmap graph](index.md), or to <a href="../#COR-03">this feature in it</a>.'))
         self.assertIn("## Sources", page)
         self.assertIn("- [design/plan.md](https://github.com/AhmedKhan-GH/caliper/blob/main/"
                       "design/plan.md#the-plan), under *The plan*. The packaging step and the "

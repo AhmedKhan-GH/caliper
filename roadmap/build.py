@@ -335,7 +335,9 @@ def feature_page(feature, pillars_by_prefix, features, root, base):
         lines += ["- " + source_line(root, group, entry, base)
                   for group, entry in feature["sources"]]
         lines += [""]
-    lines += ["Back to the [roadmap graph](index.md).", ""]
+    # A raw link, because the node's anchor exists only once the graph is drawn.
+    lines += ['Back to the [roadmap graph](index.md), or to <a href="../#%s">this feature in it</a>.'
+              % feature["id"], ""]
     return "\n".join(lines)
 
 
