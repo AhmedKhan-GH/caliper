@@ -538,4 +538,11 @@ TEST_CASE("pieces: selection.set picks an item of a program that pins a workspac
     CHECK(r["fields"]["item"] == 1);
     CHECK(r["fields"]["row"] == 1);
     CHECK(r["fields"]["norm"] == 0.75);
+    // The pick event keeps its program and item in the events' JSON.
+    Event pick;
+    pick.kind = EventKind::pick;
+    pick.fields = r["fields"];
+    const json out = event_json(pick);
+    CHECK(out["program"] == "rows");
+    CHECK(out["item"] == 1);
 }

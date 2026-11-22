@@ -132,7 +132,9 @@ std::optional<EventKind> event_kind_from_name(std::string_view name) {
 // event_json() keeps only these, so that a producer's extra detail, such as
 // the item space of a scene's selection, never leaves the schema.
 const std::vector<const char*>& kind_keys(EventKind kind) {
-    static const std::vector<const char*> pick = {"entity", "primitive", "index", "row_id", "position", "pixel", "fields", "annotation"};
+    // A pick of a piece's item adds program and item (design/programmable-graphics.md, Picking).
+    static const std::vector<const char*> pick = {"entity", "primitive", "index",   "row_id", "position",
+                                                  "pixel",  "fields",    "program", "item",   "annotation"};
     static const std::vector<const char*> select = {"entities", "truncated"};
     static const std::vector<const char*> control = {"control", "bind", "value", "key"};
     // The runner's change (design/hosted-runs.md, Runner Events) adds run,
