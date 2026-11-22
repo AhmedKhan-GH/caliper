@@ -9,6 +9,7 @@ not_features:
 - Method
 - Results
 - Runtime Results
+- Views Results
 - Documented and Undocumented Behavior
 - Risks
 - Decisions
