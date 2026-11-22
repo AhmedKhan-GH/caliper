@@ -2,13 +2,16 @@
 #include "api/session_gateway.h"
 
 #include <caliper_builder/commands/command_table.h>
+#include <caliper_builder/session/events.h>
 #include <caliper_builder/session/session.h>
 
 #include <nlohmann/json.hpp>
 
 #include <chrono>
 #include <future>
+#include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace caliper_api {
@@ -86,6 +89,7 @@ public:
         try {
             RequestInvocation r = request_invocation(std::move(request));
             if (!r.refused.empty()) return ready_command(std::move(r.refused));
+            if (r.invocation.name == "events.wait") return long_poll(std::move(r.invocation));
             return queued_command(session_.queue().submit(std::move(r.invocation), r.options));
         } catch (...) {
             return ready_command(refused(request.id, "command.handler_failed",
@@ -103,6 +107,30 @@ public:
     }
 
 private:
+    // events.wait as a long poll (design/instruments.md, Long Poll): the
+    // server holds the request until its PendingCommand is ready, and a thread
+    // of its own waits in wait_for_events(), so that neither the server nor
+    // the frame thread blocks. The hold is taken here, while the session is
+    // open, so that Session::close() waits until the thread has left
+    // wait_for_events(); a closed session's queue and ring answer at once.
+    std::unique_ptr<PendingCommand> long_poll(caliper_builder::CommandInvocation invocation) {
+        auto done = std::make_shared<std::promise<CommandResult>>();
+        std::future<CommandResult> result = done->get_future();
+        auto hold = std::make_unique<caliper_builder::EventWaitHold>(session_.events());
+        std::thread([done, hold = std::move(hold), queue = &session_.queue(), ring = &session_.events(),
+                     inv = std::move(invocation)]() mutable {
+            const std::string id = inv.id;
+            CommandResult r = CommandResult::failure(id, Error("command.handler_failed", "events.wait failed.", ""));
+            try {
+                r = caliper_builder::wait_for_events(*queue, *ring, std::move(inv));
+            } catch (...) {
+            }
+            hold.reset();   // the session may close from here on
+            done->set_value(std::move(r));
+        }).detach();
+        return queued_command(std::move(result));
+    }
+
     caliper_builder::Session& session_;
     const std::string table_;
     const std::string agent_table_;
