@@ -217,6 +217,9 @@ public:
     // result is a pick event with the panel's id (design/instruments.md).
     // False when the open spec has no scene panel `panel_id`.
     bool pick_scene(const std::string& panel_id, float u, float v);
+    // For the same seam: whether the scene panel `panel_id` of the open spec has drawn its scene,
+    // its entities' own scene or the live scene that it binds.
+    bool scene_ready(const std::string& panel_id);
     // For the hidden app's input driver: a named rectangle of the page's own
     // ("page:browser"), in window points, as the last frame drew it.
     bool item_rect(const std::string& name, float rect[4]) const;

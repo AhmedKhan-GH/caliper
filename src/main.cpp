@@ -1715,12 +1715,8 @@ private:
         const std::optional<caliper_builder::OpenSpec> open = s->open_spec();
         const spec::Panel* p = open ? open->spec.find_panel(id) : nullptr;
         if (!p || p->primitive != spec::Primitive::scene) return false;
-        const auto b = p->bind.find("scene");
-        if (b == p->bind.end() || b->second.bindings.size() != 1) return false;
-        const std::string& ref = b->second.bindings[0];
-        if (ref.rfind("live:", 0) != 0) return false;
-        const caliper_live_views::SceneView* v = caliper_live_views::scene_view(core, ref.substr(5).c_str());
-        return v && v->generation() > 0;
+        // A panel of entities draws its own scene, and another one the live scene that it binds.
+        return spec_page_.scene_ready(id);
     }
 #endif
 
