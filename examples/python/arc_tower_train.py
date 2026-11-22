@@ -20,7 +20,10 @@ The script's only Caliper line is ``caliper.watch(model, optimizer)``, which pub
 sources for a managed run:
 
 - ``live:blocks.<i>.attn.weights.act``: the attention weights of layer ``i`` after the softmax, of
-  shape (64, 4, 32, 32), as batch, head, query token and key token;
+  shape (64 * 4 * 32, 32): the (64, 4, 32, 32) weights of batch, head, query token and key token,
+  with the first three axes as rows. A (64, 4, 32, 32) tensor would show as RGBA images of its
+  four heads, which a viewer cannot bind as weights; the rows keep the same memory, thus batch
+  row 0 is still the first 4 * 32 * 32 values;
 - ``live:token_loss.act``: the loss of each token, of shape (64, 31), where column ``j`` is the
   loss of the prediction of token ``j + 1``. Row 0, columns 16 to 26, is the in-context loss: the
   tokens 17 to 27 of the sentence, which only a copy from the first occurrence predicts;
@@ -84,7 +87,7 @@ class Attention(nn.Module):
         q, k, v = (z.view(b, t, self.n_head, d).transpose(1, 2) for z in self.qkv(x).split(c, dim=2))
         scores = (q @ k.transpose(-2, -1)) / math.sqrt(d)
         scores = scores.masked_fill(~self.mask[:t, :t], float("-inf"))
-        w = self.weights(F.softmax(scores, dim=-1))
+        w = self.weights(F.softmax(scores, dim=-1).reshape(b * self.n_head * t, t)).view(b, self.n_head, t, t)
         y = (w @ v).transpose(1, 2).reshape(b, t, c)     # the heads side by side, head 0 first
         return self.proj(y)
 

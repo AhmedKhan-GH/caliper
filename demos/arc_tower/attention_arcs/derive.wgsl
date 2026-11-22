@@ -1,5 +1,5 @@
-// The weight of a query token i on a key token j, in batch row 0 of the (B, H, T, T) tensors,
-// whose first H * T * T values are that row.
+// The weight of a query token i on a key token j, in batch row 0 of the (B, H, T, T) weights,
+// which the script publishes as (B * H * T, T) rows; the first H * T * T values are that row.
 fn attn(layer: u32, head: u32, i: u32, j: u32) -> f32 {
     let k = (head * T + i) * T + j;
     if (layer == 0u) {

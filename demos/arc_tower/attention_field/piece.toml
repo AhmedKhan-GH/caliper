@@ -6,15 +6,15 @@ imports = ["colormap@1"]
 [[inputs]]
 name = "attn0"
 kind = "tensor"
-rank_min = 4
-rank_max = 4
+rank_min = 2
+rank_max = 2
 title = "Attention Weights of Layer 0"
 
 [[inputs]]
 name = "attn1"
 kind = "tensor"
-rank_min = 4
-rank_max = 4
+rank_min = 2
+rank_max = 2
 title = "Attention Weights of Layer 1"
 
 [[params]]
