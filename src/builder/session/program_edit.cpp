@@ -369,8 +369,9 @@ SpecEdit program_create(const spec::Spec& s, const json& args, const spec::Sourc
     raise_version(next);
     const std::string id = p.id;
     next.programs.push_back(std::move(p));
-    return finish(std::move(next), resolver, json{{"id", id}}, checked,
-                  "program[" + std::to_string(next.programs.size() - 1) + "].wgsl");
+    // The path is made before the call, which moves `next`.
+    const std::string source_path = "program[" + std::to_string(next.programs.size() - 1) + "].wgsl";
+    return finish(std::move(next), resolver, json{{"id", id}}, checked, source_path);
 }
 
 SpecEdit program_patch(const spec::Spec& s, const json& args, const spec::SourceResolver& resolver) {

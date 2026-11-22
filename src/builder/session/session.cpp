@@ -1518,10 +1518,15 @@ struct Session::Impl {
     }
     CommandOutput events_wait(const CommandContext& ctx) { return events_wait_command(ctx, *events); }
     // stage.check and program.status (design/gpu-programs.md).
+    // The hosts' status() runs without the document's lock, so that a host
+    // may read the open spec.
     CommandOutput program_cmd(const CommandContext& ctx) {
-        std::lock_guard<std::mutex> lock(doc_mutex);
-        static const spec::Spec kNone;
-        return program_command(ctx, doc ? doc->spec : kNone, program_host.load(), stage_host.load());
+        spec::Spec open;
+        {
+            std::lock_guard<std::mutex> lock(doc_mutex);
+            if (doc) open = doc->spec;
+        }
+        return program_command(ctx, open, program_host.load(), stage_host.load());
     }
     // The intervention commands (design/gpu-programs.md).
     CommandOutput intervene_cmd(const CommandContext& ctx) { return intervene_command(ctx, run_control.load()); }
