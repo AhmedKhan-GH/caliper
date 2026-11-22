@@ -1029,12 +1029,17 @@ SpecPanelFrame draw_spec_panel(SpecPanelView& view, const ImRect& rect, const Sp
         preview_tag(dl, L, ImVec2(std::round(title_end + 12.0f * s), std::round(rect.Min.y + (hh - th) * 0.5f)));
         title_end += tag_w;
     }
-    if (hh > 0.0f && view.data.state.ready() && !view.data.info.empty()) {
+    // The header's info, or the error that the panel shows over the last good
+    // data it keeps.
+    const bool held = !view.data.notice.ready();
+    if (hh > 0.0f && view.data.state.ready() && (held || !view.data.info.empty())) {
         const float left = title_end + 14.0f * s, right = rect.Max.x - pad;
-        const std::string info = fit_text(L.mono, L.mono_size, view.data.info, right - left);
+        const std::string line = held ? view.data.notice.label + "  " + view.data.notice.detail : view.data.info;
+        const std::string info = fit_text(L.mono, L.mono_size, line, right - left);
         if (!info.empty()) {
             const ImVec2 is = text_size(L.mono, L.mono_size, info);
-            text_at(dl, L.mono, L.mono_size, ImVec2(right - is.x, rect.Min.y + (hh - is.y) * 0.5f), L.faint, info);
+            text_at(dl, L.mono, L.mono_size, ImVec2(right - is.x, rect.Min.y + (hh - is.y) * 0.5f),
+                    held ? L.accent : L.faint, info);
         }
     }
 
@@ -1422,13 +1427,45 @@ void SpecRuntime::invalidate() {
     for (auto& e : entries_) e.second.stale = true;
 }
 
-void SpecRuntime::prepare(Entry& e, const PanelData& data, const spec::Spec* spec) {
+namespace {
+
+bool out_of_range(const caliper_builder::Error& e) { return e && e.code == "resolve.out_of_range"; }
+
+}  // namespace
+
+void SpecRuntime::prepare(Entry& e, const PanelData& resolved, const spec::Spec* spec) {
     textures_.release(e.view.texture);
     e.view.texture = nullptr;
+    // A reference whose value is outside the range of its place stops its
+    // chain (resolve.out_of_range). The panel, or each entity that the error
+    // stopped, then keeps the last good data, and the header shows the error.
+    PanelData data = resolved;
+    std::optional<caliper_builder::Error> held;
+    if (out_of_range(data.error)) {
+        held = data.error;
+        if (e.last_good) {
+            data = *e.last_good;
+            data.generation = resolved.generation;
+        }
+    } else if (!data.error) {
+        for (caliper_builder::EntityData& ent : data.entities) {
+            if (!out_of_range(ent.error)) continue;
+            if (!held) held = ent.error;
+            if (!e.last_good) continue;
+            for (const caliper_builder::EntityData& old : e.last_good->entities)
+                if (old.path == ent.path && !old.error) {
+                    ent = old;
+                    break;
+                }
+        }
+    }
+    if (!data.error) e.last_good = data;
     // The panel as it draws now: its option references applied.
     const caliper_builder::ChainContext chain = chain_context();
     const spec::Panel shown = caliper_builder::panel_with_values(e.panel, &chain);
     e.view.data = prepare_panel(spec ? *spec : spec_ ? *spec_ : spec::Spec{}, shown, data, limits_);
+    if (held && e.view.data.state.ready())
+        e.view.data.notice = panel_state_for_error(held->code, held->where.empty() ? held->code : held->where);
     e.view.fit_frames = 2;
     ++e.view.version;
     e.stale = false;

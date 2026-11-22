@@ -343,12 +343,10 @@ private:
             for (std::size_t j = 0; j < transforms.size(); ++j) {
                 const Transform& t = transforms[j];
                 const std::string path = index_path(index_path("source", i) + ".transform", j);
-                static const std::set<std::string> slice_keys = {"index", "start", "stop", "step"};
-                static const std::set<std::string> window_keys = {"start", "stop", "steps"};
                 for (const auto& [key, ref] : t.references) {
-                    const bool place = (t.op == TransformOp::slice && slice_keys.count(key)) ||
-                                       (t.op == TransformOp::window && window_keys.count(key));
-                    if (!place)
+                    // The places of integer_places() (spec.h), whose range the
+                    // resolver checks again for each value a reference gives.
+                    if (!integer_place(t.op, key))
                         c_.sink.error("spec.reference_not_allowed",
                                       key + " of a " + to_string(t.op) + " step takes a literal only.",
                                       path + "." + key);

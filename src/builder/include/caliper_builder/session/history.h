@@ -76,7 +76,11 @@ public:
     void clear();
 
     // A new value of a live view at a step: the stamp's step, else the run's
-    // step at arrival. Each source whose root is `catalog_id` keeps it.
+    // step at arrival. Each source whose root is `catalog_id` keeps it; a
+    // value of the newest step replaces it. A step below the newest step of
+    // the same view starts a new epoch: every source forgets its kept steps
+    // after that step before the value is kept, and a cursor held after it
+    // goes live.
     void append(const std::string& catalog_id, std::int64_t step, const TensorData& value);
     // The newest value of a live series at a step. A series keeps its own
     // ring of values without their steps, so only a source over it that

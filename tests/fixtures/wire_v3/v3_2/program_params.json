@@ -1,0 +1,28 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 113,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 89,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 128
+  },
+  "meta": {
+    "id": "rows",
+    "op": "params",
+    "params": {
+      "Scale2": 0.0,
+      "_bias": -2,
+      "gain": 1.5
+    },
+    "request_id": 16
+  },
+  "meta_offset": 24,
+  "name": "v3_2/program_params",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "program"
+}

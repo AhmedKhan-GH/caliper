@@ -147,6 +147,25 @@ LayoutNode LayoutNode::of_panel(std::string id) {
     return n;
 }
 
+const std::vector<IntegerPlace>& integer_places() {
+    static const std::vector<IntegerPlace> places = {
+        {TransformOp::slice, "index", &Transform::index, -limits::kMaxSafeInteger, limits::kMaxSafeInteger},
+        {TransformOp::slice, "start", &Transform::start, -limits::kMaxSafeInteger, limits::kMaxSafeInteger},
+        {TransformOp::slice, "stop", &Transform::stop, -limits::kMaxSafeInteger, limits::kMaxSafeInteger},
+        {TransformOp::slice, "step", &Transform::step, 1, limits::kMaxSafeInteger},
+        {TransformOp::window, "start", &Transform::start, -limits::kMaxSafeInteger, limits::kMaxSafeInteger},
+        {TransformOp::window, "stop", &Transform::stop, -limits::kMaxSafeInteger, limits::kMaxSafeInteger},
+        {TransformOp::window, "steps", &Transform::steps, 1, limits::kHistorySteps},
+    };
+    return places;
+}
+
+const IntegerPlace* integer_place(TransformOp op, std::string_view key) {
+    for (const IntegerPlace& p : integer_places())
+        if (p.op == op && key == p.key) return &p;
+    return nullptr;
+}
+
 const Source* Spec::find_source(std::string_view id) const {
     for (const Source& s : sources)
         if (s.id == id) return &s;

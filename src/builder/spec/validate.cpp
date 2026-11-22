@@ -86,7 +86,7 @@ std::int64_t slice_length(const std::optional<std::int64_t>& start, const std::o
     const std::int64_t s = clamp(start, 0);
     const std::int64_t e = clamp(stop, n);
     if (e <= s) return 0;
-    return (e - s + step - 1) / step;
+    return (e - s - 1) / std::max<std::int64_t>(step, 1) + 1;
 }
 
 // What one binding names.
@@ -629,10 +629,17 @@ private:
                                 "dimensions.",
                             p);
         };
-        auto safe = [&](const std::optional<std::int64_t>& v, const char* key) {
-            if (v && (*v > limits::kMaxSafeInteger || *v < -limits::kMaxSafeInteger))
-                sink_.error("spec.out_of_range", path + "." + key + " is outside +-(2^53 - 1).", path + "." + key);
-        };
+        // The integer places of the step (spec.h, integer_places()): the
+        // resolver checks a reference's value there against the same range.
+        for (const IntegerPlace& place : integer_places()) {
+            if (place.op != t.op) continue;
+            const std::optional<std::int64_t>& v = t.*place.field;
+            if (v && (*v < place.min || *v > place.max))
+                sink_.error("spec.out_of_range",
+                            path + "." + place.key + " is " + std::to_string(*v) + "; it is a whole number from " +
+                                std::to_string(place.min) + " to " + std::to_string(place.max) + ".",
+                            path + "." + place.key);
+        }
         switch (t.op) {
             case TransformOp::slice:
                 if (t.axis.empty()) {
@@ -645,13 +652,6 @@ private:
                 if (t.index && (t.start || t.stop || t.step))
                     sink_.error("spec.bad_transform",
                                 "A slice has either index or a range of start, stop and step, not both.", path);
-                safe(t.index, "index");
-                safe(t.start, "start");
-                safe(t.stop, "stop");
-                if (t.step && (*t.step < 1 || *t.step > limits::kMaxSafeInteger))
-                    sink_.error("spec.out_of_range",
-                                path + ".step is " + std::to_string(*t.step) + "; a step is at least 1.",
-                                path + ".step");
                 break;
             case TransformOp::reduce: {
                 if (t.axis.empty()) {

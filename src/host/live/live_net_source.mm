@@ -1270,7 +1270,14 @@ private:
     }
 
     void on_views(const wire::Views& v) {
-        timelines_listed_ = !v.timelines.is_null();
+        // The step is the first value of a stamp only when the first timeline
+        // is the sequence `step`; the codec refuses other VIEWS, and this
+        // reads nothing as the step when a timeline of another kind is first.
+        const Json* first = v.timelines.is_array() && !v.timelines.items().empty() ? &v.timelines.items().front() : nullptr;
+        const Json* kind = first && first->is_object() ? first->find("kind") : nullptr;
+        const Json* name = first && first->is_object() ? first->find("name") : nullptr;
+        timelines_listed_ = kind && kind->is_string() && kind->as_string() == CALIPER_NET_TIMELINE_SEQUENCE && name &&
+                            name->is_string() && name->as_string() == "step";
         if (!v.session) {   // detached: the views keep their last pixels
             session_id_.clear();
             forget_session_state();
@@ -1409,7 +1416,7 @@ private:
         m.vmin = (float)s.vmin;
         m.vmax = (float)s.vmax;
         m.stamp_ns = s.stamp_ns;
-        // The step is the first timeline of the stamp, when VIEWS listed timelines (step first).
+        // The step is the first value of the stamp, when VIEWS listed the sequence `step` first.
         if (timelines_listed_ && s.stamp && s.stamp->is(CALIPER_NET_DTYPE_I64, 1) && s.stamp->shape[0] >= 1) {
             int64_t step = 0;
             std::memcpy(&step, s.stamp->data, sizeof step);
@@ -1528,7 +1535,7 @@ private:
     std::unique_ptr<Client> client_;   // the network thread's; wake() from any thread
     std::thread thread_;
     std::atomic<bool> stop_{false};
-    bool timelines_listed_ = false;   // the newest VIEWS listed timelines, step first (network thread only)
+    bool timelines_listed_ = false;   // the newest VIEWS listed the sequence `step` first (network thread only)
 
     mutable std::mutex mu_;
     std::condition_variable cv_;

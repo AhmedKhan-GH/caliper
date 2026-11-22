@@ -147,3 +147,79 @@ TEST_CASE("live/programs: program.status carries the script's cadence, and over_
     host.pump(link, &ring);   // nothing new: no second event
     CHECK(ring.read(cursor, {{cb::EventKind::program}, {}}, 8).events.size() == 2);
 }
+
+// A changed value of a reference in a program's params is a view change
+// (design/instrument-interface.md, Decisions): it goes to the script as
+// PROGRAM op params with the values alone, never as a set that installs,
+// replaces or declares the program again, and a value outside the declared
+// range of its field in struct Params is refused and not sent.
+TEST_CASE("live/programs: a params change sends only values, and a value outside the declared range is refused") {
+    cb::spec::Spec spec;
+    cb::spec::Program heat = pixels("heat");
+    heat.wgsl = "struct Params { level: u32, gain: f32 }\n"
+                "@group(0) @binding(9) var<uniform> params: Params;\n"
+                "@compute @workgroup_size(64) fn run() {}\n";
+    cb::spec::Reference level, gain;
+    level.kind = gain.kind = cb::spec::Reference::Kind::state;
+    level.target = "level";
+    gain.target = "gain";
+    heat.params = {{"level", level}, {"gain", gain}};
+    spec.programs = {heat};
+    const auto wanted = caliper_live::AppProgramHost::wanted_program(spec, spec.programs[0]);
+    caliper_live::AppProgramHost host;
+    cb::EventRing ring;
+    Link link;
+    host.reconcile(spec);
+    host.pump(link, &ring);
+    REQUIRE(link.sent.size() == 1);
+    CHECK(link.sent[0].op == CALIPER_NET_PROGRAM_SET);
+    link.answers.push_back(answer({script_item(wanted, "running")}));
+    host.pump(link, &ring);
+    const std::size_t installed = link.sent.size();
+    auto sets = [&] {
+        std::size_t n = 0;
+        for (const auto& m : link.sent) n += m.op == CALIPER_NET_PROGRAM_SET || m.op == CALIPER_NET_PROGRAM_REMOVE;
+        return n;
+    };
+
+    double lv = 3, gv = 0.5;
+    const caliper_live::AppProgramHost::Evaluate evaluate = [&](const cb::spec::Reference& r) -> nlohmann::json {
+        return r.target == "level" ? lv : gv;
+    };
+    CHECK(host.refresh(evaluate, nullptr));
+    host.pump(link, &ring);
+    REQUIRE(link.sent.size() == installed + 1);
+    const caliper_net::wire::Program& sent = link.sent.back();
+    CHECK(sent.op == CALIPER_NET_PROGRAM_PARAMS);
+    CHECK(sent.id == "heat");
+    CHECK(sent.declaration.is_null());
+    CHECK_FALSE(sent.wgsl.has_value());
+    CHECK_FALSE(sent.sha256.has_value());
+    CHECK_FALSE(sent.scene.has_value());
+    REQUIRE(sent.params.find("level"));
+    CHECK(sent.params.find("level")->as_double() == 3);
+    CHECK(sent.params.find("gain")->as_double() == 0.5);
+    CHECK(sets() == 1);
+    REQUIRE(host.status().size() == 1);
+    CHECK(host.status()[0].sha256 == wanted.sha256);
+
+    // u32 takes no negative value and none past 2^32 - 1, and f32 none past its range.
+    for (const auto& [l, g] : {std::pair<double, double>{-1, 0.5}, {4294967296.0, 0.5}, {3, 1e39}}) {
+        lv = l;
+        gv = g;
+        CHECK_FALSE(host.refresh(evaluate, nullptr));
+    }
+    host.pump(link, &ring);
+    CHECK(link.sent.size() == installed + 1);
+    CHECK(host.refused_params() == 3);
+
+    // A value inside the range goes out, still as params alone.
+    gv = 2;
+    CHECK(host.refresh(evaluate, nullptr));
+    host.pump(link, &ring);
+    REQUIRE(link.sent.size() == installed + 2);
+    CHECK(link.sent.back().op == CALIPER_NET_PROGRAM_PARAMS);
+    CHECK(link.sent.back().params.find("level")->as_double() == 3);
+    CHECK(link.sent.back().params.find("gain")->as_double() == 2);
+    CHECK(sets() == 1);
+}

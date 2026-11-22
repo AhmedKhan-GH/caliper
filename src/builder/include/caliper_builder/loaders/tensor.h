@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -76,8 +77,16 @@ public:
     const std::string& file() const { return file_; }
     uint64_t file_offset() const { return file_offset_; }
 
-    // Element `i` (row-major) as a double; bool is 0 or 1. No bounds check.
+    // Element `i` (row-major) as a double; bool is 0 or 1. No bounds check:
+    // only for an index that the caller derives from numel() or shape().
     double element(uint64_t i) const;
+    // Element `i` as element() gives it, or nothing when `i` is negative or not
+    // below numel(). Code reads through this form whenever the index comes from
+    // outside the tensor: a command's arguments, a reference, a pick or a stream.
+    std::optional<double> element_at(int64_t i) const;
+    // Element (`row`, `column`) of a tensor of rank 2, or nothing when the
+    // tensor is not of rank 2 or the cell is outside it.
+    std::optional<double> element_at(int64_t row, int64_t column) const;
 
     struct Storage;
 

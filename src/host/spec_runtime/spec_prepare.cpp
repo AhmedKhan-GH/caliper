@@ -539,7 +539,8 @@ void prepare_points(PreparedPanel& p, const spec::Panel& panel, const PanelData&
         const float span = P.cmax - P.cmin;
         P.rgba.reserve(P.color.size());
         for (float c : P.color) {
-            const float t = std::isfinite(c) && span != 0.0f ? std::clamp((c - P.cmin) / span, 0.0f, 1.0f) : 0.0f;
+            float t = std::isfinite(c) && span != 0.0f ? std::clamp((c - P.cmin) / span, 0.0f, 1.0f) : 0.0f;
+            if (!(t >= 0.0f && t <= 1.0f)) t = 0.0f;   // NaN when the range is not finite
             P.rgba.push_back(lut[(int)(t * 255.0f + 0.5f)]);
         }
     }
@@ -777,6 +778,7 @@ PanelState panel_state_for_error(const std::string& code, const std::string& det
     if (code == "resolve.query_failed" || code == "resolve.timeout") return {PanelStateKind::query_error, "Query error", d};
     if (code == "resolve.unknown_column") return {PanelStateKind::missing, "Missing column", d};
     if (code == "resolve.unknown_source" || code == "resolve.cycle") return {PanelStateKind::missing, "Missing source", d};
+    if (code == "resolve.out_of_range") return {PanelStateKind::error, "Value out of range", d};
     if (code == "panel.not_found") return {PanelStateKind::no_spec, "Missing panel", d};
     if (code == "spec.no_open_spec") return {PanelStateKind::no_spec, "No spec", d};
     if (code == "resolve.not_tabular" || code == "resolve.not_a_tensor") return mismatch(d);

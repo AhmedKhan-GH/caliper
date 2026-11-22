@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <set>
 
 #if defined(CALIPER_BUILDER_PROGRAMS_HAVE_WGSL)
@@ -937,6 +938,22 @@ Verdict check_stage_params(const spec::Stage& s) {
                         "params." + name, toks[i + 2].line, toks[i + 2].column);
     }
     return {};
+}
+
+bool param_in_range(ParamType type, double value) {
+    if (!std::isfinite(value)) return false;
+    switch (type) {
+        case ParamType::f32: return std::fabs(value) <= static_cast<double>(std::numeric_limits<float>::max());
+        case ParamType::i32: {
+            const double r = std::round(value);
+            return r >= -2147483648.0 && r <= 2147483647.0;
+        }
+        case ParamType::u32: {
+            const double r = std::round(value);
+            return r >= 0.0 && r <= 4294967295.0;
+        }
+    }
+    return false;
 }
 
 std::vector<std::uint8_t> pack_params(const std::vector<ParamField>& fields,

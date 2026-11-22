@@ -28,8 +28,15 @@ Error apply_window(const spec::Transform& step, const spec::Source& source, cons
     std::int64_t lo = step.start.value_or(std::numeric_limits<std::int64_t>::min());
     std::int64_t hi = step.stop ? std::min(*step.stop, cursor) : cursor;
     std::vector<std::pair<std::int64_t, TensorData>> values = ctx.history->window(kept_by, lo, hi);
-    if (step.steps && (std::int64_t)values.size() > *step.steps)
-        values.erase(values.begin(), values.end() - (std::ptrdiff_t)*step.steps);
+    // substitute_references() keeps a reference's value in this range; a
+    // step made elsewhere is checked here again, before the erase.
+    if (step.steps && (*step.steps < 1 || *step.steps > spec::limits::kHistorySteps))
+        return Error("resolve.out_of_range",
+                     "steps is " + std::to_string(*step.steps) + "; it is a whole number from 1 to " +
+                         std::to_string(spec::limits::kHistorySteps) + ".",
+                     where);
+    if (step.steps && static_cast<std::int64_t>(values.size()) > *step.steps)
+        values.erase(values.begin(), values.end() - static_cast<std::ptrdiff_t>(*step.steps));
     if (values.empty())
         return Error("resolve.unavailable",
                      "The source " + kept_by + " keeps no step in the window yet (up to step " + std::to_string(hi) +

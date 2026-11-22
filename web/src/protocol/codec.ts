@@ -11,8 +11,8 @@ import {
   type SessionIdentity, type SnapshotMsg, type UnknownMsg, type ViewEntry,
 } from './messages.js';
 import {
-  INTERVENTION_STATES, MAX_INTERVENTIONS, MAX_POINTS_LISTED, MAX_PROGRAMS, OUTPUT_GEOMETRY, OUTPUT_PIXELS, POINT_MAX, PROGRAM_ARRAYS,
-  PROGRAM_EVERY_MAX, PROGRAM_ID_MAX, PROGRAM_MAX_COUNT, PROGRAM_MAX_INPUTS, PROGRAM_MEMORY_MB_MAX, PROGRAM_REMOVE, PROGRAM_SET,
+  INTERVENTION_STATES, MAX_INTERVENTIONS, MAX_POINTS_LISTED, MAX_PROGRAMS, OUTPUT_GEOMETRY, OUTPUT_PIXELS, OUTPUT_TENSOR, POINT_MAX, PROGRAM_ARRAYS,
+  PROGRAM_EVERY_MAX, PROGRAM_ID_MAX, PROGRAM_MAX_COUNT, PROGRAM_MAX_INPUTS, PROGRAM_MEMORY_MB_MAX, PROGRAM_BUILTIN_MAX, PROGRAM_PARAM_NAME_MAX, PROGRAM_PARAMS, PROGRAM_PARAMS_MAX, PROGRAM_REMOVE, PROGRAM_SET, STATUS_OPERATOR, TENSOR_AXES_MAX, TENSOR_ELEMENTS_MAX,
   PROGRAM_SIDE_MAX, PROGRAM_SOURCE_MAX, PROGRAM_STATES, PROGRAM_TIME_MS_MAX, PROGRAM_WORKGROUPS_MAX, SECTION_WGSL, TENSOR_NAME_MAX,
   type InterveneRequest, type InterventionsInfo, type ProgramDeclaration, type ProgramMsg, type ProgramStateMsg, type ProgramStatus,
 } from './messages.js';
@@ -1655,7 +1655,21 @@ const PROGRAM_ID_RE = /^[a-z][a-z0-9_-]*$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const isSafeUint = (v: unknown) => isInt(v) && v >= 0 && v <= Number.MAX_SAFE_INTEGER;
 const isNonneg = (v: unknown) => isFinite(v) && (v as number) >= 0;
-const isProgramId = (v: unknown) => typeof v === 'string' && v.length > 0 && utf8.encode(v).length <= PROGRAM_ID_MAX && PROGRAM_ID_RE.test(v);
+const OPERATOR_ID_RE = /^operator\.[a-z][a-z0-9_-]*\.[0-9]{1,5}$/;
+const PARAM_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** A program id: 1 to PROGRAM_ID_MAX bytes of [a-z0-9_-] with a letter first, or an operator id "operator.<spec id>.<n>" with 1 to 5 digits. */
+const isProgramId = (v: unknown) => typeof v === 'string' && v.length > 0 && utf8.encode(v).length <= PROGRAM_ID_MAX
+  && (v.startsWith('operator.') ? OPERATOR_ID_RE.test(v) : PROGRAM_ID_RE.test(v));
+const isParamName = (v: unknown) => typeof v === 'string' && v.length > 0 && v.length <= PROGRAM_PARAM_NAME_MAX && PARAM_NAME_RE.test(v) && !v.startsWith('__');
+/** Program parameters: 1 to PROGRAM_PARAMS_MAX names of a WGSL field, each with a finite number. */
+const isParams = (v: unknown) => {
+  if (!isObj(v)) return false;
+  const e = Object.entries(v as Record<string, unknown>);
+  return e.length >= 1 && e.length <= PROGRAM_PARAMS_MAX && e.every(([k, x]) => isParamName(k) && isFinite(x));
+};
+/** The shape of a tensor output: 1 to TENSOR_AXES_MAX integers from 1, at most TENSOR_ELEMENTS_MAX elements. */
+const isTensorShape = (v: unknown) => listOf(intIn(1, TENSOR_ELEMENTS_MAX), TENSOR_AXES_MAX, 1)(v)
+  && (v as number[]).reduce((a, b) => a * b, 1) <= TENSOR_ELEMENTS_MAX;
 const isSha256 = (v: unknown) => typeof v === 'string' && SHA256_RE.test(v);
 const boundedText = (limit: number) => (v: unknown) => typeof v === 'string' && v.length > 0 && utf8.encode(v).length <= limit;
 const intIn = (lo: number, hi: number) => (v: unknown) => isInt(v) && v >= lo && v <= hi;
@@ -1686,8 +1700,11 @@ const isArraysList = (v: unknown) => Array.isArray(v) && v.length >= 1 && v.leng
 /** The checks of a PROGRAM set's declaration: output with kind and the keys of its kind, then inputs, limits, workgroups and entry. */
 function checkDeclaration(type: number, d: Record<string, unknown>): void {
   const out = reqIn<Record<string, unknown>>(type, d, 'output', isObj, 'an object');
-  const kind = reqIn<string>(type, out, 'kind', (v) => v === OUTPUT_GEOMETRY || v === OUTPUT_PIXELS, 'geometry or pixels');
-  if (kind === OUTPUT_GEOMETRY) {
+  const kind = reqIn<string>(type, out, 'kind', (v) => v === OUTPUT_GEOMETRY || v === OUTPUT_PIXELS || v === OUTPUT_TENSOR, 'geometry, pixels or tensor');
+  if (kind === OUTPUT_TENSOR) {
+    reqIn(type, out, 'shape', isTensorShape, `1 to ${TENSOR_AXES_MAX} integers from 1 with at most ${TENSOR_ELEMENTS_MAX} elements`);
+    if (Object.keys(out).some((k) => k !== 'kind' && k !== 'shape')) bad(type, "a tensor output holds only 'kind' and 'shape'");
+  } else if (kind === OUTPUT_GEOMETRY) {
     reqIn(type, out, 'part', (v) => v === PART_POINTS || v === PART_LINES, 'points or lines');
     reqIn(type, out, 'max_count', intIn(1, PROGRAM_MAX_COUNT), `an integer from 1 to ${PROGRAM_MAX_COUNT}`);
     reqIn(type, out, 'arrays', isArraysList, 'unique names of positions, colors, values and radii, with positions');
@@ -1707,14 +1724,22 @@ function checkDeclaration(type: number, d: Record<string, unknown>): void {
   }
   optIn(type, d, 'workgroups', listOf(intIn(1, PROGRAM_WORKGROUPS_MAX), 3, 3), `three integers from 1 to ${PROGRAM_WORKGROUPS_MAX}`);
   optIn(type, d, 'entry', isName, 'an entry point name');
+  optIn(type, d, 'params', isParams, `1 to ${PROGRAM_PARAMS_MAX} names of a WGSL field with finite numbers`);
+  optIn(type, d, 'builtin', boundedText(PROGRAM_BUILTIN_MAX), `a built-in name of 1 to ${PROGRAM_BUILTIN_MAX} bytes`);
 }
 
 /** PROGRAM: viewer to producer, set or remove one GPU program (capability "programs"). */
 export function decodeProgram(f: Frame): ProgramMsg {
   const request_id = req<number>(f, 'request_id', isU32, 'a uint32');
-  const op = req<ProgramMsg['op']>(f, 'op', (v) => v === PROGRAM_SET || v === PROGRAM_REMOVE, 'set or remove');
+  const op = req<ProgramMsg['op']>(f, 'op', (v) => v === PROGRAM_SET || v === PROGRAM_REMOVE || v === PROGRAM_PARAMS, 'set, remove or params');
   const id = req<string>(f, 'id', isProgramId, `a program id of at most ${PROGRAM_ID_MAX} bytes`);
   if (op === PROGRAM_REMOVE) return { type: 'program', request_id, op, id };
+  if (op === PROGRAM_PARAMS) {
+    if ('declaration' in f.meta) bad(f.type, "a params op carries no 'declaration'");
+    if (f.sections.length > 0) bad(f.type, 'a params op carries no section');
+    const params = req<Record<string, number>>(f, 'params', isParams, `1 to ${PROGRAM_PARAMS_MAX} names of a WGSL field with finite numbers`);
+    return { type: 'program', request_id, op, id, params };
+  }
   const declaration = req<ProgramDeclaration>(f, 'declaration', isObj, 'an object');
   checkDeclaration(f.type, declaration);
   const geometry = (declaration.output as Record<string, unknown>).kind === OUTPUT_GEOMETRY;
@@ -1737,7 +1762,7 @@ export function decodeProgram(f: Frame): ProgramMsg {
 }
 
 export function encodeProgram(m: ProgramMsg, minor: number = PROTOCOL_MINOR): Uint8Array {
-  const meta = drop({ request_id: m.request_id, op: m.op, id: m.id, declaration: m.declaration, scene: m.scene, sha256: m.sha256 });
+  const meta = drop({ request_id: m.request_id, op: m.op, id: m.id, declaration: m.declaration, scene: m.scene, sha256: m.sha256, params: m.params });
   const sections: Section[] = [];
   if (m.wgsl !== undefined) {
     const b = utf8.encode(m.wgsl);
@@ -1763,7 +1788,7 @@ const STATUS_KEYS: [string, (v: unknown) => boolean][] = [
 const isStatusItem = (v: unknown) => {
   if (!isObj(v)) return false;
   const o = v as Record<string, unknown>;
-  if (!(isProgramId(o.id) && (o.kind === OUTPUT_GEOMETRY || o.kind === OUTPUT_PIXELS) && typeof o.state === 'string' && PROGRAM_STATES.includes(o.state))) return false;
+  if (!(isProgramId(o.id) && (o.kind === OUTPUT_GEOMETRY || o.kind === OUTPUT_PIXELS || o.kind === OUTPUT_TENSOR || o.kind === STATUS_OPERATOR) && typeof o.state === 'string' && PROGRAM_STATES.includes(o.state))) return false;
   if (!STATUS_KEYS.every(([k, ok]) => !present(o[k]) || ok(o[k]))) return false;
   return !present(o.sha256) || o.sha256 === '' || isSha256(o.sha256);
 };

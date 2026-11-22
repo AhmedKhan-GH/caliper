@@ -70,6 +70,16 @@ A reference stands only where its value changes data and never changes the shape
 
 Every other key takes a literal: ids, kinds, `from`, `catalog`, the axes of a step, the parameters of an operator, `history`, poses and the layout. A reference there is `spec.reference_not_allowed`.
 
+The integer places of the steps have one table of ranges, which the validator applies to a literal and the app applies to each value that a reference gives there:
+
+| Place | Range |
+|---|---|
+| `slice` `index`, `start` and `stop`, `window` `start` and `stop` | −(2<sup>53</sup> − 1) to 2<sup>53</sup> − 1 |
+| `slice` `step` | 1 to 2<sup>53</sup> − 1 |
+| `window` `steps` | 1 to 65,536 |
+
+A reference's value is rounded to the nearest whole number first. A value that is not finite, that has a magnitude above 2<sup>53</sup> − 1, or that is outside the range stops the chain with `resolve.out_of_range`, which names the key, the reference and the value. The panel then keeps the last data that it drew, or the entity keeps its last arrays, and the panel's header shows "Value out of range" with the step. Without earlier data, the panel shows that state. `panel.data` gives the code. The next value inside the range clears it.
+
 ### Re-Evaluation
 
 The app builds a dependency index when a spec opens and after each edit. The inputs of the index are the value of each control, each state variable, the last pick of each panel, the cursor and the generation of each source. Its readers are steps, options, slots, entities, annotations, bound texts and the `params` of programs and stages.
@@ -247,9 +257,9 @@ A pick on an entity gives a set of fields. The event `pick` carries them in its 
 | Entities in one panel | 64 |
 | Items of one `points` or `lines` entity | 1,048,576 |
 | Cells of one `surface` entity | 262,144, and at most 4,096 on one side |
-| Arrays of one panel | 64 MiB |
+| Arrays of one panel | 64 MiB, as float32 values |
 
-An entity over a limit shows the state "Over limit" and draws nothing.
+An entity over a limit shows the state "Over limit" and draws nothing. The resolver counts the arrays of a panel's entities in entity order, as the float32 values that the app converts them to, before the app stages any of them. The entity whose arrays pass 64 MiB has the error `entity.limit`, which names the panel and the entity, and an entity after it that fits still draws.
 
 ## Operators
 
@@ -408,10 +418,11 @@ transform = [
 ```
 
 - **Value.** The app keeps the value after the longest run of the source's steps from the start that read no reference. A source without references thus keeps its final value.
-- **Steps.** The app keeps each value that it receives, with the step of the stamp of the snapshot, or else the run's step at arrival. It keeps one value for each step, and a later value of a step replaces the earlier one. A program's cadence of N steps gives values N steps apart. A watched view publishes at most 60 times a second, so a fast run keeps steps with gaps between them.
+- **Steps.** The app keeps each value that it receives, with the step of the stamp of the snapshot, or else the run's step at arrival. It keeps one value for each step, and a later value of the newest step replaces the earlier one. A program's cadence of N steps gives values N steps apart. A watched view publishes at most 60 times a second, so a fast run keeps steps with gaps between them.
 - **Stamps.** No snapshot carries a step stamp today: the script's sender writes a sequence number and a time only, although the wire's `timelines` capability carries stamps. This work makes the sender stamp each snapshot with the run's step, and the live catalog keep the step of each view's newest snapshot.
 - **Depth.** `history` is from 0 to 65,536 steps. A source whose root is a live tensor and that has no `from` keeps 64 steps by default. Other sources keep none by default. A series already keeps its own ring and needs no `history`.
 - **Budget.** All kept steps of the open spec share 512 MiB, and one source keeps at most a quarter of it, 128 MiB. When the requested steps need more, the app shortens the largest rings first, and `cursor.get` gives the depth that each source keeps. A source that keeps fewer steps than it requests has a `note` in `cursor.get`, which names the source, the size of one step and the two limits, and suggests a reduce step before the kept value. A raw activation of 512 by 4096 values thus keeps 16 steps and leaves the rest of the budget to the other sources.
+- **Epoch.** A step below the newest step of the same view in one attachment starts a new epoch: the run's step counter restarted, as a new run on the same link or a fork from an earlier step does. Every source then forgets its kept steps after the new step, keeps the steps up to it, which a fork shares with the run it came from, and keeps the new values. A cursor held after the new step goes live. The step is the first value of a stamp only when the first timeline of VIEWS is the sequence `step`.
 - **Reset.** A new attachment, a change of the source's chain and the opening of a spec clear the source's kept steps.
 
 `history` on a source whose root is not a live tensor is `spec.history_not_allowed`, and a value outside its range is `spec.out_of_range`.
@@ -606,7 +617,7 @@ The scale applies only to the spec's entities. A live scene from the script keep
 
 ## Commands
 
-Eighteen commands join the command layer and the MCP tool table. The `edit` commands follow the rules of `design/instruments.md`: a dry run, a diff, an undo step, a journal entry and the review of each origin. The `change` commands here are not destructive. They have no undo step and no journal entry, because they change session state and not the workspace. Each mode except read-only runs them at once.
+Eighteen commands join the command layer and the MCP tool table. The `edit` commands follow the rules of `design/instruments.md`: a dry run, a diff, an undo step, a journal entry and the review of each origin. The `change` commands here are not destructive. They have no undo step and no journal entry, because they change session state and not the workspace. Each mode except read-only runs them at once. The browser's spec page runs none of them: the registry refuses each command whose effect is not `read` to the viewer origin, before any policy sees it.
 
 | Command | Arguments | Result | Effect |
 |---|---|---|---|
@@ -641,7 +652,7 @@ Eighteen commands join the command layer and the MCP tool table. The `edit` comm
 | `state.bad_value` | The value does not fit the type, the bounds or the choices |
 | `state.read_only` | The state variable is `cursor` |
 | `control.not_settable` | The control binds a parameter, an action, an intervention or the run |
-| `selection.bad_item` | The entity or the item does not exist in the panel |
+| `selection.bad_item` | The entity or the item does not exist in the panel, or the index is negative or past the signed 64-bit range |
 | `entity.not_scene_panel` | The panel is not a scene panel |
 | `entity.not_found` | The panel has no entity with the path |
 | `annotation.not_found` | The panel has no annotation with the id |
@@ -777,6 +788,12 @@ Each decision below has its reason in one line.
 - **Orbit in the journal.** The journal and the redo record of `camera.save` keep the orbit that the app gave, because a replay then rebuilds the saved view without the app.
 - **Share of one source.** One source keeps at most a quarter of the budget, because a raw activation otherwise takes the steps of every other source.
 - **Series steps by history.** A window over a live series reads the newest values that the history keeps with their steps, because the ring of a series holds no steps.
+- **Params change as view change.** `state.set` and `control.set` keep the effect `change` and need no run approval, also when the changed value feeds the `params` of a program that runs in the script, because that program is already installed under the sandbox, it cannot write a tensor, its params are bounded values that change only what it draws, and its time and memory limits still hold. A params change thus goes to the script as PROGRAM op `params` with the values alone. It never installs, replaces or declares a program, and the app refuses a value outside the declared range of the field in `struct Params`: finite and within the float range for `f32`, and after rounding within the type's range for `i32` and `u32`.
+- **One range table.** The validator and the app check an integer place against one table of ranges, because a value that a reference gives then can never reach a step that a literal could not.
+- **Last good data.** A value out of range keeps the panel's last good data with the error in its header, because a slider dragged past an end then does not blank the view.
+- **Epoch on restart.** A step counter that goes back starts a new epoch that keeps the steps up to the new step, because the ring otherwise trims the new run's values as the oldest, and a fork shares the steps before it.
+- **Arrays as float32.** The panel's limit counts the arrays as float32 values, because the app converts them to float32, and one entity at its item limit with every slot then still fits.
+- **Viewer reads only.** The registry refuses every effect but `read` to the viewer origin, because the allow list of the HTTP server is then not the only gate.
 
 ## Open Points
 

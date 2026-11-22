@@ -384,7 +384,9 @@ std::vector<SceneAnnotationMark> scene_annotation_marks(const spec::Panel& panel
                 } else if (at.is_object() && at.contains("entity") && at["entity"].is_string()) {
                     const std::optional<double> index =
                         at.contains("index") ? place_number(at["index"], host) : std::nullopt;
-                    if (!index) continue;
+                    // An item is a whole number from 0; the cast needs a
+                    // value inside the range of int64_t.
+                    if (!index || !(*index >= 0.0) || *index > 9007199254740991.0) continue;
                     m.entity = at["entity"].get<std::string>();
                     m.index = static_cast<int64_t>(*index);
                 } else if (at.is_array() && (at.size() == 2 || at.size() == 3)) {
