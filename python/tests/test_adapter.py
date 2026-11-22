@@ -1,6 +1,6 @@
 """The framework adapter (caliper._adapter): the state of a model and its optimizer saved and
 restored, so that a restored run continues exactly as the original, the loss tap that it owns,
-the export, sync point and hooks of the producer runtime, and the probe that waits for M11."""
+the export, sync point and hooks of the producer runtime, and the probe that is not available yet."""
 from __future__ import annotations
 
 import io

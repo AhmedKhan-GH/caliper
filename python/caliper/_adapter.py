@@ -13,10 +13,9 @@ of the trajectory spec:
 - ``points`` and ``ablate``: the intervention points of the model and the ablation of one point
   through a forward hook (``design/gpu-programs.md``, Interventions), in ``caliper._ablate``.
 
-M4 implements ``state`` and ``restore``, and the loss tap of ``caliper.watch(model, optimizer)``
-(the wrapper of ``torch.autograd.backward``) lives here because it patches torch. The other
-functions are declared with their contracts and raise ``NotImplementedError`` until M2 fills
-them. The shipped torch reductions of the data views and the forward and gradient hooks of
+Every function but ``probe`` is built, and ``probe`` raises ``NotImplementedError``. The loss tap of
+``caliper.watch(model, optimizer)`` (the wrapper of ``torch.autograd.backward``) lives here because
+it patches torch. The shipped torch reductions of the data views and the forward and gradient hooks of
 ``caliper._watch`` stay where they are.
 """
 from __future__ import annotations
@@ -49,7 +48,7 @@ class TorchAdapter:
         self._optimizers: list = []         # the optimizers that hooks() saw
         self._hooks: dict = {}              # id(model) -> the handles that hooks() made
 
-    # -- M2: the producer runtime -----------------------------------------------
+    # -- The producer runtime ------------------------------------------------------
     def export(self, tensor):
         """Give ``tensor`` as a DLPack capsule, without a copy.
 
