@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the runtime WGSL compiler, the static library caliper_wgsl, from source.
 
-    build_library.py --out DIR [--target-dir DIR] [--jobs N] [--offline] [--archive]
+    build_library.py --out DIR [--target-dir DIR] [--jobs N] [--offline] [--archive] [--test-hooks]
 
 It runs cargo on tools/shaders/caliper-wgsl with the locked, pinned Naga and copies the
 library to DIR/lib/. With --archive it also writes DIR/caliper_wgsl-<version>-<platform>.tar.gz,
@@ -10,6 +10,9 @@ and the SHA-256 of the library and of the archive. CI and the CMake option
 CALIPER_WGSL_FROM_SOURCE both build through this script, so that every build uses the same
 flags:
 
+- with --test-hooks, the library is built with the cargo feature test-hooks, which adds
+  caliper_wgsl_test_panic for the C test of the panic guard; the archives that a release
+  publishes are built without it;
 - the source paths of the build machine are mapped to fixed prefixes, so the library holds
   no path of the machine that built it;
 - macOS builds for the deployment target that Caliper's wheel uses (14.0) unless
@@ -67,6 +70,7 @@ def main(argv=None):
     ap.add_argument("--jobs", type=int, default=0, help="cargo build jobs (default: cargo's choice)")
     ap.add_argument("--offline", action="store_true", help="build from the crates already in CARGO_HOME")
     ap.add_argument("--archive", action="store_true", help="also write the release archive and its hash")
+    ap.add_argument("--test-hooks", action="store_true", help="build with the cargo feature test-hooks (developer and test builds only)")
     args = ap.parse_args(argv)
 
     cargo = shutil.which("cargo")
@@ -91,6 +95,8 @@ def main(argv=None):
         cmd += ["-j", str(args.jobs)]
     if args.offline:
         cmd.append("--offline")
+    if args.test_hooks:
+        cmd += ["--features", "test-hooks"]
     if subprocess.run(cmd, env=env).returncode != 0:
         print("build_library.py: cargo build failed", file=sys.stderr)
         return 1

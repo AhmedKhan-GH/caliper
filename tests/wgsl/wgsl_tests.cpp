@@ -2,7 +2,8 @@
 // interface, include/caliper/wgsl.h. A valid compute program validates, reports its bindings and
 // translates to MSL and SPIR-V; built-in programs with one entry point translate byte for byte
 // as the developer-time driver translated them; invalid, oversized and non-UTF-8 sources fail
-// with a message and a place; and a panic inside the library comes back as an error. No GPU.
+// with a message and a place; and, in a build with the test hooks, a panic inside the library
+// comes back as an error. No GPU.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
@@ -16,6 +17,7 @@
 #include "gfx/shaders/generated/fill_texture_spv.h"
 #include "gfx/shaders/generated/fill_texture_wgsl.h"
 
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -277,6 +279,18 @@ TEST_CASE("limits and arguments are checked") {
     Module options(kCompute, sizeof(kCompute) - 1, &o);
     CHECK(options.status == CALIPER_WGSL_ERROR_ARGUMENT);
 
+    caliper_wgsl_options_init(&o);
+    o.max_source_bytes = static_cast<size_t>(CALIPER_WGSL_MAX_SOURCE_BYTES_LIMIT) + 1;
+    Module above(kCompute, sizeof(kCompute) - 1, &o);
+    CHECK(above.status == CALIPER_WGSL_ERROR_ARGUMENT);
+    CHECK(above.m == nullptr);
+
+    // A claimed size of SIZE_MAX is refused before the library reads the one byte behind source.
+    const char one = 'a';
+    Module huge(&one, SIZE_MAX);
+    CHECK(huge.status == CALIPER_WGSL_ERROR_TOO_LARGE);
+    CHECK(huge.m == nullptr);
+
     Module overrides("override k: f32 = 1.0;\n@compute @workgroup_size(1) fn main() { _ = k; }\n");
     CHECK(overrides.status == CALIPER_WGSL_ERROR_UNSUPPORTED);
 
@@ -297,6 +311,7 @@ TEST_CASE("limits and arguments are checked") {
     CHECK(caliper_wgsl_translate_msl(nullptr, "main", CALIPER_WGSL_STAGE_COMPUTE, &b, nullptr) == CALIPER_WGSL_ERROR_ARGUMENT);
 }
 
+#ifdef CALIPER_WGSL_TEST_HOOKS
 TEST_CASE("a panic inside the library returns an error and the library keeps working") {
     caliper_wgsl_error e{};
     CHECK(caliper_wgsl_test_panic(&e) == CALIPER_WGSL_ERROR_INTERNAL);
@@ -309,3 +324,4 @@ TEST_CASE("a panic inside the library returns an error and the library keeps wor
     Module after(kCompute);
     CHECK(after.status == CALIPER_WGSL_OK);
 }
+#endif  // CALIPER_WGSL_TEST_HOOKS

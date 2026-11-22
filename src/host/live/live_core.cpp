@@ -1061,7 +1061,7 @@ uint64_t caliper_live_view_key(CaliperCore* core, const char* name) {
     return 0;
 }
 
-// Declared for the host in embed_core.h (a request of the M1 track events):
+// Declared for the host in embed_core.h, for the event ring of the builder:
 // sets the tap that receives each pick and selection a person makes in a
 // scene view of the attached stream, on the frame thread, after the stream
 // has it; an empty tap removes it. It holds across attachments.

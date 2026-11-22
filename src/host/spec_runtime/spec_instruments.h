@@ -13,9 +13,8 @@
 //
 // Threads: everything here runs on the frame thread, as the runtime does.
 //
-// This header is an interface of milestone M1: the track "spec1" owns the
-// runtime and its layout and calls these functions; the track "controls"
-// defines them in spec_controls.cpp.
+// The spec runtime and its layout call these functions, and spec_controls.cpp
+// defines them.
 #include "spec_runtime/spec_runtime.h"
 
 #include <caliper_builder/session/events.h>
@@ -24,6 +23,8 @@
 
 #include <imgui.h>
 #include <imgui_internal.h>   // ImRect
+
+#include <string>
 
 namespace caliper_host {
 
@@ -39,6 +40,12 @@ struct SpecInstrumentHost {
 // of the look's type with its padding. The layout gives a control leaf this
 // height and the panels the rest.
 float spec_control_height(const caliper_builder::spec::Control& control, const SpecLook& look);
+
+// The label of a button. A button bound to an action shows its title and its
+// bind string, "Save (action:save)", so that a person sees what a click runs,
+// then "· queued" or "· running" while the action waits or runs. A button
+// bound to run:pause reads "Pause", or "Resume" while the run is paused.
+std::string spec_button_label(const caliper_builder::spec::Control& control, const caliper_builder::RunState& state);
 
 // Draws one control into `rect` of the current window: its title and its
 // widget, with the value it reads from the run control (param:), the state of

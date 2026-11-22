@@ -25,9 +25,8 @@
 // thread of a Caliper API request), then reads through the queue again.
 // Nothing here throws.
 //
-// This header is an interface of milestone M1: the track "events" writes the
-// ring, the handler and the feeds (src/builder/session/event_ring.cpp); the
-// tracks "spec1" and "controls" push picks, selections, control changes and
+// The ring, the handler and the feeds are in src/builder/session/event_ring.cpp.
+// The spec runtime and its controls push picks, selections, control changes and
 // run changes through EventSink.
 #include <caliper_builder/commands/journal.h>
 #include <caliper_builder/commands/queue.h>
@@ -104,6 +103,10 @@ public:
     // Blocks until an event after `cursor` matches, the deadline passes or
     // close() is called; true when one matches.
     bool wait(std::uint64_t cursor, const EventFilter& filter, std::chrono::steady_clock::time_point deadline) const;
+    // As wait(), but when `max_waiting` callers are held already and no event
+    // matches, it returns empty at once and holds nothing.
+    std::optional<bool> wait_if_room(std::uint64_t cursor, const EventFilter& filter,
+                                     std::chrono::steady_clock::time_point deadline, std::size_t max_waiting) const;
     // The seq of the newest event; 0 before the first.
     std::uint64_t latest() const;
     // The callers that wait() holds now, such as a long poll of events.wait;
@@ -120,11 +123,19 @@ private:
 // The handler of events.wait: reads the ring at once, never waits.
 CommandOutput events_wait_command(const CommandContext& context, EventRing& ring);
 
+// The most calls of events.wait that wait_for_events() holds at once. Each
+// held call takes one of the 32 command slots of Caliper API
+// (ApiOptions::max_commands) for up to 60 s, so 8 leave 24 slots for other
+// commands. A call over the bound fails at once with kEventsTooManyWaits.
+inline constexpr std::size_t kMaxEventWaits = 8;
+inline constexpr const char* kEventsTooManyWaits = "events.too_many_waits";
+
 // events.wait for a caller that may block its own thread: submits the
 // invocation to the queue; when it answers with no event and timeout_s is
 // above 0, waits on the ring until a matching event or the end of timeout_s,
-// then submits it again with timeout_s 0. Caliper API serves events.wait
-// through it.
+// then submits it again with timeout_s 0. When kMaxEventWaits calls wait
+// already, it answers kEventsTooManyWaits at once instead of the wait.
+// Caliper API serves events.wait through it.
 CommandResult wait_for_events(CommandQueue& queue, EventRing& ring, CommandInvocation invocation);
 
 // Holds EventRing::close(), and thus Session::close(), until it goes, as a

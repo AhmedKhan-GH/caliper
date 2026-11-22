@@ -349,6 +349,54 @@ def test_lr_without_a_scheduler_stays_in_the_groups(run_env):
         assert used[-1] == [0.01, 0.025]               # both groups move by the factor 5
 
 
+def test_an_error_in_the_hook_never_stops_the_step(run_env, monkeypatch):
+    net = Mlp()
+    opt = torch.optim.SGD(net.parameters(), lr=0.05)
+    calls = []
+
+    def broken(v, name, rate=None, **kw):
+        calls.append(name)
+        raise ValueError("no series")
+    monkeypatch.setattr(caliper, "series", broken)
+    h = caliper.watch(net, opt)
+    monkeypatch.setattr(h._run, "_scene_tick", lambda: (_ for _ in ()).throw(KeyError("x")))
+    try:
+        with pytest.warns(RuntimeWarning, match="step hook raised ValueError") as rec:
+            for _ in range(3):
+                before = net.fc1.weight.detach().clone()
+                _train_step(net, opt)
+                assert not torch.equal(before, net.fc1.weight)     # the step ran
+        assert len([r for r in rec if "step hook" in str(r.message)]) == 1
+        assert "lr" in calls and run_env.n == 3
+    finally:
+        h.remove()
+
+
+def test_a_step_that_raised_leaves_no_scaled_rates(run_env):
+    net = Mlp()
+    opt = torch.optim.SGD(net.parameters(), lr=0.04)
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda e: 1.0)
+    h = caliper.watch(net, opt, scene=False)
+    raised = []
+
+    def fail_once(o, a, k):
+        if not raised:
+            raised.append(1)
+            raise RuntimeError("the step fails")
+    opt.register_step_pre_hook(fail_once)     # runs after watch()'s pre-hook
+    used = _used_lr(opt)
+    try:
+        run_env.params["lr"].set(0.01)
+        with pytest.raises(RuntimeError, match="the step fails"):
+            _train_step(net, opt)                  # the rates stay scaled, no post-hook ran
+        _train_step(net, opt)
+        sched.step()
+        assert used == [pytest.approx([0.01])]     # scaled once, not twice
+        assert sched.get_last_lr() == pytest.approx([0.04])
+    finally:
+        h.remove()
+
+
 def test_watch_run_code_never_reads_back():
     """The hooks of every step read nothing back from the device (as caliper._watch)."""
     from test_dataview import _bad_calls

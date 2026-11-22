@@ -87,11 +87,15 @@ enum {
     CALIPER_WGSL_ACCESS_WRITE = 2u
 };
 
+/** The largest value of caliper_wgsl_options.max_source_bytes, 16 MiB. */
+#define CALIPER_WGSL_MAX_SOURCE_BYTES_LIMIT (16u << 20)
+
 /** The options of a module. caliper_wgsl_options_init() writes the values
  *  of the developer-time driver, which the built-in shaders use. */
 typedef struct caliper_wgsl_options {
     /** The largest source in bytes that caliper_wgsl_module_create() takes.
-     *  The default is 1 MiB. */
+     *  The default is 1 MiB. A value above CALIPER_WGSL_MAX_SOURCE_BYTES_LIMIT
+     *  makes caliper_wgsl_module_create() return CALIPER_WGSL_ERROR_ARGUMENT. */
     size_t max_source_bytes;
     /** The Metal Shading Language version. The default is 2.4. */
     uint32_t msl_version_major;
@@ -214,10 +218,14 @@ void caliper_wgsl_buffer_free(caliper_wgsl_buffer* buffer);
 /** Frees the strings of an error and clears it. NULL is allowed. */
 void caliper_wgsl_error_free(caliper_wgsl_error* error);
 
+#ifdef CALIPER_WGSL_TEST_HOOKS
 /** Panics inside the library's guard and returns what the guard returns,
  *  CALIPER_WGSL_ERROR_INTERNAL with the panic's message. It exists for the
- *  test of the guard; a host never calls it. */
+ *  test of the guard; a host never calls it. Only a library built with the
+ *  cargo feature test-hooks (build_library.py --test-hooks) has it, and a
+ *  program declares it by defining CALIPER_WGSL_TEST_HOOKS. */
 caliper_wgsl_status caliper_wgsl_test_panic(caliper_wgsl_error* error);
+#endif
 
 #ifdef __cplusplus
 }  /* extern "C" */
