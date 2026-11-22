@@ -530,11 +530,9 @@ Backend metal_backend() {
     Backend b;
     b.bridge = metal_env().bridge.get();
     b.renderer = metal_env().renderer.get();
-    TensorBridge* br = b.bridge;
-    b.readback = [br](CaliperTextureId id, int w, int h) {
-        std::vector<uint8_t> px;   // through the graphics layer, after every prior update (M1)
-        if (!br->readback(id, &px) || px.size() != (size_t)w * h * 4) px.clear();
-        return px;
+    HostRenderer* r = b.renderer;
+    b.readback = [r](CaliperTextureId id, int w, int h) {
+        return r->debug_readback_rgba8(id, w, h);   // renderer-queue readback (M1)
     };
     return b;
 }
@@ -631,7 +629,7 @@ TEST_CASE("gfx/Metal: device f32+LUT takes the compute path, pixel-exact") {
         CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
             &t, CALIPER_CMAP_VIRIDIS, vmin, vmax, 0);
         REQUIRE(id != 0);
-        CHECK(std::string(bk.bridge->last_path()) == "compute");
+        CHECK(std::string(bk.renderer->last_device_path()) == "compute");
 
         std::vector<uint8_t> ref((size_t)n * 4);
         map_f32_to_rgba8(data.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
@@ -666,7 +664,7 @@ TEST_CASE("gfx/Metal: device f32+LUT compute path is exact with nonzero vmin") {
     CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
         &t, CALIPER_CMAP_RDBU, vmin, vmax, 0);
     REQUIRE(id != 0);
-    CHECK(std::string(bk.bridge->last_path()) == "compute");
+    CHECK(std::string(bk.renderer->last_device_path()) == "compute");
 
     std::vector<uint8_t> ref((size_t)n * 4);
     map_f32_to_rgba8(data.data(), w, h, colormap_lut(CALIPER_CMAP_RDBU),
@@ -696,7 +694,7 @@ TEST_CASE("gfx/Metal: device u8 HWC takes the blit path, byte-exact") {
 
     CaliperTextureId id = bk.bridge->texture_from_tensor(&t, 0);
     REQUIRE(id != 0);
-    CHECK(std::string(bk.bridge->last_path()) == "blit");
+    CHECK(std::string(bk.renderer->last_device_path()) == "blit");
 
     std::vector<uint8_t> ref((size_t)w * h * 4);
     expand_u8_to_rgba8(data.data(), w, h, 4, ref.data());
@@ -766,7 +764,7 @@ TEST_CASE("gfx/Metal: burst updates pipeline in order, final readback pixel-exac
         t.data = (__bridge void*)b;      // b's last strong ref dies each loop turn
         REQUIRE(bk.bridge->update_texture(tex_id, &t));
     }
-    CHECK(std::string(bk.bridge->last_path()) == "compute");
+    CHECK(std::string(bk.renderer->last_device_path()) == "compute");
 
     std::vector<uint8_t> ref((size_t)n * 4);
     map_f32_to_rgba8(last.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
@@ -783,7 +781,7 @@ TEST_CASE("gfx/Metal: burst updates pipeline in order, final readback pixel-exac
 TEST_CASE("gfx/Metal: non-NULL stream orders the update after the producer queue") {
     if (!metal_env().ok) CALIPER_SKIP_NO_GPU("no Metal device");
     Backend bk = metal_backend();
-    REQUIRE((bk.bridge->caps() & CALIPER_BRIDGE_CAP_STREAM_ORDERED) != 0u);
+    REQUIRE(bk.renderer->honors_stream_ordered_handoff());
 
     const int w = 8, h = 8, n = w * h;
     std::vector<float> stale(n, 0.0f);
@@ -951,7 +949,7 @@ TEST_CASE("gfx/Metal: import in-process MTLBuffer, colormap from a nonzero offse
     d.shape[0] = H; d.shape[1] = W; d.strides[0] = W; d.strides[1] = 1;
     d.device = CALIPER_DEV_METAL;    // data/stream stay null: alloc+offset IS the address
     REQUIRE(bk.bridge->update_texture_from_alloc(tex, alloc, off, &d));
-    CHECK(std::string(bk.bridge->last_path()) == "compute-imported");
+    CHECK(std::string(bk.renderer->last_device_path()) == "compute-imported");
 
     // Byte-exact vs the identical CPU reference the staged path uses (vmin=0, vmax=1).
     std::vector<uint8_t> ref((size_t)W * H * 4);
@@ -3310,7 +3308,7 @@ TEST_CASE("gfx/Vulkan+CUDA: device f32+LUT takes the compute path, pixel-exact")
         CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
             &t, CALIPER_CMAP_VIRIDIS, vmin, vmax, 0);
         REQUIRE(id != 0);
-        CHECK(std::string(bk.bridge->last_path()) == "compute");
+        CHECK(std::string(bk.renderer->last_device_path()) == "compute");
 
         std::vector<uint8_t> ref((size_t)n * 4);
         map_f32_to_rgba8(data.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
@@ -3356,7 +3354,7 @@ TEST_CASE("gfx/Vulkan+CUDA: burst updates pipeline in order, final frame pixel-e
         fill(gen);
         REQUIRE(bk.bridge->update_texture(id, &t));
     }
-    CHECK(std::string(bk.bridge->last_path()) == "compute");
+    CHECK(std::string(bk.renderer->last_device_path()) == "compute");
 
     // fill(8) is the last write; the readback retires the whole chain.
     std::vector<uint8_t> ref((size_t)n * 4);
@@ -3598,7 +3596,7 @@ TEST_CASE("gfx/Vulkan+CUDA: direct, buffer and CPU-staged updates mix on one tex
             fill(++gen); src.write(data.data());
             bk.renderer->device_update_wait();
             REQUIRE(bk.bridge->update_texture(id, &src.t));
-            CHECK(std::string(bk.bridge->last_path()) == "compute");
+            CHECK(std::string(bk.renderer->last_device_path()) == "compute");
         }
         // Buffer, then direct: the kernel waits for the Vulkan pass.
         REQUIRE(bk.bridge->update_texture(id, &src.t));
@@ -3859,7 +3857,7 @@ TEST_CASE("gfx/Vulkan+CUDA: alloc_shared is device-backed and zero-copy, pixel-e
                      data.data(), (size_t)n * sizeof(float));
 
     REQUIRE(bk.bridge->update_texture(tex, &out));
-    CHECK(std::string(bk.bridge->last_path()) == "compute");   // no D2D, then colormap
+    CHECK(std::string(bk.renderer->last_device_path()) == "compute");   // no D2D, then colormap
 
     std::vector<uint8_t> ref((size_t)n * 4);
     map_f32_to_rgba8(data.data(), W, H, colormap_lut(CALIPER_CMAP_VIRIDIS), 0.0f, 1.0f, ref.data());
@@ -4016,7 +4014,7 @@ TEST_CASE("gfx/Vulkan+CUDA: imported allocation f32 byte-exact at offsets 0 and 
 
         CaliperTensor d = import_desc(t);
         REQUIRE(bk.bridge->update_texture_from_alloc(id, alloc, off, &d));
-        CHECK(std::string(bk.bridge->last_path()) == "compute-imported");
+        CHECK(std::string(bk.renderer->last_device_path()) == "compute-imported");
 
         std::vector<uint8_t> ref((size_t)n * 4);
         map_f32_to_rgba8(data.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),

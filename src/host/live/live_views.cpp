@@ -30,8 +30,6 @@
 #include "live/live_views_scene.h"
 #include "live/live_views_state.h"
 #include "renderer/host_renderer.h"
-#include "gfx/gfx.h"
-#include "host_services.h"   // services_bridge: the texture views' update serials
 #include "tensor_bridge.h"   // colormap_lut
 
 #include <caliper/services/tensor_bridge_v1_2.h>   // CALIPER_ALLOC_HANDLE_MTLBUFFER
@@ -153,6 +151,8 @@ void release_payload(CaliperCore* core, View& v, PointsPayload& p) {
 void release_typed(CaliperCore* core, View& v) {
     v.scene.reset();   // a scene view's buffers and targets go back to its layer, then the layer
     HostRenderer* r = core->renderer.get();
+    for (void* h : v.pending)
+        if (r) r->device_update_release(h);
     v.pending.clear();
     if (v.have_cur) release_payload(core, v, v.cur);
     v.have_cur = false;
@@ -281,11 +281,11 @@ bool apply_texture(CaliperCore* core, View& v, const CaliperLiveSnapshot& s,
             v.tex_cpu = (const uint8_t*)bi.contents + s.data_offset;
         }
     }
-    // The device update was submitted to the graphics layer and not waited on:
-    // keep its serial until it completed (WAIT_GPU already waited).
+    // The device update was committed on the renderer's queue and not waited
+    // on: keep a +1 handle on its command buffer until it retires (WAIT_GPU
+    // already waited, and dropped the renderer's own reference).
     if (v.imported && !(s.flags & CALIPER_LIVE_APPLY_WAIT_GPU)) {
-        const caliper_host::TensorBridge* bridge = caliper_host::services_bridge();
-        if (bridge && bridge->last_serial() != 0) v.pending.push_back(bridge->last_serial());
+        if (void* h = core->renderer->device_update_retain_last()) v.pending.push_back(h);
     }
     return true;
 }
@@ -538,11 +538,8 @@ bool validate(CaliperCore* core, const CaliperLiveSnapshot& s, std::string* why)
         return no("device must be CPU or METAL; got device kind " + std::to_string(d.device));
     const bool metal = d.device == CALIPER_DEV_METAL;
     if (!d.data) return no(metal ? "null MTLBuffer (data->data)" : "null data pointer");
-    if (metal) {
-        const caliper_gfx::Backend* g = core->renderer->gfx();
-        if (g == nullptr || !g->caps().has(caliper_gfx::kCapImportMetalBuffer))
-            return no("METAL payload, but this host's graphics layer cannot read an MTLBuffer in place");
-    }
+    if (metal && core->renderer->interop_device() != CALIPER_DEV_METAL)
+        return no("METAL payload, but the active renderer is not Metal");
     for (int i = 0; i < d.ndim; ++i)
         if (d.shape[i] < 1) return no(std::string("every dim must be >= 1; got shape ") + shape_str(d));
     if (!contiguous(d))
@@ -788,9 +785,9 @@ void drop_payload(CaliperCore* core, View& v, PointsPayload& p) { release_payloa
 void poll_handles(CaliperCore* core, View& v) {
     HostRenderer* r = core->renderer.get();
     if (!r) return;
-    const caliper_host::TensorBridge* bridge = caliper_host::services_bridge();
     for (size_t i = 0; i < v.pending.size();) {
-        if (!bridge || bridge->completed(v.pending[i])) {
+        if (r->device_update_is_done(v.pending[i])) {
+            r->device_update_release(v.pending[i]);
             v.pending.erase(v.pending.begin() + (std::ptrdiff_t)i);
         } else {
             ++i;

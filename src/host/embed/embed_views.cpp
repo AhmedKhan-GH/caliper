@@ -118,12 +118,10 @@ const char* caliper_core_last_error(CaliperCore* core) {
 // composited after the applet. Frame-thread only, like every bridge op.
 //
 // ZERO-COPY HONESTY. A METAL tensor goes through the v1.2 import path only
-// (import_allocation + update_texture_from_alloc: the graphics layer imports the
-// MTLBuffer and its colormap or fill reads it in place at byte_offset). If that
-// path refuses, the call fails — there is deliberately NO fallback that
-// downloads the buffer and CPU-stages it, so info.imported/path never lie about
-// what happened. Whether a host can read a METAL tensor in place is the
-// bridge's import capability, never the renderer's name or device kind.
+// (import_allocation + update_texture_from_alloc: the renderer's compute/blit
+// reads the MTLBuffer in place at byte_offset). If that path refuses, the call
+// fails — there is deliberately NO fallback that downloads the buffer and
+// CPU-stages it, so info.imported/path never lie about what happened.
 // ===========================================================================
 using caliper_embed_views::TensorView;
 
@@ -229,7 +227,7 @@ void caliper_embed_views_destroy_all(CaliperCore* core) {
 
 // Draw every view into the current ImGui frame (between canvas_new_frame and
 // canvas_render). The ImTextureID is the bridge's public CaliperTextureId: the
-// graphics layer's imgui_texture_id of the view's texture, which on Metal is the
+// bridge hands out renderer->tex_imtexture_id(tex), which on Metal is the
 // id<MTLTexture> pointer imgui_impl_metal binds directly (tensor_bridge.h §5.4).
 void caliper_embed_views_draw(CaliperCore* core) {
     if (core->views.empty()) return;
@@ -376,10 +374,8 @@ int caliper_core_view_tensor(CaliperCore* core, const CaliperViewDesc* desc) {
     if (src.data == nullptr)
         return vfail(metal ? "null MTLBuffer (tensor->data)" : "null data");
     if (metal) {
-        if (!(bridge->caps() & CALIPER_BRIDGE_CAP_IMPORT_ALLOC) ||
-            bridge->active_device() != CALIPER_DEV_METAL)
-            return vfail("METAL tensor, but this host's graphics layer cannot read an "
-                         "MTLBuffer in place");
+        if (core->renderer->interop_device() != CALIPER_DEV_METAL)
+            return vfail("METAL tensor, but the active renderer is not Metal");
         if (desc->byte_offset % 4 != 0)
             return vfail("METAL byte_offset must be a multiple of 4; got " +
                          std::to_string(desc->byte_offset));
@@ -437,9 +433,9 @@ int caliper_core_view_tensor(CaliperCore* core, const CaliperViewDesc* desc) {
 
     // ---- 2. texture: (re)create on a new view or a shape/dtype change — the new
     // one is built BEFORE the old is released, so a failed recreate keeps the old
-    // view intact. A METAL create runs the bridge's device pass at offset 0 (in
-    // bounds: window <= buffer length was just proven); the imported update in
-    // step 3 overwrites it in queue order before any frame samples it. A CPU
+    // view intact. A METAL create runs the bridge's direct device pass at offset
+    // 0 (in bounds: window <= buffer length was just proven); the imported update
+    // in step 3 overwrites it in queue order before any frame samples it. A CPU
     // create uploads the data itself (it IS this call's update).
     CaliperTextureId tex = need_create ? 0 : v->tex;
     bool cpu_uploaded = false;
@@ -468,13 +464,15 @@ int caliper_core_view_tensor(CaliperCore* core, const CaliperViewDesc* desc) {
         ok = bridge->update_texture_from_alloc(tex, alloc, desc->byte_offset, &t);
         if (ok) {
             imported = true;
+            const char* p = core->renderer->last_device_path();
+            path = p ? p : "";
             if (desc->flags & CALIPER_VIEW_FLAG_WAIT_GPU)
-                bridge->wait(bridge->last_serial());
+                core->renderer->device_update_wait();
         }
     } else if (!cpu_uploaded) {
         ok = bridge->update_texture(tex, &t);
     }
-    if (ok) path = bridge->last_path();   // the route the graphics layer took
+    if (ok && !metal) path = bridge->last_upload_path();   // "cpu-staged", or the GPU map's path
     if (!ok) {
         if (need_create) bridge->release_texture(tex);
         drop_fresh_import();
@@ -582,11 +580,10 @@ int caliper_core_view_readback(CaliperCore* core, const char* name, void* buf,
                    " bytes)");
         return 0;
     }
-    // Through the graphics layer, ordered after every prior update.
-    std::vector<uint8_t> px;
-    TensorBridge* bridge = services_bridge();
-    if (!bridge || !bridge->readback(v->tex, &px) || px.size() != need) {
-        core->fail("view_readback: the graphics layer's readback failed");
+    // Same-queue readback: commit order retires every prior update first.
+    std::vector<uint8_t> px = core->renderer->debug_readback_rgba8(v->tex, v->w, v->h);
+    if (px.size() != need) {
+        core->fail("view_readback: renderer readback failed");
         return 0;
     }
     std::memcpy(buf, px.data(), need);

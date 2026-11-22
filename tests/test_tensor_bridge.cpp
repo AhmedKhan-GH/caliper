@@ -1,102 +1,85 @@
 // Unit tests for the TensorBridge core — validation, colormap index math, and
-// what it asks of the graphics layer. Headless: a StubRenderer stands in for the
-// Metal or Vulkan backend, with the layer's recording backend (src/host/gfx) as
-// its gfx(), so the acceptance-rule matrix, the frames the bridge submits and the
-// LUT arithmetic are exercised without a window. A stub named "staged" imports
-// no device memory; "metal" imports MTLBuffers and orders after a producer's
-// queue; "vulkan" imports Win32 memory; "none" has no backend of the layer at all,
-// as the Vulkan renderer until Windows parity. The windowed pixel-exact proof
-// lives in tests/gfx/ (caliper_gfx_tests and caliper_gfx_texture_tests, ctest
-// label "gfx").
+// the CPU staging bytes. Headless: a StubRenderer stands in for the GL/Metal
+// backend so the acceptance-rule matrix and the LUT arithmetic are exercised
+// without a window. The windowed GL pixel-exact proof lives in
+// tests/gfx/gfx_main.cpp (caliper_gfx_tests, ctest label "gfx").
 #include <doctest/doctest.h>
 
 #include "tensor_bridge.h"
-#include "gfx/colormap_keys.h"
-#include "gfx/recording_backend.h"
 #include "renderer/host_renderer.h"
 #include <caliper/services/tensor_bridge_v1_2.h>
 
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <memory>
 #include <string>
-#include <variant>
 #include <vector>
 
 using namespace caliper_host;
-using caliper_gfx::RecordingBackend;
-using OpKind = caliper_gfx::RecordingBackend::OpKind;
-using caliper_gfx::HandleKind;
 
 namespace {
 
-caliper_gfx::Caps stub_caps(const char* name) {
-    caliper_gfx::Caps c = RecordingBackend::default_caps();
-    if (std::strcmp(name, "metal") == 0)
-        c.bits |= caliper_gfx::kCapImportMetalBuffer | caliper_gfx::kCapWaitMetalEvent;
-    if (std::strcmp(name, "vulkan") == 0) c.bits |= caliper_gfx::kCapImportWin32Memory;
-    c.limits.max_buffer_size = 1ull << 40;   // the geometry gates' huge imports
-    c.limits.max_storage_buffer_binding_size = 1ull << 40;
-    return c;
-}
-
-// A HostRenderer whose graphics layer is the recording backend, so we can
-// assert the bridge's logic without any GPU context.
+// Minimal HostRenderer that records the staged bytes and the device-path
+// calls, so we can assert the bridge's logic without any GL/Metal context.
 class StubRenderer : public HostRenderer {
 public:
-    explicit StubRenderer(const char* backend_name) : name_(backend_name) {
-        if (std::strcmp(name_, "none") != 0) rec_ = std::make_unique<RecordingBackend>(stub_caps(name_));
-    }
+    explicit StubRenderer(const char* backend_name) : name_(backend_name) {}
 
     bool init(GLFWwindow*) override { return true; }
     void new_frame() override {}
     void render(int, int) override {}
     void shutdown() override {}
     const char* name() const override { return name_; }
+    // Mirror the real backends' name->interop-device mapping so a stub named
+    // "metal"/"vulkan" activates the device path (the bridge reads this, not
+    // name(), since spec §3.4).
+    CaliperDeviceKind interop_device() const override {
+        if (std::strcmp(name_, "metal") == 0)  return CALIPER_DEV_METAL;
+        if (std::strcmp(name_, "vulkan") == 0) return CALIPER_DEV_CUDA;
+        return CALIPER_DEV_CPU;
+    }
     void window_hints() override {}
-    caliper_gfx::Backend* gfx() override { return rec_.get(); }
-    // The renderer's own texture methods, which the bridge no longer calls; they go with the
-    // seam's texture methods.
-    uint64_t tex_create_rgba8(int, int) override { return 0; }
-    bool tex_upload_rgba8(uint64_t, const void*, int, int) override { return false; }
-    void tex_release(uint64_t) override {}
-    uint64_t tex_imtexture_id(uint64_t) override { return 0; }
-    bool tex_update_from_device(uint64_t, const CaliperTensor&, const uint32_t*, float, float) override {
-        return false;
+
+    uint64_t tex_create_rgba8(int w, int h) override {
+        if (w <= 0 || h <= 0) return 0;
+        uint64_t id = next_id_++;
+        created_[id] = {w, h};
+        return id;
+    }
+    bool tex_upload_rgba8(uint64_t tex, const void* data, int w, int h) override {
+        if (created_.find(tex) == created_.end() || data == nullptr) return false;
+        last_upload_id = tex;
+        last_upload.assign((const uint8_t*)data,
+                           (const uint8_t*)data + (size_t)w * h * 4);
+        ++upload_count;
+        return true;
+    }
+    void tex_release(uint64_t tex) override { created_.erase(tex); ++release_count; }
+    uint64_t tex_imtexture_id(uint64_t tex) override { return tex; }
+
+    bool tex_update_from_device(uint64_t tex, const CaliperTensor&,
+                                const uint32_t* lut, float, float) override {
+        if (created_.find(tex) == created_.end()) return false;
+        ++device_count;
+        last_device_lut = lut;
+        return device_return;
     }
 
-    RecordingBackend& rec() { return *rec_; }
-    size_t textures_made() const { return rec_->count(OpKind::Create, HandleKind::Texture); }
-    size_t textures_freed() const { return rec_->count(OpKind::Destroy, HandleKind::Texture); }
-    size_t dispatches() const {
-        size_t n = 0;
-        for (const auto& s : rec_->submitted())
-            for (const auto& p : s.frame.passes()) n += std::holds_alternative<caliper_gfx::DispatchPass>(p) ? 1 : 0;
-        return n;
-    }
+    // knobs / observations
+    bool device_return = true;
+    int  upload_count = 0;
+    int  device_count = 0;
+    int  release_count = 0;
+    uint64_t last_upload_id = 0;
+    std::vector<uint8_t> last_upload;
+    const uint32_t* last_device_lut = nullptr;
 
 private:
     const char* name_;
-    std::unique_ptr<RecordingBackend> rec_;
+    uint64_t next_id_ = 1;
+    struct WH { int w, h; };
+    std::unordered_map<uint64_t, WH> created_;
 };
-
-// The key block the last dispatch read from its frame's arena (its second
-// dynamic offset), or null when the last submit dispatched nothing.
-const caliper_gfx::shaders::Cmap* last_block(RecordingBackend& rec) {
-    if (rec.submitted().empty()) return nullptr;
-    const caliper_gfx::Frame& f = rec.submitted().back().frame;
-    for (const auto& p : f.passes())
-        if (const auto* d = std::get_if<caliper_gfx::DispatchPass>(&p))
-            return reinterpret_cast<const caliper_gfx::shaders::Cmap*>(f.arena().data + d->dynamic_offsets[1]);
-    return nullptr;
-}
-
-bool same_block(const caliper_gfx::shaders::Cmap* got, int32_t colormap, float vmin, float vmax) {
-    caliper_gfx::shaders::Cmap want{};
-    caliper_gfx::cmap::derive_block(colormap, vmin, vmax, &want);
-    return got != nullptr && std::memcmp(got, &want, sizeof want) == 0;
-}
 
 // A CPU f32 (h,w) tensor over caller-owned storage, contiguous row-major.
 CaliperTensor f32_2d(const float* data, int64_t h, int64_t w) {
@@ -188,8 +171,8 @@ TEST_CASE("expand_u8_to_rgba8: channel replication / alpha rules") {
 }
 
 TEST_CASE("acceptance matrix: only the frozen v1 shapes/dtypes are accepted") {
-    StubRenderer staged("staged");   // active device == CPU
-    TensorBridge b(staged);
+    StubRenderer gl("gl");   // active device == CPU
+    TensorBridge b(gl);
 
     float f[4] = {0, 1, 2, 3};
     uint8_t u[2 * 2 * 3] = {0};
@@ -232,7 +215,7 @@ TEST_CASE("acceptance matrix: only the frozen v1 shapes/dtypes are accepted") {
         t.strides[0] = 3;   // row stride != w -> gap
         CHECK(b.texture_from_tensor_mapped(&t, 0, 0, 3, 0) == 0);
     }
-    SUBCASE("foreign device rejected on a renderer with no device path") {
+    SUBCASE("foreign device rejected on GL backend") {
         CaliperTensor t = f32_2d(f, 2, 2);
         t.device = CALIPER_DEV_METAL;   // not the active (CPU) device
         CHECK(b.texture_from_tensor_mapped(&t, 0, 0, 3, 0) == 0);
@@ -246,33 +229,31 @@ TEST_CASE("acceptance matrix: only the frozen v1 shapes/dtypes are accepted") {
     }
 }
 
-TEST_CASE("CPU tensors: f32 values go to the layer's colormap with the range's keys, images as RGBA8 texels") {
-    StubRenderer staged("staged");
-    TensorBridge b(staged);
+TEST_CASE("CPU staging bytes match the reference conversion") {
+    StubRenderer gl("gl");
+    TensorBridge b(gl);
 
     float f[4] = {0.0f, 1.0f, 2.0f, 3.0f};   // 2x2 ramp
     CaliperTensor t = f32_2d(f, 2, 2);
     CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_VIRIDIS, 0, 3, 0);
     REQUIRE(id != 0);
-    CHECK(staged.textures_made() == 1);
-    CHECK(staged.dispatches() == 1);
-    CHECK(same_block(last_block(staged.rec()), CALIPER_CMAP_VIRIDIS, 0, 3));
-    CHECK(std::string(b.last_path()) == "cpu-staged");
-    CHECK(b.last_serial() != 0);
+    REQUIRE(gl.upload_count == 1);
 
-    // u8 (2x2x1) expands to RGBA8 on the CPU and is written into the texture.
+    std::vector<uint8_t> ref(4 * 4);
+    map_f32_to_rgba8(f, 2, 2, colormap_lut(CALIPER_CMAP_VIRIDIS), 0, 3, ref.data());
+    CHECK(gl.last_upload == ref);
+
+    // u8 (2x2x1) staged via expand reference
     uint8_t g[4] = {0, 85, 170, 255};
     CaliperTensor tu = u8_3d(g, 2, 2, 1);
     CaliperTextureId idu = b.texture_from_tensor(&tu, 0);
     REQUIRE(idu != 0);
     std::vector<uint8_t> refu(4 * 4);
     expand_u8_to_rgba8(g, 2, 2, 1, refu.data());
-    CHECK(staged.rec().texture_bytes(b.texture(idu)) == refu);
-    CHECK(std::string(b.last_path()) == "cpu-staged");
-    CHECK(b.last_serial() == 0);   // written at once: nothing for the GPU to read later
+    CHECK(gl.last_upload == refu);
 }
 
-TEST_CASE("device tensor is validated then read in place by the layer") {
+TEST_CASE("device tensor is validated then forwarded to the device path") {
     StubRenderer metal("metal");   // active device == METAL
     TensorBridge b(metal);
 
@@ -280,74 +261,63 @@ TEST_CASE("device tensor is validated then read in place by the layer") {
     CaliperTensor t = f32_2d(f, 2, 2);
     t.device = CALIPER_DEV_METAL;
 
-    SUBCASE("valid device tensor -> imported in place, the colormap's keys, no host copy") {
+    SUBCASE("valid device tensor -> device path, LUT forwarded, no CPU stage") {
         CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_MAGMA, 0, 3, 0);
         CHECK(id != 0);
-        CHECK(metal.rec().count(OpKind::Import) == 1);
-        CHECK(metal.dispatches() == 1);
-        CHECK(metal.rec().count(OpKind::WriteBuffer) == 0);
-        CHECK(metal.rec().count(OpKind::WriteTexture) == 0);
-        CHECK(same_block(last_block(metal.rec()), CALIPER_CMAP_MAGMA, 0, 3));
-        CHECK(std::string(b.last_path()) == "compute");
+        CHECK(metal.device_count == 1);
+        CHECK(metal.upload_count == 0);
+        CHECK(metal.last_device_lut == colormap_lut(CALIPER_CMAP_MAGMA));
     }
-    SUBCASE("non-contiguous device tensor never reaches the layer") {
+    SUBCASE("non-contiguous device tensor never reaches the device path") {
         t.strides[0] = 3;
         CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_MAGMA, 0, 3, 0);
         CHECK(id == 0);
-        CHECK(metal.rec().count(OpKind::Import) == 0);
-        CHECK(metal.textures_made() == 0);
+        CHECK(metal.device_count == 0);
     }
-    SUBCASE("a device image needs four channels: no host copy of device memory") {
-        uint8_t u[2 * 2 * 3] = {};
-        CaliperTensor d = u8_3d(u, 2, 2, 3);
-        d.device = CALIPER_DEV_METAL;
-        CHECK(b.texture_from_tensor(&d, 0) == 0);
-        CHECK(metal.textures_freed() == metal.textures_made());   // the refused one went back
+    SUBCASE("device path failure fails the op (tensor is not CPU-reachable)") {
+        metal.device_return = false;
+        CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_MAGMA, 0, 3, 0);
+        CHECK(id == 0);
+        CHECK(metal.upload_count == 0);
     }
 }
 
-TEST_CASE("no backend of the layer: every texture, import and view is refused with the reason") {
-    StubRenderer none("none");
-    TensorBridge b(none);
-    float f[4] = {0, 1, 2, 3};
-    CaliperTensor t = f32_2d(f, 2, 2);
-    CHECK(b.caps() == 0u);
-    CHECK(b.geom_caps() == 0u);
-    CHECK(b.active_device() == CALIPER_DEV_CPU);
-    bridge_clear_last_reject();
-    CHECK(b.texture_from_tensor_mapped(&t, CALIPER_CMAP_VIRIDIS, 0, 3, 0) == 0);
-    CHECK(std::string(bridge_last_reject()).find("runs no backend of the graphics layer") != std::string::npos);
-    uint8_t u[4] = {};
-    CaliperTensor tu = u8_3d(u, 2, 2, 1);
-    CHECK(b.texture_from_tensor(&tu, 0) == 0);
-    int64_t shape[2] = {2, 2};
-    CaliperTensor out{};
-    CaliperTextureId tex = 0;
-    CHECK_FALSE(b.alloc_shared(CALIPER_DT_F32, 2, shape, &out, &tex));
-    uint64_t dummy = 42;
-    CHECK(b.import_allocation(&dummy, 64, CALIPER_ALLOC_HANDLE_MTLBUFFER) == 0);
-    CHECK(b.geom_create_view(8, 8) == 0);
-    CHECK(b.geom_create_view_ex(8, 8, 0) == 0);
-}
+// Copy counters (HostRenderer::note_copy; docs/explanations/rendering.md): the
+// bridge counts the one upload of a CPU tensor, none for a device tensor, and
+// the upload of a renderer that colormaps host memory itself (the browser's
+// WebGPU renderer takes that route through tex_update_mapped_from_host).
+namespace {
+class HostMapStub : public StubRenderer {
+public:
+    HostMapStub() : StubRenderer("webgpu") {}
+    bool tex_update_mapped_from_host(uint64_t, const float*, int, int, const uint32_t*, float,
+                                     float) override {
+        ++mapped_count;
+        return true;
+    }
+    const char* last_device_path() const override { return "compute-host"; }
+    int mapped_count = 0;
+};
+}  // namespace
 
-TEST_CASE("copy counters: a CPU upload counts one copy, a device update none") {
+TEST_CASE("copy counters: a CPU upload counts one copy, a device update none, a host colormap its upload") {
     float f[6] = {0, 1, 2, 3, 4, 5};   // 2x3
-    SUBCASE("CPU tensor: one upload of the values per create or update, one of the texels for an image") {
-        StubRenderer staged("staged");
-        TensorBridge b(staged);
+    SUBCASE("CPU tensor: one upload of the RGBA8 texels per create or update") {
+        StubRenderer gl("gl");
+        TensorBridge b(gl);
         CaliperTensor t = f32_2d(f, 2, 3);
         CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_VIRIDIS, 0, 5, 0);
         REQUIRE(id != 0);
-        CHECK(staged.copy_count().copies == 1);
-        CHECK(staged.copy_count().bytes == 2 * 3 * 4);
+        CHECK(gl.copy_count().copies == 1);
+        CHECK(gl.copy_count().bytes == 2 * 3 * 4);
         REQUIRE(b.update_texture(id, &t));
-        CHECK(staged.copy_count().copies == 2);
-        CHECK(staged.copy_count().bytes == 2 * 2 * 3 * 4);
+        CHECK(gl.copy_count().copies == 2);
+        CHECK(gl.copy_count().bytes == 2 * 2 * 3 * 4);
         uint8_t g[2 * 2 * 3] = {};
         CaliperTensor tu = u8_3d(g, 2, 2, 3);   // RGB expands to RGBA on the CPU, then uploads
         REQUIRE(b.texture_from_tensor(&tu, 0) != 0);
-        CHECK(staged.copy_count().copies == 3);
-        CHECK(staged.copy_count().bytes == 2 * 2 * 3 * 4 + 2 * 2 * 4);
+        CHECK(gl.copy_count().copies == 3);
+        CHECK(gl.copy_count().bytes == 2 * 2 * 3 * 4 + 2 * 2 * 4);
     }
     SUBCASE("device tensor: read in place, no copy") {
         StubRenderer metal("metal");
@@ -357,37 +327,50 @@ TEST_CASE("copy counters: a CPU upload counts one copy, a device update none") {
         CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_MAGMA, 0, 5, 0);
         REQUIRE(id != 0);
         REQUIRE(b.update_texture(id, &t));
-        CHECK(metal.dispatches() == 2);
+        CHECK(metal.device_count == 2);
         CHECK(metal.copy_count().copies == 0);
         CHECK(metal.copy_count().bytes == 0);
     }
-    SUBCASE("a refused upload counts nothing") {
-        StubRenderer staged("staged");
-        TensorBridge b(staged);
+    SUBCASE("a renderer that colormaps host memory (the browser) counts its upload of the values") {
+        HostMapStub web;
+        TensorBridge b(web);
         CaliperTensor t = f32_2d(f, 2, 3);
         CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_VIRIDIS, 0, 5, 0);
         REQUIRE(id != 0);
-        staged.rec().release(b.texture(id));   // the layer's texture is gone: the update refuses
+        CHECK(web.mapped_count == 1);
+        CHECK(web.upload_count == 0);   // no CPU staging
+        CHECK(std::string(b.last_upload_path()) == "compute-host");
+        CHECK(web.copy_count().copies == 1);
+        CHECK(web.copy_count().bytes == 2 * 3 * sizeof(float));
+    }
+    SUBCASE("a refused upload counts nothing") {
+        StubRenderer gl("gl");
+        TensorBridge b(gl);
+        CaliperTensor t = f32_2d(f, 2, 3);
+        CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_VIRIDIS, 0, 5, 0);
+        REQUIRE(id != 0);
+        gl.tex_release(id);   // the stub's texture is gone: its upload refuses
         CHECK_FALSE(b.update_texture(id, &t));
-        CHECK(staged.copy_count().copies == 1);
+        CHECK(gl.copy_count().copies == 1);
     }
 }
 
 TEST_CASE("release_texture / update_texture lifecycle") {
-    StubRenderer staged("staged");
-    TensorBridge b(staged);
+    StubRenderer gl("gl");
+    TensorBridge b(gl);
 
     float f[4] = {0, 1, 2, 3};
     CaliperTensor t = f32_2d(f, 2, 2);
     CaliperTextureId id = b.texture_from_tensor_mapped(&t, CALIPER_CMAP_VIRIDIS, 0, 3, 0);
     REQUIRE(id != 0);
 
-    // update maps again (colormap/vmin/vmax remembered from creation)
+    // update re-stages (colormap/vmin/vmax remembered from creation)
     float f2[4] = {3, 2, 1, 0};
     CaliperTensor t2 = f32_2d(f2, 2, 2);
     CHECK(b.update_texture(id, &t2));
-    CHECK(staged.dispatches() == 2);
-    CHECK(same_block(last_block(staged.rec()), CALIPER_CMAP_VIRIDIS, 0, 3));
+    std::vector<uint8_t> ref(16);
+    map_f32_to_rgba8(f2, 2, 2, colormap_lut(CALIPER_CMAP_VIRIDIS), 0, 3, ref.data());
+    CHECK(gl.last_upload == ref);
 
     // update rejects a shape/dtype mismatch
     uint8_t u[12] = {0};
@@ -395,20 +378,14 @@ TEST_CASE("release_texture / update_texture lifecycle") {
     CHECK_FALSE(b.update_texture(id, &bad));
     CHECK_FALSE(b.update_texture(0, &t2));      // unknown id
 
-    // a new mapping applies to the next update
-    REQUIRE(b.set_mapping(id, CALIPER_CMAP_RDBU, -1, 1));
-    CHECK(b.update_texture(id, &t2));
-    CHECK(same_block(last_block(staged.rec()), CALIPER_CMAP_RDBU, -1, 1));
-
-    const size_t freed = staged.textures_freed();
     b.release_texture(id);
-    CHECK(staged.textures_freed() == freed + 1);
+    CHECK(gl.release_count == 1);
     CHECK_FALSE(b.update_texture(id, &t2));      // gone after release
 }
 
 TEST_CASE("alloc_shared: host buffer + texture pair, update-on-demand") {
-    StubRenderer staged("staged");
-    TensorBridge b(staged);
+    StubRenderer gl("gl");
+    TensorBridge b(gl);
 
     int64_t shape[3] = {2, 2, 4};
     CaliperTensor out{};
@@ -426,76 +403,100 @@ TEST_CASE("alloc_shared: host buffer + texture pair, update-on-demand") {
     CHECK(b.update_texture(tex, &out));
     std::vector<uint8_t> ref(16);
     expand_u8_to_rgba8(buf, 2, 2, 4, ref.data());
-    CHECK(staged.rec().texture_bytes(b.texture(tex)) == ref);
+    CHECK(gl.last_upload == ref);
 
     b.free_shared(tex);
-    CHECK(staged.textures_freed() == 1);
+    CHECK(gl.release_count == 1);
 }
 
-TEST_CASE("bridge caps() surfaces the layer's stream ordering and import capabilities (D24)") {
-    // No event waits and no device import -> caps 0 (adapters must drain).
-    StubRenderer plain("staged");
+TEST_CASE("bridge caps() surfaces the renderer's stream-handoff capability (D24)") {
+    // Default renderer: no stream honor -> caps 0 (adapters must drain).
+    StubRenderer plain("gl");
     TensorBridge b_plain(plain);
     CHECK(b_plain.caps() == 0u);
 
-    // A backend that orders after a producer's queue and imports MTLBuffers -> both bits.
-    StubRenderer honored("metal");
+    // A backend that honors the stream channel -> bit 0.
+    class StreamStub : public StubRenderer {
+    public:
+        using StubRenderer::StubRenderer;
+        bool honors_stream_ordered_handoff() const override { return true; }
+    };
+    StreamStub honored("metal");
     TensorBridge b_honored(honored);
-    CHECK(b_honored.caps() == (CALIPER_BRIDGE_CAP_STREAM_ORDERED | CALIPER_BRIDGE_CAP_IMPORT_ALLOC));
-    CHECK(b_honored.active_device() == CALIPER_DEV_METAL);
+    CHECK(b_honored.caps() == CALIPER_BRIDGE_CAP_STREAM_ORDERED);
 }
 
 // --- Bridge v1.2: imported external allocations -----------------------------
 
-TEST_CASE("caps() adds IMPORT_ALLOC only when the layer imports device memory") {
-    StubRenderer plain("staged");
+namespace {
+struct ImportStub : StubRenderer {
+    using StubRenderer::StubRenderer;
+    uint64_t next_id = 1;
+    std::vector<uint64_t> released;
+    struct Update { uint64_t tex, alloc, offset; };
+    std::vector<Update> updates;
+    bool supports_external_import() const override { return true; }
+    uint64_t import_external_allocation(void*, uint64_t size, uint32_t type) override {
+        if (type != CALIPER_ALLOC_HANDLE_OPAQUE_WIN32 &&
+            type != CALIPER_ALLOC_HANDLE_OPAQUE_FD &&
+            type != CALIPER_ALLOC_HANDLE_MTLBUFFER) return 0;
+        if (size == 0) return 0;
+        return next_id++;
+    }
+    void release_external_allocation(uint64_t id) override { released.push_back(id); }
+    bool tex_update_from_imported(uint64_t tex, uint64_t alloc, uint64_t off,
+                                  const CaliperTensor&, int32_t, float, float) override {
+        updates.push_back({tex, alloc, off});
+        return true;
+    }
+};
+} // namespace
+
+TEST_CASE("caps() adds IMPORT_ALLOC only when the renderer supports it") {
+    StubRenderer plain("vulkan");
     TensorBridge b1(plain);
     CHECK((b1.caps() & CALIPER_BRIDGE_CAP_IMPORT_ALLOC) == 0u);
-    StubRenderer imp("vulkan");
+    ImportStub imp("vulkan");
     TensorBridge b2(imp);
     CHECK((b2.caps() & CALIPER_BRIDGE_CAP_IMPORT_ALLOC) != 0u);
-    CHECK((b2.caps() & CALIPER_BRIDGE_CAP_STREAM_ORDERED) == 0u);
 }
 
 TEST_CASE("import_allocation: id lifecycle, invalid args, double release") {
-    StubRenderer imp("vulkan");
+    ImportStub imp("vulkan");
     TensorBridge b(imp);
     uint64_t dummy = 42;
     CaliperAllocId a = b.import_allocation(&dummy, 4096,
                                            CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
     REQUIRE(a != 0);
-    CHECK(imp.rec().count(OpKind::Import) == 1);
     CHECK(b.import_allocation(nullptr, 4096,
                               CALIPER_ALLOC_HANDLE_OPAQUE_WIN32) == 0);   // null handle
     CHECK(b.import_allocation(&dummy, 0,
                               CALIPER_ALLOC_HANDLE_OPAQUE_WIN32) == 0);   // zero size
     CHECK(b.import_allocation(&dummy, 4096, 99u) == 0);                   // bad type
-    CHECK(b.import_allocation(&dummy, 4096,
-                              CALIPER_ALLOC_HANDLE_MTLBUFFER) == 0);      // not this layer's kind
-    CHECK(b.import_allocation(&dummy, 4096,
-                              CALIPER_ALLOC_HANDLE_OPAQUE_FD) == 0);      // no fd imports
     b.release_allocation(a);
-    CHECK(imp.rec().count(OpKind::Destroy, HandleKind::Buffer) == 1);
+    CHECK(imp.released.size() == 1);
     b.release_allocation(a);              // double release: no-op, no crash
-    CHECK(imp.rec().count(OpKind::Destroy, HandleKind::Buffer) == 1);
+    CHECK(imp.released.size() == 1);
     b.release_allocation(0);              // invalid id: no-op
-    CHECK(imp.rec().count(OpKind::Destroy, HandleKind::Buffer) == 1);
+    CHECK(imp.released.size() == 1);
 }
 
-TEST_CASE("import_allocation: kind 3 (in-process MTLBuffer) reaches the layer as an MTLBuffer import") {
-    StubRenderer imp("metal");
+TEST_CASE("import_allocation: host gate forwards kind 3 (in-process MTLBuffer)") {
+    // The bridge stays kind-agnostic: it passes handle_type through to the
+    // renderer unchanged. A renderer that speaks kind 3 accepts; this fails if
+    // the host gate rejected the tag before it ever reached the renderer.
+    ImportStub imp("metal");
     TensorBridge b(imp);
     uint64_t dummy = 42;
     CaliperAllocId a = b.import_allocation(&dummy, 4096,
                                            CALIPER_ALLOC_HANDLE_MTLBUFFER);
     REQUIRE(a != 0);
-    CHECK(imp.rec().count(OpKind::Import) == 1);
     b.release_allocation(a);
-    CHECK(imp.rec().count(OpKind::Destroy, HandleKind::Buffer) == 1);
+    CHECK(imp.released.size() == 1);
 }
 
-TEST_CASE("update_texture_from_alloc: acceptance gates + bounds + no host fallback") {
-    StubRenderer imp("metal");
+TEST_CASE("update_texture_from_alloc: acceptance gates + bounds + fallback contract") {
+    ImportStub imp("vulkan");
     TensorBridge b(imp);
     uint64_t dummy = 42;
     // 4x4 f32 mapped texture created through the normal path first
@@ -504,35 +505,32 @@ TEST_CASE("update_texture_from_alloc: acceptance gates + bounds + no host fallba
     CaliperTextureId tex = b.texture_from_tensor_mapped(&t, 0, 0.f, 1.f, 0);
     REQUIRE(tex != 0);
     CaliperAllocId a = b.import_allocation(&dummy, 4 * 4 * sizeof(float),
-                                           CALIPER_ALLOC_HANDLE_MTLBUFFER);
+                                           CALIPER_ALLOC_HANDLE_OPAQUE_WIN32);
     REQUIRE(a != 0);
-    const size_t d0 = imp.dispatches();
-    CaliperTensor d = t; d.data = nullptr; d.device = CALIPER_DEV_METAL;   // desc: data ignored
+    CaliperTensor d = t; d.data = nullptr;                  // desc: data ignored
     CHECK(b.update_texture_from_alloc(tex, a, 0, &d));
-    CHECK(imp.dispatches() == d0 + 1);
-    CHECK(std::string(b.last_path()) == "compute-imported");
+    CHECK(imp.updates.size() == 1);
     // offset + extent exceeding the imported size must be rejected host-side
     CHECK_FALSE(b.update_texture_from_alloc(tex, a, 8, &d));
     // overflow guard: near-UINT64_MAX offset must not wrap past the bounds check
     CHECK_FALSE(b.update_texture_from_alloc(tex, a, UINT64_MAX - 30, &d));
-    CHECK(imp.dispatches() == d0 + 1);
-    // unknown alloc / unknown texture / null desc reject without reaching the layer
+    CHECK(imp.updates.size() == 1);
+    // unknown alloc / unknown texture / null desc reject without renderer call
     CHECK_FALSE(b.update_texture_from_alloc(tex, 999u, 0, &d));
     CHECK_FALSE(b.update_texture_from_alloc(0, a, 0, &d));
     CHECK_FALSE(b.update_texture_from_alloc(tex, a, 0, nullptr));
     // non-contiguous desc rejected by the same frozen gate
     CaliperTensor bad = d; bad.strides[0] = 5;
     CHECK_FALSE(b.update_texture_from_alloc(tex, a, 0, &bad));
-    CHECK(imp.dispatches() == d0 + 1);
+    CHECK(imp.updates.size() == 1);
 }
 
 // --- caliper.geometry.v1: imported 3-D points ------------------------------
 
 namespace {
-// A renderer with the geometry service: its views are the layer's textures,
-// which the bridge makes, and its draws are recorded here as they arrive.
-struct GeomStub : StubRenderer {
-    using StubRenderer::StubRenderer;
+struct GeomStub : ImportStub {
+    using ImportStub::ImportStub;
+    uint64_t next_view = 100;
     struct Draw {
         uint64_t view, pos, pos_off, count, attr, attr_off;
         const uint32_t* lut;
@@ -542,6 +540,10 @@ struct GeomStub : StubRenderer {
     std::vector<Draw> draws;
     bool draw_return = true;
     bool supports_geometry() const override { return true; }
+    uint64_t geom_create_view(int w, int h) override {
+        if (w <= 0 || h <= 0) return 0;
+        return next_view++;
+    }
     bool geom_draw_points(uint64_t view, const float*, const float*,
                           uint64_t pos, uint64_t pos_off, uint64_t count,
                           uint64_t attr, uint64_t attr_off,
@@ -556,19 +558,23 @@ struct GeomStub : StubRenderer {
 struct PrimStub : GeomStub {
     using GeomStub::GeomStub;
     struct PrimDraw {
-        uint64_t view = 0, depth = 0;
+        uint64_t view = 0;
         std::vector<HostGeomDraw> draws;
         uint32_t clear = 0;
     };
     std::vector<PrimDraw> prims;
     bool prim_return = true;
     bool supports_geometry_primitives() const override { return true; }
-    bool geom_draw_primitives(uint64_t view, uint64_t depth, const float*, const float*,
+    uint64_t geom_create_view_ex(int w, int h, uint32_t flags) override {
+        if (w <= 0 || h <= 0) return 0;
+        if ((flags & ~CALIPER_GEOM_VIEW_DEPTH) != 0u) return 0;
+        return next_view++;
+    }
+    bool geom_draw_primitives(uint64_t view, const float*, const float*,
                               const HostGeomDraw* draws, uint32_t count,
                               uint32_t clear) override {
         PrimDraw rec;
         rec.view = view;
-        rec.depth = depth;
         rec.clear = clear;
         if (count > 0) rec.draws.assign(draws, draws + count);
         prims.push_back(std::move(rec));
@@ -590,7 +596,7 @@ struct InstancedPrimStub : PrimStub {
 } // namespace
 
 TEST_CASE("geom_caps: granted only when the renderer supports geometry") {
-    StubRenderer plain("vulkan");
+    ImportStub plain("vulkan");
     TensorBridge b1(plain);
     CHECK(b1.geom_caps() == 0u);
     GeomStub g("vulkan");
@@ -620,17 +626,17 @@ TEST_CASE("geom views: lifecycle, wrong-door release, update refusal") {
     CaliperTensor t = f32_2d(px.data(), 64, 64);
     CHECK_FALSE(b.update_texture(v, &t));
     b.release_texture(v);                                   // wrong door: no-op
-    CHECK(g.textures_freed() == 0);
+    CHECK(g.release_count == 0);
     b.geom_release_view(v);
-    CHECK(g.textures_freed() == 1);
+    CHECK(g.release_count == 1);
     b.geom_release_view(v);                                 // double release: no-op
-    CHECK(g.textures_freed() == 1);
+    CHECK(g.release_count == 1);
 
     // geom_release_view refuses non-view textures.
     CaliperTextureId tex = b.texture_from_tensor_mapped(&t, 0, 0.f, 1.f, 0);
     REQUIRE(tex != 0);
     b.geom_release_view(tex);
-    CHECK(g.textures_freed() == 1);
+    CHECK(g.release_count == 1);
 }
 
 TEST_CASE("geom_draw_points: gates fail closed, count 0 clears, happy path") {
@@ -721,10 +727,7 @@ TEST_CASE("geom v1_1: create_view_ex and draw_primitives gate before forwarding"
     CHECK(b.geom_draw_primitives(depthless, &cam, &d, 1, sizeof(d), 0xff000000u));
     REQUIRE(g.prims.size() == 1);
     CHECK(g.prims[0].draws.size() == 1);
-    const uint64_t layer_buffer = g.prims[0].draws[0].pos_alloc;   // the layer's buffer
-    CHECK(layer_buffer != 0u);
-    CHECK(g.prims[0].view == b.texture(depthless).id);
-    CHECK(g.prims[0].depth == 0u);
+    CHECK(g.prims[0].draws[0].pos_alloc == 1u);  // renderer-side import id
     CHECK(g.prims[0].draws[0].vertex_count == 3u);
     CHECK(g.prims[0].draws[0].flat_rgba == 0xff336699u);
     CHECK(g.prims[0].draws[0].lut256 == nullptr);
@@ -736,7 +739,7 @@ TEST_CASE("geom v1_1: create_view_ex and draw_primitives gate before forwarding"
     cm.colormap = CALIPER_CMAP_MAGMA;
     CHECK(b.geom_draw_primitives(depthless, &cam, &cm, 1, sizeof(cm), 0u));
     REQUIRE(g.prims.size() == 2);
-    CHECK(g.prims[1].draws[0].attr_alloc == layer_buffer);
+    CHECK(g.prims[1].draws[0].attr_alloc == 1u);
     CHECK(g.prims[1].draws[0].lut256 != nullptr);
 
     CaliperGeomDraw indexed = d;
@@ -747,7 +750,7 @@ TEST_CASE("geom v1_1: create_view_ex and draw_primitives gate before forwarding"
     indexed.index_count = 2;
     CHECK(b.geom_draw_primitives(depthless, &cam, &indexed, 1, sizeof(indexed), 0u));
     REQUIRE(g.prims.size() == 3);
-    CHECK(g.prims[2].draws[0].index_alloc == layer_buffer);
+    CHECK(g.prims[2].draws[0].index_alloc == 1u);
     CHECK(g.prims[2].draws[0].index_offset == 512u);
     CHECK(g.prims[2].draws[0].index_count == 2u);
 
@@ -763,7 +766,6 @@ TEST_CASE("geom v1_1: create_view_ex and draw_primitives gate before forwarding"
     CHECK(g.prims.size() == 4);
     CHECK(b.geom_draw_primitives(depth, &cam, &z, 1, sizeof(z), 0u));
     CHECK(g.prims.size() == 5);
-    CHECK(g.prims[4].depth != 0u);   // the view's depth target, a layer texture
 
     CHECK_FALSE(b.geom_draw_primitives(depth, nullptr, &d, 1, sizeof(d), 0u));
     CHECK_FALSE(b.geom_draw_primitives(depth, &cam, &d, 1, sizeof(d) - 1, 0u));
@@ -825,9 +827,9 @@ TEST_CASE("geom v1_2: textured draws validate UV and texture sources atomically"
     CHECK(b.geom_draw_primitives_v1_2(view, &cam, &d, 1, sizeof(d), 0u));
     REQUIRE(g.prims.size() == 1);
     REQUIRE(g.prims[0].draws.size() == 1);
-    CHECK(g.prims[0].draws[0].uv_alloc == g.prims[0].draws[0].pos_alloc);
+    CHECK(g.prims[0].draws[0].uv_alloc == 1u);
     CHECK(g.prims[0].draws[0].uv_offset == 128u);
-    CHECK(g.prims[0].draws[0].texture == b.texture(texture).id);
+    CHECK(g.prims[0].draws[0].texture == 1u);
     CHECK(g.prims[0].draws[0].attr_alloc == 0u);
 
     // A v1.1 caller cannot expose the v1.2 tail or request COLOR_TEXTURE.
@@ -898,10 +900,10 @@ TEST_CASE("geom v1_3: instanced draw gate battery G1-G12, atomic refusal") {
     CHECK(b.geom_draw_primitives_v1_3(view, &cam, &d, 1, sizeof(d), 0u));
     REQUIRE(g.prims.size() == 1);
     REQUIRE(g.prims[0].draws.size() == 1);
-    CHECK(g.prims[0].draws[0].instance_alloc == g.prims[0].draws[0].pos_alloc);   // the layer's buffer
+    CHECK(g.prims[0].draws[0].instance_alloc == 1u);      // renderer import id
     CHECK(g.prims[0].draws[0].instance_offset == 256u);
     CHECK(g.prims[0].draws[0].instance_count == 4u);
-    CHECK(g.prims[0].draws[0].instance_attr_alloc == g.prims[0].draws[0].pos_alloc);
+    CHECK(g.prims[0].draws[0].instance_attr_alloc == 1u);
     CHECK(g.prims[0].draws[0].instance_attr_offset == 512u);
     // §3.3: an instanced-tint draw carries a real LUT even off a FLAT base.
     CHECK(g.prims[0].draws[0].lut256 != nullptr);

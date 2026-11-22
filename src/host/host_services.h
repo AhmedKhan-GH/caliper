@@ -79,8 +79,9 @@ class HostRenderer;
 void services_set_renderer(HostRenderer* renderer);
 
 // The HostRenderer currently backing caliper.tensor_bridge.v1 (or nullptr).
-// White-box use (tests reach its graphics layer, gfx(), and its copy counter).
-// Not on the applet-facing surface — applets never see the renderer type.
+// White-box use (the §7 host-axis byte-compare in caliper_embed_tests): read a
+// bridge texture back with debug_readback_rgba8, which is renderer-side. Not on
+// the applet-facing surface — applets never see the renderer type.
 HostRenderer* services_renderer();
 
 // The process TensorBridge behind caliper.tensor_bridge.v1..v1_2 (lazily built

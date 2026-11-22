@@ -1,21 +1,14 @@
 #pragma once
 // TensorBridge — host-side core of caliper.tensor_bridge.v1 (docs/references/service-tensor-bridge-v1.md).
-// Pure logic over the graphics layer (src/host/gfx): it validates a CaliperTensor
-// against the frozen v1 acceptance rules and puts it into a layer texture with
-// the layer's update_texture_from_tensor, which runs the colormap by keys on the
-// GPU for f32 data and fills RGBA8 texels for u8 data, reading a device tensor
-// or an imported allocation in place and copying host bytes once; and it keeps
-// the id -> layer-handle bookkeeping (§5.4). Its imported allocations are layer
-// buffers (import_buffer), which the geometry service's draws on the Metal
-// renderer read through an adapter until the geometry service goes, so there is
-// one allocation table. It never links torch and never names a graphics API.
-// Where the renderer runs no backend of the layer (HostRenderer::gfx() is null:
-// the Vulkan renderer until Windows parity), every texture, import and view is
-// refused with that reason.
+// Pure logic over the HostRenderer texture seam: it validates a CaliperTensor
+// against the frozen v1 acceptance rules, colormaps/expands it into RGBA8 on the
+// CPU staging path, or forwards a device tensor to the backend's device path —
+// and keeps the id -> backend-handle bookkeeping (§5.4). It never links torch
+// and never names a graphics API; the renderer stays swappable.
 //
 // This lives in the exe / gfx-test link scope, NOT caliper_host_lib: it depends
-// on the HostRenderer interface and the layer's header only, so unit tests drive
-// it with a stub renderer on the layer's recording backend and no window.
+// on the HostRenderer interface only (header), so unit tests drive it with a
+// stub renderer and no window.
 #include <caliper/tensor.h>
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/tensor_bridge_v1_1.h>
@@ -26,17 +19,9 @@
 #include <caliper/services/geometry_v1_3.h>
 #include <caliper/services/device_v1.h>
 
-#include "gfx/gfx.h"
-
 #include <cstdint>
-#include <memory>
-#include <string>
 #include <unordered_map>
 #include <vector>
-
-namespace caliper_gfx::cmap {
-class KeyBlockCache;
-}
 
 namespace caliper_host {
 
@@ -84,7 +69,6 @@ void        bridge_clear_last_reject();
 class TensorBridge {
 public:
     explicit TensorBridge(HostRenderer& renderer);
-    ~TensorBridge();   // gives every texture, view and import it holds back to the layer
 
     // caliper.tensor_bridge.v1 ops. Returns 0/false on an acceptance-rule
     // violation (reason emitted via log; never a misinterpreted texture).
@@ -101,23 +85,17 @@ public:
                                   CaliperTextureId* out_texture);
     void             free_shared(CaliperTextureId tex);
 
-    // Bridge-v1.1 capability bits, from the layer's caps. Bit 0 = an update
-    // honors a tensor's stream by ordering its read after the producer's queue
-    // on the GPU, so adapters may skip the device drain. Bit 1 (v1.2) = the
-    // layer can import an applet-exported device allocation in place. 0 with
-    // no backend of the layer.
+    // Bridge-v1.1 capability bits. Bit 0 = the active renderer honors
+    // stream-ordered handoff, so adapters may skip the device drain. Bit 1
+    // (v1.2) = the renderer can import an applet-exported device allocation.
     uint32_t caps() const;
-    // The device kind whose memory the layer reads in place (METAL on Metal,
-    // CUDA with an exportable-memory import, else CPU): a device tensor of any
-    // other kind is refused.
-    CaliperDeviceKind active_device() const;
 
-    // caliper.tensor_bridge.v1.2 ops (imported external allocations). The
-    // layer imports the applet's buffer in place (import_buffer, with no
-    // copy) and updates read it at a byte offset. All return 0/false/no-op
-    // when the layer cannot import or on a rule breach (reason logged), and
-    // update_texture_from_alloc reuses the SAME frozen acceptance gates as
-    // update_texture plus a host-side bounds check.
+    // caliper.tensor_bridge.v1.2 ops (imported external allocations). The host
+    // dups the applet's OS shareable handle into a renderer-internal id and
+    // runs device texture updates FROM the imported bytes — zero copies. All
+    // return 0/false/no-op when the renderer can't import or on a rule breach
+    // (reason logged), and update_texture_from_alloc reuses the SAME frozen
+    // acceptance gates as update_texture plus a host-side bounds check.
     CaliperAllocId import_allocation(void* os_handle, uint64_t size_bytes,
                                      uint32_t handle_type);
     void           release_allocation(CaliperAllocId a);
@@ -135,34 +113,17 @@ public:
     bool           set_mapping(CaliperTextureId tex, int32_t colormap,
                                float vmin, float vmax);
 
-    // Host-internal: the path label of the last successful update, as the layer
-    // returned it with its route ("compute", "compute-imported", "blit",
-    // "blit-imported" or "cpu-staged"). The embed views report it.
-    const char*    last_path() const { return last_path_; }
-    // Host-internal: completion of the updates, by the layer's serials. The
-    // serial of the last successful update's GPU read of its source (0 when it
-    // needed none: host texels the layer wrote at once), whether a serial has
-    // completed (never blocks), and a blocking wait for one (embed views'
-    // CALIPER_VIEW_FLAG_WAIT_GPU, tests).
-    uint64_t       last_serial() const { return last_serial_; }
-    bool           completed(uint64_t serial) const;
-    void           wait(uint64_t serial);
-    // Host-internal: a texture's or a geometry view's texels, tightly packed
-    // RGBA8 rows, top row first, read after every update and draw made before;
-    // false for an unknown id or a failed readback.
-    bool           readback(CaliperTextureId tex, std::vector<uint8_t>* rgba);
-    // Host-internal: the layer's texture behind a texture or view id (none for
-    // an unknown id), and how many textures and views the bridge holds.
-    caliper_gfx::Texture texture(CaliperTextureId tex) const;
-    size_t         texture_count() const { return entries_.size(); }
+    // Host-internal: how the last host-memory (CPU) upload reached its texture,
+    // "cpu-staged" (colormapped or expanded on the CPU, then uploaded) or the
+    // renderer's last_device_path() when the renderer mapped the host bytes on
+    // its GPU (tex_update_mapped_from_host). The embed views report it.
+    const char*    last_upload_path() const { return last_upload_path_; }
 
     // caliper.geometry.v1 (imported 3-D points). Lives on the SAME object as
     // the bridge so views share the texture table (ImGui-drawable ids) and
-    // points address v1.2 imported allocations directly. A view is a layer
-    // texture (and a depth texture with CALIPER_GEOM_VIEW_DEPTH) that the Metal
-    // renderer's geometry draws render into through the layer's adapter. Every
-    // gate fails closed with a logged reason; a false draw leaves the view's
-    // pixels and telemetry untouched.
+    // points address v1.2 imported allocations directly. Every gate fails
+    // closed with a logged reason; a false draw leaves the view's pixels and
+    // telemetry untouched.
     uint32_t         geom_caps() const;
     CaliperTextureId geom_create_view(uint32_t w, uint32_t h);
     CaliperTextureId geom_create_view_ex(uint32_t w, uint32_t h,
@@ -202,18 +163,18 @@ private:
     // second bool was the reviewed defect, do not reintroduce it.
     enum class GeomRev : uint32_t { V1_1, V1_2, V1_3 };
     // Per-texture bookkeeping. The public CaliperTextureId handed to callers is
-    // the layer's ImGui handle for the texture (Backend::imgui_texture_id — the
-    // id<MTLTexture> imgui_impl_metal binds, the view imgui_impl_wgpu binds;
-    // §5.4), and this table is keyed by it. Entry adds the shape/dtype/colormap
-    // needed to re-upload on update_texture.
+    // the renderer's ImGui handle (tex_imtexture_id — what imgui_impl_{metal,
+    // opengl3} bind as ImTextureID; §5.4), and this table is keyed by it. The
+    // internal renderer id (`tex` below) drives upload/release and never leaves
+    // the host. Entry adds the shape/dtype/colormap needed to re-upload on
+    // update_texture.
     struct Entry {
-        caliper_gfx::Texture tex;   // the layer's texture
-        caliper_gfx::Texture depth; // a geometry view's depth target, or none
+        uint64_t     tex = 0;       // renderer texture id (internal, for up/release)
         int          w = 0;
         int          h = 0;
         CaliperDType dtype = CALIPER_DT_F32;
         int          channels = 1;  // direct-u8 source channel count
-        bool         mapped = false;// f32 -> colormap
+        bool         mapped = false;// f32 -> colormap LUT
         int32_t      colormap = 0;
         float        vmin = 0.0f;
         float        vmax = 1.0f;
@@ -224,22 +185,9 @@ private:
         bool         view_depth = false;  // geometry.v1_1 depth attachment
     };
 
-    // The layer's backend, or null (with the reason logged) where the renderer
-    // runs none.
-    caliper_gfx::Backend* gfx(const char* what) const;
-    // A new layer texture for a tensor, registered under its ImGui id; 0 when
-    // the layer refuses it.
-    CaliperTextureId add_texture(Entry e, const char* what);
-    // A geometry view's layer textures, cleared; 0 when the layer refuses them.
-    CaliperTextureId make_view(uint32_t w, uint32_t h, bool depth, const char* what);
-    void drop(Entry& e);
-
-    // Put a validated tensor (or, with alloc, an imported allocation's window
-    // described by t) into an existing entry's texture through the layer.
-    bool upload_into(Entry& e, const CaliperTensor* t, caliper_gfx::Buffer alloc = {},
-                     uint64_t offset_bytes = 0);
-    const char* last_path_ = "cpu-staged";
-    uint64_t    last_serial_ = 0;
+    // Stage/forward a validated tensor into an existing entry's texture.
+    bool upload_into(Entry& e, const CaliperTensor* t);
+    const char* last_upload_path_ = "cpu-staged";
 
     // dtype + ndim + per-dim shape match of an update/alloc desc against an
     // existing entry (mapped: 2D h×w; direct: 3D h×w×channels). Shared by
@@ -258,18 +206,17 @@ private:
                                    uint32_t clear_rgba);
 
     // Imported external allocations (v1.2): public CaliperAllocId -> the
-    // layer's buffer + its byte size (for the host-side bounds check).
+    // renderer-internal id + its byte size (for the host-side bounds check).
     struct ImportedAlloc {
-        caliper_gfx::Buffer buffer;
-        uint64_t size_bytes = 0;
+        uint64_t renderer_id = 0;
+        uint64_t size_bytes  = 0;
     };
 
     HostRenderer&                          renderer_;
+    CaliperDeviceKind                      active_device_;  // backend's device
     std::unordered_map<uint64_t, Entry>    entries_;
     std::unordered_map<uint64_t, ImportedAlloc> imported_;   // alloc id -> entry
     uint64_t                               next_alloc_id_ = 1;
-    // The key blocks of the colormaps and ranges the textures map with.
-    std::unique_ptr<caliper_gfx::cmap::KeyBlockCache> keys_;
 };
 
 }  // namespace caliper_host

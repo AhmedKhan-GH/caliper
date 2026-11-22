@@ -1245,7 +1245,7 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                 }
                 count = 2;
             }
-            ok = r->geom_draw_primitives(v.view_rid, 0, V, P, d, count, ground);
+            ok = r->geom_draw_primitives(v.view_rid, V, P, d, count, ground);
             if (ok) {
                 void* h = r->geom_draw_retain_last();
                 if (v.cur.last_draw) r->device_update_release(v.cur.last_draw);
@@ -1257,7 +1257,7 @@ void draw_points(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
                 }
             }
         } else {
-            ok = r->geom_draw_primitives(v.view_rid, 0, V, P, nullptr, 0, ground);
+            ok = r->geom_draw_primitives(v.view_rid, V, P, nullptr, 0, ground);
         }
         v.dirty = false;   // a refused draw is not retried every frame (it logs)
         v.draw_failed = !ok;

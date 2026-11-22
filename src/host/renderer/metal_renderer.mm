@@ -1142,17 +1142,17 @@ public:
                           float size_px, uint32_t clear_rgba) override {
         @autoreleasepool {
             // ---- every gate BEFORE the encoder exists: false = pixels untouched ----
-            id<MTLTexture> t = layer_texture(view_tex);
+            id<MTLTexture> t = lookup(view_tex);
             if (t == nil || view16 == nullptr || proj16 == nullptr) return false;
             id<MTLBuffer> pos = nil, attr = nil;
             if (count > 0) {
-                pos = layer_buffer(pos_alloc);
+                pos = lookup_import(pos_alloc);
                 if (pos == nil || pos_offset % 4 != 0) return false;
                 if (count > UINT64_MAX / 12) return false;
                 if (pos_offset > pos.length || count * 12 > pos.length - pos_offset)
                     return false;
                 if (attr_alloc != 0) {
-                    attr = layer_buffer(attr_alloc);
+                    attr = lookup_import(attr_alloc);
                     if (attr == nil || attr_offset % 4 != 0 || lut256 == nullptr)
                         return false;
                     if (attr_offset > attr.length || count * 4 > attr.length - attr_offset)
@@ -1214,17 +1214,18 @@ public:
         }
     }
 
-    bool geom_draw_primitives(uint64_t view_tex, uint64_t depth_tex,
+    bool geom_draw_primitives(uint64_t view_tex,
                               const float* view16, const float* proj16,
                               const HostGeomDraw* draws, uint32_t count,
                               uint32_t clear_rgba) override {
         @autoreleasepool {
-            id<MTLTexture> color = layer_texture(view_tex);
+            id<MTLTexture> color = lookup(view_tex);
             if (color == nil) return metal_geom_fail("unknown color view");
             if (view16 == nullptr || proj16 == nullptr) return metal_geom_fail("null camera matrices");
             if (count > 0 && draws == nullptr) return metal_geom_fail("null draw array");
-            id<MTLTexture> depth = depth_tex != 0 ? layer_texture(depth_tex) : nil;
-            if (depth_tex != 0 && depth == nil) return metal_geom_fail("unknown depth view");
+            id<MTLTexture> depth = nil;
+            auto dt = depth_textures_.find(view_tex);
+            if (dt != depth_textures_.end()) depth = dt->second;
 
             struct EncodedDraw {
                 const HostGeomDraw* d = nullptr;
@@ -1252,7 +1253,7 @@ public:
                 const HostGeomDraw& d = draws[i];
                 if (d.vertex_count == 0 || d.vertex_count > UINT32_MAX)
                     return metal_geom_fail("bad vertex count");
-                id<MTLBuffer> pos = layer_buffer(d.pos_alloc);
+                id<MTLBuffer> pos = lookup_import(d.pos_alloc);
                 if (pos == nil) return metal_geom_fail("unknown pos import");
                 if (d.pos_offset % 4 != 0) return metal_geom_fail("pos offset misaligned");
                 if (d.vertex_count > UINT64_MAX / 12u) return metal_geom_fail("position byte overflow");
@@ -1262,7 +1263,7 @@ public:
                 id<MTLBuffer> idx = nil;
                 uint64_t consumed = d.vertex_count;
                 if (d.index_alloc != 0) {
-                    idx = layer_buffer(d.index_alloc);
+                    idx = lookup_import(d.index_alloc);
                     if (idx == nil || d.index_offset % 4 != 0 || d.index_count == 0)
                         return metal_geom_fail("bad index import/range");
                     if (d.index_count > UINT32_MAX || d.index_count > UINT64_MAX / 4u)
@@ -1283,14 +1284,14 @@ public:
 
                 id<MTLBuffer> nrm = nil;
                 if (d.shade_mode == CALIPER_GEOM_SHADE_LAMBERT) {
-                    nrm = layer_buffer(d.normal_alloc);
+                    nrm = lookup_import(d.normal_alloc);
                     if (nrm == nil) return metal_geom_fail("unknown normal import");
                     if (d.normal_offset % 4 != 0) return metal_geom_fail("normal offset misaligned");
                     if (d.normal_offset > nrm.length ||
                         d.vertex_count * 12u > nrm.length - d.normal_offset)
                         return metal_geom_fail("normals out of bounds");
                 } else if (d.normal_alloc != 0) {
-                    nrm = layer_buffer(d.normal_alloc);
+                    nrm = lookup_import(d.normal_alloc);
                     if (nrm == nil) return metal_geom_fail("unknown optional normal import");
                     if (d.normal_offset % 4 != 0) return metal_geom_fail("optional normal offset misaligned");
                     if (d.normal_offset > nrm.length ||
@@ -1301,7 +1302,7 @@ public:
                 id<MTLBuffer> attr = nil;
                 if (d.color_mode == CALIPER_GEOM_COLOR_COLORMAP ||
                     d.color_mode == CALIPER_GEOM_COLOR_VERTEX_RGBA) {
-                    attr = layer_buffer(d.attr_alloc);
+                    attr = lookup_import(d.attr_alloc);
                     if (attr == nil) return metal_geom_fail("unknown attr import");
                     if (d.attr_offset % 4 != 0) return metal_geom_fail("attr offset misaligned");
                     if (d.vertex_count > UINT64_MAX / 4u) return metal_geom_fail("attr byte overflow");
@@ -1315,14 +1316,14 @@ public:
                 id<MTLBuffer> uv = nil;
                 id<MTLTexture> texture = nil;
                 if (d.color_mode == CALIPER_GEOM_COLOR_TEXTURE) {
-                    uv = layer_buffer(d.uv_alloc);
-                    texture = layer_texture(d.texture);
+                    uv = lookup_import(d.uv_alloc);
+                    texture = lookup(d.texture);
                     if (uv == nil) return metal_geom_fail("unknown uv import");
                     // Refuse sampling ANY geometry view: unknown id, the current
                     // target, or any entry created by geom_create_view* (which
                     // uniquely carry MTLTextureUsageRenderTarget — tex_create_rgba8
-                    // never does). Views and sampled textures are the layer's
-                    // textures, so the usage flag is the marker a view carries.
+                    // never does). Metal views share textures_ with sampled
+                    // textures, so the usage flag is the marker create_view sets.
                     // Mirrors Vulkan's `fb != VK_NULL_HANDLE` refusal.
                     if (texture == nil || d.texture == view_tex ||
                         (texture.usage & MTLTextureUsageRenderTarget) != 0)
@@ -1357,7 +1358,7 @@ public:
                         return metal_geom_fail("instance offset misaligned");      // G4
                     if (d.instance_offset / 4u > UINT32_MAX)
                         return metal_geom_fail("instance base exceeds 32 bits");   // G6
-                    inst = layer_buffer(d.instance_alloc);
+                    inst = lookup_import(d.instance_alloc);
                     if (inst == nil)
                         return metal_geom_fail("unknown instance alloc");          // G7
                     if (d.instance_count > UINT64_MAX / 64u)
@@ -1373,7 +1374,7 @@ public:
                         return metal_geom_fail("instance attr without instances"); // G8
                     if (d.instance_attr_offset % 4 != 0)
                         return metal_geom_fail("instance attr offset misaligned"); // G9
-                    iattr = layer_buffer(d.instance_attr_alloc);
+                    iattr = lookup_import(d.instance_attr_alloc);
                     if (iattr == nil)
                         return metal_geom_fail("unknown instance attr alloc");     // G11
                     if (d.instance_count > UINT64_MAX / 4u)
@@ -1603,7 +1604,7 @@ public:
     // this reads fully-updated texels without the hot path ever waiting. The
     // gfx harness passes the PUBLIC bridge id (the bridged texture pointer),
     // so resolve by pointer value against the id table; internal renderer ids
-    // resolve via layer_texture(). NB: parameter is tex_id, never `id` (ObjC keyword).
+    // resolve via lookup(). NB: parameter is tex_id, never `id` (ObjC keyword).
     std::vector<uint8_t> debug_readback_rgba8(uint64_t tex_id, int w, int h) override {
         @autoreleasepool {
             id<MTLTexture> t = lookup(tex_id);
@@ -1783,17 +1784,6 @@ private:
     id<MTLBuffer> lookup_import(uint64_t iid) {
         auto it = imported_.find(iid);
         return it == imported_.end() ? nil : it->second;
-    }
-
-    // The geometry service's adapter (migration step 8): the views it renders
-    // into, the textures it samples and the allocations it reads are the
-    // graphics layer's, which the tensor bridge made on gfx_; until step 13
-    // deletes the geometry service this code reaches their Metal objects here.
-    id<MTLTexture> layer_texture(uint64_t handle) {
-        return gfx_ ? (__bridge id<MTLTexture>)caliper_gfx::metal_texture(*gfx_, caliper_gfx::Texture{handle}) : nil;
-    }
-    id<MTLBuffer> layer_buffer(uint64_t handle) {
-        return gfx_ ? (__bridge id<MTLBuffer>)caliper_gfx::metal_buffer(*gfx_, caliper_gfx::Buffer{handle}) : nil;
     }
 
     bool ensure_pipeline() {

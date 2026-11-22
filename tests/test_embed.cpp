@@ -18,7 +18,7 @@
 // White-box internals for the §7 host-axis byte-compare (last case): the embed
 // core wires its renderer into the process bridge at attach, so we drive the
 // SAME public tensor_bridge.v1 service and read the texture back through the
-// bridge's graphics layer, comparing to the shared CPU reference the gfx rows use.
+// renderer, comparing to the shared CPU reference the gfx rows use.
 #include <caliper/tensor.h>
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/metrics_v1.h>   // v1.1 get_service: the Compass case
@@ -402,10 +402,9 @@ TEST_CASE("embed/reload: a failed load after an active applet leaves NO applet")
 // What IS the rendering seam §7 protects — and what both hosts genuinely share —
 // is the tensor->texture BRIDGE upload. Here we drive it through the renderer the
 // EMBED CORE created and wired (services_set_renderer at attach), via the SAME
-// public caliper.tensor_bridge.v1 service an applet uses, read the texture back
-// through the graphics layer, and byte-compare it against
-// caliper_host::expand_u8_to_rgba8 — the IDENTICAL CPU reference the gfx rows
-// (mat_u8_direct) assert against with their standalone renderer. If
+// public caliper.tensor_bridge.v1 service an applet uses, and byte-compare the
+// readback against caliper_host::expand_u8_to_rgba8 — the IDENTICAL CPU reference
+// the gfx rows (mat_u8_direct) assert against with their standalone renderer. If
 // both harnesses reduce to the same bytes vs the same reference, the seam is
 // byte-stable across hosts. DELTA from §7's literal ideal: bridge-upload layer,
 // not the final windowed composite (stated in the L2b report).
@@ -433,8 +432,8 @@ TEST_CASE("embed/§7 host-axis: bridge upload under the embed core is byte-exact
     auto* bridge =
         (const CaliperTensorBridgeV1*)services_get(CALIPER_TENSOR_BRIDGE_V1);
     REQUIRE(bridge != nullptr);
-    TensorBridge* host_bridge = services_bridge();
-    REQUIRE(host_bridge != nullptr);
+    HostRenderer* r = services_renderer();
+    REQUIRE(r != nullptr);
 
     // A deterministic (H,W,4) u8 tensor — a fixed, contiguous pattern.
     std::vector<uint8_t> src((size_t)H * W * 4);
@@ -452,8 +451,7 @@ TEST_CASE("embed/§7 host-axis: bridge upload under the embed core is byte-exact
     CaliperTextureId id = bridge->texture_from_tensor(&t, 0);
     REQUIRE(id != 0);
 
-    std::vector<uint8_t> got;
-    CHECK(host_bridge->readback(id, &got));   // through the graphics layer
+    std::vector<uint8_t> got = r->debug_readback_rgba8(id, W, H);
     std::vector<uint8_t> ref((size_t)W * H * 4);
     expand_u8_to_rgba8(src.data(), W, H, 4, ref.data());
 

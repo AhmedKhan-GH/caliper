@@ -233,7 +233,7 @@ public:
     virtual bool supports_geometry_instanced() const { return false; }
     virtual uint64_t geom_create_view_ex(int /*w*/, int /*h*/,
                                          uint32_t /*flags*/) { return 0; }
-    virtual bool geom_draw_primitives(uint64_t /*view_tex*/, uint64_t /*depth_tex*/,
+    virtual bool geom_draw_primitives(uint64_t /*view_tex*/,
                                       const float* /*view16*/, const float* /*proj16*/,
                                       const HostGeomDraw* /*draws*/,
                                       uint32_t /*count*/,
