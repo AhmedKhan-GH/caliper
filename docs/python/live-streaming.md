@@ -217,7 +217,7 @@ nm <binary> | c++filt | grep -cE '[ (<,](at|c10|torch)::|_ZN3c10|_ZN2at|_ZN5torc
 ```
 
 The torch-free binaries also link no `libtorch`, `libc10` or `libomp`
-([Embedding Caliper](../web/embedding-api.md#the-torch-free-build) has the
+([Embedding Caliper](../web/embedding-api.md#torch-free-build) has the
 full check and the build options).
 
 ## Known Limits

@@ -8,7 +8,7 @@ The `web/` package defines two custom elements, `<caliper-view>` and `<caliper-c
 <caliper-view src="ws://127.0.0.1:7341/v3/stream?token=..." view="embedding" link details></caliper-view>
 ```
 
-## caliper-view
+## `<caliper-view>`
 
 One live view of the stream, with a header (the view's name, its data view picker, a line about the view, the run state, its toggles and a status dot) and a drawing area. Caliper's own views compiled to WebAssembly draw the view where WebGPU gives an adapter, and the element's views written in TypeScript draw it otherwise. The header, the gestures, the events and the highlights are the same with both.
 
@@ -33,7 +33,7 @@ The header's toggles are `log` for a series or a histogram, `follow` for a serie
 
 3-D points draw inside a box around the data, as both renderers draw it. The box's edges are a wireframe with tick labels and the axis's name on one edge of each axis, and a faint grid lies on the floor, the face across the vertical axis that is behind the data. The back edges and the grid are drawn behind the points and the other edges and the labels in front of them. Nearer points are drawn larger, within a factor of 0.5 to 2 of their size at the camera's target, and points behind the target are dimmed in proportion to their distance, to half their brightness at the far side of the data, with their hue kept. Selected points keep their full colour. The camera starts at the same three-quarter view in both renderers, fitted to the data, and a double click returns to it. 2-D points have no box, cues or `rotate`.
 
-### Properties and methods
+### Properties and Methods
 
 | Member | Meaning |
 |---|---|
@@ -53,7 +53,7 @@ The header's toggles are `log` for a series or a histogram, `follow` for a serie
 | `caliper-selection` | A SELECTION from the producer for an item space this view carries, or one made in this view: the message's `space`, `items`, `truncated`, `view`, `details` and `details_error` |
 | `caliper-reply` | A CONTROL_REPLY to a control this element sent |
 
-## caliper-controls
+## `<caliper-controls>`
 
 The controls of the session: the run state with Pause or Resume and Step, every parameter the script registered and every action. A `number` or `integer` parameter with a range shows a slider, on a log scale when the parameter says so, and a field for an exact value; one without a range shows the field only. A `boolean` shows a toggle and a `choice` a menu. An action shows a button, marked busy while it is queued or running, and its last result. The controls travel on the stream's own WebSocket, so they work while a notebook cell runs.
 
@@ -78,6 +78,6 @@ A change is sent as CONTROL. The control then shows the value it asked for, mark
 | `caliper-controls` | The run state, a parameter or an action changed: the CONTROLS message, or null when the session has none |
 | `caliper-reply` | A CONTROL_REPLY to a control this element sent, `queued` included |
 
-## The viewer page and the widgets
+## Viewer Page and Widgets
 
 The viewer page shows a `caliper-controls` panel above its grid when the producer announces controls and the script has a run state, a parameter or an action, and gives every view `link` and `details`. The notebook widget of `caliper.widget()` (`caliper-widget.js`) is a `caliper-view` with `link`, `details` and `run-controls`. The module `caliper-controls-widget.js` is the anywidget module of a controls panel, with the traits `src` and `height`.

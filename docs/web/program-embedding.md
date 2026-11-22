@@ -11,7 +11,7 @@ complete program that follows this guide.
 Everything here has been run on macOS with Metal. Windows uses the same
 package with Vulkan (`caliper_embed.dll`), but that path has not been run yet.
 
-## Install the package
+## Installation
 
 Build the core and install the `embed` component into a prefix of your choice.
 The prefix can be the one that holds the SDK or a separate one.
@@ -26,7 +26,7 @@ The prefix then holds the library (`lib/libcaliper_embed.dylib`), the headers
 under `include/caliper-embed/caliper/` and the CMake package under
 `lib/cmake/caliper-embed/`.
 
-## Link it from CMake
+## CMake Linking
 
 `find_package(caliper-embed)` gives one target, `caliper::embed`, which brings
 the library and the include root. Nothing else of Caliper needs linking: the
@@ -53,7 +53,7 @@ their build folder. An installed copy of the program needs an rpath that
 reaches `<prefix>/lib`, because the library's install name is
 `@rpath/libcaliper_embed.dylib`.
 
-## Check the version at startup
+## Version Check
 
 `caliper/embed.h` carries the version of the header you compiled against, and
 `caliper_embed_api_version()` returns the version of the library the process
@@ -70,7 +70,7 @@ if ((lib >> 16) != CALIPER_EMBED_VERSION_MAJOR ||
 
 The encoding and the rule are in [Versions](embedding-api.md#versions).
 
-## Drive the core
+## Core Frame Loop
 
 Create one core, attach one canvas, load an applet, and then pump one frame per
 tick of your own loop. The canvas is either your native view (`NSView*` on
@@ -114,7 +114,7 @@ built against the `caliper-sdk` package of the same core build. Without
 `CALIPER_DATA_DIR` names when it is set, and otherwise the operating system's
 Caliper data folder.
 
-## Run it without a window
+## Windowless Mode
 
 `embed_host` shows the whole path on a machine where no window may open.
 Build it against the package as above, put the `hello` fixture (or any applet

@@ -29,7 +29,7 @@ uv pip install --python .venv/bin/python --reinstall --no-deps dist/caliper-*.wh
 With plain pip, `pip install dist/caliper-0.1.0-cp312-cp312-macosx_14_0_arm64.whl`
 does the same. The first build compiles `libcaliper` and its dependencies (DuckDB
 among them) from source and takes minutes; later builds reuse `build/<wheel tag>`.
-The build is torch-free (see [the torch-free build](../web/embedding-api.md#the-torch-free-build)),
+The build is torch-free (see [the torch-free build](../web/embedding-api.md#torch-free-build)),
 so the extension shares the process with your own torch without a clash.
 
 The wheel contains the `caliper` package, its two native modules and the

@@ -9,7 +9,7 @@ features:
     status: shipped
     summary: The web viewer shows live views from a Caliper stream in a browser, as the viewer page that caliper.serve() serves and as the notebook widget.
     depends_on: [EMB-05, STR-05]
-    docs: docs/web/browser-elements.md#the-viewer-page-and-the-widgets
+    docs: docs/web/browser-elements.md#viewer-page-and-widgets
     design: design/streaming-and-embedding.md#the-web-viewer
     issue: null
 
@@ -209,7 +209,7 @@ features:
     status: shipped
     summary: The caliper-embed package builds and runs without libtorch, so that a host program that embeds it links no torch.
     depends_on: [EMB-07]
-    docs: docs/web/embedding-api.md#the-torch-free-build
+    docs: docs/web/embedding-api.md#torch-free-build
     issue: null
 
   - id: EMB-27

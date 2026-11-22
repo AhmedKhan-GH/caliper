@@ -495,11 +495,11 @@ entries:
   item: Examples of calls.
   ids:
   - AGT-01
-- page: docs/web/embedding-api.md#the-core-calls
+- page: docs/web/embedding-api.md#core-calls
   item: The core calls of embed.h create, attach a canvas, load an applet, run a frame and shut down.
   ids:
   - EMB-07
-- page: docs/web/embedding-api.md#every-function-in-embedh
+- page: docs/web/embedding-api.md#embedh-functions
   item: Every function in embed.h.
   ids:
   - EMB-07
@@ -516,7 +516,7 @@ entries:
   item: Caliper Embed versions in major, minor and patch, now 1.4.0.
   ids:
   - EMB-07
-- page: docs/web/embedding-api.md#reaching-services-from-a-host
+- page: docs/web/embedding-api.md#host-service-access
   item: A host reaches the core services through caliper_core_get_service.
   ids:
   - EMB-07
@@ -528,7 +528,7 @@ entries:
   item: Tensor layouts the built-in views accept.
   ids:
   - EMB-25
-- page: docs/web/embedding-api.md#two-device-paths-no-silent-fallback
+- page: docs/web/embedding-api.md#device-paths
   item: Two device paths with no silent fallback.
   ids:
   - EMB-25
@@ -536,19 +536,19 @@ entries:
   item: Typed live views apply a heatmap, image, points, series or histogram snapshot to a named view.
   ids:
   - EMB-07
-- page: docs/web/embedding-api.md#the-caliper-embed-package
+- page: docs/web/embedding-api.md#caliper-embed-package
   item: The caliper-embed package installs one shared library, headers and a CMake package.
   ids:
   - EMB-07
-- page: docs/web/embedding-api.md#the-offscreen-mode-of-embed_host
+- page: docs/web/embedding-api.md#embed_host-offscreen-mode
   item: embed_host has an offscreen mode that opens no window.
   ids:
   - EMB-07
-- page: docs/web/embedding-api.md#the-torch-free-build
+- page: docs/web/embedding-api.md#torch-free-build
   item: Caliper Embed builds and runs with no libtorch, with a release-notorch preset.
   ids:
   - EMB-26
-- page: docs/web/embedding-api.md#the-header-verbatim
+- page: docs/web/embedding-api.md#header-listing
   item: The embed.h header embedded verbatim.
   ids:
   - EMB-07
@@ -652,7 +652,7 @@ entries:
   ids:
   - EMB-05
   - STR-03
-- page: docs/web/browser-elements.md#the-viewer-page-and-the-widgets
+- page: docs/web/browser-elements.md#viewer-page-and-widgets
   item: The viewer page that caliper.serve serves and the notebook widgets are built from the elements.
   ids:
   - EMB-01

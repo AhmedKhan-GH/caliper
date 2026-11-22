@@ -11,7 +11,7 @@ in-tree embedder is `examples/embed_host/`, an AppKit host of about 260 lines
 (`main.mm`) with a Win32 counterpart (`main_win32.cpp`) and an offscreen mode
 they share (`embed_host.h`), which this page mirrors. A program outside this
 repository builds against the installed [`caliper-embed`
-package](#the-caliper-embed-package), as `embed_host` does in the
+package](#caliper-embed-package), as `embed_host` does in the
 `caliper_embed_install` test; the guide
 [Embed Caliper in a program](program-embedding.md) walks through it.
 
@@ -37,7 +37,7 @@ per-core data root, applet log routing, built-in tensor views, typed live views,
 the version call) are additive: no struct changed, so a caller built against the
 first header still links and runs.
 
-## The core calls
+## Core Calls
 
 An embedder drives the core with five calls and pumps frames from its own event
 loop. The core never owns the process loop, which is the difference between a
@@ -76,7 +76,7 @@ caliper_core_event(core, &event);
 caliper_core_shutdown(core);
 ```
 
-### Every function in `embed.h`
+### `embed.h` Functions
 
 | Function | Purpose |
 |---|---|
@@ -89,7 +89,7 @@ caliper_core_shutdown(core);
 | `caliper_core_unload_applet(core)` | Tear down the loaded applet. A no-op if none is loaded. Call between frames. |
 | `caliper_core_read_pixels(core, buf, stride)` | Copy the last composited frame as tightly packed RGBA8 with `stride` bytes per row. Offscreen canvases only. |
 | `caliper_core_last_error(core)` | The reason for the most recent refusal, or an empty string. Never `NULL` for a live core, and valid until the next core call. |
-| `caliper_core_get_service(core, id)` | The service table an applet receives for `id`, or `NULL` ([below](#reaching-services-from-a-host)). |
+| `caliper_core_get_service(core, id)` | The service table an applet receives for `id`, or `NULL` ([below](#host-service-access)). |
 | `caliper_core_view_tensor`, `_view_remove`, `_view_count`, `_view_info`, `_view_readback` | Built-in tensor views ([below](#built-in-tensor-views)). |
 | `caliper_core_colormap_lut(colormap, out256)` | The built-in 256-entry colormap table. Needs no core. |
 | `caliper_embed_api_version()` | The version of the interface the loaded library implements, encoded like `CALIPER_EMBED_VERSION` ([below](#versions)). Needs no core. |
@@ -115,7 +115,7 @@ those canvases and never paints applet pixels.
 | libtorch (one per process) | **Caliper Embed** | the embedder must NOT link its own torch; the core owns device/pack policy |
 | Crash containment | **Caliper Embed** | applet faults are caught by the core's guard and surfaced via `crash_fn`; the embedder is not taken down. The guard's signal handlers are installed once per process and pass faults outside applet calls on to the handlers installed before them, so an embedder's own crash reporter still sees its own crashes ([trust model](../applets/trust-model.md#guarded-applet-calls)) |
 
-## Per-core settings and limits
+## Per-Core Settings and Limits
 
 - **One `CaliperCore` per process.** `caliper_core_create` returns `NULL` for a
   second live core, because the one-libtorch-per-process policy
@@ -194,10 +194,10 @@ if ((lib >> 16) != CALIPER_EMBED_VERSION_MAJOR ||
 The macros are integer constant expressions, so `#if` can test them, and the
 call needs no core and may run on any thread. `CALIPER_EMBED_HAVE_VIEWS`
 remains defined as 1 for code that tested for the views before the version
-call existed. The [`caliper-embed` package](#the-caliper-embed-package) carries
+call existed. The [`caliper-embed` package](#caliper-embed-package) carries
 the same version.
 
-## Reaching services from a host
+## Host Service Access
 
 `caliper_core_get_service(core, id)` returns the same service table an applet
 receives from `CaliperHost.get_service` for that id, for example
@@ -228,7 +228,7 @@ A host pushes parameters; an applet's worker produces device tensors, because
 there is one torch per process and it is never the host's. The host-side use of
 the bridge is CPU-staged uploads on the frame thread.
 
-## Built-in tensor views
+## Built-In Tensor Views
 
 The view section of `caliper/embed.h` lets a host hand the core a
 `CaliperTensor` and have the **core** draw it: a texture made through the
@@ -260,7 +260,7 @@ window carries an info line (`WxH dtype device path updates=N last=ms`). `CALIPE
 texture 1:1 at canvas (0,0) with no window chrome, the surface the byte-exact
 `read_pixels` tests compare.
 
-### Accepted layouts
+### Accepted Layouts
 
 | Tensor | Drawn as | Rule |
 |---|---|---|
@@ -274,7 +274,7 @@ layer converts other dtypes and shapes into one of these two on the tensor's
 own device before the call; for an MPS tensor that is a GPU copy, never a host
 copy.
 
-### Two device paths, no silent fallback
+### Device Paths
 
 - **CPU.** A CPU-staged upload of the bytes at `data + byte_offset` (path
   `cpu-staged`). The bytes are copied before the call returns; the caller may
@@ -310,7 +310,7 @@ scales with the bytes moved. The first METAL f32 view in a process compiles the
 colormap shader once (1.6 ms with a warm OS shader cache, about 40 ms cold, in
 `bench_show.py`).
 
-### Sync and memory stability
+### Sync and Memory Stability
 
 Without `CALIPER_VIEW_FLAG_WAIT_GPU`, the GPU reads
 `[byte_offset, byte_offset + extent)` of the buffer **after** the call
@@ -336,7 +336,7 @@ The texture is the view's own copy of the pixels; the source buffer is read
 only during the update. A view keeps its last `MTLBuffer` retained (the import)
 until it is updated from a different buffer or removed.
 
-### Mapping changes and view info
+### Mapping Changes and View Info
 
 A different `vmin`/`vmax`/`colormap` on an existing f32 view re-pins the
 bridge entry's mapping and re-maps the new tensor into the **same** texture
@@ -363,7 +363,7 @@ canvas, because the renderer's device exists only after `attach_canvas`; a
 `view_tensor` before attach is a refusal. `caliper_core_shutdown` destroys the
 views, releasing textures and imports, before the renderer is torn down.
 
-### Typed live views
+### Typed Live Views
 
 `include/caliper/live_views.h` builds on this section. `caliper_core_live_apply`
 takes a `CaliperLiveSnapshot` of one of five kinds (heatmap, image, points,
@@ -377,7 +377,7 @@ the client and viewer C API that feed it from another process. Both are
 macOS/Metal only today; the design is in
 [Live streaming](../python/live-streaming.md).
 
-## The caliper-embed package
+## `caliper-embed` Package
 
 `cmake --install <build> --prefix <prefix> --component embed` installs the
 `caliper-embed` CMake package on macOS and Windows. It is separate from the SDK
@@ -402,7 +402,7 @@ for 1.2 accepts 1.4, and a request for 2 refuses it. In the core build
 `caliper::embed` is an alias of the `caliper_embed` target, so one
 `target_link_libraries` line works in the tree and outside it.
 
-### One shared library
+### Shared Library
 
 `libcaliper` is a static library over a dozen more: `caliper_host_lib`, the
 Metal or Vulkan backend, DuckDB, ImGui, ImPlot, ImPlot3D, ImGuiFileDialog,
@@ -430,7 +430,7 @@ adds; an installed program needs an rpath to `<prefix>/lib`. On Windows the
 program needs `caliper_embed.dll` beside it or on `PATH`, and `embed_host`
 copies the DLL beside itself after each build.
 
-### Building against the package
+### Package Linking
 
 ```sh
 cmake --install cmake-build-release --prefix <prefix> --component embed
@@ -450,7 +450,7 @@ target_link_libraries(embed_host PRIVATE
     "-framework Cocoa" "-framework QuartzCore" "-framework Metal")
 ```
 
-### The offscreen mode of embed_host
+### `embed_host` Offscreen Mode
 
 With `CALIPER_EMBED_OFFSCREEN=1`, `embed_host` runs without a window. `main()`
 takes this path before it creates an `NSApplication`, a window class or a
@@ -486,7 +486,7 @@ cannot attach, as on a machine without a GPU, the test reports Skipped, and
 the work folder, which CI puts outside the checkout. The Windows build of the
 package and of the offscreen mode has not been run yet.
 
-## The torch-free build
+## Torch-Free Build
 
 `libcaliper` (core, Metal renderer, embed C ABI) never included a torch header.
 The renderers consume `CaliperTensor.data` as a raw `id<MTLBuffer>` (Metal) or
@@ -529,7 +529,7 @@ sets `CALIPER_BUILD_PYTHON` ON and `CALIPER_WITH_TORCH`,
 `CALIPER_WITH_SLANG`, `CALIPER_WITH_LLAMA` and `CALIPER_WITH_BUILDER` OFF, and
 builds only the `_native`, `_live`, `_netio` and `caliper_viewer` targets.
 
-### What an embedder links
+### Embedder Link Lists
 
 `cmake/Dependencies.cmake` produces two link lists:
 
@@ -547,13 +547,13 @@ imgui, implot, implot3d and ImGuiFileDialog through `caliper::ui_stack`.
 Inside the core build, an embedder can link `libcaliper caliper::sdk` and
 nothing of the exe's list, plus whatever its own window code needs.
 `examples/embed_host` links `caliper::embed` instead, the shared library of the
-[package](#the-caliper-embed-package), which carries all of that inside it.
+[package](#caliper-embed-package), which carries all of that inside it.
 `caliper_embed_tests` links `doctest::doctest libcaliper caliper::sdk` only, so
 it proves that the link interface of `libcaliper` is self-sufficient. The Python extensions
 link the same two targets plus the Apple frameworks (and `glfw` for
 `caliper._native`'s window).
 
-### The release-notorch preset
+### `release-notorch` Preset
 
 `CMakePresets.json` has configure, build and test presets named
 `release-notorch`: binary dir `cmake-build-notorch`, `CMAKE_BUILD_TYPE=Release`,
@@ -598,7 +598,7 @@ These lines predate the embedding library: `embed_host` now also loads
 in the torch build `otool -L` on that library lists only system frameworks,
 libc++ and libobjc.
 
-## The header, verbatim
+## Header Listing
 
 This page embeds the real header; the docs build fails if the file moves.
 
