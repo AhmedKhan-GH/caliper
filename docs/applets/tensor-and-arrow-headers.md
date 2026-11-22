@@ -14,9 +14,7 @@ An applet passes a `CaliperTensor` into a service. No service returns one. These
 
 ### Types
 
-```c
---8<-- "sdk/include/caliper/tensor.h"
-```
+<!-- c-api types sdk/include/caliper/tensor.h level=4 -->
 
 ## Arrow Header
 
@@ -38,14 +36,16 @@ The Caliper ABI is a frozen C ABI. No third-party type can appear in a service h
 
 ### Vendored Header
 
-`caliper/arrow_c.h` is a verbatim copy of the definitions in the specification. It is the only header that [`data_v1.h`](services/caliper-data-v1.md) can include, because the frozen `data.v1` struct references `ArrowArrayStream*`.
+The definitions in `caliper/arrow_c.h` are a verbatim copy of the specification. The doc comments are Caliper's. The header is the only header that [`data_v1.h`](services/caliper-data-v1.md) can include, because the frozen `data.v1` struct references `ArrowArrayStream*`.
 
 The include guards are the `ARROW_C_DATA_INTERFACE` and `ARROW_C_STREAM_INTERFACE` guards of the specification, and not `#pragma once`. Thus another vendored copy of these definitions, for example inside DuckDB or torch, can share a translation unit with this header. The first copy that the compiler includes wins, and the other copies compile to nothing.
 
 ### Types
 
-```c
---8<-- "sdk/include/caliper/arrow_c.h"
-```
-
 Most applets never use these structs directly. The `drain_numeric` helper of the [`caliper::Data`](cpp-sugar.md) sugar walks the stream and releases it. Use the raw interface only for non-numeric columns or for control of the stream.
+
+<!-- c-api types sdk/include/caliper/arrow_c.h level=4 -->
+
+### Flags
+
+<!-- c-api ids sdk/include/caliper/arrow_c.h ARROW_FLAG_* -->

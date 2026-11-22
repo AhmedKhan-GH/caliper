@@ -1,10 +1,12 @@
 #pragma once
-/* Caliper ABI — epoch 2. FROZEN: any change here is an epoch bump (§14).
- * C types only; no STL, exceptions, or third-party types (§6c). */
+/* Caliper ABI, epoch 2. Frozen: any change here is an epoch bump.
+ * C types only, with no STL, exceptions or third-party types. */
 #include <stdint.h>
 #include <stdbool.h>
 
+/** The epoch of this contract. Any change to the frozen contract bumps the epoch. */
 #define CALIPER_ABI_EPOCH 2
+/** The name of the one symbol that every applet exports, as a string. */
 #define CALIPER_DESCRIPTOR_SYMBOL "caliper_applet_descriptor"
 
 #if defined(_WIN32)
@@ -17,48 +19,94 @@
 extern "C" {
 #endif
 
-/* The host is a service registry, not a struct of fields (§6b). */
+/**
+ * The host, as the applet sees it.
+ *
+ * The host is a service registry and not a struct of fields. An applet reads the identity of the host from this struct
+ * and gets every capability through `get_service`.
+ */
 typedef struct CaliperHost {
-    uint32_t    struct_size;      /* sizeof(CaliperHost) as the host built it */
-    uint32_t    abi_epoch;        /* epoch this host speaks */
-    uint32_t    host_version;     /* (major<<16)|(minor<<8)|patch */
-    const char* applet_data_dir;  /* per-applet sandbox dir, UTF-8, host-owned */
-    /* Returns a service table or NULL; pointer valid for the applet's
-     * lifetime. Unknown ids return NULL — never UB. */
+    /** The value of `sizeof(CaliperHost)` as the host built it. */
+    uint32_t    struct_size;
+    /** The ABI epoch that this host speaks. */
+    uint32_t    abi_epoch;
+    /** The version of the host, packed as `(major<<16)|(minor<<8)|patch`. */
+    uint32_t    host_version;
+    /** The per-applet sandbox directory, as a UTF-8 string. The host owns the string. */
+    const char* applet_data_dir;
+    /**
+     * Return the service table for `service_id`, or `NULL` if the host has no such service. The pointer stays valid for
+     * the lifetime of the applet. An unknown id returns `NULL` and never causes undefined behavior.
+     */
     const void* (*get_service)(const struct CaliperHost* host,
                                const char* service_id);
 } CaliperHost;
 
-/* Pixel-space contract (§6a): fb_* are PHYSICAL framebuffer pixels; ImGui
- * coordinates are logical units; physical = logical * dpi_scale. */
+/**
+ * The description of one frame, which the host passes to `frame`.
+ *
+ * The `fb_width` and `fb_height` values are physical framebuffer pixels. ImGui coordinates are logical units, and the
+ * physical size equals the logical size times `dpi_scale`.
+ */
 typedef struct CaliperFrameInfo {
+    /** The value of `sizeof(CaliperFrameInfo)` as the host built it. */
     uint32_t struct_size;
+    /** The width of the framebuffer in physical pixels. */
     int32_t  fb_width;
+    /** The height of the framebuffer in physical pixels. */
     int32_t  fb_height;
+    /** The number of physical pixels for each logical unit. */
     float    dpi_scale;
+    /** The time since the start of the host in seconds. */
     double   time_sec;
+    /** The time since the previous frame in seconds. */
     double   delta_sec;
 } CaliperFrameInfo;
 
+/**
+ * The entry points of an applet.
+ *
+ * The host calls these functions on the instance that `create` returns. Future entry points are appended to the end of
+ * this struct and guarded by `struct_size`.
+ */
 typedef struct CaliperAppletAPI {
+    /** The value of `sizeof(CaliperAppletAPI)` as the applet was built. */
     uint32_t struct_size;
+    /** Return a new applet instance, or `NULL` on failure. */
     void* (*create)(void);
+    /** Destroy the instance and free its memory. */
     void  (*destroy)(void* self);
+    /** Start the instance with the host, and return `true` on success. */
     bool  (*initialize)(void* self, const CaliperHost* host);
+    /** Run the instance once for each frame, with the description of the frame in `info`. */
     void  (*frame)(void* self, const CaliperFrameInfo* info);
+    /** Clean up the instance before the host destroys it. */
     void  (*cleanup)(void* self);
-    /* future entry points are APPENDED here, guarded by struct_size */
 } CaliperAppletAPI;
 
+/**
+ * The description of an applet, which the applet gives to the host.
+ *
+ * The `id` and `version` values match the manifest of the applet.
+ */
 typedef struct CaliperAppletDescriptor {
+    /** The value of `sizeof(CaliperAppletDescriptor)` as the applet was built. */
     uint32_t struct_size;
-    uint32_t abi_epoch;                   /* must equal a host-supported epoch */
-    const char* id;                       /* reverse-DNS, matches manifest */
-    const char* version;                  /* applet semver, matches manifest */
+    /** The ABI epoch of the applet. It must equal an epoch that the host supports. */
+    uint32_t abi_epoch;
+    /** The identifier of the applet in reverse-DNS form. It matches the manifest. */
+    const char* id;
+    /** The version of the applet as a semantic version. It matches the manifest. */
+    const char* version;
+    /** The display name of the applet. */
     const char* name;
+    /** A one-line summary of the applet. */
     const char* summary;
+    /** The tag that groups the applet in the host. */
     const char* tag;
-    const char* const* required_services; /* NULL-terminated; may be NULL */
+    /** The ids of the services that the applet needs, as a list that ends with `NULL`. The pointer may be `NULL`. */
+    const char* const* required_services;
+    /** The entry points of the applet. */
     CaliperAppletAPI api;
 } CaliperAppletDescriptor;
 

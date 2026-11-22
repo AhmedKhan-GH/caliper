@@ -1,18 +1,12 @@
 #pragma once
-/* The Arrow C Data Interface + C Stream Interface, vendored verbatim from the
- * Apache Arrow specification (arrow.apache.org/docs/format/CDataInterface.html
- * — the spec explicitly invites copying these definitions into downstream
- * projects; they are ABI-frozen upstream). This is how tabular results cross
- * caliper.data.v1 (docs/applets/services/caliper-data-v1.md) without any Arrow or DuckDB library type
- * in the frozen ABI: plain C structs + release callbacks.
+/* The Arrow C Data Interface and C Stream Interface. The definitions are vendored verbatim from the
+ * Apache Arrow specification (arrow.apache.org/docs/format/CDataInterface.html). The specification invites
+ * projects to copy them, and they are frozen upstream. The doc comments are Caliper's.
+ * Tabular results cross caliper.data.v1 with these structs, so no Arrow or DuckDB library type
+ * enters the frozen ABI.
  *
- * Ownership rule (per the spec): the producer fills a struct and sets
- * `release`; the consumer drains it and MUST call release(self) exactly once
- * (release sets itself to NULL). A struct whose release is NULL is empty.
- *
- * The include guards below are the spec's own, NOT pragma-once style — so this
- * copy coexists with any other vendored copy (e.g. inside DuckDB or torch) in
- * the same translation unit without redefinition. */
+ * The include guards below are the guards of the specification and not pragma once. Thus this copy
+ * coexists with any other vendored copy, for example inside DuckDB or torch, in the same translation unit. */
 
 #include <stdint.h>
 
@@ -23,40 +17,74 @@ extern "C" {
 #ifndef ARROW_C_DATA_INTERFACE
 #define ARROW_C_DATA_INTERFACE
 
+/** Bit flag of `ArrowSchema.flags`. The values of the dictionary are ordered. */
 #define ARROW_FLAG_DICTIONARY_ORDERED 1
+/** Bit flag of `ArrowSchema.flags`. The field can hold null values. */
 #define ARROW_FLAG_NULLABLE 2
+/** Bit flag of `ArrowSchema.flags`. The keys of a map type are sorted. */
 #define ARROW_FLAG_MAP_KEYS_SORTED 4
 
+/**
+ * The type description of one array, which can have child types.
+ *
+ * The producer fills the struct and sets `release`. The consumer calls `release` exactly once when it no longer needs
+ * the struct. A struct whose `release` is `NULL` is released, and the consumer must not use it.
+ */
 struct ArrowSchema {
-  /* Array type description */
+  /** The format string of the type, as a null-terminated UTF-8 string. */
   const char* format;
+  /** The name of the field, as a null-terminated UTF-8 string, or `NULL` if the type has no name. */
   const char* name;
+  /** The binary-encoded key-value metadata of the field, or `NULL` if there is none. */
   const char* metadata;
+  /** The bit flags of the field, a combination of the `ARROW_FLAG_*` values. */
   int64_t flags;
+  /** The number of child types in `children`. */
   int64_t n_children;
+  /** The array of `n_children` pointers to the child types, or `NULL` if `n_children` is 0. */
   struct ArrowSchema** children;
+  /** The type of the dictionary values for a dictionary-encoded type, or `NULL` otherwise. */
   struct ArrowSchema* dictionary;
 
-  /* Release callback */
+  /**
+   * Release the resources of the struct, including the children and the dictionary, and set `release` to `NULL`.
+   * The consumer calls it exactly once.
+   */
   void (*release)(struct ArrowSchema*);
-  /* Opaque producer-specific data */
+  /** Opaque data that belongs to the producer. The consumer must not read or change it. */
   void* private_data;
 };
 
+/**
+ * The data of one array, which can have child arrays.
+ *
+ * The producer fills the struct and sets `release`. The consumer calls `release` exactly once when it no longer needs
+ * the struct. A struct whose `release` is `NULL` is released, and the consumer must not use it.
+ */
 struct ArrowArray {
-  /* Array data description */
+  /** The number of logical elements in the array. */
   int64_t length;
+  /** The number of null elements, or -1 if the producer did not compute the count. */
   int64_t null_count;
+  /** The logical offset of the first element into the buffers, in elements. It is 0 for most arrays. */
   int64_t offset;
+  /** The number of physical buffers in `buffers`. It depends on the type of the array. */
   int64_t n_buffers;
+  /** The number of child arrays in `children`. */
   int64_t n_children;
+  /** The array of `n_buffers` pointers to the buffers. A pointer can be `NULL` when the spec allows it. */
   const void** buffers;
+  /** The array of `n_children` pointers to the child arrays, or `NULL` if `n_children` is 0. */
   struct ArrowArray** children;
+  /** The dictionary values for a dictionary-encoded array, or `NULL` otherwise. */
   struct ArrowArray* dictionary;
 
-  /* Release callback */
+  /**
+   * Release the buffers, the children and the dictionary, and set `release` to `NULL`.
+   * The consumer calls it exactly once.
+   */
   void (*release)(struct ArrowArray*);
-  /* Opaque producer-specific data */
+  /** Opaque data that belongs to the producer. The consumer must not read or change it. */
   void* private_data;
 };
 
@@ -65,28 +93,35 @@ struct ArrowArray {
 #ifndef ARROW_C_STREAM_INTERFACE
 #define ARROW_C_STREAM_INTERFACE
 
+/**
+ * A stream of arrays that all have the same type, which the consumer pulls one array at a time.
+ *
+ * The consumer calls `release` exactly once when it no longer needs the stream. The arrays that `get_next` returns are
+ * independent of the stream, and the consumer must release each one.
+ */
 struct ArrowArrayStream {
-  /* Callback to get the stream type
-   * (will be the same for all arrays in the stream).
-   * Return value: 0 if successful, an `errno`-compatible error code otherwise.
+  /**
+   * Write the type of the stream to `out`, which is the same for all arrays in the stream. Return 0 on success, or an
+   * `errno`-compatible error code otherwise.
    */
   int (*get_schema)(struct ArrowArrayStream*, struct ArrowSchema* out);
-  /* Callback to get the next array
-   * (if no error and the array is released, the stream has ended).
-   * Return value: 0 if successful, an `errno`-compatible error code otherwise.
+  /**
+   * Write the next array to `out`. If the call succeeds and the array in `out` is released, the stream has ended.
+   * Return 0 on success, or an `errno`-compatible error code otherwise.
    */
   int (*get_next)(struct ArrowArrayStream*, struct ArrowArray* out);
-  /* Callback to get optional detailed error information.
-   * This must only be called if the last stream operation failed
-   * with a non-0 return code.
-   * Return value: pointer to a null-terminated character array describing
-   * the last error, or NULL if no description is available. */
+  /**
+   * Return a null-terminated description of the last error, or `NULL` if no description is available. Call it only
+   * after a stream operation failed with a return code that is not 0.
+   */
   const char* (*get_last_error)(struct ArrowArrayStream*);
 
-  /* Release callback: release the stream's own resources.
-   * Note that arrays returned by `get_next` must be individually released. */
+  /**
+   * Release the resources of the stream itself and set `release` to `NULL`. The arrays that `get_next` returned
+   * are not affected, and the consumer must release each one.
+   */
   void (*release)(struct ArrowArrayStream*);
-  /* Opaque producer-specific data */
+  /** Opaque data that belongs to the producer. The consumer must not read or change it. */
   void* private_data;
 };
 
