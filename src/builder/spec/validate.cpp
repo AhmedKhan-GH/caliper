@@ -11,6 +11,7 @@
 #include <set>
 
 #include "internal.h"
+#include "validate_additions.h"
 
 namespace caliper_builder::spec {
 
@@ -85,7 +86,7 @@ std::int64_t slice_length(const std::optional<std::int64_t>& start, const std::o
     const std::int64_t s = clamp(start, 0);
     const std::int64_t e = clamp(stop, n);
     if (e <= s) return 0;
-    return (e - s + step - 1) / step;
+    return (e - s - 1) / std::max<std::int64_t>(step, 1) + 1;
 }
 
 // What one binding names.
@@ -138,10 +139,27 @@ public:
         provenance();
         layout();
         usage();
+        additions();
         extension(spec_.x, "x");
     }
 
 private:
+    // The checks of design/instrument-interface.md, each in its own file
+    // (validate_additions.h). A version 0 spec holds none of their keys.
+    void additions() {
+        if (spec_.version < kInstrumentVersion) return;
+        const AdditionsCheck c{spec_, resolver_, report_, sink_};
+        validate_states(c);
+        validate_references(c);
+        validate_controls(c);
+        validate_history(c);
+        validate_operators(c);
+        validate_entities(c);
+        validate_annotations(c);
+        validate_bound_text(c);
+        validate_layout(c);
+    }
+
     // ---- small checks ----------------------------------------------------------
 
     void text(const std::string& s, const std::string& path, std::size_t limit, TextKind kind, bool allow_empty) {
@@ -209,6 +227,7 @@ private:
         }
         using Table = std::pair<const char*, bool>;
         const Table tables[] = {{"control", !spec_.controls.empty()},
+                                {"state", !spec_.states.empty()},
                                 {"program", !spec_.programs.empty()},
                                 {"stage", !spec_.stages.empty()},
                                 {"provenance", !spec_.provenance.empty()}};
@@ -296,25 +315,30 @@ private:
         if (c.title) text(*c.title, path + ".title", limits::kTitleChars, TextKind::line, false);
         extension(c.x, path + ".x");
         extension(c.options.x, path + ".options.x");
-        const std::optional<ControlTarget> target = parse_control_target(c.bind);
-        if (!target)
+        // A readout binds nothing: its text reads references (validate_controls.cpp).
+        const bool unbound_readout = c.kind == ControlKind::readout && c.bind.empty();
+        const std::optional<ControlTarget> target =
+            unbound_readout ? std::nullopt : parse_control_target(c.bind);
+        if (!target && !unbound_readout)
             sink_.error("spec.bad_binding",
                         quote(c.bind) + " is not a target; a control binds param:<name>, action:<name>, run:pause, " +
-                            "value or intervene:<point>, with a name of 1 to 63 bytes and a point of 1 to 255.",
+                            "value, state:<id>, cursor or intervene:<point>, with a name of 1 to 63 bytes and a "
+                            "point of 1 to 255.",
                         path + ".bind");
         if (!control_kind_built(c.kind)) {
-            sink_.error("spec.unsupported_control",
-                        "This Caliper does not draw a " + kind + " control yet; the kinds it draws are slider, button "
-                        "and toggle.",
+            sink_.error("spec.unsupported_control", "This Caliper does not draw a " + kind + " control yet.",
                         path + ".kind");
             return;
         }
         if (target && !control_takes_target(c.kind, *target))
             sink_.error("spec.control_mismatch",
                         "A " + kind + " cannot bind " + quote(c.bind) + "; a " + kind + " binds " +
-                            (c.kind == ControlKind::slider   ? "param:<name> or value."
-                             : c.kind == ControlKind::toggle ? "intervene:<point> or param:<name>."
-                                                             : "action:<name> or run:pause."),
+                            (c.kind == ControlKind::slider      ? "param:<name>, value or state:<id>."
+                             : c.kind == ControlKind::toggle    ? "intervene:<point>, param:<name>, value or state:<id>."
+                             : c.kind == ControlKind::button    ? "action:<name> or run:pause."
+                             : c.kind == ControlKind::transport ? "cursor."
+                             : c.kind == ControlKind::readout   ? "nothing; its text reads references."
+                                                                : "value or state:<id>."),
                         path + ".bind");
         const ControlOptions& o = c.options;
         const std::string op = path + ".options";
@@ -459,6 +483,7 @@ private:
                             sp);
                 continue;
             }
+            if (value.reference) continue;   // validate_references.cpp
             if (value.bindings.empty()) {
                 sink_.error("spec.missing_slot", sp + " holds no binding.", sp);
                 continue;
@@ -494,7 +519,8 @@ private:
                                   " now, so the panel shows that its source is offline until it does.",
                               sp);
         }
-        if (!p.bind.count(kSceneSlot))
+        // A scene panel with entities draws them and needs no live scene.
+        if (!p.bind.count(kSceneSlot) && p.entities.empty())
             sink_.error("spec.missing_slot", "A scene panel needs the slot \"scene\".", path + ".bind.scene");
     }
 
@@ -603,10 +629,17 @@ private:
                                 "dimensions.",
                             p);
         };
-        auto safe = [&](const std::optional<std::int64_t>& v, const char* key) {
-            if (v && (*v > limits::kMaxSafeInteger || *v < -limits::kMaxSafeInteger))
-                sink_.error("spec.out_of_range", path + "." + key + " is outside +-(2^53 - 1).", path + "." + key);
-        };
+        // The integer places of the step (spec.h, integer_places()): the
+        // resolver checks a reference's value there against the same range.
+        for (const IntegerPlace& place : integer_places()) {
+            if (place.op != t.op) continue;
+            const std::optional<std::int64_t>& v = t.*place.field;
+            if (v && (*v < place.min || *v > place.max))
+                sink_.error("spec.out_of_range",
+                            path + "." + place.key + " is " + std::to_string(*v) + "; it is a whole number from " +
+                                std::to_string(place.min) + " to " + std::to_string(place.max) + ".",
+                            path + "." + place.key);
+        }
         switch (t.op) {
             case TransformOp::slice:
                 if (t.axis.empty()) {
@@ -619,13 +652,6 @@ private:
                 if (t.index && (t.start || t.stop || t.step))
                     sink_.error("spec.bad_transform",
                                 "A slice has either index or a range of start, stop and step, not both.", path);
-                safe(t.index, "index");
-                safe(t.start, "start");
-                safe(t.stop, "stop");
-                if (t.step && (*t.step < 1 || *t.step > limits::kMaxSafeInteger))
-                    sink_.error("spec.out_of_range",
-                                path + ".step is " + std::to_string(*t.step) + "; a step is at least 1.",
-                                path + ".step");
                 break;
             case TransformOp::reduce: {
                 if (t.axis.empty()) {
@@ -668,6 +694,10 @@ private:
                 } else if (!t.axis.empty()) {
                     axis_range(t.axis[0], ap);
                 }
+                break;
+            case TransformOp::window:    // validate_history.cpp
+            case TransformOp::surface:   // validate_operators.cpp
+            case TransformOp::path:
                 break;
         }
         extension(t.x, path + ".x");
@@ -875,6 +905,9 @@ private:
                 info.dtype = float_dtype();
                 return true;
             }
+            case TransformOp::window: return apply_window_shape(t, info, path, sink_);
+            case TransformOp::surface:
+            case TransformOp::path: return apply_operator_shape(t, info, path, sink_);
         }
         return true;
     }
@@ -919,9 +952,19 @@ private:
             return b;
         }
         if (b.info->kind == DataKind::tensor) {
+            // A window gives its stacked values and the step of each row as the
+            // columns `value` and `step` (design/instrument-interface.md, Window Step).
+            if ((column == "value" || column == "step") && windowed(it->second)) {
+                b.column = column;
+                b.what = column == "value" ? Bound::What::tensor : Bound::What::unknown;
+                return b;
+            }
             sink_.error("spec.bad_binding",
                         "The binding " + quote(binding) + " names a column, but the source " + quote(src) +
-                            " is a tensor.",
+                            " is a tensor" + (column == "value" || column == "step"
+                                                  ? "; only a source whose chain holds a window has the columns step "
+                                                    "and value."
+                                                  : "."),
                         path);
             return b;
         }
@@ -955,6 +998,19 @@ private:
             b.type_name = found->type;
         }
         return b;
+    }
+
+    // Whether the chain of `from` of source `i` holds a window step.
+    bool windowed(int i) const {
+        for (std::size_t hops = 0; i >= 0 && hops <= spec_.sources.size(); ++hops) {
+            const Source& s = spec_.sources[static_cast<std::size_t>(i)];
+            for (const Transform& t : s.transforms)
+                if (t.op == TransformOp::window) return true;
+            if (!s.from) return false;
+            const auto it = sources_.find(*s.from);
+            i = it == sources_.end() ? -1 : it->second;
+        }
+        return false;
     }
 
     void mismatch(const Bound& b, const std::string& message) { sink_.error("spec.slot_mismatch", message, b.path); }
@@ -1011,6 +1067,7 @@ private:
                 continue;
             }
             const bool list_ok = p.primitive == Primitive::series && slot == "y";
+            if (value.reference) continue;   // validate_references.cpp
             if (value.bindings.empty()) {
                 sink_.error("spec.missing_slot", sp + " holds no binding.", sp);
                 continue;
@@ -1358,8 +1415,46 @@ private:
 
     // ---- usage and portability -----------------------------------------------
 
+    // Marks the sources that a panel reads other than through its slot
+    // strings (version 1): its entities' bindings, the choices of the state
+    // that a slot reference reads, and the sources of bound texts.
+    void mark_reads() {
+        auto mark = [&](const std::string& binding) {
+            const auto it = sources_.find(binding.substr(0, binding.find('.')));
+            if (it != sources_.end()) used_[it->second] = true;
+        };
+        auto mark_reference = [&](const Reference& r) {
+            if (r.kind != Reference::Kind::state) return;
+            for (const StateVar& s : spec_.states)
+                if (s.id == r.target)
+                    for (const nlohmann::json& c : s.choices)
+                        if (c.is_string()) mark(c.get<std::string>());
+        };
+        auto mark_text = [&](const BoundText& t) {
+            for (const auto& [name, field] : t.fields)
+                if (const std::string* source = std::get_if<std::string>(&field)) mark(*source);
+        };
+        for (const Panel& p : spec_.panels) {
+            for (const auto& [slot, value] : p.bind)
+                if (value.reference) mark_reference(*value.reference);
+            for (const Entity& e : p.entities) {
+                if (e.source) mark(*e.source);
+                for (const auto& [slot, value] : e.slots) {
+                    if (const std::string* b = std::get_if<std::string>(&value)) mark(*b);
+                    else mark_reference(std::get<Reference>(value));
+                }
+            }
+            if (p.options.bound_text) mark_text(*p.options.bound_text);
+            for (const Annotation& a : p.annotations)
+                if (a.text) mark_text(*a.text);
+        }
+        for (const Control& c : spec_.controls)
+            if (c.options.bound_text) mark_text(*c.options.bound_text);
+    }
+
     void usage() {
         const std::size_t n = spec_.sources.size();
+        mark_reads();
         // A source a panel binds uses its whole chain of `from`.
         std::vector<bool> used(n, false);
         for (std::size_t i = 0; i < n; ++i) {

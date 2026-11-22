@@ -29,6 +29,23 @@ QUEUES device work:
 * a series value is retained whether or not anyone subscribes (the protocol's
   backfill rule): floats go to the network thread as they are, tensors are
   gathered (detached) and moved in chunks the same way as snapshots.
+* THE PASS. While the script calls caliper.step() and a viewer subscribes,
+  the shared cadence of caliper._programs decides at each checkpoint whether
+  the next step is a pass, from the overhead that passes add to the run's wall
+  clock (design/gpu-programs.md, Cadence). Only the view calls of a pass step
+  take snapshots (its gate is open from the checkpoint before it to its own
+  checkpoint, which closes the tick with one event), and a watched series moves
+  its gathered values only then, so every step's value still arrives, in one
+  chunk a pass. Between passes a view call returns after
+  NetTransport.attached(). The ring tells the cadence what a pass would take
+  (wants_pass: a subscription's own rate allows a snapshot) and the training
+  thread's time of each pass's view calls (gate_cost). A view that the passes
+  leave out, because it was not called in the second before the last gate
+  opened (a view called less than once a second), would never update again:
+  its call goes through the closed gate when a group of it is overdue by more
+  than FLOOR_S, and takes its snapshot with an event of its own (_held).
+  Without a checkpoint for STEP_IDLE_S, the ticks follow the clock again, as
+  for a script that calls the views by hand.
 
 There is no ``.item()``, ``.cpu()``, ``.numpy()``, ``.tolist()`` or
 ``synchronize()`` in this module (python/tests/test_net.py checks it).
@@ -50,6 +67,7 @@ from typing import Any
 
 from . import _wire
 from ._net_dataview import Call, Reduced, make_engine
+from ._programs import FLOOR_S
 from ._ring import DEFAULT_RATE_HZ, KIND_SERIES, rate_interval
 
 OFFER_REFRESH_S = 1.0          # an unsubscribed view's offer is rechecked this often
@@ -58,6 +76,10 @@ SERIES_CHUNK = 64              # tensor values gathered before a chunk is moved 
 SERIES_IDLE_FLUSH_S = 1.0      # chunk cadence of a series nobody watches
 SERIES_CAPACITY = 4096         # values kept of one huge tensor call (as caliper.series)
 TICK_MAX_AGE_S = 1.0           # a tick still open after this closes at the next call
+STEP_IDLE_S = 1.0              # without a checkpoint for this long, the ticks follow the clock again
+PASS_RATE_SAMPLES = 8          # the last passes over which the status gives snapshots a second
+PASS_SLACK = 0.9               # a view wants a pass at this share of its interval: the snapshot
+                               # itself comes later, in the next step's view call
 
 
 _TORCH = None
@@ -124,6 +146,17 @@ class ViewState:
         return e
 
 
+def _run_step() -> int | None:
+    """The run's step, ``caliper._controls.CONTROLS.n``, or None when it is
+    out of range or cannot be read."""
+    try:
+        from . import _controls
+        n = int(_controls.CONTROLS.n)
+    except Exception:
+        return None
+    return n if 0 <= n <= _wire._SAFE_INT else None
+
+
 @dataclass(eq=False)
 class Pending:
     """A snapshot queued on the device, waiting for its event."""
@@ -137,6 +170,8 @@ class Pending:
     kind: int
     event: Any = None
     mps: bool = False                           # its copies are on torch's MPS stream
+    stamp_steps: tuple | None = None            # (run step or None, wall ns) of the call
+    cadence: dict | None = None                 # the shared cadence at its pass (3.2 draft)
 
     def ready(self) -> bool:
         return self.event is None or self.event.query()
@@ -208,6 +243,24 @@ class NetRing:
         self._next_id = 1
         self._wake = wake or (lambda: None)
         self.closed = False
+        # The pass gate (see "THE PASS" in the module docstring): while the script calls
+        # caliper.step(), the shared cadence of caliper._programs opens the gate for the
+        # steps that are passes, and the views take snapshots only then.
+        self.step_mode = False                  # a checkpoint came within STEP_IDLE_S
+        self.step_seen = -math.inf              # perf_counter of the last checkpoint
+        self.gate_open = False
+        self.gate_step: int | None = None       # the step of the open gate
+        self.gate_taken = 0                     # snapshots and series chunks queued in it
+        self.gate_cost = 0.0                    # the training thread's seconds in its view calls
+        self.gate_t = math.inf                  # perf_counter when the last gate opened
+        self.pass_t = -math.inf                 # perf_counter of the last pass that took something
+        self.passes = collections.deque(maxlen=PASS_RATE_SAMPLES + 1)   # (perf_counter, step)
+        self.cadence: dict = {}                 # the shared cadence for the snapshots' status
+        self.registered = False                 # caliper._programs gates this ring
+        self.float_wake_t = -math.inf           # the last wake for a float series value
+        self.publish_s = 0.0                    # the sender thread's CPU seconds so far (it adds)
+        self.held_t = math.inf                  # when a view the passes leave out is overdue (_hold_t)
+        self.held: ViewState | None = None      # the view whose call due() let through the gate
 
     # -- the registry (training thread writes, network thread reads) -----------
     def _view(self, name: str, kind: int, now: float) -> ViewState:
@@ -260,6 +313,9 @@ class NetRing:
 
     def due(self, name: str, interval: float, now: float) -> bool:
         v = self.views.get(name)
+        gated = self._gated(now)
+        held = gated and v is not None and self._held(v, now)
+        self.held = v if held else None
         if v is not None:
             v.seen = now
             v.iv = interval
@@ -270,12 +326,16 @@ class NetRing:
             self.counters["unsubscribed"] += 1
             self._idle_due(now)
             return False
+        if gated and not held:
+            self.counters["gated"] += 1
+            self.next_due = min(self.step_seen + STEP_IDLE_S, self.held_t)
+            return False
         t = self.tick
         if t is not None and now - t.t0 > TICK_MAX_AGE_S:
             self._close_tick()              # its step's calls stopped
             t = None
         if t is None:
-            if now < self.tick_next:
+            if now < self.tick_next and not self.gate_open and not held:
                 self.counters["skipped"] += 1
                 if name in self.tick_views:     # the next step began: calls wait for the tick
                     self.next_due = self.tick_next
@@ -299,8 +359,133 @@ class NetRing:
         self.next_due = 0.0 if nd == math.inf else nd
 
     def changed(self) -> None:
-        """A subscription opened or closed (network thread): recheck at once."""
+        """A subscription opened or closed (network thread): recheck at once, and tell the
+        shared cadence whether this ring has snapshots to take."""
         self.next_due = 0.0
+        with self.lock:
+            busy = not self.closed and (any(v.groups for v in self.views.values())
+                                        or any(s.watched for s in self.series.values()))
+        if busy != self.registered:
+            self.registered = busy
+            from . import _programs
+            if busy:
+                _programs.views(self)
+            else:
+                _programs.views_closed(self)        # only while no other ring took its place
+
+    # -- the pass gate (caliper._programs, on the training thread) --------------
+    def step_tick(self, step: int, now: float) -> None:
+        """A checkpoint: the gate decides from now on. While it is closed, a view call
+        returns after NetTransport.attached(), as between two ticks; if the checkpoints
+        stop for STEP_IDLE_S, the next call finds the ticks on the clock again."""
+        self.step_seen = now
+        self.step_mode = True
+        if not self.gate_open:
+            self.held_t = self._hold_t(now)
+            self.next_due = min(now + STEP_IDLE_S, self.held_t)
+
+    def wants_pass(self, now: float) -> bool:
+        """Whether a pass at the next step would take something: a group of a view called
+        lately whose own rate allows a snapshot, or a watched series with values gathered."""
+        tick = self.tick_interval
+        lately = min(now, self.gate_t) - OFFER_REFRESH_S   # the calls reach the ring only in a gate
+        for v in list(self.views.values()):
+            if v.kind == KIND_SERIES or not v.groups or v.seen < lately:
+                continue
+            for g in list(v.groups.values()):
+                if now - g.last >= PASS_SLACK * max(g.interval, v.iv):
+                    return True
+        for s in list(self.series.values()):
+            if s.watched and s.refs and now - s.flush_t >= PASS_SLACK * tick:
+                return True
+        return False
+
+    def asked_interval(self) -> float | None:
+        """The shortest interval that a subscription of a view called lately asks for."""
+        lately = min(time.perf_counter(), self.gate_t) - OFFER_REFRESH_S
+        out = None
+        for v in list(self.views.values()):
+            if v.kind == KIND_SERIES or not v.groups or v.seen < lately:
+                continue
+            for g in list(v.groups.values()):
+                iv = max(g.interval, v.iv)
+                out = iv if out is None else min(out, iv)
+        if out is None and any(s.watched for s in list(self.series.values())):
+            out = self.tick_interval
+        return out
+
+    def open_pass(self, step: int) -> None:
+        """The next step is a pass: its view calls take the snapshots that are due."""
+        self.gate_open = True
+        self.gate_step = step
+        self.gate_taken = 0
+        self.gate_cost = 0.0
+        self.gate_t = time.perf_counter()
+        self.next_due = 0.0
+
+    def close_pass(self, step: int, now: float) -> int:
+        """The checkpoint of the pass step: the tick of its snapshots closes (one event for
+        all of them), and the gate closes. Returns how many snapshots and series chunks the
+        pass queued."""
+        if self.tick is not None:
+            t0 = time.perf_counter()
+            self._close_tick()
+            self.gate_cost += time.perf_counter() - t0
+        taken = self.gate_taken
+        self.gate_open = False
+        self.gate_step = None
+        self.held_t = self._hold_t(now)
+        self.next_due = min(now + STEP_IDLE_S, self.held_t)
+        if taken:
+            self.pass_t = now
+            self.passes.append((now, step))
+        return taken
+
+    def release_gate(self) -> None:
+        """The shared cadence no longer gates this ring: the ticks follow the clock again."""
+        self.step_mode = False
+        self.gate_open = False
+        self.next_due = 0.0
+
+    def pass_rate(self) -> float | None:
+        """The passes that took something, a second, over the last PASS_RATE_SAMPLES."""
+        p = self.passes
+        if len(p) < 2 or p[-1][0] <= p[0][0]:
+            return None
+        return (len(p) - 1) / (p[-1][0] - p[0][0])
+
+    def _gated(self, now: float) -> bool:
+        """The gate holds the snapshots back: a checkpoint came lately and this step is not a
+        pass. Past STEP_IDLE_S without a checkpoint, the ticks follow the clock again."""
+        if not self.step_mode:
+            return False
+        if now - self.step_seen > STEP_IDLE_S:
+            self.step_mode = False
+            self.gate_open = False
+            return False
+        return not self.gate_open
+
+    def _held(self, v: ViewState, now: float) -> bool:
+        """A call of view ``v`` goes through the closed gate: the passes leave the view out
+        (wants_pass), because it was not called in the second before the last gate opened, and a
+        group of it is overdue by more than FLOOR_S. A view called at each step is called in each
+        pass and keeps to the passes."""
+        if v.kind == KIND_SERIES or not v.groups or v.seen >= min(now, self.gate_t) - OFFER_REFRESH_S:
+            return False
+        return any(now - g.last > max(g.interval, v.iv) + FLOOR_S for g in list(v.groups.values()))
+
+    def _hold_t(self, now: float) -> float:
+        """The time from which a group of a view that the passes leave out is overdue by more
+        than FLOOR_S (_held): the closed gate hides the view calls only until then, so that the
+        next call of that view reaches due(). Infinite while there is no such view."""
+        lately = min(now, self.gate_t) - OFFER_REFRESH_S
+        t = math.inf
+        for v in list(self.views.values()):
+            if v.kind == KIND_SERIES or not v.groups or v.seen >= lately:
+                continue
+            for g in list(v.groups.values()):
+                t = min(t, g.last + max(g.interval, v.iv) + FLOOR_S)
+        return t
 
     def _group_due(self, g: Group, v: ViewState, now: float, joining: bool) -> bool:
         """The group may take a snapshot: its subscription's rate and the
@@ -381,12 +566,15 @@ class NetRing:
         call = Call(plan.kind, name, plan, args)
         v = self._register(call, now)
         v.seen = now
-        if not v.groups:
-            return False
+        held = self.held is v
+        self.held = None
+        if not v.groups or (self._gated(now) and not held):   # outside a pass only the offer
+            return False                                        # is refreshed
         with self.lock:
             groups = list(v.groups.values())
         t = self.tick
         stamp = time.monotonic_ns()
+        steps = (_run_step(), time.time_ns())
         taken = 0
         serves = getattr(self.engine, "serves", None)
         for g in groups:
@@ -403,11 +591,11 @@ class NetRing:
                 self.counters["ring_full"] += 1
                 continue
             if t is None:
-                if now < self.tick_next:
+                if now < self.tick_next and not self.gate_open and not held:
                     return False
                 t = self._open_tick(now)
             red = self.engine.apply(call, g.resolved)
-            p = self._stage(g, v, red, stamp)
+            p = self._stage(g, v, red, stamp, steps)
             if p is None:
                 self.counters["ring_full"] += 1
                 continue
@@ -419,11 +607,21 @@ class NetRing:
         if taken:
             v.last = now
             self.counters["taken"] += taken
-        if t is not None and self._complete(t, now):
+            self.gate_taken += taken
+        if held:
+            # Outside the passes: its own event, and the gate hides the calls again.
+            self.counters["held"] += taken
             self._close_tick()
+            self.held_t = self._hold_t(now)
+            self.next_due = min(self.step_seen + STEP_IDLE_S, self.held_t)
+        elif t is not None and self._complete(t, now):
+            self._close_tick()
+        if taken and self.gate_open:        # from the view call's start, its plan included
+            self.gate_cost += time.perf_counter() - now
         return bool(taken)
 
-    def _stage(self, g: Group, v: ViewState, red: Reduced, stamp: int) -> Pending | None:
+    def _stage(self, g: Group, v: ViewState, red: Reduced, stamp: int,
+               steps: tuple | None = None) -> Pending | None:
         import torch
         data, aux = red.data, red.aux
         key = (tuple(data.shape), data.dtype, None if aux is None else tuple(aux.shape))
@@ -451,7 +649,8 @@ class NetRing:
         stage.busy = True
         v.seq += 1
         return Pending(g, v.name, v.id, v.seq, stamp, stage, red, v.kind, None,
-                       data.device.type == "mps")
+                       data.device.type == "mps", steps,
+                       self.cadence if self.gate_open and self.cadence else None)
 
     def append(self, name, sp, now, interval) -> bool:
         return False                         # series come through tap()
@@ -477,7 +676,16 @@ class NetRing:
         if (cls is float or cls is int) and not s.refs and not s.held:
             s.q.append((float(value), time.monotonic_ns()))
             if s.watched:
-                self._wake()
+                # A wake at each step costs the training thread the sender's turn with the GIL:
+                # under the pass gate, floats wake it at most at the session's rate, and each
+                # pass's wake carries the rest.
+                if not self.step_mode:
+                    self._wake()
+                else:
+                    now = time.perf_counter()
+                    if now - self.float_wake_t >= self.tick_interval:
+                        self.float_wake_t = now
+                        self._wake()
             return s.watched
         torch = _TORCH or _torch()
         scalar = False
@@ -507,11 +715,16 @@ class NetRing:
         now = time.perf_counter()
         s.seen = now
         if s.watched:
-            if self.tick is None and now < self.tick_next and s.nref < SERIES_CAPACITY:
+            if self.tick is None and s.nref < SERIES_CAPACITY and self._gated(now):
+                return True                  # the gate is closed: until the next pass
+            if self.tick is None and now < self.tick_next and s.nref < SERIES_CAPACITY \
+                    and not self.gate_open:
                 if name in self.tick_views:  # the next step began: calls wait for the tick
                     self.next_due = self.tick_next
                 return True                  # the common step: until the next tick
             self._tick_series(s, now)
+            if self.gate_open:
+                self.gate_cost += time.perf_counter() - now
         elif s.nref >= SERIES_CHUNK or now - s.flush_t >= SERIES_IDLE_FLUSH_S:
             self._flush_series(s, now)
         return s.watched
@@ -524,12 +737,13 @@ class NetRing:
             self._close_tick()              # its step's calls stopped, or the next step began
             t = None
         if t is None:
-            if now < self.tick_next:
+            if (now < self.tick_next and not self.gate_open) or self._gated(now):
                 if s.nref >= SERIES_CAPACITY:
                     self._flush_series(s, now)
                 return
             t = self._open_tick(now)
         self._flush_series(s, now, t)
+        self.gate_taken += 1
         t.served.add(s)
         if self._complete(t, now):
             self._close_tick()
@@ -634,7 +848,14 @@ class NetRing:
             forget(name)
 
     def close(self) -> None:
+        """The server closed: the shared cadence stops gating this ring, so that a later step
+        neither keeps the programs at the share of attached views nor gates the scene colors for
+        a route that is gone."""
         self.closed = True
+        if self.registered:
+            self.registered = False
+            from . import _programs
+            _programs.views_closed(self)
 
     def views_list(self) -> list:
         return list(self.views)

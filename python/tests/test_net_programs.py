@@ -41,6 +41,10 @@ class FakeFacade:
             self.installed[program_id] = sha256
         return self.status()[-1]
 
+    def set_params(self, program_id, params):
+        with self.lock:
+            self.calls.append(("set_params", program_id, params))
+
     def remove(self, program_id):
         with self.lock:
             self.calls.append(("remove", program_id))
@@ -213,4 +217,88 @@ def test_interventions_key_only_for_its_viewers(flows, watching, server):
             assert got_a.interventions == iv
             got_b = await b.expect(w.Controls, lambda m: m.run.get("step") == 0)
             assert got_b.interventions is None
+    run(go())
+
+
+# ---- the params op and the operator id -----------------------------------------------------------
+def test_the_params_op_form():
+    msg = w.Program(4, w.PROGRAM_PARAMS, "img", params={"level": 0.5, "k_2": 3})
+    got = w.decode(w.encode(msg))
+    assert (got.op, got.id, got.params) == ("params", "img", {"level": 0.5, "k_2": 3})
+    assert got.declaration is None and "declaration" not in msg.to_meta() and msg.to_sections() == []
+
+
+@pytest.mark.parametrize("params", [
+    None, {}, [], {"a": "1"}, {"a": float("nan")}, {"a": float("inf")}, {"a": True}, {"1a": 1}, {"__x": 1},
+    {"a-b": 1}, {"": 1}, {"x" * 64: 1}, {f"p{i}": 1 for i in range(17)}])
+def test_the_params_op_refuses_a_bad_form(params):
+    meta = {"request_id": 1, "op": "params", "id": "img"}
+    if params is not None:
+        meta["params"] = params
+    with pytest.raises(w.MessageError):
+        w.Program.from_frame(w.Frame(w.MsgType.PROGRAM, meta, []))
+
+
+def test_the_params_op_takes_16_names_of_63_bytes():
+    ps = {("p" * 62 + str(i % 10)) if i == 0 else f"p{i}": 1.5 for i in range(16)}
+    meta = {"request_id": 1, "op": "params", "id": "img", "params": ps}
+    assert w.Program.from_frame(w.Frame(w.MsgType.PROGRAM, meta, [])).params == ps
+    assert w.Program.from_frame(w.Frame(w.MsgType.PROGRAM, dict(meta, params={"x" * 63: 1}), [])).params
+
+
+@pytest.mark.parametrize("pid,ok", [
+    ("operator.terrain.0", True), ("operator.a-b_c1.12345", True), ("operator.t.123456", False),
+    ("operator.t.", False), ("operator..1", False), ("operator.T.1", False), ("operator.1a.1", False),
+    ("operator.t", False), ("operator.t.x", False), ("operator." + "a" * 45 + ".1", False),
+    ("operator." + "a" * 44 + ".1", True), ("img", True), ("Img", False), ("a.b", False)])
+def test_the_operator_id_form(pid, ok):
+    assert w._program_id(pid) is ok
+
+
+def _decl(**kw):
+    d = {"output": {"kind": "tensor", "shape": [4, 4]}}
+    d.update(kw)
+    return d
+
+
+@pytest.mark.parametrize("decl,ok", [
+    (_decl(), True), (_decl(params={"level": 1}, builtin="surface@1"), True),
+    (_decl(builtin=""), False), (_decl(builtin="b" * 33), False), (_decl(builtin=3), False),
+    (_decl(params={}), False), (_decl(params={"__x": 1}), False),
+    ({"output": {"kind": "tensor", "shape": [1000, 1000]}}, True),
+    ({"output": {"kind": "tensor", "shape": [1001, 1000]}}, False),
+    ({"output": {"kind": "tensor", "shape": []}}, False),
+    ({"output": {"kind": "tensor", "shape": [1, 1, 1, 1, 1]}}, False),
+    ({"output": {"kind": "tensor", "shape": [0, 4]}}, False),
+    ({"output": {"kind": "tensor"}}, False),
+    ({"output": {"kind": "tensor", "shape": [4], "width": 4}}, False)])
+def test_a_set_declaration_with_a_tensor_output(decl, ok):
+    meta = {"request_id": 1, "op": "set", "id": "operator.t.0", "declaration": decl, "sha256": SHA}
+    sec = w.Section.from_array(w.SECTION_WGSL, __import__("numpy").frombuffer(WGSL.encode(), dtype="uint8"))
+    frame = w.Frame(w.MsgType.PROGRAM, meta, [sec])
+    if ok:
+        assert w.Program.from_frame(frame).declaration == decl
+    else:
+        with pytest.raises(w.MessageError):
+            w.Program.from_frame(frame)
+
+
+def test_the_params_op_is_applied_and_answered(mode, watching, facade, server):
+    if mode == "native":
+        pytest.skip("the native server's links do not carry the params op yet")
+
+    async def go():
+        async with Viewer(server, PROGRAM_CAPS) as v:
+            await v.send(w.Program(1, w.PROGRAM_SET, "operator.t.0",
+                                   {"output": {"kind": "tensor", "shape": [2, 2]}, "builtin": "surface@1",
+                                    "params": {"level": 1}}, WGSL, SHA))
+            st = await v.expect(w.ProgramState, lambda m: m.request_id == 1)
+            assert [x["id"] for x in st.programs] == ["operator.t.0"]
+            await v.send(w.Program(2, w.PROGRAM_PARAMS, "operator.t.0", params={"level": 2.5}))
+            st = await v.expect(w.ProgramState, lambda m: m.request_id == 2)
+            assert facade.calls[-1] == ("set_params", "operator.t.0", {"level": 2.5})
+            assert [x["id"] for x in st.programs] == ["operator.t.0"]
+            await v.send(w.Program(3, w.PROGRAM_PARAMS, "gone", params={"level": 1}))
+            st = await v.expect(w.ProgramState, lambda m: m.request_id == 3)
+            assert [x["id"] for x in st.programs] == ["operator.t.0"]
     run(go())

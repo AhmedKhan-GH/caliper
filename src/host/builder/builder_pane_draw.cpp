@@ -1792,6 +1792,19 @@ void BuilderPane::draw_source_properties(Rows& rows) {
                 field_choice("mode", {"minmax", "zscore", "softmax", "l2"}, t.mode.value_or("minmax"));
                 field_int("axis", axis, false);
                 break;
+            // A window, a surface or a path: each parameter as text, read-only,
+            // because commands add these steps and the pane does not edit them.
+            case spec::TransformOp::window:
+            case spec::TransformOp::surface:
+            case spec::TransformOp::path:
+                for (const auto& field : pane_step_fields(t)) {
+                    const ImRect fr = rows.next(d.m.row);
+                    const ImRect v = rows.label(fr, "  " + field.first);
+                    put(rows.dl, L.mono, L.mono_size, v2(v.Min.x, v.Min.y + (v.GetHeight() - d.mono_h()) * 0.5f),
+                        L.secondary, fit(L.mono, L.mono_size, field.second, v.GetWidth()));
+                    d.item(base + ":" + field.first, v);
+                }
+                break;
         }
         (void)tj;
     }

@@ -74,7 +74,7 @@ std::string merge_msl(const std::vector<std::string>& texts) {
 }
 
 StageCompile compile_stage_program(Primitive primitive, const std::string* material, const std::string* vertex,
-                                   const std::string& label) {
+                                   const std::string& label, const std::vector<std::string>& params) {
     StageCompile out;
     if (!material && !vertex) {
         out.verdict = refusal(pg::kStageCompileFailed, "A stage program needs a material or a vertex stage.");
@@ -97,6 +97,12 @@ StageCompile compile_stage_program(Primitive primitive, const std::string* mater
         src += *s;
         if (s->back() != '\n') src += '\n';
         next += line_count(*s);
+    }
+    // The uniform params after the stage sources, so that their lines stay as they are.
+    if (!params.empty()) {
+        spec::Stage names;
+        for (const std::string& n : params) names.params[n] = 0.0;
+        src += pg::stage_params_declaration(names, true);
     }
     src += '\n';
     src += points ? caliper_gfx::shaders::kScenePointsWgsl : caliper_gfx::shaders::kSceneLinesWgsl;
@@ -137,9 +143,25 @@ StageCompile compile_stage_program(Primitive primitive, const std::string* mater
     std::vector<caliper_gfx::BindingDesc> bindings(bd.bindings, bd.bindings + bd.binding_count);
     const size_t count = caliper_wgsl_module_binding_count(module);
     size_t matched = 0;
+    bool params_bound = false;
     for (size_t i = 0; i < count; ++i) {
         caliper_wgsl_binding b{};
         if (caliper_wgsl_module_binding(module, i, &b) != CALIPER_WGSL_OK) continue;
+        if (!params.empty() && b.group == pg::kStageParamsGroup && b.binding == 0) {
+            // The stages' params: one more uniform than the built-in program binds.
+            caliper_gfx::BindingDesc d{};
+            d.group = uint8_t(b.group);
+            d.binding = 0;
+            d.type = caliper_gfx::BindingType::Uniform;
+            d.stages = uint8_t(b.stages & 3u);
+            d.dynamic = true;
+            d.size = uint32_t(((params.size() * 4 + 15) / 16) * 16);
+            d.msl_index = uint8_t(b.metal_index);
+            bindings.push_back(d);
+            params_bound = true;
+            ++matched;
+            continue;
+        }
         for (caliper_gfx::BindingDesc& d : bindings)
             if (d.group == b.group && d.binding == b.binding) {
                 d.stages = uint8_t(b.stages & 3u);
@@ -182,6 +204,7 @@ StageCompile compile_stage_program(Primitive primitive, const std::string* mater
     build->bindings = std::move(bindings);
     build->material = material != nullptr;
     build->vertex = vertex != nullptr;
+    if (params_bound) build->params = params;
     for (const std::string* s : {material, vertex})
         if (s && (s->find("time_s") != std::string::npos || s->find("step") != std::string::npos)) build->animated = true;
     build->source_hash = fnv1a(build->wgsl);
@@ -246,7 +269,11 @@ public:
     void refused(const StageBuild& build, const std::string& message) override;
     void frames_done(double gpu_ms, uint32_t frames, bool staged) override;
     void frame_pending(double waited_ms) override;
+    std::vector<uint8_t> params(std::string_view path) const override;
 
+    // The params of each entity's stages by entity path: each name with its place in the spec,
+    // a later stage's place over an earlier one's.
+    std::map<std::string, std::map<std::string, spec::ValueOr<double>>> params_;
     // The builds of the panel's entities, by entity_key(); the sources each entity was built from.
     std::map<std::string, std::shared_ptr<const StageBuild>> builds_;
     std::map<std::string, std::string> sources_;
@@ -357,6 +384,37 @@ AppStageHost::~AppStageHost() = default;
 
 void AppStageHost::set_events(cb::EventSink* sink) { events_ = sink; }
 
+void AppStageHost::set_evaluate(std::function<nlohmann::json(const spec::Reference&)> evaluate) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    evaluate_ = std::move(evaluate);
+}
+
+std::vector<uint8_t> AppStageHost::Panel::params(std::string_view path) const {
+    const auto it = params_.find(std::string(path));
+    if (it == params_.end() || it->second.empty()) return {};
+    std::function<nlohmann::json(const spec::Reference&)> evaluate;
+    {
+        std::lock_guard<std::mutex> lock(host_.mutex_);
+        evaluate = host_.evaluate_;
+    }
+    std::vector<pg::ParamField> fields;
+    std::vector<std::pair<std::string, double>> values;
+    for (const auto& [name, place] : it->second) {
+        fields.push_back(pg::ParamField{name, pg::ParamType::f32});
+        double v = 0;
+        if (!spec::is_reference(place)) {
+            v = std::get<double>(place);
+        } else {
+            const spec::Reference& ref = std::get<spec::Reference>(place);
+            const nlohmann::json got = evaluate ? evaluate(ref) : ref.fallback;
+            if (got.is_number()) v = got.get<double>();
+            else if (ref.fallback.is_number()) v = ref.fallback.get<double>();
+        }
+        values.emplace_back(name, v);
+    }
+    return pg::pack_params(fields, values);
+}
+
 void AppStageHost::push(const cb::ProgramStatus& status, const char* change) {
     if (events_) cb::push_program_event(*events_, status, change);
 }
@@ -373,7 +431,9 @@ void AppStageHost::reconcile(const spec::Spec& spec) {
             const std::string sha = pg::sha256_hex(st.wgsl);
             const spec::Panel* panel = spec.find_panel(st.panel);
             const bool scene = panel && panel->primitive == spec::Primitive::scene;
-            r.key = st.wgsl + '\0' + (scene ? "s" : "-") + '\0' +
+            std::string names;
+            for (const auto& kv : st.params) names += kv.first + ',';
+            r.key = st.wgsl + '\0' + names + '\0' + (scene ? "s" : "-") + '\0' +
                     (spec.provenance.foreign ? checks_.provenance(spec.provenance, spec::stage_target(st), sha).code
                                              : std::string());
             const std::string id = spec::stage_id(st);
@@ -396,8 +456,11 @@ void AppStageHost::reconcile(const spec::Spec& spec) {
                 v = refusal(pg::kStageNotScenePanel, "The panel " + st.panel + " is not a scene panel.");
             if (v.ok()) v = checks_.provenance(spec.provenance, spec::stage_target(st), sha);
             if (v.ok()) v = checks_.source(st.wgsl, spec::program_limits::kStageSourceBytes);
+            if (v.ok()) v = pg::check_stage_params(st);
             if (v.ok()) {
-                pg::Compiled c = checks_.compile(std::string(pg::stage_prelude()) + st.wgsl);
+                // The params as a private variable after the source: a check compile binds nothing.
+                pg::Compiled c = checks_.compile(std::string(pg::stage_prelude()) + st.wgsl +
+                                                 pg::stage_params_declaration(st, false));
                 v = c.verdict;
                 if (v.ok()) v = checks_.stage(st, c.reflection);
                 if (v.code == pg::kProgramCompileFailed) v.code = pg::kStageCompileFailed;
@@ -422,6 +485,7 @@ void AppStageHost::reconcile(const spec::Spec& spec) {
         // stage's source refuses that stage, and the entity is composed again without it.
         std::map<std::string, std::map<std::string, std::shared_ptr<const StageBuild>>> builds;   // panel, key
         std::map<std::string, std::map<std::string, std::string>> sources;                       // panel, entity
+        std::map<std::string, std::map<std::string, std::map<std::string, spec::ValueOr<double>>>> params;
         std::map<std::pair<std::string, std::string>, std::array<int, 2>> entities;               // material, vertex
         for (size_t i = 0; i < next.size(); ++i) {
             if (!next[i].usable || next[i].stopped) continue;
@@ -437,7 +501,16 @@ void AppStageHost::reconcile(const spec::Spec& spec) {
                 const std::string* mat = idx[0] >= 0 ? &next[size_t(idx[0])].stage.wgsl : nullptr;
                 const std::string* vtx = idx[1] >= 0 ? &next[size_t(idx[1])].stage.wgsl : nullptr;
                 if (!mat && !vtx) break;
-                const std::string src_key = (mat ? *mat : std::string()) + '\0' + (vtx ? *vtx : std::string());
+                // The params of both stages: the names in the uniform, the places for each frame.
+                std::map<std::string, spec::ValueOr<double>> places;
+                for (int k = 0; k < 2; ++k)
+                    if (idx[k] >= 0)
+                        for (const auto& kv : next[size_t(idx[k])].stage.params) places[kv.first] = kv.second;
+                std::vector<std::string> names;
+                for (const auto& kv : places) names.push_back(kv.first);
+                params[panel_id][entity] = places;
+                std::string src_key = (mat ? *mat : std::string()) + '\0' + (vtx ? *vtx : std::string());
+                for (const std::string& n : names) src_key += '\0' + n;
                 // An entity whose sources did not change keeps its builds.
                 const auto pit = panels_.find(panel_id);
                 if (pit != panels_.end()) {
@@ -455,7 +528,7 @@ void AppStageHost::reconcile(const spec::Spec& spec) {
                 StageCompile failed;
                 for (Primitive p : kStagePrimitives) {
                     StageCompile c = compile_stage_program(
-                        p, mat, vtx, "stage " + panel_id + "/" + entity + " " + caliper_scene::primitive_name(p));
+                        p, mat, vtx, "stage " + panel_id + "/" + entity + " " + caliper_scene::primitive_name(p), names);
                     if (!c.build) {
                         failed = std::move(c);
                         break;
@@ -497,6 +570,7 @@ void AppStageHost::reconcile(const spec::Spec& spec) {
         for (auto& [panel_id, made] : builds)
             if (!panels_.count(panel_id)) panels_[panel_id] = std::make_unique<Panel>(*this, panel_id);
         for (auto& [panel_id, panel] : panels_) {
+            panel->params_ = std::move(params[panel_id]);   // new values need no new build
             auto& mine = builds[panel_id];
             if (mine == panel->builds_ && sources[panel_id] == panel->sources_) continue;
             panel->builds_ = std::move(mine);

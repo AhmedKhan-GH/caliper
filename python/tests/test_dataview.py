@@ -966,3 +966,19 @@ def test_apply_timings_on_mps(capsys):
         for r in rows:
             print(f"  {r[0]:52s} {r[1]:8.3f} {r[2]:8.3f} {r[3]:8.3f} {r[4]:8.3f}")
     assert all(r[2] < 50 for r in rows)
+
+
+def test_a_data_call_hands_the_routes_no_tensor_that_requires_grad():
+    # caliper.watch's grouped views carry module outputs and weights, which require grad. The
+    # range of a pooled heatmap is an aminmax(out=...), which autograd refuses: inside the forward
+    # hook it stopped training as soon as a viewer subscribed to such a view.
+    w = torch.nn.Parameter(torch.randn(600, 4))
+    reg = dv.Registry()
+    e = reg.register("g", "heatmap", [dv.Source("w", ("out", "in"), (600, 4), "float32",
+                                                get=lambda: w * 1.0)])
+    for x in (w * 2.0, None):                     # given by the hook, or fetched from the source
+        call = dv.DataCall(e, "w", x, {})
+        t = call.tensor()
+        assert t is not None and not t.requires_grad
+        lo, hi = torch.zeros(()), torch.zeros(())
+        torch.aminmax(t, out=(lo, hi))            # what finish() does for a pooled heatmap

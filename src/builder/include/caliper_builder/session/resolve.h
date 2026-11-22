@@ -46,6 +46,7 @@
 #include <caliper_builder/loaders/query.h>
 #include <caliper_builder/loaders/store.h>
 #include <caliper_builder/loaders/tensor.h>
+#include <caliper_builder/session/chain_hooks.h>
 #include <caliper_builder/spec/spec.h>
 
 #include <nlohmann/json.hpp>
@@ -55,6 +56,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -83,18 +85,41 @@ struct SlotData {
     nlohmann::json values = nlohmann::json::array();  // Kind::column: the cells; Kind::table: rows of cells
     bool truncated = false;             // the rows were cut at a limit
     std::uint64_t generation = 0;       // of the served source it was read from; 0 for a loader output
+    // After a `window` step: the step of each row of `tensor` (W); empty otherwise.
+    TensorData steps;
+    // While the cursor is held (design/instrument-interface.md, Latest at the
+    // Cursor): the kept step whose value the slot shows; empty while the
+    // cursor is live or when the source keeps no steps.
+    std::optional<std::int64_t> step;
+    // The cursor is held but the source keeps no step at or before it, so the
+    // slot shows the newest value; the panel's info line says "Live only".
+    bool live_only = false;
+    // After an operator (`surface`, `path`): its named geometry arrays;
+    // empty otherwise (design/instrument-interface.md, Operators).
+    GeometryArrays geometry;
 };
 
 const char* slot_kind_name(SlotData::Kind kind);
+
+// The resolved arrays of one entity of a scene panel
+// (design/instrument-interface.md, Array Resolution).
+struct EntityData {
+    std::string path;
+    Error error;                    // entity.shape, entity.length or a resolve error
+    std::vector<SlotData> slots;    // one per bound slot; a source id gives its geometry arrays
+    std::uint64_t generation = 0;
+};
 
 struct PanelData {
     Error error;
     std::string panel;
     spec::Primitive primitive = spec::Primitive::series;
     std::vector<SlotData> slots;  // in slot name order, list slots in their order
+    std::vector<EntityData> entities;  // scene panels: one per entity, in spec order
     // The generations of the served roots the panel binds, mixed in binding
-    // order; 0 when it binds none. Equal to panel_generation() for as long as
-    // none of those sources changes.
+    // order, with the cursor and the versions of the references it reads;
+    // 0 when it reads neither. Equal to panel_generation() for as long as
+    // none of those sources and references changes.
     std::uint64_t generation = 0;
 };
 
@@ -191,8 +216,12 @@ private:
 
 // `sources` may be null, and then every served root answers
 // resolve.unavailable.
+// `chain` gives the references their values and the cursor its kept steps
+// (chain_hooks.h); null resolves every reference to its default and reads
+// the newest values.
 PanelData resolve_panel(const spec::Spec& spec, std::string_view panel_id, LoaderStore& store,
-                        const ResolveLimits& limits = {}, DataSources* sources = nullptr);
+                        const ResolveLimits& limits = {}, DataSources* sources = nullptr,
+                        const ChainContext* chain = nullptr);
 
 // The generation that resolve_panel() would give panel `panel_id` now, from
 // the sources' generation() alone: a few map lookups and one cheap call per
@@ -200,7 +229,48 @@ PanelData resolve_panel(const spec::Spec& spec, std::string_view panel_id, Loade
 // does not exist. The spec runtime calls it once per frame for a panel it
 // shows, and resolves the panel again only when it differs from the
 // generation of the data it drew.
-std::uint64_t panel_generation(const spec::Spec& spec, std::string_view panel_id, const DataSources& sources);
+//
+// `chain`, when given, is the one resolve_panel() takes: while the cursor is
+// held, a panel that reads kept steps (a source that keeps steps, or a
+// window) mixes in the cursor's step, so that a move of the cursor changes
+// the generation. Without it the cursor is taken as live.
+//
+// With a value store in `chain`, the versions of every reference that the
+// panel reads (its slots, its options, its entities' slots and options and
+// the steps of its chains) are mixed in too, so that a changed control,
+// state or pick changes the generation also while no source changes, and a
+// panel that reads references but no served source has a generation too.
+std::uint64_t panel_generation(const spec::Spec& spec, std::string_view panel_id, const DataSources& sources,
+                               const ChainContext* chain = nullptr);
+
+// The panel with the references of its options and of its entities' options
+// applied (design/instrument-interface.md, Reference Places): `range`,
+// `x_range`, `y_range` and `colormap` take the value that their reference
+// reads now, or keep the panel's own default while it reads none; the table
+// of an entity option's reference keeps its form and takes the value as its
+// `default`, which the scene reads. A null `chain` or one without a value
+// store gives each reference its default.
+spec::Panel panel_with_values(const spec::Panel& panel, const ChainContext* chain);
+
+// ---- Kept steps (history.h) -------------------------------------------------
+
+// The steps that the app keeps for `source` before the budget
+// (design/instrument-interface.md, Step History): its `history`, else 64
+// (kDefaultLiveDepth) for a source whose root is a live tensor and that has
+// no `from`, else 0. A chain that holds a window keeps none, and nor does a
+// live root whose first step is an operator. Defined in history.cpp.
+std::int64_t history_depth(const spec::Spec& spec, const spec::Source& source);
+
+// The history point of `source`: how many steps of its chain, counted from
+// the root's first step down to the source's last, the kept value has
+// applied. It is the longest run of shipped steps (slice, reduce, normalise)
+// from the start that read no reference. Defined in history.cpp.
+std::size_t history_point(const spec::Spec& spec, const spec::Source& source);
+
+// The catalog ids of the live views whose values `history` keeps for the
+// spec it was last configured with, so that the live catalog copies each of
+// their snapshots. Any thread. Defined in history.cpp.
+std::vector<std::string> kept_catalog_ids(const StepHistory& history);
 
 // A summary of resolved data for a test or a log: each slot's kind, shape or
 // row count, and up to `max_values` of its values.

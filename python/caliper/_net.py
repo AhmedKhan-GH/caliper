@@ -102,6 +102,7 @@ _NOT_BUILT = (b"<!doctype html><meta charset=utf-8><title>Caliper</title>"
 MAX_CONTROL_FRAMES = 65536
 MAX_CONTROL_BYTES = 16 << 20
 CLOSE_OVERFLOW = 1008                # as the hub closes an overflowing send queue
+FINAL_S = 0.5                        # close(): what the controls held back goes out within this
 
 
 class _Fatal(Exception):
@@ -166,6 +167,8 @@ class SnapData:
     aux: Any                  # numpy or None
     stats: list
     red: Any                  # the Reduced (colormap, flags, range, axes, points fields)
+    stamp_steps: tuple | None = None   # (run step or None, wall ns) for the "timelines" stamp
+    cadence: dict | None = None        # the shared cadence of its pass, for "programs" peers
 
 
 class _History:
@@ -541,7 +544,8 @@ class Link:
             snap, best.snap = best.snap, None
             best.last_sent = now
             try:
-                frame = self._snapshot_frame(best.sub, snap)
+                frame = self._snapshot_frame(best.sub, snap, _wire.CAP_TIMELINES in self.caps,
+                                             _wire.CAP_PROGRAMS in self.caps)
             except _wire.WireError:              # over the frame limit: counted, not sent
                 self.p.counters["encode_failed"] += 1
                 return self.next_frame(now)
@@ -550,13 +554,20 @@ class Link:
         return None, wait
 
     @staticmethod
-    def _snapshot_frame(sub: int, snap: SnapData):
+    def _snapshot_frame(sub: int, snap: SnapData, stamped: bool = False, cadence: bool = False):
         r = snap.red
+        stamp = None
+        if stamped and snap.stamp_steps is not None:
+            import numpy
+            step, wall = snap.stamp_steps
+            stamp = numpy.array([_wire.STAMP_ABSENT if step is None else step, wall],
+                                dtype=numpy.int64)
         return _wire.encode_parts(_wire.Snapshot(
             sub, snap.view, snap.seq, snap.stamp_ns, snap.kind, snap.resolved, snap.data,
             aux=snap.aux, colormap=r.colormap, flags=r.flags, vmin=r.vmin, vmax=r.vmax,
             stats=snap.stats, axes=r.axes, tile=r.tile, points_dims=r.points_dims,
-            label_count=r.label_count))
+            label_count=r.label_count, stamp=stamp,
+            cadence=snap.cadence if cadence and snap.cadence else None))
 
     def close(self) -> None:
         if self.closed:
@@ -596,7 +607,7 @@ class _Producer:
 
     def capabilities(self) -> list:
         from ._net_controls import capabilities
-        return sorted(capabilities(self.controls is not None) + [_wire.CAP_SCENES])
+        return sorted(capabilities(self.controls is not None) + [_wire.CAP_SCENES, _wire.CAP_TIMELINES])
 
     def views_msg(self, link: Link | None = None) -> _wire.Views:
         with self.ring.lock:
@@ -605,7 +616,11 @@ class _Producer:
             entries = self.controls.annotate(entries)
         if link is None or _wire.CAP_SCENES not in link.caps:          # 3.2 draft
             entries = [e for e in entries if e["kind"] != _wire.Kind.SCENE]
-        return _wire.Views(entries, self.identity["id"])
+        timelines = None
+        if link is not None and _wire.CAP_TIMELINES in link.caps:
+            timelines = [{"name": "step", "kind": "sequence"},
+                         {"name": "time", "kind": "time", "epoch": True}]
+        return _wire.Views(entries, self.identity["id"], timelines=timelines)
 
     def attached_changed(self, delta: int) -> None:
         self.transport.n_attached = max(0, self.transport.n_attached + delta)
@@ -647,6 +662,7 @@ class _Producer:
             s.next = max(h.first(), h.total - back)
             st.watched = True
             link.wake.set()
+            self.ring.changed()
             return
         with self.ring.lock:
             v = self.ring.views.get(s.view)
@@ -671,6 +687,7 @@ class _Producer:
             st = s.series
             s.series = None
             st.watched = any(x.series is st for ln in self.links for x in ln.subs.values())
+            self.ring.changed()
             return
         g = s.group
         if g is None:
@@ -776,7 +793,7 @@ class _Producer:
         stage.busy = False
         self.counters["published"] += 1
         snap = SnapData(p.view, p.view_id, p.seq, p.stamp_ns, p.kind, p.group.resolved,
-                        data, aux, stats, red)
+                        data, aux, stats, red, p.stamp_steps, p.cadence)
         with self.ring.lock:
             subs = list(p.group.subs)
         for link, sub in subs:
@@ -1021,6 +1038,8 @@ class _Listener:
                     control = link.may_control = ctl.allow
             if _wire.CAP_SCENES in hello.capabilities:            # 3.2 draft
                 link.caps = link.caps | {_wire.CAP_SCENES}
+            if _wire.CAP_TIMELINES in hello.capabilities:
+                link.caps = link.caps | {_wire.CAP_TIMELINES}
             await ws.send(_wire.encode(_wire.Welcome(
                 _wire.ROLE_PRODUCER, s.producer.capabilities(), s.software, s.identity,
                 control=control)))
@@ -1243,12 +1262,14 @@ class NetServer:
     async def _pump(self) -> None:
         p = self.producer
         while True:
+            t0 = time.thread_time()
             try:
                 busy = p.pump_once()
             except Exception:
                 self.counters["pump_errors"] += 1
                 _log.debug("pump failed", exc_info=True)
                 busy = False
+            self.ring.publish_s += time.thread_time() - t0   # the sender's share of the cadence
             if busy or any(st.watched and st.q for st in list(self.ring.series.values())):
                 await asyncio.sleep(POLL_S)
                 continue
@@ -1397,16 +1418,27 @@ class NetServer:
             q.put(None)
 
     async def _drain(self, timeout: float) -> None:
-        """Publish what completed and let the writers send it."""
+        """Publish what completed, hand over the replies and the run state that the controls
+        stored, and let the writers send it all. A run state that waits for its data goes out
+        when the data went, or at ``timeout`` with FINAL_S more for the writers to send it."""
         end = time.monotonic() + timeout
-        while time.monotonic() < end:
+        ctl = self.producer.controls
+        final = False
+        while True:
             busy = self.producer.pump_once()
+            if ctl is not None:
+                ctl.flush(final=final)
             links = list(self.producer.links)
-            if not busy and not self.ring.pending and all(
+            if not busy and not self.ring.pending and (ctl is None or not ctl.pending()) and all(
                     not ln.control and all(s.snap is None and (s.series is None or s.next >= (
                         self.producer.history(s.series).total)) for s in ln.subs.values())
                     for ln in links):
                 return
+            now = time.monotonic()
+            if now >= end:
+                if final:
+                    return
+                final, end = True, now + FINAL_S
             await asyncio.sleep(0.005)
 
     async def _shutdown(self) -> None:

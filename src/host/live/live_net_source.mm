@@ -74,6 +74,7 @@ struct SlotMeta {
     uint64_t stats_offset = 0;
     uint64_t seq = 0;        // the local publish counter
     uint64_t stamp_ns = 0;
+    int64_t  step = INT64_MIN;   // the step stamp; INT64_MIN when none
     uint64_t copied = 0;     // bytes received into the slot (Snapshot::copied_bytes)
 };
 
@@ -438,6 +439,11 @@ public:
         return item_axes_;
     }
 
+    std::map<std::string, std::string> view_cadences() override {
+        std::lock_guard<std::mutex> g(mu_);
+        return cadences_;
+    }
+
     bool data_view_of(uint64_t key, Json* resolved, Json* offer) override {
         NetView* v = find(key);
         if (!v) return false;
@@ -560,6 +566,7 @@ private:
         out->slot = index;
         out->seq = m.seq;
         out->stamp_ns = m.stamp_ns;
+        out->step = m.step;
         out->map = s.map.axes.empty() ? nullptr : &s.map;
         out->copied_bytes = m.copied;
     }
@@ -674,7 +681,8 @@ private:
                         wire::Hello h;
                         h.role = CALIPER_NET_ROLE_VIEWER;
                         h.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_SCENES,
-                                          CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS};
+                                          CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
+                                          CALIPER_NET_CAP_TIMELINES};
                         Json sw = Json::object();
                         sw.set("name", "caliper-app");
                         sw.set("version", caliper_host::kHostVersionStr);
@@ -1257,6 +1265,7 @@ private:
     // session or none (wire protocol 3.1).
     void forget_session_state() {
         std::lock_guard<std::mutex> g(mu_);
+        cadences_.clear();
         have_controls_ = false;
         const uint64_t version = controls_.version + 1;
         controls_ = Controls{};
@@ -1267,6 +1276,14 @@ private:
     }
 
     void on_views(const wire::Views& v) {
+        // The step is the first value of a stamp only when the first timeline
+        // is the sequence `step`; the codec refuses other VIEWS, and this
+        // reads nothing as the step when a timeline of another kind is first.
+        const Json* first = v.timelines.is_array() && !v.timelines.items().empty() ? &v.timelines.items().front() : nullptr;
+        const Json* kind = first && first->is_object() ? first->find("kind") : nullptr;
+        const Json* name = first && first->is_object() ? first->find("name") : nullptr;
+        timelines_listed_ = kind && kind->is_string() && kind->as_string() == CALIPER_NET_TIMELINE_SEQUENCE && name &&
+                            name->is_string() && name->as_string() == "step";
         if (!v.session) {   // detached: the views keep their last pixels
             session_id_.clear();
             forget_session_state();
@@ -1393,6 +1410,10 @@ private:
             unsupported(v.name, "section encoding " + std::to_string(d.encoding));
             return;
         }
+        if (s.cadence.is_object()) {   // 3.2 draft: the script's shared cadence of its snapshots
+            std::lock_guard<std::mutex> g(mu_);
+            cadences_[v.name] = s.cadence.dump();
+        }
         for (int64_t x : d.shape)
             if (x <= 0) return;   // nothing to draw
         if (d.shape.size() > 4) return;
@@ -1405,6 +1426,12 @@ private:
         m.vmin = (float)s.vmin;
         m.vmax = (float)s.vmax;
         m.stamp_ns = s.stamp_ns;
+        // The step is the first value of the stamp, when VIEWS listed the sequence `step` first.
+        if (timelines_listed_ && s.stamp && s.stamp->is(CALIPER_NET_DTYPE_I64, 1) && s.stamp->shape[0] >= 1) {
+            int64_t step = 0;
+            std::memcpy(&step, s.stamp->data, sizeof step);
+            if (step != CALIPER_NET_STAMP_ABSENT) m.step = step;
+        }
         uint64_t payload = d.size;
         int64_t n_points = 0, dims = 0;
         if (v.kind == CALIPER_LIVE_KIND_POINTS) {
@@ -1518,6 +1545,7 @@ private:
     std::unique_ptr<Client> client_;   // the network thread's; wake() from any thread
     std::thread thread_;
     std::atomic<bool> stop_{false};
+    bool timelines_listed_ = false;   // the newest VIEWS listed the sequence `step` first (network thread only)
 
     mutable std::mutex mu_;
     std::condition_variable cv_;
@@ -1542,6 +1570,7 @@ private:
     std::map<std::string, LinkedSelection> selections_;
     uint64_t sel_version_ = 0;
     std::vector<ItemAxis> item_axes_;
+    std::map<std::string, std::string> cadences_;   // 3.2 draft: view name -> its cadence (JSON)
     // The frame thread's requests for the network thread.
     std::mutex out_mu_;
     std::deque<Outgoing> outbox_;

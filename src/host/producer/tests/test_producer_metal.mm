@@ -588,3 +588,25 @@ fn run(@builtin(global_invocation_id) id: vec3<u32>) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     CHECK(caliper_producer_reaping() == 0);
 }
+
+// ---- helpers for the operator cases (test_producer_operators.cpp), which are plain C++
+
+// A shared MTLBuffer of `bytes` on the system device, retained for the caller, and its
+// contents; null without a Metal device. Free it with caliper_test_release_buffer().
+void* caliper_test_shared_buffer(size_t bytes, void** contents) {
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (device == nil) return nullptr;
+    id<MTLBuffer> b = [device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
+    if (b == nil) return nullptr;
+    if (contents) *contents = [b contents];
+    return (__bridge_retained void*)b;
+}
+
+// The contents of a buffer that caliper_producer_read_output() gave.
+const void* caliper_test_buffer_contents(void* buffer) {
+    return buffer ? [(__bridge id<MTLBuffer>)buffer contents] : nullptr;
+}
+
+void caliper_test_release_buffer(void* buffer) {
+    if (buffer) (void)(__bridge_transfer id<MTLBuffer>)buffer;
+}

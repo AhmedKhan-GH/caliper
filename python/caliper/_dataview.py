@@ -744,6 +744,13 @@ def source_rows(program: Program, indices=None):
 # ---------------------------------------------------------------------------
 # view calls and their snapshot plans
 # ---------------------------------------------------------------------------
+def _detached(t):
+    """``t`` without autograd: a module's output or a weight requires grad, and the routes only
+    read it. An ``out=`` reduction such as the range of a pooled heatmap refuses a tensor that
+    requires grad, and that error inside a forward hook would stop training."""
+    return t.detach() if getattr(t, "requires_grad", False) else t
+
+
 class DataCall:
     """One view call of a view with data views, as the routes see it: the
     registry entry, the source the call carries, its tensor (``tensor()``
@@ -754,7 +761,7 @@ class DataCall:
 
     def __init__(self, entry, source: str, x, opts: dict):
         self.entry, self.source, self.opts = entry, source, opts
-        self.x, self.fetched, self._labels = x, x is not None, ()
+        self.x, self.fetched, self._labels = _detached(x), x is not None, ()
 
     def tensor(self):
         if not self.fetched:
@@ -763,7 +770,7 @@ class DataCall:
             t = None if src is None else src.fetch()
             if t is not None:
                 from ._convert import _as_tensor
-                t = _as_tensor(t)
+                t = _detached(_as_tensor(t))
                 REGISTRY._observe(self.entry.kind, src, t)
             self.x = t
         return self.x

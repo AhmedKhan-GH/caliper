@@ -17,8 +17,24 @@ programs every
 steps of ``CEILING_S`` seconds. When even that ceiling costs more than the share, every program
 stops with ``program.over_budget`` and training goes on. It gives each geometry output to the
 publish path of ``caliper.scene`` and each pixels output to ``caliper.show`` as the live view
-``program.<id>``. A refused or stopped program is an error of its panel, never of the script:
-no function here raises for it.
+``program.<id>``. A tensor output, the f32 array ``out`` that the program writes, goes to
+``caliper.show`` as the same live view, in the declared shape, and :func:`set_params` gives new
+values to the uniform ``params`` of a program, which its next pass reads without a compile. A
+program of a built-in operator reports the kind ``operator``. A refused or stopped program is an
+error of its panel, never of the script: no function here raises for it.
+
+VIEWS. The same cadence gates the snapshots of the network route (caliper._net_ring) while a
+viewer subscribes, so that everything viewers ask of the run (snapshots, series chunks, scene
+colors, operators and programs) keeps to one budget. The checkpoint before a step decides whether
+that step is a pass: N steps after the last one and something due, a program by its ``every`` or
+a view by its own rate. The view calls of a pass step take their snapshots, and its checkpoint
+closes them with one event and runs the programs with one wait. The overhead ``D`` of a pass is
+at least the training thread's own time in its view calls plus the sender thread's time until the
+next pass, and while views are attached the passes keep to ``VIEWS_SHARE`` instead of ``SHARE``,
+because the viewer's own work on the snapshots costs the run about as much again. While the views' own work in a pass is
+cheap enough that a pass every ``FLOOR_S`` stays inside the share by itself, they get such a pass
+of their own when the cadence is slower (the floor), which the cadence does not count.
+:func:`views_stats` gives the cadence of the views for their status.
 
 THREADS. The wire path may call :func:`install`, :func:`remove` and :func:`status` from any
 thread. One lock orders them with :func:`at_step` on the training thread, thus the runtime is
@@ -46,7 +62,9 @@ import time
 import warnings
 from collections import deque
 
-__all__ = ["install", "remove", "status", "at_step", "loaded"]
+from . import _controls
+
+__all__ = ["install", "remove", "set_params", "status", "at_step", "loaded"]
 
 ACTIVE = False
 """Whether a program may run; ``caliper.step()`` calls :func:`at_step` only while it is true."""
@@ -56,6 +74,8 @@ listeners: list = []
 PROGRAM_STATE uses them. An error in a listener is warned once and never stops the step."""
 
 SHARE = 0.04            # the runtime's share of the step time (design/producer-runtime.md, Budget)
+VIEWS_SHARE = 0.02      # the share while views are attached: the sender's and the viewer's own work
+                        # on the snapshots costs the run about as much again as the measured passes
 WARMUP_STEPS = 8        # steps after an install before the program's first pass
 N_MIN = 3               # a cycle keeps two steps without a pass, which the measurement needs
 BASE_SAMPLES = 9        # stretches without a pass in the median of the base step time b
@@ -69,10 +89,14 @@ SPARSE = 8              # the steps between two marks while the loop waits for t
 SHORT_WAITS = 2         # passes in a row whose first sync point found torch's queue empty
 WAIT_EMPTY = 2e-4       # a first sync point shorter than this found torch's queue empty
 RATE_PASSES = 8         # the last passes of a program over which its status gives passes a second
+FLOOR_S = 0.5           # the views take a pass at least this often while their own work is cheap
+VIEW_SAMPLES = 8        # passes in the median of the views' own time in a pass
 EVERY_MAX = 10000
 TIME_MS_DEFAULT, TIME_MS_MAX = 4.0, 50.0
 MEMORY_MB_DEFAULT, MEMORY_MB_MAX = 64, 512
 INPUTS_MAX = 8
+PARAMS_MAX = 16
+TENSOR_AXES_MAX, TENSOR_ELEMENTS_MAX = 4, 1000000
 _ARRAYS = ("positions", "colors", "values", "radii")
 
 _LOCK = threading.RLock()
@@ -83,7 +107,9 @@ _ACTS: dict = {}        # module name -> its last output, for the inputs <module
 _ACT_HOOKS: dict = {}   # module name -> the forward hook's handle
 _ABANDONED: list = []   # runtimes given up after a timeout, kept until the GPU ends their last pass
 _STATE = {"rt": None, "mod": None, "model": None, "optimizer": None, "marks": None, "step": None,
-          "dense": True, "drained": 0, "short": 0, "long": 0, "switches": 0}
+          "dense": True, "drained": 0, "short": 0, "long": 0, "switches": 0, "pass": None,
+          "pass_budget": True, "floor": 0, "view_s": deque(maxlen=VIEW_SAMPLES)}
+_VIEWS = {"ring": None}  # the network route's ring while it has snapshots to take
 _clock = time.perf_counter
 _WARNED: set = set()
 
@@ -139,10 +165,13 @@ class _Cadence:
         self.base = deque(maxlen=BASE_SAMPLES)
         self.cost = deque(maxlen=COST_SAMPLES)
         self.n = None               # N, None before the first measured overhead
-        self.want = None            # ceil(D / (SHARE * b)) of the last update
+        self.want = None            # ceil(D / (target * b)) of the last update
+        self.target = SHARE         # the share the passes keep to: VIEWS_SHARE while views attach
         self.ceiling = EVERY_MAX
         self.over = 0               # updates in a row that wanted more than the ceiling
         self.last_pass = None       # the step of the last pass
+        self.prev_pass = None       # the pass before it, for unpass()
+        self.view_cost: dict = {}   # pass step -> the training thread's time in its view calls
 
     def restart(self) -> None:
         """Forget the marks and passes of the current cycle, but keep ``b``, ``D``, N and the step
@@ -151,6 +180,7 @@ class _Cadence:
         self.done = {}
         self.passes = set()
         self.k = None
+        self.view_cost = {}
 
     def step_s(self):
         """The base step time ``b`` in seconds, or None before the first stretch."""
@@ -178,7 +208,22 @@ class _Cadence:
     def passed(self, step: int) -> None:
         """Step ``step`` runs a pass."""
         self.passes.add(step)
+        self.prev_pass = self.last_pass
         self.last_pass = step
+
+    def unpass(self, step: int) -> None:
+        """The pass of ``step`` took nothing: it counts as a step without a pass."""
+        if step in self.passes and self.last_pass == step:
+            self.passes.discard(step)
+            self.last_pass = self.prev_pass
+
+    def repass(self, old: int, new: int) -> None:
+        """The pass decided for step ``old`` runs at step ``new``, the number of the next
+        checkpoint, because the script's step numbers jumped past ``old``."""
+        if old in self.passes and self.last_pass == old:
+            self.passes.discard(old)
+            self.passes.add(new)
+            self.last_pass = new
 
     def period(self, every_min: int) -> int:
         """The steps between two passes of a program: max(N, every), rounded up to a multiple of N."""
@@ -196,29 +241,38 @@ class _Cadence:
         if end is not None and step - 1 not in self.passes:
             if k is None:                           # the first cycle: no pass at its start
                 first = min(done)
-                if step - 1 > first:
+                if step - 1 > first and end > done[first]:
                     self.base.append((end - done[first]) / (step - 1 - first))
             else:
                 m = max(k + 1, (k + step) // 2)
                 mid, start = done.get(m), done.get(k - 1)
                 b = None
-                if mid is not None and step - 1 > m:
+                if mid is not None and step - 1 > m and end > mid:
                     b = (end - mid) / (step - 1 - m)
                     self.base.append(b)
                 if mid is not None and start is not None and self.base:
                     b = self.step_s() if b is None else b
-                    self.cost.append(max(0.0, mid - start - (m - k + 1) * b))
+                    d = max(0.0, mid - start - (m - k + 1) * b)
+                    # never less than the training thread's own time in the pass's view calls
+                    self.cost.append(max(d, self.view_cost.pop(k, 0.0)))
                     self._update()
+            if not self.base:
+                # The cycle was too short to time a step without a pass, for example when a long
+                # pass stalls the thread and the marks of the steps after it complete together:
+                # longer cycles until one can be timed.
+                self.n = min(EVERY_MAX, math.ceil((self.n or N_MIN) * GROW))
         self.k = step
         self.done = {s: v for s, v in done.items() if s >= step - 1}
         self.passes = {s for s in self.passes if s >= step - 1}
+        self.view_cost = {s: v for s, v in self.view_cost.items() if s >= step}
+
 
     def _update(self) -> None:
         b, d = self.step_s(), self.cost_s()
         if b is None or d is None:
             return
         self.ceiling = max(N_MIN, min(EVERY_MAX, math.ceil(CEILING_S / b))) if b > 0 else N_MIN
-        self.want = math.ceil(d / (SHARE * b)) if b > 0 else EVERY_MAX
+        self.want = math.ceil(d / (self.target * b)) if b > 0 else EVERY_MAX
         n = self.n or N_MIN
         want = min(max(self.want, N_MIN), self.ceiling)
         if want > n:
@@ -250,7 +304,8 @@ class _Import:
 class _Program:
     __slots__ = ("id", "decl", "wgsl", "sha256", "scene", "kind", "inputs", "output", "every_min",
                  "time_ms", "memory_mb", "handle", "state", "error", "runs", "last_step",
-                 "last_pass_ms", "memory_bytes", "warm", "every", "t0", "bound", "pass_times")
+                 "last_pass_ms", "memory_bytes", "warm", "every", "t0", "bound", "pass_times",
+                 "params", "builtin", "shape")
 
     def __init__(self, pid, decl, wgsl, scene, sha256):
         self.id = pid
@@ -261,6 +316,9 @@ class _Program:
         out = decl.get("output") or {}
         self.output = out
         self.kind = out.get("kind", "geometry")
+        self.shape = out.get("shape")
+        self.params = dict(decl.get("params") or {})   # name -> number: the uniform's values
+        self.builtin = decl.get("builtin") or None
         self.inputs = [(str(i.get("var", "")), str(i.get("source", ""))) for i in decl.get("inputs") or []]
         lim = decl.get("limits") or {}
         self.every_min = int(lim.get("every") or 1)
@@ -290,7 +348,8 @@ class _Program:
     def item(self) -> dict:
         b, d, share = _CAD.step_s(), _CAD.cost_s(), _CAD.share()
         return {
-            "id": self.id, "kind": self.kind, "state": self.state, "every": self.every,
+            "id": self.id, "kind": "operator" if self.builtin else self.kind, "state": self.state,
+            "every": self.every,
             "every_min": self.every_min, "last_pass_ms": self.last_pass_ms,
             "last_cost_ms": None if d is None else d * 1e3,
             "step_ms": None if b is None else b * 1e3,
@@ -469,8 +528,18 @@ def _release_unused() -> None:
 def _check(p: _Program) -> None:
     """The facade's part of the declaration: what the native call needs to take its arguments."""
     out = p.output
-    if p.kind not in ("geometry", "pixels"):
-        raise _Refused("program.output_mismatch", "The output is of kind geometry or pixels.")
+    if p.kind not in ("geometry", "pixels", "tensor"):
+        raise _Refused("program.output_mismatch", "The output is of kind geometry, pixels or tensor.")
+    if len(p.params) > PARAMS_MAX:
+        raise _Refused("program.over_limits", f"A program has at most {PARAMS_MAX} params.")
+    if p.kind == "tensor":
+        shape = p.shape
+        ok = (isinstance(shape, (list, tuple)) and 1 <= len(shape) <= TENSOR_AXES_MAX
+              and all(isinstance(n, int) and not isinstance(n, bool) and n >= 1 for n in shape))
+        if not ok or math.prod(shape) > TENSOR_ELEMENTS_MAX:
+            raise _Refused("program.output_mismatch",
+                           f"A tensor output has a shape of 1 to {TENSOR_AXES_MAX} axes from 1 "
+                           f"with at most {TENSOR_ELEMENTS_MAX} elements.")
     if len(p.inputs) > INPUTS_MAX:
         raise _Refused("program.over_limits", f"A program has at most {INPUTS_MAX} inputs.")
     if not (1 <= p.every_min <= EVERY_MAX):
@@ -505,13 +574,18 @@ def _compile(p: _Program) -> None:
     out = p.output
     wg = p.decl.get("workgroups") or (0, 0, 0)
     old = p.handle
+    extra = {}
+    if p.kind == "tensor":
+        extra["tensor_shape"] = [int(n) for n in p.shape]
+    if p.params:
+        extra["params"] = [(k, float(v)) for k, v in p.params.items()]
     try:
         h = rt.program(p.id, p.wgsl, [(v, im.handle) for v, im in bound.items()], p.kind,
                        entry=p.decl.get("entry"), part=str(out.get("part", "points")),
                        max_count=int(out.get("max_count") or 0), arrays=list(out.get("arrays") or []),
                        width=int(out.get("width") or 0), height=int(out.get("height") or 0),
                        workgroups=tuple(int(x) for x in wg), time_ms=p.time_ms,
-                       memory_bytes=p.memory_mb << 20)
+                       memory_bytes=p.memory_mb << 20, **extra)
     except RuntimeError as e:
         raise _refusal(e) from e
     if old is not None:
@@ -527,7 +601,8 @@ def _compile(p: _Program) -> None:
 
 def _set_active() -> None:
     global ACTIVE
-    ACTIVE = any(p.state in ("waiting", "compiled", "running") for p in _PROGS.values())
+    ACTIVE = (any(p.state in ("waiting", "compiled", "running") for p in _PROGS.values())
+              or _VIEWS["ring"] is not None)
     _prune_act_hooks()
 
 
@@ -619,6 +694,38 @@ def _prepare(wgsl: str, entry) -> None:
         pass
 
 
+def set_params(program_id: str, params: dict) -> None:
+    """Give new values to the uniform ``params`` of a program; its next pass reads them.
+
+    The values are stored by name over the earlier ones, and a program that is compiled gets them
+    at once in the runtime. Nothing compiles again and the SHA-256 stays. A name that the WGSL
+    struct lacks leaves the old values and shows as the error ``program.params_mismatch`` of the
+    program. An unknown id does nothing.
+
+    Args:
+        program_id: The program's id.
+        params: Names of the uniform's fields and their numbers.
+    """
+    item = None
+    with _LOCK:
+        p = _PROGS.get(str(program_id))
+        if p is None:
+            return
+        new = {str(k): float(v) for k, v in dict(params or {}).items()}
+        old = dict(p.params)
+        p.params.update(new)
+        rt = _STATE["rt"]
+        if p.handle is not None and rt is not None and new:
+            try:
+                rt.set_params(p.handle, list(new.items()))
+            except RuntimeError as e:
+                p.params = old
+                p.error = _refusal(e).error
+                item = p.item()
+    if item is not None:
+        _notify([item])
+
+
 def _remove(program_id: str):
     with _LOCK:
         p = _PROGS.pop(str(program_id), None)
@@ -643,7 +750,7 @@ def remove(program_id: str) -> None:
         return
     try:
         pkg = sys.modules[__package__]
-        if p.kind == "pixels":
+        if p.kind in ("pixels", "tensor"):
             pkg.remove(f"program.{p.id}")
         elif p.scene:
             pkg.scene(p.scene).clear(_entity(p))
@@ -783,6 +890,11 @@ def _mark(marks, step: int, now: float, is_pass: bool) -> list:
     return done
 
 
+def _every_ok(p: _Program, step: int) -> bool:
+    """Whether ``every`` lets program ``p`` run at ``step``."""
+    return p.last_step is None or step < p.last_step or step - p.last_step >= p.every_min
+
+
 def _at_step(step: int) -> None:
     changed = []
     published = []
@@ -791,26 +903,39 @@ def _at_step(step: int) -> None:
             _reap()
         now = _clock()
         marks = _marks()
+        ring = _VIEWS["ring"]
         last = _STATE["step"]
         _STATE["step"] = step
         if last is not None and step <= last:        # the script numbered its steps again
             _CAD.restart()
             if marks is not None:
                 marks.clear()
-        due = []
-        for p in _PROGS.values():
-            if p.state not in ("waiting", "compiled", "running"):
-                continue
+            if _STATE["pass"] is not None and _STATE["pass"] != step:
+                _STATE["pass"] = None
+        elif _STATE["pass"] is not None and step > _STATE["pass"]:
+            # The checkpoint before made its next step a pass and opened the gate for it, but the
+            # script numbered that step higher (a loop that skips numbers, a resumed count): the
+            # pass is this step, whatever its number.
+            _CAD.repass(_STATE["pass"], step)
+            _STATE["pass"] = step
+        is_pass = _STATE["pass"] == step             # decided at the checkpoint before
+        _CAD.target = VIEWS_SHARE if ring is not None else SHARE
+        budget = _STATE.get("pass_budget", True)
+        live = [p for p in _PROGS.values() if p.state in ("waiting", "compiled", "running")]
+        due = [p for p in live if p.warm <= 0 and _every_ok(p, step)] if is_pass and budget else []
+        for p in live:
             if p.warm > 0:
                 p.warm -= 1
-                continue
-            if p.last_step is None or step < p.last_step or step - p.last_step >= p.every_min:
-                due.append(p)
-        if due and not _CAD.due(step):
-            due = []
-        done = _mark(marks, step, now, bool(due))
-        if due:
-            _CAD.passed(step)
+        # The view calls of a pass step did their work before this checkpoint, thus this look comes
+        # later than the look of a step without a pass by that work: the marks it finds move back
+        # by it, so that every mark is seen as late as at a step without a pass.
+        work = ring.gate_cost if ring is not None and is_pass and ring.gate_open else 0.0
+        done = _mark(marks, step, now, is_pass)
+        if work > 0.0:
+            done = [(k, lo, max(lo, hi - work)) for k, lo, hi in done]
+        if ring is not None:
+            ring.step_tick(step, now)
+        ran = []
         if due:
             if marks is not None:                    # sync point 1: torch's work is complete
                 done += marks.wait(step, _clock)
@@ -819,7 +944,6 @@ def _at_step(step: int) -> None:
                 _STATE["long"] = 0 if empty else _STATE["long"] + 1
             else:
                 _torch_adapter().framework_done()
-            ran = []
             try:
                 for p in due:
                     before = p.state
@@ -860,19 +984,140 @@ def _at_step(step: int) -> None:
                         p.state = "running"
                         changed.append(p)
                     published.append((p, _outputs(rt, p)))
+    # The outputs go out while the pass's gate is still open, so that their snapshots join the
+    # tick of the views' snapshots and its one event.
+    for p, outs in published:
+        _publish(p, outs)
+    with _LOCK:
+        taken = 0
+        if ring is not None and ring is _VIEWS["ring"] and (is_pass or ring.gate_open):
+            taken = ring.close_pass(step, _clock())
+            if taken:
+                # The sender thread's time since the last pass, which published that pass's
+                # snapshots, belongs to that pass: it takes the GIL from the training thread.
+                pub = ring.publish_s
+                last = _STATE.get("pub_pass")
+                if last is not None and last[0] in _CAD.view_cost:
+                    _CAD.view_cost[last[0]] += max(0.0, pub - last[1])
+                _STATE["pub_pass"] = (step, pub)
+                _STATE["view_s"].append(ring.gate_cost)
+                if is_pass:
+                    _CAD.view_cost[step] = ring.gate_cost
+        if is_pass and not ran and not taken:        # nothing was due after all
+            _CAD.unpass(step)
+        ring = _VIEWS["ring"]
+        _STATE["pass"] = None
+        nxt = step + 1
+        if _CAD.due(nxt):                            # the decision for the next step
+            if any(p.warm <= 0 and _every_ok(p, nxt) for p in live) or \
+                    (ring is not None and ring.wants_pass(now)):
+                _CAD.passed(nxt)
+                _STATE["pass"] = nxt
+                _STATE["pass_budget"] = True
+                if ring is not None:
+                    ring.cadence = _views_status(ring, False)
+                    ring.open_pass(nxt)
+        elif ring is not None and (_floor_due(ring, now) or _last_single_step()) and \
+                ring.wants_pass(now):
+            # The floor: a pass of the views alone, which the cadence does not count, because
+            # their own work is cheap, or because the run pauses after the next step; the
+            # programs keep to N.
+            _STATE["pass"] = nxt
+            _STATE["pass_budget"] = False
+            _STATE["floor"] += 1
+            ring.cadence = _views_status(ring, True)
+            ring.open_pass(nxt)
         if not _STATE["dense"]:                      # the loop waits by itself: the clock times it
             done = [(step, now, now)]
         for k, _lo, hi in done:
             _CAD.completed(k, hi)
-        live = [p.every_min for p in _PROGS.values() if p.state in ("waiting", "compiled", "running")]
-        if live and _CAD.over_budget(min(live)):
+        progs = [p.every_min for p in _PROGS.values() if p.state in ("waiting", "compiled", "running")]
+        if progs and _CAD.over_budget(min(progs)):
             changed.extend(_stop_over_budget())
-            published = []
         _set_active()
         items = [p.item() for p in dict.fromkeys(changed)]
-    for p, outs in published:
-        _publish(p, outs)
     _notify(items)
+
+
+def _floor_due(ring, now: float) -> bool:
+    """The views wait longer than FLOOR_S for a pass, and their own work in a pass is cheap
+    enough that a pass every FLOOR_S keeps inside the share by itself."""
+    if now - ring.pass_t < FLOOR_S:
+        return False
+    v = _STATE["view_s"]
+    return not v or _median(v) <= _CAD.target * FLOOR_S
+
+
+def _last_single_step() -> bool:
+    """The run single-steps and pauses after the next step: that step is a pass whatever its
+    views cost, so that the paused run shows its own step and not an older one."""
+    c = _controls.CONTROLS
+    return c.state == _controls.RUN_STEPPING and c.steps_left == 1
+
+
+def _views_status(ring, floor: bool) -> dict:
+    """The cadence of the views' snapshots, for their status: the steps between two passes,
+    the passes a second, the measured times and share, and what sets the pace: ``budget`` when
+    the passes come less often than the views ask, ``floor`` for a pass of the floor, else
+    ``rate``, the views' own rate."""
+    b, d, share = _CAD.step_s(), _CAD.cost_s(), _CAD.share()
+    n = _CAD.n or N_MIN
+    rate = ring.pass_rate()
+    asked = ring.asked_interval()
+    if floor:
+        limit = "floor"
+    elif b is not None and asked is not None and n * b > asked * 1.1:
+        limit = "budget"
+    else:
+        limit = "rate"
+    return {"every": n, "passes_per_s": None if rate is None else round(rate, 2),
+            "step_ms": None if b is None else round(b * 1e3, 3),
+            "pass_ms": None if d is None else round(d * 1e3, 3),
+            "share": None if share is None else round(share, 4), "budget": _CAD.target, "limit": limit}
+
+
+def views(ring) -> None:
+    """The network route's ring has snapshots or series values to take (``ring``), or none
+    (``None``): from then on the shared cadence gates its snapshots at the checkpoint. Called on
+    the thread that changed a subscription."""
+    with _LOCK:
+        old = _VIEWS["ring"]
+        if old is not None and old is not ring:
+            old.release_gate()
+        if ring is not None and old is None and not ACTIVE:
+            _CAD.reset()                             # the measurement starts again
+            _STATE.update(dense=True, drained=0, short=0, long=0, switches=0, floor=0)
+            _STATE["pass"] = None
+            if _STATE["marks"]:
+                _STATE["marks"].clear()
+        _VIEWS["ring"] = ring
+        _set_active()
+
+
+def views_closed(ring) -> None:
+    """The ring ``ring`` has nothing to take any more, or its server closed: the shared cadence
+    stops gating it, unless another ring has taken its place already."""
+    with _LOCK:
+        if _VIEWS["ring"] is not ring:
+            return
+        ring.release_gate()
+        _VIEWS["ring"] = None
+        _set_active()
+
+
+def pass_next() -> bool:
+    """Whether the next step may do the work that viewers ask for: always while the shared
+    cadence is off, else when the checkpoint made the next step a pass."""
+    return not ACTIVE or _STATE["pass"] is not None
+
+
+def views_stats() -> dict:
+    """The cadence of the views' snapshots and the passes that only the floor allowed."""
+    with _LOCK:
+        ring = _VIEWS["ring"]
+        out = dict(ring.cadence) if ring is not None else {}
+        out["floor_passes"] = _STATE["floor"]
+        return out
 
 
 def _stop_over_budget() -> list:
@@ -939,7 +1184,7 @@ def _rebind(p: _Program, var: str, t, im: _Import) -> bool:
 def _outputs(rt, p: _Program) -> dict:
     """The outputs of the last pass as tensors over the runtime's buffers, without a copy."""
     import torch
-    names = ["pixels"] if p.kind == "pixels" else list(p.output.get("arrays") or [])
+    names = {"pixels": ["pixels"], "tensor": ["out"]}.get(p.kind) or list(p.output.get("arrays") or [])
     out = {}
     for n in names:
         cap, count = rt.output(p.handle, n)
@@ -958,6 +1203,9 @@ def _publish(p: _Program, outs: dict) -> None:
     try:
         if p.kind == "pixels":
             pkg.show(outs["pixels"], f"program.{p.id}")
+            return
+        if p.kind == "tensor":
+            pkg.show(outs["out"].reshape([int(n) for n in p.shape]), f"program.{p.id}")
             return
         sc = pkg.scene(p.scene)
         count = int(outs.get("count", 0))

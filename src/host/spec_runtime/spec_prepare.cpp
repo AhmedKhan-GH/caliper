@@ -1,6 +1,9 @@
 // spec_prepare.cpp: the data of one spec panel made ready to draw
 // (spec_prepare.h).
 #include "spec_runtime/spec_prepare.h"
+#include "gfx/colormap_tables.h"
+#include <caliper_builder/spec/colormaps.h>
+#include <optional>
 
 #include "scene/scene.h"                 // kPalette
 #include "spec_runtime/spec_layout.h"   // spec_panel_title, spec_binding_name
@@ -536,7 +539,8 @@ void prepare_points(PreparedPanel& p, const spec::Panel& panel, const PanelData&
         const float span = P.cmax - P.cmin;
         P.rgba.reserve(P.color.size());
         for (float c : P.color) {
-            const float t = std::isfinite(c) && span != 0.0f ? std::clamp((c - P.cmin) / span, 0.0f, 1.0f) : 0.0f;
+            float t = std::isfinite(c) && span != 0.0f ? std::clamp((c - P.cmin) / span, 0.0f, 1.0f) : 0.0f;
+            if (!(t >= 0.0f && t <= 1.0f)) t = 0.0f;   // NaN when the range is not finite
             P.rgba.push_back(lut[(int)(t * 255.0f + 0.5f)]);
         }
     }
@@ -686,6 +690,7 @@ void prepare_table(PreparedPanel& p, const PanelData& d, const PrepareLimits& li
 void prepare_text(PreparedPanel& p, const spec::Panel& panel, const PanelData& d, const PrepareLimits& lim) {
     PreparedText& X = p.text;
     X.text = panel.options.text.value_or("");
+    X.bound = panel.options.bound_text.has_value();
     if (const SlotData* v = slot(d, "value")) {
         if (v->kind == SlotData::Kind::column && v->values.is_array()) {
             for (size_t i = v->values.size(); i-- > 0;) {
@@ -693,22 +698,24 @@ void prepare_text(PreparedPanel& p, const spec::Panel& panel, const PanelData& d
                 if (c.is_null()) continue;
                 const double x = cell_number(c);
                 X.value = c.is_number() || c.is_boolean() ? spec_fmt4(x) : cell_text(c, lim.max_cell_chars);
+                X.value_json = c;
                 X.has_value = true;
                 break;
             }
-            if (!X.has_value && X.text.empty()) {
+            if (!X.has_value && X.text.empty() && !X.bound) {
                 p.state = empty_state(v->binding);
                 return;
             }
         } else if (v->kind == SlotData::Kind::tensor && v->tensor.valid() && v->tensor.numel() == 1) {
             X.value = spec_fmt4(v->tensor.element(0));
+            X.value_json = v->tensor.element(0);
             X.has_value = true;
         } else {
             p.state = mismatch(v->binding);
             return;
         }
     }
-    if (X.text.empty() && !X.has_value) p.state = empty_state(p.id);
+    if (X.text.empty() && !X.has_value && !X.bound) p.state = empty_state(p.id);
 }
 
 }  // namespace
@@ -740,25 +747,13 @@ std::string spec_fmt4(double v) {
 uint32_t spec_class_color(int label) { return caliper_live_views::kPalette[(label < 0 ? 0 : label) % 16]; }
 
 int spec_colormap(const std::string& name, int fallback) {
-    if (name == "viridis") return kCmapViridis;
-    if (name == "magma") return kCmapMagma;
-    if (name == "rdbu") return kCmapRdbu;
-    if (name == "greys") return kCmapGreys;
-    return fallback;
+    const std::optional<int> id = caliper_builder::spec::colormap_id(name);
+    return id ? *id : fallback;
 }
 
 const uint32_t* spec_colormap_lut(int colormap) {
-    static const uint32_t* greys = [] {
-        static uint32_t t[256];
-        for (uint32_t i = 0; i < 256; ++i) t[i] = 0xff000000u | (i << 16) | (i << 8) | i;
-        return t;
-    }();
-    switch (colormap) {
-        case kCmapMagma: return colormap_lut(CALIPER_CMAP_MAGMA);
-        case kCmapRdbu: return colormap_lut(CALIPER_CMAP_RDBU);
-        case kCmapGreys: return greys;
-        default: return colormap_lut(CALIPER_CMAP_VIRIDIS);
-    }
+    const uint32_t* lut = caliper_gfx::cmap::builtin_lut(colormap);
+    return lut != nullptr ? lut : caliper_gfx::cmap::builtin_lut(kCmapViridis);
 }
 
 std::string spec_source_origin(const spec::Spec& s, const std::string& source_id) {
@@ -783,6 +778,7 @@ PanelState panel_state_for_error(const std::string& code, const std::string& det
     if (code == "resolve.query_failed" || code == "resolve.timeout") return {PanelStateKind::query_error, "Query error", d};
     if (code == "resolve.unknown_column") return {PanelStateKind::missing, "Missing column", d};
     if (code == "resolve.unknown_source" || code == "resolve.cycle") return {PanelStateKind::missing, "Missing source", d};
+    if (code == "resolve.out_of_range") return {PanelStateKind::error, "Value out of range", d};
     if (code == "panel.not_found") return {PanelStateKind::no_spec, "Missing panel", d};
     if (code == "spec.no_open_spec") return {PanelStateKind::no_spec, "No spec", d};
     if (code == "resolve.not_tabular" || code == "resolve.not_a_tensor") return mismatch(d);

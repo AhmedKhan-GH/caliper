@@ -67,6 +67,8 @@ target_include_directories(caliper_view_layer PUBLIC
 # the cache stays empty, and an entity with a stage draws with its built-in program in the browser.
 target_sources(caliper_view_layer PRIVATE
     ${CALIPER_ROOT}/src/host/live/live_views_scene.cpp
+    ${CALIPER_ROOT}/src/host/live/scene_overlays.cpp
+    ${CALIPER_ROOT}/src/host/spec_runtime/label_layout.cpp
     ${CALIPER_ROOT}/src/host/live/live_scene.cpp
     ${CALIPER_ROOT}/src/host/live/live_points.cpp
     ${CALIPER_ROOT}/src/host/scene/stages.cpp

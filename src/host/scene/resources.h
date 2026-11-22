@@ -84,6 +84,13 @@ public:
         (void)stage, (void)builtin, (void)group, (void)image, (void)image_binding;
         return {};
     }
+    // The group of a stage's params (stages.h, StageProgram::params): one uniform at
+    // @group(3) @binding(0) over the frame's uniform arena, at a dynamic offset. Null keeps the
+    // built-in program: an implementation that does not bind params.
+    virtual caliper_gfx::BindGroup stage_params_group(const StageProgram& stage) {
+        (void)stage;
+        return {};
+    }
 };
 
 }  // namespace caliper_scene

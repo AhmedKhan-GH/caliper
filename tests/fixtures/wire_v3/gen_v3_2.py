@@ -633,6 +633,10 @@ PIXELS = {"inputs": [{"var": "w", "source": "live:fc1.weight"}],
           "output": {"kind": "pixels", "width": 64, "height": 32, "format": "rgba8unorm"}}
 
 
+TENSOR = {"inputs": [{"var": "w", "source": "live:fc1.weight"}],
+          "output": {"kind": "tensor", "shape": [64, 32]}}
+
+
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -651,6 +655,16 @@ def _program_vectors() -> dict:
                                           "world"),
         "program_set_pixels": w.Program(12, w.PROGRAM_SET, "image", PIXELS, WGSL, _sha(WGSL)),
         "program_remove": w.Program(13, w.PROGRAM_REMOVE, "rows"),
+        "program_set_tensor": w.Program(14, w.PROGRAM_SET, "norms", TENSOR, WGSL, _sha(WGSL)),
+        "program_set_operator": w.Program(15, w.PROGRAM_SET, "operator.row-norms.12", TENSOR, WGSL,
+                                          _sha(WGSL)),
+        "program_params": w.Program(16, w.PROGRAM_PARAMS, "rows",
+                                    params={"gain": 1.5, "_bias": -2, "Scale2": 0.0}),
+        "program_params_operator": w.Program(17, w.PROGRAM_PARAMS, "operator.row-norms.12",
+                                             params={"gain": 0.25}),
+        "program_state_operator": w.ProgramState([
+            {"id": "operator.row-norms.12", "kind": "operator", "state": "running", "runs": 3},
+            {"id": "norms", "kind": "tensor", "state": "compiled"}]),
         "program_state_reply": w.ProgramState([running, refused], 12, 1200, 31.25),
         "program_state_waiting": w.ProgramState([{"id": "rows", "kind": "geometry",
                                                   "state": "compiled"}]),
@@ -696,6 +710,13 @@ def _program_invalid() -> dict:
 
     item = {"id": "rows", "kind": "geometry", "state": "running"}
 
+    def tensor(**change):
+        return decl(output=dict({"kind": "tensor", "shape": [64, 32]}, **change))
+
+    def params(v, **change):
+        meta = dict({"request_id": 1, "op": "params", "id": "rows", "params": v}, **change)
+        return _meta_frame(PG, {k: x for k, x in meta.items() if x is not None})
+
     def state(*items, **meta):
         return _meta_frame(PS, dict({"programs": list(items)}, **meta))
 
@@ -738,11 +759,39 @@ def _program_invalid() -> dict:
         "program_wgsl_big": (prog(sections={"wgsl": np.full(65537, 0x20, np.uint8)}), bad),
         "program_wgsl_utf8": (prog(sections={"wgsl": np.array([0x66, 0x6e, 0xff], np.uint8)}),
                               bad),
+        "program_tensor_shape_empty": (prog(declaration=tensor(shape=[])), bad),
+        "program_tensor_shape_axes": (prog(declaration=tensor(shape=[1, 1, 1, 1, 1])), bad),
+        "program_tensor_shape_zero": (prog(declaration=tensor(shape=[4, 0])), bad),
+        "program_tensor_shape_big": (prog(declaration=tensor(shape=[1001, 1000])), bad),
+        "program_tensor_shape_float": (prog(declaration=tensor(shape=[4.5])), bad),
+        "program_tensor_shape_missing": (prog(declaration=decl(output={"kind": "tensor"})), bad),
+        "program_tensor_extra_key": (prog(declaration=tensor(width=4)), bad),
+        "program_id_operator_bare": (prog(id="operator.row"), bad),
+        "program_id_operator_digits": (prog(id="operator.row.123456"), bad),
+        "program_id_operator_nondigit": (prog(id="operator.row.1a"), bad),
+        "program_id_operator_spec": (prog(id="operator.Row.1"), bad),
+        "program_id_operator_empty_spec": (prog(id="operator..1"), bad),
+        "program_params_missing": (params(None), bad),
+        "program_params_empty": (params({}), bad),
+        "program_params_string": (params({"gain": "1"}), bad),
+        "program_params_bool": (params({"gain": True}), bad),
+        "program_params_name_digit": (params({"1gain": 1}), bad),
+        "program_params_name_reserved": (params({"__gain": 1}), bad),
+        "program_params_name_dash": (params({"a-b": 1}), bad),
+        "program_params_name_long": (params({"a" * 64: 1}), bad),
+        "program_params_many": (params({f"p{i}": 1 for i in range(17)}), bad),
+        "program_params_list": (params([1.0]), bad),
+        "program_params_declaration": (params({"gain": 1}, declaration=PIXELS), bad),
+        "program_params_section": (_meta_frame(PG, {"request_id": 1, "op": "params", "id": "rows",
+                                                    "params": {"gain": 1}},
+                                               sections={"wgsl": np.frombuffer(WGSL.encode(), np.uint8)}),
+                                   bad),
         "program_state_programs": (_meta_frame(PS, {"request_id": 1}), bad),
         "program_state_many": (state(*[dict(item, id=f"p{i}") for i in range(17)]), bad),
         "program_state_repeat": (state(item, item), bad),
         "program_state_state": (state(dict(item, state="paused")), bad),
         "program_state_kind": (state(dict(item, kind="material")), bad),
+        "program_state_kind_operator_id": (state(dict(item, id="operator.row")), bad),
         "program_state_runs": (state(dict(item, runs=-1)), bad),
         "program_state_runs_exact": (state(dict(item, runs=2**53)), bad),
         "program_state_every": (state(dict(item, every=0)), bad),

@@ -24,7 +24,7 @@ endif()
 if(BUILD_TESTS)
     # Headless; the case that reads a real core's live views needs an offscreen
     # canvas and is counted as skipped without one (gpu_skip.h, exit 77).
-    add_executable(caliper_catalog_providers_tests tests/test_catalog_providers.cpp)
+    add_executable(caliper_catalog_providers_tests tests/test_catalog_providers.cpp tests/test_live_catalog_steps.cpp)
     target_include_directories(caliper_catalog_providers_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests)
     target_link_libraries(caliper_catalog_providers_tests PRIVATE caliper_catalog_providers doctest::doctest
         caliper_test_run_marker)

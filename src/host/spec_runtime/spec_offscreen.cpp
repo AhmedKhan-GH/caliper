@@ -1,6 +1,7 @@
 // spec_offscreen.cpp: a spec or one panel drawn into an offscreen canvas
 // (spec_offscreen.h).
 #include "spec_runtime/spec_offscreen.h"
+#include "spec_runtime/spec_annotations.h"
 
 #include "core_lifecycle.h"
 #include "export_service.h"
@@ -212,9 +213,21 @@ PanelPng OffscreenPanelRenderer::render_panel(const spec::Spec& s, const caliper
     SpecPanelView view;
     view.data = prepare_panel(s, *panel, data, limits_);
     view.key = &key;
+    // The annotations, the cursor line and the bound texts, as the page draws them.
+    SpecInstrumentHost host;
+    host.values = values_;
+    host.history = history_;
+    host.spec = &s;
+    view.spec_panel = panel;
+    view.instruments = &host;
     std::vector<uint8_t> rgba;
     const bool drawn = canvas_->render(
-        3, [&](const ImRect& area) { draw_spec_panel(view, area, canvas_->look(), canvas_->textures()); }, &rgba, &why);
+        3,
+        [&](const ImRect& area) {
+            const SpecPanelFrame f = draw_spec_panel(view, area, canvas_->look(), canvas_->textures());
+            draw_panel_overlays(*panel, f.content, canvas_->look(), host);
+        },
+        &rgba, &why);
     canvas_->with_context([&] { canvas_->textures().release(view.texture); });
     if (!drawn) {
         out.error = "The panel could not be drawn: " + why + ".";

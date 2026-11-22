@@ -260,6 +260,29 @@ A toggle bound to `intervene:0` is clicked through `CALIPER_TEST_SPEC_UI`, which
 
 The check `python3 examples/python/gpu_program_check.py` runs the same flow without a window, as one command with defaults. It uses the app and `caliper-mcp` of the build folder with the newest app, and it writes the captures into a folder of that build folder. It prints the count of files with an unchanged SHA-256, the status of the geometry program, the losses around the toggle, the pixel counts and the capture paths. It exits with 1 on a failure and with 2 when the check cannot run.
 
+## Instrument Building Acceptance
+
+The ctest entry `caliper_instrument_building_acceptance` (`tests/instrument_building/driver.py`) is the acceptance test of instrument building. It starts the hidden app with no script and `caliper-mcp` as a child, and it runs `tests/instrument_building/train.py`, a small transformer whose only Caliper line is `caliper.watch(model, optimizer)`, as a managed run started by `run_start`. The driver builds an instrument on that run with MCP tools only. It approves the cards through `CALIPER_TEST_APPROVALS` and moves the learning rate slider and the toggle through `CALIPER_TEST_SPEC_UI`, which waits for files that the driver writes.
+
+The driver checks each part by state, events and panel data, not by eye:
+
+- A scene panel holds a terrain from the `surface` operator over `live:blocks.0.attn.proj.act`. Its row count in `panel_data` rises while the run trains, and the loss is a line entity in the same scene.
+- The entry of `live:blocks.0.attn.proj.act` in `catalog_list` has the warning of the shared cadence, which says how many steps apart the view updates and why.
+- A pick on the terrain through `selection_set` gives a `pick` event with fields and writes the state `token`. The version and the values of the heatmap that reads the state through a reference change.
+- A narrower range window leaves terrain rows whose `x` values stay inside the window.
+- The transport holds the cursor at an earlier kept step of the activation source, which the terrain's rows show. The heatmap and the terrain state that step, and the series panels hold no later step. One step back, the cursor can stand at a step that only the loss keeps, and the heatmap and the terrain then show their newest value at or before it. Then the cursor is live again.
+- The segmented group `measure` changes the values of the heatmap, and the group `palette` changes at least 500 pixels of a render of the terrain at a held step.
+- The bound text is a readout control and a text panel. A text panel gives the bound value and not the formatted string, thus the driver checks the three inputs: the step of the cursor, the token and the value at that step.
+- The spec holds a threshold line and a marker in a series panel, a band and a marker, and a layout that uses shares and a minimum. The data of a panel gives no rectangles of placed labels, so the driver checks that the annotations exist and that the threshold changes a render. It does not check that labels avoid each other.
+- A person's drag changes `lr` in the run, and the toggle ablates `blocks.0.attn.proj` and releases it.
+- A source from `live:head.act` with a `surface` step runs as the program `operator.head_surface.0` in the script, draws as an entity and is removed again.
+
+The driver waits on events and published state, never for a fixed time. A terrain row comes with a step that the app keeps, at a pass of the shared cadence, thus the kept steps stand some steps apart. The driver takes that gap from the `x` values of the terrain where a check compares steps. It waits for 40 terrain rows before the checks that need a terrain. It prints the time from the first tool call to the first render of a terrain that has rows. It takes the SHA-256 of the app, of `caliper-mcp` and of each file of the Python package before and after, and the lists must be equal. Last, no process that the driver started may be alive, by its pid.
+
+`tests/CMakeLists.txt` defines the entry only when the platform is not Windows, `CALIPER_WITH_BUILDER` is on and the Python of the instrument test is set. It has the labels `instrument_building` and `acceptance` and a timeout of 600 seconds. It exits with code 77, which ctest reports as skipped, when the app, Metal, torch, numpy, the native network sender `caliper._netio` or the producer module `caliper._producer` is missing. The macOS job of the workflow runs it in its own step.
+
+The check `python3 examples/python/instrument_building_check.py` runs the same flow without a window, as one command with defaults. It uses the app and `caliper-mcp` of the build folder with the newest app, and it writes the captures into a folder of that build folder. It prints the time to the first frame, the row counts, the pick, the held step with its bound text, the changed pixels, the annotations, the count of files with an unchanged SHA-256 and the capture paths. It exits with 1 on a failure and with 2 when the check cannot run.
+
 ## GPU Tests
 
 A suite that needs a GPU must not report success when it finds none. `tests/gpu_skip.h` provides the convention that the gfx, export, embed, live and torch suites share:

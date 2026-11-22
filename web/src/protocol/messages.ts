@@ -695,6 +695,8 @@ export const CAP_INTERVENTIONS = 'interventions';
 export const PROGRAM_SET = 'set';
 /** PROGRAM "op": remove one program. */
 export const PROGRAM_REMOVE = 'remove';
+/** PROGRAM "op": change the parameters of one program with no compile. */
+export const PROGRAM_PARAMS = 'params';
 /** The name of the PROGRAM section that holds the WGSL source as UTF-8. */
 export const SECTION_WGSL = 'wgsl';
 /** The only intervention op; scale, steer and patch are reserved. */
@@ -732,6 +734,16 @@ export const TENSOR_NAME_MAX = 255;
 /** A declaration's output kinds. */
 export const OUTPUT_GEOMETRY = 'geometry';
 export const OUTPUT_PIXELS = 'pixels';
+export const OUTPUT_TENSOR = 'tensor';
+/** The kind of a status item for the program of a built-in operator. */
+export const STATUS_OPERATOR = 'operator';
+/** Most names of a params object, bytes of a params name and bytes of a declaration's "builtin". */
+export const PROGRAM_PARAMS_MAX = 16;
+export const PROGRAM_PARAM_NAME_MAX = 63;
+export const PROGRAM_BUILTIN_MAX = 32;
+/** Most axes and most elements of a tensor output's shape. */
+export const TENSOR_AXES_MAX = 4;
+export const TENSOR_ELEMENTS_MAX = 1000000;
 /** The states of a program in a PROGRAM_STATE status item. */
 export const PROGRAM_STATES: readonly string[] = ['waiting', 'review', 'compiled', 'running', 'refused', 'stopped'];
 /** The arrays a geometry output may list; "positions" is required. */
@@ -752,12 +764,14 @@ export interface InterveneRequest {
 /** CONTROLS "interventions": the points an intervention may use and the interventions in force. Re-emitted unchanged. */
 export interface InterventionsInfo { points: Record<string, unknown>[]; active: Record<string, unknown>[] }
 
-/** Viewer to producer: install or replace (op set) or remove (op remove) one GPU program. A set carries the declaration without its source, the scene of a geometry output, the SHA-256 of the source and the section "wgsl". */
+/** Viewer to producer: install or replace (op set), remove (op remove) or change the parameters of (op params) one GPU program. A set carries the declaration without its source, the scene of a geometry output, the SHA-256 of the source and the section "wgsl". */
 export interface ProgramMsg {
   type: 'program';
   request_id: number;
-  op: 'set' | 'remove';
+  op: 'set' | 'remove' | 'params';
   id: string;
+  /** params: the names of the program's uniform and their finite numbers. */
+  params?: Record<string, number>;
   /** set */
   declaration?: ProgramDeclaration;
   /** set: the source, the section "wgsl" as UTF-8. */

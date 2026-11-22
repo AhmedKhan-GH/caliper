@@ -1,20 +1,30 @@
 // The controls of a spec (spec_instruments.h, design/instruments.md, Control
-// Table).
+// Table, and design/instrument-interface.md, Controls).
 //
 // A control is one row: its title on the left, its widget on the right. This file
-// draws three kinds:
-//   slider  bound to param:<name>, it shows the script's parameter on the
-//           parameter's own range and scale, narrowed by the options, and
-//           sends each new value through the run control while the person
-//           drags; bound to `value`, it holds its value itself.
-//   button  bound to action:<name>, it queues the action; bound to
-//           run:pause, it pauses a run that runs and resumes a paused one.
-//   toggle  bound to intervene:<point>, on it ablates that point of the
-//           attached model and off it clears the point's interventions
-//           (design/gpu-programs.md, Toggle Control); bound to param:<name>
-//           of a boolean parameter, it sets the parameter. It shows the
-//           script's state, and the person's last click until the script
-//           shows it or for a few seconds.
+// draws these kinds:
+//   slider     bound to param:<name>, it shows the script's parameter on the
+//              parameter's own range and scale, narrowed by the options, and
+//              sends each new value through the run control while the person
+//              drags; bound to `value` or to a state, it holds the value in the
+//              session's values.
+//   button     bound to action:<name>, it queues the action; bound to
+//              run:pause, it pauses a run that runs and resumes a paused one.
+//   toggle     bound to intervene:<point>, on it ablates that point of the
+//              attached model and off it clears the point's interventions
+//              (design/gpu-programs.md, Toggle Control); bound to param:<name>
+//              of a boolean parameter, it sets the parameter. It shows the
+//              script's state, and the person's last click until the script
+//              shows it or for a few seconds. Bound to `value` or to a state,
+//              it holds a boolean.
+//   range      two grabs on one track, [lo, hi], between bounds that may read
+//              references; with `follow` the session moves it with its upper
+//              bound.
+//   picker     a menu of its choices.
+//   text       a field that applies its text on Return or when it loses focus.
+//   segmented  a row of 2 to 16 square buttons, the ones that are on in the
+//              accent colour; a choice's key shows in its tooltip.
+//   readout    a bound text whose fields read references.
 // A widget bound to the script is disabled, with the reason as its tooltip,
 // when no script is attached, when the connection takes no control or when
 // the script has no such parameter, action or intervention point, or takes no
@@ -26,13 +36,30 @@
 // `control` event goes to the ring once per edit, when the person lets go of
 // the slider or presses the button, with the value sent; the drag itself is
 // rate-limited by the run control and not recorded value by value.
+//
+// A control bound to `value` or to a state writes the session's ValueStore
+// (values.h) at once, so that references read each new value at the next
+// frame; the `control` event, and the `state` event of a state, go to the ring
+// once, when the edit ends. Without a session the control holds its value
+// itself.
 #include "spec_runtime/spec_instruments.h"
+#include "spec_runtime/spec_transport.h"
+
+#include <caliper_builder/spec/state.h>
+#include <caliper_builder/text/bound_text.h>
+
+#include "spec_runtime/spec_annotations.h"
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <map>
+#include <set>
 #include <string>
+#include <vector>
 
 namespace caliper_host {
 
@@ -62,11 +89,6 @@ std::map<std::string, HeldToggle>& held_toggles() {
     static std::map<std::string, HeldToggle> m;
     return m;
 }
-// The values of sliders bound to `value`, by window and control.
-std::map<std::string, double>& own_values() {
-    static std::map<std::string, double> m;
-    return m;
-}
 constexpr std::chrono::seconds kHoldFor{5};
 
 std::string key_of(const spec::Control& c) {
@@ -85,24 +107,12 @@ void push_control_event(SpecInstrumentHost& host, const spec::Control& c, json v
     host.events->push(std::move(e));
 }
 
-// The bind string's target, read here so the widget does not depend on the
-// validator: param:<name>, action:<name>, run:pause or value.
+// The bind string's target; a string that is not one reads as `value`, so
+// the widget does not depend on the validator.
 spec::ControlTarget target_of(const std::string& bind) {
+    if (auto t = spec::parse_control_target(bind)) return *t;
     spec::ControlTarget t;
-    if (bind.rfind("param:", 0) == 0) {
-        t.kind = spec::ControlTarget::Kind::param;
-        t.name = bind.substr(6);
-    } else if (bind.rfind("action:", 0) == 0) {
-        t.kind = spec::ControlTarget::Kind::action;
-        t.name = bind.substr(7);
-    } else if (bind == "run:pause") {
-        t.kind = spec::ControlTarget::Kind::run_pause;
-    } else if (bind.rfind("intervene:", 0) == 0) {
-        t.kind = spec::ControlTarget::Kind::intervene;
-        t.name = bind.substr(10);
-    } else {
-        t.kind = spec::ControlTarget::Kind::value;
-    }
+    t.kind = spec::ControlTarget::Kind::value;
     return t;
 }
 
@@ -123,6 +133,125 @@ std::string why_disabled(const SpecInstrumentHost& host, const cb::RunState& st)
     if (!host.run || !st.attached) return "No script is attached.";
     if (!st.control) return st.why_not.empty() ? "The stream takes no control." : st.why_not;
     return "";
+}
+
+// ---- values the spec holds (design/instrument-interface.md, Control Values) ----
+
+// The values of controls without a session, by window and control.
+std::map<std::string, json>& own_json() {
+    static std::map<std::string, json> m;
+    return m;
+}
+// The value a control showed when the person's drag began, by window and control.
+std::map<std::string, json>& drag_starts() {
+    static std::map<std::string, json> m;
+    return m;
+}
+
+bool holds_value(const spec::ControlTarget& t) {
+    return t.kind == spec::ControlTarget::Kind::value || t.kind == spec::ControlTarget::Kind::state;
+}
+
+// The state variable a control binds, from the spec shown.
+const spec::StateVar* bound_state(const SpecInstrumentHost& host, const spec::Control& c) {
+    const auto t = spec::parse_control_target(c.bind);
+    if (!host.spec || !t || t->kind != spec::ControlTarget::Kind::state) return nullptr;
+    for (const auto& s : host.spec->states)
+        if (s.id == t->name) return &s;
+    return nullptr;
+}
+
+// The value a reference reads now, or its default.
+json read_reference(const SpecInstrumentHost& host, const spec::Reference& r) {
+    if (r.kind == spec::Reference::Kind::state && r.target == spec::kCursorState && host.history) {
+        const cb::CursorState cur = host.history->cursor();
+        const std::string f = r.field.value_or("step");
+        if (f == "first") return cur.first;
+        if (f == "latest") return cur.latest;
+        if (f == "step") return cur.step;
+    }
+    return host.values ? host.values->value(r) : r.fallback;
+}
+
+// The low or high bound of a slider or a range: a number, a reference's
+// value, or the bound of its state.
+std::optional<double> bound_of(const SpecInstrumentHost& host, const spec::Control& c, const char* key) {
+    const auto ref = c.options.references.find(key);
+    if (ref != c.options.references.end()) {
+        const json v = read_reference(host, ref->second);
+        if (v.is_number() && std::isfinite(v.get<double>())) return v.get<double>();
+        return std::nullopt;
+    }
+    const std::optional<double>& literal = std::string_view(key) == "min" ? c.options.min : c.options.max;
+    if (literal) return literal;
+    if (const spec::StateVar* s = bound_state(host, c)) return std::string_view(key) == "min" ? s->min : s->max;
+    return std::nullopt;
+}
+
+// The value a control starts with when nothing holds one.
+json start_of(const SpecInstrumentHost& host, const spec::Control& c) {
+    if (const spec::StateVar* s = bound_state(host, c)) return spec::state_initial_value(*s);
+    const spec::ControlOptions& o = c.options;
+    if (o.value) return *o.value;
+    if (!o.value_other.is_null()) return o.value_other;
+    switch (c.kind) {
+        case spec::ControlKind::slider: return bound_of(host, c, "min").value_or(0.0);
+        case spec::ControlKind::range: {
+            const double lo = bound_of(host, c, "min").value_or(0.0);
+            return json::array({lo, bound_of(host, c, "max").value_or(lo)});
+        }
+        case spec::ControlKind::toggle: return false;
+        case spec::ControlKind::text: return "";
+        case spec::ControlKind::picker:
+        case spec::ControlKind::segmented:
+            if (o.multiple && *o.multiple) return json::array();
+            return o.choices.empty() ? json() : o.choices.front().value;
+        default: return nullptr;
+    }
+}
+
+// The value a control bound to `value` or to a state shows now.
+json current(const SpecInstrumentHost& host, const spec::Control& c) {
+    if (host.values) {
+        json v = host.values->control_value(c.id);
+        if (!v.is_null()) return v;
+    }
+    const auto it = own_json().find(key_of(c));
+    return it != own_json().end() ? it->second : start_of(host, c);
+}
+
+// Writes the value of a control bound to `value` or to a state. While a drag
+// goes on (`end` false) the value goes to the session without an event; at
+// the end of the edit the value goes again with its events, from the value
+// the drag began with, so that the `state` event gives the right previous
+// value. Returns whether the session took it.
+bool write(SpecInstrumentHost& host, const spec::Control& c, const json& v, bool end) {
+    const std::string key = key_of(c);
+    if (!end && !drag_starts().count(key)) drag_starts()[key] = current(host, c);
+    if (end) {
+        const auto start = drag_starts().find(key);
+        if (start != drag_starts().end()) {
+            if (host.values) host.values->set_control(c.id, start->second, cb::CommandOrigin::ui, nullptr);
+            drag_starts().erase(start);
+        }
+    }
+    if (host.values) {
+        const cb::Error e = host.values->set_control(c.id, v, cb::CommandOrigin::ui, end ? host.events : nullptr);
+        return e.ok();
+    }
+    own_json()[key] = v;
+    if (end) push_control_event(host, c, v);
+    return true;
+}
+
+std::string choice_text(const spec::Choice& ch) {
+    if (ch.label) return *ch.label;
+    return ch.value.is_string() ? ch.value.get<std::string>() : ch.value.dump();
+}
+
+bool same_json(const json& a, const json& b) {
+    if (a.is_number() && b.is_number()) return a.get<double>() == b.get<double>();
+    return a == b;
 }
 
 struct Style {
@@ -246,9 +375,12 @@ bool draw_slider(const spec::Control& c, const spec::ControlTarget& t, const Row
             }
         }
     } else {
-        auto& own = own_values();
-        const auto it = own.find(key);
-        shown = it != own.end() ? it->second : c.options.value.value_or(lo);
+        // Bound to `value` or to a state: the bounds may read references or
+        // the state, and the session holds the value.
+        lo = bound_of(host, c, "min").value_or(0.0);
+        hi = bound_of(host, c, "max").value_or(std::max(lo + 1.0, 1.0));
+        const json now = current(host, c);
+        shown = now.is_number() ? now.get<double>() : lo;
     }
     lo = bounded(lo, 0.0);
     hi = bounded(hi, lo + 1.0);
@@ -263,7 +395,8 @@ bool draw_slider(const spec::Control& c, const spec::ControlTarget& t, const Row
     double v = shown;
     ImGuiSliderFlags flags = ImGuiSliderFlags_AlwaysClamp;
     if (log) flags |= ImGuiSliderFlags_Logarithmic;
-    const bool integer = param && param->type == "integer";
+    const spec::StateVar* state = bound_state(host, c);
+    const bool integer = (param && param->type == "integer") || (state && state->type == spec::StateType::integer);
     // ImGui takes the smallest value a log slider reaches from the format's
     // precision (10^-precision), so the format carries enough digits for the
     // low end of the range: lr from 1e-5 needs six.
@@ -281,15 +414,16 @@ bool draw_slider(const spec::Control& c, const spec::ControlTarget& t, const Row
         changed = !same(v, shown);
     }
     const json sent = integer ? json(static_cast<std::int64_t>(v)) : json(v);
-    if (changed) {
-        if (param) {
+    if (param) {
+        if (changed) {
             host.run->set_param(t.name, sent);
             held_values()[key] = Held{v, std::chrono::steady_clock::now()};
-        } else {
-            own_values()[key] = v;
         }
+        if (done) push_control_event(host, c, sent);
+        return changed;
     }
-    if (done) push_control_event(host, c, sent);
+    if (changed && !done) write(host, c, sent, false);
+    if (done) write(host, c, sent, true);
     return changed;
 }
 
@@ -425,6 +559,282 @@ bool draw_toggle(const spec::Control& c, const spec::ControlTarget& t, const Row
     return true;
 }
 
+// ---- the kinds that hold a value (design/instrument-interface.md, Control Kinds) ----
+
+// A toggle bound to `value` or to a state: the switch of draw_toggle() over a
+// boolean that the session holds.
+bool draw_value_toggle(const spec::Control& c, const Row& row, const SpecLook& look, SpecInstrumentHost& host) {
+    const json now = current(host, c);
+    const bool on = now.is_boolean() && now.get<bool>();
+    ImGui::SetCursorScreenPos(row.widget.Min);
+    const bool pressed = ImGui::InvisibleButton("###toggle", row.widget.GetSize());
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float h = std::round(ImGui::GetFrameHeight() * 0.7f);
+    const float w = std::round(h * 1.8f);
+    const ImVec2 a(row.widget.Min.x, std::round(row.widget.GetCenter().y - h * 0.5f));
+    const ImVec2 b(a.x + w, a.y + h);
+    dl->AddRectFilled(a, b, on ? look.accent : hovered ? look.plate_hover : look.plate, h * 0.5f);
+    dl->AddRect(a, b, look.rule_faint, h * 0.5f);
+    dl->AddCircleFilled(ImVec2(on ? b.x - h * 0.5f : a.x + h * 0.5f, a.y + h * 0.5f), h * 0.5f - 2.0f, look.text);
+    const float tx = b.x + std::round(6.0f * look.text_scale);
+    dl->AddText(ImVec2(tx, row.widget.GetCenter().y - ImGui::GetTextLineHeight() * 0.5f), look.secondary,
+                on ? "on" : "off");
+    if (!pressed) return false;
+    return write(host, c, !on, true);
+}
+
+// The x of `v` on the track [x0, x1] for the bounds [lo, hi].
+float track_x(double v, double lo, double hi, float x0, float x1) {
+    const double t = hi > lo ? std::clamp((v - lo) / (hi - lo), 0.0, 1.0) : 0.0;
+    return x0 + static_cast<float>(t) * (x1 - x0);
+}
+
+std::string number_label(double v) {
+    char buf[64];
+    if (std::fabs(v - std::round(v)) < 1e-9 && std::fabs(v) < 1e15) std::snprintf(buf, sizeof buf, "%.0f", v);
+    else std::snprintf(buf, sizeof buf, "%.4g", v);
+    return buf;
+}
+
+// Which part of a range the drag holds: the low grab, the high grab or the
+// span between them, by window and control.
+std::map<std::string, int>& range_grips() {
+    static std::map<std::string, int> m;
+    return m;
+}
+
+// A range: a track between its bounds, the span [lo, hi] in the accent
+// colour with a grab at each end, and the two numbers over it. A drag moves
+// the nearer grab, or the whole span when it starts between the grabs; the
+// value snaps to `step` and keeps at least `min_span`.
+bool draw_range(const spec::Control& c, const Row& row, const SpecLook& look, SpecInstrumentHost& host) {
+    const std::optional<double> mn = bound_of(host, c, "min"), mx = bound_of(host, c, "max");
+    const std::string key = key_of(c);
+    ImGui::SetCursorScreenPos(row.widget.Min);
+    const bool disabled = !mn || !mx;
+    ImGui::BeginDisabled(disabled);
+    ImGui::InvisibleButton("###range", row.widget.GetSize());
+    const bool active = ImGui::IsItemActive(), activated = ImGui::IsItemActivated();
+    const bool released = ImGui::IsItemDeactivated();
+    ImGui::EndDisabled();
+    disabled_tooltip(disabled ? "The range has no bounds yet: its min or max reads a value that is not there." : "");
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImRect& r = row.widget;
+    dl->AddRectFilled(r.Min, r.Max, look.plate);
+    dl->AddRect(r.Min, r.Max, look.rule_faint);
+    if (disabled) {
+        dl->AddText(ImVec2(r.Min.x + 6.0f, r.GetCenter().y - ImGui::GetTextLineHeight() * 0.5f), look.faint, "no bounds");
+        return false;
+    }
+    const double lo_b = std::min(*mn, *mx), hi_b = std::max(*mn, *mx);
+    json now = current(host, c);
+    double lo = lo_b, hi = hi_b;
+    if (now.is_array() && now.size() == 2 && now[0].is_number() && now[1].is_number()) {
+        lo = std::clamp(now[0].get<double>(), lo_b, hi_b);
+        hi = std::clamp(now[1].get<double>(), lo_b, hi_b);
+    }
+    const float grab = std::max(4.0f, std::round(4.0f * look.text_scale));
+    // The numbers [lo, hi] stand at the right of the track, as a slider's value does.
+    const std::string lo_text = number_label(lo_b), hi_text = number_label(hi_b);
+    const std::string& longer = lo_text.size() > hi_text.size() ? lo_text : hi_text;
+    const std::string widest = longer + " \xE2\x80\x93 " + longer;
+    const float label_w = ImGui::CalcTextSize(widest.c_str()).x + 2.0f * std::round(6.0f * look.text_scale);
+    const float x0 = r.Min.x + grab, x1 = std::max(x0 + 1.0f, r.Max.x - grab - std::min(label_w, r.GetWidth() * 0.45f));
+    bool changed = false;
+    if (active) {
+        const float mx_pos = ImGui::GetIO().MousePos.x;
+        const double at = lo_b + (hi_b - lo_b) * std::clamp((mx_pos - x0) / std::max(1.0f, x1 - x0), 0.0f, 1.0f);
+        if (activated) {
+            const float xl = track_x(lo, lo_b, hi_b, x0, x1), xh = track_x(hi, lo_b, hi_b, x0, x1);
+            range_grips()[key] = mx_pos > xl + grab && mx_pos < xh - grab ? 2
+                                 : std::fabs(mx_pos - xl) <= std::fabs(mx_pos - xh) ? 0
+                                                                                    : 1;
+            drag_starts().erase(key);
+            range_grips()[key + "#at"] = 0;
+        }
+        const int grip = range_grips()[key];
+        double nlo = lo, nhi = hi;
+        if (grip == 0) nlo = std::min(at, hi);
+        else if (grip == 1) nhi = std::max(at, lo);
+        else {
+            const double span = hi - lo;
+            const double d = ImGui::GetIO().MouseDelta.x / std::max(1.0f, x1 - x0) * (hi_b - lo_b);
+            nlo = std::clamp(lo + d, lo_b, hi_b - span);
+            nhi = nlo + span;
+        }
+        if (c.options.step && *c.options.step > 0) {
+            nlo = lo_b + std::round((nlo - lo_b) / *c.options.step) * *c.options.step;
+            nhi = lo_b + std::round((nhi - lo_b) / *c.options.step) * *c.options.step;
+        }
+        if (std::fabs(nlo - lo) > 1e-12 || std::fabs(nhi - hi) > 1e-12) {
+            changed = write(host, c, json::array({nlo, nhi}), false);
+            now = current(host, c);
+            if (now.is_array() && now.size() == 2) lo = now[0].get<double>(), hi = now[1].get<double>();
+        }
+    }
+    if (released && drag_starts().count(key)) write(host, c, current(host, c), true);
+    // The track, the span and the grabs.
+    const float cy = r.GetCenter().y;
+    const float th = std::max(2.0f, std::round(3.0f * look.text_scale));
+    dl->AddRectFilled(ImVec2(x0, cy - th * 0.5f), ImVec2(x1, cy + th * 0.5f), look.rule_faint);
+    const float xl = track_x(lo, lo_b, hi_b, x0, x1), xh = track_x(hi, lo_b, hi_b, x0, x1);
+    dl->AddRectFilled(ImVec2(xl, cy - th), ImVec2(xh, cy + th), look.accent);
+    for (float x : {xl, xh})
+        dl->AddRectFilled(ImVec2(x - grab * 0.5f, r.Min.y + 3.0f), ImVec2(x + grab * 0.5f, r.Max.y - 3.0f),
+                          active ? look.line : look.accent);
+    const std::string text = number_label(lo) + " \xE2\x80\x93 " + number_label(hi);   // –
+    const ImVec2 ts = ImGui::CalcTextSize(text.c_str());
+    dl->PushClipRect(ImVec2(x1 + grab, r.Min.y), r.Max, true);
+    dl->AddText(ImVec2(r.Max.x - std::round(6.0f * look.text_scale) - ts.x, cy - ts.y * 0.5f), look.text, text.c_str());
+    dl->PopClipRect();
+    return changed;
+}
+
+// A picker: a menu of its choices, the chosen one shown.
+bool draw_picker(const spec::Control& c, const Row& row, SpecInstrumentHost& host) {
+    const json now = current(host, c);
+    std::string shown = now.is_null() ? std::string("\xE2\x80\x94") : now.is_string() ? now.get<std::string>() : now.dump();
+    for (const auto& ch : c.options.choices)
+        if (same_json(ch.value, now)) shown = choice_text(ch);
+    ImGui::SetCursorScreenPos(row.widget.Min);
+    ImGui::SetNextItemWidth(row.widget.GetWidth());
+    bool changed = false;
+    if (ImGui::BeginCombo("##picker", shown.c_str())) {
+        for (std::size_t i = 0; i < c.options.choices.size(); ++i) {
+            const spec::Choice& ch = c.options.choices[i];
+            ImGui::PushID(static_cast<int>(i));
+            const bool on = same_json(ch.value, now);
+            if (ImGui::Selectable(choice_text(ch).c_str(), on) && !on) changed = write(host, c, ch.value, true);
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    return changed;
+}
+
+// The text a field shows while the person edits it, by window and control.
+std::map<std::string, std::string>& text_edits() {
+    static std::map<std::string, std::string> m;
+    return m;
+}
+
+// A text field: the person's edit applies on Return or when the field loses
+// focus, cut at `max_length` bytes.
+bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost& host) {
+    const std::string key = key_of(c);
+    const json now = current(host, c);
+    const std::size_t limit = c.options.max_length
+                                  ? static_cast<std::size_t>(std::max<std::int64_t>(*c.options.max_length, 0))
+                                  : spec::limits::kStateTextBytes;
+    // The edit buffer: limit bytes and the terminating zero, filled from the
+    // session's value whenever the field is not being edited.
+    auto& edits = text_edits();
+    auto it = edits.find(key);
+    if (it == edits.end()) {
+        std::string start = now.is_string() ? now.get<std::string>() : std::string();
+        if (start.size() > limit) start.resize(limit);
+        start.resize(limit + 1, '\0');
+        it = edits.emplace(key, std::move(start)).first;
+    }
+    std::string& buf = it->second;
+    ImGui::SetCursorScreenPos(row.widget.Min);
+    ImGui::SetNextItemWidth(row.widget.GetWidth());
+    const std::string hint = c.options.placeholder.value_or("");
+    ImGui::InputTextWithHint("##text", hint.c_str(), buf.data(), buf.size());
+    const bool done = ImGui::IsItemDeactivatedAfterEdit();
+    const bool editing = ImGui::IsItemActive();
+    bool changed = false;
+    if (done) changed = write(host, c, std::string(buf.c_str()), true);
+    if (!editing) edits.erase(key);   // shows the session's value again
+    return changed;
+}
+
+// A segmented group: one square button for each choice, the ones that are on
+// in the accent colour. Without `multiple` a click chooses one; with it a
+// click turns its choice on or off.
+bool draw_segmented(const spec::Control& c, const Row& row, const SpecLook& look, SpecInstrumentHost& host) {
+    const json now = current(host, c);
+    const bool multiple = c.options.multiple && *c.options.multiple;
+    const std::size_t n = c.options.choices.size();
+    if (n == 0) return false;
+    const float w = row.widget.GetWidth() / static_cast<float>(n);
+    bool changed = false;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    for (std::size_t i = 0; i < n; ++i) {
+        const spec::Choice& ch = c.options.choices[i];
+        bool on = false;
+        if (multiple && now.is_array()) {
+            for (const auto& v : now) on = on || same_json(v, ch.value);
+        } else {
+            on = same_json(now, ch.value);
+        }
+        const ImVec2 a(std::round(row.widget.Min.x + w * static_cast<float>(i)), row.widget.Min.y);
+        const ImVec2 b(std::round(row.widget.Min.x + w * static_cast<float>(i + 1)), row.widget.Max.y);
+        ImGui::SetCursorScreenPos(a);
+        ImGui::PushID(static_cast<int>(i));
+        const bool pressed = ImGui::InvisibleButton("###segment", ImVec2(std::max(1.0f, b.x - a.x), b.y - a.y));
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::PopID();
+        if (hovered && ch.key) {
+            std::string k = *ch.key;
+            const bool shift = k.rfind("shift+", 0) == 0;
+            if (shift) k = k.substr(6);
+            for (char& ch2 : k) ch2 = static_cast<char>(std::toupper(static_cast<unsigned char>(ch2)));
+            ImGui::SetTooltip("Shortcut: %s%s", shift ? "Shift+" : "", k.c_str());
+        }
+        dl->AddRectFilled(a, b, on ? look.accent : hovered ? look.plate_hover : look.plate);
+        dl->AddRect(a, b, look.rule_faint);
+        const std::string label = choice_text(ch);
+        const ImVec2 ts = ImGui::CalcTextSize(label.c_str());
+        dl->PushClipRect(a, b, true);
+        dl->AddText(ImVec2(std::round((a.x + b.x - ts.x) * 0.5f), std::round((a.y + b.y - ts.y) * 0.5f)),
+                    on ? look.ground : look.secondary, label.c_str());
+        dl->PopClipRect();
+        if (!pressed) continue;
+        if (!multiple) {
+            if (!on) changed = write(host, c, ch.value, true) || changed;
+            continue;
+        }
+        json list = json::array();
+        for (const auto& other : c.options.choices) {
+            bool keep = false;
+            if (now.is_array())
+                for (const auto& v : now) keep = keep || same_json(v, other.value);
+            if (&other == &ch) keep = !on;
+            if (keep) list.push_back(other.value);
+        }
+        changed = write(host, c, list, true) || changed;
+    }
+    return changed;
+}
+
+// A readout: its bound text, with each field read from its reference or, for
+// a field that names a source, from the source's kept value at the cursor
+// (spec_annotations.h). A format that does not parse shows as written, in the
+// faint colour, with the reason as its tooltip.
+void draw_readout(const spec::Control& c, const Row& row, const SpecLook& look, const SpecInstrumentHost& host) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float ty = row.widget.GetCenter().y - ImGui::GetTextLineHeight() * 0.5f;
+    if (!c.options.bound_text) {
+        dl->AddText(ImVec2(row.widget.Min.x, ty), look.faint, "\xE2\x80\x94");
+        return;
+    }
+    const spec::BoundText& bt = *c.options.bound_text;
+    std::vector<std::string> names;
+    for (const auto& [name, field] : bt.fields) names.push_back(name);
+    const std::map<std::string, json> values = spec_bound_text_values(bt, host);
+    caliper_builder::text::ParsedText parsed;
+    const cb::Error e = caliper_builder::text::parse_bound_text(bt.format, names, &parsed);
+    const std::string text = e ? bt.format : caliper_builder::text::format_bound_text(parsed, values);
+    ImGui::SetCursorScreenPos(row.widget.Min);
+    ImGui::InvisibleButton("###readout", row.widget.GetSize());
+    if (e && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", e.message.c_str());
+    dl->PushClipRect(row.widget.Min, row.widget.Max, true);
+    dl->AddText(ImVec2(row.widget.Min.x, ty), e ? look.faint : look.text, text.c_str());
+    dl->PopClipRect();
+}
+
 }  // namespace
 
 std::string spec_button_label(const caliper_builder::spec::Control& control, const caliper_builder::RunState& state) {
@@ -439,7 +849,7 @@ std::string spec_button_label(const caliper_builder::spec::Control& control, con
 }
 
 float spec_control_height(const caliper_builder::spec::Control& control, const SpecLook& look) {
-    (void)control;   // a slider, a button and a toggle each take one row
+    (void)control;   // every kind takes one row
     return std::round(look.ui_size * look.text_scale * 2.0f);
 }
 
@@ -461,7 +871,19 @@ bool draw_spec_control(const caliper_builder::spec::Control& control, const ImRe
         } else if (button) {
             changed = draw_button(control, t, row, host);
         } else if (control.kind == spec::ControlKind::toggle) {
-            changed = draw_toggle(control, t, row, look, host);
+            changed = holds_value(t) ? draw_value_toggle(control, row, look, host) : draw_toggle(control, t, row, look, host);
+        } else if (control.kind == spec::ControlKind::range) {
+            changed = draw_range(control, row, look, host);
+        } else if (control.kind == spec::ControlKind::picker) {
+            changed = draw_picker(control, row, host);
+        } else if (control.kind == spec::ControlKind::text) {
+            changed = draw_text_field(control, row, host);
+        } else if (control.kind == spec::ControlKind::segmented) {
+            changed = draw_segmented(control, row, look, host);
+        } else if (control.kind == spec::ControlKind::readout) {
+            draw_readout(control, row, look, host);
+        } else if (control.kind == spec::ControlKind::transport) {
+            changed = draw_transport_control(control, row.widget, look, host);   // spec_transport.h
         } else {
             ImGui::GetWindowDrawList()->AddText(row.widget.Min, look.faint,
                                                 (std::string(spec::control_kind_name(control.kind)) +
@@ -472,6 +894,44 @@ bool draw_spec_control(const caliper_builder::spec::Control& control, const ImRe
     ImGui::PopID();
     ImGui::SetCursorScreenPos(cursor);
     return changed;
+}
+
+void record_spec_pick(const std::string& panel, const caliper_builder::Event& pick, SpecInstrumentHost& host) {
+    if (!host.values) return;
+    // The pick's fields: the event's `fields` when the panel gave them, else
+    // the keys of a live view's pick (entity, index, row_id, position).
+    const json& f = pick.fields.contains("fields") && pick.fields["fields"].is_object() ? pick.fields["fields"] : pick.fields;
+    cb::PickFields out;
+    // A whole number of the pick, when it is a finite number of a magnitude
+    // of at most 2^53 - 1, so that the rounding is exact and defined.
+    auto integer = [&](const char* k) -> std::optional<std::int64_t> {
+        const auto it = f.find(k);
+        if (it == f.end() || !it->is_number()) return std::nullopt;
+        const double d = it->get<double>();
+        if (!std::isfinite(d) || std::fabs(d) > 9007199254740991.0) return std::nullopt;
+        return static_cast<std::int64_t>(std::llround(d));
+    };
+    auto number = [&](const char* k) -> std::optional<double> {
+        const auto it = f.find(k);
+        return it != f.end() && it->is_number() ? std::optional<double>(it->get<double>()) : std::nullopt;
+    };
+    if (auto it = f.find("entity"); it != f.end() && it->is_string()) out.entity = it->get<std::string>();
+    out.index = integer("index");
+    out.row_id = integer("row_id");
+    out.row = integer("row");
+    out.column = integer("column");
+    out.step = integer("step");
+    out.value = number("value");
+    if (auto x = number("x"), y = number("y"), z = number("z"); x && y && z) {
+        out.position = std::array<double, 3>{*x, *y, *z};
+    } else if (auto p = f.find("position"); p != f.end() && p->is_array() && p->size() == 3) {
+        bool ok = true;
+        for (const auto& v : *p) ok = ok && v.is_number();
+        if (ok) out.position = std::array<double, 3>{(*p)[0].get<double>(), (*p)[1].get<double>(), (*p)[2].get<double>()};
+    }
+    if (auto a = pick.fields.find("annotation"); a != pick.fields.end() && a->is_string()) out.annotation = a->get<std::string>();
+    // The pick event is in the ring already; the state write adds its own.
+    host.values->record_pick(panel, out, cb::CommandOrigin::ui, host.events);
 }
 
 }  // namespace caliper_host

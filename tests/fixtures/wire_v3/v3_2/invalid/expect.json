@@ -216,6 +216,21 @@
   "program_id_long.bin": {
     "error": "bad_request"
   },
+  "program_id_operator_bare.bin": {
+    "error": "bad_request"
+  },
+  "program_id_operator_digits.bin": {
+    "error": "bad_request"
+  },
+  "program_id_operator_empty_spec.bin": {
+    "error": "bad_request"
+  },
+  "program_id_operator_nondigit.bin": {
+    "error": "bad_request"
+  },
+  "program_id_operator_spec.bin": {
+    "error": "bad_request"
+  },
   "program_id_upper.bin": {
     "error": "bad_request"
   },
@@ -232,6 +247,42 @@
     "error": "bad_request"
   },
   "program_output_kind.bin": {
+    "error": "bad_request"
+  },
+  "program_params_bool.bin": {
+    "error": "bad_request"
+  },
+  "program_params_declaration.bin": {
+    "error": "bad_request"
+  },
+  "program_params_empty.bin": {
+    "error": "bad_request"
+  },
+  "program_params_list.bin": {
+    "error": "bad_request"
+  },
+  "program_params_many.bin": {
+    "error": "bad_request"
+  },
+  "program_params_missing.bin": {
+    "error": "bad_request"
+  },
+  "program_params_name_dash.bin": {
+    "error": "bad_request"
+  },
+  "program_params_name_digit.bin": {
+    "error": "bad_request"
+  },
+  "program_params_name_long.bin": {
+    "error": "bad_request"
+  },
+  "program_params_name_reserved.bin": {
+    "error": "bad_request"
+  },
+  "program_params_section.bin": {
+    "error": "bad_request"
+  },
+  "program_params_string.bin": {
     "error": "bad_request"
   },
   "program_pixels_side.bin": {
@@ -253,6 +304,9 @@
     "error": "bad_request"
   },
   "program_state_kind.bin": {
+    "error": "bad_request"
+  },
+  "program_state_kind_operator_id.bin": {
     "error": "bad_request"
   },
   "program_state_many.bin": {
@@ -283,6 +337,27 @@
     "error": "bad_request"
   },
   "program_state_step.bin": {
+    "error": "bad_request"
+  },
+  "program_tensor_extra_key.bin": {
+    "error": "bad_request"
+  },
+  "program_tensor_shape_axes.bin": {
+    "error": "bad_request"
+  },
+  "program_tensor_shape_big.bin": {
+    "error": "bad_request"
+  },
+  "program_tensor_shape_empty.bin": {
+    "error": "bad_request"
+  },
+  "program_tensor_shape_float.bin": {
+    "error": "bad_request"
+  },
+  "program_tensor_shape_missing.bin": {
+    "error": "bad_request"
+  },
+  "program_tensor_shape_zero.bin": {
     "error": "bad_request"
   },
   "program_time_ms.bin": {

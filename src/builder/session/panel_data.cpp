@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <vector>
 
 namespace caliper_builder {
@@ -192,6 +193,18 @@ void encode_series(Encoded& e, const spec::Panel& panel, const PanelData& d, con
     std::vector<double> xs;
     const SlotData* xslot = slot(d, "x");
     if (xslot && !vector_of(*xslot, &xs)) return mismatch(e, xslot->binding);
+    // A y over a window of kept steps takes the steps of its rows as x
+    // (design/instrument-interface.md, Window Step).
+    const SlotData* window_x = nullptr;
+    if (!xslot)
+        for (const SlotData* ys : slots(d, "y"))
+            if (ys->kind == SlotData::Kind::tensor && ys->steps.valid() && ys->tensor.valid() && ys->tensor.rank() == 1) {
+                window_x = ys;
+                break;
+            }
+    if (window_x)
+        for (std::uint64_t i = 0; i < window_x->steps.numel(); ++i) xs.push_back(window_x->steps.element(i));
+    const bool has_x = xslot != nullptr || window_x != nullptr;
     struct Raw {
         std::string binding;
         json row = nullptr;
@@ -224,13 +237,13 @@ void encode_series(Encoded& e, const spec::Panel& panel, const PanelData& d, con
         Line l;
         l.binding = r.binding;
         l.row = r.row;
-        const std::size_t n = xslot ? std::min(r.y.size(), xs.size()) : r.y.size();
+        const std::size_t n = has_x ? std::min(r.y.size(), xs.size()) : r.y.size();
         l.count = n;
         steps = std::max(steps, n);
         l.x.reserve(n);
         l.y.reserve(n);
         for (std::size_t i = 0; i < n; ++i) {
-            const double x = xslot ? xs[i] : static_cast<double>(i), y = r.y[i];
+            const double x = has_x ? xs[i] : static_cast<double>(i), y = r.y[i];
             if (!std::isfinite(x) || !std::isfinite(y)) continue;
             l.last = y;
             l.has_last = true;
@@ -254,7 +267,34 @@ void encode_series(Encoded& e, const spec::Panel& panel, const PanelData& d, con
                          {"y", vector_json(l.y)}});
     }
     if (!any) return empty(e, raw.front().binding);
-    e.data = {{"x_index", xslot == nullptr}, {"steps", steps}, {"lines", std::move(lines)}};
+    e.data = {{"x_index", !has_x}, {"steps", steps}, {"lines", std::move(lines)}};
+}
+
+// What the time cursor chose for the panel (design/instrument-interface.md,
+// Latest at the Cursor): the newest kept step that a slot shows while the
+// cursor is held, whether a source shows only its newest value ("Live
+// only"), and the first and last step of a window. Null when no slot reads
+// kept steps.
+json cursor_info(const PanelData& d) {
+    std::optional<std::int64_t> step;
+    bool live_only = false;
+    std::optional<std::pair<double, double>> window;
+    auto look = [&](const SlotData& s) {
+        if (s.step) step = step ? std::max(*step, *s.step) : *s.step;
+        live_only = live_only || s.live_only;
+        if (s.steps.valid() && s.steps.numel() > 0) {
+            const double lo = s.steps.element(0), hi = s.steps.element(s.steps.numel() - 1);
+            window = window ? std::make_pair(std::min(window->first, lo), std::max(window->second, hi))
+                            : std::make_pair(lo, hi);
+        }
+    };
+    for (const SlotData& s : d.slots) look(s);
+    for (const EntityData& e : d.entities)
+        for (const SlotData& s : e.slots) look(s);
+    if (!step && !live_only && !window) return nullptr;
+    json out = {{"step", step ? json(*step) : json(nullptr)}, {"live_only", live_only}};
+    out["window"] = window ? json::array({(std::int64_t)window->first, (std::int64_t)window->second}) : json(nullptr);
+    return out;
 }
 
 std::int64_t stride_for(std::int64_t n, std::int64_t max_side) {
@@ -534,6 +574,7 @@ json panel_data_result(const spec::Spec& spec, const PanelData& data, std::uint6
                         ? std::nullopt
                         : spec::live_scene_name(it->second.bindings.front());
                 e.data = {{"scene", name ? json(*name) : json(nullptr)}};
+                if (!panel->entities.empty()) encode_scene_entities(*panel, data, limits, &e.data);
                 break;
             }
         }
@@ -544,7 +585,11 @@ json panel_data_result(const spec::Spec& spec, const PanelData& data, std::uint6
     }
     out["state"] = std::move(e.state);
     out["bounds"] = std::move(e.bounds);
-    if (out["state"].is_null()) out["data"] = std::move(e.data);
+    if (out["state"].is_null()) {
+        out["data"] = std::move(e.data);
+        json cursor = cursor_info(data);
+        if (!cursor.is_null() && out["data"].is_object()) out["data"]["cursor"] = std::move(cursor);
+    }
     return out;
 }
 

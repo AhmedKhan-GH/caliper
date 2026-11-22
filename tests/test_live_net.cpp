@@ -66,6 +66,8 @@ public:
     std::string token = "fake_token-0123456789abcdef";
     wire::Identity id{"clp-test-4242", "fake_train.py", 4242, 1763200000000ull};
     Json views = Json::array();
+    Json timelines;                     // 3.2: VIEWS "timelines" when not null
+    uint16_t minor = CALIPER_NET_PROTOCOL_MINOR;   // the minor of the frames it sends
     bool auto_attach = true;            // as caliper.serve(): attach a viewer to its one session
 
     // Producer-thread state (read through call()).
@@ -135,7 +137,7 @@ public:
     // ---- producer-thread actions (inside call()) ----------------------------------------
     void send(const wire::Message& m) {
         std::vector<uint8_t> b;
-        REQUIRE(wire::encode(m, &b));
+        REQUIRE(wire::encode(m, &b, nullptr, minor));
         if (conn) server_.send(conn, b.data(), b.size());
     }
     void send_raw(const std::vector<uint8_t>& b, bool binary = true) {
@@ -303,6 +305,7 @@ private:
         wire::Views v;
         v.session = id.id;
         v.views = script31 ? views_with_items() : views;
+        v.timelines = timelines;
         send(v);
         if (script31) send_controls();
     }
@@ -1378,6 +1381,102 @@ TEST_CASE("live/net: a producer streams a heatmap, an image, points, a series an
     caliper_core_shutdown(core);
 }
 
+TEST_CASE("live/net: a snapshot's step stamp reaches the view info when VIEWS listed timelines, step first") {
+    std::string no_gpu;
+    CaliperCore* core = net_core(96, 64, &no_gpu);
+    if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
+    FakeProducer p;
+    Json step = Json::object(), time = Json::object();
+    step.set("name", "step");
+    step.set("kind", CALIPER_NET_TIMELINE_SEQUENCE);
+    time.set("name", "time");
+    time.set("kind", CALIPER_NET_TIMELINE_TIME);
+    p.timelines = Json::array();
+    p.timelines.push(step);
+    p.timelines.push(time);
+    p.minor = CALIPER_NET_MINOR_3_2;
+    p.start();
+    REQUIRE_MESSAGE(caliper_core_live_attach_url(core, p.url().c_str()) == 1, caliper_core_last_error(core));
+    {
+        const std::vector<std::string> caps = p.call([](FakeProducer& f) { return f.hello_caps; });
+        CHECK(std::find(caps.begin(), caps.end(), std::string(CALIPER_NET_CAP_TIMELINES)) != caps.end());
+    }
+    REQUIRE(poll_until(core, [&] { return p.call([](FakeProducer& f) { return f.sub_of.size(); }) == 5; }));
+
+    const std::vector<float> heat = ramp(8, 4, 1.0f);
+    auto send_heat = [&](bool stamped, int64_t step_value) {
+        p.call([&](FakeProducer& f) {
+            wire::Snapshot s = f.snap("heat", CALIPER_NET_KIND_HEATMAP);
+            s.data = wire::Section::make("data", CALIPER_NET_DTYPE_F32, {4, 8}, heat.data(), heat.size() * 4);
+            s.flags = CALIPER_NET_SNAP_RAW;
+            s.stats = {0.0, 1.0};
+            const int64_t stamp[2] = {step_value, 123456};
+            if (stamped) s.stamp = wire::Section::make("stamp", CALIPER_NET_DTYPE_I64, {2}, stamp, sizeof stamp);
+            f.send(s);
+            return 0;
+        });
+    };
+    send_heat(false, 0);
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 1; }));
+    CHECK(view_info(core, "heat").step == INT64_MIN);
+    send_heat(true, 42);
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 2; }));
+    CHECK(view_info(core, "heat").step == 42);
+    send_heat(true, CALIPER_NET_STAMP_ABSENT);   // absent on the step timeline
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 3; }));
+    CHECK(view_info(core, "heat").step == INT64_MIN);
+    send_heat(true, 43);
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 4; }));
+    CHECK(view_info(core, "heat").step == 43);
+    send_heat(false, 0);
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 5; }));
+    CHECK(view_info(core, "heat").step == INT64_MIN);
+    caliper_core_live_detach(core);
+    caliper_core_shutdown(core);
+}
+
+TEST_CASE("live/net: a snapshot's cadence (protocol 3.2 draft) reaches the source's view cadences") {
+    std::string no_gpu;
+    CaliperCore* core = net_core(96, 64, &no_gpu);
+    if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
+    FakeProducer p;
+    p.minor = CALIPER_NET_MINOR_3_2;
+    p.start();
+    REQUIRE_MESSAGE(caliper_core_live_attach_url(core, p.url().c_str()) == 1, caliper_core_last_error(core));
+    REQUIRE(poll_until(core, [&] { return p.call([](FakeProducer& f) { return f.sub_of.size(); }) == 5; }));
+    caliper_live::Source* src = caliper_live_stream(core);
+    REQUIRE(src != nullptr);
+    const std::vector<float> heat = ramp(8, 4, 1.0f);
+    auto send_heat = [&](bool with_cadence) {
+        p.call([&](FakeProducer& f) {
+            wire::Snapshot s = f.snap("heat", CALIPER_NET_KIND_HEATMAP);
+            s.data = wire::Section::make("data", CALIPER_NET_DTYPE_F32, {4, 8}, heat.data(), heat.size() * 4);
+            s.flags = CALIPER_NET_SNAP_RAW;
+            s.stats = {0.0, 1.0};
+            if (with_cadence) {
+                Json c = Json::object();
+                c.set("every", 59);
+                c.set("limit", "budget");
+                s.cadence = c;
+            }
+            f.send(s);
+            return 0;
+        });
+    };
+    send_heat(false);
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 1; }));
+    CHECK(src->view_cadences().count("heat") == 0);
+    send_heat(true);
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 2; }));
+    const auto cadences = src->view_cadences();
+    REQUIRE(cadences.count("heat") == 1);
+    Json c;
+    REQUIRE(Json::parse(cadences.at("heat").data(), cadences.at("heat").size(), &c, nullptr));
+    CHECK(c.find("limit")->as_string() == "budget");
+    caliper_core_live_detach(core);
+    caliper_core_shutdown(core);
+}
+
 TEST_CASE("live/net: refusals and bad links fail the attach with the reason") {
     std::string no_gpu;
     CaliperCore* core = net_core(64, 64, &no_gpu);
@@ -1505,7 +1604,8 @@ TEST_CASE("live/net: the native source announces controls and selection, and a s
     REQUIRE(poll_until(core, [&] { return rc->have() && rc->state().run_state == "running"; }));
     CHECK(p.call([](FakeProducer& f) { return f.hello_caps; }) ==
           std::vector<std::string>{CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_SCENES,
-                                   CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS});
+                                   CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
+                                   CALIPER_NET_CAP_TIMELINES});
     CHECK(rc->access().allowed);
     CHECK(rc->why_not(CALIPER_NET_OP_PAUSE).empty());
     REQUIRE(rc->state().params.size() == 1);

@@ -2,6 +2,8 @@
 // paths, the diagnostic sink and the value rules.
 #include "internal.h"
 
+#include <caliper_builder/spec/colormaps.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -32,15 +34,19 @@ const std::vector<std::string>& slots_of(Primitive p) {
 }
 
 const std::vector<std::string>& options_of(Primitive p) {
-    static const std::vector<std::string> series = {"x_label", "x_log", "x_range", "y_label", "y_log", "y_range"};
-    static const std::vector<std::string> heatmap = {"colormap", "range", "x_label", "y_label"};
-    static const std::vector<std::string> points = {"colormap", "x_label", "y_label", "z_label"};
-    static const std::vector<std::string> histogram = {"bins", "range", "x_label", "y_label", "y_log"};
+    // The keys `legend`, `box`, `views`, `select`, `format` and `fields`, and
+    // `scale_bar` on image and points, belong to format version 1.
+    static const std::vector<std::string> series = {"legend", "select",  "x_label", "x_log",
+                                                    "x_range", "y_label", "y_log",   "y_range"};
+    static const std::vector<std::string> heatmap = {"colormap", "legend", "range", "select", "x_label", "y_label"};
+    static const std::vector<std::string> points = {"colormap", "legend",  "scale_bar", "select",
+                                                    "x_label",  "y_label", "z_label"};
+    static const std::vector<std::string> histogram = {"bins", "legend", "range", "x_label", "y_label", "y_log"};
     static const std::vector<std::string> table = {"columns"};
-    static const std::vector<std::string> image = {"colormap", "range"};
-    static const std::vector<std::string> text = {"text"};
-    static const std::vector<std::string> scene = {"axes",      "exclude", "include",    "labels",
-                                                   "scale_bar", "up",      "view_camera"};
+    static const std::vector<std::string> image = {"colormap", "legend", "range", "scale_bar", "select"};
+    static const std::vector<std::string> text = {"fields", "format", "text"};
+    static const std::vector<std::string> scene = {"axes",    "box",       "exclude", "include", "labels", "legend",
+                                                   "scale_bar", "select", "up",      "view_camera", "views"};
     switch (p) {
         case Primitive::series: return series;
         case Primitive::heatmap: return heatmap;
@@ -58,10 +64,16 @@ const std::vector<std::string>& transform_keys(TransformOp op) {
     static const std::vector<std::string> slice = {"axis", "index", "start", "stop", "step"};
     static const std::vector<std::string> reduce = {"axis", "fn", "keepdims"};
     static const std::vector<std::string> normalise = {"axis", "mode"};
+    static const std::vector<std::string> window = {"start", "stop", "steps"};
+    static const std::vector<std::string> surface = {"max_cells", "pool"};
+    static const std::vector<std::string> path = {"columns", "max_points"};
     switch (op) {
         case TransformOp::slice: return slice;
         case TransformOp::reduce: return reduce;
         case TransformOp::normalise: return normalise;
+        case TransformOp::window: return window;
+        case TransformOp::surface: return surface;
+        case TransformOp::path: return path;
     }
     return slice;
 }
@@ -77,10 +89,12 @@ const std::vector<std::string>& normalise_modes() {
     return v;
 }
 
-const std::vector<std::string>& colormaps() {
-    static const std::vector<std::string> v = {"viridis", "magma", "rdbu", "greys"};
+const std::vector<std::string>& pool_modes() {
+    static const std::vector<std::string> v = {"mean", "max", "min"};
     return v;
 }
+
+const std::vector<std::string>& colormaps() { return colormap_names(); }
 
 const std::vector<std::string>& catalog_kinds() {
     static const std::vector<std::string> v = {"table", "tensor", "live", "feed", "metric", "run"};
@@ -97,12 +111,16 @@ const std::vector<std::string>& primitive_names(std::int64_t version) {
 }
 
 const std::vector<std::string>& control_kind_names() {
-    static const std::vector<std::string> v = {"slider", "button", "range", "toggle", "picker", "text"};
+    static const std::vector<std::string> v = {"slider",  "button",    "range",    "toggle",    "picker",
+                                               "text",    "segmented", "readout",  "transport"};
     return v;
 }
 
 const std::vector<std::string>& control_option_names() {
-    static const std::vector<std::string> v = {"log", "max", "min", "step", "value"};
+    static const std::vector<std::string> v = {"choices",     "choices_from", "fields",      "follow", "format",
+                                               "keys",        "log",          "max",         "max_length", "min",
+                                               "min_span",    "multiple",     "placeholder", "speed",  "step",
+                                               "value"};
     return v;
 }
 

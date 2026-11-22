@@ -203,6 +203,29 @@ jobs:
             echo "::error::GPU programs acceptance: neither passed nor skipped for lack of Metal"
             exit 1
           fi
+      # The instrument building acceptance test on its own. It uses both build folders of this job: the app
+      # and caliper-mcp of cmake-build-release, and caliper._producer, which cmake-build-python builds with
+      # the compiler library of cmake-build-release and the step above copies into python/caliper beside
+      # caliper._netio, because the surface operator runs as a program in the training script. A skip
+      # because the runner has no Metal device is accepted. Any other skip (a program that is not built,
+      # or a missing torch, sender or producer module) is a setup error, and so is any outcome that is
+      # neither a pass nor a Metal skip.
+      - name: Instrument building acceptance test
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/instrument-building-acceptance.log"
+          ctest --test-dir cmake-build-release -R caliper_instrument_building_acceptance --output-on-failure -V --timeout 600 | tee "$log"
+          if grep -q "caliper_instrument_building_acceptance passed" "$log"; then
+            echo "Instrument building acceptance: RAN and passed"
+          elif grep -qE "caliper_instrument_building_acceptance skipped: (this machine has no Metal device|the renderer is .*, not Metal)" "$log"; then
+            echo "Instrument building acceptance: SKIPPED because the runner has no Metal device"
+          elif grep -q "caliper_instrument_building_acceptance skipped" "$log"; then
+            echo "::error::Instrument building acceptance: SKIPPED for a reason other than a missing Metal device (CI setup error)"
+            exit 1
+          else
+            echo "::error::Instrument building acceptance: neither passed nor skipped for lack of Metal"
+            exit 1
+          fi
       # The Python tests of managed runs, the adapter, watch and controls run with the acceptance
       # Python, which has torch, websockets and the native sender. The four tests of test_watch.py that
       # need the native core module (caliper._native, which the CMake build does not install into
@@ -211,14 +234,20 @@ jobs:
       # network programs, of the ablation and of wire 3.2 run here as well. One test of test_programs.py
       # is deselected: it publishes a program output through the real scene calls, which need the
       # caliper._live module, and the job builds only caliper._producer of the Python modules.
+      # The tests of step stamps and of tensor programs run here too: the stamps test needs only numpy, and the tensor
+      # test skips itself where torch has no MPS device or caliper._producer is older than ABI version 2.
       # No test of those four files holds a wall-clock limit: their step and cost times run on a fake clock.
+      # So do the stamps of both senders end to end, which need torch, websockets and the native sender, and
+      # the shared cadence of the views, whose times run on a fake clock or scale with the measured time.
       - name: Python tests of the acceptance Python
         run: >-
           PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -m pytest -q -p no:cacheprovider
           python/tests/test_managed_run.py python/tests/test_adapter.py
           python/tests/test_watch.py python/tests/test_controls.py
           python/tests/test_programs.py python/tests/test_net_programs.py
-          python/tests/test_ablate.py python/tests/test_wire_32.py
+          python/tests/test_ablate.py python/tests/test_wire_32.py python/tests/test_step_stamps.py
+          python/tests/test_program_tensor.py python/tests/test_step_stamps_senders.py
+          python/tests/test_cadence_views.py
           --deselect "python/tests/test_watch.py::test_watch_registers_produces_and_removes"
           --deselect "python/tests/test_watch.py::test_watch_include_and_every"
           --deselect "python/tests/test_watch.py::test_watch_is_free_when_nothing_is_attached"

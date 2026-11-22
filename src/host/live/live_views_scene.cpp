@@ -6,6 +6,7 @@
 #include "embed/embed_core.h"
 #include "embed/render_stats.h"   // copy counters
 #include "live/live_scene.h"
+#include "live/scene_overlays.h"
 #include "renderer/host_renderer.h"
 
 #if defined(__EMSCRIPTEN__)
@@ -241,9 +242,16 @@ SceneRectResult draw_scene_in_rect(CaliperCore* core, const std::string& name, c
         state = SceneRectState{};
         return SceneRectResult::missing;
     }
+    return draw_scene_view_in_rect(*sc, core->scale, imgui_id, p0, size, options, state, sink);
+}
+
+SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, const char* imgui_id, ImVec2 p0,
+                                        ImVec2 size, const SceneRectOptions& options, SceneRectState& state,
+                                        const SceneRectSink& sink) {
+    SceneView* sc = &view;
     if (size.x < 4.0f || size.y < 4.0f) return SceneRectResult::too_small;
     constexpr int kMaxTarget = 8192, kHysteresisPx = 8;
-    const float scale = core->scale > 0.0f ? core->scale : 1.0f;
+    const float scale = pixel_scale > 0.0f ? pixel_scale : 1.0f;
     int want_w = std::clamp(int(size.x * scale), 1, kMaxTarget);
     int want_h = std::clamp(int(size.y * scale), 1, kMaxTarget);
     if (sc->has_target() && std::abs(want_w - int(sc->width())) <= kHysteresisPx &&
@@ -380,12 +388,26 @@ SceneRectResult draw_scene_in_rect(CaliperCore* core, const std::string& name, c
         }
     }
     if (options.labels && sc->width() && sc->height()) {
-        const float sx = size.x / float(sc->width()), sy = size.y / float(sc->height());
-        for (const caliper_scene::LabelAnchor& a : sc->labels()) {
-            const ImVec2 at(p0.x + a.x * sx + 4.0f, p0.y + a.y * sy - ImGui::GetTextLineHeight() - 2.0f);
-            dl->AddText(ImVec2(at.x + 1.0f, at.y + 1.0f), shade, a.text.c_str());
-            dl->AddText(at, ink, a.text.c_str());
+        // The item labels and the annotations' labels (scene_overlays.h).
+        const std::vector<caliper_scene::LabelAnchor> labels = sc->labels();
+        std::vector<bool> annotations(labels.size(), false), rings(labels.size(), false);
+        for (std::size_t i = 0; i < labels.size(); ++i) {
+            const std::string& path = sc->tree().path(labels[i].entity);
+            annotations[i] = path.rfind("spec-overlay/", 0) == 0;
+            rings[i] = path.rfind("spec-overlay/marker/", 0) == 0;
         }
+        SceneOverlayInput in;
+        in.annotations = &annotations;
+        in.rings = &rings;
+        in.accent = IM_COL32(176, 141, 87, 255);
+        in.draw = dl;
+        in.origin = p0;
+        in.scale_x = size.x / float(sc->width());
+        in.scale_y = size.y / float(sc->height());
+        in.labels = &labels;
+        in.ink = ink;
+        in.shade = shade;
+        draw_scene_overlays(in);
     }
     if (sc->highlighted()) {
         char t[48];

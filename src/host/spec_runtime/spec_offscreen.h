@@ -107,8 +107,16 @@ public:
     ~OffscreenPanelRenderer() override;
     PanelPng render_panel(const caliper_builder::spec::Spec& spec, const caliper_builder::PanelData& data, int width,
                           int height) override;
+    // The session's values and kept steps, which the panel's annotations,
+    // cursor line and bound texts read; null reads their defaults.
+    void set_instrument_state(caliper_builder::ValueStore* values, caliper_builder::StepHistory* history) {
+        values_ = values;
+        history_ = history;
+    }
 
 private:
+    caliper_builder::ValueStore* values_ = nullptr;
+    caliper_builder::StepHistory* history_ = nullptr;
     SpecOffscreen* shared_ = nullptr;
     float text_scale_;
     PrepareLimits limits_;

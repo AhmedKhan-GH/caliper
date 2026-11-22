@@ -181,6 +181,13 @@ double column_scale(const Mat4& m, int n) {
     return s;
 }
 
+// The clip-space matrix of a depth offset of k units: z - k * kDepthOffsetUnit * w.
+Mat4 depth_offset_matrix(int k) {
+    Mat4 m;
+    m.m[14] = -double(k) * kDepthOffsetUnit;
+    return m;
+}
+
 uint32_t tint(float opacity) {
     const uint32_t a = uint32_t(std::lround(std::clamp(opacity, 0.0f, 1.0f) * 255.0f));
     return (a << 24) | 0x00ffffffu;
@@ -817,7 +824,14 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
         }
         // Matrices: composed in double, rounded to f32 once.
         const Mat4 vm = cm.view * s.model;
-        const Mat4 mvp = s.overlay ? cm.pixel_to_clip * s.model : cm.proj * vm;
+        Mat4 mvp = s.overlay ? cm.pixel_to_clip * s.model : cm.proj * vm;
+        // The batch's depth offset, in clip space: z - k w, which moves the normalised depth by k
+        // toward the camera at every distance, the same on Metal and in WebGPU.
+        if (const Batch* b = s.entry.part == DrawPart::Batch && !s.overlay && three_d
+                                 ? tree.batch(s.entry.entity, s.entry.primitive)
+                                 : nullptr;
+            b && b->depth_offset != 0)
+            mvp = depth_offset_matrix(b->depth_offset) * mvp;
         to_f32(mvp, s.params.mvp);
         normal_matrix_columns(s.overlay ? s.model : vm, s.params.nmat0, s.params.nmat1, s.params.nmat2);
         if (s.overlay) {
@@ -845,8 +859,13 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
                 r.groups[g] = res.stage_bind_group(*s.stage, s.program, g, g == 2 ? s.image : Texture{}, s.image_binding);
                 if (!r.groups[g]) s.stage = nullptr;
             }
+            // A stage's params: its uniform at group 3, in the draw and the pick pass alike.
+            if (s.stage && !s.stage->params.empty()) {
+                r.groups[3] = res.stage_params_group(*s.stage);
+                if (!r.groups[3]) s.stage = nullptr;
+            }
             if (s.stage) ++result.staged;
-            else r.groups[0] = r.groups[1] = r.groups[2] = BindGroup{};
+            else r.groups[0] = r.groups[1] = r.groups[2] = r.groups[3] = BindGroup{};
         }
         if (!s.stage) {
             r.pipeline = res.render_pipeline(s.program, d);
@@ -865,6 +884,13 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
                     if (bd.group != g || bd.binding != bnd || !bd.dynamic || n_dyn >= caliper_gfx::kMaxDynamicOffsets) continue;
                     r.dynamic_offsets[n_dyn++] = g == 0 ? frame_off : (bnd == 0 ? params_off : cmap_off);
                 }
+        // The stage's params come after the built-in program's dynamic bindings, as group 3 is last;
+        // the block is padded to 16 bytes, as a uniform binding's size is.
+        if (s.stage && !s.stage->params.empty() && n_dyn < caliper_gfx::kMaxDynamicOffsets) {
+            std::vector<uint8_t> block(s.stage->params);
+            block.resize((block.size() + 15) / 16 * 16, 0);
+            r.dynamic_offsets[n_dyn++] = out.uniform(block.data(), uint32_t(block.size()));
+        }
         for (uint8_t i = 0; i < s.layout_count; ++i) r.vertex[i] = s.vertex[i];
         r.index_buffer = s.index_buffer;
         r.count = s.count;

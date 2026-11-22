@@ -97,7 +97,7 @@ struct Placer {
                     for (size_t i = 0; i < k; ++i)
                         if ((fixed[i] = spec_layout_fixed_height(n.children[i], spec, m))) ++n_fixed;
                 if (n_fixed == 0) {
-                    shares = spec_layout_shares(length, mins, n.ratio.value_or(0.5));
+                    shares = spec_layout_shares(length, mins, n.ratio.value_or(0.5), n.shares);
                 } else {
                     float left = length;
                     shares.assign(k, 0.0f);
@@ -107,11 +107,15 @@ struct Placer {
                             left -= shares[i];
                         }
                     std::vector<float> flex_mins;
+                    std::vector<double> flex_weights;
                     for (size_t i = 0; i < k; ++i)
-                        if (!fixed[i]) flex_mins.push_back(mins[i]);
+                        if (!fixed[i]) {
+                            flex_mins.push_back(mins[i]);
+                            if (n.shares.size() == k) flex_weights.push_back(n.shares[i]);
+                        }
                     if (!flex_mins.empty()) {
-                        const std::vector<float> flex =
-                            spec_layout_shares(left, flex_mins, flex_mins.size() == 2 ? n.ratio.value_or(0.5) : 0.5);
+                        const std::vector<float> flex = spec_layout_shares(
+                            left, flex_mins, flex_mins.size() == 2 ? n.ratio.value_or(0.5) : 0.5, flex_weights);
                         for (size_t i = 0, j = 0; i < k; ++i)
                             if (!fixed[i]) shares[i] = flex[j++];
                     }
@@ -155,6 +159,8 @@ SpecLayoutMetrics SpecLayoutMetrics::for_text_scale(float text_scale) {
     m.gap = 1.0f;
     m.min_control_w = std::round(8.0f * line);
     m.control_row_h = std::round(2.0f * line);
+    m.char_w = std::round(0.55f * line);
+    m.line_h = std::round(1.2f * line);
     return m;
 }
 
@@ -278,7 +284,9 @@ SpecRect spec_layout_min_size(const spec::LayoutNode& n, const SpecLayoutMetrics
         case spec::LayoutNode::Kind::panel:
             if (spec && !spec->find_panel(n.panel))
                 if (const spec::Control* c = spec->find_control(n.panel))
-                    return {0, 0, m.min_control_w, control_height(*c, m)};
+                    return {0, 0, n.min ? std::round((float)(*n.min)[0] * m.char_w) : m.min_control_w,
+                            control_height(*c, m)};
+            if (n.min) return {0, 0, std::round((float)(*n.min)[0] * m.char_w), std::round((float)(*n.min)[1] * m.line_h)};
             return {0, 0, m.min_panel_w, m.min_panel_h};
         case spec::LayoutNode::Kind::tabs: {
             float w = 0, h = 0;
@@ -305,39 +313,50 @@ SpecRect spec_layout_min_size(const spec::LayoutNode& n, const SpecLayoutMetrics
 }
 
 std::vector<float> spec_layout_shares(float length, const std::vector<float>& mins, double ratio) {
+    return spec_layout_shares(length, mins, ratio, {});
+}
+
+std::vector<float> spec_layout_shares(float length, const std::vector<float>& mins, double ratio,
+                                      const std::vector<double>& weights) {
     const size_t k = mins.size();
     std::vector<double> share(k, 0.0);
     if (k == 0) return {};
     const double L = std::max(0.0f, std::round(length));
     const double need = std::accumulate(mins.begin(), mins.end(), 0.0);
+    // The weight of each child: its share, or 1 for an even split. A share
+    // that is not a positive finite number counts as 1 (the validator
+    // refuses it).
+    const bool weighted = weights.size() == k;
+    std::vector<double> w(k, 1.0);
+    if (weighted)
+        for (size_t i = 0; i < k; ++i) w[i] = std::isfinite(weights[i]) && weights[i] > 0.0 ? weights[i] : 1.0;
     if (need >= L) {
         // No room for every minimum: in proportion to them.
         for (size_t i = 0; i < k; ++i) share[i] = need > 0.0 ? L * mins[i] / need : L / (double)k;
-    } else if (k == 2) {
+    } else if (k == 2 && !weighted) {
         const double r = std::clamp(ratio, 0.0, 1.0);
         share[0] = std::clamp(r * L, (double)mins[0], L - (double)mins[1]);
         share[1] = L - share[0];
     } else {
-        // Equal shares, raising each child below its minimum to it and
-        // sharing what is left among the others.
+        // Shares by weight (equal without weights), raising each child below
+        // its minimum to it and sharing what is left among the others.
         std::vector<bool> fixed(k, false);
         for (bool changed = true; changed;) {
             changed = false;
-            double left = L;
-            size_t free = 0;
+            double left = L, free_w = 0.0;
             for (size_t i = 0; i < k; ++i) {
                 if (fixed[i]) left -= mins[i];
-                else ++free;
+                else free_w += w[i];
             }
-            const double each = free ? left / (double)free : 0.0;
             for (size_t i = 0; i < k; ++i) {
+                const double part = free_w > 0.0 ? left * w[i] / free_w : 0.0;
                 if (fixed[i]) {
                     share[i] = mins[i];
-                } else if ((double)mins[i] > each) {
+                } else if ((double)mins[i] > part) {
                     fixed[i] = true;
                     changed = true;
                 } else {
-                    share[i] = each;
+                    share[i] = part;
                 }
             }
         }

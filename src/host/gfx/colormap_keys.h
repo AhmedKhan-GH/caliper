@@ -28,8 +28,9 @@
 // compares colormap_index with map_f32_to_rgba8 for all 2^32 inputs on a set of ranges.
 #pragma once
 
+#include "gfx/colormap_tables.h"   // builtin_lut: the sixteen tables
 #include "gfx/shaders/generated/uniforms.h"
-#include "tensor_bridge.h"   // map_f32_to_rgba8 (the reference) and colormap_lut (the tables)
+#include "tensor_bridge.h"   // map_f32_to_rgba8 (the reference)
 
 #include <cstddef>
 #include <cstdint>
@@ -126,10 +127,10 @@ inline void fill_block(const Keys& k, float vmin, float vmax, const uint32_t* lu
     }
 }
 
-// The block of a built-in colormap (CALIPER_CMAP_*) and a range. False for an unknown colormap,
-// whose block has its keys and zero colours.
+// The block of a built-in colormap (ids 0 to 15, builtin_lut) and a range. False for an unknown
+// colormap, whose block has its keys and zero colours.
 inline bool derive_block(int32_t colormap, float vmin, float vmax, shaders::Cmap* out) {
-    const uint32_t* lut = caliper_host::colormap_lut(colormap);
+    const uint32_t* lut = builtin_lut(colormap);
     fill_block(derive_keys(vmin, vmax), vmin, vmax, lut, out);
     return lut != nullptr;
 }

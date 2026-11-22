@@ -17,6 +17,7 @@
 #include "net/wire.h"       // the scene messages of wire protocol 3.2
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <variant>
@@ -60,6 +61,8 @@ struct Snapshot {
     uint32_t slot = 0;
     uint64_t seq = 0;               // producer's publish counter for this view
     uint64_t stamp_ns = 0;          // producer CLOCK_UPTIME_RAW at show()
+    /// The step stamp of the snapshot (the first timeline of its stamp section); INT64_MIN when none.
+    int64_t step = INT64_MIN;
     const PayloadMap* map = nullptr; // borrowed until the next take() of the view; null = identity
     // Bytes the source copied to make this payload: a network snapshot
     // received into its slot, or series values appended to the ring; 0 when
@@ -263,6 +266,13 @@ public:
     // The frame thread will never show scene view `key` (the core refused it for good):
     // the source ends its subscription and drops what still arrives for it.
     virtual void stop_scene(uint64_t key) { (void)key; }
+
+    // ---- wire protocol 3.2 draft: the views' cadence (any thread) ----------------
+    // The shared cadence that the newest snapshot of each view carried (the
+    // SNAPSHOT key `cadence`: an object with every, passes_per_s, step_ms,
+    // pass_ms, share, budget and limit), as JSON text by view name; a view
+    // whose snapshots carry none is left out.
+    virtual std::map<std::string, std::string> view_cadences() { return {}; }
 };
 
 // Why open_shm_source returned NULL.

@@ -46,19 +46,26 @@ const char* control_kind_name(ControlKind kind) {
         case ControlKind::toggle: return "toggle";
         case ControlKind::picker: return "picker";
         case ControlKind::text: return "text";
+        case ControlKind::segmented: return "segmented";
+        case ControlKind::readout: return "readout";
+        case ControlKind::transport: return "transport";
     }
     return "slider";
 }
 
 std::optional<ControlKind> control_kind_from_name(std::string_view name) {
     for (ControlKind k : {ControlKind::slider, ControlKind::button, ControlKind::range, ControlKind::toggle,
-                          ControlKind::picker, ControlKind::text})
+                          ControlKind::picker, ControlKind::text, ControlKind::segmented, ControlKind::readout,
+                          ControlKind::transport})
         if (name == control_kind_name(k)) return k;
     return std::nullopt;
 }
 
 bool control_kind_built(ControlKind kind) {
-    return kind == ControlKind::slider || kind == ControlKind::button || kind == ControlKind::toggle;
+    // Every kind of design/instrument-interface.md is built, the transport
+    // with the time transport (validate_history.cpp).
+    (void)kind;
+    return true;
 }
 
 bool operator==(const ControlTarget& a, const ControlTarget& b) { return a.kind == b.kind && a.name == b.name; }
@@ -73,6 +80,10 @@ std::optional<ControlTarget> parse_control_target(std::string_view bind) {
         t.kind = ControlTarget::Kind::run_pause;
         return t;
     }
+    if (bind == "cursor") {
+        t.kind = ControlTarget::Kind::cursor;
+        return t;
+    }
     std::string_view name;
     std::size_t max_bytes = limits::kTargetNameBytes;
     if (starts_with(bind, "param:")) {
@@ -85,6 +96,13 @@ std::optional<ControlTarget> parse_control_target(std::string_view bind) {
         t.kind = ControlTarget::Kind::intervene;
         name = bind.substr(10);
         max_bytes = kPointNameBytes;
+    } else if (starts_with(bind, "state:")) {
+        // A state variable's id is a spec id, as the state table requires.
+        t.kind = ControlTarget::Kind::state;
+        name = bind.substr(6);
+        if (!detail::valid_id(name)) return std::nullopt;
+        t.name = std::string(name);
+        return t;
     } else {
         return std::nullopt;
     }
@@ -100,27 +118,41 @@ std::string control_target_string(const ControlTarget& target) {
         case ControlTarget::Kind::run_pause: return "run:pause";
         case ControlTarget::Kind::value: return "value";
         case ControlTarget::Kind::intervene: return "intervene:" + target.name;
+        case ControlTarget::Kind::state: return "state:" + target.name;
+        case ControlTarget::Kind::cursor: return "cursor";
     }
     return "value";
 }
 
 bool control_takes_target(ControlKind kind, const ControlTarget& target) {
+    using K = ControlTarget::Kind;
+    // The kinds that hold a value bind `value` or a state variable; the type
+    // of the state is the validator's check (validate_states.cpp).
+    const bool holds = target.kind == K::value || target.kind == K::state;
     switch (kind) {
-        case ControlKind::slider:
-            return target.kind == ControlTarget::Kind::param || target.kind == ControlTarget::Kind::value;
-        case ControlKind::button:
-            return target.kind == ControlTarget::Kind::action || target.kind == ControlTarget::Kind::run_pause;
-        case ControlKind::toggle:
-            return target.kind == ControlTarget::Kind::intervene || target.kind == ControlTarget::Kind::param;
+        case ControlKind::slider: return holds || target.kind == K::param;
+        case ControlKind::button: return target.kind == K::action || target.kind == K::run_pause;
+        case ControlKind::toggle: return holds || target.kind == K::intervene || target.kind == K::param;
         case ControlKind::range:
         case ControlKind::picker:
-        case ControlKind::text: return false;
+        case ControlKind::text:
+        case ControlKind::segmented: return holds;
+        case ControlKind::readout: return false;   // a readout binds nothing
+        case ControlKind::transport: return target.kind == K::cursor;
     }
     return false;
 }
 
+bool operator==(const Choice& a, const Choice& b) {
+    return a.value == b.value && a.label == b.label && a.key == b.key && a.table == b.table;
+}
+
 bool operator==(const ControlOptions& a, const ControlOptions& b) {
-    return a.min == b.min && a.max == b.max && a.step == b.step && a.log == b.log && a.value == b.value && a.x == b.x;
+    return a.min == b.min && a.max == b.max && a.step == b.step && a.log == b.log && a.value == b.value &&
+           a.value_other == b.value_other && a.choices == b.choices && a.choices_from == b.choices_from &&
+           a.multiple == b.multiple && a.placeholder == b.placeholder && a.max_length == b.max_length &&
+           a.min_span == b.min_span && a.follow == b.follow && a.speed == b.speed && a.keys == b.keys &&
+           a.bound_text == b.bound_text && a.references == b.references && a.x == b.x;
 }
 
 bool operator==(const Control& a, const Control& b) {

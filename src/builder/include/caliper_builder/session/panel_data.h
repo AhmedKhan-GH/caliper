@@ -61,6 +61,13 @@ std::string panel_data_version(const spec::Spec& spec, const std::string& panel_
 nlohmann::json panel_data_result(const spec::Spec& spec, const PanelData& data, std::uint64_t catalog_revision,
                                  const PanelDataLimits& limits = {});
 
+// The entities of a scene panel (design/instrument-interface.md, Scene
+// Entities): panel_data_result() calls it for a scene panel with entities
+// and it adds their arrays and states to the panel's `data` object.
+// Defined in panel_data_scene.cpp.
+void encode_scene_entities(const spec::Panel& panel, const PanelData& data, const PanelDataLimits& limits,
+                           nlohmann::json* out);
+
 // The result of panel.data when the caller has `version` already.
 nlohmann::json panel_data_unchanged(const spec::Spec& spec, const std::string& panel_id, const std::string& version);
 

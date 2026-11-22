@@ -43,6 +43,7 @@ __all__ = ["NativeServer"]
 
 POLL_MS = 4             # the pump's event poll while snapshots or chunks are in flight
 IDLE_MS = 250           # otherwise: retained series of unwatched views drain this often
+PUMP_END_S = 2.0        # the longest close() waits for the pump thread to hand over and end
 _DTYPE = {"torch.float32": _wire.DType.F32, "torch.uint8": _wire.DType.U8,
           "float32": _wire.DType.F32, "uint8": _wire.DType.U8}
 
@@ -95,6 +96,7 @@ class _NativeProducer(_Producer):
             st.watched = True
             self.nio.sub_open(link.conn, s.sub, s.view, int(s.kind), -1, "{}", s.max_rate,
                               int(s.resolved["budget"]["max_backfill"]))
+            self.ring.changed()
             return
         super().join(link, s)
         g = s.group
@@ -206,6 +208,10 @@ class _NativeProducer(_Producer):
         stage, red, g = p.stage, p.red, p.group
         gid = g.__dict__.get("gid")
         if gid is not None:
+            # (run step or None, wall ns) of the view call: the native side stamps the SNAPSHOT
+            # of a peer that announced "timelines" with it, as Link._snapshot_frame does.
+            steps = p.stamp_steps
+            step = _wire.STAMP_ABSENT if steps is None or steps[0] is None else int(steps[0])
             data = stage.data
             aux = stage.aux
             axes = g.__dict__.get("axes_json")
@@ -220,7 +226,9 @@ class _NativeProducer(_Producer):
                 int(red.points_dims or 0), int(red.label_count if red.label_count is not None else -1),
                 int(_DTYPE[str(data.dtype)]), list(data.shape), data.data_ptr(),
                 data.numel() * data.element_size(),
-                aux.data_ptr() if aux is not None else 0, aux.numel() if aux is not None else 0)
+                aux.data_ptr() if aux is not None else 0, aux.numel() if aux is not None else 0,
+                json.dumps(p.cadence, sort_keys=True) if p.cadence else "",
+                steps is not None, step, int(steps[1]) if steps is not None else 0)
         stage.busy = False
         self.counters["published"] += 1
 
@@ -319,10 +327,12 @@ class NativeServer(NetServer):
                     wait = POLL_MS
                 msgs = nio.control(wait)
                 self._idle = False
+                t0 = time.thread_time()
                 for kind, conn, frame in msgs:
                     self._on_control(kind, conn, frame)
                 p.pump_once()
                 p.controls.flush()
+                self.ring.publish_s += time.thread_time() - t0   # the pump's share of the cadence
             except Exception:                         # a bug: count it, keep serving
                 self.counters["pump_errors"] += 1
                 if self.closed:
@@ -383,13 +393,20 @@ class NativeServer(NetServer):
     # -- lifetime ------------------------------------------------------------------------
     def close(self) -> None:
         """Deliver what is pending (at most about a second), end every
-        connection with BYE and stop the server. Idempotent."""
+        connection with BYE and stop the server. Idempotent.
+
+        The replies and the run state that the controls stored go out before
+        BYE: the pump thread ends after it hands over what it took, and this
+        thread hands over the rest. ``nio.close()`` then sends what is queued,
+        BYE and the close 1001, and waits at most 2 seconds for each peer's
+        close, so a peer that reads nothing does not keep the process alive."""
         if self.closed:
             return
         if self._stream_file is not None:
             self._stream_file.remove()          # the app stops listing it before it goes
         from ._net import _unroute
-        if threading.current_thread() is not self._thread:
+        pump = threading.current_thread() is self._thread
+        if not pump:
             try:
                 self.ring.flush(timeout=1.0)
                 end = time.monotonic() + 1.0
@@ -401,6 +418,17 @@ class NativeServer(NetServer):
         self.ring.close()
         self.transport.n_attached = 0
         _unroute(self)
+        if not pump:
+            self.nio.wake()
+            self._thread.join(PUMP_END_S)
+        ctl = self.producer.controls
+        # While the pump thread still runs (its join timed out), it flushes the controls itself:
+        # a flush here as well would let two threads hand over the same stored messages.
+        if ctl is not None and (pump or not self._thread.is_alive()):
+            try:
+                ctl.flush(final=True)
+            except Exception:
+                pass
         self.nio.close()                              # BYE, close 1001, joins the native threads
         if self._thread.is_alive() and threading.current_thread() is not self._thread:
             self._thread.join(5)

@@ -4,8 +4,9 @@ control flag, CONTROLS after VIEWS, pause, resume and step of a loop that
 calls caliper.step(), parameter values with clamping, actions with their two
 replies, a read-only server, a script without a checkpoint, a flood of
 requests, a 3.0 viewer, linked selection from sampled points to row ids with
-details, the last step's snapshot of a paused run, and the cost of
-caliper.step() with a viewer attached."""
+details, the last step's snapshot of a paused run, the run state of a pause
+that a close sends before BYE, and the cost of caliper.step() with a viewer
+attached."""
 from __future__ import annotations
 
 import asyncio
@@ -473,6 +474,54 @@ def test_close_releases_a_paused_run(make_server, ctl):
                 await until(lambda: loop.count > n + 3)
     run(go())
 
+
+def test_close_sends_a_held_run_state_before_bye(make_server, ctl, monkeypatch):
+    """The run state of a pause waits for the data of its step, here data that never goes out.
+    A close in that wait still sends it, before BYE and the close code 1001."""
+    from caliper import _net_controls
+    s = make_server()
+    monkeypatch.setattr(_net_controls.ControlsPort, "_data_pending", lambda self: True)
+
+    async def go():
+        async with Viewer(s) as v:
+            with Loop():
+                await v.state(lambda m: m.run["state"] == "running")
+                await v.control("pause")
+                await until(s.producer.controls.holding)
+                closing = asyncio.get_running_loop().run_in_executor(None, s.close)
+                bye = await v.expect(w.Bye)
+                await closing
+                await v.ws.wait_closed()
+                paused = [m for m in v.seen if isinstance(m, w.Controls)
+                          and m.run["state"] == "paused"]
+                assert paused and v.seen.index(paused[-1]) < v.seen.index(bye)
+                assert v.ws.close_code == w.CLOSE_GOING_AWAY
+    run(go())
+
+
+
+def test_close_leaves_the_controls_to_a_pump_thread_that_still_runs(monkeypatch):
+    """The native sender's close flushes the controls only after its pump thread ended: a pump
+    thread that did not end within PUMP_END_S flushes them itself, and two flushes at once
+    would hand over the same stored messages twice."""
+    import types
+    from caliper import _net, _net_native
+    monkeypatch.setattr(_net, "_unroute", lambda server: None)
+    flushes = []
+
+    def closed(alive):
+        ns = types.SimpleNamespace
+        ctl = ns(flush=lambda final=False: flushes.append((alive, final)))
+        srv = ns(closed=False, _stream_file=None, transport=ns(n_attached=1),
+                 ring=ns(flush=lambda timeout: 0, close=lambda: None),
+                 producer=ns(busy=lambda: False, controls=ctl, _event_q=None),
+                 nio=ns(wake=lambda: None, close=lambda: None),
+                 _thread=ns(join=lambda timeout=None: None, is_alive=lambda: alive))
+        _net_native.NativeServer.close(srv)
+        return srv
+
+    assert closed(True).closed and closed(False).closed
+    assert flushes == [(False, True)]
 
 def test_step_stays_cheap_with_a_viewer(server, ctl):
     caliper.param("lr", 2e-3)

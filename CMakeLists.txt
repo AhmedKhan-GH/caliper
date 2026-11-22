@@ -570,6 +570,9 @@ add_library(libcaliper STATIC
     src/host/core_lifecycle.cpp
     src/host/embed/embed_core.cpp
     src/host/embed/embed_views.cpp
+    # The label placement of the scene overlays (live/scene_overlays.cpp),
+    # which the spec runtime shares through this library.
+    src/host/spec_runtime/label_layout.cpp
     ${CALIPER_LIVE_SOURCES}
 )
 if(APPLE)

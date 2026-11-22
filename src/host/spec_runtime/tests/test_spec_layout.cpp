@@ -8,6 +8,8 @@
 
 #include <doctest/doctest.h>
 
+#include <array>
+#include <cmath>
 #include <fstream>
 #include <numeric>
 #include <sstream>
@@ -342,4 +344,117 @@ TEST_CASE("layout: a scene panel's default title is its scene") {
     CHECK(spec_panel_title(s, p) == "Model");
     p.title.reset();
     CHECK(spec_panel_title(s, p) == "model");
+}
+
+// ---- Layout shares and leaf minimums (design/instrument-interface.md) ------
+
+namespace {
+
+// The instrument of the design page: a world and a detail over a loss panel
+// over a row of controls, with shares and a minimum on the world. The row of
+// controls takes its own height, so the share of 1 goes unused.
+spec::Spec shares_spec() {
+    const std::string text = R"toml(caliper_spec = 1
+[applet]
+id = "shares"
+[[source]]
+id = "w"
+catalog = "tensor:w"
+[[panel]]
+id = "world"
+primitive = "heatmap"
+bind = { values = "w" }
+[[panel]]
+id = "detail"
+primitive = "heatmap"
+bind = { values = "w" }
+[[panel]]
+id = "loss"
+primitive = "series"
+bind = { y = "w" }
+[[control]]
+id = "lr"
+kind = "slider"
+bind = "value"
+options = { min = 0.0, max = 1.0 }
+[[control]]
+id = "go"
+kind = "button"
+bind = "action:go"
+[layout]
+split = "vertical"
+shares = [6, 3, 1]
+children = [
+  { split = "horizontal", shares = [3, 2], children = [{ panel = "world", min = [48, 20] }, "detail"] },
+  "loss",
+  { split = "horizontal", children = ["lr", "go"] },
+]
+)toml";
+    auto parsed = spec::parse_toml(text);
+    REQUIRE_MESSAGE(parsed.ok(), (parsed.diagnostics.empty() ? "" : parsed.diagnostics[0].message));
+    return parsed.spec;
+}
+
+}  // namespace
+
+TEST_CASE("shares split the space by weight, after the row of controls") {
+    const spec::Spec s = shares_spec();
+    for (const auto& size : {std::pair<float, float>{2560, 1440}, {1440, 900}}) {
+        // Plain variables, because CAPTURE takes its argument in a lambda, and C++17 lambdas do not
+        // capture structured bindings.
+        const float w = size.first, h = size.second;
+        CAPTURE(w);
+        const SpecLayout l = lay(s, w, h);
+        check_tiling(l, w, h);
+        const SpecLayoutPanel* world = l.find("world");
+        const SpecLayoutPanel* detail = l.find("detail");
+        const SpecLayoutPanel* loss = l.find("loss");
+        const SpecLayoutPanel* lr = l.find("lr");
+        REQUIRE(world);
+        REQUIRE(detail);
+        REQUIRE(loss);
+        REQUIRE(lr);
+        const SpecLayoutMetrics m = SpecLayoutMetrics::for_text_scale(1.0f);
+        // The row of controls keeps its height, and the two rows of panels
+        // share the rest by their shares 6 : 3.
+        CHECK(std::fabs(world->rect.h / loss->rect.h - 2.0f) < 0.02f);
+        // World and detail split 3 : 2 across, within a pixel, while both minimums hold.
+        CHECK(std::fabs(world->rect.w / (world->rect.w + detail->rect.w + 1.0f) - 0.6f) < 0.01f);
+        CHECK(world->rect.w >= std::round(48 * m.char_w));
+        CHECK(world->rect.h >= std::round(20 * m.line_h));
+        CHECK(lr->rect.h == m.control_row_h);
+    }
+}
+
+TEST_CASE("a share below its minimum keeps the minimum, and the others share the rest by weight") {
+    // 1000 px by 6 : 3 : 1, the last with a minimum of 200: it keeps 200 and
+    // the other two share 800 as 6 : 3.
+    const std::vector<float> s = spec_layout_shares(1000, {50, 50, 200}, 0.5, {6, 3, 1});
+    REQUIRE(s.size() == 3);
+    CHECK(s[2] == 200);
+    CHECK(s[0] == doctest::Approx(533).epsilon(0.01));
+    CHECK(s[0] + s[1] + s[2] == 1000);
+    // Two children with shares ignore the ratio.
+    const std::vector<float> two = spec_layout_shares(900, {10, 10}, 0.5, {1, 2});
+    CHECK(two[0] == 300);
+    CHECK(two[1] == 600);
+    // When the minimums do not fit, the children share by their minimums, as before.
+    const std::vector<float> tight = spec_layout_shares(300, {200, 400}, 0.5, {5, 1});
+    CHECK(tight[0] == 100);
+    CHECK(tight[1] == 200);
+    // No weights: the even split of today.
+    CHECK(spec_layout_shares(300, {10, 10, 10}, 0.5, {}) == spec_layout_shares(300, {10, 10, 10}, 0.5));
+}
+
+TEST_CASE("a leaf's minimum is in characters and lines of the text scale") {
+    spec::LayoutNode leaf = spec::LayoutNode::of_panel("world");
+    leaf.min = std::array<std::int64_t, 2>{48, 20};
+    const SpecLayoutMetrics one = SpecLayoutMetrics::for_text_scale(1.0f);
+    const SpecLayoutMetrics two = SpecLayoutMetrics::for_text_scale(2.0f);
+    const SpecRect a = spec_layout_min_size(leaf, one);
+    const SpecRect b = spec_layout_min_size(leaf, two);
+    CHECK(a.w == std::round(48 * one.char_w));
+    CHECK(a.h == std::round(20 * one.line_h));
+    CHECK(b.w > 1.9f * a.w);
+    CHECK(b.h > 1.9f * a.h);
 }

@@ -177,11 +177,18 @@ class ControlsPort:
         then looks again soon)."""
         return self._held is not None
 
-    def flush(self) -> None:
+    def pending(self) -> bool:
+        """Something that the controls stored is not handed to the connections yet."""
+        with self._lock:
+            return (self._controls is not None or self._held is not None or bool(self._replies)
+                    or bool(self._selections) or bool(self._posts))
+
+    def flush(self, final: bool = False) -> None:
         """Send what the controls stored: CONTROLS and SELECTION to the
         attached peers that announced the capability, then the later replies.
         A CONTROLS that announces a pause, and any newer one, waits until no
-        connection has data left to send (see the module docstring)."""
+        connection has data left to send (see the module docstring), except
+        in the ``final`` flush of the server's close, which sends it at once."""
         with self._lock:
             self._scheduled = False
             controls, self._controls = self._controls, None
@@ -194,7 +201,7 @@ class ControlsPort:
                 self._held, controls = controls, None
                 self._after_data = False
         if self._held is not None:
-            controls = self._release()
+            controls = self._release(final)
         if controls is None and not selections and not replies and not posts:
             return
         links = [ln for ln in list(self.server.producer.links) if ln.attached and not ln.closed]
@@ -220,11 +227,12 @@ class ControlsPort:
                 if not target.closed and cap in target.caps:
                     self._send(target, frame)
 
-    def _release(self):
+    def _release(self, final: bool = False):
         """The held CONTROLS once the data sent before it has gone out (or the
-        wait is over), else None and a look again soon. The server's thread."""
+        wait is over, or the server closes), else None and a look again soon.
+        The server's thread."""
         self.server.producer.pump_once()          # the paused step's data, published first
-        if self._data_pending() and time.monotonic() < self._held_until:
+        if not final and self._data_pending() and time.monotonic() < self._held_until:
             if not self.native and not self._recheck:
                 self._recheck = True
                 self.server._loop.call_later(RECHECK_S, self._look_again)

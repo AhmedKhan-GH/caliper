@@ -126,6 +126,28 @@ TEST_CASE("map_file maps at an unaligned offset and refuses a short file") {
     CHECK(empty.tensor.data() == nullptr);
 }
 
+TEST_CASE("element_at reads only inside the tensor, for an index from outside it") {
+    const TensorData t = f32({2, 3}, {1, 2, 3, 4, 5, 6});
+    CHECK(t.element_at(0) == std::optional<double>(1));
+    CHECK(t.element_at(5) == std::optional<double>(6));
+    CHECK_FALSE(t.element_at(6).has_value());
+    CHECK_FALSE(t.element_at(-1).has_value());
+    CHECK_FALSE(t.element_at(std::numeric_limits<int64_t>::min()).has_value());
+    CHECK(t.element_at(1, 2) == std::optional<double>(6));
+    CHECK_FALSE(t.element_at(2, 0).has_value());
+    CHECK_FALSE(t.element_at(0, 3).has_value());
+    CHECK_FALSE(t.element_at(-1, 1).has_value());
+    CHECK_FALSE(f32({6}, {1, 2, 3, 4, 5, 6}).element_at(0, 0).has_value());   // not of rank 2
+    CHECK_FALSE(TensorData().element_at(0).has_value());
+}
+
+TEST_CASE("a slice with a step near the int64_t limit counts one row, without overflow") {
+    const TensorData t = f32({2, 3}, {1, 2, 3, 4, 5, 6});
+    const TensorData s = apply(t, {{"op", "slice"}, {"axis", 1}, {"start", 1}, {"step", std::numeric_limits<int64_t>::max()}});
+    CHECK(s.shape() == std::vector<int64_t>{2, 1});
+    check_close(values(s), {2, 5});
+}
+
 TEST_CASE("slice follows Python semantics") {
     const TensorData t = f32({2, 3}, {1, 2, 3, 4, 5, 6});
     TensorData s = apply(t, {{"op", "slice"}, {"axis", 1}, {"start", 1}});

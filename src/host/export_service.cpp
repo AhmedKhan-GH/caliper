@@ -3,7 +3,16 @@
 #include "export_service.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+// The pinned stb_image_write calls sprintf, which the macOS SDK marks deprecated; the warning is about the
+// third-party code, which stays as it is pinned.
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #include <stb_image_write.h>
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 #include <cstdio>
 #include <ctime>

@@ -54,15 +54,25 @@
 #include <vector>
 
 struct CaliperCore;   // the app's core, whose live views hold the live scenes
+namespace caliper_gfx {
+class Backend;
+struct ProgramDesc;
+}  // namespace caliper_gfx
 
 namespace caliper_builder {
 class Session;
 class EventSink;
 class RunControl;
 struct Event;
+class ValueStore;
+class StepHistory;
 }
 
 namespace caliper_host {
+
+class SpecScene;   // spec_entities.h
+
+struct SpecInstrumentHost;   // spec_instruments.h
 
 // The type and colours the runtime draws with. house_spec_look() gives the
 // Sternbild faces and tokens; the defaults are the same tokens with ImGui's
@@ -224,6 +234,11 @@ struct SpecPanelView {
     // returns true, or returns false when the scene is not there, and the
     // panel then shows "Source offline". Null: always offline.
     std::function<bool(const ImRect& content)> scene;
+    // design/instrument-interface.md: the panel's spec item and the
+    // instrument hooks, for the cursor line and the annotations that a 2-D
+    // panel draws inside its plot. Null: none drawn.
+    const caliper_builder::spec::Panel* spec_panel = nullptr;
+    const SpecInstrumentHost* instruments = nullptr;
 };
 
 // Draws one prepared panel into `rect` of the current window: the title
@@ -307,6 +322,14 @@ public:
     // panel's id, and hands both to the control leaves (spec_instruments.h).
     // Either may be null; neither is owned.
     void set_instruments(caliper_builder::EventSink* events, caliper_builder::RunControl* run);
+    // The session's values and kept steps (design/instrument-interface.md),
+    // which the controls, the shortcuts, the transport and the annotations
+    // read. Either may be null; neither is owned.
+    void set_instrument_state(caliper_builder::ValueStore* values, caliper_builder::StepHistory* history);
+    // What references and kept steps read now (resolve.h): the values, the
+    // kept steps and the cursor of set_instrument_state(); the defaults and
+    // the newest values without them.
+    caliper_builder::ChainContext chain_context() const;
     // Where the live scenes of scene panels come from: the core of the
     // attached script, asked at each draw; null or no getter shows every
     // scene panel as "Source offline".
@@ -315,6 +338,21 @@ public:
     // content of the scene panel `panel_id`, at its next draw, as if the
     // person clicked there. False when the spec has no such scene panel.
     bool pick_scene(const std::string& panel_id, float u, float v);
+    // Where the scene of a panel's entities draws: a function that makes a backend of the
+    // graphics layer and gives its table of generated programs (live_views_scene.h,
+    // open_layer). Without one, the runtime asks the live core's renderer; an offscreen canvas
+    // gives its own device here (spec_offscreen.h).
+    using SceneLayer = std::function<bool(std::unique_ptr<caliper_gfx::Backend>* owned, caliper_gfx::Backend** gfx,
+                                          const caliper_gfx::ProgramDesc** programs, std::string* why)>;
+    void set_scene_layer(SceneLayer layer) { scene_layer_ = std::move(layer); }
+    // The scene view of a scene panel with entities, made on first use and up to date with its
+    // entities, or null when the panel has none or no backend can start.
+    caliper_live_views::SceneView* entity_view(const std::string& panel_id);
+    // The scene view that a scene panel shows: its entities' own view, or the live core's view
+    // of the scene that it binds; null when it has none yet (camera.get and camera.set).
+    caliper_live_views::SceneView* scene_view_of(const std::string& panel_id);
+    // The entities of a scene panel as the runtime built them last, or null.
+    const SpecScene* entity_scene(const std::string& panel_id) const;
 
     // The layout of the last draw.
     const SpecLayout& layout() const { return layout_; }
@@ -328,6 +366,9 @@ private:
         SpecPanelView view;
         bool stale = true;
         uint64_t generation = 0;   // the served data's, when it was resolved
+        // The last data that no reference stopped with a value out of range;
+        // the panel and each entity keep it while a reference gives such a value.
+        std::optional<caliper_builder::PanelData> last_good;
     };
     void prepare(Entry& e, const caliper_builder::PanelData& data, const caliper_builder::spec::Spec* spec = nullptr);
     void update_only(const SpecLayout* shown);
@@ -336,6 +377,8 @@ private:
     // Sets e.view.scene for a scene panel: draws through the live core and
     // pushes its picks and selections.
     void bind_scene(Entry& e);
+    // Sets e.view.scene for a scene panel with entities: draws its own scene view.
+    void bind_entity_scene(Entry& e);
 
     struct SceneStates;   // the gesture and pick state of each scene panel (live_views_scene.h)
 
@@ -358,7 +401,12 @@ private:
     std::function<void(const SpecPanelFrame&)> overlay_;
     caliper_builder::EventSink* events_ = nullptr;
     caliper_builder::RunControl* run_ = nullptr;
+    caliper_builder::ValueStore* values_ = nullptr;
+    caliper_builder::StepHistory* history_ = nullptr;
+    // What the instrument hooks get, for the spec shown.
+    SpecInstrumentHost instrument_host(const caliper_builder::spec::Spec* shown) const;
     std::function<CaliperCore*()> core_;
+    SceneLayer scene_layer_;
     std::unique_ptr<SceneStates> scenes_;
 };
 

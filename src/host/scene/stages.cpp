@@ -225,11 +225,20 @@ const StageProgram* StageCache::find(std::string_view path, Primitive primitive)
     key += char('0' + int(primitive));
     Entry& e = entries_[key];
     e.used = frame_;
-    if (e.build == build) return e.ok ? &e.program : nullptr;
+    if (e.build == build) {
+        // The params' values of this frame: a new value needs no compile.
+        if (e.ok && !build->params.empty()) e.program.params = source_->params(path);
+        return e.ok ? &e.program : nullptr;
+    }
     if (e.program.program) backend_.release(e.program.program);
     e = Entry{};
     e.used = frame_;
     e.build = build;
+    if (!build->params.empty() && !params_bound_) {
+        source_->refused(*build, "This scene view does not bind the uniform params of a stage yet, so the entity "
+                                 "keeps its built-in program.");
+        return nullptr;
+    }
     const caliper_gfx::EntryDesc entries[3] = {
         {kStageVertexEntry, uint8_t(caliper_gfx::kStageVertex), {1, 1, 1}},
         {kStageFragmentEntry, uint8_t(caliper_gfx::kStageFragment), {1, 1, 1}},
@@ -254,6 +263,7 @@ const StageProgram* StageCache::find(std::string_view path, Primitive primitive)
     e.program.material = build->material;
     e.program.vertex = build->vertex;
     e.program.source_hash = build->source_hash;
+    if (!build->params.empty()) e.program.params = source_->params(path);
     e.ok = true;
     return &e.program;
 }

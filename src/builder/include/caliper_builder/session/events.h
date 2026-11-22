@@ -13,6 +13,12 @@
 //   approval  a card asked for the person's decision, or was decided
 //   program   a GPU program or a stage compiled, was refused or stopped
 //             (design/gpu-programs.md, Program Events); its host pushes it
+//   state     a state variable took a new value
+//   cursor    the time cursor went live or held, played, moved or was clamped
+//             (design/instrument-interface.md, Events)
+//   state     a state variable took a new value
+//   cursor    the time cursor went live or held, played, moved or was clamped
+//             (design/instrument-interface.md, Events)
 // Hovers never enter the ring.
 //
 // A cursor is the seq of the last event a reader looked at; 0 reads from the
@@ -47,7 +53,7 @@
 
 namespace caliper_builder {
 
-enum class EventKind { pick, select, control, run, spec, approval, program };
+enum class EventKind { pick, select, control, run, spec, approval, program, state, cursor };
 
 // "pick", "select", "control", "run", "spec", "approval", "program".
 const char* event_kind_name(EventKind kind);

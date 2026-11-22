@@ -37,6 +37,9 @@ struct StageBuild {
     bool vertex = false;                            // a vertex stage is in it
     bool animated = false;                          // a stage reads time_s or step: the view draws each frame
     uint64_t source_hash = 0;                       // of the composed WGSL
+    // The names of the stages' params, the f32 fields of the uniform `params` in struct order at
+    // @group(3) @binding(0) (sandbox.h, kStageParamsGroup); empty when the program reads none.
+    std::vector<std::string> params;
 };
 
 // The stages of one scene panel, which its scene view asks on the frame thread.
@@ -59,6 +62,12 @@ public:
     // has waited this long, on the wall clock. The view never waits for a frame; a stage that does
     // not end makes its frame wait here, and the source may turn its stages off.
     virtual void frame_pending(double waited_ms) { (void)waited_ms; }
+    // The bytes of the uniform `params` of the entity at `path` now (StageProgram::params): the
+    // values of its stages' params, evaluated at this frame; empty when it has none.
+    virtual std::vector<uint8_t> params(std::string_view path) const {
+        (void)path;
+        return {};
+    }
 };
 
 // The StageLookup of one scene view over its panel's StageSource, which makes and keeps the
@@ -81,6 +90,9 @@ public:
     bool animated() const;
     // The programs the cache holds (tests).
     size_t size() const { return entries_.size(); }
+    // Whether the view's backend binds StageProgram::params as the uniform of group 3. A build
+    // with params draws only then; else it keeps the built-in program and its source hears why.
+    void set_params_bound(bool bound) { params_bound_ = bound; }
 
     const StageProgram* find(std::string_view path, Primitive primitive) const override;
 
@@ -94,6 +106,7 @@ private:
     caliper_gfx::Backend& backend_;
     StageSource* source_ = nullptr;
     uint64_t frame_ = 0;
+    bool params_bound_ = false;
     mutable std::map<std::string, Entry> entries_;   // by path, a NUL and the primitive
 };
 

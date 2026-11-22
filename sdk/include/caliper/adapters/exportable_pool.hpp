@@ -8,7 +8,7 @@
  * The file has three clearly-marked sections:
  *   §1  Self-contained CUDA-driver VMM mini-loader (nvcuda.dll / libcuda.so.1).
  *       Resolves ONLY the nine cuMem* symbols the pool needs — no toolkit link,
- *       no host-internal headers (src/host/*), no cuInit (torch owns the ctx).
+ *       no host-internal headers (those of src/host), no cuInit (torch owns the ctx).
  *   §2  ExportablePool — a CUDAPluggableAllocator whose alloc fn cuMemCreate's
  *       shareable blocks + registers them; a c10::cuda::MemPool over it; a
  *       Scope RAII that routes in-scope tensor allocations into the pool.

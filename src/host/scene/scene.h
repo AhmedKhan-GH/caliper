@@ -69,6 +69,10 @@ inline constexpr uint32_t kMaxUnitsBytes = 15;
 // WebGPU's minStorageBufferOffsetAlignment: arrays the index clamp and the edge gather read.
 inline constexpr uint32_t kStorageOffsetAlign = 256;
 
+// One unit of a batch's depth offset: the share of the depth range, in normalised device depth,
+// that the offset moves the batch toward the camera.
+inline constexpr double kDepthOffsetUnit = 1.0 / 8192.0;
+
 // The points view's flat light grey, packed r | g << 8 | b << 16 | a << 24.
 inline constexpr uint32_t kDefaultRgba = 0xff000000u | (230u << 16) | (220u << 8) | 220u;
 // The fixed 16-colour categorical palette of the points view (live_views_draw.cpp, kPalette).
@@ -181,6 +185,10 @@ struct Batch {
     LineMode line_mode = LineMode::Segments;
     bool per_edge = false;                    // index-pair edges: colors and values are per edge, not per vertex
     bool fill = false;                        // boxes: also translucent faces
+    // Moves the batch's depth toward the camera by this many units of kDepthOffsetUnit in clip
+    // space, -8 to 8, so that lines win over the surface they lie on
+    // (design/instrument-interface.md, Depth Offset). 0 draws as before.
+    int8_t depth_offset = 0;
 
     ImageForm image_form = ImageForm::Color;  // images; a decoded JPEG or PNG frame is Color
     float opacity = 1.0f;                     // images and segmentation
