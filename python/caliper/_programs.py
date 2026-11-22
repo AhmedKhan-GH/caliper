@@ -54,7 +54,7 @@ SHARE = 0.04            # the runtime's share of the step time (design/producer-
 WARMUP_STEPS = 8        # steps after an install before the program's first pass
 N_MIN = 3               # a cycle keeps two steps without a pass, which the measurement needs
 BASE_SAMPLES = 9        # stretches without a pass in the median of the base step time b
-COST_SAMPLES = 8        # passes in the median of the overhead D
+COST_SAMPLES = 8        # cycles in the trimmed mean of the overhead D
 CHANGE = 0.25           # N moves down only when it is more than this share above the wanted value
 GROW, SHRINK = 2.0, 1.5 # the largest factors of one change of N, up and down
 CEILING_S = 10.0        # N is at most the steps of this many seconds of training
@@ -63,6 +63,7 @@ DRAINED_STEPS = 16      # steps in a row with torch's queue empty before the mar
 SPARSE = 8              # the steps between two marks while the loop waits for the GPU by itself
 SHORT_WAITS = 2         # passes in a row whose first sync point found torch's queue empty
 WAIT_EMPTY = 2e-4       # a first sync point shorter than this found torch's queue empty
+RATE_PASSES = 8         # the last passes of a program over which its status gives passes a second
 EVERY_MAX = 10000
 TIME_MS_DEFAULT, TIME_MS_MAX = 4.0, 50.0
 MEMORY_MB_DEFAULT, MEMORY_MB_MAX = 64, 512
@@ -243,7 +244,7 @@ class _Import:
 class _Program:
     __slots__ = ("id", "decl", "wgsl", "sha256", "scene", "kind", "inputs", "output", "every_min",
                  "time_ms", "memory_mb", "handle", "state", "error", "runs", "last_step",
-                 "last_pass_ms", "memory_bytes", "warm", "every", "t0", "bound")
+                 "last_pass_ms", "memory_bytes", "warm", "every", "t0", "bound", "pass_times")
 
     def __init__(self, pid, decl, wgsl, scene, sha256):
         self.id = pid
@@ -270,6 +271,15 @@ class _Program:
         self.every = None
         self.t0 = _clock()
         self.bound = {}         # var -> the _Import it was compiled with
+        self.pass_times = deque(maxlen=RATE_PASSES + 1)   # the clock at its last passes
+
+    def passes_per_s(self):
+        """The passes a second on the run's wall clock over the last ``RATE_PASSES`` passes, or
+        None before the second pass and while the program does not run."""
+        t = self.pass_times
+        if self.state != "running" or len(t) < 2 or t[-1] <= t[0]:
+            return None
+        return (len(t) - 1) / (t[-1] - t[0])
 
     def item(self) -> dict:
         b, d, share = _CAD.step_s(), _CAD.cost_s(), _CAD.share()
@@ -279,6 +289,7 @@ class _Program:
             "last_cost_ms": None if d is None else d * 1e3,
             "step_ms": None if b is None else b * 1e3,
             "overhead_share": None if share is None else share,
+            "passes_per_s": self.passes_per_s(),
             "last_step": self.last_step, "runs": self.runs, "memory_bytes": self.memory_bytes,
             "memory_limit_bytes": self.memory_mb << 20, "error": self.error,
             "sha256": self.sha256,
@@ -762,6 +773,7 @@ def _at_step(step: int) -> None:
                     res = _STATE["rt"].run([p.handle], int(step), _clock() - p.t0, every)
                     if res.get("ran"):
                         p.runs += 1                  # a compile again starts a new native count
+                        p.pass_times.append(now)
                         ran.append(p)
             except RuntimeError as e:                # a timeout or a lost device
                 r = _refusal(e)

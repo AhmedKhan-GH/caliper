@@ -3110,6 +3110,7 @@ def _program_error(v) -> bool:
 
 _STATUS_KEYS = (("every", _int_in(1, PROGRAM_EVERY_MAX)), ("every_min", _int_in(1, PROGRAM_EVERY_MAX)),
                 ("last_pass_ms", _nonneg), ("last_cost_ms", _nonneg), ("step_ms", _nonneg),
+                ("overhead_share", _nonneg), ("passes_per_s", _nonneg),
                 ("last_step", _safe_uint), ("runs", _safe_uint), ("memory_bytes", _safe_uint),
                 ("memory_limit_bytes", _safe_uint), ("error", _program_error))
 
@@ -3139,7 +3140,7 @@ class ProgramState(_Msg):
     each program, in the order of installation. It answers each PROGRAM with
     its ``request_id``, and goes out without one after a change of a state and
     at most ``PROGRAM_STATE_RATE_HZ`` times a second while programs run.
-    ``step`` is the script's step and ``step_ms`` the median step time."""
+    ``step`` is the script's step and ``step_ms`` the base step time of the cadence."""
     TYPE: ClassVar[MsgType] = MsgType.PROGRAM_STATE
     programs: list = field(default_factory=list)
     request_id: int | None = None

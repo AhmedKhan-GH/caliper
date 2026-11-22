@@ -445,7 +445,23 @@ class Check:
             mem, limit = st.get("memory_bytes"), st.get("memory_limit_bytes")
             if not mem or mem <= 0 or (limit and mem > limit):
                 raise Fail(f"{name}: memory in use {mem!r} against the limit {limit!r}")
-            self.result[name] = {k: st.get(k) for k in ("every", "last_pass_ms", "memory_bytes",
+            if "share_at_most" in w:
+                # The measured overhead share comes down to the budget once the cadence settles; a
+                # pass of a stopped program or a slow cycle can lift it for a few cycles before that.
+                last = {}
+
+                def settled():
+                    last["st"] = self.status(w["id"]) or {}
+                    share = last["st"].get("overhead_share")
+                    return isinstance(share, (int, float)) and 0 <= share <= w["share_at_most"]
+                try:
+                    self.until(f"the overhead share of {w['id']} is at most {w['share_at_most']}", settled,
+                               w.get("settle_s", 90))
+                except Fail as e:
+                    raise Fail(f"{name}: {e}; last status {json.dumps(last.get('st'))[:600]}")
+                st = last["st"]
+            self.result[name] = {k: st.get(k) for k in ("every", "last_pass_ms", "last_cost_ms", "step_ms",
+                                                         "overhead_share", "passes_per_s", "memory_bytes",
                                                          "memory_limit_bytes", "runs")}
             return
         if "toggle" in s:

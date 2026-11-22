@@ -1754,7 +1754,8 @@ const isProgramError = (v: unknown) => {
 
 const STATUS_KEYS: [string, (v: unknown) => boolean][] = [
   ['every', intIn(1, PROGRAM_EVERY_MAX)], ['every_min', intIn(1, PROGRAM_EVERY_MAX)], ['last_pass_ms', isNonneg], ['last_cost_ms', isNonneg],
-  ['step_ms', isNonneg], ['last_step', isSafeUint], ['runs', isSafeUint], ['memory_bytes', isSafeUint], ['memory_limit_bytes', isSafeUint],
+  ['step_ms', isNonneg], ['overhead_share', isNonneg], ['passes_per_s', isNonneg],
+  ['last_step', isSafeUint], ['runs', isSafeUint], ['memory_bytes', isSafeUint], ['memory_limit_bytes', isSafeUint],
   ['error', isProgramError],
 ];
 

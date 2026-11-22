@@ -472,7 +472,7 @@ struct ProgramState {                // producer to viewer: the status item of e
     Json programs = Json::array();   // the status items as given (checked on decode), kept verbatim
     std::optional<uint32_t> request_id;   // the PROGRAM it answers; absent for an unrequested one
     std::optional<uint64_t> step;         // the script's step
-    std::optional<double> step_ms;        // the median step time
+    std::optional<double> step_ms;        // the base step time b of the cadence
 };
 // Stamp text: decimal digits with an optional leading minus, at most 20 characters, a signed 64-bit value.
 bool stamp_text_ok(const std::string& v);

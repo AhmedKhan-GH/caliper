@@ -1,0 +1,149 @@
+// The app's program host over the builder session (AppProgramHost in
+// src/host/live/live_programs.h, design/gpu-programs.md, Program Status and
+// Program Events): the status items that program.status returns carry the
+// script's cadence, and a program that the script stopped for its budget
+// shows program.over_budget in its status item and in a `program` event.
+// Compiled into caliper_live_tests only with CALIPER_WITH_BUILDER.
+#include <doctest/doctest.h>
+
+#include "live/live_programs.h"
+
+#include <caliper_builder/programs/sandbox.h>
+#include <caliper_builder/session/events.h>
+#include <caliper_builder/session/program_host.h>
+
+#include <string>
+#include <vector>
+
+namespace {
+
+namespace cb = caliper_builder;
+
+struct Link final : caliper_live::ProgramLink {
+    uint32_t next = 1;
+    std::vector<caliper_net::wire::Program> sent;
+    std::vector<caliper_live::ProgramAnswer> answers;
+    bool ready() override { return true; }
+    uint64_t epoch() override { return 1; }
+    uint32_t send(caliper_net::wire::Program m) override {
+        m.request_id = next++;
+        sent.push_back(std::move(m));
+        return sent.back().request_id;
+    }
+    std::vector<caliper_live::ProgramAnswer> take() override {
+        std::vector<caliper_live::ProgramAnswer> out;
+        out.swap(answers);
+        return out;
+    }
+};
+
+cb::spec::Program pixels(const std::string& id) {
+    cb::spec::Program p;
+    p.id = id;
+    p.wgsl = "@compute @workgroup_size(64) fn run() {} // " + id;
+    p.inputs = {{"w", "live:0.weight"}};
+    p.output.kind = cb::spec::OutputKind::pixels;
+    p.output.width = 16;
+    p.output.height = 16;
+    return p;
+}
+
+// The script's status item of a running program with its cadence, or of a
+// program stopped with `code`.
+caliper_net::Json script_item(const caliper_live::WantedProgram& w, const std::string& state,
+                              const std::string& code = "") {
+    caliper_net::Json o = caliper_net::Json::object();
+    o.set("id", w.id);
+    o.set("kind", "pixels");
+    o.set("state", state);
+    o.set("every", 48);
+    o.set("every_min", 1);
+    o.set("last_pass_ms", 0.25);
+    o.set("last_cost_ms", 0.75);
+    o.set("step_ms", 0.5);
+    o.set("overhead_share", 0.03125);
+    o.set("passes_per_s", 40.0);
+    o.set("last_step", 960);
+    o.set("runs", 20);
+    o.set("sha256", w.sha256);
+    if (!code.empty()) {
+        caliper_net::Json e = caliper_net::Json::object();
+        e.set("code", code);
+        e.set("message", "A pass adds 9 ms to a step of 0.5 ms, more than the ceiling allows.");
+        e.set("line", nullptr);
+        e.set("column", nullptr);
+        o.set("error", e);
+    }
+    return o;
+}
+
+caliper_live::ProgramAnswer answer(std::vector<caliper_net::Json> items) {
+    caliper_live::ProgramAnswer a;
+    a.programs = caliper_net::Json::array();
+    for (auto& x : items) a.programs.push(std::move(x));
+    return a;
+}
+
+}  // namespace
+
+TEST_CASE("live/programs: program.status carries the script's cadence, and over_budget stops with a status and an event") {
+    cb::spec::Spec spec;
+    spec.programs = {pixels("heat"), pixels("image")};
+    const auto heat = caliper_live::AppProgramHost::wanted_program(spec, spec.programs[0]);
+    const auto image = caliper_live::AppProgramHost::wanted_program(spec, spec.programs[1]);
+    caliper_live::AppProgramHost host;
+    cb::EventRing ring;
+    Link link;
+    host.reconcile(spec);
+    host.pump(link, &ring);
+    REQUIRE(link.sent.size() == 2);
+
+    link.answers.push_back(answer({script_item(heat, "running"), script_item(image, "running")}));
+    host.pump(link, &ring);
+    auto st = host.status();
+    REQUIRE(st.size() == 2);
+    CHECK(st[0].host == "script");
+    CHECK(st[0].state == "running");
+    CHECK(st[0].every.value_or(0) == 48);
+    CHECK(st[0].last_cost_ms.value_or(0) == 0.75);
+    CHECK(st[0].step_ms.value_or(0) == 0.5);
+    CHECK(st[0].overhead_share.value_or(0) == 0.03125);
+    CHECK(st[0].passes_per_s.value_or(0) == 40.0);
+    const nlohmann::json j = cb::program_status_json(st[0]);
+    CHECK(j["overhead_share"] == 0.03125);
+    CHECK(j["passes_per_s"] == 40.0);
+    CHECK(j["error"].is_null());
+    const std::uint64_t cursor = ring.latest();   // past the two `compiled` events
+
+    // Even the ceiling of N costs more than the budget: the script stops every
+    // program with program.over_budget, and training goes on.
+    link.answers.push_back(answer({script_item(heat, "stopped", cb::programs::kProgramOverBudget),
+                                   script_item(image, "stopped", cb::programs::kProgramOverBudget)}));
+    host.pump(link, &ring);
+    st = host.status();
+    REQUIRE(st.size() == 2);
+    for (const cb::ProgramStatus& s : st) {
+        CAPTURE(s.id);
+        CHECK(s.state == "stopped");
+        REQUIRE(s.error.has_value());
+        CHECK(s.error->code == cb::programs::kProgramOverBudget);
+        CHECK(s.error->line == 0);
+        CHECK(s.overhead_share.value_or(0) == 0.03125);   // the item still shows why
+        CHECK(cb::program_status_json(s)["error"]["code"] == "program.over_budget");
+    }
+    const cb::EventRead read = ring.read(cursor, {{cb::EventKind::program}, {}}, 8);
+    REQUIRE(read.events.size() == 2);
+    std::vector<std::string> ids;
+    for (const cb::Event& e : read.events) {
+        const nlohmann::json ev = cb::event_json(e);
+        CHECK(ev["kind"] == "program");
+        CHECK(ev["change"] == "stopped");
+        CHECK(ev["host"] == "script");
+        CHECK(ev["code"] == "program.over_budget");
+        ids.push_back(ev["program"].get<std::string>());
+    }
+    CHECK(ids == std::vector<std::string>{"heat", "image"});
+
+    host.pump(link, &ring);   // nothing new: no second event
+    CHECK(ring.read(cursor, {{cb::EventKind::program}, {}}, 8).events.size() == 2);
+}

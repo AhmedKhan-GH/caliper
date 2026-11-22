@@ -270,6 +270,8 @@ public:
         s.last_pass_ms = num("last_pass_ms");
         s.last_cost_ms = num("last_cost_ms");
         s.step_ms = num("step_ms");
+        s.overhead_share = num("overhead_share");
+        s.passes_per_s = num("passes_per_s");
         if (const caliper_net::Json* j = it.is_object() ? it.find("last_step") : nullptr) {
             int64_t v = 0;
             if (j->get_i64(&v)) s.last_step = v;

@@ -93,7 +93,7 @@ struct ProgramAnswer {
     std::optional<uint32_t> request_id;
     caliper_net::Json programs;        // the status items, an array; null for a refusal
     std::optional<uint64_t> step;      // the script's step
-    std::optional<double> step_ms;     // its median step time
+    std::optional<double> step_ms;     // its base step time b (design/gpu-programs.md, Cadence)
     std::string error_code;            // a refusal: the ERROR's code and message
     std::string error_message;
 };

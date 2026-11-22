@@ -1890,6 +1890,7 @@ bool status_item(const Json& v) {
     auto every = [](const Json& x) { return int_in(x, 1, CALIPER_NET_PROGRAM_EVERY_MAX); };
     if (!opt_ok(v, "every", every) || !opt_ok(v, "every_min", every) || !opt_ok(v, "last_pass_ms", is_nonneg) ||
         !opt_ok(v, "last_cost_ms", is_nonneg) || !opt_ok(v, "step_ms", is_nonneg) ||
+        !opt_ok(v, "overhead_share", is_nonneg) || !opt_ok(v, "passes_per_s", is_nonneg) ||
         !opt_ok(v, "last_step", is_safe_uint) || !opt_ok(v, "runs", is_safe_uint) ||
         !opt_ok(v, "memory_bytes", is_safe_uint) || !opt_ok(v, "memory_limit_bytes", is_safe_uint) ||
         !opt_ok(v, "error", program_error_ok))

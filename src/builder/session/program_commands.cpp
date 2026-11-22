@@ -29,6 +29,8 @@ json program_status_json(const ProgramStatus& s) {
                 {"last_pass_ms", opt(s.last_pass_ms)},
                 {"last_cost_ms", opt(s.last_cost_ms)},
                 {"step_ms", opt(s.step_ms)},
+                {"overhead_share", opt(s.overhead_share)},
+                {"passes_per_s", opt(s.passes_per_s)},
                 {"last_step", opt(s.last_step)},
                 {"runs", s.runs},
                 {"memory_bytes", s.memory_bytes},

@@ -6,7 +6,7 @@ The page states the spec additions, the eleven new commands, the program declara
 
 ## Status
 
-The features of this page are built. The eleven commands edit the spec and read the hosts, the sandbox checks each program and stage, the producer runtime runs programs in the script on Metal, the app runs stages in its scene panels, and the toggle and the intervention commands ablate points of the watched model. A program runs only in a build with the WGSL compiler (Open Points, Wheel). The acceptance test of the eleven steps below is not in the repository yet.
+The features of this page are built. The eleven commands edit the spec and read the hosts, the sandbox checks each program and stage, the producer runtime runs programs in the script on Metal, the app runs stages in its scene panels, and the toggle and the intervention commands ablate points of the watched model. A program runs only in a build with the WGSL compiler (Open Points, Wheel). The acceptance test is in `tests/gpu_programs/` as the ctest entry `caliper_gpu_programs_acceptance`, and Acceptance Test lists its steps. `docs/development/testing.md` describes it in GPU Programs Acceptance.
 
 ## Spec Additions
 
@@ -296,7 +296,8 @@ The facade in the script gives each output to the publish path of a `caliper.sce
 | `last_pass_ms` | The GPU time of the last pass, or null |
 | `last_cost_ms` | The overhead `D` of a pass in Cadence, shared by all programs, or null before it is measured |
 | `step_ms` | The base step time `b` in Cadence, or null before it is measured |
-| `overhead_share` | `D / (N × b)`, the measured share of the training time that the passes take, or null; only the script's item has it |
+| `overhead_share` | `D / (N × b)`, the measured share of the training time that the passes take; null for a stage or before it is measured |
+| `passes_per_s` | The passes of the program a second on the run's wall clock, over its last 8 passes; null for a stage, before its second pass and while the program does not run |
 | `last_step` | The step of the last pass, or null |
 | `runs` | The count of passes |
 | `memory_bytes` | The bytes of the output buffers and the bound tensors |
@@ -314,13 +315,13 @@ Programs add the event kind `program` to the ring of `events.wait`. The hosts pu
 |---|---|
 | `compiled` | A host compiled the program or the stage, and it runs from the next pass or frame |
 | `refused` | A check refused it; `code`, `message`, `line` and `column` say why |
-| `stopped` | The watchdog, the memory budget or a lost device stopped it |
+| `stopped` | The watchdog, the memory budget, the budget of the cadence or a lost device stopped it |
 
 ## Producer Runtime Interface
 
 The native module `caliper._producer` calls the C interface `src/host/producer/caliper_producer.h`, which is internal and not part of the public C API. The interface creates a runtime on the device of the first bound tensor, imports tensors read-only, compiles a program after the sandbox checks, runs a pass of the due programs and waits for it, gives each output buffer, returns the status of a program, and destroys the runtime. The library `caliper_producer` holds it.
 
-The Python side has two files with final signatures. `python/caliper/_programs.py` is the facade that the wire path calls: `install()`, `remove()`, `status()` and `at_step()`. `python/caliper/_adapter.py` holds the framework adapter: `export()`, `framework_done()`, `before_write()`, `hooks()` and `probe()` for the runtime, and `points()` and `ablate()` for the interventions.
+The Python side has two files with final signatures. `python/caliper/_programs.py` is the facade that the wire path calls: `install()`, `remove()`, `status()` and `at_step()`. `python/caliper/_adapter.py` holds the framework adapter: `export()`, `framework_done()`, `before_write()`, `hooks()` and `probe()` for the runtime, and `points()` and `ablate()` for the interventions. It also holds `StepMarks`, the marks of the cadence on torch's queue.
 
 ## Viewer Stage Interface
 
@@ -373,19 +374,21 @@ The run command errors of `design/instruments.md` also apply, such as `run.not_a
 
 ## Acceptance Test
 
-The acceptance test drives `caliper-mcp` against the hidden app with `CALIPER_AGENT_OFFLINE=1`. Its check script is `examples/python/gpu_program_check.py`. The test does these steps in this order:
+The acceptance test drives `caliper-mcp` against the hidden app with `CALIPER_AGENT_OFFLINE=1`. Its driver is `tests/gpu_programs/driver.py`, its steps are `tests/gpu_programs/transcript.jsonl`, and its check script is `examples/python/gpu_program_check.py`. The test does these steps in this order:
 
-1. It records the SHA-256 list of the app bundle, `caliper-mcp` and the installed Python package.
+1. It records the SHA-256 list of the app, `caliper-mcp` and the files of the installed Python package.
 2. It starts a managed training run with `run.start`, and the run's script has only `caliper.watch(model, optimizer)`.
-3. It adds a geometry program over a live weight tensor, such as one segment for each row of a weight matrix in the space of its first three principal axes, which no primitive call draws. The capture shows it.
-4. It adds a pixels program that writes an image of a tensor, and an image panel shows `live:program.<id>`.
-5. It sets a material stage on the program's entity and sees the colors change in the capture.
-6. It sends a program that declares an input `read_write`, and sees `program.writes_input` with no pass of that program.
-7. It sends a program with a loop that goes over `time_ms`, and sees the event `stopped` with `program.over_time`.
-8. It reads `program.status` and sees `every` above 1 for the medium model.
-9. It measures training throughput as the median steps per second of five short runs with the same seed, with and without the programs, and checks at least 95 %.
-10. It places a toggle bound to `intervene:<point>`, turns it on, and sees the loss change at the next steps.
+3. It adds a geometry program over a live weight tensor, one point for each of the first 512 values of the first layer's weight with the value as its height, which no primitive call draws. The capture differs from the empty scene in at least 300 pixels.
+4. It adds a pixels program that writes an image of the second layer's weight, and an image panel shows `live:program.<id>`.
+5. It sets a material stage on the program's entity and sees at least 50 yellow pixels in the capture, and ten times the count before it.
+6. It sends a program that declares an input `read_write`, and sees `program.writes_input` with no item of that program in `program.status`.
+7. It sends a program with a loop that goes over `time_ms`, and sees the event `stopped` with `program.over_time` while the run's step keeps growing.
+8. It reads `program.status` and sees `every` of at least 1, the time of the last pass and the memory in use. It then waits until the measured `overhead_share` is at most 0.04, and it does not assert a value of N.
+9. It places a toggle bound to `intervene:<point>`, turns it on, and sees the mean loss rise above three times its value before. After the release, the mean loss falls below half of its value while the toggle was on.
+10. It stops the run and checks that no process that it started is alive.
 11. It records the SHA-256 list again and checks that it did not change.
+
+The test measures no throughput, because a timing on a shared machine varies by more than the margin of the threshold. The small model kept 95.9 % in a quiet window and 93.6 % to 94.4 % under load. `design/producer-runtime.md` gives the measured throughput in Runtime Results.
 
 ## Decisions
 
@@ -423,6 +426,5 @@ Each decision below has its reason in one line.
 - **Browser stages.** The browser gives the WGSL of a stage to WebGPU directly, and the prelude must match. This comes with browser parity.
 - **Deferred wait.** The producer runtime keeps the wait at once, as `design/producer-runtime.md` decides.
 - **Review card.** The card that adds a hash to `provenance.reviewed` comes with saved instruments.
-- **Share in the app.** The script's status item has `overhead_share`, but the app's `ProgramStatus` in `program_host.h`, its reader in `live_programs.h` and the schema of `program.status` do not carry it yet. Until then, `last_cost_ms / (every × step_ms)` gives it for a program with the shared N.
 - **Sync on the GPU.** A sync that orders the pass after torch's work on the GPU, and torch's next writes after the pass, needs torch's command queue. Only torch's C++ API gives it, and Cadence Measurement in `design/producer-runtime.md` gives the reasons to wait.
 - **Wheel.** The wheel builds `caliper._producer` without the sandbox and without the WGSL compiler, because it configures with `CALIPER_WITH_BUILDER=OFF` and no prebuilt archive of the compiler is pinned in `tools/shaders/caliper-wgsl/prebuilt.cmake` yet. Thus an installed package answers `program.compiler_unavailable` for each program, and only a build from source with `CALIPER_WGSL_FROM_SOURCE=ON` runs programs in the script. When CI publishes the pinned archives, the wheel defines `CALIPER_WGSL_DOWNLOAD` and builds `src/builder/programs` with its JSON library.
