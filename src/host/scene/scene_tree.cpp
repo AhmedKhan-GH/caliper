@@ -619,9 +619,9 @@ void SceneTree::reset() {
     Entity root;
     root.parent = kNone;
     ents_[0] = std::move(root);
+    if (classes_.any()) ++classes_rev_;   // the texels change only when a table goes
     classes_.stamped.reset();
     classes_.fixed.reset();
-    ++classes_rev_;
     ++rev_;
     ++pose_rev_;
     scene_radius_ = -1;

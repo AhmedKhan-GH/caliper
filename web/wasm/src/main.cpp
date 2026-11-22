@@ -24,6 +24,8 @@
 // the frame loop. No Asyncify is needed.
 #include "fonts.h"
 #include "gfx_selftest.h"
+#include "scene_selftest.h"
+#include "gfx/shaders/generated/programs_webgpu.h"
 #include "net_source.h"
 #include "net/json.h"
 #include "page_style.h"
@@ -115,6 +117,7 @@ struct Page {
     double last_publish = 0.0;            // when the counters were last published (ms)
 
     std::string selftest;                 // the graphics layer's self-test: "" or its report
+    std::string scene_selftest;           // the last scene row: "" or its report
 
     bool ready = false;                   // the first snapshot was applied
     bool destroyed = false;
@@ -195,6 +198,7 @@ void publish() {
         for (const auto& m : gb->device_errors()) gerr += (gerr.empty() ? "" : " | ") + m;
     put("gfxErrors", gerr.c_str());
     put("gfxSelftest", g.selftest.c_str());
+    put("sceneSelftest", g.scene_selftest.c_str());
     put("state", g.net ? g.net->state_text().c_str() : "starting");
     put("messages", g.net ? (double)g.net->messages() : 0.0);
     put("bytes", g.net ? (double)g.net->bytes() : 0.0);
@@ -641,6 +645,12 @@ void frame() {
         publish_selftest_images();
         publish();
     }
+    if (caliper_web::scene_selftest_running() && g.renderer && g.renderer->gfx() &&
+        caliper_web::scene_selftest_poll(*g.renderer->gfx(), &g.scene_selftest)) {
+        const std::vector<uint8_t>& px = caliper_web::scene_selftest_pixels();
+        EM_ASM({ Module["caliperScenePixels"] = HEAPU8.slice($0, $0 + $1); }, px.data(), (int)px.size());
+        publish();
+    }
 
     if (g.net && caliper_web::poll_source(g.core, *g.net, g.poll) > 0 && !g.ready) {
         g.ready = true;   // the first snapshot is drawn this frame
@@ -858,6 +868,28 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_gfx_selftest() {
     return 1;
 }
 
+// Starts the scene row of fixture `name` (scene_selftest.h); its report comes in
+// caliperStats.sceneSelftest and its picture in Module.caliperScenePixels (256 x 256 RGBA8).
+// caliperStats.sceneFixtures names the fixtures. 1 when it started.
+EMSCRIPTEN_KEEPALIVE int caliper_views_scene_selftest(const char* name) {
+    put("sceneFixtures", caliper_web::scene_selftest_names().c_str());
+    if (!g.renderer || !g.renderer->gfx()) {
+        g.scene_selftest = "fail not started: the renderer is not up";
+        publish();
+        return 0;
+    }
+    std::string why;
+    if (!caliper_web::scene_selftest_start(*g.renderer->gfx(), caliper_gfx::shaders::kWebgpuPrograms,
+                                           name ? name : "", &why)) {
+        g.scene_selftest = "fail not started: " + why;
+        publish();
+        return 0;
+    }
+    g.scene_selftest.clear();
+    publish();
+    return 1;
+}
+
 // The colormap keys that this build derives at run time for the range (vmin, vmax), from its own
 // CPU reference (src/host/gfx/colormap_keys.h), as the scene views derive them: the browser test
 // compares them with the case file that the native tool writes. Module.caliperColormapKeys =
@@ -887,6 +919,7 @@ EMSCRIPTEN_KEEPALIVE void caliper_views_destroy() {
         g.core = nullptr;
     }
     caliper_host::services_set_renderer(nullptr);   // drops the bridge before its renderer
+    caliper_web::scene_selftest_stop();             // its scene view, before the backend
     delete g.renderer;                              // shutdown(): textures, ImGui backend, surface
     g.renderer = nullptr;
     g.net.reset();

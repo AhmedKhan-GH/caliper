@@ -67,6 +67,8 @@ struct DrawMapEntry {
     Primitive primitive = Primitive::Points;   // meaningless for Frustum and Axes
     DrawPart part = DrawPart::Batch;
     bool overlay = false;                       // drawn flat over a pinhole's picture
+    bool translucent = false;                   // alpha blending (in the colour pass)
+    bool depth_test = false, depth_write = false;   // the pipeline's depth state in the colour pass
     uint64_t items = 0;                         // instances, or vertices for a mesh
     Mat4 mvp;                                   // images: the unit square onto clip space
     uint32_t image_size[2] = {0, 0};

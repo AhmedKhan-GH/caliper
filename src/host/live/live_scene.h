@@ -2,14 +2,20 @@
 // increment 1; design/scenes.md, "Drawing a scene natively").
 //
 // A scene view owns one scene of the scene core (src/host/scene) and applies to it the decoded
-// SCENE_UPDATE and SCENE_CLEAR messages of wire protocol 3.2 (docs/references/wire-protocol-3-2.md):
-// the parts points, lines (segments or strips) and mesh, static items, and the reset that opens a
-// scene's state for a new subscription. The arrays of a network message arrive as host bytes, so
-// every array is uploaded into a buffer of the graphics layer that the view owns, which is one
-// copy, reported as such: the info line says "copied" and the bytes, and each upload counts in the
-// view's copy counters (embed/render_stats.h). A batch replaced by one of the same or a smaller
-// size is written into the buffers it already has; a larger one gets new buffers, with a capacity
-// rounded up to a power of two of at least 4 KiB, as web geometry's "Uploads and reuse" sets out.
+// scene messages of wire protocol 3.2 (docs/references/wire-protocol-3-2.md): SCENE_UPDATE with the
+// parts points, lines (segments, strips and index-pair edges), arrows, boxes, mesh (with normals,
+// or UVs and a texture), image (colour, grey, depth and segmentation) and camera; SCENE_TRANSFORMS;
+// SCENE_CLASSES; SCENE_CLEAR of named parts or all, static items, and the reset that opens a scene's
+// state for a new subscription. The arrays of a network message arrive as host bytes, so every
+// array is uploaded into a buffer of the graphics layer that the view owns, and every image into a
+// texture it owns (a u16 depth scaled to f32 scene units and class ids widened to u32 on the way,
+// as the texture's format needs), which is one copy, reported as such: the info line says
+// "copied" and the bytes, and each upload counts in the view's copy counters
+// (embed/render_stats.h); so does the class table texture, 256 KiB each time the table changes. A
+// batch replaced by one of the same or a smaller size is written into the buffers it already has;
+// a larger one gets new buffers, with a capacity rounded up to a power of two of at least 4 KiB,
+// as web geometry's "Uploads and reuse" sets out, and an image keeps its texture while its size
+// and format stay. Encoded (JPEG or PNG) images are not drawn yet.
 //
 // When something changed, or the camera moved, the view compiles the scene into a draw list of the
 // graphics layer and submits it to an offscreen colour target with depth, which the view's window
@@ -31,6 +37,7 @@
 #include "net/wire.h"
 #include "scene/camera.h"
 #include "scene/compile.h"
+#include "scene/pick.h"
 #include "scene/scale_bar.h"
 #include "scene/scene.h"
 
@@ -64,6 +71,8 @@ struct SceneCounts {
     uint64_t bytes_total = 0, copies_total = 0;
     uint64_t buffers_created = 0, buffers_reused = 0;
     uint64_t buffers_live = 0;
+    uint64_t textures_created = 0, textures_reused = 0;   // images and textured meshes
+    uint64_t textures_live = 0;
 };
 
 class SceneView {
@@ -84,7 +93,9 @@ public:
     // One decoded message. False with *why when the scene store refused it; the view keeps what it
     // drew. A message's sections may be freed once the call returns.
     bool apply(const caliper_net::wire::SceneUpdate& u, std::string* why);
+    bool apply(const caliper_net::wire::SceneTransforms& t, std::string* why);
     bool apply(const caliper_net::wire::SceneClear& c, std::string* why);
+    bool apply(const caliper_net::wire::SceneClasses& c, std::string* why);
     // Something the view ignored, as the versioning rules of protocol 3.2 say (a part, a mode or a
     // section that this increment does not build), for the info line.
     void note(const std::string& text);
@@ -96,6 +107,60 @@ public:
     void pan(float dx, float dy, float view_height);
     void zoom(float wheel, float mx, float my, float view_w, float view_h);   // m: the pointer, -1 to 1
     void fit();
+    // Looks through the camera of entity `path` (its pose and intrinsics, its pixel space flat over
+    // the picture), or returns to the view's own camera with "". False when the entity holds no
+    // camera. The view keeps the path: while the entity holds no camera (a clear, a new state that
+    // has not sent it yet) it shows its own camera and says so. A fit returns to the orbit.
+    bool look_through(const std::string& path, std::string* why);
+    const std::string& looking_through() const { return through_; }
+    // The entities that hold a camera, in path order.
+    std::vector<std::string> cameras() const;
+    // The camera the view draws with: the pinhole looked through, or its own.
+    caliper_scene::ViewCamera effective_camera() const;
+    // The anchors of the labels at the view's size and camera, nearest first, at most 512.
+    std::vector<caliper_scene::LabelAnchor> labels() const;
+
+    // ---- picking (design/scenes.md, "Picking, hover and selection") --------------------------------
+    // Asks for a pick at (x, y), in physical pixels of the view's target, through the scene core's
+    // pick pass: the pick variants of the drawn scene into a 16 x 16 window around the pointer. The
+    // answer comes from poll_pick a frame or two later; a result whose frame the view replaced since,
+    // or that a newer request superseded, is dropped. Nothing is submitted while nobody asks.
+    bool request_pick(float x, float y, std::string* why);
+    caliper_scene::PickPass::Result poll_pick(caliper_scene::Hit* out);
+    bool pick_pending() const { return pick_ && pick_->pending(); }
+    const caliper_scene::PickPass* pick_pass() const { return pick_.get(); }
+    // The frames the view has drawn: the generation a pick belongs to.
+    uint64_t generation() const { return generation_; }
+    // The detail of a pick or hover event for a hit, as protocol 3.2 gives it: entity, primitive,
+    // index (the item in the sent batch), row_id (its source index through the batch's payload axes)
+    // and, where the depth gave one, position. "" for a hit on something that is no batch item (a
+    // camera's frustum or an entity's axes): a hover there reports nothing.
+    std::string pick_detail(const caliper_scene::Hit& h) const;
+    // The source index of item `index` of the batch (path, primitive), through its payload axes.
+    int64_t row_id(const std::string& path, caliper_scene::Primitive p, int64_t index) const;
+
+    // ---- selections ------------------------------------------------------------------------------
+    // Selects the points, and the boxes by their centres, whose projection at the view's camera lies
+    // inside the polygon `poly` (x, y pairs in physical pixels of the target, by the even-odd rule),
+    // from the CPU copies of their arrays, as the points view selects; occluded items are selected
+    // too. It replaces the view's selection and returns the select event's detail: `entities`, each
+    // an entity, its primitive, `indices` and `row_ids` (at most 32,768 indices in all, `truncated`
+    // when cut), and `space` and `items` when the selected batches map an item space (the first one's,
+    // when they map several). "{}" when nothing is inside.
+    std::string select_polygon(const std::vector<float>& poly);
+    // Clears the view's own selection; true when there was one.
+    bool clear_selection();
+    // A selection of item space `space` (linked selection, wire protocol 3.1): the items of every
+    // batch whose rows are items of that space are highlighted. Empty items clear it.
+    void set_linked(const std::string& space, std::vector<int64_t> items);
+    // Every linked selection at once (item space to items): spaces absent from `by_space` are cleared.
+    void set_all_linked(const std::map<std::string, std::vector<int64_t>>& by_space);
+    // The view's own selection: the items selected, in all.
+    uint64_t selected_count() const;
+    // While anything is selected or linked, the scene is drawn dimmed towards the background (as the
+    // points view dims) and the selected points and boxes over it in their own colours. The number of
+    // items drawn so now.
+    uint64_t highlighted() const { return highlighted_; }
 
     // The up-axis switch, in a 3-D scene: the orbit keeps its target, its distance and its eye, and
     // takes its angles again about the new axis; the scene, its batches and the producer are not
@@ -161,6 +226,15 @@ private:
     struct Slot {
         caliper_scene::Batch batch;
         std::map<int, Upload> buffers;
+        caliper_gfx::Texture texture;   // an image's, or a textured mesh's
+        uint32_t tex_w = 0, tex_h = 0;
+        caliper_gfx::Format tex_format = caliper_gfx::Format::RGBA8Unorm;
+        std::vector<uint8_t> cpu_rows, cpu_ids;   // CPU views for the labels: positions or centres, class ids
+        std::map<int, std::vector<uint8_t>> cpu;    // points and boxes: every array as it arrived, by role
+        // The payload axis of the batch's item dim, when the producer sampled it (the update's `axes`),
+        // and the item space its rows are (`items`).
+        int64_t ax_start = 0, ax_step = 1, ax_count = 0, ax_size = 0;
+        std::string items;
         bool present = false;
     };
     struct Key {
@@ -176,7 +250,11 @@ private:
 
     bool upload(Slot& s, caliper_scene::Role role, const void* bytes, uint64_t size, caliper_gfx::Buffer* out,
                 std::string* why);
+    bool upload_texture(Slot& s, caliper_gfx::Format f, uint32_t w, uint32_t h, const void* data,
+                        uint32_t row_pitch, std::string* why);
+    void release_texture(Slot& s);
     void release(Slot& s);
+    bool in_pixel_space(caliper_scene::EntityId e) const;   // under a camera, from the parts now
     void rebuild(const std::string& path);    // the entity's batches again from the slots
     void reset_scene();
     void changed() { dirty_ = true; }
@@ -188,6 +266,22 @@ private:
     caliper_scene::SceneTree tree_;
     caliper_scene::SceneCompiler compiler_;
     caliper_scene::ViewCamera camera_ = caliper_scene::Orbit{};
+    std::string through_;              // the camera entity looked through, or ""
+    std::unique_ptr<caliper_scene::PickPass> pick_;
+    uint64_t generation_ = 0;          // colour frames submitted
+
+    // Selections and their highlight: the view's own (entity path and primitive to sorted indices),
+    // the linked ones (item space to sorted items), and what draws them: a 2-D scene of one quad that
+    // dims the picture, and a scene of the selected items alone with the same poses and camera.
+    std::map<std::pair<std::string, int>, std::vector<int64_t>> selected_;
+    std::map<std::string, std::vector<int64_t>> linked_;
+    uint64_t highlighted_ = 0;
+    caliper_gfx::Texture dim_texture_;
+    uint32_t dim_rgba_ = 0;
+    std::vector<caliper_gfx::Buffer> hl_buffers_;
+    caliper_scene::SceneCompiler hl_compiler_, dim_compiler_;
+    bool build_highlight(caliper_scene::SceneTree* hl, caliper_scene::ViewCamera* cam, std::string* why);
+    bool highlight_wanted() const { return !selected_.empty() || !linked_.empty(); }
     std::map<Key, Slot> slots_;
     std::vector<uint8_t> scratch_;
     std::vector<std::string> notes_;
@@ -195,7 +289,7 @@ private:
     bool fitted_ = false, moved_ = false, dirty_ = true;
     caliper_scene::Axis up_mode_ = caliper_scene::Axis::PosY;   // the orbit's axis, or the one it returns to
     bool up_chosen_ = false;           // the person switched: the scene's up no longer moves the view
-    bool through_ = false;             // the last frame looked through a pinhole
+    bool was_through_ = false;         // the last frame looked through a pinhole
     bool scale_bar_on_ = true;
 
     caliper_gfx::Texture color_, depth_;

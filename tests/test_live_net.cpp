@@ -705,7 +705,7 @@ TEST_CASE("live/net: stream links are checked and normalised") {
 }
 
 TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's messages in order through the app's "
-          "source, notes a part it does not build, and draws") {
+          "source, applies every part, transforms and class tables, refuses an encoded image, and draws") {
     std::string no_gpu;
     CaliperCore* core = net_core(320, 240, &no_gpu);
     if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
@@ -718,8 +718,10 @@ TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's message
     CHECK(std::find(caps.begin(), caps.end(), CALIPER_NET_CAP_SCENES) != caps.end());
 
     // The state of a subscription, then two updates of one part (the newer wins wherever they
-    // are taken), and a part this viewer does not build.
+    // are taken), arrows, an entity transform, a class table, and an encoded image, the one form
+    // this viewer does not draw yet.
     const std::vector<float> frame = {-1, -1, -1, 1, 1, 1}, a = {0, 0, 0, 1, 0, 0}, b = {0, 0, 0, 0, 1, 0, 0, 0, 1};
+    static const uint8_t jpeg[4] = {0xff, 0xd8, 0xff, 0xd9};
     p.call([&](FakeProducer& f) {
         wire::SceneClear reset;
         reset.sub = f.sub_of.at("world");
@@ -734,7 +736,6 @@ TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's message
         f.send(fr);
         f.send(f.scene_update("cloud", CALIPER_NET_PART_POINTS, a, false));
         f.send(f.scene_update("cloud", CALIPER_NET_PART_POINTS, b, false));
-        // A part of the draft this viewer does not draw yet, and an entity transform it does not apply yet.
         wire::SceneUpdate arrows = f.scene_update("arrows", CALIPER_NET_PART_POINTS, a, false);
         arrows.part = CALIPER_NET_PART_ARROWS;
         arrows.arrays.at(0).name = "origins";
@@ -742,13 +743,13 @@ TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's message
         vec.name = "vectors";
         arrows.arrays.push_back(vec);
         f.send(arrows);
-        static const float eye[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        static const float shift[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 0, 0, 1};
         wire::SceneTransforms tr;
         tr.sub = f.sub_of.at("world");
         tr.view = "world";
         tr.seq = ++f.seq;
         tr.paths = {"cloud"};
-        tr.matrices = wire::Section::make("matrices", CALIPER_NET_DTYPE_F32, {1, 16}, eye, sizeof eye);
+        tr.matrices = wire::Section::make("matrices", CALIPER_NET_DTYPE_F32, {1, 16}, shift, sizeof shift);
         f.send(tr);
         // A points update in two pieces of a split update, which the source puts together.
         static const float four[12] = {0, 0, 0, 1, 1, 1, 2, 0, 0, 0, 2, 0};
@@ -774,26 +775,51 @@ TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's message
         p1.arrays = {wire::Section::make("positions", CALIPER_NET_DTYPE_F32, {2, 3}, four + 6, 24)};
         f.send(p0);
         f.send(p1);
+        wire::SceneClasses cl;
+        cl.sub = f.sub_of.at("world");
+        cl.view = "world";
+        cl.seq = ++f.seq;
+        Json entry = Json::object();
+        entry.set("id", Json(3));
+        entry.set("label", Json("rock"));
+        Json col = Json::array();
+        for (int c : {10, 20, 30, 255}) col.push(Json(c));
+        entry.set("color", col);
+        cl.classes.push(entry);
+        f.send(cl);
+        wire::SceneUpdate enc = f.scene_update("photo", CALIPER_NET_PART_POINTS, a, false);
+        enc.part = CALIPER_NET_PART_IMAGE;
+        enc.params = Json::object();
+        enc.params.set("form", Json(CALIPER_NET_FORM_ENCODED));
+        enc.params.set("format", Json(CALIPER_NET_FORMAT_JPEG));
+        enc.arrays = {wire::Section::make("pixels", CALIPER_NET_DTYPE_U8, {4}, jpeg, sizeof jpeg)};
+        f.send(enc);
         return 0;
     });
     caliper_live_views::SceneView* sv = nullptr;
     REQUIRE(poll_until(core, [&] {
         sv = caliper_live_views::scene_view(core, "world");
-        return sv && sv->counts().batches >= 2 && !sv->notes().empty() && sv->has_target();
+        return sv && sv->counts().batches == 4 && !sv->tree().classes().empty() && !sv->notes().empty() &&
+               sv->has_target();
     }));
     CHECK(sv->tree().up() == caliper_scene::Axis::PosZ);
-    const caliper_scene::Batch* cloud = sv->tree().batch(sv->tree().find("cloud"), caliper_scene::Primitive::Points);
+    const caliper_scene::EntityId cl = sv->tree().find("cloud");
+    const caliper_scene::Batch* cloud = sv->tree().batch(cl, caliper_scene::Primitive::Points);
     REQUIRE(cloud != nullptr);
     CHECK(cloud->count() == 3);   // the newer update
     CHECK(sv->tree().batch_static(sv->tree().root(), caliper_scene::Primitive::Lines));
-    REQUIRE(poll_until(core, [&] { return sv->notes().size() >= 2; }));
+    REQUIRE(sv->tree().batch(sv->tree().find("arrows"), caliper_scene::Primitive::Arrows));
+    REQUIRE(sv->tree().transform(cl));
+    CHECK(sv->tree().transform(cl)->at(0, 3) == 2.0);
+    CHECK(sv->tree().class_label(3) == "rock");
+    const caliper_scene::EntityId photo = sv->tree().find("photo");
+    CHECK((!photo || sv->tree().batch(photo, caliper_scene::Primitive::Image) == nullptr));
     const auto noted = [&](const char* what) {
         for (const std::string& n : sv->notes())
             if (n.find(what) != std::string::npos) return true;
         return false;
     };
-    CHECK_MESSAGE(noted("'arrows' is not drawn yet"), sv->notes().front());
-    CHECK_MESSAGE(noted("entity transforms are not applied yet"), sv->notes().back());
+    CHECK_MESSAGE(noted("encoded images (JPEG or PNG) are not drawn yet"), sv->notes().front());
     REQUIRE(poll_until(core, [&] {
         const caliper_scene::EntityId e = sv->tree().find("split");
         const caliper_scene::Batch* b = e ? sv->tree().batch(e, caliper_scene::Primitive::Points) : nullptr;
@@ -803,18 +829,21 @@ TEST_CASE("live/net: a scene view (protocol 3.2 draft) takes the scene's message
         const auto errs = p.call([](FakeProducer& f) { return f.errors; });
         return std::find(errs.begin(), errs.end(), CALIPER_NET_ERR_UNSUPPORTED) != errs.end();
     }));
-    // The view in the registry: kind 6, its items, its target and a readback of it.
+    // The view in the registry: kind 6, its items (three points, one segment, two arrows and the
+    // split update's four points), its target and a readback of it.
     CaliperLiveViewInfo vi = view_info(core, "world");
     CHECK(vi.kind == CALIPER_NET_KIND_SCENE);
-    CHECK(vi.count == 3 + 1 + 4);
+    CHECK(vi.count == 3 + 1 + 2 + 4);
     CHECK(std::string(vi.path) == "copied-from-host");
     REQUIRE(vi.width > 0);
     std::vector<uint8_t> px((size_t)vi.width * vi.height * 4);
     CHECK(caliper_core_live_view_readback(core, "world", px.data(), px.size()) == 1);
-    // One copy per uploaded array: the frame's and the cloud's positions.
+    // One copy per uploaded array (the frame's, the cloud's and the split update's positions, the
+    // arrows' origins and vectors) and the class table's texture, uploaded with the frame that drew it.
     caliper_stats::ViewCopies vc{};
-    REQUIRE(caliper_stats::view_copies(core, "world", &vc));
-    CHECK(vc.total.bytes >= (frame.size() + b.size()) * 4);
+    REQUIRE(poll_until(core, [&] {
+        return caliper_stats::view_copies(core, "world", &vc) && vc.total.bytes >= (frame.size() + b.size() + 2 * a.size() + 12) * 4 + 65536 * 4;
+    }));
     caliper_core_live_detach(core);
     caliper_core_shutdown(core);
 }
@@ -951,12 +980,59 @@ std::vector<std::string> sq_log(SceneQ& q) {
             out.push_back(u->path + ":" + u->part + (u->is_static ? " static" : ""));
         else if (const auto* c = std::get_if<wire::SceneClear>(&it.msg))
             out.push_back(c->reset ? "reset" : "clear " + (c->path.empty() ? std::string("<root>") : c->path));
+        else if (const auto* t = std::get_if<wire::SceneTransforms>(&it.msg)) {
+            std::string paths;
+            for (const std::string& p : t->paths) paths += (paths.empty() ? "" : ",") + p;
+            out.push_back("transforms " + paths + (t->is_static ? " static" : ""));
+        } else if (const auto* k = std::get_if<wire::SceneClasses>(&it.msg))
+            out.push_back(std::string("classes") + (k->is_static ? " static" : "") + " " + std::to_string(k->seq));
         else
             out.push_back(std::get<std::string>(it.msg));
     }
     return out;
 }
+caliper_live::SceneItem sq_transforms(std::vector<std::string> paths, bool is_static = false) {
+    wire::SceneTransforms t;
+    t.sub = 1;
+    t.view = "world";
+    t.paths = std::move(paths);
+    t.is_static = is_static;
+    return caliper_live::SceneItem{nullptr, std::move(t)};
+}
+caliper_live::SceneItem sq_classes(uint64_t seq, bool is_static = true) {
+    wire::SceneClasses c;
+    c.sub = 1;
+    c.view = "world";
+    c.seq = seq;
+    c.is_static = is_static;
+    return caliper_live::SceneItem{nullptr, std::move(c)};
+}
 }  // namespace
+
+// Entity transforms replace a queued message of the same layer whose every path they set again,
+// and a class table replaces a queued one of the same layer, so that an arm whose joints move
+// every step keeps one message while the display is paused.
+TEST_CASE("live/scene queue: entity transforms and class tables keep the newest of each layer") {
+    SceneQ q;
+    qpush(q, sq_reset());
+    qpush(q, sq_transforms({"rig/left", "rig/right"}, true));
+    for (int i = 0; i < 9000; ++i) {
+        qpush(q, sq_transforms({"arm/link0", "arm/link0/link1"}));
+        qpush(q, sq_classes(uint64_t(i), false));
+    }
+    CHECK(sq_log(q) == std::vector<std::string>{"reset", "transforms rig/left,rig/right static",
+                                                "transforms arm/link0,arm/link0/link1", "classes 8999"});
+    CHECK_FALSE(qwaits(q));
+    // A message that sets only some of a queued one's paths keeps it; a static table stays beside a
+    // stamped one; a reset drops both.
+    qpush(q, sq_transforms({"arm/link0"}));
+    qpush(q, sq_classes(1, true));
+    CHECK(sq_log(q) == std::vector<std::string>{"reset", "transforms rig/left,rig/right static",
+                                                "transforms arm/link0,arm/link0/link1", "classes 8999",
+                                                "transforms arm/link0", "classes static 1"});
+    qpush(q, sq_reset());
+    CHECK(sq_log(q) == std::vector<std::string>{"reset"});
+}
 
 // While the display is paused a source keeps what SceneView::apply would leave: a clear removes
 // the queued updates it removes and the clears it covers, so that clearing and logging one entity
@@ -1877,6 +1953,121 @@ TEST_CASE("live/app: clicks on the run bar and a shift-drag in a view reach the 
     REQUIRE(rc->details() != nullptr);
     CHECK(rc->details()->space == "samples");
     CHECK(rc->details()->view == "heat");
+    a.detach();
+}
+
+// A scene view picks, hovers and selects through ImGui's input queue: a click on the point at the
+// picture's centre reaches the script as a pick with its entity, index, row id through the batch's
+// payload axes and world position; resting the pointer there sends a hover; a shift+alt drag around it
+// selects it, with the batch's item space; the producer shares that selection back, and a selection of
+// the same space from elsewhere highlights the batch's matching points.
+TEST_CASE("live/app: a scene view's picks, hovers and selections reach the script, and linked selections highlight") {
+    HostFrame host;
+    if (!host.ok) CALIPER_SKIP_NO_GPU("no Metal device for the host's offscreen canvas");
+    FakeProducer p;
+    p.welcome_caps = {CALIPER_NET_CAP_SELECTION};
+    p.script31 = true;
+    p.add_scene();
+    p.start();
+    caliper_live::Attachment a;
+    std::string err;
+    REQUIRE_MESSAGE(a.attach_url(host.renderer.get(), p.url(), &err), err);
+    auto frames_until = [&](const std::function<bool()>& done, caliper_live::UiDriver* d = nullptr) {
+        for (int i = 0; i < 3000; ++i) {
+            host.frame(a, d);
+            if (done()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return false;
+    };
+    REQUIRE(frames_until([&] { return p.call([](FakeProducer& f) { return f.sub_of.count("world"); }) == 1; }));
+    // Three points on the x axis, a tenth of a unit wide, the middle one at the bounds' centre, which
+    // the fitted orbit puts at the picture's centre; the producer sampled them, every tenth of 30 units.
+    const std::vector<float> pos = {-1, 0, 0, 0, 0, 0, 1, 0, 0};
+    p.call([&](FakeProducer& f) {
+        wire::SceneClear reset;
+        reset.sub = f.sub_of.at("world");
+        reset.view = "world";
+        reset.seq = ++f.seq;
+        reset.reset = true;
+        reset.state = true;
+        f.send(reset);
+        wire::SceneUpdate u = f.scene_update("cloud", CALIPER_NET_PART_POINTS, pos, false);
+        u.params.set("radius", Json(0.12));
+        u.items = std::string("units");
+        Json ax = Json::object();
+        ax.set("dim", "unit");
+        ax.set("start", 0);
+        ax.set("step", 1);
+        ax.set("count", 30);
+        ax.set("size", 3);
+        Json axes = Json::array();
+        axes.push(ax);
+        u.axes = axes;
+        f.send(u);
+        return 0;
+    });
+    caliper_live_views::SceneView* sv = nullptr;
+    REQUIRE(frames_until([&] {
+        sv = caliper_live_views::scene_view(a.core(), "world");
+        return sv && sv->counts().batches == 1 && sv->has_target();
+    }));
+    caliper_live::UiDriver driver("hover world 0.5 0.5; wait 10; pick world 0.5 0.5; wait 10; rect world 0.4 0.4 0.6 0.6; wait 10");
+    std::vector<std::string> steps;
+    REQUIRE(frames_until([&] {
+        for (auto& line : driver.take_log()) steps.push_back(line);
+        return driver.done();
+    }, &driver));
+    for (const auto& st : steps) INFO(st);
+    REQUIRE(driver.error().empty());
+    auto event = [&](const char* type) {
+        const auto ev = p.call([](FakeProducer& f) { return f.events; });
+        for (const auto& e : ev)
+            if (e.type == type && e.view == "world") return std::optional<wire::Event>(e);
+        return std::optional<wire::Event>();
+    };
+    REQUIRE(frames_until([&] { return event("hover") && event("pick") && event("select"); }));
+    // The hover and the pick: the middle point, index 1, source row 10 through the axes.
+    for (const char* type : {"hover", "pick"}) {
+        CAPTURE(type);
+        const wire::Event e = *event(type);
+        CHECK(e.detail.find("entity")->as_string() == "cloud");
+        CHECK(e.detail.find("primitive")->as_string() == "points");
+        CHECK(e.detail.find("index")->as_double() == 1.0);
+        CHECK(e.detail.find("row_id")->as_double() == 10.0);
+        REQUIRE(e.detail.find("position"));
+        const Json& at = *e.detail.find("position");
+        // The disc's centre is at the origin; the hit lies on the disc, facing the camera.
+        CHECK(std::hypot(at.at(0).as_double(), at.at(1).as_double(), at.at(2).as_double()) < 0.12);
+    }
+    // The rectangle selected the middle point alone, with the batch's item space.
+    const wire::Event sel = *event("select");
+    const Json& ents = *sel.detail.find("entities");
+    REQUIRE(ents.size() == 1);
+    CHECK(ents.at(0).find("entity")->as_string() == "cloud");
+    CHECK(ents.at(0).find("indices")->size() == 1);
+    CHECK(ents.at(0).find("indices")->at(0).as_double() == 1.0);
+    CHECK(ents.at(0).find("row_ids")->at(0).as_double() == 10.0);
+    CHECK(sel.detail.find("space")->as_string() == "units");
+    CHECK(sel.detail.find("items")->at(0).as_double() == 10.0);
+    CHECK(sv->selected_count() == 1);
+    REQUIRE(frames_until([&] { return sv->highlighted() == 1; }));
+    // A selection of the same space from another view: units 0 and 20, the outer points, highlight
+    // beside the view's own.
+    p.call([&](FakeProducer& f) {
+        wire::Selection other;
+        other.space = "units";
+        other.view = "table";
+        other.items.push(Json(0));
+        other.items.push(Json(20));
+        f.send(other);
+        return 0;
+    });
+    REQUIRE(frames_until([&] { return sv->highlighted() == 3; }));
+    // The pointer at rest asks nothing more of the pick pass.
+    const uint64_t submits = sv->pick_pass()->submits();
+    for (int i = 0; i < 20; ++i) host.frame(a, nullptr);
+    CHECK(sv->pick_pass()->submits() == submits);
     a.detach();
 }
 

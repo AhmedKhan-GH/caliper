@@ -1,4 +1,5 @@
-// pick.cpp: the pick window and the decoding of its readback (pick.h).
+// pick.cpp: the pick window, the decoding of its readback, and the pick pass on the graphics layer
+// (pick.h).
 #include "scene/pick.h"
 
 #include <algorithm>
@@ -111,6 +112,119 @@ std::optional<Hit> Picker::deliver(uint64_t serial, uint64_t revision, const std
         std::memcpy(dz.data(), depth->data(), texels * 4);
     }
     return decode_pick(id.data(), dz.empty() ? nullptr : dz.data(), window_, map);
+}
+
+// ---- The pick pass -------------------------------------------------------------------------------
+
+using namespace caliper_gfx;
+
+PickPass::PickPass(Backend& backend, int radius_px) : gfx_(backend), radius_(radius_px < 1 ? 1 : radius_px) {}
+
+PickPass::~PickPass() {
+    cancel();
+    if (ids_target_) gfx_.release(ids_target_);
+    if (depth_target_) gfx_.release(depth_target_);
+}
+
+void PickPass::cancel() {
+    if (rb_ids_) gfx_.release(rb_ids_);
+    if (rb_depth_) gfx_.release(rb_depth_);
+    rb_ids_ = {};
+    rb_depth_ = {};
+    have_ids_ = have_depth_ = false;
+    waiting_ = false;
+}
+
+bool PickPass::targets(bool depth, std::string* why) {
+    const uint32_t side = uint32_t(2 * radius_);
+    if (!ids_target_) {
+        ids_target_ = gfx_.create_texture({side, side, Format::RG32Uint, kRenderTarget | kCopySrcTex, "pick ids"});
+        if (!ids_target_) {
+            if (why) *why = "no pick target: " + gfx_.last_error();
+            return false;
+        }
+    }
+    if (depth && !depth_target_) {
+        depth_target_ = gfx_.create_texture({side, side, Format::Depth32Float, kRenderTarget | kCopySrcTex, "pick depth"});
+        if (!depth_target_) {
+            if (why) *why = "no pick depth target: " + gfx_.last_error();
+            return false;
+        }
+    }
+    return true;
+}
+
+bool PickPass::request(const SceneTree& tree, const ViewCamera& camera, const CompileOptions& options,
+                       SceneCompiler& compiler, Resources& res, float x, float y, uint64_t generation,
+                       std::string* why) {
+    cancel();   // a new request supersedes an unanswered one
+    const bool depth = tree.space() == Space::k3D;
+    if (!targets(depth, why)) return false;
+    window_ = picker_.request(x, y, radius_, options.width, options.height);
+    const int32_t window[4] = {window_.x0, window_.y0, window_.width, window_.height};
+    RenderTarget rt;
+    rt.color = ids_target_;
+    rt.depth = depth ? depth_target_ : Texture{};
+    rt.clear_rgba = 0;
+    DrawList list(rt);
+    map_ = DrawMap{};
+    const CompileResult r = compiler.compile_pick(tree, camera, options, window, res, list, &map_);
+    if (!r.ok) {
+        if (why) *why = r.notes.empty() ? std::string("the pick pass did not compile") : r.notes[0];
+        return false;
+    }
+    map_.revision = generation;   // what the person saw when they pointed
+    Frame frame;
+    frame.render(std::move(list));
+    serial_ = gfx_.submit(std::move(frame));
+    if (serial_ == 0) {
+        if (why) *why = "the layer refused the pick pass: " + gfx_.last_error();
+        return false;
+    }
+    ++submits_;
+    rb_ids_ = gfx_.read_texture(ids_target_, 0, 0, uint32_t(window_.width), uint32_t(window_.height));
+    want_depth_ = depth;
+    if (depth) rb_depth_ = gfx_.read_texture(depth_target_, 0, 0, uint32_t(window_.width), uint32_t(window_.height));
+    if (!rb_ids_ || (depth && !rb_depth_)) {
+        if (why) *why = "no pick readback: " + gfx_.last_error();
+        cancel();
+        return false;
+    }
+    generation_ = generation;
+    waiting_ = true;
+    return true;
+}
+
+Serial PickPass::last_use() const {
+    const Serial a = ids_target_ ? gfx_.last_use(ids_target_) : 0;
+    const Serial b = depth_target_ ? gfx_.last_use(depth_target_) : 0;
+    return a > b ? a : b;
+}
+
+PickPass::Result PickPass::poll(uint64_t generation, Hit* out) {
+    if (!waiting_) return Result::None;
+    if (!have_ids_ && gfx_.take_readback(rb_ids_, &ids_)) {
+        have_ids_ = true;
+        rb_ids_ = {};
+    }
+    if (want_depth_ && !have_depth_ && gfx_.take_readback(rb_depth_, &depth_)) {
+        have_depth_ = true;
+        rb_depth_ = {};
+    }
+    if (!have_ids_ || (want_depth_ && !have_depth_)) return Result::Pending;
+    waiting_ = false;
+    have_ids_ = have_depth_ = false;
+    if (!want_depth_) depth_.clear();
+    if (generation != generation_) {   // the view drew another frame: what was under the pointer moved
+        ++dropped_;
+        picker_.deliver(picker_.current(), generation, ids_, nullptr, map_);   // retires the request
+        return Result::Dropped;
+    }
+    ++answered_;
+    const std::optional<Hit> h = picker_.deliver(picker_.current(), generation, ids_, want_depth_ ? &depth_ : nullptr, map_);
+    if (!h) return Result::Miss;
+    if (out) *out = *h;
+    return Result::Hit;
 }
 
 }  // namespace caliper_scene

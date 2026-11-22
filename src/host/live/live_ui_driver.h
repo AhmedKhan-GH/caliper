@@ -13,6 +13,10 @@
 //   set <param> <text>    ctrl+click the parameter's slider or field, type <text>, Enter
 //   toggle <param>        a click on a boolean parameter's box
 //   select <view>         a shift-drag across the top quarter of the view's image or plot area
+//   pick <view> <fx> <fy> a click at the fraction (fx, fy) of the view's data area (a scene's pick)
+//   hover <view> <fx> <fy> the pointer moves to that place, nothing pressed, and rests 10 frames
+//   rect <view> <fx0> <fy0> <fx1> <fy1>
+//                         a shift+alt drag between the two places: a rectangle selection
 //   where <view>          logs the view's data area (x y w h in points), the framebuffer's
 //                         pixels per point and the view's own geometry text (a scene's camera,
 //                         and its scale bar's band as "scale_bar x0 y0 x1 y1" in points)
@@ -197,6 +201,61 @@ public:
             } else {
                 io.AddKeyEvent(ImGuiMod_Shift, false);
                 next("select in " + s.a + (s.b.empty() ? "" : " " + s.b));
+                return;
+            }
+            ++phase_;
+            return;
+        }
+        if (s.verb == "pick" || s.verb == "hover" || s.verb == "rect") {
+            // The view's name is one word here; the fractions follow it.
+            if (phase_ == 0) {
+                const caliper_live_views::View* v = core ? caliper_live_views::find(core, s.a.c_str()) : nullptr;
+                if (!v || !v->geo_valid || v->geo_area[2] < 8.0f || v->geo_area[3] < 8.0f) {
+                    if (frames_ > kPatience) fail("view '" + s.a + "' was never drawn");
+                    return;
+                }
+                std::stringstream fr(s.b);
+                float f[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+                for (float& x : f) fr >> x;
+                ax_ = v->geo_area[0] + f[0] * v->geo_area[2];
+                ay_ = v->geo_area[1] + f[1] * v->geo_area[3];
+                aw_ = v->geo_area[0] + f[2] * v->geo_area[2];   // rect: the far corner
+                ah_ = v->geo_area[1] + f[3] * v->geo_area[3];
+                x_ = ax_;
+                y_ = ay_;
+                io.AddMousePosEvent(x_, y_);
+                phase_ = 1;
+                return;
+            }
+            if (s.verb == "hover") {
+                if (++phase_ > 10) next("hover in " + s.a + " at " + where());
+                return;
+            }
+            if (s.verb == "pick") {
+                switch (phase_++) {
+                    case 1: io.AddMouseButtonEvent(0, true); break;
+                    case 2: io.AddMouseButtonEvent(0, false); break;
+                    default:
+                        if (phase_ > 8) next("pick in " + s.a + " at " + where());   // its readback lands
+                        break;
+                }
+                return;
+            }
+            constexpr int kMoves = 8;   // rect
+            if (phase_ == 1) {
+                io.AddKeyEvent(ImGuiMod_Shift, true);
+                io.AddKeyEvent(ImGuiMod_Alt, true);
+            } else if (phase_ == 2) {
+                io.AddMouseButtonEvent(0, true);
+            } else if (phase_ < 3 + kMoves) {
+                const float t = (float)(phase_ - 2) / (float)kMoves;
+                io.AddMousePosEvent(ax_ + (aw_ - ax_) * t, ay_ + (ah_ - ay_) * t);
+            } else if (phase_ == 3 + kMoves) {
+                io.AddMouseButtonEvent(0, false);
+            } else {
+                io.AddKeyEvent(ImGuiMod_Alt, false);
+                io.AddKeyEvent(ImGuiMod_Shift, false);
+                next("rect in " + s.a);
                 return;
             }
             ++phase_;
