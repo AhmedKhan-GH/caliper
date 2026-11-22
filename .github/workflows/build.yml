@@ -237,6 +237,8 @@ jobs:
       # The tests of step stamps and of tensor programs run here too: the stamps test needs only numpy, and the tensor
       # test skips itself where torch has no MPS device or caliper._producer is older than ABI version 2.
       # No test of those four files holds a wall-clock limit: their step and cost times run on a fake clock.
+      # So do the stamps of both senders end to end, which need torch, websockets and the native sender, and
+      # the shared cadence of the views, whose times run on a fake clock or scale with the measured time.
       - name: Python tests of the acceptance Python
         run: >-
           PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -m pytest -q -p no:cacheprovider
@@ -244,7 +246,8 @@ jobs:
           python/tests/test_watch.py python/tests/test_controls.py
           python/tests/test_programs.py python/tests/test_net_programs.py
           python/tests/test_ablate.py python/tests/test_wire_32.py python/tests/test_step_stamps.py
-          python/tests/test_program_tensor.py
+          python/tests/test_program_tensor.py python/tests/test_step_stamps_senders.py
+          python/tests/test_cadence_views.py
           --deselect "python/tests/test_watch.py::test_watch_registers_produces_and_removes"
           --deselect "python/tests/test_watch.py::test_watch_include_and_every"
           --deselect "python/tests/test_watch.py::test_watch_is_free_when_nothing_is_attached"

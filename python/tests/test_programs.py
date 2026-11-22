@@ -330,6 +330,23 @@ def test_a_step_without_a_pass_never_waits(sim):
     assert all(b - a >= P.N_MIN for a, b in zip(passes, passes[1:]))
 
 
+def test_a_pass_runs_at_the_next_checkpoint_when_the_step_numbers_jump(sim):
+    # The checkpoint before a step decides that the step is a pass. When the script numbers its
+    # next step higher (a loop that skips numbers, a resumed count), that pass runs at the next
+    # checkpoint whatever its number, and the cadence counts it there.
+    s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=0.10e-3)
+    s.train(200)
+    for k in range(200, 600):
+        s.train(1, first=k)
+        if P._STATE["pass"] is not None:
+            break
+    assert P._STATE["pass"] == k + 1
+    ran = s.ran
+    s.train(1, first=k + 50)
+    assert s.ran == ran + 1
+    assert P._CAD.last_pass == k + 50 and k + 1 not in P._CAD.passes
+
+
 def test_the_cadence_follows_a_step_time_that_changes(sim):
     s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=0.10e-3)
     s.train(3000)

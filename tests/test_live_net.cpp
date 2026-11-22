@@ -1435,6 +1435,48 @@ TEST_CASE("live/net: a snapshot's step stamp reaches the view info when VIEWS li
     caliper_core_shutdown(core);
 }
 
+TEST_CASE("live/net: a snapshot's cadence (protocol 3.2 draft) reaches the source's view cadences") {
+    std::string no_gpu;
+    CaliperCore* core = net_core(96, 64, &no_gpu);
+    if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
+    FakeProducer p;
+    p.minor = CALIPER_NET_MINOR_3_2;
+    p.start();
+    REQUIRE_MESSAGE(caliper_core_live_attach_url(core, p.url().c_str()) == 1, caliper_core_last_error(core));
+    REQUIRE(poll_until(core, [&] { return p.call([](FakeProducer& f) { return f.sub_of.size(); }) == 5; }));
+    caliper_live::Source* src = caliper_live_stream(core);
+    REQUIRE(src != nullptr);
+    const std::vector<float> heat = ramp(8, 4, 1.0f);
+    auto send_heat = [&](bool with_cadence) {
+        p.call([&](FakeProducer& f) {
+            wire::Snapshot s = f.snap("heat", CALIPER_NET_KIND_HEATMAP);
+            s.data = wire::Section::make("data", CALIPER_NET_DTYPE_F32, {4, 8}, heat.data(), heat.size() * 4);
+            s.flags = CALIPER_NET_SNAP_RAW;
+            s.stats = {0.0, 1.0};
+            if (with_cadence) {
+                Json c = Json::object();
+                c.set("every", 59);
+                c.set("limit", "budget");
+                s.cadence = c;
+            }
+            f.send(s);
+            return 0;
+        });
+    };
+    send_heat(false);
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 1; }));
+    CHECK(src->view_cadences().count("heat") == 0);
+    send_heat(true);
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 2; }));
+    const auto cadences = src->view_cadences();
+    REQUIRE(cadences.count("heat") == 1);
+    Json c;
+    REQUIRE(Json::parse(cadences.at("heat").data(), cadences.at("heat").size(), &c, nullptr));
+    CHECK(c.find("limit")->as_string() == "budget");
+    caliper_core_live_detach(core);
+    caliper_core_shutdown(core);
+}
+
 TEST_CASE("live/net: refusals and bad links fail the attach with the reason") {
     std::string no_gpu;
     CaliperCore* core = net_core(64, 64, &no_gpu);
