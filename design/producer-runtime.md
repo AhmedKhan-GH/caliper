@@ -183,6 +183,15 @@ The built runtime ran the spike's two models with one program under the facade a
 
 The measured `T` agrees with the spike's step times of 0.75 ms and 12.2 ms. The medium model lost 4.4 % of its throughput, a little above the runtime's share of 4 %, thus `C` slightly underestimates the cost of a pass step there. Both models stay above the 95 % of check 5.
 
+A second measurement ran the joined code as a managed run's script does: `caliper.watch(model, optimizer)` with its defaults and no explicit `caliper.step()`, one geometry program installed through `caliper._programs.install`, and the real publish path of `caliper.scene`. The base then ran faster, because no call waited for torch's queue, and the program cost more:
+
+| Model | Base Steps per Second | With the Program | Share of Base | Cadence N | 1-Minute Load |
+|---|---|---|---|---|---|
+| Small | 2,335.25 | 1,336.38 | 57.2 % | 39 to 40 | 1.91 to 2.76 |
+| Medium | 87.46 | 83.00 | 94.9 % | 2 to 3 | 1.69 to 2.62 |
+
+The publish took 0.05 ms for each pass, and an installed program without passes cost nothing. A wait for torch's queue every 40 steps without any program gave 1,420 steps per second on the small model, thus the first sync point causes the loss. The loss of one wait grew with the steps between two waits, up to about 20 ms: a wait every 10, 40, 160 and 640 steps gave 1,179, 1,424, 1,812 and 2,156 steps per second. After a wait, the MPS queue does not keep the GPU busy until the training thread has queued many steps again. Thus `C` as defined above, which counts at most the median time to queue a step of the wait, is too small on MPS. A variant that counts the whole wait in `C` and at most doubles N at a pass gave 96.1 % and 99.4 %, but N then grew to 7,000 to 10,000, because a larger N lets torch queue more steps, which makes the next wait longer. The GPU-side sync of Open Decisions removes the wait. The cost model of a CPU wait on MPS is an open point of `design/gpu-programs.md`.
+
 The counters of the runtime showed the in-place route in each run: one import in place, no import refused, 0 bytes copied, and each output given as a DLPack capsule over the runtime's own buffer with 0 bytes copied. The publish path then makes the copy of its route, which the table of Output Path states.
 
 ### Documented and Undocumented Behavior
