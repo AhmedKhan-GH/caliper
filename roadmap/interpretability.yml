@@ -88,7 +88,7 @@ features:
   - id: INT-10
     title: Intervention API
     status: planned
-    scope: peripheral
+    scope: core
     summary: Intervention points declared on a PyTorch model in Caliper LIB let the viewer ablate, scale, steer and patch at step boundaries, with each intervention recorded with the run and compared with the original.
     depends_on: [INT-20, INT-32, RUN-05]
     sprint: 6
@@ -98,7 +98,7 @@ features:
   - id: INT-11
     title: Ablate
     status: planned
-    scope: peripheral
+    scope: core
     summary: Ablate removes a chosen head, layer output or direction from a model's computation during a run.
     depends_on: [INT-10]
     sprint: 6
@@ -108,7 +108,7 @@ features:
   - id: INT-12
     title: Scale
     status: planned
-    scope: peripheral
+    scope: core
     summary: Scale multiplies a chosen activation or direction by a factor during a run.
     depends_on: [INT-10]
     sprint: 6
@@ -117,7 +117,7 @@ features:
   - id: INT-13
     title: Steer
     status: planned
-    scope: peripheral
+    scope: core
     summary: Steer adds a chosen direction to the residual stream at selected layers and positions during a run.
     depends_on: [INT-10]
     sprint: 6
@@ -127,7 +127,7 @@ features:
   - id: INT-14
     title: Patch
     status: planned
-    scope: peripheral
+    scope: core
     summary: Patch replaces an activation in one run with the matching activation from another run.
     depends_on: [INT-10]
     sprint: 6
@@ -187,7 +187,7 @@ features:
   - id: INT-21
     title: Interventions from the Viewer
     status: planned
-    scope: peripheral
+    scope: core
     summary: A person picks a head in the attention view and ablates it, or turns a selection in an embedding into a steering direction, from the viewer.
     depends_on: [INT-03, INT-10]
     sprint: 6
