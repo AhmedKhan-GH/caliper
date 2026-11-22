@@ -2,7 +2,7 @@
 
 A piece's instance runs several compute passes at the pass steps of the shared cadence and sends
 each published resource as one RESOURCE message (type 0x0082) to the viewers that announced
-``resources``, after the draw half (PROGRAM without the section ``derive``). The checks of a
+``resources``, after the draw half (PROGRAM with the sections ``common``, ``derive`` and ``draw``). The checks of a
 manifest run anywhere. The passes need an MPS device and the native module: the arcs piece of
 the plan reads two fixed attention tensors of a small model, in place, and its arcs, scores and
 labels are compared with a reference on the CPU. The senders' test runs both servers with a
@@ -274,6 +274,19 @@ def test_a_viewer_behind_skips_versions_and_a_version_above_its_queue_goes_nowhe
     assert not ctl.posts and p.error["code"] == "program.resource_too_large"
 
 
+def test_a_relay_frame_carries_common_derive_and_draw_in_order():
+    p = P._Program("rel", {}, "fn derive_text() {}", None, "")
+    p.piece, p.manifest = {"name": "n", "version": 1, "hash": "sha256:" + "a" * 64}, {"name": "n"}
+    p.common, p.draw = "fn common_text() {}", "fn draw_text() {}"
+    f = w.decode_frame(P._relay_frame(p))
+    assert [s.name for s in f.sections] == [w.SECTION_COMMON, w.SECTION_DERIVE, w.SECTION_DRAW]
+    assert bytes(f.section(w.SECTION_DERIVE).data).decode() == "fn derive_text() {}"
+    assert w.Program.from_frame(f).derive == "fn derive_text() {}"
+    p.wgsl = ""
+    f = w.decode_frame(P._relay_frame(p))
+    assert [s.name for s in f.sections] == [w.SECTION_COMMON, w.SECTION_DRAW]
+
+
 # ---- the passes on the MPS device ----------------------------------------------------------------
 def _resources(ctl, name):
     return [f for _l, f, _c in ctl.posts if f.type == P.RESOURCE_TYPE and f.meta["resource"] == name]
@@ -290,11 +303,12 @@ def test_the_arcs_piece_publishes_its_resources_in_the_cadence(attached):
     assert st["state"] == "running", st["error"]
     assert st["runs"] >= 2
 
-    # The draw half goes first, without the section derive.
+    # The draw half goes first, with all three sections.
     first = ctl.posts[0][1]
     assert first.type == w.MsgType.PROGRAM
     assert first.meta["manifest"]["name"] == "attention_arcs" and first.meta["bind"] == BIND
-    assert {s.name for s in first.sections} == {w.SECTION_COMMON, w.SECTION_DRAW}
+    assert {s.name for s in first.sections} == {w.SECTION_COMMON, w.SECTION_DERIVE, w.SECTION_DRAW}
+    assert bytes(first.section(w.SECTION_DERIVE).data).decode() == DERIVE
     assert bytes(first.section(w.SECTION_DRAW).data).decode() == DRAW
 
     heads, rows = reference()
@@ -436,7 +450,7 @@ def test_both_senders_relay_the_draw_half_and_send_resources_to_viewers_with_res
         P._CAD.reset()
     assert w.CAP_RESOURCES in next(f for f in got if f.type == w.MsgType.WELCOME).meta["capabilities"]
     mine = [f for f in got if f.type in (w.MsgType.PROGRAM, P.RESOURCE_TYPE)]
-    assert mine[0].type == w.MsgType.PROGRAM and w.SECTION_DERIVE not in {s.name for s in mine[0].sections}
+    assert mine[0].type == w.MsgType.PROGRAM and w.SECTION_DERIVE in {s.name for s in mine[0].sections}
     _heads, rows = reference()
     arcs = [f for f in mine if f.type == P.RESOURCE_TYPE and f.meta["resource"] == "arcs"]
     assert len(arcs) >= 2

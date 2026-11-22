@@ -29,8 +29,8 @@ cadence, under the same limits, and writes named, typed resources that keep thei
 runs. After each run the facade copies each published resource that a pass of the run writes (and
 each static one after the first run) and sends it as one RESOURCE message to each viewer that
 announced ``resources``, through the controls port of either sender. It also relays the draw half,
-PROGRAM without the section ``derive``, to each such viewer after the install and when the viewer
-attaches, before its first resource. A piece without a derive half is only relayed.
+PROGRAM with the sections ``common``, ``derive`` and ``draw``, to each such viewer after the
+install and when the viewer attaches, before its first resource. A piece without a derive half is only relayed.
 
 VIEWS. The same cadence gates the snapshots of the network route (caliper._net_ring) while a
 viewer subscribes, so that everything viewers ask of the run (snapshots, series chunks, scene
@@ -1299,7 +1299,8 @@ def install_piece(program_id: str, *, piece: dict, manifest: dict, bind: dict | 
     """Install an instance of a piece, or replace the program with the same id.
 
     The derive half runs at the pass steps of the shared cadence and publishes its resources as
-    RESOURCE messages; the draw half goes to each viewer that announced ``resources``.
+    RESOURCE messages; the draw half goes to each viewer that announced ``resources``, in a PROGRAM that carries
+    all three sections.
 
     Args:
         program_id: The program's id.
@@ -1537,16 +1538,19 @@ def _resource_links(ctl) -> list:
 
 
 def _relay_frame(p: _Program, op: str = "set") -> bytes:
-    """PROGRAM of a piece's instance without the section ``derive``: what a viewer draws."""
+    """PROGRAM of a piece's instance with the sections ``common``, ``derive`` and ``draw``.
+
+    The pin's hash covers ``derive.wgsl``, so a viewer can check the hash only with that text."""
     from . import _wire
     import numpy as np
     meta = {"request_id": 0, "op": op, "id": p.id}
     sections = []
     if op == "set":
         meta.update({k: v for k, v in (("piece", p.piece), ("manifest", p.manifest), ("bind", p.bind),
-                                       ("params", p.params), ("panel", p.panel),
+                                       ("params", p.params or None), ("panel", p.panel),
                                        ("segments", p.segments)) if v is not None})
-        for name, text in ((_wire.SECTION_COMMON, p.common), (_wire.SECTION_DRAW, p.draw)):
+        for name, text in ((_wire.SECTION_COMMON, p.common), (_wire.SECTION_DERIVE, p.wgsl),
+                           (_wire.SECTION_DRAW, p.draw)):
             if text:
                 sections.append(_wire.Section.from_array(
                     name, np.frombuffer(text.encode("utf-8"), dtype=np.uint8)))
