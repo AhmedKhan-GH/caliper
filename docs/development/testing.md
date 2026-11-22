@@ -301,7 +301,7 @@ The ctest entry `caliper_programmable_graphics_acceptance` (`tests/programmable_
 6. `program_read` of the arcs gives elements with tokens below 32 and `from_token` below `to_token`. A capture of `tower` differs from the empty capture in at least 2,000 pixels.
 7. At the bump, the newest `heads` version holds a score above 0.4, and the first kept version holds no score of 0.2 or more. The loss falls, and the in-context loss falls below 1.5.
 8. `selection_set` on the brightest arc of the best head gives the event `pick` with `layer`, `head`, `from_token` and `to_token`. The state `head` equals the picked head, and the capture of `pattern` changes.
-9. The ablation of that head with `intervene_set` raises the in-context loss to more than twice its settled value.
+9. The ablation of head 0 of layer 1 with `intervene_set`, after the in-context loss settles below 0.2, raises it above twice that value within 200 steps.
 10. `run_fork` from the first kept step with the head ablated gives a child whose score of that head stays below 0.2 while another head of layer 1 passes 0.4. The tower of the child differs from the tower of the parent.
 11. A copy of `attention_arcs` whose bloom loops is written as a piece and placed in a panel of its own. The event `stopped` names the program, `program.draw_over_time` and a draw pass. The program `tower_arcs` still draws, and the step of the run still rises.
 12. The `overhead_share` of both derive halves is at most 0.02.
