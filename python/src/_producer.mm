@@ -146,6 +146,7 @@ nb::object output_capsule(id<MTLBuffer> buffer, uint64_t byte_offset, bool metal
 uint32_t output_kind_of(const std::string& kind) {
     if (kind == "geometry") return CALIPER_PRODUCER_GEOMETRY;
     if (kind == "pixels") return CALIPER_PRODUCER_PIXELS;
+    if (kind == "tensor") return CALIPER_PRODUCER_TENSOR;
     return 0;
 }
 
@@ -223,8 +224,14 @@ public:
                      const std::vector<std::pair<std::string, uint32_t>>& inputs, const std::string& kind,
                      std::optional<std::string> entry, const std::string& part, uint32_t max_count,
                      const std::vector<std::string>& arrays, uint32_t width, uint32_t height,
-                     std::array<uint32_t, 3> workgroups, double time_ms, uint64_t memory_bytes) {
+                     std::array<uint32_t, 3> workgroups, double time_ms, uint64_t memory_bytes,
+                     const std::vector<int64_t>& tensor_shape,
+                     const std::vector<std::pair<std::string, double>>& params) {
         alive();
+        if (tensor_shape.size() > 4)
+            raise(CALIPER_PRODUCER_ARGUMENT, "program.output_mismatch", "A tensor output has at most 4 axes.");
+        std::vector<caliper_producer_param> values;
+        for (const auto& [name, value] : params) values.push_back({name.c_str(), value});
         std::vector<caliper_producer_input> ins;
         for (const auto& [var, h] : inputs) ins.push_back({var.c_str(), h});
         std::vector<const char*> names;
@@ -243,6 +250,10 @@ public:
         d.array_count = names.size();
         d.width = width;
         d.height = height;
+        d.tensor_ndim = uint32_t(tensor_shape.size());
+        for (size_t i = 0; i < tensor_shape.size(); ++i) d.tensor_shape[i] = tensor_shape[i];
+        d.params = values.data();
+        d.param_count = values.size();
         std::memcpy(d.workgroups, workgroups.data(), sizeof d.workgroups);
         d.time_limit_ms = time_ms;
         d.memory_limit_bytes = memory_bytes;
@@ -252,6 +263,18 @@ public:
         if (s != CALIPER_PRODUCER_OK) raise(s, e);
         shapes_[handle] = {d.output_kind, width, height};
         return handle;
+    }
+
+    // Sets values of the uniform `params` of a program by name; the next pass reads them. A name
+    // that the struct Params lacks raises ProducerError with program.params_mismatch.
+    void set_params(uint32_t program, const std::vector<std::pair<std::string, double>>& params) {
+        alive();
+        std::vector<caliper_producer_param> values;
+        for (const auto& [name, value] : params) values.push_back({name.c_str(), value});
+        caliper_producer_error e{};
+        const caliper_producer_status s =
+            caliper_producer_set_params(rt_, program, values.data(), values.size(), &e);
+        if (s != CALIPER_PRODUCER_OK) raise(s, e);
     }
 
     // One pass of `programs`, one submit each, waited for before it returns. A timeout raises
@@ -278,7 +301,8 @@ public:
     }
 
     // An output after the last pass as (capsule, count): positions float32 (count, 3), values
-    // and radii float32 (count,), colors uint8 (count, 4), pixels uint8 (height, width, 4).
+    // and radii float32 (count,), colors uint8 (count, 4), pixels uint8 (height, width, 4), and
+    // the tensor output "out" float32 (count,), flat, the facade reshapes it.
     // device "mps" gives kDLMetal, "cpu" the shared storage's contents as kDLCPU.
     std::pair<nb::object, uint32_t> output(uint32_t program, const std::string& name, const std::string& device) {
         alive();
@@ -296,6 +320,8 @@ public:
         if (name == "pixels") {
             dtype = DLDataType{kDLUInt, 8, 1};
             shape = {int64_t(sh.height), int64_t(sh.width), 4};
+        } else if (name == "out") {
+            shape = {int64_t(o.count)};
         } else if (name == "colors") {
             dtype = DLDataType{kDLUInt, 8, 1};
             shape = {int64_t(o.count), 4};
@@ -387,8 +413,11 @@ NB_MODULE(_producer, m) {
              nb::arg("entry") = nb::none(), nb::arg("part") = "points", nb::arg("max_count") = 0,
              nb::arg("arrays") = std::vector<std::string>{}, nb::arg("width") = 0, nb::arg("height") = 0,
              nb::arg("workgroups") = std::array<uint32_t, 3>{0, 0, 0}, nb::arg("time_ms") = 4.0,
-             nb::arg("memory_bytes") = uint64_t(64) << 20,
+             nb::arg("memory_bytes") = uint64_t(64) << 20, nb::arg("tensor_shape") = std::vector<int64_t>{},
+             nb::arg("params") = std::vector<std::pair<std::string, double>>{},
              "Check and compile a program; returns its handle or raises ProducerError.")
+        .def("set_params", &Runtime::set_params, nb::arg("program"), nb::arg("params"),
+             "Set values of the uniform params of a program by name; the next pass reads them.")
         .def("run", &Runtime::run, nb::arg("programs"), nb::arg("step"), nb::arg("time_s"), nb::arg("every"),
              nb::arg("timeout_ms") = 0.0, "Run one pass of the programs and wait for it.")
         .def("output", &Runtime::output, nb::arg("program"), nb::arg("name"), nb::arg("device") = "mps",

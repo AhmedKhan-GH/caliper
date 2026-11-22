@@ -49,7 +49,8 @@
 extern "C" {
 #endif
 
-#define CALIPER_PRODUCER_ABI_VERSION 1u
+/* 2: the tensor output, the uniform `params` and caliper_producer_set_params(). */
+#define CALIPER_PRODUCER_ABI_VERSION 2u
 
 typedef struct caliper_producer caliper_producer;
 
@@ -102,7 +103,8 @@ typedef struct caliper_producer_tensor {
 
 typedef enum caliper_producer_output_kind {
     CALIPER_PRODUCER_GEOMETRY = 1,
-    CALIPER_PRODUCER_PIXELS = 2
+    CALIPER_PRODUCER_PIXELS = 2,
+    CALIPER_PRODUCER_TENSOR = 3      /* the f32 array `out`, published as the live view program.<id> */
 } caliper_producer_output_kind;
 
 typedef enum caliper_producer_part {
@@ -115,6 +117,14 @@ typedef struct caliper_producer_input {
     const char* var;
     uint32_t tensor;
 } caliper_producer_input;
+
+/* One value of the uniform `params` (design/instrument-interface.md, Program
+ * Parameters): a name of the program's struct Params and its number, which
+ * the runtime converts to the field's type (f32, i32 or u32). */
+typedef struct caliper_producer_param {
+    const char* name;
+    double value;
+} caliper_producer_param;
 
 /* A program after the editor's and the facade's parse of its declaration
  * (spec/program.h). The runtime runs check_declaration(), check_source(),
@@ -135,6 +145,13 @@ typedef struct caliper_producer_program_desc {
     /* pixels */
     uint32_t width;
     uint32_t height;
+    /* tensor: the shape of `out`, 1 to 4 axes and at most 1,000,000 elements */
+    uint32_t tensor_ndim;
+    int64_t tensor_shape[4];
+    /* params: the start values of the uniform `params`, by name; the names
+     * are those of the struct Params of the WGSL (program.params_mismatch) */
+    const caliper_producer_param* params;
+    size_t param_count;                      /* at most 16                                    */
     /* dispatch and limits */
     uint32_t workgroups[3];                  /* zeros: derived (sandbox.h dispatch_size())    */
     double time_limit_ms;
@@ -153,7 +170,8 @@ typedef struct caliper_producer_output {
     void* buffer;          /* id<MTLBuffer> in shared storage                       */
     uint64_t byte_offset;
     uint64_t byte_size;    /* of the valid items                                    */
-    uint32_t count;        /* geometry: min(count, max_count); pixels: width*height */
+    uint32_t count;        /* geometry: min(count, max_count); pixels: width*height;
+                              tensor: the elements of its shape                    */
     uint32_t words;        /* 32-bit words of one item: 3 for positions, else 1     */
 } caliper_producer_output;
 
@@ -209,10 +227,16 @@ caliper_producer_status caliper_producer_run(caliper_producer* runtime, const ui
                                              caliper_producer_pass* pass, caliper_producer_error* error);
 
 /* One output of a program after its last pass: an array by name for geometry,
- * or "pixels". */
+ * "pixels", or "out" for a tensor. */
 caliper_producer_status caliper_producer_read_output(caliper_producer* runtime, uint32_t program, const char* name,
                                                 caliper_producer_output* out, caliper_producer_error* error);
 
+/* Sets values of the uniform `params` of a program by name; the next pass
+ * reads them. A name that the struct Params lacks is
+ * "program.params_mismatch" and changes nothing. No compile and no new hash. */
+caliper_producer_status caliper_producer_set_params(caliper_producer* runtime, uint32_t program,
+                                                    const caliper_producer_param* params, size_t count,
+                                                    caliper_producer_error* error);
 /* The state, the times and the memory of a program. */
 caliper_producer_status caliper_producer_read_status(caliper_producer* runtime, uint32_t program,
                                                         caliper_producer_program_status* out);

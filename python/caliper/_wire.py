@@ -2950,7 +2950,7 @@ __all__ += ["SplitUpdates", "split_update"]
 # ---------------------------------------------------------------------------
 CAP_PROGRAMS = "programs"
 CAP_INTERVENTIONS = "interventions"
-PROGRAM_SET, PROGRAM_REMOVE = "set", "remove"
+PROGRAM_SET, PROGRAM_REMOVE, PROGRAM_PARAMS = "set", "remove", "params"
 SECTION_WGSL = "wgsl"
 INTERVENE_ABLATE = "ablate"
 MAX_PROGRAMS = 16
@@ -2968,12 +2968,21 @@ PROGRAM_MEMORY_MB_MAX = 512
 PROGRAM_EVERY_MAX = 10000
 PROGRAM_WORKGROUPS_MAX = 65535
 TENSOR_NAME_MAX = 255
-OUTPUT_GEOMETRY, OUTPUT_PIXELS = "geometry", "pixels"
+PROGRAM_PARAMS_MAX = 16
+PROGRAM_PARAM_NAME_MAX = 63
+PROGRAM_BUILTIN_MAX = 32
+TENSOR_AXES_MAX = 4
+TENSOR_ELEMENTS_MAX = 1000000
+OUTPUT_GEOMETRY, OUTPUT_PIXELS, OUTPUT_TENSOR = "geometry", "pixels", "tensor"
+STATUS_OPERATOR = "operator"
 PROGRAM_STATES = ("waiting", "review", "compiled", "running", "refused", "stopped")
 PROGRAM_ARRAYS = ("positions", "colors", "values", "radii")
 INTERVENTION_STATES = ("pending", "active", "ended")
 _SAFE_INT = (1 << 53) - 1
 _ID_TAIL = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_-")
+_DIGITS = frozenset("0123456789")
+_PARAM_HEAD = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_")
+_PARAM_TAIL = _PARAM_HEAD | _DIGITS
 _HEX = frozenset("0123456789abcdef")
 
 
@@ -2982,10 +2991,42 @@ def _safe_uint(v) -> bool:
     return _is_int(v) and 0 <= v <= _SAFE_INT
 
 
+def _spec_id(v: str) -> bool:
+    return bool(v) and "a" <= v[0] <= "z" and all(c in _ID_TAIL for c in v)
+
+
 def _program_id(v) -> bool:
-    """A program id: 1 to 55 bytes of [a-z0-9_-], the first a letter."""
-    return (isinstance(v, str) and 0 < len(v) <= PROGRAM_ID_MAX and "a" <= v[0] <= "z"
-            and all(c in _ID_TAIL for c in v))
+    """A program id: 1 to 55 bytes of [a-z0-9_-], the first a letter, or the id of an
+    operator, ``operator.<id>.<n>``: a spec id, a dot and 1 to 5 digits."""
+    if not (isinstance(v, str) and 0 < len(v) <= PROGRAM_ID_MAX and v.isascii()):
+        return False
+    if v.startswith("operator."):
+        spec, dot, n = v[len("operator."):].rpartition(".")
+        return bool(dot) and _spec_id(spec) and 1 <= len(n) <= 5 and all(c in _DIGITS for c in n)
+    return _spec_id(v)
+
+
+def _param_name(v) -> bool:
+    """A WGSL field name of 1 to 63 bytes, [A-Za-z_][A-Za-z0-9_]*, not starting with "__"."""
+    return (isinstance(v, str) and 0 < len(v) <= PROGRAM_PARAM_NAME_MAX and v.isascii()
+            and v[0] in _PARAM_HEAD and all(c in _PARAM_TAIL for c in v)
+            and not v.startswith("__"))
+
+
+def _params_ok(v) -> bool:
+    """Program parameters: 1 to 16 names of a WGSL field, each with a finite number."""
+    return (isinstance(v, dict) and 1 <= len(v) <= PROGRAM_PARAMS_MAX
+            and all(_param_name(k) and _finite(x) for k, x in v.items()))
+
+
+def _tensor_shape_ok(v) -> bool:
+    """The shape of a tensor output: 1 to 4 integers from 1, at most 1,000,000 elements."""
+    if not _list_of(_int_in(1, TENSOR_ELEMENTS_MAX), TENSOR_AXES_MAX, 1)(v):
+        return False
+    n = 1
+    for x in v:
+        n *= x
+    return n <= TENSOR_ELEMENTS_MAX
 
 
 def _sha256_hex(v) -> bool:
@@ -3024,8 +3065,14 @@ def _check_declaration(d: dict) -> None:
     ``workgroups`` and ``entry``. Every count that sizes a buffer is bounded
     here; the sandbox checks the rest before any run."""
     out = _req(d, "output", _obj, "an object")
-    kind = _req(out, "kind", lambda v: v in (OUTPUT_GEOMETRY, OUTPUT_PIXELS), "geometry or pixels")
-    if kind == OUTPUT_GEOMETRY:
+    kind = _req(out, "kind", lambda v: v in (OUTPUT_GEOMETRY, OUTPUT_PIXELS, OUTPUT_TENSOR),
+                "geometry, pixels or tensor")
+    if kind == OUTPUT_TENSOR:
+        _req(out, "shape", _tensor_shape_ok, f"1 to {TENSOR_AXES_MAX} integers from 1 with at most "
+             f"{TENSOR_ELEMENTS_MAX} elements")
+        if set(out) - {"kind", "shape"}:
+            _bad("a tensor output holds only 'kind' and 'shape'")
+    elif kind == OUTPUT_GEOMETRY:
         _req(out, "part", lambda v: v in (PART_POINTS, PART_LINES), "points or lines")
         _req(out, "max_count", _int_in(1, PROGRAM_MAX_COUNT), f"an integer from 1 to {PROGRAM_MAX_COUNT}")
         _req(out, "arrays", _arrays_ok, "unique names of positions, colors, values and radii, "
@@ -3048,12 +3095,17 @@ def _check_declaration(d: dict) -> None:
     _opt(d, "workgroups", _list_of(_int_in(1, PROGRAM_WORKGROUPS_MAX), 3, 3),
          f"three integers from 1 to {PROGRAM_WORKGROUPS_MAX}")
     _opt(d, "entry", _name, "an entry point name")
+    _opt(d, "params", _params_ok, f"1 to {PROGRAM_PARAMS_MAX} names of a WGSL field with finite numbers")
+    _opt(d, "builtin", _bounded_text(PROGRAM_BUILTIN_MAX),
+         f"a built-in name of 1 to {PROGRAM_BUILTIN_MAX} bytes")
 
 
 @dataclass
 class Program(_Msg):
     """Viewer to producer, under the capability "programs": install or replace
-    (``op`` "set") or remove (``op`` "remove") one GPU program. A set carries
+    (``op`` "set"), remove (``op`` "remove") or change the parameters of (``op`` "params") one GPU
+    program. A params op carries only ``params``, 1 to 16 names of the program's uniform with
+    finite numbers, which the program reads at its next pass, with no compile. A set carries
     the declaration without its source, the scene of a geometry output's panel,
     the SHA-256 of the source and the section ``wgsl`` (the source as UTF-8).
     The producer runs the source only on the GPU, after the sandbox checks, and
@@ -3066,11 +3118,12 @@ class Program(_Msg):
     wgsl: str | None = None                      # set: the section "wgsl"
     sha256: str | None = None                    # set: of wgsl, in lowercase hex
     scene: str | None = None                     # set: a geometry output's scene
+    params: dict | None = None                   # params: the names and their numbers
 
     def to_meta(self):
         return _drop_none({"request_id": self.request_id, "op": self.op, "id": self.id,
                            "declaration": self.declaration, "scene": self.scene,
-                           "sha256": self.sha256})
+                           "sha256": self.sha256, "params": self.params})
 
     def to_sections(self):
         if self.wgsl is None:
@@ -3082,10 +3135,15 @@ class Program(_Msg):
     def from_frame(cls, f):
         m = f.meta
         rid = _req(m, "request_id", _u32, "a uint32")
-        op = _req(m, "op", lambda v: v in (PROGRAM_SET, PROGRAM_REMOVE), "set or remove")
+        op = _req(m, "op", lambda v: v in (PROGRAM_SET, PROGRAM_REMOVE, PROGRAM_PARAMS),
+                  "set, remove or params")
         pid = _req(m, "id", _program_id, f"a program id of at most {PROGRAM_ID_MAX} bytes")
         if op == PROGRAM_REMOVE:
             return cls(rid, op, pid)
+        if op == PROGRAM_PARAMS:
+            ps = _req(m, "params", _params_ok, f"1 to {PROGRAM_PARAMS_MAX} names of a WGSL field "
+                      "with finite numbers")
+            return cls(rid, op, pid, params=ps)
         d = _req(m, "declaration", _obj, "an object")
         _check_declaration(d)
         geometry = d["output"]["kind"] == OUTPUT_GEOMETRY
@@ -3120,7 +3178,7 @@ def _status_item(v) -> bool:
     optional keys of ``_STATUS_KEYS`` and ``sha256``, null or absent when
     unknown. ``host`` is the app's and is ignored here."""
     if not (_obj(v) and _program_id(v.get("id"))
-            and v.get("kind") in (OUTPUT_GEOMETRY, OUTPUT_PIXELS)
+            and v.get("kind") in (OUTPUT_GEOMETRY, OUTPUT_PIXELS, OUTPUT_TENSOR, STATUS_OPERATOR)
             and v.get("state") in PROGRAM_STATES):
         return False
     if not all(v.get(k) is None or check(v[k]) for k, check in _STATUS_KEYS):

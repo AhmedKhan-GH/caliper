@@ -17,8 +17,11 @@ programs every
 steps of ``CEILING_S`` seconds. When even that ceiling costs more than the share, every program
 stops with ``program.over_budget`` and training goes on. It gives each geometry output to the
 publish path of ``caliper.scene`` and each pixels output to ``caliper.show`` as the live view
-``program.<id>``. A refused or stopped program is an error of its panel, never of the script:
-no function here raises for it.
+``program.<id>``. A tensor output, the f32 array ``out`` that the program writes, goes to
+``caliper.show`` as the same live view, in the declared shape, and :func:`set_params` gives new
+values to the uniform ``params`` of a program, which its next pass reads without a compile. A
+program of a built-in operator reports the kind ``operator``. A refused or stopped program is an
+error of its panel, never of the script: no function here raises for it.
 
 THREADS. The wire path may call :func:`install`, :func:`remove` and :func:`status` from any
 thread. One lock orders them with :func:`at_step` on the training thread, thus the runtime is
@@ -41,7 +44,7 @@ import time
 import warnings
 from collections import deque
 
-__all__ = ["install", "remove", "status", "at_step", "loaded"]
+__all__ = ["install", "remove", "set_params", "status", "at_step", "loaded"]
 
 ACTIVE = False
 """Whether a program may run; ``caliper.step()`` calls :func:`at_step` only while it is true."""
@@ -68,6 +71,8 @@ EVERY_MAX = 10000
 TIME_MS_DEFAULT, TIME_MS_MAX = 4.0, 50.0
 MEMORY_MB_DEFAULT, MEMORY_MB_MAX = 64, 512
 INPUTS_MAX = 8
+PARAMS_MAX = 16
+TENSOR_AXES_MAX, TENSOR_ELEMENTS_MAX = 4, 1000000
 _ARRAYS = ("positions", "colors", "values", "radii")
 
 _LOCK = threading.RLock()
@@ -244,7 +249,8 @@ class _Import:
 class _Program:
     __slots__ = ("id", "decl", "wgsl", "sha256", "scene", "kind", "inputs", "output", "every_min",
                  "time_ms", "memory_mb", "handle", "state", "error", "runs", "last_step",
-                 "last_pass_ms", "memory_bytes", "warm", "every", "t0", "bound", "pass_times")
+                 "last_pass_ms", "memory_bytes", "warm", "every", "t0", "bound", "pass_times",
+                 "params", "builtin", "shape")
 
     def __init__(self, pid, decl, wgsl, scene, sha256):
         self.id = pid
@@ -255,6 +261,9 @@ class _Program:
         out = decl.get("output") or {}
         self.output = out
         self.kind = out.get("kind", "geometry")
+        self.shape = out.get("shape")
+        self.params = dict(decl.get("params") or {})   # name -> number: the uniform's values
+        self.builtin = decl.get("builtin") or None
         self.inputs = [(str(i.get("var", "")), str(i.get("source", ""))) for i in decl.get("inputs") or []]
         lim = decl.get("limits") or {}
         self.every_min = int(lim.get("every") or 1)
@@ -284,7 +293,8 @@ class _Program:
     def item(self) -> dict:
         b, d, share = _CAD.step_s(), _CAD.cost_s(), _CAD.share()
         return {
-            "id": self.id, "kind": self.kind, "state": self.state, "every": self.every,
+            "id": self.id, "kind": "operator" if self.builtin else self.kind, "state": self.state,
+            "every": self.every,
             "every_min": self.every_min, "last_pass_ms": self.last_pass_ms,
             "last_cost_ms": None if d is None else d * 1e3,
             "step_ms": None if b is None else b * 1e3,
@@ -463,8 +473,18 @@ def _release_unused() -> None:
 def _check(p: _Program) -> None:
     """The facade's part of the declaration: what the native call needs to take its arguments."""
     out = p.output
-    if p.kind not in ("geometry", "pixels"):
-        raise _Refused("program.output_mismatch", "The output is of kind geometry or pixels.")
+    if p.kind not in ("geometry", "pixels", "tensor"):
+        raise _Refused("program.output_mismatch", "The output is of kind geometry, pixels or tensor.")
+    if len(p.params) > PARAMS_MAX:
+        raise _Refused("program.over_limits", f"A program has at most {PARAMS_MAX} params.")
+    if p.kind == "tensor":
+        shape = p.shape
+        ok = (isinstance(shape, (list, tuple)) and 1 <= len(shape) <= TENSOR_AXES_MAX
+              and all(isinstance(n, int) and not isinstance(n, bool) and n >= 1 for n in shape))
+        if not ok or math.prod(shape) > TENSOR_ELEMENTS_MAX:
+            raise _Refused("program.output_mismatch",
+                           f"A tensor output has a shape of 1 to {TENSOR_AXES_MAX} axes from 1 "
+                           f"with at most {TENSOR_ELEMENTS_MAX} elements.")
     if len(p.inputs) > INPUTS_MAX:
         raise _Refused("program.over_limits", f"A program has at most {INPUTS_MAX} inputs.")
     if not (1 <= p.every_min <= EVERY_MAX):
@@ -499,13 +519,18 @@ def _compile(p: _Program) -> None:
     out = p.output
     wg = p.decl.get("workgroups") or (0, 0, 0)
     old = p.handle
+    extra = {}
+    if p.kind == "tensor":
+        extra["tensor_shape"] = [int(n) for n in p.shape]
+    if p.params:
+        extra["params"] = [(k, float(v)) for k, v in p.params.items()]
     try:
         h = rt.program(p.id, p.wgsl, [(v, im.handle) for v, im in bound.items()], p.kind,
                        entry=p.decl.get("entry"), part=str(out.get("part", "points")),
                        max_count=int(out.get("max_count") or 0), arrays=list(out.get("arrays") or []),
                        width=int(out.get("width") or 0), height=int(out.get("height") or 0),
                        workgroups=tuple(int(x) for x in wg), time_ms=p.time_ms,
-                       memory_bytes=p.memory_mb << 20)
+                       memory_bytes=p.memory_mb << 20, **extra)
     except RuntimeError as e:
         raise _refusal(e) from e
     if old is not None:
@@ -580,6 +605,38 @@ def install(program_id: str, declaration: dict, wgsl: str, *, scene: str | None 
     return item
 
 
+def set_params(program_id: str, params: dict) -> None:
+    """Give new values to the uniform ``params`` of a program; its next pass reads them.
+
+    The values are stored by name over the earlier ones, and a program that is compiled gets them
+    at once in the runtime. Nothing compiles again and the SHA-256 stays. A name that the WGSL
+    struct lacks leaves the old values and shows as the error ``program.params_mismatch`` of the
+    program. An unknown id does nothing.
+
+    Args:
+        program_id: The program's id.
+        params: Names of the uniform's fields and their numbers.
+    """
+    item = None
+    with _LOCK:
+        p = _PROGS.get(str(program_id))
+        if p is None:
+            return
+        new = {str(k): float(v) for k, v in dict(params or {}).items()}
+        old = dict(p.params)
+        p.params.update(new)
+        rt = _STATE["rt"]
+        if p.handle is not None and rt is not None and new:
+            try:
+                rt.set_params(p.handle, list(new.items()))
+            except RuntimeError as e:
+                p.params = old
+                p.error = _refusal(e).error
+                item = p.item()
+    if item is not None:
+        _notify([item])
+
+
 def _remove(program_id: str):
     with _LOCK:
         p = _PROGS.pop(str(program_id), None)
@@ -604,7 +661,7 @@ def remove(program_id: str) -> None:
         return
     try:
         pkg = sys.modules[__package__]
-        if p.kind == "pixels":
+        if p.kind in ("pixels", "tensor"):
             pkg.remove(f"program.{p.id}")
         elif p.scene:
             pkg.scene(p.scene).clear(_entity(p))
@@ -855,7 +912,7 @@ def _refresh(p: _Program) -> None:
 def _outputs(rt, p: _Program) -> dict:
     """The outputs of the last pass as tensors over the runtime's buffers, without a copy."""
     import torch
-    names = ["pixels"] if p.kind == "pixels" else list(p.output.get("arrays") or [])
+    names = {"pixels": ["pixels"], "tensor": ["out"]}.get(p.kind) or list(p.output.get("arrays") or [])
     out = {}
     for n in names:
         cap, count = rt.output(p.handle, n)
@@ -874,6 +931,9 @@ def _publish(p: _Program, outs: dict) -> None:
     try:
         if p.kind == "pixels":
             pkg.show(outs["pixels"], f"program.{p.id}")
+            return
+        if p.kind == "tensor":
+            pkg.show(outs["out"].reshape([int(n) for n in p.shape]), f"program.{p.id}")
             return
         sc = pkg.scene(p.scene)
         count = int(outs.get("count", 0))

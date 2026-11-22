@@ -321,6 +321,10 @@ bool apply_typed(CaliperCore* core, View& v, const Snapshot& s) {
     ls.label_count = s.label_count;
     ls.seq = s.seq;
     ls.stamp_ns = s.stamp_ns;
+    if (s.step != INT64_MIN) {
+        ls.flags |= CALIPER_LIVE_APPLY_HAS_STEP;
+        ls.step = s.step;
+    }
     if (!caliper_core_live_apply(core, &ls)) {
         v.error = caliper_core_last_error(core);
         return false;

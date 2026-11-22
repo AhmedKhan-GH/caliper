@@ -348,3 +348,25 @@ TEST_CASE("the watchdog stops a program over its time limit, and a timeout stops
     CHECK(caliper_producer_compile(f.rt, &d.d, &after, &e) == CALIPER_PRODUCER_TIMEOUT);
     caliper_producer_error_free(&e);
 }
+
+// ---- helpers for the operator cases (test_producer_operators.cpp), which are plain C++
+
+// A shared MTLBuffer of `bytes` on the system device, retained for the caller, and its
+// contents; null without a Metal device. Free it with caliper_test_release_buffer().
+void* caliper_test_shared_buffer(size_t bytes, void** contents) {
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (device == nil) return nullptr;
+    id<MTLBuffer> b = [device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
+    if (b == nil) return nullptr;
+    if (contents) *contents = [b contents];
+    return (__bridge_retained void*)b;
+}
+
+// The contents of a buffer that caliper_producer_read_output() gave.
+const void* caliper_test_buffer_contents(void* buffer) {
+    return buffer ? [(__bridge id<MTLBuffer>)buffer contents] : nullptr;
+}
+
+void caliper_test_release_buffer(void* buffer) {
+    if (buffer) (void)(__bridge_transfer id<MTLBuffer>)buffer;
+}

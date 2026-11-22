@@ -56,6 +56,11 @@ caliper_producer_status caliper_producer_read_output(caliper_producer*, uint32_t
     return unsupported(error);
 }
 
+caliper_producer_status caliper_producer_set_params(caliper_producer*, uint32_t, const caliper_producer_param*, size_t,
+                                                    caliper_producer_error* error) {
+    return unsupported(error);
+}
+
 caliper_producer_status caliper_producer_read_status(caliper_producer*, uint32_t,
                                                         caliper_producer_program_status*) {
     return CALIPER_PRODUCER_UNSUPPORTED;
