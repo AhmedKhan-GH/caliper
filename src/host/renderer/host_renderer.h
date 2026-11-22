@@ -111,7 +111,7 @@ public:
     // GPU, so the caller may rewrite the source buffer on return (embed v1.2
     // views: CALIPER_VIEW_FLAG_WAIT_GPU). No-op when nothing is pending and on
     // CPU-staged backends, whose uploads are already synchronous. Never on the
-    // default hot path — the device updates themselves stay wait-free (M1).
+    // default hot path — the device updates themselves stay wait-free.
     virtual void device_update_wait() {}
 
     // Live views (src/host/live), additive. A NON-blocking completion probe for

@@ -91,6 +91,7 @@
 namespace caliper_builder {
 class Session;
 class RunControl;
+class ModelRunner;
 }
 
 namespace caliper_live {
@@ -255,6 +256,13 @@ public:
     // close(): what the spec runtime's controls act through
     // (SpecInstrumentHost::run). Null without the builder.
     caliper_builder::RunControl* run_control();
+    // The app's model runner (src/host/runner/model_runner.h,
+    // design/hosted-runs.md), which the session holds from its adoption
+    // until close() for run.list, run.start, run.fork, run.stop, run.logs and
+    // the argument `run` of the run commands; null takes it back. The app
+    // gives it before the first frame and takes it back before the runner
+    // goes. Frame thread.
+    void set_model_runner(caliper_builder::ModelRunner* runner);
 
     // Counters the spec page (spec_page.h) reads on the frame thread to know
     // when to look at the session again, without asking it every frame. Any

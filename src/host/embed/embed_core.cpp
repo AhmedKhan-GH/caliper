@@ -64,7 +64,7 @@ namespace {
 // libtorch; full de-singletonization is not L2a). This lock makes the refusal
 // honest — a second create() returns NULL while one is live.
 //
-// ATOMIC, not a plain pointer (M2): two threads racing caliper_core_create must
+// ATOMIC, not a plain pointer: two threads racing caliper_core_create must
 // not BOTH pass the guard and each half-build a core over the shared process
 // globals (ImGui context, service registry). The slot is claimed with a single
 // compare-exchange BEFORE any construction — the loser refuses immediately, and
@@ -111,8 +111,8 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
         std::fprintf(stderr, "[embed] create: null/short CaliperCoreDesc\n");
         return nullptr;
     }
-    // Claim the one-core-per-process slot atomically BEFORE building anything
-    // (M2). A racing second create sees the CAS fail and refuses; only the
+    // Claim the one-core-per-process slot atomically BEFORE building anything.
+    // A racing second create sees the CAS fail and refuses; only the
     // winner proceeds, holding kCoreReserved until it publishes or releases.
     CaliperCore* expected = nullptr;
     if (!g_live_core.compare_exchange_strong(expected, kCoreReserved,
@@ -129,7 +129,7 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
     }
 
     // Release the one-core slot if we bail before publishing — by an early
-    // return OR by an exception unwinding out of this function (M2). The CAS
+    // return OR by an exception unwinding out of this function. The CAS
     // above pinned kCoreReserved; if services_init() or the AppletLoader ctor
     // (or any step between here and the publish below) throws, this guard puts
     // the slot back to nullptr — otherwise it stays pinned forever and every

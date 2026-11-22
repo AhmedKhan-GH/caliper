@@ -83,7 +83,7 @@ const std::vector<std::string>& colormaps() {
 }
 
 const std::vector<std::string>& catalog_kinds() {
-    static const std::vector<std::string> v = {"table", "tensor", "live", "feed", "metric"};
+    static const std::vector<std::string> v = {"table", "tensor", "live", "feed", "metric", "run"};
     return v;
 }
 

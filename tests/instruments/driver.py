@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The driver of the instrument acceptance test and the instrument check.
 
-It starts tests/m1/train.py, starts the hidden app on the script's stream link and caliper-mcp
-as a child over stdio, and sends tests/m1/transcript.jsonl through the MCP tools. It waits on the
+It starts tests/instruments/train.py, starts the hidden app on the script's stream link and caliper-mcp
+as a child over stdio, and sends tests/instruments/transcript.jsonl through the MCP tools. It waits on the
 script's output, on events and on published state, never for a fixed time. Without a window and
 without the network. Exit code 0 passes, 77 skips (no app, no torch, no Metal), 1 fails.
 
@@ -27,7 +27,7 @@ ROOT = HERE.parent.parent
 SKIP = 77
 META = {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientCapabilities": {},
-        "io.modelcontextprotocol/clientInfo": {"name": "m1-check", "version": "1"}}
+        "io.modelcontextprotocol/clientInfo": {"name": "instrument-check", "version": "1"}}
 # The decisions the person gives at the cards, through the app's test seam.
 APPROVALS = ["approve spec.new mcp", "approve panel.create mcp", "approve control.create mcp",
              "approve run.set_param mcp"]
@@ -268,13 +268,13 @@ def main():
     try:
         res = run(a)
     except Skip as e:
-        print(f"caliper_m1_acceptance skipped: {e}")
+        print(f"caliper_instrument_acceptance skipped: {e}")
         return SKIP
     except Fail as e:
-        print(f"caliper_m1_acceptance FAILED: {e}")
+        print(f"caliper_instrument_acceptance FAILED: {e}")
         return 1
     print(json.dumps(res, indent=2))
-    print("caliper_m1_acceptance passed")
+    print("caliper_instrument_acceptance passed")
     return 0
 
 

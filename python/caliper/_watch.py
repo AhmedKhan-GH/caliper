@@ -32,6 +32,11 @@ makes each ``optimizer.step()`` the checkpoint of the run, registers the
 parameter ``lr`` and publishes the series ``loss`` and ``lr`` and the scene
 ``model`` (caliper._watch_run).
 
+In a managed run (``CALIPER_RUN_DIR`` set by the app's model runner), ``watch()``
+also loads the checkpoint of a fork, registers the actions ``caliper.checkpoint``
+and ``caliper.stop``, makes each forward pass of the model the checkpoint when
+there is no optimizer, and writes the link file (caliper._managed).
+
 A view has at most 64 sources (the wire protocol's limit); a group keeps the
 first 64 with a warning. A source does tensor work only when a route needs it:
 the window and the session need the default data view's source, a server the
@@ -46,7 +51,7 @@ import math
 import warnings
 import weakref
 
-from . import _dataview
+from . import _dataview, _managed
 from ._convert import CMAPS
 
 __all__ = ["watch", "WatchHandle"]
@@ -68,6 +73,7 @@ class WatchHandle:
         self._handles: list = []
         self._entries: list = []            # the grouped views' registry entries
         self._run = None                    # caliper._watch_run.RunHooks of an optimizer
+        self._actions: list = []            # the actions of a managed run (caliper._managed)
         self.views: list[str] = []          # view names the hooks show into
         """The view names that the hooks show into."""
         self.modules: list[str] = []        # module names that got a hook
@@ -76,7 +82,10 @@ class WatchHandle:
         """The names of the grouped views, with the prefix that `watch` was given."""
 
     def remove(self) -> None:
-        """Take every hook off and remove the grouped views and the parameter `lr`.
+        """Take every hook off and remove the grouped views, the parameter `lr` and the actions.
+
+        The actions are `caliper.checkpoint` and `caliper.stop` of a run that the Caliper app
+        started.
 
         The series and the scene stay. Without a learning rate scheduler, a learning rate that a
         viewer set stays in the optimizer. With one, the scheduler's own rates apply again.
@@ -84,6 +93,9 @@ class WatchHandle:
         for h in self._handles:
             h.remove()
         self._handles.clear()
+        for a in self._actions:
+            a.remove()
+        self._actions.clear()
         if self._run is not None:
             self._run.close()
             self._run = None
@@ -198,10 +210,13 @@ def watch(model, optimizer=None, *, activations: bool = True, gradients: bool = 
     h = WatchHandle()
     picked = [(mname or type(model).__name__.lower(), mod) for mname, mod in model.named_modules()
               if pick(mname, mod)]
+    managed = _managed.current()                      # started by the app's model runner
+    if managed is not None:
+        managed.prepare(pkg, model, optimizer)        # the server, the checkpoint of a fork
     run = None
     if optimizer is not None:                         # the checkpoint, lr, loss and the scene
         from ._watch_run import RunHooks
-        run = RunHooks(pkg, h, optimizer, scene, rate)
+        run = RunHooks(pkg, h, optimizer, scene, rate, managed)
         h._run = run
     rec = run if run is not None and run.scene is not None else None
     labels, mods = [], []
@@ -275,4 +290,6 @@ def watch(model, optimizer=None, *, activations: bool = True, gradients: bool = 
             mods.append(mod)
     if run is not None:
         run.modules(labels, mods)
+    if managed is not None:
+        managed.attach(h, model, optimizer)           # the two actions, then the link file
     return h

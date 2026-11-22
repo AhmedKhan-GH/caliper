@@ -190,7 +190,7 @@ The live provider copies a view's payload on the frame thread, in place, while t
 
 The acceptance case, "plot attention entropy per layer while it trains", measured with `caliper_catalog_providers_bench` (`src/host/catalog_providers/bench/`, built on demand): a live view of softmax attention rows reaches a session through the live provider, and the session resolves a panel of its entropy over the last axis and its mean over the query tokens on the CPU reference transforms. Each figure is the median of 30 runs, with the 95th percentile in brackets, on an M5 Max (18 cores, 64 GB).
 
-**These figures were taken on a busy machine**, with all three heavy-job slots held and a 1-minute load average of 29.9 before the run and 25.9 after it, so they are an upper bound. A figure on a quiet machine is still to be taken at a milestone.
+**These figures were taken on a busy machine**, with all three heavy-job slots held and a 1-minute load average of 29.9 before the run and 25.9 after it, so they are an upper bound. A figure on a quiet machine is still to be taken.
 
 | Live payload | Size | Copy on the frame thread | Resolve after a new snapshot | Of which the two transforms | Resolve with nothing new | Probe |
 |---|---|---|---|---|---|---|

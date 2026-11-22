@@ -333,5 +333,8 @@ TEST_CASE("the cache of transformed tensors keeps to its bounds and forgets on a
     CHECK(sources.cache_stats().entries == 0);
     CHECK(sources.cache_stats().bytes == 0);
     CHECK(sources.generation("metric:1/loss") == 0);
+    // The run sources of the model runner register as the others do.
+    CHECK(sources.set(CatalogKind::run, std::make_shared<FakeSource>()));
+    CHECK(sources.get(CatalogKind::run) != nullptr);
     CHECK(sources.generation("not an id") == 0);
 }

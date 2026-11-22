@@ -75,7 +75,7 @@ std::optional<ControlTarget> parse_control_target(std::string_view bind) {
         t.kind = ControlTarget::Kind::action;
         name = bind.substr(7);
     } else {
-        return std::nullopt;   // intervene: is reserved for a later milestone
+        return std::nullopt;   // intervene: is not available yet
     }
     if (!valid_target_name(name)) return std::nullopt;
     t.name = std::string(name);

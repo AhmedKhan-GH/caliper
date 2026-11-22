@@ -32,7 +32,7 @@
 // shape) remains as the per-texture fallback. The adapter-side
 // torch::cuda::synchronize() at the handoff is the v1 ABI contract and stays;
 // elided when the adapter populates CaliperTensor.stream under bridge-v1.1
-// caps (M2a) — the copy+signal then ride the producer's stream.
+// caps — the copy+signal then ride the producer's stream.
 //
 // Direct path (docs/development/vulkan-and-cuda.md): where it is available,
 // the steps above are replaced by one CUDA kernel, launched on the producer's
@@ -3583,7 +3583,7 @@ private:
         }
 
         // CUDA side, ordered on the PRODUCER's stream when the adapter
-        // supplied one (M2a) — stream order puts the copy after the
+        // supplied one — stream order puts the copy after the
         // producer's kernels, so the adapter's torch::cuda::synchronize() is
         // elided. NULL keeps the legacy default stream (v1 drained handoff).
         const cudadrv::Api* cu = cudadrv::api();

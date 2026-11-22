@@ -37,7 +37,9 @@
 #include "host/builder/spec_page.h"
 #if CALIPER_WITH_BUILDER
 #include "host/builder/agent_settings.h"
+#include "host/builder/runs_panel.h"
 #include "host/builder/widget_app.h"
+#include "host/runner/model_runner.h"
 #include <caliper_builder/session/session.h>
 #include "host/spec_runtime/spec_runtime.h"
 #endif
@@ -338,6 +340,9 @@ public:
             // frame drawn next (window_captures.h).
             if (api_.running()) serve_api();
             session_.frame();
+#if CALIPER_WITH_BUILDER
+            frame_runner();
+#endif
             save_prompt_.frame(session_);   // "Save changes to <name>?" and what waits on it
             approvals_.frame(session_.session(), session_.worker_busy(), glfwGetTime());
             chat_.frame(session_);   // the side chat polls its agent
@@ -491,6 +496,16 @@ public:
                 agent_settings_.draw(vp->WorkPos.x, vp->WorkPos.y, vp->WorkSize.x, vp->WorkSize.y,
                                      caliper_host::house_spec_look());
             }
+            // The managed runs (design/hosted-runs.md), over whatever page is
+            // shown; ⌘⇧R opens them anywhere. A start or a fork shows the
+            // session's card in the panel, the same card as the tray's.
+            runs_panel_.read_keys();
+            runs_panel_.frame(session_.session(), runner_.get(), session_.worker_busy());
+            if (runs_panel_.is_open()) {
+                const ImGuiViewport* vp = ImGui::GetMainViewport();
+                runs_panel_.draw(vp->WorkPos.x, vp->WorkPos.y, vp->WorkSize.x, vp->WorkSize.y,
+                                 caliper_host::house_spec_look());
+            }
 #endif
 
             // The session's catalog providers: registered once the session is
@@ -597,6 +612,20 @@ public:
         // App): run.state and the run commands act through the attachment,
         // and the spec page's scene panels draw its live scenes.
         session_.set_run_link(&run_link_);
+#if CALIPER_WITH_BUILDER
+        // The model runner of Hosted Runs (design/hosted-runs.md): its runs
+        // live in the workspace's runs folder, and run.list, run.start,
+        // run.fork, run.stop and run.logs act through it.
+        {
+            caliper_runner::ModelRunner::Options ro;
+            std::error_code ec;
+            ro.workspace = std::filesystem::weakly_canonical(std::filesystem::path(session_.workspace()), ec).string();
+            if (ec || ro.workspace.empty()) ro.workspace = session_.workspace();
+            runner_ = std::make_unique<caliper_runner::ModelRunner>(ro);
+            runner_->set_app_control(session_.run_control());
+            session_.set_model_runner(runner_.get());
+        }
+#endif
         spec_page_.set_live_core([this] { return live_.core(); });
         // panel.render draws on an offscreen canvas that shares this
         // window's font atlas, made on the first call between two frames.
@@ -824,6 +853,9 @@ public:
         api_.set_command_gateway(nullptr);
         session_.set_panel_renderer(nullptr);
         providers_.close(session_);   // before the session and the host's stores
+#if CALIPER_WITH_BUILDER
+        close_runner();   // every managed run's process ends here, by its process id
+#endif
         approvals_.close();
         if (live_.core()) caliper_live_set_event_tap(live_.core(), {});
         session_.set_run_link(nullptr);   // before the attachment goes
@@ -1387,10 +1419,11 @@ private:
     // previous frame on purpose: WantTextInput is computed from last frame's
     // active field, and ImGui closes a popup on Esc inside NewFrame(), before
     // this code can see it open.
-    // The widget agent's settings take Escape while they are open.
+    // The widget agent's settings and the runs panel take Escape while they
+    // are open.
     bool agent_settings_open() const {
 #if CALIPER_WITH_BUILDER
-        return agent_settings_.is_open();
+        return agent_settings_.is_open() || runs_panel_.is_open();
 #else
         return false;
 #endif
@@ -1479,6 +1512,51 @@ private:
         set_live_title();
         note_live_events();   // "attached"
     }
+
+#if CALIPER_WITH_BUILDER
+    // The model runner between two frames (design/hosted-runs.md): once the
+    // session is adopted, its run sources join the catalog and the data
+    // sources and its runner events go to the session's ring; then a managed
+    // run that became ready, or that a run command named, is attached.
+    void frame_runner() {
+        if (!runner_) return;
+        if (!runner_session_) {
+            caliper_builder::Session* s = session_.session();
+            if (s && !session_.worker_busy()) {
+                const caliper_builder::Error e = s->catalog().add_provider("runs", runner_->catalog_provider());
+                if (!e.ok()) std::cerr << "[session] run sources: " << e.message << std::endl;
+                s->data_sources().set(caliper_builder::CatalogKind::run, runner_->data_source());
+                runner_->set_event_sink(&s->events());
+                runner_session_ = s;
+            }
+        }
+        const std::string next = runner_->frame(live_.attached(), live_.attached() ? live_url_ : std::string());
+        if (next.empty()) return;
+        // The spec page stays: its panels draw the runs. From another page the
+        // app shows the run's live page, as --url does.
+        const bool on_spec = page_ == AppPage::Spec;
+        attach_stream(next);
+        if (on_spec && page_ == AppPage::Live) {
+            page_ = AppPage::Spec;
+            glfwSetWindowTitle(window_, ("Caliper - " + spec_page_.title()).c_str());
+        }
+    }
+
+    // Before the session closes: the session lets go of the runner, and the
+    // runner ends every child by its process id, so that none outlives the app.
+    void close_runner() {
+        if (!runner_) return;
+        if (runner_session_ && runner_session_ == session_.session()) {
+            runner_session_->catalog().remove_provider("runs");
+            runner_session_->data_sources().set(caliper_builder::CatalogKind::run, nullptr);
+        }
+        runner_->set_event_sink(nullptr);
+        runner_session_ = nullptr;
+        session_.set_model_runner(nullptr);
+        runner_->set_app_control(nullptr);
+        runner_->shutdown();
+    }
+#endif
 
     // The attach pane's stream link (wire protocol v3, live_net_source.h):
     // attach through a hosted core as for a session; a refusal (nothing
@@ -1957,7 +2035,10 @@ private:
     bool quit_confirmed_ = false;           // the person answered the close's question
     caliper_host::ChatPane chat_;           // the side chat, on the spec and live pages
 #if CALIPER_WITH_BUILDER
+    std::unique_ptr<caliper_runner::ModelRunner> runner_;   // the managed runs (design/hosted-runs.md)
+    caliper_builder::Session* runner_session_ = nullptr;    // the session that holds its run sources
     caliper_host::AgentSettings agent_settings_;   // the widget agent's settings, a popup over any page
+    caliper_host::RunsPanel runs_panel_;           // the managed runs, a popup over any page
 #endif
     caliper_host::CommandLine cl_;          // for starting Caliper API later, for the chat
     bool api_started_here_ = false;         // the app started the API without --api (api_for())

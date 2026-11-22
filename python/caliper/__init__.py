@@ -42,6 +42,12 @@ import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+# A process that the app's model runner started ends when the app ends, also when the app crashes
+# before the script calls watch() or param(). Without CALIPER_RUN_APP_PID nothing of this loads.
+if os.environ.get("CALIPER_RUN_APP_PID"):
+    from . import _managed
+    _managed.watch_parent()
+
 from ._convert import (CMAPS, SERIES_CAPACITY, check_range, cmap_index, plan_histogram,
                        plan_points, plan_series, plan_show)
 from . import _dataview
@@ -525,6 +531,17 @@ def watch(model, optimizer=None, *, activations: bool = True, gradients: bool = 
        optimizer does not also call `caliper.step()`.
     3. It registers the parameter `lr` and publishes the series `loss` and `lr` and the scene
        `model`.
+
+    In a managed run, which the model runner of the Caliper app starts with the environment variable
+    `CALIPER_RUN_DIR` set, `watch()` also starts the server when it is not started. It loads the
+    checkpoint of `CALIPER_RUN_RESUME` into the model and the optimizer before the first step and
+    continues the step count. It applies the values of `CALIPER_RUN_PARAMS` and of the checkpoint
+    when each parameter is registered. It registers the actions `caliper.checkpoint`, which saves
+    the model, the optimizer, the step and the parameter values to `<run dir>/checkpoint-<step>.pt`
+    and returns the path, and `caliper.stop`, which ends the script with exit code 0 at its next
+    checkpoint, before the weights change. Last, it writes the stream link into
+    `CALIPER_RUN_LINK_FILE`. Without an optimizer, each forward pass of the model is the checkpoint.
+    See [Managed Runs](../agents/managed-runs.md).
 
     | Name | Kind | Content |
     |---|---|---|

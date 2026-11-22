@@ -1057,6 +1057,10 @@ if(TARGET caliper_builder_session)
     add_subdirectory(src/host/catalog_providers)
     # The approval cards' link to the diff card and their tests.
     include(src/host/builder/approval_cards.cmake)
+    # The model runner of Hosted Runs and its tests.
+    include(src/host/runner/runner.cmake)
+    # The runs panel, caliper-runs-panel-shot and their tests.
+    include(src/host/builder/runs_panel.cmake)
 endif()
 
 # The Python extension (caliper-python spike): a nanobind module over the embed

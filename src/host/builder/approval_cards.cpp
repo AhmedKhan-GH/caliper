@@ -124,6 +124,10 @@ std::string approval_what(const cb::CommandInvocation& inv, const spec::Spec* op
         target = str_arg(a, "name");
     } else if (n == "run.pause") {
         target = str_arg(a, "op");
+    } else if (n == "run.start") {
+        target = str_arg(a, "script");
+    } else if (n == "run.fork" || n == "run.stop") {
+        target = str_arg(a, "run");
     }
     return target.empty() ? n : n + " \xC2\xB7 " + target;   // ·
 }
@@ -131,6 +135,8 @@ std::string approval_what(const cb::CommandInvocation& inv, const spec::Spec* op
 std::string approval_run_text(const cb::CommandInvocation& inv, const std::string& script) {
     const std::string& n = inv.name;
     const json& a = inv.args;
+    // The model runner's commands (design/hosted-runs.md, Review Card).
+    if (n == "run.start" || n == "run.fork" || n == "run.stop") return cb::run_card_text(inv, script);
     const std::string in = script.empty() ? std::string("the attached script") : script;
     if (n == "run.set_param") {
         const auto v = a.find("value");
@@ -333,8 +339,18 @@ ApprovalCard ApprovalCards::make_card(cb::Session& s, const cb::PendingApproval&
     c.what = approval_what(inv, before);
     c.loss = approval_loss(inv, before);
     if (inv.name.rfind("run.", 0) == 0) {
-        cb::RunControl* run = s.run_control();
-        c.loss = approval_run_text(inv, run ? run->state().script : std::string());
+        // The script of the run that the command names (a managed run), else
+        // of the attached script.
+        std::string script;
+        const std::string target = str_arg(inv.args, "run");
+        cb::ModelRunner* runner = s.model_runner();
+        if (!target.empty() && target != cb::kUserRunId && runner) {
+            for (const cb::RunEntry& e : runner->list())
+                if (e.id == target) script = e.script;
+        } else if (cb::RunControl* run = s.run_control()) {
+            script = run->state().script;
+        }
+        c.loss = approval_run_text(inv, script);
     }
     c.invocation = inv;
     c.rule = cb::permission_rule_key(inv);
