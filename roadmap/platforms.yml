@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=schema.json
 prefix: PLT
-title: Platforms and distribution
+title: Platforms and Distribution
 order: 9
 summary: This pillar covers the platforms Caliper runs on and how it is built, tested, signed and packaged for them, including the steps that bring Windows level with macOS.
 features:
@@ -23,7 +23,7 @@ features:
     issue: null
 
   - id: PLT-03
-    title: Continuous integration
+    title: Continuous Integration
     status: shipped
     scope: supporting
     summary: Continuous integration builds and tests the core on macOS and on windows-latest, builds the applets and packages against the installed SDK, and checks that the host names no applet.
@@ -32,7 +32,7 @@ features:
     issue: null
 
   - id: PLT-04
-    title: Signed and notarized build
+    title: Signed and Notarized Build
     status: planned
     scope: peripheral
     summary: The macOS app is signed and notarized for distribution, together with the agents it packages.
@@ -42,7 +42,7 @@ features:
     issue: null
 
   - id: PLT-05
-    title: Windows build and test baseline
+    title: Windows Build and Test Baseline
     status: planned
     scope: supporting
     summary: The Windows baseline runs full CI on windows-latest for every package and subcommand and runs the graphics, export and embed suites on Windows hardware with no skipped GPU rows.
@@ -52,7 +52,7 @@ features:
     issue: null
 
   - id: PLT-06
-    title: Applet platform on Windows
+    title: Applet Platform on Windows
     status: planned
     scope: supporting
     summary: The applet platform on Windows gets applet loading with the right DLL search directories, the libtorch pin with its CUDA variant, install over a loaded DLL, a console entry point, and caliper shot and caliper build.
@@ -70,7 +70,7 @@ features:
     issue: null
 
   - id: PLT-08
-    title: Streaming, the hub and Caliper API on Windows
+    title: Streaming, the Hub and Caliper API on Windows
     status: planned
     scope: supporting
     summary: Windows gets the app's network source, the caliper serve hub and Caliper API v0 on Winsock, bound to 127.0.0.1, with their refusals lifted once their tests run there.
@@ -79,7 +79,7 @@ features:
     issue: null
 
   - id: PLT-09
-    title: Web viewer and notebooks on Windows
+    title: Web Viewer and Notebooks on Windows
     status: planned
     scope: supporting
     summary: The web viewer is checked in Chrome and Edge and the notebook widget in JupyterLab and Visual Studio Code on Windows.
@@ -97,7 +97,7 @@ features:
     issue: null
 
   - id: PLT-11
-    title: Renderer fallbacks on Windows
+    title: Renderer Fallbacks on Windows
     status: planned
     scope: supporting
     summary: Windows gets the WebGPU backend through Dawn as the native fallback, drawing through Direct3D 12, Direct3D 11 or SwiftShader when Vulkan is unavailable.
@@ -106,7 +106,7 @@ features:
     issue: null
 
   - id: PLT-12
-    title: Signing and packaging on Windows
+    title: Signing and Packaging on Windows
     status: planned
     scope: peripheral
     summary: Windows gets Authenticode signing of the app, the CLI entry point and the first-party applet DLLs, an installer, and a winget package that puts the CLI on the path.
@@ -115,7 +115,7 @@ features:
     issue: null
 
   - id: PLT-13
-    title: Builder agents on Windows
+    title: Builder Agents on Windows
     status: planned
     scope: supporting
     summary: Windows gets process spawning, the caliper-mcp HTTP client and a Credential Manager key store, so that the side chat and the widget agent run there.
@@ -132,7 +132,7 @@ features:
     issue: null
 
   - id: PLT-15
-    title: Linux arm64 timing
+    title: Linux arm64 Timing
     status: decision
     scope: peripheral
     summary: This decision sets when Linux work starts; it waits until a Linux arm64 machine is available, and the Linux features wait with it.
@@ -140,7 +140,7 @@ features:
     issue: null
 
   - id: PLT-16
-    title: Scenes and recordings on Windows
+    title: Scenes and Recordings on Windows
     status: planned
     scope: supporting
     summary: Scenes, slice planes, isosurfaces and recordings work on Windows, through the Vulkan backend of the graphics layer and CUDA.
@@ -148,7 +148,7 @@ features:
     issue: null
 
   - id: PLT-17
-    title: WinUI 3 hosting
+    title: WinUI 3 Hosting
     status: decision
     scope: supporting
     summary: This decision sets whether Caliper Embed is hosted in WinUI 3, which expects a DXGI swap chain, through Vulkan and DXGI interop or through the Dawn fallback.
@@ -156,7 +156,7 @@ features:
     issue: null
 
   - id: PLT-18
-    title: Fast paths in the documented setup
+    title: Fast Paths in the Documented Setup
     status: planned
     scope: supporting
     summary: The documented setup builds the native sender and the WebAssembly views, so that a first run uses the fast paths rather than the Python sender and the TypeScript views.
@@ -165,7 +165,7 @@ features:
     issue: null
 
   - id: PLT-19
-    title: Release workflow
+    title: Release Workflow
     status: planned
     scope: supporting
     summary: A release workflow attaches the WebAssembly views to each release and publishes Caliper LIB's wheel.

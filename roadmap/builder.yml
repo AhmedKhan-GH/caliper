@@ -1,11 +1,11 @@
 # yaml-language-server: $schema=schema.json
 prefix: SPC
-title: Builder and specs
+title: Builder and Specs
 order: 4
 summary: This pillar covers building dashboards from data inside the app, with specs, loaders, a catalog of sources, a command layer and a builder pane. It also covers the later work on custom views and on promoting proven applet features into the core.
 features:
   - id: SPC-01
-    title: Spec format
+    title: Spec Format
     status: shipped
     scope: core
     summary: The spec format describes a dashboard as text, with sources, panels built from seven primitives, bindings and a layout, in a TOML form and a canonical JSON form.
@@ -15,7 +15,7 @@ features:
     issue: null
 
   - id: SPC-02
-    title: Spec validator
+    title: Spec Validator
     status: shipped
     scope: core
     summary: The spec validator checks a spec against the format and reports each error and warning with a stable code, a line and a column.
@@ -45,7 +45,7 @@ features:
     issue: null
 
   - id: SPC-05
-    title: Command layer
+    title: Command Layer
     status: shipped
     scope: core
     summary: The command layer is a table of typed commands with undo, a journal, approvals and previews, served to programs through Caliper API.
@@ -55,7 +55,7 @@ features:
     issue: null
 
   - id: SPC-06
-    title: Builder sessions
+    title: Builder Sessions
     status: shipped
     scope: core
     summary: A builder session binds the spec, loaders, catalog and commands for one workspace folder, which the app, caliper dev and caliper shot each hold.
@@ -65,7 +65,7 @@ features:
     issue: null
 
   - id: SPC-07
-    title: Builder pane
+    title: Builder Pane
     status: shipped
     scope: core
     summary: The builder pane lets a person build a spec by hand on the app's spec page, with source and primitive palettes, a canvas, properties and the spec text.
@@ -75,7 +75,7 @@ features:
     issue: null
 
   - id: SPC-08
-    title: Spec applets
+    title: Spec Applets
     status: shipped
     scope: core
     summary: A spec applet is a folder with a manifest and a spec and no library, which the loader lists, validates and the app draws as a page without running applet code.
@@ -85,7 +85,7 @@ features:
     issue: null
 
   - id: SPC-09
-    title: Removing panels
+    title: Removing Panels
     status: shipped
     scope: core
     summary: A panel is removed from a dashboard with the cross on its title strip, a menu entry or the delete key, as one undoable step.
@@ -95,7 +95,7 @@ features:
     issue: null
 
   - id: SPC-10
-    title: Data view
+    title: Data View
     status: planned
     scope: core
     summary: The Data view is a node graph in build mode of sources, derived sources with their transforms and each panel's slots, where dragging binds a source to a slot as a command.
@@ -105,7 +105,7 @@ features:
     issue: null
 
   - id: SPC-11
-    title: Spec version 1 with scenes
+    title: Spec Version 1 with Scenes
     status: planned
     scope: core
     summary: Spec version 1 adds a scene primitive, so that a panel can show a scene and, later, a recording bound to a cursor.
@@ -114,7 +114,7 @@ features:
     issue: null
 
   - id: SPC-12
-    title: Custom controls
+    title: Custom Controls
     status: planned
     scope: core
     summary: Spec version 1 declares sliders, toggles, buttons, pickers and text fields, bound without native code to a source's parameters, to other panels' selections and to the running script's controls.
@@ -123,7 +123,7 @@ features:
     issue: null
 
   - id: SPC-13
-    title: Reshape step
+    title: Reshape Step
     status: planned
     scope: core
     summary: The reshape step adds a tensor transform for reshaping and stacking, to be built only if real use needs it, since a stream carries at most three dimensions per heatmap view.
@@ -133,7 +133,7 @@ features:
     issue: null
 
   - id: SPC-14
-    title: Custom WGSL views
+    title: Custom WGSL Views
     status: planned
     scope: core
     summary: A spec carries WGSL code for a material or a compute stage of the scene primitive, checked and compiled by the scene layer, with limits on its buffers and its time per frame.
@@ -143,7 +143,7 @@ features:
     issue: null
 
   - id: SPC-15
-    title: Custom WebAssembly views
+    title: Custom WebAssembly Views
     status: planned
     scope: core
     summary: A spec carries a WebAssembly module with a fixed host interface that reads its bound sources, draws into a scene or a 2-D canvas and emits selections, without files or the network and under memory and time limits, in the app and in a browser.
@@ -153,7 +153,7 @@ features:
     issue: null
 
   - id: SPC-16
-    title: Capture service
+    title: Capture Service
     status: planned
     scope: supporting
     summary: The capture service gives every applet screenshots, scripted runs and recordings through one host interface, starting from what caliper shot already does.
@@ -162,7 +162,7 @@ features:
     issue: null
 
   - id: SPC-17
-    title: Layout grid
+    title: Layout Grid
     status: planned
     scope: core
     summary: The layout grid sizes panes as shares of the window with minimums tied to the text scale, as plain rectangles that tests check without a window.
@@ -180,7 +180,7 @@ features:
     issue: null
 
   - id: SPC-19
-    title: Python sidecar
+    title: Python Sidecar
     status: planned
     scope: supporting
     summary: A sidecar service starts a Python process beside an applet, with a version handshake, a cache version that triggers a rebuild and a synthetic-data mode.
@@ -189,7 +189,7 @@ features:
     issue: null
 
   - id: SPC-20
-    title: Viz components
+    title: Viz Components
     status: planned
     scope: supporting
     summary: The caliper viz components add an annotation scene for geometry, colour by value with a key, and a catalog tree, promoted from applet code into the SDK.
@@ -198,7 +198,7 @@ features:
     issue: null
 
   - id: SPC-21
-    title: WebAssembly and third-party applets
+    title: WebAssembly and Third-Party Applets
     status: decision
     scope: core
     summary: This decision sets how sprint 7's sandboxed custom views relate to the roadmap's Not now list, which names WebAssembly and third-party applets, and to Phase 2's split of applets into a native computation and a WebAssembly interface.
@@ -207,7 +207,7 @@ features:
     issue: null
 
   - id: SPC-22
-    title: Recording bindings in spec panels
+    title: Recording Bindings in Spec Panels
     status: planned
     scope: peripheral
     summary: A spec panel binds to a recording as it binds to a live source, so that a spec applet replays what was recorded.
@@ -216,7 +216,7 @@ features:
     issue: null
 
   - id: SPC-23
-    title: Review of custom views
+    title: Review of Custom Views
     status: planned
     scope: core
     summary: A custom view written by an agent waits for the person's review like any other spec change, with its source, its limits and a capture of what it draws.
@@ -225,7 +225,7 @@ features:
     issue: null
 
   - id: SPC-24
-    title: Custom view starter kit
+    title: Custom View Starter Kit
     status: planned
     scope: core
     summary: A starter kit, a guide and examples in Rust, C and AssemblyScript help people and agents write custom views, with an agent guide for writing them through MCP.
@@ -234,7 +234,7 @@ features:
     issue: null
 
   - id: SPC-25
-    title: Agent-written view demo
+    title: Agent-Written View Demo
     status: planned
     scope: core
     summary: A demo shows a custom view written entirely by an outside agent through MCP, built and reviewed in one session.
@@ -243,7 +243,7 @@ features:
     issue: null
 
   - id: SPC-26
-    title: Script runtime for specs
+    title: Script Runtime for Specs
     status: idea
     scope: core
     summary: A sandboxed script runtime could carry custom logic that the fixed spec primitives cannot express.
@@ -251,7 +251,7 @@ features:
     issue: null
 
   - id: SPC-27
-    title: Panel ejected to a native applet
+    title: Panel Ejected to a Native Applet
     status: idea
     scope: supporting
     summary: A spec panel that needs more speed could be turned into a native applet built outside the app and loaded like any other.
@@ -259,7 +259,7 @@ features:
     issue: null
 
   - id: SPC-28
-    title: Source transforms
+    title: Source Transforms
     status: shipped
     scope: core
     summary: A tensor source of a spec carries slice, reduce and normalise steps, edited in the builder pane with the shape after each step.
@@ -268,7 +268,7 @@ features:
     issue: null
 
   - id: SPC-29
-    title: Command script
+    title: Command Script
     status: shipped
     scope: core
     summary: CALIPER_COMMAND_SCRIPT runs a file of commands, one JSON line each, through the command queue of the hidden app or of caliper shot, and writes each result to a file, for tests, demos and screenshots.
@@ -277,7 +277,7 @@ features:
     issue: null
 
   - id: SPC-30
-    title: Builder pane on the live page
+    title: Builder Pane on the Live Page
     status: planned
     scope: core
     summary: The builder pane is available on the live page, beside an attached session.
@@ -285,7 +285,7 @@ features:
     issue: null
 
   - id: SPC-31
-    title: Arrow IPC reader
+    title: Arrow IPC Reader
     status: planned
     scope: core
     summary: A native reader decodes Arrow IPC and Feather files into a table, which the loaders refuse today.
@@ -293,7 +293,7 @@ features:
     issue: null
 
   - id: SPC-32
-    title: HDF5 reader
+    title: HDF5 Reader
     status: planned
     scope: core
     summary: A native reader reads one dataset or every dataset of an HDF5 file when the build finds the HDF5 library, where today the loader points to the Python loader.
@@ -301,7 +301,7 @@ features:
     issue: null
 
   - id: SPC-33
-    title: Image stacks
+    title: Image Stacks
     status: planned
     scope: core
     summary: A loader over a set of images stacks them into one tensor, where today each image becomes a tensor of its own.
@@ -309,7 +309,7 @@ features:
     issue: null
 
   - id: SPC-34
-    title: Python loader over many files
+    title: Python Loader over Many Files
     status: planned
     scope: core
     summary: A Python loader reads a set of files with one run per file, where today it reads exactly one file.
@@ -325,7 +325,7 @@ features:
     issue: null
 
   - id: SPC-36
-    title: Time budget for live panels
+    title: Time Budget for Live Panels
     status: idea
     scope: core
     summary: The spec runtime could recompute a slow live panel only a few times a second, or on a worker thread, and draw its last result.
@@ -333,7 +333,7 @@ features:
     issue: null
 
   - id: SPC-37
-    title: SQL column checks
+    title: SQL Column Checks
     status: idea
     scope: supporting
     summary: The validator could check a spec's bindings to the columns that a SQL source's query returns.
@@ -341,7 +341,7 @@ features:
     issue: null
 
   - id: SPC-38
-    title: Time windows over live sources
+    title: Time Windows over Live Sources
     status: idea
     scope: core
     summary: A spec could limit a live source to a window of time.
@@ -349,7 +349,7 @@ features:
     issue: null
 
   - id: SPC-39
-    title: Series labels and colours
+    title: Series Labels and Colours
     status: idea
     scope: core
     summary: A series panel could give each line its own label and colour, where today each line is labelled by its binding.
@@ -357,7 +357,7 @@ features:
     issue: null
 
   - id: SPC-40
-    title: Rename command
+    title: Rename Command
     status: idea
     scope: core
     summary: A command could rename a panel or a source and update every binding and layout that names it.
@@ -365,7 +365,7 @@ features:
     issue: null
 
   - id: SPC-41
-    title: Undo across restarts
+    title: Undo Across Restarts
     status: idea
     scope: supporting
     summary: The undo history, and with it stacked previews, could be saved with the workspace so that it survives a restart.

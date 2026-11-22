@@ -2,20 +2,19 @@
 
 The service ids are `caliper.tensor_bridge.v1`, `caliper.tensor_bridge.v1_1` and `caliper.tensor_bridge.v1_2`. The bridge
 turns a `CaliperTensor` into a live texture in the current frame, and the texture stays GPU-resident on the native
-backends. Version v1_1 adds stream-ordered handoff, and v1_2 adds imported device allocations. This page embeds each
-header verbatim, and the docs build fails if a header file moves.
+backends. Version v1_1 adds stream-ordered handoff, and v1_2 adds imported device allocations.
 
-```c
---8<-- "sdk/include/caliper/services/tensor_bridge_v1.h"
-```
+## `caliper.tensor_bridge.v1` Calls
 
-```c
---8<-- "sdk/include/caliper/services/tensor_bridge_v1_1.h"
-```
+<!-- c-api calls sdk/include/caliper/services/tensor_bridge_v1.h -->
 
-```c
---8<-- "sdk/include/caliper/services/tensor_bridge_v1_2.h"
-```
+## Types
+
+<!-- c-api types sdk/include/caliper/services/tensor_bridge_v1.h level=3 -->
+
+## Ids
+
+<!-- c-api ids sdk/include/caliper/services/tensor_bridge_v1.h -->
 
 ## Semantics
 
@@ -64,10 +63,6 @@ The Windows ladder is described in [Vulkan and CUDA on Windows](../../developmen
 
 ### Texture Lifecycle
 
-- `texture_from_tensor` and `texture_from_tensor_mapped` create a texture and return a `CaliperTextureId`.
-- `update_texture` re-uploads into an existing texture of the same shape and dtype.
-- `release_texture` frees the texture.
-
 Create the texture once on the first snapshot and call `update_texture` after that. Do not recreate a texture per
 frame, because creating a texture costs far more than updating one.
 
@@ -91,11 +86,7 @@ Free the memory with `free_shared`. The result depends on the backend:
 
 ### `CaliperTextureId` Lifetime
 
-`CaliperTextureId` is a `uint64_t`, opaque to applets. The value `0` is invalid, and the id is compare-only. Never
-interpret or dereference it, because its representation is internal to the backend. Cast its value directly to
-`ImTextureID` for `ImGui::Image`, because the host hands out the ImGui-compatible handle for each backend. That handle
-is the texture name on OpenGL, the `id<MTLTexture>` pointer on Metal and the descriptor set on Vulkan. Free ids from
-`texture_from_tensor*` with `release_texture`, and ids from `alloc_shared` with `free_shared`.
+The host hands out the ImGui-compatible handle of each backend. That handle is the texture name on OpenGL, the `id<MTLTexture>` pointer on Metal and the descriptor set on Vulkan. Free ids from `texture_from_tensor*` with `release_texture`, and ids from `alloc_shared` with `free_shared`.
 
 ### Sync Model
 
@@ -120,29 +111,20 @@ previous contract, never a crash.
 
 ### `caliper.tensor_bridge.v1_1` Handoff
 
-v1_1 adds one query, `caps()`, to the six v1 operations. Bit 0, `CALIPER_BRIDGE_CAP_STREAM_ORDERED`, means the host
-honors a non-NULL `CaliperTensor.stream`. The device update is then ordered on the producer's stream or queue (`CUstream`
-on CUDA, `MTLCommandQueue*` on Metal), so the adapter may skip its full device drain. If the host does not vend this id
-or leaves the bit unset, the v1 contract holds. The adapter drains, and `stream` stays `NULL`.
+v1_1 adds one query, `caps()`, to the six v1 operations. If the host does not vend this id or leaves bit 0 unset, the v1 contract holds. The adapter drains, and `stream` stays `NULL`.
+
+<!-- c-api calls sdk/include/caliper/services/tensor_bridge_v1_1.h -->
+
+<!-- c-api ids sdk/include/caliper/services/tensor_bridge_v1_1.h -->
 
 ### `caliper.tensor_bridge.v1_2` Imported Allocations
 
-v1_2 adds three entry points to the seven v1_1 members. Bit 1, `CALIPER_BRIDGE_CAP_IMPORT_ALLOC`, means the host can
-import an applet-exported device allocation and run device texture updates directly from it, with no copy of the
-tensor data.
+v1_2 adds three entry points to the seven v1_1 members. A host without bit 1 keeps the earlier contract.
 
-- `import_allocation(os_handle, size_bytes, handle_type)` hands the host an OS shareable handle (from
-  `cuMemExportToShareableHandle`) or, on Apple, `CALIPER_ALLOC_HANDLE_MTLBUFFER`, an in-process `id<MTLBuffer>` that
-  the host retains. It returns a `CaliperAllocId`, or `0` when the host cannot import, so the applet stays on the
-  earlier path. The host duplicates the handle, and the applet keeps ownership of its copy.
-- `release_allocation(alloc)` frees the import.
-- `update_texture_from_alloc(tex, alloc, offset_bytes, desc)` updates a texture from bytes inside the imported
-  allocation at `offset_bytes`. The texture must exist already through `texture_from_tensor*`. `desc` carries shape,
-  dtype, strides and stream, and the host ignores `desc->data`. The acceptance gates are those of `update_texture`, and
-  `false` tells the caller to fall back. The pass reads the imported bytes in place, under the memory-stability
-  contract. Thus `[offset_bytes, offset_bytes + extent)` must not change until the next update of the same texture.
+<!-- c-api calls sdk/include/caliper/services/tensor_bridge_v1_2.h -->
 
-`CaliperAllocId` is an opaque `uint64_t`. The value `0` is invalid, and the id is compare-only. It is the import
-machinery that [`caliper.geometry.v1` and its revisions](caliper-geometry-v1.md) draw from. Geometry sources are pairs
-of `(CaliperAllocId, byte offset)` into these same imports, and they reuse the caches, gates and lifecycle of v1_2. The
-applet side of an import is [`ExportablePool`](../torch-per-platform.md#exportablepool-opt-in).
+<!-- c-api types sdk/include/caliper/services/tensor_bridge_v1_2.h level=0 -->
+
+<!-- c-api ids sdk/include/caliper/services/tensor_bridge_v1_2.h -->
+
+`CaliperAllocId` is the id that `import_allocation` returns. It is the import machinery that [`caliper.geometry.v1` and its revisions](caliper-geometry-v1.md) draw from. Geometry sources are pairs of `(CaliperAllocId, byte offset)` into these same imports, and they reuse the caches, gates and lifecycle of v1_2. The applet side of an import is [`ExportablePool`](../torch-per-platform.md#exportablepool-opt-in).

@@ -1,0 +1,12 @@
+{#- A function rendered without its own heading still shows its signature. A call page keeps a hand-written heading
+    above such a directive where other pages link to that heading's anchor, and the directive then sets
+    show_root_heading: false. The rest is the template of mkdocstrings-python 2.0.10. -#}
+{% extends "_base/function.html.jinja" %}
+{% block contents scoped %}
+  {% if root and not config.show_root_heading and config.separate_signature %}
+    {% filter format_signature(function, config.line_length, crossrefs=config.signature_crossrefs) %}
+      {{ function.name }}
+    {% endfilter %}
+  {% endif %}
+  {{ super() }}
+{% endblock contents %}

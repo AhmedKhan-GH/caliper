@@ -48,16 +48,29 @@ __all__ = ["watch", "WatchHandle"]
 
 
 class WatchHandle:
-    """The hooks of one watch() call. ``remove()`` takes them all off."""
+    """The hooks of one [`watch`][caliper.watch] call.
+
+    `len(handle)` is the number of hooks that are still on. A handle also works as a context
+    manager, and leaving the block calls `remove()`.
+
+    ```python
+    with caliper.watch(model) as handle:
+        train(model)
+    ```
+    """
 
     def __init__(self):
         self._handles: list = []
         self._entries: list = []            # the grouped views' registry entries
         self.views: list[str] = []          # view names the hooks show into
+        """The view names that the hooks show into."""
         self.modules: list[str] = []        # module names that got a hook
+        """The names of the hooked modules."""
         self.groups: list[str] = []         # grouped view names (weights, activations, gradients)
+        """The names of the grouped views, with the prefix that `watch` was given."""
 
     def remove(self) -> None:
+        """Take every hook off and remove the grouped views."""
         for h in self._handles:
             h.remove()
         self._handles.clear()
@@ -67,6 +80,7 @@ class WatchHandle:
 
     @property
     def active(self) -> bool:
+        """`True` while the handle holds hooks."""
         return bool(self._handles)
 
     def __len__(self) -> int:

@@ -3,11 +3,12 @@ name: Docs
 on:
   pull_request:
     # The docs site, the design pages, their theme and MkDocs configs
-    # (design/mkdocs.yml is under design/), and the sources the docs embed
-    # as snippets.
+    # (design/mkdocs.yml is under design/), the sources the docs embed as
+    # snippets, and the docstrings and headers the API reference is built from.
     paths: ['docs/**', 'design/**', 'docs-theme/**', 'mkdocs.yml',
-            'sdk/include/**', 'include/caliper/**', 'examples/**', 'roadmap/**', 'candidates/**',
-            'scripts/check_doc_headings.py', 'scripts/test_check_doc_headings.py',
+            'sdk/include/**', 'include/caliper/**', 'python/caliper/**', 'examples/**', 'roadmap/**',
+            'candidates/**', 'scripts/check_doc_headings.py', 'scripts/test_check_doc_headings.py',
+            'scripts/check_api_reference.py', 'scripts/test_check_api_reference.py',
             '.github/workflows/docs.yml']
   workflow_dispatch:
 permissions:
@@ -28,8 +29,10 @@ jobs:
           python-version: '3.12'
       # Pinned to the versions the docs are built with. The design build also
       # depends on MkDocs accepting design/mkdocs.yml inside its own docs folder
-      # when the file is named by a relative path, as here.
-      - run: pip install mkdocs==1.6.1 mkdocs-material==9.8.1 mkdocs-awesome-nav==3.3.0 pymdown-extensions==13.1
+      # when the file is named by a relative path, as here. mkdocstrings,
+      # mkdocstrings-python, griffelib and mkdocs-autorefs render the Python API
+      # reference from the docstrings, and ruff formats its signatures.
+      - run: pip install mkdocs==1.6.1 mkdocs-material==9.8.1 mkdocs-awesome-nav==3.3.0 pymdown-extensions==13.1 mkdocstrings==1.0.8 mkdocstrings-python==2.0.10 griffelib==2.4.1 mkdocs-autorefs==1.4.5 ruff==0.17.3
       # The roadmap registry check and its tests need jsonschema; the site build does not.
       - run: pip install jsonschema==4.25.1
       # Validates the roadmap registry in roadmap/ against its schema and rules.
@@ -39,5 +42,11 @@ jobs:
       # article or Your, no colon, no question) and tests the check.
       - run: python scripts/check_doc_headings.py
       - run: python -m unittest scripts/test_check_doc_headings.py -v
+      # Fails when a name of caliper.__all__ or caliper.live.__all__ has no
+      # docstring or no ::: directive, or when a service table entry or an embed,
+      # live or live_views function has no doc comment or no generated table,
+      # and tests the check and the header parser of docs-theme/hooks/c_reference.py.
+      - run: python scripts/check_api_reference.py
+      - run: python -m unittest scripts/test_check_api_reference.py -v
       - run: mkdocs build --strict
       - run: mkdocs build --strict -f design/mkdocs.yml

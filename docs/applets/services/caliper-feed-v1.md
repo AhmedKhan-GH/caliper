@@ -5,17 +5,21 @@ The host owns the telemetry providers and buffers their samples in a ring buffer
 
 The caller holds its own cursor. Thus the service needs no callbacks across the ABI and keeps no state in the host for each reader.
 
-```c
---8<-- "sdk/include/caliper/services/feed_v1.h"
-```
+## Types
+
+<!-- c-api types sdk/include/caliper/services/feed_v1.h CaliperFeedSample CaliperFeedChannelInfo level=3 -->
+
+## Calls
+
+<!-- c-api calls sdk/include/caliper/services/feed_v1.h -->
+
+## Ids
+
+<!-- c-api ids sdk/include/caliper/services/feed_v1.h -->
 
 ## Semantics
 
-A **channel** is one named f32 time series. It has an `id` such as `"sys.cpu.util"`, a display name, units and a nominal rate hint. A **sample** is `{ seq, t_ns, value, reserved0 }`. The `seq` value is monotonic for each channel and starts at 1. The `t_ns` value comes from the host steady clock, in nanoseconds. All channels share the same epoch, so a reader can align series on one timeline.
-
-- **`caps()`**: Bit 0 (`CALIPER_FEED_CAP_LIVE`) is set if and only if the host has at least one registered channel. With no provider (Linux) or no channels, `caps()` returns `0` and every read yields nothing. The service never returns fake data.
-- **`channel_count()` and `channel_info(index, info)`**: These calls enumerate the channels this host vends. Enumerate dynamically and never assume a fixed set, because other machines vend fewer channels or none. The caller sets `info->struct_size`. A bad index or a too-small size returns `0` and leaves `*info` untouched.
-- **`read(channel_id, buf, max, cursor)`**: This call copies up to `max` samples with `seq > *cursor` into `buf`, oldest first. It advances `*cursor` to the last copied `seq` and returns the count. A `cursor` of `0` is a **tail read**: the read starts at the newest sample minus `max`, so a fresh reader gets at most the `max` newest samples. An unknown id, a null `buf`, `max == 0` or a caught-up reader returns `0` and leaves the cursor untouched.
+A **channel** is one named f32 time series. It has an `id` such as `"sys.cpu.util"`, a display name, units and a nominal rate hint. A **sample** is `{ seq, t_ns, value, reserved0 }`. All channels share the same epoch, so a reader can align series on one timeline. With no provider (Linux) or no channels, `caps()` returns `0` and every read yields nothing. The service never returns fake data. Enumerate the channels dynamically and never assume a fixed set, because other machines vend fewer channels or none.
 
 ### Honest-Loss Contract
 

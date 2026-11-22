@@ -388,13 +388,11 @@ class NativeServer(NetServer):
 
 
 class HubConnection:
-    """What ``caliper.connect()`` returns: this process's connection to a hub.
+    """The connection of this process to a hub, returned by [`connect`][caliper.connect].
 
-    ``url`` is the hub's stream (without the token), ``session`` the session id
-    the hub assigned (the proposed one until it answered), ``state`` one of
-    ``connecting``, ``connected``, ``waiting`` (to retry), ``replaced`` (another
-    connection of this session took over) and ``closed``. ``close()`` ends the
-    connection to the hub only; ``caliper.close()`` ends everything."""
+    Attributes:
+        url (str): The stream URL of the hub, without the token.
+    """
 
     def __init__(self, producer: NativeServer, url: str):
         from urllib.parse import parse_qs, urlsplit
@@ -411,22 +409,48 @@ class HubConnection:
 
     @property
     def state(self) -> str:
+        """The state of the connection.
+
+        One of `connecting`, `connected`, `waiting` (to try again), `replaced` (another connection
+        of this session took over) or `closed`.
+        """
         return self._state()["state"]
 
     @property
     def connected(self) -> bool:
+        """`True` while the connection is open."""
         return self._state()["connected"]
 
     @property
     def session(self) -> str:
+        """The session id that the hub assigned.
+
+        Until the hub answers, it is the proposed id `clp-<pid>-<6 hex>`.
+        """
         return self._state()["session"] or self._p.identity["id"]
 
     def stats(self) -> dict:
+        """Return the state of the connection as a dict.
+
+        Returns:
+            dict: `state`, `connected`, `session`, `error` (the last failure, or empty), `attempts`
+                and `connects`.
+        """
         d = self._state()
         d.pop("url", None)
         return d
 
     def wait_connected(self, timeout: float = 10.0) -> bool:
+        """Wait, with polls, until the connection is open.
+
+        Use it in tests and scripts, not in the training loop.
+
+        Args:
+            timeout (float): The longest wait, in seconds.
+
+        Returns:
+            bool: `True` if the connection is open.
+        """
         end = time.monotonic() + timeout
         while time.monotonic() < end:
             if self.connected:
@@ -435,6 +459,10 @@ class HubConnection:
         return self.connected
 
     def close(self) -> None:
+        """End the connection to the hub.
+
+        A running `serve()` keeps serving. `caliper.close()` ends the connection as well.
+        """
         self._p.nio.disconnect_upstream()
         if self._p.hub is self:
             self._p.hub = None

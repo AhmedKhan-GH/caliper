@@ -109,6 +109,7 @@ import threading
 import time
 
 DEFAULT_RATE_HZ = 60.0
+"""Default snapshots per second of a view on the session and the window."""
 
 # caliper's module lock: serialises every ring, the publisher thread and the
 # transports' teardown (show() may run on any thread).

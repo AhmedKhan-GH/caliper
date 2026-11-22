@@ -2,18 +2,17 @@
 
 The service runs SQL over the host's embedded analytical store. Datasets are named, shared resources, and results cross the ABI as **Arrow C streams**. Service id: `caliper.data.v1`.
 
-```c
---8<-- "sdk/include/caliper/services/data_v1.h"
-```
+## Calls
+
+<!-- c-api calls sdk/include/caliper/services/data_v1.h -->
+
+## Ids
+
+<!-- c-api ids sdk/include/caliper/services/data_v1.h -->
 
 ## Semantics
 
-The query engine is the host's embedded DuckDB. Results cross the ABI as [**Arrow C streams**](../tensor-and-arrow-headers.md#arrow-header), so no DuckDB or Arrow C++ type appears in the frozen header. The service has four entry points, and a **job thread** can call all of them.
-
-- **`query(sql_utf8, out)`** runs a SQL statement against the host store. On success it fills `*out` with a live `ArrowArrayStream` and returns `true`. On failure it returns `false`, leaves `*out` **untouched**, and sets `last_error()`. DDL and INSERT statements that produce no rows still succeed with an empty stream.
-- **`register_dataset(name, uri)`** names a dataset. The **`uri`** is a `.parquet` path, a `.csv` path, or the name of an existing table, and the host wraps it in a view. Re-registering a name **replaces** it. The **`name` must be a SQL identifier** (`[A-Za-z_][A-Za-z0-9_]*`) because the host splices it into SQL. Any other name returns `false` and sets `last_error()`, which also guards against injection.
-- **`open_dataset(name, out)`** streams a registered dataset back as a full-table `ArrowArrayStream`. It is the `SELECT *` shortcut over `query`.
-- **`last_error()`** returns why the last call on **this thread** returned `false`. It is never NULL and returns `""` when nothing has failed.
+The query engine is the host's embedded DuckDB. Results cross the ABI as [**Arrow C streams**](../tensor-and-arrow-headers.md#arrow-header), so no DuckDB or Arrow C++ type appears in the frozen header. The service has four entry points, and a **job thread** can call all of them. A statement that returns no rows, such as DDL or `INSERT`, still succeeds with an empty stream. The host wraps a registered `uri` in a view, and it splices the dataset `name` into SQL. A name that is not a SQL identifier (`[A-Za-z_][A-Za-z0-9_]*`) is thus refused, which also guards against injection.
 
 ### Stream Ownership Protocol
 

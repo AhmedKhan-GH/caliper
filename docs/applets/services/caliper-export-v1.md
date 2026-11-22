@@ -2,6 +2,16 @@
 
 Service id `caliper.export.v1` has an additive revision, `caliper.export.v1_1`. The revision adds `last_error()` (see [Error Reporting](#caliperexportv1_1-error-reporting)). Export re-renders a submitted draw list **offscreen** at any requested resolution. It writes a pixel-exact PNG next to a JSON **provenance sidecar**. Use it for 4K figures and numbered frame sequences from a live session. The output is deterministic and stamped. Export adds no new render code.
 
+## Reference
+
+### Calls
+
+<!-- c-api calls sdk/include/caliper/services/export_v1.h -->
+
+### Ids
+
+<!-- c-api ids sdk/include/caliper/services/export_v1.h -->
+
 ## Terminal Sink
 
 Export is the one place where pixels leave the one-way data flow described in [Platform rules](../../introduction/architecture.md#design-decisions). The readback feeds a file on disk, and nothing returns to compute. No export call hands pixels, a texture or a tensor back to the applet.
@@ -15,10 +25,6 @@ Export runs on macOS with Metal and on Windows with Vulkan. On both platforms, a
 On Windows, a rename atomically replaces an existing target on NTFS. If another process holds the target open without `FILE_SHARE_DELETE`, the rename fails cleanly. Then export is refused and the original stays byte-identical. If the sidecar write fails, export rolls the PNG back.
 
 When the geometry primitives capability is absent (headless, or a host without the renderer path), the export capability bit is unset and **every entry point is inert**. No file is written. This is the [fallback rule](../../introduction/architecture.md#design-decisions) at work and not a bug.
-
-```c
---8<-- "sdk/include/caliper/services/export_v1.h"
-```
 
 ## Draw Path Reuse
 
@@ -77,14 +83,7 @@ A refused export returns `0` and leaves the disk **exactly as it was**. It creat
 
 If any step after the first fails, export puts the previous PNG back. If there was no previous PNG, it removes the new one. It also removes the temp files. As a result, a PNG never lands without its sidecar, and a failed new figure never destroys a good earlier one. If the put-back fails too, the previous PNG stays intact at `<path>.caliper_bak`. A `path` that is a directory is refused before anything moves.
 
-Export refuses for the same reasons as `draw_primitives`, with the **same reason strings**:
-
-- A missing gate or renderer.
-- `cam == NULL`.
-- A `w` or `h` of `0`, or above `CALIPER_EXPORT_MAX_DIM` (16384).
-- An unwritable path.
-- A readback failure.
-- Any draw that the geometry gate battery rejects.
+Export refuses for the same reasons as `draw_primitives`, with the **same reason strings**. The comment of `view_png` lists them.
 
 ## Determinism Contract
 
@@ -134,13 +133,15 @@ This is an additive revision under the same rules as `caliper.metrics.v1_1` and 
 
 The host lists both ids, so a manifest may require either. An applet that wants better diagnostics asks for `caliper.export.v1_1` and falls back to v1.
 
-```c
---8<-- "sdk/include/caliper/services/export_v1_1.h"
-```
+### Calls
 
-**What it reports.** The functions `view_png`, `begin_sequence`, `frame` and `end_sequence` clear the status when called. They set a reason when they fail. A failure is a `0` return from the first three, or an `end_sequence()` whose `sequence.json` could not be written. After any of the four succeeds, `last_error()` returns `""`. The functions `caps()` and `last_error()` leave the status alone.
+<!-- c-api calls sdk/include/caliper/services/export_v1_1.h -->
 
-The string is host-owned, never `NULL`, and valid until the next export call on the same thread. This is the `last_error()` contract of [`caliper.data.v1`](caliper-data-v1.md#threading-and-errors) and `caliper.metrics.v1_1`. Export is frame-thread only, so in practice there is one status.
+### Ids
+
+<!-- c-api ids sdk/include/caliper/services/export_v1_1.h -->
+
+**Reasons.** The table lists the strings that `last_error()` can return. Export is frame-thread only, so in practice there is one status.
 
 | Reason | Cause |
 |---|---|

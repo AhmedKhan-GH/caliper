@@ -1,35 +1,12 @@
 #pragma once
-/* caliper.metrics.v1_1 — additive READ revision of caliper.metrics.v1.
+/* caliper.metrics.v1_1 — additive read revision of caliper.metrics.v1.
  *
- * metrics.v1 is WRITE-ONLY across the ABI (begin_run/scalar/histogram/image/
- * hparams_json) and IMMUTABLE — so a CONSUMER (the Compass app; embed.h's
- * caliper_core_get_service host) cannot list runs or read scalars through it.
- * v1_1 appends ONE read entry: query(), SQL → Arrow C stream, against the
- * metrics store's OWN live connection — the same DuckDB connection-under-one-
- * mutex the writers use, so a host UI thread may read WHILE an applet worker
- * streams metrics in and sees the freshly-written rows immediately (a separate
- * read-only DuckDB instance would see only CHECKPOINTed state — the reason a
- * host-layer read-only ATTACH was rejected for this surface; see the C0b
- * report). The frozen v1 writer prefix is byte-identical and unchanged.
+ * The v1 table is write-only, so a consumer such as an embedding host cannot read runs through it. This revision
+ * appends query(), which runs SQL on the live connection of the metrics store and streams the result as Arrow.
+ * The frozen v1 writer prefix is byte-identical and unchanged.
  *
- * READ-ONLY, ENFORCED. Unlike caliper.data.v1.query (which runs any SQL against
- * a SEPARATE data.duckdb), this query() runs on the LIVE METRICS WRITER
- * connection, so it is parsed (not executed) and REFUSED unless it is exactly
- * one SELECT statement. This blocks statement chaining ("SELECT 1; DROP TABLE
- * runs") and any INSERT/UPDATE/DELETE/DDL that would corrupt the store. A
- * read-only introspection PRAGMA that DuckDB rewrites into a SELECT is allowed;
- * setter pragmas parse as non-SELECT and are refused.
- *
- * Callable from applet job threads AND from a host UI thread that is NOT the
- * caliper_core_frame() thread (metrics is an ANY-THREAD service per embed.h
- * §3.2) — the store serializes internally. IMMUTABLE once published; a future
- * read entry lands as metrics.v1_2.
- *
- * Stream ownership mirrors caliper.data.v1 EXACTLY: on success the host
- * fills *out with a live ArrowArrayStream; the CALLER drains it (get_schema/
- * get_next until a released empty array) and MUST call out->release(out) once.
- * On failure (false) *out is untouched and last_error() explains — a host-owned
- * string valid until the next metrics.v1_1 call on the same thread. */
+ * Callable from applet job threads and from a host UI thread that is not the caliper_core_frame() thread. The
+ * store serializes internally. Immutable once published: a future read entry is metrics.v1_2. */
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -37,30 +14,65 @@
 #include <caliper/arrow_c.h>
 #include <caliper/services/metrics_v1.h>
 
+/** The id of this service, which `get_service` takes. */
 #define CALIPER_METRICS_V1_1 "caliper.metrics.v1_1"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/**
+ * The metrics log with a read entry.
+ *
+ * The table starts with the six writer entries of `CaliperMetricsV1`, byte for byte, and appends `query` and
+ * `last_error`. Any thread except the frame thread can call every entry, and the host serializes the calls.
+ *
+ * On success, `query` fills `*out` with a live `ArrowArrayStream`. The caller drains it with `get_schema` and
+ * `get_next` until an empty array that has been released, and must call `out->release(out)` exactly once.
+ */
 typedef struct CaliperMetricsV1_1 {
+    /** `sizeof(CaliperMetricsV1_1)` as the host built it. */
     uint32_t struct_size;
-    /* --- v1-identical WRITER prefix (byte-for-byte CaliperMetricsV1). --- */
-    uint64_t (*begin_run)(const char* experiment, const char* run_name); /* 0 = error */
+    /* --- v1-identical writer prefix (byte-for-byte CaliperMetricsV1). --- */
+    /**
+     * Open a run of `experiment` and return its id, or 0 on error. 0 is never a valid run. The run id scopes every
+     * scalar, histogram, image and hyperparameter that the applet logs afterward.
+     */
+    uint64_t (*begin_run)(const char* experiment, const char* run_name);
+    /**
+     * Close a run. Call it on every exit path of a job, so that a run never stays open. The points logged before
+     * the end are kept.
+     */
     void     (*end_run)(uint64_t run);
+    /**
+     * Append one point to the series `tag` of a run. The tag names the series, for example "train/loss", and a
+     * slash groups tags into panes. `step` is the x value of the point and `value` is the y value.
+     */
     void     (*scalar)(uint64_t run, const char* tag, int64_t step, double value);
+    /** Log a distribution of `count` values at `step` under `tag`. */
     void     (*histogram)(uint64_t run, const char* tag, int64_t step,
                           const float* values, int64_t count);
+    /**
+     * Log a picture at `step` under `tag`. The tensor must be CPU-resident, contiguous and `u8` in HWC layout. The
+     * host drops and logs any other tensor.
+     */
     void     (*image)(uint64_t run, const char* tag, int64_t step,
                       const CaliperTensor* hwc_u8);
+    /** Attach a flat JSON object of hyperparameters, for example `{"lr":0.001}`, to a run. */
     void     (*hparams_json)(uint64_t run, const char* json_utf8);
 
-    /* --- v1_1 addition: the READ surface. --- */
-    /* Run a single read-only SELECT against the metrics store; on success
-     * results stream out as Arrow. Non-SELECT / multi-statement SQL is refused
-     * (returns false, *out untouched, last_error set) — see header note. */
+    /* --- v1_1 addition: the read surface. --- */
+    /**
+     * Run one read-only `SELECT` against the metrics store and stream the result as Arrow. The host parses the
+     * text without running it and refuses anything that is not exactly one `SELECT`, so it returns `false`, leaves
+     * `*out` untouched and sets the error. A read-only introspection `PRAGMA` that DuckDB rewrites into a `SELECT`
+     * is allowed. The query sees rows that other threads logged a moment ago.
+     */
     bool (*query)(const char* sql_utf8, struct ArrowArrayStream* out);
-    /* Why the last query() on THIS thread returned false; never NULL. */
+    /**
+     * Return why the last `query` on this thread returned `false`. The host owns the string, which is never `NULL`
+     * and stays valid until the next call of this service on the same thread.
+     */
     const char* (*last_error)(void);
 } CaliperMetricsV1_1;
 

@@ -63,19 +63,43 @@ def _ext():
 
 
 def data_root() -> str:
-    """The default data root ($CALIPER_DATA_DIR, else Caliper's app-data folder)."""
+    """Return the default data root.
+
+    Returns:
+        str: `$CALIPER_DATA_DIR`, else the app-data folder of Caliper.
+    """
     return _ext().data_root()
 
 
 def list_sessions(data_root: str | None = None) -> list[dict]:
-    """Live sessions under ``<data_root>/live``, newest first. Stale sessions
-    (their process is gone) are reclaimed as a side effect: shm unlinked, file
-    removed, not listed."""
+    """List the live sessions under `<data_root>/live`, newest first.
+
+    Stale sessions are reclaimed, not listed. A session is stale when its process is gone.
+    The call unlinks its shared memory and removes its file.
+
+    Args:
+        data_root (str | None): The data root. `None` takes [`data_root()`][caliper.live.data_root].
+
+    Returns:
+        list[dict]: One dict per session with `pid`, `alive`, `view_count`, `protocol`,
+            `compatible`, `start_unix_ms`, `viewer_pid`, `session`, `script` and `path`.
+    """
     return _ext().list_sessions(data_root)
 
 
 def viewer_executable(path: str | None = None) -> str:
-    """``path``, else $CALIPER_VIEWER, else the viewer shipped in the package."""
+    """Return the path of the viewer executable.
+
+    Args:
+        path (str | None): The path to use. `None` takes `$CALIPER_VIEWER`, else the viewer in the
+            package.
+
+    Returns:
+        str: The path of the viewer.
+
+    Raises:
+        FileNotFoundError: When the viewer does not exist at that path.
+    """
     exe = path or os.environ.get("CALIPER_VIEWER") or \
         str(Path(__file__).parent / "bin" / "caliper-viewer")   # not resolve(): staged symlinks
     if not os.path.exists(exe):
@@ -165,10 +189,18 @@ class _ClosedClient:
 
 
 class SessionTransport:
-    """One live session of this process (the ``Transport`` of caliper/_ring.py).
+    """One live session of this process.
 
-    Use :meth:`open`. Calls are serialised by the caller (the ring runs on the
-    training thread); ``attached()`` may be called from any thread."""
+    [`caliper.session()`][caliper.session] returns it. The session is the transport of the
+    snapshot ring. The caller serializes the calls, because the ring runs on the training
+    thread. Only `attached()` is safe from any thread. The class also works as a context
+    manager, and leaving the `with` block closes the session.
+
+    Attributes:
+        attached (Callable[[], bool]): Returns `True` while a viewer heartbeat is younger than 1 s.
+            Safe from any thread.
+        script (str): The script name that viewers show.
+    """
 
     def __init__(self, client, script: str, viewer_path: str | None, data_dir: str | None):
         self._client = client
@@ -215,22 +247,26 @@ class SessionTransport:
 
     @property
     def session(self) -> str:
-        """The session token (what ``caliper-viewer --session`` takes)."""
+        """The token of the session, `clp-<pid>-<6 hex>`, which `caliper-viewer --session` takes."""
         return self._token
 
     @property
     def session_file(self) -> str:
-        """Path of the session file ('' when opened without one or closed)."""
+        """The path of the session file, or `""` when the session has no file or is closed."""
         return "" if self._client.closed else self._client.session_file
 
     @property
     def closed(self) -> bool:
+        """`True` after `close()`."""
         return self._client.closed
 
     def close(self) -> None:
-        """Remove the session file and unlink the shared memory. Never blocks
-        on the viewer (it keeps what it received and shows "session ended").
-        Tensors handed out by alloc() keep their pages until they are freed."""
+        """Remove the session file and unlink the shared memory.
+
+        The call never waits for the viewer. The viewer keeps what it received and shows
+        "session ended". Tensors that the session handed out keep their pages until they are
+        freed.
+        """
         with self._lock:
             self._views.clear()
             if not self._client.closed:
@@ -331,9 +367,24 @@ class SessionTransport:
     # -- the viewer process ----------------------------------------------------------
     def launch_viewer(self, exit_after: float | None = None, args=(), log: str | None = None
                       ) -> subprocess.Popen:
-        """Spawn ``caliper-viewer --session <token>`` in its own session (so a
-        Ctrl-C in the script's terminal does not close it). It attaches at once
-        and outlives the script."""
+        """Spawn `caliper-viewer --session <token>` in its own process session.
+
+        A Ctrl-C in the terminal of the script does not close the viewer. It attaches at once
+        and outlives the script.
+
+        Args:
+            exit_after (float | None): Seconds after which the viewer exits. `None` or 0 leaves it
+                open.
+            args (Sequence[str]): Extra command-line arguments for the viewer.
+            log (str | None): `None` discards the stderr of the viewer, `"-"` inherits it, and a
+                path writes it there.
+
+        Returns:
+            subprocess.Popen: The process of the viewer.
+
+        Raises:
+            FileNotFoundError: When the viewer executable does not exist.
+        """
         exe = viewer_executable(self._viewer_path)
         cmd = [exe, "--session", self.session]
         if self._data_dir:
@@ -355,19 +406,32 @@ class SessionTransport:
 
     @property
     def viewer(self) -> subprocess.Popen | None:
-        """The viewer this transport spawned, if any."""
+        """The `Popen` of the spawned viewer, or `None` when none was spawned."""
         return self._viewer
 
     def viewer_alive(self) -> bool:
-        """The spawned viewer is running; without one, whether any viewer is
-        attached (heartbeat)."""
+        """Tell whether the viewer runs.
+
+        Returns:
+            bool: `True` if the spawned viewer runs. Without a spawned viewer, whether a viewer is
+                attached.
+        """
         if self._viewer is not None:
             return self._viewer.poll() is None
         return bool(self.attached())
 
     def wait_viewer(self, timeout: float | None = None) -> bool:
-        """Wait until the viewer is gone (the spawned process exited, or with
-        none spawned, the heartbeat stopped). True if it is gone."""
+        """Wait until the viewer is gone.
+
+        The viewer is gone when the spawned process has exited. With none spawned, it is gone
+        when the heartbeat has stopped.
+
+        Args:
+            timeout (float | None): Seconds to wait at most. `None` waits without a limit.
+
+        Returns:
+            bool: `True` if the viewer is gone.
+        """
         if self._viewer is not None:
             try:
                 self._viewer.wait(timeout)
@@ -382,7 +446,16 @@ class SessionTransport:
         return True
 
     def wait_attached(self, timeout: float = 10.0) -> bool:
-        """Wait until a viewer is attached (heartbeat). True if it is."""
+        """Wait for a viewer heartbeat.
+
+        The wait ends early when the spawned viewer has exited.
+
+        Args:
+            timeout (float): Seconds to wait at most.
+
+        Returns:
+            bool: `True` if a viewer is attached.
+        """
         end = time.monotonic() + timeout
         while not self.attached():
             if time.monotonic() >= end or (self._viewer is not None and self._viewer.poll() is not None):
@@ -392,6 +465,15 @@ class SessionTransport:
 
     # -- telemetry -------------------------------------------------------------------
     def stats(self) -> dict:
+        """Return the state of the session.
+
+        The result has the session token, the session file, the script, whether a viewer is
+        attached, the viewer pid and the heartbeat age. Under `views`, each view has its publish
+        and claim counters.
+
+        Returns:
+            dict: The state of the session.
+        """
         closed = self._client.closed
         pid, age = (0, None) if closed else self._client.viewer()
         out = {"session": self.session, "session_file": self.session_file, "script": self.script,

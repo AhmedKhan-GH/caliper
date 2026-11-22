@@ -1,93 +1,71 @@
 #pragma once
-/* caliper.geometry.v1 — imported 3-D geometry: draw instanced points DIRECTLY
- * from an applet-exported device allocation (tensor_bridge.v1_2's imported
- * blocks) into an offscreen view texture. Zero copies of the point data: the
- * vertex stage reads simulation memory in place, per frame.
- *
- * Deliberately a NEW service, not a tensor_bridge revision: the bridge's
- * frozen identity is "a tensor becomes an image"; cameras and draw calls are
- * a different vocabulary. The two share id spaces on purpose:
- *   - create_view returns a CaliperTextureId in the SAME table the bridge
- *     uses — a view is drawable with ImGui::Image like any other texture;
- *   - point data is addressed as (CaliperAllocId, byte offset) — the v1.2
- *     import machinery, caches, gates, and lifecycle are reused as-is.
- *
- * v1 scope: instanced points only (built for particle clouds — additive
- *   blending, no depth). Meshes/lines are a later additive revision.
- * IMMUTABLE once published; violations return 0/false and emit a
- * caliper.log.v1 line — never a wrong image (the degradation ladder). */
+/* caliper.geometry.v1 - imported 3-D geometry. The service draws instanced points directly from an
+ * applet-exported device allocation into an offscreen view texture, with no copy of the point data.
+ * A view lives in the tensor-bridge texture table, and point data is addressed as a
+ * (CaliperAllocId, byte offset) pair. The service is frozen once published. A violation returns
+ * 0 or false and writes one caliper.log.v1 line, and it never produces a wrong image. */
 #include <stdint.h>
 #include <stdbool.h>
 #include <caliper/services/tensor_bridge_v1.h>    /* CaliperTextureId */
 #include <caliper/services/tensor_bridge_v1_2.h>  /* CaliperAllocId   */
 
+/** The id of this service, which `get_service` takes. */
 #define CALIPER_GEOMETRY_V1 "caliper.geometry.v1"
 
-/* caps() bit 0: create_view/draw_points are live (renderer has the imported-
- * geometry path — Vulkan with a UUID-paired CUDA device today). Absent bit:
- * every entry point is inert and the applet keeps its CPU fallback. */
+/**
+ * Bit 0 of `caps()`, which says that `create_view` and `draw_points` are live. The host sets it when the
+ * renderer has the imported-geometry path. If the bit is absent, every entry point is inert and the applet keeps
+ * its CPU fallback.
+ */
 #define CALIPER_GEOM_CAP_IMPORTED_POINTS (1u << 0)
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Column-major 4x4 view and projection, applet-owned math (the service does
- * no camera logic — orbit/zoom/ray-casting are UI and live in the applet). */
+/**
+ * The camera of one draw, as two column-major 4x4 matrices.
+ *
+ * The applet owns the camera math. The service does no camera logic, so orbit, zoom, and ray casting stay in the
+ * applet.
+ */
 typedef struct CaliperGeomCamera {
+    /** The column-major 4x4 view matrix, 16 floats. */
     float view[16];
+    /** The column-major 4x4 projection matrix, 16 floats. */
     float proj[16];
 } CaliperGeomCamera;
 
+/** The function table of `caliper.geometry.v1`. */
 typedef struct CaliperGeometryV1 {
+    /** `sizeof(CaliperGeometryV1)` as the host built it. */
     uint32_t struct_size;
+    /** Return the capability bits of the host, such as `CALIPER_GEOM_CAP_IMPORTED_POINTS`. */
     uint32_t (*caps)(void);
 
-    /* Offscreen 3-D render target. The returned id lives in the tensor-bridge
-     * texture table: cast it to ImTextureID for ImGui::Image, release it here
-     * (not via the bridge). 0 on failure. */
+    /**
+     * Create an offscreen 3-D render target of `width` by `height` physical pixels and return its id, or 0 on
+     * failure. The id lives in the tensor-bridge texture table, so the applet casts it to `ImTextureID` for
+     * `ImGui::Image`. The applet releases the view with `release_view` and not through the bridge.
+     */
     CaliperTextureId (*create_view)(uint32_t width, uint32_t height);
+    /** Release a view that `create_view` returned. Call it on the frame thread. */
     void (*release_view)(CaliperTextureId view);
 
-    /* Render ONE frame of `view`, atomically: clear to clear_rgba (packed
-     * little-endian r|g<<8|b<<16|a<<24), then draw `count` points whose
-     * positions are a contiguous (count,3) f32 array at pos_offset inside the
-     * imported allocation pos_alloc. count == 0 is a pure clear.
-     *
-     * attr_alloc != 0 selects a contiguous (count,) f32 scalar per point at
-     * attr_offset, colormapped through the tensor-bridge LUTs over
-     * [vmin,vmax] (same index rule as texture_from_tensor_mapped);
-     * attr_alloc == 0 draws flat white and ignores attr_offset/colormap.
-     *
-     * size_px: point size in pixels (clamped to device limits). Points blend
-     * ADDITIVELY with no depth test (v1 — built for particle clouds; order-
-     * independent, no sort).
-     *
-     * Memory-stability contract (same as update_texture_from_alloc) — TWO
-     * halves the caller owns, both load-bearing (a new worker->frame publish
-     * path must honor both):
-     *   (1) SPATIAL — the addressed bytes are read IN PLACE and must not be
-     *       rewritten until this view's next draw. Applets satisfy this by
-     *       triple-buffering the render slots: the worker only ever writes a
-     *       slot that is neither the just-published one nor the one the frame
-     *       thread is drawing, so it never overwrites bytes mid-read.
-     *   (2) TEMPORAL — the producer must FINISH its device writes to those
-     *       bytes BEFORE this call is issued. This ABI carries NO producer-
-     *       stream channel (unlike the CaliperTensor texture path's
-     *       STREAM_ORDERED handshake — there is no field for a CUstream /
-     *       MTLCommandQueue here), so the geometry path is PERMANENTLY the
-     *       drain rung: the worker drains its device
-     *       (torch::cuda::synchronize / MPS synchronize) before publishing the
-     *       slot the frame thread draws from. The renderer only makes those
-     *       already-complete writes visible to its own vertex stage (Vulkan
-     *       MEMORY_WRITE->SHADER_READ barrier / Metal same-queue commit order);
-     *       it does NOT GPU-order against an in-flight producer. Publishing a
-     *       slot whose writes are still in flight therefore RACES the vertex
-     *       read — the barrier is renderer-internal and cannot order an
-     *       external producer. The triple-buffer alone is NOT sufficient; the
-     *       drain is what the (absent) STREAM_ORDERED gate would otherwise buy.
-     * Gates: live view/allocations only, 4-byte-aligned offsets, overflow-safe
-     * bounds. false = nothing drawn, the view keeps its prior pixels. */
+    /**
+     * Render one frame of `view` atomically. The call clears the view to `clear_rgba`, packed little-endian as
+     * `r | g<<8 | b<<16 | a<<24`, and then draws `count` points. The positions are a contiguous `(count,3)` f32
+     * array at `pos_offset` inside the imported allocation `pos_alloc`, and a `count` of 0 is a pure clear. If
+     * `attr_alloc` is not 0, it selects a contiguous `(count,)` f32 scalar per point at `attr_offset`, which the
+     * service colormaps through the tensor-bridge tables over `[vmin,vmax]` with the index rule of
+     * `texture_from_tensor_mapped`. If `attr_alloc` is 0, the points are flat white and the service ignores
+     * `attr_offset` and `colormap`. The value `size_px` is the point size in pixels, clamped to the device limits.
+     * Points blend additively with no depth test, so the result does not depend on the order of the points. The
+     * addressed bytes are read in place, so the caller must not rewrite them until the next draw of the view and
+     * must finish its device writes before the call. The call needs a live view, live allocations, 4-byte-aligned
+     * offsets, and in-bounds ranges. The return value is `false` when a gate fails, and then nothing is drawn and
+     * the view keeps its earlier pixels.
+     */
     bool (*draw_points)(CaliperTextureId view,
                         const CaliperGeomCamera* cam,
                         CaliperAllocId pos_alloc, uint64_t pos_offset,

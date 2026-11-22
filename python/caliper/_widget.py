@@ -90,7 +90,30 @@ def _redact(url: str) -> str:
 
 
 class CaliperWidget(anywidget.AnyWidget):
-    """One live view of the stream, drawn in the browser by ``<caliper-view>``."""
+    """A notebook widget that shows one live view, returned by [`widget`][caliper.widget].
+
+    The browser draws the view. The traits sync through anywidget.
+
+    The `detail` of an event is in source indices. For a `select` in a points view it holds
+    `indices`, the positions in the points that were shown, and `row_ids`, their source indices.
+    The [Wire Protocol](../reference/wire-protocol.md) reference lists the detail of every kind.
+
+    Traits travel over the message channel of the notebook, which the kernel reads only while no
+    cell runs. A selection made during a long cell reaches `selection` when the cell ends. A
+    `data_view` set from Python reaches the widget at once. A data view chosen in the picker of
+    the widget goes to the producer over the stream and takes effect during the cell.
+
+    Attributes:
+        src (str): The `ws://` URL of the stream, with the token.
+        view (str): The name of the view.
+        kind (str | None): The kind of the live view.
+        height (int): Height in CSS pixels.
+        data_view (dict): The data view of the own subscription of the widget, in both directions.
+            The browser writes the data view that the user picked. Setting it from Python makes
+            the widget request that data view.
+        selection (dict): Written by the browser: the latest event it reported, as
+            `{"view", "type", "detail"}`.
+    """
 
     _esm = _assets.asset_path("caliper-widget.js")
 
@@ -120,9 +143,15 @@ class CaliperWidget(anywidget.AnyWidget):
         return proposal["value"]
 
     def on_select(self, callback, remove: bool = False):
-        """Call ``callback(selection)`` each time the browser reports a new
-        selection; ``remove=True`` stops it. Returns ``callback``, so this also
-        works as a decorator."""
+        """Call `callback(selection)` each time the browser reports a new selection.
+
+        Args:
+            callback (Callable[[dict], object]): The function to call with the new `selection`.
+            remove (bool): `True` stops the calls to `callback`.
+
+        Returns:
+            Callable[[dict], object]: `callback`, so the method also works as a decorator.
+        """
         if remove:
             handler = self._select_handlers.pop(callback, None)
             if handler is not None:

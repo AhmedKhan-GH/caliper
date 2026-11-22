@@ -1,10 +1,18 @@
 # caliper.ui.v1
 
-Service id `caliper.ui.v1` gives an applet the ImGui, ImPlot and ImPlot3D contexts and the host allocator handoff. The header follows.
+Service id `caliper.ui.v1` gives an applet the ImGui, ImPlot and ImPlot3D contexts and the host allocator handoff.
 
-```c
---8<-- "sdk/include/caliper/services/ui_v1.h"
-```
+## Calls
+
+<!-- c-api calls sdk/include/caliper/services/ui_v1.h -->
+
+## Types
+
+<!-- c-api types sdk/include/caliper/services/ui_v1.h level=3 -->
+
+## Ids
+
+<!-- c-api ids sdk/include/caliper/services/ui_v1.h -->
 
 ## Semantics
 
