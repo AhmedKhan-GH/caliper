@@ -82,10 +82,23 @@ FoundPiece resolve_pin(const PieceLibrary& library, const std::string& workspace
 Error check_instance(const PieceLibrary& library, const std::string& workspace, const spec::Spec& spec,
                      const spec::Program& program, const spec::Piece& piece, const spec::SourceResolver& resolver);
 
+// The cameras of the scene panels (design/programmable-graphics.md, Camera):
+// the programs of one panel whose pieces draw must select one camera. For
+// each panel the first such program in the spec's order sets it, as the
+// app's draw host does, and each later program of the panel that selects
+// another one gives an error diagnostic program.camera_conflict at
+// program[<i>].piece. A pin that does not resolve is skipped, because its
+// own check reports it. spec.validate adds these diagnostics, thus an agent
+// learns of a conflict before it applies a spec.
+std::vector<spec::Diagnostic> check_panel_cameras(const PieceLibrary& library, const std::string& workspace,
+                                                  const spec::Spec& spec);
+
 // Completes program.create and program.patch of an instance, after the edit
 // made `after`: resolves the pin of the program `id` (piece.missing,
 // piece.hash_mismatch), writes the piece's hash into a pin without one, and
-// runs check_instance(). `args` gets the hash too, so that the journal
+// runs check_instance(). A program whose piece draws and selects another
+// camera than another program of its panel refuses the edit with
+// program.camera_conflict. `args` gets the hash too, so that the journal
 // replays the same pin. A program of the one-pass form passes unchanged.
 Error complete_instance(const PieceLibrary& library, const std::string& workspace, spec::Spec& after,
                         const std::string& id, const spec::SourceResolver& resolver, nlohmann::json* args);

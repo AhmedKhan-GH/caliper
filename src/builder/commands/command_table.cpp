@@ -520,7 +520,7 @@ const std::pair<const char*, const char*> kFragments[] = {
         "draw": {"type": ["object", "null"], "additionalProperties": false, "description": "An instance whose piece draws: its draw half in the viewer; absent for another program.",
                  "required": ["state", "frame_ms", "frame_limit_ms", "memory_bytes", "memory_limit_bytes", "resource_step", "error"],
                  "properties": {
-                   "state": {"type": "string", "enum": ["waiting", "compiled", "running", "refused", "stopped"], "description": "The draw half's state in the viewer."},
+                   "state": {"type": "string", "enum": ["waiting", "review", "compiled", "running", "refused", "stopped"], "description": "The draw half's state in the viewer: review in a foreign spec without a review of the piece's hash."},
                    "frame_ms": {"type": ["number", "null"], "description": "The GPU time of its last frame in milliseconds, or null."},
                    "frame_limit_ms": {"type": "number", "description": "Its draw.frame_ms."},
                    "memory_bytes": {"type": "integer", "minimum": 0, "description": "The bytes of its resources, buffer inputs, draw buffers and targets in the viewer."},

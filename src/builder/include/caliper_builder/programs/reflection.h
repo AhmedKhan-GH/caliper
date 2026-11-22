@@ -35,10 +35,27 @@ struct ReflectedBinding {
     std::string storage_format;   // storage textures only
 };
 
+// One user-defined input or output of an entry point, a value with a
+// @location attribute: the neutral form of caliper_wgsl_io, with the same
+// numbers. Built-in values are not listed, and an interpolation or a
+// sampling that the source leaves out has WGSL's default.
+enum class IoScalar : std::uint32_t { other = 0, f32 = 1, i32 = 2, u32 = 3, f16 = 4 };
+enum class IoInterpolation : std::uint32_t { perspective = 0, linear = 1, flat = 2, other = 3 };
+enum class IoSampling : std::uint32_t { center = 0, centroid = 1, sample = 2, first = 3, either = 4 };
+struct ReflectedIo {
+    std::uint32_t location = 0;
+    IoScalar scalar = IoScalar::f32;
+    std::uint32_t components = 4;   // 1 for a scalar, 2 to 4 for a vector
+    IoInterpolation interpolation = IoInterpolation::perspective;
+    IoSampling sampling = IoSampling::center;
+};
+
 struct ReflectedEntry {
     std::string name;
     EntryStage stage = EntryStage::compute;
     std::array<std::uint32_t, 3> workgroup_size{};   // compute only; zeros otherwise
+    std::vector<ReflectedIo> inputs;                  // in the order of the arguments
+    std::vector<ReflectedIo> outputs;                 // in the order of the result's members
 };
 
 struct Reflection {

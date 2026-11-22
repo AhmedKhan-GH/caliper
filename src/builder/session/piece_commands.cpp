@@ -905,6 +905,54 @@ Error check_instance(const PieceLibrary& library, const std::string& workspace, 
     return {};
 }
 
+namespace {
+
+// The camera of each program of `spec` whose pin resolves to a piece that draws in a panel, in
+// the spec's order: the program's index and the camera.
+struct DrawnCamera {
+    std::size_t index = 0;
+    spec::CameraMode camera = spec::CameraMode::orbit;
+};
+std::map<std::string, std::vector<DrawnCamera>> panel_cameras(const PieceLibrary& library, const std::string& workspace,
+                                                              const spec::Spec& spec) {
+    std::map<std::string, std::vector<DrawnCamera>> out;
+    for (std::size_t i = 0; i < spec.programs.size(); ++i) {
+        const spec::Program& p = spec.programs[i];
+        if (!p.piece || !p.panel || p.panel->empty()) continue;
+        const FoundPiece found = resolve_pin(library, workspace, spec, *p.piece);
+        if (found.error || !found.piece.draw) continue;
+        out[*p.panel].push_back({i, found.piece.draw->camera});
+    }
+    return out;
+}
+
+std::string camera_conflict_message(const std::string& program, spec::CameraMode camera, const std::string& other,
+                                    spec::CameraMode other_camera, const std::string& panel) {
+    return "The program " + program + " selects the camera " + spec::camera_mode_name(camera) + ", and the program " +
+           other + " of the panel " + panel + " selects " + spec::camera_mode_name(other_camera) +
+           "; the programs of one panel share its camera.";
+}
+
+}  // namespace
+
+std::vector<spec::Diagnostic> check_panel_cameras(const PieceLibrary& library, const std::string& workspace,
+                                                  const spec::Spec& spec) {
+    std::vector<spec::Diagnostic> out;
+    for (const auto& [panel, drawn] : panel_cameras(library, workspace, spec)) {
+        const DrawnCamera& first = drawn.front();
+        for (const DrawnCamera& d : drawn) {
+            if (d.camera == first.camera) continue;
+            spec::Diagnostic diag;
+            diag.code = cp::kProgramCameraConflict;
+            diag.message = camera_conflict_message(spec.programs[d.index].id, d.camera, spec.programs[first.index].id,
+                                                   first.camera, panel);
+            diag.path = "program[" + std::to_string(d.index) + "].piece";
+            out.push_back(std::move(diag));
+        }
+    }
+    return out;
+}
+
 Error complete_instance(const PieceLibrary& library, const std::string& workspace, spec::Spec& after,
                         const std::string& id, const spec::SourceResolver& resolver, json* args) {
     spec::Program* program = nullptr;
@@ -927,6 +975,17 @@ Error complete_instance(const PieceLibrary& library, const std::string& workspac
     }
     if (Error e = check_instance(library, workspace, after, *program, found.piece, resolver))
         return fail(e.code, e.message, "args." + e.where);
+    if (found.piece.draw && program->panel) {
+        const auto cameras = panel_cameras(library, workspace, after);
+        const auto it = cameras.find(*program->panel);
+        const spec::CameraMode mine = found.piece.draw->camera;
+        if (it != cameras.end())
+            for (const DrawnCamera& d : it->second)
+                if (d.camera != mine)
+                    return fail(cp::kProgramCameraConflict,
+                                camera_conflict_message(id, mine, after.programs[d.index].id, d.camera, *program->panel),
+                                "args.piece");
+    }
     return {};
 }
 

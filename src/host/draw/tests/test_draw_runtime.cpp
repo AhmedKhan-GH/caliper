@@ -671,3 +671,57 @@ TEST_CASE("the draw host gives each panel its programs, packs params and refuses
     CHECK(host.feed("pattern")->programs().empty());
     CHECK(host.status().count("head_pattern") == 0);
 }
+
+TEST_CASE("the draw host holds a foreign spec's piece for a review of its hash, then draws it") {
+    cs::Spec spec;
+    spec.programs = {instance_of("tower_arcs", "attention_arcs", "tower"),
+                     instance_of("tower_field", "attention_field", "tower")};
+    spec.provenance.foreign = true;
+    spec.provenance.from = std::string("a shared instrument");
+    cd::DrawHost host;
+    Sink sink;
+    host.set_events(&sink);
+    host.set_resolver([](const cs::Spec&, const cs::Program& p, cs::Piece* out) {
+        *out = p.piece->name == "attention_arcs" ? ex::attention_arcs() : ex::attention_field();
+        return cp::Verdict{};
+    });
+    host.reconcile(spec);
+
+    // No program of the foreign spec reaches a runtime: the view installs only what the feed
+    // does not refuse, and each one waits in the state review, without an error event. A
+    // program in review selects no camera, thus no conflict appears either.
+    std::vector<cd::PanelProgram> tower = host.feed("tower")->programs();
+    REQUIRE(tower.size() == 2);
+    for (const cd::PanelProgram& p : tower) CHECK(p.refused.code == cp::kProgramNeedsReview);
+    CHECK(sink.events.empty());
+    CHECK(host.status().at("tower_arcs").state == cd::DrawState::review);
+    CHECK(host.status().at("tower_arcs").error.ok());
+    CHECK(cd::draw_status_json(host.status().at("tower_arcs"))["state"] == "review");
+
+    // A review of another hash, or of another program's target, does not count.
+    const std::string arcs = cp::piece_hash(ex::attention_arcs());
+    const std::string arcs_hex = arcs.substr(arcs.find(':') + 1);
+    spec.provenance.reviewed = {{"program:tower_field", arcs_hex},
+                                {"program:tower_arcs", std::string(64, '0')}};
+    host.reconcile(spec);
+    tower = host.feed("tower")->programs();
+    for (const cd::PanelProgram& p : tower) CHECK(p.refused.code == cp::kProgramNeedsReview);
+
+    // The review of the piece's hash for its program lets that program draw; the other stays.
+    spec.provenance.reviewed = {{"program:tower_arcs", arcs_hex}};
+    host.reconcile(spec);
+    tower = host.feed("tower")->programs();
+    REQUIRE(tower.size() == 2);
+    CHECK(tower[0].refused.ok());
+    CHECK(tower[1].refused.code == cp::kProgramNeedsReview);
+    CHECK(host.status().at("tower_arcs").state == cd::DrawState::waiting);
+    CHECK(host.status().at("tower_field").state == cd::DrawState::review);
+    CHECK(sink.events.empty());
+
+    // The person's own spec draws at once.
+    spec.provenance = cs::Provenance{};
+    host.reconcile(spec);
+    tower = host.feed("tower")->programs();
+    CHECK(tower[0].refused.ok());
+    CHECK(tower[1].refused.code == cp::kProgramCameraConflict);
+}

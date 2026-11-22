@@ -670,6 +670,18 @@ Verdict compile_pass(DrawRuntime::Impl& m, std::size_t k, const cp::Composed& c,
         r.name = e.name ? e.name : "";
         r.stage = cp::EntryStage(e.stage);
         for (int a = 0; a < 3; ++a) r.workgroup_size[a] = e.workgroup_size[a];
+        // The inputs and outputs, for the check of the stage interfaces (Check Order 7).
+        for (std::size_t k = 0, nio = caliper_wgsl_module_entry_io_count(module, i); k < nio; ++k) {
+            caliper_wgsl_io io{};
+            if (caliper_wgsl_module_entry_io(module, i, k, &io) != CALIPER_WGSL_OK) continue;
+            cp::ReflectedIo v;
+            v.location = io.location;
+            v.scalar = cp::IoScalar(io.scalar);
+            v.components = io.components;
+            v.interpolation = cp::IoInterpolation(io.interpolation);
+            v.sampling = cp::IoSampling(io.sampling);
+            (io.direction == CALIPER_WGSL_IO_INPUT ? r.inputs : r.outputs).push_back(v);
+        }
         reflection.entries.push_back(std::move(r));
     }
     std::vector<caliper_wgsl_binding> raw;

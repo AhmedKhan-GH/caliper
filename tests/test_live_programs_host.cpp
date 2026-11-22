@@ -12,6 +12,8 @@
 #include <caliper_builder/session/events.h>
 #include <caliper_builder/session/program_host.h>
 
+#include "gfx/example_pieces.h"
+
 #include <string>
 #include <vector>
 
@@ -222,4 +224,80 @@ TEST_CASE("live/programs: a params change sends only values, and a value outside
     CHECK(link.sent.back().params.find("level")->as_double() == 3);
     CHECK(link.sent.back().params.find("gain")->as_double() == 2);
     CHECK(sets() == 1);
+}
+
+// A program of a foreign spec (design/gpu-programs.md, Provenance;
+// design/programmable-graphics.md, Piece Sources) never goes out to the
+// script, which would compile it and relay its draw half to the viewers,
+// before provenance.reviewed holds its hash: the source's SHA-256 for the
+// one-pass form, the piece's hash for an instance. Until then its state is
+// review, without an error and without an event.
+TEST_CASE("live/programs: a foreign spec's programs and pieces wait for a review of their hash before they go out") {
+    struct PieceLink final : caliper_live::ProgramLink {
+        Link inner;
+        bool ready() override { return true; }
+        uint64_t epoch() override { return 1; }
+        uint32_t send(caliper_net::wire::Program m) override { return inner.send(std::move(m)); }
+        std::vector<caliper_live::ProgramAnswer> take() override { return inner.take(); }
+        bool takes_pieces() override { return true; }
+    };
+    cb::spec::Spec spec;
+    cb::spec::Piece field = caliper_test_pieces::attention_field();
+    const std::string field_hash = cb::programs::piece_hash(field);
+    field.hash = field_hash;
+    spec.pieces = {field};
+    cb::spec::Program instance;
+    instance.id = "field";
+    cb::spec::PieceRef pin;
+    pin.name = field.name;
+    pin.version = field.version;
+    pin.hash = field_hash;
+    pin.from = cb::spec::PieceFrom::inline_piece;
+    instance.piece = pin;
+    instance.panel = std::string("pattern");
+    instance.bind = {{"attn0", "live:0.attn"}, {"attn1", "live:1.attn"}};
+    spec.programs = {pixels("heat"), instance};
+    spec.provenance.foreign = true;
+    spec.provenance.from = std::string("a shared instrument");
+
+    caliper_live::AppProgramHost host;
+    cb::EventRing ring;
+    PieceLink link;
+    host.reconcile(spec);
+    host.pump(link, &ring);
+    CHECK(link.inner.sent.empty());
+    auto st = host.status();
+    REQUIRE(st.size() == 2);
+    for (const cb::ProgramStatus& s : st) {
+        CAPTURE(s.id);
+        CHECK(s.state == "review");
+        CHECK(s.host == "none");
+        CHECK(!s.error.has_value());
+    }
+    CHECK(ring.read(0, {{cb::EventKind::program}, {}}, 8).events.empty());
+
+    // A review of another hash for the target does not count.
+    spec.provenance.reviewed = {{"program:heat", std::string(64, '0')},
+                                {"program:field", cb::programs::sha256_hex(spec.programs[0].wgsl)}};
+    host.reconcile(spec);
+    host.pump(link, &ring);
+    CHECK(link.inner.sent.empty());
+
+    // The reviewed hashes let both go out: the source's for heat, the piece's for the instance.
+    spec.provenance.reviewed = {{"program:heat", cb::programs::sha256_hex(spec.programs[0].wgsl)},
+                                {"program:field", field_hash.substr(field_hash.find(':') + 1)}};
+    host.reconcile(spec);
+    host.pump(link, &ring);
+    REQUIRE(link.inner.sent.size() == 2);
+    CHECK(link.inner.sent[0].id == "heat");
+    CHECK(link.inner.sent[1].id == "field");
+    for (const cb::ProgramStatus& s : host.status()) CHECK(s.state == "waiting");
+
+    // A changed source of a reviewed program waits again, and the script removes the old one.
+    spec.programs[0].wgsl += "\n// changed";
+    host.reconcile(spec);
+    host.pump(link, &ring);
+    CHECK(host.status()[0].state == "review");
+    CHECK(link.inner.sent.back().op == CALIPER_NET_PROGRAM_REMOVE);
+    CHECK(link.inner.sent.back().id == "heat");
 }

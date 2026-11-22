@@ -200,14 +200,49 @@ TEST_CASE("the composer refuses what it cannot compose") {
     }
 }
 
+namespace {
+
+cp::ReflectedIo io(std::uint32_t location, cp::IoScalar scalar, std::uint32_t components,
+                   cp::IoInterpolation interpolation = cp::IoInterpolation::perspective) {
+    cp::ReflectedIo v;
+    v.location = location;
+    v.scalar = scalar;
+    v.components = components;
+    v.interpolation = interpolation;
+    v.sampling = interpolation == cp::IoInterpolation::flat ? cp::IoSampling::first : cp::IoSampling::center;
+    return v;
+}
+
+// The entries of the arcs example as the compiler reflects them, with their inputs and outputs:
+// ArcOut is a vec4<f32> color at location 0 and a flat u32 item at location 1, and the prelude's
+// CaliperFullscreen a vec2<f32> uv at location 0.
+std::vector<cp::ReflectedEntry> arcs_entries() {
+    const cp::ReflectedIo color = io(0, cp::IoScalar::f32, 4);
+    const cp::ReflectedIo item = io(1, cp::IoScalar::u32, 1, cp::IoInterpolation::flat);
+    const cp::ReflectedIo uv = io(0, cp::IoScalar::f32, 2);
+    const cp::ReflectedIo id = io(1, cp::IoScalar::u32, 2, cp::IoInterpolation::flat);
+    std::vector<cp::ReflectedEntry> e = {{"caliper_fullscreen", cp::EntryStage::vertex, {}},
+                                         {"arc_vs", cp::EntryStage::vertex, {}},
+                                         {"arc_fs", cp::EntryStage::fragment, {}},
+                                         {"arc_glow", cp::EntryStage::fragment, {}},
+                                         {"bloom", cp::EntryStage::fragment, {}}};
+    e[0].outputs = {uv};
+    e[1].outputs = {color, item};
+    e[2].inputs = {color, item};
+    e[2].outputs = {color, id};
+    e[3].inputs = {color, item};
+    e[3].outputs = {color};
+    e[4].inputs = {uv};
+    e[4].outputs = {color};
+    return e;
+}
+
+}  // namespace
+
 TEST_CASE("the reflection check takes the right entries and refuses the rest") {
     const cs::Piece arcs = ex::attention_arcs();
     cp::Reflection r;
-    r.entries = {{"caliper_fullscreen", cp::EntryStage::vertex, {}},
-                 {"arc_vs", cp::EntryStage::vertex, {}},
-                 {"arc_fs", cp::EntryStage::fragment, {}},
-                 {"arc_glow", cp::EntryStage::fragment, {}},
-                 {"bloom", cp::EntryStage::fragment, {}}};
+    r.entries = arcs_entries();
     cp::ReflectedBinding counts;
     counts.group = 1;
     counts.binding = 0;
@@ -243,6 +278,78 @@ TEST_CASE("the reflection check takes the right entries and refuses the rest") {
         cp::Reflection bad = r;
         bad.bindings[0].group = 3;
         CHECK(cp::check_piece_reflection(arcs, cp::Half::draw, 0, bad).code == cp::kProgramBindingNotAllowed);
+    }
+}
+
+TEST_CASE("the reflection check refuses stage interfaces that disagree, before any pipeline") {
+    const cs::Piece arcs = ex::attention_arcs();
+    cp::Reflection r;
+    r.entries = arcs_entries();
+    for (std::size_t k = 0; k < 3; ++k) CHECK(cp::check_piece_reflection(arcs, cp::Half::draw, k, r).ok());
+    auto code = [&](const cp::Reflection& bad, std::size_t pass) {
+        const cp::Verdict v = cp::check_piece_reflection(arcs, cp::Half::draw, pass, bad);
+        CHECK(v.where == "draw.passes[" + std::to_string(pass) + "]");
+        return v.code;
+    };
+
+    SUBCASE("a fragment input that the vertex entry does not write") {
+        cp::Reflection bad = r;
+        bad.entries[3].inputs.push_back(io(2, cp::IoScalar::f32, 1));
+        CHECK(code(bad, 1) == cp::kProgramInterfaceMismatch);
+    }
+    SUBCASE("a fragment input of another type") {
+        cp::Reflection bad = r;
+        bad.entries[4].inputs[0].components = 3;
+        CHECK(code(bad, 2) == cp::kProgramInterfaceMismatch);
+        bad = r;
+        bad.entries[2].inputs[1].scalar = cp::IoScalar::i32;
+        CHECK(code(bad, 0) == cp::kProgramInterfaceMismatch);
+    }
+    SUBCASE("a fragment input with another interpolation") {
+        cp::Reflection bad = r;
+        bad.entries[3].inputs[0].interpolation = cp::IoInterpolation::linear;
+        CHECK(code(bad, 1) == cp::kProgramInterfaceMismatch);
+        bad = r;
+        bad.entries[3].inputs[0].sampling = cp::IoSampling::centroid;
+        CHECK(code(bad, 1) == cp::kProgramInterfaceMismatch);
+    }
+    SUBCASE("a vertex attribute, which a piece cannot feed") {
+        cp::Reflection bad = r;
+        bad.entries[1].inputs.push_back(io(0, cp::IoScalar::f32, 3));
+        CHECK(code(bad, 0) == cp::kProgramInterfaceMismatch);
+    }
+    SUBCASE("more inter-stage variables than WebGPU allows") {
+        cp::Reflection bad = r;
+        bad.entries[1].outputs.clear();
+        for (std::uint32_t l = 0; l < 17; ++l) bad.entries[1].outputs.push_back(io(l, cp::IoScalar::f32, 1));
+        CHECK(code(bad, 0) == cp::kProgramOverWebLimits);
+        bad = r;
+        bad.entries[1].outputs.push_back(io(16, cp::IoScalar::f32, 1));
+        CHECK(code(bad, 0) == cp::kProgramOverWebLimits);
+    }
+    SUBCASE("a pick pass whose fragment does not return CaliperPicked") {
+        cp::Reflection bad = r;
+        bad.entries[2].outputs.pop_back();
+        CHECK(code(bad, 0) == cp::kProgramInterfaceMismatch);
+        bad = r;
+        bad.entries[2].outputs[1].scalar = cp::IoScalar::f32;
+        CHECK(code(bad, 0) == cp::kProgramInterfaceMismatch);
+    }
+    SUBCASE("a target pass whose fragment does not return one vec4<f32>") {
+        cp::Reflection bad = r;
+        bad.entries[3].outputs[0].components = 3;
+        CHECK(code(bad, 1) == cp::kProgramInterfaceMismatch);
+        bad = r;
+        bad.entries[3].outputs.push_back(io(1, cp::IoScalar::u32, 2, cp::IoInterpolation::flat));
+        CHECK(code(bad, 1) == cp::kProgramInterfaceMismatch);
+        bad = r;
+        bad.entries[3].outputs.clear();
+        CHECK(code(bad, 1) == cp::kProgramInterfaceMismatch);
+    }
+    SUBCASE("a host pass without pick that writes an ID") {
+        cp::Reflection bad = r;
+        bad.entries[4].outputs.push_back(io(1, cp::IoScalar::u32, 2, cp::IoInterpolation::flat));
+        CHECK(code(bad, 2) == cp::kProgramInterfaceMismatch);
     }
 }
 
@@ -292,6 +399,37 @@ TEST_CASE("the reflection check of a derive pass keeps the tensor inputs read-on
     const cp::Verdict v = cp::check_piece_reflection(arcs, cp::Half::derive, 1, r);
     CHECK(v.code == cp::kProgramBindingNotAllowed);
     CHECK(v.where == "derive.passes[1]");
+}
+
+TEST_CASE("the compiler's reflection refuses a fragment that reads what its vertex entry does not write") {
+    if (!cp::compiler_available()) {
+        MESSAGE("this build has no WGSL compiler");
+        return;
+    }
+    // The field example's one pass draws the full-screen triangle, whose CaliperFullscreen gives
+    // a vec2<f32> uv at location 0. A fragment that reads a vec3<f32> there, or a location the
+    // triangle does not write, is refused before any pipeline; the example itself passes.
+    const cs::Piece field = ex::attention_field();
+    const std::string fragment = field.draw->passes[0].fragment;
+    auto verdict = [&](const std::string& draw_wgsl) {
+        cs::Piece p = field;
+        p.files["draw.wgsl"] = draw_wgsl;
+        const cp::Composed c = cp::compose_draw(p, ex::resolve(p), 0);
+        REQUIRE(c.verdict.ok());
+        const cp::Compiled compiled = cp::compile_and_reflect(c.text);
+        REQUIRE_MESSAGE(compiled.verdict.ok(), compiled.verdict.message);
+        return cp::check_piece_reflection(p, cp::Half::draw, 0, compiled.reflection);
+    };
+    CHECK(verdict(field.files.at("draw.wgsl")).ok());
+    const std::string head = "@fragment\nfn " + fragment;
+    CHECK(verdict(head + "(@location(0) uv: vec3<f32>) -> @location(0) vec4<f32> { return vec4<f32>(uv, 1.0); }\n")
+              .code == cp::kProgramInterfaceMismatch);
+    CHECK(verdict(head + "(@location(3) t: f32) -> @location(0) vec4<f32> { return vec4<f32>(t); }\n").code ==
+          cp::kProgramInterfaceMismatch);
+    CHECK(verdict(head + "(@location(0) uv: vec2<f32>) -> @location(0) vec2<f32> { return uv; }\n").code ==
+          cp::kProgramInterfaceMismatch);
+    CHECK(verdict(head + "(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> { return vec4<f32>(uv, 0.0, 1.0); }\n")
+              .ok());
 }
 
 TEST_CASE("every composed pass of both examples compiles with the bounds-checked compiler") {

@@ -358,6 +358,46 @@ TEST_CASE("pieces: program.create pins a workspace piece with its hash and check
           "piece.missing");
 }
 
+TEST_CASE("pieces: two cameras in one panel are refused by the editor and named by spec.validate") {
+    std::string ws;
+    auto s = piece_session("piece_cameras", &ws);
+    ok(*s, "piece.update", {{"piece", uv_field()}});   // camera none
+    json orbit = uv_field("orbit_field");
+    orbit["draw"]["camera"] = "orbit";
+    ok(*s, "piece.update", {{"piece", orbit}});
+    ok(*s, "panel.create", {{"id", "side"}, {"primitive", "scene"}, {"bind", {{"scene", "live:model"}}}});
+    const json flat_pin = {{"name", "uv_field"}, {"from", "workspace"}};
+    const json orbit_pin = {{"name", "orbit_field"}, {"from", "workspace"}};
+
+    // One camera in a panel, and another camera in another panel, pass.
+    ok(*s, "program.create", {{"id", "flat"}, {"piece", flat_pin}, {"panel", "world"}});
+    ok(*s, "program.create", {{"id", "flat_too"}, {"piece", flat_pin}, {"panel", "world"}});
+    ok(*s, "program.create", {{"id", "round"}, {"piece", orbit_pin}, {"panel", "side"}});
+    CHECK(ok(*s, "spec.validate")["valid"] == true);
+
+    // Another camera in the same panel is refused before it applies, by create and by patch.
+    CHECK(err(*s, "program.create", {{"id", "round_too"}, {"piece", orbit_pin}, {"panel", "world"}}) ==
+          "program.camera_conflict");
+    CHECK(err(*s, "program.patch", {{"id", "round"}, {"patch", {{"panel", "world"}}}}) == "program.camera_conflict");
+    CHECK(s->open_spec()->spec.programs.size() == 3);
+
+    // spec.validate names the later program of a conflict in a text and in the open spec.
+    std::string text = ok(*s, "spec.get")["text"];
+    const std::string side = "panel = \"side\"";
+    REQUIRE(text.find(side) != std::string::npos);
+    REQUIRE(text.find(side) == text.rfind(side));
+    text.replace(text.find(side), side.size(), "panel = \"world\"");
+    auto conflict = [](const json& result) {
+        CHECK(result["valid"] == false);
+        REQUIRE(result["errors"].size() == 1);
+        CHECK(result["errors"][0]["code"] == "program.camera_conflict");
+        CHECK(result["errors"][0]["where"] == "program[2].piece");
+    };
+    conflict(ok(*s, "spec.validate", {{"text", text}}));
+    ok(*s, "spec.set_text", {{"text", text}});
+    conflict(ok(*s, "spec.validate"));
+}
+
 TEST_CASE("pieces: program.create with inline adds the piece, and piece.save extracts it in one undo step") {
     std::string ws;
     auto s = piece_session("piece_inline", &ws);
