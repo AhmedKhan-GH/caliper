@@ -317,6 +317,10 @@ class Link:
     def queue(self, msg) -> None:
         self.push(_wire.encode(msg))
 
+    def backlog(self) -> int:
+        """The bytes of the control frames still queued for this peer."""
+        return self.control_bytes
+
     def push(self, frame) -> bool:
         """Queue an encoded control frame (from any thread). A peer that keeps
         sending while it reads nothing fills the queue: past MAX_CONTROL_FRAMES

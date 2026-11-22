@@ -460,6 +460,14 @@ public:
         return it == links_.end() ? 0 : it->second.control.size() + it->second.after_views.size();
     }
 
+    // 3.2 draft: the bytes of the control frames that a connection still has waiting, which
+    // bound the RESOURCE frames that Python gives a viewer that falls behind.
+    size_t control_bytes(ConnId c) {
+        std::lock_guard<std::mutex> g(mu_);
+        auto it = links_.find(c);
+        return it == links_.end() ? 0 : it->second.control_bytes;
+    }
+
     static Json without_scenes(const Json& views) {
         Json out = Json::array();
         for (const Json& e : views.items()) {
@@ -1618,6 +1626,7 @@ NB_MODULE(_netio, m) {
         .def("enable_controls", &NetIO::enable_controls, nb::arg("allow"), R())
         .def("data_pending", &NetIO::data_pending, R())
         .def("queued", &NetIO::queued, R())
+        .def("control_bytes", &NetIO::control_bytes, nb::arg("conn"), R())
         .def("sub_open", &NetIO::sub_open, nb::arg("conn"), nb::arg("sub"), nb::arg("view"), nb::arg("kind"),
              nb::arg("group"), nb::arg("data_view"), nb::arg("max_rate"), nb::arg("backfill"), R())
         .def("sub_close", &NetIO::sub_close, R())

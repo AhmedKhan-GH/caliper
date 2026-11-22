@@ -315,7 +315,7 @@ class _Program:
                  "last_pass_ms", "memory_bytes", "warm", "every", "t0", "bound", "pass_times",
                  "params", "builtin", "shape", "piece", "manifest", "bind", "panel", "segments",
                  "common", "draw", "types", "resources", "passes", "param_types", "written",
-                 "sent_static", "static_frames", "relayed")
+                 "sent_static", "static_frames", "relayed", "skipped")
 
     def __init__(self, pid, decl, wgsl, scene, sha256):
         self.id = pid
@@ -358,6 +358,7 @@ class _Program:
         self.sent_static = False
         self.static_frames = {}  # resource id -> the RESOURCE frame of a static resource
         self.relayed = _LinkSet()  # the viewers that got the draw half
+        self.skipped = 0        # RESOURCE frames that a viewer behind did not get
 
     def passes_per_s(self):
         """The passes a second on the run's wall clock over the last ``RATE_PASSES`` passes, or
@@ -1270,6 +1271,7 @@ PIECE_COUNT_MAX = 4194304
 PIECE_SIDE_MAX = 4096
 WORKGROUPS_MAX = 65535
 _DTYPES = ("f32", "i32", "u32")
+RESOURCE_BACKLOG_BYTES = 8 << 20  # a viewer with more queued skips a version; half the control queue
 
 
 class _LinkSet:
@@ -1586,15 +1588,33 @@ def _relay_removal(p: _Program) -> None:
 
 def _send_resources(p: _Program, frames: list) -> None:
     """Give the RESOURCE frames of a pass to the viewers: first the draw half to each viewer that
-    attached since, then the frames to every viewer that announced ``resources``."""
+    attached since, then the frames to every viewer that announced ``resources``.
+
+    A viewer that falls behind loses versions: a frame goes to a viewer only while the control
+    frames queued for it, with this pass's frames, stay within ``RESOURCE_BACKLOG_BYTES``, so that
+    its queue never overflows and closes the connection, and it gets the next version once it
+    caught up. A version above that bound goes to no viewer, and the program reports
+    ``program.resource_too_large``."""
     from . import _wire
     try:
+        for frame in frames:
+            if len(frame) > RESOURCE_BACKLOG_BYTES:
+                p.error = {"code": "program.resource_too_large", "line": None, "column": None,
+                           "message": f"A resource version of {len(frame)} bytes is above the "
+                                      f"{RESOURCE_BACKLOG_BYTES} bytes that a viewer's queue takes."}
+        frames = [f for f in frames if len(f) <= RESOURCE_BACKLOG_BYTES]
         for ctl in _controls_ports():
             links = _resource_links(ctl)
             if not links:
                 continue
             _relay_to(p, ctl, links)
-            for frame in frames:
-                ctl.post(None, frame, _wire.CAP_RESOURCES)
+            for ln in links:
+                backlog = getattr(ln, "backlog", lambda: 0)()
+                for frame in frames:
+                    if backlog + len(frame) > RESOURCE_BACKLOG_BYTES:
+                        p.skipped += 1
+                        continue
+                    backlog += len(frame)
+                    ctl.post(ln, frame, _wire.CAP_RESOURCES)
     except Exception as e:  # the publish path never stops the step
         _warn_once(("publish", p.id), f"caliper: sending the resources of {p.id} failed: {e!r}")

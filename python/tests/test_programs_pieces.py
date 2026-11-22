@@ -254,6 +254,26 @@ def test_a_piece_without_a_derive_half_is_only_relayed(monkeypatch):
     assert ctl.posts[-1][1].meta["op"] == "remove"
 
 
+def test_a_viewer_behind_skips_versions_and_a_version_above_its_queue_goes_nowhere(monkeypatch):
+    ctl = FakeControls()
+    behind = FakeLink((w.CAP_PROGRAMS, w.CAP_RESOURCES))
+    behind.backlog = lambda: P.RESOURCE_BACKLOG_BYTES - 100
+    ctl.server.producer.links.append(behind)
+    monkeypatch.setattr(P, "_controls_ports", lambda: [ctl])
+    p = P._Program("r", {}, "", None, "")
+    small = w.encode_frame(P.RESOURCE_TYPE, {"program": "r", "resource": "a", "step": 1, "count": 1, "stride": 4},
+                           [w.Section(w.SECTION_RESOURCE, int(w.DType.U8), (4,), memoryview(b"abcd"))])
+    P._send_resources(p, [small])
+    got = [(ln, f.type) for ln, f, _c in ctl.posts]
+    assert (ctl.link, P.RESOURCE_TYPE) in got and (behind, P.RESOURCE_TYPE) not in got
+    assert got[0][1] == w.MsgType.PROGRAM            # the draw half first, to both viewers
+    assert p.skipped == 1 and p.error is None
+    big = b"x" * (P.RESOURCE_BACKLOG_BYTES + 1)
+    ctl.posts.clear()
+    P._send_resources(p, [big])
+    assert not ctl.posts and p.error["code"] == "program.resource_too_large"
+
+
 # ---- the passes on the MPS device ----------------------------------------------------------------
 def _resources(ctl, name):
     return [f for _l, f, _c in ctl.posts if f.type == P.RESOURCE_TYPE and f.meta["resource"] == name]

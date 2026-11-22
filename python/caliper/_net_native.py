@@ -77,6 +77,13 @@ class _NativeLink(Link):
     def queue_views(self) -> None:
         pass                                      # the native side sends VIEWS
 
+    def backlog(self) -> int:
+        """The bytes of the control frames that the native side still has to send here."""
+        try:
+            return int(self.p.nio.control_bytes(self.conn))
+        except Exception:                         # an older module: no bound
+            return 0
+
 
 class _NativeProducer(_Producer):
     def __init__(self, ring: NetRing, identity: dict, transport: NetTransport, nio):
