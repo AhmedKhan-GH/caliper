@@ -1106,6 +1106,7 @@ void SceneView::draw_programs() {
         cm = caliper_scene::camera_matrices(cam, tree_, width_, height_);
     }
     const caliper_scene::Mat4 clip = cm.proj * cm.view;
+    program_clip_ = clip;
     caliper_scene::Mat4 inv;
     if (!caliper_scene::inverse(clip, &inv)) inv = caliper_scene::Mat4{};
     caliper_draw::FrameInputs base;
@@ -1611,8 +1612,39 @@ ScaleBar SceneView::scale_bar(double w, double h) const {
 
 // ---- drawing ---------------------------------------------------------------------------------------
 
+void SceneView::set_entity_filter(const std::string& key, std::function<bool(const std::string&)> keep) {
+    if (key == filter_key_ && bool(keep) == bool(filter_)) return;
+    filter_key_ = key;
+    filter_ = std::move(keep);
+    filtered_rev_ = ~0ull;
+}
+
+void SceneView::apply_entity_filter() {
+    if (tree_.revision() == filtered_rev_) return;
+    const uint32_t n = uint32_t(tree_.entity_count());
+    std::vector<uint8_t> keep(n, 1);
+    if (filter_) {
+        for (uint32_t i = 1; i < n; ++i) {
+            const EntityId e = tree_.entity_at(i);
+            keep[i] = tree_.valid(e) && filter_(tree_.path(e)) ? 1 : 0;
+        }
+        for (uint32_t i = 1; i < n; ++i) {   // the ancestors of a kept entity stay, else it would hide
+            const EntityId e = tree_.entity_at(i);
+            if (!keep[i] || !tree_.valid(e)) continue;
+            for (EntityId p = tree_.parent(e); tree_.valid(p) && p.index != 0 && p.index < n; p = tree_.parent(p))
+                keep[p.index] = 1;
+        }
+    }
+    for (uint32_t i = 1; i < n; ++i) {
+        const EntityId e = tree_.entity_at(i);
+        if (tree_.valid(e)) tree_.set_visible(e, keep[i] != 0);
+    }
+    filtered_rev_ = tree_.revision();
+}
+
 bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint32_t clear_rgba, std::string* why) {
     if (width == 0 || height == 0) return true;
+    apply_entity_filter();
     if (!res_) {
         if (why) *why = "the scene view has no resources";
         return false;
@@ -1631,7 +1663,7 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
         color_ = gfx_.create_texture(d);
         if (depth) {
             d.format = caliper_gfx::Format::Depth32Float;
-            d.usage = caliper_gfx::kRenderTarget;
+            d.usage = caliper_gfx::kRenderTarget | caliper_gfx::kCopySrcTex;   // a program's pick reads it
             d.label = "scene view depth";
             depth_ = gfx_.create_texture(d);
         }

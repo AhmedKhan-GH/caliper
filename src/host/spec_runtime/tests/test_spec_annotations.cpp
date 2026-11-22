@@ -160,6 +160,61 @@ TEST_CASE("annotations: the item labels of a scene whose anchors fall within two
     CHECK(img.count(bright, 220, 150, 420, 260).n > 50);
 }
 
+TEST_CASE("annotations: the item labels of a scene keep off the view's own texts") {
+    if (!canvas()) return;
+    // Labelled items crowd the places of the selection count (top right) and
+    // the scale bar (bottom right), as in the app's scene window.
+    std::vector<caliper_scene::LabelAnchor> anchors;
+    const auto add = [&](float x, float y, const char* text) {
+        caliper_scene::LabelAnchor a;
+        a.x = x;
+        a.y = y;
+        a.item = anchors.size();
+        a.depth = 1.0f + 0.01f * (float)anchors.size();
+        a.text = text;
+        anchors.push_back(a);
+    };
+    for (int i = 0; i < 6; ++i) {
+        add(564.0f + 12.0f * (float)i, 32.0f + 3.0f * (float)(i % 2), ("p1" + std::to_string(i)).c_str());
+        add(540.0f + 14.0f * (float)i, 396.0f, ("p2" + std::to_string(i)).c_str());
+    }
+    const SpecLook look = house_spec_look();
+    const LabelRect count{560, 6, 632, 26}, bar{500, 352, 632, 392};
+    const std::vector<LabelRect> keep = {count, bar};
+    for (const bool kept : {false, true}) {
+        const Image img = render(640, 400, [&](const ImRect& area) {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(area.Min, area.Max, look.deep);
+            // The two texts' places, in the accent colour, under the labels.
+            for (const LabelRect& r : keep)
+                dl->AddRect(ImVec2(area.Min.x + r.x0, area.Min.y + r.y0), ImVec2(area.Min.x + r.x1, area.Min.y + r.y1),
+                            look.accent);
+            std::vector<LabelRect> screen;
+            for (const LabelRect& r : keep)
+                screen.push_back({area.Min.x + r.x0, area.Min.y + r.y0, area.Min.x + r.x1, area.Min.y + r.y1});
+            for (const auto& a : anchors) dl->AddCircleFilled(ImVec2(area.Min.x + a.x, area.Min.y + a.y), 3.0f, look.line);
+            caliper_live_views::SceneOverlayInput in;
+            in.draw = dl;
+            in.origin = area.Min;
+            in.labels = &anchors;
+            in.ink = look.text;
+            in.shade = IM_COL32(0, 0, 0, 160);
+            if (kept) in.keep_clear = &screen;
+            caliper_live_views::draw_scene_overlays(in);
+        });
+        dump(img, kept ? "annot-scene-keep-clear" : "annot-scene-keep-clear-without");
+        // Without the rectangles, labels cover them; with them, no label text lies inside.
+        const auto bright_inside = [&](const LabelRect& r) {
+            return img.count(bright, (int)r.x0 + 1, (int)r.y0 + 1, (int)r.x1 - 1, (int)r.y1 - 1).n;
+        };
+        const int inside = bright_inside(count) + bright_inside(bar);
+        if (kept)
+            CHECK(inside == 0);
+        else
+            CHECK(inside > 0);
+    }
+}
+
 TEST_CASE("annotations: the layout shares at 2560 by 1440 and at 1440 by 900") {
     if (!canvas()) return;
     const caliper_builder::spec::Spec s = parse(R"toml(caliper_spec = 1

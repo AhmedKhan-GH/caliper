@@ -213,6 +213,12 @@ public:
     caliper_scene::ScaleBar scale_bar(double w, double h) const;
     bool scale_bar_on() const { return scale_bar_on_; }
     void set_scale_bar(bool on) { scale_bar_on_ = on; }
+    // The entities that the view draws, picks and labels: a spec panel's include and exclude.
+    // `keep` answers for an entity's path; an entity it refuses is hidden with its subtree, but
+    // for the ancestors of an entity it keeps. `key` names the filter, so that setting the same
+    // one each frame costs nothing; an empty key with no function keeps every entity. A panel and
+    // the app's window draw one view, thus each sets its own before it renders.
+    void set_entity_filter(const std::string& key, std::function<bool(const std::string&)> keep);
     // What the view keeps of itself across a close and a reopen.
     struct Settings {
         bool up_chosen = false;
@@ -253,6 +259,12 @@ public:
     std::vector<const caliper_draw::DrawRuntime*> draw_runtimes() const;
     // The programs' ID target; none while the view draws no program.
     caliper_gfx::Texture id_target() const { return id_; }
+    // The depth target of the view's frame (Depth32Float, with kCopySrcTex); none in 2-D. A
+    // program's pick reads it beside the ID target, so that an entity's hit wins when nearer.
+    caliper_gfx::Texture depth_target() const { return depth_; }
+    // The clip-from-world matrix of the programs' last frame, with which the panel projects the
+    // anchors of their text tables.
+    const caliper_scene::Mat4& program_clip() const { return program_clip_; }
     // The pointer over the view, in physical pixels from the top left, its buttons as bits, and
     // whether it is over the view, for the programs' prelude (caliper_view.pointer).
     void set_pointer(float x, float y, uint32_t buttons, bool over);
@@ -376,6 +388,10 @@ private:
     bool up_chosen_ = false;           // the person switched: the scene's up no longer moves the view
     bool was_through_ = false;         // the last frame looked through a pinhole
     bool scale_bar_on_ = true;
+    std::string filter_key_;
+    std::function<bool(const std::string&)> filter_;
+    uint64_t filtered_rev_ = ~0ull;   // the tree's revision after the filter was applied
+    void apply_entity_filter();
 
     caliper_gfx::Texture color_, depth_;
     uint32_t width_ = 0, height_ = 0, clear_ = 0;
@@ -391,6 +407,7 @@ private:
     uint64_t draw_revision_ = ~0ull;
     caliper_gfx::Texture id_, program_colormaps_;
     uint32_t id_w_ = 0, id_h_ = 0;
+    caliper_scene::Mat4 program_clip_;
     float pointer_[4] = {0, 0, 0, 0};
     uint32_t panel_over_ = 0;
     std::chrono::steady_clock::time_point last_program_frame_{};

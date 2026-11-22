@@ -26,6 +26,8 @@
 
 #include <doctest/doctest.h>
 
+#include <imgui_internal.h>   // the tooltip window of a hover
+
 #include <cmath>
 #include <cstdlib>
 #include <functional>
@@ -321,6 +323,42 @@ TEST_CASE("spec controls: a button bound to an action shows the action it runs")
 }
 
 // ---- drawn on the offscreen canvas (suite "gpu": caliper_spec_runtime_gpu) ----------------
+
+TEST_CASE("spec controls: a readout and a title wider than their part of the row end in an ellipsis and show whole on a hover") {
+    Ui ui;
+    Recorder rec;
+    SpecInstrumentHost host{&rec, nullptr};
+    const SpecLook look;
+    spec::Control now = make("now", spec::ControlKind::readout, "");
+    now.title = "Now";
+    spec::BoundText text;
+    text.format = "Step 1,024 of a long run, with a readout text that does not fit a row of 400 pixels";
+    now.options.bound_text = text;
+    // The tooltip window of this frame, which ImGui names ##Tooltip_00.
+    const auto tooltip = [] {
+        ImGuiWindow* w = ImGui::FindWindowByName("##Tooltip_00");
+        return w != nullptr && w->Active;
+    };
+    const auto hover = [&](float x) {
+        bool shown = false;
+        ImGui::GetIO().AddMousePosEvent(x, 15);
+        ui.frame([&] { caliper_host::draw_spec_control(now, kRow, look, host); });
+        ui.frame([&] {
+            caliper_host::draw_spec_control(now, kRow, look, host);
+            shown = tooltip();
+        });
+        return shown;
+    };
+    CHECK(hover(300));
+    // A readout that fits needs no tooltip, nor does a title that fits.
+    now.options.bound_text->format = "Step 1,024";
+    CHECK_FALSE(hover(300));
+    CHECK_FALSE(hover(12));
+    // A title cut at its share of the row shows whole on a hover over it.
+    now.title = "A title much longer than a third of the row";
+    CHECK(hover(12));
+    CHECK(rec.events.empty());
+}
 
 TEST_SUITE("gpu") {
 TEST_CASE("spec controls: a slider row and a button row in the house look") {
@@ -751,5 +789,47 @@ TEST_CASE("spec controls: a range, a picker, a text field, a segmented group and
         CHECK(img.count(spec_test::bright, 0, i * r, w / 3, (i + 1) * r).n > 0);
     }
     CHECK(rec.events.empty());   // drawing alone sends nothing
+}
+TEST_CASE("spec controls: texts wider than a narrow row end in an ellipsis in the house look") {
+    caliper_host::SpecOffscreen* c = spec_test::canvas();
+    if (!c) return;
+    Recorder rec;
+    spec::Control now = make("now", spec::ControlKind::readout, "");
+    now.title = "Loss";
+    spec::BoundText text;
+    text.format = "Loss 2.3071 at step 1,024 of the run, averaged over the last 64 batches";
+    now.options.bound_text = text;
+    spec::Control measure = make("measure", spec::ControlKind::segmented, "state:measure");
+    measure.title = "Measure";
+    measure.options.choices = {choice("norm", "Mean absolute activation"), choice("mean", "Signed mean")};
+    spec::Control win = make("window", spec::ControlKind::range, "value");
+    win.title = "Window of training steps";
+    win.options.min = 0.0;
+    win.options.max = 3000000.0;
+    win.options.value_other = json::array({952113.0, 2999871.0});
+    const spec::Spec sp = instrument_spec({now, measure, win});
+    cb::ValueStore values;
+    values.reset(sp);
+    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    const SpecLook look = c->look();
+    const float row = caliper_host::spec_control_height(now, look);
+    const std::vector<const spec::Control*> rows = {&now, &measure, &win};
+    const int w = 300, h = (int)(row * rows.size());
+    const spec_test::Image img = spec_test::render(w, h, [&](const ImRect& area) {
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            const float y = area.Min.y + row * (float)i;
+            caliper_host::draw_spec_control(*rows[i], ImRect(ImVec2(area.Min.x, y), ImVec2(area.Max.x, y + row)), look,
+                                            host);
+        }
+    });
+    REQUIRE(img.w == w);
+    if (const char* dir = std::getenv("CALIPER_SPEC_TEST_DUMP"); dir && *dir)
+        caliper_host::export_write_png_atomic(std::string(dir) + "/controls-cut-text.png", img.px.data(), (uint32_t)w,
+                                              (uint32_t)h);
+    // The readout's text reaches into the row's right part and stops before its edge.
+    const int r = (int)row;
+    CHECK(img.count(spec_test::bright, w / 2, 0, w - 8, r).n > 0);
+    CHECK(img.count(spec_test::bright, w - 4, 0, w, r).n == 0);
+    CHECK(rec.events.empty());
 }
 }  // TEST_SUITE("gpu")
