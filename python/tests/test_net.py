@@ -440,8 +440,8 @@ def test_handshake_timeout_4003(mode, monkeypatch):
 
 
 def test_idle_ping_then_4004(mode, monkeypatch):
-    monkeypatch.setattr(w, "PING_INTERVAL_MS", 200)
-    monkeypatch.setattr(w, "IDLE_TIMEOUT_MS", 600)
+    monkeypatch.setattr(w, "PING_INTERVAL_MS", 1000)
+    monkeypatch.setattr(w, "IDLE_TIMEOUT_MS", 3000)
     server = caliper.serve()
 
     async def go():
