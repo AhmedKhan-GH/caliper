@@ -208,8 +208,8 @@ struct Program {
     // pinned piece, the bindings of its inputs (input name to live:<tensor>
     // or program:<id>/<resource>) and the scene panel of its draw half. Such
     // a program has no wgsl, entry, inputs, output, limits or workgroups of
-    // the one-pass form. The codec refuses these keys with spec.not_built
-    // until it reads them.
+    // the one-pass form, and the codec refuses a mix with program.form_mixed.
+    // An empty hash in a pin takes the piece's hash when the editor pins it.
     std::optional<PieceRef> piece;
     std::map<std::string, std::string> bind;
     std::optional<std::string> panel;

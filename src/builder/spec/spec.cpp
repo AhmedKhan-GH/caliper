@@ -272,7 +272,7 @@ bool panel_needs_version_1(const Panel& p) {
 
 std::int64_t required_version(const Spec& spec) {
     if (!spec.controls.empty() || !spec.programs.empty() || !spec.stages.empty() || !spec.provenance.empty() ||
-        !spec.states.empty())
+        !spec.states.empty() || !spec.pieces.empty())
         return kInstrumentVersion;
     for (const Source& s : spec.sources) {
         if (s.history) return kInstrumentVersion;
