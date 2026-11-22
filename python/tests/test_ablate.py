@@ -443,7 +443,21 @@ class _Controllers(_Transport):
 
 def test_interventions_end_when_no_controller_stays_for_the_linger_time(monkeypatch):
     from caliper import _net_programs
-    monkeypatch.setattr(_net_programs, "LINGER_S", 0.3)
+
+    class _Clock:
+        """The time module with a monotonic clock that the test moves forward. The linger time is
+        measured on it, so a slow machine cannot use the linger up between two steps."""
+        ahead = 0.0
+
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+        def monotonic(self):
+            return time.monotonic() + self.ahead
+
+    clock = _Clock()
+    monkeypatch.setattr(C, "time", clock)
+    monkeypatch.setattr(_net_programs, "LINGER_S", 600.0)
     monkeypatch.setattr(C, "LINGER_CHECK_S", 0.0)
     model, batch = _model(), _batch()
     ctl = C.Controls()
@@ -462,10 +476,10 @@ def test_interventions_end_when_no_controller_stays_for_the_linger_time(monkeypa
     _train(model, batch, ctl)
     t.n = 0
     _train(model, batch, ctl)
-    time.sleep(0.2)
+    clock.ahead += 400.0
     _train(model, batch, ctl)
     assert _hooks(model) == 1                           # the linger started again at the return
-    time.sleep(0.35)
+    clock.ahead += 700.0
     with pytest.warns(RuntimeWarning, match="interventions on blocks.1.attn ended"):
         _train(model, batch, ctl)
     assert _hooks(model) == 0 and torch.equal(_loss(model, batch), base)
