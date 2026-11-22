@@ -146,7 +146,7 @@ The host lists both ids, so a manifest may require either. An applet that wants 
 | Reason | Cause |
 |---|---|
 | `no renderer is bound (caps() is 0)` | A headless host, or no renderer bound yet. |
-| `the geometry primitives path is not live (caps() is 0)` | The backend has no geometry path (the GL fallback). |
+| `the geometry primitives path is not live (caps() is 0)` | The backend has no geometry primitives path. |
 | `export is not live on this host (caps() is 0)` | `begin_sequence` on a host where `caps()` is `0`. |
 | `cam is NULL`, `path is NULL`, `dir is NULL` | A required argument is missing. |
 | `w/h must be 1..16384 (got 0x720)` | A dimension is `0` or above `CALIPER_EXPORT_MAX_DIM`. |

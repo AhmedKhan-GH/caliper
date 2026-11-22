@@ -12,7 +12,7 @@ Every applet ships a manifest. The host reads the manifest before it loads any c
 
 An applet does not reach into the host. It asks for a service by id, such as `caliper.log.v1` for log lines or `caliper.jobs.v1` for background work. A revision of a service is a new id that adds calls and never changes the old ones. Thus an applet built against an older id keeps working. The [Service Catalog](services/service-catalog.md) lists every id the host serves.
 
-The host draws tensors on the GPU and hides the graphics backend from the applet. The applet hands a tensor to the tensor bridge and receives a texture id. [Rendering](rendering.md) explains how this works on each platform.
+The host draws tensors on the GPU and hides the graphics backend from the applet. The applet hands a tensor to the tensor bridge and receives a texture id. [Rendering](rendering.md) explains how this works on each platform, and [Shader Authoring](shader-authoring.md) covers how a developer writes or changes a shader of the host's graphics layer, regenerates its MSL and SPIR-V and checks them.
 
 ```mermaid
 flowchart LR
