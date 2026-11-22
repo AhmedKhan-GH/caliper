@@ -106,15 +106,25 @@ jobs:
           -DCALIPER_EMBED_PROBE_DIR="$RUNNER_TEMP/embed-probe"
           -DCALIPER_ACCEPTANCE_PYTHON="$RUNNER_TEMP/acceptance-py/bin/python"
           -DCALIPER_WGSL_FROM_SOURCE=ON
-          -DCALIPER_BUILD_PYTHON=ON -DPython_EXECUTABLE="$RUNNER_TEMP/acceptance-py/bin/python"
       - run: cmake --build cmake-build-release --parallel
       # The GPU programs acceptance test imports caliper._producer, the producer runtime of the programs.
-      # The build above makes it in the build folder; the test finds it, like caliper._netio, in
-      # python/caliper, so it is copied there. A missing module fails the job here, not as a skip later.
-      - name: Place the producer module
+      # The Python modules build in a second, small folder, because CALIPER_BUILD_PYTHON=ON names the
+      # viewer program caliper-viewer, as the wheel ships it, and the steps below check the programs of
+      # cmake-build-release by their own names. That folder takes the compiler library of the build
+      # above, keeps the builder's sandbox (CALIPER_WITH_BUILDER is ON by default) and builds only
+      # _producer. The test finds the module, like caliper._netio, in python/caliper, so it is copied
+      # there. A missing module fails the job here, not as a skip later.
+      - name: Build and place the producer module
         run: |
           set -e
-          built=$(find cmake-build-release/python -maxdepth 2 -name '_producer*.so' | head -n 1)
+          cmake -S . -B cmake-build-python -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
+            -DCALIPER_WITH_SLANG=OFF -DCALIPER_WITH_LLAMA=OFF -DCALIPER_WITH_TORCH=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_OBJC_COMPILER_LAUNCHER=sccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=sccache \
+            -DCALIPER_WGSL_LIBRARY="$PWD/cmake-build-release/caliper-wgsl/source/lib/libcaliper_wgsl.a" \
+            -DCALIPER_BUILD_PYTHON=ON -DPython_EXECUTABLE="$RUNNER_TEMP/acceptance-py/bin/python"
+          cmake --build cmake-build-python --target _producer --parallel
+          built=$(find cmake-build-python/python -maxdepth 2 -name '_producer*.so' | head -n 1)
           if [ -z "$built" ]; then
             echo "::error::The build made no caliper._producer module"
             exit 1
@@ -198,7 +208,7 @@ jobs:
       # requests to a wall-clock limit that a hosted runner does not meet. The tests of programs, of the
       # network programs, of the ablation and of wire 3.2 run here as well. One test of test_programs.py
       # is deselected: it publishes a program output through the real scene calls, which need the
-      # caliper._live module, and the job builds that module but does not place it in python/caliper.
+      # caliper._live module, and the job builds only caliper._producer of the Python modules.
       # No test of those four files holds a wall-clock limit: their step and cost times run on a fake clock.
       - name: Python tests of the acceptance Python
         run: >-
