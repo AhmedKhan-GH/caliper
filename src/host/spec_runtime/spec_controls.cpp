@@ -52,6 +52,7 @@
 #include "spec_runtime/label_layout.h"   // fit_with_ellipsis
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <cmath>
@@ -970,6 +971,28 @@ void record_spec_pick(const std::string& panel, const caliper_builder::Event& pi
         if (ok) out.position = std::array<double, 3>{(*p)[0].get<double>(), (*p)[1].get<double>(), (*p)[2].get<double>()};
     }
     if (auto a = pick.fields.find("annotation"); a != pick.fields.end() && a->is_string()) out.annotation = a->get<std::string>();
+    // A program's pick (design/programmable-graphics.md, Picking): its id stands as the entity, so
+    // that a select may name the program, and the item map's fields keep their names.
+    if (auto pr = pick.fields.find("program"); pr != pick.fields.end() && pr->is_string()) {
+        out.program = pr->get<std::string>();
+        out.entity = *out.program;
+        if (auto it = pick.fields.find("item"); it != pick.fields.end() && it->is_number_integer() &&
+                                                 it->get<std::int64_t>() >= 0 && it->get<std::int64_t>() <= 0xffffffffll)
+            out.item = static_cast<std::int64_t>(it->get<std::uint64_t>());
+        if (auto st = pick.fields.find("step"); st != pick.fields.end() && st->is_number_integer())
+            out.step = st->get<std::int64_t>();
+        out.index.reset();
+        if (auto ix = pick.fields.find("index"); ix != pick.fields.end() && ix->is_array() && ix->size() == 4) {
+            std::array<std::int64_t, 4> t{-1, -1, -1, -1};
+            for (std::size_t k = 0; k < 4; ++k)
+                if ((*ix)[k].is_number_integer()) t[k] = (*ix)[k].get<std::int64_t>();
+            out.tensor_index = t;
+        }
+        if (f.is_object())
+            for (auto it = f.begin(); it != f.end() && out.program_fields.size() < 64; ++it)
+                if (it.value().is_number() && std::isfinite(it.value().get<double>()))
+                    out.program_fields.emplace_back(it.key(), it.value().get<double>());
+    }
     // The pick event is in the ring already; the state write adds its own.
     host.values->record_pick(panel, out, cb::CommandOrigin::ui, host.events);
 }

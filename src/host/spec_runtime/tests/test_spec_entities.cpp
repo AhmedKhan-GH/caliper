@@ -25,8 +25,20 @@
 #include "spec_test_data.h"
 
 #include <caliper_builder/session/events.h>
+#include <caliper_builder/session/history.h>
+#include <caliper_builder/session/values.h>
+#include <caliper_builder/programs/pieces.h>
 
+#include "draw/draw_runtime.h"
+#include "gfx/recording_backend.h"
+#include "../../../../tests/gfx/example_pieces.h"   // the attention arcs piece and its resources
+
+#include <array>
 #include <cmath>
+#include <cstring>
+#include <limits>
+#include <map>
+#include <memory>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -458,5 +470,247 @@ TEST_CASE("entities: view_camera angles open the panel at those angles with its 
     CHECK(x0 >= -1.0);
     CHECK(y1 <= 1.0);
     CHECK(y0 >= -1.0);
+    c->with_context([&] { rt.reset(); });
+}
+
+// ---- Programs of pieces in a scene panel (design/programmable-graphics.md, Picking and Text) --------
+
+namespace {
+
+namespace ex = caliper_test_pieces;
+namespace cp = caliper_builder::programs;
+
+// The attention arcs piece with its hash, as the spec holds it inline.
+spec::Piece hashed_arcs() {
+    spec::Piece p = ex::attention_arcs();
+    p.hash = cp::piece_hash(p);
+    return p;
+}
+
+template <typename T>
+caliper_draw::ResourceVersion version_of(const char* id, const std::vector<T>& v, std::int64_t step) {
+    caliper_draw::ResourceVersion r;
+    r.resource = id;
+    r.step = step;
+    r.count = std::uint32_t(v.size());
+    r.bytes = reinterpret_cast<const std::uint8_t*>(v.data());
+    r.size = v.size() * sizeof(T);
+    return r;
+}
+
+template <typename T>
+void keep_version(caliper_builder::StepHistory& h, const char* resource, const std::vector<T>& v, std::int64_t step) {
+    caliper_builder::ResourceVersion r;
+    r.step = step;
+    r.count = std::uint32_t(v.size());
+    r.stride = std::uint32_t(sizeof(T));
+    const auto* b = reinterpret_cast<const std::uint8_t*>(v.data());
+    r.bytes = std::make_shared<const std::vector<std::uint8_t>>(b, b + v.size() * sizeof(T));
+    h.append_resource("tower_arcs", resource, 4, {}, std::move(r));
+}
+
+// One frame of a runtime on the recording backend, which updates the versions it shows.
+struct RecordingHost {
+    caliper_gfx::RecordingBackend gfx;
+    caliper_draw::HostTarget target;
+    RecordingHost() {
+        caliper_gfx::TextureDesc c;
+        c.width = 64;
+        c.height = 48;
+        c.format = caliper_gfx::Format::RGBA8Unorm;
+        c.usage = caliper_gfx::kRenderTarget | caliper_gfx::kSampled;
+        target.color = gfx.create_texture(c);
+        c.format = caliper_gfx::Format::RG32Uint;
+        c.usage = caliper_gfx::kRenderTarget;
+        target.id = gfx.create_texture(c);
+        c.format = caliper_gfx::Format::Depth32Float;
+        target.depth = gfx.create_texture(c);
+        target.width = 64;
+        target.height = 48;
+    }
+    void frame(caliper_draw::DrawRuntime& rt) {
+        std::vector<caliper_gfx::Frame> frames;
+        if (rt.encode(&frames, {}, target))
+            for (caliper_gfx::Frame& f : frames) gfx.submit(std::move(f));
+    }
+};
+
+}  // namespace
+
+TEST_CASE("programs: the item map gives an item's fields and index, and refuses an item past the count or the bytes") {
+    RecordingHost h;
+    caliper_draw::DrawRuntime rt(h.gfx, true);
+    caliper_draw::Instance inst;
+    inst.program = "tower_arcs";
+    inst.panel = "world";
+    const caliper_draw::Verdict v = rt.install(hashed_arcs(), inst, 1u << 24);
+    REQUIRE_MESSAGE(v.ok(), std::string(v.code + ": " + v.message));
+    const ex::ArcResources res = ex::arc_resources();
+    REQUIRE(res.arcs.size() > 2);
+    REQUIRE(rt.set_resource(version_of("heads", res.heads, 0)).ok());
+    REQUIRE(rt.set_resource(version_of("arcs", res.arcs, 0)).ok());
+    REQUIRE(rt.set_resource(version_of("labels", res.labels, 0)).ok());
+    CHECK_FALSE(rt.pick(0));   // no frame showed a version yet
+    h.frame(rt);
+    const std::optional<caliper_draw::PickedItem> p = rt.pick(1);
+    REQUIRE(p);
+    CHECK(p->program == "tower_arcs");
+    CHECK(p->item == 1);
+    CHECK(p->step == 0);
+    std::map<std::string, double> f(p->fields.begin(), p->fields.end());
+    const ex::Arc& a = res.arcs[1];
+    CHECK(f.at("layer") == a.layer);
+    CHECK(f.at("head") == a.head);
+    CHECK(f.at("from_token") == a.from_token);
+    CHECK(f.at("to_token") == a.to_token);
+    CHECK(f.at("weight") == doctest::Approx(a.weight));
+    CHECK(f.at("score") == doctest::Approx(a.score));
+    // The first four integer fields of the map, in its order: layer, head and the token pair.
+    CHECK(p->index == std::array<std::int32_t, 4>{std::int32_t(a.layer), std::int32_t(a.head),
+                                                  std::int32_t(a.from_token), std::int32_t(a.to_token)});
+    // An item that a fragment wrote past the valid count, or past what the copy holds.
+    CHECK_FALSE(rt.pick(std::uint32_t(res.arcs.size())));
+    CHECK_FALSE(rt.pick(0xffffffffu));
+    std::vector<ex::Arc> fewer(res.arcs.begin(), res.arcs.begin() + 2);
+    caliper_draw::ResourceVersion shortv = version_of("arcs", fewer, 1);
+    shortv.count = 3;   // one element more than its bytes hold
+    if (rt.set_resource(shortv).ok()) {
+        h.frame(rt);
+        CHECK(rt.pick(1));
+        CHECK_FALSE(rt.pick(2));
+    }
+}
+
+TEST_CASE("programs: the text table gives a label at each valid anchor and refuses a string past the table and an anchor that is not finite") {
+    RecordingHost h;
+    caliper_draw::DrawRuntime rt(h.gfx, true);
+    caliper_draw::Instance inst;
+    inst.program = "tower_arcs";
+    inst.panel = "world";
+    const spec::Piece piece = hashed_arcs();
+    REQUIRE(rt.install(piece, inst, 1u << 24).ok());
+    const ex::ArcResources res = ex::arc_resources();
+    REQUIRE(rt.set_resource(version_of("heads", res.heads, 0)).ok());
+    REQUIRE(rt.set_resource(version_of("arcs", res.arcs, 0)).ok());
+    REQUIRE(rt.set_resource(version_of("labels", res.labels, 0)).ok());
+    h.frame(rt);
+    const std::vector<caliper_draw::Label> all = rt.labels();
+    REQUIRE(all.size() == res.labels.size());
+    CHECK(all[3].text == piece.draw->text->strings[res.labels[3].string]);
+    CHECK(all[3].position[0] == res.labels[3].position[0]);
+    std::vector<ex::Label> bad = res.labels;
+    bad[0].string = 999;                                   // past the table's strings
+    bad[1].position[1] = std::numeric_limits<float>::quiet_NaN();
+    bad[2].position[2] = std::numeric_limits<float>::infinity();
+    REQUIRE(rt.set_resource(version_of("labels", bad, 1)).ok());
+    h.frame(rt);
+    const std::vector<caliper_draw::Label> kept = rt.labels();
+    CHECK(kept.size() == res.labels.size() - 3);
+    for (const caliper_draw::Label& l : kept) CHECK(l.text != "");
+}
+
+TEST_CASE("programs: a piece in a scene panel is picked at its pixel, gives its item map's fields, writes a select state and places its labels") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) return;
+    Source source;
+    Events events;
+    std::string text = kSpec;
+    const std::string opts = "options = { up = \"+z\" }";
+    text.replace(text.find(opts), opts.size(),
+                 "options = { up = \"+z\", select = { state = \"picked_head\", field = \"head\" } }");
+    text += "[[state]]\nid = \"picked_head\"\ntype = \"integer\"\nmin = 0\nmax = 63\n";
+    spec::Spec s = parse(text.c_str());
+    const spec::Piece piece = hashed_arcs();
+    s.pieces.push_back(piece);
+    spec::Program prog;
+    prog.id = "tower_arcs";
+    spec::PieceRef pin;
+    pin.name = piece.name;
+    pin.version = piece.version;
+    pin.hash = piece.hash;
+    pin.from = spec::PieceFrom::inline_piece;
+    prog.piece = pin;
+    prog.panel = "world";
+    prog.bind = {{"attn0", "live:blocks.0.attn.weights"}, {"attn1", "live:blocks.1.attn.weights"}};
+    s.programs.push_back(prog);
+    caliper_builder::StepHistory history;
+    history.configure(s);   // the pins of the spec's programs, whose resources it keeps
+    caliper_builder::ValueStore values;
+    values.reset(s);
+    const ex::ArcResources res = ex::arc_resources();
+    keep_version(history, "heads", res.heads, 0);
+    keep_version(history, "arcs", res.arcs, 0);
+    keep_version(history, "labels", res.labels, 0);
+    std::unique_ptr<SpecRuntime> rt;
+    c->with_context([&] { rt = std::make_unique<SpecRuntime>(c->textures()); });
+    rt->set_scene_layer(canvas_layer(c));
+    rt->set_source(&source);
+    rt->set_instruments(&events, nullptr);
+    rt->set_instrument_state(&values, &history);
+    rt->set_spec(s);
+    const int W = 1200, H = 520;
+    Image img;
+    caliper_live_views::SceneView* view = nullptr;
+    for (int k = 0; k < 8; ++k) {
+        img = render(W, H, [&](const ImRect& area) { rt->draw(area, c->look()); }, 2);
+        view = rt->entity_view("world");
+        if (view && !view->draw_runtimes().empty() && !view->draw_runtimes()[0]->labels().empty()) break;
+    }
+    dump(img, "programs-arcs-labels.png");
+    REQUIRE(view != nullptr);
+    REQUIRE(view->draw_runtimes().size() == 1);
+    const caliper_draw::DrawRuntime* arcs = view->draw_runtimes()[0];
+    CAPTURE(arcs->status().error.code);
+    CAPTURE(arcs->status().error.message);
+    REQUIRE(arcs->status().state == caliper_draw::DrawState::running);
+    CHECK(arcs->labels().size() == res.labels.size());
+
+    // A texel of the ID target that holds the program's pick id: its pixel picks an arc.
+    caliper_gfx::Backend& gfx = view->backend();
+    const caliper_gfx::Readback rb = gfx.read_texture(view->id_target(), 0, 0, view->width(), view->height());
+    REQUIRE(rb);
+    std::vector<std::uint8_t> ids;
+    for (int k = 0; k < 200 && !gfx.take_readback(rb, &ids); ++k) gfx.wait(gfx.last_use(view->id_target()));
+    REQUIRE(ids.size() == std::size_t(view->width()) * view->height() * 8);
+    int px = -1, py = -1;
+    for (std::uint32_t y = 0; y < view->height() && px < 0; y += 3)
+        for (std::uint32_t x = 0; x < view->width() && px < 0; x += 3) {
+            std::uint32_t texel[2];
+            std::memcpy(texel, ids.data() + (std::size_t(y) * view->width() + x) * 8, 8);
+            if (texel[0] == arcs->pick_id()) px = int(x), py = int(y);
+        }
+    REQUIRE(px >= 0);
+    events.got.clear();
+    REQUIRE(rt->pick_scene("world", (float(px) + 0.5f) / float(view->width()), (float(py) + 0.5f) / float(view->height())));
+    const auto pick_event = [&]() -> const caliper_builder::Event* {
+        for (const caliper_builder::Event& e : events.got)
+            if (e.kind == caliper_builder::EventKind::pick) return &e;
+        return nullptr;
+    };
+    for (int k = 0; k < 8 && !pick_event(); ++k)
+        render(W, H, [&](const ImRect& area) { rt->draw(area, c->look()); }, 1);
+    REQUIRE(pick_event() != nullptr);
+    const nlohmann::json& f = pick_event()->fields;
+    CAPTURE(f.dump());
+    CHECK(f["program"] == "tower_arcs");
+    const std::uint32_t item = f["item"].get<std::uint32_t>();
+    REQUIRE(item < res.arcs.size());
+    const ex::Arc& a = res.arcs[item];
+    CHECK(f["fields"]["layer"] == a.layer);
+    CHECK(f["fields"]["head"] == a.head);
+    CHECK(f["fields"]["from_token"] == a.from_token);
+    CHECK(f["fields"]["to_token"] == a.to_token);
+    CHECK(f["index"] == nlohmann::json::array({a.layer, a.head, a.from_token, a.to_token}));
+    // What selection.get returns for the panel, and the state that the panel's select wrote.
+    const std::optional<caliper_builder::PickFields> last = values.last_pick("world");
+    REQUIRE(last);
+    const nlohmann::json got = caliper_builder::pick_fields_json(*last);
+    CHECK(got["program"] == "tower_arcs");
+    CHECK(got["head"] == a.head);
+    CHECK(got["fields"]["to_token"] == a.to_token);
+    spec::Reference state;
+    state.kind = spec::Reference::Kind::state;
+    state.target = "picked_head";
+    CHECK(values.value(state) == a.head);
     c->with_context([&] { rt.reset(); });
 }
