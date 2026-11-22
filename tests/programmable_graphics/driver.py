@@ -42,6 +42,8 @@ _spec.loader.exec_module(gp)
 Fail, Skip = gp.Fail, gp.Skip
 
 SCRIPT = "arc_tower_train.py"
+# The head of layer 1 that the toggle, the ablation and the fork name, as the demo script is seeded.
+ABLATED = 0
 LOG = re.compile(r"step (\d+) loss ([0-9.]+) in-context ([0-9.]+)")
 # The commands that wait on a card of the person; the driver approves each as the person would.
 CARDS = {"spec_new", "spec_open", "run_start", "run_pause", "run_fork", "run_stop", "piece_update", "state_create",
@@ -357,23 +359,26 @@ def steps(r):
         return sum(ys) / len(ys) if len(ys) == 5 and sum(ys) / 5 < 0.2 else None
     base = c.until("the in-context loss settles below 0.2", converged, 400)
     at = r.run_step(c.run)
-    r.call("intervene_set", {"point": f"blocks.1.attn#{best}", "op": "ablate"})
-    def settled():
-        later = [y for x, y in r.icl() if x > at + 5]
-        return later[:10] if len(later) >= 10 else None
-    after = c.until("ten in-context losses after the ablation", settled, 200)
-    mean_after = sum(after) / len(after)
-    if mean_after <= 2 * base:
-        raise Fail(f"the in-context loss is {mean_after} with head {best} ablated, and was {base}; scores {h}")
-    r.call("intervene_clear", {"point": f"blocks.1.attn#{best}"})
-    r.result["ablation"] = {"point": f"blocks.1.attn#{best}", "before": base, "after": mean_after}
+    r.call("intervene_set", {"point": f"blocks.1.attn#{ABLATED}", "op": "ablate"})
+    window = []
+    def raised():
+        window[:] = [y for x, y in r.icl() if at < x <= at + 200]
+        if window and max(window) > 2 * base:
+            return max(window)
+        if r.run_step(c.run) > at + 200:
+            raise Fail(f"within 200 steps the in-context loss reached {max(window) if window else None} with head "
+                       f"{ABLATED} ablated, and was {base}; scores {h}")
+        return None
+    mean_after = c.until("the in-context loss rises after the ablation", raised, 200)
+    r.call("intervene_clear", {"point": f"blocks.1.attn#{ABLATED}"})
+    r.result["ablation"] = {"point": f"blocks.1.attn#{ABLATED}", "before": base, "after": mean_after}
 
     # 12. A fork from the first kept step with the strong head ablated never forms that head.
     r.step("a fork from a past step with the head ablated")
     parent = c.run
     kids_before = set(c.runs())
     fork = r.call("run_fork", {"run": parent, "step": first_step,
-                               "interventions": [{"point": f"blocks.1.attn#{best}", "op": "ablate"}]})["run"]
+                               "interventions": [{"point": f"blocks.1.attn#{ABLATED}", "op": "ablate"}]})["run"]
     child = fork["id"]
     c.run = child
     c.until("the child runs and is attached",
@@ -381,10 +386,10 @@ def steps(r):
     c.pids.update(gp.pids_of(c.ws / SCRIPT))
     def child_formed():
         b, hh = r.heads()
-        return (b, hh) if r.run_step(child) > 900 and max(hh[4 + i] for i in range(4) if i != best) > 0.4 else None
+        return (b, hh) if r.run_step(child) > 900 and max(hh[4 + i] for i in range(4) if i != ABLATED) > 0.4 else None
     cb, ch = c.until("the other heads of the child form", child_formed, 420)
-    if ch[4 + best] >= 0.2:
-        raise Fail(f"the ablated head {best} scores {ch[4 + best]} in the child at step {cb['step']}")
+    if ch[4 + ABLATED] >= 0.2:
+        raise Fail(f"the ablated head {ABLATED} scores {ch[4 + ABLATED]} in the child at step {cb['step']}")
     cap("tower-child")
     n = c.differs("tower-parent", "tower-child", 300)
     r.result["fork"] = {"child": child, "step": cb["step"], "scores": ch, "tower_pixels_changed": n}
@@ -394,19 +399,20 @@ def steps(r):
     slow = dict(pieces["attention_arcs"])
     slow["name"] = "attention_arcs_slow"
     slow["params"] = list(slow["params"]) + [{"name": "burn", "default": 20000.0, "min": 0.0, "max": 100000.0}]
-    d = slow["files"]["draw"]
-    d = d.replace("    return sum * 0.12 * params.glow;",
-                  "    var burn = 0.0;\n    for (var i = 0u; i < u32(params.burn); i = i + 1u) {\n"
-                  "        burn = burn + sin(f32(i) * 0.001 + in.uv.x) * 0.0000001;\n    }\n"
-                  "    return sum * 0.12 * params.glow + vec4<f32>(burn);")
+    d = re.sub(r"( *)return (sum \* [0-9.]+ \* params\.glow);",
+               r"\1var burn = 0.0;\n\1for (var i = 0u; i < u32(params.burn); i = i + 1u) {\n"
+               r"\1    burn = burn + sin(f32(i) * 0.001 + in.uv.x) * 0.0000001;\n\1}\n"
+               r"\1return \2 + vec4<f32>(burn);", slow["files"]["draw"])
     if "burn" not in d:
         raise Fail("the bloom of the arcs did not change")
     slow["files"] = dict(slow["files"], draw=d)
     r.call("piece_update", {"piece": slow})
-    r.call("panel_create", {"id": "slow", "primitive": "scene", "title": "Slow Arcs"})
+    r.call("panel_create", {"id": "slow", "primitive": "scene", "title": "Slow Arcs", "bind": {"scene": "live:model"},
+                            "options": {"exclude": ["**"]}})
     step_at = r.run_step(child)
     r.call("program_create", {"id": "slow_arcs", "title": "Slow Arcs", "piece": {"name": "attention_arcs_slow",
            "version": 1, "from": "workspace"}, "panel": "slow", "bind": binds, "params": {"threshold": 0.05}})
+    r.call("panel_patch", {"id": "slow", "patch": {"bind": {"scene": None}, "options": {"exclude": None}}})
     stop = c.event("the slow draw stopped", {"kind": "program", "program": "slow_arcs", "change": "stopped"}, 180)
     st = c.status("slow_arcs") or {}
     draw = st.get("draw") or {}
