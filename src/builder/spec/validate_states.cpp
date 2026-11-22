@@ -30,9 +30,20 @@ char pick_field_type(const std::string& field) {
     return it == types.end() ? 0 : it->second;
 }
 
-// Whether a pick field of type `field` may write a state variable of `type`.
+// Whether a program that is an instance of a piece draws in the scene panel
+// `panel`: a pick there may also give the fields of that piece's item map
+// (design/programmable-graphics.md, Picking), which the spec does not list.
+bool panel_draws_pieces(const Spec& spec, const std::string& panel) {
+    for (const auto& prog : spec.programs)
+        if (is_piece_instance(prog) && prog.panel && *prog.panel == panel) return true;
+    return false;
+}
+
+// Whether a pick field of type `field` may write a state variable of `type`;
+// 'p' is a field of a program's item map, a number of any kind.
 bool pick_writes(char field, StateType type) {
     switch (field) {
+        case 'p':
         case 'i': return type == StateType::integer || type == StateType::number;
         case 'n': return type == StateType::number;
         case 't': return type == StateType::text;
@@ -171,11 +182,13 @@ void check_select(const AdditionsCheck& c, std::size_t i) {
     } else if (!s) {
         c.sink.error("spec.unknown_state", quote(w.state) + " is not a state variable of this spec.", path + ".state");
     }
-    const char type = pick_field_type(w.field);
+    char type = pick_field_type(w.field);
+    if (!type && panel_draws_pieces(c.spec, p.id)) type = 'p';   // a field of an item map
     if (!type) {
         c.sink.error("spec.unknown_field",
                      quote(w.field) + " is not a pick field; the fields are entity, index, row_id, row, column, x, y, "
-                                      "z, value and step.",
+                                      "z, value and step, and the item map's fields of a program that draws in the "
+                                      "panel.",
                      path + ".field");
     } else if (s && !pick_writes(type, s->type)) {
         c.sink.error("spec.reference_type",
