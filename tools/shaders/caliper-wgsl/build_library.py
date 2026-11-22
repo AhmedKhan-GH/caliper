@@ -25,6 +25,7 @@ import hashlib
 import os
 import pathlib
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -32,7 +33,12 @@ import tarfile
 
 CRATE = pathlib.Path(__file__).resolve().parent
 REPO = CRATE.parents[2]
-VERSION = "0.1.0"  # Cargo.toml's version; the release tag is caliper-wgsl-<VERSION>.
+
+
+def crate_version():
+    """The package version of Cargo.toml; the release tag is caliper-wgsl-<version>."""
+    text = (CRATE / "Cargo.toml").read_text()
+    return re.search(r'^version = "([^"]+)"', text, re.M).group(1)
 
 
 def platform_name():
@@ -98,7 +104,7 @@ def main(argv=None):
     print("library %s %d bytes sha256 %s" % (library, library.stat().st_size, sha256(library)))
 
     if args.archive:
-        archive = out / ("caliper_wgsl-%s-%s.tar.gz" % (VERSION, platform_name()))
+        archive = out / ("caliper_wgsl-%s-%s.tar.gz" % (crate_version(), platform_name()))
 
         def clean(info):
             info.uid = info.gid = 0
