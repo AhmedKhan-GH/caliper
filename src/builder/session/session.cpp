@@ -912,8 +912,16 @@ struct Session::Impl {
 
     CommandOutput spec_validate(const CommandContext& ctx) {
         std::vector<spec::Diagnostic> diagnostics;
+        // The programs of one panel share its camera: the draw host refuses the later program
+        // of a conflict when it runs, and the check here tells an agent before it applies.
+        auto cameras = [&](const spec::Spec& s) {
+            for (spec::Diagnostic& d : check_panel_cameras(PieceLibrary::builtin(), workspace, s))
+                diagnostics.push_back(std::move(d));
+        };
         if (ctx.invocation.args.contains("text")) {
-            diagnostics = check_spec_text(str_arg(ctx.invocation.args, "text"), resolver()).diagnostics;
+            SpecTextCheck checked = check_spec_text(str_arg(ctx.invocation.args, "text"), resolver());
+            diagnostics = std::move(checked.diagnostics);
+            cameras(checked.spec);   // an empty spec when the text does not parse
         } else {
             std::lock_guard<std::mutex> lock(doc_mutex);
             if (!doc) return no_open_spec();
@@ -924,6 +932,7 @@ struct Session::Impl {
                 s = &p->shadow;
             }
             diagnostics = spec::validate(*s, resolver()).diagnostics;
+            cameras(*s);
         }
         json errors = json::array();
         for (const auto& d : diagnostics)
