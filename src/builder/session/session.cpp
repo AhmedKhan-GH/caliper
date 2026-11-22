@@ -205,6 +205,20 @@ struct Session::Impl {
     std::pair<std::string, ApprovalNote> last_note;
     std::mutex close_mutex;
     bool closed = false;
+    // The approval feed of the event ring (design/instruments.md, Event
+    // Feeds), under asked_mutex: the parks the review hook saw, and the
+    // parked invocations not decided yet, oldest first out.
+    struct Asked {
+        std::string approval;
+        std::string key;   // invocation_key()
+        std::string command;
+        std::string args;  // as JSON text, as the journal records them
+        CommandOrigin origin = CommandOrigin::ui;
+        std::string target;
+    };
+    std::mutex asked_mutex;
+    std::uint64_t parks = 0;
+    std::deque<Asked> asked;
 
     // ---- shared helpers ------------------------------------------------
 
@@ -1499,6 +1513,78 @@ struct Session::Impl {
     CommandOutput run_cmd(const CommandContext& ctx) { return run_command(ctx, run_control.load()); }
     CommandOutput events_wait(const CommandContext& ctx) { return events_wait_command(ctx, *events); }
 
+    // ---- the approval feed
+    // The registry numbers its approvals ap-1, ap-2, ... in the order it
+    // parks invocations, and asks the review once for each park, right after
+    // it numbers it; the session sets the only review, so the review hook
+    // knows the id of the card it reviews. The check hook runs when the
+    // person approves. A denial and a withdrawal reach the session through
+    // the journal, which records them for the commands that mutate.
+
+    static std::string args_text(const json& args) { return args.dump(-1, ' ', false, json::error_handler_t::replace); }
+
+    void approval_event(const Asked& a, const char* state, CommandOrigin origin) {
+        Event e;
+        e.kind = EventKind::approval;
+        e.origin = command_origin_name(origin);
+        e.fields = {{"approval", a.approval}, {"command", a.command}, {"state", state}};
+        if (!a.target.empty()) e.fields["target"] = a.target;
+        events->push(std::move(e));
+    }
+
+    // The review hook: inside the registry's park(), on its thread.
+    void note_parked(const CommandInvocation& inv) {
+        Asked a;
+        a.key = invocation_key(inv);
+        a.command = inv.name;
+        a.args = args_text(inv.args);
+        a.origin = inv.origin;
+        if (inv.name == "run.set_param" || inv.name == "run.action") a.target = str_arg(inv.args, "name");
+        {
+            std::lock_guard<std::mutex> lock(asked_mutex);
+            a.approval = "ap-" + std::to_string(++parks);
+            asked.push_back(a);
+            while (asked.size() > 256) asked.pop_front();
+        }
+        approval_event(a, "pending", inv.origin);
+    }
+
+    // The check hook: the person approved the parked invocation.
+    void note_approved(const CommandInvocation& inv) {
+        const std::string key = invocation_key(inv);
+        std::optional<Asked> a;
+        {
+            std::lock_guard<std::mutex> lock(asked_mutex);
+            const auto it = std::find_if(asked.begin(), asked.end(), [&](const Asked& x) { return x.key == key; });
+            if (it == asked.end()) return;
+            a = std::move(*it);
+            asked.erase(it);
+        }
+        approval_event(*a, "approved", CommandOrigin::ui);
+    }
+
+    // The journal's line of a parked invocation that was denied or withdrawn:
+    // the oldest one asked of the same command and origin, with the same
+    // arguments when one has them (the journal redacts a long value).
+    void note_refused(const JournalEvent& e) {
+        if (e.event != "do" || e.ok || (e.error != "command.denied" && e.error != "command.approval_timeout")) return;
+        const std::string text = args_text(e.args);
+        std::optional<Asked> a;
+        {
+            std::lock_guard<std::mutex> lock(asked_mutex);
+            auto same = [&](const Asked& x) { return x.command == e.name && x.origin == e.origin; };
+            auto it = std::find_if(asked.begin(), asked.end(), [&](const Asked& x) { return same(x) && x.args == text; });
+            if (it == asked.end()) it = std::find_if(asked.begin(), asked.end(), same);
+            if (it == asked.end()) return;
+            a = std::move(*it);
+            asked.erase(it);
+        }
+        if (e.error == "command.denied")
+            approval_event(*a, "denied", CommandOrigin::ui);
+        else
+            approval_event(*a, "expired", a->origin);
+    }
+
     void bind_all() {
         auto bind = [this](const char* name, CommandOutput (Impl::*fn)(const CommandContext&)) {
             registry->bind(name, [this, fn](const CommandContext& ctx) {
@@ -1711,9 +1797,10 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
         }
         // Each journaled command also reaches the event ring, before the app's
         // own hook (design/instruments.md, Event Feeds).
-        im.options.journal.on_append = [ring = im.events, app = std::move(im.options.journal.on_append)](
+        im.options.journal.on_append = [ring = im.events, self = &im, app = std::move(im.options.journal.on_append)](
                                            const JournalEvent& e) {
             note_journal_event(*ring, e);
+            self->note_refused(e);
             if (app) app(e);
         };
         CommandJournal::Open j = CommandJournal::open((im.ws() / "journal" / "commands.jsonl").u8string(), im.options.journal);
@@ -1731,10 +1818,14 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
         Impl* raw = &im;
         im.registry->set_approval_policy(
             [raw](const CommandDescriptor& d, const CommandInvocation& inv) { return raw->policy(d, inv); });
-        im.registry->set_approval_review(
-            [raw](const CommandDescriptor&, const CommandInvocation& inv) { return raw->parked_review(inv); });
-        im.registry->set_approval_check(
-            [raw](const CommandDescriptor&, const CommandInvocation& inv) { return raw->approval_holds(inv); });
+        im.registry->set_approval_review([raw](const CommandDescriptor&, const CommandInvocation& inv) {
+            raw->note_parked(inv);
+            return raw->parked_review(inv);
+        });
+        im.registry->set_approval_check([raw](const CommandDescriptor&, const CommandInvocation& inv) {
+            raw->note_approved(inv);
+            return raw->approval_holds(inv);
+        });
         im.registry->set_approval_notes(
             [raw](const CommandDescriptor&, const CommandInvocation& inv) { return raw->note_of(inv); });
         if (!im.options.permissions_file.empty()) {
