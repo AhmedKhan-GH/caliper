@@ -999,10 +999,12 @@ Aabb program_box() {
     return b;
 }
 
+// Gives the feed the program's newest status at each report, not only at a
+// change of its state, so that program.status shows the frame time, the
+// memory and the step of the resources that the last frame drew; the host
+// makes an event only at a change of state.
 void report_state(caliper_draw::DrawFeed* feed, int* reported, const caliper_draw::DrawRuntime& rt) {
-    const int state = int(rt.status().state);
-    if (state == *reported) return;
-    *reported = state;
+    *reported = int(rt.status().state);
     if (feed) feed->status(rt);
 }
 
