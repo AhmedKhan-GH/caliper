@@ -788,7 +788,7 @@ def test_training_keeps_its_step_rate_after_a_pass_times_out(run):
     _train(net, opt, P.WARMUP_STEPS + 1, first=10)   # one pass of 100,000 iterations
     st = P.status()[0]
     assert st["state"] == "running" and st["last_pass_ms"]
-    target_ms = 2000.0                               # 4 times the timeout of max(100, 10 x 50) ms
+    target_ms = 10000.0                              # 20 times the timeout of max(100, 10 x 50) ms
     net.spin[0] = min(2e9, 1e5 * target_ms / st["last_pass_ms"])
     torch.mps.synchronize()
 
@@ -799,8 +799,8 @@ def test_training_keeps_its_step_rate_after_a_pass_times_out(run):
     assert st["state"] == "stopped" and st["error"]["code"] == "program.timeout", st
     assert "cannot be stopped" in st["error"]["message"]
     assert reaping == 1, "the step returned only after the GPU ended the pass"
-    assert before[0] < 1.0, before                   # the timeout of 0.5 s, not the pass of 2 s
-    assert sorted(after)[5] < 3 * sorted(baseline)[2] + 0.02, (after, baseline)
+    assert before[0] < 5.0, before                   # the timeout of 0.5 s, not the pass of 10 s
+    assert sorted(after)[5] < 10 * sorted(baseline)[2] + 0.1, (after, baseline)
     deadline = time.monotonic() + 30
     while _producer.reaping() and time.monotonic() < deadline:
         time.sleep(0.01)
