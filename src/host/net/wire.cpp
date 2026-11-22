@@ -1765,13 +1765,64 @@ TimeState time_state(const Frame& f) {
 
 constexpr const char* kOutputGeometry = "geometry";
 constexpr const char* kOutputPixels = "pixels";
+constexpr const char* kOutputTensor = "tensor";
+constexpr size_t kParamsMax = 16;          // names in a params object
+constexpr size_t kParamNameMax = 63;       // bytes of a params name
+constexpr size_t kBuiltinMax = 32;         // bytes of a declaration's "builtin"
+constexpr uint64_t kTensorElementsMax = 1000000;
 
+bool lower(char c) { return c >= 'a' && c <= 'z'; }
+bool digit(char c) { return c >= '0' && c <= '9'; }
+// The operator form "operator.<spec id>.<n>": a spec id (a lower-case letter, then lower-case letters, digits, _ or -),
+// a dot, and 1 to 5 decimal digits.
+bool operator_id_ok(const std::string& s) {
+    static const std::string kPrefix = "operator.";
+    if (s.size() <= kPrefix.size() || s.compare(0, kPrefix.size(), kPrefix) != 0) return false;
+    const size_t dot = s.rfind('.');
+    if (dot <= kPrefix.size()) return false;   // no spec id
+    const size_t n = s.size() - dot - 1;
+    if (n < 1 || n > 5) return false;
+    for (size_t i = dot + 1; i < s.size(); ++i)
+        if (!digit(s[i])) return false;
+    if (!lower(s[kPrefix.size()])) return false;
+    for (size_t i = kPrefix.size(); i < dot; ++i)
+        if (!(lower(s[i]) || digit(s[i]) || s[i] == '_' || s[i] == '-')) return false;
+    return true;
+}
 bool program_id_ok(const Json* v) {
     if (!v || !v->is_string()) return false;
     const std::string& s = v->as_string();
-    if (s.empty() || s.size() > CALIPER_NET_PROGRAM_ID_MAX || s[0] < 'a' || s[0] > 'z') return false;
+    if (s.empty() || s.size() > CALIPER_NET_PROGRAM_ID_MAX) return false;
+    if (s.compare(0, 9, "operator.") == 0) return operator_id_ok(s);
+    if (!lower(s[0])) return false;
     for (char c : s)
-        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) return false;
+        if (!(lower(c) || digit(c) || c == '_' || c == '-')) return false;
+    return true;
+}
+// A params name: a WGSL field name of 1 to 63 bytes, [A-Za-z_][A-Za-z0-9_]*, not starting with "__".
+bool param_name_ok(const std::string& s) {
+    if (s.empty() || s.size() > kParamNameMax) return false;
+    if (!(lower(s[0]) || (s[0] >= 'A' && s[0] <= 'Z') || s[0] == '_')) return false;
+    if (s.size() >= 2 && s[0] == '_' && s[1] == '_') return false;
+    for (char c : s)
+        if (!(lower(c) || (c >= 'A' && c <= 'Z') || digit(c) || c == '_')) return false;
+    return true;
+}
+// 1 to 16 names, each a valid name with a finite number.
+bool params_ok(const Json& v) {
+    if (!v.is_object() || v.size() < 1 || v.size() > kParamsMax) return false;
+    for (const auto& kv : v.members())
+        if (!param_name_ok(kv.first) || !is_finite(kv.second)) return false;
+    return true;
+}
+bool tensor_shape_ok(const Json& v) {
+    if (!v.is_array() || v.size() < 1 || v.size() > 4) return false;
+    uint64_t prod = 1;
+    for (const Json& e : v.items()) {
+        if (!int_in(e, 1, kTensorElementsMax)) return false;
+        prod *= e.as_double() > 0 ? (uint64_t)e.as_double() : 1;
+        if (prod > kTensorElementsMax) return false;
+    }
     return true;
 }
 bool sha256_hex_ok(const Json* v) {
@@ -1806,9 +1857,13 @@ bool input_entry(const Json& v) {
 void check_declaration(const Json& d) {
     const Json& out = req(d, "output", is_obj, "an object");
     const std::string kind = req(out, "kind", [](const Json& v) {
-        return one_of(v, {kOutputGeometry, kOutputPixels});
-    }, "geometry or pixels").as_string();
-    if (kind == kOutputGeometry) {
+        return one_of(v, {kOutputGeometry, kOutputPixels, kOutputTensor});
+    }, "geometry, pixels or tensor").as_string();
+    if (kind == kOutputTensor) {
+        req(out, "shape", tensor_shape_ok, "1 to 4 integers of at least 1 with at most 1000000 elements");
+        for (const auto& kv : out.members())
+            if (kv.first != "kind" && kv.first != "shape") bad("a tensor output has only 'kind' and 'shape'");
+    } else if (kind == kOutputGeometry) {
         req(out, "part", [](const Json& v) { return one_of(v, {CALIPER_NET_PART_POINTS, CALIPER_NET_PART_LINES}); },
             "points or lines");
         req(out, "max_count", [](const Json& v) { return int_in(v, 1, CALIPER_NET_PROGRAM_MAX_COUNT); },
@@ -1845,17 +1900,26 @@ void check_declaration(const Json& d) {
         return true;
     }, "three integers from 1 to 65535");
     opt(d, "entry", is_name, "an entry point name");
+    opt(d, "params", params_ok, "1 to 16 names of finite numbers");
+    opt(d, "builtin", [](const Json& v) { return bounded_text(&v, kBuiltinMax); }, "a string of 1 to 32 bytes");
 }
 
 Program program(const Frame& f) {
     const Json& m = f.meta;
     Program p;
     p.request_id = u32(req(m, "request_id", is_u32, "a uint32"));
-    p.op = req(m, "op", [](const Json& v) { return one_of(v, {CALIPER_NET_PROGRAM_SET, CALIPER_NET_PROGRAM_REMOVE}); },
-               "set or remove").as_string();
+    p.op = req(m, "op", [](const Json& v) {
+                   return one_of(v, {CALIPER_NET_PROGRAM_SET, CALIPER_NET_PROGRAM_REMOVE, CALIPER_NET_PROGRAM_PARAMS});
+               }, "set, remove or params").as_string();
     p.id = req(m, "id", [](const Json& v) { return program_id_ok(&v); },
                "a program id of at most 55 bytes").as_string();
     if (p.op == CALIPER_NET_PROGRAM_REMOVE) return p;
+    if (p.op == CALIPER_NET_PROGRAM_PARAMS) {
+        if (m.find("declaration")) bad("a params op carries no 'declaration'");
+        if (!f.sections.empty()) bad("a params op carries no section");
+        p.params = req(m, "params", params_ok, "1 to 16 names (WGSL field names) of finite numbers");
+        return p;
+    }
     const Json& d = req(m, "declaration", is_obj, "an object");
     check_declaration(d);
     const bool geometry = d.find("output")->find("kind")->as_string() == kOutputGeometry;
@@ -1885,7 +1949,8 @@ bool status_item(const Json& v) {
     if (!v.is_object() || !program_id_ok(v.find("id"))) return false;
     const Json* kind = v.find("kind");
     const Json* state = v.find("state");
-    if (!(kind && one_of(*kind, {kOutputGeometry, kOutputPixels}))) return false;
+    // A status item's kind: the output's kind, or "operator" for the program of a built-in operator.
+    if (!(kind && one_of(*kind, {kOutputGeometry, kOutputPixels, kOutputTensor, "operator"}))) return false;
     if (!(state && one_of(*state, {"waiting", "review", "compiled", "running", "refused", "stopped"}))) return false;
     auto every = [](const Json& x) { return int_in(x, 1, CALIPER_NET_PROGRAM_EVERY_MAX); };
     if (!opt_ok(v, "every", every) || !opt_ok(v, "every_min", every) || !opt_ok(v, "last_pass_ms", is_nonneg) ||
@@ -1923,6 +1988,7 @@ void program_to_meta(const Program& p, Json& m, std::vector<Section>& sections) 
     m.set("op", p.op);
     m.set("id", p.id);
     if (!p.declaration.is_null()) m.set("declaration", p.declaration);
+    if (!p.params.is_null()) m.set("params", p.params);
     if (p.scene) m.set("scene", *p.scene);
     if (p.sha256) m.set("sha256", *p.sha256);
     if (p.wgsl)

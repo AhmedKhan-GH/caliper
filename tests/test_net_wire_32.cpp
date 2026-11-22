@@ -220,6 +220,146 @@ TEST_CASE("net/wire 3.2 programs") {
     }
 }
 
+// Encodes `p` and decodes it again, the way a peer would receive it.
+DecodeResult program_round_trip(const Program& p, Message* out) {
+    static std::vector<std::vector<uint8_t>> keep;   // a decoded Section points into its buffer
+    keep.emplace_back();
+    std::string err;
+    REQUIRE_MESSAGE(encode(Message(p), &keep.back(), &err, CALIPER_NET_MINOR_3_2), err);
+    return decode_bytes(keep.back(), out);
+}
+
+Json parse_json(const char* text) {
+    Json j;
+    std::string err;
+    REQUIRE_MESSAGE(Json::parse(text, std::strlen(text), &j, &err, 64), err);
+    return j;
+}
+
+Program params_program(const char* params_text) {
+    Program p;
+    p.request_id = 5;
+    p.op = CALIPER_NET_PROGRAM_PARAMS;
+    p.id = "rows";
+    if (params_text) p.params = parse_json(params_text);
+    return p;
+}
+
+// A valid pixels set from the golden frame, with its declaration replaced by `decl_text` when given.
+Program set_program(const char* decl_text, const char* id = nullptr) {
+    static std::vector<uint8_t> keep;
+    keep = read_bytes(v32_dir() / "program_set_pixels.bin");
+    Message m;
+    const DecodeResult r = decode_bytes(keep, &m);
+    REQUIRE(r.ok());
+    Program p = std::get<Program>(m);
+    if (decl_text) p.declaration = parse_json(decl_text);
+    if (id) p.id = id;
+    return p;
+}
+
+TEST_CASE("net/wire 3.2 program op params") {
+    {   // A round trip keeps the values.
+        Message m;
+        const DecodeResult r = program_round_trip(params_program(R"({"gain": 2.5, "_k1": -1, "A_b": 0})"), &m);
+        REQUIRE_MESSAGE(r.ok(), r.error_code << ": " << r.message);
+        const Program& p = std::get<Program>(m);
+        CHECK(p.op == CALIPER_NET_PROGRAM_PARAMS);
+        CHECK(p.request_id == 5);
+        CHECK(p.id == "rows");
+        CHECK(p.declaration.is_null());
+        CHECK(!p.wgsl.has_value());
+        CHECK(p.params.size() == 3);
+        CHECK(p.params.find("gain")->as_double() == 2.5);
+        CHECK(p.params.find("_k1")->as_double() == -1);
+    }
+    Message m;
+    CHECK(!program_round_trip(params_program(nullptr), &m).ok());   // no params
+    CHECK(!program_round_trip(params_program("{}"), &m).ok());      // no name
+    {
+        std::string seventeen = "{";
+        for (int i = 0; i < 17; ++i) seventeen += std::string(i ? "," : "") + "\"p" + std::to_string(i) + "\": 1";
+        seventeen += "}";
+        CHECK(!program_round_trip(params_program(seventeen.c_str()), &m).ok());
+        std::string sixteen = "{";
+        for (int i = 0; i < 16; ++i) sixteen += std::string(i ? "," : "") + "\"p" + std::to_string(i) + "\": 1";
+        sixteen += "}";
+        CHECK(program_round_trip(params_program(sixteen.c_str()), &m).ok());
+    }
+    CHECK(!program_round_trip(params_program(R"({"1a": 1})"), &m).ok());      // bad name
+    CHECK(!program_round_trip(params_program(R"({"a-b": 1})"), &m).ok());
+    CHECK(!program_round_trip(params_program(R"({"__x": 1})"), &m).ok());
+    CHECK(!program_round_trip(params_program(R"({"a": "1"})"), &m).ok());     // not a number
+    {
+        Program p = params_program(R"({"a": 1})");
+        p.params.set("a", std::nan(""));
+        CHECK(!program_round_trip(p, &m).ok());   // not finite
+        p.params.set("a", INFINITY);
+        CHECK(!program_round_trip(p, &m).ok());
+    }
+    {
+        Program p = params_program(R"({"a": 1})");
+        p.declaration = parse_json(R"({"output": {"kind": "pixels", "width": 4, "height": 4}})");
+        CHECK(!program_round_trip(p, &m).ok());   // a declaration
+        p = params_program(R"({"a": 1})");
+        const std::string w = "fn main() {}";
+        p.wgsl = w;
+        CHECK(!program_round_trip(p, &m).ok());   // a section
+    }
+}
+
+TEST_CASE("net/wire 3.2 program declaration keys and ids") {
+    Message m;
+    CHECK(program_round_trip(set_program(nullptr), &m).ok());
+    CHECK(program_round_trip(set_program(R"({"output": {"kind": "tensor", "shape": [4, 8]},
+        "params": {"gain": 1.5}, "builtin": "surface@1"})"), &m).ok());
+    CHECK(program_round_trip(set_program(R"({"output": {"kind": "tensor", "shape": [1000000]}})"), &m).ok());
+    CHECK(program_round_trip(set_program(R"({"output": {"kind": "tensor", "shape": [100, 100, 10, 1]}})"), &m).ok());
+    CHECK(!program_round_trip(set_program(R"({"output": {"kind": "tensor", "shape": [1, 1, 1, 1, 1]}})"), &m).ok());
+    CHECK(!program_round_trip(set_program(R"({"output": {"kind": "tensor", "shape": [1000001]}})"), &m).ok());
+    CHECK(!program_round_trip(set_program(R"({"output": {"kind": "tensor", "shape": [1001, 1000]}})"), &m).ok());
+    CHECK(!program_round_trip(set_program(R"({"output": {"kind": "tensor", "shape": []}})"), &m).ok());
+    CHECK(!program_round_trip(set_program(R"({"output": {"kind": "tensor", "shape": [0, 4]}})"), &m).ok());
+    CHECK(!program_round_trip(set_program(R"({"output": {"kind": "tensor"}})"), &m).ok());
+    CHECK(!program_round_trip(set_program(R"({"output": {"kind": "tensor", "shape": [4], "width": 4}})"), &m).ok());
+    CHECK(!program_round_trip(set_program(R"({"output": {"kind": "pixels", "width": 4, "height": 4},
+        "params": {"__a": 1}})"), &m).ok());
+    CHECK(!program_round_trip(set_program(R"({"output": {"kind": "pixels", "width": 4, "height": 4},
+        "builtin": ""})"), &m).ok());
+    CHECK(!program_round_trip(set_program(R"({"output": {"kind": "pixels", "width": 4, "height": 4},
+        "builtin": "0123456789012345678901234567890123"})"), &m).ok());
+
+    CHECK(program_round_trip(set_program(nullptr, "operator.terrain.0"), &m).ok());
+    CHECK(program_round_trip(set_program(nullptr, "operator.a-b_1.12345"), &m).ok());
+    CHECK(!program_round_trip(set_program(nullptr, "operator.Terrain.0"), &m).ok());
+    CHECK(!program_round_trip(set_program(nullptr, "operator.terrain."), &m).ok());
+    CHECK(!program_round_trip(set_program(nullptr, "operator..0"), &m).ok());
+    CHECK(!program_round_trip(set_program(nullptr, "operator.terrain.123456"), &m).ok());
+    CHECK(!program_round_trip(set_program(nullptr, "operator.1x.0"), &m).ok());
+    CHECK(!program_round_trip(set_program(nullptr, "operator.terrain.x"), &m).ok());
+    CHECK(!program_round_trip(set_program(nullptr, ("operator." + std::string(50, 'a') + ".0").c_str()), &m).ok());
+    CHECK(program_round_trip(set_program(nullptr, "operatorx"), &m).ok());   // an ordinary id
+    CHECK(!program_round_trip(set_program(nullptr, "Rows"), &m).ok());
+}
+
+TEST_CASE("net/wire 3.2 program status items of a tensor and of an operator") {
+    for (const char* kind : {"tensor", "operator", "mesh"}) {
+        ProgramState st;
+        st.programs = parse_json((std::string(R"([{"id": "operator.terrain.0", "kind": ")") + kind +
+                                  R"(", "state": "running", "runs": 3}])").c_str());
+        std::vector<uint8_t> bytes;
+        std::string err;
+        INFO(kind);
+        const bool valid = std::string(kind) != "mesh";
+        if (!encode(Message(st), &bytes, &err, CALIPER_NET_MINOR_3_2)) {   // the encoder may refuse it first
+            CHECK_FALSE(valid);
+            continue;
+        }
+        Message m;
+        CHECK(decode_bytes(bytes, &m).ok() == valid);
+    }
+}
+
 TEST_CASE("net/wire 3.2: decoded scene messages carry the golden values") {
     {
         const std::vector<uint8_t> bin = read_bytes(v32_dir() / "scene_update_mesh.bin");

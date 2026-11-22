@@ -518,6 +518,20 @@ static inline uint32_t caliper_net_align(uint32_t n) {
  * op, from_step, until_step}}, {clear: point} or {clear_all: true}). A
  * producer announces both only under caliper.watch(model, optimizer), beside
  * "controls". A hub forwards PROGRAM, as CONTROL, only when it allows control.
+ * A PROGRAM with op "params" carries the keys request_id, op, id and "params"
+ * (a JSON object of 1 to 16 names, each a WGSL field name of 1 to 63 bytes,
+ * [A-Za-z_][A-Za-z0-9_]*, not starting with "__", each value a finite
+ * number), no "declaration" and no section. The producer applies the values
+ * at the next pass of that program and answers with PROGRAM_STATE carrying
+ * the request_id. A "set" declaration may also hold "params" of the same form,
+ * an output {"kind": "tensor", "shape": [..]} (1 to 4 integers, each at least
+ * 1, product at most 1,000,000; no other output keys for that kind) and
+ * "builtin" (a string of 1 to 32 bytes such as "surface@1", for a program the
+ * app makes for an operator). A program id is either 1 to 55 bytes of
+ * [a-z0-9_-] starting with a letter, or the operator form
+ * "operator.<id>.<n>": the prefix "operator.", a spec id (a lower-case letter
+ * then lower-case letters, digits, _ or -), a dot and 1 to 5 decimal digits,
+ * the whole at most 55 bytes.
  * docs/reference/wire-protocol-3-2.md states the keys and checks. */
 #define CALIPER_NET_CAP_PROGRAMS         "programs"      /* PROGRAM and PROGRAM_STATE        */
 #define CALIPER_NET_CAP_INTERVENTIONS    "interventions" /* CONTROLS "interventions", CONTROL op "intervene" */
@@ -525,11 +539,12 @@ static inline uint32_t caliper_net_align(uint32_t n) {
 #define CALIPER_NET_MSG_PROGRAM_STATE    0x0081u      /* P -> V/H, H -> V   the status items of the programs */
 #define CALIPER_NET_PROGRAM_SET          "set"        /* PROGRAM "op": install or replace   */
 #define CALIPER_NET_PROGRAM_REMOVE       "remove"     /* PROGRAM "op"                       */
+#define CALIPER_NET_PROGRAM_PARAMS       "params"     /* PROGRAM "op": new parameter values, no source */
 #define CALIPER_NET_SECTION_WGSL         "wgsl"       /* u8 (B,): the WGSL source as UTF-8  */
 #define CALIPER_NET_OP_INTERVENE         "intervene"  /* CONTROL "op", key "intervene"      */
 #define CALIPER_NET_INTERVENE_ABLATE     "ablate"     /* the only op; scale, steer, patch reserved */
 #define CALIPER_NET_MAX_PROGRAMS         16u          /* programs of a producer; items of PROGRAM_STATE */
-#define CALIPER_NET_PROGRAM_ID_MAX       55u          /* bytes of [a-z0-9_-]: "program.<id>" fits NAME_MAX */
+#define CALIPER_NET_PROGRAM_ID_MAX       55u          /* bytes of an id, [a-z0-9_-] from a letter, or operator.<id>.<n>: "program.<id>" fits NAME_MAX */
 #define CALIPER_NET_PROGRAM_SOURCE_MAX   65536u       /* bytes of the section "wgsl"        */
 #define CALIPER_NET_PROGRAM_STATE_RATE_HZ 2u          /* unrequested PROGRAM_STATE a second, at most */
 #define CALIPER_NET_POINT_MAX            255u         /* bytes of an intervention point     */

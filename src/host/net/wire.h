@@ -460,9 +460,10 @@ struct TimeState {                   // server to viewer
 struct Program {                     // viewer to producer: install or replace (op set) or remove (op remove) one program
     static constexpr uint16_t kType = CALIPER_NET_MSG_PROGRAM;
     uint32_t request_id = 0;
-    std::string op;                  // CALIPER_NET_PROGRAM_SET or _REMOVE
-    std::string id;                  // 1 to CALIPER_NET_PROGRAM_ID_MAX bytes of [a-z0-9_-], first a letter
+    std::string op;                  // CALIPER_NET_PROGRAM_SET, _REMOVE or _PARAMS
+    std::string id;                  // 1 to CALIPER_NET_PROGRAM_ID_MAX bytes of [a-z0-9_-], first a letter, or operator.<id>.<n>
     Json declaration;                // set: the declaration as given (checked on decode); null otherwise
+    Json params;  // op params: the values by name; null otherwise
     std::optional<std::string> wgsl;     // set: the section "wgsl", the source as UTF-8
     std::optional<std::string> sha256;   // set: of the source, 64 lowercase hex digits
     std::optional<std::string> scene;    // set: the scene of a geometry output (needed for geometry)
