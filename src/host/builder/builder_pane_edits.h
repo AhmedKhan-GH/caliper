@@ -10,7 +10,7 @@
 //   - The palette's primitives, the slots and options of each, and the
 //     bindings a primitive takes for a dropped source or column (auto_bind),
 //     with the primitive a dropped source makes when none is chosen.
-//   - Ids: the id a catalog source or a new panel gets, and the renames of a
+//   - Ids: the id a catalog source, a new panel or a new program gets, and the renames of a
 //     panel or a source with every reference to it (the format has no rename
 //     command, so the pane sends a rename as spec.set_text of the renamed
 //     spec's canonical text).
@@ -183,6 +183,9 @@ std::string pane_source_id(const std::string& catalog_name, const caliper_builde
 std::string pane_new_spec_id(const std::string& title, const std::function<bool(const std::string&)>& taken);
 // The id of a new panel of `p`: its primitive's name, then "-2", "-3", ...
 std::string pane_panel_id(caliper_builder::spec::Primitive p, const caliper_builder::spec::Spec& spec);
+// The id of a new program that is an instance of the piece `piece_name`: the
+// piece's name, then "-2", "-3", ... until no program of `spec` has it.
+std::string pane_program_id(const std::string& piece_name, const caliper_builder::spec::Spec& spec);
 
 // The spec with the panel `from` named `to`, in its table and the layout.
 caliper_builder::spec::Spec pane_rename_panel(const caliper_builder::spec::Spec& spec, const std::string& from,

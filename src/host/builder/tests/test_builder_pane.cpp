@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -1098,4 +1099,146 @@ TEST_CASE("builder pane: a new spec's id from its title") {
     CHECK(r.pane->sent().back().name == "spec.set_text");
     CHECK_FALSE(r.pane->set_spec_id("Run 42"));
     CHECK(r.pane->error().code == "spec.bad_id");
+}
+
+namespace {
+
+// A workspace piece as piece.update leaves it: pieces/<name>/1/ with its
+// piece.toml and its WGSL files.
+void write_piece(const std::string& ws, const std::string& name, const std::string& manifest,
+                 const std::vector<std::pair<std::string, std::string>>& files) {
+    const std::string dir = ws + "/pieces/" + name + "/1";
+    std::filesystem::create_directories(dir);
+    std::ofstream(dir + "/piece.toml") << manifest;
+    for (const auto& [file, text] : files) std::ofstream(dir + "/" + file + ".wgsl") << text;
+}
+
+// A piece that only draws and reads no input, and one with a tensor input.
+void write_pieces(const std::string& ws) {
+    write_piece(ws, "glow",
+                "name = \"glow\"\nversion = 1\ndescription = \"A soft glow over the panel\"\n\n"
+                "[[params]]\nname = \"gain\"\ndefault = 1.0\nmin = 0.0\nmax = 2.0\n\n"
+                "[draw]\ncamera = \"none\"\npasses = [{ kind = \"render\", fragment = \"shade\" }]\n",
+                {{"draw", "@fragment fn shade() -> @location(0) vec4<f32> {\n"
+                          "    return vec4<f32>(0.2, 0.6, 1.0, 1.0) * params.gain;\n}\n"}});
+    write_piece(ws, "row_norms",
+                "name = \"row_norms\"\nversion = 1\ndescription = \"The norm of each row of a matrix, as bars\"\n\n"
+                "[[inputs]]\nname = \"w\"\nkind = \"tensor\"\nrank_min = 2\nrank_max = 2\n\n"
+                "[[resources]]\nid = \"norms\"\nkind = \"buffer\"\nelement = \"f32\"\ncount = 64\n\n"
+                "[derive]\npasses = [{ entry = \"measure\", workgroups = [1, 1, 1], writes = [\"norms\"] }]\n\n"
+                "[draw]\ncamera = \"none\"\npasses = [{ kind = \"render\", fragment = \"bars\" }]\n",
+                {{"derive", "@compute @workgroup_size(64) fn measure(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+                            "    norms[id.x] = w[id.x];\n}\n"},
+                 {"draw", "@fragment fn bars() -> @location(0) vec4<f32> {\n"
+                          "    return vec4<f32>(norms[0], 0.0, 0.0, 1.0);\n}\n"}});
+}
+
+}  // namespace
+
+TEST_CASE("builder pane: the rows of piece.list") {
+    CHECK(pane_piece_rows(json()).empty());
+    CHECK(pane_piece_rows(json::array()).empty());
+    CHECK(pane_piece_rows({{"pieces", 3}}).empty());
+    const json list = {{"pieces",
+                        {{{"name", "points"}, {"version", 1}, {"from", "library"}, {"description", "Points"},
+                          {"draws", true}, {"inputs", json::array()}},
+                         {{"version", 2}, {"from", "workspace"}},
+                         {{"name", "bars"}, {"version", 3}, {"from", "workspace"}, {"description", 7},
+                          {"draws", "yes"}, {"inputs", {"w", 2, "v"}}}}}};
+    const std::vector<PaneSource> rows = pane_piece_rows(list);
+    REQUIRE(rows.size() == 2);
+    CHECK(rows[0].group == PaneSource::Group::piece);
+    CHECK(rows[0].key == "piece:library/points@1");
+    CHECK(rows[0].name == "points@1");
+    CHECK(rows[0].shape_text == "library \xc2\xb7 Points");
+    CHECK(rows[0].piece == json{{"name", "points"}, {"version", 1}, {"from", "library"}});
+    CHECK(rows[0].draws);
+    CHECK(rows[1].key == "piece:workspace/bars@3");
+    CHECK(rows[1].shape_text == "workspace");
+    CHECK(rows[1].inputs == std::vector<std::string>{"w", "v"});
+    CHECK_FALSE(rows[1].draws);
+    CHECK(std::string(pane_group_label(PaneSource::Group::piece)) == "Pieces");
+    spec::Spec s;
+    CHECK(pane_program_id("glow", s) == "glow");
+    s.programs.emplace_back();
+    s.programs.back().id = "glow";
+    CHECK(pane_program_id("glow", s) == "glow-2");
+}
+
+TEST_CASE("builder pane: pieces in Sources, and a piece dropped on a scene panel as its program") {
+    Rig r = rig("pane-pieces");
+    build_dashboard(r);
+    BuilderPane& p = *r.pane;
+    write_pieces(r.ws);
+    cb::CommandInvocation inv;
+    inv.name = "panel.create";
+    inv.args = {{"id", "world"}, {"primitive", "scene"}, {"bind", {{"scene", "live:model"}}},
+                {"place", {{"target", "rows"}, {"where", "beside"}}}};
+    inv.origin = cb::CommandOrigin::builder;
+    const cb::CommandResult made = r.s->invoke(inv);
+    REQUIRE_MESSAGE(made.ok, made.error.message);
+    p.update();
+
+    // The group Pieces after the tensors, in piece.list's order; a piece row
+    // keeps the focus when selected.
+    const std::string glow = "piece:workspace/glow@1", norms = "piece:workspace/row_norms@1";
+    const PaneSource* g = p.find_source(glow);
+    REQUIRE(g);
+    CHECK(g->name == "glow@1");
+    CHECK(g->shape_text == "workspace \xc2\xb7 A soft glow over the panel");
+    CHECK(g->draws);
+    REQUIRE(p.find_source(norms));
+    CHECK(p.find_source(norms)->inputs == std::vector<std::string>{"w"});
+    std::vector<std::string> order;
+    for (const PaneSource* s : p.visible_sources())
+        if (s->group == PaneSource::Group::piece || s->group == PaneSource::Group::tensor) order.push_back(s->key);
+    CHECK(order == std::vector<std::string>{"tensor:attn_weights", glow, norms});
+    p.set_filter("glow");
+    bool only = true;
+    for (const PaneSource* s : p.visible_sources()) only = only && s->key == glow;
+    CHECK(only);
+    p.set_filter("");
+    p.focus_panel("curves");
+    p.select(glow);
+    CHECK(p.focused_panel() == "curves");
+    CHECK(p.focused_source().empty());
+
+    // Refused before anything is sent: a piece with an input to bind, a
+    // primitive, an edge, a panel that is no scene panel.
+    const spec::Spec before = p.open_spec()->spec;
+    const size_t steps = r.steps(), sent = p.sent().size();
+    CHECK_FALSE(p.add_selected());
+    CHECK(p.error().code == "program.bad_target");
+    CHECK(p.primitive_plan(spec::Primitive::scene).refusal.code == "program.bad_target");
+    CHECK_FALSE(p.drop(source(glow), at(DropZone::edge, "world", "below")));
+    CHECK(p.error().code == "program.bad_target");
+    CHECK_FALSE(p.drop(source(norms), at(DropZone::centre, "world", "")));
+    CHECK(p.error().code == "piece.bad_binding");
+    CHECK(p.error().message.rfind("The piece row_norms@1 reads the input w, which its program binds", 0) == 0);
+    CHECK(p.sent().size() == sent);
+    CHECK(r.steps() == steps);
+    CHECK(p.open_spec()->spec == before);
+
+    // Dropped in the scene panel's centre: one program.create from the
+    // builder origin, one undo step, pinned with the hash the session wrote.
+    REQUIRE_MESSAGE(p.drop(source(glow), at(DropZone::centre, "world", "")), p.error().message);
+    const spec::Program* prog = p.open_spec()->spec.find_program("glow");
+    REQUIRE(prog);
+    REQUIRE(prog->piece);
+    CHECK(prog->piece->name == "glow");
+    CHECK(prog->piece->from == spec::PieceFrom::workspace);
+    CHECK(prog->piece->hash.rfind("sha256:", 0) == 0);
+    REQUIRE(prog->panel);
+    CHECK(*prog->panel == "world");
+    CHECK(r.journal().back()["name"] == "program.create");
+    CHECK(r.journal().back()["origin"] == "builder");
+    CHECK(r.steps() == steps + 1);
+    CHECK(p.focused_panel() == "world");
+    // Selected, then Add with the scene panel focused: the next id.
+    p.select(glow);
+    REQUIRE_MESSAGE(p.add_selected(), p.error().message);
+    CHECK(p.open_spec()->spec.find_program("glow-2"));
+    REQUIRE(p.undo());
+    REQUIRE(p.undo());
+    CHECK(p.open_spec()->spec == before);
 }
