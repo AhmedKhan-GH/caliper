@@ -236,29 +236,51 @@ void fit_box(ViewCamera& cam, const Aabb& world, double aspect) {
     }
     if (!(aspect > 0)) aspect = 1.0;
     const Aabb b = or_unit(world);
-    const Vec3 c = b.center();
     double r = b.radius();
     if (!(r > 1e-12) || !std::isfinite(r)) r = 1.0;
     // The camera's frame: e from the target to the eye, and the picture's right and up.
     const Vec3 e = orbit_direction(*o);
     const Vec3 right = normalize(cross(e * -1.0, axis_vector(o->up)));
     const Vec3 up = cross(right, e * -1.0);
-    const double ty = std::tan(kOrbitFovY * 0.5) / kBoxFitMargin;
-    const double tx = ty * aspect;
-    // A corner q (from the centre) lies in the view when |q.right| <= tx (d - q.e) and
-    // |q.up| <= ty (d - q.e); the distance is the least d that holds for all eight.
-    double d = 0, front = -r;
-    for (int k = 0; k < 8; ++k) {
-        const Vec3 p{(k & 1) ? b.hi[0] : b.lo[0], (k & 2) ? b.hi[1] : b.lo[1], (k & 4) ? b.hi[2] : b.lo[2]};
-        const Vec3 q = p - c;
-        const double z = dot(q, e);
-        d = std::max(d, z + std::fabs(dot(q, right)) / tx);
-        d = std::max(d, z + std::fabs(dot(q, up)) / ty);
-        front = std::max(front, z);
+    const double tan_y = std::tan(kOrbitFovY * 0.5), tan_x = tan_y * aspect;
+    const double ty = tan_y / kBoxFitMargin, tx = tan_x / kBoxFitMargin;
+    Vec3 corners[8];
+    for (int k = 0; k < 8; ++k)
+        corners[k] = Vec3{(k & 1) ? b.hi[0] : b.lo[0], (k & 2) ? b.hi[1] : b.lo[1], (k & 4) ? b.hi[2] : b.lo[2]};
+    // A corner q (from the target) lies in the view when |q.right| <= tx (d - q.e) and
+    // |q.up| <= ty (d - q.e); the distance is the least d that holds for all eight. In
+    // perspective the nearer corners project larger, so the target then moves across the view
+    // until the box's picture is centred, and the distance is found again.
+    Vec3 c = b.center();
+    double d = 0;
+    for (int pass = 0; pass < 6; ++pass) {
+        d = 0;
+        double front = -r;
+        for (const Vec3& p : corners) {
+            const Vec3 q = p - c;
+            const double z = dot(q, e);
+            d = std::max(d, z + std::fabs(dot(q, right)) / tx);
+            d = std::max(d, z + std::fabs(dot(q, up)) / ty);
+            front = std::max(front, z);
+        }
+        // The eye stays outside the box, at least a tenth of the radius in front of its nearest corner.
+        d = std::max(d, front + 0.1 * r);
+        if (!(d > 0) || !std::isfinite(d)) {
+            c = b.center();
+            d = r / std::sin(kOrbitFovY * 0.5) * kDefaultFitMargin;
+            break;
+        }
+        double x0 = 1e300, x1 = -1e300, y0 = 1e300, y1 = -1e300;
+        for (const Vec3& p : corners) {
+            const Vec3 q = p - c;
+            const double depth = d - dot(q, e);
+            const double x = dot(q, right) / (depth * tan_x), y = dot(q, up) / (depth * tan_y);
+            x0 = std::min(x0, x), x1 = std::max(x1, x), y0 = std::min(y0, y), y1 = std::max(y1, y);
+        }
+        const double mx = (x0 + x1) * 0.5, my = (y0 + y1) * 0.5;
+        if (pass == 5 || (std::fabs(mx) < 1e-4 && std::fabs(my) < 1e-4)) break;
+        c = c + right * (mx * d * tan_x) + up * (my * d * tan_y);
     }
-    // The eye stays outside the box, at least a tenth of the radius in front of its nearest corner.
-    d = std::max(d, front + 0.1 * r);
-    if (!(d > 0) || !std::isfinite(d)) d = r / std::sin(kOrbitFovY * 0.5) * kDefaultFitMargin;
     o->target[0] = c.x;
     o->target[1] = c.y;
     o->target[2] = c.z;

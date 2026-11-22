@@ -96,10 +96,11 @@ Mat4 pinhole_projection(const Pinhole& c, double zn, double zf, double view_aspe
 // larger extent for the aspect; looking through a pinhole returns to zoom 1 and no pan. Without
 // valid bounds the fit frames the box from -1 to 1, as the points view does.
 void fit(ViewCamera& cam, const Aabb& world, double aspect);
-// The fit of a data box (design/instrument-interface.md, Data Box): the orbit's target goes to
-// the bounds' centre at the smallest distance at which all eight corners of the bounds lie
-// inside the view at the orbit's angles, with a margin of kBoxFitMargin on each side, so that a
-// wide flat box fills the view's width instead of a sphere around it. Other cameras fit as fit().
+// The fit of a data box (design/instrument-interface.md, Data Box): at the orbit's angles, the
+// smallest distance at which all eight corners of the bounds lie inside the view with a margin
+// of kBoxFitMargin on each side, and a target near the bounds' centre that centres the box's
+// picture, so that a wide flat box fills the view instead of a sphere around it. Other cameras
+// fit as fit().
 void fit_box(ViewCamera& cam, const Aabb& world, double aspect);
 inline constexpr double kBoxFitMargin = 1.08;
 // Whether `inner` lies inside `outer` grown by `tolerance` times the larger of outer's extents.

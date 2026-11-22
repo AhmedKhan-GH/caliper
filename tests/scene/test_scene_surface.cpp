@@ -25,7 +25,10 @@ Aabb box_of(double x, double y, double z, double cx = 0, double cy = 0, double c
 }
 
 // The largest |x/w| and |y/w| over the eight corners of `b` seen by the orbit.
-struct Extent { double x = 0, y = 0; };
+struct Extent {
+    double x = 0, y = 0;                         // the largest |x| and |y| in normalised device units
+    double x0 = 1e300, x1 = -1e300, y0 = 1e300, y1 = -1e300;   // the picture's extent
+};
 Extent corner_extent(const Orbit& o, const Aabb& b, double aspect) {
     const Mat4 vp = orbit_projection(o, b, aspect) * orbit_view(o);
     Extent e;
@@ -36,6 +39,10 @@ Extent corner_extent(const Orbit& o, const Aabb& b, double aspect) {
         REQUIRE(h[3] > 0);
         e.x = std::max(e.x, std::fabs(h[0] / h[3]));
         e.y = std::max(e.y, std::fabs(h[1] / h[3]));
+        e.x0 = std::min(e.x0, h[0] / h[3]);
+        e.x1 = std::max(e.x1, h[0] / h[3]);
+        e.y0 = std::min(e.y0, h[1] / h[3]);
+        e.y1 = std::max(e.y1, h[1] / h[3]);
     }
     return e;
 }
@@ -111,7 +118,7 @@ struct TwoPoints {
 
 }  // namespace
 
-TEST_CASE("surface: the box fit keeps all eight corners inside the margin and touches it") {
+TEST_CASE("surface: the box fit keeps all eight corners inside the margin, touches it and centres the box") {
     const Aabb boxes[] = {box_of(2, 2, 2, 1, -2, 3), box_of(4, 1, 0.25)};
     for (const Aabb& box : boxes) {
         for (double aspect : {1.0, 2.0}) {
@@ -122,11 +129,13 @@ TEST_CASE("surface: the box fit keeps all eight corners inside the margin and to
             CHECK(o.azimuth == before.azimuth);
             CHECK(o.elevation == before.elevation);
             CHECK(o.up == before.up);
+            // The target stays within the box's bounding sphere, moved only to centre its picture.
             const Vec3 c = box.center();
-            CHECK(o.target[0] == doctest::Approx(c.x));
-            CHECK(o.target[1] == doctest::Approx(c.y));
-            CHECK(o.target[2] == doctest::Approx(c.z));
+            const Vec3 t{o.target[0], o.target[1], o.target[2]};
+            CHECK(length(t - c) <= box.radius());
             const Extent e = corner_extent(o, box, aspect);
+            CHECK(std::fabs(e.x0 + e.x1) < 2e-3);
+            CHECK(std::fabs(e.y0 + e.y1) < 2e-3);
             const double limit = 1.0 / kBoxFitMargin;
             CHECK(e.x <= limit + 1e-9);
             CHECK(e.y <= limit + 1e-9);
@@ -214,7 +223,7 @@ TEST_CASE("surface: starting_camera with box_fit fills the target and distance f
     const StartResult s = starting_camera(StartingCamera{}, t, aspect, false);
     CHECK(std::get<Orbit>(s.camera).distance > o.distance);
 
-    // A given distance and angles are kept; the target still comes from the fit.
+    // A given distance and angles are kept; the target still comes from the fit at those angles.
     StartingCamera given;
     given.form = StartingCamera::Form::Orbit;
     given.distance = 7.5;
@@ -223,7 +232,11 @@ TEST_CASE("surface: starting_camera with box_fit fills the target and distance f
     const Orbit& go = std::get<Orbit>(g.camera);
     CHECK(go.distance == 7.5);
     CHECK(go.azimuth == doctest::Approx(30.0 * kPi / 180.0));
-    CHECK(go.target[0] == doctest::Approx(eo.target[0]));
+    ViewCamera at30 = Orbit{};
+    std::get<Orbit>(at30).up = Axis::PosZ;
+    std::get<Orbit>(at30).azimuth = 30.0 * kPi / 180.0;
+    fit_box(at30, t.scene_bounds(), aspect);
+    for (int i = 0; i < 3; ++i) CHECK(go.target[i] == doctest::Approx(std::get<Orbit>(at30).target[i]));
 }
 
 TEST_CASE("surface: a depth offset subtracts k units of w from the z row of the batch's mvp") {
