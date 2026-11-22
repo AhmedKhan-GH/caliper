@@ -219,7 +219,7 @@ TEST_CASE("the checks run before anything is made") {
     p.draw->passes[1].pick = true;
     const cp::Verdict off = pick_offscreen.install(p, {}, 1);
     CHECK(off.code == cp::kProgramBadPass);
-    CHECK(off.where == "draw.passes[1]");
+    CHECK(off.where == "draw.passes[1].pick");
     CHECK(h.gfx.ops().size() == before);
 }
 

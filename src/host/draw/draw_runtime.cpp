@@ -1055,7 +1055,8 @@ Verdict DrawRuntime::install(const caliper_builder::spec::Piece& piece, const In
     const cs::Draw& draw = *piece.draw;
     for (std::size_t k = 0; k < draw.passes.size(); ++k)
         if (draw.passes[k].pick && offscreen(draw.passes[k]))
-            return refuse(refusal(cp::kProgramBadPass, "A pass with pick writes the host target only.", pass_where(k)));
+            return refuse(refusal(cp::kProgramBadPass, "A pass with pick writes the host target only.",
+                                  pass_where(k) + ".pick"));
 
     m.status.frame_limit_ms = std::min(pl::kFrameMsMax, draw.frame_ms.value_or(pl::kFrameMsDefault));
     m.status.memory_limit_bytes =
