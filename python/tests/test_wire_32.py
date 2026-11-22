@@ -5,7 +5,7 @@ part and its rules, the stamps, entity transforms and class tables, the
 limits, entity paths, the VIEWS key "scene" with its starting camera and the
 default scene data view, and agreement with the 3.2 block of
 include/caliper/live_net.h and the reference page
-docs/references/wire-protocol-3-2.md.
+docs/reference/wire-protocol-3-2.md.
 
 Needs numpy and pytest only: ``pytest --noconftest python/tests/test_wire_32.py``."""
 from __future__ import annotations
@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures" / "wire_v3"
 V32 = FIXTURES / "v3_2"
 HEADER_H = ROOT / "include" / "caliper" / "live_net.h"
-PAGE = ROOT / "docs" / "references" / "wire-protocol-3-2.md"
+PAGE = ROOT / "docs" / "reference" / "wire-protocol-3-2.md"
 
 sys.path.insert(0, str(ROOT / "python"))
 from caliper import _wire as w  # noqa: E402
@@ -432,7 +432,7 @@ def test_header_block_is_separate():
 
 def test_page_example_is_the_golden_frame():
     page = PAGE.read_text()
-    part = page[page.index("## Golden frames"):]
+    part = page[page.index("## Golden Frames"):]
     block = part[part.index("```text") + len("```text"):]
     block = block[:block.index("```")]
     data = bytearray()

@@ -23,7 +23,7 @@ When the host loads an applet, it first runs a negotiation check on the manifest
 
 ## Wire Protocol
 
-Protocol v3 carries live data from a training process to viewers over one WebSocket. It defines three roles: the producer, the viewer and the hub. The [Wire Protocol](wire-protocol.md) page gives the roles, the message types and the versioning. Its details are on separate pages. [Wire Frames](wire-frames.md) defines the binary frame. The session, data, data view, linked selection and run control messages each have a page, for example [Session Messages](session-messages.md).
+Protocol v3 carries live data from a training process to viewers over one WebSocket. It defines three roles: the producer, the viewer and the hub. The [Wire Protocol](wire-protocol.md) page gives the roles, the message types and the versioning. Its details are on separate pages. [Wire Frames](wire-frames.md) defines the binary frame. The session, data, data view, linked selection and run control messages each have a page, for example [Session Messages](session-messages.md). [Wire Protocol 3.2](wire-protocol-3-2.md) is the draft of the next minor version: it specifies scenes, which Caliper LIB and the hub build, and the rest of the draft, which only the codecs build.
 
 ## Terms
 

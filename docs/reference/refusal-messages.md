@@ -107,3 +107,17 @@ The loader makes only cheap checks when it lists a spec applet, in this order: t
 `{spec}` is the spec's file name. `{spec_version}` and `{host_version}` are spec format versions, and the host reads version 0. `{line}` and `{column}` count from 1.
 
 A spec applet that passes every check opens on the app's spec page at launch ([Spec Page](../builder/workspace.md#spec-page)), and it is `ACTIVE` while the page shows it. If a program calls `AppletLoader::launch()` on a spec applet instead of the app, it gets `A spec applet opens as a page, which this version of Caliper does not draw yet.` and the applet stays `READY`.
+
+## Renderer Refusals
+
+Caliper draws with Metal on macOS and Vulkan on Windows and has no fallback renderer until the WebGPU fallback through Dawn lands ([No Fallback Renderer](../applets/rendering.md#no-fallback-renderer)). These refusals come before any applet loads.
+
+| Message template | Who prints it | When it fires |
+|------------------|---------------|---------------|
+| `caliper: the {renderer} renderer could not start ({reason}), and there is no fallback renderer until the WebGPU fallback through Dawn lands` | The app (`caliper`, `caliper dev`) on standard error, then exit code 1 | The platform's renderer failed to start on its window. |
+| `caliper: shot cannot draw offscreen: the {renderer} renderer could not start ({reason}), and there is no fallback renderer until the WebGPU fallback through Dawn lands` | `caliper shot`, then exit code 1 | The renderer failed to make its offscreen canvas. |
+| `attach_canvas: the {renderer} renderer could not start ({reason}), and there is no fallback renderer until the WebGPU fallback through Dawn lands` | Caliper Embed, as `caliper_core_last_error` after `caliper_core_attach_canvas` returns 0 | The renderer failed to make the canvas. The core stays usable. |
+| `CALIPER_RENDERER=gl asks for the OpenGL renderer, which was removed; unset it, and Caliper draws with Metal on macOS and Vulkan on Windows` | The app and `shot` after their prefixes (`caliper: `, `caliper: shot cannot draw offscreen: `), exit code 1; Caliper Embed after `caliper_core_create: `, in the embedder's log, and `caliper_core_create` returns `NULL` | `CALIPER_RENDERER=gl` is set. |
+| `this platform has no renderer: Caliper draws with Metal on macOS and Vulkan on Windows` | The same three, with the same prefixes | Neither Metal nor Vulkan is built, as on Linux. |
+
+`{renderer}` is `Metal` or `Vulkan`. `{reason}` is the backend's own, such as `no Metal device`, `no Vulkan loader`, `no Vulkan device with a graphics queue` or `ImGui's Metal backend did not start`, and is `CALIPER_TEST_RENDERER_FAIL=1 made its start fail` when that test variable forces the failure. When the app cannot create its window, the reason is `GLFW could not create a window`.

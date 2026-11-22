@@ -1,11 +1,11 @@
-# Wire protocol 3.2 draft
+# Wire Protocol 3.2
 
 This page specifies what is built of wire protocol 3.2. Producers, the hub and viewers build scenes: the capability `scenes`, the live view kind `scene`, the messages SCENE_UPDATE with every part, SCENE_TRANSFORMS, SCENE_CLEAR and SCENE_CLASSES, the VIEWS key `scene` with its starting camera, and the default data view of a scene. The codecs build the whole draft besides: timelines and stamps, the dtype `u16`, text logs, bar charts, split updates and the messages of recordings, which no producer or server sends yet ([Timelines, text logs, bar charts and recordings](#timelines-text-logs-bar-charts-and-recordings)). Everything else follows [Wire protocol v3](wire-protocol.md), whose frame layout, decoding order, terms and rules apply unchanged.
 
 !!! note "Status"
     A draft. The minor version 2, the capabilities, the kinds 6 to 8, the message types `0x0070` to `0x0074` and `0x0078` to `0x007B`, the dtype 6 and the error codes are proposals that the owners of the protocol have not confirmed, so they may still be renumbered. They are one line each in a separate block at the end of `include/caliper/live_net.h` and of each codec. Senders keep writing minor 1 in their frames until 3.2 is confirmed; a peer decides by a capability, never by the minor version. Every 3.1 message keeps its meaning and its encoding.
 
-## What is built
+## Implementation Status
 
 | Piece | Built |
 |---|---|
@@ -15,17 +15,17 @@ This page specifies what is built of wire protocol 3.2. Producers, the hub and v
 | Dtype | `u16` (6) |
 | Data view | The default scene data view, resolved |
 | Codecs | `python/caliper/_wire.py`, `src/host/net/wire.h` and `web/src/protocol/codec.ts`, with the golden frames of `tests/fixtures/wire_v3/v3_2`: every message, key and section of the draft, the assembly of split updates in each, and their division in Python |
-| Producer | `caliper.scene` in Caliper LIB on `caliper.serve()`, the Python and the native sender ([Caliper LIB](python-api.md#scenes)) |
-| Hub | Forwards the scene messages to the viewers that announced `scenes` and keeps a scene's state for a late viewer ([Through a hub](#through-a-hub)) |
+| Producer | `caliper.scene` in Caliper LIB on `caliper.serve()`, the Python and the native sender ([Caliper LIB](../python/scene-calls.md)) |
+| Hub | Forwards the scene messages to the viewers that announced `scenes` and keeps a scene's state for a late viewer ([Hub Forwarding](#hub-forwarding)) |
 | Viewers | The Caliper app, `caliper-viewer` and the WebAssembly views announce `scenes` and draw every part with one scene view, all but encoded images, and apply SCENE_TRANSFORMS and SCENE_CLASSES; the TypeScript client announces it so that the `<caliper-view>` element and the viewer page hand a scene to the WebAssembly views |
 
 Not built beyond the codecs: timelines (a producer of this version declares none and sends no stamp, and a receiver reads one and keeps it), text logs and bar charts in Caliper LIB and the viewers, split updates in the senders and viewers, and recordings in a server. Not built at all: scene data views other than the default, and scene events. [Versioning](#versioning) says what a receiver does when one of them arrives, and what a viewer does with a part it does not draw yet.
 
-## The capability
+## Capability
 
 A viewer announces `scenes` in HELLO when it draws scenes, and a producer and a hub announce it in WELCOME when they send them. A producer lists a view of kind 6 in VIEWS, and sends the scene messages, only to a peer that announced `scenes`; a SUBSCRIBE to a scene from another peer is answered with `unknown_view`. A hub announces `scenes` to the producers that connect to it. The key `static` of the scene messages comes with `scenes` alone, since a scene's state needs it while no timeline is built.
 
-## The kind scene
+## Scene Kind
 
 A scene is one live view: a tree of entities, named by entity paths, in one 2-D or 3-D space. Its entry in VIEWS has kind 6, an empty `sources` list and the key `scene`:
 
@@ -38,7 +38,7 @@ A scene is one live view: a tree of entities, named by entity paths, in one 2-D 
 
 An **entity path** is 0 to 16 segments of `[A-Za-z0-9_.-]{1,63}` joined by `/`, at most 255 bytes, with no segment `.` or `..`. The empty path is the root, the scene's own space. An entity holds at most one batch of each part, and logging a part again at the same path replaces it.
 
-## The dtype u16
+## Dtype `u16`
 
 | Id | Name | Item size | numpy | TypedArray |
 |---|---|---|---|---|
@@ -46,7 +46,7 @@ An **entity path** is 0 to 16 segments of `[A-Za-z0-9_.-]{1,63}` joined by `/`, 
 
 `u16` carries depth images in stored units, such as millimetres, and segmentation images with class ids up to 65,535. From 3.2 a decoder checks the length of a `u16` section against its shape as it does for the other dtypes. The SDK's `CaliperDType` in `sdk/include/caliper/tensor.h` has no `u16` yet.
 
-## The scene data view
+## Scene Data View
 
 A subscription to a scene takes the default data view only: `data_view` absent, `{}`, or the resolved default itself. It resolves to:
 
@@ -54,9 +54,9 @@ A subscription to a scene takes the default data view only: `data_view` absent, 
 {"budget":{"max_extent":1024,"max_items":100000,"max_points":100000,"max_vertices":1000000},"entities":{"exclude":[],"include":["**"]}}
 ```
 
-Any other data view is answered with `bad_data_view`. The producer applies the budget to points and to line segments by stride sampling, with every array of the batch sampled alike, and then sends `axes` with the batch, as a points snapshot does ([Payload axes](wire-protocol.md#payload-axes)); the other parts travel whole.
+Any other data view is answered with `bad_data_view`. The producer applies the budget to points and to line segments by stride sampling, with every array of the batch sampled alike, and then sends `axes` with the batch, as a points snapshot does ([Payload axes](data-view-messages.md#payload-axes)); the other parts travel whole.
 
-## Message types
+## Message Types
 
 | Id | Name | Direction | Sections | Answer |
 |---|---|---|---|---|
@@ -82,7 +82,7 @@ Every scene message has the keys `sub`, `view`, `seq` and `stamp_ns`, and may ca
 | `state` | boolean, optional | Part of a scene's state for a new subscription. Default false |
 | `cursor` | integer, optional | The generation of the TIME_STATE that a recorded message answers; unsigned 32-bit |
 
-### The stamp
+### Stamp
 
 A **stamp** is T signed 64-bit integers, one per timeline in the order of their ids, from 1 to 8 (`CALIPER_NET_MAX_TIMELINES`) of them; the value −2<sup>63</sup> (`CALIPER_NET_STAMP_ABSENT`) means absent on that timeline. A scene message carries its stamp in the section `stamp`, i64 (T,), written after every other section; SCENE_TRANSFORMS may instead carry `stamps`, i64 (K, T), one stamp per entity transform. A message with `static` true carries neither. A producer of this version declares no timelines and sends no stamp; a receiver checks a stamp and keeps it with the message.
 
@@ -165,11 +165,11 @@ A clear removes the parts it names from its entity, or its subtree, and leaves s
 
 The table replaces the scene's table whole; an empty list empties it.
 
-## The state of a scene for a new subscription
+## Scene State for a New Subscription
 
 When a subscription to a scene opens, the producer first sends the scene's state, each message with `state` true: SCENE_CLEAR with `path` `""` and `reset` true; SCENE_CLASSES, when the scene has a class table; SCENE_TRANSFORMS of every entity that has an entity transform, the static ones and the others in separate messages; then a SCENE_UPDATE of every camera and every batch it holds, in the byte order of their paths and, within a path, in the order of the parts in the table above. It holds the class table, the entity transforms, the cameras and every static item, which it copies once at the call even while nothing is attached, and the newest batch it still has of each other entity part, which exists only for the batches it sent while some subscription was open. A viewer draws an entity whose batch was not held from its next update.
 
-## Flow control
+## Flow Control
 
 The rules of [Flow control](wire-protocol.md#flow-control) hold, with these additions:
 
@@ -178,7 +178,7 @@ The rules of [Flow control](wire-protocol.md#flow-control) hold, with these addi
 - `max_rate` applies to each entity part of a scene. Entity transforms, cameras, class tables and clears are not limited.
 - Among pending data, series go first, then scene messages, then snapshots. The native sender of Caliper LIB hands its scene messages to its connection as control frames instead, at most two waiting at once, so that they still coalesce in the producer while a viewer drains slowly.
 
-## Through a hub
+## Hub Forwarding
 
 The hub announces `scenes` to producers and viewers. It removes the views of kind 6 from the VIEWS it sends to a viewer without `scenes`, and refuses that viewer's SUBSCRIBE to one with `unknown_view`. It forwards the scene messages to the viewers of the producer subscription, rewriting `sub` and sharing the payload sections, with the flow control above per viewer. Of the messages that go to a viewer in order, clears and states, it keeps at most 2 × `CALIPER_NET_MAX_BATCHES` waiting: a reset drops what waits before it, and past that bound the hub's own state replaces what waits. For a late viewer it keeps, per producer subscription, the newest batch of each entity part, the class table and the newest entity transform of each entity, a clear removing what it clears and a reset all of it, and sends them as the scene's state, opened by its own SCENE_CLEAR with `reset`. A viewer's pending entity transforms merge into one SCENE_TRANSFORMS, the newest per entity, and a camera and a class table are not held to the viewer's `max_rate`. The hub puts the pieces of a split update together before it forwards them, and then sends and keeps them as one update, in order and replaced only as a whole; it drops a piece whose piece 0 it does not hold. What it keeps counts toward its budget of retained bytes. Over that budget, or past `CALIPER_NET_MAX_BATCHES` batches of one scene, it forgets a scene's state, even one that viewers watch; they keep receiving the scene, and when a later viewer subscribes, the hub subscribes again at the producer, whose fresh state reaches that viewer.
 
@@ -224,7 +224,7 @@ The hub announces `scenes` to producers and viewers. It removes the views of kin
 
 A batch must also fit in one frame of 64 MiB, since Caliper LIB sends no split update yet; it refuses a larger one at the call.
 
-## Error codes and the order of the checks
+## Error Codes and Check Order
 
 | Code | Meaning |
 |---|---|
@@ -248,7 +248,7 @@ A receiver of this version handles the rest of the 3.2 draft by the rules of [Ve
 
 A 3.1 peer announces no `scenes`, so it receives no scene view and no scene message; a 3.1 decoder finds the 3.2 frames well formed, with their types unknown to it.
 
-## Readings of the draft
+## Readings of the Draft
 
 Where the draft of 3.2 is silent or ambiguous, this version reads it as follows:
 
@@ -272,7 +272,7 @@ Where the draft of 3.2 is silent or ambiguous, this version reads it as follows:
 | An empty snapshot | Carries no section at all |
 | An image's `opacity`, `scale` and `cloud` when absent | The scene view takes the scene model's defaults: opacity 1, or 0.5 for segmentation; scale 1 for f32 depths and 0.001 for u16; a cloud for a depth image under a camera |
 
-## Timelines, text logs, bar charts and recordings
+## Timelines, Text Logs, Bar Charts and Recordings
 
 The codecs build these parts of the draft; no producer or server sends them yet. Each belongs to a capability, which a peer announces as it does `scenes`:
 
@@ -283,11 +283,11 @@ The codecs build these parts of the draft; no producer or server sends them yet.
 | `bars` | The kind `bars` (8), a SNAPSHOT of that kind |
 | `recordings` | RECORDINGS, RECORDING_OPEN, CURSOR and TIME_STATE; the session key `recording`; the VIEWS key `recorded`; the keys `cursor` and `empty` of data messages; the SERIES section `indices` and key `decimated` |
 
-### Timelines and stamps
+### Timelines and Stamps
 
 VIEWS may carry `timelines`: 2 to 8 objects `{"name", "kind", "epoch"}` in the order of their ids, `name` 1 to 63 bytes of `[A-Za-z0-9_.-]` and unique, `kind` `sequence` or `time`, `epoch` an optional boolean; the first two are `step` (sequence) and `time` (time). A stamp has one value per timeline. SNAPSHOT and CONTROLS take the section `stamp` i64 (T,); SERIES takes `stamps` i64 (M, T), a stamp per value, or `stamp` i64 (T,) for all; a SNAPSHOT with `static` true carries no stamp. **Stamp text**, where a stamp value travels in metadata, is decimal digits with an optional leading minus, at most 20 characters, within the signed 64-bit range, such as `"1763200000123456789"`.
 
-### text
+### `text`
 
 New lines of a text log of kind 7, appended as a series' values are. `section_count` is 3, or 4 with a stamp section.
 
@@ -304,11 +304,11 @@ New lines of a text log of kind 7, appended as a series' values are. `section_co
 
 M is 1 to 65,536, and each line is at most 4,096 bytes of valid UTF-8. A text log's data view is a series': `{"budget": {"max_backfill": n}}`.
 
-### Bar charts
+### Bar Charts
 
 A bar chart is a SNAPSHOT of kind 8 with the section `data` f32 (B,), 1 ≤ B ≤ 4,096, and optionally the section `colors` u8 (B, 4), `labels`, exactly B strings of at most 63 bytes, `horizontal`, a boolean, and `stats` `[min, max]`. Its data view is a histogram's with exactly one kept dim of at most 4,096 positions, and its payload axis is that dim.
 
-### Split updates
+### Split Updates
 
 An update whose frame would pass 64 MiB travels as 2 to 16 SCENE_UPDATE pieces with the same `path`, `part`, `seq` and stamp and the key `split`:
 
@@ -321,7 +321,7 @@ An update whose frame would pass 64 MiB travels as 2 to 16 SCENE_UPDATE pieces w
 
 A piece holds a contiguous range of rows of some arrays, cut along their first axis, and the stamp whole; piece 0 carries the part's keys. The codecs check a piece's `split` and that `first` names exactly its arrays, and put the update together: `SplitUpdates` in Python and TypeScript and `wire::SplitUpdates` in C++ allocate each array when its first rows arrive, refuse a whole update over 512 MiB (`CALIPER_NET_MAX_UPDATE_BYTES`), overlapping rows, a piece twice or a piece that differs from piece 0, and check the whole update as an unsplit one once every piece and row has arrived. A newer update of the same entity part discards an incomplete one, and at most 2 incomplete updates are held per subscription, the oldest going first. `split_update` in Python divides an update into pieces.
 
-### The recording messages
+### Recording Messages
 
 | Message | Keys |
 |---|---|
@@ -332,7 +332,7 @@ A piece holds a contiguous range of rows of some arrays, cut along their first a
 
 A session in SESSIONS may carry `recording`, `{"id", "seekable", "complete"}`. A view in VIEWS may carry `recorded`, at most 64 resolved data views. SNAPSHOT, SERIES, TEXT and the scene messages may carry `cursor`, the generation of the TIME_STATE they answer; a SNAPSHOT with `empty` true carries no section; SERIES may carry the section `indices` i64 (M,), the absolute index of each value of a decimated series, with the key `decimated`, the bucket size.
 
-## Golden frames
+## Golden Frames
 
 `tests/fixtures/wire_v3/v3_2` holds the frames of a 3.2 sender, with minor 2 in their header, which `gen_v3_2.py` writes for `generate.py`: HELLO and WELCOME with `scenes`, VIEWS with scenes and a starting camera, VIEWS with a scene whose keys are null (which mean the same as absent keys, so the scene takes the defaults), the resolved default scene data view, SCENE_UPDATE of each part and form, with and without stamps, the five pieces of a split update, SCENE_TRANSFORMS with one stamp, a stamp each and none, SCENE_CLEAR with and without `reset`, SCENE_CLASSES, VIEWS with timelines and recorded data views, SESSIONS with a recording, SNAPSHOT with a stamp, static, empty and of a bar chart, SERIES with a stamp per value (the draft's example frame), one stamp and decimated, CONTROLS with a stamp, TEXT, and every recording message and CURSOR op. Each implementation decodes every frame to what its `.json` says and encodes it back to the same bytes, except `scene_update_points_future`, which carries a section no part has. `v3_2/invalid` holds frames every implementation refuses; its `expect.json` gives, for each, the reason and close code of a frame that is not well formed or the ERROR code of an invalid message.
 

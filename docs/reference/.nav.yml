@@ -10,6 +10,7 @@ nav:
   - data-view-messages.md
   - run-control-messages.md
   - linked-selection-messages.md
+  - wire-protocol-3-2.md
   - folders-and-environment.md
   - refusal-messages.md
   - glossary.md
