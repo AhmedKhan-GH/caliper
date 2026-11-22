@@ -3,6 +3,7 @@
 // out and keeps its panels' data.
 #include "spec_runtime/spec_runtime.h"
 #include "spec_runtime/spec_instruments.h"
+#include "spec_runtime/spec_stage_host.h"
 #include "live/live_views_scene.h"   // a scene drawn into a scene panel's rectangle
 #include "scene/scene.h"   // kPalette
 
@@ -1072,6 +1073,7 @@ SpecRuntime::SpecRuntime(SpecTextures& textures) : textures_(textures), scenes_(
 void SpecRuntime::set_instruments(caliper_builder::EventSink* events, caliper_builder::RunControl* run) {
     events_ = events;
     run_ = run;
+    if (events) app_stage_host_impl()->set_events(events);   // the stages' program events
 }
 
 bool SpecRuntime::pick_scene(const std::string& panel_id, float u, float v) {
@@ -1100,11 +1102,15 @@ void SpecRuntime::bind_scene(Entry& e) {
         CaliperCore* core = core_ ? core_() : nullptr;
         if (!core || scene.empty()) return false;
         const std::string id = "##spec.scene." + panel;
+        // The panel's stages (spec_stage_host.h), and the line of a refused or stopped one.
+        caliper_live_views::SceneRectOptions so = o;
+        so.stages = app_stage_host_impl()->source(panel);
+        so.stage_message = app_stage_host_impl()->message(panel);
         auto sink = [this, &panel, &scene](const char* type, const std::string& detail) {
             caliper_builder::Event ev;
             if (events_ && spec_scene_event(type, panel, scene, detail, &ev)) events_->push(std::move(ev));
         };
-        return caliper_live_views::draw_scene_in_rect(core, scene, id.c_str(), content.Min, content.GetSize(), o,
+        return caliper_live_views::draw_scene_in_rect(core, scene, id.c_str(), content.Min, content.GetSize(), so,
                                                       scenes_->by_panel[panel],
                                                       sink) == caliper_live_views::SceneRectResult::drawn;
     };
