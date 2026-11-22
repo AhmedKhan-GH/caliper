@@ -13,4 +13,5 @@ nav:
       - widget-agent-conformance.md
       - mcp-server.md
       - run-control-and-events.md
+      - managed-runs.md
       - http-api.md
