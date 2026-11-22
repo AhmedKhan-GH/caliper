@@ -700,7 +700,10 @@ def test_capture(notebook, tmp_path):
     """The scene after a surface forced at step 299, in the path's plane: the
     notebook's cells on the CPU with fixed seeds and deterministic algorithms
     for 300 steps with ``every`` at 100, the hidden app attached from the start
-    (so its camera fits the static frame), and the frame from Caliper API. The
+    (so its camera fits the static frame, and fits it again when the scene
+    view's area narrows as the view of the plane share joins it, because an
+    unmoved view frames its scene again when the picture changes shape), and
+    the frame from Caliper API. The
     marker is at the current point's projected pixel, and the scene view's
     area matches the reference under the parity rules. Without a reference the
     test writes the capture for review and skips: CALIPER_DEMO0_WRITE_REFERENCE=1
@@ -789,8 +792,7 @@ def test_capture(notebook, tmp_path):
             pytest.skip(f"no reference yet: review {out} and commit it as "
                         f"{REFERENCE.relative_to(REPO)} (CALIPER_DEMO0_WRITE_REFERENCE=1)")
         # The scale bar is an overlay of the view layer, drawn over the picture
-        # since the reference was taken, and checked by its own tests: its band
-        # is left out of the comparison.
+        # and checked by its own tests: its band is left out of the comparison.
         ignore = np.zeros(area.shape[:2], bool)
         if where.scale_bar:
             x0, y0, x1, y1 = where.scale_bar
