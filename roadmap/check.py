@@ -3,7 +3,7 @@
 Prints one line per problem as `<file>: <id>: <message>`. Exits 1 when there is an error and 0
 otherwise. Warnings are printed with the word warning and do not change the exit code.
 
-Candidate files under roadmap/candidates/ are checked on their own and stay out of the registry,
+Candidate files under candidates/ are checked on their own and stay out of the registry,
 the graph, the coverage check and the counts.
 
 The ledger under roadmap/coverage/ names where each feature comes from. Every entry maps to ids
@@ -213,26 +213,26 @@ def check_coverage(root, features, errors, warnings):
 
 
 def check_candidates(root, features, pillars, errors):
-    """Checks roadmap/candidates/*.yml against the registry. Candidates are not features.
+    """Checks candidates/*.yml against the registry. Candidates are not features.
 
     pillars maps each registry prefix to its file stem. Returns (candidates, files) read.
     """
-    folder = root / "roadmap" / CANDIDATES
+    folder = root / CANDIDATES
     if not folder.is_dir():
         return 0, 0
     for extra in sorted(folder.glob("*.yaml")):
-        errors.append("roadmap/%s/%s: -: candidate files end in .yml, so this file is not read"
+        errors.append("%s/%s: -: candidate files end in .yml, so this file is not read"
                       % (CANDIDATES, extra.name))
     schema_path = folder / "schema.json"
     if not schema_path.is_file():
-        errors.append("roadmap/%s/schema.json: -: the candidates' schema is missing" % CANDIDATES)
+        errors.append("%s/schema.json: -: the candidates' schema is missing" % CANDIDATES)
         return 0, 0
     validator = jsonschema.Draft202012Validator(
         json.loads(schema_path.read_text(encoding="utf-8")))
 
     groups = []
     for path in sorted(folder.glob("*.yml")):
-        name = "roadmap/%s/%s" % (CANDIDATES, path.name)
+        name = "%s/%s" % (CANDIDATES, path.name)
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
         except yaml.YAMLError as err:

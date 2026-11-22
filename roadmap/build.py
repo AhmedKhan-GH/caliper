@@ -254,16 +254,16 @@ def read_coverage(root):
 # Candidates
 
 def read_candidates(root, features):
-    """Returns the candidate pillars under root/roadmap/candidates, existing pillars first.
+    """Returns the candidate pillars under root/candidates, existing pillars first.
 
     Candidates are ideas outside the registry: they are read here and nowhere else, so they never
     reach the graph, the data files or any count. Each pillar is its YAML mapping with its file
     stem under `slug`. A dependency that is not a registry id raises RegistryError.
     """
-    folder = Path(root) / "roadmap" / CANDIDATES
+    folder = Path(root) / CANDIDATES
     pillars = []
     for path in sorted(folder.glob("*.yml")):
-        name = "roadmap/%s/%s" % (CANDIDATES, path.name)
+        name = "%s/%s" % (CANDIDATES, path.name)
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
         except yaml.YAMLError as err:

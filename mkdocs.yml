@@ -38,6 +38,7 @@ hooks:
 # A local `mkdocs serve` rebuilds when the registry changes.
 watch:
   - roadmap
+  - candidates
 plugins:
   - search
   - awesome-nav

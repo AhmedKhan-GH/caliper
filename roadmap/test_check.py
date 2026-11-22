@@ -579,13 +579,13 @@ candidates:
 
 
 class CandidateTest(unittest.TestCase):
-    """Candidate files under roadmap/candidates/ are checked and stay out of the registry."""
+    """Candidate files under candidates/ are checked and stay out of the registry."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.root = make_repo(self._tmp.name)
-        self.folder = self.root / "roadmap" / "candidates"
+        self.folder = self.root / "candidates"
         self.folder.mkdir()
         (self.folder / "schema.json").write_text(json.dumps(CANDIDATE_SCHEMA), encoding="utf-8")
         self.write("core", CAND_CORE)
@@ -628,32 +628,32 @@ class CandidateTest(unittest.TestCase):
 
     def test_schema_failure(self):
         self.edit("core", "origin: cut", "origin: other")
-        self.assertError(self.check()[0], "roadmap/candidates/core.yml", "schema", "origin")
+        self.assertError(self.check()[0], "candidates/core.yml", "schema", "origin")
 
     def test_invalid_yaml(self):
         self.write("core", "pillar: [COR\n")
-        self.assertError(self.check()[0], "roadmap/candidates/core.yml", "not valid YAML")
+        self.assertError(self.check()[0], "candidates/core.yml", "not valid YAML")
 
     def test_missing_schema(self):
         (self.folder / "schema.json").unlink()
-        self.assertError(self.check()[0], "roadmap/candidates/schema.json", "schema is missing")
+        self.assertError(self.check()[0], "candidates/schema.json", "schema is missing")
 
     def test_yaml_extension_is_not_read(self):
         self.write("rendering", CAND_CORE, ext=".yaml")
-        self.assertError(self.check()[0], "roadmap/candidates/rendering.yaml", "not read")
+        self.assertError(self.check()[0], "candidates/rendering.yaml", "not read")
 
     def test_existing_pillar_must_be_a_registry_prefix(self):
         self.edit("core", "pillar: COR", "pillar: XYZ")
-        self.assertError(self.check()[0], "roadmap/candidates/core.yml", "XYZ is not a registry prefix")
+        self.assertError(self.check()[0], "candidates/core.yml", "XYZ is not a registry prefix")
 
     def test_existing_pillar_file_stem(self):
         self.write("rendering", CAND_CORE.replace("key: host", "key: rhost").replace(
             "key: abi", "key: rabi"))
-        self.assertError(self.check()[0], "roadmap/candidates/rendering.yml", "COR", "core.yml")
+        self.assertError(self.check()[0], "candidates/rendering.yml", "COR", "core.yml")
 
     def test_proposed_prefix_is_new(self):
         self.edit("datasets", "pillar: DAT", "pillar: REN")
-        self.assertError(self.check()[0], "roadmap/candidates/datasets.yml",
+        self.assertError(self.check()[0], "candidates/datasets.yml",
                          "proposed pillar REN is already a registry prefix")
 
     def test_prefixes_are_unique(self):
@@ -669,7 +669,7 @@ class CandidateTest(unittest.TestCase):
 
     def test_depends_on_must_exist(self):
         self.edit("core", "[COR-01]", "[COR-99]")
-        self.assertError(self.check()[0], "roadmap/candidates/core.yml", "host-tracing",
+        self.assertError(self.check()[0], "candidates/core.yml", "host-tracing",
                          "depends_on COR-99, which does not exist")
 
     def test_candidate_title_rule(self):
@@ -683,7 +683,7 @@ class CandidateTest(unittest.TestCase):
 
     def test_file_title_rule(self):
         self.edit("core", "title: Core Runtime", "title: Core runtime")
-        self.assertError(self.check()[0], "roadmap/candidates/core.yml", "-:", "Core runtime")
+        self.assertError(self.check()[0], "candidates/core.yml", "-:", "Core runtime")
 
     def test_key_is_not_a_feature_id(self):
         self.edit("core", "key: abi-diff", "key: cor-03")
@@ -695,7 +695,7 @@ class CandidateTest(unittest.TestCase):
 
     def test_no_todo(self):
         self.edit("core", "Traces the host.", "TODO write this.")
-        self.assertError(self.check()[0], "roadmap/candidates/core.yml", "contains TODO")
+        self.assertError(self.check()[0], "candidates/core.yml", "contains TODO")
 
     def test_candidates_do_not_satisfy_the_registry(self):
         self.edit("core", "[COR-01]", "[REN-01]")
@@ -861,7 +861,7 @@ entries:
                                                "url": "rendering/"})
 
     def write_candidates(self, **texts):
-        folder = self.root / "roadmap" / "candidates"
+        folder = self.root / "candidates"
         folder.mkdir()
         (folder / "schema.json").write_text(json.dumps(CANDIDATE_SCHEMA), encoding="utf-8")
         for stem, text in texts.items():
@@ -1003,7 +1003,7 @@ class HookTest(unittest.TestCase):
             pillars, features = build.load_registry(build.ROOT)
             # One page per candidate file, the candidates index and its data file, when the
             # folder exists.
-            folder = build.ROOT / "roadmap" / "candidates"
+            folder = build.ROOT / "candidates"
             extra = len(list(folder.glob("*.yml"))) + 2 if folder.is_dir() else 0
             self.assertEqual(len(uris), len(pillars) + len(features) + 2 + extra)
             self.assertEqual(uris["roadmap/cor-01.md"].inclusion, InclusionLevel.NOT_IN_NAV)

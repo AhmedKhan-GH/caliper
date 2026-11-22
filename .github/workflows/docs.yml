@@ -6,7 +6,7 @@ on:
     # (design/mkdocs.yml is under design/), and the sources the docs embed
     # as snippets.
     paths: ['docs/**', 'design/**', 'docs-theme/**', 'mkdocs.yml',
-            'sdk/include/**', 'include/caliper/**', 'examples/**', 'roadmap/**',
+            'sdk/include/**', 'include/caliper/**', 'examples/**', 'roadmap/**', 'candidates/**',
             'scripts/check_doc_headings.py', 'scripts/test_check_doc_headings.py',
             '.github/workflows/docs.yml']
   workflow_dispatch:
