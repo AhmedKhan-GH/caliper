@@ -194,6 +194,41 @@ The cadence before the step marks kept 57.2 % on the small model and 94.9 % on t
 
 The counters of the runtime showed the in-place route in each run: one import in place, no import refused, 0 bytes copied, and each output given as a DLPack capsule over the runtime's own buffer with 0 bytes copied. The publish path then makes the copy of its route, which the table of Output Path states.
 
+### Views Results
+
+With the instrument of the acceptance proof open, a managed run of the proof's transformer kept 56.6 % of its training rate. The parts were then measured one at a time on the same training script. Each number is the median of five short runs of 1,500 steps under a 1-minute load of 2 to 8. An app part is measured in alternating pairs against a run with no app attached, while the app stays open. A viewer part is measured in rounds of direct runs beside a viewer process that subscribes as the app does, against the watch hook with no viewer, which ran at 342.1 steps per second.
+
+| Part | Before | After |
+|---|---|---|
+| App attached, no source and no panel | 56.0 % | 98.0 % |
+| Proof's instrument, steps a to f | 55.3 % | 95.8 % |
+| Kept steps and step stamps, one source of 2,048 steps | 58.8 % | Not measured again |
+| Terrain: kept steps, window and surface in the app | 55.4 % | Not measured again |
+| Loss series, its window and a series panel | 56.8 % | Not measured again |
+| Controls: slider `lr`, button pause and toggle ablate | 61.0 % | Not measured again |
+| Surface operator of `live:head.act` in the script | 74.8 % | 95.2 % |
+| `blocks.0.attn.proj.act` subscribed alone | 95.7 % | 98.7 % |
+| `head.act` subscribed alone | 95.1 % | Not measured again |
+| Series `loss` alone | 97.9 % | Not measured again |
+| Series `loss` and `lr`, as the runner's own connection | 99.6 % | 99.6 % (`lr` alone) |
+| Scene `model` alone | 65.0 % | 98.8 % |
+| Grouped views alone | 99.3 % | Not measured again |
+| Every view | 69.1 % | 95.2 % |
+| Every view and every series, as the app and its runner | 49.6 % | 98.5 % |
+
+The After column comes from the fixed code before its last change, the share of 2 % for attached views, except the last row, which is from the final code in a quiet window. The script without `caliper.watch` ran at 228.6 steps per second, slower than with the hook, because the hook's own commits give torch's queued work to the GPU.
+
+Two causes made the attached app cost 44 %. The app subscribes every view of the script at 60 a second for its live catalog, and the script took a snapshot of each of its 34 views at each tick, outside any budget. The colors of the scene `model` copied their color table from the host at each publish, ten times a second, and on MPS that copy waits for torch's whole queue: 29 ms a call, a third of the throughput by itself. Two more defects showed on the way. A grouped view of a model whose outputs need pooling raised in the forward hook, because the range of a pooled view is an `out=` reduction on a tensor that requires grad. A watched float series woke the sender at each step and cost 6.9 %.
+
+The final code was measured as the integration measured the defect: its proof script, its instrument of steps a to f and its timing script of 4,000 steps, five alternating pairs, in a quiet window with all three slots held. The medium model of Measurements ran the same way under the same instrument.
+
+| Model | Attached | Direct | Share | 1-Minute Load |
+|---|---|---|---|---|
+| Proof's transformer | 325.6 | 339.8 | 95.8 % | 1.7 to 4.3 |
+| Medium model | 85.7 | 86.0 | 99.6 % | 2.6 to 3.0 |
+
+The cost to what a person sees is the rate of the views. With the old code, the panels of the proof updated at every step of its run, 42.9 times a second at its pace of 10 ms of sleep a step, and at 53.9 times a second at full speed, while the run lost 44 %. With the final code, they update 2.3 times a second at the proof's pace and 4.4 times a second at full speed. The series `loss` still delivers every step's value, in one chunk a pass. The hidden app draws about one frame a second and keeps one value of a view a frame, thus the whole proof still passed, and its terrain reached its 40 rows in 38.6 s, against about 45 s before. Each live view's entry in `catalog_list` then said why it updates less often: "Updates every 19 steps, about 3.4 times a second, because the views and programs that viewers attach keep to 2 % of the training time, and one pass of them costs 8.13 ms against a step of 22.12 ms."
+
 ### Documented and Undocumented Behavior
 
 DLPack documents the device type `kDLMetal` and says that `data` can be opaque on some device types, with `byte_offset` to the first element. Torch documents `__dlpack__` and `torch.mps.Event`. Torch does not document that `data` is the storage's `id<MTLBuffer>` on MPS, that its MPS buffers use shared storage and untracked hazards, or the first version that exports MPS tensors. The runtime depends on the first point, and it checks it at run time: it refuses a `data` value that is not an `MTLBuffer` of the device.

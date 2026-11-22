@@ -103,6 +103,7 @@ class SimRing:
         self.sim = sim
         self.snap_s, self.snap_gpu = snap_s, snap_gpu
         self.calls = 30                            # the view calls of a pass
+        self.publish_s = 0.0                       # the sender thread's time (none here)
         self.interval = 1.0 / rate
         self.gate_open = False
         self.registered = True
@@ -218,13 +219,13 @@ def test_costly_snapshots_keep_to_the_budget(loop):
     b, d = P._CAD.step_s(), P._CAD.cost_s()
     assert b == pytest.approx(3.0e-3, rel=0.05)
     n = P._CAD.n
-    assert n >= math.ceil(d / (P.SHARE * b))
+    assert n >= math.ceil(d / (P.VIEWS_SHARE * b))   # attached views keep to the smaller share
     assert base_time(1.0e-3, 3.0e-3, 6000) / s.end() >= 0.95
     st = P.views_stats()
     assert st["every"] == n and st["limit"] == "budget"
-    assert st["share"] <= P.SHARE * 1.05
+    assert st["share"] <= P.VIEWS_SHARE * 1.05 and st["budget"] == P.VIEWS_SHARE
     # The views still update a few times a second.
-    assert st["passes_per_s"] is not None and st["passes_per_s"] >= 3
+    assert st["passes_per_s"] is not None and st["passes_per_s"] >= 2
 
 
 @pytest.mark.parametrize("sleep", [0.0, 10e-3])

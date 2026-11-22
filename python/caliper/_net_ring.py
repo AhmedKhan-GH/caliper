@@ -253,6 +253,7 @@ class NetRing:
         self.cadence: dict = {}                 # the shared cadence for the snapshots' status
         self.registered = False                 # caliper._programs gates this ring
         self.float_wake_t = -math.inf           # the last wake for a float series value
+        self.publish_s = 0.0                    # the sender thread's CPU seconds so far (it adds)
 
     # -- the registry (training thread writes, network thread reads) -----------
     def _view(self, name: str, kind: int, now: float) -> ViewState:

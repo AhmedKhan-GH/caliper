@@ -321,10 +321,12 @@ class NativeServer(NetServer):
                     wait = POLL_MS
                 msgs = nio.control(wait)
                 self._idle = False
+                t0 = time.thread_time()
                 for kind, conn, frame in msgs:
                     self._on_control(kind, conn, frame)
                 p.pump_once()
                 p.controls.flush()
+                self.ring.publish_s += time.thread_time() - t0   # the pump's share of the cadence
             except Exception:                         # a bug: count it, keep serving
                 self.counters["pump_errors"] += 1
                 if self.closed:

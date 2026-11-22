@@ -29,7 +29,9 @@ colors, operators and programs) keeps to one budget. The checkpoint before a ste
 that step is a pass: N steps after the last one and something due, a program by its ``every`` or
 a view by its own rate. The view calls of a pass step take their snapshots, and its checkpoint
 closes them with one event and runs the programs with one wait. The overhead ``D`` of a pass is
-at least the training thread's own time in its view calls. While the views' own work in a pass is
+at least the training thread's own time in its view calls plus the sender thread's time until the
+next pass, and while views are attached the passes keep to ``VIEWS_SHARE`` instead of ``SHARE``,
+because the viewer's own work on the snapshots costs the run about as much again. While the views' own work in a pass is
 cheap enough that a pass every ``FLOOR_S`` stays inside the share by itself, they get such a pass
 of their own when the cadence is slower (the floor), which the cadence does not count.
 :func:`views_stats` gives the cadence of the views for their status.
@@ -65,6 +67,8 @@ listeners: list = []
 PROGRAM_STATE uses them. An error in a listener is warned once and never stops the step."""
 
 SHARE = 0.04            # the runtime's share of the step time (design/producer-runtime.md, Budget)
+VIEWS_SHARE = 0.02      # the share while views are attached: the sender's and the viewer's own work
+                        # on the snapshots costs the run about as much again as the measured passes
 WARMUP_STEPS = 8        # steps after an install before the program's first pass
 N_MIN = 3               # a cycle keeps two steps without a pass, which the measurement needs
 BASE_SAMPLES = 9        # stretches without a pass in the median of the base step time b
@@ -153,7 +157,8 @@ class _Cadence:
         self.base = deque(maxlen=BASE_SAMPLES)
         self.cost = deque(maxlen=COST_SAMPLES)
         self.n = None               # N, None before the first measured overhead
-        self.want = None            # ceil(D / (SHARE * b)) of the last update
+        self.want = None            # ceil(D / (target * b)) of the last update
+        self.target = SHARE         # the share the passes keep to: VIEWS_SHARE while views attach
         self.ceiling = EVERY_MAX
         self.over = 0               # updates in a row that wanted more than the ceiling
         self.last_pass = None       # the step of the last pass
@@ -251,7 +256,7 @@ class _Cadence:
         if b is None or d is None:
             return
         self.ceiling = max(N_MIN, min(EVERY_MAX, math.ceil(CEILING_S / b))) if b > 0 else N_MIN
-        self.want = math.ceil(d / (SHARE * b)) if b > 0 else EVERY_MAX
+        self.want = math.ceil(d / (self.target * b)) if b > 0 else EVERY_MAX
         n = self.n or N_MIN
         want = min(max(self.want, N_MIN), self.ceiling)
         if want > n:
@@ -834,6 +839,7 @@ def _at_step(step: int) -> None:
             if _STATE["pass"] is not None and _STATE["pass"] != step:
                 _STATE["pass"] = None
         is_pass = _STATE["pass"] == step             # decided at the checkpoint before
+        _CAD.target = VIEWS_SHARE if ring is not None else SHARE
         budget = _STATE.get("pass_budget", True)
         live = [p for p in _PROGS.values() if p.state in ("waiting", "compiled", "running")]
         due = [p for p in live if p.warm <= 0 and _every_ok(p, step)] if is_pass and budget else []
@@ -907,6 +913,13 @@ def _at_step(step: int) -> None:
         if ring is not None and ring is _VIEWS["ring"] and (is_pass or ring.gate_open):
             taken = ring.close_pass(step, _clock())
             if taken:
+                # The sender thread's time since the last pass, which published that pass's
+                # snapshots, belongs to that pass: it takes the GIL from the training thread.
+                pub = ring.publish_s
+                last = _STATE.get("pub_pass")
+                if last is not None and last[0] in _CAD.view_cost:
+                    _CAD.view_cost[last[0]] += max(0.0, pub - last[1])
+                _STATE["pub_pass"] = (step, pub)
                 _STATE["view_s"].append(ring.gate_cost)
                 if is_pass:
                     _CAD.view_cost[step] = ring.gate_cost
@@ -950,7 +963,7 @@ def _floor_due(ring, now: float) -> bool:
     if now - ring.pass_t < FLOOR_S:
         return False
     v = _STATE["view_s"]
-    return not v or _median(v) <= SHARE * FLOOR_S
+    return not v or _median(v) <= _CAD.target * FLOOR_S
 
 
 def _views_status(ring, floor: bool) -> dict:
@@ -971,7 +984,7 @@ def _views_status(ring, floor: bool) -> dict:
     return {"every": n, "passes_per_s": None if rate is None else round(rate, 2),
             "step_ms": None if b is None else round(b * 1e3, 3),
             "pass_ms": None if d is None else round(d * 1e3, 3),
-            "share": None if share is None else round(share, 4), "budget": SHARE, "limit": limit}
+            "share": None if share is None else round(share, 4), "budget": _CAD.target, "limit": limit}
 
 
 def views(ring) -> None:

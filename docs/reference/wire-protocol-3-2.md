@@ -389,7 +389,7 @@ A hub maps the `request_id` of a PROGRAM as it maps the one of a CONTROL, and ke
 
 ### Snapshot Cadence
 
-The script runs the programs, the snapshots of the subscribed views and the chunks of the watched series at the passes of one cadence, which keeps their overhead inside 4 % of the training time. To a peer with `programs`, a SNAPSHOT taken at a pass may carry the key `cadence`, an object with these members:
+The script runs the programs, the snapshots of the subscribed views and the chunks of the watched series at the passes of one cadence, which keeps their overhead inside a share of the training time: 2 % while a viewer subscribes, 4 % for programs alone. To a peer with `programs`, a SNAPSHOT taken at a pass may carry the key `cadence`, an object with these members:
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -397,7 +397,7 @@ The script runs the programs, the snapshots of the subscribed views and the chun
 | `passes_per_s` | number or null | Passes that took something, a second, over the last 8 |
 | `step_ms`, `pass_ms` | number or null | The measured time of a step without a pass, and the overhead of a pass |
 | `share` | number or null | The measured share of the training time that the passes take |
-| `budget` | number | The share that the cadence keeps to, 0.04 |
+| `budget` | number | The share that the cadence keeps to, 0.02 while a viewer subscribes |
 | `limit` | string | `budget` when the passes come less often than the views ask, `floor` for a pass of cheap views on their own, `rate` when the views' own rate sets the pace |
 
 A reader that does not know the key ignores it.
