@@ -9,8 +9,6 @@
   {{ super() }}
   {% if page.meta and page.meta.roadmap_graph %}
     <script src="{{ 'assets/roadmap/vendor/elkjs-0.12.1/elk.bundled.js' | url }}"></script>
-    <script src="{{ 'assets/roadmap/vendor/cytoscape-3.34.4/cytoscape.min.js' | url }}"></script>
-    <script src="{{ 'assets/roadmap/vendor/cytoscape-elk-2.3.0/cytoscape-elk.js' | url }}"></script>
     <script src="{{ 'assets/roadmap/roadmap.js' | url }}"></script>
   {% endif %}
 {% endblock %}
