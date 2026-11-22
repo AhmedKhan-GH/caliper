@@ -37,7 +37,8 @@ struct SpecFile {
 SpecFile read_spec_file(const std::string& spec_path,
                         const caliper_builder::spec::SourceResolver& resolver = {});
 
-// The spec format version the spec library reads (caliper_spec).
+// The newest spec format version the spec library reads (caliper_spec); it
+// reads every version from 0 to this one.
 int64_t spec_runtime_format_version();
 
 } // namespace caliper_host

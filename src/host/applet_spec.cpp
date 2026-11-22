@@ -12,7 +12,7 @@ namespace caliper_host {
 static_assert(kMaxSpecFileBytes == spec::limits::kTextBytes,
               "the loader reads at most what the spec library parses");
 
-int64_t spec_runtime_format_version() { return spec::kFormatVersion; }
+int64_t spec_runtime_format_version() { return spec::kLatestFormatVersion; }
 
 namespace {
 SpecDiagnostic to_host(const spec::Diagnostic& d) {
