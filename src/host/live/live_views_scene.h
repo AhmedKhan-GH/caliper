@@ -10,10 +10,12 @@
 
 #include "gfx/gfx.h"
 #include "live/live_views_state.h"
+#include "scene/camera.h"   // StartingCamera, the option view_camera
 
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <vector>
 #include <string>
 
@@ -94,6 +96,14 @@ struct SceneRectOptions {
     std::string up;          // "+x", "-x", "+y", "-y", "+z" or "-z"; empty: the scene's own
     bool labels = true;      // the entities' labels over the picture
     bool scale_bar = false;  // a scale bar in the scene's units
+    // The camera the panel opens on (the option view_camera, spec_prepare.h spec_starting_camera):
+    // set as the view's starting camera once for each value, which `view_camera_key` names, as
+    // `up` is. Absent: the scene's own.
+    std::optional<caliper_scene::StartingCamera> view_camera;
+    std::string view_camera_key;
+    // The axes mark in the picture's bottom-right corner (the option axes): an arrow for each of
+    // x, y and z that turns with the camera, in a 3-D scene. A live scene has no ground grid.
+    bool axes = false;
     // The panel's stages (scene/stage_cache.h), or null for the built-in programs, and a line that
     // the picture shows at its bottom, such as a stage's refusal with its line and column.
     caliper_scene::StageSource* stages = nullptr;
@@ -114,6 +124,7 @@ struct SceneRectState {
     float seam_v = -1.0f;
     bool seam_asked = false; // the request in flight is the seam pick's
     std::string up_applied;  // the option `up` that was applied, so that it is applied once
+    std::string camera_applied;   // the key of the option `view_camera` that was applied, the same way
 };
 
 // Asks for a pick at (u, v), each from 0 to 1 across the rectangle, at the next draw, as if the

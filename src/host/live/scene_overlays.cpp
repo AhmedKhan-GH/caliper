@@ -7,7 +7,9 @@
 // then eight farther ones with a leader line. A label with no free place
 // shows a dot at its anchor, and a hover over the dot shows its text. The
 // placement runs again only when an anchor, a text or the view's size
-// changes, because the last few placements are kept.
+// changes, because the last few placements are kept. The view's own texts,
+// such as the selection count and the scale bar, are obstacles that no label
+// covers.
 #include "live/scene_overlays.h"
 
 #include "scene/compile.h"
@@ -89,7 +91,10 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
         if (in.rings && i < in.rings->size() && (*in.rings)[i])
             rings.push_back({boxes[i].anchor_x - ring - 1, boxes[i].anchor_y - ring - 1, boxes[i].anchor_x + ring + 1,
                              boxes[i].anchor_y + ring + 1});
-    const std::vector<PlacedLabel>& placed = placed_for(boxes, panel, rings);
+    // The view's own texts are obstacles as the rings are, after them.
+    std::vector<LabelRect> obstacles = rings;
+    if (in.keep_clear) obstacles.insert(obstacles.end(), in.keep_clear->begin(), in.keep_clear->end());
+    const std::vector<PlacedLabel>& placed = placed_for(boxes, panel, obstacles);
     const ImU32 accent = in.accent ? in.accent : in.ink;
     for (const LabelRect& r : rings) {
         const ImVec2 c((r.x0 + r.x1) * 0.5f, (r.y0 + r.y1) * 0.5f);

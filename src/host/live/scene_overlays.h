@@ -7,6 +7,8 @@
 // Defined in scene_overlays.cpp.
 #include <imgui.h>
 
+#include "spec_runtime/label_layout.h"   // LabelRect
+
 #include <vector>
 
 namespace caliper_scene {
@@ -29,6 +31,10 @@ struct SceneOverlayInput {
     const std::vector<bool>* rings = nullptr;
     ImU32 ink = 0, shade = 0;
     ImU32 accent = 0;   // the rings' colour; the ink when 0
+    // Rectangles in screen pixels that the view's own texts take, such as the
+    // selection count, the scale bar with its label and a stage's message:
+    // no label covers them, as no label covers a ring. Null when there are none.
+    const std::vector<caliper_host::LabelRect>* keep_clear = nullptr;
 };
 
 void draw_scene_overlays(const SceneOverlayInput& input);

@@ -229,6 +229,54 @@ const SceneView* scene_view(const View& v) { return v.scene ? v.scene->view.get(
 
 // ---- A scene drawn into a rectangle ----------------------------------------------------------------
 
+namespace {
+
+// The axes mark of a 3-D scene in the corner whose bottom-right is `corner`: an arrow for each of
+// x, y and z from one centre, as the camera's rotation turns it, the farthest drawn first, each
+// with its letter at its tip. Returns the rectangle it takes; an empty one in a 2-D scene or
+// before the view has a camera.
+caliper_host::LabelRect draw_axes_mark(ImDrawList* dl, const SceneView& view, ImVec2 corner) {
+    const caliper_scene::ViewCamera cam = view.effective_camera();
+    if (std::holds_alternative<caliper_scene::PanZoom>(cam) || !view.width() || !view.height()) return {};
+    const caliper_scene::CameraMatrices m = caliper_scene::camera_matrices(cam, view.tree(), view.width(), view.height());
+    if (!m.ok) return {};
+    const float font = ImGui::GetFontSize();
+    const float len = std::round(1.6f * font), margin = std::round(0.8f * font);
+    const ImVec2 c(corner.x - margin - len - font * 0.5f, corner.y - margin - len - font * 0.5f);
+    struct Arrow {
+        float dx, dy, depth;
+        const char* name;
+        ImU32 color;
+    };
+    Arrow arrows[3] = {{0, 0, 0, "x", IM_COL32(222, 92, 84, 255)},
+                       {0, 0, 0, "y", IM_COL32(112, 186, 104, 255)},
+                       {0, 0, 0, "z", IM_COL32(96, 146, 232, 255)}};
+    for (int i = 0; i < 3; ++i) {
+        // Column i of the view's rotation: where world axis i points on the screen (y down there).
+        arrows[i].dx = float(m.view.at(0, i));
+        arrows[i].dy = -float(m.view.at(1, i));
+        arrows[i].depth = float(m.view.at(2, i));
+        if (!std::isfinite(arrows[i].dx) || !std::isfinite(arrows[i].dy) || !std::isfinite(arrows[i].depth)) return {};
+    }
+    std::sort(std::begin(arrows), std::end(arrows), [](const Arrow& a, const Arrow& b) { return a.depth < b.depth; });
+    const ImU32 shade = IM_COL32(0, 0, 0, 140);
+    dl->AddCircleFilled(c, len + font * 0.5f, IM_COL32(0, 0, 0, 70));
+    for (const Arrow& a : arrows) {
+        const ImVec2 tip(c.x + a.dx * len, c.y + a.dy * len);
+        dl->AddLine(c, tip, shade, 4.0f);
+        dl->AddLine(c, tip, a.color, 2.0f);
+        const ImVec2 ts = ImGui::CalcTextSize(a.name);
+        const ImVec2 at(std::round(c.x + a.dx * (len + font * 0.45f) - ts.x * 0.5f),
+                        std::round(c.y + a.dy * (len + font * 0.45f) - ts.y * 0.5f));
+        dl->AddText(ImVec2(at.x + 1.0f, at.y + 1.0f), shade, a.name);
+        dl->AddText(at, a.color, a.name);
+    }
+    const float r = len + font;
+    return {c.x - r, c.y - r, c.x + r, c.y + r};
+}
+
+}  // namespace
+
 void pick_scene_rect(SceneRectState& state, float u, float v) {
     state.seam_u = std::clamp(u, 0.0f, 1.0f);
     state.seam_v = std::clamp(v, 0.0f, 1.0f);
@@ -266,6 +314,10 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
                                       caliper_scene::Axis::NegY, caliper_scene::Axis::PosZ, caliper_scene::Axis::NegZ})
             if (options.up == caliper_scene::axis_name(a)) sc->switch_up(a);
         state.up_applied = options.up;
+    }
+    if (options.view_camera && options.view_camera_key != state.camera_applied) {
+        sc->set_starting(*options.view_camera);
+        state.camera_applied = options.view_camera_key;
     }
     sc->set_scale_bar(options.scale_bar);
     sc->set_stage_source(options.stages);
@@ -319,10 +371,12 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p1(p0.x + size.x, p0.y + size.y);
     if (const uint64_t tex = sc->imgui_texture()) dl->AddImage((ImTextureID)tex, p0, p1);
+    std::vector<caliper_host::LabelRect> keep_clear;   // the view's own texts, which no label covers
     if (!options.stage_message.empty()) {   // a stage's refusal or stop, over the picture's bottom
         const float pad = 4.0f, h = ImGui::GetTextLineHeight() + 2 * pad;
         const ImVec2 a(p0.x, std::max(p0.y, p1.y - h));
         dl->AddRectFilled(a, p1, IM_COL32(0, 0, 0, 170));
+        keep_clear.push_back({a.x, a.y, p1.x, p1.y});
         dl->PushClipRect(a, p1, true);
         dl->AddText(ImVec2(a.x + pad, a.y + pad), IM_COL32(255, 196, 120, 255), options.stage_message.c_str());
         dl->PopClipRect();
@@ -384,8 +438,25 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
             dl->AddLine(a, b, ink, 2.0f);
             dl->AddLine(a, ImVec2(a.x, a.y - 5.0f), ink, 2.0f);
             dl->AddLine(b, ImVec2(b.x, b.y - 5.0f), ink, 2.0f);
-            dl->AddText(ImVec2(a.x, a.y - 6.0f - ImGui::GetTextLineHeight()), ink, bar.label.c_str());
+            const ImVec2 at(a.x, a.y - 6.0f - ImGui::GetTextLineHeight());
+            dl->AddText(at, ink, bar.label.c_str());
+            const float label_w = ImGui::CalcTextSize(bar.label.c_str()).x;
+            keep_clear.push_back({a.x - 2.0f, at.y - 2.0f, std::max(b.x, at.x + label_w) + 2.0f, a.y + 2.0f});
         }
+    }
+    if (options.axes) {
+        const float bottom = keep_clear.empty() || options.stage_message.empty() ? p1.y : keep_clear.front().y0;
+        if (const caliper_host::LabelRect mark = draw_axes_mark(dl, *sc, ImVec2(p1.x, bottom)); mark.x1 > mark.x0)
+            keep_clear.push_back(mark);
+    }
+    // The selection count at the top right, placed before the labels so that none covers it.
+    char count_text[48] = {};
+    ImVec2 count_at;
+    if (sc->highlighted()) {
+        std::snprintf(count_text, sizeof count_text, "%llu selected", (unsigned long long)sc->highlighted());
+        const ImVec2 ts = ImGui::CalcTextSize(count_text);
+        count_at = ImVec2(p1.x - ts.x - 10.0f, p0.y + 8.0f);
+        keep_clear.push_back({count_at.x - 2.0f, count_at.y - 2.0f, count_at.x + ts.x + 2.0f, count_at.y + ts.y + 2.0f});
     }
     if (options.labels && sc->width() && sc->height()) {
         // The item labels and the annotations' labels (scene_overlays.h).
@@ -407,14 +478,10 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
         in.labels = &labels;
         in.ink = ink;
         in.shade = shade;
+        in.keep_clear = &keep_clear;
         draw_scene_overlays(in);
     }
-    if (sc->highlighted()) {
-        char t[48];
-        std::snprintf(t, sizeof t, "%llu selected", (unsigned long long)sc->highlighted());
-        const ImVec2 ts = ImGui::CalcTextSize(t);
-        dl->AddText(ImVec2(p1.x - ts.x - 10.0f, p0.y + 8.0f), ink, t);
-    }
+    if (count_text[0]) dl->AddText(count_at, ink, count_text);
     dl->PopClipRect();
     return SceneRectResult::drawn;
 }

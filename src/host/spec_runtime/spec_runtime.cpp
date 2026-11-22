@@ -10,6 +10,7 @@
 #include "live/live_views_scene.h"   // a scene drawn into a scene panel's rectangle
 #include "live/live_scene.h"         // the scene view of a panel's entities
 #include "spec_runtime/spec_entities.h"
+#include "spec_runtime/label_layout.h"   // fit_with_ellipsis
 #include "scene/scene.h"   // kPalette
 
 #include "ui/sternbild_fonts.h"
@@ -46,7 +47,6 @@ using caliper_builder::PanelData;
 
 namespace {
 
-const char* const kEllipsis = "\xE2\x80\xA6";   // U+2026
 
 ImU32 with_alpha(ImU32 c, int a) { return (c & 0x00ffffffu) | ((ImU32)a << 24); }
 
@@ -59,19 +59,10 @@ ImVec2 text_size(ImFont* f, float size, const std::string& s) {
 // `s` cut to `w` with an ellipsis, "" when not even that fits (the live
 // views' fit_text).
 std::string fit_text(ImFont* f, float size, const std::string& s, float w) {
-    if (text_size(f, size, s).x <= w) return s;
-    if (text_size(f, size, kEllipsis).x > w) return {};
-    std::string t = s;
-    while (!t.empty()) {
-        while (!t.empty()) {
-            const unsigned char c = (unsigned char)t.back();
-            t.pop_back();
-            if ((c & 0xC0) != 0x80) break;
-        }
-        while (!t.empty() && t.back() == ' ') t.pop_back();
-        if (text_size(f, size, t + kEllipsis).x <= w) return t + kEllipsis;
-    }
-    return {};
+    ImFont* font = font_or_current(f);
+    return caliper_host::fit_with_ellipsis(s, w, [font, size](std::string_view t) {
+        return font->CalcTextSizeA(size, FLT_MAX, 0.0f, t.data(), t.data() + t.size()).x;
+    });
 }
 
 void text_at(ImDrawList* dl, ImFont* f, float size, ImVec2 p, ImU32 c, const std::string& s) {
@@ -1288,6 +1279,15 @@ void SpecRuntime::bind_scene(Entry& e) {
     o.up = so.up.value_or("");
     o.labels = so.labels.value_or(true);
     o.scale_bar = so.scale_bar.value_or(false);
+    // The panel's starting camera and its axes mark. The option box keeps to the entities of a
+    // spec, because a live scene keeps its own units (design/instruments.md).
+    if (!so.view_camera.is_null()) {
+        spec::Panel shown = e.panel;
+        shown.options.scene = so;
+        o.view_camera = spec_starting_camera(shown);
+        o.view_camera_key = so.view_camera.dump();
+    }
+    o.axes = so.axes.value_or(true);
     e.view.scene = [this, panel, scene, o](const ImRect& content) {
         CaliperCore* core = core_ ? core_() : nullptr;
         if (!core || scene.empty()) return false;

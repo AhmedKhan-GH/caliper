@@ -1415,8 +1415,10 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         dl->AddImage((ImTextureID)id, p0, ImVec2(p0.x + avail.x, p0.y + avail.y));
     std::string bar_text;   // where the bar is, for the UI driver's `where` and the module's geometry
     std::fill(v.geo_bar, v.geo_bar + 4, 0.0f);
+    std::vector<caliper_host::LabelRect> keep_clear;   // the view's own texts, which no label covers
     if (const caliper_scene::ScaleBar bar = sc->scale_bar(avail.x, avail.y); bar.visible) {
         const ImRect band = draw_scale_bar(dl, S->look, p0, avail, bar);
+        keep_clear.push_back({band.Min.x, band.Min.y, band.Max.x, band.Max.y});
         char t[96];
         std::snprintf(t, sizeof t, " scale_bar %.2f %.2f %.2f %.2f", band.Min.x, band.Min.y, band.Max.x, band.Max.y);
         bar_text = t;
@@ -1502,11 +1504,14 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         char t[48];
         std::snprintf(t, sizeof t, "%llu selected", (unsigned long long)sc->highlighted());
         const ImVec2 ts = ImGui::CalcTextSize(t);
-        dl->AddText(ImVec2(p0.x + avail.x - ts.x - 10.0f, p0.y + 8.0f), kSelText, t);
+        const ImVec2 at(p0.x + avail.x - ts.x - 10.0f, p0.y + 8.0f);
+        dl->AddText(at, kSelText, t);
+        keep_clear.push_back({at.x - 2.0f, at.y - 2.0f, at.x + ts.x + 2.0f, at.y + ts.y + 2.0f});
     }
 
     // Labels: text over the picture at anchors the scene core projects, nearest first, at most
-    // 512, placed without overlap (scene_overlays.h); a label without room shows as a dot.
+    // 512, placed without overlap (scene_overlays.h) and off the scale bar and the selection
+    // count; a label without room shows as a dot.
     if (sc->width() && sc->height()) {
         const std::vector<caliper_scene::LabelAnchor> labels = sc->labels();
         caliper_live_views::SceneOverlayInput in;
@@ -1517,6 +1522,7 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
         in.labels = &labels;
         in.ink = ImGui::GetColorU32(ImGuiCol_Text);
         in.shade = IM_COL32(0, 0, 0, 160);
+        in.keep_clear = &keep_clear;
         dl->PushClipRect(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), true);
         caliper_live_views::draw_scene_overlays(in);
         dl->PopClipRect();
