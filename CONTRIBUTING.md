@@ -15,10 +15,10 @@ The GPU suites skip when the machine has no usable device, and ctest reports the
 
 Every pull request is built and tested on macOS and Windows. [Continuous integration](docs/development/ci.md) describes what runs, what is cached, and how to handle a failed run.
 
-To check the documentation, build it the way the Docs workflow does, from the repository root and with the same versions. The second command checks the design pages, which are built apart from the docs site and are not published.
+To check the documentation, build it the way the Docs workflow does, from the repository root and with the same versions. The first command builds the docs site, whose Python API reference mkdocstrings renders from the docstrings of Caliper LIB. The second command checks the design pages, which are built apart from the docs site and are not published.
 
 ```sh
-uvx --with mkdocs-material==9.8.1 --with mkdocs-awesome-nav==3.3.0 --with pymdown-extensions==13.1 mkdocs@1.6.1 build --strict
+uvx --with mkdocs-material==9.8.1 --with mkdocs-awesome-nav==3.3.0 --with pymdown-extensions==13.1 --with mkdocstrings==1.0.8 --with mkdocstrings-python==2.0.10 --with griffelib==2.4.1 --with mkdocs-autorefs==1.4.5 --with ruff==0.17.3 mkdocs@1.6.1 build --strict
 uvx --with mkdocs-material==9.8.1 --with mkdocs-awesome-nav==3.3.0 --with pymdown-extensions==13.1 mkdocs@1.6.1 build --strict -f design/mkdocs.yml
 ```
 
