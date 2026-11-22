@@ -1,0 +1,245 @@
+# yaml-language-server: $schema=schema.json
+title: Web geometry plan page
+kind: page
+source: design/web-geometry.md
+ref: sprint4
+summary: The plan page design/web-geometry.md, which only the sprint4 branch holds, in its newest version
+  there, read heading by heading.
+entries:
+- heading: What is built and what is planned
+  item: Nothing on the page is built; the built pieces on the sprint2 branch are the web viewer module,
+    the heatmap colormap in WGSL, and points on the geometry path.
+  ids:
+  - EMB-04
+  - EMB-02
+  - EMB-01
+- heading: What is built and what is planned
+  item: The TypeScript package web/src has a WebGPU points renderer and Canvas 2D views that the migration
+    trims.
+  ids:
+  - EMB-03
+- heading: The backend in the renderer core
+  item: The WebGPU backend takes draw records; eight draws (points, depth points, segments, arrows, box
+    edges, box faces, mesh, image), each with a pick variant.
+  ids:
+  - EMB-08
+  - REN-13
+- heading: The backend in the renderer core
+  item: The geometry service does not come to the browser; scene draws replace it.
+  ids:
+  - EMB-08
+- heading: WebGPU limits that shape the design
+  item: WebGPU limits (no vertex storage in compatibility mode, no point size, no line width, 256 MiB
+    buffers) that shape the draws.
+  ids:
+  - EMB-08
+- heading: The design
+  item: Section heading for the WebGPU draw design.
+  ids:
+  - EMB-08
+- heading: Vertex and instance-step buffers
+  item: Scene draws use vertex and instance-step buffers at any offset, with stride 0 for constant streams,
+    and a 4-byte colour source read as bits.
+  ids:
+  - EMB-08
+- heading: Bind groups and the parameter block
+  item: Three bind groups, a 192-byte parameter block in 256-byte slots and a class table texture.
+  ids:
+  - EMB-08
+- heading: Pipelines and their cache
+  item: Pipelines cached by descriptor and created asynchronously.
+  ids:
+  - EMB-08
+- heading: Points
+  item: Points as instanced quads sized in pixels or scene units, and depth images drawn as point clouds
+    without a point buffer.
+  ids:
+  - EMB-08
+  - REN-38
+- heading: Lines and arrows
+  item: Lines as screen-space quads with break masks and index-pair edges through the edge gather, and
+    arrows of nine vertices.
+  ids:
+  - EMB-08
+  - REN-42
+  - REN-37
+- heading: Boxes
+  item: Boxes as instances of a unit cube or square with the pose built in the vertex stage.
+  ids:
+  - EMB-08
+  - REN-37
+- heading: Meshes
+  item: Meshes as indexed draws with a headlight or flat faces and an index clamp pass.
+  ids:
+  - EMB-08
+- heading: Images and camera frustums
+  item: Images as textured quads on a camera's plane, texture fills for each image kind, and frustums
+    as eight segments.
+  ids:
+  - EMB-08
+  - REN-38
+  - REN-39
+- heading: Colour
+  item: Colour by integer keys and class table lookup in WebGPU.
+  ids:
+  - REN-14
+  - EMB-08
+  - REN-41
+- heading: Depth, faces, blending and order
+  item: Fixed depth, two-sided faces and the three blend modes of the geometry service.
+  ids:
+  - EMB-08
+- heading: Entity transforms
+  item: Entity world matrices composed in double precision and rounded once per draw.
+  ids:
+  - EMB-08
+  - REN-40
+- heading: Picking
+  item: Pick pass of 16 x 16 pixels in the browser, with lasso on the CPU.
+  ids:
+  - REN-15
+  - EMB-08
+- heading: Uploads and reuse
+  item: Per-batch buffers with power-of-two capacity, writeBuffer reuse and a spare pool; heap copies
+    kept for hover and rebuilding.
+  ids:
+  - EMB-08
+- heading: Budgets and level of detail
+  item: Browser budgets, 256 MiB of scene bytes and 4,096 draws a frame; level of detail only at the producer.
+  ids:
+  - EMB-18
+- heading: The native fallback through Dawn
+  item: The same backend compiles against Dawn and always copies, serving machines without Metal or Vulkan.
+  ids:
+  - REN-25
+- heading: Shader sources
+  item: The WGSL as seven blocks plus the index clamp module, now the one shader source in src/host/gfx/shaders/.
+  ids:
+  - REN-10
+  - EMB-08
+- heading: Declarations
+  item: Declarations, bind group layout and parameter structs of the scene WGSL.
+  ids:
+  - REN-10
+  - EMB-08
+- heading: Helpers and the colormap
+  item: Helpers and the integer-key colormap in WGSL.
+  ids:
+  - REN-14
+  - EMB-08
+- heading: The point shaders
+  item: Point shaders, vs_points and the depth point shader.
+  ids:
+  - REN-10
+  - EMB-08
+- heading: The line and arrow shaders
+  item: Line and arrow shaders, vs_lines.
+  ids:
+  - REN-10
+  - EMB-08
+- heading: The box shaders
+  item: Box edge and box face shaders.
+  ids:
+  - REN-10
+  - EMB-08
+- heading: The mesh shaders
+  item: Mesh shaders and their three fragment stages.
+  ids:
+  - REN-10
+  - EMB-08
+- heading: The image shaders
+  item: Image shaders for colour, depth value and class images.
+  ids:
+  - REN-10
+  - EMB-08
+- heading: The index clamp
+  item: The index clamp and edge gather compute module, with a noted limit above 4,194,240 indices.
+  ids:
+  - REN-10
+  - EMB-08
+  - REN-42
+- heading: Parity with the native renderers
+  item: Browser parity means exact colour away from edges, edge tolerance of one pixel and 2-level tolerance
+    for lit pixels.
+  ids:
+  - EMB-08
+- heading: Parity with the native renderers
+  item: Parity tests in headless Chromium on SwiftShader and the Mac's GPU, with the compatibility device
+    in CI; 4 builder days.
+  ids:
+  - EMB-08
+- heading: The fallback without WebGPU
+  item: Where WebGPU is absent the element draws only a scene's points in Canvas 2D with a notice naming
+    what is not drawn; the text log is plain DOM and the bar chart Canvas 2D; 2 builder days.
+  ids:
+  - EMB-17
+- heading: Work items
+  item: 'Scene draws on the WebGPU backend: vertex layouts, pipeline descriptors with pick variants, uniform
+    arena and buffer pool; 4 builder days.'
+  ids:
+  - EMB-08
+  - REN-13
+- heading: Work items
+  item: Scene shaders in WGSL by hand then moved into the one shader source; 3 days and 1 for the move.
+  ids:
+  - EMB-08
+  - REN-10
+- heading: Work items
+  item: Index clamp pass, image texture fills and encoded frames through the browser decoder; 2 days.
+  ids:
+  - EMB-08
+  - REN-38
+- heading: Work items
+  item: Class table texture and cached colormap blocks; 1 day.
+  ids:
+  - EMB-08
+  - REN-14
+  - REN-41
+- heading: Work items
+  item: 'Picking in the browser: the pick pass, its readback and hover values from heap copies; 2 days.'
+  ids:
+  - REN-15
+  - EMB-08
+- heading: Work items
+  item: Budgets, the refusal line and rebuilding after a lost device; 2 days, moved to sprint 5.
+  ids:
+  - EMB-18
+- heading: Work items
+  item: Parity tests in headless Chromium; 4 days.
+  ids:
+  - EMB-08
+- heading: Work items
+  item: The scene fallback in TypeScript, points only with a notice; 2 days, moved to sprint 5.
+  ids:
+  - EMB-17
+- heading: Work items
+  item: The text log in DOM and the bar chart in Canvas 2D; 3 days, moved to sprint 5; the total is 24
+    builder days with 7 in sprint 5.
+  ids:
+  - REN-51
+  - REN-52
+- heading: Limits
+  item: 'Limits: no zero-copy in a browser or on Dawn, 256 MiB scenes, edges and lit surfaces within tolerance,
+    no mitred joins, unsorted translucency, late picks, the index clamp limit and only Chromium checked.'
+  ids:
+  - EMB-08
+- heading: Decisions
+  item: Decisions on vertex buffers, the parameter block, colour source, colormap by keys, bits textures,
+    line and arrow quads, index-pair edge gather, box poses, flat faces, pick pass, index clamp, flat
+    interpolation, level of detail at the producer and default limits.
+  ids:
+  - EMB-08
+  - REN-14
+  - REN-15
+  - REN-42
+- heading: Decisions
+  item: 'Decision: the scale bar as overlay lines and text drawn by the view layer.'
+  ids:
+  - REN-44
+- heading: Open decisions
+  item: 'Open decisions: antialiased point edges, arrow heads in 3-D, the text log with WebGPU present,
+    decimation while the camera moves, the heap cap and requesting higher limits.'
+  ids:
+  - EMB-08
+  - REN-29
+  - REN-51

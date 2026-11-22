@@ -1,0 +1,439 @@
+# yaml-language-server: $schema=schema.json
+title: Sprint 4 plan page
+kind: page
+source: design/sprint-4.md
+ref: sprint4
+summary: The plan page design/sprint-4.md, which only the sprint4 branch holds, in its newest version
+  there, read heading by heading.
+not_features:
+- How the sizes are given
+- Totals and the wait for the first increment
+entries:
+- heading: Where things stand
+  item: The recordings are MCAP files with the extension .mcap, as the user decided.
+  ids:
+  - STR-12
+- heading: Where things stand
+  item: 'The graphics change keeps no backwards compatibility: each migration step replaces what it moves
+    and deletes the old code, OpenGL is retired at the start of increment 2, one ABI epoch bump in increment
+    6, applets draw in 3-D through a scene service that replaces the geometry service.'
+  ids:
+  - REN-16
+  - REN-17
+  - COR-25
+- heading: The increments
+  item: 'Defect recorded by demo 0 for sprint 4: the app''s run bar shows ''running at step 0'' because
+    it shows the step of the last run-state change.'
+  reason: maintenance
+- heading: 0. The renderer core's minimum cut
+  item: 'Increment 0 as a whole: a quad and a one-entity scene drawn through the graphics layer on Metal
+    and read back byte for byte, scene programs compiled on Metal and in a browser, the sprint 2 heatmap
+    and points drawn unchanged in a browser through the layer (22 days).'
+  ids:
+  - REN-09
+  - REN-10
+  - REN-11
+  - REN-13
+- heading: 0. The renderer core's minimum cut
+  item: Step 0, counters and a baseline (2 days).
+  ids:
+  - REN-31
+- heading: 0. The renderer core's minimum cut
+  item: Step 1, the layer's interface, validation, uniform arena, frames, serials, readback and recording
+    backend (3 of 6 days).
+  ids:
+  - REN-09
+- heading: 0. The renderer core's minimum cut
+  item: Step 1, the layer's Metal backend (3 of 6 days).
+  ids:
+  - REN-09
+- heading: 0. The renderer core's minimum cut
+  item: Step 2, the shader generator with pinned Naga and the scene programs (3 days).
+  ids:
+  - REN-10
+- heading: 0. The renderer core's minimum cut
+  item: Step 3, the scene core (6 days).
+  ids:
+  - REN-11
+- heading: 0. The renderer core's minimum cut
+  item: Step 4, the layer's WebGPU backend in the browser (5 days).
+  ids:
+  - REN-13
+- heading: 1. A loss landscape in a notebook
+  item: 'Increment 1 as a whole: demo 0, the loss surface around the current weights as a mesh with the
+    optimizer''s path, in a notebook widget and the browser viewer, recomputed on the device every N steps
+    (18.5 days).'
+  ids:
+  - STR-11
+- heading: 1. A loss landscape in a notebook
+  item: 'The protocol 3.2 subset in three codecs with golden frames: capability scenes, kind scene (6),
+    SCENE_UPDATE with points, lines and mesh, SCENE_CLEAR with reset (2 of 4 days).'
+  ids:
+  - STR-09
+- heading: 1. A loss landscape in a notebook
+  item: 'The Caliper LIB subset: caliper.scene with space, up, units, rate; scene.mesh, scene.lines, scene.points,
+    static= and rate=, caliper.widget(kind=''scene'') (3 of 6 days).'
+  ids:
+  - STR-10
+- heading: 1. A loss landscape in a notebook
+  item: 'The scene view in the shared view layer: kind 6 in the view registry, scene state from decoded
+    messages, orbit input and fit, info line, widget kind and viewer page (2 days, new).'
+  ids:
+  - REN-12
+- heading: 1. A loss landscape in a notebook
+  item: Points, segment and mesh draws on the WebGPU backend (2 of 4 days).
+  ids:
+  - REN-12
+  - REN-13
+- heading: 1. A loss landscape in a notebook
+  item: Their WGSL and the index clamp's, in the one shader source (2 of 4 days).
+  ids:
+  - REN-10
+- heading: 1. A loss landscape in a notebook
+  item: The index clamp pass (0.5 of 2 days).
+  ids:
+  - REN-13
+- heading: 1. A loss landscape in a notebook
+  item: The colormap blocks, cached by range (0.5 of 1 day).
+  ids:
+  - REN-14
+- heading: 1. A loss landscape in a notebook
+  item: 'Step 6, browser half: the key derivation in the shared C++ header, exhaustive CPU test, integer
+    decision in the browser''s WGSL (1.5 of 2 days).'
+  ids:
+  - REN-14
+- heading: 1. A loss landscape in a notebook
+  item: Parity rows for the three draws in headless Chromium on a default and a compatibility device (2
+    of 4 days).
+  ids:
+  - REN-12
+  - REN-13
+- heading: 1. A loss landscape in a notebook
+  item: 'Demo 0, the loss landscape: notebook, landscape.py, headless test, reference captures and cost
+    measurement (3 days, new).'
+  ids:
+  - STR-11
+- heading: 1. A loss landscape in a notebook
+  item: 'What increment 1 defers: picking, events and selection; arrows, boxes, images, cameras, entity
+    transforms, class table, labels, normals, textures; index-pair edges, up-axis switch, scale bar and
+    view_camera; scene data views beyond the default; timelines and stamps; the rest of the messages;
+    shared-memory session; the TypeScript fallback and budgets.'
+  ids:
+  - REN-15
+  - REN-24
+  - REN-37
+  - REN-38
+  - REN-40
+  - REN-41
+  - STR-23
+  - REN-43
+  - REN-45
+  - REN-42
+  - STR-24
+- heading: 2. The landscape in the app, the end of OpenGL, and the views on the layer
+  item: The scene from the network route in the app, with capture rows on Metal (1.5 days, new).
+  ids:
+  - REN-12
+- heading: 2. The landscape in the app, the end of OpenGL, and the views on the layer
+  item: Step 5, retiring the GLEW OpenGL path, with the refusal where no renderer starts (2 days).
+  ids:
+  - REN-17
+- heading: 2. The landscape in the app, the end of OpenGL, and the views on the layer
+  item: 'Step 6, native rows: the colormap by keys on Metal through the generated program (0.5 of 2 days).'
+  ids:
+  - REN-14
+- heading: 2. The landscape in the app, the end of OpenGL, and the views on the layer
+  item: Step 7, the points live view on the scene core with the graphics suite's reference mode (3 days).
+  ids:
+  - REN-32
+- heading: 2. The landscape in the app, the end of OpenGL, and the views on the layer
+  item: Step 8, the texture path on Metal and the Vulkan renderer reduced (4 days).
+  ids:
+  - REN-33
+- heading: 3. Every primitive natively, through shared memory
+  item: The rest of the Caliper LIB scene calls (3 of 6 days).
+  ids:
+  - STR-10
+- heading: 3. Every primitive natively, through shared memory
+  item: 'The rest of protocol 3.2 in three codecs: other parts, SCENE_TRANSFORMS, SCENE_CLASSES, stamps,
+    text, bars, u16, split updates and the recording messages (2 of 4 days).'
+  ids:
+  - STR-09
+  - STR-23
+- heading: 3. Every primitive natively, through shared memory
+  item: The scene layout of the shared-memory session (5 days).
+  ids:
+  - STR-24
+- heading: 3. Every primitive natively, through shared memory
+  item: Scene data views (3 days).
+  ids:
+  - STR-25
+- heading: 3. Every primitive natively, through shared memory
+  item: Index-pair edges on lines (2 days).
+  ids:
+  - REN-42
+- heading: 3. Every primitive natively, through shared memory
+  item: The up-axis switch (2 days).
+  ids:
+  - REN-43
+- heading: 3. Every primitive natively, through shared memory
+  item: The starting camera, view_camera= (2 days).
+  ids:
+  - REN-45
+- heading: 3. Every primitive natively, through shared memory
+  item: The scale bar from a scene's units (1 day).
+  ids:
+  - REN-24
+- heading: 3. Every primitive natively, through shared memory
+  item: Arrows, boxes, images with depth and segmentation, entity transforms, class table and labels drawn
+    natively from shared memory; pinhole cameras and looking through them.
+  ids:
+  - REN-37
+  - REN-38
+  - REN-40
+  - REN-41
+  - REN-39
+- heading: 4. Every primitive in the browser, and the scene model's additions
+  item: The other draws, their layouts and the pick variants (2 of 4 days).
+  ids:
+  - REN-37
+  - REN-38
+  - REN-39
+  - REN-41
+- heading: 4. Every primitive in the browser, and the scene model's additions
+  item: Their WGSL, and moving the drafted shaders into the one source (2 of 4 days).
+  ids:
+  - REN-10
+  - REN-37
+  - REN-38
+  - REN-39
+  - REN-41
+- heading: 4. Every primitive in the browser, and the scene model's additions
+  item: Texture fills for the image kinds and encoded frames (1.5 of 2 days).
+  ids:
+  - REN-37
+  - REN-38
+  - REN-39
+  - REN-41
+- heading: 4. Every primitive in the browser, and the scene model's additions
+  item: The class table texture (0.5 of 1 day).
+  ids:
+  - REN-37
+  - REN-38
+  - REN-39
+  - REN-41
+- heading: 4. Every primitive in the browser, and the scene model's additions
+  item: The remaining parity rows (2 of 4 days).
+  ids:
+  - REN-37
+  - REN-38
+  - REN-39
+  - REN-41
+- heading: 4. Every primitive in the browser, and the scene model's additions
+  item: Step 9, the TypeScript WebGPU views removed (1.5 days).
+  ids:
+  - EMB-16
+- heading: 4. Every primitive in the browser, and the scene model's additions
+  item: 'Step 10, the scene model''s additions: additive blending, instanced meshes and the edges'' depth
+    offset (3 days).'
+  ids:
+  - REN-34
+- heading: 5. Picking, events and the scene service for applets
+  item: 'Increment 5 as a whole: hover, click, rectangle and lasso natively and in a browser, picks and
+    selections to the script, linked selection, then the scene service with field_scope, flow_scope and
+    sculpt_scope on it (18.5 days). The text log and bar chart moved to sprint 5.'
+  ids:
+  - REN-15
+- heading: 5. Picking, events and the scene service for applets
+  item: Picking and events natively (4 days).
+  ids:
+  - REN-15
+  - REN-46
+- heading: 5. Picking, events and the scene service for applets
+  item: Picking in the browser (2 days).
+  ids:
+  - REN-15
+  - REN-46
+- heading: 5. Picking, events and the scene service for applets
+  item: Step 11, the scene service, with field_scope, flow_scope and sculpt_scope on it (12.5 days).
+  ids:
+  - REN-35
+- heading: 6. Every applet on the scene service, one version of each graphics service and the final seam
+  item: 'Increment 6 as a whole (16.5 days): every applet of the repository on the scene service, geometry
+    service gone, one epoch bump, HostRenderer reduced. The Dawn fallback moved to Windows parity and
+    the outside applet''s port out of the sprint.'
+  ids:
+  - REN-16
+- heading: 6. Every applet on the scene service, one version of each graphics service and the final seam
+  item: Step 12, embed_scope, gpt_scope and instance_scope on the scene service (4 days).
+  ids:
+  - REN-16
+- heading: 6. Every applet on the scene service, one version of each graphics service and the final seam
+  item: Step 13, mesh_scope and twin_scope on the scene service, export drawing scenes, the geometry service
+    deleted, one version of each graphics service, the one epoch bump (11 days).
+  ids:
+  - REN-16
+  - COR-25
+- heading: 6. Every applet on the scene service, one version of each graphics service and the final seam
+  item: Step 14, HostRenderer at its final shape, and the docs (1.5 days).
+  ids:
+  - REN-36
+- heading: 7. Timelines, recordings on MCAP and the scrubber
+  item: 'Increment 7 as a whole (38 days): stamps on step, time and the script''s own timelines; caliper.record
+    writing .mcap; the scrubber in the app and in a browser; recording only when a person starts it; demo
+    4 as the acceptance.'
+  ids:
+  - STR-12
+  - STR-13
+- heading: 7. Timelines, recordings on MCAP and the scrubber
+  item: Timelines in Caliper LIB (3 days).
+  ids:
+  - STR-23
+- heading: 7. Timelines, recordings on MCAP and the scrubber
+  item: 'Recordings on MCAP: recorder and reader in C++, caliper.record, browser reader, timeline and
+    keyframe index, commit points and tailing, writer lock, segments with a manifest, recovery, thinning
+    and caliper export --to parquet (25 days).'
+  ids:
+  - STR-12
+  - STR-28
+  - STR-26
+- heading: 7. Timelines, recordings on MCAP and the scrubber
+  item: The scrubber in the app (5 days).
+  ids:
+  - STR-13
+- heading: 7. Timelines, recordings on MCAP and the scrubber
+  item: The scrubber in the browser (3 days).
+  ids:
+  - STR-27
+- heading: 7. Timelines, recordings on MCAP and the scrubber
+  item: Demo 4, the training run (2 days).
+  ids:
+  - STR-30
+- heading: 8. Recordings in the workspace
+  item: 'Increment 8 as a whole (5 days): Record in the app''s session toolbar writing into the workspace,
+    recordings in the catalog and through caliper open; recording in the hub, spec panels and applet scenes
+    moved to sprint 5.'
+  ids:
+  - STR-14
+- heading: 8. Recordings in the workspace
+  item: The app's recorder and the Record button in the session toolbar.
+  ids:
+  - STR-14
+- heading: 8. Recordings in the workspace
+  item: The workspace tables and the catalog provider for the kind recording.
+  ids:
+  - STR-29
+- heading: 8. Recordings in the workspace
+  item: The caliper open subcommand.
+  ids:
+  - COR-26
+- heading: Moved out
+  item: Budgets, the refusal line and the lost device (2 days) moved to sprint 5.
+  ids:
+  - EMB-18
+- heading: Moved out
+  item: The scene fallback in TypeScript (2 days) moved to sprint 5.
+  ids:
+  - EMB-17
+- heading: Moved out
+  item: The text log and the bar chart natively (3 days) moved to sprint 5; their messages stay in increment
+    3's codec.
+  ids:
+  - REN-51
+  - REN-52
+- heading: Moved out
+  item: The text log in DOM and the bar chart in Canvas 2D (3 days) moved to sprint 5.
+  ids:
+  - REN-51
+  - REN-52
+- heading: Moved out
+  item: Step 15, the Dawn fallback (5 days) moved to Windows parity beside the Vulkan backend.
+  ids:
+  - REN-25
+  - PLT-11
+- heading: Moved out
+  item: Step 16, one applet outside this repository ported (3 days) moved out of the sprint, to be done
+    when that applet needs it.
+  ids:
+  - REN-35
+- heading: Moved out
+  item: Demo 2, the robot arm (2 days) moved to sprint 5.
+  ids:
+  - REN-55
+- heading: Moved out
+  item: Demo 3, detection boxes (2 days) moved to sprint 5.
+  ids:
+  - REN-56
+- heading: Moved out
+  item: Demo 1, structure from motion, with choosing its shot (3 days) moved to sprint 5.
+  ids:
+  - REN-54
+- heading: Moved out
+  item: The hub recording and serving recordings (6 days) moved to sprint 5.
+  ids:
+  - STR-15
+- heading: Moved out
+  item: Spec version 1 with the scene primitive (4) and recording bindings in spec panels (2) moved to
+    sprint 5.
+  ids:
+  - SPC-11
+  - SPC-22
+- heading: Moved out
+  item: Applet scenes in recordings and through the hub (3 days) moved to sprint 5.
+  ids:
+  - STR-31
+- heading: Dependencies on sprints 2 and 3
+  item: Sprint 2 is merged first (backend, protocol, web/wasm, widget, hub, controls, step checkpoint)
+    and confirms kind 6, 0x0070, 0x0072 and scenes before increment 1; sprint 3 is needed by increment
+    8 only, for the workspace, the catalog provider interface and the catalog kind recording.
+  ids:
+  - SPC-04
+  - STR-14
+- heading: Decisions
+  item: 'Windows and Vulkan wait for the Windows machine: from step 8, Windows draws ImGui pages and refuses
+    bridge textures, geometry views, applet scenes, exports and embedding views with a reason until the
+    Vulkan backend lands with Windows parity.'
+  ids:
+  - PLT-11
+  - PLT-02
+- heading: Decisions
+  item: Increments in order, the whole minimum cut first, then the loss landscape, then every remaining
+    migration step; the subset of increment 1 is what demo 0 draws; the network route only in increment
+    1; the box and floor grid as ordinary line draws; step 6 in two halves.
+  ids:
+  - STR-11
+  - REN-14
+- heading: Decisions
+  item: The graphics change with no backwards compatibility, a scene service for applets replacing the
+    geometry service, and the trim of the sprint, each decided by the user.
+  ids:
+  - REN-16
+  - REN-35
+  - COR-25
+- heading: Decisions
+  item: 'Wire and demo decisions: strip break masks built by the viewer from strip_lengths, the key static
+    travelling with scenes alone, the path''s principal-component plane as demo 0''s default, demo 0''s
+    defaults and cost budget, MCAP and recording only when started.'
+  ids:
+  - STR-09
+  - STR-11
+  - STR-12
+- heading: Risks
+  item: 'Risks: the cost of the landscape''s surface, its changing plane, a slower fast path with no switch
+    back, Windows and GPU-less machines, applets outside the repository, applet pictures that change,
+    ids under review and one browser, MCAP with no size margin, scope of 162 days.'
+  ids:
+  - STR-11
+  - REN-17
+  - STR-12
+- heading: Open questions
+  item: Open question 1, reordering inside the minimum cut so that step 0 and the Metal backend move to
+    the start of increment 2; the page recommends the cut whole.
+  ids:
+  - REN-09
+- heading: Open questions
+  item: Open question 2, drawing the landscape in the app in increment 1 or 2 (about 1.5 days); the page
+    recommends increment 2.
+  ids:
+  - REN-12
+  - STR-11
