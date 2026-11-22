@@ -767,7 +767,8 @@ test('data view changes and resizes do not grow what the module holds', async ({
 // socket's callback and applies it at the next frame, after it decoded the frames that follow, so its
 // matrices must live in a copy of their frame, as an update's sections do. The view's fit must then
 // frame the moved points' bounds, (9, 1, 0) to (11, 3, 0.5), at a finite distance, with a scale bar.
-test('a scene\'s entity transform arrives intact through the stream, and the fit frames the moved points with a scale bar', async ({ page }) => {
+test('a scene\'s entity transform arrives intact through the stream, and the fit frames the moved points with a scale bar', async ({ page }, info) => {
+  test.skip(info.project.name === 'canvas2d', 'the WebAssembly views need a WebGPU adapter');
   const p = await producerWith(['--scene3']);
   try {
     await page.goto(p.url);
