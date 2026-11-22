@@ -32,6 +32,16 @@ def _site_url():
 
 
 DEFAULT_SITE = _site_url()
+
+
+def excluded_docs(root):
+    """The docs pages that mkdocs.yml leaves out of the site (exclude_docs), as paths under docs/."""
+    try:
+        with open(Path(root) / "mkdocs.yml", encoding="utf-8") as f:
+            text = (yaml.safe_load(f) or {}).get("exclude_docs") or ""
+    except (OSError, yaml.YAMLError):
+        return set()
+    return {line.strip() for line in text.splitlines() if line.strip() and not line.startswith("#")}
 GITHUB = "https://github.com/AhmedKhan-GH/caliper"
 
 STATUS_ORDER = ["shipped", "built", "planned", "idea", "decision"]
@@ -355,7 +365,11 @@ def source_line(root, group, entry, base):
         if heading:
             where += ", under *%s*" % md(heading_text(heading))
     elif kind == "docs":
-        where = _heading_link(root, "roadmap", entry["page"], "docs", base)
+        path = split_ref(entry["page"])[0]
+        if path[len("docs/"):] in excluded_docs(root):
+            where = "`%s`, which the docs site leaves out" % path  # a link would lead nowhere
+        else:
+            where = _heading_link(root, "roadmap", entry["page"], "docs", base)
     elif kind == "github":
         number = entry.get("pr")
         where = "[Pull request #%d](%s/pull/%d)" % (number, base, number)

@@ -1,7 +1,11 @@
-"""Checks the roadmap registry: `python roadmap/check.py [--root REPO_ROOT]`.
+"""Checks the roadmap registry and its coverage ledger: `python roadmap/check.py [--root REPO_ROOT]`.
 
 Prints one line per problem as `<file>: <id>: <message>`. Exits 1 when there is an error and 0
 otherwise. Warnings are printed with the word warning and do not change the exit code.
+
+The ledger under roadmap/coverage/ names where each feature comes from. Every entry maps to ids
+that exist or gives a reason, and every `##` and `###` heading of each plan page under design/
+appears in that page's ledger file, so a new plan heading without an entry fails the check.
 """
 
 import argparse
@@ -12,10 +16,19 @@ from collections import Counter
 from pathlib import Path
 
 import jsonschema
+import yaml
 
 import build
 
 STATUSES = build.STATUS_ORDER
+# Pages under design/ that index the folder rather than plan work.
+DESIGN_INDEXES = ("README.md", "index.md")
+# A title is a short name, so it never starts with an article.
+ARTICLE = re.compile(r"^(the|a|an)\s", re.I)
+
+
+def _article(title):
+    return isinstance(title, str) and ARTICLE.match(title) is not None
 
 
 def _has_todo(value):
@@ -72,6 +85,113 @@ def _check_ref(root, name, fid, field, ref, errors):
                       % (name, fid, field, anchor, path))
 
 
+def _heading_key(text):
+    return build.heading_text(str(text))
+
+
+def check_coverage(root, features, errors, warnings):
+    """Checks the ledger under root/roadmap/coverage against the registry and design/.
+
+    Returns (groups, entries): the number of ledger files read and of their entries.
+    """
+    folder = root / "roadmap" / build.COVERAGE
+    if not folder.is_dir():
+        errors.append("roadmap/%s: -: the coverage ledger is missing" % build.COVERAGE)
+        return 0, 0
+    for extra in sorted(folder.glob("*.yaml")):
+        errors.append("roadmap/%s/%s: -: ledger files end in .yml, so this file is not read"
+                      % (build.COVERAGE, extra.name))
+    schema_path = folder / "schema.json"
+    if not schema_path.is_file():
+        errors.append("roadmap/%s/schema.json: -: the ledger's schema is missing" % build.COVERAGE)
+        return 0, 0
+    validator = jsonschema.Draft202012Validator(
+        json.loads(schema_path.read_text(encoding="utf-8")))
+
+    groups = []
+    for path in sorted(folder.glob("*.yml")):
+        name = "roadmap/%s/%s" % (build.COVERAGE, path.name)
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as err:
+            errors.append("%s: -: not valid YAML: %s" % (name, err))
+            continue
+        problems = sorted(validator.iter_errors(data), key=lambda e: list(map(str, e.path)))
+        for err in problems:
+            where = "/".join(str(p) for p in err.absolute_path) or "-"
+            errors.append("%s: -: schema: %s: %s" % (name, where, err.message))
+        if not problems:
+            groups.append((name, data))
+            if _article(data["title"]):
+                errors.append("%s: -: the title starts with an article" % name)
+            if _has_todo(data):
+                errors.append("%s: -: contains TODO" % name)
+
+    sourced = set()
+    for name, group in groups:
+        for n, entry in enumerate(group["entries"], 1):
+            for fid in entry.get("ids") or []:
+                if fid in features:
+                    sourced.add(fid)
+                else:
+                    errors.append("%s: %s: entry %d maps to %s, which does not exist"
+                                  % (name, fid, n, fid))
+            if entry.get("page"):
+                _check_ref(root, name, "entry %d" % n, "docs", entry["page"], errors)
+
+    # Plan pages: each heading appears in the page's ledger file.
+    pages = {}
+    for name, group in groups:
+        if group["kind"] != "page":
+            continue
+        if group["source"] in pages:
+            errors.append("%s: -: %s already has the ledger file %s"
+                          % (name, group["source"], pages[group["source"]][0]))
+            continue
+        pages[group["source"]] = (name, group)
+    design = root / "design"
+    plan_pages = sorted(p for p in design.glob("*.md") if p.name not in DESIGN_INDEXES) \
+        if design.is_dir() else []
+    for page in plan_pages:
+        rel = "design/" + page.name
+        if rel not in pages:
+            errors.append("%s: -: the plan page has no ledger file under roadmap/%s"
+                          % (rel, build.COVERAGE))
+            continue
+        name, group = pages[rel]
+        group_ref = group.get("ref", "main")
+        found = build.read_headings(page) or []
+        headings = [text for level, text, _ in found if level in (2, 3)]
+        on_page = {text for _, text, _ in found}  # an entry may sit under the page's title
+        skipped = [_heading_key(h) for h in group.get("not_features") or []]
+        named = [(_heading_key(e["heading"]), e.get("ref") or group_ref)
+                 for e in group["entries"]]
+        covered = set(skipped) | {h for h, _ in named}
+        for heading in headings:
+            if heading not in covered:
+                errors.append("%s: -: the heading \"%s\" of %s has no ledger entry and is not "
+                              "listed under not_features" % (name, heading, rel))
+        for heading in skipped:
+            if heading not in on_page:
+                errors.append("%s: -: not_features names \"%s\", which is not a heading of %s"
+                              % (name, heading, rel))
+        for heading, ref in sorted(set(named)):
+            if heading not in on_page and ref == "main":
+                errors.append("%s: -: an entry names the heading \"%s\", which is not on %s; "
+                              "give the entry the ref of the branch it was read from"
+                              % (name, heading, rel))
+    for rel, (name, group) in sorted(pages.items()):
+        if not (root / rel).is_file() and group.get("ref", "main") == "main":
+            errors.append("%s: -: %s is not on this branch, so the ledger must give the ref of "
+                          "the branch it was read from" % (name, rel))
+
+    for fid in sorted(features, key=build.id_key):
+        if fid not in sourced:
+            warnings.append("%s: %s: warning: no ledger entry names this feature"
+                            % (features[fid][0], fid))
+    return len(groups), sum(len(g["entries"]) for _, g in groups)
+
+
 def run_checks(root):
     """Returns (errors, warnings, summary) for the registry under root."""
     root = Path(root)
@@ -115,6 +235,8 @@ def run_checks(root):
         orders.setdefault(data["order"], name)
         if _has_todo({k: v for k, v in data.items() if k != "features"}):
             errors.append("%s: -: contains TODO" % name)
+        if _article(data["title"]):
+            errors.append("%s: -: the pillar title starts with an article" % name)
 
     # The graph page's pillar list, which narrow screens show instead of the graph, and the
     # section's navigation are written by hand; each must name every pillar page.
@@ -144,6 +266,8 @@ def run_checks(root):
                 errors.append("%s: %s: id does not use the prefix %s" % (name, fid, data["prefix"]))
             for field in _todo_fields(f):
                 errors.append("%s: %s: %s contains TODO" % (name, fid, field))
+            if _article(f["title"]):
+                errors.append("%s: %s: the title starts with an article" % (name, fid))
 
     graph = {}
     for fid, (name, f) in sorted(features.items()):
@@ -203,11 +327,15 @@ def run_checks(root):
                                         "through %s" % (name, fid, dep, other))
                         break
 
+    ledger_files, ledger_entries = check_coverage(root, features, errors, warnings)
+
     counts = Counter(f["status"] for _, f in features.values())
     in_progress = sum(1 for _, f in features.values() if f.get("in_progress"))
     edges = sum(len(v) for v in graph.values())
     summary = "%d features, %d edges (%s; %d in progress)" % (
         len(features), edges, ", ".join("%d %s" % (counts[s], s) for s in STATUSES), in_progress)
+    if ledger_files:
+        summary += ", %d ledger entries in %d files" % (ledger_entries, ledger_files)
     return errors, warnings, summary
 
 
