@@ -7,7 +7,9 @@ optimizer)`` runs in its own process with the shared-memory session off.
 """
 from __future__ import annotations
 
+import math
 import os
+import re
 import subprocess
 import sys
 import warnings
@@ -112,6 +114,7 @@ def run(monkeypatch):
     """A model on MPS attached to the facade, and stand-ins of the publish path."""
     calls, shown = [], []
     monkeypatch.setattr(P, "SHARE", 1e6)             # N = 1: a pass on each due step
+    monkeypatch.setattr(P, "N_MIN", 1)
     monkeypatch.setattr(caliper, "scene", lambda name="scene", **kw: FakeScene(calls))
     monkeypatch.setattr(caliper, "show", lambda t, name="tensor", **kw: shown.append((name, t.clone())))
     monkeypatch.setattr(caliper, "remove", lambda name: shown.append(("removed", name)))
@@ -139,43 +142,256 @@ def _train(net, opt, steps, first=0):
         opt.step()
 
 
-def test_the_cadence_follows_the_formula():
-    c = P._Cadence()
-    c.drained(0.0)
-    now = 0.0
-    for _ in range(10):
-        now += 0.001                   # the CPU queues a step in 1 ms
-        c.tick(now)
-    # The first sync point waits 90 ms for the queued steps: T = 100 ms / 10 steps = 10 ms.
-    # The pass takes 0.9 ms, and the GPU then idles for one queued step: C = 0.9 + 1 = 1.9 ms.
-    c.update(now, now + 0.090, now + 0.0909)
-    assert c.step_s() == pytest.approx(0.010)
-    assert c.last_cost == pytest.approx(0.0019)
-    assert c.n == 5                    # ceil(1.9 / (0.04 * 10))
-    assert c.period(1) == 5 and c.period(8) == 10 and c.period(5) == 5
-    assert c.period(10000) == 10000
+class Sim:
+    """A training loop on a fake clock, as torch's MPS queue runs it.
+
+    The training thread queues the GPU work of a step in ``cpu`` seconds and goes on without a
+    wait. The GPU gets the queued work only at a mark (a commit of the queue) and runs each step in
+    ``gpu`` seconds, in order. A pass waits for the queue and then runs ``pass_s`` seconds, of which
+    ``pass_gpu`` on the GPU. ``passes`` can give the time of single passes, for an outlier.
+    """
+
+    def __init__(self, cpu, gpu, pass_s, pass_gpu=None):
+        self.t = 0.0            # the training thread's clock
+        self.gpu_free = 0.0     # when the GPU finishes the work it has
+        self.queued = 0.0       # GPU work queued since the last mark
+        self.cpu, self.gpu, self.pass_s = cpu, gpu, pass_s
+        self.pass_gpu = pass_s / 4 if pass_gpu is None else pass_gpu
+        self.passes = {}        # pass number -> its time, else pass_s
+        self.ran = 0
+        self.sleeps = 0
+
+    def clock(self):
+        return self.t
+
+    def sleep(self, s):
+        self.sleeps += 1
+        self.t += max(s, 1e-6)
+
+    def event(self):
+        return SimEvent(self)
+
+    def train(self, steps, first=0):
+        for k in range(first, first + steps):
+            self.t += self.cpu              # forward and backward of step k, optimizer of k - 1
+            self.queued += self.gpu
+            P.at_step(k)
+
+    def run(self, handles, step, time_s, every):
+        p = self.passes.get(self.ran, self.pass_s)
+        self.ran += 1
+        self.gpu_free = max(self.gpu_free, self.t) + self.pass_gpu
+        self.t += p
+        return {"ran": 1}
 
 
-def test_the_cadence_changes_n_only_beyond_a_quarter():
-    c = P._Cadence()
-    c.drained(0.0)
-    now = 0.0
+class SimEvent:
+    def __init__(self, sim):
+        self.sim, self.at = sim, float("inf")
 
-    def pass_step(steps, pass_s):
-        nonlocal now
-        for _ in range(steps):
-            now += 0.010               # a loop that waits for the GPU at each step: T = 10 ms
-            c.tick(now)
-        c.update(now, now, now + pass_s)
-        now += pass_s
+    def record(self):
+        s = self.sim
+        s.gpu_free = max(s.gpu_free, s.t) + s.queued
+        s.queued = 0.0
+        self.at = s.gpu_free
 
-    pass_step(5, 0.0019)
-    assert c.n == 5
-    pass_step(5, 0.0023)               # the median C is 2.1 ms: ceil(5.25) = 6, within 25 %
-    assert c.n == 5
-    for _ in range(8):
-        pass_step(5, 0.0064)           # ceil(6.4 / 0.4) = 16: more than 25 % above 5
-    assert c.n == 16
+    def query(self):
+        return self.sim.t >= self.at
+
+
+class SimRuntime:
+    def __init__(self, sim):
+        self.sim = sim
+
+    def run(self, handles, step, time_s, every):
+        return self.sim.run(handles, step, time_s, every)
+
+    def status(self, h):
+        return {"state": "running", "last_pass_ms": 0.05}
+
+    def remove(self, h):
+        pass
+
+    def release(self, h):
+        pass
+
+    def stats(self):
+        return {}
+
+
+@pytest.fixture
+def sim(monkeypatch):
+    """The facade with one program over the fake clock of a Sim: no device and no native module."""
+    from caliper import _adapter
+
+    made = {}
+
+    def make(cpu, gpu, pass_s, **kw):
+        s = Sim(cpu, gpu, pass_s, **kw)
+        monkeypatch.setattr(P, "_clock", s.clock)
+        monkeypatch.setattr(_adapter, "time", type("T", (), {"sleep": staticmethod(s.sleep)}))
+        monkeypatch.setitem(P._STATE, "rt", SimRuntime(s))
+        monkeypatch.setitem(P._STATE, "marks", _adapter.StepMarks(s.event, size=64))
+        monkeypatch.setitem(P._STATE, "step", None)
+        monkeypatch.setattr(P, "_outputs", lambda rt, p: {})
+        monkeypatch.setattr(P, "_publish", lambda p, outs: None)
+        P._CAD.reset()
+        p = P._Program("sim", {"output": {"kind": "pixels", "width": 1, "height": 1}}, "", None, "")
+        p.handle, p.state = 1, "compiled"
+        P._PROGS["sim"] = p
+        P._set_active()
+        made["p"] = p
+        return s
+
+    yield make
+    P._PROGS.pop("sim", None)
+    P._set_active()
+    P._CAD.reset()
+    P.listeners.clear()
+
+
+def _bounds(cost_ms, late_ms, step_ms):
+    """The range of N for a true overhead ``cost_ms`` that the facade may see late by ``late_ms``."""
+    low = math.ceil(cost_ms / (0.04 * step_ms))
+    return low, math.ceil((cost_ms + late_ms) / (0.04 * step_ms)) * (1 + P.CHANGE) + 1
+
+
+def test_the_cadence_converges_on_a_gpu_bound_run(sim):
+    # The GPU is the slower side: b is the GPU's step, and a pass costs its own time plus the time
+    # that the training thread needs to queue the next step, while the GPU idles. The mark after
+    # the pass is seen up to one step of the training thread late, thus D is at most 0.30 ms high.
+    s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=0.10e-3)
+    s.train(3000)
+    st = P.stats()
+    assert st["step_ms"] == pytest.approx(0.42, rel=0.03)
+    assert 0.40 <= st["cost_ms"] <= 0.40 + 0.30
+    low, high = _bounds(0.40, 0.30, 0.42)            # 24 and 53
+    assert low <= st["every"] <= high
+    assert st["overhead_share"] <= 0.04 * 1.05
+    item = P.status()[0]
+    assert item["every"] == st["every"] and item["state"] == "running"
+    assert item["step_ms"] == st["step_ms"] and item["last_cost_ms"] == st["cost_ms"]
+
+
+def test_the_cadence_converges_on_a_cpu_bound_run(sim):
+    # The training thread is the slower side: b is its step, and a pass costs the wait for the
+    # step's GPU work and the pass, which the thread would otherwise have spent queuing.
+    s = sim(cpu=1.0e-3, gpu=0.5e-3, pass_s=0.2e-3)
+    s.train(2000)
+    st = P.stats()
+    assert st["step_ms"] == pytest.approx(1.0, rel=0.03)
+    assert st["cost_ms"] == pytest.approx(0.5 + 0.2, rel=0.15)
+    low, high = _bounds(0.7, 0.0, 1.0)               # 18 and 23.5
+    assert low <= st["every"] <= high
+
+
+def test_a_step_without_a_pass_never_waits(sim):
+    s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=0.10e-3)
+    s.train(200)
+    passes = []
+    for k in range(200, 600):
+        before, ran = s.sleeps, s.ran
+        s.train(1, first=k)
+        if s.ran == ran:
+            assert s.sleeps == before, k              # no wait on a step without a pass
+        else:
+            passes.append(k)
+    assert len(passes) >= 5
+    assert all(b - a >= P.N_MIN for a, b in zip(passes, passes[1:]))
+
+
+def test_the_cadence_follows_a_step_time_that_changes(sim):
+    s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=0.10e-3)
+    s.train(3000)
+    before = P.stats()["every"]
+    s.gpu = 0.84e-3                                  # the step time doubles
+    s.train(4000, first=3000)
+    st = P.stats()
+    assert st["step_ms"] == pytest.approx(0.84, rel=0.03)
+    low, high = _bounds(0.40, 0.30, 0.84)            # 12 and 27
+    assert low <= st["every"] <= high and st["every"] < before
+
+
+def test_one_slow_pass_does_not_move_the_cadence(sim):
+    s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=0.10e-3)
+    s.train(3000)
+    before = P.stats()
+    s.passes[s.ran] = 50e-3                          # the next pass takes 50 ms once
+    runs = s.ran
+    k = 3000
+    while s.ran < runs + 3:                          # that pass and the two after it
+        s.train(1, first=k)
+        k += 1
+    st = P.stats()
+    assert st["every"] == before["every"]
+    assert st["cost_ms"] == pytest.approx(before["cost_ms"], rel=0.2)
+
+
+def test_the_cadence_moves_by_bounded_factors(sim):
+    s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=2.0e-3)
+    seen = []
+    k = 0
+    while len(seen) < 6:
+        ran = s.ran
+        s.train(1, first=k)
+        k += 1
+        if s.ran > ran and P._CAD.n is not None and (not seen or seen[-1] != P._CAD.n):
+            seen.append(P._CAD.n)
+    assert all(b <= math.ceil(a * P.GROW) for a, b in zip(seen, seen[1:])), seen
+
+
+def test_a_pass_over_the_budget_at_the_ceiling_stops_the_programs(sim, monkeypatch):
+    monkeypatch.setattr(P, "CEILING_S", 0.01)        # at most 24 steps of 0.42 ms between passes
+    s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=2.0e-3)
+    seen = []
+    P.listeners.append(seen.append)
+    s.train(3000)
+    item = P.status()[0]
+    assert item["state"] == "stopped" and item["error"]["code"] == "program.over_budget"
+    assert re.search(r"more than the ceiling of 2[45] steps", item["error"]["message"])
+    assert seen and seen[-1]["state"] == "stopped"
+    assert not P.ACTIVE                              # training goes on without the program
+    runs = s.ran
+    s.train(100, first=3000)
+    assert s.ran == runs
+
+
+def test_a_declared_every_above_the_need_is_not_over_budget(sim, monkeypatch):
+    monkeypatch.setattr(P, "CEILING_S", 0.01)
+    s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=2.0e-3)
+    P._PROGS["sim"].every_min = 400                  # passes rarer than the 137 steps the cost needs
+    s.train(6000)
+    assert P.status()[0]["state"] == "running"
+
+
+def test_step_marks_report_each_completion_in_order():
+    from caliper._adapter import StepMarks
+
+    class Ev:
+        def __init__(self):
+            self.done = False
+
+        def record(self):
+            self.done = False
+
+        def query(self):
+            return self.done
+
+    m = StepMarks(Ev, size=4)
+    m.record(0, 1.0)
+    m.record(1, 2.0)
+    assert m.poll(2.5) == [] and m.pending() == 2
+    m._ring[0].done = True
+    assert m.poll(3.0) == [(0, 2.5, 3.0)]            # pending at 2.5, complete at 3.0
+    m.record(2, 3.5)
+    m.record(3, 4.0)
+    m.record(4, 4.5)                                 # the ring is full: mark 1 is dropped
+    assert m.pending() == 3
+    for e in m._ring:
+        e.done = True
+    assert [s for s, _, _ in m.poll(5.0)] == [2, 3, 4]
+    m.clear()
+    assert m.pending() == 0
 
 
 def test_a_declaration_is_refused_before_any_pass(monkeypatch):
@@ -191,8 +407,8 @@ def test_a_declaration_is_refused_before_any_pass(monkeypatch):
     decl["limits"]["time_ms"] = 60
     assert P.install("g", decl, src, scene="s")["error"]["code"] == "program.over_limits"
     assert set(item) == {"id", "kind", "state", "every", "every_min", "last_pass_ms", "last_cost_ms",
-                         "step_ms", "last_step", "runs", "memory_bytes", "memory_limit_bytes",
-                         "error", "sha256"}
+                         "step_ms", "overhead_share", "last_step", "runs", "memory_bytes",
+                         "memory_limit_bytes", "error", "sha256"}
     P.remove("g")
     assert P.status() == [] and not P.ACTIVE
 
@@ -230,7 +446,7 @@ def test_a_geometry_program_reads_the_weight_in_place_and_publishes_its_points(r
     _train(net, opt, 1, first=P.WARMUP_STEPS)
     st = P.status()[0]
     assert st["state"] == "running" and st["runs"] == 1 and st["last_step"] == P.WARMUP_STEPS
-    assert st["every"] >= 1 and st["step_ms"] > 0 and st["last_cost_ms"] > 0
+    assert st["every"] >= 1 and st["step_ms"] > 0      # D needs the step after a pass
     assert st["last_pass_ms"] is not None and st["last_pass_ms"] >= 0
     kind, path, pos, kw = calls[-1]
     assert kind == "points" and path == "programs/norms"
@@ -255,6 +471,32 @@ def test_a_geometry_program_reads_the_weight_in_place_and_publishes_its_points(r
     P.remove("norms")
     assert ("clear", "programs/norms") == calls[-1]
     assert P.status() == [] and not P.ACTIVE and P.stats()["imports"] == 0
+
+
+@needs_device
+def test_the_cadence_measures_a_real_run(monkeypatch):
+    """Without stand-ins for the cadence, a run on MPS measures b and D and sets N from them."""
+    monkeypatch.setattr(caliper, "scene", lambda name="scene", **kw: FakeScene([]))
+    net = Net().to("mps")
+    opt = torch.optim.SGD(net.parameters(), lr=0.1)
+    P.attach(net, opt)
+    try:
+        decl, src = _geometry(4)
+        assert P.install("norms", decl, src, scene="s")["state"] == "compiled"
+        _train(net, opt, 400)
+        st = P.status()[0]
+        assert st["state"] == "running" and st["runs"] >= 3
+        assert st["step_ms"] > 0 and st["last_cost_ms"] is not None
+        assert P.N_MIN <= st["every"] <= P._CAD.ceiling
+        assert st["overhead_share"] == pytest.approx(
+            st["last_cost_ms"] / (P._CAD.n * st["step_ms"]))
+        assert P._STATE["marks"].pending() < P._STATE["marks"].SIZE
+    finally:
+        P.detach()
+        if P._STATE["rt"] is not None:
+            P._STATE["rt"].close()
+            P._STATE["rt"] = None
+        P._CAD.reset()
 
 
 @needs_device
@@ -358,6 +600,7 @@ def test_outputs_pass_the_argument_checks_of_the_real_scene_calls(monkeypatch):
     """The real caliper.scene checks the outputs' shapes and types, attached or not."""
     from caliper import _scene
     monkeypatch.setattr(P, "SHARE", 1e6)
+    monkeypatch.setattr(P, "N_MIN", 1)
     net = Net().to("mps")
     opt = torch.optim.SGD(net.parameters(), lr=0.1)
     P.attach(net, opt)

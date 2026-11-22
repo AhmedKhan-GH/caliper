@@ -7,6 +7,8 @@ of the trajectory spec:
 
 - ``export``: a tensor as a DLPack capsule, without a copy.
 - ``framework_done`` and ``before_write``: the two sync points of the producer runtime.
+- ``step_marks``: marks on the framework's queue that time the training steps without a wait, for
+  the cadence of the producer runtime.
 - ``hooks``: call back with module outputs, gradients and each optimizer step.
 - ``probe``: run the model forward on inputs that Caliper supplies.
 - ``state`` and ``restore``: save and load the model and the optimizer, for a fork.
@@ -23,8 +25,10 @@ from __future__ import annotations
 import functools
 import io
 import threading
+import time
+from collections import deque
 
-__all__ = ["TorchAdapter", "TORCH"]
+__all__ = ["TorchAdapter", "TORCH", "StepMarks"]
 
 _MODEL = "model"
 _OPTIMIZER = "optimizer"
@@ -90,6 +94,17 @@ class TorchAdapter:
             ev.synchronize()
         elif torch.cuda.is_available():
             torch.cuda.synchronize()
+
+    def step_marks(self):
+        """Give a :class:`StepMarks` over torch's MPS queue, or ``None`` on another device.
+
+        On the CPU and on CUDA the facade times the steps with its own clock and waits with
+        :meth:`framework_done`, because the producer runtime runs on MPS only.
+        """
+        import torch
+        if torch.backends.mps.is_available():
+            return StepMarks(torch.mps.Event)
+        return None
 
     def before_write(self, callback) -> None:
         """Call ``callback`` before torch writes a bound tensor again.
@@ -304,6 +319,73 @@ class TorchAdapter:
                 torch.autograd.backward = self._tap_orig
             self._tap_orig = None
             self.loss[1] = None
+
+
+class StepMarks:
+    """Marks of the training steps on the framework's queue, read without a wait.
+
+    :meth:`record` puts one mark after the work that the framework has queued so far. On MPS this
+    also gives that work to the GPU, because torch's MPS queue holds its work until a sync point
+    and the GPU would otherwise idle until then. :meth:`poll` returns each mark that completed since
+    the last call as ``(step, lo, hi)``: the mark completed after ``lo`` and before ``hi`` on the
+    caller's clock. The queue runs in order, thus a mark completes after every earlier mark.
+    :meth:`wait` polls until the mark of one step completed; it is the first sync point of a pass.
+
+    Args:
+        event (Callable[[], object]): Makes one event with ``record()`` and ``query()``, such as
+            ``torch.mps.Event``.
+        size (int): The events in the ring. A mark whose event is needed again before it
+            completed is dropped, and the caller gets no time for it.
+    """
+
+    SIZE = 256
+
+    def __init__(self, event, size: int = SIZE):
+        self._ring = [event() for _ in range(size)]
+        self._next = 0
+        self._pending: deque = deque()      # (step, event, time of the record), oldest first
+        self._seen = float("-inf")          # the last poll that found the oldest mark pending
+
+    def record(self, step: int, now: float) -> None:
+        """Put the mark of ``step`` after the queued work; ``now`` is the caller's clock."""
+        if len(self._pending) >= len(self._ring) - 1:
+            self._pending.popleft()         # its event is recorded again below: no time for it
+        ev = self._ring[self._next]
+        self._next = (self._next + 1) % len(self._ring)
+        ev.record()
+        self._pending.append((step, ev, now))
+
+    def poll(self, now: float) -> list:
+        """Return ``(step, lo, hi)`` for each mark that completed since the last call."""
+        out = []
+        while self._pending:
+            step, ev, at = self._pending[0]
+            if not ev.query():
+                self._seen = now
+                break
+            self._pending.popleft()
+            out.append((step, max(at, self._seen), now))
+        return out
+
+    def wait(self, step: int, clock=time.perf_counter) -> list:
+        """Poll until the mark of ``step`` and every earlier mark completed, and return what
+        :meth:`poll` returned on the way. It spins for the first 0.5 ms, then naps 20 µs."""
+        out = []
+        start = clock()
+        while True:
+            now = clock()
+            out += self.poll(now)
+            if not self._pending or self._pending[0][0] > step:
+                return out
+            time.sleep(0 if now - start < 5e-4 else 2e-5)
+
+    def pending(self) -> int:
+        """The marks that did not complete yet."""
+        return len(self._pending)
+
+    def clear(self) -> None:
+        """Forget the marks that did not complete yet; their times are never returned."""
+        self._pending.clear()
 
 
 TORCH = TorchAdapter()
