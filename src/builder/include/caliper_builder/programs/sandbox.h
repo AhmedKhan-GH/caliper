@@ -220,6 +220,11 @@ Verdict check_params(const spec::Program& program);
 // and no `params` of its own (the viewer declares them), and each field it
 // reads as params.<name> is a name of `params`; else stage.params_mismatch.
 Verdict check_stage_params(const spec::Stage& stage);
+// Whether `value` is inside the declared range of a field of struct Params:
+// a finite number of float range for f32, and after rounding a whole number
+// of the type's range for i32 and u32. A value outside it is refused, not
+// clamped, when a reference changes a program's params.
+bool param_in_range(ParamType type, double value);
 // The bytes of the uniform `params`: the value of each field by name,
 // converted to its type (i32 and u32 rounded and clamped), 4 bytes each,
 // padded to a multiple of 16 bytes; a field without a value is 0. Empty when

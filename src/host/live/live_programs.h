@@ -382,6 +382,7 @@ inline std::vector<ProgramChange> ProgramSync::take_changes() {
 #include "sha256.h"
 
 #include <caliper_builder/operators/operators.h>
+#include <caliper_builder/programs/sandbox.h>
 #include <caliper_builder/session/chain_hooks.h>
 #include <caliper_builder/session/program_host.h>
 #include <caliper_builder/session/session.h>
@@ -394,6 +395,7 @@ inline std::vector<ProgramChange> ProgramSync::take_changes() {
 #include <cmath>
 #include <functional>
 #include <map>
+#include <optional>
 
 namespace caliper_live {
 
@@ -415,6 +417,9 @@ public:
             }
         rebuild();
     }
+
+    // How many values of a reference the declared range of their param refused.
+    std::uint64_t refused_params() const { return refused_params_; }
 
     std::vector<caliper_builder::ProgramStatus> status() const override {
         std::vector<caliper_builder::ProgramStatus> out;
@@ -439,10 +444,16 @@ public:
                     (void)name;
                     if (!caliper_builder::spec::is_reference(slot.place)) continue;
                     const nlohmann::json v = evaluate(std::get<caliper_builder::spec::Reference>(slot.place));
-                    if (v.is_number() && std::isfinite(v.get<double>()) && v.get<double>() != slot.value) {
-                        slot.value = v.get<double>();
-                        changed = true;
+                    if (!v.is_number() || !std::isfinite(v.get<double>()) || v.get<double>() == slot.value) continue;
+                    // A value outside the declared range of the field in
+                    // struct Params is refused: the program keeps the last
+                    // value it took, and nothing goes to the script.
+                    if (slot.type && !caliper_builder::programs::param_in_range(*slot.type, v.get<double>())) {
+                        ++refused_params_;
+                        continue;
                     }
+                    slot.value = v.get<double>();
+                    changed = true;
                 }
             }
         if (resolver && *resolver)
@@ -653,10 +664,12 @@ private:
         caliper_builder::spec::Source source;
         std::vector<std::int64_t> shape;
     };
-    // One param of a program: its place in the spec and its value now.
+    // One param of a program: its place in the spec, its value now, and its
+    // type in the program's struct Params when the WGSL declares it.
     struct ParamSlot {
         caliper_builder::spec::ValueOr<double> place;
         double value = 0;
+        std::optional<caliper_builder::programs::ParamType> type;
     };
 
     // The wanted programs from the spec, the operators and the params' values.
@@ -666,14 +679,19 @@ private:
         std::map<std::string, std::map<std::string, ParamSlot>> next;
         for (const auto& p : spec_.programs) {
             std::map<std::string, double> values;
+            std::vector<caliper_builder::programs::ParamField> fields;
+            caliper_builder::programs::params_fields(p.wgsl, &fields, nullptr);
             for (const auto& [name, place] : p.params) {
-                ParamSlot slot{place, 0};
+                ParamSlot slot{place, 0, std::nullopt};
+                for (const auto& f : fields)
+                    if (f.name == name) slot.type = f.type;
                 if (!sp::is_reference(place)) {
                     slot.value = std::get<double>(place);
                 } else if (auto old = params_.find(p.id); old != params_.end() && old->second.count(name)) {
                     slot.value = old->second.at(name).value;   // the last evaluated value
-                } else if (std::get<sp::Reference>(place).fallback.is_number()) {
-                    slot.value = std::get<sp::Reference>(place).fallback.get<double>();
+                } else if (const auto& d = std::get<sp::Reference>(place).fallback;
+                           d.is_number() && (!slot.type || caliper_builder::programs::param_in_range(*slot.type, d.get<double>()))) {
+                    slot.value = d.get<double>();
                 }
                 values[name] = slot.value;
                 next[p.id][name] = slot;
@@ -703,6 +721,7 @@ private:
     std::vector<Operator> operators_;
     std::map<std::string, std::map<std::string, ParamSlot>> params_;   // by program id, then name
     std::uint64_t frames_ = 0;
+    std::uint64_t refused_params_ = 0;   // values refused for the declared range of their field
 };
 
 }  // namespace caliper_live
