@@ -297,7 +297,7 @@ Programs add the event kind `program` to the ring of `events.wait`. The hosts pu
 
 ## Producer Runtime Interface
 
-The native module `caliper._producer` calls the C interface `src/host/producer/caliper_producer.h`. The interface creates a runtime on the device of the first bound tensor, imports tensors read-only, compiles a program after the sandbox checks, runs a pass of the due programs and waits for it, gives each output buffer, returns the status of a program, and destroys the runtime. The library `caliper_producer` holds it.
+The native module `caliper._producer` calls the C interface `src/host/producer/caliper_producer.h`, which is internal and not part of the public C API. The interface creates a runtime on the device of the first bound tensor, imports tensors read-only, compiles a program after the sandbox checks, runs a pass of the due programs and waits for it, gives each output buffer, returns the status of a program, and destroys the runtime. The library `caliper_producer` holds it.
 
 The Python side has two files with final signatures. `python/caliper/_programs.py` is the facade that the wire path calls: `install()`, `remove()`, `status()` and `at_step()`. `python/caliper/_adapter.py` holds the framework adapter: `export()`, `framework_done()`, `before_write()`, `hooks()` and `probe()` for the runtime, and `points()` and `ablate()` for the interventions.
 
@@ -319,7 +319,7 @@ Each module of `model.named_modules()` is a point, with its dotted name, such as
 
 `intervene.set` takes `point` and `op`, and optionally `from_step` and `until_step`. It answers at once with `pending: true`, and the script applies it at its next step. A point holds at most one intervention of each op. `intervene.clear` takes `point`, or `all: true`. `intervene.list` returns `interventions`, each with `point`, `op`, `from_step`, `until_step`, `since_step` and `state` (`pending`, `active` or `ended`).
 
-The commands act through four functions of `RunControl` in `run_control.h`, which answer `command.not_available` by default. A `run` event of change `intervene` reports each applied change.
+The commands act through five functions of `RunControl` in `run_control.h`: `interventions_supported()`, `intervention_points()`, `interventions()`, `intervene_set()` and `intervene_clear()`. Their defaults give no points and answer `command.not_available`. A `run` event of change `intervene` reports each applied change.
 
 ### Intervention Effect
 
@@ -365,6 +365,32 @@ The acceptance test drives `caliper-mcp` against the hidden app with `CALIPER_AG
 9. It measures training throughput as the median steps per second of five short runs with the same seed, with and without the programs, and checks at least 95 %.
 10. It places a toggle bound to `intervene:<point>`, turns it on, and sees the loss change at the next steps.
 11. It records the SHA-256 list again and checks that it did not change.
+
+## Decisions
+
+Each decision below has its reason in one line.
+
+- **Stage storage.** Stages are the top-level array `stage`, because then only the stage commands edit their code past the compiler, and the node editor gets one node kind for each array.
+- **Stage kinds.** `stage.set` takes `material` and `vertex` only, because compute over a training tensor has one path, a program in the script.
+- **Stage source.** A stage holds functions only, and the viewer adds the prelude and the entry points, because the scene then keeps its camera, pick pass and selection.
+- **Pixels buffer.** A pixels output is a packed `array<u32>`, not a storage texture, because the layer exports buffers through DLPack and fills an image from an RGBA8 buffer, but has no copy from a texture to a buffer.
+- **Pixels view.** A pixels output is the live view `program.<id>`, because the image view, the shared-memory slot and the network snapshot then carry it unchanged.
+- **Binding by name.** Inputs and outputs bind by their WGSL variable names in any group, because the reflection gives the names and the agent writes plain WGSL.
+- **Flat arrays.** Positions are `array<f32>` with 3 floats for each item, because an array of `vec3<f32>` has a stride of 16 bytes and the scene message packs 12.
+- **Two parts.** Geometry has `points` and `lines` now, because `mesh` needs a second counter for its indices.
+- **New messages.** `PROGRAM` and `PROGRAM_STATE` are new under the capability `programs`, because `CONTROL` carries no code and no arguments, and a data view names a reduction.
+- **Intervention wire.** Interventions use `CONTROL` and `CONTROLS` under the capability `interventions`, because an intervention applies at the same step boundary as a parameter.
+- **Head names.** A head's point is `<module>#<h>`, because a torch module name never holds `#`, and the head rule covers `nn.MultiheadAttention` and the usual GPT layouts.
+- **Toggle now.** The toggle control is built with the interventions, because the acceptance test needs it. The picker and the text control stay for the interface layer.
+- **Sandbox library.** The sandbox is the builder module `caliper_builder_programs` without dependencies, because the builder configures on its own and all three hosts must run the same checks.
+- **Unchecked edits.** Without the compiler library, an edit applies with `program.not_checked`, because the hosts check again before any run.
+- **One submit each.** The runtime submits each due program on its own, because the layer gives the GPU time of a submit, and the watchdog needs each program's time.
+- **Shared cadence.** All programs share the pass steps of one N, because the sync points cost more than a pass, and a shared step pays them once.
+- **Version 1.** Programs join spec version 1, because `design/instruments.md` planned them there before version 1 reaches `main`.
+- **Provenance by the app.** No command writes `provenance`, because a mark that an agent can clear protects nothing.
+- **Internal C interface.** The runtime's C header is in `src/host/producer`, because the native module is its only caller.
+- **Schema with the codec.** The schema of version 1 gains its three keys with the codec, because the reader refuses the keys until the codec reads them.
+- **Wire constants with the wire.** The constants of the new messages go into `include/caliper/live_net.h`, the codec of Caliper LIB and the reference page together, because a test binds the three.
 
 ## Open Points
 

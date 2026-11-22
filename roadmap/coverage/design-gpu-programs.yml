@@ -6,6 +6,7 @@ summary: The plan page design/gpu-programs.md, read heading by heading; each pla
   or is listed as holding no feature.
 not_features:
 - Status
+- Decisions
 - Open Points
 entries:
 - heading: Spec Additions
