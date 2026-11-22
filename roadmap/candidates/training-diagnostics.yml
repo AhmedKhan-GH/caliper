@@ -1,0 +1,307 @@
+# yaml-language-server: $schema=schema.json
+pillar: TRN
+title: Training Diagnostics
+proposed: true
+description: "This pillar holds per-layer gradient, weight and activation statistics, optimiser state, non-finite value tracing, curvature, precision and quantisation, distributed-run checks, model graphs."
+alternative: "Training diagnostics could fold into RUN if RUN is read as everything about a training run."
+candidates:
+  - key: gradient-histograms
+    title: "Gradient Histograms per Layer"
+    summary: "The distribution of gradients of each parameter tensor is drawn over steps."
+    serves: "Vanishing and exploding gradients are spotted."
+    origin: field
+    depends_on: [STR-45]
+  - key: weight-histograms
+    title: "Weight Histograms per Layer"
+    summary: "Each layer's weight distribution is drawn over steps."
+    serves: "Drift, saturation and collapse are spotted."
+    origin: field
+    depends_on: [STR-45]
+  - key: update-ratio
+    title: "Update-to-Weight Ratio"
+    summary: "The norm of each step's update over the weight norm is plotted per layer."
+    serves: "A person checks that the learning rate suits every layer."
+    origin: field
+    depends_on: [STR-45]
+  - key: layer-norm-table
+    title: "Per-Layer Norm Table"
+    summary: "Weight, gradient and activation norms are listed per layer with sparkline histories."
+    serves: "The layer that misbehaves is found."
+    origin: field
+    depends_on: [STR-45]
+  - key: gradient-clipping-view
+    title: "Gradient Norm and Clipping View"
+    summary: "The total gradient norm, the clip threshold and the share of clipped steps are shown."
+    serves: "Clipping is tuned and instability spotted."
+    origin: field
+    depends_on: [STR-45]
+  - key: dead-unit-finder
+    title: "Dead Unit Finder"
+    summary: "Units whose activations stay zero or constant over a batch are counted per layer."
+    serves: "Dead and collapsed units are found."
+    origin: field
+    depends_on: [STR-45]
+  - key: activation-statistics
+    title: "Activation Statistics"
+    summary: "Mean, spread, kurtosis, share of zeros and maximum are plotted per layer over steps."
+    serves: "Saturation and outlier growth are caught."
+    origin: field
+    depends_on: [STR-45]
+  - key: activation-histogram-heatmap
+    title: "Activation Histogram Heatmap"
+    summary: "Each layer's activation distribution over steps is drawn as a colour matrix."
+    serves: "A person sees distributions shift in training."
+    origin: field
+    depends_on: [STR-45]
+  - key: non-finite-source-finder
+    title: "Non-Finite Value Source Finder"
+    summary: "Hooks name the first operation or layer that produced a NaN or infinity, and the run pauses there."
+    serves: "Divergence is debugged at its source."
+    origin: field
+    depends_on: [STR-45, STR-03]
+  - key: anomaly-step-replay
+    title: "Anomaly Step Replay"
+    summary: "The batch, weights and optimiser state at a detected anomaly are saved, so the step can run again under inspection."
+    serves: "A rare spike is reproduced."
+    origin: field
+    depends_on: [RUN-02, STR-03]
+  - key: loss-spike-detector
+    title: "Loss Spike Detector"
+    summary: "Sudden rises in loss or gradient norm are flagged and linked to the batch and learning rate at that step."
+    serves: "Instabilities of large runs are understood."
+    origin: field
+    depends_on: [RUN-01]
+  - key: batch-loss-attribution
+    title: "Per-Example Loss in a Batch"
+    summary: "The loss of every example in a step is shown, with those that dominated a spike listed."
+    serves: "Bad data is found."
+    origin: field
+    depends_on: [STR-45]
+  - key: schedule-view
+    title: "Learning-Rate Schedule View"
+    summary: "The schedule, warm-up, per-group rates and effective rate are plotted."
+    serves: "A person confirms the schedule is the one intended."
+    origin: field
+    depends_on: [RUN-01]
+  - key: optimiser-state-inspector
+    title: "Optimiser State Inspector"
+    summary: "Momentum, second-moment estimates and effective step sizes are shown as tensors with histograms."
+    serves: "Instabilities of adaptive optimisers are diagnosed."
+    origin: field
+    depends_on: [INT-06]
+  - key: weight-norm-growth
+    title: "Weight Norm Growth View"
+    summary: "Parameter norms are tracked over time against the weight decay setting."
+    serves: "Regularisation is set."
+    origin: field
+    depends_on: [STR-45]
+  - key: parameter-group-metrics
+    title: "Metrics by Parameter Group"
+    summary: "Every diagnostic is split by the optimiser's parameter groups."
+    serves: "Different rates per block are tuned."
+    origin: field
+    depends_on: [STR-45]
+  - key: stable-rank
+    title: "Stable Rank and Effective Dimension"
+    summary: "The stable rank of weights and of activations is tracked per layer."
+    serves: "Representation collapse is spotted."
+    origin: field
+    depends_on: [STR-45]
+  - key: linear-mode-connectivity
+    title: "Linear Mode Connectivity Plot"
+    summary: "Loss is evaluated along the line between two checkpoints."
+    serves: "A person judges whether two runs share a basin."
+    origin: field
+    depends_on: [STR-11, RUN-10]
+  - key: loss-landscape-slice
+    title: "Loss Landscape Slice of a Checkpoint"
+    summary: "Loss is drawn along one or two normalised directions around any saved checkpoint."
+    serves: "The flatness of a minimum is judged after the fact."
+    origin: field
+    depends_on: [STR-11]
+  - key: hessian-spectrum
+    title: "Hessian Spectrum"
+    summary: "The top eigenvalues, trace and spectral density of the Hessian are estimated and tracked over training."
+    serves: "Curvature and sharpness are measured."
+    origin: field
+    depends_on: [STR-45]
+  - key: sharpness-tracker
+    title: "Sharpness over Training"
+    summary: "A sharpness measure is tracked against the stability limit set by the learning rate."
+    serves: "Edge-of-stability behaviour is seen."
+    origin: field
+    depends_on: [STR-45]
+  - key: gradient-noise-scale
+    title: "Gradient Noise Scale"
+    summary: "The noise scale is estimated from gradients across batches and plotted over training, per layer."
+    serves: "Batch size is chosen."
+    origin: field
+    depends_on: [STR-45]
+  - key: per-example-gradient-norms
+    title: "Per-Example Gradient Norms"
+    summary: "The gradient norm of each example is computed, and the distribution drawn."
+    serves: "Influential and mislabelled examples are found."
+    origin: field
+    depends_on: [STR-45]
+  - key: influence-view
+    title: "Training Data Influence View"
+    summary: "The training examples most responsible for a chosen output are listed."
+    serves: "A behaviour is traced to data."
+    origin: field
+    depends_on: [INT-05]
+  - key: training-dynamics-map
+    title: "Training Dynamics Map"
+    summary: "Each example is plotted by its mean confidence and variability across epochs."
+    serves: "Easy, ambiguous and hard examples are separated."
+    origin: field
+    depends_on: [RUN-01]
+  - key: forgetting-events
+    title: "Forgetting Events"
+    summary: "The times each example turns from right to wrong during training are counted."
+    serves: "Hard and redundant examples are found."
+    origin: field
+    depends_on: [RUN-01]
+  - key: per-sample-loss-trajectories
+    title: "Per-Sample Loss Trajectories"
+    summary: "Each training example's loss over time is drawn, clustered by trajectory."
+    serves: "Training dynamics are read at the level of data."
+    origin: field
+    depends_on: [RUN-01]
+  - key: skill-timeline
+    title: "Skill Emergence Timeline"
+    summary: "The step at which each skill, class or probe becomes accurate is marked along a run."
+    serves: "The order of learning is studied."
+    origin: field
+    depends_on: [RUN-01]
+  - key: data-order-view
+    title: "Training Data Order View"
+    summary: "The shards and positions each step consumed are shown, and the exact order can be replayed."
+    serves: "Data-related events are reproduced."
+    origin: field
+    depends_on: [RUN-03]
+  - key: batch-composition
+    title: "Batch Composition View"
+    summary: "The class, length, domain and source mix of each batch is shown over steps."
+    serves: "Imbalance and curriculum effects are found."
+    origin: field
+    depends_on: [STR-45]
+  - key: padding-waste
+    title: "Sequence Length and Padding View"
+    summary: "The lengths in each batch and the share of padded tokens are drawn."
+    serves: "Packing and bucketing are tuned."
+    origin: field
+    depends_on: [STR-45]
+  - key: mixed-precision-monitor
+    title: "Mixed-Precision Monitor"
+    summary: "The loss scale, skipped steps and overflow counts are tracked per layer."
+    serves: "Mixed precision is tuned."
+    origin: field
+    depends_on: [STR-45]
+  - key: precision-error-map
+    title: "Precision Error Map"
+    summary: "A layer's output in low and high precision is compared, with relative error per layer."
+    serves: "A person chooses where to keep higher precision."
+    origin: field
+    depends_on: [STR-19]
+  - key: quantisation-sensitivity
+    title: "Quantisation Sensitivity"
+    summary: "Layers are ranked by the output change when each is quantised alone."
+    serves: "Mixed bit widths are chosen."
+    origin: field
+    depends_on: [INT-06]
+  - key: quantisation-range-histograms
+    title: "Quantisation Range Histograms"
+    summary: "The range, clipped share and rounding error of weights and activations are shown per tensor and channel."
+    serves: "Scales and calibration are chosen."
+    origin: field
+    depends_on: [INT-06]
+  - key: number-format-inspector
+    title: "Number Format Inspector"
+    summary: "Exponent use, subnormal and saturated shares are shown for low-precision tensors."
+    serves: "Low-precision training is tuned."
+    origin: field
+    depends_on: [STR-19]
+  - key: per-rank-metrics
+    title: "Per-Rank Metrics"
+    summary: "Loss, gradient norm, step time and memory are shown per rank of a distributed run, with stragglers marked."
+    serves: "Slow and divergent ranks are found."
+    origin: field
+    depends_on: [STR-40]
+  - key: replica-drift-check
+    title: "Replica Drift Check"
+    summary: "Gradients or parameters are compared across ranks, and drift flagged."
+    serves: "Silent divergence between replicas is caught."
+    origin: field
+    depends_on: [STR-40]
+  - key: pipeline-schedule-view
+    title: "Pipeline Schedule View"
+    summary: "The micro-batch schedule of pipeline parallelism is drawn per stage, with idle slots shaded."
+    serves: "Pipeline parallelism is tuned."
+    origin: field
+    depends_on: [STR-40]
+  - key: sharding-layout
+    title: "Sharding Layout View"
+    summary: "How each tensor is split across devices is drawn, with sizes per device."
+    serves: "A parallel setup is checked."
+    origin: field
+    depends_on: [STR-40]
+  - key: expert-load-balance
+    title: "Expert Load Balance"
+    summary: "Token counts per expert per layer and the router's entropy are tracked over steps."
+    serves: "Collapse of a mixture of experts is diagnosed."
+    origin: field
+    depends_on: [STR-45]
+  - key: computation-graph-view
+    title: "Computation Graph View"
+    summary: "A model's graph of operations is drawn with shapes, types and sizes, collapsible by module and searchable."
+    serves: "A model's structure is understood and shape errors found."
+    origin: field
+    depends_on: [INT-07]
+  - key: graph-diff
+    title: "Model Graph Diff"
+    summary: "Two model graphs, such as before and after export, are compared with changed nodes marked."
+    serves: "A conversion is validated."
+    origin: field
+    depends_on: [INT-07]
+  - key: graph-data-overlay
+    title: "Data Overlay on Model Graphs"
+    summary: "The nodes of a model graph are coloured by latency, error, memory or any imported value."
+    serves: "The costly or inaccurate operation is located."
+    origin: field
+    depends_on: [INT-07]
+  - key: module-tree
+    title: "Module Tree with Counts"
+    summary: "The module hierarchy is listed with parameters, activation sizes, operation counts and shapes per block."
+    serves: "A person sees where capacity and compute sit."
+    origin: field
+    depends_on: [INT-05]
+  - key: autograd-graph-inspector
+    title: "Backward Graph Inspector"
+    summary: "The backward graph is walked from a tensor, showing the tensors it keeps and their sizes."
+    serves: "Memory held for the backward pass is understood."
+    origin: field
+    depends_on: [INT-05]
+  - key: shared-storage-view
+    title: "Shared Storage View"
+    summary: "Tensors that alias or share storage are shown."
+    serves: "Tied weights are found and double counting avoided."
+    origin: field
+    depends_on: [INT-06]
+  - key: sanity-checks
+    title: "Training Sanity Checks"
+    summary: "Standard checks run before a long run, such as the expected initial loss and overfitting one batch, and each is reported."
+    serves: "Setup errors are caught early."
+    origin: field
+    depends_on: [STR-03]
+  - key: loss-term-balance
+    title: "Loss-Term Balance View"
+    summary: "Each term of a composite loss and its gradient norm are plotted on one chart."
+    serves: "Loss weights are tuned."
+    origin: field
+    depends_on: [RUN-01]
+  - key: anomaly-watcher
+    title: "Anomaly Watcher"
+    summary: "A rule or an agent watches streams for spikes, non-finite values, plateaus and dead units, then raises a notice or pauses the run."
+    serves: "Failed training is caught early."
+    origin: field
+    depends_on: [STR-03, AGT-02]

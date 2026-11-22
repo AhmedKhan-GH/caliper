@@ -1,0 +1,222 @@
+# yaml-language-server: $schema=schema.json
+pillar: PUB
+title: Publishing and Teaching
+proposed: true
+description: "This pillar holds explainer pages and notebooks, presentation mode, figure and video export, style presets, accessibility of figures, comments, review and shared sessions."
+candidates:
+  - key: explainer-notebooks
+    title: "Explainer Notebooks"
+    summary: "A set of notebooks teaches one mechanism with a picture, a formula and editable code for every idea, drawn by Caliper's widgets."
+    serves: "A newcomer learns attention, or any mechanism, by changing it."
+    origin: adjacent-work
+    depends_on: [STR-07]
+  - key: figure-callouts
+    title: "Callouts on Figures"
+    summary: "A view carries labels and arrows that point at what matters, placed from data."
+    serves: "A reader knows what to look at in a figure."
+    origin: adjacent-work
+    depends_on: [SPC-20]
+  - key: interactive-html-export
+    title: "Interactive HTML Export"
+    summary: "A notebook or page exports to one HTML file whose views still rotate, hover and animate."
+    serves: "Results are shared with someone who installs nothing."
+    origin: adjacent-work
+    depends_on: [STR-07, EMB-01]
+  - key: exercises
+    title: "Exercises with Checked Answers"
+    summary: "A lesson ends with exercises whose answers are checked by running code."
+    serves: "A course built on Caliper tests understanding."
+    origin: adjacent-work
+    depends_on: [STR-07]
+  - key: folded-derivations
+    title: "Folded Derivations and Code"
+    summary: "A lesson page shows the picture first and folds the derivation and code beneath it."
+    serves: "Readers reach the insight before the detail."
+    origin: adjacent-work
+    depends_on: [SPC-18]
+  - key: combined-book-export
+    title: "Combined Book Export"
+    summary: "Several notebooks or pages export as one book with a table of contents."
+    serves: "A course or a report ships as one document."
+    origin: adjacent-work
+    depends_on: [STR-07]
+  - key: scroll-story-pages
+    title: "Scroll-Story Explainer Pages"
+    summary: "Pages in which live views change as the reader scrolls through text steps."
+    serves: "Teaches a model or result as a guided sequence rather than one dense figure."
+    origin: field
+    depends_on: [EMB-06, EMB-07, SPC-18]
+  - key: tour-recorder
+    title: "Tour Recorder"
+    summary: "A recorder that turns the author's own clicks, camera moves and narration into a tour data file."
+    serves: "Lets teachers author tours by demonstrating instead of writing data."
+    origin: field
+    depends_on: [SPC-18, STR-12]
+  - key: presentation-mode
+    title: "Presentation Mode"
+    summary: "A full-screen mode with slides built from views, a presenter notes pane and a laser pointer."
+    serves: "Lets a talk be given from live views without a separate slide tool."
+    origin: field
+    depends_on: [SPC-18, COR-44]
+  - key: annotated-recordings
+    title: "Narrated Recordings"
+    summary: "A recording with a voice track, timed captions and notes pinned to steps."
+    serves: "Makes a recording understandable on its own to those who were not present."
+    origin: field
+    depends_on: [STR-12, STR-13]
+  - key: classroom-demo-packs
+    title: "Classroom Demo Packs"
+    summary: "Folders of applets, data, tours and exercises prepared for one lesson and runnable offline."
+    serves: "Lets an instructor run a lesson on any lab machine."
+    origin: field
+    depends_on: [COR-19, SPC-18]
+  - key: video-gif-export
+    title: "Video and GIF Export"
+    summary: "An exporter that renders a view or a recording range to video or an animated image at a chosen size and rate."
+    serves: "Produces moving figures for talks, posts and papers."
+    origin: field
+    depends_on: [REN-65, STR-13]
+  - key: animation-keyframes
+    title: "Animation Keyframes"
+    summary: "A keyframe editor for camera, time and parameters with easing and preview."
+    serves: "Makes repeatable, polished animations of a scene or training run."
+    origin: field
+    depends_on: [REN-61, STR-13]
+  - key: vector-figure-export
+    title: "Vector Figure Export"
+    summary: "An exporter of plots and diagrams to scalable vector files with live text and named layers."
+    serves: "Gives print-quality figures that can be edited in any drawing tool."
+    origin: field
+    depends_on: [REN-65]
+  - key: publication-style-presets
+    title: "Publication Style Presets"
+    summary: "Saved sets of fonts, sizes, line widths, column widths and colours matching common venue rules."
+    serves: "Makes figures fit a venue without manual restyling."
+    origin: field
+    depends_on: [REN-65]
+  - key: figure-composer
+    title: "Multi-Panel Figure Composer"
+    summary: "A canvas for arranging views into labelled panels with shared axes, scale bars and letters."
+    serves: "Builds a complete figure from live views and keeps it linked to its sources."
+    origin: field
+    depends_on: [REN-65, SPC-17]
+  - key: colour-vision-safe-palettes
+    title: "Colour-Vision-Safe Palettes"
+    summary: "Palettes checked for colour-vision deficiency with a preview that simulates the main types."
+    serves: "Keeps figures readable to all viewers and checks them before export."
+    origin: field
+    depends_on: [REN-22, SPC-39]
+  - key: sonification
+    title: "Sonification"
+    summary: "A mapping of series and tensors to pitch, loudness and stereo position with a playhead synced to the scrubber."
+    serves: "Lets a signal or training run be explored by ear, including by those who cannot see the plot."
+    origin: field
+    depends_on: [STR-13]
+  - key: figure-text-alternatives
+    title: "Text Alternatives for Figures"
+    summary: "Generated and editable descriptions of each view, with the data summary behind them."
+    serves: "Makes exported figures usable with screen readers."
+    origin: field
+    depends_on: [REN-65]
+  - key: example-gallery
+    title: "Example Gallery"
+    summary: "A browsable local collection of ready-to-open examples with thumbnails, tags and the code that made each."
+    serves: "Helps newcomers find a starting point for a kind of data."
+    origin: field
+    depends_on: [COR-43, SPC-24]
+  - key: step-anchored-comments
+    title: "Comments Anchored to a Step or Region"
+    summary: "Notes attached to a recording step, a time range or a rectangle of a view."
+    serves: "Lets collaborators discuss a precise moment or feature of a result."
+    origin: field
+    depends_on: [STR-13, STR-06]
+  - key: shareable-view-links
+    title: "Shareable View-State Links"
+    summary: "Links that restore a view, selection, camera and time on a hub run by the team itself."
+    serves: "Lets a colleague open the exact state a result was seen in."
+    origin: field
+    depends_on: [STR-06, EMB-06]
+  - key: review-mode-signoff
+    title: "Review Mode with Sign-Off"
+    summary: "A mode where reviewers step through a result, tick checks and sign off with a stored record."
+    serves: "Gives internal review of results a clear, auditable trail."
+    origin: field
+    depends_on: [STR-06, COR-38]
+  - key: live-shared-sessions
+    title: "Live Shared Sessions with Several Cursors"
+    summary: "A session in which several people see the same views, with their own cursors and pointers."
+    serves: "Supports pair debugging and teaching across rooms on a team network."
+    origin: field
+    depends_on: [STR-06, STR-05]
+  - key: course-assignment-tooling
+    title: "Course and Assignment Tooling"
+    summary: "Templates for assignments with starter applets, hidden checks and a local grader that collects results."
+    serves: "Lets instructors set and mark visual machine learning assignments on their own machines."
+    origin: field
+    depends_on: [SPC-18, COR-52]
+  - key: figure-provenance-stamp
+    title: "Citation and Provenance Stamps on Figures"
+    summary: "A small mark or metadata block on an exported figure with the run, commit, data hash and a link or code."
+    serves: "Lets any reader trace a figure to the exact data and code behind it."
+    origin: field
+    depends_on: [REN-65, RUN-03]
+  - key: quiz-cards-in-views
+    title: "Predict-Then-Reveal Prompts"
+    summary: "Prompts that ask the learner to predict a curve or value before the view reveals it."
+    serves: "Improves learning by making learners commit to a guess first."
+    origin: field
+    depends_on: [SPC-18]
+  - key: live-slide-embedding
+    title: "Live Views in Slide Files"
+    summary: "An export of slides with embedded live views or looping clips for common presentation formats."
+    serves: "Lets talks prepared elsewhere carry the live views."
+    origin: field
+    depends_on: [EMB-07, REN-65]
+  - key: poster-layout-export
+    title: "Poster and Handout Layouts"
+    summary: "Page layouts for posters and handouts with figures, captions and a code that opens the live view."
+    serves: "Brings printed material and live views together at conferences."
+    origin: field
+    depends_on: [REN-65]
+  - key: audio-description-track
+    title: "Audio Description Track"
+    summary: "A spoken description of what changes on screen in a recording, generated and editable."
+    serves: "Makes recordings usable by blind learners."
+    origin: field
+    depends_on: [STR-12]
+  - key: caption-translation
+    title: "Translated Captions"
+    summary: "Captions and tour text in several languages stored beside the original."
+    serves: "Lets a lesson be reused in other languages."
+    origin: field
+    depends_on: [SPC-18]
+  - key: glossary-popovers
+    title: "Glossary Popovers"
+    summary: "Term definitions that appear on hover in views, tours and exported pages."
+    serves: "Lets learners meet terms in context without leaving the view."
+    origin: field
+    depends_on: [SPC-18]
+  - key: lesson-progress-tracker
+    title: "Lesson Progress Tracker"
+    summary: "A local record of which steps of a tour or course a learner has finished, with a summary file for the instructor."
+    serves: "Lets instructors see progress without any online service."
+    origin: field
+    depends_on: [SPC-18]
+  - key: dark-light-figure-pairs
+    title: "Light and Dark Figure Pairs"
+    summary: "Export of each figure in matching light and dark styles."
+    serves: "Makes one figure fit both slides and print."
+    origin: field
+    depends_on: [REN-65]
+  - key: figure-regeneration
+    title: "Figure Regeneration from Stored State"
+    summary: "A command that rebuilds an exported figure from its recorded view state and data."
+    serves: "Keeps figures up to date when data or style changes."
+    origin: field
+    depends_on: [REN-65, SPC-16]
+  - key: frame-by-frame-stepper
+    title: "Frame-by-Frame Stepper for Teaching"
+    summary: "Keyboard stepping of a recording or simulation with the state shown after every step."
+    serves: "Lets a teacher walk through an algorithm one step at a time."
+    origin: field
+    depends_on: [STR-13]

@@ -1,0 +1,77 @@
+# yaml-language-server: $schema=schema.json
+pillar: PLT
+title: Platforms and Distribution
+proposed: false
+candidates:
+  - key: arm64-wheel-job
+    title: "Wheel Build Job for arm64"
+    summary: "Continuous integration builds and tests the Caliper LIB wheel for arm64."
+    serves: "People on arm64 machines install the library with one command."
+    origin: plan-idea
+    depends_on: [PLT-03, STR-01]
+  - key: linux-x86-64
+    title: "Linux x86-64"
+    summary: "Native builds, wheels and tests for Linux on x86-64 with the GPU paths available there."
+    serves: "Lets the platform run on common lab servers and workstations."
+    origin: field
+    depends_on: [PLT-03, PLT-19]
+  - key: windows-on-arm
+    title: "Windows on ARM"
+    summary: "Native builds and tests for Windows on ARM processors."
+    serves: "Supports the growing set of ARM laptops."
+    origin: field
+    depends_on: [PLT-05, PLT-12]
+  - key: tablets-and-headsets
+    title: "Tablets and Headsets"
+    summary: "A touch and spatial viewer for tablets and headsets that shows scenes and recordings."
+    serves: "Lets scenes be seen in room scale and shown in a classroom."
+    origin: field
+    depends_on: [EMB-19, REN-12]
+  - key: container-images
+    title: "Container Images"
+    summary: "Ready images of the hub, web viewer and headless tools."
+    serves: "Makes self-run hubs and batch jobs easy to deploy."
+    origin: field
+    depends_on: [STR-06, PLT-03]
+  - key: package-manager-installs
+    title: "Package-Manager Installs"
+    summary: "Install recipes for the common system package managers."
+    serves: "Lets users install and update with their usual tool."
+    origin: field
+    depends_on: [PLT-19, COR-28]
+  - key: environment-manager-packages
+    title: "Environment-Manager Packages"
+    summary: "Packages for the main scientific environment managers that pin compatible library versions."
+    serves: "Fits the platform into the setups researchers already use."
+    origin: field
+    depends_on: [PLT-19, STR-01]
+  - key: headless-server-mode
+    title: "Headless Server Mode"
+    summary: "A no-window mode that serves the hub, recordings and views to browsers."
+    serves: "Lets a machine without a display run the platform."
+    origin: field
+    depends_on: [EMB-10, STR-06]
+  - key: offline-bundle
+    title: "Offline Installation Bundle"
+    summary: "One archive with the app, runtime and dependencies for machines with no network."
+    serves: "Supports air-gapped labs and classrooms."
+    origin: field
+    depends_on: [PLT-19]
+  - key: reproducible-build
+    title: "Reproducible Builds"
+    summary: "Release builds whose outputs are bit-identical from the same source with published checksums."
+    serves: "Lets users verify what they run."
+    origin: field
+    depends_on: [PLT-19, PLT-04]
+  - key: ci-action-for-views
+    title: "Continuous-Integration Action for Views"
+    summary: "A reusable job that renders views and compares them with stored references in a project's own pipeline."
+    serves: "Catches visual regressions in analysis code."
+    origin: field
+    depends_on: [PLT-03, COR-08]
+  - key: mobile-companion-viewer
+    title: "Phone Companion Viewer"
+    summary: "A small viewer for phones that shows run curves and alerts from a hub on the same network."
+    serves: "Lets a researcher check a run away from the desk."
+    origin: field
+    depends_on: [EMB-01, STR-06]

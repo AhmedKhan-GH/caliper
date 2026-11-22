@@ -1,0 +1,769 @@
+# yaml-language-server: $schema=schema.json
+pillar: SCI
+title: Scientific Fields
+proposed: true
+description: "This pillar holds views by field: fluids, operator learning, molecules, materials, climate, astronomy, particle and plasma physics, neuroscience, genomics, quantum, dynamics, control, signals, Bayesian inference, hardware design."
+alternative: "Scientific fields could be kept out of the registry entirely as a catalogue of applets to build on the platform, since most entries are applets and not platform features."
+candidates:
+  - key: internals-beside-lab-data
+    title: "Model Internals Beside Laboratory Data"
+    summary: "A biological model's activations are shown beside the laboratory measurements they are meant to explain."
+    serves: "A scientist checks whether what a model represents matches what an assay measured."
+    origin: plan-idea
+    depends_on: [INT-05]
+  - key: fluid-streamlines
+    title: "Streamline View"
+    summary: "Traces curves tangent to a vector field from seed points and draws them as coloured ribbons or tubes."
+    serves: "Helps researchers see flow structure in solver output and learned flow models."
+    origin: field
+    depends_on: [REN-71, REN-30]
+  - key: fluid-pathlines-streaklines
+    title: "Pathlines and Streaklines"
+    summary: "Traces particles through time-varying fields to draw pathlines and streaklines."
+    serves: "Helps study unsteady flow where streamlines mislead."
+    origin: field
+    depends_on: [REN-71, STR-13]
+  - key: vorticity-q-criterion
+    title: "Vorticity and Q-Criterion Fields"
+    summary: "Computes vorticity, helicity, Q and lambda-2 from a velocity field on the GPU and shows them as fields or surfaces."
+    serves: "Helps find vortices in solver output and in model predictions."
+    origin: field
+    depends_on: [REN-27, REN-71]
+  - key: lic-view
+    title: "Line Integral Convolution"
+    summary: "Renders a texture that smears noise along a vector field to show direction densely on a plane or surface."
+    serves: "Helps compare predicted and true flow patterns in two dimensions."
+    origin: field
+    depends_on: [REN-71, REN-38]
+  - key: unstructured-mesh-fields
+    title: "Unstructured Mesh Fields"
+    summary: "Shows cell and vertex fields on triangle, tetrahedron and mixed meshes with clipped and cut views."
+    serves: "Helps inspect results of finite-element and finite-volume solvers and mesh-based networks."
+    origin: field
+    depends_on: [REN-73, REN-26]
+  - key: adaptive-mesh-refinement
+    title: "Adaptive Mesh Refinement View"
+    summary: "Shows nested refinement levels of block-structured grids with level outlines and per-level fields."
+    serves: "Helps follow where a solver or a learned refiner spends resolution."
+    origin: field
+    depends_on: [REN-70]
+  - key: point-line-probes
+    title: "Probes Along Lines and at Points"
+    summary: "Samples fields at chosen points and along lines and plots the values over time or distance."
+    serves: "Helps compare solver, measurement and model at the same locations."
+    origin: field
+    depends_on: [REN-26, REN-70]
+  - key: solver-residual-monitor
+    title: "Solver Residual Monitor"
+    summary: "Plots residuals of each equation and each iteration live, with convergence limits and stall warnings."
+    serves: "Helps tell a converging solver from a stalled one during long runs."
+    origin: field
+    depends_on: [STR-04]
+  - key: wall-quantities
+    title: "Wall Quantities"
+    summary: "Shows wall shear, pressure coefficient and y-plus on surfaces and as curves along them."
+    serves: "Helps judge boundary-layer accuracy of solvers and learned surrogates."
+    origin: field
+    depends_on: [REN-73]
+  - key: deforming-mesh-view
+    title: "Deforming Meshes"
+    summary: "Plays meshes whose vertices move each step, such as moving bodies and free surfaces, with quality metrics."
+    serves: "Helps check mesh quality in fluid-structure and moving-boundary runs."
+    origin: field
+    depends_on: [REN-73, STR-13]
+  - key: insitu-solver-adaptor
+    title: "In-Situ Adaptor for Running Solvers"
+    summary: "Lets a running solver hand its fields to the viewer through shared memory or a socket without writing files."
+    serves: "Helps watch and steer large simulations live."
+    origin: field
+    depends_on: [STR-24, STR-03]
+  - key: turbulence-statistics
+    title: "Turbulence Statistics Panel"
+    summary: "Computes energy spectra, structure functions and Reynolds stress profiles from fields."
+    serves: "Helps check whether a learned model keeps the statistics of turbulence."
+    origin: field
+    depends_on: [REN-70]
+  - key: particle-tracer-gpu
+    title: "Lagrangian Particle Tracer"
+    summary: "Advects millions of passive particles through a field on the GPU and colours them by age or origin."
+    serves: "Helps visualise mixing and transport."
+    origin: field
+    depends_on: [REN-71, REN-32]
+  - key: pde-residual-map
+    title: "PDE Residual Map"
+    summary: "Shows the residual of a governing equation evaluated on a predicted field as a map."
+    serves: "Helps find where a physics-informed model violates its own equation."
+    origin: field
+    depends_on: [REN-70]
+  - key: collocation-points-view
+    title: "Collocation Points View"
+    summary: "Shows training collocation points over the domain with residual colouring and resampling history."
+    serves: "Helps tune adaptive sampling in physics-informed training."
+    origin: field
+    depends_on: [REN-32]
+  - key: linked-reference-prediction-error
+    title: "Reference, Prediction and Error Fields"
+    summary: "Shows the true field, the prediction and the error as three views with one shared camera, scale and cursor."
+    serves: "Helps judge surrogate models at a glance."
+    origin: field
+    depends_on: [RUN-07, RUN-08]
+  - key: error-spectrum-view
+    title: "Error Spectrum"
+    summary: "Shows the error of a predicted field by spatial frequency band."
+    serves: "Helps find that a model misses high frequencies."
+    origin: field
+    depends_on: [REN-70]
+  - key: rollout-drift-view
+    title: "Rollout Drift"
+    summary: "Shows error against rollout step for autoregressive surrogates with the field at chosen steps."
+    serves: "Helps see when a learned time stepper goes unstable."
+    origin: field
+    depends_on: [STR-13]
+  - key: conservation-monitor
+    title: "Conservation Monitor"
+    summary: "Plots mass, momentum, energy and other invariants of a predicted run against the reference."
+    serves: "Helps see whether a model respects the physics it should."
+    origin: field
+    depends_on: [STR-04]
+  - key: boundary-condition-overlay
+    title: "Boundary Condition Overlay"
+    summary: "Draws boundary and initial conditions on the domain and the error of a prediction at them."
+    serves: "Helps find where boundary handling fails."
+    origin: field
+    depends_on: [REN-70]
+  - key: learned-mode-viewer
+    title: "Learned Mode Viewer"
+    summary: "Shows the basis functions or modes a neural operator learned and their weight for a given input."
+    serves: "Helps explain what an operator uses to represent a solution."
+    origin: field
+    depends_on: [REN-70]
+  - key: parametric-solution-explorer
+    title: "Parametric Solution Explorer"
+    summary: "Lets a reader change equation parameters with sliders and see the predicted solution update beside the solver result."
+    serves: "Helps judge a surrogate across its parameter space."
+    origin: field
+    depends_on: [STR-03, REN-70]
+  - key: ensemble-surrogate-bands
+    title: "Surrogate Ensemble Bands"
+    summary: "Shows the spread of an ensemble of surrogate models over a field or a curve."
+    serves: "Helps see where a surrogate is unsure."
+    origin: field
+    depends_on: []
+  - key: trajectory-player
+    title: "Molecular Trajectory Player"
+    summary: "Plays molecular dynamics frames with a scrubber, loops, smoothing and per-frame data."
+    serves: "Helps inspect simulations and generated conformations."
+    origin: field
+    depends_on: [STR-13, REN-12]
+  - key: cartoon-representation
+    title: "Cartoon Representation"
+    summary: "Draws protein backbones as ribbons, helices and sheets from secondary structure."
+    serves: "Helps read a fold at a glance."
+    origin: field
+    depends_on: [REN-30]
+  - key: surface-representation
+    title: "Molecular Surfaces"
+    summary: "Draws solvent-accessible and solvent-excluded surfaces with electrostatic or property colouring."
+    serves: "Helps study binding sites and interfaces."
+    origin: field
+    depends_on: [REN-27]
+  - key: confidence-colouring
+    title: "Confidence Colouring"
+    summary: "Colours a structure by per-residue confidence from a structure predictor and shows the predicted error between residue pairs."
+    serves: "Helps judge which parts of a prediction to trust."
+    origin: field
+    depends_on: [REN-14]
+  - key: pair-error-matrix
+    title: "Pair-Error Matrix"
+    summary: "Shows the predicted aligned error between all residue pairs as a matrix linked to the structure."
+    serves: "Helps find domains and uncertain relative placements."
+    origin: field
+    depends_on: []
+  - key: contact-map
+    title: "Contact Map"
+    summary: "Shows residue-residue distances or contacts as a matrix linked to the structure."
+    serves: "Helps compare predicted and true folds and co-evolution signals."
+    origin: field
+    depends_on: []
+  - key: superposition-rmsd
+    title: "Superposition and RMSD"
+    summary: "Aligns structures, draws them overlaid and plots per-residue and global deviation."
+    serves: "Helps measure how well a model reproduces an experimental structure."
+    origin: field
+    depends_on: [REN-12]
+  - key: docking-pose-browser
+    title: "Docking Pose Browser"
+    summary: "Lists ligand poses with scores and opens them in the pocket with interactions drawn."
+    serves: "Helps compare poses from docking and generative models."
+    origin: field
+    depends_on: [REN-12]
+  - key: orbital-density-isosurfaces
+    title: "Orbital and Density Isosurfaces"
+    summary: "Draws isosurfaces of orbitals, electron density and electrostatic potential on a molecule."
+    serves: "Helps study outputs of quantum chemistry and learned densities."
+    origin: field
+    depends_on: [REN-27]
+  - key: free-energy-landscape
+    title: "Free-Energy Landscape"
+    summary: "Shows free energy over one or two collective variables as a surface or contour map with sampled paths."
+    serves: "Helps read results of enhanced-sampling runs and learned potentials."
+    origin: field
+    depends_on: []
+  - key: collective-variables-view
+    title: "Collective Variable Plots"
+    summary: "Plots distances, angles, dihedrals and learned variables over a trajectory."
+    serves: "Helps pick variables that separate states."
+    origin: field
+    depends_on: [STR-13]
+  - key: ramachandran-plot
+    title: "Ramachandran Plot"
+    summary: "Plots backbone dihedral pairs with allowed regions and links points to residues in the structure."
+    serves: "Helps check the plausibility of predicted and generated proteins."
+    origin: field
+    depends_on: []
+  - key: radial-distribution-function
+    title: "Radial Distribution Function"
+    summary: "Computes and plots pair distribution functions from frames with live updating."
+    serves: "Helps compare simulated and measured liquid structure."
+    origin: field
+    depends_on: []
+  - key: force-error-display
+    title: "Force Error Display"
+    summary: "Draws predicted and reference forces as arrows on each atom with the error per atom."
+    serves: "Helps find where a learned potential fails."
+    origin: field
+    depends_on: [REN-37]
+  - key: md-stability-monitor
+    title: "Simulation Stability Monitor"
+    summary: "Plots temperature, energy drift and bond lengths live during a run of a learned potential."
+    serves: "Helps stop unstable simulations early."
+    origin: field
+    depends_on: [STR-04]
+  - key: sequence-alignment-viewer
+    title: "Sequence Alignment Viewer"
+    summary: "Shows aligned sequences with conservation and links columns to structure positions."
+    serves: "Helps connect language-model embeddings and structure predictions to evolution."
+    origin: field
+    depends_on: []
+  - key: molecule-gallery
+    title: "Molecule Gallery"
+    summary: "Shows many molecules as 2-D drawings or 3-D thumbnails with properties and filters."
+    serves: "Helps review the outputs of generative chemistry models."
+    origin: field
+    depends_on: []
+  - key: reaction-pathway-view
+    title: "Reaction Pathway View"
+    summary: "Shows reactant, transition state and product with the energy profile along the path."
+    serves: "Helps check learned reaction-path models."
+    origin: field
+    depends_on: []
+  - key: crystal-structure-view
+    title: "Crystal Structure View"
+    summary: "Draws unit cells, supercells, bonds and coordination polyhedra from structure files."
+    serves: "Helps inspect materials proposed by generative models."
+    origin: field
+    depends_on: [REN-21]
+  - key: band-structure-view
+    title: "Band Structure"
+    summary: "Plots electronic bands along a path of high-symmetry points with the gap marked."
+    serves: "Helps compare predicted and computed electronic structure."
+    origin: field
+    depends_on: []
+  - key: phonon-view
+    title: "Phonon Dispersion and Modes"
+    summary: "Plots phonon bands and animates the displacement pattern of a chosen mode on the crystal."
+    serves: "Helps check learned force fields against vibrational data."
+    origin: field
+    depends_on: [STR-13]
+  - key: brillouin-zone-view
+    title: "Brillouin Zone View"
+    summary: "Draws the first Brillouin zone with its special points and the sampled path."
+    serves: "Helps relate band plots to reciprocal space."
+    origin: field
+    depends_on: [REN-12]
+  - key: diffraction-pattern
+    title: "Diffraction Pattern View"
+    summary: "Simulates and shows powder and single-crystal diffraction patterns beside measured ones."
+    serves: "Helps match generated structures to measurements."
+    origin: field
+    depends_on: []
+  - key: microstructure-view
+    title: "Microstructure View"
+    summary: "Shows grains, phases and orientation maps of segmented or simulated microstructures."
+    serves: "Helps study phase-field simulations and learned microstructure models."
+    origin: field
+    depends_on: [REN-70]
+  - key: convex-hull-view
+    title: "Convex Hull of Formation Energies"
+    summary: "Plots formation energy against composition with the hull and the distance above it for each candidate."
+    serves: "Helps judge stability of generated materials."
+    origin: field
+    depends_on: []
+  - key: materials-property-map
+    title: "Materials Property Map"
+    summary: "Shows candidate materials in a map of properties with structure thumbnails and filters."
+    serves: "Helps screen the output of materials models."
+    origin: field
+    depends_on: []
+  - key: globe-view
+    title: "Globe View"
+    summary: "Shows fields and points on a rotating sphere with graticule and light."
+    serves: "Helps view global weather and climate fields without distortion."
+    origin: field
+    depends_on: [REN-12]
+  - key: map-projections
+    title: "Map Projections"
+    summary: "Offers common map projections for gridded fields and switches between them."
+    serves: "Helps compare fields in the projection a paper or model uses."
+    origin: field
+    depends_on: []
+  - key: coastlines-and-borders
+    title: "Coastlines and Boundaries"
+    summary: "Draws coastlines, rivers and boundaries as reference layers over maps and globes."
+    serves: "Helps place fields geographically."
+    origin: field
+    depends_on: []
+  - key: ensemble-spread-view
+    title: "Ensemble Spread"
+    summary: "Shows the mean, spread and members of a weather or climate ensemble as maps and spaghetti plots."
+    serves: "Helps judge calibration of learned forecast ensembles."
+    origin: field
+    depends_on: []
+  - key: anomaly-maps
+    title: "Anomaly Maps"
+    summary: "Shows fields minus a climatology on a diverging colour scale with the baseline chosen by the reader."
+    serves: "Helps see what a forecast model gets right beyond the seasonal cycle."
+    origin: field
+    depends_on: [REN-14]
+  - key: hovmoller-diagram
+    title: "Hovmoller Diagram"
+    summary: "Plots a field against longitude or latitude and time as an image."
+    serves: "Helps see waves and propagation in forecasts."
+    origin: field
+    depends_on: []
+  - key: vertical-cross-section
+    title: "Cross-Sections"
+    summary: "Cuts a three-dimensional field along a drawn path and shows the vertical section."
+    serves: "Helps inspect atmosphere and ocean structure."
+    origin: field
+    depends_on: [REN-26]
+  - key: forecast-skill-by-lead
+    title: "Forecast Skill by Lead Time"
+    summary: "Plots error and anomaly correlation against lead time per variable and region."
+    serves: "Helps compare learned and physical forecast models."
+    origin: field
+    depends_on: [RUN-05]
+  - key: seismic-gathers
+    title: "Seismic Gathers"
+    summary: "Shows seismic traces as wiggle or image displays with offset and time axes."
+    serves: "Helps inspect data and outputs of learned seismic inversion."
+    origin: field
+    depends_on: []
+  - key: seismic-volume-and-horizons
+    title: "Seismic Volumes and Horizons"
+    summary: "Shows seismic volumes with slices and interpreted horizons as surfaces."
+    serves: "Helps inspect learned interpretation models."
+    origin: field
+    depends_on: [REN-26, REN-28]
+  - key: satellite-band-composites
+    title: "Satellite Band Composites"
+    summary: "Builds true-colour and false-colour images and band indices from multispectral bands with stretches."
+    serves: "Helps inspect inputs and outputs of remote-sensing models."
+    origin: field
+    depends_on: [REN-38]
+  - key: sky-map-view
+    title: "Sky Map View"
+    summary: "Shows images and catalogues on the celestial sphere with coordinate grids and projections."
+    serves: "Helps inspect detections and survey products."
+    origin: field
+    depends_on: []
+  - key: healpix-maps
+    title: "Spherical Pixel Maps"
+    summary: "Shows maps stored on equal-area spherical pixelisations as full-sky projections."
+    serves: "Helps inspect cosmic microwave and survey maps."
+    origin: field
+    depends_on: []
+  - key: n-body-view
+    title: "N-Body View"
+    summary: "Plays particle simulations of galaxies and halos with density colouring, trails and energy monitors."
+    serves: "Helps check learned gravity emulators."
+    origin: field
+    depends_on: [REN-32, REN-20]
+  - key: spectra-view
+    title: "Spectra View"
+    summary: "Shows one-dimensional spectra with line markers, redshift shifts and model overlays."
+    serves: "Helps inspect spectral data and learned redshift estimators."
+    origin: field
+    depends_on: []
+  - key: light-curves
+    title: "Light Curves"
+    summary: "Shows photometric time series with errors, phase folding and period search."
+    serves: "Helps inspect classification of variable sources."
+    origin: field
+    depends_on: []
+  - key: power-spectrum-view
+    title: "Power Spectra"
+    summary: "Computes and plots power spectra of series and fields with error bands and fits."
+    serves: "Helps check statistics of generated cosmological fields."
+    origin: field
+    depends_on: []
+  - key: gravitational-wave-spectrogram
+    title: "Strain Time-Frequency View"
+    summary: "Shows detector strain as a spectrogram with template overlays."
+    serves: "Helps inspect signals and learned detectors."
+    origin: field
+    depends_on: []
+  - key: event-display
+    title: "Collision Event Display"
+    summary: "Draws tracks, calorimeter deposits and jets of a detector event in three dimensions."
+    serves: "Helps inspect events used by learned reconstruction and tagging models."
+    origin: field
+    depends_on: [REN-12]
+  - key: histograms-with-fits
+    title: "Histograms with Fits and Ratio Panels"
+    summary: "Shows binned counts with error bars, fitted curves, stacked samples and a ratio panel."
+    serves: "Helps compare simulated and observed distributions."
+    origin: field
+    depends_on: []
+  - key: tokamak-equilibrium
+    title: "Tokamak Equilibrium View"
+    summary: "Draws flux surfaces, the separatrix and wall of a plasma equilibrium and the coil currents."
+    serves: "Helps inspect learned equilibrium reconstruction and control."
+    origin: field
+    depends_on: [COR-37]
+  - key: pic-phase-space
+    title: "Particle-in-Cell Phase Space"
+    summary: "Shows position-momentum phase space and field slices from particle-in-cell runs."
+    serves: "Helps follow instabilities and check learned plasma models."
+    origin: field
+    depends_on: [REN-32]
+  - key: detector-hit-map
+    title: "Detector Hit Map"
+    summary: "Shows hits on detector layers and channels with timing and charge."
+    serves: "Helps inspect inputs of learned tracking and calibration models."
+    origin: field
+    depends_on: []
+  - key: particle-jet-graphs
+    title: "Particle Cloud and Jet View"
+    summary: "Shows jet constituents as points in a plane or graph with attention or scores overlaid."
+    serves: "Helps interpret taggers on particle sets."
+    origin: field
+    depends_on: [REN-42]
+  - key: spike-raster
+    title: "Spike Raster"
+    summary: "Shows spike times of many units as a raster with population rates and event alignment."
+    serves: "Helps inspect recordings and simulated networks."
+    origin: field
+    depends_on: []
+  - key: calcium-movie-with-traces
+    title: "Calcium Movie with Traces"
+    summary: "Plays fluorescence movies of animal tissue with extracted regions and their traces linked."
+    serves: "Helps check segmentation and denoising models."
+    origin: field
+    depends_on: [SPC-33, STR-13]
+  - key: connectome-graph
+    title: "Connectome Graph"
+    summary: "Shows wiring graphs of neurons with cell type, weights and paths."
+    serves: "Helps inspect maps of animal brains and compare them to trained networks."
+    origin: field
+    depends_on: [REN-42]
+  - key: neuron-morphology
+    title: "Neuron Morphology"
+    summary: "Draws neuron trees as tubes with compartments, labels and branch statistics."
+    serves: "Helps inspect reconstructions and generated morphologies."
+    origin: field
+    depends_on: [REN-30]
+  - key: membrane-voltage-traces
+    title: "Membrane Traces"
+    summary: "Plots voltage and gating variables of simulated cells with current injection controls."
+    serves: "Helps tune and fit biophysical neuron models."
+    origin: field
+    depends_on: [STR-03]
+  - key: tuning-curves
+    title: "Tuning Curves"
+    summary: "Shows unit responses against stimulus parameters, for animals and for network units."
+    serves: "Helps compare selectivity in brains and models."
+    origin: field
+    depends_on: []
+  - key: population-latent-trajectories
+    title: "Neural Population Trajectories"
+    summary: "Shows low-dimensional trajectories of recorded or simulated population activity during a task."
+    serves: "Helps compare dynamics of brains and recurrent networks."
+    origin: field
+    depends_on: []
+  - key: single-cell-embedding-explorer
+    title: "Single-Cell Embedding Explorer"
+    summary: "Shows cells in a map coloured by gene, cluster or metadata with lasso selection."
+    serves: "Helps explore models of cell state."
+    origin: field
+    depends_on: []
+  - key: genome-tracks
+    title: "Genome Tracks"
+    summary: "Shows signal, annotation and prediction tracks along a genome coordinate with zoom."
+    serves: "Helps compare sequence models with experimental tracks."
+    origin: field
+    depends_on: []
+  - key: expression-heatmap-clustering
+    title: "Expression Heatmaps with Clustering"
+    summary: "Shows genes against samples as a heat map with dendrograms and ordering controls."
+    serves: "Helps inspect structure in expression data."
+    origin: field
+    depends_on: []
+  - key: volcano-plot
+    title: "Volcano Plot"
+    summary: "Plots effect size against significance for many features with labelled outliers."
+    serves: "Helps review results of differential analyses."
+    origin: field
+    depends_on: []
+  - key: sequence-model-attribution-track
+    title: "Sequence Attribution Track"
+    summary: "Shows per-base attribution of a sequence model along a genome window with motif hits."
+    serves: "Helps interpret genomic language models."
+    origin: field
+    depends_on: []
+  - key: circuit-diagram
+    title: "Quantum Circuit Diagram"
+    summary: "Draws circuits with gates, wires and measurements and highlights the gate being stepped."
+    serves: "Helps follow circuit simulators and learned circuit compilers."
+    origin: field
+    depends_on: [STR-13]
+  - key: bloch-sphere
+    title: "Bloch Sphere"
+    summary: "Draws single-qubit states on a sphere with trails as gates are applied."
+    serves: "Helps teach and debug state evolution."
+    origin: field
+    depends_on: [REN-12]
+  - key: state-and-density-matrix
+    title: "State Vector and Density Matrix View"
+    summary: "Shows amplitudes, phases and density matrices as bar and matrix displays."
+    serves: "Helps inspect simulators and state tomography models."
+    origin: field
+    depends_on: []
+  - key: measurement-histograms
+    title: "Measurement Histograms"
+    summary: "Shows shot counts against the exact distribution with error bars."
+    serves: "Helps compare sampled and ideal outcomes."
+    origin: field
+    depends_on: []
+  - key: variational-circuit-landscape
+    title: "Variational Circuit Landscape"
+    summary: "Shows loss against circuit parameters as slices and traces of the optimiser."
+    serves: "Helps study barren plateaus and optimisers."
+    origin: field
+    depends_on: []
+  - key: phase-portrait
+    title: "Phase Portraits"
+    summary: "Draws trajectories and vector fields of low-dimensional systems with nullclines and fixed points."
+    serves: "Helps study learned and analytic dynamics."
+    origin: field
+    depends_on: [REN-71, STR-03]
+  - key: bifurcation-diagram
+    title: "Bifurcation Diagram"
+    summary: "Plots long-run states against a swept parameter computed live."
+    serves: "Helps find transitions in models and in trained networks."
+    origin: field
+    depends_on: [STR-03]
+  - key: poincare-section
+    title: "Poincare Section"
+    summary: "Plots crossings of a trajectory with a chosen plane in a phase space."
+    serves: "Helps tell periodic, quasi-periodic and chaotic motion."
+    origin: field
+    depends_on: []
+  - key: lyapunov-exponents
+    title: "Lyapunov Exponents"
+    summary: "Estimates and plots the exponents of a system or a recurrent network over time."
+    serves: "Helps measure chaos and predictability of learned dynamics."
+    origin: field
+    depends_on: []
+  - key: attractor-reconstruction
+    title: "Attractor Reconstruction"
+    summary: "Builds delay-coordinate embeddings of a series and draws the reconstructed attractor."
+    serves: "Helps judge whether a learned model reproduces the geometry of a system."
+    origin: field
+    depends_on: []
+  - key: bode-plot
+    title: "Bode Plot"
+    summary: "Plots gain and phase against frequency with margins marked."
+    serves: "Helps tune controllers and learned controllers."
+    origin: field
+    depends_on: []
+  - key: nyquist-plot
+    title: "Nyquist Plot"
+    summary: "Plots the frequency response in the complex plane with encirclement count."
+    serves: "Helps judge stability of feedback loops."
+    origin: field
+    depends_on: []
+  - key: root-locus
+    title: "Root Locus"
+    summary: "Shows how closed-loop poles move as a gain changes, with a live slider."
+    serves: "Helps teach and tune control design."
+    origin: field
+    depends_on: [STR-03]
+  - key: mpc-horizon-view
+    title: "Model-Predictive Control Horizon"
+    summary: "Shows the predicted states, planned inputs and constraints over the horizon at each step."
+    serves: "Helps tune horizon, costs and learned models in predictive control."
+    origin: field
+    depends_on: []
+  - key: state-estimator-view
+    title: "State Estimator View"
+    summary: "Shows estimated state, measurement and uncertainty band for filters and learned observers."
+    serves: "Helps tune and compare estimators."
+    origin: field
+    depends_on: []
+  - key: step-response
+    title: "Step Response"
+    summary: "Plots response to a step with rise time, overshoot and settling time marked."
+    serves: "Helps tune and compare controllers."
+    origin: field
+    depends_on: [STR-03]
+  - key: waterfall-spectrogram
+    title: "Waterfall Display"
+    summary: "Shows spectra over time as a scrolling waterfall or three-dimensional ridge plot."
+    serves: "Helps watch radio and audio signals in real time."
+    origin: field
+    depends_on: []
+  - key: filter-response
+    title: "Filter Response"
+    summary: "Shows magnitude, phase, group delay and pole-zero plots of filters with sliders for the design."
+    serves: "Helps design and check learned and classical filters."
+    origin: field
+    depends_on: [STR-03]
+  - key: constellation-eye-diagram
+    title: "Constellation and Eye Diagrams"
+    summary: "Shows received symbols and eye diagrams with error vector magnitude."
+    serves: "Helps check learned receivers and demodulators."
+    origin: field
+    depends_on: []
+  - key: wavelet-scalogram
+    title: "Wavelet Scalogram"
+    summary: "Shows continuous wavelet transforms of a series as an image with cone of influence."
+    serves: "Helps see transient structure."
+    origin: field
+    depends_on: []
+  - key: sparsity-pattern
+    title: "Sparsity Pattern"
+    summary: "Shows the nonzero structure of a matrix as an image with block and bandwidth statistics."
+    serves: "Helps study solvers and learned sparse structure."
+    origin: field
+    depends_on: []
+  - key: solver-convergence-history
+    title: "Solver Convergence History"
+    summary: "Plots residual norm against iteration for iterative solvers with preconditioner comparison."
+    serves: "Helps compare solvers and learned preconditioners."
+    origin: field
+    depends_on: [RUN-05]
+  - key: complex-plane-spectra
+    title: "Spectra in the Complex Plane"
+    summary: "Plots eigenvalues and pseudospectra of matrices and Jacobians in the complex plane."
+    serves: "Helps study stability of dynamics and of training."
+    origin: field
+    depends_on: []
+  - key: trace-and-rank-plots
+    title: "Trace and Rank Plots"
+    summary: "Shows sampler chains as traces with rank histograms per parameter."
+    serves: "Helps check mixing of Bayesian samplers."
+    origin: field
+    depends_on: []
+  - key: corner-plot
+    title: "Corner Plot"
+    summary: "Shows all pairwise and marginal posterior distributions as a triangular grid with selection."
+    serves: "Helps read posteriors of many parameters."
+    origin: field
+    depends_on: []
+  - key: sampler-diagnostics
+    title: "Sampler Diagnostics"
+    summary: "Shows split R-hat, effective sample size, divergences and energy for chains live."
+    serves: "Helps decide when a run is trustworthy."
+    origin: field
+    depends_on: [STR-04]
+  - key: posterior-predictive-checks
+    title: "Posterior Predictive Checks"
+    summary: "Overlays data with draws from the posterior predictive distribution."
+    serves: "Helps judge model fit."
+    origin: field
+    depends_on: []
+  - key: simulation-based-calibration
+    title: "Simulation-Based Calibration View"
+    summary: "Shows rank statistics of posterior draws over many simulated datasets with expected bands."
+    serves: "Helps validate neural posterior estimators."
+    origin: field
+    depends_on: []
+  - key: centrality-panel
+    title: "Centrality Panel"
+    summary: "Computes degree, betweenness, eigenvector and other centralities and colours the graph by them."
+    serves: "Helps study networks and graph model outputs."
+    origin: field
+    depends_on: [REN-42]
+  - key: adjacency-matrix-reordering
+    title: "Adjacency Matrix with Reordering"
+    summary: "Shows adjacency as a matrix with ordering by community, degree or spectral order."
+    serves: "Helps see structure in dense graphs."
+    origin: field
+    depends_on: []
+  - key: community-detection-view
+    title: "Community Detection View"
+    summary: "Shows detected communities on the graph and on the matrix with quality scores."
+    serves: "Helps compare clustering methods and learned partitions."
+    origin: field
+    depends_on: []
+  - key: complex-function-plot
+    title: "Complex Function Plots"
+    summary: "Colours the complex plane by phase and magnitude for a function with zeros and poles marked."
+    serves: "Helps study analytic functions and complex-valued networks."
+    origin: field
+    depends_on: [REN-38]
+  - key: fractal-explorer
+    title: "Fractal Explorer"
+    summary: "Renders escape-time fractals on the GPU with deep zoom and parameter controls."
+    serves: "Helps study iteration and chaos interactively."
+    origin: field
+    depends_on: [STR-03]
+  - key: parametric-surfaces
+    title: "Parametric Surfaces"
+    summary: "Draws surfaces and curves from formulas with parameter sliders and curvature colouring."
+    serves: "Helps teach geometry and inspect learned shapes."
+    origin: field
+    depends_on: [REN-73]
+  - key: hdl-waveform-viewer
+    title: "HDL Waveform Viewer"
+    summary: "Shows digital signals over time with buses, radix choices, markers and searchable names."
+    serves: "Helps debug hardware designs and hardware generated by models."
+    origin: field
+    depends_on: [STR-13]
+  - key: logic-analyser-decode
+    title: "Logic Analyser Decode"
+    summary: "Decodes captured digital lines as serial and bus protocols and shows frames above the waveform."
+    serves: "Helps debug devices that feed data to models."
+    origin: field
+    depends_on: []
+  - key: remote-rendering-image-streaming
+    title: "Remote Rendering with Image Streaming"
+    summary: "Renders on a remote machine and streams compressed frames to the viewer with input sent back."
+    serves: "Helps view data too large to move to a laptop."
+    origin: field
+    depends_on: [STR-05]
+  - key: out-of-core-volumes
+    title: "Out-of-Core Volumes"
+    summary: "Loads only the bricks of a large volume that are visible at the needed resolution."
+    serves: "Helps explore terabyte-scale scans and simulations."
+    origin: field
+    depends_on: [REN-28]
+  - key: steering-parameter-history
+    title: "Steering Parameter History"
+    summary: "Records every steering change with its time so a run can be explained and repeated later."
+    serves: "Helps keep interactive experiments reproducible."
+    origin: field
+    depends_on: [STR-03, STR-12]
+  - key: fuzzy-contours
+    title: "Fuzzy Contours"
+    summary: "Draws contours with a band that shows the spread across an ensemble or an error estimate."
+    serves: "Helps show uncertainty without hiding the field."
+    origin: field
+    depends_on: []
+  - key: exceedance-maps
+    title: "Exceedance Maps"
+    summary: "Shows the probability that a field exceeds a chosen threshold across ensemble members."
+    serves: "Helps communicate risk from forecasts and surrogates."
+    origin: field
+    depends_on: []

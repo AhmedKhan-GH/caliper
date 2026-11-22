@@ -1,0 +1,737 @@
+# yaml-language-server: $schema=schema.json
+pillar: REN
+title: Rendering and 3-D
+proposed: false
+candidates:
+  - key: video-assets
+    title: "Video Assets"
+    summary: "A view plays a compressed video file frame by frame on a recording's timeline, decoded on the viewer's device."
+    serves: "Vision and robot logs keep cameras as video, and a person checks a model's output against the footage at the same instant."
+    origin: cut
+    depends_on: [REN-38, STR-13]
+  - key: encoded-depth
+    title: "Encoded Depth Images"
+    summary: "A scene accepts depth images compressed as RVL, PNG or TIFF and decodes them before back-projection."
+    serves: "Depth cameras log compressed depth, and decoding it in the viewer keeps recordings small."
+    origin: cut
+    depends_on: [REN-38, REN-39]
+  - key: map-view
+    title: "Map View"
+    summary: "A view draws geographic points, lines and regions over map tiles or a plain graticule."
+    serves: "Field robotics, driving and geoscience data are located by latitude and longitude."
+    origin: cut
+    depends_on: [REN-12]
+  - key: audio-view
+    title: "Audio View"
+    summary: "A view plays an audio signal and draws its waveform against the timeline."
+    serves: "Speech and audio model work needs to hear a sample while reading its features."
+    origin: cut
+    depends_on: [STR-13]
+  - key: state-timeline-view
+    title: "State Timeline View"
+    summary: "A view draws discrete states as coloured spans along a timeline, one lane per signal."
+    serves: "Robot modes, training phases and agent states are read as when each began and ended."
+    origin: cut
+    depends_on: [STR-23]
+  - key: graph-layout-view
+    title: "Graph View with Layout"
+    summary: "A view lays out nodes and edges by a force or layered layout when the data gives no positions."
+    serves: "Computation graphs, knowledge graphs and circuits arrive as edges only."
+    origin: cut
+    depends_on: [REN-42]
+  - key: raw-data-view
+    title: "Raw Data View"
+    summary: "A view lists the raw values behind any selected entity or view as a table."
+    serves: "A person confirms what was actually sent when a picture looks wrong."
+    origin: cut
+    depends_on: [STR-08]
+  - key: lens-distortion
+    title: "Lens Distortion for Cameras"
+    summary: "A pinhole camera carries distortion coefficients, and its image and frustum are drawn undistorted."
+    serves: "Real camera calibration is checked against the 3-D reconstruction it produced."
+    origin: cut
+    depends_on: [REN-39]
+  - key: positions-64-bit
+    title: "64-Bit Positions"
+    summary: "A scene keeps positions in 64-bit floats and draws them relative to the camera."
+    serves: "Geospatial, orbital and city-scale data lose precision in 32-bit floats."
+    origin: cut
+    depends_on: [REN-11]
+  - key: gaussian-splats
+    title: "Gaussian Splats"
+    summary: "A scene draws 3-D Gaussian splats with sorted alpha blending."
+    serves: "Radiance-field and reconstruction research inspects a trained splat scene and its training progress."
+    origin: cut
+    depends_on: [REN-11]
+  - key: voxel-grids
+    title: "Voxel Grids"
+    summary: "A scene draws a dense or sparse grid of voxels coloured by value or class."
+    serves: "Occupancy prediction and 3-D segmentation are read cell by cell."
+    origin: cut
+    depends_on: [REN-11]
+  - key: grid-maps
+    title: "Grid Maps"
+    summary: "A scene draws a 2-D grid, such as an occupancy or elevation map, placed in 3-D."
+    serves: "Navigation stacks are checked against the map they plan on."
+    origin: cut
+    depends_on: [REN-38]
+  - key: named-frames
+    title: "Named Coordinate Frames"
+    summary: "Transforms may be given between named frames that are independent of entity paths."
+    serves: "Robot data whose frames do not form one tree is shown without remapping."
+    origin: cut
+    depends_on: [REN-40]
+  - key: axis-angle-transforms
+    title: "Axis-Angle Rotations"
+    summary: "An entity transform accepts an axis and angle, and states which way the relation points."
+    serves: "Kinematics code logs joints in the form it already holds."
+    origin: cut
+    depends_on: [REN-40]
+  - key: entity-overrides
+    title: "Per-Entity Display Overrides"
+    summary: "A viewer changes how one entity is drawn, such as its colour, size or visibility, without changing the data."
+    serves: "A person isolates or restyles one object in a crowded scene."
+    origin: cut
+    depends_on: [REN-12]
+  - key: markdown-document-view
+    title: "Markdown Document View"
+    summary: "A live view shows a Markdown document that a script sends and updates."
+    serves: "A run explains itself, with notes and results beside its views."
+    origin: cut
+    depends_on: [STR-01]
+  - key: series-styles
+    title: "Series Line and Point Styles"
+    summary: "A series chooses line, step, point or area drawing, with marker shapes and line widths."
+    serves: "Sparse evaluations, step-wise schedules and dense losses read differently on one chart."
+    origin: cut
+    depends_on: [STR-01]
+  - key: human-skeleton-demo
+    title: "Human Skeleton Demo"
+    summary: "A demo draws a tracked human skeleton from keypoints as moving bones and joints."
+    serves: "A person checks a pose-estimation model against its keypoints."
+    origin: cut
+    depends_on: [REN-48, REN-42]
+  - key: unlit-and-strip-draws
+    title: "Unlit Triangles, Triangle Strips and per-Draw State"
+    summary: "A scene primitive may state its own unlit shading, triangle-strip topology, depth test and blend mode."
+    serves: "An applet that draws a field-specific picture can choose how each draw is shaded and blended."
+    origin: cut
+    depends_on: [REN-34, REN-35]
+  - key: render-to-tensor-path
+    title: "Render-to-Tensor Path"
+    summary: "A rendered frame, or its depth and ids, is handed back to the script as a tensor on the GPU."
+    serves: "Differentiable rendering, synthetic data and vision models in the loop use the picture Caliper draws."
+    origin: cut
+    depends_on: [REN-09, REN-64]
+  - key: dlpack-into-scenes
+    title: "DLPack Path into Scenes"
+    summary: "A Python script hands GPU tensors to a scene through DLPack with no copy."
+    serves: "Simulation and model outputs already on the GPU are drawn in 3-D at full rate."
+    origin: plan-idea
+    depends_on: [REN-08, STR-10]
+  - key: cone-arrow-heads
+    title: "Cone Arrow Heads"
+    summary: "Arrows in a 3-D scene may end in a lit cone sized in scene units, in place of a flat triangle of fixed pixel size."
+    serves: "A person reads the direction of forces and flow vectors in 3-D from any angle."
+    origin: plan-idea
+    depends_on: [REN-37]
+  - key: sorted-transparency
+    title: "Sorted Transparency"
+    summary: "Translucent draws in a scene are sorted by depth so that overlapping translucent surfaces blend correctly."
+    serves: "Density shells and overlapping translucent meshes read correctly in a field or reconstruction."
+    origin: plan-idea
+    depends_on: [REN-12, REN-63]
+  - key: camera-motion-decimation
+    title: "Decimation During Camera Motion"
+    summary: "A second, coarser level of detail is drawn while the camera moves, so that orbiting stays smooth over the budget."
+    serves: "A person orbits a very large point cloud in a browser without stalls."
+    origin: plan-idea
+    depends_on: [REN-24]
+  - key: measured-versus-interpolated
+    title: "Measured and Interpolated Marks"
+    summary: "A view marks which values were measured and which are interpolated or nearest."
+    serves: "A person never mistakes a smooth transition for data."
+    origin: adjacent-work
+    depends_on: [STR-08]
+  - key: labelled-matrix-grid
+    title: "Labelled Matrix Grid"
+    summary: "A small matrix is drawn as a grid with row and column labels and the value written in every cell."
+    serves: "Small score and weight matrices are read exactly."
+    origin: adjacent-work
+    depends_on: [STR-08]
+  - key: projection-disclosure
+    title: "Projection Disclosure"
+    summary: "Every projected view states its projection method and how much variance it keeps."
+    serves: "A person knows how far to trust distances in a picture."
+    origin: adjacent-work
+    depends_on: [INT-27]
+  - key: role-colour-convention
+    title: "Role Colour Convention"
+    summary: "Queries, keys, values and outputs each keep one colour in every view, with a legend wherever they appear."
+    serves: "A reader follows one vector through several attention views without relearning the colours."
+    origin: adjacent-work
+    depends_on: [INT-03, SPC-20]
+  - key: process-animations
+    title: "Process Animations with Scrub"
+    summary: "A view animates a process such as softmax sharpening, causal generation, rotary rotation or head splitting, with play, pause and scrub."
+    serves: "A person watches a step-by-step process unfold instead of reading its end state."
+    origin: adjacent-work
+    depends_on: [STR-13, INT-03]
+  - key: spectrogram-view
+    title: "Spectrogram View"
+    summary: "A time-frequency image of audio or other signals with selectable window, scale and colour mapping."
+    serves: "Lets researchers see speech, music and vibration structure that waveforms hide."
+    origin: field
+    depends_on: [STR-13]
+  - key: audio-feature-tracks
+    title: "Audio Feature Tracks"
+    summary: "Time-aligned tracks of features such as loudness, pitch, onsets and mel bands beside a waveform."
+    serves: "Helps relate model outputs to audible events."
+    origin: field
+    depends_on: [STR-13]
+  - key: synced-image-grid
+    title: "Image Grid with Synced Zoom"
+    summary: "A grid of images whose pan and zoom move together."
+    serves: "Makes it easy to compare the same region across checkpoints, channels or samples."
+    origin: field
+    depends_on: []
+  - key: image-comparison-slider
+    title: "Image Comparison Slider"
+    summary: "Two images overlaid with a draggable divider revealing one or the other."
+    serves: "Shows where two reconstructions or edits differ."
+    origin: field
+    depends_on: [RUN-08]
+  - key: image-difference-view
+    title: "Image Difference View"
+    summary: "Shows the pixelwise difference of two images with signed colouring, a gain control and error statistics."
+    serves: "Quantifies and locates changes between outputs."
+    origin: field
+    depends_on: [RUN-08]
+  - key: pixel-inspector
+    title: "Pixel Inspector"
+    summary: "Shows exact values, coordinates and neighbourhood of the pixel under the cursor, for any channel and bit depth."
+    serves: "Lets researchers check what a model really received or produced."
+    origin: field
+    depends_on: []
+  - key: optical-flow-view
+    title: "Optical Flow View"
+    summary: "Shows a flow field as colour-coded direction and magnitude or as arrows over the image."
+    serves: "Helps debug motion estimation and video models."
+    origin: field
+    depends_on: []
+  - key: surface-normal-view
+    title: "Surface Normal View"
+    summary: "Shows per-pixel normals as colour with a lit-sphere key and angular error against a reference."
+    serves: "Helps debug depth, shape and relighting models."
+    origin: field
+    depends_on: []
+  - key: heatmap-overlay-on-images
+    title: "Heatmap Overlay on Images"
+    summary: "Blends any scalar map over an image with adjustable opacity, colour mapping and threshold."
+    serves: "A common base for explaining or inspecting model outputs against the source image."
+    origin: field
+    depends_on: []
+  - key: multi-channel-image-view
+    title: "Multi-Channel Image View"
+    summary: "Shows images with many channels, such as multispectral or feature maps, with channel pickers and composites."
+    serves: "Supports remote sensing, microscopy-like and feature-map inspection."
+    origin: field
+    depends_on: []
+  - key: hdr-image-view
+    title: "High-Dynamic-Range Image View"
+    summary: "Shows floating-point images with exposure control, tone mapping and out-of-range markers."
+    serves: "Lets researchers inspect radiance maps and rendered outputs without clipping."
+    origin: field
+    depends_on: []
+  - key: gigapixel-image-pyramid
+    title: "Tiled Image Pyramid"
+    summary: "Displays very large images by loading only visible tiles at the needed resolution."
+    serves: "Allows smooth inspection of satellite, slide-scale and panorama images."
+    origin: field
+    depends_on: []
+  - key: violin-plot
+    title: "Violin Plot"
+    summary: "Shows distributions per group as mirrored density shapes with quartile marks."
+    serves: "Compares metric distributions across runs or classes more honestly than bars."
+    origin: field
+    depends_on: []
+  - key: box-plot
+    title: "Box Plot"
+    summary: "Shows medians, quartiles, whiskers and outliers per group, with the points available on demand."
+    serves: "Gives a compact comparison of spreads across groups."
+    origin: field
+    depends_on: []
+  - key: ecdf-plot
+    title: "Empirical Cumulative Distribution Plot"
+    summary: "Plots the cumulative distribution of values per group on shared axes."
+    serves: "Compares distributions without binning choices."
+    origin: field
+    depends_on: []
+  - key: scatter-matrix
+    title: "Scatter Matrix"
+    summary: "A grid of pairwise scatter plots and histograms for several columns with linked brushing."
+    serves: "Shows relations between many variables at once."
+    origin: field
+    depends_on: [REN-46]
+  - key: parallel-coordinates
+    title: "Parallel Coordinates Plot"
+    summary: "One line per item across vertical axes for many variables, with axis brushing."
+    serves: "Explores high-dimensional runs, configurations and samples."
+    origin: field
+    depends_on: []
+  - key: density-plot-2d
+    title: "Two-Dimensional Density Plot"
+    summary: "Shows the density of many points as a smoothed colour map."
+    serves: "Reveals structure where scatter plots saturate."
+    origin: field
+    depends_on: []
+  - key: hexbin-plot
+    title: "Hexagonal Binning Plot"
+    summary: "Bins points into hexagons coloured by count or a statistic."
+    serves: "Shows dense scatter data with controlled resolution."
+    origin: field
+    depends_on: []
+  - key: contour-plot
+    title: "Contour Plot"
+    summary: "Draws labelled contour lines and filled bands for a scalar function over a plane."
+    serves: "Shows loss surfaces, response surfaces and fields."
+    origin: field
+    depends_on: []
+  - key: generic-tree-view
+    title: "Tree and Dendrogram View"
+    summary: "Draws any hierarchy or clustering result as a tree or dendrogram with collapsible branches and heights."
+    serves: "Shows clusters, taxonomies and decision structures from any model type."
+    origin: field
+    depends_on: []
+  - key: sankey-diagram
+    title: "Sankey Diagram"
+    summary: "Shows flows between stages as bands whose width is the quantity."
+    serves: "Follows how samples, tokens or probability mass move through categories or layers."
+    origin: field
+    depends_on: []
+  - key: treemap-sunburst
+    title: "Treemap and Sunburst View"
+    summary: "Shows hierarchical quantities as nested rectangles or rings."
+    serves: "Shows where parameters, compute or data volume sit in a hierarchy."
+    origin: field
+    depends_on: []
+  - key: table-with-sparklines
+    title: "Table with Sparklines"
+    summary: "A table where cells hold small inline charts of series, with shared or per-row scales."
+    serves: "Lets one table show many runs or sensors and their histories."
+    origin: field
+    depends_on: [STR-34]
+  - key: event-markers-on-series
+    title: "Event Markers on Time Series"
+    summary: "Vertical lines and labelled flags on series for events such as restarts, schedule changes and alerts."
+    serves: "Ties changes in a curve to what happened at that moment."
+    origin: field
+    depends_on: [STR-13]
+  - key: event-timeline-lanes
+    title: "Event Timeline Lanes"
+    summary: "Parallel lanes of intervals and events by source, aligned to the shared time cursor."
+    serves: "Shows how events across components overlap."
+    origin: field
+    depends_on: [STR-13]
+  - key: frequency-spectrum-view
+    title: "Frequency Spectrum View"
+    summary: "Shows the Fourier or power spectrum of a series with window choice, log scales and peak labels."
+    serves: "Reveals periodicity and noise in signals and training curves."
+    origin: field
+    depends_on: []
+  - key: phase-space-plot
+    title: "Phase-Space Plot"
+    summary: "Plots a state against its rate of change or a delayed copy, with time shown as colour."
+    serves: "Shows attractors and oscillation in dynamical systems and training."
+    origin: field
+    depends_on: []
+  - key: log-and-dual-axes
+    title: "Log and Dual Axes"
+    summary: "Logarithmic, symmetric-log and secondary y-axes with shared cursors."
+    serves: "Allows curves of very different scale to be compared on one plot."
+    origin: field
+    depends_on: []
+  - key: plot-vector-export
+    title: "Vector Export of Plots"
+    summary: "Exports any plot as SVG or PDF with live text, fonts and sizes suitable for papers."
+    serves: "Lets figures go into a paper without redrawing."
+    origin: field
+    depends_on: [REN-65]
+  - key: plot-data-export
+    title: "Data Export of Plots"
+    summary: "Exports the exact data behind a plot to CSV or Parquet with the current view and filters."
+    serves: "Makes every figure reproducible and checkable."
+    origin: field
+    depends_on: [REN-65]
+  - key: contour-lines-on-slices
+    title: "Contour Lines on Slices"
+    summary: "Draws contour lines of a scalar field on a slice plane in a scene."
+    serves: "Gives readable level sets on volume and field slices."
+    origin: field
+    depends_on: [REN-26]
+  - key: glyph-fields
+    title: "Glyph Fields"
+    summary: "Draws small oriented shapes such as arrows, ellipsoids or crosses at grid or point positions, scaled by data."
+    serves: "Shows vector, tensor and uncertainty fields compactly."
+    origin: field
+    depends_on: []
+  - key: horizon-and-ridgeline-plots
+    title: "Ridgeline Plot"
+    summary: "Stacks overlapping density or series curves in rows with shared axes."
+    serves: "Compares many distributions or histories over steps in little space."
+    origin: field
+    depends_on: []
+  - key: calendar-heatmap
+    title: "Calendar Heatmap"
+    summary: "Shows a value per day or hour in a calendar grid."
+    serves: "Shows daily patterns in logged activity and metrics."
+    origin: field
+    depends_on: []
+  - key: radar-chart
+    title: "Radar Chart"
+    summary: "Shows several metrics for one item on axes arranged in a circle."
+    serves: "Compares models over a small set of skills."
+    origin: field
+    depends_on: []
+  - key: bump-chart
+    title: "Rank Chart over Time"
+    summary: "Shows how the rank of each item changes across steps or checkpoints."
+    serves: "Shows who leads and when rankings flip."
+    origin: field
+    depends_on: []
+  - key: dot-and-forest-plot
+    title: "Dot and Forest Plot"
+    summary: "Shows estimates with intervals in rows for groups or effects."
+    serves: "Presents results with uncertainty at a glance."
+    origin: field
+    depends_on: []
+  - key: waterfall-chart
+    title: "Waterfall Chart"
+    summary: "Shows how contributions add up from a baseline to a total."
+    serves: "Explains how parts add to a score or a prediction."
+    origin: field
+    depends_on: []
+  - key: polar-and-circular-plots
+    title: "Polar and Circular Plots"
+    summary: "Plots on angle and radius axes, including rose diagrams and phase plots."
+    serves: "Suits angular data such as headings, phases and periodic features."
+    origin: field
+    depends_on: []
+  - key: streamgraph-view
+    title: "Stacked Area and Stream View"
+    summary: "Shows how the composition of a quantity changes over time as stacked bands."
+    serves: "Follows changing mixtures such as data sources or expert use."
+    origin: field
+    depends_on: []
+  - key: error-bar-and-interval-plots
+    title: "Interval Plots"
+    summary: "Shows estimates with confidence or prediction intervals as bars, bands or fans."
+    serves: "Makes uncertainty visible in forecasts and metrics."
+    origin: field
+    depends_on: [RUN-09]
+  - key: small-multiples-view
+    title: "Small Multiples"
+    summary: "A grid of identical plots split by a variable, sharing axes."
+    serves: "Compares many conditions without overplotting."
+    origin: field
+    depends_on: []
+  - key: image-with-histograms
+    title: "Image with Channel Histograms"
+    summary: "Shows an image beside per-channel histograms and statistics, with range-clipping controls."
+    serves: "Helps check normalisation and exposure of model inputs."
+    origin: field
+    depends_on: []
+  - key: colourmap-legend-tools
+    title: "Colour Scale Tools"
+    summary: "Interactive colour bars with range, clipping, log scaling and colour-blind-safe checks."
+    serves: "Keeps colour mappings honest and consistent across panels."
+    origin: field
+    depends_on: [REN-14]
+  - key: video-frame-strip
+    title: "Video Frame Strip"
+    summary: "Shows evenly spaced frames of a video as a strip with linked cursor."
+    serves: "Gives a quick overview of long clips."
+    origin: field
+    depends_on: [STR-13]
+  - key: splat-editing
+    title: "Splat Editing"
+    summary: "Selecting, deleting, moving and recolouring Gaussian splats with box, lasso and brush tools."
+    serves: "Cleans floaters and background from reconstructions."
+    origin: field
+    depends_on: [REN-12, REN-62]
+  - key: radiance-field-live-viewer
+    title: "Radiance-Field Live Viewer"
+    summary: "Renders a radiance field as it trains, at interactive rates, from any camera."
+    serves: "Lets researchers watch a reconstruction improve during training."
+    origin: field
+    depends_on: [REN-12, STR-04]
+  - key: training-cameras-panel
+    title: "Training Cameras Panel"
+    summary: "Lists the training cameras of a reconstruction with frusta, thumbnails and per-view loss."
+    serves: "Finds views that are poorly fitted or badly posed."
+    origin: field
+    depends_on: [REN-39]
+  - key: out-of-core-point-clouds
+    title: "Out-of-Core Point Clouds"
+    summary: "Streams only the visible points of very large clouds with level of detail."
+    serves: "Allows billion-point scans to be inspected smoothly."
+    origin: field
+    depends_on: [REN-32]
+  - key: point-attribute-colouring
+    title: "Point Attribute Colouring"
+    summary: "Colours points by any attribute such as intensity, height, class or return number, with range controls."
+    serves: "Reveals structure in scanned and labelled clouds."
+    origin: field
+    depends_on: [REN-32, REN-14]
+  - key: point-attribute-filters
+    title: "Point Attribute Filters"
+    summary: "Hides points outside ranges of attributes, with live histograms of each attribute."
+    serves: "Isolates ground, vegetation or noise in a cloud."
+    origin: field
+    depends_on: [REN-32]
+  - key: signed-distance-field-view
+    title: "Signed Distance Field View"
+    summary: "Shows a signed distance field as a surface, slices and distance bands."
+    serves: "Helps inspect implicit shape models."
+    origin: field
+    depends_on: [REN-27]
+  - key: transfer-function-editor
+    title: "Transfer Function Editor"
+    summary: "Edits the mapping of values to colour and opacity for volumes with a histogram behind the curve."
+    serves: "Reveals structure in volumes during inspection."
+    origin: field
+    depends_on: [REN-28]
+  - key: mesh-animation-skinning
+    title: "Mesh Animation and Skinning"
+    summary: "Plays animated meshes with bone weights, showing joints and weight heat."
+    serves: "Supports debugging of motion and skinning models."
+    origin: field
+    depends_on: [REN-18, REN-12]
+  - key: parametric-body-model-view
+    title: "Parametric Human Body Model View"
+    summary: "Shows a parametric body model with sliders for shape and pose parameters and the fitted joints."
+    serves: "Helps check motion capture and pose estimation fits."
+    origin: field
+    depends_on: [REN-48]
+  - key: usd-scenes
+    title: "USD Scenes"
+    summary: "Opens universal scene description files with hierarchy, variants and materials."
+    serves: "Lets simulation and synthetic scenes be inspected directly."
+    origin: field
+    depends_on: [REN-12, REN-18]
+  - key: scene-hierarchy-panel
+    title: "Scene Hierarchy Panel"
+    summary: "A tree of entities with visibility toggles, search and a property view."
+    serves: "Makes large scenes navigable and editable."
+    origin: field
+    depends_on: [REN-11, REN-46]
+  - key: camera-trajectory-view
+    title: "Camera Trajectory View"
+    summary: "Shows a path of camera poses with frusta, time colouring and speed."
+    serves: "Helps check odometry and capture paths."
+    origin: field
+    depends_on: [REN-39]
+  - key: trajectory-error-plots
+    title: "Trajectory Error Plots"
+    summary: "Plots absolute and relative pose error of an estimated path against a reference, with alignment options."
+    serves: "Gives standard accuracy numbers for SLAM and odometry."
+    origin: field
+    depends_on: [REN-39]
+  - key: slam-map-view
+    title: "SLAM Map View"
+    summary: "Shows the map, keyframes, loop closures and current pose of a mapping system as it runs."
+    serves: "Helps debug mapping and loop closure."
+    origin: field
+    depends_on: [REN-12, STR-04]
+  - key: bundle-adjustment-view
+    title: "Bundle Adjustment View"
+    summary: "Shows cameras, points and reprojection residuals before and after each solver iteration."
+    serves: "Helps find bad matches and poorly constrained cameras."
+    origin: field
+    depends_on: [REN-54]
+  - key: pose-graph-view
+    title: "Pose Graph View"
+    summary: "Shows poses as nodes and constraints as edges coloured by residual."
+    serves: "Finds inconsistent loop closures."
+    origin: field
+    depends_on: [REN-42]
+  - key: lidar-range-image-view
+    title: "LiDAR Range-Image View"
+    summary: "Shows a LiDAR sweep as a range, intensity or label image linked to the 3-D points."
+    serves: "Matches how many networks see LiDAR data."
+    origin: field
+    depends_on: [REN-32]
+  - key: measurement-tools
+    title: "Measurement Tools"
+    summary: "Distance, angle, area and volume measurement by clicking points in the scene."
+    serves: "Checks scale and dimensions of reconstructions and labels."
+    origin: field
+    depends_on: [REN-15]
+  - key: clip-planes-crop-boxes
+    title: "Clip Planes and Crop Boxes"
+    summary: "Cuts away part of a scene with planes or boxes."
+    serves: "Lets researchers look inside dense clouds and models."
+    origin: field
+    depends_on: [REN-12]
+  - key: cross-section-outline
+    title: "Cross-Section Outline"
+    summary: "Draws the outline where a plane cuts a mesh or cloud."
+    serves: "Gives clean profiles for comparison and measurement."
+    origin: field
+    depends_on: [REN-26]
+  - key: persistent-3d-annotations
+    title: "Persistent 3-D Annotations"
+    summary: "Notes, pins and sketches placed in a scene and stored with the recording."
+    serves: "Keeps observations attached to the place they concern."
+    origin: field
+    depends_on: [REN-15, STR-12]
+  - key: label-editing-3d
+    title: "3-D Label Editing"
+    summary: "Edits 3-D boxes and segment labels by dragging handles in the scene."
+    serves: "Allows corrections of 3-D annotations in place."
+    origin: field
+    depends_on: [REN-62]
+  - key: mesh-quality-overlays
+    title: "Mesh Quality Overlays"
+    summary: "Colours a mesh by triangle quality, normals flips, holes and non-manifold edges."
+    serves: "Finds faults that break simulation and rendering."
+    origin: field
+    depends_on: [REN-18]
+  - key: scalar-vector-fields-on-meshes
+    title: "Scalar and Vector Fields on Meshes"
+    summary: "Colours mesh surfaces by a scalar and draws vectors at vertices."
+    serves: "Shows simulation and learning results on shapes."
+    origin: field
+    depends_on: [REN-18, REN-14]
+  - key: point-cloud-registration-view
+    title: "Point-Cloud Registration View"
+    summary: "Shows two clouds aligned by an estimated transform, with correspondences and residual colouring."
+    serves: "Helps debug registration methods."
+    origin: field
+    depends_on: [REN-32]
+  - key: vr-ar-viewing
+    title: "VR and AR Viewing"
+    summary: "Views scenes in headsets with tracked controllers for navigation and picking."
+    serves: "Gives a real sense of scale in 3-D data."
+    origin: field
+    depends_on: [REN-12]
+  - key: stereo-view
+    title: "Stereo View"
+    summary: "Shows scenes as side-by-side or anaglyph stereo pairs."
+    serves: "Helps judge depth in reconstructions."
+    origin: field
+    depends_on: [REN-12]
+  - key: scene-diff
+    title: "Scene Diff"
+    summary: "Shows added, removed and moved entities between two scenes or times."
+    serves: "Shows what changed between two reconstructions or frames."
+    origin: field
+    depends_on: [REN-12, RUN-08]
+  - key: point-cloud-eye-dome-lighting
+    title: "Eye-Dome Lighting"
+    summary: "Shading for point clouds that emphasises depth edges without normals."
+    serves: "Makes sparse clouds readable."
+    origin: field
+    depends_on: [REN-32]
+  - key: point-cloud-splat-sizing
+    title: "Adaptive Point Sizing"
+    summary: "Point size follows distance, density or an attribute."
+    serves: "Avoids holes and clutter in clouds of uneven density."
+    origin: field
+    depends_on: [REN-32]
+  - key: point-cloud-segmentation-view
+    title: "Point-Cloud Segmentation View"
+    summary: "Colours points by predicted or labelled class and shows errors against labels."
+    serves: "Debugs semantic segmentation of scans."
+    origin: field
+    depends_on: [REN-32, REN-41]
+  - key: voxel-occupancy-comparison
+    title: "Occupancy Prediction Comparison"
+    summary: "Shows predicted and true occupancy grids side by side with errors marked."
+    serves: "Debugs occupancy networks."
+    origin: field
+    depends_on: []
+  - key: mesh-reconstruction-error
+    title: "Reconstruction Error on Meshes"
+    summary: "Colours a mesh by distance to a reference surface."
+    serves: "Measures shape accuracy locally."
+    origin: field
+    depends_on: [REN-18]
+  - key: normal-orientation-view
+    title: "Normal Orientation View"
+    summary: "Draws point or surface normals and flags inconsistent orientation."
+    serves: "Finds normal estimation faults."
+    origin: field
+    depends_on: [REN-32]
+  - key: depth-uncertainty-view
+    title: "Depth Uncertainty in Scenes"
+    summary: "Shows predicted depth with per-pixel uncertainty as colour or opacity in 3-D."
+    serves: "Judges which parts of a reconstruction to trust."
+    origin: field
+    depends_on: [REN-38]
+  - key: multi-view-consistency-view
+    title: "Multi-View Consistency View"
+    summary: "Shows where depth or points from different cameras disagree."
+    serves: "Finds geometry errors in multi-view systems."
+    origin: field
+    depends_on: [REN-39]
+  - key: epipolar-line-view
+    title: "Epipolar Line View"
+    summary: "Shows matches and epipolar lines between two images with their errors."
+    serves: "Debugs feature matching and calibration."
+    origin: field
+    depends_on: [REN-39]
+  - key: feature-track-view
+    title: "Feature Track View"
+    summary: "Shows tracked keypoints over frames and their reprojection error."
+    serves: "Debugs tracking and structure from motion."
+    origin: field
+    depends_on: [REN-54]
+  - key: camera-rig-view
+    title: "Camera Rig View"
+    summary: "Shows a set of rigidly mounted cameras and sensors with their extrinsics."
+    serves: "Checks calibration of multi-sensor rigs."
+    origin: field
+    depends_on: [REN-39]
+  - key: sensor-field-of-view
+    title: "Sensor Field of View"
+    summary: "Shows coverage volumes and blind zones of sensors in the scene."
+    serves: "Helps design and check sensor layouts."
+    origin: field
+    depends_on: [REN-39]
+  - key: occlusion-and-visibility-view
+    title: "Visibility View"
+    summary: "Shows which parts of a scene each camera sees."
+    serves: "Finds poorly covered regions of a capture."
+    origin: field
+    depends_on: [REN-39]
+  - key: terrain-height-field-view
+    title: "Height-Field View"
+    summary: "Shows a height map as terrain with colour and contours."
+    serves: "Inspects elevation and depth data."
+    origin: field
+    depends_on: [REN-26]
+  - key: scene-statistics-panel
+    title: "Scene Statistics Panel"
+    summary: "Counts of entities, points, triangles and memory, with a breakdown by type."
+    serves: "Shows what makes a scene heavy."
+    origin: field
+    depends_on: [REN-31]
+  - key: point-cloud-density-map
+    title: "Point Density Map"
+    summary: "Shows density of points per cell as a heat map on a plane."
+    serves: "Finds gaps and over-sampled areas in captured data."
+    origin: field
+    depends_on: [REN-32]
+  - key: change-detection-view
+    title: "Change Detection View"
+    summary: "Compares two scans of one place and colours what changed."
+    serves: "Shows differences between captures over time."
+    origin: field
+    depends_on: [REN-32, RUN-08]
+  - key: flow-in-3d-view
+    title: "Scene Flow View"
+    summary: "Draws 3-D motion vectors between two point clouds."
+    serves: "Debugs scene flow and motion estimation."
+    origin: field
+    depends_on: [REN-32, REN-37]
