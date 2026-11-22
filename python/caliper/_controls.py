@@ -217,7 +217,7 @@ class Param:
         help (str | None): The tooltip, or `None`.
     """
     __slots__ = ("name", "type", "min", "max", "log", "choices", "help", "_value", "_pending",
-                 "_ctl", "removed")
+                 "_ctl", "removed", "_version")
 
     def __init__(self, ctl, name, type_, value, lo, hi, log, choices, help):
         self.name, self.type = name, type_
@@ -226,6 +226,7 @@ class Param:
         self._pending = _NO
         self._ctl = ctl
         self.removed = False
+        self._version = 0               # counts the values set, also a value equal to the last
 
     @property
     def value(self):
@@ -773,6 +774,7 @@ class Controls:
         for p in self.params.values():
             if p._pending is not _NO:
                 p._value, p._pending = p._pending, _NO
+                p._version += 1
         self._npending = 0
         return True
 
@@ -920,6 +922,7 @@ class Controls:
             raise ValueError(e.message) from None
         with self.lock:
             p._value = v
+            p._version += 1
             if p._pending is not _NO:
                 p._pending = _NO
                 self._npending -= 1
@@ -936,6 +939,7 @@ class Controls:
             p.removed = True
             if p._pending is not _NO:
                 p._value, p._pending = p._pending, _NO
+                p._version += 1
                 self._npending -= 1
             self._update_busy()
         self._publish()
@@ -1120,6 +1124,7 @@ class Controls:
                     return error(e.code, e.message)
                 if self.state == RUN_NONE:
                     p._value = v
+                    p._version += 1
                     if p._pending is not _NO:
                         p._pending = _NO
                         self._npending -= 1
