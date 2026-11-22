@@ -11,6 +11,8 @@
 //             the end of an action, its attachment
 //   spec      a command changed the open spec (from the journal)
 //   approval  a card asked for the person's decision, or was decided
+//   program   a GPU program or a stage compiled, was refused or stopped
+//             (design/gpu-programs.md, Program Events); its host pushes it
 // Hovers never enter the ring.
 //
 // A cursor is the seq of the last event a reader looked at; 0 reads from the
@@ -45,9 +47,9 @@
 
 namespace caliper_builder {
 
-enum class EventKind { pick, select, control, run, spec, approval };
+enum class EventKind { pick, select, control, run, spec, approval, program };
 
-// "pick", "select", "control", "run", "spec", "approval".
+// "pick", "select", "control", "run", "spec", "approval", "program".
 const char* event_kind_name(EventKind kind);
 std::optional<EventKind> event_kind_from_name(std::string_view name);
 

@@ -88,6 +88,7 @@ std::string control_target_string(const ControlTarget& target) {
         case ControlTarget::Kind::action: return "action:" + target.name;
         case ControlTarget::Kind::run_pause: return "run:pause";
         case ControlTarget::Kind::value: return "value";
+        case ControlTarget::Kind::intervene: return "intervene:" + target.name;
     }
     return "value";
 }

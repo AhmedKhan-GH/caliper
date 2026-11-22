@@ -72,9 +72,13 @@ bool control_kind_built(ControlKind kind);
 //   action:<name>  an action the script registered with caliper.action
 //   run:pause      the run's pause and resume
 //   value          a value the spec holds, which references read later
-// A name has 1 to 63 bytes of UTF-8 and no control characters.
+//   intervene:<point>  an intervention point of the attached model, which a
+//                  toggle ablates while it is on (design/gpu-programs.md);
+//                  the parser accepts it once the toggle is built
+// A name has 1 to 63 bytes of UTF-8 and no control characters; a point's
+// name has up to 255 bytes.
 struct ControlTarget {
-    enum class Kind { param, action, run_pause, value };
+    enum class Kind { param, action, run_pause, value, intervene };
     Kind kind = Kind::value;
     std::string name;   // param and action only
 };

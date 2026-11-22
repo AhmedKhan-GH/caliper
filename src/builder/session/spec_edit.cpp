@@ -1,4 +1,5 @@
 #include <caliper_builder/session/spec_edit.h>
+#include <caliper_builder/session/program_commands.h>
 
 #include <caliper_builder/spec/format.h>
 #include <caliper_builder/spec/patch.h>
@@ -598,7 +599,9 @@ Error first_spec_error(const std::vector<spec::Diagnostic>& diagnostics) {
 bool is_spec_edit_command(std::string_view name) {
     return name == "spec.set_text" || name == "source.add" || name == "source.patch" || name == "source.remove" ||
            name == "panel.create" || name == "panel.patch" || name == "panel.remove" || name == "layout.place" ||
-           name == "layout.set" || name == "control.create" || name == "control.patch" || name == "control.remove";
+           name == "layout.set" || name == "control.create" || name == "control.patch" || name == "control.remove" ||
+           name == "stage.set" || name == "stage.remove" || name == "program.create" || name == "program.patch" ||
+           name == "program.remove";
 }
 
 SpecEdit apply_spec_edit(const spec::Spec& s, std::string_view name, const json& raw_args,
@@ -616,6 +619,9 @@ SpecEdit apply_spec_edit(const spec::Spec& s, std::string_view name, const json&
         if (name == "layout.set") return layout_set(s, args, resolver);
         if (name == "control.create" || name == "control.patch" || name == "control.remove")
             return apply_control_edit(s, name, args, resolver);
+        if (name == "stage.set" || name == "stage.remove" || name == "program.create" || name == "program.patch" ||
+            name == "program.remove")
+            return apply_program_edit(s, name, args, resolver);
         return refuse(fail("command.unknown", "This is not a command that edits the open spec.", std::string(name)));
     } catch (const std::exception& e) {
         return refuse(fail("spec.internal", std::string("The edit failed unexpectedly: ") + e.what()));

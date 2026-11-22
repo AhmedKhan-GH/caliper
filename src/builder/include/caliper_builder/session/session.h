@@ -110,6 +110,7 @@
 #include <caliper_builder/loaders/store.h>
 #include <caliper_builder/session/events.h>
 #include <caliper_builder/session/loader_catalog.h>
+#include <caliper_builder/session/program_host.h>
 #include <caliper_builder/session/resolve.h>
 #include <caliper_builder/session/run_control.h>
 #include <caliper_builder/session/runner_commands.h>
@@ -280,6 +281,17 @@ public:
     // the five commands answer command.not_available. Any thread.
     void set_model_runner(ModelRunner* runner);
     ModelRunner* model_runner() const;
+
+    // The hosts of the open spec's GPU programs (in the attached script) and
+    // stages (in the viewer), which program.status reads and which the session
+    // reconciles with the open spec after each change of it
+    // (program_host.h, design/gpu-programs.md). The app gives its own and takes
+    // them back with null before it destroys them; without them program.status
+    // reports host none. Any thread.
+    void set_program_host(ProgramHost* host);
+    ProgramHost* program_host() const;
+    void set_stage_host(StageHost* host);
+    StageHost* stage_host() const;
 
     // The ring of events that events.wait reads (events.h). The session feeds
     // it the spec and approval events from its journal; the app pushes the
