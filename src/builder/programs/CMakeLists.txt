@@ -9,7 +9,8 @@
 # and programs_text.cmake embeds the draw prelude and the lib modules for it.
 include("${CMAKE_CURRENT_SOURCE_DIR}/programs_text.cmake")
 caliper_programs_text_source(_caliper_programs_text_cpp)
-add_library(caliper_builder_programs STATIC sandbox.cpp pieces.cpp "${_caliper_programs_text_cpp}")
+add_library(caliper_builder_programs STATIC sandbox.cpp pieces.cpp piece_checks.cpp compose_derive.cpp compose_draw.cpp
+            piece_reflection.cpp "${_caliper_programs_text_cpp}")
 target_include_directories(caliper_builder_programs PUBLIC "${CALIPER_BUILDER_INCLUDE_ROOT}")
 target_link_libraries(caliper_builder_programs PUBLIC nlohmann_json::nlohmann_json)
 target_compile_features(caliper_builder_programs PUBLIC cxx_std_17)
@@ -26,4 +27,6 @@ caliper_builder_add_tests(programs
     SOURCES
         tests/test_sandbox.cpp
         tests/test_pieces.cpp
+        tests/test_compose_derive.cpp
+        tests/test_compose_draw.cpp
     LIBS caliper_builder_programs)

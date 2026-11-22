@@ -342,7 +342,7 @@ inline bool operator==(const PickMap& a, const PickMap& b) { return a.resource =
 // Text that the host draws: one label at each valid element of `anchors`,
 // whose `position` field (vec4<f32>, world xyz) places it and whose `string`
 // field (u32) indexes `strings`. An optional `priority` field (f32) orders
-// the labels when they overlap. An instance may give its own `strings`.
+// the labels when they overlap.
 struct TextTable {
     std::string anchors;                     // a buffer resource
     std::string position = "position";

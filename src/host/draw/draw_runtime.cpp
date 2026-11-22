@@ -2,6 +2,7 @@
 // decode() and install() answer program.not_built, and the runtime draws
 // nothing, until the work of design/programmable-graphics.md fills it.
 #include "draw/draw_runtime.h"
+#include "draw/draw_runtime_impl.h"
 
 namespace caliper_draw {
 
@@ -18,11 +19,6 @@ Verdict not_built(const char* what) {
 
 }  // namespace
 
-struct DrawRuntime::Impl {
-    caliper_gfx::Backend* gfx = nullptr;
-    bool webgpu = false;
-    DrawStatus status;
-};
 
 DrawRuntime::DrawRuntime(caliper_gfx::Backend& gfx, bool webgpu) : impl_(std::make_unique<Impl>()) {
     impl_->gfx = &gfx;
@@ -54,10 +50,6 @@ bool DrawRuntime::encode(caliper_gfx::Frame&, const FrameInputs&, const HostTarg
 void DrawRuntime::frame_done(double) {}
 
 void DrawRuntime::frame_pending(double) {}
-
-std::optional<PickedItem> DrawRuntime::pick(std::uint32_t) const { return std::nullopt; }
-
-std::vector<Label> DrawRuntime::labels() const { return {}; }
 
 DrawStatus DrawRuntime::status() const { return impl_->status; }
 

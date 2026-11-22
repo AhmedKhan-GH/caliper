@@ -7,9 +7,9 @@
 // run, the validator's codes, the result fields of the command table) and
 // runs the sandbox checks of the editor first (programs/sandbox.h). A panel
 // removal also removes the stages of that panel in the same step.
-// stage.check and program.status read: program_command() answers them, and
-// program.read and the piece commands of design/programmable-graphics.md,
-// which answer program.not_built until pieces are built.
+// stage.check and program.status read: program_command() answers them.
+// program.read and the piece commands of design/programmable-graphics.md
+// are in resource_commands.h and piece_commands.h.
 #include <caliper_builder/commands/registry.h>
 #include <caliper_builder/session/program_host.h>
 #include <caliper_builder/session/spec_edit.h>
@@ -25,8 +25,7 @@ namespace caliper_builder {
 SpecEdit apply_program_edit(const spec::Spec& spec, std::string_view name, const nlohmann::json& args,
                             const spec::SourceResolver& resolver);
 
-// stage.check, program.status, program.read and the piece commands, by the
-// invocation's name. `spec` is the
+// stage.check and program.status, by the invocation's name. `spec` is the
 // open spec (program.status lists its programs and stages, with host none
 // for an item that no host reports); `programs` and `stages` are the
 // session's hosts, or null. Defined in program_commands.cpp.

@@ -14466,7 +14466,7 @@
                         "type": "string"
                       },
                       "strings": {
-                        "description": "The texts of the labels; an instance may give its own.",
+                        "description": "The texts of the labels.",
                         "items": {
                           "maxLength": 64,
                           "type": "string"
@@ -15532,7 +15532,7 @@
                         "type": "string"
                       },
                       "strings": {
-                        "description": "The texts of the labels; an instance may give its own.",
+                        "description": "The texts of the labels.",
                         "items": {
                           "maxLength": 64,
                           "type": "string"
@@ -16480,7 +16480,7 @@
                         "type": "string"
                       },
                       "strings": {
-                        "description": "The texts of the labels; an instance may give its own.",
+                        "description": "The texts of the labels.",
                         "items": {
                           "maxLength": 64,
                           "type": "string"

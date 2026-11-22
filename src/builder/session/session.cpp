@@ -11,7 +11,9 @@
 #include <caliper_builder/session/intervene_commands.h>
 #include <caliper_builder/session/line_diff.h>
 #include <caliper_builder/session/panel_data.h>
+#include <caliper_builder/session/piece_commands.h>
 #include <caliper_builder/session/program_commands.h>
+#include <caliper_builder/session/resource_commands.h>
 #include <caliper_builder/session/spec_edit.h>
 #include <caliper_builder/spec/format.h>
 
@@ -1549,10 +1551,17 @@ struct Session::Impl {
         return runner_command(ctx, model_runner.load(), workspace, approved);
     }
     CommandOutput events_wait(const CommandContext& ctx) { return events_wait_command(ctx, *events); }
-    // stage.check and program.status (design/gpu-programs.md), and
-    // program.read and the piece commands (design/programmable-graphics.md).
+    // stage.check and program.status (design/gpu-programs.md).
     // The hosts' status() runs without the document's lock, so that a host
     // may read the open spec.
+    // The piece commands and program.read (design/programmable-graphics.md),
+    // on a copy of the open spec, without the document's lock.
+    spec::Spec open_copy() const {
+        std::lock_guard<std::mutex> lock(doc_mutex);
+        return doc ? doc->spec : spec::Spec{};
+    }
+    CommandOutput piece_cmd(const CommandContext& ctx) { return piece_command(ctx, open_copy(), workspace); }
+    CommandOutput resource_cmd(const CommandContext& ctx) { return resource_command(ctx, open_copy(), history); }
     CommandOutput program_cmd(const CommandContext& ctx) {
         spec::Spec open;
         {
@@ -1702,9 +1711,11 @@ struct Session::Impl {
                                  "cursor.get", "cursor.set", "cursor.step"})
             bind(name, &Impl::instrument_cmd);
         // The stages, programs and interventions (design/gpu-programs.md).
-        for (const char* name : {"stage.check", "program.status", "program.read", "piece.check", "piece.list",
-                                 "piece.show", "piece.save", "piece.copy", "piece.update", "piece.remove"})
-            bind(name, &Impl::program_cmd);
+        for (const char* name : {"stage.check", "program.status"}) bind(name, &Impl::program_cmd);
+        for (const char* name : {"piece.check", "piece.list", "piece.show", "piece.save", "piece.copy",
+                                 "piece.update", "piece.remove"})
+            bind(name, &Impl::piece_cmd);
+        bind("program.read", &Impl::resource_cmd);
         for (const char* name : {"intervene.points", "intervene.set", "intervene.clear", "intervene.list"})
             bind(name, &Impl::intervene_cmd);
         // The run commands and events.wait (design/instruments.md).

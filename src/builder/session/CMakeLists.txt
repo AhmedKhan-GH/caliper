@@ -26,6 +26,8 @@ add_library(caliper_builder_session STATIC
     loader_catalog.cpp
     panel_data.cpp
     program_commands.cpp
+    piece_commands.cpp
+    resource_commands.cpp
     program_edit.cpp
     resolve.cpp
     run_commands.cpp
@@ -80,6 +82,8 @@ caliper_builder_add_tests(session
         tests/test_run_commands.cpp
         tests/test_runner_commands.cpp
         tests/test_program_commands.cpp
+        tests/test_piece_commands.cpp
+        tests/test_resource_commands.cpp
         tests/test_intervene_commands.cpp
         tests/test_line_diff.cpp
         tests/test_table_conformance.cpp

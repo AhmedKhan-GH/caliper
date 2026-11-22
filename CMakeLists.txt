@@ -934,7 +934,8 @@ if(CALIPER_WITH_BUILDER)
     # design/programmable-graphics.md): the render graph on the graphics
     # layer, over the composer of the builder's programs library. The browser
     # module compiles the same source (web/wasm/CMakeLists.txt).
-    add_library(caliper_draw STATIC src/host/draw/draw_runtime.cpp)
+    add_library(caliper_draw STATIC src/host/draw/draw_runtime.cpp src/host/draw/draw_pick.cpp
+                src/host/draw/draw_text.cpp)
     target_include_directories(caliper_draw PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
     target_link_libraries(caliper_draw PUBLIC caliper_gfx caliper_builder_programs)
     set_target_properties(caliper_draw PROPERTIES

@@ -85,7 +85,11 @@ include("${CALIPER_ROOT}/src/builder/programs/programs_text.cmake")
 caliper_programs_text_source(_caliper_programs_text_cpp)
 target_sources(caliper_view_layer PRIVATE
     ${CALIPER_ROOT}/src/host/draw/draw_runtime.cpp
+    ${CALIPER_ROOT}/src/host/draw/draw_pick.cpp
+    ${CALIPER_ROOT}/src/host/draw/draw_text.cpp
     ${CALIPER_ROOT}/src/builder/programs/pieces.cpp
+    ${CALIPER_ROOT}/src/builder/programs/piece_checks.cpp
+    ${CALIPER_ROOT}/src/builder/programs/compose_draw.cpp
     ${_caliper_programs_text_cpp})
 target_include_directories(caliper_view_layer PUBLIC ${CALIPER_ROOT}/src/builder/include)
 target_compile_definitions(caliper_view_layer PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_DAWN)

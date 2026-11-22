@@ -979,3 +979,13 @@ if(NOT WIN32 AND CALIPER_WITH_BUILDER AND _acceptance_python)
     set_tests_properties(caliper_gpu_programs_acceptance PROPERTIES LABELS "gpu_programs;acceptance" TIMEOUT 300
         SKIP_RETURN_CODE 77)
 endif()
+
+# The tests of programmable graphics (design/programmable-graphics.md), each
+# in its own folder with its own CMakeLists.txt once it exists: the acceptance
+# test, the match of points@1 with the built-in draw, and the pixel
+# comparison of the app and the browser module.
+foreach(_caliper_pg_dir programmable_graphics points_match draw_parity)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_caliper_pg_dir}/CMakeLists.txt")
+        add_subdirectory(${_caliper_pg_dir})
+    endif()
+endforeach()

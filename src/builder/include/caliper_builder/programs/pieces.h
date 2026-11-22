@@ -21,8 +21,12 @@
 //
 // pieces.cpp needs only the standard library and spec/piece.h, because the
 // browser module compiles it beside the app and the script's native module.
-// Until pieces are built, every function but draw_prelude(), lib_module()
-// and lib_modules() answers program.not_built. Nothing here throws. Every
+// The functions are defined in src/builder/programs/: pieces.cpp (names,
+// paths, imports, hash, places), piece_checks.cpp (layouts and the checks
+// of the manifest, the files and the bindings), compose_derive.cpp,
+// compose_draw.cpp and piece_reflection.cpp. Until pieces are built, every
+// function but draw_prelude(), lib_module() and lib_modules() answers
+// program.not_built. Nothing here throws. Every
 // function is safe from any thread.
 #include <caliper_builder/programs/reflection.h>
 #include <caliper_builder/spec/piece.h>
@@ -53,6 +57,7 @@ inline constexpr const char* kPieceInUse = "piece.in_use";                 // th
 inline constexpr const char* kPieceBadBinding = "piece.bad_binding";       // an input unbound, or bound to another dtype, rank or layout
 inline constexpr const char* kPieceCycle = "piece.cycle";                  // buffer inputs of programs form a cycle
 // The manifest and the sources; the editor, the script and the browser give them.
+inline constexpr const char* kProgramFormMixed = "program.form_mixed";             // keys of the one-pass form and a pin
 inline constexpr const char* kProgramBadResource = "program.bad_resource";         // kind, count, size or a duplicate id
 inline constexpr const char* kProgramBadLayout = "program.bad_layout";             // a field's name or type, or a stride
 inline constexpr const char* kProgramUnknownResource = "program.unknown_resource"; // a pass, a pick or a text names none
