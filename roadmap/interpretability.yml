@@ -165,7 +165,7 @@ features:
     status: planned
     scope: peripheral
     summary: Support for MLX lets the interpretability tools read activations and apply interventions on models written in MLX.
-    depends_on: [INT-10]
+    depends_on: [INT-10, STR-49]
     issue: null
 
   - id: INT-19
@@ -173,7 +173,7 @@ features:
     status: planned
     scope: peripheral
     summary: Support for JAX lets the interpretability tools read activations and apply interventions on models written in JAX.
-    depends_on: [INT-10]
+    depends_on: [INT-10, STR-50]
     issue: null
 
   - id: INT-20

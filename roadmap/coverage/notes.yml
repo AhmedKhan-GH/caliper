@@ -1205,3 +1205,23 @@ entries:
     docs page, as the Check section of the docs templates brief specifies.
   ids:
   - HYG-12
+- file: playground/BRIEF.md
+  item: 'Founder decision of 2026-11-21: PyTorch only for now, other frameworks in the roadmap; framework adapter interface: stream sync and hooks per framework, memory through DLPack.'
+  ids:
+  - STR-48
+- file: playground/BRIEF.md
+  item: 'Founder decision of 2026-11-21: PyTorch only for now, other frameworks in the roadmap; MLX through DLPack.'
+  ids:
+  - STR-49
+- file: playground/BRIEF.md
+  item: 'Founder decision of 2026-11-21: PyTorch only for now, other frameworks in the roadmap; JAX through DLPack.'
+  ids:
+  - STR-50
+- file: playground/BRIEF.md
+  item: 'Founder decision of 2026-11-21: PyTorch only for now, other frameworks in the roadmap; CuPy and NumPy arrays through DLPack.'
+  ids:
+  - STR-51
+- file: playground/BRIEF.md
+  item: 'Founder decision of 2026-11-21: PyTorch only for now, other frameworks in the roadmap; TensorFlow through DLPack, as an idea.'
+  ids:
+  - STR-52
