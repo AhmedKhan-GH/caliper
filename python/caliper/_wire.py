@@ -80,6 +80,8 @@ class MsgType(enum.IntEnum):
     RECORDING_OPEN = 0x0079
     CURSOR = 0x007A
     TIME_STATE = 0x007B
+    PROGRAM = 0x0080               # 3.2 draft, capability "programs"
+    PROGRAM_STATE = 0x0081
 
 
 class Kind(enum.IntEnum):          # CaliperLiveKind
@@ -2924,3 +2926,21 @@ def split_update(u: SceneUpdate, update: int, max_frame: int = MAX_FRAME_BYTES) 
 
 
 __all__ += ["SplitUpdates", "split_update"]
+
+
+# ---------------------------------------------------------------------------
+# 3.2 draft: GPU programs and interventions (design/gpu-programs.md, Wire Path)
+# ---------------------------------------------------------------------------
+CAP_PROGRAMS = "programs"
+CAP_INTERVENTIONS = "interventions"
+PROGRAM_SET, PROGRAM_REMOVE = "set", "remove"
+SECTION_WGSL = "wgsl"
+OP_INTERVENE = "intervene"
+INTERVENE_ABLATE = "ablate"
+MAX_PROGRAMS = 16
+PROGRAM_ID_MAX = 55
+PROGRAM_SOURCE_MAX = 65536
+PROGRAM_STATE_RATE_HZ = 2
+POINT_MAX = 255
+MAX_POINTS_LISTED = 4096
+MAX_INTERVENTIONS = 64

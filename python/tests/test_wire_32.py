@@ -449,7 +449,8 @@ def test_page_example_is_the_golden_frame():
     rows = dict(re.findall(r"^\| `0x([0-9a-f]{4})` \| `(\w+)` \|", page, re.M))
     assert rows == {"0070": "scene_update", "0071": "scene_transforms", "0072": "scene_clear",
                     "0073": "scene_classes", "0074": "text", "0078": "recordings",
-                    "0079": "recording_open", "007a": "cursor", "007b": "time_state"}
+                    "0079": "recording_open", "007a": "cursor", "007b": "time_state",
+                    "0080": "program", "0081": "program_state"}
 
 
 

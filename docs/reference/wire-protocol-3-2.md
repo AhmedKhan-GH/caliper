@@ -69,6 +69,8 @@ Any other data view is answered with `bad_data_view`. The producer applies the b
 | `0x0079` | `recording_open` | viewer to server | none | `views` or `error` |
 | `0x007a` | `cursor` | viewer to server | none | `time_state` |
 | `0x007b` | `time_state` | server to viewer | none | |
+| `0x0080` | `program` | viewer to producer or hub, hub to producer | `wgsl` | `program_state` or `error` |
+| `0x0081` | `program_state` | producer to viewer or hub, hub to viewer | none | |
 
 Every scene message has the keys `sub`, `view`, `seq` and `stamp_ns`, and may carry `static`, `state` and `cursor`:
 
