@@ -1,0 +1,94 @@
+# Library piece points@1: a cloud of points, drawn as the built-in points primitive draws it.
+name = "points"
+version = 1
+description = "A cloud of round or square points of a size in pixels, colored by one color, by a value through a colormap, or by a packed RGBA"
+imports = ["pick@1", "camera@1"]
+
+[[inputs]]
+name = "positions"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Positions (N, 3), or (N, 2) with z 0"
+
+[[inputs]]
+name = "values"
+kind = "tensor"
+rank_min = 1
+rank_max = 1
+title = "Values (N): a value for the colormap, or a packed RGBA in its bits"
+
+[[params]]
+name = "size"
+default = 4.0
+min = 1.0
+max = 64.0
+title = "Size in Pixels"
+
+[[params]]
+name = "shape"
+type = "u32"
+default = 1
+min = 0
+max = 1
+title = "Shape (0 square, 1 disc)"
+
+[[params]]
+name = "color_mode"
+type = "u32"
+default = 1
+min = 0
+max = 2
+title = "Color (0 one color, 1 colormap, 2 packed RGBA)"
+
+[[params]]
+name = "color"
+type = "u32"
+default = 4294967295
+title = "One Color as Packed RGBA"
+
+[[params]]
+name = "colormap"
+type = "u32"
+default = 0
+min = 0
+max = 3
+title = "Colormap (0 viridis, 1 magma, 2 rdbu, 3 greys)"
+
+[[params]]
+name = "vmin"
+default = 0.0
+title = "Value at the Colormap's Start"
+
+[[params]]
+name = "vmax"
+default = 1.0
+title = "Value at the Colormap's End"
+
+[[resources]]
+id = "points"
+kind = "buffer"
+struct = "Point"
+fields = ["position: vec4<f32>", "bits: u32", "index: u32"]
+count = 262144
+counted = true
+
+[[derive.passes]]
+entry = "copy_points"
+workgroups = [1024, 1, 1]
+writes = ["points"]
+
+[draw]
+camera = "orbit"
+pick = { resource = "points", fields = ["index"] }
+
+[[draw.passes]]
+kind = "render"
+vertex = "point_vs"
+fragment = "point_fs"
+instances = "points"
+vertices = 6
+topology = "triangle_list"
+blend = "alpha"
+depth = "write"
+pick = true

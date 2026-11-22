@@ -28,6 +28,13 @@
 namespace caliper_live {
 namespace {
 
+// The program epochs of every stream of this process, so that an attachment to
+// another stream is a new epoch for the app's sync of programs
+// (live_programs.h) even when that stream's own count would repeat the last
+// stream's: a switch back to a run that the app showed before sends its
+// programs again.
+std::atomic<uint64_t> g_program_epochs{0};
+
 namespace wire = caliper_net::wire;
 using caliper_net::Bytes;
 using caliper_net::Client;
@@ -1396,7 +1403,7 @@ private:
             views_ = next;
             ++views_gen_;
             if (program_fresh_ || program_session_ != session_id_) {
-                ++program_epoch_;   // the script may hold none of the programs sent before
+                program_epoch_ = ++g_program_epochs;   // the script may hold none of the programs sent before
                 program_fresh_ = false;
                 program_session_ = session_id_;
             }

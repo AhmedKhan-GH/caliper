@@ -12,7 +12,13 @@
 // thread then waits for the link file, connects, marks the run running and
 // asks the app to attach to it at its next frame (frame()). A fork sends
 // caliper.checkpoint to its parent and starts when the action returns the
-// checkpoint's path. A stop sends caliper.stop and ends the process by its id
+// checkpoint's path. A fork with a step starts at once from the parent's
+// newest kept checkpoint at or before it, which the parent's script keeps in
+// <run dir>/kept/checkpoint-<step>.<ext>; the fork's folder gets a link of
+// that file, or a copy, as resume-<step>.<ext>, so that the parent's thinning
+// cannot remove it. A fork's interventions reach its script as the JSON array
+// CALIPER_RUN_INTERVENTIONS, which it applies before its first step. A stop
+// sends caliper.stop and ends the process by its id
 // after the limit. A run's process exit ends the run. shutdown() ends every
 // child by its id, so that none outlives the app.
 //
@@ -64,6 +70,7 @@ public:
     caliper_builder::Error stop(const std::string& run, double kill_after_s, caliper_builder::RunEntry* out) override;
     caliper_builder::Error logs(const std::string& run, int lines, std::vector<std::string>* out) override;
     caliper_builder::RunControl* control_of(const std::string& run, caliper_builder::Error* error) override;
+    std::vector<caliper_builder::InterventionPoint> intervention_points(const std::string& run) override;
 
     // Frame thread, once per frame: whether the app is attached and the
     // stream link it shows ("" for none, or for a session that is not a

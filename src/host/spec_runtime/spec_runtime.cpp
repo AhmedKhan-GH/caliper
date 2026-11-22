@@ -1341,11 +1341,26 @@ caliper_live_views::SceneView* SpecRuntime::entity_view(const std::string& panel
     return ep.view.get();
 }
 
+namespace {
+
+// Whether a scene panel draws a scene of its own, in a view of its own: its
+// entities, or nothing but its programs when it binds no live scene
+// (design/programmable-graphics.md, Attention Arc Tower). Two panels of one
+// live scene share that scene's view, so a panel of programs alone must not.
+bool own_scene(const spec::Panel& p) {
+    if (p.primitive != spec::Primitive::scene) return false;
+    if (!p.entities.empty()) return true;
+    const auto it = p.bind.find(spec::kSceneSlot);
+    return it == p.bind.end() || it->second.bindings.empty();
+}
+
+}  // namespace
+
 caliper_live_views::SceneView* SpecRuntime::scene_view_of(const std::string& panel_id) {
     if (!spec_) return nullptr;
     const spec::Panel* p = spec_->find_panel(panel_id);
     if (!p || p->primitive != spec::Primitive::scene) return nullptr;
-    if (!p->entities.empty()) return entity_view(panel_id);
+    if (own_scene(*p)) return entity_view(panel_id);
     auto it = p->bind.find(spec::kSceneSlot);
     if (it == p->bind.end() || it->second.bindings.empty()) return nullptr;
     const std::optional<std::string> name = spec::live_scene_name(it->second.bindings.front());
@@ -1433,7 +1448,7 @@ void SpecRuntime::bind_scene(Entry& e) {
         e.view.scene = nullptr;
         return;
     }
-    if (!e.panel.entities.empty()) {
+    if (own_scene(e.panel)) {
         bind_entity_scene(e);
         return;
     }
@@ -1648,7 +1663,7 @@ void SpecRuntime::prepare(Entry& e, const PanelData& resolved, const spec::Spec*
     ++e.view.version;
     e.stale = false;
     e.generation = data.generation;
-    if (e.panel.primitive == spec::Primitive::scene && !e.panel.entities.empty()) {
+    if (own_scene(e.panel)) {
         EntityPanel& ep = scenes_->entity(e.panel.id);
         ep.scene.set_entities(shown, data);
         ep.dirty = true;

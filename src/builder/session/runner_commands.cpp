@@ -289,6 +289,74 @@ CommandOutput start(const json& args, ModelRunner& runner, const std::string& wo
     return CommandOutput::ok(json{{"run", run_entry_json(entry)}});
 }
 
+// A step of JSON: a non-negative integer, signed or unsigned, else nothing.
+std::optional<std::uint64_t> step_value(const json& v) {
+    if (v.is_number_unsigned()) return v.get<std::uint64_t>();
+    if (v.is_number_integer() && v.get<std::int64_t>() >= 0) return static_cast<std::uint64_t>(v.get<std::int64_t>());
+    return std::nullopt;
+}
+
+// The step and the interventions of a fork: each intervention an object with
+// a point, the op ablate and optional steps, with until_step above
+// from_step, at most kRunMaxForkInterventions of them, and their points
+// together at most kRunMaxInterventionsBytes. A point that the parent does
+// not list is intervene.unknown_point when `runner` gives the parent's points;
+// the fork's script refuses it at its start otherwise.
+Error fork_args(const json& args, ModelRunner* runner, RunForkRequest* out) {
+    if (const auto it = args.find("step"); it != args.end()) {
+        out->step = step_value(*it);
+        if (!out->step) return fail("command.invalid_args", "step is a step of the run, 0 or more.", "args.step");
+    }
+    out->interventions = json::array();
+    const auto it = args.find("interventions");
+    if (it == args.end()) return {};
+    if (!it->is_array() || it->size() > kRunMaxForkInterventions)
+        return fail("command.invalid_args",
+                    "interventions is an array of at most " + std::to_string(kRunMaxForkInterventions) + " interventions.",
+                    "args.interventions");
+    const std::vector<InterventionPoint> points =
+        runner ? runner->intervention_points(str_arg(args, "run")) : std::vector<InterventionPoint>();
+    std::size_t bytes = 0;
+    for (std::size_t i = 0; i < it->size(); ++i) {
+        const json& iv = (*it)[i];
+        const std::string where = "args.interventions[" + std::to_string(i) + "]";
+        if (!iv.is_object()) return fail("command.invalid_args", "An intervention is an object.", where);
+        const std::string point = str_arg(iv, "point");
+        const std::string op = str_arg(iv, "op");
+        if (point.empty() || !valid_utf8(point))
+            return fail("command.invalid_args", "An intervention names its point.", where + ".point");
+        bytes += point.size();
+        if (bytes > kRunMaxInterventionsBytes)
+            return fail("command.invalid_args",
+                        "The points of the interventions hold at most " + std::to_string(kRunMaxInterventionsBytes) +
+                            " bytes together.",
+                        where + ".point");
+        if (op != "ablate")
+            return fail(kInterveneOpReserved, "The op " + op + " comes later; ablate is the only op built.", where + ".op");
+        std::optional<std::uint64_t> steps[2];
+        const char* keys[2] = {"from_step", "until_step"};
+        for (int k = 0; k < 2; ++k)
+            if (const auto s = iv.find(keys[k]); s != iv.end()) {
+                steps[k] = step_value(*s);
+                if (!steps[k]) return fail("command.invalid_args", std::string(keys[k]) + " is a step.", where + "." + keys[k]);
+            }
+        if (steps[0] && steps[1] && *steps[1] <= *steps[0])
+            return fail(kInterveneBadRange,
+                        "until_step " + std::to_string(*steps[1]) + " is not above from_step " + std::to_string(*steps[0]) + ".",
+                        where + ".until_step");
+        if (!points.empty() &&
+            std::none_of(points.begin(), points.end(), [&](const InterventionPoint& p) { return p.point == point; }))
+            return fail(kInterveneUnknownPoint,
+                        "The run " + str_arg(args, "run") + " has no point " + point + "; intervene.points lists them.",
+                        where + ".point");
+        json one = {{"point", point}, {"op", op}};
+        if (steps[0]) one["from_step"] = *steps[0];
+        if (steps[1]) one["until_step"] = *steps[1];
+        out->interventions.push_back(std::move(one));
+    }
+    return {};
+}
+
 CommandOutput fork(const json& args, ModelRunner& runner, bool approved) {
     RunForkRequest req;
     req.parent = str_arg(args, "run");
@@ -299,6 +367,7 @@ CommandOutput fork(const json& args, ModelRunner& runner, bool approved) {
                                         "args.run"));
     if (Error e = params_arg(args, &req.params)) return CommandOutput::fail(std::move(e));
     if (Error e = id_arg(args, &req.id)) return CommandOutput::fail(std::move(e));
+    if (Error e = fork_args(args, &runner, &req)) return CommandOutput::fail(std::move(e));
     if (!approved) return CommandOutput::fail(not_approved("run.fork"));
     RunEntry entry;
     if (Error e = runner.fork(req, &entry)) return CommandOutput::fail(std::move(e));
@@ -354,6 +423,8 @@ Error runner_precheck(const CommandInvocation& inv, ModelRunner* runner, const s
         if (inv.name == "run.fork") {
             const std::string parent = str_arg(args, "run");
             if (parent == kUserRunId) return fail(kRunNotManaged, "The person's script cannot fork.", "args.run");
+            RunForkRequest req;
+            if (Error e = fork_args(args, runner, &req)) return e;
             for (const RunEntry& e : runner->list())
                 if (e.id == parent && e.managed)
                     return e.state == "running" || e.state == "paused"
@@ -413,8 +484,25 @@ std::string run_card_text(const CommandInvocation& inv, const std::string& scrip
     }
     if (inv.name == "run.fork") {
         const std::string p = params();
-        return "Fork the run " + shown(str_arg(a, "run")) + " at its next checkpoint, with " +
-               (p.empty() ? std::string("no changed parameters") : "the parameters " + p) + ". The fork runs " +
+        const auto st = a.find("step");
+        const std::optional<std::uint64_t> step = st != a.end() ? step_value(*st) : std::nullopt;
+        const std::string from = step ? " from its newest kept checkpoint at or before step " + std::to_string(*step)
+                                      : std::string(" at its next checkpoint");
+        std::string ivs;
+        if (const auto it = a.find("interventions"); it != a.end() && it->is_array())
+            for (const json& iv : *it) {
+                if (!iv.is_object()) continue;
+                ivs += (ivs.empty() ? "" : ", ") + shown(str_arg(iv, "op")) + " " + shown(str_arg(iv, "point"));
+                const auto f = iv.find("from_step");
+                const auto u = iv.find("until_step");
+                const std::optional<std::uint64_t> from_step = f != iv.end() ? step_value(*f) : std::nullopt;
+                const std::optional<std::uint64_t> until_step = u != iv.end() ? step_value(*u) : std::nullopt;
+                ivs += from_step ? " from step " + std::to_string(*from_step) : std::string(" from its first step");
+                if (until_step) ivs += " until step " + std::to_string(*until_step);
+            }
+        return "Fork the run " + shown(str_arg(a, "run")) + from + ", with " +
+               (p.empty() ? std::string("no changed parameters") : "the parameters " + p) +
+               (ivs.empty() ? std::string() : " and the interventions " + ivs) + ". The fork runs " +
                (script.empty() ? std::string("its script") : shown(script)) + " as Python code beside its parent.";
     }
     if (inv.name == "run.stop") {

@@ -583,6 +583,13 @@ TEST_CASE("controls and scene panels use the codes of version 0 for their other 
     CHECK(has(scene_bind("tensor:model").diagnostics, "spec.bad_binding", "panel[0].bind.scene"));
     CHECK(has(check_v1("[[panel]]\nid = \"w\"\nprimitive = \"scene\"\n").diagnostics, "spec.missing_slot",
               "panel[0].bind.scene"));
+    // A scene panel where an instance of a piece draws needs no scene: it holds its programs alone.
+    const std::string alone =
+        "[[panel]]\nid = \"w\"\nprimitive = \"scene\"\n"
+        "[[program]]\nid = \"arcs\"\npanel = \"w\"\nbind = { attn = \"live:attn\" }\n"
+        "piece = { name = \"arcs\", version = 1, from = \"workspace\", hash = \"sha256:" + std::string(64, 'a') + "\" }\n";
+    CHECK_MESSAGE(!has(check_v1(alone).diagnostics, "spec.missing_slot", "panel[0].bind.scene"),
+                  first(check_v1(alone)));
     CHECK(has(check_v1(std::string(kScene) + control("w", "button", "run:pause")).diagnostics, "spec.duplicate_id",
               "control[0].id"));
     CHECK(has(check_v1(control("k", "button", "run:pause") + control("k", "button", "action:a")).diagnostics,

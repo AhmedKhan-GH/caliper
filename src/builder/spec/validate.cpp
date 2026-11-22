@@ -634,9 +634,14 @@ private:
                                   " now, so the panel shows that its source is offline until it does.",
                               sp);
         }
-        // A scene panel with entities draws them and needs no live scene.
-        if (!p.bind.count(kSceneSlot) && p.entities.empty())
-            sink_.error("spec.missing_slot", "A scene panel needs the slot \"scene\".", path + ".bind.scene");
+        // A scene panel with entities draws them and needs no live scene, and
+        // so does a panel where an instance of a piece draws: its programs alone.
+        bool programs = false;
+        for (const auto& prog : spec_.programs)
+            programs = programs || (is_piece_instance(prog) && prog.panel && *prog.panel == p.id);
+        if (!p.bind.count(kSceneSlot) && p.entities.empty() && !programs)
+            sink_.error("spec.missing_slot", "A scene panel needs the slot \"scene\", entities or a program of a piece.",
+                        path + ".bind.scene");
     }
 
     void scene_options(const SceneOptions& o, const std::string& op) {

@@ -174,6 +174,18 @@ bool same_cursor(const CursorState& a, const CursorState& b) {
            a.playing == b.playing && a.speed == b.speed;
 }
 
+// One field of a pick by name. A program's pick reads a field of its item map
+// first, so that an item map field named index, item, program, step or entity
+// gives the item's own value and not the pick's key of that name.
+json pick_field(const PickFields& fields, const std::string& name) {
+    if (fields.program)
+        for (const auto& [n, v] : fields.program_fields)
+            if (n == name) return v;
+    const json all = pick_fields_json(fields);
+    const auto it = all.find(name);
+    return it == all.end() ? json() : *it;
+}
+
 }  // namespace
 
 struct ValueStore::Impl {
@@ -276,10 +288,8 @@ struct ValueStore::Impl {
                 const auto p = picks.find(ref.target);
                 if (p == picks.end()) return nullptr;
                 if (ref.entity && p->second.entity != *ref.entity) return nullptr;
-                const json fields = pick_fields_json(p->second);
-                if (!ref.field) return fields;
-                const auto f = fields.find(*ref.field);
-                return f == fields.end() ? json() : *f;
+                if (!ref.field) return pick_fields_json(p->second);
+                return pick_field(p->second, *ref.field);
             }
         }
         return nullptr;
@@ -674,11 +684,10 @@ void ValueStore::record_pick(const std::string& panel, const PickFields& fields,
         const auto sel = m.selects.find(panel);
         if (sel != m.selects.end() && (!sel->second.entity || *sel->second.entity == fields.entity) &&
             m.states.count(sel->second.state)) {
-            const json all = pick_fields_json(fields);
-            const auto v = all.find(sel->second.field);
+            const json v = pick_field(fields, sel->second.field);
             const spec::StateVar& s = m.states.at(sel->second.state);
-            if (v != all.end() && spec::state_value_problem(s, *v).empty())
-                if (auto e = m.store_state(s.id, *v, panel, origin)) out.push_back(std::move(*e));
+            if (!v.is_null() && spec::state_value_problem(s, v).empty())
+                if (auto e = m.store_state(s.id, v, panel, origin)) out.push_back(std::move(*e));
         }
         m.refresh_follows();
     }

@@ -1,0 +1,57 @@
+name = "attention_field"
+version = 1
+description = "The attention pattern of one head of a two-layer model, as a field with contour lines"
+imports = ["colormap@1"]
+
+[[inputs]]
+name = "attn0"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Attention Weights of Layer 0"
+
+[[inputs]]
+name = "attn1"
+kind = "tensor"
+rank_min = 2
+rank_max = 2
+title = "Attention Weights of Layer 1"
+
+[[params]]
+name = "layer"
+type = "i32"
+min = 0
+max = 1
+title = "Layer"
+
+[[params]]
+name = "head"
+type = "i32"
+min = 0
+max = 3
+title = "Head"
+
+[[params]]
+name = "gain"
+default = 1.0
+min = 0.1
+max = 10.0
+title = "Gain"
+
+[[resources]]
+id = "pattern"
+kind = "buffer"
+element = "f32"
+count = 8192      # 2 layers, 4 heads, 32 by 32 tokens
+
+[[derive.passes]]
+entry = "copy_rows"
+workgroups = [16, 1, 1]
+writes = ["pattern"]
+
+[draw]
+camera = "none"
+
+[[draw.passes]]
+kind = "render"
+fragment = "field"

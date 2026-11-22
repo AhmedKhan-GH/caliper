@@ -239,9 +239,17 @@ private:
                     {"value", VT::number},  {"step", VT::integer},  {"annotation", VT::text}};
                 const auto it = fields.find(*r.field);
                 if (it == fields.end()) {
+                    // A field of the item map of a program that draws in the
+                    // panel (design/programmable-graphics.md, Picking): a number.
+                    for (const auto& prog : c_.spec.programs)
+                        if (is_piece_instance(prog) && prog.panel && *prog.panel == p->id) {
+                            g.type = VT::number;
+                            return g;
+                        }
                     c_.sink.error("spec.unknown_field",
                                   quote(*r.field) + " is not a pick field; the fields are entity, index, row_id, row, "
-                                                    "column, x, y, z, value and step.",
+                                                    "column, x, y, z, value and step, and the item map's fields of a "
+                                                    "program that draws in the panel.",
                                   path + ".field");
                     return std::nullopt;
                 }

@@ -107,11 +107,23 @@ struct RunStartRequest {
     std::string id;              // empty: the runner chooses one from the script's name
 };
 
+// The most interventions of a fork, and the byte limit of all their points
+// together, which keeps the card short enough to show each point in full.
+inline constexpr std::size_t kRunMaxForkInterventions = 16;
+inline constexpr std::size_t kRunMaxInterventionsBytes = 1024;
+
 // A fork of run.fork, after the handler checked it.
 struct RunForkRequest {
     std::string parent;
     nlohmann::json params = nlohmann::json::object();
     std::string id;              // empty: the runner chooses one
+    // Start from the parent's newest kept checkpoint at or before this step,
+    // in place of the checkpoint that the parent saves at its next step.
+    std::optional<std::uint64_t> step;
+    // The interventions that the fork applies before its first step, each an
+    // object as intervene.set takes it (point, op ablate, from_step and
+    // until_step), in the order given.
+    nlohmann::json interventions = nlohmann::json::array();
 };
 
 class ModelRunner {
@@ -123,9 +135,13 @@ public:
     // Starts the script as a managed run; *out is the new run, in the state
     // starting. Fails with run.bad_id, run.exists or run.start_failed.
     virtual Error start(const RunStartRequest& request, RunEntry* out) = 0;
-    // Asks the parent for a checkpoint and starts the fork when it comes;
-    // *out is the fork, in the state starting. Fails with run.not_found,
-    // run.not_managed, run.not_ready, run.bad_id or run.exists.
+    // Asks the parent for a checkpoint and starts the fork when it comes, or
+    // with `step` starts the fork at once from the parent's newest kept
+    // checkpoint at or before that step; *out is the fork, in the state
+    // starting. Fails with run.not_found, run.not_managed, run.not_ready (also
+    // when no kept checkpoint is at or before `step`), run.bad_id, run.exists,
+    // run.start_failed or intervene.bad_range (an until_step at or before
+    // the kept checkpoint's step).
     virtual Error fork(const RunForkRequest& request, RunEntry* out) = 0;
     // Sends caliper.stop and ends the process after `kill_after_s` seconds;
     // *out is the run with stopping true. A run that ended already is
@@ -139,6 +155,13 @@ public:
     // Null with *error (run.not_found, run.not_ready) when there is none. The
     // pointer stays valid until the next call of the frame thread.
     virtual RunControl* control_of(const std::string& run, Error* error) = 0;
+    // The intervention points that the managed run `run` lists, without
+    // switching the app to it, for the check of a fork's interventions;
+    // empty when the run lists none or is not there.
+    virtual std::vector<InterventionPoint> intervention_points(const std::string& run) {
+        (void)run;
+        return {};
+    }
 };
 
 // The handler of run.list, run.start, run.fork, run.stop and run.logs, by the
