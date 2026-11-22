@@ -105,7 +105,7 @@ name is the command name with `_` for its first dot (`panel_create` for `panel.c
 name. The input schema is the command's arguments, the output schema is the command's result, and the description is
 the command's summary.
 
-The tools `control_create`, `control_patch` and `control_remove` edit the controls of the open spec. The tools `run_state`, `run_set_param`, `run_action` and `run_pause` act on the attached script, and `events_wait` reads the events of the app. [Run Control and Events](run-control-and-events.md) describes them. `caliper-mcp` waits for `events_wait` up to its `timeout_s` plus the margin of a call of Caliper API.
+Eight tools came with spec version 1. The tools `control_create`, `control_patch` and `control_remove` edit the controls of the open spec, as [Spec Version 1](../builder/spec-version-1.md) describes. The tools `run_state`, `run_set_param`, `run_action` and `run_pause` act on the script that the app is attached to. The tool `events_wait` reads the events of the app, and it holds the call until an event comes or its `timeout_s` ends, at most 60 seconds. `caliper-mcp` waits for it up to `timeout_s` plus the margin of a call of Caliper API. The tool `panel_create` also takes the primitive `scene`. The run tools ask for your card in the modes Ask and Accept edits. [Run Control and Events](run-control-and-events.md) describes the arguments, the results, the errors and the events. Without the app, the run tools fail with `command.not_available`.
 
 `history.undo` and `history.redo` are yours and are not offered. An agent takes back a change with an edit that you
 review. The list comes from the table of the running app, or from the table built into `caliper-mcp` when no app
@@ -127,8 +127,8 @@ The codes are of two kinds:
 What waits for you depends on the mode you give the clients of `caliper-mcp` in the app's settings (⌘,, under
 Permissions):
 
-- Ask, the default, holds spec edits and destructive commands for your card.
-- Accept edits applies an edit of the open spec at once. The edit is still journaled and undoable.
+- Ask, the default, holds spec edits, run commands and destructive commands for your card.
+- Accept edits applies an edit of the open spec at once. The edit is still journaled and undoable. A run command still asks for your card.
 - Read only lets reads, dry runs and edits of a preview through. It refuses every other change with `command.denied`.
 
 A card can also allow its command for the rest of the app's run or always, until you revoke it in the settings. The
@@ -141,7 +141,8 @@ choose or change it. The annotations of a tool stay as the flags of the table sa
 |---|---|
 | `caliper://docs/<path>` | A Markdown page under the `--docs` folder |
 | `caliper://sdk/<path>` | A header under the `--sdk` folder |
-| `caliper://schema/caliper-spec-v0.schema.json` | The JSON Schema of a spec's canonical JSON |
+| `caliper://schema/caliper-spec-v0.schema.json` | The JSON Schema of a spec's canonical JSON, version 0 |
+| `caliper://schema/caliper-spec-v1.schema.json` | The JSON Schema of version 1, with the scene primitive and the controls |
 | `caliper://commands/command_table.json` | The command table the tools come from |
 
 The folders are confined. A path is a list of plain segments, and the real path of a file, with its links resolved,

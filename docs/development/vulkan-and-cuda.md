@@ -84,6 +84,18 @@ A device that cannot export timeline semaphores cannot pipeline. It needs both t
 
 An in-tree glslang compiles the Vulkan shaders to SPIR-V at build time, and the binary embeds them as byte arrays. The byte-exact contract fixes the colormaps, so run-time code generation has no benefit. The build fetches the Vulkan headers and volk, so no SDK is necessary. All shaders go through one CMake function, `caliper_compile_shader`, because the generated headers must stay bit-identical for the byte-exact guarantee to hold.
 
+### Runtime WGSL Compiler
+
+A second compiler works at run time. The library `tools/shaders/caliper-wgsl` is Naga behind the C interface `caliper/wgsl.h`. It validates a WGSL source and translates one entry point to MSL for Metal or to SPIR-V for Vulkan. It uses the same pinned Naga and the same options as the developer-time driver, thus an agent program and a built-in shader follow one convention for bindings and bounds checks.
+
+`caliper_wgsl_module_create()` parses and validates a source and keeps an immutable module. The calls `caliper_wgsl_module_binding()` and `caliper_wgsl_module_entry_point()` list the bindings and the entry points. `caliper_wgsl_translate_msl()` and `caliper_wgsl_translate_spirv()` translate one entry point. Each call that can fail returns a status and fills an optional error with the message and the line and column of the fault, both counted from 1. A panic of Naga never leaves the library. The library owns each pointer that it returns, and a caller frees it with `caliper_wgsl_buffer_free()`, `caliper_wgsl_error_free()` or `caliper_wgsl_module_destroy()`.
+
+The library is a Rust static library, which CI prebuilds for each platform, so that a build of Caliper needs no Rust. CMake makes it the imported target `caliper::wgsl` only when the library is present. Without it the build does not change, and the tests that need it are skipped. Three options give the library, and an option that cannot give it fails the configure with the reason:
+
+- `CALIPER_WGSL_LIBRARY=<file>` names a library that a script or another build placed.
+- `CALIPER_WGSL_DOWNLOAD=ON` downloads the archive for the platform at configure time and checks its SHA-256. `CALIPER_WGSL_URL` names the release folder of the archives.
+- `CALIPER_WGSL_FROM_SOURCE=ON` builds the library with cargo at build time. It needs Rust and Python.
+
 ## Log Lines and Switches
 
 The backend prints one-time lines to stderr, each tagged `[vulkan] device path:`, so a run shows which path is live. Each message prints once per process.
