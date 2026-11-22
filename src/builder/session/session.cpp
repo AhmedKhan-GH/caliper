@@ -142,6 +142,7 @@ struct Session::Impl {
     // Declared first, so that it outlives the journal that feeds it.
     std::shared_ptr<EventRing> events = std::make_shared<EventRing>();
     std::atomic<RunControl*> run_control{nullptr};
+    std::atomic<ModelRunner*> model_runner{nullptr};
     std::string workspace;
     SessionOptions options;
     std::unique_ptr<LoaderStore> store;
@@ -1496,7 +1497,15 @@ struct Session::Impl {
                                static_cast<int>(int_arg(ctx.invocation.args, "height", 500)));
     }
 
-    CommandOutput run_cmd(const CommandContext& ctx) { return run_command(ctx, run_control.load()); }
+    CommandOutput run_cmd(const CommandContext& ctx) {
+        return run_command(ctx, run_control.load(), model_runner.load());
+    }
+    // A start or a fork runs only when the person approved its card, from
+    // every origin (design/hosted-runs.md, Review Card).
+    CommandOutput runner_cmd(const CommandContext& ctx) {
+        const bool approved = !starts_run(ctx.invocation.name) || run_approved(ctx.invocation);
+        return runner_command(ctx, model_runner.load(), workspace, approved);
+    }
     CommandOutput events_wait(const CommandContext& ctx) { return events_wait_command(ctx, *events); }
 
     // ---- the approval feed
@@ -1563,6 +1572,8 @@ struct Session::Impl {
             bind(name, &Impl::spec_edit);
         // The run commands and events.wait (design/instruments.md).
         for (const char* name : {"run.state", "run.set_param", "run.action", "run.pause"}) bind(name, &Impl::run_cmd);
+        for (const char* name : {"run.list", "run.start", "run.fork", "run.stop", "run.logs"})
+            bind(name, &Impl::runner_cmd);
         bind("events.wait", &Impl::events_wait);
         bind("preview.begin", &Impl::preview_begin);
         bind("preview.diff", &Impl::preview_diff);
@@ -1584,6 +1595,10 @@ struct Session::Impl {
         return r && *r == ReaderKind::python;
     }
 
+    // Whether a command starts a managed run, which executes Python code
+    // (design/hosted-runs.md, Review Card).
+    static bool starts_run(const std::string& name) { return name == "run.start" || name == "run.fork"; }
+
     // Whether an invocation runs a Python loader's script: loader.run of one,
     // or loader.create or loader.update of one with run set.
     bool runs_python(const CommandInvocation& inv) {
@@ -1603,6 +1618,17 @@ struct Session::Impl {
     // which reaches its handler only once the person approved it.
     bool python_approved(const CommandInvocation& inv) {
         if (user_origin(inv.origin)) return true;
+        const std::string key = invocation_key(inv);
+        std::lock_guard<std::mutex> lock(python_mutex);
+        const auto it = std::find(python_asked.begin(), python_asked.end(), key);
+        if (it == python_asked.end()) return false;
+        python_asked.erase(it);
+        return true;
+    }
+
+    // Whether the policy asked about this start or fork, which reaches its
+    // handler only once the person approved it; the key is used up.
+    bool run_approved(const CommandInvocation& inv) {
         const std::string key = invocation_key(inv);
         std::lock_guard<std::mutex> lock(python_mutex);
         const auto it = std::find(python_asked.begin(), python_asked.end(), key);
@@ -1649,7 +1675,9 @@ struct Session::Impl {
         if (who == AgentPrincipal::none) return base;
         const std::string key = invocation_key(inv);
         PermissionContext c;
-        c.bound = base == ApprovalDecision::ask && is_bound(key);
+        // A start or a fork of a managed run shows its card in every mode:
+        // like a bound approval, only the card decides.
+        c.bound = base == ApprovalDecision::ask && (is_bound(key) || starts_run(inv.name));
         c.python = base == ApprovalDecision::ask && python_pending(key);
         std::lock_guard<std::mutex> lock(perm_mutex);
         c.mode = mode_of(who);
@@ -1673,6 +1701,17 @@ struct Session::Impl {
     }
 
     ApprovalDecision base_policy(const CommandDescriptor& d, const CommandInvocation& inv) {
+        if (starts_run(inv.name)) {
+            // A start or a fork of a managed run runs Python code: it waits for
+            // a card from every origin, the person's own panel too
+            // (design/hosted-runs.md, Review Card). A request that its handler
+            // refuses anyway goes through, so that the reason comes at once.
+            if (runner_precheck(inv, model_runner.load(), workspace)) return ApprovalDecision::allow;
+            std::lock_guard<std::mutex> lock(python_mutex);
+            python_asked.push_back(invocation_key(inv));
+            while (python_asked.size() > 256) python_asked.pop_front();
+            return ApprovalDecision::ask;
+        }
         if (!user_origin(inv.origin) && runs_python(inv)) {
             // Running a script runs the user's code, so every such invocation
             // asks, whatever the command's flags say.
@@ -1802,6 +1841,8 @@ CommandResult Session::invoke(CommandInvocation invocation) {
 }
 
 void Session::set_run_control(RunControl* control) { impl_->run_control.store(control); }
+void Session::set_model_runner(ModelRunner* runner) { impl_->model_runner.store(runner); }
+ModelRunner* Session::model_runner() const { return impl_->model_runner.load(); }
 RunControl* Session::run_control() const { return impl_->run_control.load(); }
 EventRing& Session::events() { return *impl_->events; }
 
@@ -1889,7 +1930,7 @@ bool Session::approval_offers_rules(const CommandInvocation& parked) const {
     const AgentPrincipal who = agent_principal(parked);
     if (who == AgentPrincipal::none || !rule_command_allowed(permission_rule_key(parked))) return false;
     const std::string key = Impl::invocation_key(parked);
-    if (impl_->is_bound(key) || impl_->python_pending(key)) return false;
+    if (impl_->is_bound(key) || impl_->python_pending(key) || Impl::starts_run(parked.name)) return false;
     std::lock_guard<std::mutex> lock(impl_->perm_mutex);
     return who == AgentPrincipal::mcp || !impl_->rule_agent(who).empty();
 }

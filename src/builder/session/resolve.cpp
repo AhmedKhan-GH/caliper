@@ -82,7 +82,8 @@ Chain chain_of(const spec::Spec& spec, const std::string& id, const DataSources*
     switch (parsed.kind) {
         case CatalogKind::tensor: c.kind = RootKind::tensor; return c;
         case CatalogKind::table: c.kind = RootKind::table; return c;
-        case CatalogKind::live: c.kind = RootKind::served_tensor; break;
+        case CatalogKind::live:
+        case CatalogKind::run: c.kind = RootKind::served_tensor; break;
         case CatalogKind::feed:
         case CatalogKind::metric: c.kind = RootKind::served_table; break;
     }
@@ -462,6 +463,7 @@ bool DataSources::set(CatalogKind kind, std::shared_ptr<CatalogDataSource> sourc
         case CatalogKind::live: live_ = std::move(source); break;
         case CatalogKind::feed: feed_ = std::move(source); break;
         case CatalogKind::metric: metric_ = std::move(source); break;
+        case CatalogKind::run: run_ = std::move(source); break;
         default: return false;
     }
     cache_.clear();
@@ -476,6 +478,7 @@ std::shared_ptr<CatalogDataSource> DataSources::get(CatalogKind kind) const {
         case CatalogKind::live: return live_;
         case CatalogKind::feed: return feed_;
         case CatalogKind::metric: return metric_;
+        case CatalogKind::run: return run_;
         default: return nullptr;
     }
 }

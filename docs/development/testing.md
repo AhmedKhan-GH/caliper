@@ -240,6 +240,14 @@ The hidden app takes the input of the test through `CALIPER_TEST_UI` and the dec
 
 The instrument check `python3 examples/python/instrument_check.py` runs the same transcript without a window, as one command with defaults. It finds `caliper` and `caliper-mcp` in `cmake-build-release`, then `cmake-build-notorch`, and it uses the Python that runs it when that Python has torch, else the `.venv` of the repository. It saves one capture of the app, taken after the learning rate changed, into a new folder under the build folder, and the arguments `--app`, `--mcp`, `--python` and a folder override these defaults. Then it prints one line for each acceptance point: the one Caliper line of the script, the scene panel, the slider, the learning rate that the script reports at its next step, and the pick event. It exits with a code other than 0 on any failure, and it stops after five minutes. In CI, the `macos` job builds a Python with torch and the native sender, passes it as `CALIPER_M1_PYTHON`, and runs `caliper_m1_acceptance` as its own step. That step fails when the test skips because torch or the sender is missing, and it accepts a skip because the runner has no Metal device.
 
+## Hosted Runs Acceptance
+
+The ctest entry `caliper_m4_acceptance` (`tests/m4/driver.py`) is the hosted runs acceptance test. It starts the hidden app with no script and `caliper-mcp` as a child. The driver copies `tests/m4/train.py` and `tests/m4/infer.py` into a throwaway workspace and sends `tests/m4/transcript.jsonl` through the MCP tools. The model runner of the app starts, forks and stops the scripts as managed runs.
+
+The test waits on events and published state, never for a fixed time. `tests/CMakeLists.txt` defines it only when the platform is not Windows, `CALIPER_WITH_BUILDER` is on and the Python of the instrument test is set. It has the labels `m4` and `acceptance` and a timeout of 300 seconds. It runs with the Python that `CALIPER_M1_PYTHON` names, and it exits with code 77, which ctest reports as skipped, when the app, Metal or torch is missing.
+
+The check `python3 examples/python/hosted_runs_check.py` runs the same flow without a window, as one command with defaults. It writes the capture of the two loss curves into a folder, prints the states of the runs, and exits with 1 on a failure and with 2 when the check cannot run.
+
 ## GPU Tests
 
 A suite that needs a GPU must not report success when it finds none. `tests/gpu_skip.h` provides the convention that the gfx, export, embed, live and torch suites share:

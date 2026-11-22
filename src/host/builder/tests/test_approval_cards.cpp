@@ -686,3 +686,37 @@ TEST_CASE("approval cards: a run command's card states the change and the script
     CHECK(approval_always_label("run.pause") == "Always allow run.pause");
     CHECK(approval_session_label("panel.patch") == "Allow always for this session");
 }
+
+TEST_CASE("approval cards: a start, a fork and a stop of a managed run state the script, its arguments and parameters") {
+    CommandInvocation start;
+    start.name = "run.start";
+    start.origin = CommandOrigin::mcp;
+    start.args = {{"script", "scripts/train.py"},
+                  {"args", {"--epochs", "5"}},
+                  {"params", json::array({{{"name", "lr"}, {"value", 0.01}}, {{"name", "opt"}, {"value", "adam"}}})}};
+    CHECK(approval_what(start, nullptr) == "run.start \xC2\xB7 scripts/train.py");
+    CHECK(approval_run_text(start, "") ==
+          "Start scripts/train.py as a new managed run, with the arguments --epochs 5 and the parameters lr=0.01 "
+          "opt=adam. The script runs as Python code on this computer.");
+    start.args = {{"script", "train.py"}, {"id", "base"}};
+    CHECK(approval_run_text(start, "") ==
+          "Start train.py as the managed run base, with no arguments and no parameters. The script runs as Python code "
+          "on this computer.");
+    CommandInvocation fork;
+    fork.name = "run.fork";
+    fork.args = {{"run", "base"}, {"params", json::array({{{"name", "lr"}, {"value", 0.001}}})}};
+    CHECK(approval_what(fork, nullptr) == "run.fork \xC2\xB7 base");
+    CHECK(approval_run_text(fork, "train.py") ==
+          "Fork the run base at its next checkpoint, with the parameters lr=0.001. The fork runs train.py as Python "
+          "code beside its parent.");
+    fork.args = {{"run", "base"}};
+    CHECK(approval_run_text(fork, "") ==
+          "Fork the run base at its next checkpoint, with no changed parameters. The fork runs its script as Python "
+          "code beside its parent.");
+    CommandInvocation stop;
+    stop.name = "run.stop";
+    stop.args = {{"run", "base"}};
+    CHECK(approval_run_text(stop, "") == "Stop the run base at its next checkpoint, and end its process after 10 seconds.");
+    stop.args = {{"run", "base"}, {"kill_after_s", 2.5}};
+    CHECK(approval_run_text(stop, "") == "Stop the run base at its next checkpoint, and end its process after 2.5 seconds.");
+}

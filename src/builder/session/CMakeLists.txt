@@ -26,6 +26,7 @@ add_library(caliper_builder_session STATIC
     panel_data.cpp
     resolve.cpp
     run_commands.cpp
+    runner_commands.cpp
     session.cpp
     spec_edit.cpp
     util.cpp)
@@ -61,6 +62,7 @@ caliper_builder_add_tests(session
         tests/test_control_edit.cpp
         tests/test_events.cpp
         tests/test_run_commands.cpp
+        tests/test_runner_commands.cpp
         tests/test_line_diff.cpp
         tests/test_table_conformance.cpp
         tests/test_spec_edit.cpp

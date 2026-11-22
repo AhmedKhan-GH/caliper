@@ -372,6 +372,9 @@ TEST_CASE("kinds and dtypes have their names and sizes") {
     CHECK(!cb::catalog_kind_from_name("FEED"));
     CHECK(cb::catalog_kind_is_tabular(CatalogKind::feed));
     CHECK_FALSE(cb::catalog_kind_is_tabular(CatalogKind::live));
+    // A managed run's series (design/hosted-runs.md, Run Sources) is tensor-shaped.
+    CHECK(cb::catalog_kind_from_name("run") == CatalogKind::run);
+    CHECK_FALSE(cb::catalog_kind_is_tabular(CatalogKind::run));
     CHECK(std::string(cb::catalog_dtype_name(CatalogDtype::boolean)) == "bool");
     CHECK(cb::catalog_dtype_from_name("bool") == CatalogDtype::boolean);
     CHECK(cb::catalog_dtype_size(CatalogDtype::f16) == 2);

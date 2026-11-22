@@ -25,9 +25,11 @@
 
 namespace caliper_builder {
 
-// The five kinds of source. table, feed and metric are tabular (columns and a
-// row count); tensor and live are tensor-shaped (a dtype and a shape).
-enum class CatalogKind { table, tensor, live, feed, metric };
+// The six kinds of source. table, feed and metric are tabular (columns and a
+// row count); tensor, live and run are tensor-shaped (a dtype and a shape). A
+// run source is a series of a managed run of the model runner,
+// run:<run id>/<view> (design/hosted-runs.md).
+enum class CatalogKind { table, tensor, live, feed, metric, run };
 
 const char* catalog_kind_name(CatalogKind kind);
 std::optional<CatalogKind> catalog_kind_from_name(std::string_view name);

@@ -920,3 +920,16 @@ if(NOT WIN32 AND CALIPER_WITH_BUILDER)
             SKIP_RETURN_CODE 77)
     endif()
 endif()
+
+# The acceptance test of hosted runs (design/hosted-runs.md): the hidden app with no script, and caliper-mcp as a
+# child. tests/m4/driver.py runs tests/m4/transcript.jsonl through the MCP tools: the model runner starts
+# tests/m4/train.py as a managed run, forks it, draws both loss curves, stops both, starts and stops
+# tests/m4/infer.py, and checks by pid that no child process is left. It exits 77 where the app, Metal or
+# torch is missing. It uses the Python of the M1 acceptance test (CALIPER_M1_PYTHON).
+if(NOT WIN32 AND CALIPER_WITH_BUILDER AND _m1_python)
+    add_test(NAME caliper_m4_acceptance COMMAND "${_m1_python}" "${CMAKE_CURRENT_SOURCE_DIR}/m4/driver.py"
+        --app "$<TARGET_FILE:caliper>" --mcp "$<TARGET_FILE:caliper-mcp>" --python "${_m1_python}"
+        --work "${CMAKE_CURRENT_BINARY_DIR}/m4-work")
+    set_tests_properties(caliper_m4_acceptance PROPERTIES LABELS "m4;acceptance" TIMEOUT 300
+        SKIP_RETURN_CODE 77)
+endif()

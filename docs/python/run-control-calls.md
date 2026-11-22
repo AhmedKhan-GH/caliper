@@ -94,3 +94,17 @@ The call also publishes these names:
 The size of a box shows the parameter count of its module, and its color shows the mean absolute value of the last output of the module. The label is the module name. The row id of a box is the index of its module in `WatchHandle.modules`, thus a pick on a box names the module. The scene is computed only while a viewer watches it. The argument `scene=False` leaves it out.
 
 Without a scheduler, the new rates stay in `optimizer.param_groups`. Under a torch learning rate scheduler, a new `lr` scales the schedule from the step where it applies. The hook multiplies the scheduled rates by a factor before each step and takes it off after the step. The scheduler thus neither undoes the change nor compounds it. `param_groups` and `get_last_lr()` show the scheduled rates, and the series `lr` shows the rate that the step used. `WatchHandle.remove()` also removes `lr` and the loss tap, and it leaves the series and the scene.
+
+## Watch in a Managed Run
+
+The app's model runner starts a script as a managed run and sets `CALIPER_RUN_DIR`, with the other variables of [Managed Runs](../agents/managed-runs.md). When that variable is set, `caliper.watch(model, optimizer)` and `caliper.watch(model)` also do the following, and the script needs no other line.
+
+1. It starts the server when none runs.
+2. It loads the checkpoint that `CALIPER_RUN_RESUME` names into the model and the optimizer, and the step count continues from the step of the checkpoint. A run that resumes redoes that step with its own parameter values.
+3. It applies the parameter values of the checkpoint, and then those of `CALIPER_RUN_PARAMS`, when each parameter is registered. A value of the wrong type causes a warning, and a number out of range is clamped.
+4. It registers the actions `caliper.checkpoint` and `caliper.stop`.
+5. It writes the link file that `CALIPER_RUN_LINK_FILE` names, with the stream link and no newline. The file comes last, thus the app that attaches finds the parameters and the actions.
+
+The action `caliper.checkpoint` writes `checkpoint-<step>.pt` in the run folder at the next checkpoint and returns its path. The file holds the model state, the optimizer state, the step and the parameter values. The action `caliper.stop` makes the script end with `SystemExit(0)` at its next checkpoint, after it sends what is pending and before the weights change. It also ends a pause.
+
+Without an optimizer, each forward pass of the model is the checkpoint, thus an inference loop with `caliper.watch(model)` takes the actions too. Such a script must not also call `caliper.step()`. Outside a managed run, `caliper.watch` does none of this.

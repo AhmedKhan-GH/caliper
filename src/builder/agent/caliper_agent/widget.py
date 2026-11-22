@@ -76,7 +76,7 @@ MAX_HANDOFF_REASON = 500
 
 _ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")              # spec ids: panels, sources, applets
 _LOADER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-_CATALOG_ID = re.compile(r"^(table|tensor|live|feed|metric):[^\x00-\x1f]{1,256}$")
+_CATALOG_ID = re.compile(r"^(table|tensor|live|feed|metric|run):[^\x00-\x1f]{1,256}$")
 _PREVIEW_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")      # the command table's preview id
 _PROPERTY_PATH = re.compile(r"^[a-z_][a-z0-9_]{0,63}(\.[a-z_][a-z0-9_]{0,63}){0,7}$")
 _COMMAND = re.compile(r"^[a-z][a-z0-9]*\.[a-z][a-z0-9_]*$")

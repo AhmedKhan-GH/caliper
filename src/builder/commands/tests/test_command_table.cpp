@@ -34,8 +34,8 @@ const char* const kV0[] = {
     "panel.remove",    "panel.render",    "panel.data",     "layout.place",  "layout.set",       "preview.begin",
     "preview.diff",    "preview.commit",  "preview.discard", "applet.save",  "applet.open",      "applet.list",
     "review.status",   "capture.frame",   "control.create", "control.patch", "control.remove",   "run.state",
-    "run.set_param",   "run.action",      "run.pause",      "events.wait",   "history.undo",     "history.redo",
-    "history.list",
+    "run.set_param",   "run.action",      "run.pause",      "run.list",      "run.start",        "run.fork",
+    "run.stop",        "run.logs",        "events.wait",    "history.undo",  "history.redo",     "history.list",
 };
 
 std::set<std::string> names_where(bool (*pred)(const CommandDescriptor&)) {
@@ -140,6 +140,7 @@ TEST_CASE("the flags follow the design page") {
                                 "preview.begin", "preview.diff", "preview.commit", "preview.discard",
                                 "applet.save", "applet.open", "capture.frame", "control.create", "control.patch",
                                 "control.remove", "run.state", "run.set_param", "run.action", "run.pause",
+                                "run.list", "run.start", "run.fork", "run.stop", "run.logs",
                                 "history.undo", "history.redo", "history.list"});
     // Every destructive command mutates.
     for (const auto& d : cb::command_table())

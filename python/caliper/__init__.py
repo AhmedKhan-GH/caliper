@@ -526,6 +526,17 @@ def watch(model, optimizer=None, *, activations: bool = True, gradients: bool = 
     3. It registers the parameter `lr` and publishes the series `loss` and `lr` and the scene
        `model`.
 
+    In a managed run, which the model runner of the Caliper app starts with the environment variable
+    `CALIPER_RUN_DIR` set, `watch()` also starts the server when it is not started. It loads the
+    checkpoint of `CALIPER_RUN_RESUME` into the model and the optimizer before the first step and
+    continues the step count. It applies the values of `CALIPER_RUN_PARAMS` and of the checkpoint
+    when each parameter is registered. It registers the actions `caliper.checkpoint`, which saves
+    the model, the optimizer, the step and the parameter values to `<run dir>/checkpoint-<step>.pt`
+    and returns the path, and `caliper.stop`, which ends the script with exit code 0 at its next
+    checkpoint, before the weights change. Last, it writes the stream link into
+    `CALIPER_RUN_LINK_FILE`. Without an optimizer, each forward pass of the model is the checkpoint.
+    See [Managed Runs](../agents/managed-runs.md).
+
     | Name | Kind | Content |
     |---|---|---|
     | `loss` | Series | The last 0-d tensor that `backward()` ran on before each step, or inside the closure of `optimizer.step(closure)` |

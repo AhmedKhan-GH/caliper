@@ -1,0 +1,28 @@
+{"step": "spec", "tool": "spec_new", "arguments": {"id": "m4", "title": "Hosted Runs Check"}}
+{"step": "start", "tool": "run_start", "arguments": {"script": "train.py"}, "expect_run": {"id": "train-1"}}
+{"step": "running", "wait_state": {"run": "train-1", "states": ["running"]}}
+{"step": "listed", "tool": "run_list", "arguments": {}, "expect_runs": {"train-1": {"state": "running", "managed": true}}}
+{"step": "grows", "steps_grow": {"run": "train-1"}}
+{"step": "pids", "record_pids": "train.py"}
+{"step": "fork", "tool": "run_fork", "arguments": {"run": "train-1", "params": [{"name": "lr", "value": 0.002}]}, "expect_run": {"parent": "train-1"}}
+{"step": "forked", "wait_state": {"run": "{child}", "states": ["running"]}}
+{"step": "pair", "tool": "run_list", "arguments": {}, "expect_runs": {"train-1": {"state": "running"}, "{child}": {"state": "running", "parent": "train-1"}}}
+{"step": "pids2", "record_pids": "train.py"}
+{"step": "source_a", "tool": "source_add", "arguments": {"id": "loss_a", "catalog": "run:{child}/loss"}}
+{"step": "source_b", "tool": "source_add", "arguments": {"id": "loss_b", "catalog": "run:train-1/loss"}}
+{"step": "panel", "tool": "panel_create", "arguments": {"id": "losses", "primitive": "series", "title": "Loss of Both Runs", "bind": {"y": ["loss_a", "loss_b"]}}}
+{"step": "data", "panel_has_lines": {"panel": "losses", "lines": 2}}
+{"step": "capture", "capture": "m4_two_runs"}
+{"step": "logs", "tool": "run_logs", "arguments": {"run": "train-1", "lines": 20}, "expect_lines": true}
+{"step": "stop_child", "tool": "run_stop", "arguments": {"run": "{child}"}}
+{"step": "stop_parent", "tool": "run_stop", "arguments": {"run": "train-1"}}
+{"step": "ended", "wait_state": {"run": "{child}", "states": ["exited"]}}
+{"step": "ended_parent", "wait_state": {"run": "train-1", "states": ["exited"]}}
+{"step": "no_children", "no_children": true}
+{"step": "infer", "tool": "run_start", "arguments": {"script": "infer.py"}, "expect_run": {"id": "infer-1"}}
+{"step": "infer_running", "wait_state": {"run": "infer-1", "states": ["running"]}}
+{"step": "infer_grows", "steps_grow": {"run": "infer-1"}}
+{"step": "infer_pids", "record_pids": "infer.py"}
+{"step": "infer_stop", "tool": "run_stop", "arguments": {"run": "infer-1"}}
+{"step": "infer_ended", "wait_state": {"run": "infer-1", "states": ["exited"]}}
+{"step": "no_children_end", "no_children": true}

@@ -227,7 +227,7 @@ void BuilderPane::refresh_catalog() {
     // One list per kind, so that hundreds of metrics never crowd the tables
     // and tensors out of one list cut at its limit.
     catalog_ = json::array();
-    for (const char* kind : {"table", "tensor", "live", "feed", "metric"}) list_kind(kind, "", 0);
+    for (const char* kind : {"table", "tensor", "live", "feed", "metric", "run"}) list_kind(kind, "", 0);
     rebuild_rows();
     invalidate_caches();
 }
