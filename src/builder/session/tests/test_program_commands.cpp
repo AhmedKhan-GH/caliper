@@ -513,6 +513,11 @@ TEST_CASE("operator steps: surface and path give their named arrays, with the wi
     CHECK(err.code == "resolve.operator_shape");
     path.columns = {6, 0};
     CHECK(apply_operator(path, input, nullptr, &out).code == "resolve.operator_shape");
+    // A column of 2^32 is refused as it is, not read as column 0 after a cast to int.
+    path.columns = {int64_t{1} << 32, 0};
+    err = apply_operator(path, input, nullptr, &out);
+    CHECK(err.code == "resolve.operator_shape");
+    CHECK(err.message.find("4294967296") != std::string::npos);
 }
 
 TEST_CASE("operator steps: only the first step of a live tensor source runs in the script") {

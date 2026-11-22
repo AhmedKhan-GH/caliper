@@ -499,6 +499,30 @@ def test_close_sends_a_held_run_state_before_bye(make_server, ctl, monkeypatch):
     run(go())
 
 
+
+def test_close_leaves_the_controls_to_a_pump_thread_that_still_runs(monkeypatch):
+    """The native sender's close flushes the controls only after its pump thread ended: a pump
+    thread that did not end within PUMP_END_S flushes them itself, and two flushes at once
+    would hand over the same stored messages twice."""
+    import types
+    from caliper import _net, _net_native
+    monkeypatch.setattr(_net, "_unroute", lambda server: None)
+    flushes = []
+
+    def closed(alive):
+        ns = types.SimpleNamespace
+        ctl = ns(flush=lambda final=False: flushes.append((alive, final)))
+        srv = ns(closed=False, _stream_file=None, transport=ns(n_attached=1),
+                 ring=ns(flush=lambda timeout: 0, close=lambda: None),
+                 producer=ns(busy=lambda: False, controls=ctl, _event_q=None),
+                 nio=ns(wake=lambda: None, close=lambda: None),
+                 _thread=ns(join=lambda timeout=None: None, is_alive=lambda: alive))
+        _net_native.NativeServer.close(srv)
+        return srv
+
+    assert closed(True).closed and closed(False).closed
+    assert flushes == [(False, True)]
+
 def test_step_stays_cheap_with_a_viewer(server, ctl):
     caliper.param("lr", 2e-3)
 

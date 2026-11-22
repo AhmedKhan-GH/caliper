@@ -1778,3 +1778,26 @@ def test_native_listen_after_close_fails_at_once():
     t.start()
     t.join(10)
     assert out == ["listen: the server is closed"]
+
+
+def test_the_python_sender_counts_its_time_for_the_cadence():
+    # The shared cadence counts the sender thread's time between two passes as part of a pass
+    # (ring.publish_s); the Python sender adds its pump's thread time as the native one does.
+    from caliper._net_ring import NetRing
+    ring = NetRing()
+    calls = []
+
+    def pump_once():
+        calls.append(1)
+        if len(calls) > 1:
+            raise asyncio.CancelledError
+        end = time.thread_time() + 0.005
+        while time.thread_time() < end:
+            pass
+        return True
+
+    srv = types.SimpleNamespace(producer=types.SimpleNamespace(pump_once=pump_once), ring=ring,
+                                counters={"pump_errors": 0})
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(_net.NetServer._pump(srv))
+    assert ring.publish_s >= 0.005 and srv.counters["pump_errors"] == 0
