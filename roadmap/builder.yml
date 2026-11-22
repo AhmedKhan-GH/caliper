@@ -27,7 +27,7 @@ features:
     status: shipped
     summary: Loaders turn dropped files into sources, reading CSV, Parquet, JSON, NumPy, safetensors, image and WAV files, refusing pickle, Arrow IPC and HDF5 files, and running a Python loader in its own process for other formats.
     depends_on: []
-    docs: docs/references/builder-pane.md#sources
+    docs: docs/builder/builder-pane.md#sources
     design: design/loaders.md
     issue: null
 
@@ -36,7 +36,7 @@ features:
     status: shipped
     summary: The catalog lists every source a spec can use, from loader outputs, live views, feed channels and metrics, and describes and samples each one.
     depends_on: [RUN-01, SPC-03, STR-05]
-    docs: docs/references/builder-pane.md#sources
+    docs: docs/builder/builder-pane.md#sources
     design: design/catalog.md
     issue: null
 
@@ -63,7 +63,7 @@ features:
     status: shipped
     summary: The builder pane lets a person build a spec by hand on the app's spec page, with source and primitive palettes, a canvas, properties and the spec text.
     depends_on: [SPC-06, SPC-08]
-    docs: docs/references/builder-pane.md
+    docs: docs/builder/builder-pane.md
     design: design/builder-pane.md
     issue: null
 
@@ -81,7 +81,7 @@ features:
     status: shipped
     summary: A panel is removed from a dashboard with the cross on its title strip, a menu entry or the delete key, as one undoable step.
     depends_on: [SPC-07]
-    docs: docs/references/builder-pane.md#the-canvas
+    docs: docs/builder/builder-pane.md#the-canvas
     design: design/builder-pane.md#gestures-and-commands
     issue: null
 
@@ -236,7 +236,7 @@ features:
     status: shipped
     summary: A tensor source of a spec carries slice, reduce and normalise steps, edited in the builder pane with the shape after each step.
     depends_on: [SPC-01]
-    docs: docs/references/builder-pane.md#properties
+    docs: docs/builder/builder-pane.md#properties
     issue: null
 
   - id: SPC-29

@@ -10,4 +10,5 @@ nav:
       - introduction/architecture.md
   - Python: python
   - Applets: applets
+  - Builder: builder
   - Roadmap: roadmap

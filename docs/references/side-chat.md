@@ -11,7 +11,7 @@ explains when to use the side chat and when the widget agent.
     model served by Ollama in the dry run `examples/build_a_dashboard/dry_run/step4_side_chat.py`. It is not on the
     landing page.
     In the spec page's build mode it is the lower part of the builder pane's right column, under Properties
-    ([Builder pane](builder-pane.md)).
+    ([Builder pane](../builder/builder-pane.md)).
 
 ## Opening it
 

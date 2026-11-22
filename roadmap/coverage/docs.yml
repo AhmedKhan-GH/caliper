@@ -656,50 +656,50 @@ entries:
   item: The viewer page that caliper.serve serves and the notebook widgets are built from the elements.
   ids:
   - EMB-01
-- page: docs/references/builder-pane.md#starting-a-dashboard
+- page: docs/builder/builder-pane.md#starting-a-dashboard
   item: 'Three ways into the builder pane: a new dashboard, dropped files and an open spec.'
   ids:
   - SPC-07
-- page: docs/references/builder-pane.md#where-things-are
+- page: docs/builder/builder-pane.md#where-things-are
   item: Where the parts of the builder pane are.
   ids:
   - SPC-07
-- page: docs/references/builder-pane.md#sources
+- page: docs/builder/builder-pane.md#sources
   item: The Sources palette lists the spec sources and the catalog grouped as Tables, Tensors, Live, Feeds
     and Metrics, with refused files.
   ids:
   - SPC-03
   - SPC-04
   - SPC-07
-- page: docs/references/builder-pane.md#primitives
+- page: docs/builder/builder-pane.md#primitives
   item: The seven primitives Series, Heatmap, Points, Histogram, Table, Image and Text.
   ids:
   - SPC-01
   - SPC-07
-- page: docs/references/builder-pane.md#the-canvas
+- page: docs/builder/builder-pane.md#the-canvas
   item: The canvas places, moves and removes panels.
   ids:
   - SPC-07
   - SPC-09
-- page: docs/references/builder-pane.md#properties
+- page: docs/builder/builder-pane.md#properties
   item: Properties edit a panel, its bindings and options, and the transforms of a tensor source.
   ids:
   - SPC-07
   - SPC-28
-- page: docs/references/builder-pane.md#the-spec-text
+- page: docs/builder/builder-pane.md#the-spec-text
   item: The spec text strip shows and edits the canonical TOML of the open spec.
   ids:
   - SPC-01
   - SPC-07
-- page: docs/references/builder-pane.md#open-in-browser
+- page: docs/builder/builder-pane.md#open-in-browser
   item: Open in browser shows the saved dashboard at the browser viewer of Caliper API.
   ids:
   - EMB-06
-- page: docs/references/builder-pane.md#keys
+- page: docs/builder/builder-pane.md#keys
   item: The keys of the builder pane.
   ids:
   - SPC-07
-- page: docs/references/builder-pane.md#undo-and-the-journal
+- page: docs/builder/builder-pane.md#undo-and-the-journal
   item: Each gesture is one undo step and is journaled by the command layer.
   ids:
   - SPC-05

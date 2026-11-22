@@ -1,4 +1,4 @@
-# Builder pane
+# Builder Pane
 
 The builder pane is where you build a spec by hand on the app's spec page: you pick a source, pick a primitive, get a
 panel, arrange the panels, edit their properties and see the spec text follow. Every change is a command of the
@@ -145,7 +145,7 @@ With a source selected: its id, its catalog id, its shape, and for a tensor its 
 the shape after it. Slice, Reduce and Normalise add one; × removes one. A catalog source that the spec does not read
 yet takes its id here before it is added; its first transform, or the first panel made from it, adds it. For a source
 of the open spec, ⌘K beside what it reads and beside its transforms opens the widget agent's prompt for that property
-([Widget agent](widget-agent.md)).
+([Widget agent](../references/widget-agent.md)).
 
 A slice's or a reduce's axis is a choice of every axis of the step's input, each with its index range, such as
 `axis 1 · 0–3` for an axis of 4, and with its name where the source carries names: a live view's dims are named by the
@@ -174,7 +174,7 @@ new panel's block at the end of the text, or a title changed in the middle of it
 ## Open in browser
 
 ⌘O Open in browser in the page bar opens the saved dashboard that the page shows in your default browser, at the
-browser viewer of [Caliper API](api.md#get-v0spec), which draws it with the layout and the look of the spec page. It
+browser viewer of [Caliper API](../references/api.md#get-v0spec), which draws it with the layout and the look of the spec page. It
 works in build mode and outside it. The browser shows the dashboard as it was last saved, so save first to show a
 change: while the dashboard has unsaved changes the button's tooltip says "the browser shows the saved dashboard", and
 once its link is out the status bar says so too, after `unsaved`. The button is disabled, with the reason in its
@@ -185,7 +185,7 @@ When the app was started without `--api`, the button starts Caliper API as the s
 until the app quits, since the page in the browser keeps reading the dashboard's data. What would refuse the link, a
 build without the browser viewer or an id that cannot be a link, is asked before the API starts, and when the link
 cannot be handed over all the same, an API started for it alone stops again. What the link carries and who
-can use it is in [Caliper API](api.md#started-by-the-app).
+can use it is in [Caliper API](../references/api.md#started-by-the-app).
 
 ## Keys
 
@@ -199,8 +199,8 @@ can use it is in [Caliper API](api.md#started-by-the-app).
 | ⌘O | Open the saved dashboard in a browser |
 | ⏎ | Add the selection, in Sources |
 | ⌫, Delete | Remove the focused panel; on the dashboard page too |
-| ⌘K | The inline prompt in the focused panel ([Widget agent](widget-agent.md)) |
-| ⌘L | The side chat ([Side chat](side-chat.md)) |
+| ⌘K | The inline prompt in the focused panel ([Widget agent](../references/widget-agent.md)) |
+| ⌘L | The side chat ([Side chat](../references/side-chat.md)) |
 | Esc | Cancels a drag, leaves the editor, gives up a source's focus, then a panel's, then goes Home |
 
 Off macOS each ⌘ is Ctrl.
