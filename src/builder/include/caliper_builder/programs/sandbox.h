@@ -37,6 +37,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace caliper_builder::programs {
@@ -61,6 +62,11 @@ inline constexpr const char* kProgramNotChecked = "program.not_checked";   // a 
 inline constexpr const char* kStageBindingNotAllowed = "stage.binding_not_allowed";
 inline constexpr const char* kStageEntryNotAllowed = "stage.entry_not_allowed";
 inline constexpr const char* kStageCompileFailed = "stage.compile_failed";
+// The struct Params of a program, or the params a stage reads, differ from
+// the names of its `params` (design/instrument-interface.md, Program
+// Parameters).
+inline constexpr const char* kProgramParamsMismatch = "program.params_mismatch";
+inline constexpr const char* kStageParamsMismatch = "stage.params_mismatch";
 // The hosts' codes.
 inline constexpr const char* kProgramNeedsReview = "program.needs_review";   // state review, not an error event
 inline constexpr const char* kProgramUnknownInput = "program.unknown_input";
@@ -178,12 +184,60 @@ Verdict check_stage(const spec::Stage& stage, const Reflection& reflection);
 // PROGRAM message carry it.
 std::string sha256_hex(std::string_view text);
 // The workgroup counts of a program's dispatch: its `workgroups`, else
-// ceil(max_count / x) for geometry and ceil(width / x), ceil(height / y) for
-// pixels, with the entry's workgroup size from the reflection.
+// ceil(max_count / x) for geometry, ceil(width / x), ceil(height / y) for
+// pixels and ceil(elements / x) for a tensor, with the entry's workgroup size
+// from the reflection.
 std::array<std::uint32_t, 3> dispatch_size(const spec::Program& program, const Reflection& reflection);
 // The bytes of a program's output buffers: each array for max_count items and
-// the counter, or width * height * 4 for pixels.
+// the counter, width * height * 4 for pixels, or 4 for each element of a
+// tensor output.
 std::uint64_t output_bytes(const spec::Program& program);
+// The elements of a tensor output: the product of its shape; 0 for another
+// kind or an empty shape.
+std::uint64_t tensor_elements(const spec::ProgramOutput& output);
+
+// ---- params (design/instrument-interface.md, Program Parameters)
+// The WGSL name of a program's tensor output: var<storage, read_write> out: array<f32>.
+inline constexpr const char* kTensorVar = "out";
+// The scalar types of a field of the struct Params.
+enum class ParamType : std::uint32_t { f32 = 0, i32 = 1, u32 = 2 };
+// One field of the struct Params, in struct order. Each field takes 4 bytes,
+// at offset 4 times its index.
+struct ParamField {
+    std::string name;
+    ParamType type = ParamType::f32;
+};
+// The fields of `struct Params` in `wgsl`, in order. False when the source
+// has no such struct; a field of another type than f32, i32 or u32, or with
+// an attribute, gives program.params_mismatch in `why`.
+bool params_fields(std::string_view wgsl, std::vector<ParamField>* fields, Verdict* why);
+// A program's params against its source: the names of `params` and the
+// fields of its struct Params are the same set, and the source declares the
+// struct exactly when the program has params; else program.params_mismatch.
+Verdict check_params(const spec::Program& program);
+// A stage's params against its source: the source declares no struct Params
+// and no `params` of its own (the viewer declares them), and each field it
+// reads as params.<name> is a name of `params`; else stage.params_mismatch.
+Verdict check_stage_params(const spec::Stage& stage);
+// The bytes of the uniform `params`: the value of each field by name,
+// converted to its type (i32 and u32 rounded and clamped), 4 bytes each,
+// padded to a multiple of 16 bytes; a field without a value is 0. Empty when
+// there are no fields.
+std::vector<std::uint8_t> pack_params(const std::vector<ParamField>& fields,
+                                      const std::vector<std::pair<std::string, double>>& values);
+// The group of the uniform `params` in a stage's composed shader; its binding
+// is 0. Groups 0 to 2 hold the built-in program's resources.
+inline constexpr std::uint32_t kStageParamsGroup = 3;
+// The declaration of a stage's params that a host puts after the stage's
+// source, so that the line numbers of the source stay as they are: struct
+// Params with one f32 field for each name of `params` in name order, and
+// `params` as var<uniform> at kStageParamsGroup (uniform true) or as
+// var<private> for a check compile without bindings. Empty when the stage has
+// no params.
+std::string stage_params_declaration(const spec::Stage& stage, bool uniform);
+// The fields of a stage's struct Params: each name of `params` in name order,
+// as f32.
+std::vector<ParamField> stage_params_fields(const spec::Stage& stage);
 
 // ---- the stage contract (design/gpu-programs.md, Stage Declaration)
 // The WGSL that every host puts before a stage's source. The compiler's line
