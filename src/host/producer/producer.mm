@@ -761,6 +761,11 @@ caliper_producer_status check_derive_desc(const caliper_producer_derive_desc* d,
                                                     ", which is no resource of the piece.");
         }
     }
+    // Only the form of the hash: the derive half arrives with its imports resolved and without
+    // the manifest, thus the runtime cannot compute it. The app computes the hash
+    // from the author's files and sends a program only when it equals the pin
+    // (design/programmable-graphics.md, Sandbox), the script takes PROGRAM only from a peer that
+    // may control it, and what runs here is checked and translated with bounds checks either way.
     if (d->piece_hash) {
         const std::string h = d->piece_hash;
         const bool hex = h.size() == 71 && h.rfind("sha256:", 0) == 0 &&

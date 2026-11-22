@@ -716,7 +716,11 @@ public:
         if (!piece)
             return refuse(pg::kPieceMissing, "The piece " + pin + " that the program " + p.id + " pins is not in " +
                                                  sp::piece_from_name(ref.from) + ".");
-        const std::string hash = piece->hash.empty() ? pg::piece_hash(*piece) : piece->hash;
+        // The app's check of the hash is the one that counts: the script gets
+        // the resolved text without the author's files, thus it checks only the
+        // hash's form. The hash is computed here from the text that goes out,
+        // never taken from the piece's own `hash`, which an inline piece states.
+        const std::string hash = pg::piece_hash(*piece);
         if (hash != ref.hash)
             return refuse(pg::kPieceHashMismatch, "The piece " + pin + " has the hash " + hash +
                                                       ", and the program " + p.id + " pins " + ref.hash + ".");
