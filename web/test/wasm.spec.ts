@@ -262,7 +262,12 @@ test('the graphics layer draws an indexed quad and instanced draws, dispatches a
         };
         if (!(await until(() => Number(m.caliperStats?.gfxReady) === 1))) return { report: `no layer: ${JSON.stringify(m.caliperStats ?? {})}`, level: '', images: {} };
         m._caliper_views_gfx_selftest();
-        await until(() => !!m.caliperStats?.gfxSelftest);
+        if (!(await until(() => !!m.caliperStats?.gfxSelftest))) {
+          const report = `the self-test did not finish in 10 s: ${JSON.stringify(m.caliperStats ?? {})}`;
+          m._caliper_views_destroy();
+          canvas.remove();
+          return { report, level: '', images: {} };
+        }
         // Each picture as a PNG, four times its size, nearest.
         const images: Record<string, string> = {};
         for (const [name, im] of Object.entries(m.caliperGfxImages ?? {})) {
