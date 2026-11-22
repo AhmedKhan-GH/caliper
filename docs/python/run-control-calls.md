@@ -95,6 +95,16 @@ The size of a box shows the parameter count of its module, and its color shows t
 
 Without a scheduler, the new rates stay in `optimizer.param_groups`. Under a torch learning rate scheduler, a new `lr` scales the schedule from the step where it applies. The hook multiplies the scheduled rates by a factor before each step and takes it off after the step. The scheduler thus neither undoes the change nor compounds it. `param_groups` and `get_last_lr()` show the scheduled rates, and the series `lr` shows the rate that the step used. `WatchHandle.remove()` also removes `lr` and the loss tap, and it leaves the series and the scene.
 
+## Programs in the Script
+
+Under `caliper.watch(model, optimizer)`, the script announces the capabilities `programs` and `interventions` to a viewer. The app then sends the GPU programs of its open spec as PROGRAM messages ([GPU Programs and Stages](../agents/gpu-programs.md)). The script needs no other line. A script that does not call `caliper.watch(model, optimizer)` announces neither capability.
+
+The module `caliper._producer` loads when the first program arrives, thus a script that only streams tensors loads nothing new. It compiles the program through the sandbox, imports each input tensor on the GPU in place and read-only, and never copies a training tensor. `caliper.step()` runs the programs that are due after the work of the step is done. A program runs every N steps, as the cadence of the program rules, and its GPU time has a limit. A program that is refused or stopped is an error of its panel and never raises in the script.
+
+An input is `live:<name>`. The name is a parameter name of the watched model, a parameter name with `.grad` added for its gradient, or a module name with `.act` added for the last output of the module. The script gives a geometry output to the publish path of `caliper.scene`, as a batch of the target entity. It gives a pixels output to `caliper.show`, as the live view `program.<id>`. A pick, a selection and a recording then work on the output as on any other. The script answers each PROGRAM with a PROGRAM_STATE, and it sends the status of each program again after a change and at most twice a second while programs run.
+
+The script also lists each module of the model as an intervention point by its dotted name, and each head of an attention module that has a head count and an output projection as `<module>#<h>`. A CONTROL with the op `intervene` sets or clears an `ablate` of a point, and the script applies it at the next step with a forward hook. The wire messages are in the [wire protocol reference](../reference/wire-protocol-3-2.md#gpu-programs-and-interventions).
+
 ## Watch in a Managed Run
 
 The app's model runner starts a script as a managed run and sets `CALIPER_RUN_DIR`, with the other variables of [Managed Runs](../agents/managed-runs.md). When that variable is set, `caliper.watch(model, optimizer)` and `caliper.watch(model)` also do the following, and the script needs no other line.

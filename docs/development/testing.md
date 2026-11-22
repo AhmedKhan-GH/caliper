@@ -248,6 +248,18 @@ The test waits on events and published state, never for a fixed time. `tests/CMa
 
 The check `python3 examples/python/hosted_runs_check.py` runs the same flow without a window, as one command with defaults. It writes the capture of the two loss curves into a folder, prints the states of the runs, and exits with 1 on a failure and with 2 when the check cannot run.
 
+## GPU Programs Acceptance
+
+The ctest entry `caliper_gpu_programs_acceptance` (`tests/gpu_programs/driver.py`) is the GPU programs acceptance test. It starts the hidden app with no script and `caliper-mcp` as a child, and it runs `tests/gpu_programs/train.py`, a script whose only Caliper line is `caliper.watch(model, optimizer)`, as a managed run. The WGSL sources of the programs are the files `grid.wgsl`, `heat.wgsl`, `material.wgsl`, `writer.wgsl` and `slow.wgsl` beside it, and `tests/gpu_programs/transcript.jsonl` sends the steps through the MCP tools.
+
+The agent adds a geometry program over the weight `0.weight` and a pixels program over `2.weight`. The driver takes a capture of the empty scene, one with the geometry, one with the image panel and one with the material stage, and it compares them by counts of pixels, not by eye. The geometry must change at least 300 pixels of the empty scene. The material stage must give at least 50 yellow pixels in the lower left quarter of the frame, and at least ten times the count of the capture before it. A program that declares the model tensor writable must fail with `program.writes_input` and must not appear in `program.status`. A program over its `time_ms` must stop with a `program` event of change `stopped` and the code `program.over_time`, while the step of the run keeps growing. `program.status` must report a cadence `every` of at least 1, a last pass time and the memory in use. The test does not assert a value of N.
+
+A toggle bound to `intervene:0` is clicked through `CALIPER_TEST_SPEC_UI`, which waits for files that the driver writes. The mean of five losses while the toggle is on must be above three times the mean before it, and the mean after its release must be below half of the mean while it was on. The driver takes the SHA-256 of the app, of `caliper-mcp` and of each file of the Python package before and after, and the lists must be equal. Last, no process that the driver started may be alive, by its pid. The test waits on events and published state, never for a fixed time.
+
+`tests/CMakeLists.txt` defines the entry only when the platform is not Windows, `CALIPER_WITH_BUILDER` is on and the Python of the instrument test is set. It has the labels `gpu_programs` and `acceptance` and a timeout of 300 seconds. It exits with code 77, which ctest reports as skipped, with the reason printed, when the app, Metal, torch, numpy, the native network sender `caliper._netio`, the producer module `caliper._producer` or the WGSL compiler library is missing. The producer module needs `CALIPER_BUILD_PYTHON=ON` and its file in `python/caliper/`, and the compiler library needs `CALIPER_WGSL_FROM_SOURCE=ON`, which needs Rust.
+
+The check `python3 examples/python/gpu_program_check.py` runs the same flow without a window, as one command with defaults. It uses the app and `caliper-mcp` of the build folder with the newest app, and it writes the captures into a folder of that build folder. It prints the count of files with an unchanged SHA-256, the status of the geometry program, the losses around the toggle, the pixel counts and the capture paths. It exits with 1 on a failure and with 2 when the check cannot run.
+
 ## GPU Tests
 
 A suite that needs a GPU must not report success when it finds none. `tests/gpu_skip.h` provides the convention that the gfx, export, embed, live and torch suites share:

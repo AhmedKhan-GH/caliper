@@ -65,6 +65,18 @@ Version 1 builds the kinds `slider`, `button` and `toggle`. A toggle binds `inte
 
 A slider bound to a parameter takes the range and the scale of the parameter when `min`, `max` or `log` is absent, and it sets the parameter while you drag it. The script clamps every value to its own range, thus a slider can show a narrower range but not a wider one. A slider bound to `value` holds its value, which starts at the option `value` or at `min`. A button bound to an action runs it. A button bound to `run:pause` pauses a run that runs and resumes a run that is paused. A control sends its value to the attached script directly, so it shows no approval card. Each finished edit gives one `control` event with the origin `ui`.
 
+## Programs
+
+The array `program` holds at most 16 GPU programs. A program is WGSL source with a declaration of its inputs, its output and its limits. The keys are `id` (at most 55 characters), `title`, `wgsl` (at most 64 KiB), `entry`, `inputs` (at most 8, each `{var, source}` with a source `live:<name>`), `output`, `limits` (`time_ms`, `memory_mb` and `every`) and `workgroups`. The output has the `kind` `geometry` or `pixels`. A geometry output names a scene `panel`, and optionally an `entity`, a `part` of `points` or `lines`, `max_count`, the `arrays` and a `style`. A pixels output has `width`, `height` and `format`. The validator holds each program to the limits of the sandbox, and it reports a target that is not a scene panel of the spec as `spec.unknown_panel`. [GPU Programs and Stages](../agents/gpu-programs.md) describes the keys, the limits and what the script does with a program.
+
+## Stages
+
+The array `stage` holds at most 32 stages. A stage has a `panel` (a scene panel), an `entity` (an entity path), a `kind` (`material` or `vertex`) and `wgsl` (at most 16 KiB). The panel, the entity and the kind are unique among the stages. A stage replaces one function in the draw of the entity, and its source holds functions and constants only. When a command removes a panel, the same undo step removes the stages of that panel.
+
+## Provenance
+
+The table `provenance` marks a spec from someone else. It has `foreign` (true), `from` (a text that names the origin) and `reviewed`, a list of `{target, sha256}`. A target is `program:<id>` or `stage:<panel>/<entity>/<kind>`, and the hash is the SHA-256 of its WGSL. In a foreign spec, a program or a stage runs only when its hash is in `reviewed`, and else its state is `review`. A spec without `provenance` is the person's own. No command writes `provenance`, and `spec.set_text` refuses a text whose `provenance` differs from the open spec's with `spec.provenance_locked`.
+
 ## Control Layout
 
 A control is a leaf of the layout, as a panel is. A leaf is an id, and the id names a panel or a control. The commands `layout.place` and `layout.set` accept control ids. In a vertical split, a control leaf takes the height of one control row.
@@ -81,7 +93,7 @@ The result of `control.create` and `control.remove` holds `id`, `warnings`, `dif
 
 ## Validator Codes
 
-Version 1 adds three error codes. The other errors of controls and scene panels use the codes of version 0.
+Version 1 adds three error codes for controls. A spec with more than 16 programs or 32 stages fails with `spec.too_many`. The other errors of controls and scene panels use the codes of version 0.
 
 | Code | Stage | Cause |
 |---|---|---|
