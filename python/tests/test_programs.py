@@ -664,3 +664,59 @@ def test_programs_that_share_a_moving_gradient_both_keep_running(run):
     assert [s["state"] for s in st] == ["running", "running"], st
     assert [s["runs"] for s in st] == [4, 4]          # steps 8 to 11
     assert P.stats()["imports"] == 1                 # the older imports were released
+
+
+class _TimesOut:
+    """The real runtime, whose passes time out as a pass that never ends does."""
+
+    def __init__(self, rt):
+        self._rt = rt
+
+    def run(self, *args, **kw):
+        raise RuntimeError("program.timeout", "The pass did not finish in time.", 0, 0, 3)
+
+    def __getattr__(self, name):
+        return getattr(self._rt, name)
+
+
+@needs_device
+def test_activation_hooks_leave_the_model_when_the_last_program_stops(run):
+    net, opt, _, _ = run
+    decl, src = _geometry(4, source="live:fc.act")
+    P.install("acts", decl, src, scene="s")
+    assert set(P._ACT_HOOKS) == {"fc"} and len(net.fc._forward_hooks) == 1
+    _train(net, opt, P.WARMUP_STEPS + 2)
+    assert P.status()[0]["state"] == "running"
+    P._STATE["rt"] = _TimesOut(P._STATE["rt"])
+    _train(net, opt, 1, first=50)
+    st = P.status()[0]
+    assert st["state"] == "stopped" and st["error"]["code"] == "program.timeout"
+    # The program stays installed, stopped; nothing reads the module's output any more.
+    assert not P._ACT_HOOKS and not P._ACTS and not net.fc._forward_hooks
+
+
+def test_activation_hooks_stay_while_another_program_needs_them(monkeypatch):
+    net = Net()
+    P.attach(net, None)
+    try:
+        for pid in ("a", "b"):
+            p = P._Program(pid, {"inputs": [{"var": "w", "source": "live:fc.act"}],
+                                 "output": {"kind": "pixels", "width": 1, "height": 1}}, "", None, "")
+            with pytest.raises(P._Waiting):
+                P._resolve("fc.act")                 # registers the hook, as a compile does
+            p.state = "waiting"
+            P._PROGS[pid] = p
+        with P._LOCK:
+            P._set_active()
+        assert len(net.fc._forward_hooks) == 1
+        with P._LOCK:
+            P._PROGS["a"].state = "refused"
+            P._set_active()
+        assert len(net.fc._forward_hooks) == 1       # b still reads fc's output
+        with P._LOCK:
+            P._PROGS["b"].state = "stopped"
+            P._set_active()
+        assert not net.fc._forward_hooks and not P._ACT_HOOKS
+    finally:
+        P._PROGS.clear()
+        P.detach()

@@ -511,6 +511,24 @@ def _compile(p: _Program) -> None:
 def _set_active() -> None:
     global ACTIVE
     ACTIVE = any(p.state in ("waiting", "compiled", "running") for p in _PROGS.values())
+    _prune_act_hooks()
+
+
+def _prune_act_hooks() -> None:
+    """Remove the forward hook of each module whose output no program that may still run reads.
+
+    Every change of a program's state ends in :func:`_set_active`, thus the hooks leave the model
+    when the last program that needs them stops for any reason: a removal, a refusal, a stop over
+    time or over budget, a timeout or a lost device.
+    """
+    if not _ACT_HOOKS:
+        return
+    needed = {src[len("live:"):-len(".act")] for p in _PROGS.values()
+              if p.state in ("waiting", "compiled", "running")
+              for _var, src in p.inputs if src.startswith("live:") and src.endswith(".act")}
+    for mname in [m for m in _ACT_HOOKS if m not in needed]:
+        _ACT_HOOKS.pop(mname).remove()
+        _ACTS.pop(mname, None)
 
 
 def _notify(items) -> None:
