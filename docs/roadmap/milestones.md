@@ -11,22 +11,21 @@ This page lists the milestones of Caliper's current trajectory, Agent-Built Play
 | M2, GPU Programs | Agent-written WGSL over live tensors, stages, sandbox, first ablation | Done | [#27](https://github.com/AhmedKhan-GH/caliper/pull/27) |
 | M3, Instrument Building | Entities from tensors, operators, shared state, time transport, annotations, all control kinds | In progress | |
 | M4, Hosted Runs | Start, fork and stop a model's run from Caliper and over MCP | Done | [#26](https://github.com/AhmedKhan-GH/caliper/pull/26) |
-| M5, Rendering Essentials | Transparency, thick lines, ribbons and tubes, instancing, glow, label placement | Next | |
-| M6, GPU Passes | Programs with several passes and state that persists between frames | Planned | |
-| M7, Derivation Catalog | Projections and layouts on the GPU, overlays, model probes | Planned | |
-| M8, Steering and Intervention | Steer, scale and patch | Planned | |
-| M9, Saved and Editable Instruments | Saved instruments and the node editor | Planned | |
-| M10, Browser Parity | Saved instruments in the browser | Planned | |
-| M11, Training Debugger | First acceptance demo | Planned | |
-| M12, Image Sequences and Training Data | Image grids, sequences, augmentation preview | Planned | |
-| M13, World-Model Playground | Second acceptance demo | Planned | |
-| M14, Vector Drawing and Primitive Completion | 2-D vector drawing and the remaining primitives | Planned | |
-| M15, Time Axis | Recordings and timelines | Deferred | |
-| M16, WebAssembly Views | Agent-written interaction logic | Deferred | |
+| M5, Programmable Graphics | Agent-written buffers, pipelines, passes and persistent state over live tensors | Next | |
+| M6, Derivation Catalog | Projections, layouts, overlays and model probes as library programs | Planned | |
+| M7, Steering and Intervention | Steer, scale and patch | Planned | |
+| M8, Saved and Editable Instruments | Saved instruments with their programs, and the node editor | Planned | |
+| M9, Browser Parity | Saved instruments in the browser | Planned | |
+| M10, Training Debugger | First acceptance demo | Planned | |
+| M11, Image Sequences and Training Data | Image grids, sequences, augmentation preview | Planned | |
+| M12, World-Model Playground | Second acceptance demo | Planned | |
+| M13, Vector Drawing and Library Completion | 2-D vector drawing, and the remaining shapes as library programs | Planned | |
+| M14, Time Axis | Recordings and timelines | Deferred | |
+| M15, WebAssembly Views | Agent-written interaction logic | Deferred | |
 
 ## Order
 
-The milestones up to M4 ran in the order M0, M1, M4, M2, M3. Hosted runs came before GPU programs, so that each later demo starts its own run. From M5 on, the numbers follow the order of work. Visual depth comes first: rendering, then GPU passes, then the derivation catalog. Steering and intervention follow, and they can run beside the derivation catalog.
+The milestones up to M4 ran in the order M0, M1, M4, M2, M3. Hosted runs came before GPU programs, so that each later demo starts its own run. From M5 on, the numbers follow the order of work. Programmable graphics comes first, because the agent authors the graphics: it writes its own buffers, pipelines and passes, and the built-in primitives become a library on that layer. The derivation catalog follows as library programs, and steering and intervention can run beside it.
 
 Each milestone ends in a state that works. A milestone is done when the release build is clean, the suites and the browser checks pass, a demo script runs without a person, the docs are written, and a short check shows the result.
 
@@ -46,10 +45,16 @@ M2 lets an agent write WGSL programs that read live training tensors on the trai
 
 M3 lets an agent turn any tensor of the running model into a visual with no scene code in the script. The `surface` and `path` operators derive geometry on the GPU. Shared state connects the views: a pick in one panel changes another, and a time transport moves one cursor through the recent steps. Annotations, bound text readouts, segmented groups and every control kind complete the interface.
 
-## Rendering Essentials
+## Programmable Graphics
 
-M5 makes dense visuals legible. It adds transparency and blending, thick lines with ribbons and tubes, mesh instancing, a glow pass and label placement without overlap, and it applies the scene options for camera, axes and entity filters. Its demo is an attention arc tower. A small transformer trains, and each attention weight becomes an arc between tokens on a ring for each layer. The arcs show when induction heads form, and an ablation and a fork test whether they cause the drop in loss.
+M5 gives the agent the graphics layer itself, inside the sandbox. The agent declares buffers, textures and state that persists between frames, and it imports live model tensors read-only with no copy. It writes its own vertex, fragment and compute shaders in WGSL, with its own blending and depth, and it composes compute, render and post passes. The output draws into a panel with the camera given, and an ID buffer keeps picking. Caliper validates each program before it runs and holds it inside its budgets.
+
+The demo is an attention arc tower that the agent writes completely. A small transformer trains, and a compute pass turns each attention weight into an arc between tokens on a ring for each layer. A render pass draws the arcs with additive blending, and a bloom pass adds the glow. The arcs show when induction heads form, and an ablation and a fork test whether they cause the drop in loss.
+
+## Built-In Primitives
+
+The built-in primitives stay as the standard library and as the Python logging API, `caliper.scene`. They give a script one call for a common visual, with picking, labels and cameras included. They get no new features. Over time they move onto the programmable layer, so that one rendering path remains, and an agent can copy the program of a primitive and change it.
 
 ## Later Milestones
 
-M6 adds GPU programs with several passes and persistent state, for particles, flows and iterative algorithms. M7 builds on them with projections and layouts of high-dimensional data, overlays and model probes. M8 adds steering, scaling and patching, the core of interpretability work. M9 to M16 complete saved and editable instruments, browser parity, the two acceptance demos, image data, vector drawing, recordings and WebAssembly views.
+M6 adds projections and layouts of high-dimensional data, overlays and model probes as library programs on the programmable layer. M7 adds steering, scaling and patching, the core of interpretability work. M8 to M15 complete saved and editable instruments, browser parity, the two acceptance demos, image data, vector drawing, recordings and WebAssembly views.
