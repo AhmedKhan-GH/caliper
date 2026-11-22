@@ -1,6 +1,7 @@
 // The child process on POSIX (child_process.h): posix_spawn with the output
-// file as stdout and stderr, /dev/null as stdin, a process group of its own
-// and the default handlers of the common signals.
+// file as stdout and stderr (mode 0600, never through a link), /dev/null as
+// stdin, a process group of its own and the default handlers of the common
+// signals. A signal goes to the child's whole process group.
 #include "child_process.h"
 
 #include <cerrno>
@@ -86,7 +87,10 @@ public:
 private:
     void signal(int sig) {
         std::int64_t code = 0;
-        if (!poll(&code)) ::kill(pid_, sig);   // the id is still this child's: it has not been reaped
+        // The id is still this child's, and the group's: it has not been
+        // reaped. The group holds the processes that the child started, such
+        // as the interpreter behind a launcher, unless one left it.
+        if (!poll(&code) && ::kill(-pid_, sig) != 0) ::kill(pid_, sig);
     }
 
     pid_t pid_;
@@ -107,6 +111,8 @@ std::vector<std::pair<std::string, std::string>> current_environment() {
     return out;
 }
 
+std::int64_t current_process_id() { return static_cast<std::int64_t>(::getpid()); }
+
 std::unique_ptr<ChildProcess> start_child(const ChildSpec& spec, std::string* error) {
     auto failed = [&](const std::string& why) -> std::unique_ptr<ChildProcess> {
         if (error) *error = "The program " + spec.program + " could not start: " + why;
@@ -120,7 +126,7 @@ std::unique_ptr<ChildProcess> start_child(const ChildSpec& spec, std::string* er
     posix_spawnattr_init(&attr);
     posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
     posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, spec.output.empty() ? "/dev/null" : spec.output.c_str(),
-                                     O_WRONLY | O_CREAT | O_APPEND, 0644);
+                                     O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW, 0600);
     posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDERR_FILENO);
     const bool chdir_ok = spec.cwd.empty() || add_chdir(&actions, spec.cwd);
 

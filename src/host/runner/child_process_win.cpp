@@ -1,8 +1,10 @@
-// The child process on Windows (child_process.h). UNTESTED: this code is
-// written to compile against the documented Win32 declarations and has not
-// run. CreateProcessW starts the child suspended, in a job object whose last
-// handle ends it (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE), so that no child
-// outlives the app, also in a crash; then it resumes. The output file takes
+// The child process on Windows (child_process.h). This code is written
+// against the documented Win32 declarations and is not yet built or tested
+// on Windows. CreateProcessW starts the child suspended, in a job object
+// whose last handle ends it (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE), so that no
+// child outlives the app, also in a crash; then it resumes. A forced end
+// ends the whole job, so that a process the child started, such as the real
+// interpreter behind a venv launcher, ends too. The output file takes
 // stdout and stderr, NUL takes stdin, and the child has no console window.
 #include "child_process.h"
 
@@ -81,6 +83,10 @@ public:
     void terminate() override { kill(); }
 
     void kill() override {
+        // The job holds only the child and the processes it started, so it
+        // may end also after the child ended, when a process it started runs
+        // on.
+        if (job_ && TerminateJobObject(job_, 1)) return;
         std::int64_t code = 0;
         if (!poll(&code)) TerminateProcess(process_, 1);
     }
@@ -123,6 +129,8 @@ std::vector<std::pair<std::string, std::string>> current_environment() {
     FreeEnvironmentStringsW(block);
     return out;
 }
+
+std::int64_t current_process_id() { return static_cast<std::int64_t>(GetCurrentProcessId()); }
 
 std::unique_ptr<ChildProcess> start_child(const ChildSpec& spec, std::string* error) {
     auto failed = [&](const std::string& why) -> std::unique_ptr<ChildProcess> {

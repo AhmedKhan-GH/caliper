@@ -46,6 +46,9 @@ public:
         double start_limit_s = 120.0;          // the wait for a link file, and for a fork's checkpoint
         double kill_grace_s = 2.0;             // from the request to end to the forced end
         std::size_t max_series_values = 262144;   // the newest values kept for each series
+        // The size at which output.log moves to output.log.1 and starts again
+        // (design/hosted-runs.md, Process Contract).
+        std::uint64_t output_limit_bytes = 8ull << 20;
     };
 
     explicit ModelRunner(Options options);

@@ -35,6 +35,9 @@ constexpr const char* kCheckpointAction = "caliper.checkpoint";
 constexpr const char* kStopAction = "caliper.stop";
 constexpr std::uint64_t kLogTailBytes = 256 * 1024;
 constexpr std::size_t kLogLineBytes = 2000;
+// How long the runner reads a connection after its process ended, for the
+// last values and replies that the process sent before its end.
+constexpr int kDrainMs = 250;
 
 cb::Error fail(std::string code, std::string message, std::string where = {}) {
     return cb::Error(std::move(code), std::move(message), std::move(where));
@@ -80,6 +83,53 @@ std::string clean_line(std::string s) {
         }
     }
     return out;
+}
+
+// The last lines of the file at `path`, from at most its last kLogTailBytes,
+// oldest first; none when it does not exist.
+std::vector<std::string> tail_lines(const std::string& path) {
+    std::vector<std::string> all;
+    std::ifstream f(fs::u8path(path), std::ios::binary);
+    if (!f) return all;
+    f.seekg(0, std::ios::end);
+    const auto size = static_cast<std::uint64_t>(std::max<std::streamoff>(0, f.tellg()));
+    const std::uint64_t from = size > kLogTailBytes ? size - kLogTailBytes : 0;
+    f.seekg(static_cast<std::streamoff>(from));
+    std::string text(static_cast<std::size_t>(size - from), '\0');
+    f.read(text.data(), static_cast<std::streamsize>(text.size()));
+    text.resize(static_cast<std::size_t>(f.gcount()));
+    std::size_t pos = 0;
+    if (from > 0) {   // the first line is cut
+        const std::size_t nl = text.find('\n');
+        pos = nl == std::string::npos ? text.size() : nl + 1;
+    }
+    while (pos < text.size()) {
+        std::size_t nl = text.find('\n', pos);
+        if (nl == std::string::npos) nl = text.size();
+        all.push_back(clean_line(text.substr(pos, nl - pos)));
+        pos = nl + 1;
+    }
+    return all;
+}
+
+// Keeps a run's output.log near `limit` bytes: once it passed the limit, its
+// content moves to output.log.1, which replaces the one before, and
+// output.log starts again with a line that says so. The child appends to the
+// file, so its next write lands at the new end. What it writes between the
+// copy and the cut is lost. Both files have the mode 0600 on POSIX.
+void rotate_output(const std::string& path, std::uint64_t limit) {
+    std::error_code ec;
+    const fs::path p = fs::u8path(path);
+    const std::uint64_t size = fs::file_size(p, ec);
+    if (ec || size <= limit) return;
+    const fs::path older = fs::u8path(path + ".1");
+    fs::remove(older, ec);
+    fs::copy_file(p, older, ec);
+    fs::permissions(older, fs::perms::owner_read | fs::perms::owner_write, ec);
+    fs::resize_file(p, 0, ec);
+    std::ofstream f(p, std::ios::binary | std::ios::app);
+    f << "caliper: output.log reached " << limit << " bytes, so the runner moved its lines to output.log.1, which "
+      << "keeps only the latest such part, and output.log starts again here\n";
 }
 
 }  // namespace
@@ -426,6 +476,35 @@ std::string runner_python(const ModelRunner::Options& options, std::string* erro
     return py.path;
 }
 
+namespace {
+
+// The child of a run (design/hosted-runs.md, Process Contract): the
+// interpreter on the script with its arguments, in the workspace, with the
+// app's environment without the variables that start with CALIPER_RUN_ and
+// without PYTHONUNBUFFERED, then the variables of the contract, `extra` and
+// PYTHONUNBUFFERED=1, and the output into the run's output.log.
+ChildSpec run_spec(const ModelRunner::Options& o, const std::string& python, const Run& r,
+                   const std::vector<std::pair<std::string, std::string>>& extra) {
+    ChildSpec spec;
+    spec.program = python;
+    spec.args.push_back(r.script_path);
+    spec.args.insert(spec.args.end(), r.entry.args.begin(), r.entry.args.end());
+    for (auto& kv : current_environment())
+        if (kv.first.rfind("CALIPER_RUN_", 0) != 0 && kv.first != "PYTHONUNBUFFERED") spec.env.push_back(kv);
+    spec.env.emplace_back("CALIPER_RUN_ID", r.entry.id);
+    spec.env.emplace_back("CALIPER_RUN_DIR", r.dir);
+    spec.env.emplace_back("CALIPER_RUN_LINK_FILE", r.link_file);
+    spec.env.emplace_back("CALIPER_RUN_APP_PID", std::to_string(current_process_id()));
+    if (!r.entry.params.empty()) spec.env.emplace_back("CALIPER_RUN_PARAMS", r.entry.params.dump());
+    spec.env.insert(spec.env.end(), extra.begin(), extra.end());
+    spec.env.emplace_back("PYTHONUNBUFFERED", "1");
+    spec.cwd = o.workspace;
+    spec.output = r.output;
+    return spec;
+}
+
+}  // namespace
+
 ModelRunner::ModelRunner(Options options) : state_(std::make_shared<RunnerState>()) {
     state_->options = std::move(options);
     state_->thread = std::thread([this] { loop(); });
@@ -525,21 +604,8 @@ cb::Error ModelRunner::start(const cb::RunStartRequest& request, cb::RunEntry* o
         run->link_file = (dir / "link.txt").u8string();
         run->output = (dir / "output.log").u8string();
 
-        ChildSpec spec;
-        spec.program = python;
-        spec.args.push_back(request.script_path);
-        spec.args.insert(spec.args.end(), request.args.begin(), request.args.end());
-        for (auto& kv : current_environment())
-            if (kv.first.rfind("CALIPER_RUN_", 0) != 0 && kv.first != "PYTHONUNBUFFERED") spec.env.push_back(kv);
-        spec.env.emplace_back("CALIPER_RUN_ID", id);
-        spec.env.emplace_back("CALIPER_RUN_DIR", run->dir);
-        spec.env.emplace_back("CALIPER_RUN_LINK_FILE", run->link_file);
-        if (!run->entry.params.empty()) spec.env.emplace_back("CALIPER_RUN_PARAMS", run->entry.params.dump());
-        spec.env.emplace_back("PYTHONUNBUFFERED", "1");
-        spec.cwd = s.options.workspace;
-        spec.output = run->output;
         std::string err;
-        run->proc = start_child(spec, &err);
+        run->proc = start_child(run_spec(s.options, python, *run, {}), &err);
         if (!run->proc) {
             fs::remove_all(dir, ec);
             return fail(cb::kRunStartFailed, err);
@@ -622,11 +688,21 @@ cb::Error ModelRunner::fork(const cb::RunForkRequest& request, cb::RunEntry* out
 
 cb::Error ModelRunner::stop(const std::string& id, double kill_after_s, cb::RunEntry* out) {
     RunnerState& s = *state_;
+    std::vector<cb::Event> events;
     {
         std::lock_guard<std::mutex> lock(s.m);
         Run* r = s.find(id);
         if (!r) return fail(cb::kRunNotFound, "There is no managed run " + id + "; run.list lists the runs.", "args.run");
-        if (!finished(r->entry.state)) {
+        if (!finished(r->entry.state) && !r->proc) {
+            // A fork that waits for its parent's checkpoint has no process:
+            // it ends here, and the checkpoint's reply starts nothing.
+            r->entry.stopping = true;
+            r->waits_for.clear();
+            r->entry.state = "exited";
+            events.push_back(RunnerState::event_of(s.entry_of(*r)));
+            ++s.changes;
+            s.changed.notify_all();
+        } else if (!finished(r->entry.state)) {
             r->entry.stopping = true;
             const auto now = Clock::now();
             bool asked = false;
@@ -640,6 +716,7 @@ cb::Error ModelRunner::stop(const std::string& id, double kill_after_s, cb::RunE
         *out = s.entry_of(*r);
     }
     s.wake.notify_all();
+    s.push_events(std::move(events));
     return {};
 }
 
@@ -651,29 +728,13 @@ cb::Error ModelRunner::logs(const std::string& id, int lines, std::vector<std::s
         if (!r) return fail(cb::kRunNotFound, "There is no managed run " + id + "; run.list lists the runs.", "args.run");
         path = r->output;
     }
-    out->clear();
-    std::ifstream f(fs::u8path(path), std::ios::binary);
-    if (!f) return {};   // no output yet
-    f.seekg(0, std::ios::end);
-    const auto size = static_cast<std::uint64_t>(std::max<std::streamoff>(0, f.tellg()));
-    const std::uint64_t from = size > kLogTailBytes ? size - kLogTailBytes : 0;
-    f.seekg(static_cast<std::streamoff>(from));
-    std::string text(static_cast<std::size_t>(size - from), '\0');
-    f.read(text.data(), static_cast<std::streamsize>(text.size()));
-    text.resize(static_cast<std::size_t>(f.gcount()));
-    std::vector<std::string> all;
-    std::size_t pos = 0;
-    if (from > 0) {   // the first line is cut
-        const std::size_t nl = text.find('\n');
-        pos = nl == std::string::npos ? text.size() : nl + 1;
+    const std::size_t want = static_cast<std::size_t>(std::max(1, lines));
+    std::vector<std::string> all = tail_lines(path);
+    if (all.size() < want) {   // the older lines of a rotated output.log
+        std::vector<std::string> older = tail_lines(path + ".1");
+        all.insert(all.begin(), older.begin(), older.end());
     }
-    while (pos < text.size()) {
-        std::size_t nl = text.find('\n', pos);
-        if (nl == std::string::npos) nl = text.size();
-        all.push_back(clean_line(text.substr(pos, nl - pos)));
-        pos = nl + 1;
-    }
-    const std::size_t keep = std::min<std::size_t>(all.size(), static_cast<std::size_t>(std::max(1, lines)));
+    const std::size_t keep = std::min(all.size(), want);
     out->assign(all.end() - static_cast<std::ptrdiff_t>(keep), all.end());
     return {};
 }
@@ -793,6 +854,45 @@ void ModelRunner::loop() {
             }
             changed = true;
         };
+        // The checkpoint replies of run `id`: each starts the fork that waits
+        // for it, or fails it.
+        auto take_checkpoints = [&](Run& r, const std::string& id) {
+            for (const RunConnection::Reply& rep : r.conn->take_replies()) {
+                for (const std::string& other : s.order) {
+                    Run& f = *s.runs.at(other);
+                    if (f.waits_for != id || f.checkpoint_request != rep.request_id || rep.status == "queued") continue;
+                    f.waits_for.clear();
+                    if (rep.status != "ok" || rep.message.empty()) {
+                        fail_run(f, "The parent's caliper.checkpoint failed: " +
+                                        (rep.error_message.empty() ? std::string("it returned no checkpoint path.")
+                                                                   : rep.error_message));
+                        continue;
+                    }
+                    // The checkpoint is there: the fork starts from it.
+                    std::string py_error;
+                    const std::string python = runner_python(s.options, &py_error);
+                    const ChildSpec spec =
+                        run_spec(s.options, python, f, {{"CALIPER_RUN_RESUME", rep.message}, {"CALIPER_RUN_PARENT", id}});
+                    // checkpoint-<step>.<ext> (the process contract) gives the step of the checkpoint.
+                    const std::string file = fs::u8path(rep.message).filename().u8string();
+                    if (file.rfind("checkpoint-", 0) == 0) {
+                        std::uint64_t step = 0;
+                        std::size_t k = 11;
+                        for (; k < file.size() && file[k] >= '0' && file[k] <= '9' && step < (1ull << 40); ++k)
+                            step = step * 10 + static_cast<std::uint64_t>(file[k] - '0');
+                        if (k > 11) f.offset = std::min<std::uint64_t>(step, s.options.max_series_values);
+                    }
+                    std::string err = py_error;
+                    if (!python.empty()) f.proc = start_child(spec, &err);
+                    if (!f.proc) {
+                        fail_run(f, err);
+                    } else {
+                        f.started = Clock::now();
+                    }
+                    changed = true;
+                }
+            }
+        };
         for (const std::string& id : s.order) {
             Run& r = *s.runs.at(id);
             if (finished(r.entry.state)) continue;
@@ -801,7 +901,13 @@ void ModelRunner::loop() {
             if (r.proc && r.proc->poll(&code)) {
                 r.entry.exit_code = code;
                 if (r.conn) {
-                    r.conn->poll(0);   // the last values that arrived
+                    // The last values and replies that the process sent
+                    // before its end, read until its connection closes: a
+                    // checkpoint reply that came in this pass still starts
+                    // its fork.
+                    const auto until = Clock::now() + std::chrono::milliseconds(kDrainMs);
+                    while (r.conn->state() != RunConnection::State::closed && Clock::now() < until) r.conn->poll(10);
+                    take_checkpoints(r, id);
                     r.conn->close();
                 }
                 const bool clean = (code == 0 || r.entry.stopping) && !r.entry.error;
@@ -861,54 +967,7 @@ void ModelRunner::loop() {
                     if (r.entry.state == "running" || r.entry.state == "paused")
                         set_state(r, run.value("state", std::string()) == "paused" ? "paused" : "running");
                 }
-                for (const RunConnection::Reply& rep : r.conn->take_replies()) {
-                    for (const std::string& other : s.order) {
-                        Run& f = *s.runs.at(other);
-                        if (f.waits_for != id || f.checkpoint_request != rep.request_id || rep.status == "queued") continue;
-                        f.waits_for.clear();
-                        if (rep.status != "ok" || rep.message.empty()) {
-                            fail_run(f, "The parent's caliper.checkpoint failed: " +
-                                            (rep.error_message.empty() ? std::string("it returned no checkpoint path.")
-                                                                       : rep.error_message));
-                            continue;
-                        }
-                        // The checkpoint is there: the fork starts from it.
-                        std::string py_error;
-                        const std::string python = runner_python(s.options, &py_error);
-                        ChildSpec spec;
-                        spec.program = python;
-                        spec.args.push_back(f.script_path);
-                        spec.args.insert(spec.args.end(), f.entry.args.begin(), f.entry.args.end());
-                        for (auto& kv : current_environment())
-                            if (kv.first.rfind("CALIPER_RUN_", 0) != 0 && kv.first != "PYTHONUNBUFFERED") spec.env.push_back(kv);
-                        spec.env.emplace_back("CALIPER_RUN_ID", f.entry.id);
-                        spec.env.emplace_back("CALIPER_RUN_DIR", f.dir);
-                        spec.env.emplace_back("CALIPER_RUN_LINK_FILE", f.link_file);
-                        if (!f.entry.params.empty()) spec.env.emplace_back("CALIPER_RUN_PARAMS", f.entry.params.dump());
-                        spec.env.emplace_back("CALIPER_RUN_RESUME", rep.message);
-                        spec.env.emplace_back("CALIPER_RUN_PARENT", id);
-                        spec.env.emplace_back("PYTHONUNBUFFERED", "1");
-                        spec.cwd = s.options.workspace;
-                        spec.output = f.output;
-                        // checkpoint-<step>.<ext> (the process contract) gives the step of the checkpoint.
-                        const std::string file = fs::u8path(rep.message).filename().u8string();
-                        if (file.rfind("checkpoint-", 0) == 0) {
-                            std::uint64_t step = 0;
-                            std::size_t k = 11;
-                            for (; k < file.size() && file[k] >= '0' && file[k] <= '9' && step < (1ull << 40); ++k)
-                                step = step * 10 + static_cast<std::uint64_t>(file[k] - '0');
-                            if (k > 11) f.offset = std::min<std::uint64_t>(step, s.options.max_series_values);
-                        }
-                        std::string err = py_error;
-                        if (!python.empty()) f.proc = start_child(spec, &err);
-                        if (!f.proc) {
-                            fail_run(f, err);
-                        } else {
-                            f.started = Clock::now();
-                        }
-                        changed = true;
-                    }
-                }
+                take_checkpoints(r, id);
                 for (const auto& [view, ser] : r.conn->series()) {
                     auto& g = r.series_gen[view];
                     if (g.first != ser.total || g.second == 0) {
@@ -919,7 +978,9 @@ void ModelRunner::loop() {
                     }
                 }
             }
-            // 5. A stop: ask the process to end at its limit, then end it.
+            // 5. The output's size limit.
+            if (r.proc) rotate_output(r.output, s.options.output_limit_bytes);
+            // 6. A stop: ask the process to end at its limit, then end it.
             if (r.proc && r.end_at && now >= *r.end_at) {
                 if (!r.terminated_at) {
                     r.proc->terminate();
