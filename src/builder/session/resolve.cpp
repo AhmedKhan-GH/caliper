@@ -448,10 +448,42 @@ private:
             out.entities[i].error = err;
             if (out.entities[i].error.where.empty()) out.entities[i].error.where = panel.entities[i].path;
         }
+        limit_panel_arrays(panel, out);
         std::vector<std::string> bindings;
         for (const auto& [i, b] : bound) bindings.push_back(b.binding);
         out.generation = panel_mix(served, generation, history, ctx,
                                    reference_versions(spec_, panel, bindings, ctx, sources_));
+    }
+
+    // The arrays of one panel (design/instrument-interface.md, Entity
+    // Limits), counted as the float32 values that the app converts them to,
+    // in entity order, before the app stages any of them. An entity whose
+    // arrays would take the panel past the limit has the error entity.limit,
+    // which names it, and keeps no arrays; an entity after it that fits
+    // still resolves.
+    static void limit_panel_arrays(const spec::Panel& panel, PanelData& out) {
+        constexpr std::uint64_t kLimit = static_cast<std::uint64_t>(spec::limits::kPanelArrayBytes);
+        std::uint64_t total = 0;
+        for (EntityData& e : out.entities) {
+            if (e.error) continue;
+            std::uint64_t values = 0;
+            for (const SlotData& s : e.slots) {
+                values += s.kind == SlotData::Kind::tensor ? s.tensor.numel() : s.values.size();
+                values += s.steps.numel();
+                for (const auto& [name, array] : s.geometry) values += array.numel();
+            }
+            const std::uint64_t bytes = values > kLimit ? kLimit + 1 : values * 4;
+            if (bytes > kLimit - total) {
+                e.slots.clear();
+                e.error = Error("entity.limit",
+                                "The arrays of the panel " + panel.id + " pass the limit of 64 MiB at the entity " +
+                                    e.path + ", which adds " + std::to_string(bytes) + " bytes to " +
+                                    std::to_string(total) + ".",
+                                e.path);
+                continue;
+            }
+            total += bytes;
+        }
     }
 
     Error fill(const spec::Panel& panel, SlotData& data, bool* served) {

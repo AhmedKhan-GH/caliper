@@ -436,3 +436,41 @@ bind = { y = "recent" }
     CHECK(values_of(d.slots[0].steps) == std::vector<double>{30});
 }
 
+// The arrays of one panel stop at 64 MiB, counted as float32 values in
+// entity order before the app stages any: the entity that passes the limit
+// has entity.limit, which names it, and the entities before it resolve.
+TEST_CASE("the arrays of one panel stop at 64 MiB, at the entity that passes the limit") {
+    const std::string ws = fresh_dir("resolve-panel-arrays");
+    StoreOpen opened = LoaderStore::open(ws);
+    REQUIRE(opened.error.ok());
+    std::string text = "caliper_spec = 1\n[applet]\nid = \"big\"\n[[source]]\nid = \"cloud\"\ncatalog = \"live:act\"\n"
+                       "[[panel]]\nid = \"world\"\nprimitive = \"scene\"\n";
+    for (int k = 1; k <= 6; ++k)
+        text += "[[panel.entity]]\npath = \"e" + std::to_string(k) +
+                "\"\ndraw = \"points\"\nbind = { positions = \"cloud\" }\n";
+    spec::ParseResult parsed = spec::parse_toml(text);
+    INFO((parsed.diagnostics.empty() ? std::string() : parsed.diagnostics.front().message));
+    REQUIRE(parsed.ok());
+    auto live = std::make_shared<LiveFake>();
+    DataSources sources;
+    sources.set(CatalogKind::live, live);
+    // 1,048,576 points of 3 values: 12 MiB as float32, one block shared by the six entities.
+    TensorResult cloud = TensorData::allocate(DType::f32, {spec::limits::kEntityItems, 3});
+    REQUIRE(cloud.error.ok());
+    std::memset(cloud.tensor.mutable_data(), 0, cloud.tensor.nbytes());
+    live->put(cloud.tensor);
+
+    const PanelData d = resolve_panel(parsed.spec, "world", *opened.store, {}, &sources);
+    REQUIRE(d.error.ok());
+    REQUIRE(d.entities.size() == 6);
+    for (int k = 0; k < 5; ++k) {
+        INFO(k);
+        CHECK(d.entities[size_t(k)].error.ok());
+        CHECK(d.entities[size_t(k)].slots.size() == 1);
+    }
+    CHECK(d.entities[5].error.code == "entity.limit");
+    CHECK(d.entities[5].error.where == "e6");
+    CHECK(d.entities[5].error.message.find("e6") != std::string::npos);
+    CHECK(d.entities[5].error.message.find("world") != std::string::npos);
+    CHECK(d.entities[5].slots.empty());
+}
