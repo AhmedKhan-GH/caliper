@@ -952,9 +952,19 @@ private:
             return b;
         }
         if (b.info->kind == DataKind::tensor) {
+            // A window gives its stacked values and the step of each row as the
+            // columns `value` and `step` (design/instrument-interface.md, Window Step).
+            if ((column == "value" || column == "step") && windowed(it->second)) {
+                b.column = column;
+                b.what = column == "value" ? Bound::What::tensor : Bound::What::unknown;
+                return b;
+            }
             sink_.error("spec.bad_binding",
                         "The binding " + quote(binding) + " names a column, but the source " + quote(src) +
-                            " is a tensor.",
+                            " is a tensor" + (column == "value" || column == "step"
+                                                  ? "; only a source whose chain holds a window has the columns step "
+                                                    "and value."
+                                                  : "."),
                         path);
             return b;
         }
@@ -988,6 +998,19 @@ private:
             b.type_name = found->type;
         }
         return b;
+    }
+
+    // Whether the chain of `from` of source `i` holds a window step.
+    bool windowed(int i) const {
+        for (std::size_t hops = 0; i >= 0 && hops <= spec_.sources.size(); ++hops) {
+            const Source& s = spec_.sources[static_cast<std::size_t>(i)];
+            for (const Transform& t : s.transforms)
+                if (t.op == TransformOp::window) return true;
+            if (!s.from) return false;
+            const auto it = sources_.find(*s.from);
+            i = it == sources_.end() ? -1 : it->second;
+        }
+        return false;
     }
 
     void mismatch(const Bound& b, const std::string& message) { sink_.error("spec.slot_mismatch", message, b.path); }

@@ -5,6 +5,8 @@
 // entity's error and does not stop the panel.
 #include <caliper_builder/session/panel_data.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -76,12 +78,34 @@ Error check_entity_shape(const spec::Entity& entity, const EntityData& data) {
 
 json error_json(const Error& e) { return {{"code", e.code}, {"message", e.message}}; }
 
+// The values of a tensor slot in row-major order, NaN and infinities as
+// null; the smallest and largest finite value beside them.
+void add_values(const SlotData& s, bool with_values, json* item) {
+    if (s.kind != SlotData::Kind::tensor || !s.tensor.valid()) return;
+    const std::uint64_t n = s.tensor.numel();
+    double lo = 0, hi = 0;
+    bool any = false;
+    json values = json::array();
+    for (std::uint64_t i = 0; i < n; ++i) {
+        const double v = s.tensor.element(i);
+        const bool finite = std::isfinite(v);
+        if (finite) {
+            lo = any ? std::min(lo, v) : v;
+            hi = any ? std::max(hi, v) : v;
+            any = true;
+        }
+        if (with_values) values.push_back(finite ? json(v) : json(nullptr));
+    }
+    (*item)["min"] = any ? json(lo) : json(nullptr);
+    (*item)["max"] = any ? json(hi) : json(nullptr);
+    if (with_values) (*item)["values"] = std::move(values);
+}
+
 }  // namespace
 
 // Sets (*out)["entities"] to one object per entity of the panel, in spec order.
 void encode_scene_entities(const spec::Panel& panel, const PanelData& data, const PanelDataLimits& limits,
                            nlohmann::json* out) {
-    (void)limits;
     json list = json::array();
     for (const spec::Entity& entity : panel.entities) {
         json item{{"path", entity.path}, {"draw", spec::draw_kind_name(entity.draw)}};
@@ -95,9 +119,16 @@ void encode_scene_entities(const spec::Panel& panel, const PanelData& data, cons
         } else if (Error shape = check_entity_shape(entity, *found)) {
             item["error"] = error_json(shape);
         } else {
+            // Each slot's shape, its range, and its values when it is one axis
+            // (x, y, steps, a column) or small; a grid of heights gives its range only.
             json slots = json::array();
-            for (const SlotData& s : found->slots)
-                slots.push_back({{"slot", s.slot}, {"binding", s.binding}, {"shape", slot_shape(s)}});
+            for (const SlotData& s : found->slots) {
+                json one{{"slot", s.slot}, {"binding", s.binding}, {"shape", slot_shape(s)}};
+                const auto shape = slot_shape(s);
+                const std::uint64_t n = s.kind == SlotData::Kind::tensor && s.tensor.valid() ? s.tensor.numel() : 0;
+                add_values(s, (shape.size() == 1 && n <= limits.max_points) || n <= 4096, &one);
+                slots.push_back(std::move(one));
+            }
             item["slots"] = std::move(slots);
             item["generation"] = found->generation;
         }

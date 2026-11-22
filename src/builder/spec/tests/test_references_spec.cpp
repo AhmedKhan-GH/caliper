@@ -278,3 +278,27 @@ TEST_CASE("references spec: a reference at a literal key is not allowed") {
     CHECK_MESSAGE(has(history.diagnostics, "spec.reference_not_allowed", "source[0].history"), dump(history.diagnostics));
     CHECK_FALSE(has(history.diagnostics, "spec.wrong_type"));
 }
+
+// A window gives the columns step and value, which a 2-D panel binds; another tensor source has no columns.
+TEST_CASE("references spec: a series binds the step and value columns of a window") {
+    const std::string kept = "[[source]]\nid = \"loss\"\ncatalog = \"live:loss\"\nhistory = 256\n"
+                             "[[source]]\nid = \"w\"\nfrom = \"loss\"\n  [[source.transform]]\n  op = \"window\"\n"
+                             "  steps = 128\n";
+    auto series = check(kept + "[[panel]]\nid = \"p\"\nprimitive = \"series\"\nbind = { x = \"w.step\", y = \"w.value\" }\n");
+    CHECK_MESSAGE(series.ok(), dump(series.diagnostics));
+    auto plain = check("[[source]]\nid = \"t\"\ncatalog = \"live:loss\"\n"
+                       "[[panel]]\nid = \"p\"\nprimitive = \"series\"\nbind = { x = \"t.step\", y = \"t.value\" }\n");
+    CHECK_MESSAGE(has(plain.diagnostics, "spec.bad_binding", "panel[0].bind.x"), dump(plain.diagnostics));
+}
+
+// A marker on a 2-D panel reads the x, y and z of a scene's pick.
+TEST_CASE("references spec: an annotation point reads the x, y and z fields of a pick") {
+    const std::string body = std::string(kToken) + kScenePanel +
+                             "[[panel]]\nid = \"t\"\nprimitive = \"text\"\noptions = { text = \"x\" }\n"
+                             "[[panel]]\nid = \"s\"\nprimitive = \"series\"\nbind = { y = \"v\" }\n"
+                             "[[panel.annotation]]\nid = \"m\"\nkind = \"marker\"\n"
+                             "at = [{ selection = \"world\", field = \"x\" }, { selection = \"world\", field = \"z\" }]\n"
+                             "[[source]]\nid = \"v\"\ncatalog = \"live:loss\"\n";
+    auto r = check(body);
+    CHECK_FALSE(has(r.diagnostics, "spec.unknown_field"));
+}

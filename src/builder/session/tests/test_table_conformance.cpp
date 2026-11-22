@@ -169,7 +169,8 @@ TEST_CASE("the table refuses what the spec refuses where the schema subset can s
     check_refused("panel.create", panel_args({{"rows", "q"}}, {{"columns", {""}}}, "table"), "args.options.columns[0]");
     check_refused("panel.create", panel_args({{"y", "m.loss"}}, {{"x_label", std::string(257, 'l')}}),
                   "args.options.x_label");
-    check_refused("panel.create", panel_args({{"y", "m.loss"}}, {{"legend", true}}), "args.options.legend");
+    check_refused("panel.create", panel_args({{"y", "m.loss"}}, {{"legend", "maybe"}}), "args.options.legend");
+    check_passes("panel.create", panel_args({{"y", "m.loss"}}, {{"legend", true}}));
     check_refused("panel.create", panel_args({{"y", "Metrics.loss"}}, nullptr), "args.bind.y");
     check_refused("panel.create", panel_args({{"y", "m."}}, nullptr), "args.bind.y");
     check_refused("panel.create", panel_args({{"y", json::array()}}, nullptr), "args.bind.y");

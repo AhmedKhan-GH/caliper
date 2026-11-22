@@ -150,11 +150,11 @@ std::string reference_value_type(const AdditionsCheck& c, const Reference& r, co
             const std::string& f = *r.field;
             if (f == "entity" || f == "annotation") return "text";
             if (f == "index" || f == "row_id" || f == "row" || f == "column" || f == "step") return "integer";
-            if (f == "value") return "number";
+            if (f == "value" || f == "x" || f == "y" || f == "z") return "number";
             if (f == "position") return "position";
             return fail("spec.unknown_field", path + " reads the pick field " + quote(f) +
-                                                  "; the fields are entity, index, row_id, row, column, position, value, "
-                                                  "step and annotation.");
+                                                  "; the fields are entity, index, row_id, row, column, x, y, z, "
+                                                  "position, value, step and annotation.");
         }
     }
     return "";

@@ -3821,8 +3821,23 @@
                 "minimum": 1,
                 "type": "integer"
               },
+              "box": {
+                "description": "Spec version 1, scene with entities: the data box, auto or three positive proportions of its x, y and z sides.",
+                "items": {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "maxLength": 4,
+                "minItems": 3,
+                "minLength": 4,
+                "type": [
+                  "string",
+                  "array"
+                ]
+              },
               "colormap": {
-                "description": "heatmap, points and image: the colormap; viridis by default, greys for a one-channel image.",
+                "description": "heatmap and points: the colormap; viridis for a heatmap when absent. A spec file may also give a reference to a text state whose choices are colormap names, as an entity's colormap does.",
                 "enum": [
                   "viridis",
                   "magma",
@@ -3865,6 +3880,15 @@
                 "minItems": 1,
                 "type": "array"
               },
+              "fields": {
+                "description": "Spec version 1, text: a JSON object that gives each name of the format a reference or a source id."
+              },
+              "format": {
+                "description": "Spec version 1, text: a bound text in the format language, in place of text.",
+                "maxLength": 1024,
+                "minLength": 1,
+                "type": "string"
+              },
               "include": {
                 "description": "scene: entity path patterns to draw, where * matches one path segment and ** any number; every entity when absent.",
                 "items": {
@@ -3880,18 +3904,95 @@
                 "description": "scene: whether the entities' labels are drawn; true by default.",
                 "type": "boolean"
               },
+              "legend": {
+                "description": "Spec version 1: auto, true or false; auto shows a legend for two series or more, or a colormap.",
+                "enum": [
+                  "auto",
+                  true,
+                  false
+                ],
+                "type": [
+                  "string",
+                  "boolean"
+                ]
+              },
               "range": {
-                "description": "heatmap and image: the values at the ends of the colormap; histogram: the binned range; [min, max] with min below max.",
+                "additionalProperties": false,
+                "description": "heatmap and image: the values at the ends of the colormap; histogram: the binned range; [min, max] with min below max, or a reference to a range.",
                 "items": {
                   "type": "number"
                 },
                 "maxItems": 2,
                 "minItems": 2,
-                "type": "array"
+                "properties": {
+                  "control": {
+                    "description": "The id of a control whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "default": {
+                    "description": "The literal the place takes while the input has no value."
+                  },
+                  "entity": {
+                    "description": "selection: the entity path; only a pick on that entity counts.",
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                    "type": "string"
+                  },
+                  "selection": {
+                    "description": "The id of a panel whose last pick the place reads.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The id of a state variable whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": [
+                  "array",
+                  "object"
+                ]
               },
               "scale_bar": {
                 "description": "scene: whether a scale bar in the scene's units is drawn; false by default.",
                 "type": "boolean"
+              },
+              "select": {
+                "additionalProperties": false,
+                "description": "Spec version 1: a pick on the panel writes one of its fields into a state variable.",
+                "properties": {
+                  "entity": {
+                    "description": "Only a pick on this entity writes.",
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The pick field it writes, such as column, row, index or value.",
+                    "maxLength": 32,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The state variable that the pick writes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "field"
+                ],
+                "type": "object"
               },
               "text": {
                 "description": "text: static text to show.",
@@ -3947,6 +4048,50 @@
                   "string"
                 ]
               },
+              "views": {
+                "description": "Spec version 1, scene: the saved views, each with a unique name.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "azimuth": {
+                      "description": "The orbit's azimuth in degrees.",
+                      "type": "number"
+                    },
+                    "distance": {
+                      "description": "The distance from the target.",
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "elevation": {
+                      "description": "The orbit's elevation in degrees.",
+                      "maximum": 89,
+                      "minimum": -89,
+                      "type": "number"
+                    },
+                    "name": {
+                      "description": "The view's name, unique in the panel.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "target": {
+                      "description": "The point the orbit looks at.",
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 3,
+                      "minItems": 3,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
               "x_label": {
                 "description": "series, heatmap, points and histogram: the label of the x axis.",
                 "maxLength": 256,
@@ -3957,13 +4102,49 @@
                 "type": "boolean"
               },
               "x_range": {
-                "description": "series: a fixed x range, [min, max] with min below max.",
+                "additionalProperties": false,
+                "description": "series: a fixed x range, [min, max] with min below max, or a reference to a range.",
                 "items": {
                   "type": "number"
                 },
                 "maxItems": 2,
                 "minItems": 2,
-                "type": "array"
+                "properties": {
+                  "control": {
+                    "description": "The id of a control whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "default": {
+                    "description": "The literal the place takes while the input has no value."
+                  },
+                  "entity": {
+                    "description": "selection: the entity path; only a pick on that entity counts.",
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                    "type": "string"
+                  },
+                  "selection": {
+                    "description": "The id of a panel whose last pick the place reads.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The id of a state variable whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": [
+                  "array",
+                  "object"
+                ]
               },
               "y_label": {
                 "description": "series, heatmap, points and histogram: the label of the y axis.",
@@ -3975,13 +4156,49 @@
                 "type": "boolean"
               },
               "y_range": {
-                "description": "series: a fixed y range, [min, max] with min below max.",
+                "additionalProperties": false,
+                "description": "series: a fixed y range, [min, max] with min below max, or a reference to a range.",
                 "items": {
                   "type": "number"
                 },
                 "maxItems": 2,
                 "minItems": 2,
-                "type": "array"
+                "properties": {
+                  "control": {
+                    "description": "The id of a control whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "default": {
+                    "description": "The literal the place takes while the input has no value."
+                  },
+                  "entity": {
+                    "description": "selection: the entity path; only a pick on that entity counts.",
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                    "type": "string"
+                  },
+                  "selection": {
+                    "description": "The id of a panel whose last pick the place reads.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "The id of a state variable whose current value the place takes.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": [
+                  "array",
+                  "object"
+                ]
               },
               "z_label": {
                 "description": "points: the label of the z axis.",
@@ -4797,8 +5014,24 @@
                       "null"
                     ]
                   },
+                  "box": {
+                    "description": "Spec version 1, scene with entities: the data box, auto or three positive proportions of its x, y and z sides.",
+                    "items": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "maxItems": 3,
+                    "maxLength": 4,
+                    "minItems": 3,
+                    "minLength": 4,
+                    "type": [
+                      "string",
+                      "array",
+                      "null"
+                    ]
+                  },
                   "colormap": {
-                    "description": "heatmap, points and image: the colormap; viridis by default, greys for a one-channel image.",
+                    "description": "heatmap and points: the colormap; viridis for a heatmap when absent. A spec file may also give a reference to a text state whose choices are colormap names, as an entity's colormap does.",
                     "enum": [
                       "viridis",
                       "magma",
@@ -4851,6 +5084,18 @@
                       "null"
                     ]
                   },
+                  "fields": {
+                    "description": "Spec version 1, text: a JSON object that gives each name of the format a reference or a source id."
+                  },
+                  "format": {
+                    "description": "Spec version 1, text: a bound text in the format language, in place of text.",
+                    "maxLength": 1024,
+                    "minLength": 1,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
                   "include": {
                     "description": "scene: entity path patterns to draw, where * matches one path segment and ** any number; every entity when absent.",
                     "items": {
@@ -4872,15 +5117,78 @@
                       "null"
                     ]
                   },
+                  "legend": {
+                    "description": "Spec version 1: auto, true or false; auto shows a legend for two series or more, or a colormap.",
+                    "enum": [
+                      "auto",
+                      true,
+                      false,
+                      null
+                    ],
+                    "type": [
+                      "string",
+                      "boolean",
+                      "null"
+                    ]
+                  },
                   "range": {
-                    "description": "heatmap and image: the values at the ends of the colormap; histogram: the binned range; [min, max] with min below max.",
+                    "additionalProperties": false,
+                    "description": "heatmap and image: the values at the ends of the colormap; histogram: the binned range; [min, max] with min below max, or a reference to a range.",
                     "items": {
                       "type": "number"
                     },
                     "maxItems": 2,
                     "minItems": 2,
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "array",
+                      "object",
                       "null"
                     ]
                   },
@@ -4888,6 +5196,44 @@
                     "description": "scene: whether a scale bar in the scene's units is drawn; false by default.",
                     "type": [
                       "boolean",
+                      "null"
+                    ]
+                  },
+                  "select": {
+                    "additionalProperties": false,
+                    "description": "Spec version 1: a pick on the panel writes one of its fields into a state variable.",
+                    "properties": {
+                      "entity": {
+                        "description": "Only a pick on this entity writes.",
+                        "maxLength": 255,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The pick field it writes, such as column, row, index or value.",
+                        "maxLength": 32,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The state variable that the pick writes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "object",
                       "null"
                     ]
                   },
@@ -4965,6 +5311,53 @@
                       "null"
                     ]
                   },
+                  "views": {
+                    "description": "Spec version 1, scene: the saved views, each with a unique name.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "azimuth": {
+                          "description": "The orbit's azimuth in degrees.",
+                          "type": "number"
+                        },
+                        "distance": {
+                          "description": "The distance from the target.",
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "elevation": {
+                          "description": "The orbit's elevation in degrees.",
+                          "maximum": 89,
+                          "minimum": -89,
+                          "type": "number"
+                        },
+                        "name": {
+                          "description": "The view's name, unique in the panel.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "target": {
+                          "description": "The point the orbit looks at.",
+                          "items": {
+                            "type": "number"
+                          },
+                          "maxItems": 3,
+                          "minItems": 3,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 16,
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
                   "x_label": {
                     "description": "series, heatmap, points and histogram: the label of the x axis.",
                     "maxLength": 256,
@@ -4981,14 +5374,63 @@
                     ]
                   },
                   "x_range": {
-                    "description": "series: a fixed x range, [min, max] with min below max.",
+                    "additionalProperties": false,
+                    "description": "series: a fixed x range, [min, max] with min below max, or a reference to a range.",
                     "items": {
                       "type": "number"
                     },
                     "maxItems": 2,
                     "minItems": 2,
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "array",
+                      "object",
                       "null"
                     ]
                   },
@@ -5008,14 +5450,63 @@
                     ]
                   },
                   "y_range": {
-                    "description": "series: a fixed y range, [min, max] with min below max.",
+                    "additionalProperties": false,
+                    "description": "series: a fixed y range, [min, max] with min below max, or a reference to a range.",
                     "items": {
                       "type": "number"
                     },
                     "maxItems": 2,
                     "minItems": 2,
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [],
                     "type": [
                       "array",
+                      "object",
                       "null"
                     ]
                   },
@@ -5565,8 +6056,23 @@
                     "minimum": 1,
                     "type": "integer"
                   },
+                  "box": {
+                    "description": "Spec version 1, scene with entities: the data box, auto or three positive proportions of its x, y and z sides.",
+                    "items": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "maxItems": 3,
+                    "maxLength": 4,
+                    "minItems": 3,
+                    "minLength": 4,
+                    "type": [
+                      "string",
+                      "array"
+                    ]
+                  },
                   "colormap": {
-                    "description": "heatmap, points and image: the colormap; viridis by default, greys for a one-channel image.",
+                    "description": "heatmap and points: the colormap; viridis for a heatmap when absent. A spec file may also give a reference to a text state whose choices are colormap names, as an entity's colormap does.",
                     "enum": [
                       "viridis",
                       "magma",
@@ -5609,6 +6115,15 @@
                     "minItems": 1,
                     "type": "array"
                   },
+                  "fields": {
+                    "description": "Spec version 1, text: a JSON object that gives each name of the format a reference or a source id."
+                  },
+                  "format": {
+                    "description": "Spec version 1, text: a bound text in the format language, in place of text.",
+                    "maxLength": 1024,
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "include": {
                     "description": "scene: entity path patterns to draw, where * matches one path segment and ** any number; every entity when absent.",
                     "items": {
@@ -5624,18 +6139,95 @@
                     "description": "scene: whether the entities' labels are drawn; true by default.",
                     "type": "boolean"
                   },
+                  "legend": {
+                    "description": "Spec version 1: auto, true or false; auto shows a legend for two series or more, or a colormap.",
+                    "enum": [
+                      "auto",
+                      true,
+                      false
+                    ],
+                    "type": [
+                      "string",
+                      "boolean"
+                    ]
+                  },
                   "range": {
-                    "description": "heatmap and image: the values at the ends of the colormap; histogram: the binned range; [min, max] with min below max.",
+                    "additionalProperties": false,
+                    "description": "heatmap and image: the values at the ends of the colormap; histogram: the binned range; [min, max] with min below max, or a reference to a range.",
                     "items": {
                       "type": "number"
                     },
                     "maxItems": 2,
                     "minItems": 2,
-                    "type": "array"
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": "string"
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "array",
+                      "object"
+                    ]
                   },
                   "scale_bar": {
                     "description": "scene: whether a scale bar in the scene's units is drawn; false by default.",
                     "type": "boolean"
+                  },
+                  "select": {
+                    "additionalProperties": false,
+                    "description": "Spec version 1: a pick on the panel writes one of its fields into a state variable.",
+                    "properties": {
+                      "entity": {
+                        "description": "Only a pick on this entity writes.",
+                        "maxLength": 255,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The pick field it writes, such as column, row, index or value.",
+                        "maxLength": 32,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The state variable that the pick writes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "field"
+                    ],
+                    "type": "object"
                   },
                   "text": {
                     "description": "text: static text to show.",
@@ -5691,6 +6283,50 @@
                       "string"
                     ]
                   },
+                  "views": {
+                    "description": "Spec version 1, scene: the saved views, each with a unique name.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "azimuth": {
+                          "description": "The orbit's azimuth in degrees.",
+                          "type": "number"
+                        },
+                        "distance": {
+                          "description": "The distance from the target.",
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "elevation": {
+                          "description": "The orbit's elevation in degrees.",
+                          "maximum": 89,
+                          "minimum": -89,
+                          "type": "number"
+                        },
+                        "name": {
+                          "description": "The view's name, unique in the panel.",
+                          "maxLength": 64,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "target": {
+                          "description": "The point the orbit looks at.",
+                          "items": {
+                            "type": "number"
+                          },
+                          "maxItems": 3,
+                          "minItems": 3,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 16,
+                    "type": "array"
+                  },
                   "x_label": {
                     "description": "series, heatmap, points and histogram: the label of the x axis.",
                     "maxLength": 256,
@@ -5701,13 +6337,49 @@
                     "type": "boolean"
                   },
                   "x_range": {
-                    "description": "series: a fixed x range, [min, max] with min below max.",
+                    "additionalProperties": false,
+                    "description": "series: a fixed x range, [min, max] with min below max, or a reference to a range.",
                     "items": {
                       "type": "number"
                     },
                     "maxItems": 2,
                     "minItems": 2,
-                    "type": "array"
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": "string"
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "array",
+                      "object"
+                    ]
                   },
                   "y_label": {
                     "description": "series, heatmap, points and histogram: the label of the y axis.",
@@ -5719,13 +6391,49 @@
                     "type": "boolean"
                   },
                   "y_range": {
-                    "description": "series: a fixed y range, [min, max] with min below max.",
+                    "additionalProperties": false,
+                    "description": "series: a fixed y range, [min, max] with min below max, or a reference to a range.",
                     "items": {
                       "type": "number"
                     },
                     "maxItems": 2,
                     "minItems": 2,
-                    "type": "array"
+                    "properties": {
+                      "control": {
+                        "description": "The id of a control whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "default": {
+                        "description": "The literal the place takes while the input has no value."
+                      },
+                      "entity": {
+                        "description": "selection: the entity path; only a pick on that entity counts.",
+                        "type": "string"
+                      },
+                      "field": {
+                        "description": "The field to read: lo or hi of a range, a pick field of a selection, or a field of a state such as the cursor's first and latest.",
+                        "type": "string"
+                      },
+                      "selection": {
+                        "description": "The id of a panel whose last pick the place reads.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The id of a state variable whose current value the place takes.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "type": [
+                      "array",
+                      "object"
+                    ]
                   },
                   "z_label": {
                     "description": "points: the label of the z axis.",
