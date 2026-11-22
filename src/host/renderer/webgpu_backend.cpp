@@ -36,7 +36,7 @@
 //                             the group is rebuilt (same handle) if the arena buffer has to grow.
 //   on_destroy                buffers go to the spare pool or are destroyed; a texture is destroyed
 //                             at once and its view kept to the end of the frame (release_retired),
-//                             as the sprint 2 renderer does for imgui_impl_wgpu; the rest is released.
+//                             as the earlier renderer does for imgui_impl_wgpu; the rest is released.
 //   on_write_buffer           wgpuQueueWriteBuffer. The queue orders it after earlier submits, so
 //                             in_use changes nothing here.
 //   on_write_texture          wgpuQueueWriteTexture of the whole texture with the caller's row pitch.

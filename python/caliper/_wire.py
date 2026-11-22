@@ -1582,7 +1582,7 @@ def payload_layout(view: dict, resolved: dict) -> dict:
 # ===========================================================================
 # PROTOCOL 3.2 DRAFT: THE SCENES SUBSET
 #
-# Proposals of the 3.2 draft that sprint 2 has not confirmed: the minor 2,
+# Provisional proposals of the 3.2 draft: the minor 2,
 # the capability "scenes", the kind scene (6), the scene messages (0x0070 to
 # 0x0073), the dtype u16 (6) and the limits below; each is one line, here and
 # in the 3.2 block of include/caliper/live_net.h. The MsgType, Kind and DType

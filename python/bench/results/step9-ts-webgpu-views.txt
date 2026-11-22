@@ -9,7 +9,7 @@ caliper_colormap_cases built as .github/workflows/web.yml builds it.
 The step changes the browser package only (web/src, its tests and the bundles built from it). No native path
 changes, so the benchmarks and counters of "Keeping the fast path as fast" run no changed code and the graphics
 suite's rows are untouched. The browser's frame-rate measurements (web/test/perf.spec.ts and wasm.spec.ts's
-"orbit at an interactive rate") were not run: timing was held by the orchestrator while the GPU was in use.
+"orbit at an interactive rate") were not run: timing was held back while the GPU was in use.
 The webgpu project, which draws on the machine's GPU, was not run for the same reason; the TypeScript WebGPU
 views' pictures below are SwiftShader's.
 

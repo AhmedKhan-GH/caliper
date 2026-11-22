@@ -1,6 +1,6 @@
 # Renderer core, step 6: the colormap by keys, measured in a quiet window (2026-11-16)
 
-Measured at 01:06:59 to 01:07:01 in the orchestrator's quiet window (every heavy slot held for it, no other
+Measured at 01:06:59 to 01:07:01 in a quiet window (every heavy slot held, no other
 heavy job running), 1-minute load 3.49, on the reference Mac (M-series Max, 18 cores, 64 GB, macOS 27, mains
 power). Build: Release, preset release-notorch, head dab6634a of sprint4-cmap.
 
@@ -111,7 +111,7 @@ a frame of 24.1 µs of GPU time (2,048²: 63.9 µs and 47.5 µs). The kernel-lev
 
 ## The decision, and the built form re-measured (2026-11-16, 01:42, load 3.93)
 
-The orchestrator decided: keys everywhere, in the cheaper exact form, with the threshold read as 20 µs
+The decision is: keys everywhere, in the cheaper exact form, with the threshold read as 20 µs
 absolute; the float formula is retired on the native path when the texture path moves (step 8). The built form
 differs from the edited-MSL variant above in two ways, each measured first in a scratch probe:
 - The block is one 16-byte entry per level (its first key, the next level's first key, its colour; 4,112

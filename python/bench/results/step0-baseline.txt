@@ -1,6 +1,6 @@
 # Renderer core, step 0: counters and baseline, on a quiet machine (2026-11-16)
 
-Measured in a quiet window the orchestrator held (no other heavy job on the machine, every heavy slot
+Measured in a quiet window (no other heavy job on the machine, every heavy slot
 held for it), 23:53 to 00:07, in 13 minutes of an 18-minute limit. The 1-minute load average was 1.0 to
 4.0 across the window, and is beside every row in the table files. The run under load that this
 replaces is step0-baseline-loaded.txt, with its files named "-step0-loaded".

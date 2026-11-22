@@ -376,7 +376,7 @@ static inline uint32_t caliper_net_align(uint32_t n) {
 /* ===========================================================================
  * PROTOCOL 3.2 DRAFT: THE SCENES SUBSET
  *
- * Proposals that sprint 2 has not confirmed: the minor version 2, the
+ * Provisional proposals: the minor version 2, the
  * capabilities, the kinds scene (6), text (7) and bars (8), the messages
  * 0x0070 to 0x0074 and 0x0078 to 0x007B, the dtype u16 (6), the error codes
  * and the limits below. Each is one line here, so
@@ -390,7 +390,7 @@ static inline uint32_t caliper_net_align(uint32_t n) {
  * golden frames (tests/fixtures/wire_v3/v3_2) carry CALIPER_NET_MINOR_3_2. A
  * peer decides by the capability, never the minor. Every 3.1 message keeps
  * its meaning and encoding. CaliperDType (sdk/include/caliper/tensor.h) has
- * no CALIPER_DT_U16 yet: the SDK owns it, and the draft asks sprint 2 for it.
+ * no CALIPER_DT_U16 yet: the SDK owns it, so the draft depends on a later SDK addition.
  * ===========================================================================*/
 #define CALIPER_NET_MINOR_3_2            2u
 #define CALIPER_NET_CAP_SCENES           "scenes"     /* kind scene and its messages      */

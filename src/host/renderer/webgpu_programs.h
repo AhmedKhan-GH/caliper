@@ -2,7 +2,7 @@
 // caliper_gfx::ProgramDescs written by hand.
 //
 // TO BE REPLACED by the shader generator's table (src/host/gfx/shaders/generated/
-// programs_webgpu.h) when it holds this program. It is the sprint 2 backend's own WGSL, moved
+// programs_webgpu.h) when it holds this program. It is the earlier backend's own WGSL, moved
 // behind the layer with its arithmetic unchanged, so that the pictures stay byte for byte what they
 // were (design/renderer-core.md, Migration, step 4):
 //
