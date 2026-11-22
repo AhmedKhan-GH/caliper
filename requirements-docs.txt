@@ -10,4 +10,4 @@ mkdocstrings-python==2.0.10
 griffelib==2.4.1
 mkdocs-autorefs==1.4.5
 ruff==0.17.3
-sternbild-docs @ git+https://github.com/AhmedKhan-GH/organization@docs-v1.0.0#subdirectory=packages/sternbild-docs
+sternbild-docs @ git+https://github.com/AhmedKhan-GH/organization@docs-v1.0.1#subdirectory=packages/sternbild-docs
