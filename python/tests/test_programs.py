@@ -267,14 +267,15 @@ def _bounds(cost_ms, late_ms, step_ms):
 
 def test_the_cadence_converges_on_a_gpu_bound_run(sim):
     # The GPU is the slower side: b is the GPU's step, and a pass costs its own time plus the time
-    # that the training thread needs to queue the next step, while the GPU idles. The mark after
-    # the pass is seen up to one step of the training thread late, thus D is at most 0.30 ms high.
+    # that the training thread needs to queue the next step, while the GPU idles. The middle mark of
+    # a cycle is seen up to one step of the training thread late, which makes D larger by up to
+    # twice that step: at most 0.60 ms here.
     s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=0.10e-3)
     s.train(3000)
     st = P.stats()
     assert st["step_ms"] == pytest.approx(0.42, rel=0.03)
-    assert 0.40 <= st["cost_ms"] <= 0.40 + 0.30
-    low, high = _bounds(0.40, 0.30, 0.42)            # 24 and 53
+    assert 0.40 <= st["cost_ms"] <= 0.40 + 0.60
+    low, high = _bounds(0.40, 0.60, 0.42)            # 24 and 75
     assert low <= st["every"] <= high
     assert st["overhead_share"] <= 0.04 * 1.05
     item = P.status()[0]
@@ -334,7 +335,7 @@ def test_the_cadence_follows_a_step_time_that_changes(sim):
     s.train(4000, first=3000)
     st = P.stats()
     assert st["step_ms"] == pytest.approx(0.84, rel=0.03)
-    low, high = _bounds(0.40, 0.30, 0.84)            # 12 and 27
+    low, high = _bounds(0.40, 0.60, 0.84)            # 12 and 38
     assert low <= st["every"] <= high and st["every"] < before
 
 
@@ -374,7 +375,7 @@ def test_a_pass_over_the_budget_at_the_ceiling_stops_the_programs(sim, monkeypat
     s.train(3000)
     item = P.status()[0]
     assert item["state"] == "stopped" and item["error"]["code"] == "program.over_budget"
-    assert re.search(r"more than the ceiling of 2[45] steps", item["error"]["message"])
+    assert re.search(r"more than the ceiling of 2[4-7] steps", item["error"]["message"])
     assert seen and seen[-1]["state"] == "stopped"
     assert not P.ACTIVE                              # training goes on without the program
     runs = s.ran

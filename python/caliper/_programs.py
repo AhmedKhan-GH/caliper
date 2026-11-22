@@ -95,16 +95,23 @@ class _Cadence:
     two looks, which is a step of the training thread, or a few microseconds while a pass waits.
     The controller then measures:
 
-    - the base step time ``b``: over each stretch of marks without a pass, from the first mark after
-      a pass to the mark before the next pass, the time per step; ``b`` is the median of the last
-      ``BASE_SAMPLES`` stretches, thus it follows a step time that changes;
-    - the overhead ``D`` of a pass at step ``k``: the time from the mark of ``k - 1`` to the mark of
-      ``k + 1`` minus ``2 * b``. Both ends are marks of steps without a pass, thus a wait that only
-      drains torch's queued work costs nothing here, and the GPU's idle time while the training
-      thread waits, runs the pass and queues the next step counts. When the training thread waits
-      at each step anyway, both ends are late by the same time; else only the end after the pass can
-      be late, thus ``D`` can come out larger than it is, never smaller. ``D`` is the median of the
-      last ``COST_SAMPLES`` passes, which ignores an outlier.
+    Each cycle runs from the mark before one pass, at step ``k - 1``, to the mark before the next
+    pass, at step ``k' - 1``. Its middle mark ``m`` is at ``max(k + 1, (k + k') // 2)``. Both
+    halves end at marks of steps without a pass, thus a wait that only drains torch's queued work
+    costs nothing here. The controller measures per cycle:
+
+    - the base step time ``b``: the time per step of the second half, from ``m`` to ``k' - 1``,
+      far from both passes; ``b`` is the median of the last ``BASE_SAMPLES`` cycles, thus it
+      follows a step time that changes;
+    - the overhead ``D`` of the pass at ``k``: the time of the first half, from ``k - 1`` to ``m``,
+      minus ``(m - k + 1) * b``. It counts the GPU's idle time while the training thread waits,
+      runs the pass, publishes and queues the next step, and the slower steps after a pass while
+      torch's queue fills again or the publish path works in its own thread. ``D`` is the median of
+      the last ``COST_SAMPLES`` cycles, which ignores a single slow pass.
+
+    When the training thread waits at each step anyway, all marks are late by the same time, and
+    the lateness cancels. Else a mark in the middle of a cycle can be late, which makes ``D``
+    larger and ``b`` smaller, thus ``D`` can come out larger than it is, but not smaller.
 
     After each new ``D`` it wants ``ceil(D / (SHARE * b))`` steps between passes, between
     ``N_MIN`` and the ceiling. N moves up as soon as it is below that value, by at most a factor
@@ -116,9 +123,9 @@ class _Cadence:
         self.reset()
 
     def reset(self) -> None:
-        self.done: dict = {}        # step -> completion time of its mark, for the last few marks
+        self.done: dict = {}        # step -> completion time of its mark, from the last cycle's start
         self.passes: set = set()    # the recent steps with a pass
-        self.start = None           # (step, time) of the first mark after the last pass
+        self.k = None               # the step of the last pass whose mark completed
         self.base = deque(maxlen=BASE_SAMPLES)
         self.cost = deque(maxlen=COST_SAMPLES)
         self.n = None               # N, None before the first measured overhead
@@ -128,12 +135,12 @@ class _Cadence:
         self.last_pass = None       # the step of the last pass
 
     def restart(self) -> None:
-        """Forget the marks and passes of the current windows, but keep ``b``, ``D``, N and the
-        step of the last pass: the script numbered its steps again, or the clock of the
-        completions changed."""
+        """Forget the marks and passes of the current cycle, but keep ``b``, ``D``, N and the step
+        of the last pass: the script numbered its steps again, or the clock of the completions
+        changed."""
         self.done = {}
         self.passes = set()
-        self.start = None
+        self.k = None
 
     def step_s(self):
         """The base step time ``b`` in seconds, or None before the first stretch."""
@@ -166,23 +173,28 @@ class _Cadence:
 
     def completed(self, step: int, t: float) -> None:
         """The mark of ``step`` completed at ``t``."""
-        self.done[step] = t
-        prev = self.done.get(step - 1)
-        if step in self.passes:
-            s = self.start
-            if s is not None and prev is not None and step - 1 not in self.passes and step - 1 > s[0]:
-                self.base.append((prev - s[1]) / (step - 1 - s[0]))
-            self.start = None
-        elif self.start is None or step - 1 in self.passes:
-            self.start = (step, t)
-        if step - 1 in self.passes and step not in self.passes and step - 2 not in self.passes:
-            before, b = self.done.get(step - 2), self.step_s()
-            if before is not None and b is not None:
-                self.cost.append(max(0.0, t - before - 2.0 * b))
-                self._update()
-        for k in [k for k in self.done if k < step - 2]:
-            del self.done[k]
-        self.passes = {k for k in self.passes if k >= step - 2}
+        done = self.done
+        done[step] = t
+        if step not in self.passes:
+            return
+        end = done.get(step - 1)                    # the mark before this pass closes a cycle
+        k = self.k
+        if end is not None and step - 1 not in self.passes:
+            if k is None:                           # the first cycle: no pass at its start
+                first = min(done)
+                if step - 1 > first:
+                    self.base.append((end - done[first]) / (step - 1 - first))
+            else:
+                m = max(k + 1, (k + step) // 2)
+                mid, start = done.get(m), done.get(k - 1)
+                if mid is not None and step - 1 > m:
+                    self.base.append((end - mid) / (step - 1 - m))
+                if mid is not None and start is not None and self.base:
+                    self.cost.append(max(0.0, mid - start - (m - k + 1) * self.step_s()))
+                    self._update()
+        self.k = step
+        self.done = {s: v for s, v in done.items() if s >= step - 1}
+        self.passes = {s for s in self.passes if s >= step - 1}
 
     def _update(self) -> None:
         b, d = self.step_s(), self.cost_s()
