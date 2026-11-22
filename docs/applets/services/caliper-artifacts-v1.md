@@ -1,6 +1,6 @@
 # caliper.artifacts.v1
 
-Service id `caliper.artifacts.v1` — content-addressed artifact store: deduplicated, lineage-tracked checkpoints and exports. This page embeds the header verbatim.
+Service id `caliper.artifacts.v1` is a content-addressed artifact store. It keeps deduplicated, lineage-tracked checkpoints and exports.
 
 ```c
 --8<-- "sdk/include/caliper/services/artifacts_v1.h"
@@ -8,66 +8,35 @@ Service id `caliper.artifacts.v1` — content-addressed artifact store: deduplic
 
 ## Semantics
 
-The idea is **MLflow's artifact store without the server**: checkpoints and
-exports keyed by their content, deduplicated on disk, and lineage-linked to the
-run that produced them. Three entry points, all callable from an applet **job
-thread**.
+The store keeps checkpoints and exports under a key that comes from their content. It deduplicates them on disk and links each one to the run that produced it. An applet calls all three entry points from a **job thread**.
 
-- **`put(name, bytes, len, run, out_digest)`** hashes the bytes with **sha256**,
-  writes the blob to a file named by that hash, and upserts an index row
-  `(digest, name, run, len, ts)`. It writes the **64 hex chars + NUL** of the
-  digest into `out_digest[65]` and returns `true`. The blob is
-  **content-addressed**: the digest is a pure function of the bytes, so identical
-  bytes always land at the same path.
-- **Dedup.** Storing the same bytes twice computes the same digest, sees the file
-  already on disk, and **skips the second write** — one file, not two. The index
-  row is still upserted, so the newer `(name, run, ts)` is recorded against the
-  same digest.
-- **Name → newest resolution.** A `name` is a mutable label, not a key: reusing a
-  name for new bytes adds a new row with a fresh `ts`. `path_of`/`exists` accept
-  **either** a digest **or** a name; a name resolves to the **newest** matching
-  row (`ORDER BY ts DESC LIMIT 1`). A digest resolves to exactly that blob.
-- **Run lineage.** The `run` argument links a blob to the `caliper.metrics.v1`
-  run that produced it (**`run = 0` means unlinked** — a standalone export with no
-  training provenance). The host can list a run's artifacts back (the
-  host's `by_run` query), so a checkpoint always knows which
-  run made it.
-- **Unknown is inert, never fatal.** An unknown digest or name returns
-  `false`/`nullptr` — never an exception across the C boundary. If the store
-  failed to open at host start-up, the service is still vended but every thunk
-  no-ops (`put` → `false`, `path_of` → `nullptr`, `exists` → `false`); the applet
-  degrades, it does not crash.
+- **`put(name, bytes, len, run, out_digest)`** hashes the bytes with **sha256** and stores the blob under that hash. It records the digest, `name`, `run`, `len` and a timestamp in the index. It writes the **64 hex chars + NUL** of the digest into `out_digest[65]` and returns `true`.
+- **`path_of`** returns the file path of a blob, or `nullptr` if the blob is unknown.
+- **`exists`** returns `true` if the blob is known.
+
+The digest is a pure function of the bytes, so identical bytes always land at the same path.
+
+**Deduplication.** If an applet stores the same bytes twice, the second `put` finds the file on disk and **skips the write**. The store keeps one file, not two. The index still records the newer `(name, run, ts)` against the same digest.
+
+**Name Resolution.** A `name` is a mutable label, not a key. If an applet reuses a name for new bytes, the store adds a new row with a fresh `ts`. `path_of` and `exists` accept **either** a digest **or** a name. A name resolves to the **newest** row with that name, and a digest resolves to exactly that blob.
+
+**Run Lineage.** The `run` argument links a blob to the `caliper.metrics.v1` run that produced it. The value `run = 0` means the blob is unlinked, for example a standalone export. The host can list the artifacts of a run with its `by_run` query, so a checkpoint always knows which run made it.
+
+**Unknown Values.** An unknown digest or name returns `false` or `nullptr`. No exception crosses the C boundary. If the store fails to open at host start-up, the host still vends the service, but every call does nothing: `put` returns `false`, `path_of` returns `nullptr` and `exists` returns `false`. The applet degrades and does not crash.
 
 ### Threading and String Lifetime
 
-Every method is host-**serialized** internally (one mutex over one DuckDB
-connection, the same sanctioned model as [MetricsStore](caliper-metrics-v1.md#thread-callability)),
-so job threads calling `put` concurrently are safe. The store is destroyed
-*after* the host joins its job threads, so a `put` in the last instant before a
-cancel lands cannot fault — for a job that honours cancel; the join gives up
-after 5 s (see [`caliper.jobs.v1`](caliper-jobs-v1.md)).
+The host serializes every method internally, in the same way as [MetricsStore](caliper-metrics-v1.md#thread-callability). Job threads can thus call `put` concurrently. The host destroys the store after it joins its job threads, so a `put` just before a cancel cannot fault. This holds for a job that honors cancel, and the join gives up after 5 s (see [`caliper.jobs.v1`](caliper-jobs-v1.md)).
 
-The artifacts index (`artifacts.duckdb`) opens with its own DuckDB thread count
-and memory limit, sized from the machine's RAM and cores. Override them with
-`CALIPER_DUCKDB_ARTIFACTS_THREADS` and `CALIPER_DUCKDB_ARTIFACTS_MEMORY_LIMIT`,
-or the all-stores `CALIPER_DUCKDB_THREADS` and `CALIPER_DUCKDB_MEMORY_LIMIT`.
-The defaults and the precedence are in
-[`caliper.data.v1`: Resource limits](caliper-data-v1.md#resource-limits).
+The artifacts index opens with its own DuckDB thread count and memory limit. Set them with `CALIPER_DUCKDB_ARTIFACTS_THREADS` and `CALIPER_DUCKDB_ARTIFACTS_MEMORY_LIMIT`, or set both for all stores with `CALIPER_DUCKDB_THREADS` and `CALIPER_DUCKDB_MEMORY_LIMIT`. The defaults and the precedence are in [`caliper.data.v1`: Resource limits](caliper-data-v1.md#resource-limits).
 
 !!! warning "`path_of` returns a host-owned string, valid only until your next call"
-    The `const char*` from `path_of` points at **host-owned** backing storage,
-    documented **valid until the next `artifacts.v1` call**. Copy it into a
-    `std::string` immediately if you will call the service again before using it.
-    The host backs this with **thread-local** storage, so two threads each calling
-    `path_of` get independent buffers and cannot stomp each other's result — but
-    a *second* call **on the same thread** still overwrites the first. Resolve
-    `path_of` on the frame thread and hand the *copied* path to the worker to
-    sidestep the race entirely.
+    The `const char*` from `path_of` points at host-owned storage. It stays valid until the next `artifacts.v1` call. Copy it into a `std::string` at once if you call the service again before you use it.
+    The host keeps this storage per thread, so two threads that call `path_of` get independent buffers. A second call on the same thread still overwrites the first. To avoid the problem, resolve `path_of` on the frame thread and give the copied path to the worker.
 
 ### C++ Sugar
 
-The [`caliper::Artifacts`](../cpp-sugar.md) wrapper is falsy-inert when the service is
-absent (every call no-ops) and hides the `out_digest` buffer:
+The [`caliper::Artifacts`](../cpp-sugar.md) wrapper does nothing and tests false when the service is absent. It also hides the `out_digest` buffer.
 
 ```cpp
 caliper::Artifacts art(host);           // falsy if the host doesn't vend it

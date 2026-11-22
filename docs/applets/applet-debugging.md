@@ -1,19 +1,21 @@
 # Applet Debugging
 
-An applet is a shared library the host loads at runtime, so you don't debug it as
-its own program — you attach a debugger to the running **`caliper`** host. The
-dylib carries your own symbols (built `Debug`, they're right there), so once
-attached you get full source-level stepping, breakpoints, and variable
-inspection inside `on_init` / `on_frame` / `on_cleanup`.
+An applet is a shared library that the host loads at runtime. Thus you attach a debugger to the running **`caliper`** host. A `Debug` build of the dylib carries your symbols, so you get source-level stepping and breakpoints inside `on_init`, `on_frame` and `on_cleanup`.
+
+```mermaid
+flowchart LR
+    build["Debug build"] -->|"caliper dev"| host["Running host"]
+    host -->|"attach"| dbg["Debugger"]
+    dbg -->|"open applet"| bp["Breakpoints bind"]
+```
+
+Breakpoints in the applet bind only after you open the applet, because the host loads it after startup.
 
 ## Debugger Attachment
 
-Build both the host and your applet with debug info, then launch and attach.
-The host builds with the `debug` preset in your Caliper checkout, and the
-applet builds in its own folder against the installed SDK, as in
-[Your first applet](first-applet.md#build), with
-`-DCMAKE_BUILD_TYPE=Debug`. Start the host with `caliper dev` and the applet's
-build folder, so that it loads your debug build first.
+Build both the host and your applet with debug info. The host builds with the `debug` preset in your Caliper checkout. The applet builds in its own folder against the installed SDK with `-DCMAKE_BUILD_TYPE=Debug`, as in [Your first applet](first-applet.md#build). Start the host with `caliper dev` and the applet's build folder, so that it loads your debug build first.
+
+Attach to the running process and do not launch the host under the debugger. Then you skip the host's boot.
 
 **LLDB (command line)**
 
@@ -23,9 +25,7 @@ cmake --preset debug && cmake --build --preset debug      # in the Caliper check
 lldb -p "$(pgrep -f 'cmake-build-debug/caliper')"
 ```
 
-At the `(lldb)` prompt set a breakpoint by symbol or file:line and continue —
-your applet's translation unit is visible even though it lives in a separate
-dylib:
+At the `(lldb)` prompt, set a breakpoint by symbol or by file and line, then continue.
 
 ```
 (lldb) breakpoint set --name HelloApplet::on_frame
@@ -35,22 +35,11 @@ dylib:
 
 **CLion**
 
-Use **Run ▸ Attach to Process…**, filter for `caliper`, and pick the running
-host. Set breakpoints in your applet source as usual. Because the applet dylib is
-loaded lazily when you launch the applet from the landing screen, a breakpoint in
-`on_frame` won't bind until the applet is opened in the app — CLion resolves it
-the moment the dylib is mapped in, which is expected. Breakpoints in `on_init`
-bind at open time; to catch very early setup, break in `on_init` and step from
-there.
-
-Because the host loads the dylib after startup, prefer *attaching to the running
-process* over launching the host under the debugger — the symbols resolve when
-the applet is opened, and you avoid stepping through the host's whole boot.
+Use **Run ▸ Attach to Process…**, filter for `caliper`, and pick the running host. Set breakpoints in your applet source as usual. A breakpoint in `on_frame` does not bind until you open the applet from the landing screen. CLion then resolves it when the dylib is mapped in. Breakpoints in `on_init` bind at open time. To catch very early setup, break in `on_init` and step from there.
 
 ## Host Logging
 
-Do **not** use `printf`/`std::cout` for diagnostics. Log through the
-`caliper.log.v1` service, which the sugar layer exposes on your `Host`:
+Do **not** use `printf` or `std::cout` for diagnostics. Log through the `caliper.log.v1` service, which the sugar layer exposes on your `Host`:
 
 ```cpp
 bool on_init(caliper::Host& host) override {
@@ -60,124 +49,54 @@ bool on_init(caliper::Host& host) override {
 }
 ```
 
-Host logging is unified: messages go to the same sink as the host's own
-diagnostics (the console the host is launched from, and the dev-mode tail), they
-carry the applet's identity, and they keep working when your dylib's stdio is not
-wired to a terminal — which it often isn't once the app is bundled. The raw
-service is `caliper.log.v1` (declare it in your manifest's `required` list, as the
-hello applet does); the sugar `host.log_info` / `host.log_error` are thin
-wrappers over it.
+Host logging goes to the same sink as the host's own diagnostics, which are the launch console and the dev-mode tail. Each message carries the applet's identity. Logging keeps working when the dylib's stdio has no terminal, as in a bundled app. Declare `caliper.log.v1` in the `required` list of your manifest, as the hello applet does.
 
-When the loader turns an applet away, the diagnostic is on the **landing
-screen**, not in the console. The applet's row in the Instruments pane shows its
-status (`REFUSED`, `FAILED` or `QUARANTINED`), and with the row selected the
-Inspector shows the contractual reason under Status and beside the disabled
-`⏎ Launch` button (see [refusals](../reference/refusal-messages.md)) — a missing or
-malformed manifest, an `id`/`version` that disagrees with the descriptor, an
-unmet required service, or an ABI-epoch mismatch. The same rows name the fault
-for applets that crashed and were quarantined, and the Activity pane logs each
-`launch failed` and `quarantined` event with the applet's name. If an applet
-doesn't appear at all, run `caliper check` on the folder you loaded it from: it
-lists every manifest it finds there, with the status and reason the host would
-give, without opening a window ([Caliper CLI](../reference/cli.md#caliper-check)).
+When the loader turns an applet away, the diagnostic is on the **landing screen** and not in the console. The applet's row in the Instruments pane shows its status: `REFUSED`, `FAILED` or `QUARANTINED`. When you select the row, the Inspector shows the reason under Status and beside the disabled `⏎ Launch` button (see [refusals](../reference/refusal-messages.md)). The reason is one of these:
 
-A background job that faults or throws prints one line on the host's stderr,
-`[jobs] job #3 "train" failed: SIGSEGV (invalid memory access)`, and the jobs
-tray marks it `FAILED` with the reason until you press `clear finished`, even
-after the host has gone Home. Activity logs it as a `job failed` row. If the job
-was submitted from one of the applet's entry points, the applet is quarantined
-as well: Activity's next row is `quarantined`, and the status reads
-`crashed in background job "train": <reason>` (see
-[`caliper.jobs.v1`](services/caliper-jobs-v1.md)).
+- A missing or malformed manifest
+- An `id` or `version` that disagrees with the descriptor
+- An unmet required service
+- An ABI-epoch mismatch
 
-When a fault interrupts the applet's UI code, the host unwinds whatever the
-applet left open and prints what it closed, e.g.
-`[ui] unwound after an applet fault: Missing End() x2, ImPlot: missing EndPlot()`.
-That line tells you how far the frame got before the fault.
+The same rows name the fault for applets that crashed and were quarantined. The Activity pane logs each `launch failed` and `quarantined` event with the applet's name. If an applet does not appear at all, run `caliper check` on its folder. It lists every manifest there, with the status and reason the host would give, and opens no window ([Caliper CLI](../reference/cli.md#caliper-check)).
 
-**Trying again.** If the fault was a C++ exception, select the applet and press
-`⌘R Restart` in the Inspector: the host releases the old instance and launches a
-fresh one without restarting Caliper. Restart reuses the library already loaded,
-so it re-runs the same code; it is for checking that the applet recovers, not
-for loading a fix. To run a rebuilt dylib, and after any signal (the Inspector
-then says `restart Caliper to reload`), quit and start Caliper again.
+A background job that faults or throws prints one line on the host's stderr, for example `[jobs] job #3 "train" failed: SIGSEGV (invalid memory access)`. The jobs tray marks the job `FAILED` with the reason until you press `clear finished`. Activity logs a `job failed` row. If an entry point of the applet submitted the job, the host also quarantines the applet, and the status reads `crashed in background job "train": <reason>` (see [`caliper.jobs.v1`](services/caliper-jobs-v1.md)).
+
+When a fault interrupts the applet's UI code, the host unwinds whatever the applet left open and prints what it closed, for example `[ui] unwound after an applet fault: Missing End() x2, ImPlot: missing EndPlot()`. That line shows how far the frame got before the fault.
+
+**Trying again.** If the fault was a C++ exception, select the applet and press `⌘R Restart` in the Inspector. The host releases the old instance and launches a fresh one. Restart reuses the loaded library, so it runs the same code. Use it to check that the applet recovers, not to load a fix. To run a rebuilt dylib, quit and start Caliper again. Do the same after any signal, when the Inspector says `restart Caliper to reload`.
 
 ## Data Location
 
-The host hands you a writable directory via `host.data_dir()`, and that is the
-**only** place an applet should read or write files — never build your own paths
-or drop dotfiles in `$HOME`. It is `data/<id>/` under the app-data root, named
-by the applet's manifest id, so two applets never collide:
+The host gives you a writable directory through `host.data_dir()`. It is the **only** place an applet reads or writes files. Never build your own paths or put dotfiles in `$HOME`. The directory is `data/<id>/` under the app-data root, named by the manifest id, so two applets never collide. The app-data root is:
 
 - **macOS:** `~/Library/Application Support/Caliper/`
-- **Linux:** `$XDG_DATA_HOME/caliper/` (or `~/.local/share/caliper/`; the folder name is lowercase)
+- **Linux:** `$XDG_DATA_HOME/caliper/`, or `~/.local/share/caliper/` (the folder name is lowercase)
 - **Windows:** `%APPDATA%/Caliper/`
 
-`CALIPER_DATA_DIR` moves the whole root, and every applet's data folder with
-it: with `CALIPER_DATA_DIR=/tmp/caliper-try`, an applet with the id
-`com.example.viewer` gets `/tmp/caliper-try/data/com.example.viewer/`. That is
-a quick way to run an applet against an empty data folder without touching the
-real one. `caliper shot` uses a temporary root of its own unless
-`CALIPER_DATA_DIR` is set; see [Caliper CLI](../reference/cli.md#caliper-shot).
+`CALIPER_DATA_DIR` moves the whole root. With `CALIPER_DATA_DIR=/tmp/caliper-try`, an applet with the id `com.example.viewer` gets `/tmp/caliper-try/data/com.example.viewer/`. Use this to run an applet against an empty data folder. `caliper shot` uses a temporary root of its own unless `CALIPER_DATA_DIR` is set (see [Caliper CLI](../reference/cli.md#caliper-shot)).
 
-The host also keeps `.caliper-data.toml` there for an applet that declares a data
-schema; leave that file alone. For example, an applet can build `data_dir() + "/settings.txt"` and
-persist a single value across relaunches. (The `signal_scope` applet in
-`applets/legacy-dev/` does this, but it is archived and the default build does
-not compile it.)
+An applet can build `data_dir() + "/settings.txt"` and keep a value across relaunches. The host also keeps `.caliper-data.toml` there for an applet that declares a data schema. Leave that file alone.
 
-When a stored file looks wrong, inspect it directly on disk under that root
-(it's plain files, not a database), delete it to reset to defaults, and relaunch.
+The stored files are plain files and not a database. When one looks wrong, inspect it on disk. To reset to defaults, delete it and relaunch.
 
 ## Frame Stall Diagnosis
 
-A window that runs at 2 fps while the applet "does nothing" is a frame-thread
-stall. Start with what the host already tells you, then narrow the cause with
-timers, working from the outside in.
+A window that runs at 2 fps while the applet does nothing has a frame-thread stall. Start with what the host tells you. Then narrow the cause with timers, from the outside in.
 
-**The frame watchdog.** The host times the applet's `on_frame` call. When it
-exceeds about 250 ms for three consecutive frames, the menu bar shows
-`slow: long work belongs in background jobs` and the flag stays until the applet
-is relaunched (see [the trust model](trust-model.md#frame-watchdog)).
-The watchdog times only `on_frame`. A stall in rendering, in presenting or in a
-different thread's contention with the frame thread does not raise it, so a
-frame that feels slow with no flag raised points away from your frame function.
+**The frame watchdog.** The host times the `on_frame` call of the applet. When it exceeds about 250 ms for three consecutive frames, the menu bar shows `slow: long work belongs in background jobs`. The flag stays until you relaunch the applet (see [the trust model](trust-model.md#frame-watchdog)). The watchdog times only `on_frame`. A stall in rendering, in presenting, or in contention with another thread does not raise it. Thus a slow frame with no flag points away from your frame function.
 
-**The probe ladder.** Add temporary timers and log the result through
-`caliper.log.v1`. Go down one rung at a time, because a timer on a lower rung
-cannot see time spent on a higher one:
+**The probe ladder.** Add temporary timers and log the result through `caliper.log.v1`. Go down one rung at a time, because a timer on a lower rung cannot see time spent on a higher one:
 
-1. **The frame gap around rendering.** Compare the time between two consecutive
-   frames with the time spent inside your `on_frame`. If the gap is long and
-   `on_frame` is short, the time is spent outside your code, in the host's
-   render or present step or waiting on a lock your frame thread shares with a
-   worker.
-2. **The loop phases.** Time each phase of the host's frame loop separately:
-   event polling, the applet frame, the UI draw, the render and the present. This
-   names the phase that owns the gap.
-3. **The applet's draw phases.** If the applet frame owns the time, time each
-   window's drawing block, each texture update and each service call inside
-   `on_frame`.
+1. **The frame gap around rendering.** Compare the time between two consecutive frames with the time inside your `on_frame`. If the gap is long and `on_frame` is short, the time goes to the render or present step of the host, or to a wait on a lock that a worker shares with your frame thread.
+2. **The loop phases.** Time each phase of the host's frame loop: event polling, the applet frame, the UI draw, the render and the present. This names the phase that owns the gap.
+3. **The applet's draw phases.** If the applet frame owns the time, time each window's drawing block, each texture update and each service call inside `on_frame`.
 
-Timers inside the applet alone mislead. They show the applet as innocent when the
-cost is in the host, and they show a long `on_frame` without saying which call
-inside it blocked.
+Timers inside the applet alone mislead. They hide a cost in the host and do not name the call that blocked.
 
-**The usual cause is I/O on the frame thread.** The rule is that the frame thread
-does no I/O: no file access, no network call, no SQL query and no store call
-([The frame loop](../introduction/architecture.md#frame-loop)). The cost of that work
-differs by platform and by session age, so it can look fine on one machine and
-freeze the window on another. EmbedScope froze at about 2 fps on Windows because
-it rebuilt a table in the on-disk data store on the frame thread twice a second,
-and each rebuild took longer than the last. The fixes that apply to any applet:
+**The usual cause is I/O on the frame thread.** The frame thread does no I/O: no file access, no network call, no SQL query and no store call ([The frame loop](../introduction/architecture.md#frame-loop)). The cost of that work differs by platform and by session age, so it can freeze the window on one machine only. These fixes apply to any applet:
 
-- Run the work on a thread the applet owns, or in a job for work the user cares
-  about, and publish the result to the frame thread under a lock with a
-  generation counter.
-- Build tables for live visualization as `TEMP` tables, which live in memory and
-  do not write to the store's log. See
-  [`caliper.data.v1`](services/caliper-data-v1.md#persistence-and-rebuilds).
-- Create a texture once and call `update_texture` afterwards. On Vulkan with CUDA
-  a create costs several times an update, so releasing and re-creating a texture
-  every refresh is a frame-thread cost.
+- Run the work on a thread the applet owns, or in a job for work the user cares about. Publish the result to the frame thread under a lock with a generation counter.
+- Build tables for live visualization as `TEMP` tables. They live in memory and do not write to the store's log (see [`caliper.data.v1`](services/caliper-data-v1.md#persistence-and-rebuilds)).
+- Create a texture once and call `update_texture` afterward. On Vulkan with CUDA, a create costs more than an update, so a release and re-create at every refresh is a frame-thread cost.
 - Run expensive probes only while the window that shows them is open.

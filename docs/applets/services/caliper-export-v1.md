@@ -1,43 +1,20 @@
 # caliper.export.v1 and v1_1
 
-Service id `caliper.export.v1`, and its additive revision `caliper.export.v1_1`,
-which adds `last_error()` (see [below](#caliperexportv1_1-error-reporting)). Export
-re-renders a submitted draw list **offscreen** at any requested resolution and
-writes a pixel-exact PNG next to a JSON **provenance sidecar**: 4K figures and
-numbered frame sequences from a live session, deterministic and stamped. It
-composes pieces that already exist and are byte-exact tested, and adds no new
-render code. This page embeds the headers verbatim; the docs build fails if an
-embedded file moves.
+Service id `caliper.export.v1` has an additive revision, `caliper.export.v1_1`. The revision adds `last_error()` (see [Error Reporting](#caliperexportv1_1-error-reporting)). Export re-renders a submitted draw list **offscreen** at any requested resolution. It writes a pixel-exact PNG next to a JSON **provenance sidecar**. Use it for 4K figures and numbered frame sequences from a live session. The output is deterministic and stamped. Export adds no new render code.
 
 ## Terminal Sink
 
-Export is the one place where pixels leave the one-way data flow described in
-[Platform rules](../../introduction/architecture.md#design-decisions). The readback it performs feeds a
-file on disk, and nothing returns to compute: no export call hands pixels, a
-texture or a tensor back to the applet. Caliper exports **pixel-exact view
-images plus a sidecar** and does not compose figures. Axes, captions, typography
-and subfigure layout belong to the paper toolchain (matplotlib, TikZ) that
-consumes these PNGs. The claim that the pixels are the tensors survives export
-bit for bit; a typography engine would add scope and no claim.
+Export is the one place where pixels leave the one-way data flow described in [Platform rules](../../introduction/architecture.md#design-decisions). The readback feeds a file on disk, and nothing returns to compute. No export call hands pixels, a texture or a tensor back to the applet.
+
+Caliper exports **pixel-exact view images plus a sidecar**. It does not compose figures. Axes, captions, typography and subfigure layout belong to the paper toolchain (matplotlib, TikZ) that consumes the PNGs.
 
 ## Platform Behaviour
 
-Export runs on macOS with Metal and on Windows with Vulkan. On both, a known flat
-quad exports and decodes back to the CPU reference pixels, a second export of the
-same view is byte-identical, and a refused export leaves the disk unchanged. A
-sequence finalizes with its sidecar, and a sequence cut short by a killed process
-still finalizes with the honest partial frame count.
+Export runs on macOS with Metal and on Windows with Vulkan. On both platforms, a known flat quad exports and decodes back to the CPU reference pixels. A second export of the same view is byte-identical. A refused export leaves the disk unchanged. If a process is killed during a sequence, the sequence still finalizes with the true partial frame count.
 
-On Windows the filesystem behaviour is verified on NTFS: `std::filesystem::rename`
-atomically replaces an existing target, a target held open without
-`FILE_SHARE_DELETE` makes the rename fail cleanly (the export is refused, the
-temp file is removed and the original is byte-identical), and a sidecar-write
-failure rolls the PNG back rather than orphaning it.
+On Windows, a rename atomically replaces an existing target on NTFS. If another process holds the target open without `FILE_SHARE_DELETE`, the rename fails cleanly. Then export is refused and the original stays byte-identical. If the sidecar write fails, export rolls the PNG back.
 
-When the geometry primitives capability is absent (headless, or a host without
-the renderer path) the export capability bit is unset and **every entry point is
-inert**: no file is written. This is the
-[fallback rule](../../introduction/architecture.md#design-decisions) at work, not a bug.
+When the geometry primitives capability is absent (headless, or a host without the renderer path), the export capability bit is unset and **every entry point is inert**. No file is written. This is the [fallback rule](../../introduction/architecture.md#design-decisions) at work and not a bug.
 
 ```c
 --8<-- "sdk/include/caliper/services/export_v1.h"
@@ -45,48 +22,27 @@ inert**: no file is written. This is the
 
 ## Draw Path Reuse
 
-Export is a **veneer** over the geometry draw path, not a second renderer. Each
-call:
+Export is a **veneer** over the geometry draw path and not a second renderer. Each call does these steps:
 
-1. `create_view_ex(w, h, CALIPER_GEOM_VIEW_DEPTH)` — a fresh offscreen target at
-   the requested resolution (the geometry pipeline is resolution-independent, so
-   a 4K figure from a live session costs only pixels);
-2. the **existing** `draw_primitives` path over the submitted v1_3 draws — every
-   gate, every reason string, every byte-exact behavior reused **verbatim** (it
-   *is* `draw_primitives`);
-3. `debug_readback_rgba8` — the tightly-packed RGBA8 readback implemented on
-   **both** backends since the v1_3 pass, promoted from test-only to the export
-   path;
-4. PNG encode (`stb_image_write`, vendored and pinned) + the sidecar JSON;
-5. destroy the temp view.
+1. `create_view_ex(w, h, CALIPER_GEOM_VIEW_DEPTH)` creates a fresh offscreen target at the requested resolution. The geometry pipeline is resolution-independent, so a 4K figure costs only pixels.
+2. The existing `draw_primitives` path runs over the submitted v1_3 draws. Every gate, reason string and byte-exact behavior is the same as in `draw_primitives`.
+3. `debug_readback_rgba8` reads back tightly packed RGBA8 pixels on both backends.
+4. The PNG encoder and the sidecar writer produce the files.
+5. The temporary view is destroyed.
 
-No retained draw state. The draw arrays are the **same** immediate-mode arrays
-the applet draws with (v1_3 records, stride-widened exactly like
-`caliper.geometry.v1_3` — the `caliper::Export` sugar mirrors
-`caliper::Geometry`'s v1.1/v1.2/v1.3 overload set and passes `sizeof` for you).
-Because export re-renders through the geometry cap, it **degrades in lockstep**
-with it: `caps()` bit 0 (`CALIPER_EXPORT_CAP_VIEW_PNG`) is set **iff**
-`CALIPER_GEOM_CAP_PRIMITIVES` is live on this host.
+Export keeps no draw state. The draw arrays are the same immediate-mode v1_3 arrays the applet draws with, stride-widened as in `caliper.geometry.v1_3`. The `caliper::Export` sugar mirrors the overload set of `caliper::Geometry` and passes `sizeof` for you.
+
+Export re-renders through the geometry capability, so it degrades with it. `caps()` bit 0 (`CALIPER_EXPORT_CAP_VIEW_PNG`) is set if and only if `CALIPER_GEOM_CAP_PRIMITIVES` is live on this host.
 
 ## Frame Thread Only
 
-Every entry point composes the **frame-thread-owned** renderer, so export
-carries the same rule as [`caliper.geometry.v1`](caliper-geometry-v1.md): call it from
-the `caliper_core_frame()` thread only. Calling from any other thread races the
-renderer's texture/geometry maps. The sequence bookkeeping (one sequence live at
-a time in v0) is guarded by a mutex, but that mutex serializes **bookkeeping
-only** — it does **not** make export safe against a renderer running on another
-thread. MeshScope and TwinScope capture **inline on the frame thread** for exactly this
-reason: they snapshot the worker-published slot under the usual mutex, then
-export from the same arrays they draw, on the same thread they draw on. (A truly
-background export would need a serialization mutex around the renderer's shared
-maps, which the host does not provide.)
+Every entry point uses the renderer that the frame thread owns. Export carries the same rule as [`caliper.geometry.v1`](caliper-geometry-v1.md): call it from the `caliper_core_frame()` thread only. A call from any other thread races the texture and geometry maps of the renderer.
+
+One sequence can be live at a time in v0. A mutex guards the sequence bookkeeping, but it does not make export safe against a renderer on another thread. For this reason, MeshScope and TwinScope capture inline on the frame thread. They snapshot the worker-published slot under the usual mutex, then export from the same arrays they draw. A background export is not possible, because the host provides no lock around the shared renderer maps.
 
 ## Sidecar File
 
-Every export writes `<path>.json` next to the PNG (for a sequence, one
-`sequence.json` for the whole run). It carries the provenance that makes a PNG
-**research-grade** rather than a screenshot:
+Every export writes `<path>.json` next to the PNG. A sequence writes one `sequence.json` for the whole run. The sidecar carries the provenance that makes a PNG **research-grade** and not a screenshot:
 
 ```json
 {
@@ -100,91 +56,59 @@ Every export writes `<path>.json` next to the PNG (for a sequence, one
 }
 ```
 
-`git_commit` is compiled in at configure time (the same mechanism that plumbs
-the version string). `state` is the caller's own JSON, copied **verbatim** (step,
-seed, hparams — whatever the applet chooses) or `null`. A sequence sidecar adds
-`frame_count`. This is the export rule:
-**a figure without its sidecar is a screenshot; Caliper exports figures.**
+The `state` field is the caller's own JSON, copied **verbatim**, or `null`. A sequence sidecar adds `frame_count`. The export rule is this: **a figure without its sidecar is a screenshot, and Caliper exports figures.**
 
-A sequence's `sequence.json` is written by `end_sequence()`. If that write
-fails, the frames already written are kept, the handle is finalized anyway (so
-the next sequence can begin), and the host logs an ERROR through
-`caliper.log.v1` naming the file, the frame count and the reason:
+`end_sequence()` writes `sequence.json`. If that write fails, the frames already written are kept. The handle is finalized anyway, so the next sequence can begin. The host logs an ERROR through `caliper.log.v1` that names the file, the frame count and the reason:
 
 ```
 [export] sequence sidecar write failed: clip_dir/sequence.json (300 frame(s) kept, provenance missing): <reason>
 ```
 
-`end_sequence()` returns nothing in v1, so this log line is all a v1 applet
-gets; [`caliper.export.v1_1`](#caliperexportv1_1-error-reporting)'s `last_error()`
-reports the same text to the applet.
+In v1, `end_sequence()` returns nothing, so this log line is all a v1 applet gets. The `last_error()` function of [`caliper.export.v1_1`](#caliperexportv1_1-error-reporting) reports the same text to the applet.
 
 ## Filesystem Refusal Purity
 
-A refused export returns `0` and leaves the disk **exactly as it was** — no file
-created, no pre-existing file truncated, and a **previous export at the same path
-kept**. `view_png` commits the PNG and its sidecar as a pair:
+A refused export returns `0` and leaves the disk **exactly as it was**. It creates no file and truncates no existing file. A **previous export at the same path is kept**. The `view_png` function commits the PNG and its sidecar as a pair:
 
-1. Both are written to sibling temp files (`<path>.caliper_tmp`,
-   `<path>.json.caliper_tmp`). A failure here has touched nothing you can see.
-2. A previous PNG at `<path>` is set aside as `<path>.caliper_bak`.
-3. The new PNG is renamed onto `<path>`, then the sidecar onto `<path>.json`.
-4. The backup is removed.
+1. Export writes both files to sibling temp files, `<path>.caliper_tmp` and `<path>.json.caliper_tmp`. A failure here has touched nothing you can see.
+2. Export sets aside a previous PNG at `<path>` as `<path>.caliper_bak`.
+3. Export renames the new PNG onto `<path>`, then the sidecar onto `<path>.json`.
+4. Export removes the backup.
 
-If any step after the first fails, the previous PNG is put back (or the new PNG
-is removed when there was none) and the temp files are removed, so a PNG never
-lands without its sidecar and a good earlier figure is never lost to a failed
-new one. If putting it back fails as well, the previous PNG is left intact at
-`<path>.caliper_bak`. A `path` that is a directory is refused before anything
-moves.
+If any step after the first fails, export puts the previous PNG back. If there was no previous PNG, it removes the new one. It also removes the temp files. As a result, a PNG never lands without its sidecar, and a failed new figure never destroys a good earlier one. If the put-back fails too, the previous PNG stays intact at `<path>.caliper_bak`. A `path` that is a directory is refused before anything moves.
 
-Export refuses for the same
-reasons `draw_primitives` does — missing gate/renderer, `cam == NULL`, `w`/`h` of
-`0` or `> CALIPER_EXPORT_MAX_DIM` (16384), an unwritable path, a readback
-failure, or any draw the geometry gate battery rejects — with the **same reason
-strings**. (The atomic-rename-over-existing-file guarantee is verified on POSIX
-**and on NTFS**, including the held-open-handle refusal; see platform behaviour
-above. The pair commit with its `.caliper_bak` backup is tested on macOS.)
+Export refuses for the same reasons as `draw_primitives`, with the **same reason strings**:
+
+- A missing gate or renderer.
+- `cam == NULL`.
+- A `w` or `h` of `0`, or above `CALIPER_EXPORT_MAX_DIM` (16384).
+- An unwritable path.
+- A readback failure.
+- Any draw that the geometry gate battery rejects.
 
 ## Determinism Contract
 
-Same draws + camera + clear + `(w, h)` on the **same backend** → a
-**byte-identical PNG** across calls. The readback is deterministic (the entire
-byte-exact test matrix is built on it) and `stb_image_write` is deterministic, so
-this is pinned by a test that exports twice and `memcmp`s the files. **Cross-**
-backend is **not** byte-identical — the Lambert ±2-LSB tolerance that the
-geometry contract carries survives into the pixels — and the sidecar's `backend`
-field makes that honest rather than silent. Determinism is the byte-exact
-discipline extended one step to disk, scoped exactly where the instrument can
-back it.
+The same draws, camera, clear color and `(w, h)` on the **same backend** give a **byte-identical PNG** across calls. Both the readback and the PNG encoder are deterministic.
+
+Output across backends is **not** byte-identical. The Lambert ±2-LSB tolerance of the geometry contract carries into the pixels. The `backend` field of the sidecar records which backend produced the file.
 
 ## Video Assembly
 
-Export writes numbered frames (`<dir>/frame_%06u.png`) and one sequence sidecar;
-it does **not** encode video (no in-process codecs). Assemble the frames with one
-documented ffmpeg line:
+Export writes numbered frames (`<dir>/frame_%06u.png`) and one sequence sidecar. It does **not** encode video, because it has no in-process codecs. Assemble the frames with this ffmpeg line:
 
 ```sh
 ffmpeg -framerate 30 -i frame_%06d.png -pix_fmt yuv420p out.mp4
 ```
 
-A 300-frame sequence at 30 fps becomes a 10 s clip this way.
+A 300-frame sequence at 30 fps becomes a 10 s clip.
 
 ## Non-Exportable Panes
 
-ImPlot chart panes (strip charts, metrics plots) are **ImGui chrome, not
-exportable views** — they are not tensors re-rendered offscreen, so export does
-not touch them. Their paper path is the one that already ships: the numbers go to
-**SQL via [`caliper.metrics.v1_1`](caliper-metrics-v1.md)** and into matplotlib
-downstream. Export is for the 3-D views whose pixels *are* the tensors; charts
-are for the metrics surface. 
+ImPlot chart panes (strip charts, metrics plots) are **ImGui chrome and not exportable views**. They are not tensors re-rendered offscreen, so export does not touch them. Their paper path is **SQL via [`caliper.metrics.v1_1`](caliper-metrics-v1.md)**, and then matplotlib downstream. Export is for the 3-D views whose pixels *are* the tensors.
 
 ## Figure and Clip Example
 
-Modelled on the MeshScope and TwinScope export buttons.
-The applet already draws its 3-D view every frame from worker-published,
-mutex-snapshotted slot tensors; export reuses **those same arrays**, on the frame
-thread:
+The MeshScope and TwinScope export buttons work this way. The applet already draws its 3-D view every frame from worker-published, mutex-snapshotted slot tensors. Export reuses **those same arrays** on the frame thread:
 
 ```cpp
 caliper::Export xport(host);          // falsy when the host vends no export path
@@ -202,36 +126,21 @@ if (xport.has_view_png()) {           // caps bit 0, tied to geometry primitives
 }
 ```
 
-Then assemble the clip with the ffmpeg line above. Because capture re-renders and
-reads back each frame inline, a long high-resolution record paces the UI while it
-runs — the exemplars show a live "Recording N/300" counter; the produced clip is
-correct real-time regardless.
+Then assemble the clip with the ffmpeg line above. Capture re-renders and reads back each frame inline. As a result, a long high-resolution record paces the UI while it runs, but the produced clip is correct in real time.
 
 ## `caliper.export.v1_1` Error Reporting
 
-An additive revision under the same discipline as `caliper.metrics.v1_1` and
-the [bridge revisions](caliper-tensor-bridge-v1.md#additive-revisions):
-`CaliperExportV1_1` repeats the v1 table byte for
-byte, `reserved0` included and still `NULL`, and appends one entry,
-`last_error()`. There is no ABI epoch bump. `caliper.export.v1` is still vended,
-unchanged, so a v1 applet keeps getting the v1 table and the v1 behaviour. The
-host lists both ids, so a manifest may require either; an applet that only wants
-better diagnostics asks for `caliper.export.v1_1` and falls back to v1 when it is
-absent.
+This is an additive revision under the same rules as `caliper.metrics.v1_1` and the [bridge revisions](caliper-tensor-bridge-v1.md#additive-revisions). `CaliperExportV1_1` repeats the v1 table byte for byte, with `reserved0` still `NULL`. It appends one entry, `last_error()`. The ABI epoch does not change. The host still vends `caliper.export.v1` unchanged, so a v1 applet keeps the v1 table and the v1 behavior.
+
+The host lists both ids, so a manifest may require either. An applet that wants better diagnostics asks for `caliper.export.v1_1` and falls back to v1.
 
 ```c
 --8<-- "sdk/include/caliper/services/export_v1_1.h"
 ```
 
-**What it reports.** `view_png`, `begin_sequence`, `frame` and `end_sequence`
-clear the status when called and set a reason when they fail: a `0` return from
-the first three, or an `end_sequence()` whose `sequence.json` could not be
-written. After any of the four succeeds, `last_error()` returns `""`. `caps()`
-and `last_error()` leave the status alone. The string is host-owned, never
-`NULL`, and valid until the next export call on the same thread — the
-`last_error()` contract of [`caliper.data.v1`](caliper-data-v1.md#threading-and-errors)
-and `caliper.metrics.v1_1`. Export is frame-thread only, so in practice there is
-one status.
+**What it reports.** The functions `view_png`, `begin_sequence`, `frame` and `end_sequence` clear the status when called. They set a reason when they fail. A failure is a `0` return from the first three, or an `end_sequence()` whose `sequence.json` could not be written. After any of the four succeeds, `last_error()` returns `""`. The functions `caps()` and `last_error()` leave the status alone.
+
+The string is host-owned, never `NULL`, and valid until the next export call on the same thread. This is the `last_error()` contract of [`caliper.data.v1`](caliper-data-v1.md#threading-and-errors) and `caliper.metrics.v1_1`. Export is frame-thread only, so in practice there is one status.
 
 | Reason | Cause |
 |---|---|
@@ -247,8 +156,7 @@ one status.
 | `cannot create <dir>: <reason>`, `could not write <dir>/frame_000012.png: <reason>` | A sequence directory or frame could not be written. |
 | `sequence sidecar write failed: <dir>/sequence.json (N frame(s) kept, provenance missing): <reason>` | `end_sequence` could not write the sequence sidecar. |
 
-The `caliper::Export` sugar wraps v1 and does not expose `last_error()`; take the
-v1_1 table from the host directly:
+The `caliper::Export` sugar wraps v1 and does not expose `last_error()`. Take the v1_1 table from the host directly:
 
 ```cpp
 auto* ex11 = static_cast<const CaliperExportV1_1*>(
@@ -262,6 +170,4 @@ if (ex11) {
 
 ---
 
-See also: [`caliper.geometry.v1`](caliper-geometry-v1.md) for the draw path and camera
-vocabulary export composes, and [`caliper.metrics.v1_1`](caliper-metrics-v1.md) for the
-chart/metrics paper path export deliberately does not cover.
+See also: [`caliper.geometry.v1`](caliper-geometry-v1.md) for the draw path and camera vocabulary that export composes, and [`caliper.metrics.v1_1`](caliper-metrics-v1.md) for the chart and metrics paper path that export does not cover.

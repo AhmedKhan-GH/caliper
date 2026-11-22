@@ -1,10 +1,10 @@
 # Service Catalog
 
-The host serves 19 service ids on `main`, which are 11 services and their additive revisions. An applet obtains a service by id from `CaliperHost.get_service`, which returns `NULL` for an id the host does not serve. An applet lists the ids it cannot run without in its manifest; see [Manifest](../manifest.md). The ids are defined in `sdk/include/caliper/services/`, and the host serves them from `src/host/host_services.cpp`.
+The host serves 19 service ids, which are 11 services and their additive revisions. An applet gets a service by id from `CaliperHost.get_service`. The call returns `NULL` for an id the host does not serve. An applet lists the ids it cannot run without in its manifest. See [Manifest](../manifest.md).
 
 ## Revisions
 
-A revision of a service is a new id with a `_N` suffix after the version, for example `caliper.geometry.v1_2`. A revision is additive: its table begins with a byte-identical copy of the previous table and appends entries, and the host keeps serving the older ids unchanged. An applet built against `caliper.geometry.v1` keeps working when the host also serves `v1_3`. [Compatibility and epochs](../../development/compatibility-and-epochs.md) explains the rule. No service has an incompatible `.v2`.
+A revision of a service is a new id with a `_N` suffix after the version, for example `caliper.geometry.v1_2`. A revision is additive. Its table begins with a byte-identical copy of the previous table and appends entries, and the host keeps serving the older ids unchanged. An applet built against `caliper.geometry.v1` keeps working when the host also serves `v1_3`. No service has an incompatible `.v2`. For the full rule, see [Compatibility and epochs](../../development/compatibility-and-epochs.md).
 
 ## Service IDs
 
@@ -30,8 +30,8 @@ A revision of a service is a new id with a `_N` suffix after the version, for ex
 | `caliper.data.v1` | SQL over the embedded DuckDB store, results as Arrow streams | [data](caliper-data-v1.md) | | Applet job threads. `last_error()` is per thread. |
 | `caliper.feed.v1` | Machine telemetry channels read by pull | [feed](caliper-feed-v1.md) | | Any thread, non-blocking, stated in the header |
 
-The threading column follows the headers, except for the bridge and geometry rows, which come from their pages. Every `v1_N` row keeps the threading rule of the service it extends.
+Every `v1_N` row keeps the threading rule of the service it extends.
 
 ## Companion Types
 
-The services pass data in two interchange types rather than in framework types: [`CaliperTensor`](../tensor-and-arrow-headers.md#tensor-header) for tensors, and the [Arrow C Data Interface](../tensor-and-arrow-headers.md#arrow-header) for tables. Neither depends on a framework, which is why the SDK headers contain no torch or DuckDB type.
+The services pass data in two interchange types instead of framework types. These are [`CaliperTensor`](../tensor-and-arrow-headers.md#tensor-header) for tensors and the [Arrow C Data Interface](../tensor-and-arrow-headers.md#arrow-header) for tables. Neither type depends on a framework, thus the SDK headers contain no torch or DuckDB type.

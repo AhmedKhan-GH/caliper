@@ -1,6 +1,6 @@
 # caliper.device.v1
 
-Service id `caliper.device.v1` — the host's negotiated compute device. This page embeds the header verbatim; the docs build fails if the file moves.
+Service id `caliper.device.v1` gives the compute device that the host negotiates.
 
 ```c
 --8<-- "sdk/include/caliper/services/device_v1.h"
@@ -8,21 +8,11 @@ Service id `caliper.device.v1` — the host's negotiated compute device. This pa
 
 ## Semantics
 
-**The host negotiates; the applet maps.** The host detects one compute device
-and vends it through this service. The applet reads the `kind` and maps it to
-*its own framework's* device — the host stays framework-agnostic. This is a hard
-[architectural rule](../../introduction/architecture.md#design-decisions): **the host never links torch or any other ML
-framework.** On Apple the detection uses the Metal API only. Elsewhere the host
-detects CUDA devices through the CUDA driver API, which it loads at run time
-(`src/host/device_query_cuda.cpp`), so it links no CUDA toolkit. With no NVIDIA
-driver, or no device, the service reports the CPU.
+The host negotiates the device and the applet maps it. The host detects one compute device and vends it through this service. The applet reads the `kind` and maps it to the device of its own framework. This follows an [architectural rule](../../introduction/architecture.md#design-decisions): the host never links torch or any other ML framework.
 
-**Kinds name the memory/API domain, not a backend.** The enum is
-`CALIPER_DEV_CPU = 0`, `CALIPER_DEV_CUDA = 1`, `CALIPER_DEV_METAL = 2`.
-`METAL` deliberately does **not** say "MPS": it names the Metal memory/API
-domain, which covers torch-MPS, MLX, and ggml-Metal alike (see [Types that never cross the boundary](../../development/compatibility-and-epochs.md#excluded-boundary-types)). "MPS" is
-a torch-specific backend name and must never appear in the ABI. An applet that
-uses libtorch maps `CALIPER_DEV_METAL → torch::kMPS` itself:
+On Apple, the host uses the Metal API only to detect the device. On other systems, the host detects CUDA devices through the CUDA driver API, which it loads at run time. Thus it links no CUDA toolkit. If there is no NVIDIA driver or no device, the service reports the CPU.
+
+A kind names a memory and API domain, not a backend. The enum is `CALIPER_DEV_CPU = 0`, `CALIPER_DEV_CUDA = 1` and `CALIPER_DEV_METAL = 2`. `METAL` does not say "MPS" because it names the Metal memory and API domain. This domain covers torch-MPS, MLX and ggml-Metal (see [Types that never cross the boundary](../../development/compatibility-and-epochs.md#excluded-boundary-types)). "MPS" is a torch-specific backend name and must not appear in the ABI. An applet that uses libtorch maps `CALIPER_DEV_METAL` to `torch::kMPS` itself:
 
 ```cpp
 torch::Device dev =
@@ -31,15 +21,10 @@ torch::Device dev =
         : torch::Device(torch::kCPU);
 ```
 
-Note the `torch::hasMPS()` check: the host reports the *memory domain it
-detected*, but the applet still confirms its own framework can use it, and falls
-back to CPU otherwise. The kind is a negotiation input, not a promise that every
-framework is built for it.
+The `torch::hasMPS()` check is necessary. The host reports the memory domain that it detected, but the applet must confirm that its own framework can use it. If the framework cannot, the applet falls back to the CPU. The kind is an input to negotiation. It does not promise that every framework supports it.
 
-**Fields.** `index` is `0` for CPU and METAL. For CUDA it is the device ordinal; the host
-currently reports device `0`. `name` is a **host-owned** string valid for the process
-lifetime — do not free it, and do not assume it outlives the host. `free_memory_hint`
-is a best-effort byte count; `0` means "unknown", not "no memory". Any function
-pointer may be null on an older host; the [`caliper::Device`](../first-applet.md)
-sugar null-guards each one and defaults the whole snapshot to CPU when the host
-does not vend the service.
+### Fields
+
+`index` is `0` for CPU and METAL. For CUDA, it is the device ordinal, and the host reports device `0`. `name` is a host-owned string that stays valid for the process lifetime. Do not free it, and do not keep it after the host exits. `free_memory_hint` is a best-effort byte count, and `0` means "unknown", not "no memory".
+
+Any function pointer can be null on an older host. The [`caliper::Device`](../first-applet.md) sugar checks each pointer for null. If the host does not vend the service, it sets the whole snapshot to the CPU.

@@ -325,6 +325,14 @@ before it returns. A suite that uses them ends with `CALIPER_GPU_TEST_MAIN()` in
 place of `DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN`. A bare `MESSAGE` and `return`
 would report the suite as passed.
 
+## Applets in This Repository
+
+`caliper_add_applet()` is the same file in the core build and in the SDK package. The core build compiles no applets unless `CALIPER_BUILD_APPLETS=ON`. `examples/hello` builds with the tests as the loader-test fixture. `examples/sine_scope` builds with the tests in a build with libtorch.
+
+Each applet folder under `applets/` and `examples/` also builds alone against the installed SDK. `scripts/build_applets_against_sdk.sh <core build folder> <work folder> [applet folder...]` installs the SDK and builds them that way, as CI does.
+
+An older build folder can keep libraries from in-tree builds that predate `caliper_add_applet()`. Their manifests have no `[build]` table, so the host does not check them against the UI-stack hash. Delete the `applets/` folder of the build after you turn `CALIPER_BUILD_APPLETS` off, and when you reuse such a build folder.
+
 ## Rules
 
 - **No raw GL/Metal/Vulkan calls in applets** ([Platform rules](../introduction/architecture.md#design-decisions)). Draw through

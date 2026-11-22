@@ -172,6 +172,20 @@ Each message prints once per process. Two environment variables change the backe
 `CALIPER_RENDERER=gl` selects the OpenGL backend. See [Verify on Windows hardware](windows-verification.md) for
 the full procedure.
 
+## Renderer Caches
+
+Vulkan keeps a pipeline cache with the topology, the blend mode, the depth state and the textured flag as its key. It has a descriptor set for each draw and a ring of parameter slots, aligned to 256 bytes, that grows as necessary. Metal keeps pipelines by topology class, blend mode, depth state and textured flag, plus a depth-stencil state for each pair of test and write settings. The direct path writes the Vulkan image through a CUDA surface object.
+
+On WebGPU, Caliper destroys a released texture at once. It releases the view of that texture at the end of the frame, after ImGui drops its bind groups. Caliper uses released point buffers again for the next snapshot of the same size.
+
+## Geometry Backend
+
+The `PrimParams` record has 192 bytes. Four places keep its layout by hand: the `std140` block in `geom.vert`, `PrimParams` in `vulkan_renderer.cpp`, and the MSL struct and its C++ mirror in `metal_renderer.mm`. Two `static_assert(sizeof(PrimParams) == 192)` lines lock the size, and a change to the record must change all four places.
+
+Torch MPS tensors import as `MTLStorageModePrivate`, and the host cannot read that memory. For gate G14, the Metal backend copies private instance buffers with one blit into a staging buffer that only grows. It waits one time, before a render encoder exists. Vulkan stages with `vkCmdCopyBuffer`.
+
+Indexed draws go out as non-indexed draws, and thus no index buffer is bound. On Metal, the creation of the encoder does the clear, and thus all gates run before the encoder exists.
+
 ## Measured Costs
 
 These measurements come from an RTX 500 Ada laptop GPU, driver 596.47, in a Release build. They are one machine and

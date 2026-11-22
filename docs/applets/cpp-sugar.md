@@ -1,10 +1,10 @@
 # C++ Sugar
 
-`caliper.hpp` is the header-only, optional C++ layer over the frozen C ABI. A C applet can implement `abi.h` by hand; the sugar exists so C++ authors write a class and a macro instead of five `extern "C"` bridge functions and a hand-built descriptor. It requires **C++20** (the `CALIPER_APPLET` macro uses designated initializers).
+`caliper.hpp` is the optional, header-only C++ layer over the frozen C ABI. A C applet can implement `abi.h` by hand. The C++ layer lets an author write a class and a macro instead of five `extern "C"` bridge functions and a hand-built descriptor. It requires **C++20**, because the `CALIPER_APPLET` macro uses designated initializers.
 
 ## `CALIPER_APPLET` Macro
 
-You write a class deriving from `caliper::Applet` and invoke the macro once:
+You write a class that derives from `caliper::Applet` and invoke the macro once:
 
 ```cpp
 #include <caliper/caliper.hpp>
@@ -27,42 +27,45 @@ CALIPER_APPLET(MyApplet,
 
 ### Required Field Order
 
-The fields are C++20 designated initializers on `caliper::AppletMeta`, and **the order is fixed** — the aggregate is initialized positionally, so the names are documentation, not a reordering license:
+The fields are C++20 designated initializers on `caliper::AppletMeta`. **The order is fixed.** The compiler initializes the aggregate by position, so the names document the fields and do not allow reordering. The order is:
 
-1. `.id` — reverse-DNS identifier, must match `caliper.toml`
-2. `.version` — applet semver, must match the manifest
-3. `.name` — human-facing title
-4. `.summary` — one-line description
-5. `.tag` — category label
-6. `.services` — brace-list of required service-id macros (e.g. `{CALIPER_LOG_V1}`)
+1. `.id`: the reverse-DNS identifier, which must match `caliper.toml`.
+2. `.version`: the applet semver, which must match the manifest.
+3. `.name`: the human-facing title.
+4. `.summary`: a one-line description.
+5. `.tag`: a category label.
+6. `.services`: a brace-list of required service-id macros, for example `{CALIPER_LOG_V1}`.
 
-`.services` is a `const char*[15]`; any trailing slots are zero-initialized, so the array the host sees is **NULL-terminated** automatically. Fifteen slots is the fixed capacity — list only the services your applet truly requires (negotiation refuses to load an applet whose required services the host cannot vend).
+`.services` is a `const char*[15]`. The compiler zero-initializes unused slots, so the host always sees a **NULL-terminated** array. Fifteen slots is the fixed capacity. List only the services that your applet requires, because negotiation refuses to load an applet when the host cannot vend a required service.
 
 ### Generated Code
 
-- One `static const caliper::AppletMeta kMeta` holding the six fields.
-- A `Holder` struct pairing your class instance with a `caliper::Host`.
-- Five exception-safe `extern "C"` bridge functions — `create`, `destroy`, `initialize`, `frame`, `cleanup` — that own the `try/catch` so **no C++ exception ever crosses the C boundary** (a throw is caught, logged via `host.log_error("unhandled exception in on_<phase>")`, and swallowed; `create` returns `nullptr` on a failed `new`).
-- `caliper::ui::connect(host)` is called inside `initialize`, before `on_init`, so ImGui/ImPlot contexts are live by the time your code runs.
-- The single exported symbol `caliper_applet_descriptor()` returning a `static const CaliperAppletDescriptor` wired to `kMeta` and the five bridges.
+The macro generates these items:
+
+- One `static const caliper::AppletMeta kMeta` that holds the six fields.
+- A `Holder` struct that pairs your class instance with a `caliper::Host`.
+- Five exception-safe `extern "C"` bridge functions: `create`, `destroy`, `initialize`, `frame` and `cleanup`.
+- The single exported symbol `caliper_applet_descriptor()`, which returns a `static const CaliperAppletDescriptor` wired to `kMeta` and the five bridges.
+
+The bridges own the `try/catch`, so **no C++ exception crosses the C boundary**. A bridge catches a throw, logs it with `host.log_error("unhandled exception in on_<phase>")` and swallows it. `create` returns `nullptr` when `new` fails. The `initialize` bridge calls `caliper::ui::connect(host)` before `on_init`, so the ImGui and ImPlot contexts are live when your code runs.
 
 ### One Macro per Library
 
-The macro defines the `caliper_applet_gen` namespace and the exported `caliper_applet_descriptor` symbol, so **exactly one `CALIPER_APPLET` may appear per shared library** (one applet per dylib — the ABI contract). In a test binary that needs to exercise several behaviours, keep a single `CALIPER_APPLET` and toggle behaviour from inside the class (see the fixture-host recipe below).
+The macro defines the `caliper_applet_gen` namespace and the exported `caliper_applet_descriptor` symbol. Thus **one shared library can contain exactly one `CALIPER_APPLET`**, because the ABI allows one applet per dylib. If a test binary must exercise several behaviors, keep one `CALIPER_APPLET` and switch the behavior from inside the class.
 
 ## `ui::connect` Semantics
 
-`caliper::ui::connect(const CaliperHost*)` performs the ImGui context + allocator handoff described by [`caliper.ui.v1`](services/caliper-ui-v1.md), in the one order authors get wrong when they do it by hand:
+`caliper::ui::connect(const CaliperHost*)` hands the ImGui context and allocator to the applet, as [`caliper.ui.v1`](services/caliper-ui-v1.md) describes. It uses the one order that authors get wrong when they do the handoff by hand:
 
-1. Fetches `caliper.ui.v1` via `get_service`. **If the host does not vend it (headless), `connect` returns `false` and does nothing** — this is why the fixture host and other headless drivers work without a GL context.
-2. Installs the host's allocator pair with `ImGui::SetAllocatorFunctions`, so every allocation in the applet's copy of ImGui lands on the **host** heap (the crux of sound context-sharing across a DLL boundary).
-3. Calls `ImGui::SetCurrentContext`, `ImPlot::SetCurrentContext`, and `ImPlot3D::SetCurrentContext` with the host-owned contexts.
+1. It fetches `caliper.ui.v1` with `get_service`. If the host does not vend the service (a headless host), `connect` returns `false` and does nothing. Thus headless drivers work without a GL context.
+2. It installs the host allocator pair with `ImGui::SetAllocatorFunctions`. Every allocation in the applet copy of ImGui then lands on the **host** heap, which makes context sharing across a library boundary sound.
+3. It calls `ImGui::SetCurrentContext`, `ImPlot::SetCurrentContext` and `ImPlot3D::SetCurrentContext` with the host-owned contexts.
 
-Because the macro calls `connect` for you inside `initialize`, most applets never call it directly.
+The macro calls `connect` inside `initialize`, so most applets never call it directly.
 
 ## Service Wrappers
 
-`caliper::Host` wraps the raw `CaliperHost`: `service(id)` calls `get_service`, `data_dir()` returns the applet's data folder, and `log_info` and `log_error` write through `caliper.log.v1`. On top of it the header defines one typed wrapper per service. Each wrapper is built from a `Host`, is falsy when the host does not vend the service, and does nothing (returns 0, `false`, an empty string or `nullptr`) when called on a host without it. There is no wrapper for `caliper.feed.v1`; call that table through `Host::service`.
+`caliper::Host` wraps the raw `CaliperHost`. `service(id)` calls `get_service`, `data_dir()` returns the data folder of the applet, and `log_info` and `log_error` write through `caliper.log.v1`. The header also defines one typed wrapper for each service. Each wrapper is built from a `Host` and is falsy when the host does not vend the service. When you call a wrapper on a host without the service, it does nothing and returns 0, `false`, an empty string or `nullptr`. No wrapper exists for `caliper.feed.v1`, so call that table through `Host::service`.
 
 | Wrapper | Service | What it gives you |
 |---|---|---|
@@ -73,15 +76,15 @@ Because the macro calls `connect` for you inside `initialize`, most applets neve
 | `Bridge` | [`caliper.tensor_bridge.v1`](services/caliper-tensor-bridge-v1.md) | Texture creation and update, `alloc_shared` and `free_shared`, `caps()` from `v1_1`, and the imported-allocation calls from `v1_2`. `imtex` casts a texture id to an `ImTextureID`. Frame thread only. |
 | `Geometry` | [`caliper.geometry.v1`](services/caliper-geometry-v1.md) | View creation, `draw_points` and the `draw_primitives` overloads for each record revision. When the host vends only a later revision, the wrapper widens older records to the layout that revision requires. Frame thread only. |
 | `Export` | [`caliper.export.v1`](services/caliper-export-v1.md) | `view_png` and the frame-sequence calls `begin_sequence`, `frame` and `end_sequence`, with the same overloads for each geometry record revision. |
-| `Device` | [`caliper.device.v1`](services/caliper-device-v1.md) | A plain struct filled by `Device::query(host)` with `kind`, `index`, `name` and `free_memory_hint`. It reports the CPU when the service is absent. |
+| `Device` | [`caliper.device.v1`](services/caliper-device-v1.md) | A plain struct that `Device::query(host)` fills with `kind`, `index`, `name` and `free_memory_hint`. It reports the CPU when the service is absent. |
 
 ## Fixture-Host TDD Recipe
 
-`caliper::testing::FixtureHost` (from `<caliper/fixture_host.h>`, target `caliper::sdk_testing`) is a headless fake `CaliperHost` for test-driving applets and sugar without launching UI. It vends `caliper.log.v1` only; `get_service` returns `NULL` for everything else (so `ui::connect` no-ops). It records every logged line, exposed via `log_lines()` and `log_contains()`.
+`caliper::testing::FixtureHost` (header `<caliper/fixture_host.h>`, target `caliper::sdk_testing`) is a headless fake `CaliperHost` for tests. It vends only `caliper.log.v1`, and `get_service` returns `NULL` for all other services, so `ui::connect` does nothing. It records each logged line, and `log_lines()` and `log_contains()` expose them.
 
-Because the C ABI carries no user-data pointer, the log/service thunks route through a single static active pointer: **exactly one `FixtureHost` may be live per process at a time** (construct one per `TEST_CASE`; its destructor clears the active slot).
+The C ABI has no user-data pointer, so the thunks use one static active pointer. Only one `FixtureHost` may be live in a process. Build one for each `TEST_CASE`, because the destructor clears the slot.
 
-Drive an applet through the generated C table exactly as the host would:
+To drive an applet, call `caliper_applet_descriptor()`, then `api.create()`, `api.initialize(self, fx.host())`, `api.frame(self, &fi)` with a `CaliperFrameInfo` (set `struct_size`, `fb_width`, `fb_height`, `dpi_scale`), `api.cleanup(self)` and `api.destroy(self)`. Check the log with `fx.log_contains("hi")`.
 
 ```cpp
 #include <doctest/doctest.h>
@@ -112,3 +115,4 @@ TEST_CASE("applet: initialize logs and frame is exception-safe") {
 ```cpp
 --8<-- "sdk/include/caliper/caliper.hpp"
 ```
+</Content>

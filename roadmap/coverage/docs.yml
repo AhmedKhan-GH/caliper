@@ -168,7 +168,7 @@ entries:
   item: caliper.geometry.v1_3 adds instanced transforms.
   ids:
   - REN-07
-- page: docs/applets/services/caliper-geometry-v1.md#backend-notes
+- page: docs/development/vulkan-and-cuda.md#geometry-backend
   item: Per-backend notes for the geometry service.
   ids:
   - REN-04
@@ -888,7 +888,7 @@ entries:
   item: The UI-stack hash pins the ImGui stack.
   ids:
   - COR-04
-- page: docs/applets/sdk-package.md#in-tree-applets
+- page: docs/applets/in-tree-applets.md#in-tree-applets
   item: Applets in this repository build against the installed SDK.
   ids:
   - COR-13

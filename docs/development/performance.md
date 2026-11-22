@@ -167,6 +167,10 @@ A command goes to the queue of the command layer, which the frame thread drains.
 
 The windowless mode runs at about 60 frames per second. The first command opens the default workspace in a few milliseconds. The code is in `src/host/api/api_server.h`, `src/host/api/app_api.h`, `src/host/builder/app_session.h` and `src/host/api/session_gateway.h`. The spec page is in `web/src/spec/`, and the build makes it from `python/caliper/_web/spec.html`.
 
+## Data Store Rebuilds
+
+A table that `caliper.data.v1` rebuilt with `CREATE OR REPLACE TABLE` several times per second on a persistent store became slow. Over one session, in EmbedScope on Windows, each rebuild went from 80 ms to 500 ms. The cause is the growth of the write-ahead log and the catalog. `TEMP` tables do not have this problem.
+
 ## Related Pages
 
 - [Live Streaming](../python/live-streaming.md)
