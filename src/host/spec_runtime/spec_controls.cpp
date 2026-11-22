@@ -232,8 +232,13 @@ bool draw_slider(const spec::Control& c, const spec::ControlTarget& t, const Row
     ImGuiSliderFlags flags = ImGuiSliderFlags_AlwaysClamp;
     if (log) flags |= ImGuiSliderFlags_Logarithmic;
     const bool integer = param && param->type == "integer";
-    const char* format = integer ? "%.0f" : log ? "%.3g" : "%.4g";
-    bool changed = ImGui::SliderScalar("##value", ImGuiDataType_Double, &v, &lo, &hi, format, flags);
+    // ImGui takes the smallest value a log slider reaches from the format's
+    // precision (10^-precision), so the format carries enough digits for the
+    // low end of the range: lr from 1e-5 needs six.
+    std::string format = integer ? "%.0f" : "%.4g";
+    if (log && !integer)
+        format = "%." + std::to_string(std::clamp((int)std::ceil(-std::log10(lo)) + 1, 3, 12)) + "g";
+    bool changed = ImGui::SliderScalar("##value", ImGuiDataType_Double, &v, &lo, &hi, format.c_str(), flags);
     const bool done = ImGui::IsItemDeactivatedAfterEdit();
     ImGui::EndDisabled();
     disabled_tooltip(why);

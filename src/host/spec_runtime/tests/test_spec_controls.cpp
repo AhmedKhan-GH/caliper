@@ -4,11 +4,18 @@
 // events. A slider bound to param:lr sends the value the person drags to and
 // pushes one control event when they let go; a button queues its action or
 // pauses the run; a widget without a script or without control sends nothing.
+// The suite "gpu" draws a slider row and a button row on the offscreen canvas.
 #include "spec_runtime/spec_instruments.h"
+#include "spec_runtime/spec_offscreen.h"
+
+#include "export_service.h"
+
+#include "spec_test_canvas.h"
 
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <string>
 #include <vector>
@@ -237,3 +244,40 @@ TEST_CASE("spec controls: a button queues its action, and run:pause pauses a run
     ui.click(200, 15, [&] { return caliper_host::draw_spec_control(eval, kRow, look, host); });
     CHECK(run.sent.size() == 3);
 }
+
+// ---- drawn on the offscreen canvas (suite "gpu": caliper_spec_runtime_gpu) ----------------
+
+TEST_SUITE("gpu") {
+TEST_CASE("spec controls: a slider row and a button row in the house look") {
+    caliper_host::SpecOffscreen* c = spec_test::canvas();
+    if (!c) return;
+    FakeRun run;
+    run.run = training();
+    Recorder rec;
+    SpecInstrumentHost host{&rec, &run};
+    spec::Control lr = make("lr", spec::ControlKind::slider, "param:lr");
+    lr.title = "Learning rate";
+    spec::Control save = make("save", spec::ControlKind::button, "action:save");
+    save.title = "Save checkpoint";
+    const SpecLook look = c->look();
+    const float row = caliper_host::spec_control_height(lr, look);
+    const int w = 480, h = (int)(2 * row);
+    const spec_test::Image img = spec_test::render(w, h, [&](const ImRect& area) {
+        caliper_host::draw_spec_control(lr, ImRect(area.Min, ImVec2(area.Max.x, area.Min.y + row)), look, host);
+        caliper_host::draw_spec_control(save, ImRect(ImVec2(area.Min.x, area.Min.y + row), area.Max), look, host);
+    });
+    REQUIRE(img.w == w);
+    if (const char* dir = std::getenv("CALIPER_SPEC_TEST_DUMP"); dir && *dir)
+        caliper_host::export_write_png_atomic(std::string(dir) + "/controls-slider-button.png", img.px.data(),
+                                              (uint32_t)w, (uint32_t)h);
+    // The grab of lr = 0.01 on its log range 1e-5 to 0.1 stands three
+    // quarters along the slider, which takes the right part of the row.
+    const auto grab = img.count(spec_test::near(look.accent, 8), 0, 0, w, (int)row);
+    REQUIRE(grab.n > 0);
+    CHECK(grab.cx > 0.6 * w);
+    // The title and the button's label are drawn: bright text in both rows.
+    CHECK(img.count(spec_test::bright, 0, 0, w / 3, (int)row).n > 0);
+    CHECK(img.count(spec_test::bright, 0, (int)row, w, h).n > 0);
+    CHECK(run.sent.empty());   // drawing alone sends nothing
+}
+}  // TEST_SUITE("gpu")
