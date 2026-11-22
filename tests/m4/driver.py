@@ -11,6 +11,7 @@ usage: driver.py --app <caliper> --mcp <caliper-mcp> --python <python> --work <d
                  [--capture-dir <dir>] [--transcript <file>] [--limit-s 280]
 """
 import argparse
+import array
 import base64
 import json
 import os
@@ -166,6 +167,55 @@ class Check:
                 raise Fail(f"the step of {run} did not grow: {first} then {step}")
             self.pace(1)
 
+    def child_steps(self, run, factor, limit=60):
+        """Waits on the step that the run reports, until it is `factor` times the first step seen."""
+        end = time.monotonic() + limit
+        first = None
+        while True:
+            step = self.mcp.body("run_state", {"run": run}).get("step")
+            if step is not None:
+                first = step if first is None else first
+                if step >= factor * first:
+                    return first, step
+            if time.monotonic() > end:
+                raise Fail(f"the step of {run} did not reach {factor} times {first}: {step}")
+            self.pace(1)
+
+    def loss_gap(self, panel, fork, parent, margin):
+        """The fork learns more slowly: at the last step that both lines have, its loss is higher than its
+        parent's by the factor `margin`. Its line also spans a third of the plot's width or more."""
+        r = self.mcp.call("panel_data", {"panel": panel})
+        lines = {l["binding"]: l for l in ((r.get("structuredContent") or {}).get("data") or {}).get("lines", [])}
+
+        def series(binding):
+            l = lines.get(binding)
+            if not l:
+                raise Fail(f"panel {panel} has no line {binding}: {list(lines)}")
+            out = []
+            for k in ("x", "y"):
+                v = array.array("d")
+                v.frombytes(base64.b64decode(l[k]["base64"]))
+                out.append(list(v))
+            return out
+        fx, fy = series(fork)
+        px, py = series(parent)
+        if len(fx) < 2 or len(px) < 2:
+            raise Fail(f"panel {panel}: a line has fewer than two points")
+        common = min(fx[-1], px[-1])
+
+        def at(xs, ys):
+            return ys[min(range(len(xs)), key=lambda i: abs(xs[i] - common))]
+        f_loss, p_loss = at(fx, fy), at(px, py)
+        lo, hi = min(fx[0], px[0]), max(fx[-1], px[-1])
+        share = (fx[-1] - fx[0]) / (hi - lo)
+        if share < 1 / 3:
+            raise Fail(f"the fork's line spans {share:.2f} of the plot's width, less than a third")
+        if f_loss < margin * p_loss:
+            raise Fail(f"at step {common:.0f} the fork's loss {f_loss:.3f} is not {margin} times "
+                       f"the parent's {p_loss:.3f}")
+        return {"step": common, "fork_loss": round(f_loss, 3), "parent_loss": round(p_loss, 3),
+                "fork_share_of_width": round(share, 2)}
+
     def panel_has_lines(self, panel, count, limit=90):
         end = time.monotonic() + limit
         last = None
@@ -206,6 +256,15 @@ class Check:
                 raise Fail(f"{name}: no process runs {s['record_pids']}")
             self.pids.update(found)
             self.result[name] = sorted(self.pids)
+            return
+        if "steps_factor" in s:
+            w = self.sub(s["steps_factor"])
+            first, now = self.child_steps(w["run"], w["factor"])
+            self.result[name] = {"first": first, "later": now}
+            return
+        if "loss_gap" in s:
+            w = self.sub(s["loss_gap"])
+            self.result[name] = self.loss_gap(w["panel"], w["fork"], w["parent"], w["margin"])
             return
         if "panel_has_lines" in s:
             w = s["panel_has_lines"]
