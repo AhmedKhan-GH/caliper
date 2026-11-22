@@ -11,10 +11,16 @@
 #include <caliper_builder/commands/queue.h>
 #include <caliper_builder/session/session.h>
 
+#include "caliper/live_net.h"   // the ops and run states of wire protocol 3.1
+#include "live/live_attach.h"     // RunLink, Controls
+
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <condition_variable>
+#include <limits>
 #include <fstream>
 #include <optional>
 #include <thread>
@@ -124,6 +130,178 @@ struct GatewayCore {
     AppSession::Impl* im = nullptr;
 };
 
+// ---- the app's run control ------------------------------------------------------------
+
+namespace {
+
+// A scalar of wire protocol 3.1 as the command table's JSON, and back.
+json from_net(const caliper_net::Json& v) {
+    using T = caliper_net::Json::Type;
+    switch (v.type()) {
+        case T::Bool: return v.as_bool();
+        case T::Int: {
+            int64_t i = 0;
+            return v.get_i64(&i) ? json(i) : json(v.as_double());
+        }
+        case T::UInt: {
+            uint64_t u = 0;
+            return v.get_u64(&u) ? json(u) : json(v.as_double());
+        }
+        case T::Double: return v.as_double();
+        case T::String: return v.as_string();
+        default: return nullptr;
+    }
+}
+
+caliper_net::Json to_net(const json& v) {
+    if (v.is_boolean()) return caliper_net::Json(v.get<bool>());
+    if (v.is_number_unsigned()) return caliper_net::Json(v.get<uint64_t>());
+    if (v.is_number_integer()) return caliper_net::Json(v.get<int64_t>());
+    if (v.is_number_float()) return caliper_net::Json(v.get<double>());
+    if (v.is_string()) return caliper_net::Json(v.get<std::string>());
+    return caliper_net::Json();
+}
+
+// RunControls' reasons are lower-case clauses; a command's message is a sentence.
+std::string sentence(std::string why) {
+    if (why.empty()) return why;
+    why[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(why[0])));
+    if (why.back() != '.') why += '.';
+    return why;
+}
+
+void push_run(cb::EventSink& sink, json fields) {
+    cb::Event e;
+    e.kind = cb::EventKind::run;
+    e.origin = "script";
+    e.fields = std::move(fields);
+    sink.push(std::move(e));
+}
+
+}  // namespace
+
+cb::RunState AppRunControl::state() {
+    cb::RunState st;
+    if (!link_ || !link_->attached()) return st;
+    st.attached = true;
+    st.script = link_->script();
+    const caliper_live::ControlAccess access = link_->access();
+    const caliper_live::Controls* c = link_->controls();
+    st.control = access.allowed && c != nullptr;
+    if (!access.allowed)
+        st.why_not = sentence(access.why.empty() ? "the connection takes no control" : access.why);
+    else if (!c)
+        st.why_not = "The script has sent no controls yet.";
+    if (!c) return st;
+    st.state = c->run_state;
+    if (c->has_step) st.step = static_cast<std::int64_t>(c->step);
+    if (c->run_state == CALIPER_NET_RUN_STEPPING) st.steps_left = static_cast<std::int64_t>(c->steps_left);
+    for (const caliper_live::ControlParam& p : c->params) {
+        cb::RunParam r;
+        r.name = p.name;
+        r.type = p.type;
+        r.value = from_net(p.value);
+        r.pending = from_net(p.pending);
+        if (p.has_min) r.min = p.min;
+        if (p.has_max) r.max = p.max;
+        r.log = p.log;
+        r.choices = p.choices;
+        r.help = p.help;
+        st.params.push_back(std::move(r));
+    }
+    for (const caliper_live::ControlAction& a : c->actions) {
+        cb::RunAction r;
+        r.name = a.name;
+        r.help = a.help;
+        r.running = a.running;
+        r.queued = a.queued;
+        st.actions.push_back(std::move(r));
+    }
+    return st;
+}
+
+cb::Error AppRunControl::send(const std::string& op, const std::string& name, const json& value, std::int64_t count) {
+    if (!link_ || !link_->attached())
+        return cb::Error(cb::kRunNotAttached, "No script is attached to Caliper.");
+    const caliper_live::ControlAccess access = link_->access();
+    if (!access.allowed)
+        return cb::Error(cb::kRunControlNotAllowed,
+                         sentence(access.why.empty() ? "the connection takes no control" : access.why));
+    const auto n = static_cast<uint32_t>(
+        std::min<std::int64_t>(std::max<std::int64_t>(count, 1), std::numeric_limits<uint32_t>::max()));
+    const std::string why = link_->send(op, name, to_net(value), n);
+    if (why.empty()) return {};
+    const caliper_live::Controls* c = link_->controls();
+    if (op != CALIPER_NET_OP_SET && c && c->run_state == CALIPER_NET_RUN_NONE)
+        return cb::Error(cb::kRunNoStep, "The script " + link_->script() +
+                                             " has not made its first step, and it takes this request only at a step.");
+    return cb::Error(cb::kRunRefused, sentence(why));
+}
+
+cb::Error AppRunControl::set_param(const std::string& name, const json& value) {
+    return send(CALIPER_NET_OP_SET, name, value, 0);
+}
+
+cb::Error AppRunControl::run_action(const std::string& name) { return send(CALIPER_NET_OP_RUN, name, json(), 0); }
+
+cb::Error AppRunControl::pause(cb::RunPauseOp op, std::int64_t count) {
+    switch (op) {
+        case cb::RunPauseOp::pause: return send(CALIPER_NET_OP_PAUSE, "", json(), 0);
+        case cb::RunPauseOp::resume: return send(CALIPER_NET_OP_RESUME, "", json(), 0);
+        case cb::RunPauseOp::step: return send(CALIPER_NET_OP_STEP, "", json(), count);
+    }
+    return send(CALIPER_NET_OP_PAUSE, "", json(), 0);
+}
+
+void AppRunControl::feed(cb::EventSink& sink) {
+    const bool attached = link_ && link_->attached();
+    const std::string script = attached ? link_->script() : std::string();
+    if (attached != attached_ || (attached && script != script_)) {
+        push_run(sink, json{{"change", "attach"}, {"attached", attached}, {"script", attached ? script : script_}});
+        attached_ = attached;
+        script_ = attached ? script : std::string();
+        have_ = false;
+        version_ = 0;
+        run_state_ = CALIPER_NET_RUN_NONE;
+        params_.clear();
+        results_.clear();
+    }
+    if (!attached) return;
+    const caliper_live::Controls* c = link_->controls();
+    if (!c) return;
+    const bool baseline = !have_;
+    if (baseline || c->version != version_) {
+        const json step = c->has_step ? json(c->step) : json();
+        if (c->run_state != run_state_)
+            push_run(sink, json{{"change", "state"}, {"state", c->run_state}, {"step", step}});
+        std::map<std::string, std::pair<json, json>> now;
+        for (const caliper_live::ControlParam& p : c->params) {
+            json value = from_net(p.value);
+            json pending = from_net(p.pending);
+            const auto it = params_.find(p.name);
+            // A value the script applied: it changed, or the pending value it
+            // held has gone. The baseline's values are registrations.
+            if (!baseline && it != params_.end() &&
+                (it->second.first != value || (!it->second.second.is_null() && pending.is_null())))
+                push_run(sink, json{{"change", "param"}, {"name", p.name}, {"value", value}, {"step", step}});
+            now[p.name] = {std::move(value), std::move(pending)};
+        }
+        params_ = std::move(now);
+        run_state_ = c->run_state;
+        version_ = c->version;
+        have_ = true;
+    }
+    for (const caliper_live::ControlAction& a : c->actions) {
+        const caliper_live::RunLink::ActionResult r = link_->action_result(a.name);
+        std::uint64_t& seen = results_[a.name];
+        if (r.at_ns == 0 || r.at_ns == seen) continue;
+        if (!baseline)
+            push_run(sink, json{{"change", "action"}, {"name", a.name}, {"status", r.error ? "error" : "ok"},
+                                {"text", r.text}});
+        seen = r.at_ns;
+    }
+}
+
 struct AppSession::Impl {
     enum class State { idle, opening, opened, ready, failed, closed };
     enum class Capture { none, armed, ready, failed };
@@ -170,6 +348,7 @@ struct AppSession::Impl {
     int in_flight = 0;   // worker jobs that make or use the session
     std::atomic<bool> busy{false};
     std::shared_ptr<HostBinding> binding;
+    AppRunControl run_ctl;   // the session's run control from its adoption until close()
 
     std::mutex lines_m;
     std::vector<Line> lines;   // from the journal, any thread
@@ -273,6 +452,7 @@ struct AppSession::Impl {
         s->registry().set_frame_thread(frame_thread);
         binding = std::make_shared<HostBinding>(this);
         s->set_host(binding);
+        s->set_run_control(&run_ctl);
         cb::Session* raw = s.get();
         {
             std::lock_guard<std::mutex> lock(m);
@@ -398,6 +578,9 @@ struct AppSession::Impl {
             std::lock_guard<std::mutex> lock(m);
             if (state == State::ready) s = session.get();
         }
+        // The run events of what the attached script changed; the ring is
+        // safe while a worker holds the registry.
+        if (s) run_ctl.feed(s->events());
         if (!s || busy.load(std::memory_order_acquire)) return;
         pump(*s);
         flush_lines();
@@ -591,6 +774,7 @@ struct AppSession::Impl {
         }
         if (session) {
             session->set_host(nullptr);
+            session->set_run_control(nullptr);
             session->close();   // the queue and the journal
             session.reset();    // the loader store and workspace.duckdb
             say("workspace " + opt.workspace + " closed");
@@ -764,6 +948,10 @@ void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderSeam> renderer) {
     impl_->renderer = std::move(renderer);
 }
 
+void AppSession::set_run_link(caliper_live::RunLink* link) { impl_->run_ctl.set_link(link); }
+
+caliper_builder::RunControl* AppSession::run_control() { return &impl_->run_ctl; }
+
 uint64_t AppSession::journaled() const { return impl_->journaled.load(std::memory_order_acquire); }
 
 uint64_t AppSession::specs_opened() const { return impl_->specs_opened.load(std::memory_order_acquire); }
@@ -825,6 +1013,8 @@ const std::string& AppSession::workspace() const { return impl_->opt.workspace; 
 bool AppSession::worker_busy() const { return false; }
 bool AppSession::script_running() const { return false; }
 void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderSeam>) {}
+void AppSession::set_run_link(caliper_live::RunLink*) {}
+caliper_builder::RunControl* AppSession::run_control() { return nullptr; }
 uint64_t AppSession::journaled() const { return 0; }
 uint64_t AppSession::specs_opened() const { return 0; }
 uint64_t AppSession::agent_specs_opened() const { return 0; }

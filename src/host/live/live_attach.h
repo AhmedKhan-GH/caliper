@@ -38,6 +38,40 @@ namespace caliper_live {
 
 class RunControls;
 
+// The attached script's run as the builder session's run control reads and
+// drives it (src/host/builder/app_session.h, design/instruments.md, Run
+// Control in App): in the app, the attachment and its RunControls
+// (AttachmentRunLink, live_controls.h); in the tests, a fake. A request goes
+// out as RunControls sends it from the run bar, through the app's own viewer
+// connection. Frame thread.
+class RunLink {
+public:
+    // The last result of an action: its text, or why it failed, and when it
+    // arrived (now_ns() clock); at_ns 0 when there is none.
+    struct ActionResult {
+        std::string text;
+        bool error = false;
+        uint64_t at_ns = 0;
+    };
+
+    virtual ~RunLink() = default;
+    // Whether a script is attached, and its name.
+    virtual bool attached() const = 0;
+    virtual std::string script() const = 0;
+    // The script's latest CONTROLS; null before the first one.
+    virtual const Controls* controls() const = 0;
+    // Whether the connection takes control at all, and why not.
+    virtual ControlAccess access() const = 0;
+    // Sends one request: `op` is pause, resume, step (with `count`), set
+    // (with `name` and `value`) or run (with `name`). Returns "" when it was
+    // sent (or a set value is already what the script shows), else why not,
+    // in RunControls' words.
+    virtual std::string send(const std::string& op, const std::string& name, const caliper_net::Json& value,
+                             uint32_t count) = 0;
+    // The last result of the action `name`.
+    virtual ActionResult action_result(const std::string& name) const = 0;
+};
+
 // The state column of a session row: "running", "starting", "closing",
 // "viewed by <pid>", "protocol v<n>", and "stream" for a caliper.serve()
 // stream.
