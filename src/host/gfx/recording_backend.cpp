@@ -197,14 +197,14 @@ bool RecordingBackend::on_submit(Serial s, const Frame& frame, Stats*, std::stri
 }
 
 void RecordingBackend::retire(Serial s) {
-    if (auto_complete_) complete(s);
+    if (auto_complete_) complete(s, gpu_ms_);
     else pending_.push_back(s);
 }
 
 void RecordingBackend::finish(Serial s) {
     for (size_t i = 0; i < pending_.size();) {
         if (pending_[i] <= s) {
-            complete(pending_[i]);
+            complete(pending_[i], gpu_ms_);
             pending_.erase(pending_.begin() + long(i));
         } else {
             ++i;

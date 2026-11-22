@@ -563,6 +563,35 @@ TEST_CASE("gfx layer: release is deferred until the last submit that used it com
     CHECK(s.gfx.count(RecordingBackend::OpKind::Destroy, HandleKind::Buffer) == destroyed + 2);
 }
 
+TEST_CASE("gfx layer: each submit's GPU time is known once it completed, and never before") {
+    Scene s;
+    s.gfx.set_auto_complete(false);
+    s.gfx.set_gpu_ms(2.5);
+    auto submit = [&] {
+        DrawList list(s.target());
+        list.draw(s.draw(list, 4));
+        Frame f;
+        f.render(std::move(list));
+        return s.gfx.submit(std::move(f));
+    };
+    const Serial first = submit(), second = submit();
+    REQUIRE(first != 0);
+    REQUIRE(second == first + 1);
+    double ms = -2;
+    CHECK_FALSE(s.gfx.submit_gpu_ms(first, &ms));   // pending: no time, no wait
+    CHECK(ms == -2);
+    s.gfx.finish(first);
+    CHECK(s.gfx.submit_gpu_ms(first, &ms));
+    CHECK(ms == doctest::Approx(2.5));
+    CHECK_FALSE(s.gfx.submit_gpu_ms(second, &ms));
+    CHECK_FALSE(s.gfx.submit_gpu_ms(0, &ms));
+    // A backend without timestamps answers -1 for a completed submit that reported no time.
+    s.gfx.set_gpu_ms(-1);
+    s.gfx.finish(second);
+    CHECK(s.gfx.submit_gpu_ms(second, &ms));
+    CHECK(ms < 0);
+}
+
 TEST_CASE("gfx layer: readback is asynchronous and taken once") {
     Scene s;
     s.gfx.set_auto_complete(false);

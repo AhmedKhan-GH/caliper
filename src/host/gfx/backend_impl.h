@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <set>
 #include <string>
@@ -77,9 +78,15 @@ public:
     void complete(Serial s, double gpu_ms);
     Serial completed_through() const { return through_.load(std::memory_order_acquire); }
     double take_gpu_ms(uint32_t* submits = nullptr);   // the sum since the last take; < 0 none
+    // The measured GPU time of one completed submit among the last kSubmitTimes: true with
+    // *gpu_ms once serial s completed with a time, false before, without a time, or when it is
+    // older than the times kept.
+    bool submit_gpu_ms(Serial s, double* gpu_ms) const;
+    static constexpr size_t kSubmitTimes = 1024;
 
 private:
     mutable std::mutex mu_;
+    std::map<Serial, double> times_;               // the last kSubmitTimes completions
     std::set<Serial> early_;                        // completed ahead of an earlier serial
     std::atomic<Serial> through_{0};
     double gpu_ms_ = 0;
