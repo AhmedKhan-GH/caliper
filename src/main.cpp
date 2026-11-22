@@ -19,10 +19,13 @@
 #include "host/job_system.h"
 #include "host/host_version.h"
 #include "host/renderer/host_renderer.h"
+#include "host/embed/embed_core.h"   // caliper_live_set_event_tap
 #include "host/live/live_attach.h"
 #include "host/live/live_controls.h"
 #include "host/live/live_ui_driver.h"
+#include "host/live/live_views_scene.h"   // scene_view, for CALIPER_TEST_UI's spec page steps
 #include "host/live/live_views_state.h"   // the views' header look
+#include "host/live/live_scene.h"
 #include "host/api/app_api.h"
 #include "host/api/window_captures.h"
 #include "host/open_url.h"
@@ -53,6 +56,7 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <system_error>
 
 // The hidden window (--hidden, CALIPER_HIDDEN=1): SIGINT and SIGTERM ask for
@@ -276,7 +280,10 @@ public:
         // window is hidden, so a test clicks the real widgets and nothing
         // appears on the screen.
         if (const char* ui = std::getenv("CALIPER_TEST_UI")) {
-            if (hidden_ && *ui) ui_driver_ = std::make_unique<caliper_live::UiDriver>(ui);
+            if (hidden_ && *ui) {
+                ui_driver_ = std::make_unique<caliper_live::UiDriver>(ui);
+                give_ui_driver_spec_hooks();
+            }
             else if (*ui) std::cerr << "[ui] CALIPER_TEST_UI needs --hidden; ignored" << std::endl;
         }
         // The same for the spec page (builder/spec_ui_driver.h), whose shots
@@ -345,7 +352,8 @@ public:
 
             // CALIPER_TEST_UI with --hidden: the scripted clicks of a UI test,
             // queued into ImGui before the frame reads its input.
-            if (ui_driver_ && page_ == AppPage::Live) feed_ui_driver();
+            if (ui_driver_ && (page_ == AppPage::Live || (page_ == AppPage::Spec && ui_driver_->spec_step())))
+                feed_ui_driver();
             if (spec_ui_ && (page_ == AppPage::Spec || page_ == AppPage::Live || page_ == AppPage::Landing ||
                              page_ == AppPage::Applet))
                 feed_spec_ui();
@@ -585,6 +593,11 @@ public:
             landing_.log("command script refused", "CALIPER_COMMAND_SCRIPT", "needs --hidden");
         }
         spec_page_.set_hidden(hidden_);
+        // The attached script's run (design/instruments.md, Run Control in
+        // App): run.state and the run commands act through the attachment,
+        // and the spec page's scene panels draw its live scenes.
+        session_.set_run_link(&run_link_);
+        spec_page_.set_live_core([this] { return live_.core(); });
         // panel.render draws on an offscreen canvas that shares this
         // window's font atlas, made on the first call between two frames.
         session_.set_panel_renderer(caliper_host::SpecPage::make_panel_renderer());
@@ -812,6 +825,8 @@ public:
         session_.set_panel_renderer(nullptr);
         providers_.close(session_);   // before the session and the host's stores
         approvals_.close();
+        if (live_.core()) caliper_live_set_event_tap(live_.core(), {});
+        session_.set_run_link(nullptr);   // before the attachment goes
         session_.close();
         // Workers FIRST: a job may hold a pointer into applet state, so every
         // worker must be joined before close_all() destroys that state (the
@@ -1544,6 +1559,66 @@ private:
         }
     }
 
+    // The picks and selections a person makes in the live views outside a
+    // spec go to the agent's events.wait as events without a panel
+    // (design/instruments.md, Event Feeds). Each attachment has a core of its
+    // own, so the tap is set at each attach.
+    void tap_live_events() {
+#if CALIPER_WITH_BUILDER
+        caliper_live_set_event_tap(live_.core(), [this](const caliper_live_views::LiveEvent& e) {
+            caliper_builder::Session* s = session_.session();
+            if (!s) return;
+            caliper_builder::Event ev;
+            ev.kind = std::strcmp(e.type, "pick") == 0 ? caliper_builder::EventKind::pick
+                                                       : caliper_builder::EventKind::select;
+            ev.view = e.view;
+            ev.origin = "ui";
+            ev.fields = nlohmann::json::parse(e.detail, nullptr, false);
+            if (!ev.fields.is_object()) ev.fields = nlohmann::json::object();
+            s->events().push(std::move(ev));
+        });
+#endif
+    }
+
+    // CALIPER_TEST_UI's steps on the spec page (live_ui_driver.h): a scene
+    // panel of the open spec that draws its live scene, a pick in it, and a
+    // long poll of events.wait that waits on the event ring.
+    void give_ui_driver_spec_hooks() {
+#if CALIPER_WITH_BUILDER
+        caliper_live::UiDriver::SpecHooks h;
+        h.scene_ready = [this](const std::string& id) { return scene_panel_ready(id); };
+        h.scene_pick = [this](const std::string& id, float u, float v) {
+            return scene_panel_ready(id) && spec_page_.pick_scene(id, u, v);
+        };
+        h.long_poll_held = [this](const std::string& kind) {
+            caliper_builder::Session* s = session_.session();
+            if (!s) return false;
+            if (kind.empty()) return s->events().waiting() > 0;
+            const std::optional<caliper_builder::EventKind> k = caliper_builder::event_kind_from_name(kind);
+            return k && s->events().waiting(k) > 0;
+        };
+        ui_driver_->set_spec_hooks(std::move(h));
+#endif
+    }
+
+#if CALIPER_WITH_BUILDER
+    bool scene_panel_ready(const std::string& id) {
+        namespace spec = caliper_builder::spec;
+        caliper_builder::Session* s = session_.session();
+        CaliperCore* core = live_.core();
+        if (page_ != AppPage::Spec || !s || !core) return false;
+        const std::optional<caliper_builder::OpenSpec> open = s->open_spec();
+        const spec::Panel* p = open ? open->spec.find_panel(id) : nullptr;
+        if (!p || p->primitive != spec::Primitive::scene) return false;
+        const auto b = p->bind.find("scene");
+        if (b == p->bind.end() || b->second.bindings.size() != 1) return false;
+        const std::string& ref = b->second.bindings[0];
+        if (ref.rfind("live:", 0) != 0) return false;
+        const caliper_live_views::SceneView* v = caliper_live_views::scene_view(core, ref.substr(5).c_str());
+        return v && v->generation() > 0;
+    }
+#endif
+
     void feed_ui_driver() {
         ui_driver_->feed(live_.core(), live_.controls());
         for (const std::string& line : ui_driver_->take_log()) std::cerr << "[ui] " << line << std::endl;
@@ -1580,6 +1655,7 @@ private:
                 case Event::Attached:
                     what = "attached";
                     landing_.log(what, live_script_, pid);
+                    tap_live_events();
                     break;
                 case Event::Ended:
                     what = "session ended";
@@ -1868,6 +1944,7 @@ private:
     // attached session (hosted core) and what Activity names it by.
     caliper_live::SessionList sessions_;
     caliper_live::Attachment live_;
+    caliper_live::AttachmentRunLink run_link_{live_};   // the session's run control acts through it
     std::string live_script_;
     int32_t live_pid_ = 0;
     bool pending_live_home_ = false;  // esc Home on the live page: the landing after render

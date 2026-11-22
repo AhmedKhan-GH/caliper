@@ -204,6 +204,8 @@ The app may send CONTROL only when its connection allows it. The stream must ann
 
 When no script is attached, each run command fails with `run.not_attached`. When the connection allows no control, each run command fails with `run.control_not_allowed`. Its message is the reason that `RunControls::why_not()` gives. The shared memory session of `caliper.show` takes no control (`live_source.h`). Thus the run control needs the network connection that `caliper.watch` starts.
 
+A control widget of the spec sends its value through `RunControl` directly, and not through `run.set_param`. Thus the person's own slider shows no approval card.
+
 The app implements `RunControl` in a class of its own that wraps the attachment's `RunControls`. It gives the class to `Session::set_run_control()` when the session opens, and it takes it back with null before the attachment closes.
 
 ## Events
@@ -222,7 +224,7 @@ The result holds `events`, `cursor`, `lost` and `more`. The new cursor is past e
 
 The call answers at once when matching events wait. Otherwise it holds the request until a matching event comes or `timeout_s` ends. The default of `timeout_s` is 10 seconds, the maximum is 60 seconds, and 0 answers at once.
 
-The handler never waits, because the command queue runs it on the frame thread. Instead, `wait_for_events()` holds the thread of the caller. It submits the call to the queue, and it waits on the ring when the answer holds no event. When a matching event comes, it submits the call again with `timeout_s` 0. Caliper API serves `POST /v0/commands/events.wait` through this function. The HTTP client of `caliper-mcp` thus waits up to 60 seconds plus a margin for this command.
+The handler never waits, because the command queue runs it on the frame thread. Instead, `wait_for_events()` holds the thread of the caller. It submits the call to the queue, and it waits on the ring when the answer holds no event. When a matching event comes, it submits the call again with `timeout_s` 0. Caliper API serves `POST /v0/commands/events.wait` through this function, on a thread of its own for each call. `Session::close()` waits until each such thread has left the function. The HTTP client of `caliper-mcp` thus waits up to 60 seconds plus a margin for this command.
 
 A long poll works with each MCP client and each protocol revision that `caliper-mcp` serves. The resource `caliper://events` with `resources/subscribe` is a later, additive path.
 
@@ -245,7 +247,7 @@ Each event is one JSON object. Six keys are common to all kinds, and the kind ad
 |---|---|---|
 | `pick` | A click on an item of a scene | `entity`, `primitive`, `index`, `row_id`, `position`, and `pixel` for an image |
 | `select` | A selection in a scene, made or cleared | `entities` (each with `entity`, `primitive`, `indices`, `row_ids`), `truncated` |
-| `control` | A control of the spec changed its value | `control`, `bind`, `value` |
+| `control` | The person finished an edit of a control of the spec | `control`, `bind`, `value` |
 | `run` | The attached script changed | `change`, then the keys of the change |
 | `spec` | A command changed the open spec | `command`, `event`, `applet` |
 | `approval` | A card asked or was decided | `approval`, `command`, `state`, `target` |
@@ -267,10 +269,10 @@ Each kind has one producer, and each producer pushes through the `EventSink` int
 
 - The scene panel of the spec runtime pushes `pick` and `select` with its panel id.
 - The live views outside a spec push `pick` and `select` without a panel.
-- The control widgets push `control` when the person changes a value.
+- The control widgets push one `control` event for each finished edit: at the end of a slider's drag or typed entry, and at a button's click. A slider sends each new value to the script while the person drags it, but the ring gets only the last value.
 - The app's run control pushes `run` when the CONTROLS message or a CONTROL_REPLY shows a change.
 - The session pushes `spec` from its journal through `note_journal_event()`.
-- The session pushes `approval` when the registry parks a call and when the person decides.
+- The session pushes `approval` from the approval observer of the command registry: when the registry parks a call, when the person decides and when the wait ends. This includes the `run` commands, which the journal does not record.
 
 The ring lives in the session, so that `events.wait` works the same way in the app and in a headless session. The spec runtime receives the ring and the run control through `SpecInstrumentHost` in `spec_instruments.h`.
 
@@ -315,4 +317,3 @@ The test of M1 starts a script whose only Caliper line is `caliper.watch(model, 
 
 - A learning rate scheduler sets the rate again at each of its steps. The watch track decides whether `lr` scales the scheduler's base rates or the current rates.
 - The watch track decides whether the shared memory session also carries the views when the server runs, so that no view appears twice in the app.
-- The controls track decides whether a control widget sends its value through `run.set_param` with the origin `ui` or through `RunControl` directly. The control event is the same in both cases.

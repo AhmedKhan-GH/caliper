@@ -803,7 +803,7 @@ public:
             if (!core_->im) {
                 inner_ = caliper_api::ready_command(shutdown_envelope(inv_.id));
             } else if (cb::Session* s = core_->im->ready_session()) {
-                inner_ = caliper_api::queued_command(s->queue().submit(std::move(inv_), options_));
+                inner_ = caliper_api::session_command(*s, std::move(inv_), options_);   // events.wait: a long poll
             } else {
                 const std::string why = core_->im->open_failure();
                 if (why.empty()) return false;   // still opening

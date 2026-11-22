@@ -353,7 +353,11 @@ const std::vector<PaneListItem>& BuilderPane::list_items() const {
     for (size_t i = 0; i < rows_.size();) {
         const PaneSource& r = rows_[i];
         if (r.group != PaneSource::Group::metric) {
-            if (matches(r)) items_.push_back({PaneListItem::Kind::source, &r});
+            if (matches(r)) {
+                PaneListItem it;
+                it.source = &r;
+                items_.push_back(it);
+            }
             ++i;
             continue;
         }
@@ -381,7 +385,8 @@ const std::vector<PaneListItem>& BuilderPane::list_items() const {
             items_.push_back(run);
             if (run.open)
                 for (const PaneSource* m : shown) {
-                    PaneListItem it{PaneListItem::Kind::source, m};
+                    PaneListItem it;
+                    it.source = m;
                     it.nested = true;
                     items_.push_back(it);
                 }

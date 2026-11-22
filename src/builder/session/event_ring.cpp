@@ -172,6 +172,7 @@ struct EventRing::State {
     std::deque<Event> events;    // oldest first, at most `capacity`
     std::uint64_t next = 1;      // the seq of the next push
     bool closed = false;
+    std::vector<const EventFilter*> waiting;   // the filters of the callers blocked in wait()
 
     // The cursor a read starts after: a cursor beyond the newest event reads
     // from the oldest event kept (see the top of this file).
@@ -234,11 +235,31 @@ bool EventRing::wait(std::uint64_t cursor, const EventFilter& filter,
         scanned = state_->next - 1;
         return false;
     };
+    if (found()) return true;
+    if (state_->closed) return false;
+    state_->waiting.push_back(&filter);
+    bool match = false;
     for (;;) {
-        if (found()) return true;
-        if (state_->closed) return false;
-        if (state_->changed.wait_until(lock, deadline) == std::cv_status::timeout) return found();
+        if (state_->changed.wait_until(lock, deadline) == std::cv_status::timeout) {
+            match = found();
+            break;
+        }
+        if (found()) {
+            match = true;
+            break;
+        }
+        if (state_->closed) break;
     }
+    state_->waiting.erase(std::find(state_->waiting.begin(), state_->waiting.end(), &filter));
+    return match;
+}
+
+std::size_t EventRing::waiting(std::optional<EventKind> kind) const {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    std::size_t n = 0;
+    for (const EventFilter* f : state_->waiting)
+        if (!kind || f->kinds.empty() || std::find(f->kinds.begin(), f->kinds.end(), *kind) != f->kinds.end()) ++n;
+    return n;
 }
 
 std::uint64_t EventRing::latest() const {
@@ -270,22 +291,22 @@ CommandOutput events_wait_command(const CommandContext& context, EventRing& ring
         {{"events", std::move(events)}, {"cursor", r.cursor}, {"lost", r.lost}, {"more", r.more}});
 }
 
+EventWaitHold::EventWaitHold(const EventRing& ring) : ring_(&ring) {
+    std::lock_guard<std::mutex> lock(callers().mutex);
+    ++callers().count[ring_];
+}
+
+EventWaitHold::~EventWaitHold() {
+    Callers& c = callers();
+    {
+        std::lock_guard<std::mutex> lock(c.mutex);
+        --c.count[ring_];
+    }
+    c.left.notify_all();
+}
+
 CommandResult wait_for_events(CommandQueue& queue, EventRing& ring, CommandInvocation invocation) {
-    struct Caller {
-        const EventRing* ring;
-        explicit Caller(const EventRing* r) : ring(r) {
-            std::lock_guard<std::mutex> lock(callers().mutex);
-            ++callers().count[ring];
-        }
-        ~Caller() {
-            Callers& c = callers();
-            {
-                std::lock_guard<std::mutex> lock(c.mutex);
-                --c.count[ring];
-            }
-            c.left.notify_all();
-        }
-    } caller(&ring);
+    const EventWaitHold caller(ring);
 
     const WaitArgs w = wait_args(invocation.args);
     const auto deadline = std::chrono::steady_clock::now() +
@@ -304,7 +325,7 @@ CommandResult wait_for_events(CommandQueue& queue, EventRing& ring, CommandInvoc
     return queue.submit(std::move(invocation)).get();
 }
 
-void note_journal_event(EventSink& sink, const JournalEvent& event) {
+void note_journal_event(EventSink& sink, const JournalEvent& event, const std::string& applet) {
     if (!event.ok) return;
     const bool history = event.event == "undo" || event.event == "redo";
     if (!history && !(event.event == "do" && changes_open_spec(event.name))) return;
@@ -313,6 +334,7 @@ void note_journal_event(EventSink& sink, const JournalEvent& event) {
     e.origin = command_origin_name(event.origin);
     e.panel = history ? std::string() : spec_event_panel(event);
     e.fields = {{"command", event.name}, {"event", event.event}};
+    if (!applet.empty()) e.fields["applet"] = applet;
     sink.push(std::move(e));
 }
 

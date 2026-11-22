@@ -293,6 +293,33 @@ TEST_CASE("events: wait_for_events holds its caller, not the frame thread, until
     CHECK(r.result["cursor"] == 3);
 }
 
+TEST_CASE("events: a hold taken before a thread starts keeps the session's close waiting until it goes") {
+    auto s = open_session(fresh_dir("events-hold") + "/workspace");
+    auto hold = std::make_unique<EventWaitHold>(s->events());
+    auto closed = std::async(std::launch::async, [&] { s->close(); });
+    CHECK(closed.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout);
+    hold.reset();
+    CHECK(closed.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+}
+
+TEST_CASE("events: the ring counts the callers it holds, by the kinds their filters take") {
+    EventRing ring;
+    CHECK(ring.waiting() == 0);
+    EventFilter picks;
+    picks.kinds = {EventKind::pick};
+    auto held = std::async(std::launch::async, [&] {
+        return ring.wait(0, picks, std::chrono::steady_clock::now() + std::chrono::seconds(30));
+    });
+    while (ring.waiting() == 0) std::this_thread::yield();   // the waiter is held
+    CHECK(ring.waiting(EventKind::pick) == 1);
+    CHECK(ring.waiting(EventKind::run) == 0);
+    Event e;
+    e.kind = EventKind::pick;
+    ring.push(e);
+    CHECK(held.get());
+    CHECK(ring.waiting() == 0);
+}
+
 TEST_CASE("events: closing the session wakes a held wait_for_events and waits for it to leave") {
     auto s = open_session(fresh_dir("events-close") + "/workspace");
     std::optional<CommandResult> got;
@@ -327,6 +354,7 @@ TEST_CASE("events: the session feeds spec events from its journal") {
     CHECK(spec[0]["command"] == "spec.new");
     CHECK(spec[0]["event"] == "do");
     CHECK(spec[0]["panel"].is_null());
+    for (const json& e : spec) CHECK(e["applet"] == "dash");   // the open spec's applet id
     CHECK(spec[1]["command"] == "source.add");
     CHECK(spec[2]["command"] == "panel.create");
     CHECK(spec[2]["panel"] == "loss");
@@ -387,7 +415,19 @@ TEST_CASE("events: the session feeds approval events when a card asks and when t
     CHECK(a[5]["approval"] == third);
     CHECK(a[5]["state"] == "expired");
     CHECK(a[5]["origin"] == "mcp");
+    // A run command that the person denies gives its approval event too,
+    // although the journal does not record it.
+    r = invoke(*s, "run.action", {{"name", "save"}}, CommandOrigin::mcp);
+    REQUIRE(r.error.code == "command.needs_approval");
+    s->registry().deny(r.approval);
+    a = ring_events(*s, EventKind::approval);
+    REQUIRE(a.size() == 8);
+    CHECK(a[7]["approval"] == r.approval);
+    CHECK(a[7]["command"] == "run.action");
+    CHECK(a[7]["target"] == "save");
+    CHECK(a[7]["state"] == "denied");
+    CHECK(a[7]["origin"] == "ui");
     // The approval events are readable through events.wait.
     const json w = ok(*s, "events.wait", {{"kinds", {"approval"}}, {"timeout_s", 0}});
-    CHECK(w["events"].size() == 6);
+    CHECK(w["events"].size() == 8);
 }

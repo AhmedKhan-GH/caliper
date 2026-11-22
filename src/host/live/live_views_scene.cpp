@@ -331,17 +331,22 @@ SceneRectResult draw_scene_in_rect(CaliperCore* core, const std::string& name, c
         state.down = false;
         state.selecting = false;
     }
-    if (state.seam_u >= 0.0f && sc->width() && sc->height()) {
+    // A seam pick stays asked until its own request gives a hit or a miss: a
+    // live scene that changes before the pick's readback drops the result, and
+    // the pick is then asked again at the next draw.
+    if (state.seam_u >= 0.0f && !state.click && sc->width() && sc->height()) {
         std::string pick_why;
-        if (sc->request_pick(state.seam_u * float(sc->width()), state.seam_v * float(sc->height()), &pick_why))
-            state.click = true;
-        state.seam_u = state.seam_v = -1.0f;
+        state.seam_asked = sc->request_pick(state.seam_u * float(sc->width()), state.seam_v * float(sc->height()),
+                                            &pick_why);
+        state.click = state.seam_asked;
     }
     caliper_scene::Hit hit;
     const caliper_scene::PickPass::Result pr = sc->poll_pick(&hit);
     if (pr == caliper_scene::PickPass::Result::Hit || pr == caliper_scene::PickPass::Result::Miss ||
         pr == caliper_scene::PickPass::Result::Dropped) {
         if (state.click && pr == caliper_scene::PickPass::Result::Hit && sink) sink("pick", sc->pick_detail(hit));
+        if (state.seam_asked && pr != caliper_scene::PickPass::Result::Dropped) state.seam_u = state.seam_v = -1.0f;
+        state.seam_asked = false;
         state.click = false;
     }
 

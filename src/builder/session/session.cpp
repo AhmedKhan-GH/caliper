@@ -205,20 +205,6 @@ struct Session::Impl {
     std::pair<std::string, ApprovalNote> last_note;
     std::mutex close_mutex;
     bool closed = false;
-    // The approval feed of the event ring (design/instruments.md, Event
-    // Feeds), under asked_mutex: the parks the review hook saw, and the
-    // parked invocations not decided yet, oldest first out.
-    struct Asked {
-        std::string approval;
-        std::string key;   // invocation_key()
-        std::string command;
-        std::string args;  // as JSON text, as the journal records them
-        CommandOrigin origin = CommandOrigin::ui;
-        std::string target;
-    };
-    std::mutex asked_mutex;
-    std::uint64_t parks = 0;
-    std::deque<Asked> asked;
 
     // ---- shared helpers ------------------------------------------------
 
@@ -1514,75 +1500,28 @@ struct Session::Impl {
     CommandOutput events_wait(const CommandContext& ctx) { return events_wait_command(ctx, *events); }
 
     // ---- the approval feed
-    // The registry numbers its approvals ap-1, ap-2, ... in the order it
-    // parks invocations, and asks the review once for each park, right after
-    // it numbers it; the session sets the only review, so the review hook
-    // knows the id of the card it reviews. The check hook runs when the
-    // person approves. A denial and a withdrawal reach the session through
-    // the journal, which records them for the commands that mutate.
-
-    static std::string args_text(const json& args) { return args.dump(-1, ' ', false, json::error_handler_t::replace); }
-
-    void approval_event(const Asked& a, const char* state, CommandOrigin origin) {
+    // The registry tells of each approval as it goes (set_approval_observer):
+    // parked, approved, denied or withdrawn, with its own id, also for the
+    // commands that the journal does not record, such as run commands. The
+    // person approves and denies; a park and a withdrawal are the caller's.
+    void approval_event(const PendingApproval& p, std::string_view state) {
         Event e;
         e.kind = EventKind::approval;
-        e.origin = command_origin_name(origin);
-        e.fields = {{"approval", a.approval}, {"command", a.command}, {"state", state}};
-        if (!a.target.empty()) e.fields["target"] = a.target;
+        const bool person = state == "approved" || state == "denied";
+        e.origin = command_origin_name(person ? CommandOrigin::ui : p.invocation.origin);
+        e.fields = {{"approval", p.approval}, {"command", p.invocation.name}, {"state", std::string(state)}};
+        const std::string& n = p.invocation.name;
+        if (n == "run.set_param" || n == "run.action") {
+            const std::string target = str_arg(p.invocation.args, "name");
+            if (!target.empty()) e.fields["target"] = target;
+        }
         events->push(std::move(e));
     }
 
-    // The review hook: inside the registry's park(), on its thread.
-    void note_parked(const CommandInvocation& inv) {
-        Asked a;
-        a.key = invocation_key(inv);
-        a.command = inv.name;
-        a.args = args_text(inv.args);
-        a.origin = inv.origin;
-        if (inv.name == "run.set_param" || inv.name == "run.action") a.target = str_arg(inv.args, "name");
-        {
-            std::lock_guard<std::mutex> lock(asked_mutex);
-            a.approval = "ap-" + std::to_string(++parks);
-            asked.push_back(a);
-            while (asked.size() > 256) asked.pop_front();
-        }
-        approval_event(a, "pending", inv.origin);
-    }
-
-    // The check hook: the person approved the parked invocation.
-    void note_approved(const CommandInvocation& inv) {
-        const std::string key = invocation_key(inv);
-        std::optional<Asked> a;
-        {
-            std::lock_guard<std::mutex> lock(asked_mutex);
-            const auto it = std::find_if(asked.begin(), asked.end(), [&](const Asked& x) { return x.key == key; });
-            if (it == asked.end()) return;
-            a = std::move(*it);
-            asked.erase(it);
-        }
-        approval_event(*a, "approved", CommandOrigin::ui);
-    }
-
-    // The journal's line of a parked invocation that was denied or withdrawn:
-    // the oldest one asked of the same command and origin, with the same
-    // arguments when one has them (the journal redacts a long value).
-    void note_refused(const JournalEvent& e) {
-        if (e.event != "do" || e.ok || (e.error != "command.denied" && e.error != "command.approval_timeout")) return;
-        const std::string text = args_text(e.args);
-        std::optional<Asked> a;
-        {
-            std::lock_guard<std::mutex> lock(asked_mutex);
-            auto same = [&](const Asked& x) { return x.command == e.name && x.origin == e.origin; };
-            auto it = std::find_if(asked.begin(), asked.end(), [&](const Asked& x) { return same(x) && x.args == text; });
-            if (it == asked.end()) it = std::find_if(asked.begin(), asked.end(), same);
-            if (it == asked.end()) return;
-            a = std::move(*it);
-            asked.erase(it);
-        }
-        if (e.error == "command.denied")
-            approval_event(*a, "denied", CommandOrigin::ui);
-        else
-            approval_event(*a, "expired", a->origin);
+    // The applet id of the open spec, for the spec events of the journal.
+    std::string open_applet_id() const {
+        std::lock_guard<std::mutex> lock(doc_mutex);
+        return doc ? doc->spec.applet.id : std::string();
     }
 
     void bind_all() {
@@ -1799,8 +1738,9 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
         // own hook (design/instruments.md, Event Feeds).
         im.options.journal.on_append = [ring = im.events, self = &im, app = std::move(im.options.journal.on_append)](
                                            const JournalEvent& e) {
-            note_journal_event(*ring, e);
-            self->note_refused(e);
+            // The journal appends after the command's handler returned, so
+            // the open spec is not locked here.
+            note_journal_event(*ring, e, self->open_applet_id());
             if (app) app(e);
         };
         CommandJournal::Open j = CommandJournal::open((im.ws() / "journal" / "commands.jsonl").u8string(), im.options.journal);
@@ -1819,15 +1759,15 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
         im.registry->set_approval_policy(
             [raw](const CommandDescriptor& d, const CommandInvocation& inv) { return raw->policy(d, inv); });
         im.registry->set_approval_review([raw](const CommandDescriptor&, const CommandInvocation& inv) {
-            raw->note_parked(inv);
             return raw->parked_review(inv);
         });
         im.registry->set_approval_check([raw](const CommandDescriptor&, const CommandInvocation& inv) {
-            raw->note_approved(inv);
             return raw->approval_holds(inv);
         });
         im.registry->set_approval_notes(
             [raw](const CommandDescriptor&, const CommandInvocation& inv) { return raw->note_of(inv); });
+        im.registry->set_approval_observer(
+            [raw](const PendingApproval& p, std::string_view state) { raw->approval_event(p, state); });
         if (!im.options.permissions_file.empty()) {
             AgentPermissionsRead read = read_agent_permissions(im.options.permissions_file);
             im.perms = std::move(read.file);
@@ -1947,7 +1887,7 @@ void Session::end_chat_session() {
 
 bool Session::approval_offers_rules(const CommandInvocation& parked) const {
     const AgentPrincipal who = agent_principal(parked);
-    if (who == AgentPrincipal::none || !rule_command_allowed(parked.name)) return false;
+    if (who == AgentPrincipal::none || !rule_command_allowed(permission_rule_key(parked))) return false;
     const std::string key = Impl::invocation_key(parked);
     if (impl_->is_bound(key) || impl_->python_pending(key)) return false;
     std::lock_guard<std::mutex> lock(impl_->perm_mutex);
@@ -1960,12 +1900,15 @@ Error Session::allow_always(const CommandInvocation& parked, RuleScope scope) {
                      parked.name);
     Impl& im = *impl_;
     const AgentPrincipal who = agent_principal(parked);
+    // The key the policy looks rules up by: a run command's carries its
+    // target (run.set_param:lr), so that the rule allows one parameter.
+    const std::string key = permission_rule_key(parked);
     std::lock_guard<std::mutex> lock(im.perm_mutex);
     if (scope == RuleScope::session) {
-        (who == AgentPrincipal::chat ? im.chat_session_rules : im.mcp_session_rules).insert(parked.name);
+        (who == AgentPrincipal::chat ? im.chat_session_rules : im.mcp_session_rules).insert(key);
         return {};
     }
-    const AgentRule rule{im.rule_agent(who), parked.name};
+    const AgentRule rule{im.rule_agent(who), key};
     if (std::find(im.perms.rules.begin(), im.perms.rules.end(), rule) == im.perms.rules.end()) im.perms.rules.push_back(rule);
     return im.save_perms();
 }

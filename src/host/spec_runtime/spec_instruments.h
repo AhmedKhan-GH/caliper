@@ -5,8 +5,9 @@
 //
 // The runtime lays a control out as a leaf of the layout, like a panel, and
 // calls draw_spec_control() for it inside the leaf's rectangle. A control
-// bound to param:, action: or run:pause acts through the app's RunControl;
-// each change of its value is pushed as a `control` event. A scene panel
+// bound to param:, action: or run:pause acts through the app's RunControl.
+// It pushes one `control` event when the person finishes an edit: at the end
+// of a slider's drag or typed entry, and at a button's click. A scene panel
 // pushes its picks and selections as `pick` and `select` events with its
 // panel id. Both reach the session's EventRing through SpecInstrumentHost.
 //
@@ -42,8 +43,8 @@ float spec_control_height(const caliper_builder::spec::Control& control, const S
 // Draws one control into `rect` of the current window: its title and its
 // widget, with the value it reads from the run control (param:), the state of
 // the run (run:pause) or the value it holds (value). Returns true when the
-// person changed it in this frame; the change has then been sent and pushed
-// as a control event.
+// person changed it in this frame; the change has then been sent. The control
+// event goes to the ring once, in the frame where the edit ends.
 bool draw_spec_control(const caliper_builder::spec::Control& control, const ImRect& rect, const SpecLook& look,
                        SpecInstrumentHost& host);
 

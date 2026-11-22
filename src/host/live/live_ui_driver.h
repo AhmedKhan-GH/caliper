@@ -25,6 +25,17 @@
 //   state <run state>     wait until the run state is <run state> (paused, running, ...)
 //   bar [<text>]          wait until the run state the bar wrote in the last frame starts
 //                         with <text> (any text without one), and log it: bar shows '<text>'
+// Three steps act on the spec page instead, through the hooks the app gives
+// (set_spec_hooks()), and wait up to kLongPatience frames, because they wait
+// for an agent in another process:
+//   panel <id>            wait until the open spec's scene panel <id> draws its live scene
+//   pick_panel <id> <fx> <fy>
+//                         a pick at the fraction (fx, fy) of the scene panel's content
+//                         (SpecPage::pick_scene), once the panel draws its live scene
+//   held [<kind>]         wait until a call of events.wait waits on the event ring (a long
+//                         poll), with a kind one whose filter takes events of that kind
+// The app feeds the driver on the spec page only while the step is one of
+// these, `wait` or `leave`.
 // A step whose target has not been drawn waits for it, up to kPatience frames,
 // then the script stops with an error.
 //
@@ -40,8 +51,10 @@
 #include <cfloat>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace caliper_live {
@@ -49,6 +62,26 @@ namespace caliper_live {
 class UiDriver {
 public:
     static constexpr int kPatience = 1200;   // frames a step waits for its target (20 s at 60 Hz)
+    static constexpr int kLongPatience = 10 * kPatience;   // a spec page step waits for an agent
+
+    // What the steps on the spec page ask the app (src/main.cpp).
+    struct SpecHooks {
+        // Whether the open spec's scene panel `id` draws its live scene.
+        std::function<bool(const std::string& id)> scene_ready;
+        // Asks the scene panel `id` for a pick at (u, v) at its next draw;
+        // false when it cannot take one.
+        std::function<bool(const std::string& id, float u, float v)> scene_pick;
+        // Whether a call of events.wait waits on the event ring; with a kind
+        // ("pick"), one whose filter takes events of that kind ("" for any).
+        std::function<bool(const std::string& kind)> long_poll_held;
+    };
+    void set_spec_hooks(SpecHooks hooks) { spec_ = std::move(hooks); }
+    // Whether the current step may run on the spec page.
+    bool spec_step() const {
+        if (done()) return false;
+        const std::string& v = steps_[at_].verb;
+        return v == "panel" || v == "pick_panel" || v == "held" || v == "wait" || v == "leave";
+    }
 
     explicit UiDriver(const std::string& script) {
         std::stringstream all(script);
@@ -80,6 +113,27 @@ public:
         ++frames_;
         if (s.verb == "wait") {
             if (frames_ >= std::atoi(s.a.c_str())) next("waited " + s.a + " frames");
+            return;
+        }
+        if (s.verb == "panel" || s.verb == "pick_panel") {
+            const bool ready = spec_.scene_ready && spec_.scene_ready(s.a);
+            if (ready && s.verb == "panel") {
+                next("panel " + s.a + " draws its scene");
+                return;
+            }
+            float u = 0.5f, v = 0.5f;
+            if (ready && std::sscanf(s.b.c_str(), "%f %f", &u, &v) != 2) {
+                fail("pick_panel needs <id> <fx> <fy>");
+                return;
+            }
+            if (ready && spec_.scene_pick && spec_.scene_pick(s.a, u, v)) next("pick_panel " + s.a + " " + s.b);
+            else if (frames_ > kLongPatience) fail("the scene panel '" + s.a + "' never drew its scene");
+            return;
+        }
+        if (s.verb == "held") {
+            if (spec_.long_poll_held && spec_.long_poll_held(s.a))
+                next("events.wait is held" + (s.a.empty() ? std::string() : " for " + s.a));
+            else if (frames_ > kLongPatience) fail("no call of events.wait was ever held");
             return;
         }
         if (s.verb == "leave") {
@@ -291,6 +345,7 @@ private:
     float x_ = 0, y_ = 0, ax_ = 0, ay_ = 0, aw_ = 0, ah_ = 0;
     std::string error_;
     std::vector<std::string> log_;
+    SpecHooks spec_;
 };
 
 }  // namespace caliper_live

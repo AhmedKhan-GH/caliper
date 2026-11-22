@@ -70,6 +70,14 @@ RequestInvocation request_invocation(CommandRequest request);
 std::unique_ptr<PendingCommand> ready_command(std::string envelope);
 std::unique_ptr<PendingCommand> queued_command(std::future<caliper_builder::CommandResult> result);
 
+// The PendingCommand of one invocation for an open session: events.wait as a
+// long poll, which wait_for_events() serves on a thread of its own (the
+// session's close() waits until that thread has left it), and every other
+// command through the session's queue. Call it while the session is open.
+std::unique_ptr<PendingCommand> session_command(caliper_builder::Session& session,
+                                                caliper_builder::CommandInvocation invocation,
+                                                caliper_builder::SubmitOptions options);
+
 // The body of GET /v0/approvals/{id}, from the queue's outcome of the
 // approval and the registry's pending approvals.
 std::string approval_state_json(const std::string& approval_id,
