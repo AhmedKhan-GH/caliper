@@ -783,9 +783,26 @@ test('a scene\'s entity transform arrives intact through the stream, and the fit
       return near && Number.isFinite(d) && d > 0.5 && d < 50 ? 'framed' : `orbit ${JSON.stringify(o)}`;
     };
     await expect.poll(fit, { timeout: 30_000 }).toBe('framed');
-    const bar = (await geo())?.scaleBar as number[] | null;
-    expect(bar, 'the scale bar is drawn').not.toBeNull();
-    expect(bar!.every(Number.isFinite) && bar![2] > bar![0] && bar![3] > bar![1]).toBe(true);
+    // Whatever makes a fit fail, a camera or a scale bar that is not finite or not above zero fails here.
+    const g = await geo();
+    const [x, y, z, d] = g.orbit as number[];
+    for (const v of [x, y, z, d]) expect(Number.isFinite(v), `orbit ${JSON.stringify(g.orbit)}`).toBe(true);
+    expect(d, 'the orbit\'s distance').toBeGreaterThan(0);
+    const band = g.scaleBar as number[] | null;
+    expect(band, 'the scale bar is drawn').not.toBeNull();
+    for (const v of band!) expect(Number.isFinite(v), `band ${JSON.stringify(band)}`).toBe(true);
+    expect(band![2] - band![0]).toBeGreaterThan(0);
+    expect(band![3] - band![1]).toBeGreaterThan(0);
+    // The bar's length, in metres and in logical pixels, finite and above zero, and its scale the
+    // orbit's at the target: 2 · distance · tan(fovy / 2) per picture height, fovy 45 degrees.
+    expect(Array.isArray(g.scaleBarLength), `scale bar length ${JSON.stringify(g.scaleBarLength)}`).toBe(true);
+    const [metres, pixels] = g.scaleBarLength as number[];
+    expect(Number.isFinite(metres) && Number.isFinite(pixels)).toBe(true);
+    expect(metres).toBeGreaterThan(0);
+    expect(pixels).toBeGreaterThan(0);
+    const perPixel = (2 * d * Math.tan(Math.PI / 8)) / g.area[3];
+    expect(Math.abs(metres / pixels - perPixel) / perPixel).toBeLessThan(1e-6);
+    expect(metres, 'a bar of the moved points\' scale').toBeLessThan(10);
   } finally {
     p.proc.kill();
   }

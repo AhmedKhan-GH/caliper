@@ -294,6 +294,13 @@ void publish() {
                 else
                     std::snprintf(b, sizeof b, ",\"orbit\":null");
                 geo += b;
+                // The scale bar the view measures for its picture: [length in scene units, logical pixels].
+                const caliper_scene::ScaleBar sb = sv ? sv->scale_bar(v->geo_area[2], v->geo_area[3]) : caliper_scene::ScaleBar{};
+                if (sb.visible && std::isfinite(sb.length) && std::isfinite(sb.pixels))
+                    std::snprintf(b, sizeof b, ",\"scaleBarLength\":[%.17g,%.17g]", sb.length, sb.pixels);
+                else
+                    std::snprintf(b, sizeof b, sb.visible ? ",\"scaleBarLength\":\"not finite\"" : ",\"scaleBarLength\":null");
+                geo += b;
             }
             geo += "}";
         }
