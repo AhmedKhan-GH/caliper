@@ -235,6 +235,8 @@ struct Check {
         }
         if (!c.spec.find_source(source))
             c.sink.error("spec.unknown_source", quote(source) + " is not a source of this spec.", path);
+        // The picker does not read the distinct values of a column yet.
+        not_built(c.sink, "the option choices_from", path);
     }
 
     void shortcut(const std::string& key, bool segmented, const std::string& path) {
