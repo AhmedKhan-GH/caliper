@@ -10,6 +10,7 @@
 #include "program_checks.h"
 
 
+#include <caliper_builder/session/piece_commands.h>
 #include <caliper_builder/session/program_commands.h>
 #include <caliper_builder/session/chain_hooks.h>
 
@@ -144,6 +145,52 @@ ProgramStatus unhosted(const spec::Spec& s, std::string id, std::string kind, st
     return st;
 }
 
+// The status item of an instance of a piece (design/programmable-graphics.md,
+// Program Commands): the kind piece, the pin, and the draw half's object when
+// the piece draws. An item that no host reports is refused when its pin does
+// not resolve, in review when a foreign spec's provenance lacks the piece's
+// hash, and waiting otherwise.
+json instance_status(const spec::Spec& s, const spec::Program& p, const ProgramStatus* hosted,
+                     const std::string& workspace) {
+    const FoundPiece found = resolve_pin(PieceLibrary::builtin(), workspace, s, *p.piece);
+    json out;
+    if (hosted) {
+        out = program_status_json(*hosted);
+    } else {
+        ProgramStatus st;
+        st.id = p.id;
+        st.panel = p.panel.value_or("");
+        if (found.error) {
+            st.state = "refused";
+            st.error = ProgramError{found.error.code, found.error.message, 0, 0};
+        } else {
+            const std::string hex = found.piece.hash.substr(found.piece.hash.find(':') + 1);
+            st.state = programs::check_provenance(s.provenance, spec::program_target(p), hex).ok() ? "waiting" : "review";
+            st.sha256 = hex;
+        }
+        if (!found.error && found.piece.derive) {
+            st.every_min = found.piece.derive->every;
+            st.memory_limit_bytes = std::uint64_t(found.piece.derive->memory_mb.value_or(64)) << 20;
+        }
+        out = program_status_json(st);
+    }
+    out["kind"] = "piece";
+    out["piece"] = spec::to_json(*p.piece);
+    if (!found.error && found.piece.draw) {
+        const spec::Draw& d = *found.piece.draw;
+        const std::string state = out["state"] == "refused" ? "refused" : "waiting";
+        out["draw"] = {{"state", state},
+                       {"frame_ms", nullptr},
+                       {"frame_limit_ms", d.frame_ms.value_or(spec::piece_limits::kFrameMsDefault)},
+                       {"memory_bytes", 0},
+                       {"memory_limit_bytes",
+                        std::uint64_t(d.memory_mb.value_or(spec::piece_limits::kDrawMemoryMbDefault)) << 20},
+                       {"resource_step", nullptr},
+                       {"error", nullptr}};
+    }
+    return out;
+}
+
 const ProgramStatus* reported(const std::vector<ProgramStatus>& list, const std::string& id) {
     for (const ProgramStatus& st : list)
         if (st.id == id) return &st;
@@ -151,7 +198,7 @@ const ProgramStatus* reported(const std::vector<ProgramStatus>& list, const std:
 }
 
 CommandOutput program_status(const json& args, const spec::Spec& s, const ProgramHost* program_host,
-                             const StageHost* stage_host) {
+                             const StageHost* stage_host, const std::string& workspace) {
     const std::string only = arg_string(args, "id");
     const std::vector<ProgramStatus> hosted_programs =
         program_host ? program_host->status() : std::vector<ProgramStatus>{};
@@ -159,6 +206,10 @@ CommandOutput program_status(const json& args, const spec::Spec& s, const Progra
     json programs_out = json::array();
     for (const spec::Program& p : s.programs) {
         if (!only.empty() && p.id != only) continue;
+        if (p.piece) {
+            programs_out.push_back(instance_status(s, p, reported(hosted_programs, p.id), workspace));
+            continue;
+        }
         if (const ProgramStatus* st = reported(hosted_programs, p.id)) {
             programs_out.push_back(program_status_json(*st));
             continue;
@@ -208,10 +259,10 @@ CommandOutput program_status(const json& args, const spec::Spec& s, const Progra
 }  // namespace
 
 CommandOutput program_command(const CommandContext& context, const spec::Spec& spec, const ProgramHost* programs,
-                              const StageHost* stages) {
+                              const StageHost* stages, const std::string& workspace) {
     const std::string& name = context.invocation.name;
     if (name == "stage.check") return stage_check(context.invocation.args);
-    if (name == "program.status") return program_status(context.invocation.args, spec, programs, stages);
+    if (name == "program.status") return program_status(context.invocation.args, spec, programs, stages, workspace);
     return CommandOutput::fail(Error("command.unknown", name + " is not a stage or program read command."));
 }
 

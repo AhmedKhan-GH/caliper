@@ -330,6 +330,25 @@ struct Session::Impl {
         return load_spec_file(rel(folder / fs::u8path(m.spec)), res);
     }
 
+    // The event `refused` of each program whose pinned piece is missing from
+    // its source or has another hash, when a spec opens
+    // (design/programmable-graphics.md, Status and Events). The spec opens all
+    // the same, and the host never pins another version on its own.
+    void refuse_unresolved_pins(const spec::Spec& s) {
+        for (const spec::Program& p : s.programs) {
+            if (!p.piece) continue;
+            const FoundPiece f = resolve_pin(PieceLibrary::builtin(), workspace, s, *p.piece);
+            if (!f.error) continue;
+            ProgramStatus st;
+            st.id = p.id;
+            st.kind = "piece";
+            st.state = "refused";
+            st.panel = p.panel.value_or("");
+            st.error = ProgramError{f.error.code, f.error.message, 0, 0};
+            push_program_event(*events, st, "refused");
+        }
+    }
+
     // Replaces the open document. Its undo restores the document that was
     // open before; its redo puts back the one it replaced.
     UndoRecord replace_document(Document next) {
@@ -343,6 +362,7 @@ struct Session::Impl {
         state->current = next.id;
         const std::size_t bytes = 2 * (spec::to_toml(next.spec).size() + (doc ? spec::to_toml(doc->spec).size() : 0)) + 512;
         doc = std::move(next);
+        refuse_unresolved_pins(doc->spec);
         auto undo = [this, state]() -> Error {
             std::lock_guard<std::mutex> lock(doc_mutex);
             if (!doc || doc->id != state->current) return conflict("restoring the spec open before");
@@ -912,6 +932,24 @@ struct Session::Impl {
         return CommandOutput::ok({{"valid", valid}, {"errors", std::move(errors)}, {"warnings", warnings_json(diagnostics)}});
     }
 
+    // apply_spec_edit(), and for program.create and program.patch of an
+    // instance of a piece the resolution of its pin against the library, the
+    // workspace and the spec's inline pieces (piece_commands.h): the missing
+    // or changed piece refuses the edit, a pin without a hash takes the
+    // piece's, and `args` gets that hash so that the journal replays it.
+    SpecEdit edit_spec(const spec::Spec& s, const std::string& name, json& args) {
+        const spec::SourceResolver res = resolver();
+        SpecEdit e = apply_spec_edit(s, name, args, res);
+        if (e.error || (name != "program.create" && name != "program.patch")) return e;
+        const std::string id = str_arg(args, "id");
+        if (Error err = complete_instance(PieceLibrary::builtin(), workspace, e.spec, id, res, &args)) {
+            SpecEdit refused;
+            refused.error = std::move(err);
+            return refused;
+        }
+        return e;
+    }
+
     // A dry run, whether it succeeds or fails, and an edit that leaves the
     // spec as it was report no effect, so the registry treats them as reads:
     // the redo stack stays, no undo step is filed and the journal is not
@@ -929,7 +967,7 @@ struct Session::Impl {
             camera_args["orbit"] = got.result.value("orbit", json());
         }
         std::lock_guard<std::mutex> lock(doc_mutex);
-        const json& args = camera_args.is_null() ? ctx.invocation.args : camera_args;
+        json args = camera_args.is_null() ? ctx.invocation.args : camera_args;
         const bool dry = bool_arg(args, "dry_run", false);
         if (!ctx.invocation.preview.empty()) return preview_edit(ctx, dry);
         auto refused = [dry](CommandOutput out) {
@@ -943,7 +981,7 @@ struct Session::Impl {
             return fail("history.conflict",
                         "Another spec was opened after the person was shown this change, so it was not applied; read "
                         "the open spec and send the edit again.");
-        SpecEdit e = apply_spec_edit(doc->spec, ctx.invocation.name, args, resolver());
+        SpecEdit e = edit_spec(doc->spec, ctx.invocation.name, args);
         if (e.error && shown)
             return fail("history.conflict",
                         "The open spec changed after the person was shown this change, and it no longer applies: " +
@@ -967,8 +1005,10 @@ struct Session::Impl {
         CommandOutput out =
             CommandOutput::ok(std::move(result), change_spec(std::move(e.spec), !ctx.invocation.merge_key.empty(), bytes));
         // camera.save journals the orbit it saved, so that a replay of the
-        // journal and a redo need no app.
+        // journal and a redo need no app; a program edit journals the hash
+        // of the piece it pinned.
         out.recorded_args = camera_args;
+        if (args != ctx.invocation.args) out.recorded_args = args;
         return out;
     }
 
@@ -1010,7 +1050,8 @@ struct Session::Impl {
         {
             std::lock_guard<std::mutex> lock(doc_mutex);
             if (!doc) return nullptr;
-            SpecEdit e = apply_spec_edit(doc->spec, inv.name, inv.args, resolver());
+            json args = inv.args;
+            SpecEdit e = edit_spec(doc->spec, inv.name, args);
             if (e.error || e.spec == doc->spec) return nullptr;
             const std::string before = spec::to_toml(doc->spec);
             const std::string after = spec::to_toml(e.spec);
@@ -1198,7 +1239,8 @@ struct Session::Impl {
         spec::Spec s = doc->spec;
         const spec::SourceResolver res = resolver();
         for (const CommandInvocation& inv : p.stack) {
-            SpecEdit e = apply_spec_edit(s, inv.name, inv.args, res);
+            json args = inv.args;
+            SpecEdit e = edit_spec(s, inv.name, args);
             if (e.error)
                 return Error("history.conflict",
                              "The open spec changed since the preview's edits were made, and its " + inv.name +
@@ -1270,7 +1312,8 @@ struct Session::Impl {
         const std::string& name = ctx.invocation.name;
         const json& args = ctx.invocation.args;
         if (Error e = check_scope(*p, name, args)) return quiet(CommandOutput::fail(e));
-        SpecEdit e = apply_spec_edit(p->shadow, name, args, resolver());
+        json completed = args;
+        SpecEdit e = edit_spec(p->shadow, name, completed);
         if (e.error) return quiet(CommandOutput::fail(e.error));
         const std::string label = spec_label();
         json result = std::move(e.result);
@@ -1561,6 +1604,22 @@ struct Session::Impl {
         return doc ? doc->spec : spec::Spec{};
     }
     CommandOutput piece_cmd(const CommandContext& ctx) { return piece_command(ctx, open_copy(), workspace); }
+    // piece.save writes the inline piece to the workspace and installs the
+    // spec without it, its programs pinned to the copy, as one undo step.
+    CommandOutput piece_save(const CommandContext& ctx) {
+        std::lock_guard<std::mutex> lock(doc_mutex);
+        const bool dry = bool_arg(ctx.invocation.args, "dry_run", false);
+        auto quiet = [dry](CommandOutput out) {
+            out.no_effect = dry || out.error;
+            return out;
+        };
+        if (!doc) return quiet(no_open_spec());
+        PieceSave saved = save_inline_piece(workspace, doc->spec, ctx.invocation.args, dry);
+        if (saved.error) return quiet(CommandOutput::fail(saved.error));
+        if (dry || saved.after == doc->spec) return CommandOutput::unchanged(std::move(saved.result));
+        const std::size_t bytes = 2 * (spec::to_toml(doc->spec).size() + spec::to_toml(saved.after).size()) + 512;
+        return CommandOutput::ok(std::move(saved.result), change_spec(std::move(saved.after), false, bytes));
+    }
     CommandOutput resource_cmd(const CommandContext& ctx) { return resource_command(ctx, open_copy(), history); }
     CommandOutput program_cmd(const CommandContext& ctx) {
         spec::Spec open;
@@ -1568,7 +1627,7 @@ struct Session::Impl {
             std::lock_guard<std::mutex> lock(doc_mutex);
             if (doc) open = doc->spec;
         }
-        return program_command(ctx, open, program_host.load(), stage_host.load());
+        return program_command(ctx, open, program_host.load(), stage_host.load(), workspace);
     }
     // The commands of design/instrument-interface.md that change or read
     // session state (instrument_commands.h). They run on a copy of the open
@@ -1712,9 +1771,10 @@ struct Session::Impl {
             bind(name, &Impl::instrument_cmd);
         // The stages, programs and interventions (design/gpu-programs.md).
         for (const char* name : {"stage.check", "program.status"}) bind(name, &Impl::program_cmd);
-        for (const char* name : {"piece.check", "piece.list", "piece.show", "piece.save", "piece.copy",
-                                 "piece.update", "piece.remove"})
+        for (const char* name : {"piece.check", "piece.list", "piece.show", "piece.copy", "piece.update",
+                                 "piece.remove"})
             bind(name, &Impl::piece_cmd);
+        bind("piece.save", &Impl::piece_save);
         bind("program.read", &Impl::resource_cmd);
         for (const char* name : {"intervene.points", "intervene.set", "intervene.clear", "intervene.list"})
             bind(name, &Impl::intervene_cmd);

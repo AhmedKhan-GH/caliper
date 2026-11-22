@@ -102,6 +102,16 @@ std::string_view draw_prelude();
 // there is none. A released version never changes.
 std::vector<std::string_view> lib_modules();
 std::string_view lib_module(std::string_view name_at_version);
+// One file of the built-in library (src/builder/programs/library/): its path
+// below library/, such as "lib/colormap/1.wgsl" or
+// "pieces/points/1/piece.toml", and its text. The build embeds the lib
+// modules and the piece.toml and WGSL files of each library piece, in the
+// order of their paths; the samples of library pieces are not embedded.
+struct LibraryFile {
+    std::string_view path;
+    std::string_view text;
+};
+std::vector<LibraryFile> library_files();
 
 // ---- names and paths (design/programmable-graphics.md, Piece Files)
 // A piece name is [a-z][a-z0-9_]{0,31} and a version 1 to kVersionMax, so
