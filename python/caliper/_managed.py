@@ -35,7 +35,9 @@ things, in this order:
 before the weights change, and returns the path. The file is a ``torch.save`` dict with the keys
 ``model``, ``optimizer``, ``format``, ``version``, ``run``, ``parent``, ``step`` and ``params``
 (``caliper._adapter.TorchAdapter.state``). ``caliper.stop`` makes the hook of that checkpoint
-send what is pending and raise ``SystemExit(0)`` before the weights change. It also ends a pause.
+send what is pending, close the stream server and raise ``SystemExit(0)`` before the weights
+change. The close sends the final reply of each action and the last run state before BYE and
+the close code 1001, and waits a bounded time for each viewer. The stop also ends a pause.
 
 A managed run does not outlive the app that started it. On POSIX, ``import caliper`` in a process
 with ``CALIPER_RUN_APP_PID`` imports this module and starts a daemon thread (``watch_parent``), and
@@ -293,13 +295,27 @@ class ManagedRun:
         return f"stopping at step {ctl.n}"
 
     def exit(self) -> None:
-        """Send what is pending, then raise ``SystemExit(0)`` (the hook of the checkpoint)."""
+        """Send what is pending, close the stream server, then raise ``SystemExit(0)`` (the hook
+        of the checkpoint).
+
+        The close sends the final replies of the actions and the last run state, then BYE and
+        the close 1001 to each viewer, with a bounded wait (``NetServer.close``). It comes before
+        the ``SystemExit``, so that neither the script's own cleanup nor a thread that the
+        interpreter waits for at its exit delays it.
+        """
         pkg = self._pkg
         try:
             pkg.flush(FLUSH_S)
         except Exception:                # noqa: BLE001 - the stop goes on
             pass
         print(f"caliper: run {self.id} stops at step {pkg._CTL.n}", flush=True)
+        from ._net import current_server
+        server = current_server()
+        if server is not None:
+            try:
+                server.close()
+            except Exception:            # noqa: BLE001 - the stop goes on
+                pass
         raise SystemExit(0)
 
     def _forward(self, module, inputs, output) -> None:
