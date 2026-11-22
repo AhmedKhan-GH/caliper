@@ -313,7 +313,7 @@
                   "type": "string"
                 },
                 "kind": {
-                  "description": "table: a DuckDB table or view, such as a loader made; tensor: a tensor read from a file, an image or an audio clip; live: a live view of the attached live session; feed: a channel of live telemetry; metric: a run and tag of logged metrics.",
+                  "description": "table: a DuckDB table or view, such as a loader made; tensor: a tensor read from a file, an image or an audio clip; live: a live view of the attached live session; feed: a channel of live telemetry; metric: a run and tag of logged metrics; run: a series of a managed run of the model runner, run:<run id>/<view>.",
                   "enum": [
                     "table",
                     "tensor",
@@ -588,7 +588,7 @@
                 "type": "string"
               },
               "kind": {
-                "description": "table: a DuckDB table or view, such as a loader made; tensor: a tensor read from a file, an image or an audio clip; live: a live view of the attached live session; feed: a channel of live telemetry; metric: a run and tag of logged metrics.",
+                "description": "table: a DuckDB table or view, such as a loader made; tensor: a tensor read from a file, an image or an audio clip; live: a live view of the attached live session; feed: a channel of live telemetry; metric: a run and tag of logged metrics; run: a series of a managed run of the model runner, run:<run id>/<view>.",
                 "enum": [
                   "table",
                   "tensor",

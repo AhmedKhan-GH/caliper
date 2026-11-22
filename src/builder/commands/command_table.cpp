@@ -61,7 +61,7 @@ const std::pair<const char*, const char*> kFragments[] = {
       "properties": {
         "id": {"type": "string", "description": "The source id, <kind>:<name>; a spec source names it in its catalog field."},
         "kind": {"type": "string", "enum": ["table", "tensor", "live", "feed", "metric", "run"],
-                 "description": "table: a DuckDB table or view, such as a loader made; tensor: a tensor read from a file, an image or an audio clip; live: a live view of the attached live session; feed: a channel of live telemetry; metric: a run and tag of logged metrics."},
+                 "description": "table: a DuckDB table or view, such as a loader made; tensor: a tensor read from a file, an image or an audio clip; live: a live view of the attached live session; feed: a channel of live telemetry; metric: a run and tag of logged metrics; run: a series of a managed run of the model runner, run:<run id>/<view>."},
         "name": {"type": "string", "description": "The name part of the id. For a table it is the table's name in SQL."},
         "title": {"type": "string", "description": "A name for a person."},
         "origin": {"$use": "origin", "description": "Where the source comes from: a loader and its file, a database table, a live view, a feed channel, or a metrics run and tag."},

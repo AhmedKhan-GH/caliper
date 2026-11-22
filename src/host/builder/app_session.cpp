@@ -349,6 +349,7 @@ struct AppSession::Impl {
     std::atomic<bool> busy{false};
     std::shared_ptr<HostBinding> binding;
     AppRunControl run_ctl;   // the session's run control from its adoption until close()
+    std::atomic<cb::ModelRunner*> runner{nullptr};   // the session's model runner from its adoption until close()
 
     std::mutex lines_m;
     std::vector<Line> lines;   // from the journal, any thread
@@ -453,6 +454,7 @@ struct AppSession::Impl {
         binding = std::make_shared<HostBinding>(this);
         s->set_host(binding);
         s->set_run_control(&run_ctl);
+        s->set_model_runner(runner.load());
         cb::Session* raw = s.get();
         {
             std::lock_guard<std::mutex> lock(m);
@@ -775,6 +777,7 @@ struct AppSession::Impl {
         if (session) {
             session->set_host(nullptr);
             session->set_run_control(nullptr);
+            session->set_model_runner(nullptr);
             session->close();   // the queue and the journal
             session.reset();    // the loader store and workspace.duckdb
             say("workspace " + opt.workspace + " closed");
@@ -952,6 +955,12 @@ void AppSession::set_run_link(caliper_live::RunLink* link) { impl_->run_ctl.set_
 
 caliper_builder::RunControl* AppSession::run_control() { return &impl_->run_ctl; }
 
+void AppSession::set_model_runner(caliper_builder::ModelRunner* runner) {
+    impl_->runner.store(runner);
+    std::lock_guard<std::mutex> lock(impl_->m);
+    if (impl_->session) impl_->session->set_model_runner(runner);
+}
+
 uint64_t AppSession::journaled() const { return impl_->journaled.load(std::memory_order_acquire); }
 
 uint64_t AppSession::specs_opened() const { return impl_->specs_opened.load(std::memory_order_acquire); }
@@ -1015,6 +1024,7 @@ bool AppSession::script_running() const { return false; }
 void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderSeam>) {}
 void AppSession::set_run_link(caliper_live::RunLink*) {}
 caliper_builder::RunControl* AppSession::run_control() { return nullptr; }
+void AppSession::set_model_runner(caliper_builder::ModelRunner*) {}
 uint64_t AppSession::journaled() const { return 0; }
 uint64_t AppSession::specs_opened() const { return 0; }
 uint64_t AppSession::agent_specs_opened() const { return 0; }
