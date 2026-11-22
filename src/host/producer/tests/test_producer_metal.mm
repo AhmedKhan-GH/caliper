@@ -314,8 +314,11 @@ TEST_CASE("an import that cannot be in place is refused, never copied") {
 TEST_CASE("the watchdog stops a program over its time limit, and a timeout stops every program") {
     Fixture f;
     if (f.device == nil) { MESSAGE("no Metal device"); return; }
-    Desc d(kRowNorms, f.w);
-    d.d.time_limit_ms = 1e-9;   // every pass is over it
+    // A long loop over the row, thus every pass is over the sandbox's least limit of 0.01 ms.
+    const std::string slow = replaced(kRowNorms, "c < 8u; c++) { let v = w[row * 8u + c];",
+                                      "c < 200000u; c++) { let v = w[row * 8u + c % 8u];");
+    Desc d(slow.c_str(), f.w);
+    d.d.time_limit_ms = 0.01;
     uint32_t prog = 0;
     caliper_producer_error e{};
     if (!compile_or_skip(f.rt, d.d, &prog, &e)) { caliper_producer_error_free(&e); return; }

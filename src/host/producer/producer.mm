@@ -326,8 +326,8 @@ sp::Program to_spec(const caliper_producer_program_desc* d, const std::vector<Im
         p.output.max_count = d->max_count;
         for (size_t i = 0; i < d->array_count; ++i)
             if (auto a = sp::geometry_array_from_name(d->arrays[i])) p.output.arrays.push_back(*a);
+        p.output.panel = "script";   // the sandbox's declaration check wants a panel; a pixels output has none
     }
-    p.output.panel = "script";
     p.limits.time_ms = d->time_limit_ms;
     p.limits.memory_mb = uint32_t(std::max<uint64_t>(1, d->memory_limit_bytes >> 20));
     if (d->workgroups[0] || d->workgroups[1] || d->workgroups[2])

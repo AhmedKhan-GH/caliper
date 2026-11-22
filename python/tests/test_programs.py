@@ -306,7 +306,10 @@ def test_a_program_over_its_time_limit_stops_and_training_continues(run):
     net, opt, _, _ = run
     seen = []
     P.listeners.append(seen.append)
-    decl, src = _geometry(4, time_ms=1e-6)           # every pass is over the limit
+    decl, src = _geometry(4, time_ms=0.01)           # the sandbox's least limit
+    loop = "c < 8u; c++) { let v = w[row * 8u + c];"
+    assert loop in src
+    src = src.replace(loop, "c < 200000u; c++) { let v = w[row * 8u + c % 8u];")   # every pass is over it
     P.install("slow", decl, src, scene="s")
     for i in range(P.WARMUP_STEPS + 10):
         _train(net, opt, 1, first=i)
