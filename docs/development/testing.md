@@ -260,6 +260,40 @@ A toggle bound to `intervene:0` is clicked through `CALIPER_TEST_SPEC_UI`, which
 
 The check `python3 examples/python/gpu_program_check.py` runs the same flow without a window, as one command with defaults. It uses the app and `caliper-mcp` of the build folder with the newest app, and it writes the captures into a folder of that build folder. It prints the count of files with an unchanged SHA-256, the status of the geometry program, the losses around the toggle, the pixel counts and the capture paths. It exits with 1 on a failure and with 2 when the check cannot run.
 
+## Programmable Graphics Tests
+
+Pieces have tests at four levels. Each refusal that [Pieces](../agents/pieces.md#refusals) lists has a case at the level of the host that gives it.
+
+| Level | Entry | What it checks |
+|---|---|---|
+| Builder | `builder_programs`, `builder_spec`, `builder_session`, `builder_commands`, `builder_mcp` | The names, files, imports, hash and layouts of a piece, the manifest checks with one case for each code, the composers of both halves, the codec and validator of the spec, the piece commands with their pins and undo steps, the command table, and the resources of `caliper://library/` (`src/builder/programs/tests/`, `src/builder/session/tests/test_piece_commands.cpp`) |
+| Draw runtime | `caliper_gfx_draw_tests` | The draw half on the recording backend of the graphics layer: install, the order of the passes, a skipped pass, the checks before anything is made, a pass that does not compile, the layout of a version, the reset rules of the draw buffers, the stop after 30 slow frames, the timeout of 1 s, the draw memory, the decode of PROGRAM with the hash, and the draw host with its camera conflict (`src/host/draw/tests/test_draw_runtime.cpp`) |
+| Metal rows | `caliper_gfx_tests` | The cases named `gfx/Metal pieces` (`tests/gfx/gfx_pieces.cpp`). The field draws as the CPU reference of its fragment, the arcs draw instanced and additive with an ID for each arc and the bloom of their glow, a slow pass stops its program while the other goes on, a compute pass of the draw half feeds an instanced draw with state, reset and depth, and the scene view draws its programs after its scene |
+| Derive half | `caliper_producer_tests` | The derive half in the producer runtime on Metal: passes in order with the contents kept, clears and counters, read-only tensors, bounds, sizes, the watchdog and the timeout without a wait, a rebind and a texture |
+| Host | `caliper_spec_runtime` | The `programs` cases: the item map gives the fields and the index of an item and refuses an item past the count, the text table gives a label at each valid anchor, and a piece in a scene panel is picked at its pixel, writes a select state and places its labels |
+| Python | `python/tests/test_programs_pieces.py` | The facade of the script: an instance installs, the derive half runs and publishes RESOURCE, a draw half relays to a viewer, and the backlog of RESOURCE frames stays bounded |
+
+The wire frames have golden files and codec tests in all three languages, as [Wire Golden Frames](#wire-golden-frames) describes. The folder `tests/fixtures/wire_v3/v3_2` holds the frames of PROGRAM for an instance of a piece and of RESOURCE, and the invalid frames that each codec refuses.
+
+### Piece Path
+
+The ctest entry `caliper_piece_path_acceptance` (`tests/piece_path/driver.py`) follows one piece through the whole path. It starts the hidden app with no script and `caliper-mcp` as a child, and the model runner starts the training script of the GPU programs test, `tests/gpu_programs/train.py`, in a throwaway workspace. The driver writes the workspace piece `row_norms` with `piece_update`. Its derive half reads the weight `0.weight` and writes the norm of each row, and its draw half draws one bar for each row with an ID. The driver then creates an instance of it in a scene panel with `program_create`.
+
+The driver waits for the event `compiled` of both halves and checks each step by state, not by eye:
+
+- The status of the instance has the kind `piece`, and the hash that the script runs equals the hash of the pin.
+- `program_read` gives the elements of the newest version, and each element has its row index and the norm of that row. A later version and the step history hold at least two versions, and a read at an older step gives the version that was newest then.
+- The `draw` object of the status is `running` with a `resource_step`, and the panel gains at least 2,000 blue pixels against a capture of the empty panel.
+- `selection_set` with `program` and `item` gives the fields of row 5 and a `pick` event. The linked selection then marks the bar, which adds magenta pixels.
+
+The driver writes three captures, `empty`, `drawn` and `picked`, into `piece-path-captures` of the build folder. The entry has the labels `pieces` and `acceptance`, a timeout of 300 seconds, and the conditions and the exit code 77 of the GPU programs test.
+
+### Draw Parity
+
+The folder `tests/draw_parity/` compares the app and the browser module on the same frame. A fixture holds two instances, a field and a set of arcs, as PROGRAM frames and one RESOURCE frame for each, thus no training runs. `caliper_draw_parity_tests` checks what needs no GPU: the frames, the decode with the hash of the pin, the packed params, the refusals of the module, and an install of each program on the recording backend. `caliper_draw_parity_app` draws the fixture with the draw runtime of the app on Metal into a folder of the build. It exits with 77 and prints the reason when no Metal device exists.
+
+The browser side is `web/test/draw_parity.spec.ts`. It draws the same frames with the browser module in headless Chromium and compares the color and the ID targets with the files of the app. An interior pixel, which has one ID in its 3 by 3 neighborhood in both images, differs by at most 2 levels in each channel and has the same ID. The bloom of the glow target may differ by 3 levels. The pixels that differ at an edge and take neither side stay below 1 percent of the image. A second case sends the draw halves over a connection as PROGRAM and RESOURCE and checks that the scene view of the module draws them and refuses a bad one. The test runs in the macOS lane of CI with the browser on SwiftShader. It waits on a written frame and never on a fixed time.
+
 ## Instrument Building Acceptance
 
 The ctest entry `caliper_instrument_building_acceptance` (`tests/instrument_building/driver.py`) is the acceptance test of instrument building. It starts the hidden app with no script and `caliper-mcp` as a child, and it runs `tests/instrument_building/train.py`, a small transformer whose only Caliper line is `caliper.watch(model, optimizer)`, as a managed run started by `run_start`. The driver builds an instrument on that run with MCP tools only. It approves the cards through `CALIPER_TEST_APPROVALS` and moves the learning rate slider and the toggle through `CALIPER_TEST_SPEC_UI`, which waits for files that the driver writes.
