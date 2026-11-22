@@ -49,6 +49,7 @@
 #include <caliper_builder/text/bound_text.h>
 
 #include "spec_runtime/spec_annotations.h"
+#include "spec_runtime/label_layout.h"   // fit_with_ellipsis
 
 #include <algorithm>
 #include <chrono>
@@ -68,6 +69,22 @@ namespace {
 namespace cb = caliper_builder;
 namespace spec = caliper_builder::spec;
 using nlohmann::json;
+
+// `text` cut to `width` with an ellipsis at the current font (label_layout.h).
+std::string fit_row_text(const std::string& text, float width) {
+    return fit_with_ellipsis(text, width, [](std::string_view t) {
+        return ImGui::CalcTextSize(t.data(), t.data() + t.size()).x;
+    });
+}
+
+// The whole of a cut text as a tooltip while the pointer is over `hover` in
+// this window. A text that fits needs none.
+void cut_text_tooltip(const std::string& text, const std::string& shown, const ImRect& hover) {
+    if (shown == text || text.empty()) return;
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+        ImGui::IsMouseHoveringRect(hover.Min, hover.Max))
+        ImGui::SetTooltip("%s", text.c_str());
+}
 
 // A value the person set that the script has not shown yet: the slider keeps
 // showing it until the script's value or pending value matches it, or for a
@@ -313,9 +330,14 @@ void draw_title(const Row& row, const std::string& title, const SpecLook& look) 
     if (row.title.GetWidth() <= 0.0f) return;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float ty = row.title.Min.y + (row.title.GetHeight() - ImGui::GetTextLineHeight()) * 0.5f;
+    // A title wider than its part of the row ends in an ellipsis before the
+    // widget's gap, and a hover shows it whole.
+    const float gap = std::round(6.0f * look.text_scale);
+    const std::string shown = fit_row_text(title, std::max(0.0f, row.title.GetWidth() - gap));
     dl->PushClipRect(row.title.Min, row.title.Max, true);
-    dl->AddText(ImVec2(row.title.Min.x, ty), look.secondary, title.c_str());
+    dl->AddText(ImVec2(row.title.Min.x, ty), look.secondary, shown.c_str());
     dl->PopClipRect();
+    cut_text_tooltip(title, shown, row.title);
 }
 
 void disabled_tooltip(const std::string& why) {
@@ -534,10 +556,12 @@ bool draw_toggle(const spec::Control& c, const spec::ControlTarget& t, const Row
     dl->AddCircleFilled(ImVec2(on ? b.x - h * 0.5f : a.x + h * 0.5f, a.y + h * 0.5f), r,
                         disabled ? look.faint : look.text);
     const float tx = b.x + std::round(6.0f * look.text_scale);
+    const std::string shown = fit_row_text(text, std::max(0.0f, row.widget.Max.x - tx));
     dl->PushClipRect(ImVec2(tx, row.widget.Min.y), row.widget.Max, true);
     dl->AddText(ImVec2(tx, row.widget.GetCenter().y - ImGui::GetTextLineHeight() * 0.5f),
-                disabled ? look.faint : look.secondary, text.c_str());
+                disabled ? look.faint : look.secondary, shown.c_str());
     dl->PopClipRect();
+    cut_text_tooltip(text, shown, ImRect(ImVec2(tx, row.widget.Min.y), row.widget.Max));
     if (!pressed || disabled) return false;
     const bool want = !on;
     cb::Error e;
@@ -684,10 +708,13 @@ bool draw_range(const spec::Control& c, const Row& row, const SpecLook& look, Sp
         dl->AddRectFilled(ImVec2(x - grab * 0.5f, r.Min.y + 3.0f), ImVec2(x + grab * 0.5f, r.Max.y - 3.0f),
                           active ? look.line : look.accent);
     const std::string text = number_label(lo) + " \xE2\x80\x93 " + number_label(hi);   // –
-    const ImVec2 ts = ImGui::CalcTextSize(text.c_str());
+    const float right = r.Max.x - std::round(6.0f * look.text_scale);
+    const std::string shown = fit_row_text(text, std::max(0.0f, right - (x1 + grab)));
+    const ImVec2 ts = ImGui::CalcTextSize(shown.c_str());
     dl->PushClipRect(ImVec2(x1 + grab, r.Min.y), r.Max, true);
-    dl->AddText(ImVec2(r.Max.x - std::round(6.0f * look.text_scale) - ts.x, cy - ts.y * 0.5f), look.text, text.c_str());
+    dl->AddText(ImVec2(right - ts.x, cy - ts.y * 0.5f), look.text, shown.c_str());
     dl->PopClipRect();
+    cut_text_tooltip(text, shown, ImRect(ImVec2(x1 + grab, r.Min.y), r.Max));
     return changed;
 }
 
@@ -776,20 +803,28 @@ bool draw_segmented(const spec::Control& c, const Row& row, const SpecLook& look
         const bool pressed = ImGui::InvisibleButton("###segment", ImVec2(std::max(1.0f, b.x - a.x), b.y - a.y));
         const bool hovered = ImGui::IsItemHovered();
         ImGui::PopID();
+        // A label wider than its segment ends in an ellipsis, and a hover
+        // shows it whole above the choice's shortcut.
+        const std::string label = choice_text(ch);
+        const std::string shown = fit_row_text(label, std::max(0.0f, b.x - a.x - 4.0f));
         if (hovered && ch.key) {
             std::string k = *ch.key;
             const bool shift = k.rfind("shift+", 0) == 0;
             if (shift) k = k.substr(6);
             for (char& ch2 : k) ch2 = static_cast<char>(std::toupper(static_cast<unsigned char>(ch2)));
-            ImGui::SetTooltip("Shortcut: %s%s", shift ? "Shift+" : "", k.c_str());
+            if (shown != label)
+                ImGui::SetTooltip("%s\nShortcut: %s%s", label.c_str(), shift ? "Shift+" : "", k.c_str());
+            else
+                ImGui::SetTooltip("Shortcut: %s%s", shift ? "Shift+" : "", k.c_str());
+        } else if (hovered && shown != label) {
+            ImGui::SetTooltip("%s", label.c_str());
         }
         dl->AddRectFilled(a, b, on ? look.accent : hovered ? look.plate_hover : look.plate);
         dl->AddRect(a, b, look.rule_faint);
-        const std::string label = choice_text(ch);
-        const ImVec2 ts = ImGui::CalcTextSize(label.c_str());
+        const ImVec2 ts = ImGui::CalcTextSize(shown.c_str());
         dl->PushClipRect(a, b, true);
         dl->AddText(ImVec2(std::round((a.x + b.x - ts.x) * 0.5f), std::round((a.y + b.y - ts.y) * 0.5f)),
-                    on ? look.ground : look.secondary, label.c_str());
+                    on ? look.ground : look.secondary, shown.c_str());
         dl->PopClipRect();
         if (!pressed) continue;
         if (!multiple) {
@@ -827,11 +862,16 @@ void draw_readout(const spec::Control& c, const Row& row, const SpecLook& look, 
     caliper_builder::text::ParsedText parsed;
     const cb::Error e = caliper_builder::text::parse_bound_text(bt.format, names, &parsed);
     const std::string text = e ? bt.format : caliper_builder::text::format_bound_text(parsed, values);
+    // A text wider than the row ends in an ellipsis, and a hover shows it whole.
+    const std::string shown = fit_row_text(text, row.widget.GetWidth());
     ImGui::SetCursorScreenPos(row.widget.Min);
     ImGui::InvisibleButton("###readout", row.widget.GetSize());
-    if (e && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", e.message.c_str());
+    if (ImGui::IsItemHovered()) {
+        if (e) ImGui::SetTooltip("%s", e.message.c_str());
+        else if (shown != text) ImGui::SetTooltip("%s", text.c_str());
+    }
     dl->PushClipRect(row.widget.Min, row.widget.Max, true);
-    dl->AddText(ImVec2(row.widget.Min.x, ty), e ? look.faint : look.text, text.c_str());
+    dl->AddText(ImVec2(row.widget.Min.x, ty), e ? look.faint : look.text, shown.c_str());
     dl->PopClipRect();
 }
 

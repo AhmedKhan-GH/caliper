@@ -105,4 +105,34 @@ std::vector<PlacedLabel> place_labels(const std::vector<LabelBox>& boxes, const 
     return out;
 }
 
+std::string fit_with_ellipsis(std::string_view text, float width,
+                              const std::function<float(std::string_view)>& width_of) {
+    if (!width_of || !(width >= 0.0f)) return {};
+    if (width_of(text) <= width) return std::string(text);
+    const std::string_view ell(kTextEllipsis);
+    if (width_of(ell) > width) return {};
+    // The places where a prefix may end: before each character that starts a
+    // UTF-8 sequence, and not after a space.
+    std::vector<std::size_t> ends;
+    for (std::size_t i = 1; i < text.size(); ++i)
+        if ((static_cast<unsigned char>(text[i]) & 0xC0) != 0x80 && text[i - 1] != ' ') ends.push_back(i);
+    // Prefix widths grow with their length, thus a binary search finds the
+    // longest prefix that fits with its ellipsis.
+    std::string best;
+    std::string probe;
+    std::size_t lo = 0, hi = ends.size();
+    while (lo < hi) {
+        const std::size_t mid = lo + (hi - lo) / 2;
+        probe.assign(text.substr(0, ends[mid]));
+        probe.append(ell);
+        if (width_of(probe) <= width) {
+            best = probe;
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return best.empty() ? std::string(ell) : best;
+}
+
 }  // namespace caliper_host
