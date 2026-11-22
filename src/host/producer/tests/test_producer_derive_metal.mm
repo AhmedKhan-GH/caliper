@@ -656,3 +656,22 @@ fn look(@builtin(global_invocation_id) id: vec3<u32>) {
     CHECK(read<float>(f.rt, prog, "v", &out)[0] == weight(1, 0, 5, 2));
     caliper_producer_error_free(&e);
 }
+
+TEST_CASE("a resource and an input that no pass uses still compile, and a private resource stays in the script") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    Piece p = f.piece("@compute @workgroup_size(1)\nfn run() { a[0] = 2.0; }\n", 2);
+    p.buffer("a", "f32", 4);
+    p.buffer("unused", "vec4<f32>", 8).counted = 1;
+    p.pass("run", 1, {"a"});
+    const caliper_producer_derive_desc d = p.desc();
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+    caliper_producer_frame frame{1, 0.0, 3};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_output out{};
+    CHECK(read<float>(f.rt, prog, "a", &out)[0] == 2.0f);
+    CHECK(read<float>(f.rt, prog, "unused", &out).empty());   // counted, and nothing counted it
+    caliper_producer_error_free(&e);
+}
