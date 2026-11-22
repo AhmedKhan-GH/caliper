@@ -90,8 +90,11 @@ _MEMBERS = ("source", "index", "reduce", "tile")
 
 
 class DataViewError(ValueError):
-    """A data view that does not resolve (the protocol's ``bad_data_view``).
-    The message is plain text that names the rule, fit to send to a viewer."""
+    """A `ValueError` for a data view that breaks a rule.
+
+    The error is the `bad_data_view` of the wire protocol. Its message is plain text that names the
+    broken rule and is fit to send to a viewer. The view keeps the data view it had.
+    """
 
 
 # ---------------------------------------------------------------------------

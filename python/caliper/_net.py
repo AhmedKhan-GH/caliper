@@ -1110,16 +1110,17 @@ class _Listener:
 # the server object
 # ===========================================================================
 class NetServer:
-    """What ``caliper.serve()`` returns: the running stream server.
+    """The running stream server, returned by [`serve`][caliper.serve].
 
-    ``url`` is the viewer page (``http://127.0.0.1:<port>/?token=<token>``),
-    ``stream_url`` the WebSocket endpoint, ``port``, ``token`` and ``session``
-    (the session id) identify it, and ``closed`` says whether it still runs.
-    ``on_event(fn)`` registers a function that receives every viewer event as a
-    dict (on a thread of its own, never the training thread); ``events()``
-    returns and clears the events received since the last call (at most 256).
-    ``close()`` ends every connection with BYE and stops the server; it also
-    runs at ``caliper.close()`` and at interpreter exit."""
+    It works as a context manager that closes the server on exit.
+
+    Attributes:
+        url (str): The link of the viewer page, with the token.
+        stream_url (str): The `ws://` URL of the stream, with the token.
+        port (int): The port the server listens on.
+        token (str): The session token.
+        closed (bool): `True` once the server is stopped.
+    """
 
     _stream_file = None                 # serve()'s StreamFile while it listens
 
@@ -1165,12 +1166,13 @@ class NetServer:
 
     @property
     def control(self) -> bool:
-        """Whether viewers may control the script (``serve(control=...)``)."""
+        """Whether viewers may control the run, as `serve()` was told."""
         c = self.producer.controls
         return c is not None and c.allow
 
     @property
     def session(self) -> str:
+        """The session id that viewers see, `clp-<pid>-<6 hex>`."""
         return self.identity["id"]
 
     # -- the network thread -------------------------------------------------------
@@ -1229,11 +1231,26 @@ class NetServer:
 
     # -- events --------------------------------------------------------------------
     def on_event(self, fn: Callable[[dict], Any]) -> Callable[[dict], Any]:
-        """Call ``fn(event)`` for every viewer event from now on (usable as a
-        decorator). ``event`` is a dict: ``view``, ``type`` ("select", "pick",
-        "hover"), ``detail``, ``sub``, ``seq``, ``data_view``, ``connection``,
-        ``time``. ``fn`` runs on the thread "caliper.events"; an exception in it
-        is reported as a warning and does not stop later events."""
+        """Call `fn(event)` for every viewer event from now on.
+
+        An event is a dict with `view`, `type` (`"select"`, `"pick"` or `"hover"`), `detail`, `sub`,
+        `seq`, `data_view`, `connection` and `time`. The `detail` is in source indices, as the
+        [Wire Protocol](../reference/data-messages.md#events) reference lists for each kind. Events
+        are data for Python code to read, and nothing in them runs as a command.
+
+        The functions run on a thread named `caliper.events`, never on the training thread. An
+        exception in one becomes a `RuntimeWarning` and does not stop the others. The server keeps
+        at most 256 unread events for `events()` and drops the oldest.
+
+        Args:
+            fn (Callable[[dict], object]): The function to call with each event.
+
+        Returns:
+            Callable[[dict], object]: `fn`, so the method also works as a decorator.
+
+        Raises:
+            TypeError: When `fn` is not callable.
+        """
         if not callable(fn):
             raise TypeError("on_event() takes a callable")
         p = self.producer
@@ -1246,6 +1263,14 @@ class NetServer:
         return fn
 
     def remove_event_handler(self, fn) -> bool:
+        """Stop calls to `fn`.
+
+        Args:
+            fn (Callable[[dict], object]): A function registered with `on_event`.
+
+        Returns:
+            bool: `True` if the function was registered.
+        """
         try:
             self.producer.handlers.remove(fn)
             return True
@@ -1266,8 +1291,13 @@ class NetServer:
                                   RuntimeWarning, stacklevel=1)
 
     def events(self) -> list[dict]:
-        """The viewer events received since the last call, oldest first, and
-        clears them. Never blocks."""
+        """Return the events received since the last call, oldest first, and clear them.
+
+        The call never blocks. The server keeps at most 256 unread events and drops the oldest.
+
+        Returns:
+            list[dict]: The events, in the form that `on_event` describes.
+        """
         out = []
         d = self.producer.events
         while True:
@@ -1278,6 +1308,13 @@ class NetServer:
 
     # -- inspection ----------------------------------------------------------------
     def stats(self) -> dict:
+        """Return the state and the counters of the server.
+
+        Returns:
+            dict: `url`, `port`, `session`, `closed`, `attached` (connected viewers), `connections`,
+                `views` (per view its `id`, `kind`, `groups` of subscriptions with one data view,
+                and `seq`), `series` (values retained per series) and counters.
+        """
         p = self.producer
         links = []
         for ln in list(p.links):
@@ -1296,8 +1333,11 @@ class NetServer:
 
     # -- lifetime -------------------------------------------------------------------
     def close(self) -> None:
-        """Deliver what is pending (at most about a second), end every
-        connection with BYE and stop the server. Idempotent."""
+        """Deliver what is pending for about a second, end every connection and stop the server.
+
+        The call may be made more than once. It also runs at `caliper.close()` and at interpreter
+        exit, and it removes the stream file.
+        """
         if self.closed:
             return
         if self._stream_file is not None:

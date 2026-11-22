@@ -126,14 +126,49 @@ class WindowTransport:
 
 
 class Window:
-    """A Caliper canvas in this process fed by a SnapshotRing.
+    """The Caliper canvas of this process, which a snapshot ring feeds.
 
-    * ``Window()``: a GLFW/AppKit window repainted by the render thread.
-    * ``Window(offscreen=True)``: the render thread on an offscreen canvas
-      (benchmarks, CI, :meth:`render`).
-    * ``Window(offscreen=True, sync=True)``: no render thread (caliper.offscreen).
+    [`window`][caliper.window] and [`offscreen`][caliper.offscreen] return it. It has three
+    forms. `Window()` is a window that the render thread repaints. `Window(offscreen=True)` is
+    the render thread on an offscreen canvas (benchmarks, CI, `render()`).
+    `Window(offscreen=True, sync=True)` has no render thread and is the canvas of
+    `caliper.offscreen()`. Create it on the main thread.
 
-    Create on the main thread."""
+    A window also works as a context manager. Leaving the `with` block closes it.
+
+    ```python
+    with caliper.window() as w:
+        w.run(train)
+    ```
+
+    Args:
+        width (int): Width of the canvas.
+        height (int): Height of the canvas.
+        title (str): Title of the window.
+        offscreen (bool): `True` drives an offscreen canvas.
+        sync (bool): `True` selects the synchronous mode without a render thread. It needs
+            `offscreen=True`.
+        fps (float): Frame rate of the render thread.
+        rate (float | None): Default snapshot rate. `None` takes 60 per second, or every call when
+            `sync` is `True`.
+        activate (bool): `False` shows the window without taking focus.
+        heartbeat (bool): `True` adds the view `caliper.render` that scrolls one texel per rendered
+            frame.
+        data_dir (str | None): The data folder of the core. `None` takes `$CALIPER_DATA_DIR`, else a
+            private temporary directory that closes with the window.
+        on_pending (Callable | None): Called when a snapshot is pending.
+
+    Attributes:
+        core (object): The native core of the canvas.
+        offscreen (bool): `True` for an offscreen canvas.
+        sync (bool): `True` for the synchronous mode.
+        transport (WindowTransport): The route that applies snapshots to the core.
+        ring (SnapshotRing): The snapshot ring that feeds the core.
+
+    Raises:
+        RuntimeError: When created off the main thread.
+        ValueError: When `sync` is `True` without `offscreen`.
+    """
 
     def __init__(self, width: int = 1280, height: int = 800, title: str = "caliper", *,
                  offscreen: bool = False, sync: bool = False, fps: float = 60.0,
@@ -226,12 +261,25 @@ class Window:
             self.close()
 
     def run(self, fn: Callable, *args, **kwargs):
-        """Run ``fn(*args, **kwargs)`` on a worker thread while the main thread
-        sits in the AppKit event loop, so the window stays fully interactive
-        whatever fn does. Returns fn's result or re-raises its exception. If the
-        user closes the window, fn keeps running (its show() calls become
-        no-ops) and the window closes when fn returns. Ctrl-C is forwarded to
-        the worker as KeyboardInterrupt."""
+        """Run `fn(*args, **kwargs)` on a worker thread while the main thread runs the event loop.
+
+        The window stays fully interactive whatever `fn` does. The worker is a daemon thread
+        named `caliper.train`. Ctrl-C reaches it as `KeyboardInterrupt`. If the user closes the
+        window, `fn` keeps running and its view calls become no-ops. The window closes when
+        `fn` returns.
+
+        Args:
+            fn (Callable): The function to run.
+            *args (object): Positional arguments of `fn`.
+            **kwargs (object): Keyword arguments of `fn`.
+
+        Returns:
+            object: The result of `fn`.
+
+        Raises:
+            RuntimeError: When called off the main thread.
+            Exception: Any exception of `fn`.
+        """
         if threading.current_thread() is not threading.main_thread():
             raise RuntimeError("caliper.run must be called from the main thread")
         result: dict = {}
@@ -276,6 +324,17 @@ class Window:
 
     # -- telemetry / readback -------------------------------------------------------------
     def stats(self, reset: bool = False) -> dict:
+        """Return the render stats and the ring counters of this window.
+
+        The result has the render stats and `ring`, as the `"window"` entry of
+        [`stats`][caliper.stats] describes them.
+
+        Args:
+            reset (bool): `True` clears the sample lists and the ring counters after the read.
+
+        Returns:
+            dict: The render stats plus `ring`.
+        """
         with LOCK:
             d = dict(self.core.render_stats(reset)) if not self._closed else {}
             d["ring"] = dict(self.ring.counters)
@@ -284,7 +343,14 @@ class Window:
         return d
 
     def render(self):
-        """(H, W, 4) uint8 of a freshly composited frame (offscreen canvases)."""
+        """Render a frame and return its pixels (offscreen canvases).
+
+        Returns:
+            numpy.ndarray: A freshly composited frame, `(H, W, 4)` uint8.
+
+        Raises:
+            RuntimeError: When the canvas is not offscreen.
+        """
         if not self.offscreen:
             raise RuntimeError("render() needs an offscreen canvas (caliper.offscreen() or "
                                "caliper.window(offscreen=True))")
@@ -297,9 +363,14 @@ class Window:
     # -- teardown -------------------------------------------------------------------------
     @property
     def closed(self) -> bool:
+        """`True` after `close()`, or after the user closed the window."""
         return self._closed
 
     def close(self) -> None:
+        """Close the canvas and release its core.
+
+        A second call does nothing.
+        """
         with LOCK:
             if self._closed:
                 return

@@ -65,7 +65,7 @@ import caliper
 hub = caliper.connect()
 ```
 
-It takes the address and token from its argument. The argument is the stream URL or the viewer link that the hub prints. Without an argument it reads `CALIPER_HUB_URL`, and then the hub file. It raises `RuntimeError` when there is no hub file. It returns at once and connects in the background, so the training loop never waits for the hub. A script can also run `caliper.serve()`. Then every view call reaches the hub and the viewers of the script. `connect()` needs the native sender, which `python scripts/build_netio.py` builds. The [Python API](network-streaming-calls.md#connect) lists what it returns.
+It takes the address and token from its argument. The argument is the stream URL or the viewer link that the hub prints. Without an argument it reads `CALIPER_HUB_URL`, and then the hub file. It raises `RuntimeError` when there is no hub file. It returns at once and connects in the background, so the training loop never waits for the hub. A script can also run `caliper.serve()`. Then every view call reaches the hub and the viewers of the script. `connect()` needs the native sender, which `python scripts/build_netio.py` builds. The [Python API](network-streaming-calls.md#caliper.connect) lists what it returns.
 
 When the hub cannot be reached or the connection drops, the script tries again after half a second. It doubles the wait up to 30 seconds and proposes the session id the hub gave it. It stops when the hub closes the connection with BYE `replaced`.
 

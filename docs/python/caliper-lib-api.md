@@ -16,13 +16,17 @@ Importing the package does not touch GLFW, AppKit, Metal or torch. The native ex
 
 ## Constants and Types
 
-| Name | Value |
-|---|---|
-| `CMAPS` | `{"viridis": 0, "magma": 1, "rdbu": 2}` |
-| `SERIES_CAPACITY` | 4096 |
-| `DEFAULT_RATE_HZ` | 60.0 |
-| `ShowStats` | Returned in the offscreen mode, always truthy: `name`, `kind` (`"heatmap"`, ...), `path` (renderer path, such as `"compute-imported"`), `imported`, `total_ms` |
-| `HAVE_VIEWS`, `HAVE_LIVE_VIEWS`, `VIEW_FLAG_RAW`, `VIEW_FLAG_WAIT_GPU`, `EMBED_API_VERSION`, `HEATMAP_IMAGE_VIA_LIVE_APPLY` | Native module attributes. Reading one loads the extension |
+::: caliper.CMAPS
+
+::: caliper.SERIES_CAPACITY
+
+::: caliper.DEFAULT_RATE_HZ
+
+::: caliper.ShowStats
+    options:
+      members: false
+
+The native module attributes `HAVE_VIEWS`, `HAVE_LIVE_VIEWS`, `VIEW_FLAG_RAW`, `VIEW_FLAG_WAIT_GPU`, `EMBED_API_VERSION` and `HEATMAP_IMAGE_VIA_LIVE_APPLY` have no Python source. Reading one loads the extension.
 
 View names in a session are 1 to 63 bytes, and a session holds at most 64 views. Reusing a name with another kind rebuilds the view. A change of shape, dtype or device reallocates its slots.
 
