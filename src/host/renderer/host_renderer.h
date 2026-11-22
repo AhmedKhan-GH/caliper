@@ -289,8 +289,8 @@ public:
     // adapter skip its drain.
     virtual bool honors_stream_ordered_handoff() const { return false; }
 
-    // ---- Measurement (docs/explanations/rendering.md, "Copy counters and
-    // frame statistics") ------------------------------------------------------
+    // ---- Measurement (docs/applets/rendering.md, "Copy Counters and
+    // Frame Statistics") ------------------------------------------------------
     // Every copy the host makes of tensor or geometry data on the way to
     // pixels is counted here, by whoever makes it: an upload of host bytes (a
     // CPU tensor's staged upload, the browser's host import and host
@@ -345,7 +345,7 @@ protected:
     }
     // The test variable CALIPER_TEST_RENDERER_FAIL=1 makes init() and
     // canvas_init() fail before they touch a device, so that the refusals can
-    // be tested on a machine whose GPU works (docs/references/environment.md).
+    // be tested on a machine whose GPU works (docs/reference/folders-and-environment.md).
     // Each begins with `if (forced_start_failure()) return false;`.
     bool forced_start_failure() {
         const char* v = std::getenv("CALIPER_TEST_RENDERER_FAIL");

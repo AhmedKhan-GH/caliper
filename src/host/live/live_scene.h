@@ -2,7 +2,7 @@
 // increment 1; design/scenes.md, "Drawing a scene natively").
 //
 // A scene view owns one scene of the scene core (src/host/scene) and applies to it the decoded
-// scene messages of wire protocol 3.2 (docs/references/wire-protocol-3-2.md): SCENE_UPDATE with the
+// scene messages of wire protocol 3.2 (docs/reference/wire-protocol-3-2.md): SCENE_UPDATE with the
 // parts points, lines (segments, strips and index-pair edges), arrows, boxes, mesh (with normals,
 // or UVs and a texture), image (colour, grey, depth and segmentation) and camera; SCENE_TRANSFORMS;
 // SCENE_CLASSES; SCENE_CLEAR of named parts or all, static items, and the reset that opens a scene's

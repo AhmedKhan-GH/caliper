@@ -35,7 +35,7 @@
 //
 // 3.2 draft. The scenes subset (SCENE_UPDATE, SCENE_CLEAR, the scene view
 // helpers) sits in one block before the Message variant; the rules are those of
-// the block at the end of _wire.py and of docs/references/wire-protocol-3-2.md.
+// the block at the end of _wire.py and of docs/reference/wire-protocol-3-2.md.
 //
 // LIFETIME. A decoded Section points into the buffer given to decode(): keep
 // that buffer alive while the message is used.

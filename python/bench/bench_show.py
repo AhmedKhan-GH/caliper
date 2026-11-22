@@ -32,8 +32,8 @@ No window opens unless --visible is given: window mode renders on the in-process
 offscreen canvas (caliper.window(offscreen=True), the same render thread) and
 attach mode starts the viewer with --headless. Each caliper row also reports the
 frame time p50 and p99, the GPU time of an update (p50 and p99) and the copies per
-frame of the drawing process (docs/explanations/rendering.md, "Copy counters and
-frame statistics"): window mode from the core's frame_stats() with
+frame of the drawing process (docs/applets/rendering.md, "Copy Counters and
+Frame Statistics"): window mode from the core's frame_stats() with
 CALIPER_METAL_STATS set, attach mode from the viewer's --stats windows inside the
 row.
 """

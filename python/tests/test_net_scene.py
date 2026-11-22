@@ -700,8 +700,8 @@ def test_the_demo_sequence_runs(server):
 def test_a_call_with_nothing_attached_is_cheap(server, device, monkeypatch):
     """With nothing attached a call runs its checks and returns False: no snapshot, nothing
     queued, no device work. What that costs in time is a benchmark row, not a test:
-    python/bench/bench_call_cost.py --scenes, outside CI (docs/references/python-api.md,
-    "Cost of a call")."""
+    python/bench/bench_call_cost.py --scenes, outside CI (docs/development/performance.md,
+    "Python Calls")."""
     sc = caliper.scene("cost")
     pos = torch.rand(1681, 3, device=device)
     tri = torch.randint(0, 1681, (3200, 3), device=device, dtype=torch.int32)

@@ -87,7 +87,7 @@ struct Snap {
 };
 using SnapPtr = std::shared_ptr<const Snap>;
 
-// ---- 3.2 draft: scenes (capability "scenes"; docs/references/wire-protocol-3-2.md) ----
+// ---- 3.2 draft: scenes (capability "scenes"; docs/reference/wire-protocol-3-2.md) ----
 // One entity transform as the hub keeps it: the column-major matrix, and its stamp row (T values,
 // none for a producer without timelines).
 struct TransformRow {

@@ -1628,8 +1628,8 @@ public:
     }
 
 private:
-    // ---- CALIPER_METAL_STATS (docs/explanations/rendering.md, "Copy counters
-    // and frame statistics"): frame times, GPU times from the command buffers'
+    // ---- CALIPER_METAL_STATS (docs/applets/rendering.md, "Copy Counters
+    // and Frame Statistics"): frame times, GPU times from the command buffers'
     // GPUStartTime and GPUEndTime, and updates by path, over a window that
     // frame_stats() resets and over the whole run, which shutdown prints in one
     // line beside the renderer's copy count. Read once at construction; while

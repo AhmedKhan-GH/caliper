@@ -10,7 +10,7 @@ Nothing on this page is built. It rests on these built pieces:
 - **Series retention.** `caliper.serve()` keeps the last 1,048,576 values of each series whether or not anyone watches, and the hub keeps as many per series view, so a late viewer draws the whole curve.
 - **The hub's ended sessions.** The hub keeps an ended session with its last snapshots, series and controls, and answers a data view that nobody watched with the one watched last.
 - **Sprint 3's workspace**: `workspace.duckdb` with the loader and catalog tables in the schema `caliper`, the catalog's `CatalogEntry`, and the names `recording` (a catalog kind) and `caliper_recordings` (a schema), which sprint 3 reserved for this page.
-- **The metrics store** behind `caliper.metrics.v1` (`docs/references/service-metrics-v1.md`) and the data service of `caliper.data.v1` (`docs/references/service-data-v1.md`).
+- **The metrics store** behind `caliper.metrics.v1` (`docs/applets/services/caliper-metrics-v1.md`) and the data service of `caliper.data.v1` (`docs/applets/services/caliper-data-v1.md`).
 - **The web package**, whose frame codec already decodes every frame of the protocol in the browser.
 
 The evidence for the recording file is a **structural check of MCAP**, kept outside the repository. A recorder prototype on the official MCAP C++ library 2.2.0 wrote the first 1,500 steps of a synthetic training session, 1,170 real frames of protocol 3.2 and 14.1 MB, with four series, a text log, two heatmaps, an image, points, a histogram, bars and a scene with entity transforms, clears, a class table, static items and five entity parts, on the timelines `step`, `time` and a timeline of the script's own. Its encoder reproduced the golden frames of protocols 3.0, 3.1 and 3.2 byte for byte. The files were read back with Caliper's own reader, the official C++, Python and TypeScript readers and the `mcap` command-line tool 0.4.0, on an Apple M5 Max with macOS 27.0.1 and APFS. The check answered eight structural questions and measured no timing. Where this page relies on it, it says so; everything else about the file is designed and untested.
@@ -408,7 +408,7 @@ A generic MCAP viewer, judged from the format's rules, since the check launched 
 
 ### Exporting to Parquet
 
-`caliper export` writes a recording as Parquet tables for analysis in other tools. It is a subcommand of Caliper CLI (`docs/references/cli.md`) and, like the other subcommands except `dev` and `open`, never opens a window.
+`caliper export` writes a recording as Parquet tables for analysis in other tools. It is a subcommand of Caliper CLI (`docs/reference/cli.md`) and, like the other subcommands except `dev` and `open`, never opens a window.
 
 ```text
 usage: caliper export <recording> --to parquet [--out <folder>] [--view <pattern>]... [--arrays]

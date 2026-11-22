@@ -478,8 +478,8 @@ export class CaliperView extends HTMLElement {
 
   /**
    * Decides, once the view's kind is known, what draws it. This is the one
-   * statement of the rule, which docs/references/browser-elements.md ("What
-   * draws a view") describes: renderer="auto" (the default) uses the
+   * statement of the rule, which docs/web/browser-elements.md ("Renderer
+   * Selection") describes: renderer="auto" (the default) uses the
    * WebAssembly views for the kinds their loader lists when WebGPU gives an
    * adapter; "wasm" uses them for those kinds whatever the adapter; "ts" uses
    * this element's own views. The element's own views, which draw with

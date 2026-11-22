@@ -1,5 +1,5 @@
 // Rows of the graphics suite for the graphics layer (src/host/gfx) on Metal, on the renderer's
-// own device and queue (docs/explanations/rendering.md). Each row draws through the layer,
+// own device and queue (docs/applets/graphics-layer.md). Each row draws through the layer,
 // reads the targets back through the layer's asynchronous readback, and compares them byte
 // for byte with a CPU reference built the way the suite's geometry rows build theirs (the
 // clear everywhere, each quad's colour on the pixels it covers, quads edged on pixel

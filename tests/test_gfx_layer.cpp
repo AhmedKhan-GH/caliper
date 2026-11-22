@@ -1,5 +1,5 @@
 // The graphics layer's backend-neutral core on the recording backend, with no GPU
-// (src/host/gfx/, docs/explanations/rendering.md): handles, descriptor and draw validation
+// (src/host/gfx/, docs/applets/graphics-layer.md): handles, descriptor and draw validation
 // against WebGPU's default limits, the uniform arena, frames, serials, deferred release,
 // asynchronous readback and the routes of import, including the failure paths.
 #include <doctest/doctest.h>

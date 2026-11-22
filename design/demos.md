@@ -4,7 +4,7 @@ This page plans an increment demo, demo 0, and four demos of scenes and recordin
 
 ## What is built and what is planned
 
-Nothing on this page is built. The demos rest on these built pieces: Caliper LIB's live views and its controls of protocol 3.1 (`caliper.step`, `caliper.param`, pause, resume and step from a viewer), which are on the `sprint2` branches; `caliper.serve()` and the web viewer with its headless checks in Chromium, also on `sprint2`; the notebook `examples/notebooks/live_training.ipynb` on `sprint2`, which trains a small transformer with live views in a notebook and which demo 0 continues; and on `main`, the Python API (`docs/references/python-api.md`) and the example `examples/python/train_show.py`, which trains a small network with live views. The scene calls, timelines and recorders they use are planned in [Scenes](scenes.md) and [Recordings](recordings.md).
+Nothing on this page is built. The demos rest on these built pieces: Caliper LIB's live views and its controls of protocol 3.1 (`caliper.step`, `caliper.param`, pause, resume and step from a viewer), which are on the `sprint2` branches; `caliper.serve()` and the web viewer with its headless checks in Chromium, also on `sprint2`; the notebook `examples/notebooks/live_training.ipynb` on `sprint2`, which trains a small transformer with live views in a notebook and which demo 0 continues; and on `main`, the Python API (`docs/python/caliper-lib-api.md`) and the example `examples/python/train_show.py`, which trains a small network with live views. The scene calls, timelines and recorders they use are planned in [Scenes](scenes.md) and [Recordings](recordings.md).
 
 ## How every demo is made
 

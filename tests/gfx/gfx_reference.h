@@ -1,5 +1,5 @@
 // gfx_reference.h: the graphics suite's reference mode (design/renderer-core.md, "The rule of
-// every step"; docs/explanations/testing.md).
+// every step"; docs/development/testing.md).
 //
 // A migration step that promises unchanged pixels records, at its first commit, what the old path
 // draws for every case of its rows, before any code moves; the commits that replace the path must

@@ -24,7 +24,7 @@ namespace caliper_live {
 
 inline constexpr size_t kSceneQueueMax = 8192;
 
-// ---- what the scene view draws (docs/references/wire-protocol-3-2.md, "Versioning") ----------
+// ---- what the scene view draws (docs/reference/wire-protocol-3-2.md, "Versioning") ----------
 // The codec decodes every part of the 3.2 draft, and the scene view draws every part but encoded
 // (JPEG or PNG) images. For those this is why a source does not queue the update: it answers ERROR
 // unsupported and notes it in the view. "" when the view draws it.

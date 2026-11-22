@@ -47,7 +47,7 @@
 // dropped counters, each view's renderer path, and this process's RSS and
 // physical footprint (for the no-host-copy evidence). It also turns on the
 // renderer's frame statistics (CALIPER_METAL_STATS) and adds the copy counters
-// (docs/explanations/rendering.md, "Copy counters and frame statistics"): the
+// (docs/applets/rendering.md, "Copy Counters and Frame Statistics"): the
 // copies and bytes copied in the window, the frames they spread over, the
 // frame-time and GPU-time percentiles and the updates by path of the window,
 // and each view's copies and bytes since it appeared; the renderer prints its

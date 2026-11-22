@@ -1444,8 +1444,8 @@ TEST_CASE("live_views/hover: a CPU payload is copied at apply, so hover reads va
 }
 
 // ---------------------------------------------------------------------------
-// Copy counters (embed/render_stats.h; docs/explanations/rendering.md, "Copy
-// counters and frame statistics"): each route reads its known copies. A METAL
+// Copy counters (embed/render_stats.h; docs/applets/rendering.md, "Copy
+// Counters and Frame Statistics"): each route reads its known copies. A METAL
 // payload is read in place (0, also while a points view redraws it every
 // frame); a CPU heatmap or image is uploaded once per update; CPU points are
 // staged once per buffer; series and histogram values are copied at apply.

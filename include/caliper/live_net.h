@@ -381,7 +381,7 @@ static inline uint32_t caliper_net_align(uint32_t n) {
  * 0x0070 to 0x0074 and 0x0078 to 0x007B, the dtype u16 (6), the error codes
  * and the limits below. Each is one line here, so
  * a renumbering changes one line (the dtype also has one line in
- * caliper_net_dtype_size above). docs/references/wire-protocol-3-2.md states
+ * caliper_net_dtype_size above). docs/reference/wire-protocol-3-2.md states
  * what is built of them: the codecs build the whole draft (every part of
  * SCENE_UPDATE, split updates, SCENE_TRANSFORMS, SCENE_CLEAR, SCENE_CLASSES,
  * stamps, TEXT, bar charts and the recording messages); producers, the hub

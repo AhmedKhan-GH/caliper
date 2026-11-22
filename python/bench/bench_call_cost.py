@@ -1,5 +1,5 @@
 """The cost of a view call with nothing attached, as the cost table of
-docs/references/python-api.md measures it: 100,000 calls per row, each timed
+docs/development/performance.md measures it: 100,000 calls per row, each timed
 singly with perf_counter_ns, median and p99 in microseconds.
 
     PYTHONPATH=python .venv/bin/python python/bench/bench_call_cost.py [--calls 100000] [--scenes]

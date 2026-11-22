@@ -283,7 +283,7 @@ TEST_CASE("device tensor is validated then forwarded to the device path") {
     }
 }
 
-// Copy counters (HostRenderer::note_copy; docs/explanations/rendering.md): the
+// Copy counters (HostRenderer::note_copy; docs/applets/rendering.md): the
 // bridge counts the one upload of a CPU tensor, none for a device tensor, and
 // the upload of a renderer that colormaps host memory itself (the browser's
 // WebGPU renderer takes that route through tex_update_mapped_from_host).

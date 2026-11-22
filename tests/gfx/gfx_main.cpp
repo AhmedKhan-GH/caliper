@@ -2921,7 +2921,7 @@ TEST_CASE("gfx/metal geometry.v1_3: instance-gate refusals leave the view untouc
     bk.bridge->geom_release_view(view);
 }
 
-// Geometry draw cost by count (docs/explanations/testing.md, the timing rows): one
+// Geometry draw cost by count (docs/development/testing.md, the timing rows): one
 // draw_primitives frame of N additive, colormapped points pulled in place from
 // imported buffers, by N, then frames of K draw records of 1,000 points each, by
 // K. "call" is the frame-thread time inside draw_primitives (gates, encode,

@@ -2,7 +2,7 @@
 // core on Metal: the scene compiled by SceneCompiler over BackendResources, with the generated
 // programs (kMetalPrograms), submitted to the graphics layer's Metal backend on the renderer's own
 // device and queue, rendered into offscreen targets and read back through the layer
-// (docs/explanations/rendering.md, docs/explanations/testing.md).
+// (docs/applets/scene-rendering.md, docs/development/testing.md).
 //
 // - The one-entity row draws the fixture of tests/scene/scene_row_fixture.h, square points one
 //   pixel wide on pixel centres, and compares the readback with its reference byte for byte.

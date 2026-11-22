@@ -1587,7 +1587,7 @@ def payload_layout(view: dict, resolved: dict) -> dict:
 # 0x0073), the dtype u16 (6) and the limits below; each is one line, here and
 # in the 3.2 block of include/caliper/live_net.h. The MsgType, Kind and DType
 # members are the only lines outside this block.
-# docs/references/wire-protocol-3-2.md states what is built. Senders keep
+# docs/reference/wire-protocol-3-2.md states what is built. Senders keep
 # writing MINOR (1) until 3.2 is confirmed; the 3.2 golden frames carry
 # MINOR_3_2.
 #
