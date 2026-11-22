@@ -10,7 +10,7 @@ The `web/` package defines two custom elements, `<caliper-view>` and `<caliper-c
 
 ## `<caliper-view>`
 
-One live view of the stream. It has a header and a drawing area. The header shows the name of the view, its data view picker, a line about the view, the run state, its toggles and a status dot. Where WebGPU gives an adapter, views compiled to WebAssembly draw the data. Otherwise, views written in TypeScript draw it. The header, the gestures, the events and the highlights are the same with both.
+One live view of the stream. It has a header and a drawing area. The header shows the name of the view, its data view picker, a line about the view, the run state, its toggles and a status dot. Two renderers draw the area: Caliper's own views compiled to WebAssembly, which draw with WebGPU and are the only WebGPU drawing in the page, and the views of the element itself, written in TypeScript, which draw with Canvas 2D. [Renderer Selection](#renderer-selection) says which one draws a view. The header, the gestures, the events and the highlights are the same with both.
 
 ### Attributes
 
@@ -18,9 +18,9 @@ One live view of the stream. It has a header and a drawing area. The header show
 |---|---|
 | `src` | The stream's `ws://` URL, with the session token. `session=<id>` in its query picks a session of a hub |
 | `view` | The view's name. Several series share one plate when the names are separated by commas |
-| `kind` | `heatmap`, `image`, `points`, `series` or `histogram`. Without it, the kind comes from the stream |
+| `kind` | `heatmap`, `image`, `points`, `series`, `histogram` or `scene`. Without it, the kind comes from the stream. A scene (the wire protocol 3.2 draft) is drawn only by the WebAssembly views, on WebGPU. Where they cannot draw it, the plate shows a notice in its place |
 | `height` | The element's height in CSS pixels, header included. Default 320 |
-| `renderer` | `auto` (the default) uses the WebAssembly views for the kinds their loader lists when WebGPU gives an adapter. `wasm` uses them with any adapter. `ts` uses the TypeScript views |
+| `renderer` | `auto` (the default), `wasm` or `ts`: which renderer draws the view, as [Renderer Selection](#renderer-selection) describes |
 | `run-controls` | The header shows Pause or Resume and Step beside the run state if the producer has [controls](../reference/run-control-messages.md#controls) |
 | `link` | [Linked selection](../reference/linked-selection-messages.md#linked-selection): The view sends a selection with its item space and items. It also draws the producer's selections when one of its axes carries their space |
 | `details` | With `link`, the details of a selection made in this view show under it, with one row per item |
@@ -33,13 +33,21 @@ The header has three toggles: `log` for a series or a histogram, `follow` for a 
 
 Both renderers draw 3-D points inside a box around the data. The edges of the box are a wireframe with tick labels. One edge of each axis also shows the name of the axis. A faint grid lies on the floor, the face across the vertical axis that is behind the data. The renderer draws the back edges and the grid behind the points, and the other edges and the labels in front of them. Nearer points look larger, within a factor of 0.5 to 2 of their size at the target of the camera. Points behind the target look dimmer in proportion to their distance, down to half their brightness at the far side of the data, and keep their hue. Selected points keep their full color. The camera starts at the same three-quarter view in both renderers, fitted to the data, and a double click returns to it. 2-D points have no box, cues or `rotate`.
 
+### Renderer Selection
+
+The element decides once the kind of the view is known. With `renderer="auto"`, the default, the WebAssembly views draw the view when the server of the stream serves their loader, the loader lists the kind of the view and the WebGPU of the browser gives an adapter. With `renderer="wasm"`, the WebAssembly views draw the kinds their loader lists, whatever the adapter.
+
+In every other case the views of the element draw with Canvas 2D. This happens with `renderer="ts"`, in a browser without WebGPU or without an adapter, when the server has no loader or the loader does not list the kind, for a stream given through the `source` property, for several series in one plate, and when the WebAssembly views fail to mount.
+
+The views of the element have no WebGPU path. A heatmap, an image or a cloud of points that they draw is therefore drawn at the speed of Canvas 2D, also in a browser that has WebGPU. They do not draw scenes (see `kind`).
+
 ### Properties and Methods
 
 | Member | Meaning |
 |---|---|
 | `source` | A stream client to read from instead of the socket named by `src` |
 | `dataView` | The resolved data view of the view. If you set it, the view asks the producer for another data view, as the picker does |
-| `renderer` | What draws the view: `wasm`, `webgpu` or `canvas2d` |
+| `renderer` | What draws the view: `wasm` for the WebAssembly views, `canvas2d` for the views of the element |
 | `pause()`, `resume()`, `step(n = 1)` | Send the control and resolve with the reply of the producer, or with null if this viewer may not control the run |
 | `settled()` | Resolves once pending drawing is done |
 | `debugState()` | Read-only state for tests |
