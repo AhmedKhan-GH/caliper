@@ -933,3 +933,22 @@ if(NOT WIN32 AND CALIPER_WITH_BUILDER AND _acceptance_python)
     set_tests_properties(caliper_hosted_runs_acceptance PROPERTIES LABELS "hosted_runs;acceptance" TIMEOUT 300
         SKIP_RETURN_CODE 77)
 endif()
+
+# The acceptance test of GPU programs (design/gpu-programs.md): the hidden app with no script, and caliper-mcp as a
+# child. tests/gpu_programs/driver.py runs tests/gpu_programs/transcript.jsonl through the MCP tools: the model runner
+# starts tests/gpu_programs/train.py as a managed run, the agent's WGSL programs (the .wgsl files beside it) run in the
+# script on its live tensors, the driver captures the scene and image panels, refuses a writable input, stops a
+# program over its time limit, drives a toggle bound to an intervention, and compares the SHA-256 of the app,
+# caliper-mcp and the Python package before and after. It exits 77 where the app, Metal, torch, the native network
+# sender, the producer module or the WGSL compiler library is missing, and prints the reason. The producer module
+# and the compiler library need CALIPER_BUILD_PYTHON=ON and CALIPER_WGSL_FROM_SOURCE=ON (or a prebuilt library), and
+# the built modules in python/caliper. It uses the Python of the instrument acceptance test
+# (CALIPER_ACCEPTANCE_PYTHON).
+if(NOT WIN32 AND CALIPER_WITH_BUILDER AND _acceptance_python)
+    add_test(NAME caliper_gpu_programs_acceptance COMMAND "${_acceptance_python}" "${CMAKE_CURRENT_SOURCE_DIR}/gpu_programs/driver.py"
+        --app "$<TARGET_FILE:caliper>" --mcp "$<TARGET_FILE:caliper-mcp>" --python "${_acceptance_python}"
+        --work "${CMAKE_CURRENT_BINARY_DIR}/gpu-programs-work"
+        --capture-dir "${CMAKE_CURRENT_BINARY_DIR}/gpu-programs-captures")
+    set_tests_properties(caliper_gpu_programs_acceptance PROPERTIES LABELS "gpu_programs;acceptance" TIMEOUT 300
+        SKIP_RETURN_CODE 77)
+endif()
