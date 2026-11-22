@@ -132,7 +132,7 @@ TEST_CASE("every refusal before the handler runs has its own code") {
     CHECK(r.invoke(named).id == "mine");
 }
 
-TEST_CASE("the viewer origin only reads: a command that mutates or runs is refused before its handler") {
+TEST_CASE("the viewer origin only reads: a command that mutates, changes or runs is refused before its handler") {
     CommandRegistry r;
     int ran = 0;
     const auto count = [&ran](const CommandContext&) {
@@ -142,16 +142,31 @@ TEST_CASE("the viewer origin only reads: a command that mutates or runs is refus
     CommandDescriptor run = descriptor("toy.run", false);
     run.effect = CommandEffect::run;
     REQUIRE(r.add(run, count).ok());
-    REQUIRE(r.add(descriptor("toy.get", false), count).ok());
+    // The effect change without a workspace change, as state.set and
+    // control.set have it, and a command that states no effect, which counts
+    // as change.
+    CommandDescriptor change = descriptor("toy.change", false);
+    change.effect = CommandEffect::change;
+    REQUIRE(r.add(change, count).ok());
+    REQUIRE(r.add(descriptor("toy.unclassified", false), count).ok());
+    CommandDescriptor get = descriptor("toy.get", false);
+    get.effect = CommandEffect::read;
+    REQUIRE(r.add(get, count).ok());
 
     const auto refused = r.invoke(inv("toy.run", {}, CommandOrigin::viewer));
     CHECK(refused.error.code == "command.not_allowed");
     CHECK(refused.error.where == "origin");
     CHECK(refused.error.message.find("running script") != std::string::npos);
+    const auto changed = r.invoke(inv("toy.change", {}, CommandOrigin::viewer));
+    CHECK(changed.error.code == "command.not_allowed");
+    CHECK(changed.error.where == "origin");
+    CHECK(changed.error.message.find("app's state") != std::string::npos);
+    CHECK(r.invoke(inv("toy.unclassified", {}, CommandOrigin::viewer)).error.code == "command.not_allowed");
     CHECK(ran == 0);
     CHECK(r.invoke(inv("toy.get", {}, CommandOrigin::viewer)).ok);
     CHECK(r.invoke(inv("toy.run", {}, CommandOrigin::ui)).ok);
-    CHECK(ran == 2);
+    CHECK(r.invoke(inv("toy.change", {}, CommandOrigin::ui)).ok);
+    CHECK(ran == 3);
 }
 
 TEST_CASE("a frame_thread command runs only on the frame thread once one is named") {
