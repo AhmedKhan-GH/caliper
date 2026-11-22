@@ -92,6 +92,8 @@ namespace caliper_builder {
 class Session;
 class RunControl;
 class ModelRunner;
+class ProgramHost;
+class StageHost;
 }
 
 namespace caliper_live {
@@ -263,6 +265,14 @@ public:
     // gives it before the first frame and takes it back before the runner
     // goes. Frame thread.
     void set_model_runner(caliper_builder::ModelRunner* runner);
+    // The hosts of the open spec's GPU programs (in the attached script) and
+    // stages (in the viewer), which the session holds from its adoption until
+    // close() for program.status and its reconciles
+    // (caliper_builder/session/program_host.h, design/gpu-programs.md); null
+    // takes one back. The app gives them before the first frame and takes
+    // them back before they go. Frame thread.
+    void set_program_host(caliper_builder::ProgramHost* host);
+    void set_stage_host(caliper_builder::StageHost* host);
 
     // Counters the spec page (spec_page.h) reads on the frame thread to know
     // when to look at the session again, without asking it every frame. Any
