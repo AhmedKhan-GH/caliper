@@ -1,7 +1,15 @@
 nav:
-  - index.md
-  - Tutorials: tutorials
-  - Guides: guides
-  - References: references
-  - Explanations: explanations
+  - Introduction:
+      - introduction/index.md
+      - index.md
+      - introduction/python-quickstart.md
+      - introduction/architecture.md
+  - Python: python
+  - Applets: applets
+  - Builder: builder
+  - Agents: agents
+  - Web and Embedding: web
+  - Reference: reference
+  - Development: development
   - Roadmap: roadmap
+  - Candidates: roadmap/candidates/index.md

@@ -1,0 +1,279 @@
+# yaml-language-server: $schema=schema.json
+title: Builder overview plan page
+kind: page
+source: design/builder-overview.md
+ref: main
+summary: The plan page design/builder-overview.md on main, read heading by heading; each plan heading
+  has an entry or is listed as holding no feature.
+entries:
+- heading: Builder overview
+  item: 'The map of the builder: drop data, make loaders, build visuals by hand, with the side chat, the
+    widget agent or an outside agent; everything built is data.'
+  ids:
+  - SPC-07
+  - AGT-03
+  - AGT-05
+  - AGT-02
+- heading: The parts
+  item: 'Parts diagram and table: spec format, loaders, catalog, command layer, session, caliper-mcp,
+    side chat, widget agent, caliper-agent.'
+  ids:
+  - SPC-01
+  - SPC-03
+  - SPC-04
+  - SPC-05
+  - SPC-06
+  - AGT-02
+  - AGT-03
+  - AGT-05
+- heading: The parts
+  item: The side chat and widget agent are two roles over one AcpClient, and Ask in chat hands a widget
+    request to the side chat.
+  ids:
+  - AGT-03
+  - AGT-05
+- heading: What is built
+  item: The libraries and tools under src/builder/ build with the host when CALIPER_WITH_BUILDER is on,
+    default off on Windows.
+  ids:
+  - SPC-06
+  - PLT-13
+- heading: What is built
+  item: Spec library parses, validates, writes and merge-patches specs.
+  ids:
+  - SPC-01
+  - SPC-02
+- heading: What is built
+  item: Loaders read CSV, TSV, Parquet, JSON, JSONL, npy, npz, safetensors, PNG, JPEG, WAV; refuse pickle;
+    run a Python loader out of process.
+  ids:
+  - SPC-03
+- heading: What is built
+  item: Command layer with registry, validator, undo groups, journal replay, approvals, queue and 40 commands.
+  ids:
+  - SPC-05
+- heading: What is built
+  item: Session binds every command that needs no window; a headless test builds a three-panel dashboard.
+  ids:
+  - SPC-06
+- heading: What is built
+  item: 'Review of spec edits for every agent: with review on, agent and mcp edits wait for approval with
+    a diff and warnings.'
+  ids:
+  - AGT-06
+  - SPC-05
+- heading: What is built
+  item: Stacked previews, applied to a copy of the spec and committed as one undo step.
+  ids:
+  - AGT-05
+  - SPC-05
+- heading: What is built
+  item: AcpClient::new_session() takes an optional _meta for widget sessions.
+  ids:
+  - AGT-05
+- heading: What is built
+  item: caliper-mcp against Caliper API v0 and the command endpoints.
+  ids:
+  - AGT-02
+  - AGT-01
+- heading: What is built
+  item: The loader knows the spec applet kind.
+  ids:
+  - SPC-08
+- heading: What is built
+  item: The API server serves the command endpoints through a CommandGateway with approvals held.
+  ids:
+  - AGT-01
+  - SPC-05
+- heading: What is built
+  item: The app, caliper dev and caliper shot own a session for their workspace.
+  ids:
+  - SPC-06
+- heading: What is built
+  item: The session reads sources through registered data sources and catalog providers; the app does
+    not call the providers yet.
+  ids:
+  - SPC-04
+- heading: What is built
+  item: The ACP client drives a session against a stub agent; caliper-acp-harness runs one headless.
+  ids:
+  - AGT-03
+- heading: What is built
+  item: 'The spec runtime first slice: seven primitives, layout rectangles with text-scale minimums, a
+    colour key, an offscreen canvas and caliper-spec-shot.'
+  ids:
+  - SPC-08
+  - SPC-17
+- heading: What is built
+  item: caliper-agent runs on Pydantic AI with Claude native and other models over an OpenAI-compatible
+    API, and widget sessions with a tool scope, budget and handoff.
+  ids:
+  - AGT-05
+- heading: What is built
+  item: 'The widget agent''s inline surface: Cmd-K on the spec page, preview in place, accept as one undo
+    step.'
+  ids:
+  - AGT-05
+- heading: What is built
+  item: The app shows each pending approval as a card above the jobs tray.
+  ids:
+  - AGT-06
+- heading: What is built
+  item: The side chat on the spec and live pages, with a Local model marking and Shared GPU header.
+  ids:
+  - AGT-03
+  - AGT-04
+- heading: What is built
+  item: 'The builder pane on the spec page: Cmd-B Build, palettes, canvas, Properties, spec text, New
+    dashboard.'
+  ids:
+  - SPC-07
+- heading: What is built
+  item: A saved spec applet opens in a browser from the running app through GET /v0/spec.
+  ids:
+  - EMB-06
+- heading: What is built
+  item: On Windows the builder option is off until a Windows session compiles it with MSVC; the SDK and
+    embed install components hold none of it.
+  ids:
+  - PLT-13
+  - PLT-05
+- heading: The integration order after sprint 2
+  item: 'Item 1: the command endpoints of Caliper API, built.'
+  ids:
+  - AGT-01
+  - SPC-05
+- heading: The integration order after sprint 2
+  item: 'Item 2: the session in the app, built.'
+  ids:
+  - SPC-06
+- heading: The integration order after sprint 2
+  item: 'Item 3: the review of spec edits and the approval cards, done.'
+  ids:
+  - AGT-06
+- heading: The integration order after sprint 2
+  item: 'Item 4: the catalog providers for live views, feed channels and metrics; a heatmap carries at
+    most three dimensions and a spec has no reshape; reshape moved to sprint 5.'
+  ids:
+  - SPC-04
+  - SPC-13
+- heading: The integration order after sprint 2
+  item: 'Item 5: the spec runtime, the spec applet kind, the app''s spec page and the first slice of the
+    browser viewer; left in the browser: 3-D walls'' grid and ticks, tooltips and live panels over the
+    stream.'
+  ids:
+  - SPC-08
+  - EMB-06
+  - EMB-28
+  - EMB-27
+- heading: The integration order after sprint 2
+  item: 'Item 6: drag and drop of files into the window.'
+  ids:
+  - SPC-03
+  - SPC-07
+- heading: The integration order after sprint 2
+  item: 'Item 7: the builder pane.'
+  ids:
+  - SPC-07
+- heading: The integration order after sprint 2
+  item: 'Item 8: the side chat with four detected agents; the packaging of caliper-mcp with the app is
+    moved to sprint 5.'
+  ids:
+  - AGT-03
+  - AGT-04
+  - AGT-10
+- heading: The integration order after sprint 2
+  item: 'Item 9: stacked previews in the session.'
+  ids:
+  - AGT-05
+- heading: The integration order after sprint 2
+  item: 'Item 10: an optional _meta argument on AcpClient::new_session().'
+  ids:
+  - AGT-05
+- heading: The integration order after sprint 2
+  item: 'Item 11: evaluation of the ACP Python SDK; the hand-written agent side stays.'
+  ids:
+  - AGT-05
+- heading: The integration order after sprint 2
+  item: 'Item 12: widget sessions in the sidecar.'
+  ids:
+  - AGT-05
+- heading: The integration order after sprint 2
+  item: 'Item 13: the context bundle for a target.'
+  ids:
+  - AGT-05
+- heading: The integration order after sprint 2
+  item: 'Item 14: the widget agent''s inline surface with selection, dropped-file and property entry points;
+    packaging caliper-agent with a Python runtime is moved to sprint 5.'
+  ids:
+  - AGT-05
+  - AGT-10
+- heading: The integration order after sprint 2
+  item: 'Item 15: Pydantic AI adopted as the provider layer.'
+  ids:
+  - AGT-05
+- heading: The integration order after sprint 2
+  item: 'Item 16: the capability probe and its cache.'
+  ids:
+  - AGT-05
+- heading: The integration order after sprint 2
+  item: 'Item 17: presets, one key per provider and the widget agent''s settings.'
+  ids:
+  - AGT-05
+- heading: The integration order after sprint 2
+  item: 'Item 18: the provider conformance suite, caliper-agent-conformance.'
+  ids:
+  - AGT-05
+- heading: The integration order after sprint 2
+  item: 'Item 19: the GPU contention note, Shared GPU.'
+  ids:
+  - AGT-04
+- heading: Where the pieces sit
+  item: Placement sketch of a live page in build mode with every pane open.
+  ids:
+  - SPC-07
+- heading: The integration branch
+  item: The work is rebased onto sprint 2 on the branch sprint3-integration; the standalone build of src/builder/
+    stays.
+  ids:
+  - SPC-06
+- heading: Acceptance
+  item: 'Acceptance: drop Parquet and safetensors, build the dashboard four ways, save as a spec applet,
+    open in the browser viewer, entropy from the side chat on a live stream, both roles on local models.'
+  ids:
+  - SPC-07
+  - AGT-03
+  - AGT-04
+  - AGT-05
+  - EMB-06
+- heading: Decisions
+  item: 'Cross-cutting decisions: everything built is data; text is the source of truth; one command table;
+    two roles; Claude native API and others through OpenAI-compatible API; local models; keys; nothing
+    bundled; loopback only.'
+  ids:
+  - SPC-05
+  - AGT-03
+  - AGT-05
+  - AGT-04
+- heading: Next
+  item: 'The Data view: a node graph of sources, transforms and panel slots on imgui-node-editor.'
+  ids:
+  - SPC-10
+- heading: Next
+  item: Empty optional arguments count as left out.
+  ids:
+  - AGT-08
+- heading: Next
+  item: The Ollama preset offered when Ollama is running.
+  ids:
+  - AGT-07
+- heading: Next
+  item: The documented setup builds the native sender and the WebAssembly views.
+  ids:
+  - STR-01
+  - EMB-04
+- heading: Reserved for later work
+  item: The primitive name scene and the catalog kind recording are reserved and not built.
+  ids:
+  - SPC-11
+  - STR-12

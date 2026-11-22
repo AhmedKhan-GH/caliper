@@ -1,5 +1,5 @@
 // The approval cards in the real app (the hidden-app pattern of
-// docs/explanations/testing.md): `caliper --hidden --api --api-port 0
+// docs/development/testing.md): `caliper --hidden --api --api-port 0
 // --workspace <dir>` runs as a child, with a command script that imports a
 // small table, builds a spec of one panel, saves it and opens it, which shows
 // the spec page. The real caliper-mcp then sends panel.create through an MCP

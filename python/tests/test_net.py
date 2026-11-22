@@ -552,7 +552,7 @@ def test_heatmap_pooled_to_budget(server, device):
             assert np.allclose(a, ref, atol=1e-5)
             assert s.axes == [{"dim": "row", "start": 0, "step": 1, "count": 700, "size": 512},
                               {"dim": "col", "start": 0, "step": 1, "count": 1000, "size": 512}]
-            lo, hi = s.stats                     # the whole tensor's range (docs/references/python-api.md)
+            lo, hi = s.stats                     # the whole tensor's range (docs/python/caliper-lib-api.md)
             full = [pytest.approx(W.min().cpu().item()), pytest.approx(W.max().cpu().item())]
             assert [lo, hi] == full
             assert s.flags == w.SNAP_AUTO_VMIN | w.SNAP_AUTO_VMAX and s.data_view == r.data_view

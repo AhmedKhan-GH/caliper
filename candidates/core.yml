@@ -1,0 +1,83 @@
+# yaml-language-server: $schema=schema.json
+pillar: COR
+title: Core Runtime and SDK
+proposed: false
+candidates:
+  - key: single-applet-app
+    title: "Single-Applet App"
+    summary: "A second small host packages one applet as an app of its own."
+    serves: "A research group hands a collaborator one instrument, not a platform."
+    origin: cut
+    depends_on: [COR-04, EMB-07]
+  - key: applet-shaders
+    title: "Applet-Supplied Shaders"
+    summary: "A native applet supplies its own checked shaders to the graphics layer."
+    serves: "Field-specific rendering, such as a custom transfer function, is written by the applet's author."
+    origin: plan-idea
+    depends_on: [REN-10, REN-35]
+  - key: unicode-text
+    title: "Full Unicode Text"
+    summary: "The interface draws any script and symbol through font fallback, including token text."
+    serves: "Tokens and data in any language are readable in every view."
+    origin: adjacent-work
+    depends_on: [COR-44]
+  - key: command-palette
+    title: "Keyboard Command Palette"
+    summary: "A searchable list of every command, view and setting, opened with one shortcut."
+    serves: "Lets power users reach any action without menus."
+    origin: field
+    depends_on: [COR-44, SPC-05]
+  - key: keyboard-screen-reader-access
+    title: "Screen Reader and Keyboard Access"
+    summary: "Full keyboard navigation, focus order and accessible names for panels and controls, with spoken summaries of views."
+    serves: "Makes the platform usable without a mouse or sight."
+    origin: field
+    depends_on: [COR-44]
+  - key: interface-localisation
+    title: "Interface Localisation"
+    summary: "Translatable interface text, number and date formats, and right-to-left layout."
+    serves: "Lets teams and classes use the platform in their own language."
+    origin: field
+    depends_on: [COR-44]
+  - key: view-theme-switch
+    title: "Theme Switch for Views"
+    summary: "A light, dark and high-contrast theme applied to every view and exported figure."
+    serves: "Keeps views legible in different rooms and for different eyes."
+    origin: field
+    depends_on: [COR-44, REN-22]
+  - key: folder-plugin-loader
+    title: "Folder-Based Plug-in Discovery"
+    summary: "A loader that finds view types and plug-ins placed in a known folder at start."
+    serves: "Lets a lab share custom views by copying a folder."
+    origin: field
+    depends_on: [COR-06, COR-18]
+  - key: local-crash-reports
+    title: "Local Crash Reports"
+    summary: "Crash dumps and recent logs stored on the machine with a viewer and a clean export."
+    serves: "Helps diagnose crashes without sending anything off the machine."
+    origin: field
+    depends_on: [COR-53, COR-45]
+  - key: settings-sync-file
+    title: "Settings Sync by File"
+    summary: "All preferences held in one plain file that can be kept in a shared folder or repository."
+    serves: "Lets a researcher carry the same setup across machines."
+    origin: field
+    depends_on: [COR-44]
+  - key: workspace-snapshots
+    title: "Workspace Layout Snapshots"
+    summary: "Named saved layouts of panels, sources and view state that can be restored or shared."
+    serves: "Lets a researcher switch between tasks in one action."
+    origin: field
+    depends_on: [SPC-17, SPC-41]
+  - key: accessible-colour-contrast-audit
+    title: "Contrast Audit of the Interface"
+    summary: "An automated check of contrast and text size in every panel with a report."
+    serves: "Keeps the interface within accessibility limits."
+    origin: field
+    depends_on: [COR-44, PLT-03]
+  - key: high-dpi-font-scaling
+    title: "Interface Scaling and Font Choice"
+    summary: "User settings for interface scale, monospaced fonts and reduced motion."
+    serves: "Makes the platform comfortable on any screen and for any user."
+    origin: field
+    depends_on: [COR-44]

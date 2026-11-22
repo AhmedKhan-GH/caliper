@@ -1,0 +1,7 @@
+nav:
+  - index.md
+  - Guides:
+      - program-embedding.md
+  - Reference:
+      - embedding-api.md
+      - browser-elements.md

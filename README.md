@@ -22,7 +22,7 @@
   <a href="https://ahmedkhan-gh.github.io/caliper/"><b>Website</b></a> ·
   <a href="https://ahmedkhan-gh.github.io/caliper/docs/">Documentation</a> ·
   <a href="design/roadmap.md">Roadmap</a> ·
-  <a href="docs/references/applets.md">Applets</a>
+  <a href="docs/applets/in-tree-applets.md">Applets</a>
 </p>
 
 <br>
@@ -62,8 +62,8 @@ cmake --build --preset release
 
 The core build compiles no applets. Applets build against the installed SDK
 (`cmake --install cmake-build-release --prefix <prefix> --component sdk`), each in
-its own folder; [Your first applet](docs/tutorials/first-applet.md) walks through
-it, and [SDK package](docs/references/sdk-package.md) describes the package.
+its own folder; [Your first applet](docs/applets/first-applet.md) walks through
+it, and [SDK package](docs/applets/sdk-package.md) describes the package.
 
 `--preset release-notorch` builds the host without LibTorch, into
 `cmake-build-notorch/`. The presets need CMake 3.25 or later.
@@ -145,7 +145,7 @@ At run time LibTorch chooses the device. The same archive runs on the CPU when n
 
 ## Python package
 
-Caliper LIB, the `python/caliper` package, opens a live Caliper session from a training script, so that `caliper.show` and the other view calls draw into the viewer. See [`docs/references/python-api.md`](docs/references/python-api.md). It is built with `CALIPER_BUILD_PYTHON=ON` or as a wheel through `pyproject.toml`.
+Caliper LIB, the `python/caliper` package, opens a live Caliper session from a training script, so that `caliper.show` and the other view calls draw into the viewer. See [`docs/python/caliper-lib-api.md`](docs/python/caliper-lib-api.md). It is built with `CALIPER_BUILD_PYTHON=ON` or as a wheel through `pyproject.toml`.
 
 ## Project structure
 
@@ -287,9 +287,7 @@ Caliper uses the following open-source libraries. Their license texts can be fou
 | [glslang](https://github.com/KhronosGroup/glslang) | BSD 3-Clause (with other permissive licenses for some files) | The Khronos Group and contributors | Use, modify, and distribute freely provided the license notices are included. |
 | [IBM Plex Sans Condensed](https://github.com/IBM/plex) | SIL OFL 1.1 | 2017 IBM Corp. | Use, embed, and redistribute freely; the font may not be sold on its own. |
 | [Source Code Pro](https://github.com/adobe-fonts/source-code-pro) | SIL OFL 1.1 | 2010, 2012 Adobe Systems Incorporated | Use, embed, and redistribute freely; the font may not be sold on its own. |
-| [Cytoscape.js](https://github.com/cytoscape/cytoscape.js) | MIT | 2016-2026 The Cytoscape Consortium | Use, modify, and distribute freely provided the license notice is included. |
 | [elkjs](https://github.com/kieler/elkjs) | EPL 2.0 (dual-licensed EPL 2.0 or GPL 3.0 or later; used under EPL 2.0) | 2017-2021 Kiel University and others | Use, modify, and distribute provided the license text is included and changes to the files are published under the same license. |
-| [cytoscape-elk](https://github.com/cytoscape-contrib/cytoscape-elk) | MIT | 2016-2018, 2020 The Cytoscape Consortium | Use, modify, and distribute freely provided the license notice is included. |
 
 ## Acknowledgments
 

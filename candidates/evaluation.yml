@@ -1,0 +1,307 @@
+# yaml-language-server: $schema=schema.json
+pillar: EVL
+title: Evaluation
+proposed: true
+description: "This pillar holds results tables, side-by-side outputs, confusion and calibration, slices, benchmarks, judges and human rating, retrieval and agent evaluation."
+alternative: "Evaluation could also fold into RUN, at the cost of RUN tripling in size."
+candidates:
+  - key: problem-galaxy
+    title: "Problem Galaxy"
+    summary: "Evaluation problems are drawn as points placed by the model's own representation and coloured by outcome, with each problem's history as a trail."
+    serves: "A person sees which kinds of problem a change fixes and which it breaks."
+    origin: adjacent-work
+    depends_on: [INT-27]
+  - key: outcome-against-dose
+    title: "Outcome Against a Swept Parameter"
+    summary: "Evaluation outcomes are plotted against one swept parameter, with each example's state at each value."
+    serves: "A person finds the best setting and sees which examples change state on the way."
+    origin: adjacent-work
+    depends_on: [RUN-01]
+  - key: eval-results-table
+    title: "Evaluation Results Table"
+    summary: "One row per example shows the input, the reference, the output and each score, with sorting and filters."
+    serves: "Individual failures are read."
+    origin: field
+    depends_on: [SPC-10, COR-48]
+  - key: side-by-side-outputs
+    title: "Side-by-Side Outputs"
+    summary: "The outputs of several models, prompts or checkpoints for one input are shown in parallel columns with scores."
+    serves: "Changes in behaviour are judged."
+    origin: field
+    depends_on: [RUN-05]
+  - key: text-diff-view
+    title: "Text Diff View"
+    summary: "Two texts are compared by word, token or line, with the differences marked."
+    serves: "Small changes between outputs, prompts or configurations are seen."
+    origin: field
+    depends_on: [REN-51]
+  - key: confusion-matrix
+    title: "Confusion Matrix"
+    summary: "Predicted classes are drawn against true ones, and each cell opens its examples."
+    serves: "A person finds which classes are mistaken for which."
+    origin: field
+    depends_on: [REN-52]
+  - key: per-class-metrics
+    title: "Per-Class Metrics Table"
+    summary: "Precision, recall, F1 and support are listed per class with bars."
+    serves: "Weak classes are located."
+    origin: field
+    depends_on: [REN-52]
+  - key: pr-roc-curves
+    title: "Precision-Recall and ROC Curves"
+    summary: "Curves are drawn per class and per run with areas and operating points."
+    serves: "Thresholds are chosen."
+    origin: field
+    depends_on: [RUN-05]
+  - key: threshold-explorer
+    title: "Threshold Explorer"
+    summary: "A decision threshold is moved, and the confusion matrix and metrics follow."
+    serves: "Operating points are set."
+    origin: field
+    depends_on: [SPC-12]
+  - key: calibration-diagram
+    title: "Calibration Diagram"
+    summary: "Confidence is plotted against accuracy in bins, with the calibration error and a confidence histogram."
+    serves: "The quality of probabilities is judged."
+    origin: field
+    depends_on: [REN-52]
+  - key: slice-finder
+    title: "Slice Finder"
+    summary: "A search finds subsets of the data, defined by metadata or features, where a metric is much worse."
+    serves: "Failure modes nobody thought to filter on are found."
+    origin: field
+    depends_on: [COR-48]
+  - key: slice-dashboard
+    title: "Slice Dashboard"
+    summary: "Metrics of named data slices are shown side by side with their change between runs."
+    serves: "Known weak groups are tracked."
+    origin: field
+    depends_on: [RUN-05]
+  - key: error-map
+    title: "Error Map"
+    summary: "Examples are plotted by embedding with errors highlighted, so clusters of failures stand out."
+    serves: "Patterns in errors are seen."
+    origin: field
+    depends_on: [INT-27]
+  - key: counterfactual-editing
+    title: "Counterfactual Editing"
+    summary: "A person edits one input and sees the changed output and score, or asks for the nearest example that flips the label."
+    serves: "A model's behaviour is probed by hand."
+    origin: field
+    depends_on: [INT-08]
+  - key: benchmark-matrix
+    title: "Benchmark Matrix"
+    summary: "Scores of many models over many tasks are shown as a matrix with ranking and filters."
+    serves: "Models are compared across suites."
+    origin: field
+    depends_on: [RUN-05]
+  - key: benchmark-task-detail
+    title: "Benchmark Task Detail"
+    summary: "A task's examples, prompts, metrics and per-example outcomes are shown with sample counts."
+    serves: "A person audits how a score arises."
+    origin: field
+    depends_on: [RUN-03]
+  - key: eval-transcript-viewer
+    title: "Evaluation Transcript Viewer"
+    summary: "The transcript of each evaluation sample is shown with its messages, tool calls, scoring and metadata."
+    serves: "Evaluations are debugged."
+    origin: field
+    depends_on: [REN-51]
+  - key: judge-scoring-view
+    title: "Judge-Model Scoring View"
+    summary: "A rubric, the judge's reasoning and its score are shown per example, with agreement against human labels."
+    serves: "Automated graders are trusted or corrected."
+    origin: field
+    depends_on: [AGT-01]
+  - key: rating-queue
+    title: "Rating Queue"
+    summary: "Examples are presented to people with a form for score, label, comment and correction, and progress is tracked."
+    serves: "Human judgements are collected."
+    origin: field
+    depends_on: [SPC-12]
+  - key: pairwise-preference
+    title: "Pairwise Preference Ranking"
+    summary: "Two outputs are shown, the preferred one recorded, and a ranking built from the choices."
+    serves: "Models are ranked by people's choices."
+    origin: field
+    depends_on: [SPC-12]
+  - key: rater-agreement
+    title: "Rater Agreement"
+    summary: "Agreement statistics and per-item disagreement between raters are computed."
+    serves: "Label quality is judged."
+    origin: field
+    depends_on: [COR-48]
+  - key: span-annotation
+    title: "Span and Region Annotation"
+    summary: "A person marks text spans, image regions or audio segments on an output and tags them."
+    serves: "Error taxonomies are built."
+    origin: field
+    depends_on: [REN-46]
+  - key: regression-report
+    title: "Regression Report Between Checkpoints"
+    summary: "Examples right in one checkpoint and wrong in another are listed, counted in each direction."
+    serves: "Forgetting and regressions are caught."
+    origin: field
+    depends_on: [RUN-08]
+  - key: samples-over-training
+    title: "Generation Samples over Training"
+    summary: "Generations from fixed prompts are kept at each checkpoint and shown as a gallery by step."
+    serves: "Quality is watched while training."
+    origin: field
+    depends_on: [RUN-01]
+  - key: fixed-prompt-panel
+    title: "Fixed Prompt Panel"
+    summary: "A pinned set of prompts is generated again at chosen intervals during a run."
+    serves: "Behaviour is tracked with qualitative probes."
+    origin: field
+    depends_on: [STR-03]
+  - key: prompt-playground
+    title: "Prompt Playground"
+    summary: "A prompt with variables is edited and run with a chosen model and sampling settings over rows of a dataset."
+    serves: "Prompts are iterated."
+    origin: field
+    depends_on: [AGT-15]
+  - key: prompt-versions
+    title: "Prompt Versions"
+    summary: "Versions of a prompt are kept with diffs and the evaluation scores of each."
+    serves: "A person knows which prompt change helped."
+    origin: field
+    depends_on: [RUN-03]
+  - key: sampling-settings-grid
+    title: "Sampling Settings Grid"
+    summary: "One prompt is run under a grid of temperature, nucleus size and seed, and the outputs shown together."
+    serves: "The effect of sampling on outputs is learned."
+    origin: field
+    depends_on: [INT-09]
+  - key: self-consistency-view
+    title: "Self-Consistency View"
+    summary: "Several samples per prompt are shown with their agreement and score spread."
+    serves: "The stability of a score is estimated."
+    origin: field
+    depends_on: [RUN-09]
+  - key: pass-at-k
+    title: "Pass@k Curves"
+    summary: "Success is plotted against the number of samples."
+    serves: "Inference-time compute is judged."
+    origin: field
+    depends_on: [RUN-01]
+  - key: retrieval-trace
+    title: "Retrieval Trace View"
+    summary: "The query, the retrieved passages with scores, and the passages used in the answer are shown with their sources."
+    serves: "Retrieval pipelines are debugged."
+    origin: field
+    depends_on: [REN-51]
+  - key: retrieval-metrics
+    title: "Retrieval Metrics"
+    summary: "Recall at k, rank metrics, relevance and faithfulness are shown per query."
+    serves: "Retrieval quality is measured."
+    origin: field
+    depends_on: [RUN-01]
+  - key: query-document-map
+    title: "Query and Document Map"
+    summary: "Queries, documents and retrieved results are plotted in one projection."
+    serves: "Retrieval gaps are found."
+    origin: field
+    depends_on: [INT-27]
+  - key: source-attribution
+    title: "Attribution to Sources"
+    summary: "The parts of an answer that match each retrieved passage are highlighted."
+    serves: "Grounding is checked."
+    origin: field
+    depends_on: [REN-51]
+  - key: agent-trajectory-eval
+    title: "Agent Trajectory Scoring"
+    summary: "Whole agent runs are scored by tool choice, step count, repeated loops, cost and outcome."
+    serves: "Agents are evaluated for efficiency as well as success."
+    origin: field
+    depends_on: [AGT-01]
+  - key: trajectory-comparison
+    title: "Trajectory Comparison"
+    summary: "Two agent runs on one task are aligned step by step, with the point of divergence marked."
+    serves: "The decision that mattered is found."
+    origin: field
+    depends_on: [RUN-05]
+  - key: conversation-view
+    title: "Multi-Turn Conversation View"
+    summary: "A dialogue is shown as a thread with per-turn scores and the state carried over."
+    serves: "Long interactions are evaluated."
+    origin: field
+    depends_on: [REN-51]
+  - key: tool-call-validity
+    title: "Tool-Call Validity View"
+    summary: "Tool calls are shown with their schema check results and argument errors."
+    serves: "Function calling is debugged."
+    origin: field
+    depends_on: [AGT-01]
+  - key: guidance-seed-grid
+    title: "Guidance and Seed Grid"
+    summary: "One prompt is generated across a grid of guidance scales and seeds."
+    serves: "Samplers of image models are tuned."
+    origin: field
+    depends_on: [INT-09]
+  - key: generative-metrics
+    title: "Generative Quality Metrics"
+    summary: "Distribution metrics of generated images, audio or video are tracked over checkpoints."
+    serves: "Generative quality is followed."
+    origin: field
+    depends_on: [RUN-01]
+  - key: detection-error-browser
+    title: "Detection Error Browser"
+    summary: "Predictions and ground truth are drawn over images with filters by confidence, class and match status."
+    serves: "Vision errors are analysed."
+    origin: field
+    depends_on: [REN-56]
+  - key: novel-view-comparison
+    title: "Novel-View Comparison"
+    summary: "A model's render from a held-out camera is shown beside the photograph, with their error."
+    serves: "View-synthesis models are evaluated."
+    origin: field
+    depends_on: [REN-39]
+  - key: fairness-metrics
+    title: "Group Metric Gaps"
+    summary: "Metric gaps are shown across groups defined by a chosen attribute."
+    serves: "Disparities are audited."
+    origin: field
+    depends_on: [COR-48]
+  - key: ensemble-uncertainty
+    title: "Ensemble Uncertainty View"
+    summary: "The spread of predictions across ensemble members or repeated passes is shown."
+    serves: "Model uncertainty is judged."
+    origin: field
+    depends_on: [RUN-09]
+  - key: contamination-check
+    title: "Contamination Check"
+    summary: "Outputs are searched for verbatim overlap with training or benchmark text."
+    serves: "Benchmark scores are validated."
+    origin: field
+    depends_on: [COR-48]
+  - key: behaviour-test-panel
+    title: "Behaviour Test Panel"
+    summary: "A suite of probe prompts is run against a model, with pass rates by category over checkpoints."
+    serves: "Safety and refusal behaviour are tracked."
+    origin: field
+    depends_on: [RUN-01]
+  - key: eval-suite-registry
+    title: "Evaluation Suite Registry"
+    summary: "Evaluation sets and metric settings are named and run on any checkpoint with one action."
+    serves: "Evaluation is consistent."
+    origin: field
+    depends_on: [RUN-10]
+  - key: regression-gate
+    title: "Regression Gate"
+    summary: "A check fails when an evaluation score falls below a threshold, with a diff of the examples."
+    serves: "Regressions are stopped in continuous integration."
+    origin: field
+    depends_on: [PLT-03]
+  - key: logprob-eval-board
+    title: "Log-Probability Scoring Board"
+    summary: "Multiple-choice tasks are scored by option log probability across a series of checkpoints."
+    serves: "Capability is tracked through training."
+    origin: field
+    depends_on: [RUN-10]
+  - key: agent-eval-harness
+    title: "Agent Evaluation Harness"
+    summary: "An agent is run on a task set inside Caliper and scored on outcomes, steps and cost."
+    serves: "The research agents themselves are measured."
+    origin: field
+    depends_on: [AGT-14]

@@ -1,4 +1,4 @@
-// Metal backend for the HostRenderer seam (docs/explanations/rendering.md). Sibling to
+// Metal backend for the HostRenderer seam (docs/applets/rendering.md). Sibling to
 // gl_renderer.cpp; make_metal_renderer() (declared in host_renderer.h)
 // constructs it and main.cpp selects via CALIPER_RENDERER=metal, falling back
 // to the GL backend if init() fails. Apple-only translation unit.

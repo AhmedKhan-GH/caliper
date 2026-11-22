@@ -32,16 +32,37 @@ def _site_url():
 
 
 DEFAULT_SITE = _site_url()
+
+
+def excluded_docs(root):
+    """The docs pages that mkdocs.yml leaves out of the site (exclude_docs), as paths under docs/."""
+    try:
+        with open(Path(root) / "mkdocs.yml", encoding="utf-8") as f:
+            text = (yaml.safe_load(f) or {}).get("exclude_docs") or ""
+    except (OSError, yaml.YAMLError):
+        return set()
+    return {line.strip() for line in text.splitlines() if line.strip() and not line.startswith("#")}
 GITHUB = "https://github.com/AhmedKhan-GH/caliper"
 
 STATUS_ORDER = ["shipped", "built", "planned", "idea", "decision"]
 STATUS_RANK = {"shipped": 0, "built": 1, "planned": 2, "idea": 2, "decision": 2}
-SECTION_TITLES = {"shipped": "Shipped", "built": "Built", "planned": "Planned",
-                  "idea": "Ideas", "decision": "Decisions"}
-BADGE_LABELS = {"shipped": "Shipped", "built": "Built", "planned": "Planned",
-                "idea": "Idea", "decision": "Decision"}
-FEATURE_KEYS = ["id", "title", "status", "summary", "depends_on", "sprint", "docs",
-                "branch", "design", "issue", "draft"]
+# What the pages show: built work whose branches are unfinished shows as in progress.
+SHOWN_ORDER = ["shipped", "built", "progress", "planned", "idea", "decision"]
+SECTION_TITLES = {"shipped": "Shipped", "built": "Built", "progress": "In progress",
+                  "planned": "Planned", "idea": "Ideas", "decision": "Decisions"}
+BADGE_LABELS = {"shipped": "Shipped", "built": "Built", "progress": "In progress",
+                "planned": "Planned", "idea": "Idea", "decision": "Decision"}
+SCOPE_LABELS = {"core": "Core", "supporting": "Supporting", "peripheral": "Peripheral"}
+FEATURE_KEYS = ["id", "title", "status", "scope", "summary", "depends_on", "sprint", "docs",
+                "branches", "in_progress", "design", "issue", "draft"]
+COVERAGE = "coverage"
+CANDIDATES = "candidates"
+# Candidate origins in the order their sections appear: (value, section title, count column).
+ORIGINS = [("cut", "Scope Cuts"), ("plan-idea", "Plan Ideas"),
+           ("adjacent-work", "Adjacent Work"), ("field", "Field")]
+# The proposed pillars follow the registry's pillars in this order.
+PROPOSED_ORDER = ["datasets", "training-diagnostics", "evaluation", "profiling-and-systems",
+                  "robotics-and-simulation", "scientific-fields", "publishing-and-teaching"]
 
 
 class RegistryError(Exception):
@@ -132,6 +153,13 @@ def first_heading(headings):
     return None
 
 
+def shown_status(feature):
+    """The status a page shows: 'progress' for built work that is unfinished."""
+    if feature["status"] == "built" and feature.get("in_progress"):
+        return "progress"
+    return feature["status"]
+
+
 def split_ref(ref):
     """'docs/a.md#x' -> ('docs/a.md', 'x'); no anchor gives None."""
     path, _, anchor = ref.partition("#")
@@ -173,7 +201,10 @@ def load_registry(root):
                 raise RegistryError("%s: %s: duplicate id" % (name, fid))
             feature = {key: raw.get(key) for key in FEATURE_KEYS}
             feature["depends_on"] = sorted(raw.get("depends_on") or [], key=id_key)
+            feature["branches"] = list(raw.get("branches") or [])
+            feature["in_progress"] = bool(raw.get("in_progress"))
             feature["draft"] = bool(raw.get("draft"))
+            feature["sources"] = []
             feature["pillar"] = pillar["prefix"]
             feature["file"] = name
             feature["unblocks"] = []
@@ -190,7 +221,123 @@ def load_registry(root):
             features[dep]["unblocks"].append(fid)
     for feature in features.values():
         feature["unblocks"].sort(key=id_key)
+    for group in read_coverage(root):
+        for entry in group["entries"]:
+            for fid in entry.get("ids") or []:
+                if fid in features:
+                    features[fid]["sources"].append((group, entry))
     return pillars, features
+
+
+# Coverage ledger
+
+def read_coverage(root):
+    """Returns the ledger groups under root/roadmap/coverage, sorted by file name.
+
+    Each group is its YAML mapping with its file name under the key `file`. A file that is not
+    a mapping is skipped here; the checker reports it.
+    """
+    folder = Path(root) / "roadmap" / COVERAGE
+    groups = []
+    for path in sorted(folder.glob("*.yml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as err:
+            raise RegistryError("roadmap/%s/%s: not valid YAML: %s" % (COVERAGE, path.name, err))
+        if isinstance(data, dict):
+            data = dict(data)
+            data["file"] = "roadmap/%s/%s" % (COVERAGE, path.name)
+            data["entries"] = [e for e in data.get("entries") or [] if isinstance(e, dict)]
+            groups.append(data)
+    return groups
+
+
+# Candidates
+
+def read_candidates(root, features):
+    """Returns the candidate pillars under root/candidates, existing pillars first.
+
+    Candidates are ideas outside the registry: they are read here and nowhere else, so they never
+    reach the graph, the data files or any count. Each pillar is its YAML mapping with its file
+    stem under `slug`. A dependency that is not a registry id raises RegistryError.
+    """
+    folder = Path(root) / CANDIDATES
+    pillars = []
+    for path in sorted(folder.glob("*.yml")):
+        name = "%s/%s" % (CANDIDATES, path.name)
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as err:
+            raise RegistryError("%s: not valid YAML: %s" % (name, err))
+        if not isinstance(data, dict):
+            raise RegistryError("%s: not a pillar mapping" % name)
+        data = dict(data)
+        data["slug"] = path.stem
+        data["candidates"] = list(data.get("candidates") or [])
+        for item in data["candidates"]:
+            for dep in item.get("depends_on") or []:
+                if dep not in features:
+                    raise RegistryError("%s: %s: depends_on %s, which does not exist"
+                                        % (name, item["key"], dep))
+        pillars.append(data)
+
+    order = {Path(name).stem: data["order"] for name, data in read_files(root)}
+
+    def rank(p):
+        if p["slug"] in PROPOSED_ORDER:
+            return (1, PROPOSED_ORDER.index(p["slug"]))
+        return (0, order.get(p["slug"], 0))
+    pillars.sort(key=lambda p: (rank(p), p["slug"]))
+    return pillars
+
+
+def candidates_index():
+    """The Candidates page: the navigator's mount, which navigator.js fills from candidates.json.
+
+    The rail and the pillar headings carry the counts and the proposed pillars' descriptions, so
+    the page itself holds only its title and a short paragraph under the window.
+    """
+    return "\n".join([
+        "---", "template: roadmap.html", "candidates_navigator: true",
+        "hide:", "  - navigation", "  - toc", "---", "",
+        "# Candidates", "",
+        '<div id="candidate-navigator" class="roadmap-window" '
+        'data-candidates="../candidates.json"></div>', "",
+        "Candidates are ideas that are not in the registry. They are kept here to mine as Caliper "
+        "grows, and they appear in no graph or count of the roadmap. On a wide screen, the "
+        "navigator shows every candidate as a card under its pillar. Hover a card for its "
+        "summary, and click it for its dependencies and links. On a phone, the pillar list links "
+        "to the page of each pillar's candidates.", ""])
+
+
+def candidates_page(pillar, features, by_prefix):
+    lines = ["---", "candidates_filter: true", "---", "", "# " + md(pillar["title"]), ""]
+    if pillar.get("proposed"):
+        lines += [md(pillar.get("description") or ""), ""]
+        if pillar.get("alternative"):
+            lines += ["Alternative: %s" % md(pillar["alternative"]), ""]
+    else:
+        target = by_prefix[pillar["pillar"]]
+        lines += ["These candidates are not in the registry. The pillar itself is on the "
+                  "[%s](../%s.md) roadmap page." % (md(target["title"]), target["slug"]), ""]
+    lines += ['<input type="search" class="candidate-filter" aria-label="Filter candidates" '
+              'placeholder="Filter candidates">', ""]
+    for origin, title in ORIGINS:
+        items = [c for c in pillar["candidates"] if c["origin"] == origin]
+        if not items:
+            continue
+        lines += ["## " + title, ""]
+        for c in items:
+            lines.append("- **%s**" % md(c["title"]))
+            lines += ["", "    " + md(c["summary"]), ""]
+            if c.get("serves"):
+                lines += ["    Serves: %s" % md(c["serves"]), ""]
+            deps = c.get("depends_on") or []
+            if deps:
+                links = ", ".join("[%s](../%s.md)" % (d, d.lower()) for d in sorted(deps, key=id_key))
+                lines += ["    Depends on: " + links, ""]
+        lines.append("")
+    return "\n".join(lines)
 
 
 # Pages
@@ -227,9 +374,11 @@ def pillar_page(pillar):
     lines = ["---", "template: roadmap.html", "---", "", "# " + md(pillar["title"]), "",
              md(pillar["summary"]), "",
              "The [roadmap graph](index.md) shows how these features depend on features in "
-             "other pillars.", ""]
-    for status in STATUS_ORDER:
-        items = [f for f in pillar["features"] if f["status"] == status]
+             "other pillars.",
+             "Ideas for this pillar that are not in the registry are on its "
+             "[candidates page](%s/%s.md)." % (CANDIDATES, pillar["slug"]), ""]
+    for status in SHOWN_ORDER:
+        items = [f for f in pillar["features"] if shown_status(f) == status]
         if not items:
             continue
         lines += ["## " + SECTION_TITLES[status], ""]
@@ -255,24 +404,85 @@ def feature_page(feature, pillars_by_prefix, features, root, base):
             if feature["docs"] else "None")
     design = (_heading_link(root, "roadmap", feature["design"], "design", base)
               if feature["design"] else "None")
-    branch = ("[`%s`](%s/tree/%s)" % (feature["branch"], base, feature["branch"])
-              if feature["branch"] else "None")
+    # Most work branches are not published, so a branch is named rather than linked.
+    branches = ("<br>".join("`%s`" % b for b in feature["branches"])
+                if feature["branches"] else "None")
+    shown = shown_status(feature)
     issue = ("[#%d](%s/issues/%d)" % (feature["issue"], base, feature["issue"])
              if feature["issue"] else "None")
     rows = [
         ("Id", "`%s`" % feature["id"]),
         ("Status", '<span class="roadmap-badge roadmap-badge--%s">%s</span>'
-         % (feature["status"], BADGE_LABELS[feature["status"]])),
+         % (shown, BADGE_LABELS[shown])),
+        ("Scope", '<span class="roadmap-scope roadmap-scope--%s">%s</span>'
+         % (feature["scope"], SCOPE_LABELS.get(feature["scope"], "None"))),
         ("Pillar", "[%s](%s.md)" % (md(pillar["title"]), pillar["slug"])),
         ("Sprint", str(feature["sprint"]) if feature["sprint"] else "None"),
         ("Depends on", _feature_links(feature["depends_on"], features)),
         ("Unblocks", _feature_links(feature["unblocks"], features)),
-        ("Docs", docs), ("Branch", branch), ("Design", design), ("Issue", issue),
+        ("Docs", docs), ("Branches", branches), ("Design", design), ("Issue", issue),
     ]
     lines += ["| Field | Value |", "| --- | --- |"]
     lines += ["| %s | %s |" % row for row in rows]
-    lines += ["", "Back to the [roadmap graph](index.md).", ""]
+    if feature["in_progress"]:
+        lines += ["", "The work on these branches is unfinished, so the feature shows as in "
+                  "progress."]
+    lines += [""]
+    if feature["sources"]:
+        lines += ["## Coverage Ledger", ""]
+        lines += ["- " + source_line(root, group, entry, base)
+                  for group, entry in feature["sources"]]
+        lines += [""]
+    # Raw links, because the node's anchor exists only once the graph is drawn.
+    lines += ['<a class="md-button" href="../">Roadmap Graph</a> '
+              '<a class="md-button" href="../#%s">Feature in Graph</a>' % feature["id"], ""]
     return "\n".join(lines)
+
+
+def _sentence(text):
+    text = md(text)
+    return text if text.endswith((".", "?", "!")) else text + "."
+
+
+def source_line(root, group, entry, base):
+    """One line of a feature page's Coverage Ledger list: where the item is, then the item."""
+    kind = group.get("kind")
+    ref = entry.get("ref") or group.get("ref") or "main"
+    if kind == "page":
+        path = group["source"]
+        heading = entry.get("heading")
+        on_main = ref == "main" and (Path(root) / path).is_file()
+        if on_main:
+            anchor = ""
+            if heading:
+                for _, text, slug in read_headings(Path(root) / path) or []:
+                    if text == heading_text(heading):
+                        anchor = "#" + slug
+                        break
+            where = "[%s](%s/blob/main/%s%s)" % (md(path), base, path, anchor)
+        else:
+            where = "`%s` on the branch `%s`" % (path, ref)
+        if heading:
+            where += ", under *%s*" % md(heading_text(heading))
+    elif kind == "docs":
+        path = split_ref(entry["page"])[0]
+        if path[len("docs/"):] in excluded_docs(root):
+            where = "`%s`, which the docs site leaves out" % path  # a link would lead nowhere
+        else:
+            where = _heading_link(root, "roadmap", entry["page"], "docs", base)
+    elif kind == "github":
+        number = entry.get("pr")
+        where = "[Pull request #%d](%s/pull/%d)" % (number, base, number)
+    elif kind in ("branches", "worktrees"):
+        label = "Branch" if kind == "branches" else "Uncommitted work on the branch"
+        where = "%s `%s`" % (label, entry["branch"])
+        if entry.get("commits"):
+            where += ", %s" % md(entry["commits"])
+    elif kind == "notes":
+        where = "%s, `%s`" % (md(group.get("title", "Notes")), entry["file"])
+    else:
+        where = md(group.get("title", group["file"]))
+    return "%s. %s" % (where, _sentence(entry["item"]))
 
 
 def _dump(obj):
@@ -284,8 +494,10 @@ def graph_json(pillars, features):
     nodes = []
     for f in sorted(features.values(), key=lambda f: (order[f["pillar"]], id_key(f["id"]))):
         nodes.append({"id": f["id"], "title": f["title"], "status": f["status"],
-                      "pillar": f["pillar"], "summary": f["summary"], "sprint": f["sprint"],
-                      "draft": f["draft"], "url": f["id"].lower() + "/"})
+                      "scope": f["scope"], "in_progress": f["in_progress"], "pillar": f["pillar"],
+                      "summary": f["summary"], "sprint": f["sprint"],
+                      "branches": f["branches"], "draft": f["draft"],
+                      "url": f["id"].lower() + "/"})
     edges = []
     for f in sorted(features.values(), key=lambda f: id_key(f["id"])):
         for dep in f["depends_on"]:
@@ -298,6 +510,39 @@ def graph_json(pillars, features):
         "nodes": nodes, "edges": edges})
 
 
+def candidates_json(cand_pillars, features):
+    """The data file of the candidates navigator; its URLs are relative to roadmap/."""
+    used = {dep for p in cand_pillars for c in p["candidates"] for dep in c.get("depends_on") or []}
+    return _dump({
+        "origins": [{"origin": origin, "title": title} for origin, title in ORIGINS],
+        "pillars": [
+            {"prefix": p["pillar"], "slug": p["slug"], "title": p["title"],
+             "proposed": p["proposed"], "description": p.get("description"),
+             "alternative": p.get("alternative"), "url": "%s/%s/" % (CANDIDATES, p["slug"]),
+             "candidates": [
+                 {"key": c["key"], "title": c["title"], "summary": c["summary"],
+                  "serves": c.get("serves"), "origin": c["origin"],
+                  "depends_on": sorted(c.get("depends_on") or [], key=id_key)}
+                 for c in p["candidates"]]}
+            for p in cand_pillars],
+        "features": {
+            fid: {"title": features[fid]["title"], "status": shown_status(features[fid]),
+                  "url": fid.lower() + "/", "graph": "./#" + fid}
+            for fid in sorted(used, key=id_key)}})
+
+
+def _source_ref(group, entry):
+    """A ledger entry for roadmap.json: its ledger file and the fields that place the item."""
+    ref = {"ledger": group["file"], "item": entry["item"]}
+    for key in ("heading", "ref", "page", "pr", "branch", "state", "file"):
+        if entry.get(key) is not None:
+            ref[key] = entry[key]
+    if group.get("kind") == "page":
+        ref["source"] = group["source"]
+        ref.setdefault("ref", group.get("ref") or "main")
+    return ref
+
+
 def registry_json(pillars, features, site):
     return _dump({
         "site": site,
@@ -306,10 +551,12 @@ def registry_json(pillars, features, site):
                      "url": "%sroadmap/%s/" % (site, p["slug"]),
                      "features": [f["id"] for f in p["features"]]} for p in pillars],
         "features": [
-            {"id": f["id"], "title": f["title"], "status": f["status"], "pillar": f["pillar"],
+            {"id": f["id"], "title": f["title"], "status": f["status"], "scope": f["scope"],
+             "pillar": f["pillar"],
              "summary": f["summary"], "depends_on": f["depends_on"], "unblocks": f["unblocks"],
-             "sprint": f["sprint"], "docs": f["docs"], "branch": f["branch"],
-             "design": f["design"], "issue": f["issue"], "draft": f["draft"],
+             "sprint": f["sprint"], "docs": f["docs"], "branches": f["branches"],
+             "in_progress": f["in_progress"], "design": f["design"], "issue": f["issue"],
+             "draft": f["draft"], "sources": [_source_ref(g, e) for g, e in f["sources"]],
              "url": "%sroadmap/%s/" % (site, f["id"].lower())}
             for f in sorted(features.values(), key=lambda f: id_key(f["id"]))]})
 
@@ -326,6 +573,14 @@ def generate(root, site=DEFAULT_SITE):
     for fid in sorted(features, key=id_key):
         out.append(("roadmap/%s.md" % fid.lower(),
                     feature_page(features[fid], by_prefix, features, root, GITHUB), False))
+    cand = read_candidates(root, features)
+    if cand:
+        # The navigator is its own top tab (docs/.nav.yml); its pillar pages stay out of the sidebar.
+        out.append(("roadmap/%s/index.md" % CANDIDATES, candidates_index(), True))
+        for p in cand:
+            out.append(("roadmap/%s/%s.md" % (CANDIDATES, p["slug"]),
+                        candidates_page(p, features, by_prefix), False))
+        out.append(("roadmap/candidates.json", candidates_json(cand, features), True))
     out.append(("roadmap/graph.json", graph_json(pillars, features), True))
     out.append(("roadmap.json", registry_json(pillars, features, site), True))
     return out

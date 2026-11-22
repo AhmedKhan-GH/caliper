@@ -155,3 +155,115 @@ body { background: var(--ground); -webkit-font-smoothing: antialiased; }
 
 /* The sidebar's sticky title sits on the ground colour, so links scrolling under it stay hidden. */
 .md-nav--primary > .md-nav__title { background: var(--ground); box-shadow: 0 .4rem .4rem -.2rem var(--ground); }
+
+/* Page headings under the H1 (partials/sb-toc.html). On desktop and tablet the full list sits in the flow under the H1; once it
+   has scrolled away a compact bar is pinned under the header (no layout space of its own), and a list opens below it. On a
+   phone only the bar exists, in the flow, collapsed until tapped. The right-hand sidebar is gone, so the grid is wider.
+   Headings keep clear of the header and the bar when scrolled to (header + bar + gap stays under the threshold Material's
+   tracking uses: header + 0.8 of the main area's top margin). */
+:root { --sb-header: 3.05rem; } /* the header's height; assets/toc.js keeps it exact */
+.md-grid { max-width: 70rem; }
+.md-main__inner:has(.sb-toc) { margin-top: 3rem; } /* pages without the list keep Material's margin, as the roadmap graph does */
+.md-typeset :is(h2, h3, h4), .md-typeset :target { scroll-margin-top: calc(var(--sb-header) + 2rem); }
+
+.md-typeset .sb-toc { position: sticky; top: var(--sb-header); z-index: 3; height: 0; margin: 0; }
+.md-typeset .sb-toc__bar {
+  position: absolute; top: 0; left: 0; display: flex; align-items: center; justify-content: space-between; gap: .6rem; width: 100%; height: 1.8rem;
+  padding: 0 .6rem; background: var(--plate); color: var(--secondary); border: 1px solid var(--rule-faint); border-radius: 4px; cursor: pointer;
+  font: inherit; font-size: .7rem; letter-spacing: .1em; text-transform: uppercase; text-align: left; box-shadow: 0 .3rem 0 var(--ground);
+  visibility: hidden; opacity: 0; transition: opacity .12s;
+}
+.md-typeset .sb-toc--pinned .sb-toc__bar { visibility: visible; opacity: 1; }
+.md-typeset .sb-toc__bar:hover, .md-typeset .sb-toc__bar:focus-visible { background: var(--plate-hover); color: var(--parchment); outline: none; border-color: var(--rule); }
+.md-typeset .sb-toc__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.md-typeset .sb-toc__chev { flex: none; color: var(--bronze); transition: transform .15s; }
+.md-typeset .sb-toc--open .sb-toc__chev { transform: rotate(180deg); }
+.md-typeset .sb-toc__panel {
+  position: absolute; left: 0; width: min(100%, 26rem); top: 2rem; z-index: 3; max-height: calc(100vh - 7.5rem); overflow-y: auto;
+  background: var(--plate); border: 1px solid var(--rule); border-radius: 4px; box-shadow: var(--md-shadow-z3); padding: .4rem 0;
+  scrollbar-color: var(--rule) transparent;
+}
+.md-typeset .sb-toc__panel[hidden] { display: none; }
+
+.md-typeset .sb-toc ul.sb-toc__list, .md-typeset .sb-toc-inline ul.sb-toc__list { list-style: none; margin: 0; padding: 0; }
+.md-typeset :is(.sb-toc, .sb-toc-inline) li.sb-toc__item { list-style: none; margin: 0; padding: 0; }
+.md-typeset :is(.sb-toc, .sb-toc-inline) .sb-toc__item > a {
+  display: block; margin: 0; padding: .18rem .8rem; font-size: .72rem; line-height: 1.4; color: var(--secondary); border-left: 2px solid transparent;
+}
+.md-typeset :is(.sb-toc, .sb-toc-inline) .sb-toc__item--3 > a { padding-left: 1.7rem; color: var(--faint); font-size: .68rem; }
+.md-typeset :is(.sb-toc, .sb-toc-inline) .sb-toc__item > a:hover { color: var(--parchment); background: var(--plate-hover); }
+.md-typeset .sb-toc .sb-toc__item > a.md-nav__link--active { color: var(--bronze-hover); border-left-color: var(--bronze); }
+
+/* The inline list: a plate under the H1, in one column that reads top to bottom. */
+.md-typeset .sb-toc-inline { margin: 0 0 1.6rem; padding: .5rem 0; background: var(--plate); border: 1px solid var(--rule-faint); border-radius: 4px; }
+
+/* Phone: no inline list; the bar sits in the flow, always shown, and sticks when scrolled. */
+@media (max-width: 37.4375em) {
+  .md-typeset .sb-toc-inline { display: none; }
+  .md-typeset .sb-toc { height: 1.8rem; margin: 0 0 1.4rem; }
+  .md-typeset .sb-toc__bar { visibility: visible; opacity: 1; }
+}
+@media print { .md-typeset :is(.sb-toc, .sb-toc-inline) { display: none; } }
+
+/* Mermaid diagrams, drawn from the palette so authors write no colours. Material defines these variables on ":root > *",
+   which outranks a bare "body", so ":root > body" is used. The ones Material derives from others are set too, so none
+   keeps a default that clashes with the dark slate scheme. */
+:root > body {
+  --md-mermaid-font-family: "Plex Condensed", sans-serif;
+  --md-mermaid-node-bg-color: var(--plate);
+  --md-mermaid-node-fg-color: var(--faint);
+  --md-mermaid-edge-color: var(--secondary);
+  --md-mermaid-label-bg-color: var(--ground);
+  --md-mermaid-label-fg-color: var(--parchment);
+  --md-mermaid-sequence-actor-bg-color: var(--plate);
+  --md-mermaid-sequence-actor-border-color: var(--rule);
+  --md-mermaid-sequence-actor-fg-color: var(--parchment);
+  --md-mermaid-sequence-actor-line-color: var(--rule);
+  --md-mermaid-sequence-actorman-bg-color: var(--plate);
+  --md-mermaid-sequence-actorman-line-color: var(--rule);
+  --md-mermaid-sequence-box-bg-color: var(--plate);
+  --md-mermaid-sequence-box-fg-color: var(--secondary);
+  --md-mermaid-sequence-label-bg-color: var(--plate);
+  --md-mermaid-sequence-label-fg-color: var(--parchment);
+  --md-mermaid-sequence-loop-bg-color: var(--plate);
+  --md-mermaid-sequence-loop-border-color: var(--rule);
+  --md-mermaid-sequence-loop-fg-color: var(--secondary);
+  --md-mermaid-sequence-message-fg-color: var(--secondary);
+  --md-mermaid-sequence-message-line-color: var(--secondary);
+  --md-mermaid-sequence-note-bg-color: var(--plate);
+  --md-mermaid-sequence-note-border-color: var(--rule);
+  --md-mermaid-sequence-note-fg-color: var(--parchment);
+  --md-mermaid-sequence-number-bg-color: var(--bronze);
+  --md-mermaid-sequence-number-fg-color: var(--deep);
+}
+/* Subgraph and divider fills come from Material's general grey, which is too bright on the dark ground. */
+.md-typeset .mermaid { --md-default-fg-color--lightest: var(--rule-faint); }
+
+/* Contents: the full docs tree that the header logo opens (docs-theme/hooks/contents.py). Each tab and section
+   is a toggle that opens and closes its branch; connector lines show the nesting. */
+.md-typeset .docs-tree { margin-top: .4rem; }
+.md-typeset .docs-tree .dt-actions { display: flex; gap: .5rem; margin: 0 0 1.2rem; }
+.md-typeset .docs-tree .dt-btn {
+  font: inherit; font-size: .72rem; letter-spacing: .04em; padding: .35rem .8rem; cursor: pointer;
+  color: var(--parchment); background: var(--plate); border: 1px solid var(--rule); border-radius: 4px;
+}
+.md-typeset .docs-tree .dt-btn:hover { background: var(--plate-hover); border-color: var(--bronze); }
+.md-typeset .docs-tree ul, .md-typeset .docs-tree li { list-style: none; margin: 0; padding: 0; }
+.md-typeset .docs-tree li { position: relative; }
+.md-typeset .docs-tree li li { margin-left: 1.1rem; }
+.md-typeset .docs-tree ul ul { margin-left: .45rem; border-left: 1px solid var(--rule); }
+.md-typeset .docs-tree ul ul > li::before {
+  content: ""; position: absolute; left: -1.1rem; top: .85rem; width: .8rem; border-top: 1px solid var(--rule);
+}
+.md-typeset .docs-tree .dt-section > ul { display: none; }
+.md-typeset .docs-tree .dt-section.is-open > ul { display: block; }
+.md-typeset .docs-tree .dt-toggle {
+  font: inherit; font-size: .8rem; letter-spacing: .02em; color: var(--parchment); background: none; border: 0;
+  padding: .2rem .3rem .2rem 0; cursor: pointer; text-align: left;
+}
+.md-typeset .docs-tree .dt-toggle::before {
+  content: "\25B8"; display: inline-block; width: 1rem; color: var(--bronze); transition: transform .12s;
+}
+.md-typeset .docs-tree .dt-section.is-open > .dt-toggle::before { transform: rotate(90deg); }
+.md-typeset .docs-tree .dt-root > .dt-section > .dt-toggle { font-size: .86rem; text-transform: uppercase; letter-spacing: .08em; padding-top: .45rem; }
+.md-typeset .docs-tree .dt-page a { display: inline-block; padding: .15rem 0 .15rem .15rem; font-size: .8rem; }

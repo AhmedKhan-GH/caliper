@@ -5,7 +5,7 @@ on:
     branches: [main]
     # The docs, the design pages, their theme, and the sources the docs embed as snippets.
     paths: ['site/**', 'docs/**', 'design/**', 'docs-theme/**', 'mkdocs.yml',
-            'sdk/include/**', 'include/caliper/**', 'examples/**', 'roadmap/**',
+            'sdk/include/**', 'include/caliper/**', 'examples/**', 'roadmap/**', 'candidates/**',
             '.github/workflows/pages.yml']
   workflow_dispatch:
 permissions:

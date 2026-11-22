@@ -1,7 +1,7 @@
 #pragma once
 // ============================================================================
 // api_server.h: Caliper API v0, an HTTP interface to the running app on
-// 127.0.0.1 (docs/references/api.md). It is off unless the app starts with
+// 127.0.0.1 (docs/agents/http-api.md). It is off unless the app starts with
 // --api or CALIPER_API=1; `caliper`, `caliper dev` and `caliper shot` take it
 // (api/app_api.h starts it for them).
 //

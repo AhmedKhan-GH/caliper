@@ -69,7 +69,7 @@ extern "C" {
 #define CALIPER_EMBED_API_VERSION 1
 
 /* ---------------------------------------------------------------------------
- * v1.1 — the "consumer" pass (docs/references/embedding.md). ALL additive; every v1 struct is byte-stable and no
+ * v1.1 — the "consumer" pass (docs/web/embedding-api.md). ALL additive; every v1 struct is byte-stable and no
  * struct grew a member, so CALIPER_EMBED_API_VERSION stays 1 (the size gate is
  * about struct fields; v1.1's additions are a new free function plus semantics
  * activated on EXISTING reserved fields). A v1 caller links and runs unchanged.

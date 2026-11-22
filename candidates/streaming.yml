@@ -1,0 +1,197 @@
+# yaml-language-server: $schema=schema.json
+pillar: STR
+title: Live Data, Streaming and Recordings
+proposed: false
+candidates:
+  - key: video-streams
+    title: "Compressed Video Streams"
+    summary: "Caliper LIB sends camera frames as an encoded H.264, H.265 or AV1 stream that the viewer decodes."
+    serves: "Long camera runs over a network need far less bandwidth than raw frames."
+    origin: cut
+    depends_on: [STR-05, STR-09]
+  - key: open-component-model
+    title: "Open Component Model"
+    summary: "A producer attaches its own typed components to a scene entity, beyond the closed set of primitives."
+    serves: "Research code carries domain values, such as joint torques, on the entity they belong to."
+    origin: cut
+    depends_on: [STR-10]
+  - key: store-of-everything
+    title: "Complete Logged-Data Store"
+    summary: "An optional store keeps every value a producer logs, so that any past value can be queried later."
+    serves: "A person asks a question of a run that no data view was recording at the time."
+    origin: cut
+    depends_on: [STR-12]
+  - key: per-part-updates
+    title: "Per-Component Partial Updates"
+    summary: "A producer updates one component of one entity, such as colours alone, without resending the rest."
+    serves: "Large static geometry with changing values streams at a fraction of the bytes."
+    origin: cut
+    depends_on: [STR-10]
+  - key: grpc-transport
+    title: "gRPC Transport"
+    summary: "The live protocol is also offered over gRPC for tools that already speak it."
+    serves: "Existing robotics and serving stacks connect without a WebSocket client."
+    origin: cut
+    depends_on: [STR-05]
+  - key: column-send
+    title: "Column Send with Explicit Times"
+    summary: "A producer sends a whole column of values with their times in one call."
+    serves: "Offline logs and simulation outputs load in bulk, not one step at a time."
+    origin: cut
+    depends_on: [STR-23]
+  - key: recording-tools
+    title: "Recording Merge, Compact and Verify Tools"
+    summary: "Command-line tools merge several recordings, compact one, and verify its integrity."
+    serves: "Long experiments recorded in pieces become one file that is known to be sound."
+    origin: cut
+    depends_on: [STR-12]
+  - key: recording-dataframe-api
+    title: "Dataframe Queries over Recordings"
+    summary: "A Python API returns any recorded entity or series over a time range as a dataframe."
+    serves: "Analysis after a run starts from the recording, with no export step."
+    origin: cut
+    depends_on: [STR-12, STR-28]
+  - key: caliper-lib-cpp
+    title: "Caliper LIB for C++"
+    summary: "A C++ library streams tensors, series and scenes to Caliper as the Python library does."
+    serves: "Simulators, robot stacks and inference engines written in C++ stream without a Python process."
+    origin: cut
+    depends_on: [STR-02]
+  - key: caliper-lib-rust
+    title: "Caliper LIB for Rust"
+    summary: "A Rust crate streams tensors, series and scenes to Caliper."
+    serves: "Rust training and robotics code streams natively."
+    origin: cut
+    depends_on: [STR-02]
+  - key: scene-parquet-arrays
+    title: "Scene Arrays in Parquet Export"
+    summary: "The Parquet export writes the arrays of a scene's batches as well as the table of its items."
+    serves: "A person analyses recorded geometry, such as point sets and meshes, in a dataframe tool."
+    origin: cut
+    depends_on: [STR-28, STR-10]
+  - key: landscape-options
+    title: "Loss Landscape Options"
+    summary: "The loss landscape demo may switch what the height shows, project the optimiser's path onto the surface, tie the span to the recent path and evaluate the surface in evaluation mode."
+    serves: "A person studies how an optimiser moves across the surface of a model that has batch normalisation or dropout."
+    origin: cut
+    depends_on: [STR-11]
+  - key: compressed-recording-chunks
+    title: "Compressed Recording Chunks"
+    summary: "The recording reader opens recordings whose chunks another tool rewrote with LZ4 or Zstandard compression."
+    serves: "Recordings compacted by standard tools still open."
+    origin: cut
+    depends_on: [STR-12]
+  - key: rgb-zero-copy
+    title: "RGB Zero-Copy Kernels"
+    summary: "Colour images held on the GPU are drawn in place, as single-channel tensors already are."
+    serves: "Generated images and camera frames display without a round trip through the CPU."
+    origin: plan-idea
+    depends_on: [REN-08]
+  - key: wider-ros2-messages
+    title: "Wider ROS 2 Message Coverage"
+    summary: "ROS 2 import decodes custom and less common message types from their definitions."
+    serves: "Recordings from any robot open, not only those with common messages."
+    origin: plan-idea
+    depends_on: [STR-22]
+  - key: static-tensor-borrow
+    title: "Borrowed Static Tensors"
+    summary: "A script may promise that a static tensor never changes, so that a scene reads it without the one-time device copy."
+    serves: "Very large static meshes or point sets in a simulation or reconstruction are not held twice in device memory."
+    origin: plan-idea
+    depends_on: [STR-10, REN-08]
+  - key: recording-disk-index
+    title: "Disk-Backed Recording Index"
+    summary: "The reader of a recording keeps its index on disk or in pages, so that a recording with tens of millions of items opens in a browser."
+    serves: "Multi-day runs with very many logged items are scrubbed without needing several gigabytes of memory."
+    origin: plan-idea
+    depends_on: [STR-12, STR-26]
+  - key: recording-byte-budget
+    title: "Bytes-per-Second Recording Target"
+    summary: "A recorder takes one bytes-per-second target and divides it among the views, in place of a fixed rate for each kind of view."
+    serves: "A person bounds the size of a long recording by one number whatever the mix of views."
+    origin: plan-idea
+    depends_on: [STR-12, STR-14]
+  - key: lossless-series
+    title: "Lossless Series Delivery"
+    summary: "A series can be marked so that no snapshot is coalesced, and each sample carries text and a vector of values."
+    serves: "Token-by-token activations of a generation are shown completely, not as a latest-wins sample."
+    origin: adjacent-work
+    depends_on: [STR-01, STR-03]
+  - key: remote-attach-ssh
+    title: "Remote Attach over SSH"
+    summary: "A command that attaches to a job on a remote machine and keeps the needed ports forwarded, reconnecting on loss."
+    serves: "Lets a researcher watch a cluster job from a laptop with no manual tunnels."
+    origin: field
+    depends_on: [STR-05, STR-06]
+  - key: julia-sender
+    title: "Julia Sender"
+    summary: "A package that logs arrays, series and tables from Julia."
+    serves: "Brings the same live views to Julia scientific code."
+    origin: field
+    depends_on: [STR-02, STR-01]
+  - key: r-sender
+    title: "R Sender"
+    summary: "A package that logs vectors, data frames and plots from R."
+    serves: "Brings live views to statistical work in R."
+    origin: field
+    depends_on: [STR-02, STR-01]
+  - key: matlab-sender
+    title: "MATLAB Sender"
+    summary: "A toolbox that logs matrices and series from MATLAB."
+    serves: "Lets signal and control researchers stream their data."
+    origin: field
+    depends_on: [STR-02, STR-01]
+  - key: c-header-sender
+    title: "Plain C Header Sender"
+    summary: "A single C header with a small, stable interface for sending data."
+    serves: "Lets any language with a C interface and any solver log data."
+    origin: field
+    depends_on: [STR-02, STR-01]
+  - key: fortran-module-sender
+    title: "Fortran Module"
+    summary: "A Fortran module wrapping the sender for arrays and scalars."
+    serves: "Lets numerical simulation codes stream fields as they solve."
+    origin: field
+    depends_on: [STR-02, STR-01]
+  - key: labelled-array-hand-off
+    title: "Dataframe and Labelled-Array Hand-Off"
+    summary: "Sending of dataframes and labelled arrays that keeps column names, dimension names and coordinate values."
+    serves: "Keeps meaning attached to the data so axes and tables are labelled automatically."
+    origin: field
+    depends_on: [STR-01, COR-50]
+  - key: more-array-libraries
+    title: "Additional Array Libraries"
+    summary: "Zero-copy or low-copy sending from further array and tensor libraries and compiled array formats."
+    serves: "Lets researchers keep their framework of choice."
+    origin: field
+    depends_on: [REN-08, REN-66, INT-19]
+  - key: env-var-auto-attach
+    title: "Environment-Variable Auto-Attach"
+    summary: "A variable that makes any script using the library attach to a named hub or recording without code changes."
+    serves: "Lets existing scripts be watched without editing them."
+    origin: field
+    depends_on: [STR-01, STR-06]
+  - key: browser-producer-js
+    title: "Browser-Side Producer in JavaScript"
+    summary: "A JavaScript library that streams values from web code to the hub."
+    serves: "Lets browser models and simulations show live views."
+    origin: field
+    depends_on: [STR-05, EMB-03]
+  - key: stdout-parser-sender
+    title: "Log Line Parser"
+    summary: "A bridge that reads structured lines from a program's output and streams them as series."
+    serves: "Lets programs that only print text be watched live."
+    origin: field
+    depends_on: [STR-02]
+  - key: open-telemetry-bridge
+    title: "Bridge for Open Telemetry Standards"
+    summary: "An importer and exporter for standard trace and metric formats."
+    serves: "Connects the platform to existing monitoring setups of a lab."
+    origin: field
+    depends_on: [STR-05, STR-02]
+  - key: parquet-and-columnar-sender
+    title: "Columnar File Streaming"
+    summary: "Streaming of rows from columnar files as they are written."
+    serves: "Lets a growing results file be watched without reloading."
+    origin: field
+    depends_on: [SPC-31]

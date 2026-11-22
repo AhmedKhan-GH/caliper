@@ -73,7 +73,7 @@ constexpr float kPointAttenMin = 0.5f;
 constexpr float kPointAttenMax = 2.0f;
 constexpr float kPointFadeFloor = 0.5f;
 
-// Host-internal renderer seam (docs/explanations/rendering.md). The ABI never sees this;
+// Host-internal renderer seam (docs/applets/rendering.md). The ABI never sees this;
 // backends are swappable forever because applets only see ImGui + bridge ids.
 class HostRenderer {
 public:
@@ -313,6 +313,6 @@ std::unique_ptr<HostRenderer> make_metal_renderer();
 // Vulkan factory (vulkan_renderer.cpp, Phase 4; Windows-only translation unit
 // today). Same contract as the Metal factory: un-init'd, caller falls back to
 // GL if init() fails. Device-resident CUDA tensors via VK_KHR_external_memory
-// + the runtime-loaded CUDA driver API (docs/explanations/zero-copy.md). Not defined elsewhere.
+// + the runtime-loaded CUDA driver API (docs/python/zero-copy-tensors.md). Not defined elsewhere.
 std::unique_ptr<HostRenderer> make_vulkan_renderer();
 }

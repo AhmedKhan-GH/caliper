@@ -1,5 +1,5 @@
 // The side chat in the hidden app (the hidden-app pattern of
-// docs/explanations/testing.md), with the stub agents: no real agent and no
+// docs/development/testing.md), with the stub agents: no real agent and no
 // model runs, and CALIPER_AGENT_OFFLINE=1 is set for the app. Two cases:
 //
 //   - The spec page: a dashboard built by a command script, the chat opened

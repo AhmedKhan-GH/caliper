@@ -1,5 +1,5 @@
 #pragma once
-/* caliper.tensor_bridge.v1 — the USP, productized (docs/references/service-tensor-bridge-v1.md): a
+/* caliper.tensor_bridge.v1 — the USP, productized (docs/applets/services/caliper-tensor-bridge-v1.md): a
  * CaliperTensor becomes a live texture this frame, GPU-resident on the native
  * backends (Metal buffer aliasing on MPS, Vulkan external-memory + CUDA import
  * on Windows), CPU-staged only on the GL fallback (§5.4). The ABI never names a

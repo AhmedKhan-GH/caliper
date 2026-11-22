@@ -1,5 +1,5 @@
 // CUDA twins of colormap.comp and the u8 blit for the direct image path
-// (docs/explanations/vulkan-cuda.md). The renderer launches these on the producer's stream; they read the
+// (docs/development/vulkan-and-cuda.md). The renderer launches these on the producer's stream; they read the
 // tensor in place and write the texture's VkImage through a surface object.
 //
 // The output must stay BYTE-IDENTICAL to the CPU reference map_f32_to_rgba8

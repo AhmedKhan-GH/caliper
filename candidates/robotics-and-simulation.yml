@@ -1,0 +1,445 @@
+# yaml-language-server: $schema=schema.json
+pillar: ROB
+title: Robotics and Simulation
+proposed: true
+description: "This pillar holds transform trees, episodes and rollouts, rewards, simulator state and contacts, world models, sensor timing, robot log tooling."
+alternative: "Robotics and simulation could be split between REN and STR, as it is today."
+candidates:
+  - key: prediction-beside-measurement
+    title: "Prediction Beside Measurement"
+    summary: "One frame shows a model's prediction and the live measurement it predicts, with their difference."
+    serves: "A person sees where along a run a learned model drifts from the real system."
+    origin: plan-idea
+    depends_on: [STR-33, COR-35]
+  - key: transform-tree-view
+    title: "Transform Tree View"
+    summary: "Shows the tree of coordinate frames as a collapsible graph with the live transform on each edge."
+    serves: "Helps find broken or missing links when a robot or simulator publishes frames."
+    origin: field
+    depends_on: [REN-40, REN-12]
+  - key: view-from-any-frame
+    title: "View from Any Frame"
+    summary: "Places the scene camera at a chosen coordinate frame so the world is seen from that link."
+    serves: "Helps check what a wrist, head or vehicle frame actually sees during a run."
+    origin: field
+    depends_on: [REN-12, REN-39]
+  - key: joint-state-plots
+    title: "Joint State Plots"
+    summary: "Plots position, velocity and effort of every joint in a grouped panel with limits drawn as bands."
+    serves: "Helps catch joints hitting limits or oscillating during training or deployment."
+    origin: field
+    depends_on: [REN-19, STR-04]
+  - key: joint-limit-margin
+    title: "Joint Limit Margin View"
+    summary: "Colours each joint of the model by how close it is to its range and velocity limits."
+    serves: "Helps explain why a learned policy saturates in certain poses."
+    origin: field
+    depends_on: [REN-19, REN-12]
+  - key: mjcf-models
+    title: "MJCF Robot Models"
+    summary: "MJCF model files load as scene entities, with their bodies, joints, geometry, sites and tendons."
+    serves: "Lets reinforcement-learning researchers see their simulator models without a separate viewer."
+    origin: field
+    depends_on: [REN-19, REN-11]
+  - key: sdf-models
+    title: "SDF World and Model Files"
+    summary: "Loads Simulation Description Format worlds and models with their links, joints and sensors."
+    serves: "Lets researchers inspect simulated worlds from common robotics simulators next to their data."
+    origin: field
+    depends_on: [REN-19, REN-11]
+  - key: model-tree-inspector
+    title: "Model Tree Inspector"
+    summary: "Lists the bodies, joints, geoms, sensors and actuators of a loaded robot model with their parameters."
+    serves: "Helps check masses, inertias and friction values that a policy may exploit."
+    origin: field
+    depends_on: [REN-19]
+  - key: teleoperation-view
+    title: "Teleoperation Data View"
+    summary: "Shows operator device input, the commanded robot target and the robot response together on one timeline."
+    serves: "Helps judge demonstration quality and latency when collecting data for imitation learning."
+    origin: field
+    depends_on: [STR-13, REN-12]
+  - key: trajectory-view
+    title: "Trajectory and Plan View"
+    summary: "Draws planned paths, waypoints and time-parameterised plans in the scene together with the executed path."
+    serves: "Helps compare what a planner or policy intended with what the robot did."
+    origin: field
+    depends_on: [REN-12, REN-30]
+  - key: trajectory-ensemble
+    title: "Trajectory Ensembles"
+    summary: "Draws many sampled trajectories from a stochastic planner or policy as a fan with a density shading."
+    serves: "Helps judge multimodality and spread in sampling-based planning and diffusion policies."
+    origin: field
+    depends_on: [REN-30, REN-12]
+  - key: action-chunk-view
+    title: "Action Chunk View"
+    summary: "Shows a predicted chunk of future actions against the actions actually executed and the next chunk."
+    serves: "Helps tune chunk length and blending in policies that predict action sequences."
+    origin: field
+    depends_on: [STR-04]
+  - key: cost-map-layers
+    title: "Cost Map Layers"
+    summary: "Shows each layer of a navigation cost map, such as obstacles, inflation and social cost, with a combined view."
+    serves: "Helps debug why a planner avoids or enters a region."
+    origin: field
+    depends_on: [REN-38, REN-12]
+  - key: sensor-timeline
+    title: "Sensor Fusion Timeline"
+    summary: "Lays out every sensor stream on one time axis with message rates, gaps and latency per stream."
+    serves: "Helps find dropped or delayed sensors that break a fusion pipeline or a learned model."
+    origin: field
+    depends_on: [STR-13, STR-23]
+  - key: sensor-rate-monitor
+    title: "Message Rate Monitor"
+    summary: "Plots the live rate and jitter of each stream against its expected rate."
+    serves: "Helps spot throttled drivers and overloaded nodes during data collection."
+    origin: field
+    depends_on: [STR-04]
+  - key: end-to-end-latency
+    title: "End-to-End Latency Breakdown"
+    summary: "Splits the delay from sensor capture to actuator command into stages using stamps on each message."
+    serves: "Helps find which stage of a control loop causes late actions."
+    origin: field
+    depends_on: [STR-47, STR-12]
+  - key: policy-rollout-viewer
+    title: "Policy Rollout Viewer"
+    summary: "Plays a policy rollout with the scene, the observations and the chosen actions in linked panels."
+    serves: "Helps researchers see how and where a policy fails rather than only reading returns."
+    origin: field
+    depends_on: [REN-12, STR-13]
+  - key: episode-browser
+    title: "Episode Browser"
+    summary: "Lists episodes of a dataset or run with thumbnails, length, return and success flag for opening in the scene view."
+    serves: "Helps pick good, bad and borderline episodes in large robot datasets."
+    origin: field
+    depends_on: [STR-12, STR-13]
+  - key: episode-filtering
+    title: "Episode Filtering"
+    summary: "Filters episodes by length, return, success, task, scene or any logged statistic with a query."
+    serves: "Helps build clean training subsets and find outliers."
+    origin: field
+    depends_on: [SPC-10]
+  - key: episode-tagging
+    title: "Episode Tagging"
+    summary: "Lets a reviewer tag episodes and segments as good, failed, recoverable or any custom label and saves the tags."
+    serves: "Helps curate imitation-learning data and mark failure modes for later analysis."
+    origin: field
+    depends_on: [STR-12]
+  - key: episode-annotation-clips
+    title: "Segment Annotation Within Episodes"
+    summary: "Marks sub-segments of an episode, such as grasp or approach, with labels on the scrubber."
+    serves: "Helps make phase labels for hierarchical policies and evaluation."
+    origin: field
+    depends_on: [STR-13]
+  - key: episode-action-obs-plots
+    title: "Per-Episode Action and Observation Plots"
+    summary: "Plots every action and observation dimension of one episode with the episode statistics behind it."
+    serves: "Helps check normalisation, saturation and dead dimensions before training."
+    origin: field
+    depends_on: [STR-13]
+  - key: dataset-stats-view
+    title: "Dataset Statistics View"
+    summary: "Shows per-dimension means, spreads, ranges and histograms across all episodes of a dataset."
+    serves: "Helps choose normalisation and spot distribution shift between datasets."
+    origin: field
+    depends_on: [SPC-10]
+  - key: reward-term-breakdown
+    title: "Reward Term Breakdown"
+    summary: "Stacks each term of a composite reward over time with its weight and running total."
+    serves: "Helps tune reward shaping and find terms that dominate or conflict."
+    origin: field
+    depends_on: [STR-04]
+  - key: policy-output-distribution
+    title: "Policy Output Distribution"
+    summary: "Shows the mean, spread and samples of the action distribution of a stochastic policy at each step."
+    serves: "Helps see confidence, entropy collapse and multimodal behaviour."
+    origin: field
+    depends_on: [STR-04]
+  - key: environment-replay
+    title: "Environment Replay from States and Actions"
+    summary: "Reconstructs a run by resetting a simulator to logged states or by re-applying logged actions and shows both side by side."
+    serves: "Helps check determinism and find where replay diverges from the record."
+    origin: field
+    depends_on: [STR-12, REN-12]
+  - key: replay-divergence-plot
+    title: "Replay Divergence Plot"
+    summary: "Plots the distance between recorded and replayed states over time."
+    serves: "Helps measure simulator nondeterminism and quantify model error."
+    origin: field
+    depends_on: [STR-12]
+  - key: sim-to-real-comparison
+    title: "Sim-to-Real Comparison"
+    summary: "Overlays simulated and real traces of the same task with time alignment and per-signal error."
+    serves: "Helps measure the reality gap and tune simulator parameters."
+    origin: field
+    depends_on: [STR-12, RUN-08]
+  - key: system-identification-view
+    title: "System Identification Fit View"
+    summary: "Shows simulated response against measured response while simulator parameters are fitted."
+    serves: "Helps calibrate friction, mass and actuator models."
+    origin: field
+    depends_on: [STR-03]
+  - key: imitation-dataset-viewer
+    title: "Imitation-Learning Dataset Viewer"
+    summary: "Opens robot demonstration datasets with synchronised video, states and actions per episode."
+    serves: "Helps inspect training data for behaviour cloning before and after training."
+    origin: field
+    depends_on: [SPC-03, STR-13]
+  - key: dataset-format-converter
+    title: "Dataset Format Converter"
+    summary: "Converts episodes between robot-learning formats with a preview of the key mapping and a check of the result."
+    serves: "Helps move data between training stacks without custom scripts."
+    origin: field
+    depends_on: [SPC-03, STR-28]
+  - key: episode-video-sync
+    title: "Multi-Camera Sync View"
+    summary: "Plays several camera streams together with timestamps aligned and offsets shown per camera."
+    serves: "Helps catch unsynchronised cameras in multi-view policy data."
+    origin: field
+    depends_on: [STR-13]
+  - key: physics-state-streaming
+    title: "Physics Simulator State Streaming"
+    summary: "Streams positions, velocities and body poses from a running physics engine into the scene without copies."
+    serves: "Lets researchers watch and pause simulators during training and debugging."
+    origin: field
+    depends_on: [STR-04, REN-12]
+  - key: contact-forces-view
+    title: "Contact Forces View"
+    summary: "Draws contact points, normals and force arrows from a physics engine, with friction cones optional."
+    serves: "Helps debug slipping, penetration and unstable grasps."
+    origin: field
+    depends_on: [REN-37, REN-12]
+  - key: contact-history-plot
+    title: "Contact History Plot"
+    summary: "Shows which bodies touch and the force on each pair as a timeline."
+    serves: "Helps link task events such as grasp and release to contact data."
+    origin: field
+    depends_on: [STR-13]
+  - key: collision-geometry-view
+    title: "Collision Geometry and Distances"
+    summary: "Shows collision shapes next to visual meshes and the signed distance between chosen pairs."
+    serves: "Helps find collision shapes that differ from the visual model."
+    origin: field
+    depends_on: [REN-19, REN-12]
+  - key: clearance-heatmap
+    title: "Clearance Heat Map"
+    summary: "Colours a robot model by its distance to the nearest obstacle."
+    serves: "Helps judge safety margins in motion plans."
+    origin: field
+    depends_on: [REN-12]
+  - key: differentiable-sim-gradients
+    title: "Differentiable Simulation Gradients"
+    summary: "Draws gradients of a loss with respect to initial states or actions as arrows and plots on the scene."
+    serves: "Helps researchers see where gradients vanish or explode through contacts."
+    origin: field
+    depends_on: [REN-37, STR-04]
+  - key: gradient-landscape-through-contact
+    title: "Gradient Quality Through Contact"
+    summary: "Compares simulator gradients with finite differences and sampled estimates over a parameter sweep."
+    serves: "Helps decide whether to trust analytic gradients in contact-rich tasks."
+    origin: field
+    depends_on: []
+  - key: world-model-rollouts
+    title: "World-Model Rollouts Beside Real Ones"
+    summary: "Shows imagined rollouts of a learned world model next to real trajectories from the same start."
+    serves: "Helps judge compounding error in model-based reinforcement learning."
+    origin: field
+    depends_on: [RUN-08, STR-13]
+  - key: imagination-horizon-error
+    title: "Imagination Error by Horizon"
+    summary: "Plots prediction error of a world model against rollout step for each state dimension."
+    serves: "Helps pick a safe planning horizon."
+    origin: field
+    depends_on: []
+  - key: latent-state-trajectories
+    title: "Latent State Trajectories"
+    summary: "Projects latent states of a recurrent or world-model agent over an episode as a path in a map."
+    serves: "Helps see how an agent represents task phases and surprises."
+    origin: field
+    depends_on: []
+  - key: latent-decoded-frames
+    title: "Decoded Latent Frames"
+    summary: "Decodes latent states back to images and shows them beside the real observations."
+    serves: "Helps check what a world model keeps and drops."
+    origin: field
+    depends_on: []
+  - key: multi-agent-view
+    title: "Multi-Agent View"
+    summary: "Shows several agents with their own observations, actions and rewards in one scene with per-agent panels."
+    serves: "Helps study cooperation and competition in multi-agent training."
+    origin: field
+    depends_on: [REN-12]
+  - key: communication-graph-view
+    title: "Agent Communication Graph"
+    summary: "Draws messages between agents as edges with strength over time."
+    serves: "Helps study emergent communication and coordination."
+    origin: field
+    depends_on: [REN-42]
+  - key: population-league-view
+    title: "Population and League View"
+    summary: "Shows a population of agents with ratings, match results and lineage."
+    serves: "Helps follow self-play and population-based training."
+    origin: field
+    depends_on: []
+  - key: gridworld-frame-viewer
+    title: "Game and Grid-World Frame Viewer"
+    summary: "Shows frames or symbolic grids of games and grid worlds with the agent path and step slider."
+    serves: "Helps debug small reinforcement-learning tasks quickly."
+    origin: field
+    depends_on: [STR-13]
+  - key: agent-observation-view
+    title: "Agent-Perspective Observation"
+    summary: "Shows the exact, possibly cropped, stacked, down-scaled or normalised observation the policy receives next to the raw frame."
+    serves: "Helps catch preprocessing bugs that no plot of returns reveals."
+    origin: field
+    depends_on: []
+  - key: frame-stack-view
+    title: "Frame Stack View"
+    summary: "Shows the frames of a stacked observation side by side with motion between them."
+    serves: "Helps check stacking order and frame skip."
+    origin: field
+    depends_on: []
+  - key: message-schema-browser
+    title: "Message Schema Browser"
+    summary: "Browses the types, fields and nested fields of every stream with example values and units."
+    serves: "Helps find the right field in unfamiliar robot logs."
+    origin: field
+    depends_on: [STR-22, STR-12]
+  - key: stream-time-alignment
+    title: "Stream Time Alignment Tools"
+    summary: "Aligns streams recorded on different clocks by a fitted offset and drift and shows the residual."
+    serves: "Helps merge logs from several machines before analysis."
+    origin: field
+    depends_on: [STR-47, STR-12]
+  - key: message-field-plots
+    title: "Live Message Field Plots"
+    summary: "Plots any numeric field of a live message path, such as pose.position.x, with a path expression."
+    serves: "Helps watch robot signals without writing code."
+    origin: field
+    depends_on: [STR-04]
+  - key: diagnostics-panel
+    title: "Diagnostics Panel"
+    summary: "Shows health reports of nodes and devices with level, message and history."
+    serves: "Helps find failing drivers and warnings during long data collection."
+    origin: field
+    depends_on: [STR-22]
+  - key: imu-view
+    title: "IMU View"
+    summary: "Shows accelerometer, gyroscope and orientation as plots and a 3-D attitude with bias estimates."
+    serves: "Helps check inertial data for noise, bias and saturation."
+    origin: field
+    depends_on: [REN-12, STR-04]
+  - key: odometry-view
+    title: "Odometry and Drift View"
+    summary: "Draws odometry paths with the drift against a reference and per-segment error."
+    serves: "Helps judge state estimators and learned odometry."
+    origin: field
+    depends_on: [REN-20]
+  - key: covariance-ellipses
+    title: "Covariance Ellipses"
+    summary: "Draws uncertainty ellipses and ellipsoids from covariance matrices on poses and landmarks."
+    serves: "Helps judge calibration of state estimators and learned uncertainty."
+    origin: field
+    depends_on: [REN-12]
+  - key: filter-consistency-plots
+    title: "Filter Consistency Plots"
+    summary: "Plots normalised estimation error squared and innovation statistics against their expected bounds."
+    serves: "Helps check that an estimator's claimed uncertainty is honest."
+    origin: field
+    depends_on: []
+  - key: grasp-candidates
+    title: "Grasp Candidate View"
+    summary: "Draws proposed grasps as gripper poses coloured by score on the object cloud."
+    serves: "Helps debug grasp generators and rankers."
+    origin: field
+    depends_on: [REN-12, REN-40]
+  - key: pose-candidates
+    title: "Pose Candidate View"
+    summary: "Shows many candidate object or end-effector poses with scores and the chosen one."
+    serves: "Helps debug pose estimation and sampling-based planners."
+    origin: field
+    depends_on: [REN-12]
+  - key: behaviour-tree-view
+    title: "Behaviour Tree View"
+    summary: "Shows a behaviour tree or state machine with node status updating live."
+    serves: "Helps debug task logic around learned skills."
+    origin: field
+    depends_on: []
+  - key: recording-triggers
+    title: "Recording Triggers"
+    summary: "Starts saving when a condition on a stream fires and keeps a set amount of earlier data from a ring buffer."
+    serves: "Helps capture rare failures without recording everything."
+    origin: field
+    depends_on: [STR-14, STR-12]
+  - key: recording-bookmarks
+    title: "Bookmarks in Recordings"
+    summary: "Lets a reader mark moments in a recording with notes and jump back to them."
+    serves: "Helps teams discuss specific events in long logs."
+    origin: field
+    depends_on: [STR-13]
+  - key: event-markers-from-code
+    title: "Event Markers from Code"
+    summary: "Lets running code place named events on the timeline, such as reset, grasp or collision."
+    serves: "Helps navigate long runs by what happened."
+    origin: field
+    depends_on: [STR-23]
+  - key: rl-environment-adapters
+    title: "Reinforcement Learning Environment Adapters"
+    summary: "Wraps common reinforcement-learning environment interfaces so states, frames and rewards stream with no code changes."
+    serves: "Helps researchers watch any environment during training."
+    origin: field
+    depends_on: [STR-01, STR-45]
+  - key: vector-env-grid
+    title: "Vectorised-Environment Grid"
+    summary: "Shows hundreds of parallel environments as a tiled grid with per-tile return and status."
+    serves: "Helps notice stuck or failing instances during massively parallel training."
+    origin: field
+    depends_on: [REN-12]
+  - key: curriculum-view
+    title: "Curriculum View"
+    summary: "Shows task difficulty levels, advancement and success rate per level over training."
+    serves: "Helps tune automatic curricula."
+    origin: field
+    depends_on: []
+  - key: domain-randomisation-view
+    title: "Domain Randomisation View"
+    summary: "Shows sampled randomisation parameters against success and return, with ranges as bands."
+    serves: "Helps find which randomised factors hurt or help transfer."
+    origin: field
+    depends_on: []
+  - key: replay-buffer-inspector
+    title: "Replay Buffer Inspector"
+    summary: "Browses transitions in a replay buffer with age, priority, reward and a map of states."
+    serves: "Helps debug off-policy learners and prioritisation."
+    origin: field
+    depends_on: []
+  - key: success-rate-by-scene
+    title: "Success Rate by Scene Variation"
+    summary: "Breaks success down by object, position and lighting variation as a grid."
+    serves: "Helps find where a policy generalises poorly."
+    origin: field
+    depends_on: []
+  - key: failure-clustering
+    title: "Failure Clustering"
+    summary: "Groups failed episodes by trajectory and state features and shows representatives."
+    serves: "Helps name failure modes in evaluation."
+    origin: field
+    depends_on: []
+  - key: vehicle-scenario-view
+    title: "Driving Scenario View"
+    summary: "Shows lanes, agents, predicted futures and the ego plan from driving logs in the scene."
+    serves: "Helps debug forecasting and planning models."
+    origin: field
+    depends_on: [REN-12]
+  - key: forecast-miss-browser
+    title: "Forecast Miss Browser"
+    summary: "Lists the agents where predicted futures miss most and opens them in the scene."
+    serves: "Helps find hard cases for motion-forecasting models."
+    origin: field
+    depends_on: []
+  - key: motion-retargeting-view
+    title: "Motion Retargeting View"
+    summary: "Shows a source motion and its retargeted robot motion with joint mapping and error."
+    serves: "Helps check humanoid imitation of captured motion."
+    origin: field
+    depends_on: []

@@ -1,6 +1,6 @@
 """Data views: which part of a tensor travels to a viewer.
 
-The rules are those of the wire protocol (docs/references/wire-protocol.md,
+The rules are those of the wire protocol (docs/reference/wire-protocol.md,
 "Data views"); this module applies them in the producer. A view offers one or
 more named sources, each a tensor with named dims. A data view names a source,
 indexes dims, reduces dims, can tile one dim of a heatmap, and sets a budget:

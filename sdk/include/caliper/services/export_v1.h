@@ -1,6 +1,6 @@
 #pragma once
 /* caliper.export.v1 — the terminal sink: pixel-exact view PNGs + a provenance
- * sidecar (docs/references/service-export-v1.md). Export re-renders a submitted draw list
+ * sidecar (docs/applets/services/caliper-export-v1.md). Export re-renders a submitted draw list
  * OFFSCREEN at any requested resolution through pieces that already ship and
  * are already byte-exact tested — geometry.v1_3's create_view_ex + the existing
  * draw_primitives host path + the promoted debug_readback_rgba8 — then encodes
@@ -56,7 +56,7 @@ typedef struct CaliperExportV1 {
     /* Render `draws` (v1_3 records, stride-widened exactly like geometry.v1_3)
      * into a fresh offscreen (w,h) target and write:
      *   <path>        — PNG, tightly-packed RGBA8, top-down (row 0 = top).
-     *   <path>.json   — the provenance sidecar (docs/references/service-export-v1.md), written
+     *   <path>.json   — the provenance sidecar (docs/applets/services/caliper-export-v1.md), written
      *                   atomically AFTER the PNG succeeds.
      * Returns 1 on success; 0 on refusal. On ANY refusal — no gate/renderer,
      * cam==0, w/h 0 or > CALIPER_EXPORT_MAX_DIM, unwritable path, readback

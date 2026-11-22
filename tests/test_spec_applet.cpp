@@ -1,4 +1,4 @@
-// Spec applets in the loader (docs/references/manifest.md, "Spec applets"):
+// Spec applets in the loader (docs/applets/manifest.md, "Spec applets"):
 // a folder with a manifest of kind "spec" and a spec, and no library. The
 // loader finds them in the search folders, their subfolders and the open
 // workspace's applets/ folder, chooses one copy per id by the usual rules,

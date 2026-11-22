@@ -1,0 +1,149 @@
+# yaml-language-server: $schema=schema.json
+pillar: SPC
+title: Builder and Specs
+proposed: false
+candidates:
+  - key: direct-manipulation-editor
+    title: "Direct-Manipulation Interface Editor"
+    summary: "A person builds an interface by dragging panels and controls on the page itself, with no command or spec text."
+    serves: "Researchers who do not write specs assemble a dashboard by hand."
+    origin: cut
+    depends_on: [SPC-07, SPC-17]
+  - key: spec-scene-column-slots
+    title: "Column Slots for Scene Lines and Meshes"
+    summary: "A scene panel of a spec takes lines and meshes, and builds cameras, from the columns of one table."
+    serves: "A dashboard built from a tabular source draws paths, surfaces and cameras without tensors."
+    origin: plan-idea
+    depends_on: [SPC-11]
+  - key: keep-outputs-on-loader-delete
+    title: "Output Retention on Loader Deletion"
+    summary: "Deleting a loader may keep the tables it produced."
+    serves: "A person removes a loader recipe but keeps the data it read."
+    origin: plan-idea
+    depends_on: [SPC-03, SPC-05]
+  - key: python-loader-sandbox
+    title: "Sandboxed Python Loaders"
+    summary: "A Python loader runs under a sandbox, so that the script cannot touch files outside its inputs."
+    serves: "A person runs a loader written by an agent without trusting its code."
+    origin: plan-idea
+    depends_on: [SPC-03, SPC-19, SPC-26]
+  - key: builder-pane-gestures
+    title: "Tab Dragging and Transform Reordering"
+    summary: "A person drags a panel by its tab and reorders the transforms of a source in the builder pane."
+    serves: "Dashboards are rearranged and data pipelines are reordered without editing the spec text."
+    origin: plan-idea
+    depends_on: [SPC-07, SPC-17]
+  - key: many-child-split-ratios
+    title: "Movable Dividers in Wide Splits"
+    summary: "A split with more than two children carries a ratio for each divider, so that every divider can be dragged."
+    serves: "A person sizes a row of several panels by hand."
+    origin: plan-idea
+    depends_on: [SPC-01, SPC-17]
+  - key: point-cloud-file-readers
+    title: "Point-Cloud File Readers"
+    summary: "Loaders for LAS, LAZ, PLY, PCD and E57 files with attributes and coordinate systems."
+    serves: "Lets scans from common tools open without conversion."
+    origin: field
+    depends_on: [SPC-03, REN-32]
+  - key: lerobot-reader
+    title: "Robot-Learning Dataset Reader"
+    summary: "Reads Parquet-and-video episode datasets used for robot learning, including consolidated multi-episode files and task tables."
+    serves: "Opens common open robot-learning datasets directly."
+    origin: field
+    depends_on: [SPC-03, SPC-31]
+  - key: rlds-reader
+    title: "TFRecord Episode Reader"
+    summary: "Reads episode datasets stored as steps in record files with nested observations and actions."
+    serves: "Opens large cross-embodiment robot datasets without conversion."
+    origin: field
+    depends_on: [SPC-03]
+  - key: hdf5-episode-reader
+    title: "HDF5 Episode Reader"
+    summary: "Reads robot episodes stored as groups of datasets in HDF5 with camera, state and action keys mapped to views."
+    serves: "Opens the demonstration formats used by many manipulation benchmarks."
+    origin: field
+    depends_on: [SPC-32, SPC-03]
+  - key: zarr-episode-reader
+    title: "Zarr Episode Reader"
+    summary: "Reads chunked Zarr stores of episodes with episode-end indices and lazy chunk loading."
+    serves: "Opens large replay and demonstration buffers stored for diffusion policies."
+    origin: field
+    depends_on: [SPC-03]
+  - key: ros1-bag-reader
+    title: "ROS 1 Bag Reader"
+    summary: "Reads ROS 1 bag files with their message definitions, chunks and indexes."
+    serves: "Opens older robot logs without a conversion step."
+    origin: field
+    depends_on: [STR-22, SPC-03]
+  - key: ros2-sqlite-bag-reader
+    title: "ROS 2 SQLite Bag Reader"
+    summary: "Reads ROS 2 bags stored in SQLite as well as MCAP with their stored schemas."
+    serves: "Opens recorded robot runs from either storage plugin."
+    origin: field
+    depends_on: [STR-22]
+  - key: staged-output-reader
+    title: "Staged-Output Stream Reader"
+    summary: "Reads step-by-step output of simulations written through staged or streaming output libraries while they run."
+    serves: "Lets researchers follow a simulation from another machine without waiting for files."
+    origin: field
+    depends_on: [SPC-03, STR-05]
+  - key: pdb-mmcif-reader
+    title: "PDB and mmCIF Reader"
+    summary: "Reads Protein Data Bank and macromolecular CIF files with chains, residues, atoms and annotations."
+    serves: "Opens protein structures and model outputs directly."
+    origin: field
+    depends_on: [SPC-03]
+  - key: xyz-and-trajectory-readers
+    title: "XYZ and Trajectory File Readers"
+    summary: "Reads XYZ, extended XYZ, DCD, XTC and similar molecular files with cell and property fields."
+    serves: "Opens outputs of molecular dynamics and machine-learned potentials."
+    origin: field
+    depends_on: [SPC-03]
+  - key: cube-file-reader
+    title: "Cube File Reader"
+    summary: "Reads Gaussian cube files with atoms and volumetric data."
+    serves: "Opens density and orbital data from common chemistry codes."
+    origin: field
+    depends_on: [SPC-03, REN-28]
+  - key: cif-poscar-readers
+    title: "CIF and POSCAR Readers"
+    summary: "Reads crystallographic information files and POSCAR structure files with symmetry and occupancy."
+    serves: "Opens materials data from common databases and codes."
+    origin: field
+    depends_on: [SPC-03]
+  - key: geotiff-reader
+    title: "GeoTIFF Reader"
+    summary: "Reads GeoTIFF rasters with their coordinate system, bands, tiles and overviews."
+    serves: "Opens remote-sensing and elevation data."
+    origin: field
+    depends_on: [SPC-03]
+  - key: netcdf-reader
+    title: "NetCDF Reader"
+    summary: "Reads NetCDF files with named dimensions, coordinates, attributes and chunked variables."
+    serves: "Opens weather, ocean and climate data."
+    origin: field
+    depends_on: [SPC-03, SPC-32]
+  - key: zarr-array-reader
+    title: "Zarr Array Reader"
+    summary: "Reads Zarr stores of arrays, local or remote, with lazy chunk loading."
+    serves: "Opens cloud-hosted climate and imaging datasets."
+    origin: field
+    depends_on: [SPC-03]
+  - key: grib-reader
+    title: "GRIB Reader"
+    summary: "Reads GRIB messages with their grids, levels and parameters."
+    serves: "Opens operational forecast and reanalysis data."
+    origin: field
+    depends_on: [SPC-03]
+  - key: fits-reader
+    title: "FITS Reader"
+    summary: "Reads FITS images, cubes, tables and headers with world coordinates."
+    serves: "Opens astronomical data directly."
+    origin: field
+    depends_on: [SPC-03]
+  - key: vcd-fst-readers
+    title: "VCD and FST Readers"
+    summary: "Reads value change dump and fast signal trace waveform files with hierarchy."
+    serves: "Opens output of common logic simulators."
+    origin: field
+    depends_on: [SPC-03]

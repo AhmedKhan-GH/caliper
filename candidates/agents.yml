@@ -1,0 +1,251 @@
+# yaml-language-server: $schema=schema.json
+pillar: AGT
+title: Agents and Automation
+proposed: false
+candidates:
+  - key: widget-agent-loaders-and-applets
+    title: "Loader Creation and Applet Saving by the Widget Agent"
+    summary: "The widget agent creates loaders, saves a spec as an applet, undoes its steps and replaces a whole spec."
+    serves: "A person builds a complete dashboard from raw files by asking, without leaving the chat."
+    origin: cut
+    depends_on: [AGT-05, SPC-03, SPC-08]
+  - key: preview-commit-expectation
+    title: "Expectation on Preview Commit"
+    summary: "Accepting a preview may state the edit count and a digest of the previewed text, and the app refuses the accept if the preview changed after its card was drawn."
+    serves: "A person never accepts an agent's edit that differs from what the card showed."
+    origin: plan-idea
+    depends_on: [SPC-05, AGT-17]
+  - key: single-type-tool-schemas
+    title: "Single-Type Tool Schemas"
+    summary: "The command table writes nullable values in a form that clients with single-type tool schemas accept."
+    serves: "Agents built on other model providers drive Caliper through the same tools."
+    origin: plan-idea
+    depends_on: [AGT-02, SPC-05]
+  - key: agent-per-message-effort
+    title: "Per-Message Agent Effort"
+    summary: "The builder agent changes its effort for one message without changing the cached conversation."
+    serves: "Long builder sessions cost less when only some steps need deep reasoning."
+    origin: plan-idea
+    depends_on: [AGT-05]
+  - key: agent-capture-context-editing
+    title: "Context Editing of Captures"
+    summary: "Old screenshots inside an agent's tool results are cleared by server-side context editing without editing its history."
+    serves: "Long agent sessions that check their work by capture stay within the context limit."
+    origin: plan-idea
+    depends_on: [AGT-28]
+  - key: refusal-fallbacks
+    title: "Server-Side Refusal Fallbacks"
+    summary: "When a model declines a turn, the request is run again on another model within the same call."
+    serves: "A builder session continues after a refusal instead of ending the turn."
+    origin: plan-idea
+    depends_on: [AGT-05, AGT-15]
+  - key: agent-status-lines
+    title: "Agent Status Lines"
+    summary: "The widget agent reports short status lines that the app shows while a turn runs."
+    serves: "A person sees what the agent is doing during a slow edit."
+    origin: plan-idea
+    depends_on: [AGT-05, AGT-17]
+  - key: experiment-runner-agent
+    title: "Experiment Runner Agent"
+    summary: "An agent that turns a stated question into a configured run, launches it, watches the live views and reports the outcome."
+    serves: "Cuts the manual loop of editing, launching and checking experiments."
+    origin: field
+    depends_on: [AGT-02, AGT-17, RUN-03]
+  - key: ablation-planner
+    title: "Ablation Planner"
+    summary: "An agent tool that lists the components of a model or method and proposes a grid of ablations with expected cost."
+    serves: "Makes ablation studies complete and costed before any run starts."
+    origin: field
+    depends_on: [AGT-03, RUN-13]
+  - key: research-journal
+    title: "Research Journal"
+    summary: "A dated log of questions, runs, findings and decisions that agents and people both write and that links to recordings."
+    serves: "Keeps the reasoning behind results so a project can be resumed or reviewed later."
+    origin: field
+    depends_on: [RUN-03, AGT-02]
+  - key: hypothesis-plan-board
+    title: "Hypothesis and Plan Board"
+    summary: "A board of hypotheses with their planned experiments, status, evidence for and against."
+    serves: "Keeps a research programme organised and shows which ideas are supported."
+    origin: field
+    depends_on: [AGT-03]
+  - key: agent-trace-viewer
+    title: "Agent Trace Viewer"
+    summary: "A timeline of an agent's messages, tool calls, results and file edits with timing and token counts."
+    serves: "Lets a researcher see exactly how an agent reached a result and where it went wrong."
+    origin: field
+    depends_on: [AGT-01, AGT-21]
+  - key: agent-session-replay
+    title: "Agent Session Replay"
+    summary: "A scrubber over a saved agent session that replays its actions against the views and recordings it used."
+    serves: "Reviews what an agent did without redoing the work."
+    origin: field
+    depends_on: [STR-13, AGT-21]
+  - key: multi-agent-orchestration-view
+    title: "Multi-Agent Orchestration View"
+    summary: "A graph of agents with their tasks, hand-offs, status and shared files."
+    serves: "Makes several cooperating agents understandable and easy to stop or redirect."
+    origin: field
+    depends_on: [AGT-02, AGT-17]
+  - key: agent-driven-notebook
+    title: "Agent-Driven Notebook"
+    summary: "A notebook where an agent adds cells, runs them and shows live views while the researcher watches or steers."
+    serves: "Combines exploratory analysis by an agent with the usual notebook record."
+    origin: field
+    depends_on: [STR-07, AGT-02]
+  - key: figure-from-question
+    title: "Figure from a Question"
+    summary: "A command that takes a plain question about a run or recording and returns a view or figure with its query shown."
+    serves: "Lets a researcher get a plot without writing plotting code and still see how it was made."
+    origin: field
+    depends_on: [AGT-03, SPC-05]
+  - key: linked-number-report
+    title: "Report with Linked Numbers"
+    summary: "A generated report in which each quoted number opens the recording, query or run that produced it."
+    serves: "Makes claims in a write-up checkable in one click."
+    origin: field
+    depends_on: [RUN-03, STR-12]
+  - key: analysis-provenance
+    title: "Provenance for Agent Analyses"
+    summary: "A stored graph of the data, code, prompts and tool calls behind each result an agent produced."
+    serves: "Lets others judge whether an agent's finding can be trusted and repeated."
+    origin: field
+    depends_on: [AGT-01, STR-12]
+  - key: literature-experiment-links
+    title: "Literature-to-Experiment Links"
+    summary: "Links between cited papers, the claims taken from them and the runs that test those claims."
+    serves: "Shows which published results a project has reproduced, extended or contradicted."
+    origin: field
+    depends_on: [RUN-03]
+  - key: reproducibility-bundle
+    title: "Reproducibility Bundle"
+    summary: "One archive of code, environment lock, seeds, data hashes, configuration and recordings for a result."
+    serves: "Allows another person or a later self to rerun a result and compare it."
+    origin: field
+    depends_on: [RUN-02, STR-12]
+  - key: scheduled-automations
+    title: "Scheduled and Triggered Automations"
+    summary: "Rules that run an agent task on a timer or when a run ends, an alert fires or a file changes."
+    serves: "Automates routine checks such as nightly evaluations and morning summaries."
+    origin: field
+    depends_on: [AGT-02, RUN-03]
+  - key: voice-control
+    title: "Voice Control"
+    summary: "Spoken commands and dictated questions turned into the same actions as typed ones, with local speech recognition."
+    serves: "Allows hands-free steering during demonstrations and lab work."
+    origin: field
+    depends_on: [AGT-03, COR-44]
+  - key: agent-project-memory
+    title: "Agent Memory of a Project"
+    summary: "A reviewable store of facts, conventions and past findings that agents read at the start of each session."
+    serves: "Stops agents from repeating dead ends and keeps them consistent across sessions."
+    origin: field
+    depends_on: [AGT-03]
+  - key: agent-budget-cost-view
+    title: "Agent Budgets and Cost View"
+    summary: "A panel of tokens, tool calls and time used per agent task with limits that pause it."
+    serves: "Keeps long agent jobs within a known allowance."
+    origin: field
+    depends_on: [AGT-06, AGT-17]
+  - key: agent-experiment-sandbox
+    title: "Agent Sandboxes for Experiments"
+    summary: "A scratch copy of code, data and settings in which an agent can run trials that never touch the original."
+    serves: "Lets agents try risky changes and have the good ones merged on approval."
+    origin: field
+    depends_on: [AGT-30, AGT-17]
+  - key: agent-playbooks
+    title: "Skills and Playbooks for Agents"
+    summary: "Named step lists for tasks such as profiling a slow run or reproducing a figure that agents load on demand."
+    serves: "Makes agent behaviour on common research tasks consistent and shareable."
+    origin: field
+    depends_on: [AGT-02]
+  - key: agent-result-review
+    title: "Agent Review of Results"
+    summary: "A reviewing agent that checks a finished analysis for leakage, missing baselines, weak statistics and unsupported claims."
+    serves: "Gives a second look before a result is believed."
+    origin: field
+    depends_on: [AGT-03, RUN-05]
+  - key: paper-replication-agent
+    title: "Paper Replication Agent"
+    summary: "An agent that reads a paper, builds the described experiment and compares its numbers with the reported ones."
+    serves: "Tests whether published results hold and records where they differ."
+    origin: field
+    depends_on: [AGT-02, RUN-03]
+  - key: agent-diff-review
+    title: "Review of Agent Code Changes"
+    summary: "A diff viewer that groups an agent's edits by intent and shows the run results of each."
+    serves: "Makes it easy to accept or reject what an agent changed in a research codebase."
+    origin: field
+    depends_on: [AGT-29, AGT-17]
+  - key: agent-hypothesis-generator
+    title: "Hypothesis Suggestions from Results"
+    summary: "An agent that reads a run set and suggests follow-up questions with the evidence that prompted each."
+    serves: "Surfaces patterns a researcher might miss in many runs."
+    origin: field
+    depends_on: [RUN-03]
+  - key: agent-data-checker
+    title: "Dataset Audit Agent"
+    summary: "An agent that scans a dataset for duplicates, label noise, leakage between splits and odd distributions."
+    serves: "Finds data problems before they become results."
+    origin: field
+    depends_on: [SPC-10]
+  - key: agent-failure-triage
+    title: "Failed Run Triage"
+    summary: "An agent that reads the logs, stack traces and last views of a failed run and proposes a cause and a fix."
+    serves: "Shortens the time from a crashed job to a restart."
+    origin: field
+    depends_on: [RUN-03, STR-12]
+  - key: agent-tool-registry
+    title: "Project Tool Registry for Agents"
+    summary: "A list of project-specific commands, scripts and datasets that agents may call with typed arguments."
+    serves: "Lets agents use a lab's own tooling safely and consistently."
+    origin: field
+    depends_on: [AGT-02, AGT-30]
+  - key: agent-handoff-notes
+    title: "Handoff Notes Between Sessions"
+    summary: "An automatic summary of state, open questions and next steps written at the end of an agent session."
+    serves: "Lets a new session or another person continue without rereading everything."
+    origin: field
+    depends_on: [AGT-28]
+  - key: agent-claim-extractor
+    title: "Claim Extraction from Reports"
+    summary: "A tool that lists the claims in a draft and shows which have a linked run, recording or query behind them."
+    serves: "Shows which claims in a paper are still unsupported."
+    origin: field
+    depends_on: [RUN-03]
+  - key: agent-hypothesis-tests
+    title: "Statistical Test Assistant"
+    summary: "An agent helper that chooses suitable tests, checks assumptions and reports effect sizes with intervals."
+    serves: "Reduces misuse of statistics when comparing runs."
+    origin: field
+    depends_on: [RUN-05]
+  - key: agent-comparison-arena
+    title: "Agent Comparison on One Task"
+    summary: "A side-by-side run of two agents or settings on the same research task with scores and traces."
+    serves: "Helps choose which agent configuration works best for a lab's tasks."
+    origin: field
+    depends_on: [AGT-15]
+  - key: agent-notification-channels
+    title: "Local Notification Channels"
+    summary: "Notices of finished runs, approvals needed and agent questions through system notifications and a local webhook."
+    serves: "Lets long agent work proceed while the researcher is elsewhere."
+    origin: field
+    depends_on: [AGT-17]
+  - key: agent-rollback-points
+    title: "Agent Rollback Points"
+    summary: "Named checkpoints of code, settings and views that a session can be restored to."
+    serves: "Makes agent exploration reversible beyond a single undo step."
+    origin: field
+    depends_on: [AGT-20]
+  - key: agent-question-queue
+    title: "Agent Question Queue"
+    summary: "A list of questions an agent could not answer alone, kept until the researcher replies."
+    serves: "Lets agents carry on with other work instead of blocking."
+    origin: field
+    depends_on: [AGT-18]
+  - key: agent-dataset-curation
+    title: "Dataset Curation Agent"
+    summary: "An agent that builds evaluation sets, prompt pairs and test cases with a record of how each was chosen."
+    serves: "Speeds up making the inputs that experiments need."
+    origin: field
+    depends_on: [AGT-02]

@@ -8,8 +8,8 @@ coding-agent session. This page designs the widget agent.
 
 The widget agent's process is `caliper-agent`, the sidecar that [Widget agent sidecar](byok-agent.md) describes. The
 loop, the Claude settings, the key handling and the tests on that page are built, and this page adds the inline role
-on top of them. The person's side is in Agent roles (`docs/explanations/agent-roles.md`) and
-Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`).
+on top of them. The person's side is in Agent roles (`docs/agents/agent-roles.md`) and
+Set up the widget agent (`docs/agents/widget-agent-setup.md`).
 
 **Built on this branch:** the sidecar, its tests and the key store, which that page lists; the presets as data with one
 key per provider in the key store (item 17, [Presets](#presets)); stacked previews in the
@@ -483,7 +483,7 @@ where needed, enters a key. The sidecar reaches every preset from its command li
 them.
 
 **Built: the settings in the app** (`src/host/builder/agent_settings.h`, the reference Widget agent,
-`docs/references/widget-agent.md`, under The settings in the app). Decisions made while building them:
+`docs/agents/widget-agent.md`, under The settings in the app). Decisions made while building them:
 
 - **Where they open.** A popup over any page, from the landing screen's ⌘, Agent, from the key ⌘, on any page, and from
   the inline surface's Setup (no provider) and Model (after a refusal). One placement rule at every size: 62 percent
@@ -607,7 +607,7 @@ one, else from the person's setting, else 8,192 tokens are assumed. The Claude p
 it offers takes tools and images.
 
 **Built: the probe and its cache** (`caliper_agent/probe.py`, `caliper_agent/capabilities.py`), run by the settings
-through `caliper-agent probe`, which prints one JSON object (Widget agent, `docs/references/widget-agent.md`, has its
+through `caliper-agent probe`, which prints one JSON object (Widget agent, `docs/agents/widget-agent.md`, has its
 fields). The design above was made concrete as follows:
 
 - **The tool call.** One streamed request offers the tool `record_number` and asks for the number 7; tool calling works
@@ -693,7 +693,7 @@ pass criteria, and publishes the results, so that a person can see which models 
   sidecar more than two versions old is marked as stale.
 
 **Built: the suite** (`src/builder/agent/conformance/`), as the program `caliper-agent-conformance`, with its reference
-page, Widget agent conformance (`docs/references/widget-agent-conformance.md`). The design above was made concrete:
+page, Widget agent conformance (`docs/agents/widget-agent-conformance.md`). The design above was made concrete:
 
 - **The tasks are data**, `conformance/tasks.json`, embedded at build time: each gives the target, an optional
   selection, the request, a check and two scripted answers, one that passes and one that fails. Two tasks were added
@@ -754,7 +754,7 @@ swapping. On a machine with a discrete GPU, the model's weights take video memor
   the live session is attached and the chosen agent is marked, the chat's header shows the same noun, "Shared GPU"
   (`chat_gpu_note()`), framed in bronze after the agent's name. A test in the hidden app attaches to the producer's
   stream, marks the stub agent and sees the note, then detaches and sees it gone.
-- **The advice**, in Set up the widget agent (`docs/guides/set-up-the-widget-agent.md`):
+- **The advice**, in Set up the widget agent (`docs/agents/widget-agent-setup.md`):
   during a run, use a smaller or more quantized model; keep its context length
   modest, since the context takes memory too; unload the model when done; use a hosted preset while a long run trains;
   and watch the system's memory pressure. With Ollama, `ollama ps` shows whether a model sits on the GPU or the CPU and

@@ -7,83 +7,262 @@ features:
   - id: AGT-01
     title: Caliper API v0
     status: shipped
+    scope: core
     summary: Caliper API v0 is an HTTP interface to the running app, on the loopback address and behind tokens, that lists and launches applets, returns a capture, serves a stream and runs the commands of the command layer.
     depends_on: [COR-01, SPC-05]
-    docs: docs/references/api.md
+    docs: docs/agents/http-api.md
     issue: null
 
   - id: AGT-02
-    title: The MCP server
+    title: MCP server
     status: shipped
+    scope: core
     summary: caliper-mcp is a stdio Model Context Protocol server that gives an outside agent one tool per command of the command layer, with read-only resources, and carries each call out through Caliper API.
     depends_on: [AGT-01]
-    docs: docs/references/mcp-server.md
+    docs: docs/agents/mcp-server.md
     design: design/mcp-server.md
     issue: null
 
   - id: AGT-03
-    title: The side chat
+    title: Side chat
     status: shipped
+    scope: supporting
     summary: The side chat is a pane where the person's own agent works over the Agent Client Protocol, with caliper-mcp handed to it, so it can read and edit the open spec with each change reviewed.
     depends_on: [AGT-02]
-    docs: docs/references/side-chat.md
+    docs: docs/agents/side-chat.md
     design: design/acp-integration.md
     issue: null
 
   - id: AGT-04
     title: Local models in the side chat
     status: shipped
+    scope: supporting
     summary: An agent whose model runs on the same machine can be marked as a local model in the side chat, which then warns when the model and a training run share the GPU.
     depends_on: [AGT-03, AGT-05]
-    docs: docs/references/side-chat.md#local-models
+    docs: docs/agents/side-chat.md#local-models
     design: design/acp-integration.md#local-models-in-the-side-chat
     issue: null
 
   - id: AGT-05
-    title: The widget agent
+    title: Widget agent
     status: shipped
+    scope: supporting
     summary: caliper-agent in its widget role works on one panel, selection, dropped file or property, using the person's own provider key or a local model, and its changes wait in a preview for the person to accept.
     depends_on: [AGT-01]
-    docs: docs/references/widget-agent.md
+    docs: docs/agents/widget-agent.md
     design: design/widget-agent.md
     issue: null
 
   - id: AGT-06
     title: Permission modes
     status: shipped
-    summary: The side chat and caliper-mcp clients run in a mode, Ask, Accept edits, Read only or Allow all, that decides which commands wait for the person's approval.
+    scope: core
+    summary: The side chat's agent and caliper-mcp's clients run in a mode, Ask, Accept edits or Read only, that decides which commands wait for the person's approval, and the side chat's agent may also run with Allow all for its session.
     depends_on: [AGT-03]
-    docs: docs/references/side-chat.md#modes
+    docs: docs/agents/side-chat.md#modes
     design: design/acp-integration.md#approvals-and-diffs-for-every-agent
     issue: null
 
   - id: AGT-07
-    title: The Ollama preset on first run
+    title: Ollama preset on first run
     status: planned
+    scope: supporting
     summary: The widget agent's settings offer the Ollama preset when Ollama is running on the machine, so a first run can use a local model with no key.
     depends_on: [AGT-05]
+    sprint: "3.2"
     issue: null
 
   - id: AGT-08
-    title: Empty arguments treated as omitted
+    title: Empty arguments as omitted
     status: planned
-    summary: An empty value that a model sends for an optional tool argument is treated as if the argument were omitted, so the call still runs.
+    scope: core
+    summary: An empty string that a model sends for an optional argument counts as omitted, as a null already does, so that the call runs instead of failing.
     depends_on: [AGT-05]
+    sprint: "3.2"
     issue: null
-    draft: true
 
   - id: AGT-09
     title: Cloud agents end to end
     status: planned
+    scope: supporting
     summary: This work checks that an agent running on a remote service, rather than on this machine, works through the side chat from start to finish.
     depends_on: [AGT-03]
     issue: null
-    draft: true
 
   - id: AGT-10
-    title: Agents with a bundled Python
+    title: Agent packaging with a bundled Python
     status: planned
-    summary: caliper-agent is packaged with its own Python runtime and a lock file, so the app finds it without CALIPER_AGENT_PYTHON being set.
-    depends_on: [AGT-05]
+    scope: supporting
+    summary: caliper-agent and caliper-mcp ship inside the app with a standalone Python runtime built from the lockfile, signed and notarized with the app, which prefers that runtime.
+    depends_on: [AGT-02, AGT-05, PLT-04]
+    sprint: 5
     design: design/byok-agent.md#what-is-built-and-what-waits
+    issue: null
+
+  - id: AGT-11
+    title: Approval expiry for API origins
+    status: planned
+    scope: core
+    summary: Approvals that nobody waits for expire, and each origin gets a share of the pending slots, so that calls through Caliper API cannot fill them.
+    depends_on: [AGT-06]
+    sprint: "3.2"
+    issue: null
+
+  - id: AGT-12
+    title: Held launches
+    status: planned
+    scope: core
+    summary: A launch of a workspace spec applet by an origin under review waits on its own approval card, like any other held command.
+    depends_on: [AGT-06]
+    sprint: "3.2"
+    issue: null
+
+  - id: AGT-13
+    title: MCP resources
+    status: shipped
+    scope: core
+    summary: "caliper-mcp serves read-only resources: the documentation pages, the SDK headers, the spec format's JSON Schema and the command table."
+    depends_on: [AGT-02]
+    docs: docs/agents/mcp-server.md#resources
+    issue: null
+
+  - id: AGT-14
+    title: Widget agent conformance suite
+    status: shipped
+    scope: supporting
+    summary: The conformance suite runs a set of widget tasks against a provider and a model, checks each result and writes a result file with a verdict.
+    depends_on: [AGT-05]
+    docs: docs/agents/widget-agent-conformance.md
+    issue: null
+
+  - id: AGT-15
+    title: Provider presets
+    status: shipped
+    scope: supporting
+    summary: The widget agent offers presets for hosted providers, for Ollama and LM Studio and for any OpenAI-compatible server, each with its own key in the system's credential store.
+    depends_on: [AGT-05]
+    docs: docs/agents/widget-agent-startup.md#presets
+    issue: null
+
+  - id: AGT-16
+    title: Model check
+    status: shipped
+    scope: supporting
+    summary: caliper-agent probe checks a model's tool calling, vision and context length with two short calls and caches the answer, which the settings run when a person picks a model.
+    depends_on: [AGT-15]
+    docs: docs/agents/widget-agent-startup.md#model-checks
+    issue: null
+
+  - id: AGT-17
+    title: Approval cards
+    status: shipped
+    scope: core
+    summary: Each command that waits for the person's approval appears as a card that shows who asks, what changes, its diff and the time left, with Approve and Deny.
+    depends_on: [AGT-06]
+    docs: docs/agents/side-chat.md#pane
+    issue: null
+
+  - id: AGT-18
+    title: Ask in chat
+    status: shipped
+    scope: supporting
+    summary: From the widget agent's prompt, Ask in chat sends the request with its context to the side chat as a draft that the person reviews and sends.
+    depends_on: [AGT-03, AGT-05]
+    docs: docs/agents/side-chat.md#ask-in-chat-action
+    issue: null
+
+  - id: AGT-19
+    title: Approval progress in caliper-mcp
+    status: planned
+    scope: core
+    summary: caliper-mcp sends progress notices while a call waits for approval, so that a client with a short time limit can extend it.
+    depends_on: [AGT-17]
+    issue: null
+
+  - id: AGT-20
+    title: One undo step per agent turn
+    status: idea
+    scope: core
+    summary: The edits an outside agent makes through caliper-mcp could be grouped into one undo step, which needs a notion of a turn that MCP does not have.
+    depends_on: [AGT-02]
+    issue: null
+
+  - id: AGT-21
+    title: Live stream for MCP agents
+    status: idea
+    scope: core
+    summary: caliper-mcp could offer the live stream to outside agents.
+    depends_on: [AGT-02, STR-05]
+    issue: null
+
+  - id: AGT-22
+    title: ACP version 2
+    status: idea
+    scope: supporting
+    summary: The side chat could add version 2 of the Agent Client Protocol beside version 1 once it is stable.
+    depends_on: [AGT-03]
+    issue: null
+
+  - id: AGT-23
+    title: Review setting per origin
+    status: planned
+    scope: core
+    summary: The side chat's settings let the person choose, for each origin, whether edits of the open spec wait for review, with the side chat's own cards for an agent's permission requests.
+    depends_on: [AGT-17]
+    issue: null
+
+  - id: AGT-24
+    title: Checks of an agent's own spec edits
+    status: planned
+    scope: supporting
+    summary: The side chat runs the spec validator on an agent's own edit of a spec file before the person answers its permission request.
+    depends_on: [AGT-03, SPC-02]
+    issue: null
+
+  - id: AGT-25
+    title: More ACP features in the side chat
+    status: planned
+    scope: supporting
+    summary: The side chat gains loading and resuming sessions, modes and configuration options, and images in prompts.
+    depends_on: [AGT-03]
+    issue: null
+
+  - id: AGT-26
+    title: ACP agent registry
+    status: idea
+    scope: supporting
+    summary: The side chat could read the Agent Client Protocol's registry of agents at run time instead of its fixed presets.
+    depends_on: [AGT-03]
+    issue: null
+
+  - id: AGT-27
+    title: Side chat on every page
+    status: planned
+    scope: supporting
+    summary: The side chat opens on the landing page as well, and a Selection tab sits above the chat on the live page.
+    depends_on: [AGT-03]
+    issue: null
+
+  - id: AGT-28
+    title: Context compaction for local models
+    status: idea
+    scope: supporting
+    summary: When a conversation no longer fits a local model's context, the earlier part could be summarised so that the turn goes on instead of ending.
+    depends_on: [AGT-04]
+    issue: null
+
+  - id: AGT-29
+    title: Source edit previews
+    status: planned
+    scope: supporting
+    summary: A widget agent's edit of a source is drawn in the panels that read it before the person accepts it.
+    depends_on: [AGT-05]
+    issue: null
+
+  - id: AGT-30
+    title: Finer agent permissions
+    status: idea
+    scope: core
+    summary: Agent permissions could gain deny rules, scopes finer than a command's name and a session for outside agents.
+    depends_on: [AGT-06]
     issue: null

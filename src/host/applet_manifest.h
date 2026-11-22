@@ -10,7 +10,7 @@ namespace caliper_host {
 // library) that the app draws as a page and never executes.
 enum class AppletKind { Library, Spec };
 
-// Parsed caliper.toml (docs/references/manifest.md). Unknown keys/tables are ignored
+// Parsed caliper.toml (docs/applets/manifest.md). Unknown keys/tables are ignored
 // for forward compatibility; missing required fields are errors. A spec
 // applet (kind = "spec") has no [compat].abi_epoch, and the keys that only a
 // library can honour ([compat].abi_epoch and torch, [build], [services],

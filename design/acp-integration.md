@@ -368,7 +368,7 @@ or not the agent asks on its own. Three parts are built:
   the widget agent's sidecar each get an `agent` token of their own in an API file of their own,
   `api-agent-<pid>-<n>.json` (mode 0600), which the app revokes and removes when that agent's session ends. An agent
   that reads a file and calls the API with curl therefore runs as `mcp` or `agent`, and its spec edits wait for review
-  like those that go through `caliper-mcp` (Caliper API, `docs/references/api.md`, under Who sends a command). On the
+  like those that go through `caliper-mcp` (Caliper API, `docs/agents/http-api.md`, under Who sends a command). On the
   stream, the `mcp` and `agent` tokens watch, and can neither control a run nor publish a session: the hub decides
   per connection, by the token that opened it (`HubOptions::stream_access`), so its WELCOME sets `control` false, a
   CONTROL is answered `forbidden`, and a producer's HELLO is refused with close code 4002 as `caliper.serve()` refuses

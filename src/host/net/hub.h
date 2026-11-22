@@ -3,9 +3,9 @@
 // to it and each becomes a session; viewers connect to it, list the sessions,
 // attach to one, subscribe to its views and send data view requests and
 // events, which the hub forwards to that session's producer. The reference
-// page docs/references/wire-protocol.md states the protocol ("The producer
+// page docs/reference/wire-protocol.md states the protocol ("The producer
 // connection to a hub", "Choosing a session", "Flow control", "Limits"); the
-// guide docs/guides/run-a-hub.md states what this hub keeps and for how long.
+// guide docs/python/hub-setup.md states what this hub keeps and for how long.
 // Host-internal C++17 on net/ws.h, net/wire.h and net/http_door.h; no window,
 // renderer or GPU.
 //
@@ -95,7 +95,7 @@ struct HubOptions {
     // default: every CONTROL is then answered `forbidden` (--allow-control).
     bool allow_control = false;
 
-    // Bounds. Each is documented in docs/guides/run-a-hub.md.
+    // Bounds. Each is documented in docs/python/hub-setup.md.
     size_t max_viewers = 256;          // viewer connections
     size_t max_producers = 64;         // live sessions
     size_t max_ended_sessions = 32;    // ended sessions kept, the oldest go first

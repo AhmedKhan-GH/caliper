@@ -18,7 +18,7 @@ struct Negotiation {
     std::string reason;               // friendly card text when !ok
 };
 
-// The checks made before dlopen (docs/explanations/compatibility.md), in this
+// The checks made before dlopen (docs/development/compatibility-and-epochs.md), in this
 // order: ABI epoch, min_host, UI-stack hash, libtorch version, required
 // services, data schema. `stored_data_schema` is the schema recorded in the
 // applet's data folder (read_data_schema_stamp in applet_loader.h), 0 when

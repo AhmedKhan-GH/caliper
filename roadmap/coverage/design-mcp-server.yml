@@ -1,0 +1,204 @@
+# yaml-language-server: $schema=schema.json
+title: MCP server plan page
+kind: page
+source: design/mcp-server.md
+ref: main
+summary: The plan page design/mcp-server.md on main, read heading by heading; each plan heading has an
+  entry or is listed as holding no feature.
+entries:
+- heading: What is built and what is planned
+  item: caliper-mcp, the stdio MCP server, with its protocol engine, tools derived from the command table,
+    resources, loopback HTTP client and tests.
+  ids:
+  - AGT-02
+- heading: What is built and what is planned
+  item: The example client outside_agent.py lists the tools, reads the catalog and the open spec and adds
+    a panel that waits on an approval card.
+  ids:
+  - AGT-02
+- heading: What is built and what is planned
+  item: 'Planned: progress notifications while a call waits for approval.'
+  ids:
+  - AGT-19
+- heading: What is built and what is planned
+  item: 'Planned: a Windows version of the HTTP client.'
+  ids:
+  - PLT-13
+- heading: How it runs
+  item: caliper-mcp runs per agent session, speaks MCP on stdin and stdout, reads api.json, calls the
+    API over loopback, and finishes running calls for 2 seconds when input ends.
+  ids:
+  - AGT-02
+- heading: Command line
+  item: Command line options --api-file, --docs, --sdk, --origin mcp|agent and --command-timeout, with
+    exit code 2 for a missing folder or bad usage.
+  ids:
+  - AGT-02
+- heading: Configuring an agent
+  item: Setting up an outside agent needs a path, arguments and optional variables, and no token; the
+    api.json token runs as the mcp origin so edits wait for review.
+  ids:
+  - AGT-02
+- heading: Claude Code
+  item: Configuration for Claude Code in .mcp.json, with resources referred to as @caliper:caliper://docs/...
+  ids:
+  - AGT-02
+- heading: Codex
+  item: Configuration for Codex in config.toml with tool_timeout_sec 140 so approvals do not time out.
+  ids:
+  - AGT-02
+- heading: The app's side chat
+  item: The side chat hands caliper-mcp to its agent in session/new with the agent origin and the session's
+    own API file and token.
+  ids:
+  - AGT-02
+  - AGT-03
+- heading: The protocol
+  item: 'Section heading for the protocol: dual-era MCP serving, JSON-RPC handling and subscriptions.'
+  ids:
+  - AGT-02
+- heading: Revisions
+  item: caliper-mcp serves MCP revision 2026-07-28 and the earlier 2025-11-25 and 2025-06-18 on one connection,
+    with server/discover.
+  ids:
+  - AGT-02
+- heading: JSON-RPC handling
+  item: Hostile-input handling of each stdin line, with bounds on size, nesting and requests in flight,
+    and cancellation within 100 ms.
+  ids:
+  - AGT-02
+- heading: Subscriptions and list changes
+  item: Tool list change notifications for legacy and subscribing clients.
+  ids:
+  - AGT-02
+- heading: Tools
+  item: 'Section heading for the tools of caliper-mcp: derived from the command table.'
+  ids:
+  - AGT-02
+- heading: From the command table to tools
+  item: One tool per agent-allowed command, derived at run time, with a reversible name, schemas, and
+    read-only and destructive hints; history.undo and history.redo are left out.
+  ids:
+  - AGT-02
+  - SPC-05
+- heading: Which table
+  item: The app's command table wins, falling back to the compiled-in table; a bad command is left out
+    alone.
+  ids:
+  - AGT-02
+- heading: Calling a tool
+  item: Section heading for calling a tool.
+  ids:
+  - AGT-02
+- heading: Before anything is sent
+  item: Arguments are checked against the command's schema before sending, as command.invalid_args with
+    where.
+  ids:
+  - AGT-02
+- heading: Before anything is sent
+  item: An empty string on an optional argument counts as the argument left out, as a null already does
+    (the empty-arguments rule); this page treats absent or null arguments as empty.
+  ids:
+  - AGT-08
+- heading: Where a call goes
+  item: Routing of the four v0 tools to their v0 endpoints and of every other tool to POST /v0/commands/{name}.
+  ids:
+  - AGT-02
+  - AGT-01
+- heading: Results
+  item: Results come back as structured content plus text, PNGs as image blocks, app_launch relaying PENDING_APPROVAL,
+    and output checked against the schema.
+  ids:
+  - AGT-02
+- heading: Results
+  item: 'The held launch answer: a launch that would replace unsaved changes answers PENDING_APPROVAL
+    with a note so the agent checks rather than believes.'
+  ids:
+  - AGT-02
+  - AGT-01
+- heading: Errors
+  item: Every failure is a tool error carrying a JSON object with code, message and where.
+  ids:
+  - AGT-02
+- heading: Approval
+  item: A destructive command or a reviewed spec edit waits in the app for up to 120 seconds; there is
+    no tool that approves; modes Ask, Accept edits and Read only apply to the mcp origin.
+  ids:
+  - AGT-02
+  - AGT-06
+- heading: Resources
+  item: 'Read-only resources under caliper://: docs pages, SDK headers, the spec JSON Schema and the command
+    table, with templates, caching hints and confined folders.'
+  ids:
+  - AGT-13
+- heading: Reaching the app
+  item: 'Section heading for how caliper-mcp reaches the app: the API file and the HTTP client.'
+  ids:
+  - AGT-02
+- heading: The API file
+  item: api.json holds the outside-agent token, is read strictly at every call, and is read again after
+    a 401 or refused connection so a restarted app works.
+  ids:
+  - AGT-02
+  - AGT-01
+- heading: The HTTP client
+  item: A strict HTTP/1.1 client for 127.0.0.1 only, with connect, endpoint and command time limits.
+  ids:
+  - AGT-02
+- heading: What works against API v0
+  item: 'What works against API v0 on sprint2: the four v0 tools only, with other tools answering mcp.no_command_layer.'
+  ids:
+  - AGT-02
+  - AGT-01
+- heading: Security
+  item: 'Security rules: token only in the Authorization header and scrubbed, loopback only, confined
+    read-only folders, checked arguments, bounded hostile input, approval stays in the app.'
+  ids:
+  - AGT-02
+- heading: Limits
+  item: 'Limits of caliper-mcp: 8 MiB messages, 128 nesting levels, 32 concurrent requests, 16 subscriptions,
+    1 MiB arguments, 130 second commands, 1024 commands.'
+  ids:
+  - AGT-02
+- heading: Tests
+  item: 'Tests: builder_mcp unit and child-process tests, builder_mcp_acceptance against the stand-in
+    host, and builder_mcp_app against the real app.'
+  ids:
+  - AGT-02
+- heading: Results on this branch
+  item: The end-to-end test and the MCP Inspector were run on 15 November 2026 against a sprint2 app;
+    Inspector warned about 71 type-list schemas.
+  ids:
+  - AGT-02
+- heading: Changes to the contracts
+  item: The origin agent via --origin agent, the MCP revisions served, and the capture.unavailable code.
+  ids:
+  - AGT-02
+- heading: Decisions
+  item: 'Decisions of the MCP server: dual-era, tool errors for model-actionable failures, JSON error
+    text, the app''s table wins, no half-close, compiled-in schema, no new dependency.'
+  ids:
+  - AGT-02
+- heading: Open questions
+  item: 'Open: progress notifications while a call waits for approval, so a client with a short limit
+    can extend it.'
+  ids:
+  - AGT-19
+- heading: Open questions
+  item: 'Open: grouping an agent''s edits into one undo step, since MCP has no notion of a turn to map
+    onto X-Caliper-Group.'
+  ids:
+  - AGT-20
+- heading: Open questions
+  item: 'Open: a Windows version of the HTTP client; it answers http.unsupported today.'
+  ids:
+  - PLT-13
+- heading: Open questions
+  item: 'Open: whether to expose the stream to agents, which would need the token in the stream''s address.'
+  ids:
+  - AGT-21
+- heading: Open questions
+  item: 'Open: whether the command table should write nullable values with anyOf instead of a type list,
+    for single-type dialects.'
+  ids:
+  - AGT-02

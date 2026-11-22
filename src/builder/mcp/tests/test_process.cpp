@@ -342,7 +342,7 @@ TEST_CASE("a modern session drives every route of the fake API") {
     CHECK(api.log_size() == before);
 
     // Resources.
-    const json page = child.request("r1", "resources/read", {{"uri", "caliper://docs/references/api.md"}});
+    const json page = child.request("r1", "resources/read", {{"uri", "caliper://docs/agents/http-api.md"}});
     CHECK(page["result"]["contents"][0]["text"] == "# Caliper API\n");
     const json table = child.request("r2", "resources/read", {{"uri", "caliper://commands/command_table.json"}});
     CHECK(json::parse(table["result"]["contents"][0]["text"].get<std::string>()) == app_table);

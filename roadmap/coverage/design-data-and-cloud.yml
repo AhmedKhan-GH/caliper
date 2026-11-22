@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=schema.json
+title: Data and Cloud plan page
+kind: page
+source: design/data-and-cloud.md
+ref: main
+summary: The plan page design/data-and-cloud.md on main. Run history, comparison and recording are mapped
+  to features; the hosted products it describes are outside the public registry.
+entries:
+- heading: Data and Cloud
+  item: Plans the history of runs, comparison and replayable recordings kept locally.
+  ids:
+  - RUN-03
+  - RUN-05
+  - STR-12
+- heading: The line
+  item: The desktop app keeps everything locally, needs no account or server and stays local-first.
+  ids:
+  - RUN-03
+- heading: The line
+  item: A hosted product, which is outside the public registry.
+  reason: out-of-scope
+- heading: Local history and recording
+  item: Planned after Phase 1 and after the streaming work, on the local DuckDB data service and the metrics
+    and artifacts stores.
+  ids:
+  - RUN-01
+  - RUN-02
+- heading: Local history and recording
+  item: 'Run history: the runs that the metrics and artifacts stores record, shown as a history that outlives
+    each session.'
+  ids:
+  - RUN-03
+  - RUN-04
+- heading: Local history and recording
+  item: 'Comparing runs: two or more runs from the history shown side by side.'
+  ids:
+  - RUN-05
+- heading: Local history and recording
+  item: 'Recording and replay: a session recorded to a file and replayed later with no server, sharing
+    its snapshots with the live protocol.'
+  ids:
+  - STR-12
+  - STR-13
+  - STR-14
+- heading: Caliper Cloud and Caliper Web
+  item: A hosted product, which is outside the public registry.
+  reason: out-of-scope
+- heading: Security
+  item: A hosted product, which is outside the public registry.
+  reason: out-of-scope

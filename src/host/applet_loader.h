@@ -61,7 +61,7 @@ struct AppletEntry {
     bool stale_initialized = false;   // initialize() had succeeded: cleanup first
 };
 
-// The data-schema stamp (docs/explanations/compatibility.md): a small TOML
+// The data-schema stamp (docs/development/compatibility-and-epochs.md): a small TOML
 // file the host keeps in each applet's data folder, recording the highest
 // [data].schema that has opened the folder. The applet never writes it.
 inline constexpr const char* kDataStampName = ".caliper-data.toml";
@@ -75,7 +75,7 @@ uint32_t read_data_schema_stamp(const std::string& data_dir);
 bool raise_data_schema_stamp(const std::string& data_dir, uint32_t schema);
 
 // The folders the host searches for applets, in order
-// (docs/explanations/compatibility.md, "Several copies of one applet"): the
+// (docs/development/compatibility-and-epochs.md, "Several copies of one applet"): the
 // development paths, first those given on the command line and then those in
 // CALIPER_APPLET_PATH, each list in its own order; then the open workspace's
 // applets/ folder, when a workspace is given; then the user applets folder;
@@ -145,7 +145,7 @@ bool spec_runtime_available();
 // spec runtime.
 int64_t spec_format_version();
 
-// Refusal and failure texts of spec applets (docs/references/refusals.md).
+// Refusal and failure texts of spec applets (docs/reference/refusal-messages.md).
 std::string no_spec_runtime_reason();
 std::string spec_version_reason(int64_t spec_version, int64_t host_version);
 std::string workspace_library_reason();
@@ -181,7 +181,7 @@ struct SpecDiagnostic {
 std::string format_spec_diagnostic(const std::string& file, const SpecDiagnostic& d,
                                    bool severity);
 
-// Manifest-first loader (docs/explanations/compatibility.md): scan() never dlopens; launch()
+// Manifest-first loader (docs/development/compatibility-and-epochs.md): scan() never dlopens; launch()
 // performs dlopen -> descriptor sanity -> guarded create/initialize.
 //
 // Several copies of one id: after every scan, the copy that stays Ready is

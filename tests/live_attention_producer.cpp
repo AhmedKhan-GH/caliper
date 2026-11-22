@@ -1,6 +1,6 @@
 // caliper_attention_producer: a test and demo tool, not installed. It stands
 // in for a training script that streams its attention over wire protocol v3
-// (docs/references/wire-protocol.md), with no torch and no Python: a hub of
+// (docs/reference/wire-protocol.md), with no torch and no Python: a hub of
 // its own on 127.0.0.1 (the hub of `caliper serve`, src/host/net/hub.h) and a
 // producer connection to it, which publishes, about `--hz` times a second, the
 // attention of a model whose heads sharpen as it trains, deeper layers

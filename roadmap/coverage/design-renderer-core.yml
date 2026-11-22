@@ -1,0 +1,380 @@
+# yaml-language-server: $schema=schema.json
+title: Renderer core plan page
+kind: page
+source: design/renderer-core.md
+ref: sprint4
+summary: The plan page design/renderer-core.md, which only the sprint4 branch holds, in its newest version
+  there, read heading by heading.
+entries:
+- heading: What is built and what is planned
+  item: 'The page states that nothing on it is built and lists built pieces: the renderer seam and its
+    backends, the zero-copy paths, the geometry service and tensor bridge, the live views and the pixel-exact
+    graphics suite.'
+  ids:
+  - REN-01
+  - REN-02
+  - REN-03
+  - REN-08
+  - REN-04
+  - REN-05
+  - REN-06
+  - REN-07
+- heading: What is built and what is planned
+  item: The web viewer spike of the sprint 2 branch found the WebGPU constraints the design is shaped
+    to.
+  ids:
+  - EMB-02
+- heading: The problem
+  item: Section heading on the problem the renderer core solves.
+  ids:
+  - REN-09
+- heading: Shader copies
+  item: 'Hand-written shader copies: colormap four times, points three times, geometry twice.'
+  ids:
+  - REN-10
+- heading: The host renderer's methods
+  item: HostRenderer has 42 virtual methods on main and 47 on sprint 2, each shaped to a feature.
+  ids:
+  - REN-09
+- heading: Platform details in the views
+  item: Platform details in the views (bind_buffer, path labels, embed Metal branch, native_device checks)
+    that the import capability replaces.
+  ids:
+  - REN-09
+- heading: Drawing worlds
+  item: 'Four drawing worlds share no camera or scene model: ImGui and ImPlot, the geometry service, texture
+    views and the TypeScript views.'
+  ids:
+  - REN-11
+- heading: Backends
+  item: 'Backends table: Metal, Vulkan with CUDA, OpenGL 3.3 and WebGPU; Dawn is a fifth role rather than
+    a fifth implementation.'
+  ids:
+  - REN-01
+  - REN-02
+  - REN-03
+  - REN-25
+- heading: The graphics layer
+  item: Section heading for the graphics layer, which each backend implements once.
+  ids:
+  - REN-09
+- heading: Its shape
+  item: A thin internal C++ layer, caliper_gfx, shaped to WebGPU with bind groups, dynamic uniform offsets,
+    instanced quads, vertex buffers at any offset, and asynchronous completion.
+  ids:
+  - REN-09
+- heading: Handles and descriptors
+  item: Handles, descriptors, formats, vertex layouts and pipeline descriptors of the layer.
+  ids:
+  - REN-09
+- heading: Capabilities and limits
+  item: Capability bits and limits that replace the renderer's supports booleans.
+  ids:
+  - REN-09
+- heading: The draw list
+  item: The backend-neutral draw list of plain records, with the header as built settling the sketch.
+  ids:
+  - REN-09
+- heading: The backend interface
+  item: The 24-method Backend interface, with the Frame, route and stats types, implemented once per backend.
+  ids:
+  - REN-09
+- heading: Frames, and why there is no frame graph
+  item: A frame is an ordered list of passes with no frame graph.
+  ids:
+  - REN-09
+- heading: How Metal and Vulkan keep their speed
+  item: Metal and Vulkan keep their private fast paths behind the layer's interface.
+  ids:
+  - REN-09
+- heading: ImGui and ImPlot
+  item: ImGui, ImPlot and ImPlot3D keep their own backends and the layer supplies the textures they show.
+  ids:
+  - REN-09
+- heading: What is rebuilt on top
+  item: The tensor bridge, embed views, points view, scene service, export service, scenes, browser and
+    HostRenderer rebuilt on the layer; series and histogram unchanged.
+  ids:
+  - REN-09
+  - REN-33
+- heading: One shader source
+  item: Every shader is written once in WGSL and translated to MSL and SPIR-V by a pinned Naga, with the
+    generated sources checked in and regenerated in CI.
+  ids:
+  - REN-10
+- heading: The options
+  item: Slang, Naga, Tint and hand-written copies compared.
+  ids:
+  - REN-10
+- heading: A trial translation
+  item: A trial translation of three small shaders through Slang.
+  ids:
+  - REN-10
+- heading: Exact colormap output
+  item: Colormaps decided by integer comparisons against keys from the CPU reference, with a 4,112-byte
+    block per mapping, proven over all 2^32 inputs on 14 ranges.
+  ids:
+  - REN-14
+- heading: Recommendation
+  item: The recommendation to write WGSL, translate with Naga and allow a hand-written native version
+    of a shader, with CUDA kernels staying hand-written.
+  ids:
+  - REN-10
+- heading: The scene core
+  item: Section heading for the scene core.
+  ids:
+  - REN-11
+- heading: Conventions
+  item: 'One statement of conventions: right-handed, +y up, clip z in [0, 1], column-major, top-left origin.'
+  ids:
+  - REN-11
+- heading: Entity tree, cameras and bounds
+  item: The entity tree with world matrices, the orbit, pan and zoom, and pinhole camera models, bounds
+    and fitting.
+  ids:
+  - REN-11
+- heading: Picking
+  item: A 16 x 16 RG32Uint pick pass around the pointer with its own depth buffer.
+  ids:
+  - REN-15
+- heading: Compiling primitives into a draw list
+  item: The core walks the visible entities and compiles batches into draws with per-draw uniform blocks.
+  ids:
+  - REN-11
+- heading: Interface outline
+  item: 'The caliper_scene interface outline: SceneTree, Orbit, PanZoom, ThroughPinhole, fit, compile
+    and Picker.'
+  ids:
+  - REN-11
+- heading: The points view and ImPlot3D
+  item: The points view becomes the one-entity case with unchanged pixels; ImPlot3D stays as it is for
+    small charts.
+  ids:
+  - EMB-09
+  - REN-32
+- heading: Zero-copy as a backend capability
+  item: Section heading for zero-copy as a backend capability.
+  ids:
+  - REN-08
+- heading: Import
+  item: Zero-copy expressed as import of external buffers and textures into the layer, with a copy and
+    a report where a backend cannot.
+  ids:
+  - REN-09
+- heading: Lifetime and synchronisation
+  item: Ownership, deferred release, stability, ordering and one-way direction of imports.
+  ids:
+  - REN-09
+- heading: Routes per backend
+  item: 'Routes per source and backend: in place on Metal, in place on Vulkan with CUDA for exportable
+    memory, one upload or copy in the browser and on Dawn.'
+  ids:
+  - REN-09
+- heading: Keeping the fast path as fast
+  item: Before and after benchmarks and acceptance thresholds that every migration step must pass.
+  ids:
+  - REN-08
+  - REN-31
+- heading: The alternatives
+  item: Dawn, wgpu-native and other libraries rejected because none keeps both zero-copy paths; a thin
+    layer with three backends is built instead.
+  ids:
+  - REN-09
+- heading: Migration
+  item: 'Section heading for the migration: minimum cut first then every remaining step, with no backwards
+    compatibility.'
+  ids:
+  - REN-09
+- heading: The rule of every step
+  item: Every step lands as its own series, deletes the old code, is measured before and after, and has
+    offscreen captures.
+  ids:
+  - REN-09
+- heading: The steps
+  item: Table of steps 0 to 17 with builder days; 66.5 days in sprint 4 and 82.5 in all.
+  ids:
+  - REN-09
+- heading: The steps
+  item: 'Step 0, counters and baseline: copy counters, Metal frame statistics, a points benchmark row,
+    a recorded baseline; 2 days.'
+  ids:
+  - REN-31
+- heading: The steps
+  item: Step 1, layer and Metal backend, with a recording backend for headless tests; 6 days.
+  ids:
+  - REN-09
+- heading: The steps
+  item: Step 2, shader generator with WGSL sources, pinned Naga and the scene programs; 3 days.
+  ids:
+  - REN-10
+- heading: The steps
+  item: 'Step 3, scene core: tree, matrices, cameras, bounds, fitting, compile, ID target and picks; 6
+    days.'
+  ids:
+  - REN-11
+- heading: The steps
+  item: Step 4, WebGPU backend of the layer in the browser; 5 days. The minimum cut of steps 0 to 4 is
+    22 days.
+  ids:
+  - REN-13
+- heading: The steps
+  item: 'Step 5, retire OpenGL: remove GLEW, the OpenGL backend and fallback code, and refuse with a message;
+    2 days.'
+  ids:
+  - REN-17
+- heading: The steps
+  item: Step 6, colormap by keys, with the exhaustive CPU test and boundary rows; 2 days.
+  ids:
+  - REN-14
+- heading: The steps
+  item: Step 7, points live view on the scene core as a one-entity scene; 3 days.
+  ids:
+  - REN-32
+- heading: The steps
+  item: Step 8, texture path on Metal and the Vulkan renderer reduced; 4 days.
+  ids:
+  - REN-33
+- heading: The steps
+  item: Step 9, TypeScript WebGPU views removed, Canvas 2D kept; 1.5 days.
+  ids:
+  - EMB-16
+- heading: The steps
+  item: 'Step 10, scene model additions: additive blending, instanced meshes and a line depth offset;
+    3 days.'
+  ids:
+  - REN-34
+- heading: The steps
+  item: Step 11, the scene service and the particle applets field_scope, flow_scope and sculpt_scope on
+    it; 12.5 days.
+  ids:
+  - REN-16
+  - REN-35
+- heading: The steps
+  item: Step 12, embed_scope, gpt_scope and instance_scope on the scene service; 4 days.
+  ids:
+  - REN-16
+- heading: The steps
+  item: Step 13, mesh_scope and twin_scope on the scene service, export of scenes, geometry service deleted,
+    one version of each graphics service and the epoch bump; 11 days.
+  ids:
+  - REN-16
+  - COR-25
+- heading: The steps
+  item: Step 14, HostRenderer at its final shape of 16 methods, with docs updated; 1.5 days.
+  ids:
+  - REN-36
+- heading: The steps
+  item: Step 15, Dawn fallback, moved to Windows parity; 5 days.
+  ids:
+  - REN-25
+  - PLT-11
+- heading: The steps
+  item: Step 16, one applet outside the repository ported onto the scene service, moved out of the sprint;
+    3 days.
+  ids:
+  - REN-35
+- heading: The steps
+  item: Step 17, the Vulkan backend of the layer with Windows parity; 8 days.
+  ids:
+  - REN-53
+- heading: The order of the steps
+  item: 'Order of steps: cut first, OpenGL next, colormap before clients, points before textures, additions
+    before the service, particle applets first.'
+  ids:
+  - REN-09
+- heading: One version of each graphics service
+  item: Each graphics service keeps one version under plain v1 ids, with one ABI epoch bump from 2 to
+    3 in step 13 and a simplified epoch check.
+  ids:
+  - COR-25
+- heading: The applets on the scene service
+  item: 'Eight applets in the repository move onto the scene service: field_scope, flow_scope, sculpt_scope,
+    embed_scope, gpt_scope, instance_scope, mesh_scope and twin_scope.'
+  ids:
+  - REN-16
+- heading: The renderer seam at its final shape
+  item: HostRenderer ends with 16 methods for window, frame, canvas, window capture, gfx() and frame_stats.
+  ids:
+  - REN-36
+- heading: The Vulkan renderer until Windows parity
+  item: From step 8 the Vulkan renderer keeps only window, ImGui and canvas; Windows refuses bridge textures,
+    geometry views and scenes until the Vulkan backend of the layer lands.
+  ids:
+  - PLT-02
+  - PLT-05
+  - REN-53
+- heading: No fallback renderer until Dawn
+  item: 'From step 5 until step 15 there is no fallback renderer: the app, caliper shot and the embedding
+    core refuse with a message and exit 1.'
+  ids:
+  - REN-17
+- heading: The TypeScript views in the browser
+  item: Step 9 removes the TypeScript WebGPU views and keeps Canvas 2D views as the fallback.
+  ids:
+  - EMB-03
+  - EMB-16
+- heading: Risks
+  item: 'Risks: slower fast path, moved pixels, no switch back, weaker contract for applets, costlier
+    particle clouds, frozen scene model, outside applets, Windows gap, no fallback renderer, large steps.'
+  ids:
+  - REN-09
+  - REN-16
+- heading: Limits
+  item: 'Limits: zero-copy only on the same machine, single-sample views, no frame graph, no fallback
+    renderer between steps 5 and 15, the Windows gap.'
+  ids:
+  - REN-08
+  - REN-17
+- heading: Changes to the shared contracts
+  item: 'Contract changes: every line is an expanded quad, CUDA import covers exportable memory only,
+    and the scene model gains additive blending and instanced meshes.'
+  ids:
+  - REN-09
+  - REN-34
+- heading: Decisions
+  item: 'Decisions on the migration: minimum cut first, no backwards compatibility, no dual paths, HostRenderer
+    shrinks, one version of each service, OpenGL retired early, TypeScript WebGPU views removed.'
+  ids:
+  - REN-09
+  - REN-17
+  - COR-25
+  - EMB-16
+- heading: Decisions
+  item: Decisions on zero-copy as a hard requirement, the scene service, applets adapting to the API,
+    and the particle applets first.
+  ids:
+  - REN-08
+  - REN-35
+  - REN-09
+- heading: Decisions
+  item: Decisions on a thin layer with three backends, the Vulkan backend with Windows parity, the accepted
+    Windows gap and Dawn as the WebGPU implementation.
+  ids:
+  - REN-09
+  - REN-13
+  - REN-25
+  - REN-53
+- heading: Decisions
+  item: Decisions on WGSL as the one source through Naga, hand-written native versions, CUDA kernels,
+    integer keys for the colormap, conventions, no immediate data, and ImGui keeping its backends.
+  ids:
+  - REN-10
+  - REN-14
+- heading: Decisions
+  item: One applet outside the repository ported as the last step, later moved out of sprint 4.
+  ids:
+  - REN-35
+- heading: Open decisions
+  item: 'Open decision: how a graphics service changes after this sprint, appending within an epoch or
+    revision ids.'
+  ids:
+  - COR-25
+- heading: Open decisions
+  item: 'Open decision: applets and embedding hosts outside the repository, updated at step 13 or left
+    until next worked on.'
+  ids:
+  - REN-35
+- heading: Open decisions
+  item: 'Open decision: how Dawn is obtained, pinned source or nightly binaries.'
+  ids:
+  - REN-25

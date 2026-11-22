@@ -1,0 +1,107 @@
+/* The candidate navigator. The window, rail, search box, pillar links and tooltip come from roadmap.css;
+   this file holds the origin marks, the canvas of cards and the detail panel. */
+
+:root, [data-md-color-scheme="slate"] {
+  --cn-cut: var(--rm-decision);
+  --cn-plan: var(--rm-planned);
+  --cn-adjacent: #3ca99c;
+  --cn-field: var(--rm-idea);
+}
+/* Declared again for the light scheme, so that each reference resolves to that scheme's colour. */
+[data-md-color-scheme="default"] {
+  --cn-cut: var(--rm-decision);
+  --cn-plan: var(--rm-planned);
+  --cn-adjacent: #1f7a70;
+  --cn-field: var(--rm-idea);
+}
+
+/* Origin marks, drawn with CSS only. */
+.cn-mark { display: inline-block; flex: none; width: 9px; height: 9px; margin-right: .4rem; vertical-align: baseline; box-sizing: border-box; }
+.cn-mark--cut { background: var(--cn-cut); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.cn-mark--plan-idea { background: var(--cn-plan); border-radius: 50%; }
+.cn-mark--adjacent-work { background: var(--cn-adjacent); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+.cn-mark--field { border: 1.5px solid var(--cn-field); }
+.roadmap-legend .cn-mark { margin-right: 0; }
+[data-origin="cut"] { --cn-origin: var(--cn-cut); }
+[data-origin="plan-idea"] { --cn-origin: var(--cn-plan); }
+[data-origin="adjacent-work"] { --cn-origin: var(--cn-adjacent); }
+[data-origin="field"] { --cn-origin: var(--cn-field); }
+
+/* The canvas scrolls vertically instead of panning. */
+.roadmap-canvas.cn-canvas { cursor: auto; touch-action: auto; }
+.cn-scroll { height: 100%; overflow-y: auto; overscroll-behavior: contain; box-sizing: border-box; padding: 24px; }
+.cn-scroll > * { zoom: var(--cn-zoom, 1); }
+.cn-pillar + .cn-pillar { margin-top: 56px; }
+.cn-pillar p { margin: 0 0 .3rem; }
+.cn-pillar-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .9rem; margin-bottom: .6rem; }
+.cn-pillar-title { font-size: 15px; letter-spacing: .08em; text-transform: uppercase; color: var(--rm-text); }
+.cn-pillar-count { font-size: .7rem; color: var(--rm-text-dim); }
+.cn-proposed {
+  font-size: .58rem; letter-spacing: .16em; text-transform: uppercase; color: var(--rm-faint); line-height: 1;
+  padding: .25em .6em .2em; border: 1px solid var(--rm-plate-rule); border-radius: 3px;
+}
+.cn-pillar-desc { max-width: 52rem; font-size: .74rem; line-height: 1.45; color: var(--rm-text-dim); }
+.cn-pillar-alt { max-width: 52rem; font-size: .7rem; line-height: 1.45; color: var(--rm-faint); }
+.cn-group { margin-top: .9rem; }
+.cn-group-label {
+  display: flex; align-items: center; margin-bottom: .4rem; font-size: .62rem; letter-spacing: .16em; text-transform: uppercase; color: var(--rm-faint);
+}
+.cn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr)); gap: .5rem; }
+
+.cn-scroll a.cn-card {
+  display: block; box-sizing: border-box; min-width: 0; padding: .4rem .55rem; text-decoration: none; color: var(--rm-text);
+  background: var(--rm-plate); border: 1px solid var(--rm-plate-rule); border-left: 3px solid var(--cn-origin); border-radius: 4px;
+}
+.cn-scroll a.cn-card:hover, .cn-scroll a.cn-card:focus-visible, .cn-scroll a.cn-card.is-selected {
+  color: var(--rm-text); border-color: var(--rm-accent); border-left-color: var(--rm-accent);
+}
+.cn-scroll a.cn-card:focus-visible { outline: 2px solid var(--rm-accent); outline-offset: 1px; }
+.cn-card-key {
+  display: flex; align-items: center; font-family: var(--md-code-font, "Source Code Pro"), monospace; font-size: .55rem;
+  line-height: 1.4; color: var(--rm-text-dim); overflow-wrap: anywhere;
+}
+.cn-card-title { display: block; margin-top: .15rem; font-size: .66rem; line-height: 1.35; color: var(--rm-text); }
+.cn-scroll.is-searching a.cn-card:not(.is-found) { opacity: .3; }
+.cn-scroll a.cn-card.is-found { border-color: var(--rm-text-dim); }
+.cn-scroll a.cn-card.is-current { border-color: var(--rm-text); box-shadow: 0 0 0 1px var(--rm-text); }
+
+/* Material's typeset styles reach into the article, so the details are set back here. */
+.cn-panel {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 4; width: min(20rem, 60%); box-sizing: border-box; overflow-y: auto;
+  padding: .9rem; background: var(--rm-plate); border-left: 1px solid var(--rm-plate-rule); box-shadow: var(--rm-shadow);
+  font-size: .72rem; line-height: 1.45; color: var(--rm-text-dim); display: none;
+}
+.cn-panel.is-open { display: block; }
+.cn-panel a { color: var(--rm-accent); text-decoration: none; }
+.cn-panel a:hover { color: var(--rm-accent-hover); text-decoration: underline; }
+/* Material indents list items with [dir=ltr] .md-typeset ul li, so these selectors need the higher specificity. */
+.cn-panel ul.cn-deps, .cn-panel ul.cn-deps > li.cn-dep { margin: 0; padding: 0; list-style: none; }
+.cn-panel ul.cn-deps > li.cn-dep::marker { content: none; }
+.cn-panel-close {
+  position: absolute; top: .45rem; right: .5rem; width: 1.6rem; height: 1.6rem; padding: 0; font: inherit; font-size: 1.1rem; line-height: 1;
+  color: var(--rm-text-dim); background: none; border: 0; border-radius: 4px; cursor: pointer;
+}
+.cn-panel-close:hover { color: var(--rm-text); background: color-mix(in srgb, var(--rm-accent) 14%, transparent); }
+.cn-panel-close:focus-visible { outline: 2px solid var(--rm-accent); outline-offset: 1px; }
+.cn-panel-title { padding-right: 1.8rem; font-size: .9rem; line-height: 1.3; color: var(--rm-text); }
+.cn-panel-key { margin-top: .15rem; font-size: .7rem; }
+.cn-panel-row { margin-top: .85rem; }
+.cn-panel-label { margin-bottom: .2rem; font-size: .62rem; letter-spacing: .16em; text-transform: uppercase; color: var(--rm-faint); }
+.cn-panel-value { display: flex; align-items: center; flex-wrap: wrap; }
+.cn-panel-value:not(:has(.cn-mark)) { display: block; }
+/* A dependency: the id, the feature's title and its status on the first line, the graph link under the title. */
+.cn-panel ul.cn-deps > li.cn-dep {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline; gap: .1rem .5rem; padding: .35rem 0;
+  border-top: 1px solid color-mix(in srgb, var(--rm-text-dim) 25%, transparent);
+}
+.cn-panel ul.cn-deps > li.cn-dep:first-child { border-top: 0; }
+.cn-dep .cn-dep-page { min-width: 0; }
+.cn-dep .roadmap-badge { font-size: .52rem; }
+.cn-dep-graph { grid-column: 2; justify-self: start; font-size: .62rem; letter-spacing: .12em; text-transform: uppercase; }
+
+/* The tooltip's head: a candidate's key is long, so it sits above the title, as on the cards. */
+.cn-canvas .roadmap-tip-head { flex-direction: column; align-items: flex-start; gap: .15rem; }
+
+@media (max-width: 44.9375em) {
+  .cn-canvas, .cn-panel { display: none; }
+}

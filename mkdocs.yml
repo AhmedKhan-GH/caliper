@@ -5,7 +5,7 @@ site_dir: build/wiki-site
 # In the repository, not on the site: the cookbook is written around the applets, which are
 # not shipped.
 exclude_docs: |
-  guides/ml-applet-cookbook.md
+  applets/ml-applet-cookbook.md
 # Broken anchors fail the strict build too, like broken links.
 validation:
   anchors: warn
@@ -21,19 +21,26 @@ theme:
     primary: custom
     accent: custom
   features:
+    - navigation.tabs
     - navigation.sections
     - navigation.indexes
+    - navigation.prune
+    - navigation.tracking
+    - toc.follow
     - content.code.copy
     - search.suggest
 extra:
-  homepage: /caliper/
+  # The header logo opens the full docs tree (docs/contents.md, filled by docs-theme/hooks/contents.py).
+  homepage: /caliper/docs/contents/
 # The navigation follows the folders under docs/; a .nav.yml in a folder sets its order.
 # Generates the roadmap's pages and data files from the registry in roadmap/.
 hooks:
   - roadmap/build.py
+  - docs-theme/hooks/contents.py
 # A local `mkdocs serve` rebuilds when the registry changes.
 watch:
   - roadmap
+  - candidates
 plugins:
   - search
   - awesome-nav
@@ -41,7 +48,11 @@ markdown_extensions:
   - admonition
   - toc:
       permalink: true
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.snippets:
       base_path: ['.']
       check_paths: true

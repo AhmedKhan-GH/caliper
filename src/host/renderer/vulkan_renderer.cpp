@@ -1,9 +1,9 @@
-// Vulkan backend for the HostRenderer seam (docs/explanations/rendering.md).
+// Vulkan backend for the HostRenderer seam (docs/applets/rendering.md).
 // Sibling to metal_renderer.mm / gl_renderer.cpp; make_vulkan_renderer()
 // constructs it and main.cpp selects it as the Windows default, falling back
 // to the GL backend if init() fails (no Vulkan driver, remote desktop, ...).
 //
-// Zero-copy story (docs/explanations/zero-copy.md, Windows/NVIDIA): discrete GPUs have no
+// Zero-copy story (docs/python/zero-copy-tensors.md, Windows/NVIDIA): discrete GPUs have no
 // unified memory, so "zero-copy" means the tensor bytes never leave VRAM.
 // The bridge hands us a CaliperTensor whose data is a CUDA device pointer
 // (torch's own allocation). We keep a per-texture VkBuffer allocated with
@@ -13,7 +13,7 @@
 //   1. one cuMemcpyDtoD  (torch tensor -> shared buffer, in-VRAM)
 //   2. one Vulkan pass    (shared buffer -> VkImage, colormap on-GPU for f32)
 // = 0 host copies + 1 in-VRAM copy, exactly the budget the table in
-// docs/explanations/zero-copy.md gives this path. Note the direction deviates from the usual sketch (CUDA
+// docs/python/zero-copy-tensors.md gives this path. Note the direction deviates from the usual sketch (CUDA
 // exports / Vulkan imports): torch's caching allocator does not produce
 // exportable allocations, so the renderer exports and CUDA imports. Same
 // residency guarantee, same crossing count.
@@ -33,7 +33,7 @@
 // elided when the adapter populates CaliperTensor.stream under bridge-v1.1
 // caps (M2a) — the copy+signal then ride the producer's stream.
 //
-// Direct path (docs/explanations/vulkan-cuda.md): where it is available,
+// Direct path (docs/development/vulkan-and-cuda.md): where it is available,
 // the steps above are replaced by one CUDA kernel, launched on the producer's
 // stream, that reads the tensor in place and writes the VkImage through a
 // surface object = 0 host copies + 0 in-VRAM copies, for any torch tensor. The
@@ -1193,7 +1193,7 @@ public:
         return id;
     }
 
-    // One view frame, atomically (docs/references/service-geometry-v1.md). Gate EVERY draw against the
+    // One view frame, atomically (docs/applets/services/caliper-geometry-v1.md). Gate EVERY draw against the
     // renderer's OWN imported_ table first (defense in depth, §2.3) — nothing is
     // encoded or cleared unless all draws pass, so a refusal leaves the view's
     // pixels exactly as they were. Then barrier the imported buffers, clear, and

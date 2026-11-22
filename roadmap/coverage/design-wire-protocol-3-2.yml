@@ -1,0 +1,165 @@
+# yaml-language-server: $schema=schema.json
+title: Wire protocol 3.2 draft plan page
+kind: page
+source: design/wire-protocol-3-2.md
+ref: sprint4
+summary: The plan page design/wire-protocol-3-2.md, which only the sprint4 branch holds, in its newest
+  version there, read heading by heading.
+entries:
+- heading: What is built and what is planned
+  item: Nothing of 3.2 is built according to this page; it rests on 3.1 as the sprint 2 branch builds
+    it. The page's example frames come from a prototype encoder kept outside the repository.
+  ids:
+  - STR-09
+- heading: What 3.2 adds
+  item: 'Five capabilities: timelines, scenes, text, bars and recordings, each used only with a peer that
+    announced it, with every 3.1 message unchanged.'
+  ids:
+  - STR-09
+  - STR-23
+- heading: Checking for clashes
+  item: The ids of 3.2 (message types 0x0070 to 0x007F, kinds 6 to 8, dtypes above 5) were checked against
+    all nineteen sprint 2 branches and are free.
+  ids:
+  - STR-09
+- heading: Timelines and stamps
+  item: Timelines and stamps on the wire.
+  ids:
+  - STR-09
+  - STR-23
+- heading: Declaring timelines
+  item: Timelines are declared by a VIEWS key timelines.
+  ids:
+  - STR-09
+  - STR-23
+- heading: The stamp
+  item: A stamp is an i64 section per message, or per value for series and text, and a static key marks
+    items with no stamp.
+  ids:
+  - STR-09
+  - STR-23
+- heading: The dtype u16
+  item: The dtype u16 (6) carries depth and segmentation.
+  ids:
+  - STR-09
+- heading: New kinds in VIEWS
+  item: Kinds scene (6), text (7) and bars (8) in VIEWS with their keys.
+  ids:
+  - STR-09
+- heading: Message types
+  item: Message types 0x0070 to 0x0074 for scenes and text and 0x0078 to 0x007B for recordings.
+  ids:
+  - STR-09
+- heading: scene_update
+  item: SCENE_UPDATE carries the arrays of one entity part (points, lines, mesh and the other parts);
+    the points, lines and mesh parts are built.
+  ids:
+  - STR-09
+- heading: Splitting a large update
+  item: A large update is split into pieces that go together and are replaced only as a whole.
+  ids:
+  - STR-09
+- heading: scene_transforms
+  item: SCENE_TRANSFORMS carries entity transforms as matrices batched per scene.
+  ids:
+  - STR-09
+- heading: scene_clear
+  item: SCENE_CLEAR clears entities or parts, with reset for a new subscription; the clear is built in
+    the subset.
+  ids:
+  - STR-09
+- heading: scene_classes
+  item: SCENE_CLASSES carries a class table.
+  ids:
+  - STR-09
+- heading: The state of a scene for a new subscription
+  item: A producer or hub sends a scene's state, built from the class table, transforms, cameras and newest
+    batches, to a late subscriber.
+  ids:
+  - STR-09
+  - STR-06
+- heading: text
+  item: The TEXT message carries log lines in binary sections with levels and stamps.
+  ids:
+  - STR-09
+- heading: bars
+  item: A bar chart is a SNAPSHOT of kind 8 with labels and colours.
+  ids:
+  - STR-09
+- heading: Events on the new kinds
+  item: Events on scenes and bars carry picks and selections.
+  ids:
+  - REN-46
+- heading: recordings
+  item: RECORDINGS lists the recordings a server holds, announced by the capability recordings.
+  ids:
+  - STR-09
+- heading: recording_open
+  item: RECORDING_OPEN opens a recording as an ended session, answered by VIEWS or an error.
+  ids:
+  - STR-09
+- heading: cursor
+  item: CURSOR moves a viewer's cursor, with generations, and is answered by TIME_STATE.
+  ids:
+  - STR-09
+- heading: time_state
+  item: TIME_STATE reports a viewer's cursor and playback state.
+  ids:
+  - STR-09
+- heading: Flow control
+  item: 'Flow control: scene updates coalesce per entity part, clears keep their order, split pieces go
+    together, text lines never drop silently, and playback obeys max_rate.'
+  ids:
+  - STR-09
+  - STR-06
+- heading: Through a hub
+  item: A 3.2 hub filters additions for older viewers, keeps scene state and text for late viewers, answers
+    CURSOR and records or serves recordings.
+  ids:
+  - STR-06
+  - STR-15
+  - STR-09
+- heading: Limits
+  item: Limits of 3.2 messages, such as the retained text lines and scene state counted toward the hub's
+    1 GiB budget.
+  ids:
+  - STR-09
+  - STR-06
+- heading: Error codes
+  item: New error codes for the 3.2 messages.
+  ids:
+  - STR-09
+- heading: Versioning and compatibility
+  item: 3.2 is additive; senders use each capability only with a peer that announced it, and a recorded
+    session is an ended session to a 3.1 viewer.
+  ids:
+  - STR-09
+- heading: Worked example
+  item: A worked example of a scene with entity transforms over timelines.
+  ids:
+  - STR-09
+- heading: Example frames
+  item: Example frames made by a prototype encoder that reproduces the golden frames of 3.0 to 3.2 byte
+    for byte.
+  ids:
+  - STR-09
+- heading: What sprint 2 must confirm
+  item: Sprint 2 must confirm minor version 2, kinds 6 to 8, message types, the u16 dtype, the capabilities,
+    the hub's new duties and the caliper.step(n) form.
+  ids:
+  - STR-09
+- heading: Decisions
+  item: 'Decisions: stamps in i64 sections, timelines in VIEWS, one scene message per entity part, entity
+    transforms as matrices, only u16 added, index-pair edges as an indices section of lines, bars as a
+    SNAPSHOT, text in binary sections, a cursor per viewer connection, the hub never forwards CURSOR to
+    a producer.'
+  ids:
+  - STR-09
+  - STR-23
+- heading: Open decisions
+  item: 'Open decisions: the timeline declaration as a VIEWS key, server-side playback, time windows as
+    a later key window, the text log''s levels, and scene state at the hub.'
+  ids:
+  - STR-13
+  - STR-09
+  - STR-06

@@ -1,0 +1,312 @@
+# yaml-language-server: $schema=schema.json
+title: Command layer plan page
+kind: page
+source: design/command-layer.md
+ref: main
+summary: The plan page design/command-layer.md on main, read heading by heading; each plan heading has
+  an entry or is listed as holding no feature.
+entries:
+- heading: What is built and what is planned
+  item: 'The library caliper_builder_commands: descriptors, invocations, results, the registry, the schema
+    validator, undo history, journal, approval policy, follow-ups, queue and the descriptor table of every
+    v0 command.'
+  ids:
+  - SPC-05
+- heading: What is built and what is planned
+  item: Agent permissions as data (effect), modes, rules and allowed_by in the journal.
+  ids:
+  - AGT-06
+- heading: What is built and what is planned
+  item: The command endpoints of Caliper API served by the app through CommandGateway and the session
+    gateway.
+  ids:
+  - AGT-01
+  - SPC-05
+- heading: What is built and what is planned
+  item: The builder session builds the review of spec edits for the origins agent and mcp and stacked
+    previews on these.
+  ids:
+  - SPC-06
+  - AGT-05
+- heading: What is built and what is planned
+  item: 'Planned: handlers bound by the builder session, the app binding app.info, app.applets, app.launch,
+    capture.frame and panel.render, the live catalog providers and setting the command gateway on the
+    API server.'
+  ids:
+  - SPC-05
+  - SPC-06
+  - SPC-08
+- heading: The command model
+  item: Every action on a workspace is a typed command with argument and result schemas.
+  ids:
+  - SPC-05
+- heading: Descriptors
+  item: A descriptor has name, summary, args and result schemas, examples and flags mutates, destructive,
+    frame_thread, agents and effect.
+  ids:
+  - SPC-05
+- heading: The schema subset
+  item: The registry validates arguments with a small built-in JSON Schema subset, drops null optional
+    arguments, and bounds its own work; table schemas are strict, closed and non-recursive.
+  ids:
+  - SPC-05
+- heading: Invocations
+  item: An invocation has id, name, args, origin (ui, builder, agent, mcp, api), group, merge_key, client
+    and preview.
+  ids:
+  - SPC-05
+- heading: Results
+  item: A result is an ok envelope or an error with code, message and where; no handler throws across
+    the registry.
+  ids:
+  - SPC-05
+- heading: Errors common to every command
+  item: The command.* codes the registry answers in a fixed order, such as invalid_args, not_allowed,
+    needs_approval, denied and shutdown.
+  ids:
+  - SPC-05
+- heading: The commands of v0
+  item: The table of 40 commands with their mutates, destructive, frame-thread flags and undo behaviour.
+  ids:
+  - SPC-05
+- heading: app
+  item: app.info, app.applets and app.launch, bound by the running app.
+  ids:
+  - SPC-05
+  - AGT-01
+- heading: catalog
+  item: catalog.list, catalog.describe and catalog.sample.
+  ids:
+  - SPC-05
+  - SPC-04
+- heading: data
+  item: data.query runs one read-only SELECT and data.import imports files into loaders; outside paths
+    only from ui and builder.
+  ids:
+  - SPC-05
+  - SPC-03
+- heading: loader
+  item: loader.list, loader.describe, loader.create, loader.update, loader.run and loader.delete; running
+    a Python script always asks every origin except ui and builder.
+  ids:
+  - SPC-05
+  - SPC-03
+- heading: spec, source, panel and layout
+  item: Commands that edit the open spec (spec.*, source.*, panel.*, layout.*) with dry_run, a unified
+    diff and validation after every edit, and a flat layout form for layout.set.
+  ids:
+  - SPC-05
+  - SPC-01
+- heading: preview
+  item: 'Stacked previews: preview.begin, preview.diff, preview.commit and preview.discard, with bounds
+    of 16 previews, 64 edits and a 30 minute idle drop; only ui and builder may commit.'
+  ids:
+  - SPC-05
+  - AGT-05
+- heading: review
+  item: review.status tells a caller which of its commands wait for the person.
+  ids:
+  - SPC-05
+  - AGT-06
+- heading: applet, capture and history
+  item: applet.save, applet.open, applet.list, capture.frame, history.undo, history.redo and history.list.
+  ids:
+  - SPC-05
+  - SPC-08
+- heading: Undo
+  item: One undo and one redo stack per workspace, held by the registry.
+  ids:
+  - SPC-05
+- heading: Steps and records
+  item: A step is one or more records (a closure pair, an inverse invocation or none); a handler can report
+    no_effect so a dry run costs no redo.
+  ids:
+  - SPC-05
+- heading: Groups
+  item: Invocations with one group join the step on top of the undo stack, so an agent's proposal of several
+    edits is one step.
+  ids:
+  - SPC-05
+- heading: Follow-ups
+  item: A handler may return follow-up invocations that run as one undo step; preview.commit uses them.
+  ids:
+  - SPC-05
+- heading: Merging
+  item: Consecutive invocations with the same merge key merge into one step, so a slider drag is one undo.
+  ids:
+  - SPC-05
+- heading: Redo
+  item: Redo moves a step back; any successful mutating command clears the redo stack except one that
+    reports no effect.
+  ids:
+  - SPC-05
+- heading: Commands that cannot be undone
+  item: loader.run and applet.save record no step and are passed by, not barriers.
+  ids:
+  - SPC-05
+- heading: When the workspace changed underneath
+  item: Undo records check the state they replace and fail with history.conflict, history.undo_failed
+    or history.inconsistent rather than overwrite a change they never saw.
+  ids:
+  - SPC-05
+- heading: Undo, redo and approval
+  item: 'Undo and redo are the person''s tools: agents and mcp may not run them, and the history asks
+    the approval policy about destructive commands in the step it would undo.'
+  ids:
+  - SPC-05
+  - AGT-06
+- heading: Bounds
+  item: Undo bounds of 200 steps, 64 MiB, 4096 merged commands and a 1000 ms merge window.
+  ids:
+  - SPC-05
+- heading: The journal
+  item: The journal is the append-only record of every mutating command.
+  ids:
+  - SPC-05
+- heading: Format
+  item: Journal lines in JSON Lines with seq, ts, origin, name, args, ok, group, event and allowed_by,
+    with undo and redo events that name the seqs they reverse.
+  ids:
+  - SPC-05
+- heading: What is redacted
+  item: Strings over 64 KiB are replaced by a digest and secret-like keys are replaced, so no secret or
+    large value reaches the journal.
+  ids:
+  - SPC-05
+- heading: Rotation and sequence numbers
+  item: The journal rotates at 16 MiB into commands.1.jsonl to commands.4.jsonl and continues its sequence
+    numbers across reopening.
+  ids:
+  - SPC-05
+- heading: Reading and replay
+  item: The reader reports bad lines and gaps, and replay rebuilds the open spec from the events in effect
+    without running undo records.
+  ids:
+  - SPC-05
+- heading: Approval
+  item: The approval policy allows, denies or asks; destructive commands from agent, mcp and api ask,
+    and the session adds rules for Python runs, applet overwrites, replacing an unsaved spec and review
+    of spec edits, with approvals bound to content.
+  ids:
+  - SPC-05
+  - AGT-06
+- heading: Approval
+  item: 'Only the app''s own UI calls approve and deny: no command or endpoint approves, sets a mode or
+    adds a rule.'
+  ids:
+  - SPC-05
+  - AGT-06
+- heading: Agent permissions
+  item: The person chooses how much the side chat's agent and outside agents may do without asking; the
+    command layer applies it.
+  ids:
+  - AGT-06
+- heading: Who they govern
+  item: Modes govern the side chat's agent (origin agent with client chat) and caliper-mcp's clients;
+    the widget agent keeps its preview with Accept.
+  ids:
+  - AGT-06
+  - AGT-05
+- heading: Modes
+  item: Ask, Accept edits, Read only and Allow all, where Allow all is the side chat's only and never
+    saved.
+  ids:
+  - AGT-06
+- heading: Rules
+  item: Allow once, Allow always for this session and Always allow a command, saved in agent-permissions.json
+    owner-only.
+  ids:
+  - AGT-06
+- heading: What no mode or rule changes
+  item: Only the person's UI sets a mode or rule; ceilings such as the viewer's read-only origin, the
+    refusal of undo to agents and content-bound approvals stand in every mode.
+  ids:
+  - AGT-06
+- heading: Pending approvals and the end of a session
+  item: A mode change leaves waiting approvals waiting, and Allow all ends with the chat's agent.
+  ids:
+  - AGT-06
+- heading: What each command does
+  item: The effect of every command, read, edit or change, is data in the table and decides what each
+    mode allows.
+  ids:
+  - AGT-06
+  - SPC-05
+- heading: Threads and the queue
+  item: CommandQueue accepts invocations from any thread, drains on one thread in order, holds approval
+    waits and runs long commands on a worker while the frame thread leaves the queue alone.
+  ids:
+  - SPC-05
+- heading: Caliper API
+  item: GET /v0/commands, POST /v0/commands/{name} with origin, group and preview headers, approval holds
+    of 120 seconds and GET /v0/approvals/{id}, plus how the server holds a request without a thread.
+  ids:
+  - AGT-01
+  - SPC-05
+- heading: Which origin a call has
+  item: The origin belongs to the token, not the request, so a request cannot raise its own rights.
+  ids:
+  - AGT-01
+  - AGT-06
+- heading: caliper-mcp and the Python sidecar
+  item: The descriptor table is the one source of tool definitions for caliper-mcp and for the widget
+    agent's sidecar, with tool names that replace the dot by an underscore.
+  ids:
+  - AGT-02
+  - AGT-05
+- heading: Changes to the contracts
+  item: 'Additions to the sprint 3 contracts: merge_key, error.approval, seqs on journal events, examples,
+    minItems and maxItems, the flat layout and preview.'
+  ids:
+  - SPC-05
+- heading: Decisions
+  item: 'Recorded decisions of the command layer: destructive means saved data, groups join only the top
+    step, undo is the person''s, approvals bound to content and origin by token.'
+  ids:
+  - SPC-05
+- heading: Open items
+  item: 'Open from agent permissions: deny rules and finer scopes, and a session for mcp whose rule lasts
+    until the app quits.'
+  ids:
+  - AGT-06
+  - AGT-30
+- heading: Open items
+  item: An expectation on preview.commit, with the edit count and a digest, so the app refuses a preview
+    that changed after its card was drawn.
+  ids:
+  - SPC-05
+- heading: Open items
+  item: Approvals from api never expire and could fill the 64 pending slots; a long expiry and a share
+    of slots per origin would bound it.
+  ids:
+  - AGT-01
+  - AGT-11
+- heading: Open items
+  item: A group should join only the open top step of the same origin, and the step of a commit should
+    close after its follow-ups.
+  ids:
+  - SPC-05
+- heading: Open items
+  item: Holding a launch of a workspace spec applet as one command under review, so it waits on a card
+    like other held commands.
+  ids:
+  - AGT-06
+  - AGT-01
+  - AGT-12
+- heading: Open items
+  item: Two launches in one frame share one pending open; a queue of pending opens, each with its origin,
+    would keep both.
+  ids:
+  - SPC-06
+- heading: Open items
+  item: A timing test of the stand-in's server still waits 300 ms for the first connection.
+  reason: maintenance
+- heading: Open questions
+  item: Whether a later phase splits the registry's lock so short commands run on the frame thread while
+    a loader runs.
+  ids:
+  - SPC-05
+- heading: Open questions
+  item: Whether the history should be saved with the workspace so that undo survives a restart.
+  ids:
+  - SPC-41

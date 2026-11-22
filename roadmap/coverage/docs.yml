@@ -1,0 +1,1309 @@
+# yaml-language-server: $schema=schema.json
+title: Docs pages
+kind: docs
+summary: 'The pages of the docs site, which describe what is shipped on main: each CLI subcommand, service,
+  applet, reference, guide and explanation, mapped to the shipped feature it describes.'
+entries:
+- page: docs/reference/cli.md#app-startup
+  item: Starting the app with caliper, with --applets folders and --url to attach to a stream at start.
+  ids:
+  - COR-06
+  - STR-43
+- page: docs/reference/cli.md#caliper-api
+  item: The --api, --api-port and --allow-control options that serve Caliper API from the running app.
+  ids:
+  - AGT-01
+- page: docs/reference/cli.md#workspace
+  item: The --workspace option and the builder session that the app, caliper dev and caliper shot hold.
+  ids:
+  - SPC-06
+- page: docs/builder/workspace.md#spec-page
+  item: Launching a spec applet or opening a spec through a command shows the spec page.
+  ids:
+  - SPC-08
+  - EMB-06
+- page: docs/reference/cli.md#hidden-window
+  item: The --hidden option runs the real app with its window never shown, so a test or an agent can drive
+    it through Caliper API.
+  ids:
+  - COR-42
+- page: docs/reference/cli.md#search-order
+  item: The fixed search order of development folders, CALIPER_APPLET_PATH, the user applets folder and
+    the app folder.
+  ids:
+  - COR-06
+- page: docs/reference/cli.md#build-folders
+  item: A build folder stands for its applets/ subfolder in every search list.
+  ids:
+  - COR-06
+- page: docs/reference/applet-commands.md#caliper-list
+  item: caliper list prints every applet in the search folders with its status, id, version, kind and
+    folder, without opening a library.
+  ids:
+  - COR-39
+- page: docs/reference/applet-commands.md#caliper-check
+  item: caliper check runs the pre-load checks on every applet of one folder and validates each spec applet
+    in full.
+  ids:
+  - COR-07
+  - SPC-02
+- page: docs/reference/applet-commands.md#caliper-install
+  item: caliper install checks a folder and copies the applets into the user applets folder all or nothing.
+  ids:
+  - COR-12
+- page: docs/reference/applet-commands.md#caliper-new
+  item: caliper new creates an applet project from a built-in template with a manifest, a source file,
+    a CMake file and a test.
+  ids:
+  - COR-41
+- page: docs/reference/applet-commands.md#caliper-build
+  item: caliper build configures and builds an applet folder against the installed SDK and runs the checks.
+  ids:
+  - COR-10
+- page: docs/reference/applet-commands.md#caliper-info
+  item: caliper info prints the host version, ABI epoch, SDK version, libtorch version, UI-stack hash
+    and every service the host serves.
+  ids:
+  - COR-40
+- page: docs/reference/shot-and-serve-commands.md#caliper-shot
+  item: caliper shot draws one applet page without a window and writes the last frame as a PNG.
+  ids:
+  - COR-08
+- page: docs/reference/shot-and-serve-commands.md#caliper-serve
+  item: caliper serve runs the hub with --port, --token-file, --assets and --allow-control, and writes
+    a hub file.
+  ids:
+  - COR-11
+  - STR-06
+- page: docs/reference/cli.md#caliper-help
+  item: caliper --help prints the usage.
+  ids:
+  - COR-07
+- page: docs/reference/cli.md#exit-codes
+  item: Exit codes 0, 1 and 2 of the subcommands.
+  ids:
+  - COR-07
+- page: docs/reference/cli.md#windows-limits
+  item: The Windows build refuses caliper serve, caliper build, --api and --url before anything starts.
+  ids:
+  - PLT-06
+  - PLT-08
+- page: docs/reference/cli.md#environment-variables
+  item: The environment variables the subcommands read.
+  ids:
+  - COR-06
+- page: docs/applets/services/service-catalog.md#revisions
+  item: A revision is a new id with a _N suffix whose table begins with a byte-identical copy of the previous
+    one.
+  ids:
+  - COR-03
+- page: docs/applets/services/service-catalog.md#service-ids
+  item: The 19 service ids, their purpose, page and threading.
+  ids:
+  - COR-03
+- page: docs/applets/services/service-catalog.md#companion-types
+  item: CaliperTensor and the Arrow C Data Interface are the two interchange types the services pass.
+  ids:
+  - COR-49
+  - COR-50
+- page: docs/applets/services/caliper-ui-v1.md#semantics
+  item: caliper.ui.v1 hands an applet the ImGui, ImPlot and ImPlot3D contexts and the host allocator pair.
+  ids:
+  - COR-44
+- page: docs/applets/services/caliper-ui-v1-1.md#semantics
+  item: caliper.ui.v1_1 adds dock_hint, the role of each window in the docked layout.
+  ids:
+  - COR-44
+- page: docs/applets/services/caliper-log-v1.md#semantics
+  item: caliper.log.v1 writes timestamped log lines from an applet into the host console.
+  ids:
+  - COR-45
+- page: docs/applets/services/caliper-jobs-v1.md#semantics
+  item: caliper.jobs.v1 runs background work on a host worker thread with progress and cancellation under
+    the crash guard.
+  ids:
+  - COR-46
+- page: docs/applets/services/caliper-device-v1.md#semantics
+  item: caliper.device.v1 reports the compute device the host found, CPU, CUDA or Metal, for the applet
+    to map to its own framework.
+  ids:
+  - COR-47
+- page: docs/applets/services/caliper-metrics-v1.md#semantics
+  item: caliper.metrics.v1 is a write-only metrics log of scalars, histograms, images and hyperparameters
+    per run, tag and step.
+  ids:
+  - RUN-01
+- page: docs/applets/services/caliper-metrics-v1.md#calipermetricsv1_1
+  item: caliper.metrics.v1_1 adds query, a read-only SQL query that returns an Arrow stream.
+  ids:
+  - RUN-01
+- page: docs/applets/services/caliper-tensor-bridge-v1.md#semantics
+  item: caliper.tensor_bridge.v1 turns a CaliperTensor into a live texture this frame, GPU-resident on
+    the native backends.
+  ids:
+  - REN-64
+- page: docs/applets/services/caliper-tensor-bridge-v1.md#calipertensor_bridgev1_1-handoff
+  item: caliper.tensor_bridge.v1_1 adds caps() and a stream-ordered handoff.
+  ids:
+  - REN-08
+  - REN-64
+- page: docs/applets/services/caliper-tensor-bridge-v1.md#calipertensor_bridgev1_2-imported-allocations
+  item: caliper.tensor_bridge.v1_2 adds imported device allocations.
+  ids:
+  - REN-08
+  - REN-64
+- page: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1-instanced-points
+  item: caliper.geometry.v1 draws instanced points in place from device memory into an offscreen view.
+  ids:
+  - REN-04
+- page: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_1-general-primitives
+  item: caliper.geometry.v1_1 adds points, lines and triangles, depth views and one atomic gated frame.
+  ids:
+  - REN-05
+- page: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_2-textured-meshes
+  item: caliper.geometry.v1_2 adds textured meshes with the COLOR_TEXTURE colour mode.
+  ids:
+  - REN-06
+- page: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_3-instanced-transforms
+  item: caliper.geometry.v1_3 adds instanced transforms.
+  ids:
+  - REN-07
+- page: docs/development/vulkan-and-cuda.md#geometry-backend
+  item: Per-backend notes for the geometry service.
+  ids:
+  - REN-04
+- page: docs/applets/services/caliper-geometry-v1.md#c-sugar
+  item: C++ sugar over the geometry service.
+  ids:
+  - REN-04
+  - COR-51
+- page: docs/applets/services/caliper-geometry-v1.md#learned-surface-example
+  item: Worked example of a learned surface in three draws.
+  ids:
+  - REN-05
+- page: docs/applets/services/caliper-export-v1.md#terminal-sink
+  item: caliper.export.v1 re-renders a submitted draw list offscreen at any resolution and writes a pixel-exact
+    PNG with a JSON provenance sidecar, and a frame sequence.
+  ids:
+  - REN-65
+- page: docs/applets/services/caliper-export-v1.md#caliperexportv1_1-error-reporting
+  item: caliper.export.v1_1 adds last_error().
+  ids:
+  - REN-65
+- page: docs/applets/services/caliper-export-v1.md#figure-and-clip-example
+  item: Worked shape for a 4K figure and a recorded clip.
+  ids:
+  - REN-65
+- page: docs/applets/services/caliper-artifacts-v1.md#semantics
+  item: caliper.artifacts.v1 is a content-addressed, deduplicated, lineage-tracked store of checkpoints
+    and exports.
+  ids:
+  - RUN-02
+- page: docs/applets/services/caliper-data-v1.md#semantics
+  item: caliper.data.v1 runs SQL over the embedded DuckDB store, with datasets as named shared resources
+    and results as Arrow streams.
+  ids:
+  - COR-48
+- page: docs/applets/services/caliper-feed-v1.md#semantics
+  item: caliper.feed.v1 vends machine telemetry channels by pull from per-channel ring buffers with an
+    honest-loss contract.
+  ids:
+  - STR-41
+- page: docs/applets/services/caliper-feed-v1.md#providers
+  item: The macOS and Windows telemetry providers and their channels; Linux has none.
+  ids:
+  - STR-41
+- page: docs/applets/in-tree-applets.md#embedscope
+  item: EmbedScope trains a small MNIST network with a learned 3-D bottleneck and draws the test-set embeddings
+    as a live ImPlot3D scatter, with SQL panels.
+  ids:
+  - COR-13
+  - INT-27
+- page: docs/applets/in-tree-applets.md#fieldscope
+  item: FieldScope is a charged-particle field simulator, a particle-in-cell plasma with 200,000 particles,
+    drawn zero-copy.
+  ids:
+  - COR-13
+  - REN-70
+- page: docs/applets/in-tree-applets.md#flowscope
+  item: FlowScope drives a flow field of one million particles drawn in place through the geometry service.
+  ids:
+  - COR-13
+  - REN-71
+- page: docs/applets/in-tree-applets.md#gptscope
+  item: GPTScope trains a character-level GPT live and shows it in seven windows, with ThoughtSpace as
+    a 3-D residual-stream constellation.
+  ids:
+  - INT-01
+  - INT-02
+  - INT-03
+- page: docs/applets/in-tree-applets.md#instancescope
+  item: InstanceScope draws a field of procedural gems with one instanced draw call and no copies of the
+    mesh.
+  ids:
+  - COR-13
+  - REN-07
+  - REN-72
+- page: docs/applets/in-tree-applets.md#meshscope
+  item: MeshScope learns a 2-D target surface live, drawn as lit indexed triangles, with figure and 10-second
+    recording export.
+  ids:
+  - COR-13
+  - REN-05
+  - REN-73
+- page: docs/applets/in-tree-applets.md#pulsescope
+  item: PulseScope draws one strip chart per telemetry channel of this machine from caliper.feed.v1.
+  ids:
+  - COR-13
+  - STR-42
+- page: docs/applets/in-tree-applets.md#sculptscope
+  item: SculptScope trains a small MLP to turn latent codes into a 3-D shape, with the last layer writing
+    the buffer the GPU draws.
+  ids:
+  - COR-13
+  - REN-74
+- page: docs/applets/in-tree-applets.md#twinscope
+  item: TwinScope runs a synthetic heat twin on a UV-mapped housing and shows physics and belief side
+    by side with a four-rung fallback ladder.
+  ids:
+  - COR-13
+  - REN-06
+  - REN-75
+- page: docs/applets/in-tree-applets.md#tutorial-applets
+  item: Hello and SineScope are the tutorial applets under examples/.
+  ids:
+  - COR-13
+- page: docs/applets/in-tree-applets.md#embedding-example
+  item: examples/embed_host is a second host of the core in a bare native window, with an offscreen mode.
+  ids:
+  - EMB-07
+- page: docs/applets/in-tree-applets.md#archived-applets
+  item: Archived applets under applets/legacy are skipped by the default build.
+  ids:
+  - COR-13
+- page: docs/python/routes-and-inspection.md#routing
+  item: 'A view call is offered to every open route: the live session, the in-process core and the network
+    server.'
+  ids:
+  - STR-01
+  - STR-04
+  - STR-05
+- page: docs/python/view-calls.md#call-cost
+  item: The measured cost of a view call per device and route.
+  ids:
+  - STR-01
+- page: docs/python/view-calls.md#rate-limit
+  item: The rate limit of snapshots per route, 60 a second by default.
+  ids:
+  - STR-01
+- page: docs/python/view-calls.md#show
+  item: show sends a tensor as a heatmap or an image view.
+  ids:
+  - STR-01
+- page: docs/python/view-calls.md#points
+  item: points sends a 2-D or 3-D point cloud as a view.
+  ids:
+  - STR-01
+- page: docs/python/view-calls.md#series
+  item: series appends scalar values to a line view.
+  ids:
+  - STR-01
+- page: docs/python/view-calls.md#histogram
+  item: histogram sends a histogram view of a tensor.
+  ids:
+  - STR-01
+- page: docs/python/view-calls.md#watch
+  item: watch hooks a torch module so that its activations and gradients are shown as views.
+  ids:
+  - STR-45
+- page: docs/python/view-calls.md#mps-zero-copy
+  item: A tensor on MPS reaches the viewer with no host copy.
+  ids:
+  - REN-08
+  - STR-04
+- page: docs/python/routes-and-inspection.md#routes-and-lifetime
+  item: session, window, offscreen, run, spin, flush, close and remove manage the routes and their lifetime.
+  ids:
+  - STR-04
+  - STR-46
+- page: docs/python/network-streaming-calls.md#network-streaming
+  item: The Python calls that stream over a WebSocket.
+  ids:
+  - STR-05
+- page: docs/python/network-streaming-calls.md#serve
+  item: serve starts the server in the producer script and prints the viewer link.
+  ids:
+  - STR-05
+- page: docs/python/network-streaming-calls.md#connect
+  item: connect streams the script to a hub instead of listening itself.
+  ids:
+  - STR-06
+- page: docs/python/network-streaming-calls.md#widget
+  item: widget returns the notebook widget that shows a view or the controls.
+  ids:
+  - STR-07
+- page: docs/python/data-view-calls.md#data-views
+  item: Python data views tell the producer which slice, reduction or downsample of a tensor to send.
+  ids:
+  - STR-08
+- page: docs/python/run-control-calls.md#controls
+  item: 'The Python controls layer: step, pause, param, action, items and controls.'
+  ids:
+  - STR-03
+- page: docs/python/run-control-calls.md#step
+  item: step is the checkpoint in a training loop where a viewer can pause and step.
+  ids:
+  - STR-03
+  - INT-04
+- page: docs/python/run-control-calls.md#pause
+  item: pause stops a run at its next checkpoint.
+  ids:
+  - STR-03
+- page: docs/python/run-control-calls.md#param
+  item: param registers a parameter that a viewer can change while the script runs.
+  ids:
+  - STR-03
+  - INT-04
+- page: docs/python/run-control-calls.md#action
+  item: action registers a function a viewer can run.
+  ids:
+  - STR-03
+  - INT-04
+- page: docs/python/run-control-calls.md#items
+  item: items registers item ids and details for linked selection.
+  ids:
+  - STR-03
+- page: docs/python/routes-and-inspection.md#inspection-and-test-helpers
+  item: stats, frame, render, read_pixels and view readback helpers for the in-process core.
+  ids:
+  - STR-01
+  - STR-46
+- page: docs/python/routes-and-inspection.md#caliperlive
+  item: caliper.live lists live sessions on this machine and finds the viewer executable.
+  ids:
+  - STR-04
+- page: docs/python/caliper-lib-api.md#constants-and-types
+  item: Constants and types of the package.
+  ids:
+  - STR-01
+- page: docs/python/caliper-lib-api.md#environment-variables
+  item: The Python environment variables such as CALIPER_SESSION.
+  ids:
+  - STR-01
+- page: docs/python/caliper-lib-api.md#threading
+  item: The threading rules of the Python calls.
+  ids:
+  - STR-01
+- page: docs/applets/cpp-sugar.md#caliper_applet-macro
+  item: The CALIPER_APPLET macro and the caliper::Applet class replace the five extern C bridge functions
+    and the hand-built descriptor.
+  ids:
+  - COR-51
+- page: docs/applets/cpp-sugar.md#uiconnect-semantics
+  item: ui::connect binds an applet to the UI service contexts.
+  ids:
+  - COR-51
+- page: docs/applets/cpp-sugar.md#service-wrappers
+  item: Typed C++ wrappers Jobs, Metrics, Artifacts, Data, Bridge, Geometry, Export and Device over the
+    C services.
+  ids:
+  - RUN-01
+  - RUN-02
+  - COR-51
+  - COR-46
+  - COR-48
+- page: docs/applets/cpp-sugar.md#fixture-host-tdd-recipe
+  item: A fixture host runs an applet lifecycle in a test without a window.
+  ids:
+  - COR-52
+- page: docs/applets/cpp-sugar.md#full-source
+  item: The full caliper.hpp source.
+  ids:
+  - COR-51
+- page: docs/agents/http-api.md#startup
+  item: Caliper API starts with --api or CALIPER_API=1, and from the app for Open in browser and the side
+    chat.
+  ids:
+  - AGT-01
+- page: docs/agents/http-api.md#app-startup
+  item: The app starts the API on its own for the browser viewer and the side chat.
+  ids:
+  - AGT-01
+  - EMB-06
+- page: docs/agents/http-api.md#windowless-mode
+  item: Caliper API with caliper shot and the hidden app runs without a visible window.
+  ids:
+  - AGT-01
+  - COR-42
+- page: docs/agents/http-api.md#security
+  item: Loopback only, behind tokens that say who sends each command.
+  ids:
+  - AGT-01
+- page: docs/agents/http-api.md#command-origin
+  item: The session token and the token for outside agents differ in what waits for approval.
+  ids:
+  - AGT-06
+- page: docs/agents/http-api.md#get-v0info
+  item: GET /v0/info returns what caliper info prints, as JSON.
+  ids:
+  - AGT-01
+  - COR-40
+- page: docs/agents/http-api.md#get-v0applets
+  item: GET /v0/applets returns what caliper list prints.
+  ids:
+  - AGT-01
+  - COR-39
+- page: docs/agents/http-api.md#post-v0appletsidlaunch
+  item: POST /v0/applets/{id}/launch opens an applet page.
+  ids:
+  - AGT-01
+- page: docs/agents/http-api.md#get-v0capturepng
+  item: GET /v0/capture.png returns a capture of the frame the app draws.
+  ids:
+  - AGT-01
+- page: docs/agents/http-api.md#get-v3stream
+  item: GET /v3/stream serves wire protocol v3 as a hub.
+  ids:
+  - AGT-01
+  - STR-02
+- page: docs/agents/http-api.md#get-v0commands
+  item: GET /v0/commands lists the command layer table.
+  ids:
+  - SPC-05
+- page: docs/agents/http-api.md#post-v0commandsname
+  item: POST /v0/commands/{name} runs a command.
+  ids:
+  - SPC-05
+  - AGT-01
+- page: docs/agents/http-api.md#get-v0approvalsid
+  item: GET /v0/approvals/{id} reads an approval.
+  ids:
+  - SPC-05
+- page: docs/agents/http-api.md#get-v0spec
+  item: GET /v0/spec serves the browser viewer of a spec applet.
+  ids:
+  - EMB-06
+- page: docs/agents/http-api.md#threads-and-limits
+  item: Threads and limits of the API.
+  ids:
+  - AGT-01
+- page: docs/agents/http-api.md#errors
+  item: The error codes of the API.
+  ids:
+  - AGT-01
+- page: docs/agents/http-api.md#worked-examples
+  item: Examples of calls.
+  ids:
+  - AGT-01
+- page: docs/web/embedding-api.md#core-calls
+  item: The core calls of embed.h create, attach a canvas, load an applet, run a frame and shut down.
+  ids:
+  - EMB-07
+- page: docs/web/embedding-api.md#embedh-functions
+  item: Every function in embed.h.
+  ids:
+  - EMB-07
+- page: docs/web/embedding-api.md#ownership
+  item: Ownership rules for what the core returns.
+  ids:
+  - EMB-07
+- page: docs/web/embedding-api.md#per-core-settings-and-limits
+  item: One core per process, and a second canvas is refused.
+  ids:
+  - EMB-07
+  - EMB-12
+- page: docs/web/embedding-api.md#versions
+  item: Caliper Embed versions in major, minor and patch, now 1.4.0.
+  ids:
+  - EMB-07
+- page: docs/web/embedding-api.md#host-service-access
+  item: A host reaches the core services through caliper_core_get_service.
+  ids:
+  - EMB-07
+- page: docs/web/embedding-api.md#built-in-tensor-views
+  item: The core draws a CaliperTensor a host hands it as a texture in a window titled with the view name.
+  ids:
+  - EMB-25
+- page: docs/web/embedding-api.md#accepted-layouts
+  item: Tensor layouts the built-in views accept.
+  ids:
+  - EMB-25
+- page: docs/web/embedding-api.md#device-paths
+  item: Two device paths with no silent fallback.
+  ids:
+  - EMB-25
+- page: docs/web/embedding-api.md#typed-live-views
+  item: Typed live views apply a heatmap, image, points, series or histogram snapshot to a named view.
+  ids:
+  - EMB-07
+- page: docs/web/embedding-api.md#caliper-embed-package
+  item: The caliper-embed package installs one shared library, headers and a CMake package.
+  ids:
+  - EMB-07
+- page: docs/web/embedding-api.md#embed_host-offscreen-mode
+  item: embed_host has an offscreen mode that opens no window.
+  ids:
+  - EMB-07
+- page: docs/web/embedding-api.md#torch-free-build
+  item: Caliper Embed builds and runs with no libtorch, with a release-notorch preset.
+  ids:
+  - EMB-26
+- page: docs/web/embedding-api.md#header-listing
+  item: The embed.h header embedded verbatim.
+  ids:
+  - EMB-07
+- page: docs/python/run-control-calls.md#controls_1
+  item: controls returns the notebook widget with the run state and the Pause, Resume and Step buttons.
+  ids:
+  - STR-07
+  - STR-03
+- page: docs/reference/wire-protocol.md#roles-and-terms
+  item: Producer, hub and viewer roles of wire protocol v3.
+  ids:
+  - STR-02
+- page: docs/reference/wire-protocol.md#connection-setup
+  item: The upgrade request, hello and welcome, choosing a session and the producer connection to a hub.
+  ids:
+  - STR-02
+  - STR-06
+- page: docs/reference/wire-frames.md#frames
+  item: The binary frame layout with metadata and sections.
+  ids:
+  - STR-02
+- page: docs/reference/wire-protocol.md#message-types
+  item: The message types from hello to selection.
+  ids:
+  - STR-02
+- page: docs/reference/data-view-messages.md#data-views
+  item: Data views tell the producer which part of a large tensor to send.
+  ids:
+  - STR-08
+- page: docs/reference/data-messages.md#events
+  item: Events carried on the stream.
+  ids:
+  - STR-02
+- page: docs/reference/run-control-messages.md#controls
+  item: 'Protocol 3.1 controls: the checkpoint, pause, resume and step, parameters, actions, ordering
+    and who may control.'
+  ids:
+  - STR-03
+- page: docs/reference/linked-selection-messages.md#linked-selection
+  item: Linked selection shares a selection between views through item spaces.
+  ids:
+  - STR-03
+- page: docs/reference/wire-protocol.md#flow-control
+  item: Flow control keeps the latest snapshot and drops older ones.
+  ids:
+  - STR-02
+  - STR-05
+- page: docs/reference/wire-protocol.md#resource-limits
+  item: The limits of the protocol.
+  ids:
+  - STR-02
+- page: docs/reference/wire-protocol.md#versioning
+  item: Protocol versioning and capabilities.
+  ids:
+  - STR-02
+- page: docs/reference/wire-protocol.md#close-codes
+  item: Close codes.
+  ids:
+  - STR-02
+- page: docs/reference/wire-protocol.md#error-codes
+  item: Error codes.
+  ids:
+  - STR-02
+- page: docs/reference/wire-protocol.md#security
+  item: The stream binds to 127.0.0.1 and requires a token.
+  ids:
+  - STR-02
+- page: docs/reference/wire-frames.md#worked-example
+  item: A worked example of a session.
+  ids:
+  - STR-02
+- page: docs/reference/wire-protocol.md#golden-frames
+  item: Golden frames pin the byte layout.
+  ids:
+  - STR-02
+- page: docs/reference/wire-protocol.md#header-listing
+  item: The protocol header verbatim.
+  ids:
+  - STR-02
+- page: docs/web/browser-elements.md#caliper-view
+  item: The caliper-view element draws one live view of a stream, with a renderer attribute of auto, wasm
+    or ts.
+  ids:
+  - EMB-05
+  - EMB-03
+  - EMB-04
+- page: docs/web/browser-elements.md#attributes
+  item: The attributes of caliper-view.
+  ids:
+  - EMB-05
+- page: docs/web/browser-elements.md#properties-and-methods
+  item: The properties and methods of caliper-view.
+  ids:
+  - EMB-05
+- page: docs/web/browser-elements.md#events
+  item: The events of caliper-view.
+  ids:
+  - EMB-05
+- page: docs/web/browser-elements.md#caliper-controls
+  item: The caliper-controls element shows the run state and the controls of a stream.
+  ids:
+  - EMB-05
+  - STR-03
+- page: docs/web/browser-elements.md#viewer-page-and-widgets
+  item: The viewer page that caliper.serve serves and the notebook widgets are built from the elements.
+  ids:
+  - EMB-01
+- page: docs/builder/builder-pane.md#pane-access
+  item: 'Three ways into the builder pane: a new dashboard, dropped files and an open spec.'
+  ids:
+  - SPC-07
+- page: docs/builder/builder-pane.md#layout-regions
+  item: Where the parts of the builder pane are.
+  ids:
+  - SPC-07
+- page: docs/builder/builder-pane.md#sources
+  item: The Sources palette lists the spec sources and the catalog grouped as Tables, Tensors, Live, Feeds
+    and Metrics, with refused files.
+  ids:
+  - SPC-03
+  - SPC-04
+  - SPC-07
+- page: docs/builder/builder-pane.md#primitives
+  item: The seven primitives Series, Heatmap, Points, Histogram, Table, Image and Text.
+  ids:
+  - SPC-01
+  - SPC-07
+- page: docs/builder/builder-pane.md#canvas
+  item: The canvas places, moves and removes panels.
+  ids:
+  - SPC-07
+  - SPC-09
+- page: docs/builder/builder-pane.md#properties
+  item: Properties edit a panel, its bindings and options, and the transforms of a tensor source.
+  ids:
+  - SPC-07
+  - SPC-28
+- page: docs/builder/builder-pane.md#spec-text
+  item: The spec text strip shows and edits the canonical TOML of the open spec.
+  ids:
+  - SPC-01
+  - SPC-07
+- page: docs/builder/builder-pane.md#browser-preview
+  item: Open in browser shows the saved dashboard at the browser viewer of Caliper API.
+  ids:
+  - EMB-06
+- page: docs/builder/builder-pane.md#keys
+  item: The keys of the builder pane.
+  ids:
+  - SPC-07
+- page: docs/builder/builder-pane.md#undo-and-journal
+  item: Each gesture is one undo step and is journaled by the command layer.
+  ids:
+  - SPC-05
+- page: docs/agents/mcp-server.md#requirements
+  item: caliper-mcp needs the app running with Caliper API on.
+  ids:
+  - AGT-02
+- page: docs/agents/mcp-server.md#command-line
+  item: The command line of caliper-mcp.
+  ids:
+  - AGT-02
+- page: docs/agents/mcp-server.md#agent-configuration
+  item: How to configure an outside agent to start caliper-mcp.
+  ids:
+  - AGT-02
+- page: docs/agents/mcp-server.md#tools
+  item: One tool per agent-permitted command, with schema checks and permission modes.
+  ids:
+  - AGT-02
+  - AGT-06
+- page: docs/agents/mcp-server.md#resources
+  item: Read-only resources beside the tools.
+  ids:
+  - AGT-02
+- page: docs/agents/side-chat.md#side-chat-access
+  item: The side chat opens on the spec page and the live page.
+  ids:
+  - AGT-03
+- page: docs/agents/side-chat.md#agents
+  item: 'The agents the side chat runs: Claude Code, Codex, Gemini CLI, opencode or any ACP agent.'
+  ids:
+  - AGT-03
+- page: docs/agents/widget-agent-startup.md#agent-startup
+  item: What Caliper starts and hands to the agent.
+  ids:
+  - AGT-03
+- page: docs/agents/side-chat.md#pane
+  item: The side chat pane.
+  ids:
+  - AGT-03
+- page: docs/agents/side-chat.md#modes
+  item: The modes Ask, Accept edits, Read only and Allow all.
+  ids:
+  - AGT-06
+- page: docs/agents/side-chat.md#local-models
+  item: Local models in the side chat warn when a model and a run share the GPU.
+  ids:
+  - AGT-04
+- page: docs/agents/side-chat.md#ask-in-chat-action
+  item: Ask in chat hands a request from the inline prompt to the side chat.
+  ids:
+  - AGT-03
+  - AGT-05
+- page: docs/agents/side-chat.md
+  item: caliper-chat-shot is a development tool that draws the side chat with a stub agent and writes
+    a PNG per state.
+  ids:
+  - AGT-03
+- page: docs/agents/widget-agent-startup.md#agent-startup
+  item: caliper-agent starts as an ACP child process with provider presets.
+  ids:
+  - AGT-05
+- page: docs/agents/widget-agent-startup.md#presets
+  item: The provider presets of caliper-agent.
+  ids:
+  - AGT-05
+- page: docs/agents/widget-agent-startup.md#model-checks
+  item: caliper-agent probe checks what a model can do and prints a JSON result, which the settings run
+    when a model is picked.
+  ids:
+  - AGT-16
+- page: docs/agents/widget-agent-startup.md#model-assumptions
+  item: What the agent assumes of a model.
+  ids:
+  - AGT-05
+- page: docs/agents/widget-agent-startup.md#ollama-chat-api
+  item: Ollama is driven through its own chat API.
+  ids:
+  - AGT-05
+  - AGT-07
+- page: docs/agents/widget-session-protocol.md#widget-session-startup
+  item: How a widget session is opened.
+  ids:
+  - AGT-05
+- page: docs/agents/widget-agent.md#tool-scope
+  item: The commands a widget session may use.
+  ids:
+  - AGT-05
+- page: docs/agents/widget-session-protocol.md#context-bundle
+  item: The context bundle a prompt carries.
+  ids:
+  - AGT-05
+- page: docs/agents/widget-session-protocol.md#prompts
+  item: What a prompt may hold.
+  ids:
+  - AGT-05
+- page: docs/agents/widget-session-protocol.md#answers
+  item: What each answer carries, held in a preview for accept.
+  ids:
+  - AGT-05
+- page: docs/agents/widget-agent.md#side-chat-use
+  item: A widget session continues in the side chat.
+  ids:
+  - AGT-05
+  - AGT-03
+- page: docs/agents/widget-session-protocol.md#session-closing
+  item: Closing a widget session.
+  ids:
+  - AGT-05
+- page: docs/agents/inline-prompt.md#inline-surface
+  item: The inline surface opens a one-line prompt with Command K on the focused panel.
+  ids:
+  - AGT-05
+- page: docs/agents/inline-prompt.md#app-settings
+  item: The widget agent settings popup holds provider, key and model.
+  ids:
+  - AGT-05
+- page: docs/agents/widget-agent-conformance.md#task-lifecycle
+  item: The conformance suite runs the widget tasks against a provider and a model.
+  ids:
+  - AGT-14
+- page: docs/agents/widget-agent-conformance.md#verdicts
+  item: Verdicts checked against each task criterion.
+  ids:
+  - AGT-14
+- page: docs/agents/widget-agent-conformance.md#test-runs
+  item: How to run caliper-agent-conformance.
+  ids:
+  - AGT-14
+- page: docs/agents/widget-agent-conformance.md#result-files
+  item: The result files.
+  ids:
+  - AGT-14
+- page: docs/agents/widget-agent-conformance.md#result-publishing
+  item: Publishing results.
+  ids:
+  - AGT-14
+- page: docs/applets/manifest.md#search-order
+  item: Where the host looks for manifests.
+  ids:
+  - COR-05
+  - COR-06
+- page: docs/applets/manifest.md#schema
+  item: The manifest schema.
+  ids:
+  - COR-05
+- page: docs/applets/manifest.md#spec-applets
+  item: A spec applet is a folder with a manifest of kind spec and a spec, found in the search folders
+    one folder down.
+  ids:
+  - SPC-08
+  - SPC-01
+- page: docs/applets/manifest.md#spec-applet-ids
+  item: Spec applet ids are written as local.<id>.
+  ids:
+  - SPC-08
+- page: docs/applets/manifest.md#spec-applet-search-order
+  item: Where spec applets are found.
+  ids:
+  - SPC-08
+- page: docs/applets/manifest.md#applet-ids
+  item: The rules for applet ids.
+  ids:
+  - COR-05
+- page: docs/applets/manifest.md#worked-example
+  item: An example manifest.
+  ids:
+  - COR-05
+- page: docs/applets/sdk-package.md#installation
+  item: Installing the SDK from a core build folder.
+  ids:
+  - COR-04
+- page: docs/applets/sdk-package.md#installed-files
+  item: What the SDK installs.
+  ids:
+  - COR-04
+- page: docs/applets/sdk-package.md#package-usage
+  item: Targets and variables of the caliper-sdk package.
+  ids:
+  - COR-04
+- page: docs/applets/sdk-package.md#caliper_add_applet
+  item: caliper_add_applet() builds, checks and stamps an applet.
+  ids:
+  - COR-04
+- page: docs/applets/sdk-package.md#ui-stack-hash
+  item: The UI-stack hash pins the ImGui stack.
+  ids:
+  - COR-04
+- page: docs/applets/in-tree-applets.md#in-tree-applets
+  item: Applets in this repository build against the installed SDK.
+  ids:
+  - COR-13
+- page: docs/applets/adapters.md#torchhpp
+  item: torch.hpp turns a torch tensor into a CaliperTensor, rejects rather than copies, and applies the
+    MPS and CUDA rules.
+  ids:
+  - REN-08
+  - REN-66
+- page: docs/applets/adapters.md#alloc_registryhpp
+  item: alloc_registry.hpp tracks allocations the host can import.
+  ids:
+  - REN-67
+- page: docs/applets/adapters.md#exportable_poolhpp
+  item: ExportablePool allocates tensors the renderer can draw from in place.
+  ids:
+  - REN-08
+  - REN-67
+- page: docs/applets/adapters.md#objhpp
+  item: obj.hpp loads an OBJ mesh for an applet.
+  ids:
+  - REN-68
+- page: docs/applets/adapters.md#orbit_camerahpp
+  item: orbit_camera.hpp gives an applet an orbit camera with cursor picking.
+  ids:
+  - REN-68
+- page: docs/applets/adapters.md#torchhpp-source
+  item: The full source of torch.hpp.
+  ids:
+  - REN-66
+- page: docs/applets/tensor-and-arrow-headers.md#overview
+  item: The Arrow C Data Interface is the ABI tabular boundary.
+  ids:
+  - COR-50
+- page: docs/applets/tensor-and-arrow-headers.md#vendored-header
+  item: The vendored Arrow header.
+  ids:
+  - COR-50
+- page: docs/applets/tensor-and-arrow-headers.md#tensor-header
+  item: caliper/tensor.h is the frozen DLPack-aligned tensor interchange type, a type and not a service.
+  ids:
+  - COR-49
+- page: docs/applets/applet-contract.md
+  item: The frozen epoch 2 ABI header.
+  ids:
+  - COR-02
+- page: docs/reference/folders-and-environment.md#app-data-folder
+  item: The app-data folder where the host keeps what it writes.
+  ids:
+  - COR-01
+- page: docs/reference/folders-and-environment.md#host-variables
+  item: The host environment variables.
+  ids:
+  - COR-01
+- page: docs/reference/folders-and-environment.md#renderer-variables
+  item: The renderer variables.
+  ids:
+  - PLT-01
+  - PLT-02
+- page: docs/reference/folders-and-environment.md#applet-and-example-variables
+  item: The applet and example variables.
+  ids:
+  - COR-13
+- page: docs/reference/folders-and-environment.md#test-variables
+  item: The test variables.
+  ids:
+  - COR-01
+- page: docs/reference/folders-and-environment.md#python-variables
+  item: The Python variables.
+  ids:
+  - STR-01
+- page: docs/reference/folders-and-environment.md#startup-log-lines
+  item: The startup log lines name the renderer and the device path.
+  ids:
+  - PLT-01
+  - PLT-02
+  - REN-03
+- page: docs/reference/refusal-messages.md#negotiation-refusals
+  item: Negotiation refuses an applet before any code runs, with one message for each cause.
+  ids:
+  - COR-06
+  - COR-07
+- page: docs/reference/refusal-messages.md#loader-statuses
+  item: Loader statuses READY, REFUSED, FAILED, SHADOWED and QUARANTINED, with their messages.
+  ids:
+  - COR-06
+  - COR-07
+- page: docs/reference/refusal-messages.md#spec-applets
+  item: Refusals for spec applets.
+  ids:
+  - SPC-08
+- page: docs/applets/torch-per-platform.md#step-details
+  item: The six steps of the zero-copy path on macOS Metal and on Windows Vulkan with CUDA.
+  ids:
+  - REN-08
+  - PLT-01
+  - PLT-02
+- page: docs/applets/torch-per-platform.md#windows-memory-sharing
+  item: Two ways to share memory on Windows.
+  ids:
+  - PLT-02
+  - REN-67
+- page: docs/applets/torch-per-platform.md#exportablepool-opt-in
+  item: An applet opts in to ExportablePool.
+  ids:
+  - REN-67
+- page: docs/reference/glossary.md
+  item: The glossary of terms.
+  ids:
+  - COR-01
+- page: docs/development/development-basics.md#mental-model
+  item: 'The mental model: the host is a running program and an applet is one shared library it loads.'
+  ids:
+  - COR-01
+- page: docs/development/development-basics.md#library-sources
+  item: Where every library comes from.
+  ids:
+  - COR-04
+- page: docs/development/development-basics.md#applet-anatomy
+  item: The anatomy of an applet.
+  ids:
+  - COR-05
+  - COR-51
+- page: docs/development/development-basics.md#development-loop
+  item: The edit, build and run loop with caliper build and caliper dev.
+  ids:
+  - COR-09
+  - COR-10
+- page: docs/development/development-basics.md#landing-screen
+  item: The landing screen has Projects, Instruments, Inspector and Activity panes, a command bar and
+    function keys.
+  ids:
+  - COR-43
+- page: docs/development/development-basics.md#training-script-attachment
+  item: Attaching to a training script from the landing screen with F4.
+  ids:
+  - STR-04
+  - STR-43
+- page: docs/development/development-basics.md#jobs-and-window-layout
+  item: Jobs and window layout.
+  ids:
+  - COR-46
+- page: docs/development/development-basics.md#test-runs
+  item: Running the tests.
+  ids:
+  - PLT-03
+- page: docs/development/development-basics.md#rules
+  item: The rules each guard something real.
+  ids:
+  - COR-01
+- page: docs/applets/first-applet.md
+  item: Your first applet builds Hello step by step with the manifest, the macro and the lifecycle.
+  ids:
+  - COR-05
+  - COR-04
+  - COR-51
+- page: docs/applets/first-ml-applet.md
+  item: Your first ML applet builds SineScope from the state spine to a bridged tensor.
+  ids:
+  - COR-13
+  - COR-46
+  - REN-64
+- page: docs/introduction/python-quickstart.md
+  item: Watch a PyTorch training run live with caliper.show, in the app, in caliper-viewer and in an own
+    window.
+  ids:
+  - STR-01
+  - STR-04
+  - STR-46
+  - STR-44
+- page: docs/python/notebook-training-runs.md
+  item: Watch a training run in a notebook with caliper.serve, widgets, controls and a browser tab.
+  ids:
+  - STR-07
+  - STR-05
+  - STR-03
+- page: docs/python/script-attachment.md#session-list
+  item: Find the session file of a running script.
+  ids:
+  - STR-04
+- page: docs/python/script-attachment.md#app-attachment
+  item: Attach from the Caliper app with F4.
+  ids:
+  - STR-04
+  - STR-43
+- page: docs/python/script-attachment.md#viewer-attachment
+  item: caliper-viewer ships in the wheel and attaches by token or from a session list.
+  ids:
+  - STR-04
+  - STR-44
+- page: docs/python/stream-links.md
+  item: Attach to a stream by its link or the stream file.
+  ids:
+  - STR-05
+  - STR-43
+- page: docs/python/viewer.md#view-pickers
+  item: Choose what a view shows with data views.
+  ids:
+  - STR-08
+- page: docs/python/viewer.md#stream-controls
+  item: Control the run and share a selection from the viewer.
+  ids:
+  - STR-03
+- page: docs/python/live-streaming.md#limits
+  item: One viewer per session today.
+  ids:
+  - STR-18
+- page: docs/web/embedding-api.md#live-session-attachment
+  item: Attach from an embed host.
+  ids:
+  - EMB-07
+- page: docs/python/live-streaming.md#limits
+  item: Cost to the script when nobody is attached.
+  ids:
+  - STR-04
+- page: docs/development/ci.md
+  item: Continuous integration workflows, caches and the browser views tests.
+  ids:
+  - PLT-03
+- page: docs/python/script-control.md
+  item: Control a running script with checkpoints, parameters, actions, pause and step, and linked selection.
+  ids:
+  - STR-03
+  - INT-04
+- page: docs/applets/applet-debugging.md#debugger-attachment
+  item: Attach a debugger to the running host to step through an applet.
+  ids:
+  - COR-09
+- page: docs/applets/applet-debugging.md#host-logging
+  item: Log through caliper.log.v1 instead of printf.
+  ids:
+  - COR-45
+- page: docs/applets/applet-debugging.md#frame-stall-diagnosis
+  item: Find what stalls the frame with the frame watchdog.
+  ids:
+  - COR-53
+- page: docs/web/program-embedding.md
+  item: 'Embed Caliper in a program: install the package, link it from CMake and drive the core.'
+  ids:
+  - EMB-07
+- page: docs/applets/ml-applet-cookbook.md#1-threading-spine
+  item: The threading spine for ML applets.
+  ids:
+  - COR-46
+- page: docs/applets/ml-applet-cookbook.md#3-device-resident-pull
+  item: The device-resident pull of a tensor into a texture.
+  ids:
+  - REN-08
+  - REN-64
+- page: docs/applets/ml-applet-cookbook.md#9-checkpoints-via-artifactsv1
+  item: Checkpoints through caliper.artifacts.v1.
+  ids:
+  - RUN-02
+- page: docs/applets/ml-applet-cookbook.md#10-sql-over-live-data
+  item: SQL over live data through caliper.data.v1.
+  ids:
+  - COR-48
+- page: docs/applets/ml-applet-cookbook.md#2-three-cadences
+  item: Three cadences match the update rate to the data.
+  ids:
+  - COR-13
+- page: docs/python/hub-setup.md
+  item: Run a hub with caliper serve, connect scripts and choose a session in a viewer.
+  ids:
+  - STR-06
+  - COR-11
+- page: docs/agents/widget-agent-setup.md
+  item: Set up the widget agent with a provider, a key, a model and a local model.
+  ids:
+  - AGT-05
+  - AGT-04
+- page: docs/development/windows-verification.md
+  item: A procedure to verify a Windows build on real hardware.
+  ids:
+  - PLT-05
+- page: docs/agents/agent-roles.md
+  item: Explains when to use the side chat and when the widget agent.
+  ids:
+  - AGT-03
+  - AGT-05
+- page: docs/introduction/architecture.md#components
+  item: The layers of the host, the SDK and the applets.
+  ids:
+  - COR-01
+- page: docs/introduction/architecture.md#design-decisions
+  item: The platform rules, including that the host never links torch.
+  ids:
+  - COR-01
+  - COR-03
+- page: docs/introduction/architecture.md#frame-loop
+  item: The frame loop never blocks on I/O.
+  ids:
+  - COR-01
+- page: docs/introduction/architecture.md#embedding
+  item: The core as an embeddable library.
+  ids:
+  - EMB-07
+- page: docs/development/compatibility-and-epochs.md#abi-hygiene
+  item: ABI hygiene rules.
+  ids:
+  - COR-02
+- page: docs/development/compatibility-and-epochs.md#versioning
+  item: Versioning of the host ABI epoch, service revisions, the SDK and applets.
+  ids:
+  - COR-02
+  - COR-03
+  - COR-05
+- page: docs/development/compatibility-and-epochs.md#load-negotiation
+  item: Negotiation at load.
+  ids:
+  - COR-06
+- page: docs/development/compatibility-and-epochs.md#promotion-rule
+  item: The rule for promoting an applet capability into the core.
+  ids:
+  - COR-14
+- page: docs/development/compatibility-and-epochs.md#toolchain-contract
+  item: The toolchain contract.
+  ids:
+  - COR-04
+- page: docs/python/live-streaming.md
+  item: Live streaming over shared memory with sessions, snapshots, sampling and sync.
+  ids:
+  - STR-04
+- page: docs/python/live-streaming.md#components
+  item: The torch-free Caliper Embed behind Caliper LIB.
+  ids:
+  - EMB-26
+- page: docs/python/live-streaming.md#limits
+  item: Known limits of live streaming.
+  ids:
+  - STR-18
+  - STR-19
+- page: docs/python/network-streaming.md
+  item: Network streaming with one set of calls over three transports.
+  ids:
+  - STR-05
+  - STR-08
+  - EMB-04
+- page: docs/applets/rendering.md#backends
+  item: The backends Metal, Vulkan, OpenGL and WebGPU.
+  ids:
+  - REN-01
+  - REN-02
+  - REN-03
+  - PLT-01
+- page: docs/applets/rendering.md#webgpu-backend
+  item: The WebGPU renderer draws the browser views with a WGSL colormap pass and instanced quads for
+    points.
+  ids:
+  - EMB-02
+  - EMB-04
+  - REN-69
+- page: docs/applets/rendering.md#geometry-path
+  item: The geometry path.
+  ids:
+  - REN-04
+  - REN-07
+- page: docs/applets/rendering.md#pixel-space-contract
+  item: The pixel-space contract.
+  ids:
+  - REN-01
+- page: docs/applets/rendering.md#graphics-api-independence
+  item: Why the ABI never names a graphics API.
+  ids:
+  - COR-02
+- page: docs/development/testing.md
+  item: 'The test suites: unit, fixture host, pixel-exact graphics, embedding, CLI, builder.'
+  ids:
+  - PLT-03
+  - COR-52
+- page: docs/applets/trust-model.md#fault-quarantine
+  item: A faulting applet is quarantined and its UI unwound, as containment and not a sandbox.
+  ids:
+  - COR-53
+- page: docs/applets/trust-model.md#frame-watchdog
+  item: The frame watchdog.
+  ids:
+  - COR-53
+- page: docs/applets/trust-model.md#pre-flight-checks
+  item: Checks run before any applet code loads.
+  ids:
+  - COR-06
+  - COR-07
+- page: docs/applets/trust-model.md#spec-applets
+  item: Spec applets are data and run no code.
+  ids:
+  - SPC-08
+- page: docs/applets/trust-model.md#supply-chain-and-data
+  item: Supply chain and data.
+  ids:
+  - COR-01
+- page: docs/development/ui-principles.md
+  item: UI principles for text, layout, behaviour, colour and size.
+  reason: context
+- page: docs/development/vulkan-and-cuda.md
+  item: How Vulkan and CUDA are paired on Windows, with the direct image, buffer and CPU staging paths.
+  ids:
+  - PLT-02
+  - REN-02
+- page: docs/python/zero-copy-tensors.md#tensor-texture-paths
+  item: How a tensor reaches a texture on Apple silicon, on Windows with an NVIDIA GPU and on the OpenGL
+    fallback.
+  ids:
+  - REN-08
+  - REN-01
+  - REN-02
+- page: docs/python/zero-copy-tensors.md#sync-ladder
+  item: The sync ladder of synchronization modes.
+  ids:
+  - REN-08
+- page: docs/python/zero-copy-tensors.md#imported-allocations
+  item: Imported allocations.
+  ids:
+  - REN-64
+- page: docs/python/zero-copy-tensors.md#derived-graphics
+  item: Derived graphics.
+  ids:
+  - REN-08

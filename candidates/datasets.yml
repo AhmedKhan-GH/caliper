@@ -1,0 +1,385 @@
+# yaml-language-server: $schema=schema.json
+pillar: DAT
+title: Datasets
+proposed: true
+description: "This pillar holds browsing a dataset by modality, label overlays, label errors, duplicates and leakage, drift, slices, versions and diffs, loader batches and augmentation previews."
+alternative: "Datasets could fold into SPC next to the loaders."
+candidates:
+  - key: image-dataset-browser
+    title: "Image Dataset Browser"
+    summary: "A virtualised grid of dataset images with thumbnails, metadata columns, sorting and filtering over millions of items."
+    serves: "Lets a researcher look at the real training images before trusting any metric computed on them."
+    origin: field
+    depends_on: [SPC-03, COR-48]
+  - key: text-dataset-browser
+    title: "Text Dataset Browser"
+    summary: "A browsable list of text samples with length, language and token-count columns and full-text search."
+    serves: "Helps spot formatting faults, truncation and odd samples in language-model training and evaluation sets."
+    origin: field
+    depends_on: [SPC-03, COR-48]
+  - key: audio-dataset-browser
+    title: "Audio Dataset Browser"
+    summary: "A grid of audio clips with waveform and spectrogram thumbnails, duration and sample-rate columns and click-to-play."
+    serves: "Lets a researcher find silent, clipped or mislabelled clips in speech and sound datasets."
+    origin: field
+    depends_on: [SPC-03]
+  - key: video-dataset-browser
+    title: "Video Dataset Browser"
+    summary: "A grid of video clips with hover scrubbing, frame-rate and duration columns and per-clip keyframe strips."
+    serves: "Helps check clip boundaries, frame rates and label timing in action and tracking datasets."
+    origin: field
+    depends_on: [SPC-03]
+  - key: point-cloud-dataset-browser
+    title: "Point-Cloud Dataset Browser"
+    summary: "A gallery of point-cloud samples with small 3-D previews, point counts and bounds, openable in the scene view."
+    serves: "Lets a 3-D researcher scan LiDAR or scan datasets for empty, sparse or misaligned samples."
+    origin: field
+    depends_on: [REN-12, SPC-03]
+  - key: time-series-dataset-browser
+    title: "Time-Series Dataset Browser"
+    summary: "A list of series samples with sparkline thumbnails, length, sampling-rate and gap columns."
+    serves: "Helps find flat, spiking or irregularly sampled series before training forecasting or sensor models."
+    origin: field
+    depends_on: [SPC-03]
+  - key: grouped-multimodal-samples
+    title: "Grouped Multimodal Samples"
+    summary: "One sample opens as a group of linked parts such as image, depth, LiDAR, caption and sensor readings, shown side by side."
+    serves: "Lets a researcher check that the modalities of one sample agree, which matters for multimodal and robotics datasets."
+    origin: field
+    depends_on: [REN-12, STR-13]
+  - key: box-label-overlay
+    title: "Bounding-Box Label Overlay"
+    summary: "Draws 2-D boxes with class names and attributes over images, with filters by class, size and score."
+    serves: "Lets a researcher verify detection labels visually and find systematic annotation errors."
+    origin: field
+    depends_on: [REN-38, REN-41]
+  - key: mask-label-overlay
+    title: "Mask and Polygon Label Overlay"
+    summary: "Draws instance masks, semantic masks and polygons over images with per-class colours and opacity."
+    serves: "Helps check segmentation labels for leaks, holes and boundary errors."
+    origin: field
+    depends_on: [REN-38, REN-41]
+  - key: text-span-label-overlay
+    title: "Text Span Label Overlay"
+    summary: "Highlights labelled spans in text, such as entities, claims or toxic passages, with a legend and overlap handling."
+    serves: "Supports reviewing sequence-labelling and extraction datasets for boundary and class errors."
+    origin: field
+    depends_on: []
+  - key: time-span-label-overlay
+    title: "Time Span Label Overlay"
+    summary: "Shows labelled intervals as coloured bands over audio, video or sensor series."
+    serves: "Helps check event and activity labels against the signal they describe."
+    origin: field
+    depends_on: [STR-13]
+  - key: camera-3d-box-overlay
+    title: "3-D Box Labels on Camera Images"
+    summary: "Projects labelled 3-D boxes into each camera image using the calibration stored with the sample."
+    serves: "Lets a perception researcher check that 3-D labels line up with what each camera sees."
+    origin: field
+    depends_on: [REN-39, REN-37]
+  - key: lidar-3d-box-overlay
+    title: "3-D Box Labels on LiDAR Sweeps"
+    summary: "Shows labelled 3-D boxes with headings, track ids and point counts inside a LiDAR sweep."
+    serves: "Helps find boxes that are loose, empty or mis-oriented in driving and robotics datasets."
+    origin: field
+    depends_on: [REN-12, REN-37]
+  - key: ground-truth-versus-prediction
+    title: "Ground Truth Against Prediction"
+    summary: "Overlays labels and model outputs on the same sample, with matches, misses and false alarms marked in different colours."
+    serves: "Lets a researcher see exactly where a model disagrees with the labels, one sample at a time."
+    origin: field
+    depends_on: []
+  - key: label-error-finder
+    title: "Label Error Finder"
+    summary: "Ranks samples whose given label disagrees with out-of-sample model confidence and shows the likeliest mistakes first."
+    serves: "Reduces noisy-label damage by letting a researcher fix or drop the worst labels."
+    origin: field
+    depends_on: [INT-27]
+  - key: exact-duplicate-finder
+    title: "Exact Duplicate Finder"
+    summary: "Groups byte-identical or hash-identical samples and shows where they fall in each split."
+    serves: "Catches duplicated samples that inflate scores, especially when copies cross train and test."
+    origin: field
+    depends_on: []
+  - key: near-duplicate-finder
+    title: "Near-Duplicate Finder"
+    summary: "Clusters samples that are almost identical by perceptual hash or embedding distance and lets a researcher step through each cluster."
+    serves: "Finds near copies, crops and re-encodes that leak between splits."
+    origin: field
+    depends_on: [INT-27]
+  - key: cross-split-leakage-check
+    title: "Cross-Split Leakage Check"
+    summary: "Reports samples, authors, sessions or scenes shared between training, validation and test sets."
+    serves: "Prevents over-optimistic evaluation caused by overlap between splits."
+    origin: field
+    depends_on: []
+  - key: outlier-finder
+    title: "Outlier Finder"
+    summary: "Scores each sample by distance to its neighbours in a chosen feature or embedding space and lists the most unusual ones."
+    serves: "Surfaces corrupt, off-domain and rare samples worth a manual look."
+    origin: field
+    depends_on: [INT-27]
+  - key: similarity-search
+    title: "Similarity Search over Samples"
+    summary: "Finds the nearest samples to a chosen sample, an uploaded example or a text description using stored embeddings."
+    serves: "Helps build targeted slices and find more examples of a failure case."
+    origin: field
+    depends_on: [INT-27]
+  - key: class-balance-view
+    title: "Class Balance View"
+    summary: "Bars and long-tail curves of samples per class, per split, with imbalance ratios."
+    serves: "Shows where rare classes will starve training and where splits are unrepresentative."
+    origin: field
+    depends_on: []
+  - key: label-statistics
+    title: "Label Statistics"
+    summary: "Summaries of labels per sample, box sizes, mask areas, span lengths and co-occurrence between classes."
+    serves: "Tells a researcher what the labels actually contain before choosing anchors, crops or losses."
+    origin: field
+    depends_on: []
+  - key: label-cooccurrence-matrix
+    title: "Label Co-Occurrence Matrix"
+    summary: "A matrix of how often each pair of labels appears together in one sample."
+    serves: "Reveals spurious correlations a model could shortcut through."
+    origin: field
+    depends_on: []
+  - key: column-profiles
+    title: "Column Profiles"
+    summary: "Per-column distributions, ranges, distinct counts, quantiles and outliers shown as small charts above a table."
+    serves: "Gives a fast first look at a tabular dataset before any modelling."
+    origin: field
+    depends_on: [SPC-10, STR-34]
+  - key: schema-inference
+    title: "Schema Inference"
+    summary: "Infers column types, units, ranges and allowed values from a dataset and proposes a schema."
+    serves: "Gives a starting contract for later validation and for building loaders."
+    origin: field
+    depends_on: [SPC-03, SPC-37]
+  - key: schema-validation
+    title: "Schema Validation Report"
+    summary: "Checks new data against a saved schema and lists violations by column, row and rule."
+    serves: "Catches silent format changes that break training pipelines."
+    origin: field
+    depends_on: [SPC-37]
+  - key: saved-dataset-slices
+    title: "Saved Dataset Slices"
+    summary: "Named filters or hand-picked sample sets stored with the dataset and reused across views and recordings."
+    serves: "Lets a team return to the same failure subset across experiments."
+    origin: field
+    depends_on: [COR-48, REN-46]
+  - key: feature-drift-view
+    title: "Feature Drift View"
+    summary: "Compares column distributions between two datasets or time windows with distance scores and overlaid histograms."
+    serves: "Detects data shift between training data and live or newer data."
+    origin: field
+    depends_on: []
+  - key: label-drift-view
+    title: "Label Drift View"
+    summary: "Compares label frequencies and attribute statistics across versions, sources or time."
+    serves: "Reveals changes in annotation policy or data collection that alter what a model learns."
+    origin: field
+    depends_on: []
+  - key: covariate-shift-classifier
+    title: "Domain Classifier for Shift"
+    summary: "Trains a quick classifier to tell two datasets apart and shows the samples that give them away."
+    serves: "Explains in concrete examples how a test set differs from training data."
+    origin: field
+    depends_on: []
+  - key: augmentation-preview
+    title: "Augmentation Preview"
+    summary: "Shows several random draws of an augmentation pipeline for a sample with adjustable parameters."
+    serves: "Lets a researcher judge whether augmentations stay realistic and label-preserving."
+    origin: field
+    depends_on: []
+  - key: augmentation-label-check
+    title: "Augmentation on Labels"
+    summary: "Applies the same augmentation to images and their boxes, masks, keypoints or spans and shows them together."
+    serves: "Catches pipelines that move images but not labels."
+    origin: field
+    depends_on: []
+  - key: augmentation-impact-table
+    title: "Augmentation Impact Table"
+    summary: "Lists each augmentation with how often it fires, the mean change in input statistics and the mean change in loss."
+    serves: "Shows which augmentations help and which only add noise."
+    origin: field
+    depends_on: []
+  - key: loader-batch-viewer
+    title: "Data-Loader Batch Viewer"
+    summary: "Shows the actual batches produced by a training data loader, after collation and transforms, as images, text or tables."
+    serves: "Verifies that the model receives what the researcher thinks it receives."
+    origin: field
+    depends_on: [STR-04]
+  - key: sample-provenance
+    title: "Sample Provenance"
+    summary: "Records for every sample its source file, row, shard, transform chain and seed, and shows it beside the sample."
+    serves: "Makes any odd batch traceable back to where it came from."
+    origin: field
+    depends_on: [COR-48, RUN-02]
+  - key: batch-statistics-view
+    title: "Batch Statistics View"
+    summary: "Shows per-batch means, ranges, class counts and length distributions over a run."
+    serves: "Spots batches that drift or contain few classes."
+    origin: field
+    depends_on: [STR-04]
+  - key: synthetic-data-inspector
+    title: "Synthetic Data Inspector"
+    summary: "Browses generated samples with the scene and generation parameters that produced them."
+    serves: "Helps judge whether synthetic data covers the variation the real task needs."
+    origin: field
+    depends_on: [REN-12]
+  - key: render-channel-viewer
+    title: "Render Channel Viewer"
+    summary: "Shows each channel of a rendered sample, such as colour, depth, normals, instance ids and flow, with linked cursors."
+    serves: "Lets researchers check synthetic ground truth channels against each other."
+    origin: field
+    depends_on: [REN-38]
+  - key: synthetic-real-gap-view
+    title: "Synthetic Against Real Comparison"
+    summary: "Compares feature and embedding distributions of synthetic and real samples and shows the most distinct examples."
+    serves: "Quantifies the domain gap before relying on synthetic training data."
+    origin: field
+    depends_on: [INT-27]
+  - key: large-table-viewer
+    title: "Large Table Viewer"
+    summary: "A virtualised table that scrolls through hundreds of millions of rows with sorting, filtering and column pinning."
+    serves: "Makes very large logged or labelled tables usable without loading them in full."
+    origin: field
+    depends_on: [SPC-10, COR-50]
+  - key: rich-cell-renderers
+    title: "Rich Cell Renderers"
+    summary: "Table cells that render as images, audio players, sparklines, tensors, colour chips, links or small 3-D previews."
+    serves: "Lets a table of samples be read as the samples themselves."
+    origin: field
+    depends_on: [SPC-10]
+  - key: pivot-table
+    title: "Pivot Table"
+    summary: "Drag-and-drop grouping of rows and columns with aggregate functions and conditional colouring."
+    serves: "Answers questions like accuracy by class and source without writing a query."
+    origin: field
+    depends_on: [COR-48]
+  - key: crossfilter-panel
+    title: "Crossfilter Panel"
+    summary: "A set of linked column histograms where brushing any one filters all the others and the table."
+    serves: "Helps find combinations of attributes where a dataset is thin or errors cluster."
+    origin: field
+    depends_on: [REN-46]
+  - key: missing-value-view
+    title: "Missing-Value View"
+    summary: "A matrix and bar summary showing which rows and columns are missing values and how the gaps correlate."
+    serves: "Shows whether missingness is random or tied to labels and sources."
+    origin: field
+    depends_on: []
+  - key: correlation-matrix
+    title: "Column Correlation Matrix"
+    summary: "A clustered matrix of pairwise correlations or mutual information between columns with drill-down to scatter plots."
+    serves: "Finds redundant columns and leakage of the target into inputs."
+    origin: field
+    depends_on: []
+  - key: dataset-versions
+    title: "Dataset Versions"
+    summary: "Immutable versions of a dataset with content hashes, creation steps and a browsable history."
+    serves: "Lets any run state exactly which data it trained on."
+    origin: field
+    depends_on: [RUN-02]
+  - key: dataset-diff
+    title: "Dataset Diff"
+    summary: "Shows samples added, removed and relabelled between two dataset versions with counts and examples."
+    serves: "Explains why a metric changed after a data update."
+    origin: field
+    depends_on: [RUN-02]
+  - key: dataset-lineage
+    title: "Dataset Lineage"
+    summary: "A graph from raw sources through filters and joins to the final dataset and the runs that used it."
+    serves: "Makes the origin and processing of data auditable."
+    origin: field
+    depends_on: [RUN-02]
+  - key: data-card
+    title: "Data Card"
+    summary: "A generated page describing a dataset's source, collection, splits, statistics, known issues and intended use."
+    serves: "Keeps knowledge about a dataset next to the data for reviewers and new team members."
+    origin: field
+    depends_on: [RUN-02]
+  - key: label-editing-in-place
+    title: "Label Editing in Place"
+    summary: "Edits labels, boxes, masks and spans directly in the dataset browser with undo and a change log."
+    serves: "Lets a researcher fix errors the moment they find them."
+    origin: field
+    depends_on: []
+  - key: active-learning-queue
+    title: "Active-Learning Queue"
+    summary: "A ranked queue of unlabelled samples chosen by model uncertainty, diversity or expected gain."
+    serves: "Spends limited labelling effort on the samples that teach a model most."
+    origin: field
+    depends_on: []
+  - key: forecasting-window-preview
+    title: "Forecasting Window Preview"
+    summary: "Shows how a series is cut into input and target windows with stride, horizon and covariates highlighted."
+    serves: "Catches off-by-one and leakage errors in forecasting datasets."
+    origin: field
+    depends_on: [STR-13]
+  - key: tokenised-sample-view
+    title: "Tokenised Sample View"
+    summary: "Shows a text sample as the tokens, masks and packed sequence boundaries the model actually receives."
+    serves: "Finds packing, truncation and special-token mistakes in language-model data."
+    origin: field
+    depends_on: []
+  - key: dataset-mixture-view
+    title: "Dataset Mixture View"
+    summary: "Shows the proportion of each source, language and domain in a training mixture and how it changes through training."
+    serves: "Checks that sampling weights do what was intended."
+    origin: field
+    depends_on: []
+  - key: text-quality-signals
+    title: "Text Quality Signals"
+    summary: "Per-sample scores such as perplexity, repetition, language confidence and boilerplate share, with histograms and examples."
+    serves: "Supports filtering of web-scale text with evidence."
+    origin: field
+    depends_on: []
+  - key: image-quality-signals
+    title: "Image Quality Signals"
+    summary: "Per-image blur, brightness, contrast, aspect ratio and compression scores with histograms and examples."
+    serves: "Finds unusable images before they reach training."
+    origin: field
+    depends_on: []
+  - key: audio-quality-signals
+    title: "Audio Quality Signals"
+    summary: "Per-clip loudness, clipping, silence share and signal-to-noise estimates with histograms."
+    serves: "Flags bad recordings in speech and sound datasets."
+    origin: field
+    depends_on: []
+  - key: metadata-bias-view
+    title: "Metadata Balance View"
+    summary: "Cross-tabulates metadata such as source, device, location and time against labels and splits."
+    serves: "Reveals confounders that a model could learn instead of the task."
+    origin: field
+    depends_on: []
+  - key: label-taxonomy-view
+    title: "Label Taxonomy View"
+    summary: "A tree of classes with counts per node and tools to merge, split or rename classes."
+    serves: "Helps tidy class hierarchies and see where the hierarchy is unbalanced."
+    origin: field
+    depends_on: []
+  - key: sample-comparison-pairs
+    title: "Sample Pair Comparison"
+    summary: "Shows two chosen samples side by side with their metadata and label differences."
+    serves: "Supports checking duplicates and contradictory labels by eye."
+    origin: field
+    depends_on: []
+  - key: dataset-sampling-simulator
+    title: "Sampling Simulator"
+    summary: "Previews what a sampler, weighting or curriculum would produce over many steps before training starts."
+    serves: "Verifies class frequencies and order effects cheaply."
+    origin: field
+    depends_on: [STR-04]
+  - key: dataset-health-report
+    title: "Dataset Health Report"
+    summary: "A one-page summary of duplicates, label issues, imbalance, drift and missing values with links to examples."
+    serves: "Gives a starting checklist for any new dataset."
+    origin: field
+    depends_on: []
+  - key: dataset-streaming-reader
+    title: "Streaming Dataset Reader"
+    summary: "Browses remote or sharded datasets by streaming only the samples on screen."
+    serves: "Allows inspection of datasets too large to download."
+    origin: field
+    depends_on: [SPC-03]

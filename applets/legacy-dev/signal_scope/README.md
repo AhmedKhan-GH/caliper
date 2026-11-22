@@ -5,8 +5,8 @@ demonstrates every idiom of writing an applet against the Caliper SDK
 (ABI epoch 2), in ~200 lines.
 
 > **Status:** an archived exemplar. It uses the SDK headers and the sugar layer
-> (`docs/references/sugar.md`); the first-applet tutorial
-> (`docs/tutorials/first-applet.md`) covers the same ground for a current applet.
+> (`docs/applets/cpp-sugar.md`); the first-applet tutorial
+> (`docs/applets/first-applet.md`) covers the same ground for a current applet.
 
 ## Anatomy
 

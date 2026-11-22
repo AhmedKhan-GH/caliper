@@ -3,7 +3,7 @@
 A viewer can pause, resume and single-step the training loop, change the
 parameters the script registered, run the actions it registered, and select
 items that every view of the session then highlights
-(docs/references/wire-protocol.md, "Controls" and "Linked selection"). This
+(docs/reference/wire-protocol.md, "Controls" and "Linked selection"). This
 module holds all of that state for the process, one :class:`Controls` object,
 ``CONTROLS``, behind the public calls of caliper/__init__.py:
 

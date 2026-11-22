@@ -1,0 +1,255 @@
+# yaml-language-server: $schema=schema.json
+title: Sprint 5 plan page
+kind: page
+source: design/sprint-5.md
+ref: sprint4
+summary: The plan page design/sprint-5.md, which only the sprint4 branch holds, in its newest version
+  there, read heading by heading.
+not_features:
+- How the sizes are given
+- The steps
+- Order
+entries:
+- heading: Where things stand
+  item: 'Status: sprint 4 is designed and not built; sprint 3 is built as libraries and not wired into
+    the app; run history in the local database is planned in Data and Cloud; recordings are MCAP, so ROS
+    2 import shares the container.'
+  ids:
+  - RUN-03
+  - STR-22
+- heading: 1. Comparing runs
+  item: Several sessions on one page, each live or recorded, on one shared cursor aligned by step or time;
+    a run with no item at the cursor shows its latest earlier item with its distance (6 days).
+  ids:
+  - RUN-05
+  - RUN-06
+- heading: 1. Comparing runs
+  item: Linked cameras and linked selections across runs (2 days).
+  ids:
+  - RUN-07
+- heading: 1. Comparing runs
+  item: 'Difference views: A minus B heatmaps, overlaid series and histograms on shared bins (3 days).'
+  ids:
+  - RUN-08
+- heading: 1. Comparing runs
+  item: Done when two recordings of the Fashion-MNIST training demo with different learning rates scrub
+    together, their embedding scenes turn together, and a difference heatmap updates with the cursor.
+  ids:
+  - RUN-05
+  - RUN-07
+  - RUN-08
+  - RUN-11
+- heading: 2. Fields for the physical sciences
+  item: Slice planes of 3-D fields, placed in the scene and dragged along an axis, computed on the device
+    and drawn on a textured quad (5 days).
+  ids:
+  - REN-26
+- heading: 2. Fields for the physical sciences
+  item: Isosurfaces computed by a marching-cubes kernel on the device and sent as meshes (7 days).
+  ids:
+  - REN-27
+- heading: 2. Fields for the physical sciences
+  item: Done when a 3-D field from a script shows three draggable slice planes and one isosurface set
+    from the controls panel, natively and in the browser.
+  ids:
+  - REN-26
+  - REN-27
+- heading: 3. Robotics
+  item: Mesh files in glTF, OBJ and STL through sprint 3's loaders into mesh sources (4 days).
+  ids:
+  - REN-18
+- heading: 3. Robotics
+  item: 'A URDF helper in Caliper LIB: a link per entity with meshes and joint transforms (3 days).'
+  ids:
+  - REN-19
+- heading: 3. Robotics
+  item: 'Follow an entity: the orbit''s target tracks a moving entity (2 days).'
+  ids:
+  - REN-47
+- heading: 3. Robotics
+  item: 'Trails over a time window: the last N steps of an entity''s positions (3 days).'
+  ids:
+  - REN-20
+  - STR-13
+- heading: 3. Robotics
+  item: Ellipsoids for covariances (4 days with error bands).
+  ids:
+  - REN-21
+- heading: 3. Robotics
+  item: Error bands on series.
+  ids:
+  - RUN-09
+- heading: 3. Robotics
+  item: Importing ROS 2 recordings in MCAP, with transforms, point clouds, images and markers decoded
+    into scene entities and named frames translated into the entity tree (6 days).
+  ids:
+  - STR-22
+- heading: 3. Robotics
+  item: Done when a robot loads from its URDF, its gripper is followed with a trail through a recorded
+    reach, and a public ROS 2 recording opens with a model's predictions overlaid.
+  ids:
+  - REN-19
+  - REN-20
+  - STR-22
+  - REN-47
+  - REN-55
+  - STR-33
+- heading: 4. Viewport
+  item: An orthographic projection and preset views from top, front, side and three-quarter (3 days).
+  ids:
+  - REN-50
+- heading: 4. Viewport
+  item: Saved viewpoints in views, recordings and spec applets (2 days).
+  ids:
+  - REN-23
+  - REN-45
+- heading: 4. Viewport
+  item: Done when a view switches to orthographic, takes each preset, and reopens a recording on a saved
+    viewpoint.
+  ids:
+  - REN-23
+  - REN-50
+- heading: 5. Scene additions moved from sprint 4
+  item: Capsules, cylinders and planes drawn from their parameters (3 days).
+  ids:
+  - REN-21
+- heading: 5. Scene additions moved from sprint 4
+  item: The event ring from the app to the script over shared memory (3 days).
+  ids:
+  - STR-32
+- heading: 5. Scene additions moved from sprint 4
+  item: Named frames are covered by step 3's ROS 2 import, which translates them into the entity tree;
+    a second transform system stays out.
+  ids:
+  - STR-22
+- heading: 5. Scene additions moved from sprint 4
+  item: The text log and the bar chart natively (3 days), moved from sprint 4.
+  ids:
+  - REN-51
+  - REN-52
+- heading: 5. Scene additions moved from sprint 4
+  item: The text log in DOM and the bar chart in Canvas 2D (3 days), moved from sprint 4.
+  ids:
+  - REN-51
+  - REN-52
+- heading: 5. Scene additions moved from sprint 4
+  item: Done when a scene draws each new shape natively and in the browser, a script attached through
+    shared memory receives a pick and a selection without a server, and a text log and a bar chart update
+    natively and in a browser.
+  ids:
+  - REN-21
+  - STR-32
+  - REN-51
+  - REN-52
+- heading: 6. Robustness in the browser
+  item: 'The scene fallback in TypeScript: entity transforms, points only, with a notice (2 days).'
+  ids:
+  - EMB-17
+- heading: 6. Robustness in the browser
+  item: Budgets, the refusal line and rebuilding after a lost device (2 days).
+  ids:
+  - EMB-18
+- heading: 6. Robustness in the browser
+  item: Done when the budget and lost-device rows pass in headless Chromium and a scene opened without
+    WebGPU shows its points with the notice.
+  ids:
+  - EMB-17
+  - EMB-18
+- heading: 7. Recordings through the hub and in spec panels
+  item: 'The hub recording and serving recordings: caliper serve --record and --recordings (6 days).'
+  ids:
+  - STR-15
+- heading: 7. Recordings through the hub and in spec panels
+  item: Spec version 1 with the scene primitive (4 days).
+  ids:
+  - SPC-11
+- heading: 7. Recordings through the hub and in spec panels
+  item: Recording bindings in spec panels (2 days).
+  ids:
+  - SPC-22
+- heading: 7. Recordings through the hub and in spec panels
+  item: 'Applet scenes in recordings and through the hub: a buffer readback in the graphics layer and
+    the host encoding a wire-capable applet scene as protocol 3.2 (3 days).'
+  ids:
+  - STR-31
+- heading: 7. Recordings through the hub and in spec panels
+  item: Done when a hub recording opens in a browser through the hub and in the app from the catalog,
+    a spec panel shows a recorded scene at the cursor, and a recording of mesh_scope scrubs in the app
+    and in a browser.
+  ids:
+  - STR-15
+  - SPC-11
+  - SPC-22
+  - STR-31
+- heading: 8. Demos
+  item: The comparison demo, which learning rate separates the ten Fashion-MNIST classes first.
+  ids:
+  - RUN-11
+- heading: 8. Demos
+  item: The fields demo, where a neural PDE surrogate's error concentrates in a 3-D flow, on a public
+    PDE dataset whose licence is to be checked.
+  ids:
+  - REN-57
+- heading: 8. Demos
+  item: The robotics demo, where a model's prediction drifts along a recorded robot run, on a public ROS
+    2 recording whose licence is to be checked.
+  ids:
+  - REN-55
+  - STR-33
+- heading: 8. Demos
+  item: The three demos (6 days).
+  ids:
+  - RUN-11
+  - REN-57
+  - REN-55
+  - STR-33
+- heading: 8. Demos
+  item: Demo 2, the robot arm (2 days), moved from sprint 4.
+  ids:
+  - REN-55
+- heading: 8. Demos
+  item: Demo 3, detection boxes (2 days), moved from sprint 4.
+  ids:
+  - REN-56
+- heading: 8. Demos
+  item: Demo 1, structure from motion, with choosing its shot (3 days), moved from sprint 4.
+  ids:
+  - REN-54
+- heading: What it adds to Windows parity
+  item: Arrays from JAX and CuPy through DLPack come with Windows parity because CuPy does not run on
+    macOS; until then a JAX user passes NumPy arrays at the cost of one copy.
+  ids:
+  - STR-36
+- heading: What it adds to Windows parity
+  item: 'Slice planes and isosurfaces on CUDA: the device-side slice and the marching-cubes kernel.'
+  ids:
+  - REN-26
+  - REN-27
+  - PLT-16
+- heading: What it adds to Windows parity
+  item: 'Two items of Windows parity came with the items moved from sprint 4: recording in the hub on
+    Windows, and demos 2, 3 and 1 on CUDA.'
+  ids:
+  - STR-15
+  - PLT-08
+  - REN-55
+  - REN-56
+  - REN-54
+- heading: Left out
+  item: 'Left out: ray-marched volume rendering, named coordinate frames as a second transform system,
+    a fly mode, object gizmos and scene editing, lights and materials, camera paths.'
+  ids:
+  - REN-28
+- heading: Open questions
+  item: 'Open questions: which PDE dataset and which ROS 2 recording the demos use; whether difference
+    views need tensors of the same shape; whether ROS 2 import covers more than the common message types.'
+  ids:
+  - RUN-08
+  - STR-22
+- heading: Risks
+  item: 'Risks: aligning runs that log at different steps or rates, isosurface kernels on each backend,
+    ROS 2 message type variation, demo data licences and download sizes.'
+  ids:
+  - RUN-06
+  - REN-27
+  - STR-22

@@ -1,9 +1,0 @@
-nav:
-  - index.md
-  - development-basics.md
-  - first-applet.md
-  - first-ml-applet.md
-  - live-pytorch.md
-  - watch-a-training-run-in-a-notebook.md
-  - glob: "*"
-    ignore_no_matches: true

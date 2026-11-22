@@ -1,6 +1,6 @@
 #pragma once
 // wire.h: the C++ codec of wire protocol v3 (caliper/live_net.h,
-// docs/references/wire-protocol.md), the native twin of python/caliper/
+// docs/reference/wire-protocol.md), the native twin of python/caliper/
 // _wire.py. Host-internal C++17; no sockets (ws.h carries the bytes).
 //
 // FRAMES. decode_frame() applies the protocol's decoding steps 1 to 9 in their

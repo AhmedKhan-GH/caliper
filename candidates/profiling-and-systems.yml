@@ -1,0 +1,348 @@
+# yaml-language-server: $schema=schema.json
+pillar: PRF
+title: Profiling and Systems
+proposed: true
+description: "This pillar holds memory timelines and allocator snapshots, operation and kernel profiles, trace timelines, compiler views, cluster and serving views, energy."
+candidates:
+  - key: exported-model-comparison
+    title: "Exported Model Comparison"
+    summary: "Each operation's output in an exported or quantised model is compared with the reference model on the same input."
+    serves: "A person finds the operation where a deployed model departs from the trained one."
+    origin: plan-idea
+    depends_on: [INT-06]
+  - key: gpu-memory-timeline
+    title: "GPU Memory Timeline by Category"
+    summary: "A stacked timeline of device memory split into parameters, gradients, optimiser state, activations and temporary buffers."
+    serves: "Shows which kind of tensor fills the device at each point of a training step so memory problems are fixed at the right place."
+    origin: field
+    depends_on: [STR-01, STR-12, STR-13]
+  - key: allocator-snapshot-viewer
+    title: "Allocator Snapshot Viewer"
+    summary: "A view that steps through allocator events and shows each block, its size, its owner and the call stack that created it."
+    serves: "Explains fragmentation and unexpected reservations by letting the researcher replay what the allocator did."
+    origin: field
+    depends_on: [STR-12, STR-13]
+  - key: oom-post-mortem
+    title: "Out-of-Memory Post-Mortem"
+    summary: "A saved record of allocator state, live tensors and recent operations taken at the moment an allocation fails."
+    serves: "Turns a crashed run into a readable account of what was holding memory when it died."
+    origin: field
+    depends_on: [STR-12, RUN-03]
+  - key: peak-memory-breakdown
+    title: "Peak Memory Breakdown"
+    summary: "A table and treemap of what is live at the highest memory point of a step, grouped by module and tensor role."
+    serves: "Points at the few tensors that set the peak so batch size or checkpointing choices are made with evidence."
+    origin: field
+    depends_on: [STR-01]
+  - key: activation-memory-by-layer
+    title: "Activation Memory by Layer"
+    summary: "A per-layer bar view of saved activation bytes during the forward pass, with the effect of recomputation shown beside it."
+    serves: "Helps decide which layers to recompute or offload to fit a larger model or batch."
+    origin: field
+    depends_on: [STR-01]
+  - key: memory-leak-tracker
+    title: "Memory Leak Tracker"
+    summary: "A watcher that flags allocations that survive many steps and groups them by creation site."
+    serves: "Finds tensors kept alive by accident, such as stored losses that still hold a graph."
+    origin: field
+    depends_on: [STR-12]
+  - key: host-memory-view
+    title: "Host and Pinned Memory View"
+    summary: "A timeline of host memory, pinned buffers and transfers between host and device."
+    serves: "Shows when staging buffers or copies, not the device, limit a run."
+    origin: field
+    depends_on: [STR-01]
+  - key: memory-what-if
+    title: "Memory What-If Estimator"
+    summary: "A panel that predicts memory for a changed batch size, precision, sharding or recomputation setting from a recorded step."
+    serves: "Lets a researcher test a configuration before launching an expensive run."
+    origin: field
+    depends_on: [STR-12]
+  - key: operation-profile-table
+    title: "Operation Profile Table"
+    summary: "A sortable table of operators with call counts, self and total time, shapes and memory."
+    serves: "Shows which operators dominate a step and whether the cost is in a few large calls or many small ones."
+    origin: field
+    depends_on: [STR-01, SPC-10]
+  - key: kernel-table
+    title: "Kernel Table"
+    summary: "A table of device kernels with duration, launch size, registers, shared memory and occupancy."
+    serves: "Identifies slow or badly shaped kernels and links each one back to the operator that launched it."
+    origin: field
+    depends_on: [STR-01]
+  - key: trace-timeline
+    title: "Trace Timeline"
+    summary: "A zoomable timeline with one lane per host thread and device stream and flow arrows from launch to execution."
+    serves: "Reveals whether a step is limited by host launch work, device compute or synchronisation."
+    origin: field
+    depends_on: [STR-12, STR-13]
+  - key: gpu-idle-analysis
+    title: "GPU Idle Analysis"
+    summary: "A summary that finds gaps between kernels and attributes each gap to host work, copies, waits or synchronisation."
+    serves: "Explains why device utilisation is low and what to fix first."
+    origin: field
+    depends_on: [STR-12]
+  - key: flame-graph
+    title: "Flame Graph"
+    summary: "A hierarchical view of time by call stack, built from traces or samples and linked to source lines."
+    serves: "Gives a fast picture of where a script spends its time across Python, native and device code."
+    origin: field
+    depends_on: [STR-01]
+  - key: icicle-and-sunburst-profile
+    title: "Icicle and Sunburst Profile Views"
+    summary: "Alternative layouts of the same call tree profile for deep or wide stacks."
+    serves: "Makes very deep model call trees readable where a flame graph becomes crowded."
+    origin: field
+    depends_on: [STR-01]
+  - key: stack-sampling
+    title: "Stack Sampling of a Running Script"
+    summary: "A sampler that attaches to a live process and streams call stacks without editing the script."
+    serves: "Profiles a long job that was not started with a profiler and shows hot spots while it runs."
+    origin: field
+    depends_on: [STR-05, STR-01]
+  - key: line-profile
+    title: "Line-Level Profile"
+    summary: "A source view with time and memory per line, updated as the script runs."
+    serves: "Shows which lines of a training or analysis script cost the most."
+    origin: field
+    depends_on: [STR-01]
+  - key: step-time-breakdown
+    title: "Step Time Breakdown"
+    summary: "A stacked series of data wait, forward, backward, optimiser, communication and logging time per step."
+    serves: "Shows where each step goes and how that split drifts over a run."
+    origin: field
+    depends_on: [STR-01, RUN-03]
+  - key: roofline-plot
+    title: "Roofline Plot"
+    summary: "A plot of each kernel or layer by arithmetic intensity and achieved throughput against hardware limits."
+    serves: "Tells whether a kernel is limited by memory bandwidth or by compute."
+    origin: field
+    depends_on: [STR-01]
+  - key: model-flops-utilisation
+    title: "Model FLOPs Utilisation"
+    summary: "A live gauge and history of achieved arithmetic throughput as a share of the hardware peak."
+    serves: "Gives one honest number for how well a training run uses the machine."
+    origin: field
+    depends_on: [STR-01, RUN-03]
+  - key: throughput-panel
+    title: "Throughput Panel"
+    summary: "A live panel of samples, tokens and images per second with smoothing and per-device split."
+    serves: "Lets a researcher see at once whether a change made training faster or slower."
+    origin: field
+    depends_on: [STR-01]
+  - key: trace-diff
+    title: "Trace Diff"
+    summary: "A side-by-side and difference view of two profiled steps that aligns operators and highlights changed time."
+    serves: "Shows exactly what a code or setting change did to performance."
+    origin: field
+    depends_on: [STR-12, RUN-05]
+  - key: profile-baseline-regression
+    title: "Performance Regression Baseline"
+    summary: "A stored reference profile per model and machine with a flag when a new run is slower beyond a set margin."
+    serves: "Catches slowdowns early across commits and library upgrades."
+    origin: field
+    depends_on: [RUN-03, PLT-03]
+  - key: compile-graph-viewer
+    title: "Compile Graph Viewer"
+    summary: "A graph view of captured regions of compiled code with each graph break, its reason and its source line."
+    serves: "Helps remove breaks that stop a model from compiling as one piece."
+    origin: field
+    depends_on: [STR-01]
+  - key: compiled-code-inspector
+    title: "Compiled Code Inspector"
+    summary: "A viewer for the intermediate forms and generated kernel source of a compiled model beside the original code."
+    serves: "Lets a researcher see what the compiler did to a function and why it is fast or slow."
+    origin: field
+    depends_on: [STR-01]
+  - key: recompilation-tracker
+    title: "Recompilation Tracker"
+    summary: "A log of every recompile with the guard that failed and the input that triggered it."
+    serves: "Explains sudden stalls caused by changing shapes or Python values."
+    origin: field
+    depends_on: [STR-01]
+  - key: fusion-and-launch-counts
+    title: "Fusion and Kernel Launch Counts"
+    summary: "A count of kernels launched per step with the operators fused into each."
+    serves: "Shows whether fusion is working and where many tiny launches add overhead."
+    origin: field
+    depends_on: [STR-01]
+  - key: cluster-utilisation-view
+    title: "Cluster Utilisation View"
+    summary: "A grid of nodes and devices coloured by utilisation, memory and temperature."
+    serves: "Shows which machines in a self-run cluster are idle, busy or unhealthy."
+    origin: field
+    depends_on: [STR-05, STR-06]
+  - key: batch-scheduler-queue-view
+    title: "Job Queue View for Batch Schedulers"
+    summary: "A live list of queued, running and finished jobs from a batch scheduler, linked to the runs they produce."
+    serves: "Lets a researcher follow submitted jobs and open their live views from one place."
+    origin: field
+    depends_on: [RUN-03, STR-06]
+  - key: interconnect-bandwidth
+    title: "Interconnect Bandwidth View"
+    summary: "A live view of bytes moved over device links, network cards and host buses against their limits."
+    serves: "Shows when communication, not compute, caps scaling."
+    origin: field
+    depends_on: [STR-01]
+  - key: straggler-detection
+    title: "Straggler Detection"
+    summary: "A comparison of per-rank step times that names the slow rank and what it was doing."
+    serves: "Finds the one device or node that slows every synchronised step."
+    origin: field
+    depends_on: [STR-05, RUN-01]
+  - key: hang-watchdog-view
+    title: "Hang and Watchdog View"
+    summary: "A panel that detects ranks that stop progressing and shows their last operation and stack."
+    serves: "Turns a silent distributed hang into a located cause."
+    origin: field
+    depends_on: [STR-05, COR-53]
+  - key: collective-timeline
+    title: "Collective Communication Timeline"
+    summary: "A timeline of all-reduce, all-gather and similar operations per rank with sizes, waits and overlap with compute."
+    serves: "Shows how much communication is hidden behind compute and where ranks wait on each other."
+    origin: field
+    depends_on: [STR-12]
+  - key: dataloader-bottleneck-view
+    title: "Data-Loader Bottleneck View"
+    summary: "A view of worker queues, wait time per batch and time spent decoding, augmenting and transferring."
+    serves: "Tells whether the input pipeline starves the device and which stage is slow."
+    origin: field
+    depends_on: [STR-01]
+  - key: dataloader-worker-timeline
+    title: "Data-Loader Worker Timeline"
+    summary: "A lane per worker process showing when each batch was fetched, processed and handed over."
+    serves: "Finds uneven workers and slow samples in an input pipeline."
+    origin: field
+    depends_on: [STR-12]
+  - key: energy-power-timeline
+    title: "Energy and Power Timeline"
+    summary: "A timeline of device and host power draw with energy per step and per phase."
+    serves: "Lets a researcher compare the energy cost of two designs at the level of a step."
+    origin: field
+    depends_on: [RUN-03]
+  - key: thermal-throttling-view
+    title: "Thermal and Throttling View"
+    summary: "A timeline of temperatures, clocks and throttle reasons aligned with step time."
+    serves: "Explains slow periods that come from heat or power limits and not from code."
+    origin: field
+    depends_on: [STR-01]
+  - key: apple-gpu-counters
+    title: "Apple GPU and Unified Memory Counters"
+    summary: "Live and captured counters for the Apple GPU, such as occupancy, limiters and memory bandwidth, shown beside the unified memory pool."
+    serves: "Lets work on laptops and desktops with unified memory be tuned with the same views as other machines."
+    origin: field
+    depends_on: [REN-01, STR-01]
+  - key: shader-kernel-capture
+    title: "Shader and Kernel Capture"
+    summary: "A one-shot capture of the commands, buffers and counters of a single frame or step with a viewer for them."
+    serves: "Helps debug a custom shader or compute kernel without leaving the platform."
+    origin: field
+    depends_on: [REN-31, SPC-16]
+  - key: renderer-frame-timeline
+    title: "Frame Timeline of the Renderer"
+    summary: "A timeline of the platform's own frames showing upload, draw, compute and present time per view."
+    serves: "Shows which view slows the interface so heavy streams do not hurt interactivity."
+    origin: field
+    depends_on: [REN-31, SPC-36]
+  - key: latency-tokens-per-second
+    title: "Latency and Tokens-per-Second Panel"
+    summary: "A panel of time to first token, time per output token, throughput and tail latency with histograms."
+    serves: "Shows how a language model behaves under real prompts and settings."
+    origin: field
+    depends_on: [STR-01]
+  - key: request-trace-waterfall
+    title: "Request Trace Waterfall"
+    summary: "A waterfall of one request through queueing, prefill, decode, tool calls and network, built from standard trace spans."
+    serves: "Pinpoints which stage of a serving path costs the time."
+    origin: field
+    depends_on: [STR-05]
+  - key: batch-scheduler-serving-view
+    title: "Batch Scheduler View for Serving"
+    summary: "A live view of running and waiting requests, batch composition and preemptions in an inference server."
+    serves: "Explains throughput and latency effects of scheduling choices."
+    origin: field
+    depends_on: [STR-05]
+  - key: prefill-decode-split
+    title: "Prefill and Decode Cost Split"
+    summary: "A breakdown of compute and time between prompt processing and token generation per request and per model."
+    serves: "Shows which phase to optimise for a given workload."
+    origin: field
+    depends_on: [STR-01]
+  - key: load-test-sweep
+    title: "Load-Test Sweep"
+    summary: "A sweep over request rate, prompt length and concurrency that plots latency and throughput curves."
+    serves: "Finds the saturation point of a model server and how it degrades."
+    origin: field
+    depends_on: [RUN-13]
+  - key: format-comparison
+    title: "Runtime Comparison Across Formats"
+    summary: "A comparison of speed, memory and output difference for the same model in several runtimes and export formats."
+    serves: "Shows what each deployment format gains or costs before a model is shipped."
+    origin: field
+    depends_on: [EMB-04, RUN-05]
+  - key: process-thread-view
+    title: "Process and Thread View"
+    summary: "A live table of processes, threads, CPU use, memory and open files for a running job."
+    serves: "Lets a researcher see what a script and its workers are doing on the machine."
+    origin: field
+    depends_on: [STR-05]
+  - key: profile-trace-import
+    title: "Trace File Import"
+    summary: "A loader for trace event JSON and common profiler exports so existing traces open in the timeline."
+    serves: "Lets traces captured elsewhere be explored and diffed with the same views."
+    origin: field
+    depends_on: [SPC-03, STR-12]
+  - key: profile-to-source-jump
+    title: "Jump from a Profile to Source"
+    summary: "A link from any operator, kernel or sample to its file and line in the editor."
+    serves: "Closes the loop from a slow region to the code that caused it."
+    origin: field
+    depends_on: [STR-01]
+  - key: roofline-per-model-layer
+    title: "Per-Layer Cost Model"
+    summary: "A table of expected FLOPs, bytes and time per layer set against measured values."
+    serves: "Shows which layers run far from their ideal cost."
+    origin: field
+    depends_on: [STR-01]
+  - key: io-and-storage-view
+    title: "Disk and Storage Throughput View"
+    summary: "A timeline of read and write rates, queue depth and cache hits for datasets and checkpoints."
+    serves: "Finds slow storage as the cause of stalls in loading and checkpointing."
+    origin: field
+    depends_on: [STR-01]
+  - key: checkpoint-cost-view
+    title: "Checkpoint Cost View"
+    summary: "A view of time and bytes spent saving and loading checkpoints and how much each stalls training."
+    serves: "Helps choose checkpoint frequency and format."
+    origin: field
+    depends_on: [RUN-10]
+  - key: precision-speed-tradeoff
+    title: "Precision and Speed Trade-Off Plot"
+    summary: "A plot of speed gain against output error for each number format tried on a model."
+    serves: "Lets a researcher choose a precision with both costs in view."
+    origin: field
+    depends_on: [STR-01]
+  - key: profile-annotations
+    title: "Profile Range Annotations"
+    summary: "A small library call that marks named ranges in a script and shows them as bands on every timeline."
+    serves: "Connects profiler output to the researcher's own phases such as rollout or evaluation."
+    origin: field
+    depends_on: [STR-01, EMB-01]
+  - key: profile-capture-trigger
+    title: "Triggered Profile Capture"
+    summary: "A rule that starts a short profile when step time, memory or loss crosses a threshold."
+    serves: "Captures evidence of a rare slowdown without profiling the whole run."
+    origin: field
+    depends_on: [STR-05, RUN-03]
+  - key: memory-fragmentation-map
+    title: "Memory Fragmentation Map"
+    summary: "An address-space picture of reserved blocks, free gaps and the largest allocation that would still fit."
+    serves: "Shows why an allocation fails although total free memory looks large."
+    origin: field
+    depends_on: [STR-01]
+  - key: parallelism-planner
+    title: "Parallelism Planner"
+    summary: "A calculator view that sets model size and cluster shape against memory, compute and communication to suggest sharding layouts."
+    serves: "Helps plan a distributed run before using cluster time."
+    origin: field
+    depends_on: [STR-01]

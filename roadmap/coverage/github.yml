@@ -1,0 +1,228 @@
+# yaml-language-server: $schema=schema.json
+title: Pull requests
+kind: github
+summary: The repository's pull requests, open and closed, each mapped to the features it shipped or planned.
+  The repository has no issues. Dependabot pull requests are maintenance.
+entries:
+- pr: 1
+  item: Pull request 1 (merged) ships the public landing page on GitHub Pages.
+  reason: docs
+- pr: 2
+  item: Pull request 2 (merged) adds zero-copy mechanism diagrams to the landing page.
+  ids:
+  - REN-08
+- pr: 3
+  item: 'Pull request 3 (merged) fixes the Windows test lane: libtorch DLLs copied beside the tests and
+    a stack-overflow guard that re-arms itself on Windows.'
+  ids:
+  - PLT-03
+  - PLT-05
+- pr: 4
+  item: Pull request 4 (merged) caches compiled objects with sccache; warm builds fall from about 13 to
+    1 minute on macOS and 26 to 3 on Windows.
+  ids:
+  - PLT-03
+- pr: 13
+  item: 'Pull request 13 (merged) delivers roadmap Phase 1: the SDK package, a core that compiles no applets,
+    loading from outside, the Caliper CLI, Caliper Embed as a package, and docs and plans.'
+  ids:
+  - COR-04
+  - COR-06
+  - COR-07
+  - COR-08
+  - COR-09
+  - COR-10
+  - COR-12
+  - EMB-07
+- pr: 14
+  item: 'Pull request 14 (merged) delivers sprint 2: wire protocol v3 and 3.1, Caliper LIB serving, data
+    views, browser views, the hub, the app attaching to a stream, interactive controls, Caliper API v0,
+    macOS 14 target and CI for the browser views.'
+  ids:
+  - STR-01
+  - STR-02
+  - STR-03
+  - STR-04
+  - STR-05
+  - STR-06
+  - STR-07
+  - STR-08
+  - EMB-01
+  - EMB-03
+  - EMB-04
+  - EMB-05
+  - AGT-01
+  - INT-04
+  - COR-11
+- pr: 14
+  item: Follow-up recorded in pull request 14, not done. Compile and run the network layer and its tests
+    on Windows, lifting the refusals; the pull request notes that Windows is untested at run time.
+  ids:
+  - PLT-07
+  - PLT-08
+  - STR-20
+- pr: 14
+  item: Follow-up recorded in pull request 14, not done. Interventions on a model (ablating a head, steering
+    a direction), with the inspector work.
+  ids:
+  - INT-10
+  - INT-11
+  - INT-13
+  - INT-20
+- pr: 14
+  item: Follow-up recorded in pull request 14, not done. WebTransport beside the WebSocket, and the security
+    review before any session leaves the machine.
+  ids:
+  - STR-16
+  - STR-17
+- pr: 14
+  item: Follow-up recorded in pull request 14, not done. A clock exchange in the protocol, so that viewers
+    can show absolute latency.
+  ids:
+  - STR-47
+- pr: 14
+  item: Follow-up recorded in pull request 14, not done. A release workflow that attaches the WebAssembly
+    views to a release and publishes the wheel.
+  ids:
+  - PLT-19
+- pr: 14
+  item: Known gaps recorded in pull request 14. Vulkan does not draw the 3-D points depth cues or the
+    exact value colours for points; the two browser renderers still differ (square against round points,
+    a fixed range with equal ends).
+  ids:
+  - REN-02
+  - EMB-02
+  - REN-53
+- pr: 14
+  item: Known gaps recorded in pull request 14. The notebook widget is untested in VS Code notebooks,
+    the capture is Metal only, and the cost goal of 3 percent is missed for three views with two viewers
+    (4.6 percent).
+  ids:
+  - STR-07
+  - AGT-01
+  - STR-04
+- pr: 15
+  item: Pull request 15 (merged) switches the site, docs and README to the Minerals Caliper icon.
+  reason: docs
+- pr: 17
+  item: 'Pull request 17 (merged) delivers sprint 3: the builder libraries, spec format, loaders, catalog,
+    command layer and session, caliper-mcp, the side chat, the widget agent, command endpoints of Caliper
+    API, the spec runtime and applets, the builder pane, drag and drop, approval cards and the first slice
+    of the browser spec page.'
+  ids:
+  - SPC-01
+  - SPC-02
+  - SPC-03
+  - SPC-04
+  - SPC-05
+  - SPC-06
+  - SPC-07
+  - SPC-08
+  - AGT-01
+  - AGT-02
+  - AGT-03
+  - AGT-05
+  - EMB-06
+- pr: 17
+  item: Deferred or not done in pull request 17. The attention entropy acceptance case waits on a reshape
+    step; packaging of caliper-mcp and caliper-agent, a note on GPU contention during a live run, and
+    the rest of the browser spec page are not done; revoking a token does not close a stream already open.
+  ids:
+  - SPC-13
+  - AGT-10
+  - EMB-06
+  - EMB-27
+  - EMB-28
+- pr: 17
+  item: 'Review findings deferred in pull request 17: how Accept treats preview.commit, edge cases in
+    the life cycle of the API the chat starts, approvals from the API that never expire, and a command
+    joining another origin''s undo step through its group.'
+  ids:
+  - AGT-06
+  - SPC-05
+  - AGT-01
+  - AGT-11
+- pr: 18
+  item: Pull request 18 (merged) delivers the widget agent settings in the app, three more entry points
+    for the widget agent prompt (a selection on a panel, a dropped file, a property), and the Shared GPU
+    note.
+  ids:
+  - AGT-05
+  - AGT-04
+- pr: 18
+  item: 'Deferred in pull request 18: Escape and the prompt key pass through the settings popup, a property
+    prompt can draw under another panel row, a selection outlives its spec, and packaging of caliper-agent
+    with a Python runtime and the Shared GPU note in the side chat are not done.'
+  ids:
+  - AGT-05
+  - AGT-10
+- pr: 19
+  item: Pull request 19 (merged) delivers the build-a-dashboard walk-through on a real training run, local
+    models for the widget agent and the side chat (Ollama preset, context lengths), launches that carry
+    the caller's origin, unsaved-changes prompts, a live session that stays attached, and Open in browser.
+  ids:
+  - AGT-04
+  - AGT-05
+  - AGT-03
+  - SPC-07
+  - EMB-06
+- pr: 19
+  item: 'Not done in pull request 19: holding a launch as one command with an approval id, offering to
+    compact a conversation that no longer fits, and the repeated layout.set rows in Activity; the reshape
+    step and packaging of caliper-agent and caliper-mcp moved to sprint 5; axis ticks on the tiled attention
+    view are not added.'
+  ids:
+  - SPC-13
+  - AGT-10
+  - AGT-12
+  - AGT-28
+- pr: 20
+  item: 'Pull request 20 (merged) delivers sprint 3.1: tests isolated from the person''s data, permission
+    modes for the side chat and caliper-mcp clients, metrics in the Sources list grouped by run, and removal
+    of a panel.'
+  ids:
+  - AGT-06
+  - RUN-01
+  - SPC-09
+  - SPC-07
+- pr: 20
+  item: 'Not done in pull request 20: deny rules, a guard for the browser tests and the sidecar''s default
+    API file, one saved-rule key shared by all custom agents, and the x on a panel strip covering the
+    end of its stats text.'
+  ids:
+  - AGT-06
+  - SPC-09
+- pr: 21
+  item: Pull request 21 (merged) updates the Sternbild seal and display font in the site and docs.
+  reason: docs
+- pr: 22
+  item: 'Pull request 22 (merged) adds the public roadmap: a feature registry, a dependency graph page
+    and generated pillar and feature pages, with checks.'
+  reason: docs
+- pr: 5
+  item: Pull request 5 (closed), Dependabot bump of slang bump.
+  reason: maintenance
+- pr: 6
+  item: Pull request 6 (closed), Dependabot bump of actions group bump.
+  reason: maintenance
+- pr: 7
+  item: Pull request 7 (open), Dependabot bump of glm.
+  reason: maintenance
+- pr: 8
+  item: Pull request 8 (open), Dependabot bump of glfw.
+  reason: maintenance
+- pr: 9
+  item: Pull request 9 (open), Dependabot bump of python group.
+  reason: maintenance
+- pr: 10
+  item: Pull request 10 (open), Dependabot bump of imgui-node-editor.
+  reason: maintenance
+- pr: 11
+  item: Pull request 11 (open), Dependabot bump of glew.
+  reason: maintenance
+- pr: 12
+  item: Pull request 12 (open), Dependabot bump of slang.
+  reason: maintenance
+- pr: 16
+  item: Pull request 16 (open), Dependabot bump of actions group.
+  reason: maintenance

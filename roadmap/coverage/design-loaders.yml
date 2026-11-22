@@ -1,0 +1,221 @@
+# yaml-language-server: $schema=schema.json
+title: Loaders plan page
+kind: page
+source: design/loaders.md
+ref: main
+summary: The plan page design/loaders.md on main, read heading by heading; each plan heading has an entry
+  or is listed as holding no feature.
+entries:
+- heading: The loader format v0
+  item: A loader is a TOML recipe loaders/<id>.loader.toml with caliper_loader = 0, an input path and
+    reader, reader options and outputs; parsing is strict with line and column errors.
+  ids:
+  - SPC-03
+- heading: Keys
+  item: 'The table of loader keys: id, title, input.path and reader, reader options, and per-output name,
+    mode (view or table), sql, tensor, table and transform.'
+  ids:
+  - SPC-03
+- heading: Readers
+  item: 'The reader table: csv, parquet, json, jsonl, arrow, npy, npz, safetensors, hdf5, image, wav and
+    python, with extensions, magic bytes and options.'
+  ids:
+  - SPC-03
+- heading: Readers
+  item: The tabular readers csv, parquet, json and jsonl through DuckDB, with options such as header,
+    delimiter and union_by_name.
+  ids:
+  - SPC-03
+- heading: What each reader produces
+  item: 'The tensor readers: npy (versions 1 to 3, all byte orders), npz (zip, stored or deflate, zip64),
+    safetensors (header plus mapped bytes, BF16 converted to f32), image (PNG and JPEG to u8 [H, W, C])
+    and wav (PCM and float to [frames, channels] with rate_hz).'
+  ids:
+  - SPC-03
+- heading: What each reader produces
+  item: The json and jsonl readers need DuckDB's JSON extension, which the page says the host does not
+    link yet.
+  ids:
+  - SPC-03
+- heading: Inferring the reader
+  item: Reader inference from extension and the first 16 bytes, with loader.reader_mismatch and loader.no_reader,
+    and infer_loader making the default loader for a dropped file.
+  ids:
+  - SPC-03
+- heading: Arrow IPC files
+  item: The arrow reader is a refusal, loader.arrow_not_available; a later stream would fetch nanoarrow
+    at a pinned release and copy the file into a table.
+  ids:
+  - SPC-31
+- heading: HDF5
+  item: The hdf5 reader is a refusal, loader.hdf5_not_available; the plan is a reader behind find_package(HDF5
+    COMPONENTS C) that reads one dataset or every dataset when libhdf5 is found.
+  ids:
+  - SPC-32
+- heading: Globs
+  item: input.path may be a glob (*, ?, **), expanded by the library with confinement checks, sorted,
+    bounded, giving one relation for tabular readers and one tensor per file for tensor readers.
+  ids:
+  - SPC-03
+- heading: Tables, views and SQL
+  item: Table outputs become views (default, read on each query) or copied tables in workspace.duckdb,
+    with an optional single SELECT over the relation input checked by DuckDB's parser.
+  ids:
+  - SPC-03
+- heading: Tensor outputs and transforms
+  item: Tensor outputs select one tensor or all with tensor = "*" and may apply the slice, reduce and
+    normalise transforms, whose CPU reference implementation fixes the numeric rules.
+  ids:
+  - SPC-03
+  - SPC-01
+- heading: Tensor outputs and transforms
+  item: A GPU version of the transforms that must match the CPU rules.
+  ids:
+  - SPC-35
+- heading: Statistics for `catalog.sample`
+  item: tensor_stats and tensor_sample give the count, non-finite count, min, max, mean and standard deviation
+    and a bounded slice that catalog.sample returns.
+  ids:
+  - SPC-04
+  - SPC-03
+- heading: Where loaders and their outputs are stored
+  item: The workspace layout of loaders/, tensors/, loader-outputs/, inputs.toml and workspace.duckdb,
+    and LoaderStore::rebuild() that recreates every database row from the text files.
+  ids:
+  - SPC-03
+- heading: '`caliper.loaders`'
+  item: The caliper.loaders table holds each loader's recipe, times and last run status.
+  ids:
+  - SPC-03
+- heading: '`caliper.sources`'
+  item: The caliper.sources table holds each output's kind, columns, dtype, shape, storage columns and
+    wire flag, and runs are atomic.
+  ids:
+  - SPC-03
+  - SPC-04
+- heading: The C++ interface
+  item: The public headers of caliper_builder_loaders and LoaderStore with its mutex and the DuckDB-behind-one-file
+    rule.
+  ids:
+  - SPC-03
+- heading: The pickle policy
+  item: 'Native readers never load a pickle: .pkl, .pt, .pth, .ckpt and .joblib files, pickle markers,
+    torch zip archives and object-dtype arrays are refused with loader.pickle_refused, which points to
+    safetensors or the Python loader.'
+  ids:
+  - SPC-03
+- heading: The Python loader
+  item: A Python loader runs a user's script in a separate process and takes back only .npy, Parquet and
+    CSV files, which Caliper checks as untrusted input.
+  ids:
+  - SPC-03
+- heading: The recipe
+  item: 'The Python loader recipe: reader = "python", a script inside the workspace, an interpreter and
+    a timeout, with outputs that select tensor or table by name or "*".'
+  ids:
+  - SPC-03
+- heading: The script
+  item: The script defines load(path, out) and uses out.tensor, out.table, out.warn and out.torch_weights,
+    which reads torch files weights-only; without pyarrow tables are written as typed CSV.
+  ids:
+  - SPC-03
+- heading: The host and the process
+  item: loader_host.py is embedded in the library and run with python -I through acp::run_process, with
+    a scrubbed environment, a time limit with SIGTERM then SIGKILL and bounded output.
+  ids:
+  - SPC-03
+- heading: The manifest and what Caliper checks
+  item: 'The script''s manifest.json is treated as hostile input: names, file names, links, sizes, dtype
+    and shape are all checked before the files are read by the native readers.'
+  ids:
+  - SPC-03
+- heading: Where the outputs are kept
+  item: Checked outputs move to loader-outputs/<id>/run-<n>/ and are read back by rebuild() without running
+    the script.
+  ids:
+  - SPC-03
+- heading: Approval
+  item: LoaderStore::run refuses a Python loader without RunOptions::allow_python and the command layer
+    sets it only after the person approved, so an agent's run of a script asks.
+  ids:
+  - SPC-03
+  - SPC-05
+  - AGT-06
+- heading: Limits
+  item: 'The Python loader''s limits table: 120 s time default (3,600 at most), 1 MiB per output stream,
+    4 GiB per file, 16 GiB in all and one input file.'
+  ids:
+  - SPC-03
+- heading: What the Python loader does not do yet
+  item: Python loaders on Windows, where process spawning is POSIX only and every run fails with loader.python_not_available.
+  ids:
+  - PLT-13
+- heading: What the Python loader does not do yet
+  item: A Python loader over a glob, with one run per file.
+  ids:
+  - SPC-34
+- heading: What the Python loader does not do yet
+  item: A script that leaves a process behind or leaves the process group keeps running; this is a known
+    gap, not a planned change.
+  ids:
+  - SPC-03
+- heading: Safety
+  item: 'Safety of loaders: confinement of paths, size checks of every header, a locked-down DuckDB and
+    a read-only query helper.'
+  ids:
+  - SPC-03
+- heading: Paths and confinement
+  item: A loader reads files inside the workspace or granted by the person; grants live in inputs.toml
+    and only a user action calls grant(); symbolic links that leave are refused.
+  ids:
+  - SPC-03
+- heading: Sizes
+  item: Every reader checks header sizes against the file's real size and a table of limits for dimensions,
+    bytes, members, image sides and results.
+  ids:
+  - SPC-03
+- heading: What the database may read
+  item: workspace.duckdb is opened with external access off, allowed directories and files, extensions
+    off and the configuration locked.
+  ids:
+  - SPC-03
+- heading: The query helper
+  item: LoaderStore::query runs exactly one SELECT in a transaction that is always rolled back, with a
+    row limit and a timeout; it backs data.query and catalog.sample.
+  ids:
+  - SPC-03
+  - SPC-05
+- heading: Errors
+  item: The table of loader.*, catalog.*, tensor.*, query.timeout and transform.* error codes.
+  ids:
+  - SPC-03
+- heading: What is built and what is planned
+  item: 'Built on the branches sprint3-loaders and sprint3-pyloader: the tensor type and transforms, the
+    readers, the refusals, the tabular readers, the loader format, LoaderStore and the Python loader with
+    tests.'
+  ids:
+  - SPC-03
+- heading: What is built and what is planned
+  item: 'Planned: the CatalogProvider adapter for loader outputs.'
+  ids:
+  - SPC-04
+  - SPC-03
+- heading: What is built and what is planned
+  item: 'Planned: the command handlers for the loader commands.'
+  ids:
+  - SPC-05
+- heading: What is built and what is planned
+  item: 'Planned: the Arrow IPC reader, the HDF5 reader, stacking a glob of images, GPU transforms, Python
+    loaders on Windows and a Python loader over a glob.'
+  ids:
+  - SPC-31
+  - SPC-32
+  - SPC-33
+  - SPC-35
+  - PLT-13
+  - SPC-34
+- heading: Decisions
+  item: 'Recorded loader decisions: grants in inputs.toml, absolute paths in views, library-side glob
+    expansion, bf16 to f32, .npy derived tensors, unknown keys as errors and the Python loader''s rules.'
+  ids:
+  - SPC-03

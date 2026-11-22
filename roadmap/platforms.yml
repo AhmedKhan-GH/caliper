@@ -7,57 +7,63 @@ features:
   - id: PLT-01
     title: macOS on Metal
     status: shipped
+    scope: supporting
     summary: macOS is the primary platform, where the host draws with its own Metal renderer and takes tensors from torch on MPS without a copy.
     depends_on: []
-    docs: docs/explanations/rendering.md#backends
+    docs: docs/applets/rendering.md#backends
     issue: null
 
   - id: PLT-02
     title: Windows on Vulkan and CUDA
     status: shipped
+    scope: supporting
     summary: On Windows the host draws with a Vulkan renderer and moves CUDA tensors to it through interop, with fallbacks when the fast path is unavailable.
     depends_on: []
-    docs: docs/explanations/vulkan-cuda.md
+    docs: docs/development/vulkan-and-cuda.md
     issue: null
 
   - id: PLT-03
     title: Continuous integration
     status: shipped
+    scope: supporting
     summary: Continuous integration builds and tests the core on macOS and on windows-latest, builds the applets and packages against the installed SDK, and checks that the host names no applet.
     depends_on: []
-    docs: docs/guides/ci.md
+    docs: docs/development/ci.md
     issue: null
 
   - id: PLT-04
-    title: A signed and notarized build
+    title: Signed and notarized build
     status: planned
-    summary: A signed and notarized macOS build carries the first-party applets inside the app bundle.
+    scope: peripheral
+    summary: The macOS app is signed and notarized for distribution, together with the agents it packages.
     depends_on: [PLT-01]
     sprint: 5
     design: design/applets-outside-the-core.md#signing-on-macos
     issue: null
-    draft: true
 
   - id: PLT-05
     title: Windows build and test baseline
     status: planned
+    scope: supporting
     summary: The Windows baseline runs full CI on windows-latest for every package and subcommand and runs the graphics, export and embed suites on Windows hardware with no skipped GPU rows.
     depends_on: [PLT-02, PLT-03]
-    docs: docs/guides/verify-on-windows.md
+    docs: docs/development/windows-verification.md
     design: design/windows-parity.md#1-build-and-test-baseline
     issue: null
 
   - id: PLT-06
-    title: The applet platform on Windows
+    title: Applet platform on Windows
     status: planned
+    scope: supporting
     summary: The applet platform on Windows gets applet loading with the right DLL search directories, the libtorch pin with its CUDA variant, install over a loaded DLL, a console entry point, and caliper shot and caliper build.
-    depends_on: [PLT-05, COR-08, COR-10]
+    depends_on: [COR-08, COR-10, PLT-13]
     design: design/windows-parity.md#2-the-applet-platform
     issue: null
 
   - id: PLT-07
     title: Caliper LIB on Windows
     status: planned
+    scope: supporting
     summary: Caliper LIB gets Windows wheels built with MSVC, its network transport is verified and measured on CUDA, and its in-process window runs on Vulkan.
     depends_on: [PLT-05, STR-01]
     design: design/windows-parity.md#3-caliper-lib
@@ -66,63 +72,102 @@ features:
   - id: PLT-08
     title: Streaming, the hub and Caliper API on Windows
     status: planned
+    scope: supporting
     summary: Windows gets the app's network source, the caliper serve hub and Caliper API v0 on Winsock, bound to 127.0.0.1, with their refusals lifted once their tests run there.
-    depends_on: [PLT-05, STR-06, AGT-01]
+    depends_on: [AGT-01, PLT-05, STR-06]
     design: design/windows-parity.md#4-streaming-the-hub-and-caliper-api
     issue: null
 
   - id: PLT-09
-    title: The web viewer and notebooks on Windows
+    title: Web viewer and notebooks on Windows
     status: planned
+    scope: supporting
     summary: The web viewer is checked in Chrome and Edge and the notebook widget in JupyterLab and Visual Studio Code on Windows.
-    depends_on: [PLT-07, PLT-08, EMB-01, STR-07]
+    depends_on: [EMB-01, PLT-07, PLT-08, STR-07]
     design: design/windows-parity.md#5-the-web-viewer-and-notebooks
     issue: null
 
   - id: PLT-10
     title: Caliper Embed on Windows
     status: planned
+    scope: supporting
     summary: The installed caliper-embed package runs on Windows hardware with Win32 hosting in a window and offscreen, and it gains hosting examples for WPF, WinForms and Qt.
-    depends_on: [PLT-05, EMB-07]
+    depends_on: [EMB-07, PLT-05, PLT-17]
     design: design/windows-parity.md#6-caliper-embed
     issue: null
 
   - id: PLT-11
     title: Renderer fallbacks on Windows
     status: planned
+    scope: supporting
     summary: Windows gets the WebGPU backend through Dawn as the native fallback, drawing through Direct3D 12, Direct3D 11 or SwiftShader when Vulkan is unavailable.
     depends_on: [PLT-05, REN-25]
     design: design/windows-parity.md#7-renderer-fallbacks
     issue: null
-    draft: true
 
   - id: PLT-12
     title: Signing and packaging on Windows
     status: planned
+    scope: peripheral
     summary: Windows gets Authenticode signing of the app, the CLI entry point and the first-party applet DLLs, an installer, and a winget package that puts the CLI on the path.
     depends_on: [PLT-06]
     design: design/windows-parity.md#8-signing-packaging-and-distribution
     issue: null
 
   - id: PLT-13
-    title: The builder's agents on Windows
+    title: Builder agents on Windows
     status: planned
+    scope: supporting
     summary: Windows gets process spawning, the caliper-mcp HTTP client and a Credential Manager key store, so that the side chat and the widget agent run there.
-    depends_on: [PLT-08, AGT-03, AGT-05]
+    depends_on: [AGT-03, AGT-05, PLT-08]
     design: design/windows-parity.md#9-the-builders-agents
     issue: null
 
   - id: PLT-14
     title: Linux arm64
     status: planned
-    summary: Linux arm64 is a build of the core and its tools for Linux on arm64.
+    scope: peripheral
+    summary: Caliper builds, tests and ships on Linux on arm64, including a Caliper LIB wheel, once a Linux arm64 machine is available.
     depends_on: [PLT-15]
     issue: null
-    draft: true
 
   - id: PLT-15
     title: Linux arm64 timing
     status: decision
-    summary: This decision sets when the Linux arm64 build starts.
+    scope: peripheral
+    summary: This decision sets when Linux work starts; it waits until a Linux arm64 machine is available, and the Linux features wait with it.
     depends_on: []
+    issue: null
+
+  - id: PLT-16
+    title: Scenes and recordings on Windows
+    status: planned
+    scope: supporting
+    summary: Scenes, slice planes, isosurfaces and recordings work on Windows, through the Vulkan backend of the graphics layer and CUDA.
+    depends_on: [REN-53, STR-12]
+    issue: null
+
+  - id: PLT-17
+    title: WinUI 3 hosting
+    status: decision
+    scope: supporting
+    summary: This decision sets whether Caliper Embed is hosted in WinUI 3, which expects a DXGI swap chain, through Vulkan and DXGI interop or through the Dawn fallback.
+    depends_on: []
+    issue: null
+
+  - id: PLT-18
+    title: Fast paths in the documented setup
+    status: planned
+    scope: supporting
+    summary: The documented setup builds the native sender and the WebAssembly views, so that a first run uses the fast paths rather than the Python sender and the TypeScript views.
+    depends_on: [EMB-04, STR-05]
+    sprint: "3.2"
+    issue: null
+
+  - id: PLT-19
+    title: Release workflow
+    status: planned
+    scope: supporting
+    summary: A release workflow attaches the WebAssembly views to each release and publishes Caliper LIB's wheel.
+    depends_on: [EMB-04, PLT-03, STR-01]
     issue: null

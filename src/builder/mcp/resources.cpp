@@ -185,7 +185,7 @@ json ResourceStore::templates() const {
                        {"name", "docs"},
                        {"title", "Caliper documentation pages"},
                        {"description", "A Markdown page of the Caliper documentation, by its path under docs/, such as "
-                                       "references/api.md."},
+                                       "agents/http-api.md."},
                        {"mimeType", "text/markdown"}});
     if (!sdk_root_.empty())
         out.push_back({{"uriTemplate", std::string(kSdkUriPrefix) + "{+path}"},

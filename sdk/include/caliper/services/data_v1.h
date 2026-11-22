@@ -1,6 +1,6 @@
 #pragma once
 /* caliper.data.v1 — SQL over the host's embedded analytical store, results
- * out as Arrow C streams (docs/references/service-data-v1.md). Datasets become named, shared,
+ * out as Arrow C streams (docs/applets/services/caliper-data-v1.md). Datasets become named, shared,
  * queryable resources instead of per-applet private downloads. IMMUTABLE once
  * published. Callable from applet job threads; the host serializes
  * internally.
