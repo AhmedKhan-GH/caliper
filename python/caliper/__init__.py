@@ -498,12 +498,53 @@ def series(value, name: str = "series", rate=None, *, items=None):
     return res if sync is not None else taken
 
 
-def watch(model, activations: bool = True, gradients: bool = False, every: int = 1,
-          include=None, rate=None, groups=True):
-    """Hook a module so that `show` displays its outputs and gradients.
+def watch(model, optimizer=None, *, activations: bool = True, gradients: bool = False,
+          every: int = 1, include=None, rate=None, groups=True, scene: bool = True):
+    """Hook a module so that `show` displays its outputs and gradients, and with an optimizer, the run.
 
     The call returns a [`WatchHandle`][caliper._watch.WatchHandle]. The root module is labeled with
     its class name in lower case.
+
+    ```python
+    caliper.watch(model, optimizer)
+    for x, y in loader:
+        loss = loss_fn(model(x), y)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+    ```
+
+    With an optimizer, `watch()` also does these things:
+
+    1. It starts the stream server with [`serve`][caliper.serve] when no server runs, so that the
+       Caliper app can attach with control. The shared-memory session does not open, so no view
+       appears twice in the app.
+    2. It makes each `optimizer.step()` the checkpoint of the run, through a step pre-hook that
+       calls [`step`][caliper.step]. Pending parameter values apply and queued actions run there,
+       and a pause holds the run there, before the weights change. A script that passes an
+       optimizer does not also call `caliper.step()`.
+    3. It registers the parameter `lr` and publishes the series `loss` and `lr` and the scene
+       `model`.
+
+    | Name | Kind | Content |
+    |---|---|---|
+    | `loss` | Series | The last 0-d tensor that `backward()` ran on before each step, or inside the closure of `optimizer.step(closure)` |
+    | `lr` | Series | The learning rate that parameter group 0 used at each step |
+    | `lr` | Parameter | A number on a log scale, from the start rate of group 0 divided by 1,000 to the start rate multiplied by 10 |
+    | `model` | Scene | The entity `modules`: one box for each module of `WatchHandle.modules`, along +y in that order |
+
+    A new value of `lr` applies to the next optimizer step, and every parameter group moves by the
+    same factor, so the ratios between the groups stay. Without a learning rate scheduler, the new
+    rates stay in `optimizer.param_groups`. With a torch scheduler, the value scales the
+    scheduler's schedule from that step on: before each step the hook multiplies the scheduled
+    rates by the factor, and after the step it puts them back, so the scheduler neither undoes nor
+    compounds the change. `optimizer.param_groups` and `scheduler.get_last_lr()` then show the
+    scheduled rates, and the series `lr` shows the rate that each step used.
+
+    The size of a box shows the parameter count of its module, and its color the mean absolute
+    value of the module's last output, computed at most 10 times a second and only while a viewer
+    watches the scene. The row id of a box is the index of its module in `WatchHandle.modules`,
+    so a pick on a box names the module, and each box has the module's name as its label.
 
     The grouped views are heatmaps with [data views](data-view-calls.md#data-views). Their sources
     are the selected modules or their parameters, so one widget can switch between layers. The same
@@ -530,6 +571,8 @@ def watch(model, activations: bool = True, gradients: bool = False, every: int =
 
     Args:
         model (torch.nn.Module): The module to hook.
+        optimizer (torch.optim.Optimizer | None): The optimizer of the run. `None` watches the
+            module only, as above.
         activations (bool): A forward hook per selected module shows its output as `<module>.act`.
             A tuple output gives its first tensor. Only floating-point, non-empty tensors show.
             `(N, C, H, W)` outputs show item 0 as a channel mosaic, and `(N, F)` outputs show a
@@ -544,17 +587,20 @@ def watch(model, activations: bool = True, gradients: bool = False, every: int =
         rate (float | None): Passed to `show`.
         groups (bool | str): Also offer the grouped views above. A string prefixes their names with
             `<string>.`, and `False` offers none.
+        scene (bool): With an optimizer, also publish the scene `model`. Without one, it does
+            nothing.
 
     Returns:
-        WatchHandle: The handle of the hooks. Its `remove()` takes them off.
+        WatchHandle: The handle of the hooks. Its `remove()` takes them off, with the parameter
+            `lr`.
 
     Raises:
-        TypeError: When `model` is not a `torch.nn.Module`.
+        TypeError: When `model` is not a `torch.nn.Module`, or `optimizer` is not an optimizer.
         ValueError: When `every` is below 1.
     """
     from ._watch import watch as _w
-    return _w(model, activations=activations, gradients=gradients, every=every,
-              include=include, rate=rate, groups=groups)
+    return _w(model, optimizer, activations=activations, gradients=gradients, every=every,
+              include=include, rate=rate, groups=groups, scene=scene)
 
 
 # ---------------------------------------------------------------------------

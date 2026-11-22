@@ -27,6 +27,11 @@ data view picks the source, so that one widget can switch between layers.
 * ``gradients``: the gradients that ``<module>.<param>.grad`` shows, with the
   sources and dims of ``weights``.
 
+With an optimizer, ``watch(model, optimizer)`` also starts caliper.serve(),
+makes each ``optimizer.step()`` the checkpoint of the run, registers the
+parameter ``lr`` and publishes the series ``loss`` and ``lr`` and the scene
+``model`` (caliper._watch_run).
+
 A view has at most 64 sources (the wire protocol's limit); a group keeps the
 first 64 with a warning. A source does tensor work only when a route needs it:
 the window and the session need the default data view's source, a server the
@@ -62,6 +67,7 @@ class WatchHandle:
     def __init__(self):
         self._handles: list = []
         self._entries: list = []            # the grouped views' registry entries
+        self._run = None                    # caliper._watch_run.RunHooks of an optimizer
         self.views: list[str] = []          # view names the hooks show into
         """The view names that the hooks show into."""
         self.modules: list[str] = []        # module names that got a hook
@@ -70,10 +76,17 @@ class WatchHandle:
         """The names of the grouped views, with the prefix that `watch` was given."""
 
     def remove(self) -> None:
-        """Take every hook off and remove the grouped views."""
+        """Take every hook off and remove the grouped views and the parameter `lr`.
+
+        The series and the scene stay. Without a learning rate scheduler, a learning rate that a
+        viewer set stays in the optimizer. With one, the scheduler's own rates apply again.
+        """
         for h in self._handles:
             h.remove()
         self._handles.clear()
+        if self._run is not None:
+            self._run.close()
+            self._run = None
         for e in self._entries:
             _dataview.REGISTRY.remove(e.name, e)
         self._entries.clear()
@@ -172,8 +185,8 @@ def _register_groups(h, picked, activations, gradients, rate, prefix):
     return out
 
 
-def watch(model, activations: bool = True, gradients: bool = False, every: int = 1,
-          include=None, rate=None, groups=True) -> WatchHandle:
+def watch(model, optimizer=None, *, activations: bool = True, gradients: bool = False,
+          every: int = 1, include=None, rate=None, groups=True, scene: bool = True) -> WatchHandle:
     import torch
     if not isinstance(model, torch.nn.Module):
         raise TypeError("caliper.watch expects a torch.nn.Module")
@@ -185,6 +198,13 @@ def watch(model, activations: bool = True, gradients: bool = False, every: int =
     h = WatchHandle()
     picked = [(mname or type(model).__name__.lower(), mod) for mname, mod in model.named_modules()
               if pick(mname, mod)]
+    run = None
+    if optimizer is not None:                         # the checkpoint, lr, loss and the scene
+        from ._watch_run import RunHooks
+        run = RunHooks(pkg, h, optimizer, scene, rate)
+        h._run = run
+    rec = run if run is not None and run.scene is not None else None
+    labels, mods = [], []
     gw = ga = gg = None
     if groups:
         prefix = f"{groups}." if isinstance(groups, str) else ""
@@ -197,7 +217,9 @@ def watch(model, activations: bool = True, gradients: bool = False, every: int =
         if activations:
             view = f"{label}.act"
 
-            def fwd(m, inp, out, view=view, label=label, wsrc=wsrc, count=[0]):
+            def fwd(m, inp, out, view=view, label=label, wsrc=wsrc, i=len(labels), count=[0]):
+                if rec is not None and rec.armed:
+                    rec.record(i, out)
                 count[0] += 1
                 if every > 1 and count[0] % every:
                     return
@@ -212,6 +234,13 @@ def watch(model, activations: bool = True, gradients: bool = False, every: int =
                     pkg._dv_hook(gw, src, None)
             h._handles.append(mod.register_forward_hook(fwd))
             h.views.append(view)
+            hooked = True
+        elif rec is not None:                         # the scene's colors only
+
+            def colors(m, inp, out, i=len(labels)):
+                if rec.armed:
+                    rec.record(i, out)
+            h._handles.append(mod.register_forward_hook(colors))
             hooked = True
         if gradients:
             for pname, p in mod.named_parameters(recurse=False):
@@ -242,4 +271,8 @@ def watch(model, activations: bool = True, gradients: bool = False, every: int =
                 hooked = True
         if hooked:
             h.modules.append(label)
+            labels.append(label)
+            mods.append(mod)
+    if run is not None:
+        run.modules(labels, mods)
     return h
