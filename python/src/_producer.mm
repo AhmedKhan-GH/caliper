@@ -22,6 +22,7 @@
 
 #include "dlpack.h"
 #include "producer/caliper_producer.h"
+#include "producer/caliper_producer_derive.h"
 
 #include <array>
 #include <cstring>
@@ -265,6 +266,106 @@ public:
         return handle;
     }
 
+    // Checks, composes and compiles the derive half of a piece (caliper_producer_derive.h).
+    // `inputs` holds (name, import handle or 0 for the place of a buffer input, dtype);
+    // `resources` (id, kind, element, struct name, fields, count, width, height, counted,
+    // publish, clear); `passes` (entry, workgroups, writes); `params` (name, type, value).
+    uint32_t derive(const std::string& id, const std::string& wgsl, const std::string& common,
+                    const std::vector<std::tuple<std::string, uint32_t, std::string>>& inputs,
+                    const std::vector<std::tuple<std::string, std::string, std::string, std::string,
+                                                 std::vector<std::string>, uint32_t, uint32_t, uint32_t, bool,
+                                                 bool, bool>>& resources,
+                    const std::vector<std::tuple<std::string, std::array<uint32_t, 3>, std::vector<std::string>>>&
+                        passes,
+                    const std::vector<std::tuple<std::string, std::string, double>>& params, double time_ms,
+                    uint64_t memory_bytes, std::optional<std::string> piece_hash) {
+        alive();
+        std::vector<caliper_producer_input> ins;
+        std::vector<const char*> types;
+        for (const auto& [name, h, dtype] : inputs) {
+            ins.push_back({name.c_str(), h});
+            types.push_back(dtype.c_str());
+        }
+        std::vector<std::vector<const char*>> fields(resources.size());
+        std::vector<caliper_producer_resource_desc> res;
+        for (size_t i = 0; i < resources.size(); ++i) {
+            const auto& [rid, kind, element, struct_name, fs, count, width, height, counted, publish, clear] =
+                resources[i];
+            for (const std::string& f : fs) fields[i].push_back(f.c_str());
+            caliper_producer_resource_desc r{};
+            r.id = rid.c_str();
+            r.kind = kind == "texture" ? CALIPER_PRODUCER_RESOURCE_TEXTURE : CALIPER_PRODUCER_RESOURCE_BUFFER;
+            r.element = element.empty() ? nullptr : element.c_str();
+            r.struct_name = struct_name.empty() ? nullptr : struct_name.c_str();
+            r.fields = fields[i].empty() ? nullptr : fields[i].data();
+            r.field_count = fields[i].size();
+            r.count = count;
+            r.width = width;
+            r.height = height;
+            r.counted = counted;
+            r.publish = publish;
+            r.clear = clear;
+            res.push_back(r);
+        }
+        std::vector<std::vector<const char*>> writes(passes.size());
+        std::vector<caliper_producer_derive_pass> ps;
+        for (size_t i = 0; i < passes.size(); ++i) {
+            const auto& [entry, wg, w] = passes[i];
+            for (const std::string& x : w) writes[i].push_back(x.c_str());
+            caliper_producer_derive_pass p{};
+            p.entry = entry.c_str();
+            std::memcpy(p.workgroups, wg.data(), sizeof p.workgroups);
+            p.writes = writes[i].empty() ? nullptr : writes[i].data();
+            p.write_count = writes[i].size();
+            ps.push_back(p);
+        }
+        std::vector<caliper_producer_param> values;
+        std::vector<const char*> param_types;
+        for (const auto& [name, type, value] : params) {
+            values.push_back({name.c_str(), value});
+            param_types.push_back(type.c_str());
+        }
+        caliper_producer_derive_desc d{};
+        d.id = id.c_str();
+        d.piece_hash = piece_hash ? piece_hash->c_str() : nullptr;
+        d.wgsl = wgsl.data();
+        d.wgsl_size = wgsl.size();
+        d.common = common.empty() ? nullptr : common.data();
+        d.common_size = common.size();
+        d.inputs = ins.data();
+        d.input_count = ins.size();
+        d.input_types = types.data();
+        d.resources = res.data();
+        d.resource_count = res.size();
+        d.passes = ps.data();
+        d.pass_count = ps.size();
+        d.params = values.data();
+        d.param_types = param_types.data();
+        d.param_count = values.size();
+        d.time_limit_ms = time_ms;
+        d.memory_limit_bytes = memory_bytes;
+        uint32_t handle = 0;
+        caliper_producer_error e{};
+        const caliper_producer_status s = caliper_producer_compile_derive(rt_, &d, &handle, &e);
+        if (s != CALIPER_PRODUCER_OK) raise(s, e);
+        return handle;
+    }
+
+    // The valid bytes of one published resource after the last pass, copied, as (bytes, count,
+    // stride): the next pass writes the runtime's buffer again while a sender still holds them.
+    nb::tuple resource(uint32_t program, const std::string& name) {
+        alive();
+        caliper_producer_output o{};
+        caliper_producer_error e{};
+        const caliper_producer_status s = caliper_producer_read_resource(rt_, program, name.c_str(), &o, &e);
+        if (s != CALIPER_PRODUCER_OK) raise(s, e);
+        id<MTLBuffer> buffer = (__bridge id<MTLBuffer>)o.buffer;
+        const char* base = buffer ? static_cast<const char*>([buffer contents]) : nullptr;
+        nb::bytes data(base && o.byte_size ? base + o.byte_offset : "", base ? size_t(o.byte_size) : 0);
+        ++outputs_exported_;
+        return nb::make_tuple(data, o.count, o.words * 4);
+    }
+
     // Binds the import `tensor` in place of `old` in the program, without a compile; raises
     // ProducerError with program.import_refused when its size differs.
     void rebind(uint32_t program, uint32_t old, uint32_t tensor) {
@@ -454,6 +555,12 @@ NB_MODULE(_producer, m) {
              nb::arg("memory_bytes") = uint64_t(64) << 20, nb::arg("tensor_shape") = std::vector<int64_t>{},
              nb::arg("params") = std::vector<std::pair<std::string, double>>{},
              "Check and compile a program; returns its handle or raises ProducerError.")
+        .def("derive", &Runtime::derive, nb::arg("id"), nb::arg("wgsl"), nb::arg("common"), nb::arg("inputs"),
+             nb::arg("resources"), nb::arg("passes"), nb::arg("params"), nb::arg("time_ms") = 4.0,
+             nb::arg("memory_bytes") = uint64_t(64) << 20, nb::arg("piece_hash") = nb::none(),
+             "Check, compose and compile the derive half of a piece; returns its handle or raises ProducerError.")
+        .def("resource", &Runtime::resource, nb::arg("program"), nb::arg("name"),
+             "A published resource after the last pass as (bytes, count, stride), copied.")
         .def("set_params", &Runtime::set_params, nb::arg("program"), nb::arg("params"),
              "Set values of the uniform params of a program by name; the next pass reads them.")
         .def("run", &Runtime::run, nb::arg("programs"), nb::arg("step"), nb::arg("time_s"), nb::arg("every"),
