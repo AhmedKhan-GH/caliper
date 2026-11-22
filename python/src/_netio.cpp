@@ -142,6 +142,7 @@ struct Snap {
     std::vector<uint8_t> data;
     bool has_aux = false;
     std::vector<uint8_t> aux;                 // (N,) f32
+    Json cadence;                             // 3.2 draft: the views' cadence, for "programs" peers
 };
 
 struct Group {
@@ -530,7 +531,7 @@ public:
                  std::string axes_json, std::string tile_json, int64_t colormap, uint64_t flags, double vmin,
                  double vmax, uint64_t stats_ptr, size_t stats_n, int64_t points_dims, int64_t label_count,
                  int64_t dtype, std::vector<int64_t> shape, uint64_t data_ptr, size_t data_nbytes,
-                 uint64_t aux_ptr, size_t aux_n) {
+                 uint64_t aux_ptr, size_t aux_n, std::string cadence_json) {
         auto s = std::make_shared<Snap>();
         s->view = std::move(view);
         s->seq = seq;
@@ -543,6 +544,7 @@ public:
         std::string err;
         if (!axes_json.empty()) Json::parse(axes_json.data(), axes_json.size(), &s->axes, &err, 8);
         if (!tile_json.empty()) Json::parse(tile_json.data(), tile_json.size(), &s->tile, &err, 8);
+        if (!cadence_json.empty()) Json::parse(cadence_json.data(), cadence_json.size(), &s->cadence, &err, 8);
         if (stats_ptr && stats_n) {
             const float* f = reinterpret_cast<const float*>(stats_ptr);
             s->stats.assign(f, f + std::min<size_t>(stats_n, CALIPER_NET_MAX_STATS));
@@ -1321,6 +1323,7 @@ private:
             m.tile = sn->tile;
             m.points_dims = sn->points_dims;
             m.label_count = sn->label_count;
+            if (l.cap_programs && sn->cadence.is_object()) m.cadence = sn->cadence;
             if (SharedBytes f = encode(m)) return f;
             --l.snapshots_sent;
         }

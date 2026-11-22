@@ -1878,7 +1878,7 @@ def _snapshot(st: SceneState, path: str, spec: _Spec, static: bool) -> Batch:
     if spec.depth:                                   # the depths in scene units, zeros and
         v = arrays["pixels"].to(f32) * params["scale"]          # non-finite values left out
         ok = torch.isfinite(v) & (v != 0)
-        inf = torch.tensor(math.inf, dtype=f32, device=v.device)
+        inf = torch.full((), math.inf, dtype=f32, device=v.device)   # a fill: no copy from the host
         vrange = torch.stack([torch.where(ok, v, inf).amin(), torch.where(ok, v, -inf).amax()])
         stats = [None, None, 0]
     elif spec.part in (_wire.PART_IMAGE,):

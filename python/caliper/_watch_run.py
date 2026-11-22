@@ -36,8 +36,10 @@ show the scheduler's rates between steps, and the series ``lr`` shows the rate e
 
 COST. With nothing waiting, a step costs the checkpoint's flag, two series values, a few dict
 reads and one clock read. The scene's colors (the mean absolute output of each module) are
-computed in one forward pass at most ``SCENE_RATE_HZ`` times a second, and only while a viewer
-watches the scene. Nothing here reads a value back from the device.
+computed in one forward pass at most ``SCENE_RATE_HZ`` times a second, only while a viewer
+watches the scene, and, while the shared cadence of caliper._programs gates the views, only in a
+step that is a pass. Nothing here reads a value back from the device, and nothing copies from the
+host to the device after the first time: on MPS such a copy waits for torch's whole queue.
 """
 from __future__ import annotations
 
@@ -45,7 +47,7 @@ import math
 import time
 import warnings
 
-from . import _net_programs
+from . import _net_programs, _programs
 from ._adapter import TORCH
 
 __all__ = ["RunHooks"]
@@ -120,6 +122,7 @@ class RunHooks:
         self._next = 0.0
         self._interval = 1.0 / SCENE_RATE_HZ
         self._geom: dict = {}
+        self._lut: dict = {}             # device -> the colormap table of the boxes
         self._torch = torch
         with pkg.LOCK:
             pkg._auto_tried = True      # the server carries the views, not the shared memory
@@ -192,7 +195,9 @@ class RunHooks:
         zero = torch.zeros((), device=dev)
         v = torch.stack([zero if m is None else m.float().to(dev) for m in self.means])
         v = v / v.max().clamp_min(1e-30)
-        lut = torch.tensor(_VIRIDIS, dtype=torch.float32, device=dev)
+        lut = self._lut.get(dev)
+        if lut is None:      # made once: a copy from the host to MPS waits for torch's whole queue
+            lut = self._lut[dev] = torch.tensor(_VIRIDIS, dtype=torch.float32, device=dev)
         pos = v.clamp(0, 1) * (len(_VIRIDIS) - 1)
         i = pos.floor().clamp(max=len(_VIRIDIS) - 2).long()
         f = (pos - i).unsqueeze(1)
@@ -210,7 +215,7 @@ class RunHooks:
             self._publish(colors, dev)
             self.means = [None] * len(self.means)
         now = time.perf_counter()
-        if now >= self._next:
+        if now >= self._next and _programs.pass_next():   # the colors join a pass of the cadence
             self._next = now + self._interval
             self.armed = self.scene._watched()
 

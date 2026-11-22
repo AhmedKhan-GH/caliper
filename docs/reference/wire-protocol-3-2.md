@@ -341,7 +341,7 @@ An agent writes a GPU program in WGSL over a live tensor of a training script, a
 
 | Capability | Adds |
 |---|---|
-| `programs` | PROGRAM and PROGRAM_STATE |
+| `programs` | PROGRAM and PROGRAM_STATE, and the SNAPSHOT key `cadence` |
 | `interventions` | The CONTROLS key `interventions` and the CONTROL op `intervene` ([Run control messages](run-control-messages.md#interventions)) |
 
 Caliper LIB announces both only while a `caliper.watch(model, optimizer)` is on, and only beside `controls`. A peer that connected before that call does not get them. A viewer sends PROGRAM only to a server that announced `programs`, and through a hub only to a session whose producer announced it. A PROGRAM needs the same permission as CONTROL: a server that does not allow control answers it with ERROR `forbidden`.
@@ -386,6 +386,21 @@ A server refuses a PROGRAM with a non-fatal ERROR that names it in `in_reply_to`
 | `bad_request` | The message breaks this page, or `sha256` is not the hash of the source |
 
 A hub maps the `request_id` of a PROGRAM as it maps the one of a CONTROL, and keeps the latest PROGRAM_STATE without `request_id` for a viewer that attaches later. The script removes every program when no viewer with `programs` stayed connected for 5 seconds, and the app sends each program again after it attaches.
+
+### Snapshot Cadence
+
+The script runs the programs, the snapshots of the subscribed views and the chunks of the watched series at the passes of one cadence, which keeps their overhead inside a share of the training time: 2 % while a viewer subscribes, 4 % for programs alone. To a peer with `programs`, a SNAPSHOT taken at a pass may carry the key `cadence`, an object with these members:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `every` | integer | Steps between two passes of the cadence |
+| `passes_per_s` | number or null | Passes that took something, a second, over the last 8 |
+| `step_ms`, `pass_ms` | number or null | The measured time of a step without a pass, and the overhead of a pass |
+| `share` | number or null | The measured share of the training time that the passes take |
+| `budget` | number | The share that the cadence keeps to, 0.02 while a viewer subscribes |
+| `limit` | string | `budget` when the passes come less often than the views ask, `floor` for a pass of cheap views on their own, `rate` when the views' own rate sets the pace |
+
+A reader that does not know the key ignores it.
 
 ### Program Limits
 

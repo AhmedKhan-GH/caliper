@@ -10,10 +10,14 @@
 
 #include "embed/embed_core.h"
 #include "live/live_attach.h"
+#include "live/live_source.h"
+
+#include <nlohmann/json.hpp>
 #include "live/live_views_state.h"
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <set>
@@ -23,6 +27,44 @@ namespace caliper_host {
 using namespace caliper_builder;
 
 namespace {
+
+// The warning of a view that the script's shared cadence thinned (the SNAPSHOT
+// key `cadence` of wire protocol 3.2, design/gpu-programs.md, Cadence): how
+// often it updates and why; empty while the view updates at its own rate.
+std::string cadence_note(const std::string& text) {
+    const nlohmann::json c = nlohmann::json::parse(text, nullptr, false);
+    if (!c.is_object()) return {};
+    auto num = [&](const char* key) -> std::optional<double> {
+        const auto it = c.find(key);
+        if (it == c.end() || !it->is_number()) return std::nullopt;
+        return it->get<double>();
+    };
+    const auto limit = c.find("limit");
+    if (limit == c.end() || !limit->is_string()) return {};
+    const std::optional<double> every = num("every"), rate = num("passes_per_s"), pass = num("pass_ms"),
+                                step = num("step_ms"), budget = num("budget");
+    char buf[400];
+    std::string often;
+    if (rate) {
+        std::snprintf(buf, sizeof buf, ", about %.1f times a second", *rate);
+        often = buf;
+    }
+    if (*limit == "budget" && every && pass && step && budget) {
+        std::snprintf(buf, sizeof buf,
+                      "Updates every %.0f steps%s, because the views and programs that viewers attach keep to "
+                      "%.0f %% of the training time, and one pass of them costs %.2f ms against a step of %.2f ms.",
+                      *every, often.c_str(), *budget * 100.0, *pass, *step);
+        return buf;
+    }
+    if (*limit == "floor" && every) {
+        std::snprintf(buf, sizeof buf,
+                      "Updates on passes of the views alone%s, because the views are cheap while the shared "
+                      "cadence of the programs runs a pass every %.0f steps.",
+                      often.c_str(), *every);
+        return buf;
+    }
+    return {};
+}
 
 const char* view_type_of(std::uint32_t kind) {
     switch (kind) {
@@ -210,6 +252,12 @@ void LiveCatalog::update(CaliperCore* core, const std::string& session) {
         f.kind = st.kind;
         frames.push_back(std::move(f));
     }
+    if (caliper_live::Source* src = caliper_live_stream(core)) {   // 3.2 draft: the views' cadence
+        const std::map<std::string, std::string> cadences = src->view_cadences();
+        if (!cadences.empty())
+            for (ViewFrame& f : frames)
+                if (const auto it = cadences.find(f.name); it != cadences.end()) f.note = cadence_note(it->second);
+    }
     apply(true, session, frames);
 }
 
@@ -267,6 +315,7 @@ void LiveCatalog::apply(bool attached, const std::string& session, const std::ve
             v.dims = f.dims.size() == f.shape.size() ? f.dims : std::vector<std::string>();
             v.bytes = f.has_payload ? shape_bytes(f.dtype, f.shape) : 0;
             v.readable = f.data != nullptr;
+            v.note = f.note;
             if (f.updates != v.updates_seen) {
                 v.updates_seen = f.updates;
                 if (f.has_payload) {
@@ -334,6 +383,7 @@ CatalogEntry LiveCatalog::entry_of(const View& v) const {
         e.bytes = v.bytes;
     }
     e.rate_hz = v.rate_hz;
+    if (!v.note.empty()) e.warnings.push_back(v.note);
     e.wire = true;
     e.updated_at = v.updated_at;
     return e;
