@@ -22,6 +22,7 @@
 #include "live/live_controls.h"
 #include "live/live_ui_driver.h"
 #include "live/live_net_source.h"      // parse_stream_url
+#include "live/live_programs.h"         // ProgramSync (GPU programs, protocol 3.2 draft)
 #include "live/live_scene.h"           // the scene view (protocol 3.2 draft)
 #include "live/live_views_scene.h"
 #include "live/live_views_state.h"     // kPalette (the exact categorical colours)
@@ -2509,3 +2510,182 @@ TEST_CASE("live/app: the data view picker changes the head of an attention map, 
     CHECK(v->map.tile_cols == 2);
     a.detach();
 }
+
+// ---- GPU programs (protocol 3.2 draft): ProgramSync against a fake link ------------------------
+
+namespace {
+
+// A ProgramLink that records what goes out and hands back the answers a test queues.
+struct FakeProgramLink final : caliper_live::ProgramLink {
+    bool up = true;
+    uint64_t ep = 1;
+    uint32_t next = 1;
+    std::vector<caliper_net::wire::Program> sent;
+    std::vector<caliper_live::ProgramAnswer> answers;
+    bool ready() override { return up; }
+    uint64_t epoch() override { return ep; }
+    uint32_t send(caliper_net::wire::Program m) override {
+        m.request_id = next++;
+        sent.push_back(std::move(m));
+        return sent.back().request_id;
+    }
+    std::vector<caliper_live::ProgramAnswer> take() override {
+        std::vector<caliper_live::ProgramAnswer> out;
+        out.swap(answers);
+        return out;
+    }
+};
+
+caliper_live::WantedProgram wanted(const std::string& id, const std::string& sha) {
+    caliper_live::WantedProgram w;
+    w.id = id;
+    w.kind = "pixels";
+    w.wgsl = "fn main() {}";
+    w.sha256 = sha;
+    w.declaration = caliper_net::Json::object();
+    return w;
+}
+
+caliper_net::Json item(const std::string& id, const std::string& state, const std::string& sha,
+                       const std::string& code = "") {
+    caliper_net::Json o = caliper_net::Json::object();
+    o.set("id", id);
+    o.set("kind", "pixels");
+    o.set("state", state);
+    o.set("sha256", sha);
+    if (!code.empty()) {
+        caliper_net::Json e = caliper_net::Json::object();
+        e.set("code", code);
+        e.set("message", "why");
+        e.set("line", 3);
+        e.set("column", 7);
+        o.set("error", e);
+    }
+    return o;
+}
+
+caliper_live::ProgramAnswer state(std::optional<uint32_t> rid, std::vector<caliper_net::Json> items) {
+    caliper_live::ProgramAnswer a;
+    a.request_id = rid;
+    a.programs = caliper_net::Json::array();
+    for (auto& x : items) a.programs.push(std::move(x));
+    return a;
+}
+
+const std::string kShaA(64, 'a'), kShaB(64, 'b');
+
+}  // namespace
+
+TEST_CASE("live/programs: the script's programs follow the wanted ones by id and hash") {
+    caliper_live::ProgramSync sync;
+    FakeProgramLink link;
+    sync.want({wanted("img", kShaA)});
+    sync.poll(link);
+    REQUIRE(link.sent.size() == 1);
+    CHECK(link.sent[0].op == CALIPER_NET_PROGRAM_SET);
+    CHECK(link.sent[0].id == "img");
+    CHECK(link.sent[0].sha256.value_or("") == kShaA);
+    CHECK(sync.records().at(0).state == "waiting");
+    sync.poll(link);
+    CHECK(link.sent.size() == 1);   // nothing differs: nothing goes out
+
+    link.answers.push_back(state(1, {item("img", "compiled", kShaA)}));
+    sync.poll(link);
+    auto r = sync.records();
+    CHECK(r.at(0).host == "script");
+    CHECK(r.at(0).state == "compiled");
+    auto ch = sync.take_changes();
+    REQUIRE(ch.size() == 1);
+    CHECK(ch[0].change == "compiled");
+
+    link.answers.push_back(state(std::nullopt, {item("img", "running", kShaA)}));
+    sync.poll(link);
+    CHECK(sync.take_changes().empty());   // compiled to running is no new event
+
+    sync.want({wanted("img", kShaB)});    // a changed source goes out again
+    sync.poll(link);
+    REQUIRE(link.sent.size() == 2);
+    CHECK(link.sent[1].sha256.value_or("") == kShaB);
+    link.answers.push_back(state(2, {item("img", "running", kShaB)}));
+    sync.poll(link);
+    CHECK(sync.take_changes().size() == 1);   // the replaced program compiled
+
+    sync.want({});                         // removed from the spec: removed from the script
+    sync.poll(link);
+    REQUIRE(link.sent.size() == 3);
+    CHECK(link.sent[2].op == CALIPER_NET_PROGRAM_REMOVE);
+    CHECK(link.sent[2].id == "img");
+    CHECK(sync.records().empty());
+}
+
+TEST_CASE("live/programs: an attachment sends each program again unless the script runs its source") {
+    caliper_live::ProgramSync sync;
+    FakeProgramLink link;
+    sync.want({wanted("a", kShaA), wanted("b", kShaB)});
+    sync.poll(link);
+    CHECK(link.sent.size() == 2);
+    link.ep = 2;                          // a new connection: the script told nothing yet
+    link.answers.push_back(state(std::nullopt, {item("a", "stopped", kShaA, "program.over_time"),
+                                                item("zombie", "running", kShaA)}));
+    sync.poll(link);
+    // a still runs (stopped) with the same source: not sent again; b goes again; the
+    // script's program that the app does not want is removed.
+    REQUIRE(link.sent.size() == 4);
+    CHECK((link.sent[2].id == "b" && link.sent[2].op == CALIPER_NET_PROGRAM_SET));
+    CHECK((link.sent[3].id == "zombie" && link.sent[3].op == CALIPER_NET_PROGRAM_REMOVE));
+    auto r = sync.records();
+    CHECK(r.at(0).state == "stopped");
+    CHECK(r.at(0).error_code == "program.over_time");
+    CHECK(r.at(0).line == 3);
+    auto ch = sync.take_changes();
+    REQUIRE(ch.size() == 1);
+    CHECK(ch[0].change == "stopped");
+
+    link.up = false;                      // detached: every program waits, with host none
+    sync.poll(link);
+    r = sync.records();
+    CHECK((r.at(0).host == "none" && r.at(0).state == "waiting"));
+    link.up = true;
+    sync.poll(link);
+    CHECK(link.sent.size() == 6);         // both again once a script takes programs
+}
+
+TEST_CASE("live/programs: a refusal and a program the app refuses become refused records") {
+    caliper_live::ProgramSync sync;
+    FakeProgramLink link;
+    auto bad = wanted("far", kShaA);
+    bad.refused_code = "program.bad_target";
+    bad.refused_message = "not a scene panel";
+    sync.want({wanted("img", kShaA), bad});
+    sync.poll(link);
+    REQUIRE(link.sent.size() == 1);       // the refused one never goes out
+    caliper_live::ProgramAnswer no;
+    no.request_id = link.sent[0].request_id;
+    no.error_code = CALIPER_NET_ERR_FORBIDDEN;
+    no.error_message = "this server does not allow control";
+    link.answers.push_back(no);
+    sync.poll(link);
+    auto r = sync.records();
+    CHECK(r.at(0).state == "refused");
+    CHECK(r.at(0).error_code == "program.unavailable");
+    CHECK(r.at(1).state == "refused");
+    CHECK(r.at(1).error_code == "program.bad_target");
+    auto ch = sync.take_changes();
+    CHECK(ch.size() == 2);
+    for (const auto& c : ch) CHECK(c.change == "refused");
+}
+
+TEST_CASE("live/programs: a script that keeps dropping a program gets it a few times at most") {
+    caliper_live::ProgramSync sync;
+    FakeProgramLink link;
+    sync.want({wanted("img", kShaA)});
+    for (int i = 0; i < 10; ++i) {
+        sync.poll(link);
+        const uint32_t last = link.sent.back().request_id;
+        link.answers.push_back(state(last, {item("img", "compiled", kShaA)}));
+        sync.poll(link);
+        link.answers.push_back(state(std::nullopt, {}));   // gone again
+    }
+    CHECK(link.sent.size() == size_t(caliper_live::ProgramSync::kMaxSends));
+}
+
