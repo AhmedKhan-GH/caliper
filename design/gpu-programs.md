@@ -212,6 +212,7 @@ The hosts report these codes in a status item and in a `program` event. The cons
 | `program.over_memory` | The outputs and the bound tensors are above `memory_mb` |
 | `program.layer_refused` | The frame validation of the graphics layer refused the pass |
 | `program.over_time` | The program went over `time_ms` on 3 passes in a row |
+| `program.over_budget` | Even a pass every 10 s or every 10,000 steps takes more than 4 % of the training time, and every program stopped |
 | `program.timeout` | A wait of a pass timed out, and every program stopped |
 | `program.device_lost` | The device was lost, and every program stopped |
 | `program.unavailable` | The script cannot load the runtime, such as a torch without DLPack export on MPS |
@@ -219,16 +220,32 @@ The hosts report these codes in a status item and in a `program` event. The cons
 
 ## Cadence
 
-A program never runs on each step by default. It runs every N steps, and the runtime sets N from the measured cost of a pass against the measured step time. Thus training keeps at least 95 % of its speed, and the runtime uses at most 4 % of it, as `design/producer-runtime.md` states in Budget per Step.
+A program never runs on each step by default. It runs every N steps, and the facade sets N by feedback from the time that passes add to the run's wall clock. Thus training keeps at least 95 % of its throughput, and the passes take at most 4 % of it, as `design/producer-runtime.md` states in Budget per Step. The rest of the 5 % stays for the hooks of `caliper.watch(model, optimizer)` and the publish path.
 
-The facade measures two times on the training thread, each between two moments when torch's queue is empty, because torch's MPS queue lets the training thread run ahead of the GPU. `T` is the time from the end of one pass to the end of the next first sync point, divided by the steps in between. `C` is the time of the pass, which is the second and the third sync point, plus the idle time of the GPU after the first sync point. The facade takes that idle time as the wait of the first sync point, but at most the median time to queue a step. `design/producer-runtime.md` gives the reason and the measured values in Cadence Measurement. The rate of the budget is then:
+Torch's MPS queue keeps its work until a sync point. Thus the GPU idles while the training thread queues a step, and a wait at a pass costs the queued work that the GPU did not start. While a program is installed, the facade records a `torch.mps.Event` at the checkpoint of each step. The record gives the queued work to the GPU without a wait. The facade then reads with `query()` which of these marks completed, and it takes the time of the first look that saw a mark complete as the mark's completion time. A step without a pass never waits.
+
+From the completion times, the facade measures two times for each cycle. A cycle runs from the mark before one pass, at step k − 1, to the mark before the next pass, at step k′ − 1. Its middle mark m is at the larger of k + 1 and (k + k′) / 2, rounded down. Both ends of each half are marks of steps without a pass, thus a wait that only drains torch's queue costs nothing.
+
+- **Base step time `b`.** The time per step of the second half, from m to k′ − 1, far from both passes. `b` is the median of the last 9 cycles, thus it follows a step time that changes.
+- **Overhead `D`.** The time of the first half, from k − 1 to m, minus m − k + 1 steps at the time per step of the same cycle's second half. It counts the GPU's idle time while the training thread waits, runs the pass, publishes and queues the next step. It also counts slower steps after the pass, while torch's queue fills again or the publish path works in its own thread. `D` is the mean of the last 8 cycles without the largest and the smallest. Thus it ignores a single slow pass but counts costs that come back often, which a median can miss.
+
+A completion time is late by at most the time between two looks, which is one step of the training thread. In a loop that waits at each step, all marks are late by the same time, and the lateness cancels. Else the middle mark can be late, which makes `D` larger and `b` smaller. Thus `D` can come out larger than it is, but not smaller.
+
+After each new `D`, the facade computes the wanted rate and the ceiling:
 
 ```text
-N_budget = ceil(C / (0.04 × T))
-N        = max(N_budget, every, 1)
+N_want = ceil(D / (0.04 × b))
+N_max  = max(3, min(10000, ceil(10 s / b)))
+target = min(max(N_want, 3), N_max)
 ```
 
-All due programs share one pass step and its sync points, thus `C` is the cost of the pass with all of them. A program with a larger `every` runs on each pass step that is a multiple of its own `max(N, every)`, rounded up to a multiple of `N`. After a program is installed, the first step runs one extra first sync point, so that the first `T` starts from an empty queue, and the facade measures `T` for 8 steps and runs the first pass. It then computes N after each pass, and it changes N only when the new value differs by more than 25 %. N is at most 10000. The declaration can ask for a slower cadence with `every`, never for a faster one.
+N moves up as soon as it is below the target, by at most a factor of 2 for each update. It moves down only when it is more than 25 % above the target, by at most a factor of 1.5. Thus N rests between the target and 1.25 times the target. N is at least 3, so that each half of a cycle holds at least one step. Before the first measured pass, N is 3, and a program's first pass runs 8 steps after its install.
+
+All programs share the pass steps of N, and one pass runs every program that is due, thus the wait is paid once. A program is due at a pass step when at least its declared `every` steps passed since its own last pass. Thus `every` asks for a slower cadence, never for a faster one. When `N_want` stays above `N_max` for 3 updates in a row while N is at `N_max`, and the smallest declared `every` is below `N_want` too, the programs cannot run inside the budget on this run. Every program then stops with `program.over_budget`, which gives a status item and a `program` event of the change `stopped`. Training continues, and the next install measures again.
+
+A loop that waits for the GPU at each step, for example with `loss.item()`, gains nothing from a mark at each step, and the extra command buffer costs about 4 % of a step of 1 ms. When the previous mark completed before 16 steps in a row, and the first sync points of the last 2 passes waited less than 0.2 ms, the facade marks only every 8 steps, the step before a pass and the pass. It then takes the time of each step's checkpoint as the step's completion time. A sparse mark that is still pending at the next sparse mark, or 2 long waits at passes in a row, give a mark at each step again.
+
+`design/producer-runtime.md` gives the measured throughput, N, `D` and `b` of the spike's two models in Runtime Results, and the reason against a sync on the GPU in Cadence Measurement.
 
 ## Wire Path
 
@@ -274,11 +291,12 @@ The facade in the script gives each output to the publish path of a `caliper.sce
 | `kind` | `geometry`, `pixels`, `material` or `vertex` |
 | `host` | `script`, `viewer` or `none` |
 | `state` | `waiting`, `review`, `compiled`, `running`, `refused` or `stopped` |
-| `every` | The cadence N; null for a stage or before the first pass |
+| `every` | The steps between two passes of the program: N, or a multiple of N for a larger declared `every`; null for a stage or before the first pass |
 | `every_min` | The declared `every`; null for a stage |
 | `last_pass_ms` | The GPU time of the last pass, or null |
-| `last_cost_ms` | The cost `C` of the last pass step: the pass plus the GPU's idle time after the first sync point, or null |
-| `step_ms` | The step time `T` between two empty queues of torch, or null |
+| `last_cost_ms` | The overhead `D` of a pass in Cadence, shared by all programs, or null before it is measured |
+| `step_ms` | The base step time `b` in Cadence, or null before it is measured |
+| `overhead_share` | `D / (N × b)`, the measured share of the training time that the passes take, or null; only the script's item has it |
 | `last_step` | The step of the last pass, or null |
 | `runs` | The count of passes |
 | `memory_bytes` | The bytes of the output buffers and the bound tensors |
@@ -389,6 +407,10 @@ Each decision below has its reason in one line.
 - **Unchecked edits.** Without the compiler library, an edit applies with `program.not_checked`, because the hosts check again before any run.
 - **One submit each.** The runtime submits each due program on its own, because the layer gives the GPU time of a submit, and the watchdog needs each program's time.
 - **Shared cadence.** All programs share the pass steps of one N, because the sync points cost more than a pass, and a shared step pays them once.
+- **Cadence by feedback.** N follows the overhead that a pass adds to the wall clock, because a model of the pass missed the GPU's idle time on MPS.
+- **Step marks.** The facade marks each step on torch's queue, because torch's MPS queue otherwise holds a step's work until a sync point, and the GPU idles meanwhile.
+- **Marks by query.** The facade reads marks with `query()`, not with `elapsed_time()`, because `elapsed_time()` waits for the device.
+- **Stop over budget.** Programs that cannot run inside the budget stop, because a live view that slows training below 95 % breaks check 5 of the specification.
 - **Version 1.** Programs join spec version 1, because `design/instruments.md` planned them there before version 1 reaches `main`.
 - **Provenance by the app.** No command writes `provenance`, because a mark that an agent can clear protects nothing.
 - **Internal C interface.** The runtime's C header is in `src/host/producer`, because the native module is its only caller.
@@ -401,5 +423,6 @@ Each decision below has its reason in one line.
 - **Browser stages.** The browser gives the WGSL of a stage to WebGPU directly, and the prelude must match. This comes with browser parity.
 - **Deferred wait.** The producer runtime keeps the wait at once, as `design/producer-runtime.md` decides.
 - **Review card.** The card that adds a hash to `provenance.reviewed` comes with saved instruments.
-- **Cadence on MPS.** Under `caliper.watch(model, optimizer)`, one geometry program keeps 57.2 % of the throughput of the spike's small model and 94.9 % of the medium model, below the 95 % of this page, because a CPU wait at the first sync point costs about the time that torch needs to fill its queue again, up to about 20 ms, and `C` counts less. Counting the whole wait meets 95 % but lets N grow to 10,000. `design/producer-runtime.md` gives the measurement in Runtime Results. The GPU-side sync with torch's queue, or a cost that counts the refill of the queue, is the next step.
+- **Share in the app.** The script's status item has `overhead_share`, but the app's `ProgramStatus` in `program_host.h`, its reader in `live_programs.h` and the schema of `program.status` do not carry it yet. Until then, `last_cost_ms / (every × step_ms)` gives it for a program with the shared N.
+- **Sync on the GPU.** A sync that orders the pass after torch's work on the GPU, and torch's next writes after the pass, needs torch's command queue. Only torch's C++ API gives it, and Cadence Measurement in `design/producer-runtime.md` gives the reasons to wait.
 - **Wheel.** The wheel builds `caliper._producer` without the sandbox and without the WGSL compiler, because it configures with `CALIPER_WITH_BUILDER=OFF` and no prebuilt archive of the compiler is pinned in `tools/shaders/caliper-wgsl/prebuilt.cmake` yet. Thus an installed package answers `program.compiler_unavailable` for each program, and only a build from source with `CALIPER_WGSL_FROM_SOURCE=ON` runs programs in the script. When CI publishes the pinned archives, the wheel defines `CALIPER_WGSL_DOWNLOAD` and builds `src/builder/programs` with its JSON library.

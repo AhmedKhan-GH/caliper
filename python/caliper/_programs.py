@@ -7,10 +7,16 @@ message arrives, and sends the status items back in PROGRAM_STATE. ``caliper.ste
 module ``caliper._producer`` on the first :func:`install` only, so that a script that only
 streams tensors loads nothing new.
 
-The facade keeps the cadence (``design/gpu-programs.md``, Cadence): it measures the step time
-``T`` and the added time ``C`` of a pass step, and runs the programs every
-``N = max(ceil(C / (0.04 * T)), every, 1)`` steps. It gives each geometry output to the publish
-path of ``caliper.scene`` and each pixels output to ``caliper.show`` as the live view
+The facade keeps the cadence (``design/gpu-programs.md``, Cadence) by feedback on the run's wall
+clock. At each step it puts a mark on torch's queue (:class:`caliper._adapter.StepMarks`), which
+also gives the queued work to the GPU, and it reads the marks that completed without a wait. From
+their completion times it measures the base step time ``b`` over the second half of each cycle
+between two passes and the overhead ``D`` that a pass adds to the first half, and it runs the
+programs every
+``N = ceil(D / (0.04 * b))`` steps, moved by bounded factors, at least ``N_MIN`` and at most the
+steps of ``CEILING_S`` seconds. When even that ceiling costs more than the share, every program
+stops with ``program.over_budget`` and training goes on. It gives each geometry output to the
+publish path of ``caliper.scene`` and each pixels output to ``caliper.show`` as the live view
 ``program.<id>``. A refused or stopped program is an error of its panel, never of the script:
 no function here raises for it.
 
@@ -45,10 +51,18 @@ listeners: list = []
 PROGRAM_STATE uses them. An error in a listener is warned once and never stops the step."""
 
 SHARE = 0.04            # the runtime's share of the step time (design/producer-runtime.md, Budget)
-WARMUP_STEPS = 8        # steps that measure T after an install, before the first pass
-T_WINDOW = 32           # steps without a pass in the median of T
-C_WINDOW = 8            # pass steps in the median of C
-CHANGE = 0.25           # N changes only when the new value differs by more than this share
+WARMUP_STEPS = 8        # steps after an install before the program's first pass
+N_MIN = 3               # a cycle keeps two steps without a pass, which the measurement needs
+BASE_SAMPLES = 9        # stretches without a pass in the median of the base step time b
+COST_SAMPLES = 8        # passes in the median of the overhead D
+CHANGE = 0.25           # N moves down only when it is more than this share above the wanted value
+GROW, SHRINK = 2.0, 1.5 # the largest factors of one change of N, up and down
+CEILING_S = 10.0        # N is at most the steps of this many seconds of training
+OVER_UPDATES = 3        # updates over budget at the ceiling before the programs stop
+DRAINED_STEPS = 16      # steps in a row with torch's queue empty before the marks become sparse
+SPARSE = 8              # the steps between two marks while the loop waits for the GPU by itself
+SHORT_WAITS = 2         # passes in a row whose first sync point found torch's queue empty
+WAIT_EMPTY = 2e-4       # a first sync point shorter than this found torch's queue empty
 EVERY_MAX = 10000
 TIME_MS_DEFAULT, TIME_MS_MAX = 4.0, 50.0
 MEMORY_MB_DEFAULT, MEMORY_MB_MAX = 64, 512
@@ -61,7 +75,9 @@ _IMPORTS: dict = {}     # input name -> its newest _Import
 _LIVE: dict = {}        # handle -> each _Import not released yet (an older one may still be bound)
 _ACTS: dict = {}        # module name -> its last output, for the inputs <module>.act
 _ACT_HOOKS: dict = {}   # module name -> the forward hook's handle
-_STATE = {"rt": None, "mod": None, "model": None, "optimizer": None, "t0": time.perf_counter()}
+_STATE = {"rt": None, "mod": None, "model": None, "optimizer": None, "marks": None, "step": None,
+          "dense": True, "drained": 0, "short": 0, "long": 0, "switches": 0}
+_clock = time.perf_counter
 _WARNED: set = set()
 
 
@@ -72,68 +88,145 @@ def _median(xs) -> float:
 
 
 class _Cadence:
-    """The step time ``T``, the added time ``C`` of a pass step and the rate ``N``.
+    """The cadence N by feedback on the measured overhead of a pass (``design/gpu-programs.md``).
 
-    Torch's MPS queue lets the training thread run ahead of the GPU, thus the time between two
-    ``caliper.step()`` calls is often only the time to queue a step, and the first sync point then
-    waits for every queued step. The facade therefore measures ``T`` as the time from the end of
-    one pass, when torch's queue is empty, to the end of the next first sync point, when it is
-    empty again, divided by the steps in between. ``C`` is the pass (sync points 2 and 3) plus the
-    idle time of the GPU after the first sync point, which is at most the wait of that sync point
-    and at most the median time to queue a step.
+    The facade names each step with a pass by :meth:`passed` before its mark can complete, and gives
+    each completion by :meth:`completed`, in the order of the steps. A completion time is the time
+    of the first look that saw the mark complete: never early, and late by at most the time between
+    two looks, which is a step of the training thread, or a few microseconds while a pass waits.
+    The controller then measures:
+
+    Each cycle runs from the mark before one pass, at step ``k - 1``, to the mark before the next
+    pass, at step ``k' - 1``. Its middle mark ``m`` is at ``max(k + 1, (k + k') // 2)``. Both
+    halves end at marks of steps without a pass, thus a wait that only drains torch's queued work
+    costs nothing here. The controller measures per cycle:
+
+    - the base step time ``b``: the time per step of the second half, from ``m`` to ``k' - 1``,
+      far from both passes; ``b`` is the median of the last ``BASE_SAMPLES`` cycles, thus it
+      follows a step time that changes;
+    - the overhead ``D`` of the pass at ``k``: the time of the first half, from ``k - 1`` to ``m``,
+      minus ``m - k + 1`` steps at the time per step of the same cycle's second half, thus a step
+      time that changes moves only the one cycle across the change. It counts the GPU's idle time while the training thread waits,
+      runs the pass, publishes and queues the next step, and the slower steps after a pass while
+      torch's queue fills again or the publish path works in its own thread. ``D`` is the mean of
+      the last ``COST_SAMPLES`` cycles without the largest and the smallest. Thus it ignores a single
+      slow pass but counts costs that come back often, which a median can miss.
+
+    When the training thread waits at each step anyway, all marks are late by the same time, and
+    the lateness cancels. Else a mark in the middle of a cycle can be late, which makes ``D``
+    larger and ``b`` smaller, thus ``D`` can come out larger than it is, but not smaller.
+
+    After each new ``D`` it wants ``ceil(D / (SHARE * b))`` steps between passes, between
+    ``N_MIN`` and the ceiling. N moves up as soon as it is below that value, by at most a factor
+    ``GROW``, and down only when it is more than ``CHANGE`` above it, by at most a factor
+    ``SHRINK``. Thus N rests between the wanted value and ``1 + CHANGE`` times it.
     """
 
     def __init__(self):
         self.reset()
 
     def reset(self) -> None:
-        self.cpu = deque(maxlen=T_WINDOW)   # times between two steps without a pass
-        self.t = deque(maxlen=C_WINDOW)     # T samples: step times between two empty queues
-        self.c = deque(maxlen=C_WINDOW)     # C samples: added times of pass steps
-        self.last = None        # perf_counter() of the previous at_step
-        self.passed = False     # whether the previous at_step ran a pass
-        self.n = None           # N, None before the first pass
-        self.last_cost = None
-        self.mark = None        # perf_counter() when torch's queue was last empty
-        self.since = 0          # steps since then
+        self.done: dict = {}        # step -> completion time of its mark, from the last cycle's start
+        self.passes: set = set()    # the recent steps with a pass
+        self.k = None               # the step of the last pass whose mark completed
+        self.base = deque(maxlen=BASE_SAMPLES)
+        self.cost = deque(maxlen=COST_SAMPLES)
+        self.n = None               # N, None before the first measured overhead
+        self.want = None            # ceil(D / (SHARE * b)) of the last update
+        self.ceiling = EVERY_MAX
+        self.over = 0               # updates in a row that wanted more than the ceiling
+        self.last_pass = None       # the step of the last pass
 
-    def tick(self, now: float) -> None:
-        """Count a step, and record its time unless a pass ran in it."""
-        if self.last is not None and not self.passed:
-            self.cpu.append(now - self.last)
-        self.last = now
-        self.passed = False
-        self.since += 1
-
-    def drained(self, now: float) -> None:
-        """Torch's queue is empty now: the start of the next T sample."""
-        self.mark = now
-        self.since = 0
+    def restart(self) -> None:
+        """Forget the marks and passes of the current cycle, but keep ``b``, ``D``, N and the step
+        of the last pass: the script numbered its steps again, or the clock of the completions
+        changed."""
+        self.done = {}
+        self.passes = set()
+        self.k = None
 
     def step_s(self):
-        return _median(self.t) if self.t else None
+        """The base step time ``b`` in seconds, or None before the first stretch."""
+        return _median(self.base) if self.base else None
 
-    def update(self, t0: float, t1: float, t2: float) -> None:
-        """Record a pass step (sync point 1 from ``t0`` to ``t1``, the pass from ``t1`` to
-        ``t2``) and compute N again."""
-        self.passed = True
-        if self.mark is not None and self.since > 0:
-            self.t.append((t1 - self.mark) / self.since)
-        wait = t1 - t0
-        cost = (t2 - t1) + (min(wait, _median(self.cpu)) if self.cpu else wait)
-        self.c.append(cost)
-        self.last_cost = cost
-        self.drained(t2)
-        T = self.step_s()
-        budget = math.ceil(_median(self.c) / (SHARE * T)) if T and T > 0 else 1
-        budget = min(max(budget, 1), EVERY_MAX)
-        if self.n is None or abs(budget - self.n) > CHANGE * self.n:
-            self.n = budget
+    def cost_s(self):
+        """The overhead ``D`` of a pass in seconds, or None before the first pass is measured: the
+        mean of the last cycles without the largest and the smallest once there are four."""
+        c = sorted(self.cost)
+        if len(c) >= 4:
+            c = c[1:-1]
+        return sum(c) / len(c) if c else None
+
+    def share(self):
+        """The measured share ``D / (N * b)`` of the training time, or None."""
+        b, d = self.step_s(), self.cost_s()
+        return None if b is None or d is None or b <= 0 else d / ((self.n or N_MIN) * b)
+
+    def due(self, step: int) -> bool:
+        """Whether ``step`` may run a pass: N steps after the last one, or before it when the
+        script numbered its steps again."""
+        last = self.last_pass
+        return last is None or step < last or step - last >= (self.n or N_MIN)
+
+    def passed(self, step: int) -> None:
+        """Step ``step`` runs a pass."""
+        self.passes.add(step)
+        self.last_pass = step
 
     def period(self, every_min: int) -> int:
         """The steps between two passes of a program: max(N, every), rounded up to a multiple of N."""
-        n = self.n or 1
+        n = self.n or N_MIN
         return min(n * math.ceil(max(n, every_min) / n), EVERY_MAX)
+
+    def completed(self, step: int, t: float) -> None:
+        """The mark of ``step`` completed at ``t``."""
+        done = self.done
+        done[step] = t
+        if step not in self.passes:
+            return
+        end = done.get(step - 1)                    # the mark before this pass closes a cycle
+        k = self.k
+        if end is not None and step - 1 not in self.passes:
+            if k is None:                           # the first cycle: no pass at its start
+                first = min(done)
+                if step - 1 > first:
+                    self.base.append((end - done[first]) / (step - 1 - first))
+            else:
+                m = max(k + 1, (k + step) // 2)
+                mid, start = done.get(m), done.get(k - 1)
+                b = None
+                if mid is not None and step - 1 > m:
+                    b = (end - mid) / (step - 1 - m)
+                    self.base.append(b)
+                if mid is not None and start is not None and self.base:
+                    b = self.step_s() if b is None else b
+                    self.cost.append(max(0.0, mid - start - (m - k + 1) * b))
+                    self._update()
+        self.k = step
+        self.done = {s: v for s, v in done.items() if s >= step - 1}
+        self.passes = {s for s in self.passes if s >= step - 1}
+
+    def _update(self) -> None:
+        b, d = self.step_s(), self.cost_s()
+        if b is None or d is None:
+            return
+        self.ceiling = max(N_MIN, min(EVERY_MAX, math.ceil(CEILING_S / b))) if b > 0 else N_MIN
+        self.want = math.ceil(d / (SHARE * b)) if b > 0 else EVERY_MAX
+        n = self.n or N_MIN
+        want = min(max(self.want, N_MIN), self.ceiling)
+        if want > n:
+            n = min(want, math.ceil(n * GROW))
+        elif want * (1 + CHANGE) < n:
+            n = max(want, math.floor(n / SHRINK))
+        self.n = n
+        self.over = self.over + 1 if self.want > self.ceiling and n >= self.ceiling else 0
+
+    def over_budget(self, every_min: int) -> bool:
+        """Whether the programs cannot run inside the share on this run: the wanted N stayed above
+        the ceiling for ``OVER_UPDATES`` updates, and the declared ``every_min`` does not keep the
+        passes rare enough either."""
+        return (self.over >= OVER_UPDATES and self.want is not None
+                and self.want > max(self.ceiling, every_min))
 
 
 _CAD = _Cadence()
@@ -175,17 +268,18 @@ class _Program:
         self.memory_bytes = 0
         self.warm = WARMUP_STEPS
         self.every = None
-        self.t0 = time.perf_counter()
+        self.t0 = _clock()
         self.bound = {}         # var -> the _Import it was compiled with
 
     def item(self) -> dict:
-        T = _CAD.step_s()
+        b, d, share = _CAD.step_s(), _CAD.cost_s(), _CAD.share()
         return {
             "id": self.id, "kind": self.kind, "state": self.state, "every": self.every,
             "every_min": self.every_min, "last_pass_ms": self.last_pass_ms,
-            "last_cost_ms": None if _CAD.last_cost is None else _CAD.last_cost * 1e3,
-            "step_ms": None if T is None else T * 1e3, "last_step": self.last_step,
-            "runs": self.runs, "memory_bytes": self.memory_bytes,
+            "last_cost_ms": None if d is None else d * 1e3,
+            "step_ms": None if b is None else b * 1e3,
+            "overhead_share": None if share is None else share,
+            "last_step": self.last_step, "runs": self.runs, "memory_bytes": self.memory_bytes,
             "memory_limit_bytes": self.memory_mb << 20, "error": self.error,
             "sha256": self.sha256,
         }
@@ -455,7 +549,10 @@ def install(program_id: str, declaration: dict, wgsl: str, *, scene: str | None 
     _remove(program_id)
     with _LOCK:
         if not ACTIVE:
-            _CAD.reset()                             # T starts again from this install
+            _CAD.reset()                             # the measurement starts again from this install
+            _STATE.update(dense=True, drained=0, short=0, long=0, switches=0)
+            if _STATE["marks"]:
+                _STATE["marks"].clear()
         p = _Program(str(program_id), dict(declaration or {}), str(wgsl), scene, str(sha256 or ""))
         _PROGS[p.id] = p
         try:
@@ -521,9 +618,11 @@ def stats() -> dict:
     with _LOCK:
         rt = _STATE["rt"]
         out = dict(rt.stats()) if rt is not None else {}
-        T = _CAD.step_s()
-        out.update({"every": _CAD.n, "step_ms": None if T is None else T * 1e3,
-                    "cost_ms": None if _CAD.last_cost is None else _CAD.last_cost * 1e3})
+        b, d = _CAD.step_s(), _CAD.cost_s()
+        out.update({"every": _CAD.n, "step_ms": None if b is None else b * 1e3,
+                    "cost_ms": None if d is None else d * 1e3, "overhead_share": _CAD.share(),
+                    "wanted_every": _CAD.want, "ceiling": _CAD.ceiling,
+                    "sparse_marks": not _STATE["dense"], "mark_switches": _STATE["switches"]})
         return out
 
 
@@ -557,7 +656,9 @@ def at_step(step: int) -> None:
     """Run the programs that are due at ``step`` and publish their outputs.
 
     ``caliper.step()`` calls it on the training thread after the framework's work of the step is
-    complete. Without an installed program it returns at once and touches no device.
+    queued, before ``optimizer.step()``. Without an installed program it returns at once and touches
+    no device. With one, it puts the step's mark on torch's queue and reads the marks that completed,
+    without a wait; only a step with a pass waits.
     """
     if not ACTIVE:
         return
@@ -567,14 +668,60 @@ def at_step(step: int) -> None:
         _warn_once(("step",), f"caliper: the GPU programs failed at step {step}: {e!r}")
 
 
+def _marks():
+    """The step marks of torch's queue, made at the first step that needs them; None off MPS."""
+    m = _STATE["marks"]
+    if m is None:
+        m = _STATE["marks"] = _torch_adapter().step_marks() or False
+    return m or None
+
+
+def _mark(marks, step: int, now: float, is_pass: bool) -> list:
+    """Put the mark of ``step`` on torch's queue when it is needed, and return the marks that
+    completed since the last step.
+
+    A mark at each step gives torch's queued work to the GPU at once, which keeps the GPU busy
+    while the training thread queues the next step. A loop that waits for the GPU by itself, for
+    example with ``loss.item()``, gains nothing from it, and there the extra command buffer costs
+    about 4 % of a short step. Such a loop shows two signs: the previous mark has completed before
+    each step, for ``DRAINED_STEPS`` steps in a row, and the first sync point of the last
+    ``SHORT_WAITS`` passes waited less than ``WAIT_EMPTY``, thus torch's queue was empty at the
+    step. Then the facade marks only every ``SPARSE`` steps, the step before a pass and the pass,
+    and times the steps with its own clock. A sparse mark that is still pending at the next one, or
+    ``SHORT_WAITS`` long waits at passes in a row, show that the loop no longer waits by itself, and
+    each step is marked again.
+    """
+    if marks is None:
+        return [(step, now, now)]
+    done = marks.poll(now)
+    if _STATE["dense"]:
+        _STATE["drained"] = _STATE["drained"] + 1 if marks.pending() == 0 else 0
+        if _STATE["drained"] >= DRAINED_STEPS and _STATE["short"] >= SHORT_WAITS:
+            _STATE["dense"] = False
+            _STATE["switches"] += 1
+            _CAD.restart()
+    elif (step % SPARSE == 0 and marks.pending() > 0) or _STATE["long"] >= SHORT_WAITS:
+        _STATE["dense"], _STATE["drained"] = True, 0
+        _STATE["switches"] += 1
+        _CAD.restart()
+        done = []
+    if _STATE["dense"] or is_pass or step % SPARSE == 0 or _CAD.due(step + 1):
+        marks.record(step, now)                  # also gives torch's queued work to the GPU
+    return done
+
+
 def _at_step(step: int) -> None:
     changed = []
     published = []
     with _LOCK:
-        _CAD.tick(time.perf_counter())
-        if _CAD.mark is None:                        # one sync after an install: T starts here
-            _torch_adapter().framework_done()
-            _CAD.drained(time.perf_counter())
+        now = _clock()
+        marks = _marks()
+        last = _STATE["step"]
+        _STATE["step"] = step
+        if last is not None and step <= last:        # the script numbered its steps again
+            _CAD.restart()
+            if marks is not None:
+                marks.clear()
         due = []
         for p in _PROGS.values():
             if p.state not in ("waiting", "compiled", "running"):
@@ -582,59 +729,97 @@ def _at_step(step: int) -> None:
             if p.warm > 0:
                 p.warm -= 1
                 continue
-            if p.last_step is None or step - p.last_step >= _CAD.period(p.every_min):
+            if p.last_step is None or step < p.last_step or step - p.last_step >= p.every_min:
                 due.append(p)
-        if not due:
-            return
-        t0 = time.perf_counter()
-        _torch_adapter().framework_done()            # sync point 1: torch's work is complete
-        t1 = time.perf_counter()
-        ran = []
-        try:
-            for p in due:
-                before = p.state
-                try:
-                    _refresh(p)
-                except _Waiting:
-                    continue
-                except _Refused as r:
-                    p.state, p.error = "refused", r.error
-                    changed.append(p)
-                    continue
-                if before != p.state:
-                    changed.append(p)
-                every = _CAD.period(p.every_min)
-                res = _STATE["rt"].run([p.handle], int(step), time.perf_counter() - p.t0, every)
-                if res.get("ran"):
-                    p.runs += 1                      # a compile again starts a new native count
-                    ran.append(p)
-        except RuntimeError as e:                    # a timeout or a lost device
-            r = _refusal(e)
-            changed.extend(_stop_all(r.error["code"], r.error["message"]))
-            ran = []
-        _CAD.update(t0, t1, time.perf_counter())     # sync point 1, then the pass to sync point 3
-        rt = _STATE["rt"]
-        for p in ran:
-            st = rt.status(p.handle)
-            p.last_step = int(step)
-            p.last_pass_ms = st.get("last_pass_ms")
-            p.every = _CAD.period(p.every_min)
-            if st.get("state") == "stopped":
-                code = st.get("stop_code") or "program.over_time"
-                p.state = "stopped"
-                p.error = {"code": code, "message": _STOP_TEXT.get(code, code), "line": None,
-                           "column": None}
-                changed.append(p)
+        if due and not _CAD.due(step):
+            due = []
+        done = _mark(marks, step, now, bool(due))
+        if due:
+            _CAD.passed(step)
+        if due:
+            if marks is not None:                    # sync point 1: torch's work is complete
+                done += marks.wait(step, _clock)
+                empty = _clock() - now < WAIT_EMPTY
+                _STATE["short"] = _STATE["short"] + 1 if empty else 0
+                _STATE["long"] = 0 if empty else _STATE["long"] + 1
             else:
-                if p.state != "running":
-                    p.state = "running"
+                _torch_adapter().framework_done()
+            ran = []
+            try:
+                for p in due:
+                    before = p.state
+                    try:
+                        _refresh(p)
+                    except _Waiting:
+                        continue
+                    except _Refused as r:
+                        p.state, p.error = "refused", r.error
+                        changed.append(p)
+                        continue
+                    if before != p.state:
+                        changed.append(p)
+                    every = _CAD.period(p.every_min)
+                    res = _STATE["rt"].run([p.handle], int(step), _clock() - p.t0, every)
+                    if res.get("ran"):
+                        p.runs += 1                  # a compile again starts a new native count
+                        ran.append(p)
+            except RuntimeError as e:                # a timeout or a lost device
+                r = _refusal(e)
+                changed.extend(_stop_all(r.error["code"], r.error["message"]))
+                ran = []
+            rt = _STATE["rt"]
+            for p in ran:
+                st = rt.status(p.handle)
+                p.last_step = int(step)
+                p.last_pass_ms = st.get("last_pass_ms")
+                p.every = _CAD.period(p.every_min)
+                if st.get("state") == "stopped":
+                    code = st.get("stop_code") or "program.over_time"
+                    p.state = "stopped"
+                    p.error = {"code": code, "message": _STOP_TEXT.get(code, code), "line": None,
+                               "column": None}
                     changed.append(p)
-                published.append((p, _outputs(rt, p)))
+                else:
+                    if p.state != "running":
+                        p.state = "running"
+                        changed.append(p)
+                    published.append((p, _outputs(rt, p)))
+        if not _STATE["dense"]:                      # the loop waits by itself: the clock times it
+            done = [(step, now, now)]
+        for k, _lo, hi in done:
+            _CAD.completed(k, hi)
+        live = [p.every_min for p in _PROGS.values() if p.state in ("waiting", "compiled", "running")]
+        if live and _CAD.over_budget(min(live)):
+            changed.extend(_stop_over_budget())
+            published = []
         _set_active()
         items = [p.item() for p in dict.fromkeys(changed)]
     for p, outs in published:
         _publish(p, outs)
     _notify(items)
+
+
+def _stop_over_budget() -> list:
+    """Every program stops with ``program.over_budget``: a pass even at the ceiling of N costs more
+    than the share of the training time. The runtime stays open, and training goes on."""
+    b, d = _CAD.step_s(), _CAD.cost_s()
+    message = (f"A pass adds {d * 1e3:.2f} ms to a step of {b * 1e3:.3f} ms, thus the programs need "
+               f"at least {_CAD.want} steps between passes to stay under {SHARE:.0%} of the training "
+               f"time, more than the ceiling of {_CAD.ceiling} steps ({_CAD.ceiling * b:.3g} s) on "
+               "this run. The programs stopped, and training goes on.")
+    changed = []
+    rt = _STATE["rt"]
+    for p in _PROGS.values():
+        if p.state in ("waiting", "compiled", "running"):
+            p.state = "stopped"
+            p.error = {"code": "program.over_budget", "message": message, "line": None, "column": None}
+            if rt is not None and p.handle is not None:
+                rt.remove(p.handle)
+            p.handle = None
+            p.bound = {}
+            changed.append(p)
+    _release_unused()
+    return changed
 
 
 def _refresh(p: _Program) -> None:
