@@ -136,6 +136,25 @@ jobs:
             echo "::error::Hosted runs acceptance: neither passed nor skipped for lack of Metal"
             exit 1
           fi
+      # The instrument building acceptance test on its own. A skip because the runner has no Metal device is
+      # accepted. A skip because torch or the native network sender is missing is a setup error, and so
+      # is any other outcome that is neither a pass nor a Metal skip.
+      - name: Instrument building acceptance test
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/instrument-building-acceptance.log"
+          ctest --test-dir cmake-build-release -R caliper_instrument_building_acceptance --output-on-failure -V --timeout 600 | tee "$log"
+          if grep -q "caliper_instrument_building_acceptance passed" "$log"; then
+            echo "Instrument building acceptance: RAN and passed"
+          elif grep -q "caliper_instrument_building_acceptance skipped: .*Metal" "$log"; then
+            echo "Instrument building acceptance: SKIPPED because the runner has no Metal device"
+          elif grep -q "caliper_instrument_building_acceptance skipped: torch or the native network sender is missing" "$log"; then
+            echo "::error::Instrument building acceptance: SKIPPED because torch or the native network sender is missing (CI setup error)"
+            exit 1
+          else
+            echo "::error::Instrument building acceptance: neither passed nor skipped for lack of Metal"
+            exit 1
+          fi
       # The Python tests of managed runs, the adapter, watch and controls run with the acceptance
       # Python, which has torch, websockets and the native sender. The four tests of test_watch.py that
       # need the native core module (caliper._native, which the CMake build does not install into

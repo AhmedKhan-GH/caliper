@@ -931,13 +931,18 @@ if(NOT WIN32 AND CALIPER_WITH_BUILDER)
 endif()
 
 # The acceptance test of instrument building (design/instrument-interface.md, Acceptance Test): the hidden app with
-# no script, and caliper-mcp as a child. tests/instrument_building/driver.py runs its transcript through the MCP
-# tools on a managed run of tests/instrument_building/train.py and exits 77 where the app, Metal or torch is missing.
+# no script, and caliper-mcp as a child. tests/instrument_building/driver.py builds an instrument through the MCP
+# tools on a managed run of tests/instrument_building/train.py (a terrain from the surface operator, the loss line,
+# state, controls, a time cursor, bound text, annotations and layout shares), checks each part by state, events and
+# panel data, and compares the SHA-256 of the app, caliper-mcp and the Python package before and after. It exits 77
+# where the app, Metal, torch, the native network sender or the producer module is missing. It uses the Python of
+# the instrument acceptance test (CALIPER_ACCEPTANCE_PYTHON).
 if(NOT WIN32 AND CALIPER_WITH_BUILDER AND _acceptance_python)
     add_test(NAME caliper_instrument_building_acceptance COMMAND "${_acceptance_python}"
         "${CMAKE_CURRENT_SOURCE_DIR}/instrument_building/driver.py"
         --app "$<TARGET_FILE:caliper>" --mcp "$<TARGET_FILE:caliper-mcp>" --python "${_acceptance_python}"
-        --work "${CMAKE_CURRENT_BINARY_DIR}/instrument-building-work")
+        --work "${CMAKE_CURRENT_BINARY_DIR}/instrument-building-work"
+        --capture-dir "${CMAKE_CURRENT_BINARY_DIR}/instrument-building-captures")
     set_tests_properties(caliper_instrument_building_acceptance PROPERTIES LABELS "instrument_building;acceptance"
         TIMEOUT 600 SKIP_RETURN_CODE 77)
 endif()
