@@ -1,4 +1,4 @@
-# Wire protocol v3
+# Wire Protocol
 
 Protocol v3 carries live data from a training process to viewers over one WebSocket: to a browser tab, a Jupyter widget, the hub and the native Caliper app. From version 3.1 it also carries a viewer's controls back to the script. This page specifies it completely. The header `include/caliper/live_net.h` defines its constants and frame header, and is [embedded at the end of this page](#the-header-verbatim). The folder `tests/fixtures/wire_v3` holds [golden frames](#golden-frames) that every implementation decodes in its tests.
 

@@ -1,4 +1,4 @@
-# Refusal messages
+# Refusal Messages
 
 Before the host loads any applet code, it runs a pure **negotiation** check over
 the applet's manifest and the host's own capabilities (see

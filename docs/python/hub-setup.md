@@ -1,6 +1,6 @@
 # Hub Setup
 
-The hub is a separate process, `caliper serve`, that holds the live sessions of several training scripts at once. Each script connects out to it as a producer, and viewers connect to it, list the sessions and attach to one. This page covers starting the hub, connecting scripts and viewers to it, what it keeps after a script ends, and its limits. The protocol it speaks is [wire protocol v3](../references/wire-protocol.md), and every option is in [Caliper CLI](../references/cli.md#caliper-serve).
+The hub is a separate process, `caliper serve`, that holds the live sessions of several training scripts at once. Each script connects out to it as a producer, and viewers connect to it, list the sessions and attach to one. This page covers starting the hub, connecting scripts and viewers to it, what it keeps after a script ends, and its limits. The protocol it speaks is [wire protocol v3](../reference/wire-protocol.md), and every option is in [Caliper CLI](../reference/cli.md#caliper-serve).
 
 ## When to use a hub
 
@@ -44,7 +44,7 @@ Without `--assets`, the link opens a short note that says where the page is. The
 
 ## Connect a script
 
-A script connects to `ws://127.0.0.1:<port>/v3/stream?token=<token>` as a producer, as [The producer connection to a hub](../references/wire-protocol.md#the-producer-connection-to-a-hub) describes. It sends HELLO with the role `producer` and its session identity: an id, the script's name, its pid and the time it started streaming. The hub answers WELCOME with the id it chose. It keeps the proposed id unless a live session of another process holds it, in which case it appends `-2`, `-3` and so on. The script then sends its list of views, and from then on the hub is its one viewer: it subscribes to the views that viewers ask for, at the rate they ask for, and forwards their events.
+A script connects to `ws://127.0.0.1:<port>/v3/stream?token=<token>` as a producer, as [The producer connection to a hub](../reference/wire-protocol.md#the-producer-connection-to-a-hub) describes. It sends HELLO with the role `producer` and its session identity: an id, the script's name, its pid and the time it started streaming. The hub answers WELCOME with the id it chose. It keeps the proposed id unless a live session of another process holds it, in which case it appends `-2`, `-3` and so on. The script then sends its list of views, and from then on the hub is its one viewer: it subscribes to the views that viewers ask for, at the rate they ask for, and forwards their events.
 
 Scripts on the same machine find the hub through the **hub file**, which the hub writes when it starts and removes when it stops. It is `hub.json` in the app-data folder (`~/Library/Application Support/Caliper/hub.json` on macOS), or the path in `CALIPER_HUB_FILE`. Only its owner can read it, because it holds the token along with the port.
 
@@ -101,7 +101,7 @@ Sending takes memory too, but little. On each viewer connection the hub hands on
 
 ## How the hub forwards
 
-The hub applies the protocol's [flow control](../references/wire-protocol.md#flow-control) on every viewer connection, so one slow viewer slows only itself:
+The hub applies the protocol's [flow control](../reference/wire-protocol.md#flow-control) on every viewer connection, so one slow viewer slows only itself:
 
 - A newer snapshot replaces a pending one, and a viewer that falls behind receives the newest snapshot when it catches up, never a backlog.
 - Series values are sent from the hub's retained values by index. They are coalesced into as few messages as possible and are not dropped while the hub retains them.
@@ -114,7 +114,7 @@ On an Apple silicon Mac, a 512 × 512 heatmap at 60 Hz reaches four viewers thro
 
 ## Controls and selections
 
-From [protocol 3.1](../references/wire-protocol.md#controls-through-a-hub), a viewer can pause, resume and step a script's training loop, change the parameters the script registered and run its actions, and a selection in one view highlights the same items in the session's other views. The hub announces both capabilities, `controls` and `selection`, to viewers and to scripts.
+From [protocol 3.1](../reference/wire-protocol.md#controls-through-a-hub), a viewer can pause, resume and step a script's training loop, change the parameters the script registered and run its actions, and a selection in one view highlights the same items in the session's other views. The hub announces both capabilities, `controls` and `selection`, to viewers and to scripts.
 
 **Controls are off unless you allow them.** Without `--allow-control` the hub forwards no control: it tells every viewer in its WELCOME that it may not control, and answers every CONTROL itself with the error `forbidden`. Viewers still show the run state, the parameters and the actions, without letting them be changed. Start the hub with the option to forward controls:
 
@@ -150,7 +150,7 @@ The timers are the protocol's: a connection that sends no HELLO within 10 second
 
 ## Security
 
-The hub follows the protocol's [security](../references/wire-protocol.md#security) rules. It listens on 127.0.0.1 only. Every request must name 127.0.0.1 or localhost with the hub's port in its Host header, and a stream connection must come from no origin, a loopback origin or a VS Code webview, and must carry the session token. The viewer page and its files need no token: they are public code and hold no data.
+The hub follows the protocol's [security](../reference/wire-protocol.md#security) rules. It listens on 127.0.0.1 only. Every request must name 127.0.0.1 or localhost with the hub's port in its Host header, and a stream connection must come from no origin, a loopback origin or a VS Code webview, and must carry the session token. The viewer page and its files need no token: they are public code and hold no data.
 
 The hub forwards data, viewer events and, only when it was started with `--allow-control`, controls that name a parameter or an action the script registered, to the script of the viewer's own session. It never runs anything a message names, and the stream never carries host commands. Whoever holds the session token of a hub started with `--allow-control` can pause the scripts connected to it, change their registered parameters and run their registered actions, so give that option only to a hub whose token you keep to yourself. The token appears in the viewer link, so it can reach a browser's history; the hub file that holds it can be read by its owner only.
 

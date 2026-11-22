@@ -11,7 +11,7 @@ session is opened, which commands it may use, what a prompt may hold, and what e
     The agent and its widget sessions are built and tested in `src/builder/agent/`. The inline surface that opens them
     on a panel, a selection, a dropped file and a property is built in `src/host/builder/` and works on the app's spec
     page ([The inline surface](#the-inline-surface)). `caliper-agent` is not yet packaged with a Python runtime, so
-    the app finds it through `CALIPER_AGENT_PYTHON` ([Environment variables](../references/environment.md)).
+    the app finds it through `CALIPER_AGENT_PYTHON` ([Environment variables](../reference/folders-and-environment.md)).
 
 ## Starting the agent
 

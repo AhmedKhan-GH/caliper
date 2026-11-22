@@ -23,10 +23,10 @@ views fill what the column leaves. The chat stays open when the page changes, so
 from the live page shows beside the same conversation: the app shows the spec page for each `spec.new`, `spec.open` and
 `applet.open` of the agent, so that you see the spec whose edits you review, except over a compiled applet's page,
 which an agent never ends: there the spec opens in the session, the page stays, and Activity says how to get to it
-([Caliper CLI](../references/cli.md#the-spec-page)).
+([Caliper CLI](../reference/cli.md#the-spec-page)).
 
 The chat's settings are kept in `side-chat.json` in the app-data folder ([Folders and environment
-variables](../references/environment.md)): the chosen agent, the custom agent's name and command line, whether an agent's "always
+variables](../reference/folders-and-environment.md)): the chosen agent, the custom agent's name and command line, whether an agent's "always
 allow" options are offered, the agents you marked as running on a local model (`local_model_agents`, a list of agent
 ids), and whether the chat is open. They never hold a key.
 

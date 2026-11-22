@@ -41,7 +41,7 @@ does:
 
 | Job submitted from | On a fault or exception |
 |---|---|
-| an applet entry point (`create`, `initialize`, `frame`, `cleanup`, `destroy`), or another job submitted from one | The job fails, and the applet is quarantined before the host calls it again: at its next `frame()`, or at teardown. Its status reads `crashed in background job "{label}": {fault}` (see [Refusal messages](../../references/refusals.md#quarantined-messages)). A job that threw leaves the applet restartable with `⌘R Restart`; a job that took a signal needs a Caliper restart. |
+| an applet entry point (`create`, `initialize`, `frame`, `cleanup`, `destroy`), or another job submitted from one | The job fails, and the applet is quarantined before the host calls it again: at its next `frame()`, or at teardown. Its status reads `crashed in background job "{label}": {fault}` (see [Refusal messages](../../reference/refusal-messages.md#quarantined-messages)). A job that threw leaves the applet restartable with `⌘R Restart`; a job that took a signal needs a Caliper restart. |
 | a thread the applet started itself | The job fails. The applet keeps running. |
 | an embedder, through `caliper_core_get_service` | The job fails. No applet is quarantined. |
 

@@ -4,91 +4,91 @@ kind: docs
 summary: 'The pages of the docs site, which describe what is shipped on main: each CLI subcommand, service,
   applet, reference, guide and explanation, mapped to the shipped feature it describes.'
 entries:
-- page: docs/references/cli.md#starting-the-app
+- page: docs/reference/cli.md#starting-the-app
   item: Starting the app with caliper, with --applets folders and --url to attach to a stream at start.
   ids:
   - COR-06
   - STR-43
-- page: docs/references/cli.md#caliper-api
+- page: docs/reference/cli.md#caliper-api
   item: The --api, --api-port and --allow-control options that serve Caliper API from the running app.
   ids:
   - AGT-01
-- page: docs/references/cli.md#the-workspace
+- page: docs/reference/cli.md#the-workspace
   item: The --workspace option and the builder session that the app, caliper dev and caliper shot hold.
   ids:
   - SPC-06
-- page: docs/references/cli.md#the-spec-page
+- page: docs/reference/cli.md#the-spec-page
   item: Launching a spec applet or opening a spec through a command shows the spec page.
   ids:
   - SPC-08
   - EMB-06
-- page: docs/references/cli.md#the-hidden-window
+- page: docs/reference/cli.md#the-hidden-window
   item: The --hidden option runs the real app with its window never shown, so a test or an agent can drive
     it through Caliper API.
   ids:
   - COR-42
-- page: docs/references/cli.md#the-search-order
+- page: docs/reference/cli.md#the-search-order
   item: The fixed search order of development folders, CALIPER_APPLET_PATH, the user applets folder and
     the app folder.
   ids:
   - COR-06
-- page: docs/references/cli.md#build-folders
+- page: docs/reference/cli.md#build-folders
   item: A build folder stands for its applets/ subfolder in every search list.
   ids:
   - COR-06
-- page: docs/references/cli.md#caliper-list
+- page: docs/reference/cli.md#caliper-list
   item: caliper list prints every applet in the search folders with its status, id, version, kind and
     folder, without opening a library.
   ids:
   - COR-39
-- page: docs/references/cli.md#caliper-check
+- page: docs/reference/cli.md#caliper-check
   item: caliper check runs the pre-load checks on every applet of one folder and validates each spec applet
     in full.
   ids:
   - COR-07
   - SPC-02
-- page: docs/references/cli.md#caliper-install
+- page: docs/reference/cli.md#caliper-install
   item: caliper install checks a folder and copies the applets into the user applets folder all or nothing.
   ids:
   - COR-12
-- page: docs/references/cli.md#caliper-new
+- page: docs/reference/cli.md#caliper-new
   item: caliper new creates an applet project from a built-in template with a manifest, a source file,
     a CMake file and a test.
   ids:
   - COR-41
-- page: docs/references/cli.md#caliper-build
+- page: docs/reference/cli.md#caliper-build
   item: caliper build configures and builds an applet folder against the installed SDK and runs the checks.
   ids:
   - COR-10
-- page: docs/references/cli.md#caliper-info
+- page: docs/reference/cli.md#caliper-info
   item: caliper info prints the host version, ABI epoch, SDK version, libtorch version, UI-stack hash
     and every service the host serves.
   ids:
   - COR-40
-- page: docs/references/cli.md#caliper-shot
+- page: docs/reference/cli.md#caliper-shot
   item: caliper shot draws one applet page without a window and writes the last frame as a PNG.
   ids:
   - COR-08
-- page: docs/references/cli.md#caliper-serve
+- page: docs/reference/cli.md#caliper-serve
   item: caliper serve runs the hub with --port, --token-file, --assets and --allow-control, and writes
     a hub file.
   ids:
   - COR-11
   - STR-06
-- page: docs/references/cli.md#caliper-help
+- page: docs/reference/cli.md#caliper-help
   item: caliper --help prints the usage.
   ids:
   - COR-07
-- page: docs/references/cli.md#exit-codes
+- page: docs/reference/cli.md#exit-codes
   item: Exit codes 0, 1 and 2 of the subcommands.
   ids:
   - COR-07
-- page: docs/references/cli.md#on-windows
+- page: docs/reference/cli.md#on-windows
   item: The Windows build refuses caliper serve, caliper build, --api and --url before anything starts.
   ids:
   - PLT-06
   - PLT-08
-- page: docs/references/cli.md#environment-variables
+- page: docs/reference/cli.md#environment-variables
   item: The environment variables the subcommands read.
   ids:
   - COR-06
@@ -557,74 +557,74 @@ entries:
   ids:
   - STR-07
   - STR-03
-- page: docs/references/wire-protocol.md#roles-and-terms
+- page: docs/reference/wire-protocol.md#roles-and-terms
   item: Producer, hub and viewer roles of wire protocol v3.
   ids:
   - STR-02
-- page: docs/references/wire-protocol.md#opening-a-connection
+- page: docs/reference/wire-protocol.md#opening-a-connection
   item: The upgrade request, hello and welcome, choosing a session and the producer connection to a hub.
   ids:
   - STR-02
   - STR-06
-- page: docs/references/wire-protocol.md#frames
+- page: docs/reference/wire-protocol.md#frames
   item: The binary frame layout with metadata and sections.
   ids:
   - STR-02
-- page: docs/references/wire-protocol.md#message-types
+- page: docs/reference/wire-protocol.md#message-types
   item: The message types from hello to selection.
   ids:
   - STR-02
-- page: docs/references/wire-protocol.md#data-views
+- page: docs/reference/wire-protocol.md#data-views
   item: Data views tell the producer which part of a large tensor to send.
   ids:
   - STR-08
-- page: docs/references/wire-protocol.md#events
+- page: docs/reference/wire-protocol.md#events
   item: Events carried on the stream.
   ids:
   - STR-02
-- page: docs/references/wire-protocol.md#controls_1
+- page: docs/reference/wire-protocol.md#controls_1
   item: 'Protocol 3.1 controls: the checkpoint, pause, resume and step, parameters, actions, ordering
     and who may control.'
   ids:
   - STR-03
-- page: docs/references/wire-protocol.md#linked-selection
+- page: docs/reference/wire-protocol.md#linked-selection
   item: Linked selection shares a selection between views through item spaces.
   ids:
   - STR-03
-- page: docs/references/wire-protocol.md#flow-control
+- page: docs/reference/wire-protocol.md#flow-control
   item: Flow control keeps the latest snapshot and drops older ones.
   ids:
   - STR-02
   - STR-05
-- page: docs/references/wire-protocol.md#limits
+- page: docs/reference/wire-protocol.md#limits
   item: The limits of the protocol.
   ids:
   - STR-02
-- page: docs/references/wire-protocol.md#versioning
+- page: docs/reference/wire-protocol.md#versioning
   item: Protocol versioning and capabilities.
   ids:
   - STR-02
-- page: docs/references/wire-protocol.md#close-codes
+- page: docs/reference/wire-protocol.md#close-codes
   item: Close codes.
   ids:
   - STR-02
-- page: docs/references/wire-protocol.md#error-codes
+- page: docs/reference/wire-protocol.md#error-codes
   item: Error codes.
   ids:
   - STR-02
-- page: docs/references/wire-protocol.md#security
+- page: docs/reference/wire-protocol.md#security
   item: The stream binds to 127.0.0.1 and requires a token.
   ids:
   - STR-02
-- page: docs/references/wire-protocol.md#worked-example
+- page: docs/reference/wire-protocol.md#worked-example
   item: A worked example of a session.
   ids:
   - STR-02
-- page: docs/references/wire-protocol.md#golden-frames
+- page: docs/reference/wire-protocol.md#golden-frames
   item: Golden frames pin the byte layout.
   ids:
   - STR-02
-- page: docs/references/wire-protocol.md#the-header-verbatim
+- page: docs/reference/wire-protocol.md#the-header-verbatim
   item: The protocol header verbatim.
   ids:
   - STR-02
@@ -935,48 +935,48 @@ entries:
   item: The frozen epoch 2 ABI header.
   ids:
   - COR-02
-- page: docs/references/environment.md#the-app-data-folder
+- page: docs/reference/folders-and-environment.md#the-app-data-folder
   item: The app-data folder where the host keeps what it writes.
   ids:
   - COR-01
-- page: docs/references/environment.md#host-variables
+- page: docs/reference/folders-and-environment.md#host-variables
   item: The host environment variables.
   ids:
   - COR-01
-- page: docs/references/environment.md#renderer-variables
+- page: docs/reference/folders-and-environment.md#renderer-variables
   item: The renderer variables.
   ids:
   - PLT-01
   - PLT-02
-- page: docs/references/environment.md#applet-and-example-variables
+- page: docs/reference/folders-and-environment.md#applet-and-example-variables
   item: The applet and example variables.
   ids:
   - COR-13
-- page: docs/references/environment.md#test-variables
+- page: docs/reference/folders-and-environment.md#test-variables
   item: The test variables.
   ids:
   - COR-01
-- page: docs/references/environment.md#python-variables
+- page: docs/reference/folders-and-environment.md#python-variables
   item: The Python variables.
   ids:
   - STR-01
-- page: docs/references/environment.md#startup-log-lines
+- page: docs/reference/folders-and-environment.md#startup-log-lines
   item: The startup log lines name the renderer and the device path.
   ids:
   - PLT-01
   - PLT-02
   - REN-03
-- page: docs/references/refusals.md#negotiation-refusals
+- page: docs/reference/refusal-messages.md#negotiation-refusals
   item: Negotiation refuses an applet before any code runs, with one message for each cause.
   ids:
   - COR-06
   - COR-07
-- page: docs/references/refusals.md#loader-statuses
+- page: docs/reference/refusal-messages.md#loader-statuses
   item: Loader statuses READY, REFUSED, FAILED, SHADOWED and QUARANTINED, with their messages.
   ids:
   - COR-06
   - COR-07
-- page: docs/references/refusals.md#spec-applets
+- page: docs/reference/refusal-messages.md#spec-applets
   item: Refusals for spec applets.
   ids:
   - SPC-08
@@ -995,7 +995,7 @@ entries:
   item: An applet opts in to ExportablePool.
   ids:
   - REN-67
-- page: docs/references/glossary.md
+- page: docs/reference/glossary.md
   item: The glossary of terms.
   ids:
   - COR-01

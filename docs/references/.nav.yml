@@ -1,12 +1,4 @@
 nav:
   - index.md
-  - The applet contract:
-      - cli.md
-      - refusals.md
-  - Hosts and clients:
-      - wire-protocol.md
-  - Applets and environment:
-      - environment.md
-      - glossary.md
   - glob: "*"
     ignore_no_matches: true

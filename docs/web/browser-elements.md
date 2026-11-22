@@ -1,6 +1,6 @@
 # Browser Elements
 
-The `web/` package defines two custom elements, `<caliper-view>` and `<caliper-controls>`. The viewer page that `caliper.serve()` serves and the notebook widgets of Caliper LIB are built from them. Both read a [wire protocol v3](../references/wire-protocol.md) stream, and elements with the same `src` on one page share one WebSocket. The module `caliper-view.js` registers both elements and exports `connect(src)`, the shared stream client. The `web/` package is licensed under Apache 2.0, like the core.
+The `web/` package defines two custom elements, `<caliper-view>` and `<caliper-controls>`. The viewer page that `caliper.serve()` serves and the notebook widgets of Caliper LIB are built from them. Both read a [wire protocol v3](../reference/wire-protocol.md) stream, and elements with the same `src` on one page share one WebSocket. The module `caliper-view.js` registers both elements and exports `connect(src)`, the shared stream client. The `web/` package is licensed under Apache 2.0, like the core.
 
 ```html
 <script type="module" src="http://127.0.0.1:7341/caliper-view.js"></script>
@@ -21,8 +21,8 @@ One live view of the stream, with a header (the view's name, its data view picke
 | `kind` | `heatmap`, `image`, `points`, `series` or `histogram`. Without it, the kind comes from the stream |
 | `height` | The element's height in CSS pixels, header included. Default 320 |
 | `renderer` | `auto` (the default) uses the WebAssembly views for the kinds their loader lists when WebGPU gives an adapter; `wasm` uses them whatever the adapter; `ts` uses the TypeScript views |
-| `run-controls` | The header shows Pause or Resume and Step beside the run state, when the producer has [controls](../references/wire-protocol.md#controls) |
-| `link` | [Linked selection](../references/wire-protocol.md#linked-selection): a selection is sent with its item space and items, and the producer's selections are drawn in this view when one of its axes carries their space |
+| `run-controls` | The header shows Pause or Resume and Step beside the run state, when the producer has [controls](../reference/wire-protocol.md#controls) |
+| `link` | [Linked selection](../reference/wire-protocol.md#linked-selection): a selection is sent with its item space and items, and the producer's selections are drawn in this view when one of its axes carries their space |
 | `details` | With `link`, the details of a selection made in this view show under it, one row per item |
 
 The header shows the run state, such as `running` or `paused at 1200`, whenever the producer announces one other than `none`, with or without `run-controls`. Pause, Resume and Step are disabled, with the reason as their tooltip, when the server does not let this viewer control the run, when the session has ended, and when the script has not reached a checkpoint yet.

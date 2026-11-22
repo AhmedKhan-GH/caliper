@@ -8,7 +8,7 @@ decide which part of a large tensor travels at all.
 
 To use it, start with [Watch a training run in a notebook](notebook-training-runs.md).
 The calls are in the [Caliper LIB](caliper-lib-api.md#serve) reference,
-and the [Wire protocol](../references/wire-protocol.md) reference defines every
+and the [Wire protocol](../reference/wire-protocol.md) reference defines every
 message on the stream. This page explains the design and does not repeat the
 protocol.
 

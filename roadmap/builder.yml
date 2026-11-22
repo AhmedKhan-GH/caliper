@@ -18,7 +18,7 @@ features:
     status: shipped
     summary: The spec validator checks a spec against the format and reports each error and warning with a stable code, a line and a column.
     depends_on: [SPC-01]
-    docs: docs/references/cli.md#caliper-check
+    docs: docs/reference/cli.md#caliper-check
     design: design/spec-format.md#validation
     issue: null
 
@@ -54,7 +54,7 @@ features:
     status: shipped
     summary: A builder session binds the spec, loaders, catalog and commands for one workspace folder, which the app, caliper dev and caliper shot each hold.
     depends_on: [SPC-01, SPC-04, SPC-05]
-    docs: docs/references/cli.md#the-workspace
+    docs: docs/reference/cli.md#the-workspace
     design: design/builder-session.md
     issue: null
 
@@ -244,7 +244,7 @@ features:
     status: shipped
     summary: CALIPER_COMMAND_SCRIPT runs a file of commands, one JSON line each, through the command queue of the hidden app or of caliper shot, and writes each result to a file, for tests, demos and screenshots.
     depends_on: [SPC-06]
-    docs: docs/references/cli.md#the-workspace
+    docs: docs/reference/cli.md#the-workspace
     issue: null
 
   - id: SPC-30

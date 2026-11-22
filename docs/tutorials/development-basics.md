@@ -123,7 +123,7 @@ ctest --test-dir build
 with the stem `my_applet`: the manifest, the `CMakeLists.txt`, a source file with
 one window, and a test that runs the applet on the fixture host. Pass a full id,
 such as `com.example.my-applet`, to choose the id yourself.
-[Caliper CLI](../references/cli.md#caliper-new) describes the template.
+[Caliper CLI](../reference/cli.md#caliper-new) describes the template.
 
 ### Loading your applet
 
@@ -152,7 +152,7 @@ pattern. Applet logic that reads services can be unit-tested headlessly.
 
 **Your data lives at** `~/Library/Application Support/Caliper/data/<your-id>/`
 — the host creates it and hands it to you as `host.data_dir()`. Downloads,
-caches, scratch files go there and nowhere else. [Folders and environment variables](../references/environment.md)
+caches, scratch files go there and nowhere else. [Folders and environment variables](../reference/folders-and-environment.md)
 lists the folder on every platform; `CALIPER_DATA_DIR` moves the whole
 app-data folder, and your data folder with it.
 

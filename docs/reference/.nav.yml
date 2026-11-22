@@ -1,0 +1,7 @@
+nav:
+  - index.md
+  - cli.md
+  - wire-protocol.md
+  - folders-and-environment.md
+  - refusal-messages.md
+  - glossary.md

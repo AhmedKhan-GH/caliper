@@ -1,4 +1,4 @@
-# Folders and environment variables
+# Folders and Environment
 
 This page lists where Caliper keeps its files, every environment variable the source reads, and the startup log lines that report which renderer and device path are in use.
 

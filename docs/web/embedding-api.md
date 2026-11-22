@@ -125,7 +125,7 @@ those canvases and never paints applet pixels.
   A canvas-info query and several canvases per core are not provided.
 - **`CaliperCoreDesc.data_dir` moves the app-data folder.** A non-`NULL`
   directory (created if missing) takes the place of the
-  [app-data folder](../references/environment.md#the-app-data-folder) for that core: the
+  [app-data folder](../reference/folders-and-environment.md#the-app-data-folder) for that core: the
   metrics, data and artifacts stores, the applets' data folders `data/<id>/`,
   and the user applets folder `applets/` that the core searches, unless
   `CALIPER_USER_APPLETS_DIR` names another one. The window layout is kept at
@@ -145,7 +145,7 @@ those canvases and never paints applet pixels.
   system's folder (`src/host/live/live_shm.h`).
 - **`CaliperCoreDesc.applets_dir` is searched first.** It takes the place of the
   `caliper` executable's `--applets` folders in the
-  [search order](../references/cli.md#the-search-order), and like them a folder that holds no
+  [search order](../reference/cli.md#the-search-order), and like them a folder that holds no
   manifest but has an `applets/` subfolder that does stands for that subfolder,
   so a build folder can be passed as it is.
 - **Applet log lines reach `log_fn`.** When the embedder sets `log_fn`, the

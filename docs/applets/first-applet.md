@@ -207,7 +207,7 @@ quits, so after each rebuild quit Caliper and run `caliper dev` again.
 
 To keep the applet installed, `"$CALIPER" install build/applets` runs the same
 checks and copies the library and its manifest into the user applets folder,
-which the host searches every time it starts. [Caliper CLI](../references/cli.md)
+which the host searches every time it starts. [Caliper CLI](../reference/cli.md)
 describes every subcommand.
 
 ## 6. See it in the app
@@ -219,6 +219,6 @@ discovers it by reading its `<stem>.caliper.toml` manifest and the
 way must ship. If the row is missing, run `caliper check` on the folder. If its
 status is `REFUSED`, `FAILED` or `QUARANTINED` instead of `READY`, the **Inspector** shows the
 loader's reason under Status (see the
-[refusal reference](../references/refusals.md)). Esc, or the `esc Home` button,
+[refusal reference](../reference/refusal-messages.md)). Esc, or the `esc Home` button,
 returns to the landing screen. [Development basics](../tutorials/development-basics.md#the-landing-screen)
 describes the panes and keys.

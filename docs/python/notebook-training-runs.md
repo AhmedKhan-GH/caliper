@@ -400,5 +400,5 @@ browser tab.
   controls to a script of your own.
 - [Network streaming](network-streaming.md) explains the
   transport, data views and the security position.
-- [Wire protocol](../references/wire-protocol.md) defines every message on the
+- [Wire protocol](../reference/wire-protocol.md) defines every message on the
   stream.

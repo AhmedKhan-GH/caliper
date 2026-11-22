@@ -1,6 +1,6 @@
 # Script Control
 
-A training loop that streams its views with `caliper.serve()` can also take controls from its viewers while it trains: a viewer pauses the loop, runs it one step at a time, changes a learning rate, saves a checkpoint, and selects samples in one view to see them highlighted in the others. This guide adds each of these to a loop with Caliper LIB, the `caliper` Python package. The calls are listed in [Caliper LIB](caliper-lib-api.md#controls), and the messages that carry them are [wire protocol 3.1](../references/wire-protocol.md#controls).
+A training loop that streams its views with `caliper.serve()` can also take controls from its viewers while it trains: a viewer pauses the loop, runs it one step at a time, changes a learning rate, saves a checkpoint, and selects samples in one view to see them highlighted in the others. This guide adds each of these to a loop with Caliper LIB, the `caliper` Python package. The calls are listed in [Caliper LIB](caliper-lib-api.md#controls), and the messages that carry them are [wire protocol 3.1](../reference/wire-protocol.md#controls).
 
 Controls travel on the same stream as the views, so they reach the script while a notebook cell runs. A notebook's own widget messages cannot, because the kernel reads them only between cells.
 

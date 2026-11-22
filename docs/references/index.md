@@ -9,8 +9,8 @@ Reference pages describe the contracts exactly: the ABI, the manifest, each serv
 | [ABI](../applets/applet-contract.md) | `caliper/abi.h`, the epoch 2 descriptor and host structs |
 | [Manifest](../applets/manifest.md) | The `caliper.toml` keys and the id rules |
 | [SDK package](../applets/sdk-package.md) | The installed `caliper-sdk` package, `caliper_add_applet()` and the UI-stack hash |
-| [Caliper CLI](cli.md) | The `caliper` subcommands, the `--applets` flag, the search order and the exit codes |
-| [Refusal messages](refusals.md) | Every message the loader and the services show when they refuse an applet |
+| [Caliper CLI](../reference/cli.md) | The `caliper` subcommands, the `--applets` flag, the search order and the exit codes |
+| [Refusal messages](../reference/refusal-messages.md) | Every message the loader and the services show when they refuse an applet |
 | [C++ sugar](../applets/cpp-sugar.md) | `caliper.hpp`, the `CALIPER_APPLET` macro and the service wrappers |
 | [Tensor](../applets/tensor-and-arrow-headers.md#tensor-header) | `caliper/tensor.h`, the `CaliperTensor` interchange type |
 | [Arrow C Data Interface](../applets/tensor-and-arrow-headers.md#arrow-header) | `caliper/arrow_c.h`, the tabular interchange |
@@ -42,7 +42,7 @@ The [service catalog](../applets/services/service-catalog.md) lists every servic
 |---|---|
 | [Embedding Caliper](../web/embedding-api.md) | `caliper/embed.h`, the C interface for hosting the core in another program |
 | [Caliper LIB](../python/caliper-lib-api.md) | The `caliper` Python package |
-| [Wire protocol v3](wire-protocol.md) | `caliper/live_net.h`, the WebSocket protocol between producers, viewers and the hub |
+| [Wire protocol v3](../reference/wire-protocol.md) | `caliper/live_net.h`, the WebSocket protocol between producers, viewers and the hub |
 | [Browser elements](../web/browser-elements.md) | `<caliper-view>` and `<caliper-controls>`: their attributes, methods and events, and the widgets built on them |
 | [Caliper API](../agents/http-api.md) | The HTTP interface to the running app: its endpoints, its session token and its limits |
 | [MCP server](../agents/mcp-server.md) | `caliper-mcp`: what an outside agent needs running, its command line, the configuration of an MCP client, its tools and resources |
@@ -55,5 +55,5 @@ The [service catalog](../applets/services/service-catalog.md) lists every servic
 | Page | Contents |
 |---|---|
 | [Applets](../applets/in-tree-applets.md) | The applets and examples built in this repository |
-| [Folders and environment variables](environment.md) | Where the host keeps its data, and every `CALIPER_*` variable |
-| [Glossary](glossary.md) | The terms these pages use |
+| [Folders and environment variables](../reference/folders-and-environment.md) | Where the host keeps its data, and every `CALIPER_*` variable |
+| [Glossary](../reference/glossary.md) | The terms these pages use |

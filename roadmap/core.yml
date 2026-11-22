@@ -49,7 +49,7 @@ features:
     status: shipped
     summary: The host searches development folders, the user applets folder and the app in a fixed order, chooses one copy of each applet id and checks its manifest before opening the library.
     depends_on: [COR-01, COR-05]
-    docs: docs/references/cli.md#the-search-order
+    docs: docs/reference/cli.md#the-search-order
     issue: null
 
   - id: COR-07
@@ -57,7 +57,7 @@ features:
     status: shipped
     summary: caliper check runs the host's pre-load checks on every applet in one folder, without opening any library, and reports whether each is ready.
     depends_on: [COR-06]
-    docs: docs/references/cli.md#caliper-check
+    docs: docs/reference/cli.md#caliper-check
     issue: null
 
   - id: COR-08
@@ -65,7 +65,7 @@ features:
     status: shipped
     summary: caliper shot draws one applet's page without a window, as the app draws it, and writes the last frame as a PNG.
     depends_on: [COR-06]
-    docs: docs/references/cli.md#caliper-shot
+    docs: docs/reference/cli.md#caliper-shot
     issue: null
 
   - id: COR-09
@@ -73,7 +73,7 @@ features:
     status: shipped
     summary: caliper dev starts the app with an applet's build folder searched first, so that a rebuilt applet loads without being installed.
     depends_on: [COR-06]
-    docs: docs/references/cli.md#starting-the-app
+    docs: docs/reference/cli.md#starting-the-app
     issue: null
 
   - id: COR-10
@@ -81,7 +81,7 @@ features:
     status: shipped
     summary: caliper build configures and builds an applet's folder against the installed SDK with CMake, then runs the checks of caliper check on the result.
     depends_on: [COR-04, COR-07]
-    docs: docs/references/cli.md#caliper-build
+    docs: docs/reference/cli.md#caliper-build
     issue: null
 
   - id: COR-11
@@ -89,7 +89,7 @@ features:
     status: shipped
     summary: caliper serve runs the hub of wire protocol v3 without a window or a GPU, so that producers connect to it and viewers attach to their sessions.
     depends_on: [STR-06]
-    docs: docs/references/cli.md#caliper-serve
+    docs: docs/reference/cli.md#caliper-serve
     issue: null
 
   - id: COR-12
@@ -97,7 +97,7 @@ features:
     status: shipped
     summary: caliper install checks a local folder of applets and, when every one passes, copies them into the user applets folder in one all-or-nothing step.
     depends_on: [COR-07]
-    docs: docs/references/cli.md#caliper-install
+    docs: docs/reference/cli.md#caliper-install
     issue: null
 
   - id: COR-13
@@ -300,7 +300,7 @@ features:
     status: shipped
     summary: caliper list prints every applet in the search folders with its status, id, version, kind and folder, and the reason for one that is refused, failed or shadowed, without opening any library.
     depends_on: [COR-06]
-    docs: docs/references/cli.md#caliper-list
+    docs: docs/reference/cli.md#caliper-list
     issue: null
 
   - id: COR-40
@@ -308,7 +308,7 @@ features:
     status: shipped
     summary: caliper info prints the host version, its ABI epoch, the SDK version, the libtorch version, the UI stack hash and one line for each service the host serves.
     depends_on: [COR-03]
-    docs: docs/references/cli.md#caliper-info
+    docs: docs/reference/cli.md#caliper-info
     issue: null
 
   - id: COR-41
@@ -316,7 +316,7 @@ features:
     status: shipped
     summary: caliper new creates an applet project from a template built into the executable, with a manifest, a source file, a CMake file and a test.
     depends_on: [COR-04]
-    docs: docs/references/cli.md#caliper-new
+    docs: docs/reference/cli.md#caliper-new
     issue: null
 
   - id: COR-42
@@ -324,7 +324,7 @@ features:
     status: shipped
     summary: The --hidden option runs the real app with its renderer and frame loop but never shows its window, so that a test or an agent can drive the whole app through Caliper API.
     depends_on: [COR-01]
-    docs: docs/references/cli.md#the-hidden-window
+    docs: docs/reference/cli.md#the-hidden-window
     issue: null
 
   - id: COR-43

@@ -141,7 +141,7 @@ the script's terminal does not close it and it outlives the script.
 ## Attach to a stream by its link
 
 A script that streams with `caliper.serve()` sends its views over a WebSocket on
-127.0.0.1 ([wire protocol v3](../references/wire-protocol.md)) instead of shared
+127.0.0.1 ([wire protocol v3](../reference/wire-protocol.md)) instead of shared
 memory, so it has no session file. While its server listens it writes a
 stream file, `<data_root>/streams/<pid>.json`, with mode 0600 in a folder of
 mode 0700, and removes it when the server closes. The file holds its pid, the
@@ -219,7 +219,7 @@ When the script ends, the views keep their last pixels.
 A view of a stream may offer more than it draws by default: several sources,
 such as the layers of a model, and dimensions beyond the ones its kind
 draws, such as the heads of an attention map
-([Data views](../references/wire-protocol.md#data-views)). In the app and in
+([Data views](../reference/wire-protocol.md#data-views)). In the app and in
 `caliper-viewer` such a view has a picker under its header, as in the
 browser: a menu of its sources when it has several, and a menu per
 dimension that keeps the dimension (`all`), reduces it (`mean`, `sum`,
@@ -237,8 +237,8 @@ shows. A shared-memory session offers no choices.
 A script on protocol 3.1 can take controls from its viewers: it calls a
 checkpoint once per training step (`caliper.step()`), and it may register
 parameters and actions and declare which axes of its views index the same
-items, such as the samples of a test set ([Controls](../references/wire-protocol.md#controls)
-and [Item spaces](../references/wire-protocol.md#item-spaces)). The app's live
+items, such as the samples of a test set ([Controls](../reference/wire-protocol.md#controls)
+and [Item spaces](../reference/wire-protocol.md#item-spaces)). The app's live
 page and `caliper-viewer` show these for a stream. A shared-memory session has
 no channel back to the script, so its page has no run bar.
 
