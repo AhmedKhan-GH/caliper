@@ -130,7 +130,8 @@ class RunHooks:
 
     def __init__(self, pkg, handle, optimizer, scene: bool, rate=None):
         import torch
-        if not (hasattr(optimizer, "register_step_pre_hook") and hasattr(optimizer, "param_groups")):
+        if not (hasattr(optimizer, "register_step_pre_hook")
+                and hasattr(optimizer, "param_groups")):
             raise TypeError("caliper.watch expects a torch.optim.Optimizer as optimizer")
         self.pkg = pkg
         self.opt = optimizer
@@ -147,7 +148,7 @@ class RunHooks:
         self._geom: dict = {}
         self._torch = torch
         with pkg.LOCK:
-            pkg._auto_tried = True      # the server carries the views, not the shared memory session
+            pkg._auto_tried = True      # the server carries the views, not the shared memory
         pkg.serve()
         groups = optimizer.param_groups
         start = _rate(groups[0]) if groups else float("nan")

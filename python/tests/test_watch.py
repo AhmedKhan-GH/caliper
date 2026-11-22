@@ -174,7 +174,8 @@ def _train_step(net, opt, x=None):
 def _used_lr(opt):
     """The rates that each step used: a pre-hook registered after watch()'s runs after it."""
     used = []
-    opt.register_step_pre_hook(lambda o, a, k: used.append([float(g["lr"]) for g in o.param_groups]))
+    opt.register_step_pre_hook(
+        lambda o, a, k: used.append([float(g["lr"]) for g in o.param_groups]))
     return used
 
 
@@ -196,7 +197,8 @@ def test_watch_with_optimizer_publishes_the_names(run_env, monkeypatch):
         series.append((name, v)), real(v, name, rate=rate, **kw))[1])
     h = caliper.watch(net, opt)
     try:
-        assert caliper._server is not None and caliper._auto_tried and caliper._session_route is None
+        assert caliper._server is not None and caliper._auto_tried
+        assert caliper._session_route is None
         lr = run_env.params["lr"]
         assert (lr.value, lr.min, lr.max, lr.log) == (0.05, 0.05 / 1000, 0.05 * 10, True)
         assert h.modules == ["fc1", "act", "fc2"] and R.SCENE_NAME in _scene.SCENES
@@ -366,14 +368,43 @@ def test_the_checkpoint_stays_on_the_fast_path(run_env, monkeypatch):
     assert len(seen) == 1 and run_env.busy is False   # only the first step takes the slow path
 
 
+VIEWER = """
+import sys
+from websockets.sync.client import connect
+from caliper import _wire as w
+with connect(sys.argv[1], max_size=None, compression=None) as ws:
+    ws.send(w.encode(w.Hello("viewer", [w.CAP_CONTROLS, w.CAP_SCENES],
+                             {"name": "timing", "version": "0"})))
+    w.decode(ws.recv())
+    for sub, view in enumerate(sys.argv[2:], 1):
+        ws.send(w.encode(w.Subscribe(sub, view, 100 + sub)))
+    print("subscribed", flush=True)
+    try:
+        while True:
+            ws.recv()
+    except Exception:
+        pass
+"""
+
+
+def _untimed(net, opt, x, y):
+    for _ in range(50):
+        loss = (net(x) - y).square().mean()
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+
+
 @pytest.mark.skipif(os.environ.get("CALIPER_WATCH_TIMING") != "1",
-                    reason="a bounded timing: set CALIPER_WATCH_TIMING=1 in a slot on a quiet machine")
+                    reason="a bounded timing: CALIPER_WATCH_TIMING=1 in a slot on a quiet machine")
 def test_the_throughput_cost_of_the_hook(run_env):
-    """Training with watch(model, optimizer) and a viewer of loss, lr and the scene runs at 95 %
-    or more of its speed without the hook: the median of five runs of each, interleaved."""
-    from test_net_controls import Viewer, run
+    """Training with watch(model, optimizer) and a viewer of loss, lr and the scene in another
+    process runs at 95 % or more of its speed without the hook: the median of five runs of each,
+    interleaved, each well under 60 seconds."""
+    import subprocess
+    import sys
     torch.set_num_threads(4)
-    steps = int(os.environ.get("CALIPER_WATCH_STEPS", "1500"))
+    steps = int(os.environ.get("CALIPER_WATCH_STEPS", "3000"))
     x, y = torch.randn(256, 64), torch.randn(256, 10)
 
     def make():
@@ -391,24 +422,27 @@ def test_the_throughput_cost_of_the_hook(run_env):
             opt.step()
         return time.perf_counter() - t0
 
+    env = dict(os.environ, PYTHONPATH=str(pathlib.Path(caliper.__file__).parent.parent))
     train(*make())                                    # warm up
     plain, watched = [], []
     for _ in range(5):
         plain.append(train(*make()))
         net, opt = make()
         h = caliper.watch(net, opt)
-
-        async def go():
-            async with Viewer(caliper._server) as v:
-                for sub, view in enumerate(("loss", "lr", R.SCENE_NAME), 1):
-                    await v.send(w.Subscribe(sub, view, 100 + sub))
-                await asyncio.sleep(0.2)
-                return await asyncio.to_thread(train, net, opt)
+        viewer = subprocess.Popen([sys.executable, "-c", VIEWER, caliper._server.stream_url,
+                                   "loss", "lr", R.SCENE_NAME], env=env, stdout=subprocess.PIPE,
+                                  text=True)
         try:
-            watched.append(run(go()))
+            assert viewer.stdout.readline().strip() == "subscribed"
+            end = time.monotonic() + 10
+            while not h._run.scene._watched():        # untimed steps until the viewer watches
+                assert time.monotonic() < end
+                _untimed(net, opt, x, y)
+            watched.append(train(net, opt))
         finally:
             h.remove()
             caliper._server.close()
+            viewer.wait(10)
             _scene.forget(R.SCENE_NAME)
         assert max(plain[-1], watched[-1]) < 60
     p, q = statistics.median(plain), statistics.median(watched)
