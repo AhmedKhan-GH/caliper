@@ -1,7 +1,8 @@
 // caliper_wgsl_tests: the runtime WGSL compiler (tools/shaders/caliper-wgsl) through its C
 // interface, include/caliper/wgsl.h. A valid compute program validates, reports its bindings and
 // translates to MSL and SPIR-V; built-in programs with one entry point translate byte for byte
-// as the developer-time driver translated them; invalid, oversized and non-UTF-8 sources fail
+// as the developer-time driver translated them when the caller asks for the driver's unchecked
+// buffers, and with bounds checks by default; invalid, oversized and non-UTF-8 sources fail
 // with a message and a place; and, in a build with the test hooks, a panic inside the library
 // comes back as an error. No GPU.
 
@@ -114,6 +115,7 @@ TEST_CASE("versions") {
     CHECK(o.spirv_version_major == 1);
     CHECK(o.spirv_version_minor == 3);
     CHECK(o.metal_vertex_buffer_base == 16);
+    CHECK(o.bounds_checks == CALIPER_WGSL_BOUNDS_CHECKED);
 }
 
 TEST_CASE("a compute program validates, reports its bindings and translates") {
@@ -221,8 +223,11 @@ TEST_CASE("built-in programs translate as the developer-time driver translated t
         {kFillTextureWgsl, kFillTextureMsl, kFillTextureSpirv, sizeof(kFillTextureSpirv) / 4},
         {kEdgeGatherWgsl, kEdgeGatherMsl, kEdgeGatherSpirv, sizeof(kEdgeGatherSpirv) / 4},
     };
+    caliper_wgsl_options unchecked{};
+    caliper_wgsl_options_init(&unchecked);
+    unchecked.bounds_checks = CALIPER_WGSL_BOUNDS_UNCHECKED_BUFFERS;
     for (const Builtin& p : programs) {
-        Module mod(p.wgsl);
+        Module mod(p.wgsl, std::strlen(p.wgsl), &unchecked);
         INFO((mod.error.report ? mod.error.report : ""));
         REQUIRE(mod.status == CALIPER_WGSL_OK);
         REQUIRE(caliper_wgsl_module_entry_point_count(mod.m) == 1);
@@ -232,7 +237,46 @@ TEST_CASE("built-in programs translate as the developer-time driver translated t
         auto stage = static_cast<caliper_wgsl_stage>(ep.stage);
         CHECK(msl_of(mod.m, ep.name, stage) == std::string(p.msl));
         CHECK(spirv_of(mod.m, ep.name, stage) == std::vector<uint32_t>(p.spirv, p.spirv + p.spirv_words));
+
+        // The default checks every buffer index, thus the same program translates otherwise.
+        Module checked(p.wgsl);
+        REQUIRE(checked.status == CALIPER_WGSL_OK);
+        const std::string msl = msl_of(checked.m, ep.name, stage);
+        CHECK(msl != std::string(p.msl));
+        CHECK(msl.find("DefaultConstructible") != std::string::npos);
+        CHECK(spirv_of(checked.m, ep.name, stage) != std::vector<uint32_t>(p.spirv, p.spirv + p.spirv_words));
     }
+}
+
+TEST_CASE("the sizes buffer holds one size for each storage binding in binding order") {
+    // The counter is a fixed-size storage binding before the arrays, and w is declared first:
+    // the MSL must read values' size from the second word and w's from the third, as the host
+    // binds them.
+    const char src[] = R"(@group(0) @binding(2) var<storage, read> w: array<f32>;
+@group(0) @binding(0) var<storage, read_write> count: atomic<u32>;
+@group(0) @binding(1) var<storage, read_write> values: array<f32>;
+@compute @workgroup_size(64)
+fn run(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = atomicAdd(&count, 1u);
+    values[i] = w[id.x];
+}
+)";
+    Module mod(src);
+    INFO((mod.error.report ? mod.error.report : ""));
+    REQUIRE(mod.status == CALIPER_WGSL_OK);
+    const std::string msl = msl_of(mod.m, "run", CALIPER_WGSL_STAGE_COMPUTE);
+    const size_t at = msl.find("struct _mslBufferSizes {\n");
+    REQUIRE(at != std::string::npos);
+    const std::string body = msl.substr(at, msl.find("};", at) - at);
+    const size_t unused = body.find("unused_0_0"), values = body.find("uint size"),
+                 w = body.find("uint size", values + 1);
+    REQUIRE(unused != std::string::npos);
+    REQUIRE(w != std::string::npos);
+    CHECK(unused < values);
+    // values is declared after w, thus Naga numbers it higher; the layout still puts it first.
+    const auto member = [&](size_t pos) { return body.substr(pos + 5, body.find(';', pos) - pos - 5); };
+    CHECK(msl.find("_buffer_sizes." + member(values) + " - 0 - 4) / 4) {") != std::string::npos);   // the store
+    CHECK(msl.find("_buffer_sizes." + member(w) + " - 0 - 4) / 4 ? w[") != std::string::npos);    // the load
 }
 
 TEST_CASE("an invalid program fails with its message, line and column") {
@@ -278,6 +322,11 @@ TEST_CASE("limits and arguments are checked") {
     o.metal_vertex_buffer_base = 40;
     Module options(kCompute, sizeof(kCompute) - 1, &o);
     CHECK(options.status == CALIPER_WGSL_ERROR_ARGUMENT);
+
+    caliper_wgsl_options_init(&o);
+    o.bounds_checks = 2;
+    Module policy(kCompute, sizeof(kCompute) - 1, &o);
+    CHECK(policy.status == CALIPER_WGSL_ERROR_ARGUMENT);
 
     caliper_wgsl_options_init(&o);
     o.max_source_bytes = static_cast<size_t>(CALIPER_WGSL_MAX_SOURCE_BYTES_LIMIT) + 1;

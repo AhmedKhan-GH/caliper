@@ -400,6 +400,7 @@ add_library(caliper_scene STATIC
     src/host/scene/pick.cpp
     src/host/scene/scale_bar.cpp
     src/host/scene/backend_resources.cpp
+    src/host/scene/stages.cpp
 )
 target_include_directories(caliper_scene PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_scene PUBLIC caliper_gfx caliper::sdk)
@@ -952,6 +953,11 @@ if(CALIPER_WITH_BUILDER)
     # The WYSIWYG builder pane and caliper-builder-shot.
     include(src/host/builder/builder_pane.cmake)
 endif()
+
+# The producer runtime of GPU programs (src/host/producer, caliper_producer.h,
+# design/gpu-programs.md), which the native module caliper._producer links, with
+# its tests.
+add_subdirectory(src/host/producer)
 
 # The builder session in the app (src/host/builder/app_session.h): with the
 # builder, the caliper executable links the session library, the spec runtime

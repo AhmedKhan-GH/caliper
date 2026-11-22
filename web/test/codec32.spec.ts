@@ -25,6 +25,10 @@ import {
   MAX_PIECES, MAX_RECORDED, MAX_RECORDINGS, MAX_SPEED, MAX_UPDATE_BYTES, MIN_SPEED, PACE_EVEN, PACE_RECORDED, RECORDING_LINGER_MS,
   STAMP_TEXT_MAX, TEXT_LINE_MAX, TEXT_MAX_LINES, TEXT_RETAIN_MIN, TIME_FOLLOWING, TIME_PAUSED, TIME_PLAYING, TIME_STATE_RATE_HZ,
   TIMELINE_SEQUENCE, TIMELINE_TIME,
+  CAP_INTERVENTIONS, CAP_PROGRAMS, INTERVENE_ABLATE, MAX_INTERVENTIONS, MAX_POINTS_LISTED, MAX_PROGRAMS, POINT_MAX, PROGRAM_EVERY_MAX,
+  PROGRAM_ID_MAX, PROGRAM_MAX_COUNT, PROGRAM_MAX_INPUTS, PROGRAM_MEMORY_MB_MAX, PROGRAM_REMOVE, PROGRAM_SET, PROGRAM_SIDE_MAX,
+  PROGRAM_SOURCE_MAX, PROGRAM_STATE_RATE_HZ, PROGRAM_TIME_MS_MAX, PROGRAM_WORKGROUPS_MAX, TENSOR_NAME_MAX,
+  type ControlMsg, type ControlsMsg, type ProgramMsg, type ProgramStateMsg,
   type CursorMsg, type SceneClassesMsg, type SceneTransformsMsg, type SceneUpdateMsg, type SnapshotMsg, type TextMsg, type TimeStateMsg,
   type ViewEntry, type ViewsMsg,
 } from '../src/protocol/messages.js';
@@ -321,6 +325,29 @@ test('the 3.2 constants agree with include/caliper/live_net.h', () => {
     CALIPER_NET_LINES_SEGMENTS: LINES_SEGMENTS,
     CALIPER_NET_LINES_STRIPS: LINES_STRIPS,
     CALIPER_NET_LINES_EDGES: LINES_EDGES,
+    CALIPER_NET_CAP_PROGRAMS: CAP_PROGRAMS,
+    CALIPER_NET_CAP_INTERVENTIONS: CAP_INTERVENTIONS,
+    CALIPER_NET_MSG_PROGRAM: MSG.program,
+    CALIPER_NET_MSG_PROGRAM_STATE: MSG.program_state,
+    CALIPER_NET_PROGRAM_SET: PROGRAM_SET,
+    CALIPER_NET_PROGRAM_REMOVE: PROGRAM_REMOVE,
+    CALIPER_NET_OP_INTERVENE: 'intervene',
+    CALIPER_NET_INTERVENE_ABLATE: INTERVENE_ABLATE,
+    CALIPER_NET_MAX_PROGRAMS: MAX_PROGRAMS,
+    CALIPER_NET_PROGRAM_ID_MAX: PROGRAM_ID_MAX,
+    CALIPER_NET_PROGRAM_SOURCE_MAX: PROGRAM_SOURCE_MAX,
+    CALIPER_NET_PROGRAM_STATE_RATE_HZ: PROGRAM_STATE_RATE_HZ,
+    CALIPER_NET_POINT_MAX: POINT_MAX,
+    CALIPER_NET_MAX_POINTS_LISTED: MAX_POINTS_LISTED,
+    CALIPER_NET_MAX_INTERVENTIONS: MAX_INTERVENTIONS,
+    CALIPER_NET_PROGRAM_MAX_INPUTS: PROGRAM_MAX_INPUTS,
+    CALIPER_NET_PROGRAM_MAX_COUNT: PROGRAM_MAX_COUNT,
+    CALIPER_NET_PROGRAM_SIDE_MAX: PROGRAM_SIDE_MAX,
+    CALIPER_NET_PROGRAM_TIME_MS_MAX: PROGRAM_TIME_MS_MAX,
+    CALIPER_NET_PROGRAM_MEMORY_MB_MAX: PROGRAM_MEMORY_MB_MAX,
+    CALIPER_NET_PROGRAM_EVERY_MAX: PROGRAM_EVERY_MAX,
+    CALIPER_NET_PROGRAM_WORKGROUPS_MAX: PROGRAM_WORKGROUPS_MAX,
+    CALIPER_NET_TENSOR_NAME_MAX: TENSOR_NAME_MAX,
     CALIPER_NET_COLOR_PER_VERTEX: COLOR_PER_VERTEX,
     CALIPER_NET_COLOR_PER_STRIP: COLOR_PER_STRIP,
     CALIPER_NET_COLOR_PER_EDGE: COLOR_PER_EDGE,
@@ -944,3 +971,41 @@ test('a split update of a large mesh', () => {
 function fails2(fn: () => unknown): void {
   expect(catchError(fn)).toBeInstanceOf(MessageError);
 }
+
+test('golden values of programs and interventions', async () => {
+  const { createHash } = await import('node:crypto');
+  const g = frame32('program_set_geometry') as ProgramMsg;
+  expect([g.op, g.id, g.scene, g.request_id]).toEqual(['set', 'rows', 'world', 11]);
+  expect(g.wgsl!.endsWith('\n')).toBe(true);
+  expect(createHash('sha256').update(g.wgsl!, 'utf8').digest('hex')).toBe(g.sha256);
+  expect(g.wgsl).toContain('\u00b5');
+  expect((g.declaration!.output as Record<string, unknown>).max_count).toBe(4096);
+  const gf = decodeFrame(read('program_set_geometry.bin'));
+  expect(gf.sections.map((x) => x.name)).toEqual(['wgsl']);
+  expect(gf.sections[0].dtype).toBe(DTYPE.u8);
+  const p = frame32('program_set_pixels') as ProgramMsg;
+  expect(p.scene).toBeUndefined();
+  expect((p.declaration!.output as Record<string, unknown>).width).toBe(64);
+  const r = frame32('program_remove') as ProgramMsg;
+  expect([r.op, r.declaration, r.wgsl, r.sha256]).toEqual(['remove', undefined, undefined, undefined]);
+  expect(decodeFrame(read('program_remove.bin')).sections).toEqual([]);
+  const st = frame32('program_state_reply') as ProgramStateMsg;
+  expect([st.request_id, st.step, st.step_ms]).toEqual([12, 1200, 31.25]);
+  expect(st.programs).toHaveLength(2);
+  expect(st.programs.map((x) => x.state)).toEqual(['running', 'refused']);
+  expect([st.programs[0].overhead_share, st.programs[0].passes_per_s]).toEqual([0.03125, 2.5]);
+  expect((st.programs[1].error as Record<string, unknown>).code).toBe('program.unknown_input');
+  const wt = frame32('program_state_waiting') as ProgramStateMsg;
+  expect([wt.request_id, wt.step, wt.programs.length]).toEqual([undefined, undefined, 1]);
+
+  const s = frame32('control_intervene_set') as ControlMsg;
+  expect(s.intervene).toEqual({ set: { point: 'blocks.0.attn#3', op: 'ablate', from_step: 1201, until_step: null } });
+  expect((frame32('control_intervene_clear') as ControlMsg).intervene).toEqual({ clear: 'blocks.0.attn#3' });
+  expect((frame32('control_intervene_clear_all') as ControlMsg).intervene).toEqual({ clear_all: true });
+  expect((frame32('control_reply_intervene') as { op: string }).op).toBe('intervene');
+  const c = frame32('controls_interventions') as ControlsMsg;
+  expect(c.interventions!.points).toHaveLength(2);
+  expect(c.interventions!.points.map((x) => x.kind)).toEqual(['module', 'head']);
+  expect(c.interventions!.active[0].state).toBe('active');
+  expect((decode(new Uint8Array(fs.readFileSync(path.join(goldenFrames(), 'v3_1', 'controls.bin')))) as ControlsMsg).interventions).toBeUndefined();
+});

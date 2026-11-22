@@ -36,6 +36,14 @@
 // scene view in order. A part, mode or section this viewer does not build is
 // answered as the versioning rules say and becomes a note in the view.
 //
+// PROTOCOL 3.2 DRAFT: GPU PROGRAMS. HELLO also announces `programs` and
+// `interventions` (design/gpu-programs.md, Wire Path). The frame thread queues
+// a PROGRAM with send_program() when programs_ready(), and takes the script's
+// PROGRAM_STATE messages, and the ERRORs that refused a PROGRAM, with
+// take_program_answers(). program_epoch() grows with each attachment of a new
+// connection or another session, after which the script may hold none of the
+// programs sent before.
+//
 // THE HAND-OVER (the claim rules of live_source.h). Every method of Source is
 // called on the frame thread. Each view of a texture or points kind owns
 // kSlots shared-storage MTLBuffers on the renderer's device. The network thread
@@ -53,9 +61,11 @@
 #pragma once
 
 #include "live/live_source.h"
+#include "net/wire.h"
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace caliper_live {
@@ -76,6 +86,18 @@ struct StreamUrl {
 };
 bool parse_stream_url(const std::string& url, StreamUrl* out, std::string* err);
 
+// One message of the script about its GPU programs: a PROGRAM_STATE, which
+// answers a PROGRAM (request_id set) or reports on its own, or an ERROR that
+// refused a PROGRAM (error_code set, programs null).
+struct ProgramAnswer {
+    std::optional<uint32_t> request_id;
+    caliper_net::Json programs;        // the status items, an array; null for a refusal
+    std::optional<uint64_t> step;      // the script's step
+    std::optional<double> step_ms;     // its base step time b (design/gpu-programs.md, Cadence)
+    std::string error_code;            // a refusal: the ERROR's code and message
+    std::string error_message;
+};
+
 class NetSource : public Source {
 public:
     static constexpr uint32_t kSlots = 4;
@@ -91,6 +113,24 @@ public:
     virtual bool pending() const = 0;
     // What the connection is doing, for a status line ("" when all is well).
     virtual std::string problem() const = 0;
+
+    // 3.2 draft, GPU programs. Whether a PROGRAM may go out now: attached to
+    // a session whose server and producer announced `programs`; *why says
+    // why not. Frame thread.
+    virtual bool programs_ready(std::string* why) {
+        if (why) *why = "this stream takes no programs";
+        return false;
+    }
+    // Grows with each attachment on a new connection or to another session.
+    virtual uint64_t program_epoch() { return 0; }
+    // Queues `msg` with a new request id, which it returns; 0 when it was not
+    // queued (not ready, or the queue is full). Frame thread.
+    virtual uint32_t send_program(caliper_net::wire::Program msg) {
+        (void)msg;
+        return 0;
+    }
+    // The answers since the last call, oldest first. Frame thread.
+    virtual std::vector<ProgramAnswer> take_program_answers() { return {}; }
 };
 
 // Starts the network thread. NULL with *err for a bad URL or a missing device.

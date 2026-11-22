@@ -3,7 +3,7 @@
 This page specifies what is built of wire protocol 3.2. Producers, the hub and viewers build scenes: the capability `scenes`, the live view kind `scene`, the messages SCENE_UPDATE with every part, SCENE_TRANSFORMS, SCENE_CLEAR and SCENE_CLASSES, the VIEWS key `scene` with its starting camera, and the default data view of a scene. The codecs build the whole draft besides: timelines and stamps, the dtype `u16`, text logs, bar charts, split updates and the messages of recordings, which no producer or server sends yet ([Timelines, text logs, bar charts and recordings](#timelines-text-logs-bar-charts-and-recordings)). Everything else follows [Wire protocol v3](wire-protocol.md), whose frame layout, decoding order, terms and rules apply unchanged.
 
 !!! note "Status"
-    A draft. The minor version 2, the capabilities, the kinds 6 to 8, the message types `0x0070` to `0x0074` and `0x0078` to `0x007B`, the dtype 6 and the error codes are proposals that the owners of the protocol have not confirmed, so they may still be renumbered. They are one line each in a separate block at the end of `include/caliper/live_net.h` and of each codec. Senders keep writing minor 1 in their frames until 3.2 is confirmed; a peer decides by a capability, never by the minor version. Every 3.1 message keeps its meaning and its encoding.
+    A draft. The minor version 2, the capabilities, the kinds 6 to 8, the message types `0x0070` to `0x0074`, `0x0078` to `0x007B`, `0x0080` and `0x0081`, the dtype 6 and the error codes are proposals that the owners of the protocol have not confirmed, so they may still be renumbered. They are one line each in a separate block at the end of `include/caliper/live_net.h` and of each codec. Senders keep writing minor 1 in their frames until 3.2 is confirmed; a peer decides by a capability, never by the minor version. Every 3.1 message keeps its meaning and its encoding.
 
 ## Implementation Status
 
@@ -17,6 +17,7 @@ This page specifies what is built of wire protocol 3.2. Producers, the hub and v
 | Codecs | `python/caliper/_wire.py`, `src/host/net/wire.h` and `web/src/protocol/codec.ts`, with the golden frames of `tests/fixtures/wire_v3/v3_2`: every message, key and section of the draft, the assembly of split updates in each, and their division in Python |
 | Producer | `caliper.scene` in Caliper LIB on `caliper.serve()`, the Python and the native sender ([Caliper LIB](../python/scene-calls.md)) |
 | Hub | Forwards the scene messages to the viewers that announced `scenes` and keeps a scene's state for a late viewer ([Hub Forwarding](#hub-forwarding)) |
+| GPU programs | The capabilities `programs` and `interventions`, PROGRAM and PROGRAM_STATE, the CONTROL op `intervene` and the CONTROLS key `interventions` in the three codecs; Caliper LIB on both senders, the hub and the Caliper app send and forward them ([GPU Programs and Interventions](#gpu-programs-and-interventions)) |
 | Viewers | The Caliper app, `caliper-viewer` and the WebAssembly views announce `scenes` and draw every part with one scene view, all but encoded images, and apply SCENE_TRANSFORMS and SCENE_CLASSES; the TypeScript client announces it so that the `<caliper-view>` element and the viewer page hand a scene to the WebAssembly views |
 
 Not built beyond the codecs: timelines (a producer of this version declares none and sends no stamp, and a receiver reads one and keeps it), text logs and bar charts in Caliper LIB and the viewers, split updates in the senders and viewers, and recordings in a server. Not built at all: scene data views other than the default, and scene events. [Versioning](#versioning) says what a receiver does when one of them arrives, and what a viewer does with a part it does not draw yet.
@@ -69,6 +70,8 @@ Any other data view is answered with `bad_data_view`. The producer applies the b
 | `0x0079` | `recording_open` | viewer to server | none | `views` or `error` |
 | `0x007a` | `cursor` | viewer to server | none | `time_state` |
 | `0x007b` | `time_state` | server to viewer | none | |
+| `0x0080` | `program` | viewer to producer or hub, hub to producer | `wgsl` | `program_state` or `error` |
+| `0x0081` | `program_state` | producer to viewer or hub, hub to viewer | none | |
 
 Every scene message has the keys `sub`, `view`, `seq` and `stamp_ns`, and may carry `static`, `state` and `cursor`:
 
@@ -332,9 +335,81 @@ A piece holds a contiguous range of rows of some arrays, cut along their first a
 
 A session in SESSIONS may carry `recording`, `{"id", "seekable", "complete"}`. A view in VIEWS may carry `recorded`, at most 64 resolved data views. SNAPSHOT, SERIES, TEXT and the scene messages may carry `cursor`, the generation of the TIME_STATE they answer; a SNAPSHOT with `empty` true carries no section; SERIES may carry the section `indices` i64 (M,), the absolute index of each value of a decimated series, with the key `decimated`, the bucket size.
 
+## GPU Programs and Interventions
+
+An agent writes a GPU program in WGSL over a live tensor of a training script, and the script runs it on the GPU every few steps. The program's outputs come back as SCENE_UPDATE and SNAPSHOT messages that exist already. Two capabilities guard the additions:
+
+| Capability | Adds |
+|---|---|
+| `programs` | PROGRAM and PROGRAM_STATE |
+| `interventions` | The CONTROLS key `interventions` and the CONTROL op `intervene` ([Run control messages](run-control-messages.md#interventions)) |
+
+Caliper LIB announces both only while a `caliper.watch(model, optimizer)` is on, and only beside `controls`. A peer that connected before that call does not get them. A viewer sends PROGRAM only to a server that announced `programs`, and through a hub only to a session whose producer announced it. A PROGRAM needs the same permission as CONTROL: a server that does not allow control answers it with ERROR `forbidden`.
+
+The wire protocol says that no message carries code. PROGRAM is the one exception. Its WGSL runs only on the GPU, after the sandbox checks of the script, with each tensor bound read-only, and never on the CPU.
+
+### `program`
+
+PROGRAM installs, replaces or removes one program. A `set` carries one section, `wgsl`, of dtype u8 and shape (B,): the source as UTF-8, 1 to 65,536 bytes. A `remove` carries no section.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `request_id` | integer (uint32) | Chosen by the viewer, echoed by PROGRAM_STATE or ERROR |
+| `op` | string | `set` or `remove` |
+| `id` | string | 1 to 55 bytes of `[a-z0-9_-]` that start with a letter, so that the view `program.<id>` fits a view name |
+| `declaration` | object | `set` only: the program declaration without `wgsl` |
+| `scene` | string | `set` of a geometry output only: the scene name of the target panel |
+| `sha256` | string | `set` only: the SHA-256 of the source, 64 lowercase hex digits |
+
+The codecs check the parts of the declaration that size a buffer in the script, in this order: `output` with `kind` (`geometry` or `pixels`); for geometry, `part` (`points` or `lines`), `max_count` (1 to 1,000,000), `arrays` (unique names of `positions`, `colors`, `values` and `radii`, with `positions`) and an optional `entity` path; for pixels, `width` and `height` (1 to 2,048) and an optional `format` (`rgba8unorm`); then `inputs` (at most 8 objects `{var, source}`, `source` 1 to 255 bytes), `limits` (`time_ms` above 0 and at most 50, `memory_mb` 1 to 512, `every` 1 to 10,000), `workgroups` (three integers from 1 to 65,535) and `entry`. The script checks the hash against the source and refuses a mismatch with ERROR `bad_request`. Its sandbox checks the rest before any run.
+
+### `program_state`
+
+PROGRAM_STATE carries no section. The script sends one after each PROGRAM, with its `request_id`, and one without `request_id` after a change of a state and at most twice a second while a program runs. A viewer that attaches also gets one, so that it can remove the programs it no longer wants.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `request_id` | integer (uint32), optional | The PROGRAM it answers |
+| `step` | integer, optional | The script's step |
+| `step_ms` | number, optional | The base step time in milliseconds |
+| `programs` | array of objects | At most 16 status items with unique ids, in the order of installation |
+
+A status item has the keys of the status item of `program.status` without `host`: `id`, `kind` (`geometry` or `pixels`) and `state` (`waiting`, `review`, `compiled`, `running`, `refused` or `stopped`) are necessary. `every` and `every_min` (1 to 10,000), `last_pass_ms`, `last_cost_ms`, `step_ms`, `overhead_share` and `passes_per_s` (numbers of at least 0), `last_step`, `runs`, `memory_bytes` and `memory_limit_bytes` (integers from 0 to 2^53 − 1), `error` (`{code, message, line, column}`) and `sha256` (empty or 64 hex digits) are optional and null when unknown. A script that cannot load the producer runtime answers with a refused item of code `program.unavailable`.
+
+A server refuses a PROGRAM with a non-fatal ERROR that names it in `in_reply_to` and `request_id`:
+
+| Code | Cause |
+|---|---|
+| `unsupported` | The viewer or the producer did not announce `programs`, or the session has ended |
+| `forbidden` | The server does not allow control, or the token may only watch |
+| `not_attached` | The viewer of a hub is not attached to a session |
+| `bad_request` | The message breaks this page, or `sha256` is not the hash of the source |
+
+A hub maps the `request_id` of a PROGRAM as it maps the one of a CONTROL, and keeps the latest PROGRAM_STATE without `request_id` for a viewer that attaches later. The script removes every program when no viewer with `programs` stayed connected for 5 seconds, and the app sends each program again after it attaches.
+
+### Program Limits
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `CALIPER_NET_MAX_PROGRAMS` | 16 | Programs of a producer, and status items of PROGRAM_STATE |
+| `CALIPER_NET_PROGRAM_ID_MAX` | 55 | Bytes of a program id |
+| `CALIPER_NET_PROGRAM_SOURCE_MAX` | 65,536 | Bytes of the section `wgsl` |
+| `CALIPER_NET_PROGRAM_STATE_RATE_HZ` | 2 | Unrequested PROGRAM_STATE messages a second, at most |
+| `CALIPER_NET_PROGRAM_MAX_INPUTS` | 8 | Inputs of a declaration |
+| `CALIPER_NET_PROGRAM_MAX_COUNT` | 1,000,000 | The largest `max_count` of a geometry output |
+| `CALIPER_NET_PROGRAM_SIDE_MAX` | 2,048 | The largest `width` and `height` of a pixels output |
+| `CALIPER_NET_PROGRAM_TIME_MS_MAX` | 50 | The largest `time_ms` |
+| `CALIPER_NET_PROGRAM_MEMORY_MB_MAX` | 512 | The largest `memory_mb` |
+| `CALIPER_NET_PROGRAM_EVERY_MAX` | 10,000 | The largest `every`, and the largest cadence |
+| `CALIPER_NET_PROGRAM_WORKGROUPS_MAX` | 65,535 | The largest count of each of the three `workgroups` |
+| `CALIPER_NET_TENSOR_NAME_MAX` | 255 | Bytes of an input's `source` |
+| `CALIPER_NET_POINT_MAX` | 255 | Bytes of an intervention point |
+| `CALIPER_NET_MAX_POINTS_LISTED` | 4,096 | Points in the CONTROLS key `interventions` |
+| `CALIPER_NET_MAX_INTERVENTIONS` | 64 | Interventions in the CONTROLS key `interventions` |
+
 ## Golden Frames
 
-`tests/fixtures/wire_v3/v3_2` holds the frames of a 3.2 sender, with minor 2 in their header, which `gen_v3_2.py` writes for `generate.py`: HELLO and WELCOME with `scenes`, VIEWS with scenes and a starting camera, VIEWS with a scene whose keys are null (which mean the same as absent keys, so the scene takes the defaults), the resolved default scene data view, SCENE_UPDATE of each part and form, with and without stamps, the five pieces of a split update, SCENE_TRANSFORMS with one stamp, a stamp each and none, SCENE_CLEAR with and without `reset`, SCENE_CLASSES, VIEWS with timelines and recorded data views, SESSIONS with a recording, SNAPSHOT with a stamp, static, empty and of a bar chart, SERIES with a stamp per value (the draft's example frame), one stamp and decimated, CONTROLS with a stamp, TEXT, and every recording message and CURSOR op. Each implementation decodes every frame to what its `.json` says and encodes it back to the same bytes, except `scene_update_points_future`, which carries a section no part has. `v3_2/invalid` holds frames every implementation refuses; its `expect.json` gives, for each, the reason and close code of a frame that is not well formed or the ERROR code of an invalid message.
+`tests/fixtures/wire_v3/v3_2` holds the frames of a 3.2 sender, with minor 2 in their header, which `gen_v3_2.py` writes for `generate.py`: HELLO and WELCOME with `scenes`, VIEWS with scenes and a starting camera, VIEWS with a scene whose keys are null (which mean the same as absent keys, so the scene takes the defaults), the resolved default scene data view, SCENE_UPDATE of each part and form, with and without stamps, the five pieces of a split update, SCENE_TRANSFORMS with one stamp, a stamp each and none, SCENE_CLEAR with and without `reset`, SCENE_CLASSES, VIEWS with timelines and recorded data views, SESSIONS with a recording, SNAPSHOT with a stamp, static, empty and of a bar chart, SERIES with a stamp per value (the draft's example frame), one stamp and decimated, CONTROLS with a stamp, TEXT, every recording message and CURSOR op, PROGRAM `set` of each output and `remove`, PROGRAM_STATE as an answer and on its own, CONTROL `intervene` of each form, its CONTROL_REPLY, and CONTROLS with `interventions`. Each implementation decodes every frame to what its `.json` says and encodes it back to the same bytes, except `scene_update_points_future`, which carries a section no part has. `v3_2/invalid` holds frames every implementation refuses; its `expect.json` gives, for each, the reason and close code of a frame that is not well formed or the ERROR code of an invalid message.
 
 This is `v3_2/scene_update_mesh.bin`: the surface of two triangles over four vertices, coloured by their values through viridis on the fixed range −4 to 2.
 

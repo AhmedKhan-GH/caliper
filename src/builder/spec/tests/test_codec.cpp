@@ -588,19 +588,24 @@ TEST_CASE("the bind grammar of a control") {
     CHECK(cs::parse_control_target("value") == cs::ControlTarget{K::value, ""});
     CHECK(cs::parse_control_target("param:" + std::string(63, 'a')).has_value());
     for (const std::string& bad : std::vector<std::string>{"param:", "param:" + std::string(64, 'a'), "param:a\nb",
-                                                           "action:", "run:step", "intervene:layer.0", "values", "",
+                                                           "action:", "run:step", "intervene:", "values", "",
                                                            "lr"}) {
         CAPTURE(bad);
         CHECK_FALSE(cs::parse_control_target(bad).has_value());
     }
-    for (const std::string& text : std::vector<std::string>{"param:lr", "action:save", "run:pause", "value"})
+    CHECK(cs::parse_control_target("intervene:layer.0") == cs::ControlTarget{K::intervene, "layer.0"});
+    for (const std::string& text :
+         std::vector<std::string>{"param:lr", "action:save", "run:pause", "value", "intervene:layer.0#2"})
         CHECK(cs::control_target_string(*cs::parse_control_target(text)) == text);
     CHECK(cs::control_takes_target(cs::ControlKind::slider, {K::param, "lr"}));
     CHECK(cs::control_takes_target(cs::ControlKind::slider, {K::value, ""}));
     CHECK_FALSE(cs::control_takes_target(cs::ControlKind::slider, {K::action, "save"}));
     CHECK(cs::control_takes_target(cs::ControlKind::button, {K::run_pause, ""}));
     CHECK_FALSE(cs::control_takes_target(cs::ControlKind::button, {K::param, "lr"}));
-    CHECK_FALSE(cs::control_takes_target(cs::ControlKind::toggle, {K::param, "lr"}));
+    CHECK(cs::control_takes_target(cs::ControlKind::toggle, {K::param, "lr"}));
+    CHECK(cs::control_takes_target(cs::ControlKind::toggle, {K::intervene, "layer.0"}));
+    CHECK_FALSE(cs::control_takes_target(cs::ControlKind::toggle, {K::value, ""}));
+    CHECK_FALSE(cs::control_takes_target(cs::ControlKind::range, {K::param, "lr"}));
     CHECK(cs::live_scene_name("live:model") == std::optional<std::string>("model"));
     CHECK_FALSE(cs::live_scene_name("live:").has_value());
     CHECK_FALSE(cs::live_scene_name("model").has_value());

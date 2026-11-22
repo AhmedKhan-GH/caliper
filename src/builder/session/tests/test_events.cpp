@@ -5,6 +5,7 @@
 #include "helpers.h"
 
 #include <caliper_builder/session/events.h>
+#include <caliper_builder/session/program_host.h>
 #include <caliper_builder/session/session.h>
 
 #include <doctest/doctest.h>
@@ -88,7 +89,7 @@ CommandInvocation wait_call(json args) {
 
 TEST_CASE("the event kinds have stable names and the ring keeps 1024 events") {
     for (EventKind k : {EventKind::pick, EventKind::select, EventKind::control, EventKind::run, EventKind::spec,
-                        EventKind::approval})
+                        EventKind::approval, EventKind::program})
         CHECK(event_kind_from_name(event_kind_name(k)) == k);
     CHECK_FALSE(event_kind_from_name("hover"));
     CHECK(EventRing::kCapacity == 1024);
@@ -456,4 +457,39 @@ TEST_CASE("events: the session feeds approval events when a card asks and when t
     // The approval events are readable through events.wait.
     const json w = ok(*s, "events.wait", {{"kinds", {"approval"}}, {"timeout_s", 0}});
     CHECK(w["events"].size() == 8);
+}
+
+TEST_CASE("events: a program event that a host pushes reaches events.wait in the command table's form") {
+    auto s = open_session(fresh_dir("events-program") + "/workspace");
+    ProgramStatus stopped;
+    stopped.id = "rows";
+    stopped.kind = "geometry";
+    stopped.host = "script";
+    stopped.state = "stopped";
+    stopped.panel = "world";
+    stopped.error = ProgramError{"program.over_time", "The program went over 4 ms on 3 passes in a row.", 0, 0};
+    push_program_event(s->events(), stopped, "stopped");
+    ProgramStatus compiled;
+    compiled.id = "world/programs/rows/material";
+    compiled.kind = "material";
+    compiled.host = "viewer";
+    compiled.panel = "world";
+    push_program_event(s->events(), compiled, "compiled");
+    s->events().push(make(EventKind::control, "lr"));
+
+    // The registry checks every result against the table's schema.
+    json r = ok(*s, "events.wait", {{"cursor", 0}, {"kinds", {"program"}}, {"timeout_s", 0}});
+    REQUIRE(r["events"].size() == 2);
+    const json& e = r["events"][0];
+    CHECK(e["kind"] == "program");
+    CHECK(e["program"] == "rows");
+    CHECK(e["change"] == "stopped");
+    CHECK(e["host"] == "script");
+    CHECK(e["code"] == "program.over_time");
+    CHECK(e["panel"] == "world");
+    CHECK(r["events"][1]["change"] == "compiled");
+    CHECK(r["events"][1]["host"] == "viewer");
+    CHECK_FALSE(r["events"][1].contains("code"));
+    r = ok(*s, "events.wait", {{"cursor", 0}, {"kinds", {"program"}}, {"panels", {"other"}}, {"timeout_s", 0}});
+    CHECK(r["events"].empty());
 }

@@ -27,8 +27,10 @@ concurrency:
 # from scratch.
 env:
   LIBTORCH_VERSION: 2.5.1
-  # The Python torch of the instrument acceptance test matches the libtorch the build fetches.
-  ACCEPTANCE_TORCH_VERSION: 2.5.1
+  # The Python torch of the acceptance tests. GPU programs import the script's MPS tensors through
+  # DLPack and caliper.watch stages them in pinned memory, and torch 2.5.1 (the libtorch the build
+  # fetches) does neither for MPS tensors, thus this torch is newer than that libtorch.
+  ACCEPTANCE_TORCH_VERSION: 2.15.0
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
@@ -70,6 +72,25 @@ jobs:
           "$RUNNER_TEMP/acceptance-py/bin/pip" install "torch==$ACCEPTANCE_TORCH_VERSION" numpy websockets nanobind pytest
           "$RUNNER_TEMP/acceptance-py/bin/python" scripts/build_netio.py
           PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -c "import torch, caliper, caliper._netio; print('Instrument test Python ready, torch', torch.__version__)"
+      # The runtime WGSL compiler (tools/shaders/caliper-wgsl) is built from source in this job
+      # (CALIPER_WGSL_FROM_SOURCE=ON below), so the programs of the GPU programs tests compile and run.
+      # The hosted macOS image carries a Rust toolchain; nothing is installed or pinned here. Cargo's
+      # registry and the crate's target folder are cached by the hash of the crate's lock file.
+      - name: Check the Rust toolchain
+        run: |
+          if ! command -v rustc >/dev/null || ! command -v cargo >/dev/null; then
+            echo "::error::The runner image has no Rust toolchain (rustc and cargo), which the WGSL compiler build needs"
+            exit 1
+          fi
+          rustc --version
+          cargo --version
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            cmake-build-release/caliper-wgsl/source/cargo-target
+          key: caliper-wgsl-source-macos-arm64-${{ hashFiles('tools/shaders/caliper-wgsl/Cargo.lock') }}
       # slang (SystemVerilog) is vendored but linked by nothing; its submodule pin is not always
       # fetchable, and the fallback is a newer slang that needs C++20, so CI skips configuring it.
       # The Metal backend is Objective-C++, so the OBJC/OBJCXX launchers are set as well.
@@ -86,7 +107,32 @@ jobs:
           -DCALIPER_SDK_PROBE_DIR="$RUNNER_TEMP/sdk-probe"
           -DCALIPER_EMBED_PROBE_DIR="$RUNNER_TEMP/embed-probe"
           -DCALIPER_ACCEPTANCE_PYTHON="$RUNNER_TEMP/acceptance-py/bin/python"
+          -DCALIPER_WGSL_FROM_SOURCE=ON
       - run: cmake --build cmake-build-release --parallel
+      # The GPU programs acceptance test imports caliper._producer, the producer runtime of the programs.
+      # The Python modules build in a second, small folder, because CALIPER_BUILD_PYTHON=ON names the
+      # viewer program caliper-viewer, as the wheel ships it, and the steps below check the programs of
+      # cmake-build-release by their own names. That folder takes the compiler library of the build
+      # above, keeps the builder's sandbox (CALIPER_WITH_BUILDER is ON by default) and builds only
+      # _producer. The test finds the module, like caliper._netio, in python/caliper, so it is copied
+      # there. A missing module fails the job here, not as a skip later.
+      - name: Build and place the producer module
+        run: |
+          set -e
+          cmake -S . -B cmake-build-python -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
+            -DCALIPER_WITH_SLANG=OFF -DCALIPER_WITH_LLAMA=OFF -DCALIPER_WITH_TORCH=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_OBJC_COMPILER_LAUNCHER=sccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=sccache \
+            -DCALIPER_WGSL_LIBRARY="$PWD/cmake-build-release/caliper-wgsl/source/lib/libcaliper_wgsl.a" \
+            -DCALIPER_BUILD_PYTHON=ON -DPython_EXECUTABLE="$RUNNER_TEMP/acceptance-py/bin/python"
+          cmake --build cmake-build-python --target _producer --parallel
+          built=$(find cmake-build-python/python -maxdepth 2 -name '_producer*.so' | head -n 1)
+          if [ -z "$built" ]; then
+            echo "::error::The build made no caliper._producer module"
+            exit 1
+          fi
+          cp "$built" python/caliper/
+          PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -c "import caliper._producer; print('Producer module ready')"
       # Every binary must say macOS 14.0 as its minimum (cmake/CaliperMacOSTarget.cmake).
       - run: >-
           python3 scripts/check_macos_min.py 14.0
@@ -136,20 +182,48 @@ jobs:
             echo "::error::Hosted runs acceptance: neither passed nor skipped for lack of Metal"
             exit 1
           fi
+      # The GPU programs acceptance test on its own. It runs the agent's WGSL programs in a training
+      # script, so it needs the compiler library, caliper._producer and caliper._netio, all built above.
+      # A skip because the runner has no Metal device is accepted. Any other skip (a missing compiler
+      # library, producer module, sender or torch, or a program that is not built) is a setup error,
+      # and so is any outcome that is neither a pass nor a Metal skip.
+      - name: GPU programs acceptance test
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/gpu-programs-acceptance.log"
+          ctest --test-dir cmake-build-release -R caliper_gpu_programs_acceptance --output-on-failure -V --timeout 300 | tee "$log"
+          if grep -q "caliper_gpu_programs_acceptance passed" "$log"; then
+            echo "GPU programs acceptance: RAN and passed"
+          elif grep -qE "caliper_gpu_programs_acceptance skipped: (this machine has no Metal device|the renderer is .*, not Metal)" "$log"; then
+            echo "GPU programs acceptance: SKIPPED because the runner has no Metal device"
+          elif grep -q "caliper_gpu_programs_acceptance skipped" "$log"; then
+            echo "::error::GPU programs acceptance: SKIPPED for a reason other than a missing Metal device (CI setup error)"
+            exit 1
+          else
+            echo "::error::GPU programs acceptance: neither passed nor skipped for lack of Metal"
+            exit 1
+          fi
       # The Python tests of managed runs, the adapter, watch and controls run with the acceptance
       # Python, which has torch, websockets and the native sender. The four tests of test_watch.py that
       # need the native core module (caliper._native, which the CMake build does not install into
       # python/caliper) are deselected by name. So is the flood test of the controls, which holds 20,000
-      # requests to a wall-clock limit that a hosted runner does not meet.
+      # requests to a wall-clock limit that a hosted runner does not meet. The tests of programs, of the
+      # network programs, of the ablation and of wire 3.2 run here as well. One test of test_programs.py
+      # is deselected: it publishes a program output through the real scene calls, which need the
+      # caliper._live module, and the job builds only caliper._producer of the Python modules.
+      # No test of those four files holds a wall-clock limit: their step and cost times run on a fake clock.
       - name: Python tests of the acceptance Python
         run: >-
           PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -m pytest -q -p no:cacheprovider
           python/tests/test_managed_run.py python/tests/test_adapter.py
           python/tests/test_watch.py python/tests/test_controls.py
+          python/tests/test_programs.py python/tests/test_net_programs.py
+          python/tests/test_ablate.py python/tests/test_wire_32.py
           --deselect "python/tests/test_watch.py::test_watch_registers_produces_and_removes"
           --deselect "python/tests/test_watch.py::test_watch_include_and_every"
           --deselect "python/tests/test_watch.py::test_watch_is_free_when_nothing_is_attached"
           --deselect "python/tests/test_controls.py::test_a_flood_of_values_from_several_threads"
+          --deselect "python/tests/test_programs.py::test_outputs_pass_the_argument_checks_of_the_real_scene_calls"
       - if: failure()
         uses: actions/upload-artifact@v6
         with:

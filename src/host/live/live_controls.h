@@ -46,6 +46,10 @@ struct CaliperCore;
 
 namespace caliper_live {
 
+// The CONTROL op of an intervention (CALIPER_NET_OP_INTERVENE of the 3.2
+// draft), for a script that announced the capability "interventions".
+inline constexpr const char* kOpIntervene = "intervene";
+
 class RunControls {
 public:
     // Once per frame, before drawing: reads the source's CONTROLS, replies and
@@ -69,6 +73,13 @@ public:
     bool step(uint32_t count = 1);
     bool set(const std::string& name, const caliper_net::Json& value);
     bool run(const std::string& name);
+    // Sets or clears an intervention of the attached script
+    // (design/gpu-programs.md, Intervention Wire): CONTROL op "intervene"
+    // with `body` as its key "intervene", one of {"set": {point, op,
+    // from_step, until_step}}, {"clear": point} and {"clear_all": true}. The
+    // script applies it at its next step; a refusal in its CONTROL_REPLY
+    // shows in notice().
+    bool intervene(const caliper_net::Json& body);
 
     // What a parameter's control shows: the value set here until the script
     // confirms it, else the script's pending value, else its value.

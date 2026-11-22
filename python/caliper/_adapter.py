@@ -7,14 +7,17 @@ of the trajectory spec:
 
 - ``export``: a tensor as a DLPack capsule, without a copy.
 - ``framework_done`` and ``before_write``: the two sync points of the producer runtime.
+- ``step_marks``: marks on the framework's queue that time the training steps without a wait, for
+  the cadence of the producer runtime.
 - ``hooks``: call back with module outputs, gradients and each optimizer step.
 - ``probe``: run the model forward on inputs that Caliper supplies.
 - ``state`` and ``restore``: save and load the model and the optimizer, for a fork.
+- ``points`` and ``ablate``: the intervention points of the model and the ablation of one point
+  through a forward hook (``design/gpu-programs.md``, Interventions), in ``caliper._ablate``.
 
-M4 implements ``state`` and ``restore``, and the loss tap of ``caliper.watch(model, optimizer)``
-(the wrapper of ``torch.autograd.backward``) lives here because it patches torch. The other
-functions are declared with their contracts and raise ``NotImplementedError`` until M2 fills
-them. The shipped torch reductions of the data views and the forward and gradient hooks of
+Every function but ``probe`` is built, and ``probe`` raises ``NotImplementedError``. The loss tap of
+``caliper.watch(model, optimizer)`` (the wrapper of ``torch.autograd.backward``) lives here because
+it patches torch. The shipped torch reductions of the data views and the forward and gradient hooks of
 ``caliper._watch`` stay where they are.
 """
 from __future__ import annotations
@@ -22,8 +25,10 @@ from __future__ import annotations
 import functools
 import io
 import threading
+import time
+from collections import deque
 
-__all__ = ["TorchAdapter", "TORCH"]
+__all__ = ["TorchAdapter", "TORCH", "StepMarks"]
 
 _MODEL = "model"
 _OPTIMIZER = "optimizer"
@@ -43,8 +48,11 @@ class TorchAdapter:
         self._tap_lock = threading.Lock()
         self._tap_users = 0
         self._tap_orig = None
+        self._event = None                  # the torch.mps.Event of framework_done
+        self._optimizers: list = []         # the optimizers that hooks() saw
+        self._hooks: dict = {}              # id(model) -> the handles that hooks() made
 
-    # -- M2: the producer runtime -----------------------------------------------
+    # -- The producer runtime ------------------------------------------------------
     def export(self, tensor):
         """Give ``tensor`` as a DLPack capsule, without a copy.
 
@@ -59,19 +67,44 @@ class TorchAdapter:
             PyCapsule: The DLPack capsule of the tensor.
 
         Raises:
-            NotImplementedError: Not available yet.
+            ValueError: When the tensor is not contiguous.
+            RuntimeError: When this torch cannot export the tensor's device through DLPack (torch
+                2.6.0 cannot export an MPS tensor).
         """
-        raise NotImplementedError("TorchAdapter.export is not available")
+        if not tensor.is_contiguous():
+            raise ValueError("the tensor is not contiguous, and the producer runtime never copies a "
+                             "tensor")
+        try:
+            return tensor.detach().__dlpack__()     # detach shares the storage; no copy
+        except (BufferError, TypeError) as e:
+            raise RuntimeError(f"this torch cannot export the tensor through DLPack: {e}") from e
 
     def framework_done(self) -> None:
         """Wait on the CPU until torch's work on every bound tensor is complete.
 
         On MPS this records a ``torch.mps.Event`` after ``optimizer.step()`` and synchronizes it.
-
-        Raises:
-            NotImplementedError: Not available yet.
+        On CUDA it synchronizes the device, and on the CPU it returns at once.
         """
-        raise NotImplementedError("TorchAdapter.framework_done is not available")
+        import torch
+        if torch.backends.mps.is_available():
+            ev = self._event
+            if ev is None:
+                ev = self._event = torch.mps.Event()
+            ev.record()
+            ev.synchronize()
+        elif torch.cuda.is_available():
+            torch.cuda.synchronize()
+
+    def step_marks(self):
+        """Give a :class:`StepMarks` over torch's MPS queue, or ``None`` on another device.
+
+        On the CPU and on CUDA the facade times the steps with its own clock and waits with
+        :meth:`framework_done`, because the producer runtime runs on MPS only.
+        """
+        import torch
+        if torch.backends.mps.is_available():
+            return StepMarks(torch.mps.Event)
+        return None
 
     def before_write(self, callback) -> None:
         """Call ``callback`` before torch writes a bound tensor again.
@@ -82,9 +115,13 @@ class TorchAdapter:
             callback (Callable[[], None]): Called on the training thread.
 
         Raises:
-            NotImplementedError: Not available yet.
+            RuntimeError: When :meth:`hooks` has seen no optimizer yet.
         """
-        raise NotImplementedError("TorchAdapter.before_write is not available")
+        if not self._optimizers:
+            raise RuntimeError("before_write needs the optimizer that hooks() was given")
+        for opt in self._optimizers:
+            h = opt.register_step_pre_hook(lambda *_a, **_k: callback())
+            self._hooks.setdefault(id(opt), []).append(h)
 
     def hooks(self, model, optimizer, on_outputs, on_grads, on_step) -> None:
         """Call back with the outputs and the gradients of modules, and at each optimizer step.
@@ -96,10 +133,33 @@ class TorchAdapter:
             on_grads (Callable): Called with a parameter's name and its gradient.
             on_step (Callable[[], None]): Called before each optimizer step.
 
-        Raises:
-            NotImplementedError: Not available yet.
+        A callback that is ``None`` installs no hook, thus a caller pays only for what it uses.
+        The module of ``model`` itself has the name ``""``. :meth:`unhook` removes the hooks.
         """
-        raise NotImplementedError("TorchAdapter.hooks is not available")
+        made = self._hooks.setdefault(id(model), [])
+        if on_outputs is not None:
+            for name, mod in model.named_modules():
+                made.append(mod.register_forward_hook(
+                    lambda _m, _i, out, name=name: on_outputs(name, out)))
+        if on_grads is not None:
+            for name, p in model.named_parameters():
+                if p.requires_grad:
+                    made.append(p.register_post_accumulate_grad_hook(
+                        lambda t, name=name: on_grads(name, t.grad)))
+        if optimizer is not None:
+            if all(o is not optimizer for o in self._optimizers):
+                self._optimizers.append(optimizer)
+            if on_step is not None:
+                made.append(optimizer.register_step_pre_hook(lambda *_a, **_k: on_step()))
+
+    def unhook(self, model) -> None:
+        """Remove the hooks that :meth:`hooks` put on ``model``.
+
+        Args:
+            model (torch.nn.Module): The model that :meth:`hooks` was given.
+        """
+        for h in self._hooks.pop(id(model), []):
+            h.remove()
 
     def probe(self, model, inputs):
         """Run ``model`` forward on ``inputs`` that Caliper supplies, without gradients.
@@ -115,6 +175,46 @@ class TorchAdapter:
             NotImplementedError: Not available yet.
         """
         raise NotImplementedError("TorchAdapter.probe is not available")
+
+    # -- interventions (design/gpu-programs.md, Interventions) ----------------------
+    def points(self, model) -> list:
+        """List the intervention points of ``model``.
+
+        Each module of ``model.named_modules()`` is a point with its dotted name. A module with an
+        integer ``num_heads``, ``n_heads`` or ``n_head`` and one child ``nn.Linear`` named
+        ``out_proj``, ``o_proj``, ``c_proj`` or ``proj``, whose ``in_features`` divides by the head
+        count, also gives the points ``<module>#<h>``, one for each head.
+
+        Args:
+            model (torch.nn.Module): The watched model.
+
+        Returns:
+            list[dict]: One item for each point, in the model's order, with the keys ``point``,
+            ``kind`` (``"module"`` or ``"head"``), ``module``, ``head`` (an index or ``None``),
+            ``type`` (the module's class name) and ``shape`` (``None`` until a forward pass).
+        """
+        from ._ablate import points
+        return points(model)
+
+    def ablate(self, model, point: str):
+        """Set the output of one point of ``model`` to zero, from its next forward pass.
+
+        A module's point zeroes its output with a forward hook. A head's point zeroes that head's
+        slice of the input of the module's output projection with a forward pre-hook. The caller
+        installs it at a step boundary, between two optimizer steps.
+
+        Args:
+            model (torch.nn.Module): The watched model.
+            point (str): A point that :meth:`points` lists.
+
+        Returns:
+            Callable[[], None]: Removes the ablation; calling it twice does nothing.
+
+        Raises:
+            KeyError: When ``model`` has no such point.
+        """
+        from ._ablate import ablate
+        return ablate(model, point)
 
     # -- State of a fork -----------------------------------------------------
     def state(self, model, optimizer=None, extra=None) -> bytes:
@@ -219,6 +319,73 @@ class TorchAdapter:
                 torch.autograd.backward = self._tap_orig
             self._tap_orig = None
             self.loss[1] = None
+
+
+class StepMarks:
+    """Marks of the training steps on the framework's queue, read without a wait.
+
+    :meth:`record` puts one mark after the work that the framework has queued so far. On MPS this
+    also gives that work to the GPU, because torch's MPS queue holds its work until a sync point
+    and the GPU would otherwise idle until then. :meth:`poll` returns each mark that completed since
+    the last call as ``(step, lo, hi)``: the mark completed after ``lo`` and before ``hi`` on the
+    caller's clock. The queue runs in order, thus a mark completes after every earlier mark.
+    :meth:`wait` polls until the mark of one step completed; it is the first sync point of a pass.
+
+    Args:
+        event (Callable[[], object]): Makes one event with ``record()`` and ``query()``, such as
+            ``torch.mps.Event``.
+        size (int): The events in the ring. A mark whose event is needed again before it
+            completed is dropped, and the caller gets no time for it.
+    """
+
+    SIZE = 256
+
+    def __init__(self, event, size: int = SIZE):
+        self._ring = [event() for _ in range(size)]
+        self._next = 0
+        self._pending: deque = deque()      # (step, event, time of the record), oldest first
+        self._seen = float("-inf")          # the last poll that found the oldest mark pending
+
+    def record(self, step: int, now: float) -> None:
+        """Put the mark of ``step`` after the queued work; ``now`` is the caller's clock."""
+        if len(self._pending) >= len(self._ring) - 1:
+            self._pending.popleft()         # its event is recorded again below: no time for it
+        ev = self._ring[self._next]
+        self._next = (self._next + 1) % len(self._ring)
+        ev.record()
+        self._pending.append((step, ev, now))
+
+    def poll(self, now: float) -> list:
+        """Return ``(step, lo, hi)`` for each mark that completed since the last call."""
+        out = []
+        while self._pending:
+            step, ev, at = self._pending[0]
+            if not ev.query():
+                self._seen = now
+                break
+            self._pending.popleft()
+            out.append((step, max(at, self._seen), now))
+        return out
+
+    def wait(self, step: int, clock=time.perf_counter) -> list:
+        """Poll until the mark of ``step`` and every earlier mark completed, and return what
+        :meth:`poll` returned on the way. It spins for the first 0.5 ms, then naps 20 µs."""
+        out = []
+        start = clock()
+        while True:
+            now = clock()
+            out += self.poll(now)
+            if not self._pending or self._pending[0][0] > step:
+                return out
+            time.sleep(0 if now - start < 5e-4 else 2e-5)
+
+    def pending(self) -> int:
+        """The marks that did not complete yet."""
+        return len(self._pending)
+
+    def clear(self) -> None:
+        """Forget the marks that did not complete yet; their times are never returned."""
+        self._pending.clear()
 
 
 TORCH = TorchAdapter()

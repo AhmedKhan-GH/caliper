@@ -118,6 +118,10 @@ SpecOffscreen::~SpecOffscreen() {
 
 const char* SpecOffscreen::renderer_name() const { return renderer_ ? renderer_->name() : ""; }
 
+void* SpecOffscreen::native_device() const { return renderer_ ? renderer_->native_device() : nullptr; }
+
+void* SpecOffscreen::native_queue() const { return renderer_ ? renderer_->native_queue() : nullptr; }
+
 bool SpecOffscreen::resize(int width, int height) {
     if (width <= 0 || height <= 0 || width > 16384 || height > 16384 || !canvas_) return false;
     if (width == w_ && height == h_) return true;

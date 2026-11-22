@@ -10,6 +10,12 @@ import {
   type MessageType, type ParamInfo, type ParamValue, type PayloadAxis, type RunInfo, type SelectionDetails,
   type SessionIdentity, type SnapshotMsg, type UnknownMsg, type ViewEntry,
 } from './messages.js';
+import {
+  INTERVENTION_STATES, MAX_INTERVENTIONS, MAX_POINTS_LISTED, MAX_PROGRAMS, OUTPUT_GEOMETRY, OUTPUT_PIXELS, POINT_MAX, PROGRAM_ARRAYS,
+  PROGRAM_EVERY_MAX, PROGRAM_ID_MAX, PROGRAM_MAX_COUNT, PROGRAM_MAX_INPUTS, PROGRAM_MEMORY_MB_MAX, PROGRAM_REMOVE, PROGRAM_SET,
+  PROGRAM_SIDE_MAX, PROGRAM_SOURCE_MAX, PROGRAM_STATES, PROGRAM_TIME_MS_MAX, PROGRAM_WORKGROUPS_MAX, SECTION_WGSL, TENSOR_NAME_MAX,
+  type InterveneRequest, type InterventionsInfo, type ProgramDeclaration, type ProgramMsg, type ProgramStateMsg, type ProgramStatus,
+} from './messages.js';
 
 export const MAGIC = 0x574c4143; // "CALW" read as a little-endian uint32
 export const HEADER_BYTES = 24;
@@ -532,12 +538,17 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
       };
       const { stamp } = stampSections(f, false);
       if (stamp) c.stamp = i64(stamp);
+      const interventions = opt<InterventionsInfo | undefined>(f, 'interventions', isInterventions, '{points, active} of intervention points and interventions', undefined);
+      if (interventions !== undefined) c.interventions = interventions;
       return c;
     }
     case MSG.control: {
-      const op = req<ControlOp>(f, 'op', (v) => CONTROL_OPS.includes(v as ControlOp), 'pause, resume, step, set or run');
+      const op = req<ControlOp>(f, 'op', (v) => CONTROL_OPS.includes(v as ControlOp), 'pause, resume, step, set, run or intervene');
       const name = opt<string | undefined>(f, 'name', isName, 'a parameter or action name', undefined);
       if ((op === 'set' || op === 'run') && name === undefined) bad(t, `'${op}' needs 'name'`);
+      const intervene = op === 'intervene'
+        ? req<InterveneRequest>(f, 'intervene', isInterveneRequest, 'exactly one of {set: {point, op, from_step, until_step}}, {clear: point} and {clear_all: true}')
+        : undefined;
       return {
         type: 'control',
         request_id: req(f, 'request_id', isU32, 'a uint32'),
@@ -545,6 +556,7 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
         name: op === 'set' || op === 'run' ? name : undefined,
         value: op === 'set' ? req<ParamValue>(f, 'value', isSetValue, 'a number, a boolean or a choice') : undefined,
         count: op === 'step' ? opt<number | undefined>(f, 'count', (v) => isU32(v) && (v as number) >= 1, 'a positive uint32', undefined) : undefined,
+        intervene,
       };
     }
     case MSG.control_reply: {
@@ -594,6 +606,10 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
       return decodeCursor(f);
     case MSG.time_state:
       return decodeTimeState(f);
+    case MSG.program:
+      return decodeProgram(f);
+    case MSG.program_state:
+      return decodeProgramState(f);
     default:
       return { type: 'unknown', id: t, meta: f.meta };
   }
@@ -674,9 +690,9 @@ export function encode(msg: Message, minor: number = PROTOCOL_MINOR): Uint8Array
       }), sections);
     }
     case 'controls':
-      return encodeFrame(id, { run: msg.run, params: msg.params, actions: msg.actions }, msg.stamp ? [stampSection('stamp', msg.stamp, [msg.stamp.length])] : []);
+      return encodeFrame(id, drop({ run: msg.run, params: msg.params, actions: msg.actions, interventions: msg.interventions }), msg.stamp ? [stampSection('stamp', msg.stamp, [msg.stamp.length])] : []);
     case 'control':
-      return encodeFrame(id, drop({ request_id: msg.request_id, op: msg.op, name: msg.name, value: msg.value, count: msg.count }));
+      return encodeFrame(id, drop({ request_id: msg.request_id, op: msg.op, name: msg.name, value: msg.value, count: msg.count, intervene: msg.intervene }));
     case 'control_reply':
       return encodeFrame(id, drop({
         request_id: msg.request_id, op: msg.op, status: msg.status, name: msg.name, value: msg.value, message: msg.message, error: msg.error,
@@ -705,6 +721,10 @@ export function encode(msg: Message, minor: number = PROTOCOL_MINOR): Uint8Array
         request_id: msg.request_id, op: msg.op, timeline: msg.timeline, value: msg.value, count: msg.count, speed: msg.speed,
         pace: msg.pace, loop: msg.loop,
       }));
+    case 'program':
+      return encodeProgram(msg, minor);
+    case 'program_state':
+      return encodeFrame(id, drop({ request_id: msg.request_id, step: msg.step, step_ms: msg.step_ms, programs: msg.programs }));
     case 'time_state':
       return encodeFrame(id, { ...drop({
         request_id: msg.request_id, session: msg.session, generation: msg.generation, state: msg.state, timeline: msg.timeline,
@@ -1624,4 +1644,176 @@ export function resolveSceneDataView(view: ViewEntry, request?: DataViewSpec | n
   if (!isDefault(request))
     fail('only the default data view of a scene is built yet: send {} or none; entity filters and budgets come in a later increment');
   return JSON.parse(JSON.stringify(SCENE_DATA_VIEW));
+}
+
+// --- 3.2 draft: GPU programs and interventions (python: the block "GPU programs and interventions") ---
+// The same checks, in the same order, as _check_declaration, Program, ProgramState, _intervene_request and _interventions of _wire.py.
+
+
+const MAX_SHAPE_DIMS = 8;
+const PROGRAM_ID_RE = /^[a-z][a-z0-9_-]*$/;
+const SHA256_RE = /^[0-9a-f]{64}$/;
+const isSafeUint = (v: unknown) => isInt(v) && v >= 0 && v <= Number.MAX_SAFE_INTEGER;
+const isNonneg = (v: unknown) => isFinite(v) && (v as number) >= 0;
+const isProgramId = (v: unknown) => typeof v === 'string' && v.length > 0 && utf8.encode(v).length <= PROGRAM_ID_MAX && PROGRAM_ID_RE.test(v);
+const isSha256 = (v: unknown) => typeof v === 'string' && SHA256_RE.test(v);
+const boundedText = (limit: number) => (v: unknown) => typeof v === 'string' && v.length > 0 && utf8.encode(v).length <= limit;
+const intIn = (lo: number, hi: number) => (v: unknown) => isInt(v) && v >= lo && v <= hi;
+const listOf = (ok: (v: unknown) => boolean, most: number, least = 0) => (v: unknown) =>
+  Array.isArray(v) && v.length >= least && v.length <= most && v.every((x) => ok(x));
+const isPoint = boundedText(POINT_MAX);
+const isOptStep = (v: unknown) => v === undefined || v === null || isSafeUint(v);
+const present = (v: unknown) => v !== undefined && v !== null;
+
+/** `req` and `opt` of the meta of a message on a plain object (a declaration, a status item). */
+function reqIn<T>(type: number, o: Record<string, unknown>, key: string, ok: (v: unknown) => boolean, what: string): T {
+  if (!(key in o)) bad(type, `missing '${key}'`);
+  if (!ok(o[key])) bad(type, `'${key}' must be ${what}, got ${JSON.stringify(o[key])}`);
+  return o[key] as T;
+}
+
+function optIn(type: number, o: Record<string, unknown>, key: string, ok: (v: unknown) => boolean, what: string): unknown {
+  const v = o[key];
+  if (v === undefined || v === null) return undefined;
+  if (!ok(v)) bad(type, `'${key}' must be ${what}, got ${JSON.stringify(v)}`);
+  return v;
+}
+
+const isInputEntry = (v: unknown) => isObj(v) && isName((v as Record<string, unknown>).var) && boundedText(TENSOR_NAME_MAX)((v as Record<string, unknown>).source);
+const isArraysList = (v: unknown) => Array.isArray(v) && v.length >= 1 && v.length <= PROGRAM_ARRAYS.length
+  && v.every((x) => typeof x === 'string' && PROGRAM_ARRAYS.includes(x)) && new Set(v).size === v.length && v.includes('positions');
+
+/** The checks of a PROGRAM set's declaration: output with kind and the keys of its kind, then inputs, limits, workgroups and entry. */
+function checkDeclaration(type: number, d: Record<string, unknown>): void {
+  const out = reqIn<Record<string, unknown>>(type, d, 'output', isObj, 'an object');
+  const kind = reqIn<string>(type, out, 'kind', (v) => v === OUTPUT_GEOMETRY || v === OUTPUT_PIXELS, 'geometry or pixels');
+  if (kind === OUTPUT_GEOMETRY) {
+    reqIn(type, out, 'part', (v) => v === PART_POINTS || v === PART_LINES, 'points or lines');
+    reqIn(type, out, 'max_count', intIn(1, PROGRAM_MAX_COUNT), `an integer from 1 to ${PROGRAM_MAX_COUNT}`);
+    reqIn(type, out, 'arrays', isArraysList, 'unique names of positions, colors, values and radii, with positions');
+    optIn(type, out, 'entity', entityPathOk, 'an entity path');
+  } else {
+    const side = intIn(1, PROGRAM_SIDE_MAX);
+    reqIn(type, out, 'width', side, `an integer from 1 to ${PROGRAM_SIDE_MAX}`);
+    reqIn(type, out, 'height', side, `an integer from 1 to ${PROGRAM_SIDE_MAX}`);
+    optIn(type, out, 'format', (v) => v === 'rgba8unorm', 'rgba8unorm');
+  }
+  optIn(type, d, 'inputs', listOf(isInputEntry, PROGRAM_MAX_INPUTS), `at most ${PROGRAM_MAX_INPUTS} inputs {var, source}`);
+  const lim = optIn(type, d, 'limits', isObj, 'an object') as Record<string, unknown> | undefined;
+  if (lim !== undefined) {
+    optIn(type, lim, 'time_ms', (v) => isFinite(v) && (v as number) > 0 && (v as number) <= PROGRAM_TIME_MS_MAX, `a number above 0 and at most ${PROGRAM_TIME_MS_MAX}`);
+    optIn(type, lim, 'memory_mb', intIn(1, PROGRAM_MEMORY_MB_MAX), `an integer from 1 to ${PROGRAM_MEMORY_MB_MAX}`);
+    optIn(type, lim, 'every', intIn(1, PROGRAM_EVERY_MAX), `an integer from 1 to ${PROGRAM_EVERY_MAX}`);
+  }
+  optIn(type, d, 'workgroups', listOf(intIn(1, PROGRAM_WORKGROUPS_MAX), 3, 3), `three integers from 1 to ${PROGRAM_WORKGROUPS_MAX}`);
+  optIn(type, d, 'entry', isName, 'an entry point name');
+}
+
+/** PROGRAM: viewer to producer, set or remove one GPU program (capability "programs"). */
+export function decodeProgram(f: Frame): ProgramMsg {
+  const request_id = req<number>(f, 'request_id', isU32, 'a uint32');
+  const op = req<ProgramMsg['op']>(f, 'op', (v) => v === PROGRAM_SET || v === PROGRAM_REMOVE, 'set or remove');
+  const id = req<string>(f, 'id', isProgramId, `a program id of at most ${PROGRAM_ID_MAX} bytes`);
+  if (op === PROGRAM_REMOVE) return { type: 'program', request_id, op, id };
+  const declaration = req<ProgramDeclaration>(f, 'declaration', isObj, 'an object');
+  checkDeclaration(f.type, declaration);
+  const geometry = (declaration.output as Record<string, unknown>).kind === OUTPUT_GEOMETRY;
+  const scene = geometry
+    ? req<string>(f, 'scene', isName, 'a scene name')
+    : opt<string | undefined>(f, 'scene', isName, 'a scene name', undefined);
+  const sha256 = req<string>(f, 'sha256', isSha256, '64 lowercase hex digits');
+  const w = section(f, SECTION_WGSL);
+  if (!w || w.encoding !== 0 || w.dtype !== DTYPE.u8 || w.shape.length !== 1) bad(f.type, "a program set needs a (B,) u8 'wgsl' section");
+  if (w.shape[0] < 1 || w.shape[0] > PROGRAM_SOURCE_MAX) bad(f.type, `'wgsl' holds 1 to ${PROGRAM_SOURCE_MAX} bytes, got ${w.shape[0]}`);
+  let wgsl: string;
+  try {
+    wgsl = utf8Strict.decode(w.bytes);
+  } catch {
+    bad(f.type, "'wgsl' is not UTF-8");
+  }
+  const m: ProgramMsg = { type: 'program', request_id, op, id, declaration, wgsl, sha256 };
+  if (scene !== undefined) m.scene = scene;
+  return m;
+}
+
+export function encodeProgram(m: ProgramMsg, minor: number = PROTOCOL_MINOR): Uint8Array {
+  const meta = drop({ request_id: m.request_id, op: m.op, id: m.id, declaration: m.declaration, scene: m.scene, sha256: m.sha256 });
+  const sections: Section[] = [];
+  if (m.wgsl !== undefined) {
+    const b = utf8.encode(m.wgsl);
+    sections.push({ name: SECTION_WGSL, dtype: DTYPE.u8, shape: [b.length], encoding: 0, bytes: b });
+  }
+  return frameAt(MSG.program, meta, sections, minor);
+}
+
+const isProgramError = (v: unknown) => {
+  if (!isObj(v)) return false;
+  const o = v as Record<string, unknown>;
+  return isName(o.code) && isText(o.message) && ['line', 'column'].every((k) => !present(o[k]) || isU32(o[k]));
+};
+
+const STATUS_KEYS: [string, (v: unknown) => boolean][] = [
+  ['every', intIn(1, PROGRAM_EVERY_MAX)], ['every_min', intIn(1, PROGRAM_EVERY_MAX)], ['last_pass_ms', isNonneg], ['last_cost_ms', isNonneg],
+  ['step_ms', isNonneg], ['overhead_share', isNonneg], ['passes_per_s', isNonneg],
+  ['last_step', isSafeUint], ['runs', isSafeUint], ['memory_bytes', isSafeUint], ['memory_limit_bytes', isSafeUint],
+  ['error', isProgramError],
+];
+
+/** A status item: id, kind and state, and the optional keys of STATUS_KEYS and sha256, null or absent when unknown. */
+const isStatusItem = (v: unknown) => {
+  if (!isObj(v)) return false;
+  const o = v as Record<string, unknown>;
+  if (!(isProgramId(o.id) && (o.kind === OUTPUT_GEOMETRY || o.kind === OUTPUT_PIXELS) && typeof o.state === 'string' && PROGRAM_STATES.includes(o.state))) return false;
+  if (!STATUS_KEYS.every(([k, ok]) => !present(o[k]) || ok(o[k]))) return false;
+  return !present(o.sha256) || o.sha256 === '' || isSha256(o.sha256);
+};
+
+const isStatusItems = (v: unknown) => listOf(isStatusItem, MAX_PROGRAMS)(v)
+  && new Set((v as { id: string }[]).map((x) => x.id)).size === (v as unknown[]).length;
+
+/** PROGRAM_STATE: producer to viewer, the status item of each program. */
+export function decodeProgramState(f: Frame): ProgramStateMsg {
+  const request_id = opt<number | undefined>(f, 'request_id', isU32, 'a uint32', undefined);
+  const step = opt<number | undefined>(f, 'step', isSafeUint, 'an unsigned integer', undefined);
+  const step_ms = opt<number | undefined>(f, 'step_ms', isNonneg, 'a number of at least 0', undefined);
+  const programs = req<ProgramStatus[]>(f, 'programs', isStatusItems, `at most ${MAX_PROGRAMS} status items with unique program ids`);
+  const m: ProgramStateMsg = { type: 'program_state', programs };
+  if (request_id !== undefined) m.request_id = request_id;
+  if (step !== undefined) m.step = step;
+  if (step_ms !== undefined) m.step_ms = step_ms;
+  return m;
+}
+
+/** CONTROL's intervene: exactly one of set, clear and clear_all. */
+function isInterveneRequest(v: unknown): boolean {
+  if (!isObj(v)) return false;
+  const o = v as Record<string, unknown>;
+  if (['set', 'clear', 'clear_all'].filter((k) => present(o[k])).length !== 1) return false;
+  if (present(o.set)) {
+    const st = o.set as Record<string, unknown>;
+    return isObj(st) && isPoint(st.point) && isName(st.op) && isOptStep(st.from_step) && isOptStep(st.until_step);
+  }
+  if (present(o.clear)) return isPoint(o.clear);
+  return o.clear_all === true;
+}
+
+function isPointEntry(v: unknown): boolean {
+  if (!isObj(v)) return false;
+  const o = v as Record<string, unknown>;
+  return isPoint(o.point) && (o.kind === 'module' || o.kind === 'head') && isPoint(o.module) && (!present(o.head) || isU32(o.head))
+    && (!present(o.type) || isName(o.type)) && (!present(o.shape) || listOf(isSafeUint, MAX_SHAPE_DIMS)(o.shape));
+}
+
+function isActiveEntry(v: unknown): boolean {
+  if (!isObj(v)) return false;
+  const o = v as Record<string, unknown>;
+  return isPoint(o.point) && isName(o.op) && ['from_step', 'until_step', 'since_step'].every((k) => isOptStep(o[k]))
+    && typeof o.state === 'string' && INTERVENTION_STATES.includes(o.state);
+}
+
+/** CONTROLS' interventions: points (at most MAX_POINTS_LISTED) and active (at most MAX_INTERVENTIONS). */
+function isInterventions(v: unknown): boolean {
+  if (!isObj(v)) return false;
+  const o = v as Record<string, unknown>;
+  return listOf(isPointEntry, MAX_POINTS_LISTED)(o.points) && listOf(isActiveEntry, MAX_INTERVENTIONS)(o.active);
 }

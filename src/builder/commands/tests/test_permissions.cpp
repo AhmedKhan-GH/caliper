@@ -82,6 +82,13 @@ TEST_CASE("every command of the table says what it does, and the classes agree w
     for (const char* name : {"run.start", "run.fork", "run.stop"}) CHECK(cmd(name).effect == CommandEffect::run);
     for (const char* name : {"run.list", "run.logs"}) CHECK(cmd(name).effect == CommandEffect::read);
     CHECK(cmd("events.wait").effect == CommandEffect::read);
+    // design/gpu-programs.md: stages and programs are edits of the open spec,
+    // and an intervention acts on the running script.
+    for (const char* name : {"stage.set", "stage.remove", "program.create", "program.patch", "program.remove"})
+        CHECK(cmd(name).effect == CommandEffect::edit);
+    for (const char* name : {"stage.check", "program.status", "intervene.points", "intervene.list"})
+        CHECK(cmd(name).effect == CommandEffect::read);
+    for (const char* name : {"intervene.set", "intervene.clear"}) CHECK(cmd(name).effect == CommandEffect::run);
     CHECK(command_effect_from_name("run") == CommandEffect::run);
     // Replacing the open spec is not a plain edit.
     for (const char* name : {"spec.new", "spec.open", "applet.open", "app.launch"})
@@ -289,6 +296,47 @@ TEST_CASE("a rule of a run command names one parameter or one action") {
           ApprovalDecision::deny);
     CHECK(decide("run.action", AgentMode::allow_all, ApprovalDecision::ask, {{"name", "save"}}).decision ==
           ApprovalDecision::allow);
+}
+
+TEST_CASE("a rule of an intervention names one point, and clearing all always asks") {
+    CHECK(permission_rule_key(chat("intervene.set", {{"point", "blocks.0.attn#3"}, {"op", "ablate"}})) ==
+          "intervene.set:blocks.0.attn#3");
+    CHECK(permission_rule_key(chat("intervene.clear", {{"point", "blocks.0.attn"}})) == "intervene.clear:blocks.0.attn");
+    CHECK(permission_rule_key(chat("intervene.clear", {{"all", true}})) == "intervene.clear:");
+    CHECK(permission_rule_key(chat("intervene.set", {{"name", "head"}, {"op", "ablate"}})) == "intervene.set:");
+    CHECK(permission_rule_key(chat("intervene.set", {{"point", std::string(255, 'p')}, {"op", "ablate"}})) ==
+          "intervene.set:" + std::string(255, 'p'));
+    CHECK(permission_rule_key(chat("intervene.set", {{"point", std::string(256, 'p')}, {"op", "ablate"}})) ==
+          "intervene.set:");
+    CHECK(permission_rule_key(chat("intervene.points", {{"match", "blocks.*"}})) == "intervene.points");
+
+    CHECK(rule_command_allowed("intervene.set:blocks.0.attn#3"));
+    CHECK(rule_command_allowed("intervene.clear:head"));
+    CHECK(rule_command_allowed("intervene.set:" + std::string(255, 'x')));
+    CHECK_FALSE(rule_command_allowed("intervene.set:" + std::string(256, 'x')));
+    CHECK_FALSE(rule_command_allowed("intervene.clear:"));
+    CHECK_FALSE(rule_command_allowed("intervene.list:head"));   // a read
+    CHECK(rule_command_allowed("intervene.set"));               // the card's check of the command
+
+    PermissionContext c;
+    c.saved_rule = true;
+    CHECK(decide("intervene.set", AgentMode::ask, ApprovalDecision::ask, {{"point", "head"}, {"op", "ablate"}}, c)
+              .decision == ApprovalDecision::allow);
+    CHECK(decide("intervene.set", AgentMode::accept_edits, ApprovalDecision::ask, {{"point", "head"}, {"op", "ablate"}})
+              .decision == ApprovalDecision::ask);
+    CHECK(decide("intervene.clear", AgentMode::read_only, ApprovalDecision::ask, {{"all", true}}).decision ==
+          ApprovalDecision::deny);
+
+    // A saved rule of an intervention without its point is ignored.
+    const std::string path = dir("intervene") + "/agent-permissions.json";
+    write(path, R"({"version": 1, "rules": [{"agent": "mcp", "command": "intervene.set"},
+                   {"agent": "mcp", "command": "intervene.set:blocks.0.attn#3"}]})");
+#ifndef _WIN32
+    ::chmod(path.c_str(), 0600);
+#endif
+    const AgentPermissionsRead r = read_agent_permissions(path);
+    CHECK(r.file.rules == std::vector<AgentRule>{{"mcp", "intervene.set:blocks.0.attn#3"}});
+    CHECK(r.problems.size() == 1);
 }
 
 TEST_CASE("saved rules with a target round-trip, and a run rule without its target is ignored") {

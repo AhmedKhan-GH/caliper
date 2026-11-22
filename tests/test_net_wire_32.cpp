@@ -140,12 +140,88 @@ TEST_CASE("net/wire 3.2: every golden frame decodes as described and encodes bac
         if (f.type == CALIPER_NET_MSG_SCENE_CLEAR) CHECK(std::holds_alternative<SceneClear>(m));
         if (f.type == CALIPER_NET_MSG_SCENE_TRANSFORMS) CHECK(std::holds_alternative<SceneTransforms>(m));
         if (f.type == CALIPER_NET_MSG_SCENE_CLASSES) CHECK(std::holds_alternative<SceneClasses>(m));
+        if (f.type == CALIPER_NET_MSG_PROGRAM) CHECK(std::holds_alternative<Program>(m));
+        if (f.type == CALIPER_NET_MSG_PROGRAM_STATE) CHECK(std::holds_alternative<ProgramState>(m));
 
         std::vector<uint8_t> again;
         std::string err;
         REQUIRE_MESSAGE(encode(m, &again, &err, CALIPER_NET_MINOR_3_2), err);
         if (decode_only(name)) CHECK(again != bin);   // a section no part has is not written
         else CHECK(again == bin);
+    }
+}
+
+TEST_CASE("net/wire 3.2 programs") {
+    auto load = [](const char* name) {
+        static std::vector<std::vector<uint8_t>> keep;   // a decoded Section points into its buffer
+        keep.push_back(read_bytes(v32_dir() / (std::string(name) + ".bin")));
+        Message m;
+        const DecodeResult r = decode_bytes(keep.back(), &m);
+        REQUIRE_MESSAGE(r.ok(), name << ": " << r.error_code << ": " << r.message);
+        return m;
+    };
+    {
+        const Message m = load("program_set_geometry");
+        const Program& p = std::get<Program>(m);
+        CHECK(p.op == CALIPER_NET_PROGRAM_SET);
+        CHECK(p.id == "rows");
+        CHECK(p.scene.value_or("") == "world");
+        CHECK(p.request_id == 11);
+        REQUIRE(p.wgsl.has_value());
+        CHECK(!p.wgsl->empty());
+        CHECK(p.wgsl->back() == '\n');
+        CHECK(p.sha256.has_value());
+        CHECK(p.declaration.find("output")->find("max_count")->as_double() == 4096);
+    }
+    {
+        const Message m = load("program_set_pixels");
+        const Program& p = std::get<Program>(m);
+        CHECK(!p.scene.has_value());
+        CHECK(p.declaration.find("output")->find("width")->as_double() == 64);
+    }
+    {
+        const Message m = load("program_remove");
+        const Program& p = std::get<Program>(m);
+        CHECK(p.op == CALIPER_NET_PROGRAM_REMOVE);
+        CHECK(p.declaration.is_null());
+        CHECK(!p.wgsl.has_value());
+        CHECK(!p.sha256.has_value());
+    }
+    {
+        const Message m = load("program_state_reply");
+        const ProgramState& s = std::get<ProgramState>(m);
+        CHECK(s.request_id.value_or(0) == 12);
+        CHECK(s.step.value_or(0) == 1200);
+        CHECK(s.step_ms.value_or(0) == 31.25);
+        CHECK(s.programs.size() == 2);
+        const Json& run = s.programs.items().front();   // the cadence keys of a running program
+        REQUIRE(run.find("overhead_share"));
+        REQUIRE(run.find("passes_per_s"));
+        CHECK(run.find("overhead_share")->as_double() == 0.03125);
+        CHECK(run.find("passes_per_s")->as_double() == 2.5);
+    }
+    {
+        const Message m = load("program_state_waiting");
+        const ProgramState& s = std::get<ProgramState>(m);
+        CHECK(!s.request_id.has_value());
+        CHECK(!s.step.has_value());
+        CHECK(s.programs.size() == 1);
+    }
+    {
+        const Message m = load("control_intervene_clear_all");
+        const Control& c = std::get<Control>(m);
+        CHECK(c.op == CALIPER_NET_OP_INTERVENE);
+        CHECK(c.intervene.find("clear_all")->as_bool());
+    }
+    {
+        const Message m = load("controls_interventions");
+        const Controls& c = std::get<Controls>(m);
+        REQUIRE(c.interventions.is_object());
+        CHECK(c.interventions.find("points")->size() == 2);
+    }
+    {
+        const Message m = load("control_reply_intervene");
+        CHECK(std::get<ControlReply>(m).op == CALIPER_NET_OP_INTERVENE);
     }
 }
 

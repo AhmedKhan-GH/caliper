@@ -48,6 +48,10 @@ public:
     int width() const { return w_; }
     int height() const { return h_; }
     const char* renderer_name() const;
+    // The renderer's device and command queue (id<MTLDevice> and id<MTLCommandQueue> on Metal), for
+    // a test that makes its own backend of the graphics layer; null when it has none.
+    void* native_device() const;
+    void* native_queue() const;
     const SpecLook& look() const { return look_; }
     SpecTextures& textures() { return *textures_; }
 

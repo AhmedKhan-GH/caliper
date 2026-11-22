@@ -51,6 +51,34 @@ Each error has a code and one plain sentence.
 
 A script allows control when it starts its server with `caliper.serve(control=True)`, which is the default. A hub allows control only when you start it with `--allow-control`. Thus you decide at the start of the run, and the agent cannot change it. The shared memory session of `caliper.show` takes no control. The run control needs the network connection that `caliper.watch` starts.
 
+## Intervention Commands
+
+An intervention changes a module of the model at a step boundary while the run trains. The first intervention is `ablate`, which sets the output of a module to zero. For an attention module that gives heads, it sets the slice of one head. The names `scale`, `steer` and `patch` are reserved, and `intervene.set` refuses them with `intervene.op_reserved`. A script offers interventions only under `caliper.watch(model, optimizer)`.
+
+| Command | Arguments | Result |
+|---|---|---|
+| `intervene.points` | `match`, a glob over the point names | `points`, each with `point`, `kind` (`module` or `head`), `module`, `head`, `type` and `shape` |
+| `intervene.set` | `point`, `op`, `from_step`, `until_step` | `point`, `op`, `pending: true` |
+| `intervene.clear` | `point`, or `all: true` | `cleared` (the points) and `pending: true` |
+| `intervene.list` | None | `interventions`, each with `point`, `op`, `from_step`, `until_step`, `since_step` and `state` (`pending`, `active` or `ended`) |
+
+Each module of `model.named_modules()` is a point, with its dotted name, such as `blocks.0.attn`. A module gives heads when it has an integer attribute `num_heads`, `n_heads` or `n_head`, and one child `nn.Linear` named `out_proj`, `o_proj`, `c_proj` or `proj` whose `in_features` divides by the head count. Each head is then a point `<module>#<h>`, such as `blocks.0.attn#3`. A module of the class `nn.MultiheadAttention` gives no heads, because it never calls its `out_proj`. A point holds at most one intervention of each op.
+
+`intervene.set` answers at once, and the script applies the intervention at its next step. A `run` event of change `intervene` then reports each applied change, with the `point`, the `op` and the `step`. The `op` is null when the interventions of the point were cleared. The commands have the effect class `run`, thus they follow the Approval Rules above. The cards read "Ablate `<point>` in `<script>` from the next step.", "Clear the interventions on `<point>` in `<script>` at the next step." and "Clear every intervention in `<script>` at the next step.". A rule allows one point, with the key `intervene.set:<point>` or `intervene.clear:<point>`, and clearing all interventions always asks.
+
+| Code | Cause |
+|---|---|
+| `intervene.unknown_point` | The model has no point of this name |
+| `intervene.op_reserved` | The op is `scale`, `steer` or `patch` |
+| `intervene.bad_range` | `until_step` is not above `from_step`, or a step is in the past |
+| `intervene.not_supported` | The attached script did not announce `interventions` |
+
+The run command errors above also apply, such as `run.not_attached`.
+
+## Toggle Control
+
+A control of the kind `toggle` bound to `intervene:<point>` sets the ablation of the point while it is on and clears it when it is off. A toggle bound to `param:<name>` of a boolean parameter sets that parameter. The click of the person has the origin `ui`, thus it runs at once and shows no card. A toggle is disabled, with the reason beside it, when no script is attached, when the script takes no interventions, or when the model has no such point. `control.create` takes the bind `intervene:<point>`, as [Spec Version 1](../builder/spec-version-1.md) describes.
+
 ## Events
 
 The app keeps the last 1,024 events in a ring. The command `events.wait` returns the events after a cursor.
@@ -77,6 +105,7 @@ Each event has the keys `seq`, `time`, `kind`, `panel`, `view` and `origin`. The
 | `run` | The attached script changed | `change`, then the keys of the change |
 | `spec` | A command changed the open spec | `command`, `event`, `applet` |
 | `approval` | A card asked or was decided | `approval`, `command`, `state`, `target` |
+| `program` | A program or a stage changed its state ([GPU Programs and Stages](gpu-programs.md#program-events)) | `program`, `change`, `host`, `code`, `message`, `line`, `column` |
 
 A pick in a scene panel has the panel id in `panel` and the name of the scene in `view`. A pick or a selection in a live view outside a spec has `panel` null. The key `index` is the index of the item in the batch that the script sent. The key `row_id` is its row in the source tensor of the script, or null. The key `position` is the point that the click hit in scene coordinates, or null without depth. Each entry of `entities` in a selection has `entity`, `primitive`, `indices` and `row_ids`, and an empty list means that the selection was cleared. The key `truncated` is true when the selection held more than 32,768 items.
 
@@ -88,6 +117,7 @@ A `control` event is one event for each finished edit. A slider sends each value
 | `param` | `name`, `value`, `step` | The script applied a parameter at a step |
 | `action` | `name`, `status`, `text` | An action ended with `ok` or `error` |
 | `attach` | `attached`, `script` | A script was attached or detached |
+| `intervene` | `point`, `op`, `step` | The script applied or ended an intervention at a step |
 
 A `spec` event comes from the journal. Its `event` is `do`, `undo` or `redo`, and `applet` is the id of the spec that is open after the command. An `approval` event has the `state` `pending`, `approved`, `denied` or `expired`. It also comes for a run command that you deny or that expires. For a run command, `target` names the parameter or the action.
 

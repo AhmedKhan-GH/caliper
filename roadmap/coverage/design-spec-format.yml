@@ -179,6 +179,11 @@ entries:
     older documents in their JSON form.
   ids:
   - SPC-01
+- heading: Programs, Stages and Provenance
+  item: Version 1 holds the program, stage and provenance tables of GPU programs, with their canonical
+    form and their validation with the sandbox's codes.
+  ids:
+  - SPC-14
 - heading: Validation
   item: Checking a spec has two stages, parsing (with line and column for TOML) and validation, which
     reports errors and warnings with stable codes and document paths.

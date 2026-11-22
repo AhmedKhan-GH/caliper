@@ -80,6 +80,8 @@ class MsgType(enum.IntEnum):
     RECORDING_OPEN = 0x0079
     CURSOR = 0x007A
     TIME_STATE = 0x007B
+    PROGRAM = 0x0080               # 3.2 draft, capability "programs"
+    PROGRAM_STATE = 0x0081
 
 
 class Kind(enum.IntEnum):          # CaliperLiveKind
@@ -161,7 +163,8 @@ RUN_NONE, RUN_RUNNING, RUN_PAUSING, RUN_PAUSED, RUN_STEPPING = (
     "none", "running", "pausing", "paused", "stepping")
 RUN_STATES = (RUN_NONE, RUN_RUNNING, RUN_PAUSING, RUN_PAUSED, RUN_STEPPING)
 OP_PAUSE, OP_RESUME, OP_STEP, OP_SET, OP_RUN = "pause", "resume", "step", "set", "run"
-OPS = (OP_PAUSE, OP_RESUME, OP_STEP, OP_SET, OP_RUN)
+OP_INTERVENE = "intervene"                 # 3.2 draft, capability "interventions"
+OPS = (OP_PAUSE, OP_RESUME, OP_STEP, OP_SET, OP_RUN, OP_INTERVENE)
 PARAM_NUMBER, PARAM_INTEGER, PARAM_BOOLEAN, PARAM_CHOICE = "number", "integer", "boolean", "choice"
 PARAM_TYPES = (PARAM_NUMBER, PARAM_INTEGER, PARAM_BOOLEAN, PARAM_CHOICE)
 STATUS_OK, STATUS_QUEUED, STATUS_ERROR = "ok", "queued", "error"
@@ -1107,10 +1110,14 @@ class Controls(_Msg):
     params: list = field(default_factory=list)
     actions: list = field(default_factory=list)
     stamp: Any = None                            # 3.2 draft: when the state or a value changed
+    interventions: dict | None = None            # 3.2 draft: {"points", "active"}
 
     def to_meta(self):
-        return {"run": dict(self.run), "params": list(self.params),
+        meta = {"run": dict(self.run), "params": list(self.params),
                 "actions": list(self.actions)}
+        if self.interventions is not None:
+            meta["interventions"] = self.interventions
+        return meta
 
     def to_sections(self):
         return [] if self.stamp is None else [_section("stamp", self.stamp)]
@@ -1126,6 +1133,8 @@ class Controls(_Msg):
                         and all(_action_entry(a) for a in v) and _unique_names(v),
                         f"at most {MAX_ACTIONS} actions with unique names"))
         c.stamp, _ = _stamp(f, False)                                         # 3.2 draft
+        c.interventions = _opt(m, "interventions", _interventions,                # 3.2 draft
+                               "{points, active} of intervention points and interventions")
         return c
 
 
@@ -1137,23 +1146,28 @@ def _set_value(v) -> bool:
 class Control(_Msg):
     """Viewer to producer: pause, resume, ``count`` steps, set parameter
     ``name`` to ``value``, or run action ``name``. Never code: a producer acts
-    only on the parameters and actions its script registered."""
+    only on the parameters and actions its script registered. The 3.2 draft
+    adds ``intervene`` (capability "interventions"), whose key ``intervene`` is
+    ``{"set": {"point", "op", "from_step", "until_step"}}``, ``{"clear":
+    point}`` or ``{"clear_all": true}``."""
     TYPE: ClassVar[MsgType] = MsgType.CONTROL
     request_id: int
-    op: str                                      # "pause", "resume", "step", "set", "run"
+    op: str                                      # "pause", "resume", "step", "set", "run", "intervene"
     name: str | None = None                      # set, run
     value: Any = None                            # set
     count: int | None = None                     # step: default 1
+    intervene: dict | None = None                # intervene
 
     def to_meta(self):
         return _drop_none({"request_id": self.request_id, "op": self.op, "name": self.name,
-                           "value": self.value, "count": self.count})
+                           "value": self.value, "count": self.count,
+                           "intervene": self.intervene})
 
     @classmethod
     def from_frame(cls, f):
         m = f.meta
         rid = _req(m, "request_id", _u32, "a uint32")
-        op = _req(m, "op", lambda v: v in OPS, "pause, resume, step, set or run")
+        op = _req(m, "op", lambda v: v in OPS, "pause, resume, step, set, run or intervene")
         name = _opt(m, "name", _name, "a parameter or action name")
         if op in (OP_SET, OP_RUN) and name is None:
             _bad(f"'{op}' needs 'name'")
@@ -1163,7 +1177,12 @@ class Control(_Msg):
         count = None
         if op == OP_STEP:
             count = _opt(m, "count", lambda v: _u32(v) and v >= 1, "a positive uint32")
-        return cls(rid, op, name if op in (OP_SET, OP_RUN) else None, value, count)
+        intervene = None
+        if op == OP_INTERVENE:                                                 # 3.2 draft
+            intervene = _req(m, "intervene", _intervene_request,
+                             "exactly one of {set: {point, op, from_step, until_step}}, "
+                             "{clear: point} and {clear_all: true}")
+        return cls(rid, op, name if op in (OP_SET, OP_RUN) else None, value, count, intervene)
 
 
 def _reply_error(v) -> bool:
@@ -2924,3 +2943,267 @@ def split_update(u: SceneUpdate, update: int, max_frame: int = MAX_FRAME_BYTES) 
 
 
 __all__ += ["SplitUpdates", "split_update"]
+
+
+# ---------------------------------------------------------------------------
+# 3.2 draft: GPU programs and interventions (design/gpu-programs.md, Wire Path)
+# ---------------------------------------------------------------------------
+CAP_PROGRAMS = "programs"
+CAP_INTERVENTIONS = "interventions"
+PROGRAM_SET, PROGRAM_REMOVE = "set", "remove"
+SECTION_WGSL = "wgsl"
+INTERVENE_ABLATE = "ablate"
+MAX_PROGRAMS = 16
+PROGRAM_ID_MAX = 55
+PROGRAM_SOURCE_MAX = 65536
+PROGRAM_STATE_RATE_HZ = 2
+POINT_MAX = 255
+MAX_POINTS_LISTED = 4096
+MAX_INTERVENTIONS = 64
+PROGRAM_MAX_INPUTS = 8
+PROGRAM_MAX_COUNT = 1000000
+PROGRAM_SIDE_MAX = 2048
+PROGRAM_TIME_MS_MAX = 50
+PROGRAM_MEMORY_MB_MAX = 512
+PROGRAM_EVERY_MAX = 10000
+PROGRAM_WORKGROUPS_MAX = 65535
+TENSOR_NAME_MAX = 255
+OUTPUT_GEOMETRY, OUTPUT_PIXELS = "geometry", "pixels"
+PROGRAM_STATES = ("waiting", "review", "compiled", "running", "refused", "stopped")
+PROGRAM_ARRAYS = ("positions", "colors", "values", "radii")
+INTERVENTION_STATES = ("pending", "active", "ended")
+_SAFE_INT = (1 << 53) - 1
+_ID_TAIL = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_-")
+_HEX = frozenset("0123456789abcdef")
+
+
+def _safe_uint(v) -> bool:
+    """An unsigned integer that every codec holds exactly: 0 to 2^53 - 1."""
+    return _is_int(v) and 0 <= v <= _SAFE_INT
+
+
+def _program_id(v) -> bool:
+    """A program id: 1 to 55 bytes of [a-z0-9_-], the first a letter."""
+    return (isinstance(v, str) and 0 < len(v) <= PROGRAM_ID_MAX and "a" <= v[0] <= "z"
+            and all(c in _ID_TAIL for c in v))
+
+
+def _sha256_hex(v) -> bool:
+    return isinstance(v, str) and len(v) == 64 and all(c in _HEX for c in v)
+
+
+def _bounded_text(limit: int):
+    return lambda v: isinstance(v, str) and 0 < len(v.encode("utf-8")) <= limit
+
+
+def _int_in(lo: int, hi: int):
+    return lambda v: _is_int(v) and lo <= v <= hi
+
+
+def _nonneg(v) -> bool:
+    return _finite(v) and v >= 0
+
+
+def _list_of(check, most: int, least: int = 0):
+    return lambda v: isinstance(v, list) and least <= len(v) <= most and all(check(x) for x in v)
+
+
+def _input_entry(v) -> bool:
+    return (_obj(v) and _name(v.get("var")) and _bounded_text(TENSOR_NAME_MAX)(v.get("source")))
+
+
+def _arrays_ok(v) -> bool:
+    return (isinstance(v, list) and 1 <= len(v) <= len(PROGRAM_ARRAYS)
+            and all(isinstance(x, str) and x in PROGRAM_ARRAYS for x in v)
+            and len(set(v)) == len(v) and "positions" in v)
+
+
+def _check_declaration(d: dict) -> None:
+    """The checks of a PROGRAM set's ``declaration``, in this order: ``output``
+    with ``kind`` and the keys of its kind, then ``inputs``, ``limits``,
+    ``workgroups`` and ``entry``. Every count that sizes a buffer is bounded
+    here; the sandbox checks the rest before any run."""
+    out = _req(d, "output", _obj, "an object")
+    kind = _req(out, "kind", lambda v: v in (OUTPUT_GEOMETRY, OUTPUT_PIXELS), "geometry or pixels")
+    if kind == OUTPUT_GEOMETRY:
+        _req(out, "part", lambda v: v in (PART_POINTS, PART_LINES), "points or lines")
+        _req(out, "max_count", _int_in(1, PROGRAM_MAX_COUNT), f"an integer from 1 to {PROGRAM_MAX_COUNT}")
+        _req(out, "arrays", _arrays_ok, "unique names of positions, colors, values and radii, "
+             "with positions")
+        _opt(out, "entity", entity_path_ok, "an entity path")
+    else:
+        side = _int_in(1, PROGRAM_SIDE_MAX)
+        _req(out, "width", side, f"an integer from 1 to {PROGRAM_SIDE_MAX}")
+        _req(out, "height", side, f"an integer from 1 to {PROGRAM_SIDE_MAX}")
+        _opt(out, "format", lambda v: v == "rgba8unorm", "rgba8unorm")
+    _opt(d, "inputs", _list_of(_input_entry, PROGRAM_MAX_INPUTS),
+         f"at most {PROGRAM_MAX_INPUTS} inputs {{var, source}}")
+    lim = _opt(d, "limits", _obj, "an object")
+    if lim is not None:
+        _opt(lim, "time_ms", lambda v: _finite(v) and 0 < v <= PROGRAM_TIME_MS_MAX,
+             f"a number above 0 and at most {PROGRAM_TIME_MS_MAX}")
+        _opt(lim, "memory_mb", _int_in(1, PROGRAM_MEMORY_MB_MAX),
+             f"an integer from 1 to {PROGRAM_MEMORY_MB_MAX}")
+        _opt(lim, "every", _int_in(1, PROGRAM_EVERY_MAX), f"an integer from 1 to {PROGRAM_EVERY_MAX}")
+    _opt(d, "workgroups", _list_of(_int_in(1, PROGRAM_WORKGROUPS_MAX), 3, 3),
+         f"three integers from 1 to {PROGRAM_WORKGROUPS_MAX}")
+    _opt(d, "entry", _name, "an entry point name")
+
+
+@dataclass
+class Program(_Msg):
+    """Viewer to producer, under the capability "programs": install or replace
+    (``op`` "set") or remove (``op`` "remove") one GPU program. A set carries
+    the declaration without its source, the scene of a geometry output's panel,
+    the SHA-256 of the source and the section ``wgsl`` (the source as UTF-8).
+    The producer runs the source only on the GPU, after the sandbox checks, and
+    answers with PROGRAM_STATE (``design/gpu-programs.md``, Wire Path)."""
+    TYPE: ClassVar[MsgType] = MsgType.PROGRAM
+    request_id: int
+    op: str                                      # "set" or "remove"
+    id: str
+    declaration: dict | None = None              # set
+    wgsl: str | None = None                      # set: the section "wgsl"
+    sha256: str | None = None                    # set: of wgsl, in lowercase hex
+    scene: str | None = None                     # set: a geometry output's scene
+
+    def to_meta(self):
+        return _drop_none({"request_id": self.request_id, "op": self.op, "id": self.id,
+                           "declaration": self.declaration, "scene": self.scene,
+                           "sha256": self.sha256})
+
+    def to_sections(self):
+        if self.wgsl is None:
+            return []
+        return [Section.from_array(SECTION_WGSL,
+                                   np.frombuffer(self.wgsl.encode("utf-8"), dtype=np.uint8))]
+
+    @classmethod
+    def from_frame(cls, f):
+        m = f.meta
+        rid = _req(m, "request_id", _u32, "a uint32")
+        op = _req(m, "op", lambda v: v in (PROGRAM_SET, PROGRAM_REMOVE), "set or remove")
+        pid = _req(m, "id", _program_id, f"a program id of at most {PROGRAM_ID_MAX} bytes")
+        if op == PROGRAM_REMOVE:
+            return cls(rid, op, pid)
+        d = _req(m, "declaration", _obj, "an object")
+        _check_declaration(d)
+        geometry = d["output"]["kind"] == OUTPUT_GEOMETRY
+        scene = (_req if geometry else _opt)(m, "scene", _name, "a scene name")
+        sha = _req(m, "sha256", _sha256_hex, "64 lowercase hex digits")
+        w = f.section(SECTION_WGSL)
+        if w is None or w.encoding != Encoding.RAW or w.dtype != DType.U8 or len(w.shape) != 1:
+            _bad("a program set needs a (B,) u8 'wgsl' section")
+        if not 1 <= w.shape[0] <= PROGRAM_SOURCE_MAX:
+            _bad(f"'wgsl' holds 1 to {PROGRAM_SOURCE_MAX} bytes, got {w.shape[0]}")
+        try:
+            src = bytes(w.data).decode("utf-8")
+        except UnicodeDecodeError:
+            _bad("'wgsl' is not UTF-8")
+        return cls(rid, op, pid, d, src, sha, scene)
+
+
+def _program_error(v) -> bool:
+    return (_obj(v) and _name(v.get("code")) and _text(v.get("message"))
+            and all(v.get(k) is None or _u32(v[k]) for k in ("line", "column")))
+
+
+_STATUS_KEYS = (("every", _int_in(1, PROGRAM_EVERY_MAX)), ("every_min", _int_in(1, PROGRAM_EVERY_MAX)),
+                ("last_pass_ms", _nonneg), ("last_cost_ms", _nonneg), ("step_ms", _nonneg),
+                ("overhead_share", _nonneg), ("passes_per_s", _nonneg),
+                ("last_step", _safe_uint), ("runs", _safe_uint), ("memory_bytes", _safe_uint),
+                ("memory_limit_bytes", _safe_uint), ("error", _program_error))
+
+
+def _status_item(v) -> bool:
+    """A status item of PROGRAM_STATE: ``id``, ``kind`` and ``state``, and the
+    optional keys of ``_STATUS_KEYS`` and ``sha256``, null or absent when
+    unknown. ``host`` is the app's and is ignored here."""
+    if not (_obj(v) and _program_id(v.get("id"))
+            and v.get("kind") in (OUTPUT_GEOMETRY, OUTPUT_PIXELS)
+            and v.get("state") in PROGRAM_STATES):
+        return False
+    if not all(v.get(k) is None or check(v[k]) for k, check in _STATUS_KEYS):
+        return False
+    sha = v.get("sha256")
+    return sha is None or sha == "" or _sha256_hex(sha)
+
+
+def _status_items(v) -> bool:
+    return (_list_of(_status_item, MAX_PROGRAMS)(v)
+            and len({x["id"] for x in v}) == len(v))
+
+
+@dataclass
+class ProgramState(_Msg):
+    """Producer to viewer, under the capability "programs": the status item of
+    each program, in the order of installation. It answers each PROGRAM with
+    its ``request_id``, and goes out without one after a change of a state and
+    at most ``PROGRAM_STATE_RATE_HZ`` times a second while programs run.
+    ``step`` is the script's step and ``step_ms`` the base step time of the cadence."""
+    TYPE: ClassVar[MsgType] = MsgType.PROGRAM_STATE
+    programs: list = field(default_factory=list)
+    request_id: int | None = None
+    step: int | None = None
+    step_ms: float | None = None
+
+    def to_meta(self):
+        return _drop_none({"request_id": self.request_id, "step": self.step,
+                           "step_ms": self.step_ms, "programs": list(self.programs)})
+
+    @classmethod
+    def from_frame(cls, f):
+        m = f.meta
+        rid = _opt(m, "request_id", _u32, "a uint32")
+        step = _opt(m, "step", _safe_uint, "an unsigned integer")
+        step_ms = _opt(m, "step_ms", _nonneg, "a number of at least 0")
+        items = _req(m, "programs", _status_items,
+                     f"at most {MAX_PROGRAMS} status items with unique program ids")
+        return cls(items, rid, step, step_ms)
+
+
+def _point(v) -> bool:
+    return _bounded_text(POINT_MAX)(v)
+
+
+def _opt_step(v) -> bool:
+    return v is None or _safe_uint(v)
+
+
+def _intervene_request(v) -> bool:
+    """CONTROL's ``intervene``: exactly one of ``set``, ``clear`` and ``clear_all``."""
+    if not _obj(v) or sum(v.get(k) is not None for k in ("set", "clear", "clear_all")) != 1:
+        return False
+    if v.get("set") is not None:
+        st = v["set"]
+        return (_obj(st) and _point(st.get("point")) and _name(st.get("op"))
+                and _opt_step(st.get("from_step")) and _opt_step(st.get("until_step")))
+    if v.get("clear") is not None:
+        return _point(v["clear"])
+    return v["clear_all"] is True
+
+
+def _point_entry(v) -> bool:
+    shape = v.get("shape") if _obj(v) else None
+    return (_obj(v) and _point(v.get("point")) and v.get("kind") in ("module", "head")
+            and _point(v.get("module")) and (v.get("head") is None or _u32(v["head"]))
+            and (v.get("type") is None or _name(v["type"]))
+            and (shape is None or _list_of(_safe_uint, MAX_DIMS)(shape)))
+
+
+def _active_entry(v) -> bool:
+    return (_obj(v) and _point(v.get("point")) and _name(v.get("op"))
+            and all(_opt_step(v.get(k)) for k in ("from_step", "until_step", "since_step"))
+            and v.get("state") in INTERVENTION_STATES)
+
+
+def _interventions(v) -> bool:
+    """CONTROLS' ``interventions``: ``points`` (at most ``MAX_POINTS_LISTED``)
+    and ``active`` (at most ``MAX_INTERVENTIONS``)."""
+    return (_obj(v) and _list_of(_point_entry, MAX_POINTS_LISTED)(v.get("points"))
+            and _list_of(_active_entry, MAX_INTERVENTIONS)(v.get("active")))
+
+
+for _cls in (Program, ProgramState):
+    MESSAGES[_cls.TYPE] = _cls
+__all__ += ["Program", "ProgramState"]

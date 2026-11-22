@@ -71,14 +71,15 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '26'
-      # Builds into web/wasm/build and copies the three files into
-      # python/caliper/_web/, as in a checkout. It refuses another Emscripten.
-      - run: python scripts/build_wasm.py
-      # A Python for the producers of the checks and for the tests.
+      # A Python for the producers of the checks and for the tests. It comes before the module build,
+      # so that the bundle check below, which runs after a failed step too, has its Python.
       - run: |
           python -m venv "$RUNNER_TEMP/py"
           "$RUNNER_TEMP/py/bin/pip" install numpy websockets pytest pyyaml
           echo "CALIPER_PYTHON=$RUNNER_TEMP/py/bin/python" >> "$GITHUB_ENV"
+      # Builds into web/wasm/build and copies the three files into
+      # python/caliper/_web/, as in a checkout. It refuses another Emscripten.
+      - run: python scripts/build_wasm.py
       # The module on its own, in Playwright's Chromium headless shell on SwiftShader.
       - name: Check the module
         working-directory: web/wasm/test

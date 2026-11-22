@@ -170,6 +170,37 @@ std::string sentence(std::string why) {
     return why;
 }
 
+// The CONTROL op of an intervention (caliper_live::kOpIntervene, which this
+// file does not include because live_controls.h needs ImGui).
+constexpr const char* kOpIntervene = "intervene";
+
+// Any JSON value between the wire's Json and the command table's JSON.
+json from_net_json(const caliper_net::Json& v) {
+    if (v.is_null()) return json();
+    json out = json::parse(v.dump(), nullptr, false);
+    return out.is_discarded() ? json() : out;
+}
+
+caliper_net::Json to_net_json(const json& v) {
+    const std::string text = v.dump();
+    caliper_net::Json out;
+    std::string err;
+    if (!caliper_net::Json::parse(text.data(), text.size(), &out, &err)) return caliper_net::Json();
+    return out;
+}
+
+// The CONTROLS key "interventions" of the attached script ({points, active})
+// as the command table's JSON, or null when the script sent none.
+json interventions_json(const caliper_live::Controls* c) {
+    return c ? from_net_json(c->interventions) : json();
+}
+
+std::optional<std::int64_t> opt_int(const json& o, const char* key) {
+    const auto it = o.find(key);
+    if (it == o.end() || !it->is_number_integer()) return std::nullopt;
+    return it->get<std::int64_t>();
+}
+
 void push_run(cb::EventSink& sink, json fields) {
     cb::Event e;
     e.kind = cb::EventKind::run;
@@ -221,6 +252,11 @@ cb::RunState AppRunControl::state() {
 }
 
 cb::Error AppRunControl::send(const std::string& op, const std::string& name, const json& value, std::int64_t count) {
+    return send_net(op, name, to_net(value), count);
+}
+
+cb::Error AppRunControl::send_net(const std::string& op, const std::string& name, const caliper_net::Json& value,
+                                  std::int64_t count) {
     if (!link_ || !link_->attached())
         return cb::Error(cb::kRunNotAttached, "No script is attached to Caliper.");
     const caliper_live::ControlAccess access = link_->access();
@@ -229,7 +265,7 @@ cb::Error AppRunControl::send(const std::string& op, const std::string& name, co
                          sentence(access.why.empty() ? "the connection takes no control" : access.why));
     const auto n = static_cast<uint32_t>(
         std::min<std::int64_t>(std::max<std::int64_t>(count, 1), std::numeric_limits<uint32_t>::max()));
-    const std::string why = link_->send(op, name, to_net(value), n);
+    const std::string why = link_->send(op, name, value, n);
     if (why.empty()) return {};
     const caliper_live::Controls* c = link_->controls();
     if (op != CALIPER_NET_OP_SET && c && c->run_state == CALIPER_NET_RUN_NONE)
@@ -253,11 +289,110 @@ cb::Error AppRunControl::pause(cb::RunPauseOp op, std::int64_t count) {
     return send(CALIPER_NET_OP_PAUSE, "", json(), 0);
 }
 
+std::vector<cb::InterventionPoint> intervention_points_of(const json& interventions) {
+    std::vector<cb::InterventionPoint> out;
+    if (!interventions.is_object() || !interventions.contains("points") || !interventions["points"].is_array())
+        return out;
+    for (const json& p : interventions["points"]) {
+        if (!p.is_object()) continue;
+        cb::InterventionPoint q;
+        q.point = p.value("point", std::string());
+        q.kind = p.value("kind", std::string("module"));
+        q.module = p.value("module", q.point);
+        q.head = opt_int(p, "head");
+        q.type = p.is_object() && p.contains("type") && p["type"].is_string() ? p["type"].get<std::string>() : "";
+        if (p.contains("shape") && p["shape"].is_array()) {
+            std::vector<std::int64_t> shape;
+            for (const json& d : p["shape"])
+                if (d.is_number_integer()) shape.push_back(d.get<std::int64_t>());
+            q.shape = std::move(shape);
+        }
+        if (!q.point.empty()) out.push_back(std::move(q));
+    }
+    return out;
+}
+
+std::vector<cb::Intervention> interventions_of(const json& interventions) {
+    std::vector<cb::Intervention> pending, rest;
+    if (!interventions.is_object() || !interventions.contains("active") || !interventions["active"].is_array())
+        return pending;
+    for (const json& a : interventions["active"]) {
+        if (!a.is_object()) continue;
+        cb::Intervention i;
+        i.point = a.value("point", std::string());
+        i.op = a.value("op", std::string("ablate"));
+        i.from_step = opt_int(a, "from_step");
+        i.until_step = opt_int(a, "until_step");
+        i.since_step = opt_int(a, "since_step");
+        i.state = a.value("state", std::string("pending"));
+        if (i.point.empty()) continue;
+        (i.state == "pending" ? pending : rest).push_back(std::move(i));
+    }
+    pending.insert(pending.end(), std::make_move_iterator(rest.begin()), std::make_move_iterator(rest.end()));
+    return pending;
+}
+
+bool AppRunControl::interventions_supported() {
+    return link_ && link_->attached() && interventions_json(link_->controls()).is_object();
+}
+
+std::vector<cb::InterventionPoint> AppRunControl::intervention_points() {
+    if (!link_ || !link_->attached()) return {};
+    return intervention_points_of(interventions_json(link_->controls()));
+}
+
+std::vector<cb::Intervention> AppRunControl::interventions() {
+    if (!link_ || !link_->attached()) return {};
+    return interventions_of(interventions_json(link_->controls()));
+}
+
+cb::Error AppRunControl::intervene_set(const cb::Intervention& i) {
+    if (link_ && link_->attached() && !interventions_supported())
+        return cb::Error(cb::kInterveneNotSupported, "The script " + link_->script() + " takes no interventions.");
+    json set{{"point", i.point}, {"op", i.op}};
+    set["from_step"] = i.from_step ? json(*i.from_step) : json();
+    set["until_step"] = i.until_step ? json(*i.until_step) : json();
+    return send_net(kOpIntervene, "", to_net_json(json{{"set", std::move(set)}}), 0);
+}
+
+cb::Error AppRunControl::intervene_clear(const std::string& point) {
+    if (link_ && link_->attached() && !interventions_supported())
+        return cb::Error(cb::kInterveneNotSupported, "The script " + link_->script() + " takes no interventions.");
+    const json body = point.empty() ? json{{"clear_all", true}} : json{{"clear", point}};
+    return send_net(kOpIntervene, "", to_net_json(body), 0);
+}
+
+void AppRunControl::feed_interventions(const json& interventions, const json& step, bool baseline,
+                                       cb::EventSink& sink) {
+    // The interventions the script applies now, by point and op, with the
+    // step it applied each at.
+    std::map<std::pair<std::string, std::string>, json> now;
+    for (const cb::Intervention& i : interventions_of(interventions))
+        if (i.state == "active") now[{i.point, i.op}] = i.since_step ? json(*i.since_step) : step;
+    if (!baseline) {
+        for (const auto& [key, since] : now) {
+            const auto it = applied_.find(key);
+            if (it == applied_.end() || it->second != since)
+                push_run(sink, json{{"change", "intervene"}, {"point", key.first}, {"op", key.second}, {"step", since}});
+        }
+    }
+    // A stop also in a baseline: applied_ then holds what the same script applied before its
+    // link dropped (feed()), else nothing.
+    for (const auto& [key, since] : applied_)
+        if (!now.count(key))
+            push_run(sink, json{{"change", "intervene"}, {"point", key.first}, {"op", nullptr}, {"step", step}});
+    applied_ = std::move(now);
+}
+
 void AppRunControl::feed(cb::EventSink& sink) {
     const bool attached = link_ && link_->attached();
     const std::string script = attached ? link_->script() : std::string();
     if (attached != attached_ || (attached && script != script_)) {
         push_run(sink, json{{"change", "attach"}, {"attached", attached}, {"script", attached ? script : script_}});
+        if (attached_ && !attached) {   // what the script applied stays known for its return
+            dropped_script_ = script_;
+            dropped_ = std::move(applied_);
+        }
         attached_ = attached;
         script_ = attached ? script : std::string();
         have_ = false;
@@ -265,6 +400,12 @@ void AppRunControl::feed(cb::EventSink& sink) {
         run_state_ = CALIPER_NET_RUN_NONE;
         params_.clear();
         results_.clear();
+        applied_.clear();
+        if (attached) {
+            if (script == dropped_script_) applied_ = std::move(dropped_);
+            dropped_.clear();
+            dropped_script_.clear();
+        }
     }
     if (!attached) return;
     const caliper_live::Controls* c = link_->controls();
@@ -287,6 +428,7 @@ void AppRunControl::feed(cb::EventSink& sink) {
             now[p.name] = {std::move(value), std::move(pending)};
         }
         params_ = std::move(now);
+        feed_interventions(interventions_json(c), step, baseline, sink);
         run_state_ = c->run_state;
         version_ = c->version;
         have_ = true;
@@ -350,6 +492,8 @@ struct AppSession::Impl {
     std::shared_ptr<HostBinding> binding;
     AppRunControl run_ctl;   // the session's run control from its adoption until close()
     std::atomic<cb::ModelRunner*> runner{nullptr};   // the session's model runner from its adoption until close()
+    std::atomic<cb::ProgramHost*> program_host{nullptr};   // the hosts of GPU programs and stages, likewise
+    std::atomic<cb::StageHost*> stage_host{nullptr};
 
     std::mutex lines_m;
     std::vector<Line> lines;   // from the journal, any thread
@@ -455,6 +599,8 @@ struct AppSession::Impl {
         s->set_host(binding);
         s->set_run_control(&run_ctl);
         s->set_model_runner(runner.load());
+        s->set_program_host(program_host.load());
+        s->set_stage_host(stage_host.load());
         cb::Session* raw = s.get();
         {
             std::lock_guard<std::mutex> lock(m);
@@ -778,6 +924,8 @@ struct AppSession::Impl {
             session->set_host(nullptr);
             session->set_run_control(nullptr);
             session->set_model_runner(nullptr);
+            session->set_program_host(nullptr);
+            session->set_stage_host(nullptr);
             session->close();   // the queue and the journal
             session.reset();    // the loader store and workspace.duckdb
             say("workspace " + opt.workspace + " closed");
@@ -961,6 +1109,18 @@ void AppSession::set_model_runner(caliper_builder::ModelRunner* runner) {
     if (impl_->session) impl_->session->set_model_runner(runner);
 }
 
+void AppSession::set_program_host(caliper_builder::ProgramHost* host) {
+    impl_->program_host.store(host);
+    std::lock_guard<std::mutex> lock(impl_->m);
+    if (impl_->session) impl_->session->set_program_host(host);
+}
+
+void AppSession::set_stage_host(caliper_builder::StageHost* host) {
+    impl_->stage_host.store(host);
+    std::lock_guard<std::mutex> lock(impl_->m);
+    if (impl_->session) impl_->session->set_stage_host(host);
+}
+
 uint64_t AppSession::journaled() const { return impl_->journaled.load(std::memory_order_acquire); }
 
 uint64_t AppSession::specs_opened() const { return impl_->specs_opened.load(std::memory_order_acquire); }
@@ -1025,6 +1185,8 @@ void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderSeam>) {}
 void AppSession::set_run_link(caliper_live::RunLink*) {}
 caliper_builder::RunControl* AppSession::run_control() { return nullptr; }
 void AppSession::set_model_runner(caliper_builder::ModelRunner*) {}
+void AppSession::set_program_host(caliper_builder::ProgramHost*) {}
+void AppSession::set_stage_host(caliper_builder::StageHost*) {}
 uint64_t AppSession::journaled() const { return 0; }
 uint64_t AppSession::specs_opened() const { return 0; }
 uint64_t AppSession::agent_specs_opened() const { return 0; }

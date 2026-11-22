@@ -275,6 +275,24 @@ public:
                 table(c, {"id", "kind", "title", "bind", "options", "x"}, false, "");
             }
         }
+        // A program's and a stage's WGSL come last in their tables, as
+        // multi-line strings, so that the short keys stay together above them.
+        if (auto programs = j.find("program"); programs != j.end()) {
+            for (const json& p : *programs) {
+                out_ += "\n[[program]]\n";
+                table(p, {"id", "title", "entry", "inputs", "output", "limits", "workgroups", "x", "wgsl"}, false, "");
+            }
+        }
+        if (auto stages = j.find("stage"); stages != j.end()) {
+            for (const json& s : *stages) {
+                out_ += "\n[[stage]]\n";
+                table(s, {"panel", "entity", "kind", "x", "wgsl"}, false, "");
+            }
+        }
+        if (auto provenance = j.find("provenance"); provenance != j.end()) {
+            out_ += "\n[provenance]\n";
+            table(*provenance, {"foreign", "from", "reviewed", "x"}, false, "");
+        }
         if (layout != j.end() && layout->is_object()) {
             out_ += "\n[layout]\n";
             table(*layout, layout_order(), true, "");

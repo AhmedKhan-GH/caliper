@@ -35,7 +35,9 @@ const char* const kV0[] = {
     "preview.diff",    "preview.commit",  "preview.discard", "applet.save",  "applet.open",      "applet.list",
     "review.status",   "capture.frame",   "control.create", "control.patch", "control.remove",   "run.state",
     "run.set_param",   "run.action",      "run.pause",      "run.list",      "run.start",        "run.fork",
-    "run.stop",        "run.logs",        "events.wait",    "history.undo",  "history.redo",     "history.list",
+    "run.stop",        "run.logs",        "events.wait",    "stage.set",     "stage.remove",     "stage.check",
+    "program.create",  "program.patch",   "program.remove", "program.status", "intervene.points", "intervene.set",
+    "intervene.clear", "intervene.list",  "history.undo",   "history.redo",  "history.list",
 };
 
 std::set<std::string> names_where(bool (*pred)(const CommandDescriptor&)) {
@@ -132,7 +134,8 @@ TEST_CASE("the flags follow the design page") {
                                 "spec.new", "spec.open", "spec.set_text", "source.add", "source.patch",
                                 "source.remove", "panel.create", "panel.patch", "panel.remove", "layout.place",
                                 "layout.set", "preview.commit", "applet.save", "applet.open", "control.create",
-                                "control.patch", "control.remove", "history.undo", "history.redo"});
+                                "control.patch", "control.remove", "stage.set", "stage.remove", "program.create",
+                                "program.patch", "program.remove", "history.undo", "history.redo"});
     CHECK(names_where([](const CommandDescriptor& d) { return d.frame_thread; }) ==
           std::set<std::string>{"app.applets", "app.launch", "spec.new", "spec.open", "spec.get", "spec.set_text",
                                 "spec.validate", "source.add", "source.patch", "source.remove", "panel.create",
@@ -140,7 +143,9 @@ TEST_CASE("the flags follow the design page") {
                                 "preview.begin", "preview.diff", "preview.commit", "preview.discard",
                                 "applet.save", "applet.open", "capture.frame", "control.create", "control.patch",
                                 "control.remove", "run.state", "run.set_param", "run.action", "run.pause",
-                                "run.list", "run.start", "run.fork", "run.stop", "run.logs",
+                                "run.list", "run.start", "run.fork", "run.stop", "run.logs", "stage.set",
+                                "stage.remove", "program.create", "program.patch", "program.remove", "program.status",
+                                "intervene.points", "intervene.set", "intervene.clear", "intervene.list",
                                 "history.undo", "history.redo", "history.list"});
     // Every destructive command mutates.
     for (const auto& d : cb::command_table())

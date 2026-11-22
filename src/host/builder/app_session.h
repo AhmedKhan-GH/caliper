@@ -92,10 +92,16 @@ namespace caliper_builder {
 class Session;
 class RunControl;
 class ModelRunner;
+class ProgramHost;
+class StageHost;
 }
 
 namespace caliper_live {
 class RunLink;   // live/live_attach.h
+}
+
+namespace caliper_net {
+class Json;   // net/json.h
 }
 
 namespace caliper_api {
@@ -137,12 +143,36 @@ public:
     caliper_builder::Error run_action(const std::string& name) override;
     caliper_builder::Error pause(caliper_builder::RunPauseOp op, std::int64_t count) override;
 
-    // Pushes the run events of the changes since the last call into `sink`.
+    // The interventions (design/gpu-programs.md, Intervention Wire): the
+    // points and the interventions come from the CONTROLS key
+    // "interventions", which a script sends only when it announced the
+    // capability "interventions"; a change goes out as CONTROL op
+    // "intervene" through the link, and fails as the requests above do.
+    bool interventions_supported() override;
+    std::vector<caliper_builder::InterventionPoint> intervention_points() override;
+    std::vector<caliper_builder::Intervention> interventions() override;
+    caliper_builder::Error intervene_set(const caliper_builder::Intervention& intervention) override;
+    caliper_builder::Error intervene_clear(const std::string& point) override;
+
+    // Pushes the run events of the changes since the last call into `sink`,
+    // with `intervene` when the script applied an intervention (its point,
+    // its op and the step it applied it at) or stopped one (op null). The
+    // interventions applied when the link dropped stay known: when the same
+    // script attaches again, each one that it no longer applies, such as one
+    // it ended because no viewer that may control stayed connected, is a
+    // stop (op null) at the script's step.
     void feed(caliper_builder::EventSink& sink);
+    // The `intervene` events of the CONTROLS key "interventions" against the
+    // last one seen; `baseline` records the new ones without events, and
+    // still reports a stop of one known before it. Called by feed().
+    void feed_interventions(const nlohmann::json& interventions, const nlohmann::json& step, bool baseline,
+                            caliper_builder::EventSink& sink);
 
 private:
     caliper_builder::Error send(const std::string& op, const std::string& name, const nlohmann::json& value,
                                 std::int64_t count);
+    caliper_builder::Error send_net(const std::string& op, const std::string& name, const caliper_net::Json& value,
+                                    std::int64_t count);
 
     caliper_live::RunLink* link_ = nullptr;
     // What feed() saw last.
@@ -153,7 +183,16 @@ private:
     std::string run_state_ = "none";
     std::map<std::string, std::pair<nlohmann::json, nlohmann::json>> params_;   // name: value, pending
     std::map<std::string, std::uint64_t> results_;                              // action: at_ns of its last result
+    std::map<std::pair<std::string, std::string>, nlohmann::json> applied_;    // (point, op): the step applied at
+    std::string dropped_script_;                                                // the script of the dropped link
+    std::map<std::pair<std::string, std::string>, nlohmann::json> dropped_;    // its applied_ then
 };
+
+// The points and the interventions of a CONTROLS key "interventions"
+// ({points, active}) in the run control's form, the pending interventions
+// first; empty for anything else.
+std::vector<caliper_builder::InterventionPoint> intervention_points_of(const nlohmann::json& interventions);
+std::vector<caliper_builder::Intervention> interventions_of(const nlohmann::json& interventions);
 #endif
 
 // What the app's navigation answers a launch by manifest id, for POST
@@ -263,6 +302,14 @@ public:
     // gives it before the first frame and takes it back before the runner
     // goes. Frame thread.
     void set_model_runner(caliper_builder::ModelRunner* runner);
+    // The hosts of the open spec's GPU programs (in the attached script) and
+    // stages (in the viewer), which the session holds from its adoption until
+    // close() for program.status and its reconciles
+    // (caliper_builder/session/program_host.h, design/gpu-programs.md); null
+    // takes one back. The app gives them before the first frame and takes
+    // them back before they go. Frame thread.
+    void set_program_host(caliper_builder::ProgramHost* host);
+    void set_stage_host(caliper_builder::StageHost* host);
 
     // Counters the spec page (spec_page.h) reads on the frame thread to know
     // when to look at the session again, without asking it every frame. Any

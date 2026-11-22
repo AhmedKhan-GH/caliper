@@ -97,6 +97,10 @@ namespace wire = caliper_net::wire;
 
 namespace {
 
+// 3.2 draft: whether a caliper.watch(model, optimizer) is on (caliper._net_programs), so that a
+// server with controls also announces "programs" and "interventions".
+std::atomic<bool> g_watch_caps{false};
+
 uint64_t now_ns() {
     return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
                std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -213,6 +217,8 @@ struct Link {
     bool cap_controls = false;                // 3.1: the peer announced "controls"
     bool cap_selection = false;               // 3.1: the peer announced "selection"
     bool cap_scenes = false;                  // 3.2 draft: the peer announced "scenes"
+    bool cap_programs = false;                // 3.2 draft: both sides announced "programs"
+    bool cap_interventions = false;           // 3.2 draft: both sides announced "interventions"
     bool may_control = false;                 // 3.1: a CONTROL from it is accepted
     std::deque<SharedBytes> after_views;      // 3.1: frames that follow the next VIEWS
     size_t control_bytes = 0;                 // the bytes in control and after_views, scene frames aside
@@ -877,6 +883,9 @@ private:
     // the JSON of its "opened" message for Python.
     std::vector<std::string> capabilities() const {
         if (!controls_) return {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENES};
+        if (g_watch_caps.load())
+            return {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_INTERVENTIONS,
+                    CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SELECTION};
         return {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENES,
                 CALIPER_NET_CAP_SELECTION};
     }
@@ -888,6 +897,8 @@ private:
         o.set("controls", l.cap_controls);
         o.set("selection", l.cap_selection);
         o.set("scenes", l.cap_scenes);
+        o.set("programs", l.cap_programs);
+        o.set("interventions", l.cap_interventions);
         o.set("control", l.may_control);
         o.set("upstream", l.upstream);
         const std::string t = o.dump();
@@ -1049,6 +1060,9 @@ private:
             l.cap_controls = controls_ && announces(h->capabilities, CALIPER_NET_CAP_CONTROLS);
             l.cap_selection = controls_ && announces(h->capabilities, CALIPER_NET_CAP_SELECTION);
             l.cap_scenes = announces(h->capabilities, CALIPER_NET_CAP_SCENES);
+            l.cap_programs = controls_ && g_watch_caps.load() && announces(h->capabilities, CALIPER_NET_CAP_PROGRAMS);
+            l.cap_interventions =
+                controls_ && g_watch_caps.load() && announces(h->capabilities, CALIPER_NET_CAP_INTERVENTIONS);
             l.may_control = l.cap_controls && allow_control_;
             wire::Welcome w;
             w.role = CALIPER_NET_ROLE_PRODUCER;
@@ -1112,6 +1126,17 @@ private:
                 err.request_id = c->request_id;
                 queue(l, err);
             }
+        } else if (auto* pg = std::get_if<wire::Program>(&m)) {   // 3.2 draft
+            if (l.cap_programs) {
+                to_python(l, m, e.data);
+            } else {
+                wire::Error err;
+                err.code = CALIPER_NET_ERR_UNSUPPORTED;
+                err.message = "a PROGRAM needs the capability programs in HELLO and caliper.watch(model, optimizer)";
+                err.in_reply_to = CALIPER_NET_MSG_PROGRAM;
+                err.request_id = pg->request_id;
+                queue(l, err);
+            }
         } else {
             fatal(l, CALIPER_NET_ERR_BAD_REQUEST,
                   std::string("a producer does not accept ") + wire::type_name(r.type),
@@ -1156,6 +1181,13 @@ private:
                 err.set("message", "too many requests waiting");
                 rep.error = err;
                 queue(l, rep);
+            } else if (auto* pg = std::get_if<wire::Program>(&m)) {
+                wire::Error err;
+                err.code = CALIPER_NET_ERR_LIMIT;
+                err.message = "too many requests waiting";
+                err.in_reply_to = CALIPER_NET_MSG_PROGRAM;
+                err.request_id = pg->request_id;
+                queue(l, err);
             }
             return;
         }
@@ -1356,6 +1388,10 @@ private:
                         l.cap_controls = controls_ && announces(w->capabilities, CALIPER_NET_CAP_CONTROLS);
                         l.cap_selection = controls_ && announces(w->capabilities, CALIPER_NET_CAP_SELECTION);
                         l.cap_scenes = announces(w->capabilities, CALIPER_NET_CAP_SCENES);
+                        l.cap_programs = controls_ && g_watch_caps.load() &&
+                                         announces(w->capabilities, CALIPER_NET_CAP_PROGRAMS);
+                        l.cap_interventions = controls_ && g_watch_caps.load() &&
+                                              announces(w->capabilities, CALIPER_NET_CAP_INTERVENTIONS);
                         l.may_control = l.cap_controls && w->control.value_or(false);
                         std::vector<uint8_t> info = link_info(l);
                         links_[cid] = std::move(l);
@@ -1477,6 +1513,9 @@ NB_MODULE(_netio, m) {
     m.attr("MAX_CONTROL_FRAMES") = kMaxControlFrames;
     m.attr("MAX_CONTROL_BYTES") = kMaxControlBytes;
     m.attr("MAX_SCENE_BYTES") = kMaxSceneBytes;
+    m.def("set_watch_capabilities", [](bool on) { g_watch_caps.store(on); }, nb::arg("on"),
+          "Whether a caliper.watch(model, optimizer) is on, so that a server with controls announces "
+          "programs and interventions to the peers that connect from now on.");
     using R = nb::call_guard<nb::gil_scoped_release>;
     nb::class_<NetIO>(m, "Server")
         .def(nb::init<int, std::string, std::string, std::string,

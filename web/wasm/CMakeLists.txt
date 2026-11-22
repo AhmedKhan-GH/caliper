@@ -60,10 +60,16 @@ target_include_directories(caliper_view_layer PUBLIC
 # The scene view and the points view of the live views (src/host/live/live_scene.h, live_points.h)
 # and what they draw through: the scene core over the graphics layer's WebGPU backend, which the
 # renderer owns.
+#
+# stages.cpp holds the scene view's stage cache (scene/stage_cache.h) and the stage entry points as
+# text. It needs no WGSL translator: the app's stage host (src/host/spec_runtime) translates the
+# stages, and the browser module does not have that host. Thus no browser view gets a stage source,
+# the cache stays empty, and an entity with a stage draws with its built-in program in the browser.
 target_sources(caliper_view_layer PRIVATE
     ${CALIPER_ROOT}/src/host/live/live_views_scene.cpp
     ${CALIPER_ROOT}/src/host/live/live_scene.cpp
     ${CALIPER_ROOT}/src/host/live/live_points.cpp
+    ${CALIPER_ROOT}/src/host/scene/stages.cpp
     ${CALIPER_ROOT}/src/host/scene/path.cpp
     ${CALIPER_ROOT}/src/host/scene/scene_tree.cpp
     ${CALIPER_ROOT}/src/host/scene/camera.cpp

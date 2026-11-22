@@ -948,6 +948,11 @@ BindGroup Backend::create_bind_group(const BindGroupDesc& d) {
                     c.fail(fmt("create_bind_group: binding %u's buffer is released or unknown", b.binding));
                     return {};
                 }
+                if (b.type == BindingType::StorageReadWrite && bs->info.read_only) {
+                    c.fail(fmt("create_bind_group: binding %u is read_write, and its buffer is a read-only import",
+                               b.binding));
+                    return {};
+                }
                 if (!(bs->info.usage & (uniform ? kUniform : kStorage))) {
                     c.fail(fmt("create_bind_group: binding %u's buffer lacks %s", b.binding,
                                uniform ? "kUniform" : "kStorage"));
@@ -1170,6 +1175,7 @@ ImportResult Backend::import_buffer(const ExternalBuffer& ext) {
     s->info.size = ext.size;
     s->info.usage = ext.usage;
     s->info.imported = true;
+    s->info.read_only = ext.read_only;
     ImportResult r;
     const uint32_t slot = handle_slot(id);
     if (!on_import_buffer(slot, ext, &r) || r.route == Route::Refused) {

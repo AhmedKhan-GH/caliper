@@ -115,7 +115,11 @@
  *   parameter or an action the script registered. It never carries host
  *   commands or the command layer. No message carries code, and the only code
  *   a message makes a producer run is an action the script registered, by its
- *   exact name and with no argument from the viewer.
+ *   exact name and with no argument from the viewer. One exception: PROGRAM
+ *   (3.2 draft, capability "programs") carries the WGSL source of a GPU
+ *   program. A producer that announced "programs" runs it only on the GPU,
+ *   after the sandbox checks, with read-only bindings of its tensors, and
+ *   never on the CPU.
  * ===========================================================================*/
 #ifndef CALIPER_LIVE_NET_H
 #define CALIPER_LIVE_NET_H
@@ -378,7 +382,7 @@ static inline uint32_t caliper_net_align(uint32_t n) {
  *
  * Provisional proposals: the minor version 2, the
  * capabilities, the kinds scene (6), text (7) and bars (8), the messages
- * 0x0070 to 0x0074 and 0x0078 to 0x007B, the dtype u16 (6), the error codes
+ * 0x0070 to 0x0074, 0x0078 to 0x007B, 0x0080 and 0x0081, the dtype u16 (6), the error codes
  * and the limits below. Each is one line here, so
  * a renumbering changes one line (the dtype also has one line in
  * caliper_net_dtype_size above). docs/reference/wire-protocol-3-2.md states
@@ -504,6 +508,42 @@ static inline uint32_t caliper_net_align(uint32_t n) {
 #define CALIPER_NET_MIN_SPEED            0.0625       /* playback speed, 1/16                */
 #define CALIPER_NET_MAX_SPEED            64u
 #define CALIPER_NET_RECORDING_LINGER_MS  600000u      /* an opened recording without viewers stays listed */
+
+/* --- GPU programs and interventions (design/gpu-programs.md) ---------------
+ * "programs": a viewer sends PROGRAM (set or remove one program) only to a
+ * producer that announced it, and the producer answers each PROGRAM and
+ * reports state changes with PROGRAM_STATE. "interventions": the producer's
+ * CONTROLS holds the key "interventions" ({points, active}), and a viewer
+ * sends CONTROL with op "intervene" and the key "intervene" ({set: {point,
+ * op, from_step, until_step}}, {clear: point} or {clear_all: true}). A
+ * producer announces both only under caliper.watch(model, optimizer), beside
+ * "controls". A hub forwards PROGRAM, as CONTROL, only when it allows control.
+ * docs/reference/wire-protocol-3-2.md states the keys and checks. */
+#define CALIPER_NET_CAP_PROGRAMS         "programs"      /* PROGRAM and PROGRAM_STATE        */
+#define CALIPER_NET_CAP_INTERVENTIONS    "interventions" /* CONTROLS "interventions", CONTROL op "intervene" */
+#define CALIPER_NET_MSG_PROGRAM          0x0080u      /* V -> P/H, H -> P   set or remove one program; section "wgsl" */
+#define CALIPER_NET_MSG_PROGRAM_STATE    0x0081u      /* P -> V/H, H -> V   the status items of the programs */
+#define CALIPER_NET_PROGRAM_SET          "set"        /* PROGRAM "op": install or replace   */
+#define CALIPER_NET_PROGRAM_REMOVE       "remove"     /* PROGRAM "op"                       */
+#define CALIPER_NET_SECTION_WGSL         "wgsl"       /* u8 (B,): the WGSL source as UTF-8  */
+#define CALIPER_NET_OP_INTERVENE         "intervene"  /* CONTROL "op", key "intervene"      */
+#define CALIPER_NET_INTERVENE_ABLATE     "ablate"     /* the only op; scale, steer, patch reserved */
+#define CALIPER_NET_MAX_PROGRAMS         16u          /* programs of a producer; items of PROGRAM_STATE */
+#define CALIPER_NET_PROGRAM_ID_MAX       55u          /* bytes of [a-z0-9_-]: "program.<id>" fits NAME_MAX */
+#define CALIPER_NET_PROGRAM_SOURCE_MAX   65536u       /* bytes of the section "wgsl"        */
+#define CALIPER_NET_PROGRAM_STATE_RATE_HZ 2u          /* unrequested PROGRAM_STATE a second, at most */
+#define CALIPER_NET_POINT_MAX            255u         /* bytes of an intervention point     */
+#define CALIPER_NET_MAX_POINTS_LISTED    4096u        /* CONTROLS "interventions" "points"  */
+#define CALIPER_NET_MAX_INTERVENTIONS    64u          /* CONTROLS "interventions" "active"  */
+/* the PROGRAM set declaration's bounds: each count that sizes a buffer */
+#define CALIPER_NET_PROGRAM_MAX_INPUTS   8u           /* "inputs"                           */
+#define CALIPER_NET_PROGRAM_MAX_COUNT    1000000u     /* geometry "max_count"               */
+#define CALIPER_NET_PROGRAM_SIDE_MAX     2048u        /* pixels "width" and "height"        */
+#define CALIPER_NET_PROGRAM_TIME_MS_MAX  50u          /* "limits" "time_ms"                 */
+#define CALIPER_NET_PROGRAM_MEMORY_MB_MAX 512u        /* "limits" "memory_mb"               */
+#define CALIPER_NET_PROGRAM_EVERY_MAX    10000u       /* "limits" "every", and the cadence N */
+#define CALIPER_NET_PROGRAM_WORKGROUPS_MAX 65535u     /* each of the three "workgroups"     */
+#define CALIPER_NET_TENSOR_NAME_MAX      255u         /* bytes of an input's "source"       */
 
 #ifdef __cplusplus
 }  /* extern "C" */

@@ -36,7 +36,11 @@ class TorchAdapter:
 
     def framework_done(self) -> None:
         """torch's work on every bound tensor is complete:
-        torch.mps.Event().record(), then .synchronize() (CPU wait)."""
+        torch.mps.Event().record(), then .synchronize() (CPU wait). Off MPS only."""
+
+    def step_marks(self) -> "StepMarks | None":
+        """A ring of torch.mps.Event marks: record(step) gives the queued work to the GPU
+        without a wait, poll() returns the marks that completed, wait(step) is sync point 1."""
 
     def before_write(self, callback) -> None:
         """Calls callback before the framework writes a bound tensor again:
@@ -68,11 +72,11 @@ The runtime adds no thread. The graphics layer is used from one thread (decision
 
 Each step that runs programs has three sync points, in this order:
 
-1. **Framework work complete.** The adapter records a `torch.mps.Event` after `optimizer.step()` and waits for it on the CPU. Torch's writes to the bound tensors are then complete.
+1. **Framework work complete.** The facade waits until the step's mark completed. The mark is a `torch.mps.Event` that the facade records at the checkpoint, before `optimizer.step()`, and the facade looks at it and at the earlier marks with `query()` until it completed. Torch's writes to the bound tensors are then complete.
 2. **Caliper's pass.** The runtime submits one frame with the dispatches of the due programs on its own queue.
 3. **Caliper's work complete.** The runtime waits for the serial of that frame at once, before `caliper.step()` returns. Torch then writes no bound tensor while the pass reads it.
 
-A step without a due program has no sync point at all. The spike also measured a deferred wait, in the optimizer step pre-hook of the next step, which lets the pass run while torch runs the next forward and backward passes. It helped the medium model and hurt the small model, thus it is an open decision. The import holds the capsule, and the capsule keeps the storage alive. Thus torch cannot give a bound storage to another tensor while the runtime reads it.
+A step without a due program has no sync point at all. It only records a mark, which gives torch's queued work to the GPU without a wait. The spike also measured a deferred wait, in the optimizer step pre-hook of the next step, which lets the pass run while torch runs the next forward and backward passes. It helped the medium model and hurt the small model, thus it is an open decision. The import holds the capsule, and the capsule keeps the storage alive. Thus torch cannot give a bound storage to another tensor while the runtime reads it.
 
 ### Read-Only Rule
 
@@ -88,7 +92,23 @@ Naga's MSL also declares the binding `const device`, and the Metal compiler refu
 
 Check 5 of the specification allows 5 % of training throughput for the whole instrument. The runtime gets at most 4 % of it, and the rest stays for the hooks and the publish path. The runtime measures the time of each step between two `caliper.step()` calls and the cost of its own sync points and passes. It then runs the programs every N steps, with the smallest N that keeps its cost under 4 % of the step time. A program over its time limit of the sandbox is skipped for the next steps, and the view says why.
 
+The built facade sets N by feedback from the measured overhead of a pass, as Cadence in `design/gpu-programs.md` states, because the time between two `caliper.step()` calls is often only the time to queue a step. Cadence Measurement below gives the reasons.
+
 The measured costs set N. On this machine, a step with all three sync points and the pass added 0.42 ms on the small model and 0.90 ms on the medium model at each step. It added 0.8 ms to 1.6 ms when it ran every 10 or 20 steps, probably because torch's queue then held more work at the wait. The first sync point alone added 0.23 ms, which is 23.6 % of the throughput of the small model with its step of 0.75 ms. Thus a program over the weights of the small model runs about every 27 steps, and the medium model, with its step of 12.2 ms, allows a program every 2 to 4 steps. With a pass every 20 steps, the small model kept 94.6 % and the medium model 99.6 % of its throughput. The measured loops never waited for the GPU. A loop that already waits at each step, for example with `loss.item()`, pays less for the first sync point.
+
+### Cadence Measurement
+
+Torch's MPS queue gives its work to the GPU only at a sync point, such as `torch.mps.synchronize()`, `loss.item()` or the record of a `torch.mps.Event`. Thus a loop without a sync point queues its steps on the CPU, and the GPU idles until the end. The spike's small model queued 3,000 steps in 0.91 s, at 0.30 ms a step, and the GPU then ran them in 1.26 s more, at 0.42 ms a step. The loop gave 1,380 steps per second. With an event record at each step, which gives the queued work to the GPU without a wait, the same loop gave 2,387 steps per second.
+
+Under `caliper.watch(model, optimizer)`, the small model gave 2,363 to 2,372 steps per second, because the hooks of the watch give the queue to the GPU at times. A CPU wait every 40 steps then gave only 1,429 steps per second. The GPU idled while the training thread queued the 40 steps, and the thread idled while the GPU ran them. With a record at each step, the same wait gave 2,296 steps per second, which is 97.0 %. Thus the loss of a pass came from the queue that torch held back, not from the wait itself. The facade therefore records a mark at each step while a program is installed.
+
+The training thread can run ahead of the GPU without a bound. Without a record, it was 1.26 s ahead of the GPU at the end of the small model's loop. Thus the time between two `caliper.step()` calls is often only the time to queue a step. With a record at each step, Metal's limit of command buffers in flight held the lead to 26 ms on the small model and to 0.70 s on the medium model. The facade therefore times the steps by the completion of their marks, as Cadence in `design/gpu-programs.md` states.
+
+A mark's completion shows only through `query()`, at the next look. The `elapsed_time()` of timing events would give exact intervals, but it waits for the device. It took 109 ms with 20 steps of the medium model in the queue. Thus the facade reads plain events with `query()` at each step, and it waits only at a pass. That wait looks at the marks until the step's mark completed, thus each mark that completes during the wait gets an exact time.
+
+In a loop that reads `loss.item()` at each step, torch's queue is empty at each checkpoint. A record there adds a command buffer of its own, which the GPU runs before the next step's work. On the small model with steps of 0.94 ms, this cost 4.2 %: 1,020 instead of 1,065 steps per second, in the median of three runs. A record every 8 steps cost 1.2 %. Thus the facade marks sparsely in such a loop.
+
+A sync on the GPU would also remove the wait at a pass. The pass would wait on the GPU for an event that torch's queue signals after the step's work, and torch's next work would wait for an event that the pass signals. The stream-ordered handoff of the tensor bridge does the first half with a command buffer on torch's queue. Torch's C++ API gives that queue through `torch::mps::get_command_buffer()` and `get_dispatch_queue()`. The second half also needs the queue, because torch's buffers have untracked hazards, and Metal orders nothing between two queues. Python has no access to the queue, and a module that uses torch's C++ API must be built for each torch version, which Own Command Queue in Decisions excludes. `torch.mps.compile_shader()` runs Metal source on torch's own queue, and torch then orders the pass in both directions. But the pass then runs outside the graphics layer, its read-only rule and its GPU time of each submit. With the marks, a pass costs about 1 ms on the small model, which a pass every 60 to 70 steps keeps under 4 %. Thus both routes stay in Open Decisions.
 
 ### Output Path
 
@@ -159,6 +179,21 @@ The functional checks passed on torch 2.14.1 and 2.15.0:
 - The norms matched torch's `w.norm(dim=1)` within 5.4e-7. After an optimizer step changed the weight in place, the same import gave the new norms within 4.8e-7, with no new import.
 - A view with a storage offset of 784 elements came as the storage's buffer with a byte offset of 3,136 bytes. The program read it through an element offset in its uniform block and matched within 2.3e-5. The DLPack `data` field is the storage's `id<MTLBuffer>`, while `tensor.data_ptr()` of the view is that pointer plus the offset, which is no object.
 
+### Runtime Results
+
+The built runtime ran the spike's two models under `caliper.watch(model, optimizer)` with its defaults, as a managed run's script does, without an explicit `caliper.step()`. One geometry program was installed through `caliper._programs.install`, and its outputs went through the real publish path of `caliper.scene`. The program computes the norm of each row of the bound weight and writes one point for each row. Each number is the median of five runs, one process per run of 6 s to 9 s, with the two modes in alternating order. The runs held all three heavy slots in a quiet window. The peak memory footprint was 0.49 GB for the small model.
+
+| Model | Loop | Base Steps per Second | With the Program | Share of Base | Cadence N | `D` | `b` | Measured Share | Passes per Second | 1-Minute Load |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Small | Plain | 2,400.0 | 2,302.1 | 95.9 % | 64 to 102 | 1.20 ms | 0.417 ms | 3.70 % | 32.7 | 1.30 to 2.49 |
+| Medium | Plain | 87.63 | 84.80 | 96.8 % | 3 to 5 | 1.25 ms | 11.39 ms | 3.54 % | 26.9 | 1.21 to 2.65 |
+| Small | `loss.item()` | 996.6 | 971.0 | 97.4 % | 5 to 10 | 0.29 ms | 0.937 ms | 3.68 % | 112.3 | 1.28 to 2.53 |
+| Medium | `loss.item()` | 82.80 | 81.71 | 98.7 % | 3 | 0.64 ms | 12.04 ms | 1.78 % | 27.2 | 1.33 to 2.37 |
+
+The cadence before the step marks kept 57.2 % on the small model and 94.9 % on the medium model in the same setup. On the small model, the loss is larger than the measured share, because the marks themselves cost about 1 % to 3 %: a program that ran no pass after its warm-up gave 2,326 steps per second against 2,392 to 2,396 without it. The base runs of the small model with `loss.item()` spread from 893 to 1,066 steps per second, thus that row has a larger error than the others. Under a 1-minute load of 4 to 7, with other builds on the machine, the small model kept 93.6 % to 94.4 % in the same measurement.
+
+The counters of the runtime showed the in-place route in each run: one import in place, no import refused, 0 bytes copied, and each output given as a DLPack capsule over the runtime's own buffer with 0 bytes copied. The publish path then makes the copy of its route, which the table of Output Path states.
+
 ### Documented and Undocumented Behavior
 
 DLPack documents the device type `kDLMetal` and says that `data` can be opaque on some device types, with `byte_offset` to the first element. Torch documents `__dlpack__` and `torch.mps.Event`. Torch does not document that `data` is the storage's `id<MTLBuffer>` on MPS, that its MPS buffers use shared storage and untracked hazards, or the first version that exports MPS tensors. The runtime depends on the first point, and it checks it at run time: it refuses a `data` value that is not an `MTLBuffer` of the device.
@@ -194,11 +229,12 @@ These items come to 9 days. The shared-memory route waits for scenes through sha
 
 - **Own command queue.** The runtime does not use torch's queue, and so it stays free of the torch ABI. The cost is the CPU wait of the first sync point.
 - **Wait at once.** The runtime waits for Caliper's work at once after its pass. The deferred wait was not stable across the two models, and the wait at once costs less than a millisecond.
-- **Sync points only on pass steps.** A step without a due program waits for nothing, thus the rate N lowers the cost of the sync points as well as the cost of the pass.
+- **Sync points only on pass steps.** A step without a due program waits for nothing, thus the rate N lowers the cost of the sync points as well as the cost of the pass. It records a mark, which gives torch's queued work to the GPU without a wait.
+- **Marks at each step.** While a program is installed, the facade records a mark at each step, because torch's MPS queue otherwise holds its work until the pass, and the wait then costs that work's whole GPU time.
 - **Device from the tensor.** The runtime takes the device from the first bound tensor's buffer and refuses a tensor on another device.
 - **Read-only in three places.** Naga, the binder and the layer each refuse a write to a training tensor, and the layer field keeps the rule when a later caller skips the binder.
 
 ## Open Decisions
 
 - **Deferred wait.** A wait in the next optimizer step pre-hook gave 95.8 % instead of 93.0 % on the medium model, but 41.1 % instead of 64.1 % on the small model, with runs from 397 to 643 steps per second. The cause is not known. Recommendation: keep the wait at once in the first version, and measure the deferred wait again with the GPU time per pass before it becomes an option.
-- **GPU-side sync with torch's queue.** A module built against the torch C++ API could make torch's queue signal and wait on a shared event and remove the CPU waits. Recommendation: not in the first version. Revisit if the budget lowers the rate of the demo models below one pass per 10 steps.
+- **GPU-side sync with torch's queue.** A module built against the torch C++ API could make torch's queue signal and wait on a shared event and remove the CPU wait at a pass. `torch.mps.compile_shader()` could instead run the pass on torch's own queue, outside the graphics layer. Recommendation: not in the first version, because the step marks cut the cost of a pass on the small model from about 13 ms to about 1 ms. Revisit if the budget lowers the rate of the demo models below one pass per second.

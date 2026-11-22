@@ -39,6 +39,8 @@ export const MSG = {
   recording_open: 0x0079, // 3.2 draft
   cursor: 0x007a, // 3.2 draft
   time_state: 0x007b, // 3.2 draft
+  program: 0x0080, // 3.2 draft
+  program_state: 0x0081, // 3.2 draft
 } as const;
 export type MessageType = keyof typeof MSG;
 
@@ -286,8 +288,9 @@ export type RunState = 'none' | 'running' | 'pausing' | 'paused' | 'stepping';
 export const RUN_STATES: readonly RunState[] = ['none', 'running', 'pausing', 'paused', 'stepping'];
 export type ParamType = 'number' | 'integer' | 'boolean' | 'choice';
 export type ParamValue = number | boolean | string;
-export type ControlOp = 'pause' | 'resume' | 'step' | 'set' | 'run';
-export const CONTROL_OPS: readonly ControlOp[] = ['pause', 'resume', 'step', 'set', 'run'];
+/** The control ops; 'intervene' is the 3.2 draft's, under the capability "interventions". */
+export type ControlOp = 'pause' | 'resume' | 'step' | 'set' | 'run' | 'intervene';
+export const CONTROL_OPS: readonly ControlOp[] = ['pause', 'resume', 'step', 'set', 'run', 'intervene'];
 
 export interface RunInfo { state: RunState; step?: number; steps_left?: number }
 export interface ParamInfo {
@@ -304,7 +307,7 @@ export interface ParamInfo {
 export interface ActionInfo { name: string; running: boolean; queued: boolean; help?: string }
 
 /** Producer to viewer: the run state, the parameters and the actions, whole. */
-export interface ControlsMsg { type: 'controls'; run: RunInfo; params: ParamInfo[]; actions: ActionInfo[]; /** 3.2 draft */ stamp?: BigInt64Array }
+export interface ControlsMsg { type: 'controls'; run: RunInfo; params: ParamInfo[]; actions: ActionInfo[]; /** 3.2 draft */ stamp?: BigInt64Array; /** 3.2 draft, capability "interventions": the intervention points and the interventions in force. */ interventions?: InterventionsInfo }
 /** Viewer to producer: pause, resume, step, set a parameter, run an action. */
 export interface ControlMsg {
   type: 'control';
@@ -313,6 +316,8 @@ export interface ControlMsg {
   name?: string;
   value?: ParamValue;
   count?: number;
+  /** 3.2 draft, op 'intervene': exactly one of set, clear and clear_all. */
+  intervene?: InterveneRequest;
 }
 export interface ControlReplyMsg {
   type: 'control_reply';
@@ -347,7 +352,7 @@ export type Message =
   | ViewsMsg | SubscribeMsg | UnsubscribeMsg | ViewRequestMsg | ViewReplyMsg | SnapshotMsg
   | SeriesMsg | EventMsg | ControlsMsg | ControlMsg | ControlReplyMsg | SelectionMsg
   | SceneUpdateMsg | SceneTransformsMsg | SceneClearMsg | SceneClassesMsg
-  | TextMsg | RecordingsMsg | RecordingOpenMsg | CursorMsg | TimeStateMsg;
+  | TextMsg | RecordingsMsg | RecordingOpenMsg | CursorMsg | TimeStateMsg | ProgramMsg | ProgramStateMsg;
 
 /** Effective colour range of a snapshot: AUTO flags read stats[0] and stats[1]. */
 export function snapshotRange(s: SnapshotMsg): [number, number] {
@@ -679,3 +684,95 @@ export const TIME_STATE_RATE_HZ = 30;
 export const MIN_SPEED = 0.0625;
 export const MAX_SPEED = 64;
 export const RECORDING_LINGER_MS = 600000;
+
+// --- 3.2 draft: GPU programs and interventions (include/caliper/live_net.h, capabilities "programs" and "interventions") ---
+
+/** Capability: a viewer sends PROGRAM only to a producer that announced it, and the producer answers with PROGRAM_STATE. */
+export const CAP_PROGRAMS = 'programs';
+/** Capability: CONTROLS carries "interventions" and CONTROL accepts the op "intervene". */
+export const CAP_INTERVENTIONS = 'interventions';
+/** PROGRAM "op": install or replace one program. */
+export const PROGRAM_SET = 'set';
+/** PROGRAM "op": remove one program. */
+export const PROGRAM_REMOVE = 'remove';
+/** The name of the PROGRAM section that holds the WGSL source as UTF-8. */
+export const SECTION_WGSL = 'wgsl';
+/** The only intervention op; scale, steer and patch are reserved. */
+export const INTERVENE_ABLATE = 'ablate';
+/** Programs of a producer, and the most items of a PROGRAM_STATE. */
+export const MAX_PROGRAMS = 16;
+/** Bytes of a program id; "program.<id>" fits a view name. */
+export const PROGRAM_ID_MAX = 55;
+/** Bytes of the section "wgsl". */
+export const PROGRAM_SOURCE_MAX = 65536;
+/** Unrequested PROGRAM_STATE messages a second, at most. */
+export const PROGRAM_STATE_RATE_HZ = 2;
+/** Bytes of an intervention point. */
+export const POINT_MAX = 255;
+/** Most entries of CONTROLS "interventions" "points". */
+export const MAX_POINTS_LISTED = 4096;
+/** Most entries of CONTROLS "interventions" "active". */
+export const MAX_INTERVENTIONS = 64;
+/** Most entries of a declaration's "inputs". */
+export const PROGRAM_MAX_INPUTS = 8;
+/** Most elements of a geometry output ("max_count"). */
+export const PROGRAM_MAX_COUNT = 1000000;
+/** Most pixels of the width and of the height of a pixels output. */
+export const PROGRAM_SIDE_MAX = 2048;
+/** Most milliseconds of "limits" "time_ms". */
+export const PROGRAM_TIME_MS_MAX = 50;
+/** Most megabytes of "limits" "memory_mb". */
+export const PROGRAM_MEMORY_MB_MAX = 512;
+/** Most of "limits" "every", the cadence in steps. */
+export const PROGRAM_EVERY_MAX = 10000;
+/** Most of each of the three "workgroups". */
+export const PROGRAM_WORKGROUPS_MAX = 65535;
+/** Bytes of an input's "source" tensor name. */
+export const TENSOR_NAME_MAX = 255;
+/** A declaration's output kinds. */
+export const OUTPUT_GEOMETRY = 'geometry';
+export const OUTPUT_PIXELS = 'pixels';
+/** The states of a program in a PROGRAM_STATE status item. */
+export const PROGRAM_STATES: readonly string[] = ['waiting', 'review', 'compiled', 'running', 'refused', 'stopped'];
+/** The arrays a geometry output may list; "positions" is required. */
+export const PROGRAM_ARRAYS: readonly string[] = ['positions', 'colors', 'values', 'radii'];
+/** The states of an entry of CONTROLS "interventions" "active". */
+export const INTERVENTION_STATES: readonly string[] = ['pending', 'active', 'ended'];
+
+/** The declaration of a program, checked on decode as the Python codec checks it and re-emitted unchanged (`design/gpu-programs.md`). */
+export type ProgramDeclaration = Record<string, unknown>;
+/** A status item of PROGRAM_STATE: id, kind and state, and the optional keys, null or absent when unknown. Re-emitted unchanged. */
+export type ProgramStatus = Record<string, unknown>;
+/** CONTROL "intervene": exactly one of set, clear and clear_all. */
+export interface InterveneRequest {
+  set?: { point: string; op: string; from_step?: number | null; until_step?: number | null };
+  clear?: string;
+  clear_all?: true;
+}
+/** CONTROLS "interventions": the points an intervention may use and the interventions in force. Re-emitted unchanged. */
+export interface InterventionsInfo { points: Record<string, unknown>[]; active: Record<string, unknown>[] }
+
+/** Viewer to producer: install or replace (op set) or remove (op remove) one GPU program. A set carries the declaration without its source, the scene of a geometry output, the SHA-256 of the source and the section "wgsl". */
+export interface ProgramMsg {
+  type: 'program';
+  request_id: number;
+  op: 'set' | 'remove';
+  id: string;
+  /** set */
+  declaration?: ProgramDeclaration;
+  /** set: the source, the section "wgsl" as UTF-8. */
+  wgsl?: string;
+  /** set: SHA-256 of the source in 64 lowercase hex digits. */
+  sha256?: string;
+  /** set: the scene of a geometry output's panel. */
+  scene?: string;
+}
+
+/** Producer to viewer: the status items of the programs in order of installation. It answers each PROGRAM with its request_id and goes out without one after a state change. */
+export interface ProgramStateMsg {
+  type: 'program_state';
+  programs: ProgramStatus[];
+  request_id?: number;
+  step?: number;
+  step_ms?: number;
+}

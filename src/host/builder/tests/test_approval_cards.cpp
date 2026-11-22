@@ -687,6 +687,19 @@ TEST_CASE("approval cards: a run command's card states the change and the script
     CHECK(approval_session_label("panel.patch") == "Allow always for this session");
 }
 
+TEST_CASE("approval cards: an intervention's card states the point and the script, and its rule names the point") {
+    CommandInvocation set;
+    set.name = "intervene.set";
+    set.args = {{"point", "head"}, {"op", "ablate"}};
+    set.origin = CommandOrigin::mcp;
+    CHECK(approval_run_text(set, "train.py") == "Ablate head in train.py from the next step.");
+    CommandInvocation clear;
+    clear.name = "intervene.clear";
+    clear.args = {{"all", true}};
+    CHECK(approval_run_text(clear, "") == "Clear every intervention in the attached script at the next step.");
+    CHECK(approval_session_label("intervene.set:head") == "Allow interventions on head for this session");
+}
+
 TEST_CASE("approval cards: a start, a fork and a stop of a managed run state the script, its arguments and parameters") {
     CommandInvocation start;
     start.name = "run.start";

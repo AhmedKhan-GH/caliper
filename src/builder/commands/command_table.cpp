@@ -226,8 +226,8 @@ const std::pair<const char*, const char*> kFragments[] = {
                               "children": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$use": "id"}, "description": "Panel ids, control ids (spec version 1) and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once."}}}}}})json"},
 
     // Spec version 1 controls (design/instruments.md, Control Table).
-    {"control_bind", R"json({"type": "string", "minLength": 5, "maxLength": 320, "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value)$",
-      "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, or value for a value the spec holds. A slider binds param: or value; a button binds action: or run:pause. run.state lists the names."})json"},
+    {"control_bind", R"json({"type": "string", "minLength": 5, "maxLength": 320, "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|intervene:.{1,255})$",
+      "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, or intervene:<point> for an intervention point that intervene.points lists. A slider binds param: or value; a button binds action: or run:pause; a toggle binds intervene:<point> or param:<name>. run.state lists the names of parameters and actions."})json"},
 
     {"control_options", R"json({
       "type": "object", "additionalProperties": false, "required": [],
@@ -297,7 +297,7 @@ const std::pair<const char*, const char*> kFragments[] = {
       "properties": {
         "seq": {"type": "integer", "minimum": 1, "description": "The event's number; it grows by one with each event the app records."},
         "time": {"type": "string", "description": "When the app recorded it, in UTC ISO 8601 with milliseconds."},
-        "kind": {"type": "string", "enum": ["pick", "select", "control", "run", "spec", "approval"], "description": "What happened."},
+        "kind": {"type": "string", "enum": ["pick", "select", "control", "run", "spec", "approval", "program"], "description": "What happened."},
         "panel": {"type": ["string", "null"], "description": "The spec panel or control it happened in, or null."},
         "view": {"type": ["string", "null"], "description": "pick and select: the live view, such as the scene's name; null otherwise."},
         "origin": {"type": "string", "enum": ["ui", "builder", "agent", "mcp", "api", "script"], "description": "Who caused it: ui for the person in the app, script for the running script, else the origin of the command."},
@@ -317,7 +317,7 @@ const std::pair<const char*, const char*> kFragments[] = {
         "truncated": {"type": "boolean", "description": "select: whether the selection held more than 32768 items and was cut."},
         "control": {"type": "string", "description": "control: the control's id."},
         "bind": {"type": "string", "description": "control: the control's target, such as param:lr."},
-        "change": {"type": "string", "enum": ["state", "param", "action", "attach", "runner"], "description": "run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, or the state of a managed run (runner)."},
+        "change": {"type": "string", "enum": ["state", "param", "action", "attach", "runner", "intervene", "compiled", "refused", "stopped"], "description": "run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, the state of a managed run (runner), or an intervention applied at a step (intervene); program: compiled, refused by a check, or stopped by a limit."},
         "state": {"type": "string", "description": "run with change state: the run's new state; approval: pending, approved, denied or expired."},
         "step": {"type": ["integer", "null"], "description": "run: the script's step when it changed, or null before the first step."},
         "name": {"type": "string", "description": "run with change param or action: the parameter's or the action's name."},
@@ -334,7 +334,119 @@ const std::pair<const char*, const char*> kFragments[] = {
         "run": {"type": "string", "description": "run with change runner: the managed run's id."},
         "parent": {"type": ["string", "null"], "description": "run with change runner: the run a fork started from, or null."},
         "exit_code": {"type": ["integer", "null"], "description": "run with change runner: the exit code once the process ended, else null."},
-        "error": {"type": ["string", "null"], "description": "run with change runner: why the run failed, else null."}}})json"},
+        "error": {"type": ["string", "null"], "description": "run with change runner: why the run failed, else null."},
+        "point": {"type": "string", "description": "run with change intervene: the intervention point."},
+        "op": {"type": ["string", "null"], "description": "run with change intervene: the op applied, or null when the point's interventions were cleared."},
+        "program": {"type": "string", "description": "program: the program's id, or the stage as <panel>/<entity>/<kind>."},
+        "host": {"type": "string", "enum": ["script", "viewer"], "description": "program: where it compiled, was refused or stopped."},
+        "code": {"type": "string", "description": "program with change refused or stopped: a stable code, such as program.writes_input."},
+        "message": {"type": "string", "description": "program with change refused or stopped: one plain sentence that says why."},
+        "line": {"type": "integer", "minimum": 0, "description": "program with change refused: the line in the source, or 0."},
+        "column": {"type": "integer", "minimum": 0, "description": "program with change refused: the column in the source, or 0."}}})json"},
+
+    // GPU programs and interventions (design/gpu-programs.md)
+    {"entity_path", R"json({"type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[A-Za-z0-9_.-]{1,63}(/[A-Za-z0-9_.-]{1,63}){0,15}$", "description": "An entity path of a scene, such as programs/ribbons: segments of letters, digits, _, . and - joined by /."})json"},
+
+    {"stage_kind", R"json({"type": "string", "enum": ["material", "vertex"], "description": "material gives the color of each fragment with fn material(in: MaterialIn) -> vec4<f32>; vertex gives the position and the radius of each item with fn vertex(in: VertexIn) -> VertexOut."})json"},
+
+    {"compiler_message", R"json({
+      "type": "object", "additionalProperties": false, "required": ["severity", "code", "message", "line", "column"],
+      "properties": {
+        "severity": {"type": "string", "enum": ["error", "warning"], "description": "Whether the message stops the source or only warns."},
+        "code": {"type": "string", "description": "A stable code, such as program.compile_failed or program.writes_input."},
+        "message": {"type": "string", "description": "The message of the compiler or the sandbox, in one line."},
+        "line": {"type": "integer", "minimum": 0, "description": "The line in the given source, from 1; 0 when the message has no place."},
+        "column": {"type": "integer", "minimum": 0, "description": "The column in bytes, from 1; 0 when the message has no place."}}})json"},
+
+    {"program_input", R"json({
+      "type": "object", "additionalProperties": false, "required": ["var", "source"],
+      "properties": {
+        "var": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$", "description": "The WGSL variable that the input binds, declared var<storage, read> in any group and binding."},
+        "source": {"type": "string", "minLength": 6, "maxLength": 68, "pattern": "^live:.{1,63}$", "description": "The script's tensor as live:<name>: a parameter of model.named_parameters() such as live:layers.0.weight, its gradient as live:<parameter>.grad, or a module's last output as live:<module>.act. The program reads it in place and cannot write it."}}})json"},
+
+    {"program_output", R"json({
+      "type": "object", "additionalProperties": false, "required": ["kind"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["geometry", "pixels"], "description": "geometry writes arrays that a scene panel draws as one entity; pixels writes an RGBA8 image that the live view program.<id> carries."},
+        "panel": {"$use": "id", "description": "geometry: the scene panel whose scene gets the entity."},
+        "entity": {"$use": "entity_path", "description": "geometry: the entity path; programs/<id> when absent."},
+        "part": {"type": "string", "enum": ["points", "lines"], "description": "geometry: points draws one point for each item; lines draws one segment for each two items; points when absent."},
+        "max_count": {"type": "integer", "minimum": 1, "maximum": 1000000, "description": "geometry: the most items; the program adds the valid count to count, a var<storage, read_write> atomic<u32>."},
+        "arrays": {"type": "array", "minItems": 1, "maxItems": 4, "items": {"type": "string", "enum": ["positions", "colors", "values", "radii"]}, "description": "geometry: the arrays the program writes, each a var<storage, read_write> of that name: positions array<f32> with 3 for each item (necessary), colors array<u32> (RGBA8 from pack4x8unorm), values array<f32>, radii array<f32> (points only)."},
+        "style": {"type": "object", "additionalProperties": false, "required": [], "description": "geometry: how values map to colors.",
+                  "properties": {
+                    "colormap": {"type": "string", "enum": ["viridis", "magma", "rdbu", "greys"], "description": "The colormap of values; viridis when absent."},
+                    "vmin": {"type": "number", "description": "The value at the low end; the batch's minimum when absent."},
+                    "vmax": {"type": "number", "description": "The value at the high end; the batch's maximum when absent."}}},
+        "width": {"type": "integer", "minimum": 1, "maximum": 2048, "description": "pixels: the image's width."},
+        "height": {"type": "integer", "minimum": 1, "maximum": 2048, "description": "pixels: the image's height."},
+        "format": {"type": "string", "enum": ["rgba8unorm"], "description": "pixels: the format; the program writes pixels, a var<storage, read_write> array<u32> of width times height items packed with pack4x8unorm, row by row."}}})json"},
+
+    {"program_limits", R"json({
+      "type": "object", "additionalProperties": false, "required": [],
+      "properties": {
+        "time_ms": {"type": "number", "minimum": 0.01, "maximum": 50, "description": "The most GPU time of one pass in milliseconds; 4 when absent. A program over it on 3 passes in a row stops."},
+        "memory_mb": {"type": "integer", "minimum": 1, "maximum": 512, "description": "The budget of the output buffers and the bound tensors in MiB; 64 when absent."},
+        "every": {"type": "integer", "minimum": 1, "maximum": 10000, "description": "The fewest steps between two passes; the runtime may run the program less often to keep training at 95 percent of its speed, never more often."}}})json"},
+
+    {"program", R"json({
+      "type": "object", "additionalProperties": false, "required": ["id", "wgsl", "inputs", "output"],
+      "properties": {
+        "id": {"$use": "id", "maxLength": 55, "description": "The program's id, unique among programs, at most 55 characters, because its pixels output is the live view program.<id>."},
+        "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The program's label."},
+        "wgsl": {"type": "string", "minLength": 1, "maxLength": 65536, "description": "The WGSL source with a compute entry point, at most 64 KiB, with no enable, requires or diagnostic directive."},
+        "entry": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$", "description": "The compute entry point; the one compute entry point when absent."},
+        "inputs": {"type": "array", "maxItems": 8, "items": {"$use": "program_input"}, "description": "The tensors the program reads, at most 8."},
+        "output": {"$use": "program_output", "description": "The program's one output."},
+        "limits": {"$use": "program_limits", "description": "The program's limits."},
+        "workgroups": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "description": "The workgroup counts x, y and z of the dispatch; from max_count or the image size and the entry's workgroup size when absent."}}})json"},
+
+    {"program_status", R"json({
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "host", "state", "every", "every_min", "last_pass_ms", "last_cost_ms", "step_ms", "overhead_share", "passes_per_s", "last_step", "runs", "memory_bytes", "memory_limit_bytes", "error", "sha256"],
+      "properties": {
+        "id": {"type": "string", "description": "The program's id, or a stage as <panel>/<entity>/<kind>."},
+        "kind": {"type": "string", "enum": ["geometry", "pixels", "material", "vertex"], "description": "The program's output kind or the stage's kind."},
+        "host": {"type": "string", "enum": ["script", "viewer", "none"], "description": "Where it runs: script for a program in the attached script, viewer for a stage, none when nothing runs it."},
+        "state": {"type": "string", "enum": ["waiting", "review", "compiled", "running", "refused", "stopped"], "description": "waiting for a host, review in a foreign spec without a review, compiled before its first pass, running, refused by a check, or stopped by a limit."},
+        "every": {"type": ["integer", "null"], "description": "The steps between two passes of the program: the cadence N that all programs share, or a multiple of N for a larger limits.every; null for a stage or before the first pass."},
+        "every_min": {"type": ["integer", "null"], "description": "The declared limits.every; null for a stage or when absent."},
+        "last_pass_ms": {"type": ["number", "null"], "description": "The GPU time of the last pass or frame in milliseconds, or null."},
+        "last_cost_ms": {"type": ["number", "null"], "description": "The overhead D of a pass in milliseconds: the time that a pass adds to the run's wall clock, shared by all programs; null for a stage or before it is measured."},
+        "step_ms": {"type": ["number", "null"], "description": "The base step time b in milliseconds: the time of a training step far from a pass; null for a stage or before it is measured."},
+        "overhead_share": {"type": ["number", "null"], "minimum": 0, "description": "The measured share of the training time that the passes take, D / (N b), which the cadence aims to keep at or below 0.04; null for a stage or before it is measured."},
+        "passes_per_s": {"type": ["number", "null"], "minimum": 0, "description": "The passes of the program a second on the run's wall clock, over its last passes; null for a stage, before its second pass and while it does not run."},
+        "last_step": {"type": ["integer", "null"], "description": "The script's step of the last pass, or null."},
+        "runs": {"type": "integer", "minimum": 0, "description": "The count of passes, or of frames for a stage."},
+        "memory_bytes": {"type": "integer", "minimum": 0, "description": "The bytes of its output buffers and bound tensors."},
+        "memory_limit_bytes": {"type": "integer", "minimum": 0, "description": "The budget from limits.memory_mb; 0 for a stage."},
+        "error": {"type": ["object", "null"], "additionalProperties": false, "required": ["code", "message", "line", "column"], "description": "The last error, or null.",
+                  "properties": {
+                    "code": {"type": "string", "description": "A stable code, such as program.over_time."},
+                    "message": {"type": "string", "description": "One plain sentence that says what happened."},
+                    "line": {"type": "integer", "minimum": 0, "description": "The line in the source, or 0."},
+                    "column": {"type": "integer", "minimum": 0, "description": "The column in the source, or 0."}}},
+        "sha256": {"type": "string", "description": "The SHA-256 of the source the host runs, in hex; empty when none runs."}}})json"},
+
+    {"intervention_point", R"json({
+      "type": "object", "additionalProperties": false, "required": ["point", "kind", "module", "head", "type", "shape"],
+      "properties": {
+        "point": {"type": "string", "description": "The point's name: a module's dotted name, or <module>#<h> for a head."},
+        "kind": {"type": "string", "enum": ["module", "head"], "description": "module for a module's output, head for one head of an attention module."},
+        "module": {"type": "string", "description": "The module's dotted name."},
+        "head": {"type": ["integer", "null"], "description": "The head's index, or null for a module."},
+        "type": {"type": "string", "description": "The module's class name, such as Linear or MultiheadAttention."},
+        "shape": {"type": ["array", "null"], "items": {"type": "integer"}, "description": "The shape of the module's last output, or null before the first step."}}})json"},
+
+    {"intervention", R"json({
+      "type": "object", "additionalProperties": false, "required": ["point", "op", "from_step", "until_step", "since_step", "state"],
+      "properties": {
+        "point": {"type": "string", "description": "The point it acts on."},
+        "op": {"type": "string", "enum": ["ablate"], "description": "What it does: ablate sets the point's output to zero."},
+        "from_step": {"type": ["integer", "null"], "description": "The first step it acts on, or null for the next step."},
+        "until_step": {"type": ["integer", "null"], "description": "The step it ends before, or null until it is cleared."},
+        "since_step": {"type": ["integer", "null"], "description": "The step the script applied it at, or null while it is pending."},
+        "state": {"type": "string", "enum": ["pending", "active", "ended"], "description": "pending until the script's next step, active, or ended after until_step."}}})json"},
 
     // What a spec edit returns besides its own fields.
     {"warnings", R"json({"type": "array", "items": {"$use": "diagnostic"}, "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer."})json"},
@@ -998,16 +1110,18 @@ const Row kRows[] = {
 
     // control (spec version 1; design/instruments.md)
     {"control.create", true, false, true,
-     "Adds a control to the open spec: a slider or a button that the person and you can use. bind names its one "
-     "target: param:<name> for a parameter of the running script, action:<name> for an action of it, run:pause for "
-     "pausing and resuming the run, or value for a value the spec holds. run.state lists the parameters and actions. "
+     "Adds a control to the open spec: a slider, a button or a toggle that the person and you can use. bind names its "
+     "one target: param:<name> for a parameter of the running script, action:<name> for an action of it, run:pause "
+     "for pausing and resuming the run, value for a value the spec holds, or intervene:<point> for an intervention "
+     "point, which a toggle ablates while it is on. run.state lists the parameters and actions, and intervene.points "
+     "the points. "
      "A control is a leaf of the layout, like a panel: place puts it next to a panel or control, and without place it "
      "goes under the whole layout. Undo removes it. The result holds the change as a diff; with dry_run true the "
      "change is only checked and not applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "kind", "bind"],
       "properties": {
         "id": {"$use": "id", "description": "The new control's id; panels and controls share one set of ids."},
-        "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text"], "description": "slider sets a number in a range; button acts once when pressed. range, toggle, picker and text are reserved and refused with spec.unsupported_control until they are built."},
+        "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text"], "description": "slider sets a number in a range; button acts once when pressed; toggle is on or off, and ablates intervene:<point> or sets a boolean param:<name>. range, picker and text are reserved and refused with spec.unsupported_control until they are built."},
         "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The control's label; the id when absent."},
         "bind": {"$use": "control_bind"},
         "options": {"$use": "control_options", "description": "The control's options."},
@@ -1196,13 +1310,14 @@ const Row kRows[] = {
     {"events.wait", false, false, false,
      "Returns the events that came after a cursor: picks and selections in the app's views and scene panels, "
      "changes of controls, changes of the running script (state, parameters, actions, attachment), edits of the open "
-     "spec and approvals. It answers at once when events wait, and otherwise holds the call until one comes or "
+     "spec, approvals, and the compile, refusal and stop of GPU programs and stages. It answers at once when events "
+     "wait, and otherwise holds the call until one comes or "
      "timeout_s ends. Pass the cursor of each result to the next call. The app keeps the last 1024 events; lost "
      "counts those that were dropped before you read them. Hovers are not events. It changes nothing.",
      R"json({"type": "object", "additionalProperties": false, "required": [],
       "properties": {
         "cursor": {"type": "integer", "minimum": 0, "default": 0, "description": "The cursor of the previous result; 0, the default, returns the oldest events the app still keeps."},
-        "kinds": {"type": "array", "minItems": 1, "maxItems": 6, "items": {"type": "string", "enum": ["pick", "select", "control", "run", "spec", "approval"]}, "description": "Only these kinds; every kind when absent."},
+        "kinds": {"type": "array", "minItems": 1, "maxItems": 7, "items": {"type": "string", "enum": ["pick", "select", "control", "run", "spec", "approval", "program"]}, "description": "Only these kinds; every kind when absent."},
         "panels": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$use": "id"}, "description": "Only events of these panels or controls; events of every panel and of none when absent."},
         "timeout_s": {"type": "number", "minimum": 0, "maximum": 60, "default": 10, "description": "How long to wait for a first event, in seconds, at most 60; 10 when absent, 0 to answer at once."},
         "limit": {"type": "integer", "minimum": 1, "maximum": 256, "default": 64, "description": "The most events returned; 64 when absent."}}})json",
@@ -1213,6 +1328,208 @@ const Row kRows[] = {
         "lost": {"type": "integer", "minimum": 0, "description": "How many events after the given cursor the app dropped before this call, because the ring keeps 1024; 0 when none."},
         "more": {"type": "boolean", "description": "Whether more matching events wait after cursor, beyond limit."}}})json",
      R"json({"cursor": 0, "kinds": ["pick"], "panels": ["world"], "timeout_s": 30})json"},
+
+    // stages and programs (design/gpu-programs.md)
+    {"stage.set", true, false, true,
+     "Sets the material or vertex stage of one entity of a scene panel: WGSL that the viewer runs in place of its own "
+     "function for that entity. material gives the color of each fragment with fn material(in: MaterialIn) -> "
+     "vec4<f32>; vertex gives the position and the radius of each item with fn vertex(in: VertexIn) -> VertexOut. The "
+     "source holds functions and constants only, with no binding and no entry point. It replaces the stage of the same "
+     "panel, entity and kind, and the entity still picks and selects. The sandbox checks it first, and messages give "
+     "the compiler's line and column. Undo restores the stage before. With dry_run true the change is only checked and "
+     "not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "entity", "kind", "wgsl"],
+      "properties": {
+        "panel": {"$use": "id", "description": "The scene panel's id in the open spec."},
+        "entity": {"$use": "entity_path", "description": "The entity of the panel's scene, such as programs/ribbons or a path the script publishes."},
+        "kind": {"$use": "stage_kind"},
+        "wgsl": {"type": "string", "minLength": 1, "maxLength": 16384, "description": "The stage's WGSL: the function material or vertex, with helper functions and constants, at most 16 KiB."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "entity", "kind", "messages", "warnings", "diff", "applied"],
+      "properties": {
+        "panel": {"type": "string", "description": "The scene panel's id."},
+        "entity": {"type": "string", "description": "The entity path."},
+        "kind": {"type": "string", "description": "The stage's kind."},
+        "messages": {"type": "array", "items": {"$use": "compiler_message"}, "description": "The compiler's and the sandbox's warnings; an error refuses the edit instead."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"panel": "world", "entity": "programs/ribbons", "kind": "material", "wgsl": "fn material(in: MaterialIn) -> vec4<f32> {\n  return vec4<f32>(in.color.rgb * (0.5 + 0.5 * in.value), 1.0);\n}\n"})json"},
+    {"stage.remove", true, false, true,
+     "Removes the material or vertex stage of one entity of a scene panel, so that the entity draws with the viewer's "
+     "own function again. Undo restores the stage. The result holds the change as a diff; with dry_run true the change "
+     "is only checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "entity", "kind"],
+      "properties": {
+        "panel": {"$use": "id", "description": "The scene panel's id in the open spec."},
+        "entity": {"$use": "entity_path", "description": "The entity path of the stage."},
+        "kind": {"$use": "stage_kind"},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["panel", "entity", "kind", "warnings", "diff", "applied"],
+      "properties": {
+        "panel": {"type": "string", "description": "The scene panel's id."},
+        "entity": {"type": "string", "description": "The entity path."},
+        "kind": {"type": "string", "description": "The removed stage's kind."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"panel": "world", "entity": "programs/ribbons", "kind": "material"})json"},
+    {"stage.check", false, false, false,
+     "Compiles a WGSL source as the viewer compiles a stage or as the runtime compiles a program, and returns the "
+     "compiler's and the sandbox's messages with line and column, the entry points and the bindings. kind material or "
+     "vertex checks a stage with the viewer's prelude; kind compute checks a program's source without its declaration. "
+     "It changes nothing.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["kind", "wgsl"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["material", "vertex", "compute"], "description": "How to compile it: as a material or vertex stage, or as a program's compute source."},
+        "wgsl": {"type": "string", "minLength": 1, "maxLength": 65536, "description": "The WGSL source."},
+        "entry": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$", "description": "compute: the entry point to check; the one compute entry point when absent."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["ok", "messages", "entry_points", "bindings"],
+      "properties": {
+        "ok": {"type": "boolean", "description": "Whether the source compiles and passes the checks that need no declaration."},
+        "messages": {"type": "array", "items": {"$use": "compiler_message"}, "description": "The messages, errors first."},
+        "entry_points": {"type": "array", "description": "The entry points of the source.",
+                         "items": {"type": "object", "additionalProperties": false, "required": ["name", "stage", "workgroup_size"],
+                                   "properties": {
+                                     "name": {"type": "string", "description": "The entry point's name."},
+                                     "stage": {"type": "string", "enum": ["vertex", "fragment", "compute"], "description": "The entry point's stage."},
+                                     "workgroup_size": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "integer"}, "description": "compute: the workgroup size x, y and z; zeros otherwise."}}}},
+        "bindings": {"type": "array", "description": "The bindings of the source, as the compiler reflects them.",
+                     "items": {"type": "object", "additionalProperties": false, "required": ["group", "binding", "name", "kind", "access"],
+                               "properties": {
+                                 "group": {"type": "integer", "minimum": 0, "description": "The binding's group."},
+                                 "binding": {"type": "integer", "minimum": 0, "description": "The binding's number in its group."},
+                                 "name": {"type": "string", "description": "The WGSL variable's name."},
+                                 "kind": {"type": "string", "enum": ["uniform", "storage", "texture", "uint_texture", "storage_texture", "sampler"], "description": "What the binding is."},
+                                 "access": {"type": "string", "enum": ["read", "read_write", "write"], "description": "How the source may use it."}}}}}})json",
+     R"json({"kind": "compute", "wgsl": "@group(0) @binding(0) var<storage, read> w: array<f32>;\n@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n@compute @workgroup_size(64) fn run(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i >= 256u) { return; }\n  positions[3u * i] = w[3u * i];\n  positions[3u * i + 1u] = w[3u * i + 1u];\n  positions[3u * i + 2u] = w[3u * i + 2u];\n  atomicAdd(&count, 1u);\n}\n"})json"},
+    {"program.create", true, false, true,
+     "Adds a GPU program to the open spec: a WGSL compute pass that reads live tensors of the running script in place "
+     "and read-only, and writes one output. A geometry output becomes an entity of a scene panel. A pixels output "
+     "becomes the live view program.<id>, which an image panel shows through a source of catalog live:program.<id>. "
+     "The program runs in the script's process every N steps, with N set so that training keeps 95 percent of its "
+     "speed, and a program over its time or memory limit stops. The sandbox checks the declaration and the source "
+     "first; a refused program is not added, and messages give the compiler's line and column. program.status reports "
+     "its state. Undo removes it. With dry_run true the change is only checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "wgsl", "inputs", "output"],
+      "properties": {
+        "id": {"$use": "id", "description": "The new program's id, unique among programs."},
+        "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The program's label; the id when absent."},
+        "wgsl": {"type": "string", "minLength": 1, "maxLength": 65536, "description": "The WGSL source with a compute entry point, at most 64 KiB, with no enable, requires or diagnostic directive. It may declare var<uniform> caliper: CaliperFrame, a struct of 8 u32 and f32 fields (step, pass_index, max_count, width, height, time_s, every, pad)."},
+        "entry": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$", "description": "The compute entry point; the one compute entry point when absent."},
+        "inputs": {"type": "array", "maxItems": 8, "items": {"$use": "program_input"}, "description": "The tensors the program reads, at most 8."},
+        "output": {"$use": "program_output", "description": "The program's one output."},
+        "limits": {"$use": "program_limits", "description": "The program's limits; the defaults when absent."},
+        "workgroups": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "description": "The workgroup counts x, y and z of the dispatch; from max_count or the image size and the entry's workgroup size when absent."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "messages", "warnings", "diff", "applied"],
+      "properties": {
+        "id": {"type": "string", "description": "The new program's id."},
+        "messages": {"type": "array", "items": {"$use": "compiler_message"}, "description": "The compiler's and the sandbox's warnings; an error refuses the edit instead."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"id": "rows", "title": "Rows of the first layer", "wgsl": "@group(0) @binding(0) var<storage, read> w: array<f32>;\n@group(0) @binding(1) var<storage, read_write> positions: array<f32>;\n@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;\n@compute @workgroup_size(64) fn run(@builtin(global_invocation_id) id: vec3<u32>) {\n  let i = id.x;\n  if (i >= 256u) { return; }\n  positions[3u * i] = w[3u * i];\n  positions[3u * i + 1u] = w[3u * i + 1u];\n  positions[3u * i + 2u] = w[3u * i + 2u];\n  atomicAdd(&count, 1u);\n}\n", "inputs": [{"var": "w", "source": "live:layers.0.weight"}], "output": {"kind": "geometry", "panel": "world", "part": "points", "max_count": 256, "arrays": ["positions"]}, "limits": {"every": 10}})json"},
+    {"program.patch", true, false, true,
+     "Changes a GPU program of the open spec with a JSON merge patch (RFC 7386) of its title, wgsl, entry, inputs, "
+     "output, limits and workgroups: the keys given replace the program's own, a key set to null is removed, and "
+     "output and limits merge key by key. The id cannot change. The sandbox checks the program again, and the script "
+     "runs the new version from its next pass. Undo restores the program. With dry_run true the change is only "
+     "checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "patch"],
+      "properties": {
+        "id": {"$use": "id", "description": "The program's id in the open spec."},
+        "patch": {"$patch": "program", "description": "The keys to change; null removes one."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["program", "messages", "warnings", "diff", "applied"],
+      "properties": {
+        "program": {"$use": "program", "description": "The program as it is now, or would be after a dry run."},
+        "messages": {"type": "array", "items": {"$use": "compiler_message"}, "description": "The compiler's and the sandbox's warnings; an error refuses the edit instead."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"id": "rows", "patch": {"limits": {"every": 20}, "output": {"max_count": 512}}})json"},
+    {"program.remove", true, false, true,
+     "Removes a GPU program from the open spec; the script stops it and frees its buffers, and its output leaves the "
+     "scene or the live view. The id comes from spec.get or program.status. Undo restores it. The result holds the "
+     "change as a diff; with dry_run true the change is only checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id"],
+      "properties": {
+        "id": {"$use": "id", "description": "The program's id in the open spec."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings", "diff", "applied"],
+      "properties": {
+        "id": {"type": "string", "description": "The removed program's id."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"id": "rows"})json"},
+    {"program.status", false, false, true,
+     "Returns the state of each GPU program and each stage of the open spec: where it runs, whether it compiled, runs, "
+     "was refused or stopped, its cadence N, the GPU time of its last pass, the overhead of a pass and the base step "
+     "time on the run's wall clock, the measured share of the training time, its passes a second, its memory, and "
+     "its last error with line and column. It changes nothing.",
+     R"json({"type": "object", "additionalProperties": false, "required": [],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 320, "description": "Only this program, or this stage as <panel>/<entity>/<kind>; every program and stage when absent."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["programs", "stages"],
+      "properties": {
+        "programs": {"type": "array", "maxItems": 16, "items": {"$use": "program_status"}, "description": "The programs, in the spec's order."},
+        "stages": {"type": "array", "maxItems": 32, "items": {"$use": "program_status"}, "description": "The stages, in the spec's order."}}})json",
+     R"json({"id": "rows"})json"},
+
+    // interventions (design/gpu-programs.md)
+    {"intervene.points", false, false, true,
+     "Lists the intervention points of the model that the attached script watches: each module's output by its dotted "
+     "name, and each head of an attention module as <module>#<h>, with the module's class and the shape of its last "
+     "output. It changes nothing.",
+     R"json({"type": "object", "additionalProperties": false, "required": [],
+      "properties": {
+        "match": {"type": "string", "minLength": 1, "maxLength": 255, "description": "Only the points whose names match this glob, such as blocks.*.attn*; every point when absent."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["points", "step"],
+      "properties": {
+        "points": {"type": "array", "items": {"$use": "intervention_point"}, "description": "The points, in the model's order."},
+        "step": {"type": ["integer", "null"], "description": "The script's step, or null before the first."}}})json",
+     R"json({"match": "blocks.0.*"})json"},
+    {"intervene.set", false, false, true,
+     "Sets one intervention on a point of the attached model, applied at the script's next step through the module "
+     "hooks: ablate sets the point's output to zero, or one head's part where the point is a head. scale, steer and "
+     "patch are reserved. It lasts until intervene.clear, or from from_step until until_step. The result says it is "
+     "pending; a run event of change intervene reports the step the script applied it at. intervene.points lists the "
+     "points.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["point", "op"],
+      "properties": {
+        "point": {"type": "string", "minLength": 1, "maxLength": 255, "description": "The point's name, from intervene.points."},
+        "op": {"type": "string", "enum": ["ablate", "scale", "steer", "patch"], "description": "What to do: ablate sets the output to zero; scale, steer and patch are reserved and refused with intervene.op_reserved."},
+        "from_step": {"type": "integer", "minimum": 0, "description": "The first step it acts on; the next step when absent."},
+        "until_step": {"type": "integer", "minimum": 1, "description": "The step it ends before; it lasts until it is cleared when absent."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["point", "op", "pending"],
+      "properties": {
+        "point": {"type": "string", "description": "The point."},
+        "op": {"type": "string", "description": "The op sent."},
+        "pending": {"type": "boolean", "description": "True: the intervention waits for the script's next step."}}})json",
+     R"json({"point": "blocks.0.attn#3", "op": "ablate"})json"},
+    {"intervene.clear", false, false, true,
+     "Clears the interventions on one point of the attached model, or every intervention with all true, at the "
+     "script's next step. The result names the points cleared and says the change is pending; a run event of change "
+     "intervene reports the step the script applied it at.",
+     R"json({"type": "object", "additionalProperties": false, "required": [],
+      "properties": {
+        "point": {"type": "string", "minLength": 1, "maxLength": 255, "description": "The point whose interventions to clear, from intervene.list."},
+        "all": {"type": "boolean", "description": "true clears every intervention; point is then not given."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["cleared", "pending"],
+      "properties": {
+        "cleared": {"type": "array", "items": {"type": "string"}, "description": "The points whose interventions are cleared."},
+        "pending": {"type": "boolean", "description": "True: the change waits for the script's next step."}}})json",
+     R"json({"point": "blocks.0.attn#3"})json"},
+    {"intervene.list", false, false, true,
+     "Lists the interventions on the attached model with their points, ops, step ranges and states: pending until the "
+     "script's next step, active, or ended after their last step. It changes nothing.",
+     R"json({"type": "object", "additionalProperties": false, "required": [], "properties": {}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["interventions"],
+      "properties": {
+        "interventions": {"type": "array", "items": {"$use": "intervention"}, "description": "The interventions, oldest first."}}})json",
+     "{}"},
 };
 
 // Turns an object schema into the schema of its merge patch: nothing is
@@ -1328,6 +1645,17 @@ const std::pair<const char*, CommandEffect> kEffects[] = {
     {"run.stop", E::run},
     {"run.logs", E::read},
     {"events.wait", E::read},
+    {"stage.set", E::edit},
+    {"stage.remove", E::edit},
+    {"stage.check", E::read},
+    {"program.create", E::edit},
+    {"program.patch", E::edit},
+    {"program.remove", E::edit},
+    {"program.status", E::read},
+    {"intervene.points", E::read},
+    {"intervene.set", E::run},  // acts on the running script at its next step
+    {"intervene.clear", E::run},
+    {"intervene.list", E::read},
     {"history.undo", E::change},
     {"history.redo", E::change},
     {"history.list", E::read},

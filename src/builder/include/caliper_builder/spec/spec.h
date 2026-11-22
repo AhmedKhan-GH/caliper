@@ -29,6 +29,7 @@
 
 #include <caliper_builder/error.h>
 #include <caliper_builder/spec/instrument.h>
+#include <caliper_builder/spec/program.h>
 
 namespace caliper_builder::spec {
 
@@ -173,17 +174,22 @@ struct Spec {
     std::vector<Panel> panels;
     std::optional<LayoutNode> layout;
     std::vector<Control> controls;   // `control`, spec version 1 (instrument.h); empty in version 0
+    std::vector<Program> programs;   // `program`, spec version 1 (program.h); empty in version 0
+    std::vector<Stage> stages;       // `stage`, spec version 1 (program.h); empty in version 0
+    Provenance provenance;           // `provenance`, spec version 1 (program.h); empty for the person's own spec
     nlohmann::json x;
 
     // The first source, panel or control with this id, or null.
     const Source* find_source(std::string_view id) const;
     const Panel* find_panel(std::string_view id) const;
     const Control* find_control(std::string_view id) const;
+    const Program* find_program(std::string_view id) const;
 };
 
-// The lowest format version that holds `spec`: 1 when it has a scene panel or
-// a control, else 0. An edit that adds either to a version 0 spec raises the
-// version to this one in the same step.
+// The lowest format version that holds `spec`: 1 when it has a scene panel, a
+// control, a program, a stage or a provenance table, else 0. An edit that adds
+// one of them to a version 0 spec raises the version to this one in the same
+// step.
 std::int64_t required_version(const Spec& spec);
 // The first version whose documents may use the primitive.
 std::int64_t primitive_version(Primitive p);

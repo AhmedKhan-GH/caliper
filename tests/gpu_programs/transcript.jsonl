@@ -1,0 +1,36 @@
+{"step": "hash_before", "hash": "before"}
+{"step": "spec", "tool": "spec_new", "arguments": {"id": "gpu_programs", "title": "GPU Programs Check"}}
+{"step": "start", "tool": "run_start", "arguments": {"script": "train.py"}, "expect_run": {"id": "train-1"}}
+{"step": "running", "wait_attached": {"run": "train-1"}}
+{"step": "grows", "steps_grow": {"run": "train-1"}}
+{"step": "pids", "record_pids": "train.py"}
+{"step": "world", "tool": "panel_create", "arguments": {"id": "world", "primitive": "scene", "title": "Model", "bind": {"scene": "live:model"}, "options": {"axes": true}}}
+{"step": "capture_empty", "capture": "scene-empty"}
+{"step": "grid", "tool": "program_create", "wgsl_file": "grid.wgsl", "arguments": {"id": "grid", "title": "Weights of the First Layer", "inputs": [{"var": "w", "source": "live:0.weight"}], "output": {"kind": "geometry", "panel": "world", "part": "points", "max_count": 512, "arrays": ["positions", "values"], "style": {"colormap": "rdbu", "vmin": -0.4, "vmax": 0.4}}}}
+{"step": "grid_running", "wait_program": {"id": "grid", "states": ["running"], "runs": 2}}
+{"step": "grid_compiled", "wait_event": {"kind": "program", "program": "grid", "change": "compiled", "host": "script"}}
+{"step": "grid_passes", "passes": {"id": "grid", "more": 3}}
+{"step": "capture_geometry", "capture": "geometry"}
+{"step": "geometry_drawn", "differs": {"a": "scene-empty", "b": "geometry", "min_pixels": 300}}
+{"step": "heat", "tool": "program_create", "wgsl_file": "heat.wgsl", "arguments": {"id": "heat", "title": "Second Layer", "inputs": [{"var": "w", "source": "live:2.weight"}], "output": {"kind": "pixels", "width": 64, "height": 64}}}
+{"step": "heat_running", "wait_program": {"id": "heat", "states": ["running"], "runs": 1}}
+{"step": "heat_view", "wait_catalog": "live:program.heat"}
+{"step": "heat_source", "tool": "source_add", "arguments": {"id": "heat_img", "catalog": "live:program.heat"}}
+{"step": "heat_panel", "tool": "panel_create", "arguments": {"id": "heat", "primitive": "image", "title": "Second Layer", "bind": {"values": "heat_img"}, "place": {"target": "world", "where": "beside"}}}
+{"step": "heat_data", "wait_panel_data": {"panel": "heat"}}
+{"step": "heat_passes", "passes": {"id": "heat", "more": 3}}
+{"step": "capture_pixels", "capture": "pixels", "panel": "heat"}
+{"step": "pixels_shown", "differs": {"a": "geometry", "b": "pixels", "min_pixels": 1000}}
+{"step": "material", "tool": "stage_set", "wgsl_file": "material.wgsl", "arguments": {"panel": "world", "entity": "programs/grid", "kind": "material"}}
+{"step": "material_compiled", "wait_program": {"id": "world/programs/grid/material", "states": ["compiled", "running"], "runs": 0}}
+{"step": "capture_material", "capture": "material"}
+{"step": "material_changed", "yellow_gain": {"before": "pixels", "after": "material", "min_after": 50, "ratio": 10}}
+{"step": "writer", "expect_error": {"tool": "program_create", "code": "program.writes_input", "wgsl_file": "writer.wgsl", "arguments": {"id": "writer", "inputs": [{"var": "w", "source": "live:0.weight"}], "output": {"kind": "geometry", "panel": "world", "part": "points", "max_count": 512, "arrays": ["positions", "values"]}}}}
+{"step": "writer_absent", "no_status": "writer"}
+{"step": "slow", "over_time": {"id": "slow", "wgsl_file": "slow.wgsl", "arguments": {"id": "slow", "inputs": [{"var": "w", "source": "live:2.weight"}], "output": {"kind": "pixels", "width": 16, "height": 16}, "limits": {"time_ms": 0.5}}, "steps_after": 20}}
+{"step": "status", "status_fields": {"id": "grid", "every_min": 1, "share_at_most": 0.05, "settle_s": 90}}
+{"step": "toggle", "toggle": {"point": "0", "id": "ablate", "below": "heat", "raise_factor": 3, "return_factor": 0.5, "capture": "toggle-on"}}
+{"step": "stop", "tool": "run_stop", "arguments": {"run": "train-1"}}
+{"step": "ended", "wait_state": {"run": "train-1", "states": ["exited"]}}
+{"step": "no_children", "no_children": true}
+{"step": "hash_after", "hash_same": "before"}

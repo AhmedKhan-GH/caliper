@@ -174,6 +174,8 @@ struct HubStats {
     // 3.1
     uint64_t controls_forwarded = 0, controls_refused = 0, control_replies = 0;
     uint64_t controls_out = 0, selections_out = 0, selections_dropped = 0;
+    // 3.2 draft: PROGRAMs forwarded and refused, PROGRAM_STATEs sent to viewers
+    uint64_t programs_forwarded = 0, programs_refused = 0, program_states_out = 0;
     uint64_t controls_held = 0;             // CONTROLS that waited for the data before them
     uint64_t controls_hold_expired = 0;     // of which went after 2 s with that data still unsent
     // 3.2 draft: scene messages in, out and replaced by a newer batch of the

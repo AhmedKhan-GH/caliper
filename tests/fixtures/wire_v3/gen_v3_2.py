@@ -23,6 +23,7 @@ The ids, the kind and the capability are proposals of the 3.2 draft; see the
 """
 from __future__ import annotations
 
+import hashlib
 import struct
 
 import numpy as np
@@ -324,6 +325,7 @@ def valid_vectors() -> dict[str, bytes]:
                                             stamp=STAMP_T),
     }
     msgs.update(_timeline_vectors())
+    msgs.update(_program_vectors())
     out = {f"v3_2/{name}": w.encode(m, minor=M) for name, m in msgs.items()}
     # A split update: 20 coloured points in five pieces of at most 600 bytes, with a stamp.
     for k, piece in enumerate(w.split_update(SPLIT, update=4, max_frame=600)):
@@ -508,6 +510,7 @@ def invalid_vectors(valid: dict[str, bytes]) -> dict[str, tuple[bytes, dict]]:
                                                    "color": [0, 0, 0, 255]}]), bad),
         "classes_color_missing": (_message(K, classes=[{"id": 1, "label": "x"}]), bad),
         **_timeline_invalid(valid),
+        **_program_invalid(),
     }
 
 
@@ -615,4 +618,148 @@ def _timeline_invalid(valid: dict) -> dict:
         "split_first_rows": (_frame("points", "p", pos, split={
             "update": 1, "piece": 0, "pieces": 2, "first": {"positions": 6},
             "rows": {"positions": 6}}), bad),
+    }
+
+
+# ---------------------------------------------------------------------------
+# GPU programs and interventions
+# ---------------------------------------------------------------------------
+WGSL = "@compute @workgroup_size(64) fn main() {} // \u00b5\n"
+GEOMETRY = {"entry": "main", "inputs": [{"var": "w", "source": "live:fc1.weight"}],
+            "output": {"kind": "geometry", "entity": "programs/rows", "part": "lines",
+                       "max_count": 4096, "arrays": ["positions", "values"]},
+            "limits": {"every": 5}, "workgroups": [64, 1, 1]}
+PIXELS = {"inputs": [{"var": "w", "source": "live:fc1.weight"}],
+          "output": {"kind": "pixels", "width": 64, "height": 32, "format": "rgba8unorm"}}
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _program_vectors() -> dict:
+    running = {"id": "rows", "kind": "geometry", "state": "running", "every": 12, "every_min": 5,
+               "last_pass_ms": 0.25, "last_cost_ms": 11.71875, "step_ms": 31.25,
+               "overhead_share": 0.03125, "passes_per_s": 2.5, "last_step": 1200,
+               "runs": 7, "memory_bytes": 1310720, "memory_limit_bytes": 67108864,
+               "error": None, "sha256": _sha(WGSL)}
+    refused = {"id": "image", "kind": "pixels", "state": "refused", "every_min": 1,
+               "error": {"code": "program.unknown_input", "message": "No tensor fc9.weight.",
+                         "line": 0, "column": 0}}
+    return {
+        "program_set_geometry": w.Program(11, w.PROGRAM_SET, "rows", GEOMETRY, WGSL, _sha(WGSL),
+                                          "world"),
+        "program_set_pixels": w.Program(12, w.PROGRAM_SET, "image", PIXELS, WGSL, _sha(WGSL)),
+        "program_remove": w.Program(13, w.PROGRAM_REMOVE, "rows"),
+        "program_state_reply": w.ProgramState([running, refused], 12, 1200, 31.25),
+        "program_state_waiting": w.ProgramState([{"id": "rows", "kind": "geometry",
+                                                  "state": "compiled"}]),
+        "control_intervene_set": w.Control(21, w.OP_INTERVENE, intervene={"set": {
+            "point": "blocks.0.attn#3", "op": w.INTERVENE_ABLATE, "from_step": 1201,
+            "until_step": None}}),
+        "control_intervene_clear": w.Control(22, w.OP_INTERVENE,
+                                             intervene={"clear": "blocks.0.attn#3"}),
+        "control_intervene_clear_all": w.Control(23, w.OP_INTERVENE,
+                                                 intervene={"clear_all": True}),
+        "control_reply_intervene": w.ControlReply(21, w.OP_INTERVENE, w.STATUS_ERROR, error={
+            "code": "intervene.unknown_point", "message": "The model has no point blocks.9."}),
+        "controls_interventions": w.Controls(
+            {"state": w.RUN_RUNNING, "step": 1200, "steps_left": 0}, [], [],
+            interventions={
+                "points": [{"point": "blocks.0.attn", "kind": "module", "module": "blocks.0.attn",
+                            "head": None, "type": "Attention", "shape": [8, 64, 128]},
+                           {"point": "blocks.0.attn#3", "kind": "head",
+                            "module": "blocks.0.attn", "head": 3, "type": "Attention",
+                            "shape": None}],
+                "active": [{"point": "blocks.0.attn#3", "op": "ablate", "from_step": 1201,
+                            "until_step": None, "since_step": 1201, "state": "active"}]}),
+    }
+
+
+def _program_invalid() -> dict:
+    bad = {"error": w.ERR_BAD_REQUEST}
+    PG, PS, C, CS = (w.MsgType.PROGRAM, w.MsgType.PROGRAM_STATE, w.MsgType.CONTROL,
+                     w.MsgType.CONTROLS)
+    src = np.frombuffer(WGSL.encode("utf-8"), np.uint8)
+    base = {"request_id": 1, "op": "set", "id": "rows", "declaration": GEOMETRY,
+            "scene": "world", "sha256": _sha(WGSL)}
+
+    def prog(sections=None, **change):
+        meta = {k: v for k, v in dict(base, **change).items() if v is not None}
+        return _meta_frame(PG, meta, {"wgsl": src} if sections is None else sections)
+
+    def decl(**change):
+        return dict(GEOMETRY, **change)
+
+    def out(**change):
+        return decl(output=dict(GEOMETRY["output"], **change))
+
+    item = {"id": "rows", "kind": "geometry", "state": "running"}
+
+    def state(*items, **meta):
+        return _meta_frame(PS, dict({"programs": list(items)}, **meta))
+
+    run = {"state": "running", "step": 1, "steps_left": 0}
+    point = {"point": "a", "kind": "module", "module": "a"}
+    active = {"point": "a", "op": "ablate", "state": "active"}
+
+    def controls(**iv):
+        return _meta_frame(CS, {"run": run, "params": [], "actions": [],
+                                "interventions": dict({"points": [point], "active": []}, **iv)})
+
+    def intervene(v):
+        return _meta_frame(C, {"request_id": 1, "op": "intervene", "intervene": v})
+    return {
+        "program_op": (prog(op="install"), bad),
+        "program_request_id": (prog(request_id=None), bad),
+        "program_id_long": (prog(id="r" * 56), bad),
+        "program_id_upper": (prog(id="Rows"), bad),
+        "program_declaration_missing": (prog(declaration=None), bad),
+        "program_output_kind": (prog(declaration=out(kind="mesh")), bad),
+        "program_max_count": (prog(declaration=out(max_count=1000001)), bad),
+        "program_arrays_positions": (prog(declaration=out(arrays=["colors"])), bad),
+        "program_arrays_repeat": (prog(declaration=out(arrays=["positions", "positions"])), bad),
+        "program_entity": (prog(declaration=out(entity="a/../b")), bad),
+        "program_pixels_side": (prog(declaration=dict(PIXELS, output=dict(PIXELS["output"],
+                                                                          width=2049))), bad),
+        "program_inputs_many": (prog(declaration=decl(inputs=[{"var": f"v{i}",
+                                                               "source": "live:x"}
+                                                              for i in range(9)])), bad),
+        "program_input_source": (prog(declaration=decl(inputs=[{"var": "w",
+                                                                "source": "x" * 256}])), bad),
+        "program_time_ms": (prog(declaration=decl(limits={"time_ms": 0})), bad),
+        "program_every": (prog(declaration=decl(limits={"every": 10001})), bad),
+        "program_workgroups": (prog(declaration=decl(workgroups=[64, 1])), bad),
+        "program_scene_missing": (prog(scene=None), bad),
+        "program_sha256": (prog(sha256=_sha(WGSL).upper()), bad),
+        "program_wgsl_missing": (prog(sections={}), bad),
+        "program_wgsl_dtype": (prog(sections={"wgsl": src[:64].view(np.int32)}), bad),
+        "program_wgsl_empty": (prog(sections={"wgsl": np.zeros(0, np.uint8)}), bad),
+        "program_wgsl_big": (prog(sections={"wgsl": np.full(65537, 0x20, np.uint8)}), bad),
+        "program_wgsl_utf8": (prog(sections={"wgsl": np.array([0x66, 0x6e, 0xff], np.uint8)}),
+                              bad),
+        "program_state_programs": (_meta_frame(PS, {"request_id": 1}), bad),
+        "program_state_many": (state(*[dict(item, id=f"p{i}") for i in range(17)]), bad),
+        "program_state_repeat": (state(item, item), bad),
+        "program_state_state": (state(dict(item, state="paused")), bad),
+        "program_state_kind": (state(dict(item, kind="material")), bad),
+        "program_state_runs": (state(dict(item, runs=-1)), bad),
+        "program_state_runs_exact": (state(dict(item, runs=2**53)), bad),
+        "program_state_every": (state(dict(item, every=0)), bad),
+        "program_state_share": (state(dict(item, overhead_share=-0.5)), bad),
+        "program_state_rate": (state(dict(item, passes_per_s="2")), bad),
+        "program_state_error": (state(dict(item, error={"message": "x"})), bad),
+        "program_state_sha256": (state(dict(item, sha256="a" * 63)), bad),
+        "program_state_step": (state(item, step=-1), bad),
+        "control_intervene_missing": (_meta_frame(C, {"request_id": 1, "op": "intervene"}), bad),
+        "control_intervene_two": (intervene({"clear": "a", "clear_all": True}), bad),
+        "control_intervene_clear_all": (intervene({"clear_all": False}), bad),
+        "control_intervene_point": (intervene({"clear": "p" * 256}), bad),
+        "control_intervene_step": (intervene({"set": {"point": "a", "op": "ablate",
+                                                      "from_step": -1}}), bad),
+        "control_intervene_op": (intervene({"set": {"point": "a"}}), bad),
+        "controls_interventions_kind": (controls(points=[dict(point, kind="layer")]), bad),
+        "controls_interventions_active": (controls(active=[active] * 65), bad),
+        "controls_interventions_shape": (controls(points=[dict(point, shape=[1] * 9)]), bad),
+        "controls_interventions_state": (controls(active=[dict(active, state="on")]), bad),
     }

@@ -115,7 +115,7 @@ bool RunConnection::poll(int timeout_ms) {
                 changed = true;
                 wire::Hello hello;
                 hello.role = CALIPER_NET_ROLE_VIEWER;
-                hello.capabilities = {CALIPER_NET_CAP_CONTROLS};
+                hello.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_INTERVENTIONS};
                 Json software = Json::object();
                 software.set("name", "caliper-runner");
                 software.set("version", "1");
@@ -208,6 +208,7 @@ void RunConnection::on_message(const std::vector<std::uint8_t>& bytes) {
         }
     } else if (const auto* c = std::get_if<wire::Controls>(&msg)) {
         controls_ = json{{"run", from_net(c->run)}, {"params", from_net(c->params)}, {"actions", from_net(c->actions)}};
+        if (!c->interventions.is_null()) controls_["interventions"] = from_net(c->interventions);
     } else if (const auto* cr = std::get_if<wire::ControlReply>(&msg)) {
         Reply rep;
         rep.request_id = cr->request_id;
@@ -256,6 +257,7 @@ std::uint32_t RunConnection::send_control(const std::string& op, const std::stri
     if (!name.empty()) c.name = name;
     if (op == CALIPER_NET_OP_SET) c.value = to_net(value);
     if (op == CALIPER_NET_OP_STEP) c.count = std::max<std::uint32_t>(1, count);
+    if (op == CALIPER_NET_OP_INTERVENE) c.intervene = to_net(value);
     std::vector<std::uint8_t> out;
     std::string err;
     if (!wire::encode(c, &out, &err)) {

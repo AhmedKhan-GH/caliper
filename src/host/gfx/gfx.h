@@ -375,6 +375,10 @@ struct ExternalBuffer {
     // true: the memory is valid only until the call returns, so the backend copies it and never
     // wraps it (a live view's CPU payload, whose producer may free its bytes on return).
     bool transient = false;
+    // true: the import is read-only for the layer, such as a training tensor of the producer
+    // runtime (design/producer-runtime.md, Read-Only Rule). create_bind_group refuses it in a
+    // StorageReadWrite binding, thus no program of the layer can write it.
+    bool read_only = false;
     const char* label = nullptr;
 };
 struct ExternalTexture {

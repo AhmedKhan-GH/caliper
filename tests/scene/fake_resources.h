@@ -92,6 +92,27 @@ public:
         ++cmap_requests;
     }
 
+    // Stage programs (scene/stages.h): pipelines at 0x600 and groups at 0x680, or none when refused.
+    struct StageRecord {
+        const caliper_scene::StageProgram* stage;
+        ProgramId builtin;
+        std::string vs, fs;
+    };
+    Pipeline stage_pipeline(const caliper_scene::StageProgram& stage, ProgramId builtin,
+                            const RenderPipelineDesc& desc) override {
+        if (refuse_stages) return {};
+        stage_pipelines.push_back({&stage, builtin, desc.vertex_entry, desc.fragment_entry});
+        return Pipeline{0x600 + stage_pipelines.size() - 1};
+    }
+    BindGroup stage_bind_group(const caliper_scene::StageProgram&, ProgramId builtin, uint32_t group, Texture image,
+                               uint32_t binding) override {
+        stage_groups.push_back({builtin, group, image, binding});
+        return BindGroup{0x680 + stage_groups.size() - 1};
+    }
+    bool refuse_stages = false;
+    std::vector<StageRecord> stage_pipelines;
+    std::vector<GroupRecord> stage_groups;
+
     const PipelineRecord& pipeline(Pipeline p) const { return pipelines.at(p.id - 0x100); }
     const GroupRecord& group(BindGroup g) const { return groups.at(g.id - 0x200); }
 
