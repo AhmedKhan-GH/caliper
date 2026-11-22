@@ -78,9 +78,9 @@ public:
     void complete(Serial s, double gpu_ms);
     Serial completed_through() const { return through_.load(std::memory_order_acquire); }
     double take_gpu_ms(uint32_t* submits = nullptr);   // the sum since the last take; < 0 none
-    // The GPU time of one completed submit among the last kSubmitTimes: true with *gpu_ms (< 0
-    // when the backend did not measure it) once serial s completed, false before or when it
-    // is older than the times kept.
+    // The measured GPU time of one completed submit among the last kSubmitTimes: true with
+    // *gpu_ms once serial s completed with a time, false before, without a time, or when it is
+    // older than the times kept.
     bool submit_gpu_ms(Serial s, double* gpu_ms) const;
     static constexpr size_t kSubmitTimes = 1024;
 
