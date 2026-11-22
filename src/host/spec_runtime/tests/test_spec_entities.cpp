@@ -416,3 +416,47 @@ TEST_CASE("entities: a line that lies on the surface wins by its depth offset, a
     CHECK(seen[0] > 400);
     CHECK(seen[0] > 3 * seen[1]);
 }
+
+TEST_CASE("entities: view_camera angles open the panel at those angles with its box framed") {
+    SpecOffscreen* c = canvas();
+    if (!c || !c->native_device()) return;
+    Source source;
+    std::string text = kSpec;
+    const std::string opts = R"(options = { up = "+z" })";
+    text.replace(text.find(opts), opts.size(), R"(options = { up = "+z", view_camera = { azimuth = -62.0, elevation = 32.0 } })");
+    const spec::Spec s = parse(text);
+    std::unique_ptr<SpecRuntime> rt;
+    c->with_context([&] { rt = std::make_unique<SpecRuntime>(c->textures()); });
+    rt->set_scene_layer(canvas_layer(c));
+    rt->set_source(&source);
+    rt->set_spec(s);
+    const Image img = render(1000, 520, [&](const ImRect& area) { rt->draw(area, c->look()); }, 4);
+    dump(img, "entities-view-camera.png");
+    caliper_live_views::SceneView* view = rt->entity_view("world");
+    REQUIRE(view != nullptr);
+    const auto* o = std::get_if<caliper_scene::Orbit>(&view->camera());
+    REQUIRE(o != nullptr);
+    CHECK(o->azimuth == doctest::Approx(-62.0 * caliper_scene::kPi / 180.0));
+    CHECK(o->elevation == doctest::Approx(32.0 * caliper_scene::kPi / 180.0));
+    // The distance and the target come from the box fit: the box fills the picture.
+    const caliper_scene::CameraMatrices cm =
+        caliper_scene::camera_matrices(view->effective_camera(), view->tree(), view->width(), view->height());
+    REQUIRE(cm.ok);
+    const caliper_host::EntityBox& box = caliper_host::spec_scene_content(*rt->entity_scene("world")).box;
+    double x0 = 9, x1 = -9, y0 = 9, y1 = -9;
+    for (int k = 0; k < 8; ++k) {
+        double h[4];
+        caliper_scene::transform_h(cm.proj * cm.view,
+                                   {(k & 1) ? box.half[0] : -box.half[0], (k & 2) ? box.half[1] : -box.half[1],
+                                    (k & 4) ? box.half[2] : -box.half[2]},
+                                   h);
+        x0 = std::min(x0, h[0] / h[3]), x1 = std::max(x1, h[0] / h[3]);
+        y0 = std::min(y0, h[1] / h[3]), y1 = std::max(y1, h[1] / h[3]);
+    }
+    CHECK(std::max(x1 - x0, y1 - y0) > 1.8);   // one side spans the picture, within its margin
+    CHECK(x1 <= 1.0);
+    CHECK(x0 >= -1.0);
+    CHECK(y1 <= 1.0);
+    CHECK(y0 >= -1.0);
+    c->with_context([&] { rt.reset(); });
+}
