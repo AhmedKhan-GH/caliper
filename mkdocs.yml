@@ -25,6 +25,8 @@ theme:
     - navigation.sections
     - navigation.indexes
     - navigation.prune
+    - navigation.tracking
+    - toc.follow
     - content.code.copy
     - search.suggest
 extra:
