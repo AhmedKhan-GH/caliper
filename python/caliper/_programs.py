@@ -58,6 +58,10 @@ CHANGE = 0.25           # N moves down only when it is more than this share abov
 GROW, SHRINK = 2.0, 1.5 # the largest factors of one change of N, up and down
 CEILING_S = 10.0        # N is at most the steps of this many seconds of training
 OVER_UPDATES = 3        # updates over budget at the ceiling before the programs stop
+DRAINED_STEPS = 16      # steps in a row with torch's queue empty before the marks become sparse
+SPARSE = 8              # the steps between two marks while the loop waits for the GPU by itself
+SHORT_WAITS = 2         # passes in a row whose first sync point found torch's queue empty
+WAIT_EMPTY = 2e-4       # a first sync point shorter than this found torch's queue empty
 EVERY_MAX = 10000
 TIME_MS_DEFAULT, TIME_MS_MAX = 4.0, 50.0
 MEMORY_MB_DEFAULT, MEMORY_MB_MAX = 64, 512
@@ -70,7 +74,8 @@ _IMPORTS: dict = {}     # input name -> its newest _Import
 _LIVE: dict = {}        # handle -> each _Import not released yet (an older one may still be bound)
 _ACTS: dict = {}        # module name -> its last output, for the inputs <module>.act
 _ACT_HOOKS: dict = {}   # module name -> the forward hook's handle
-_STATE = {"rt": None, "mod": None, "model": None, "optimizer": None, "marks": None, "step": None}
+_STATE = {"rt": None, "mod": None, "model": None, "optimizer": None, "marks": None, "step": None,
+          "dense": True, "drained": 0, "short": 0, "long": 0, "switches": 0}
 _clock = time.perf_counter
 _WARNED: set = set()
 
@@ -123,12 +128,12 @@ class _Cadence:
         self.last_pass = None       # the step of the last pass
 
     def restart(self) -> None:
-        """Forget the marks and passes of the current windows, but keep ``b``, ``D`` and N: the
-        script numbered its steps again."""
+        """Forget the marks and passes of the current windows, but keep ``b``, ``D``, N and the
+        step of the last pass: the script numbered its steps again, or the clock of the
+        completions changed."""
         self.done = {}
         self.passes = set()
         self.start = None
-        self.last_pass = None
 
     def step_s(self):
         """The base step time ``b`` in seconds, or None before the first stretch."""
@@ -144,8 +149,10 @@ class _Cadence:
         return None if b is None or d is None or b <= 0 else d / ((self.n or N_MIN) * b)
 
     def due(self, step: int) -> bool:
-        """Whether ``step`` may run a pass: N steps after the last one."""
-        return self.last_pass is None or step - self.last_pass >= (self.n or N_MIN)
+        """Whether ``step`` may run a pass: N steps after the last one, or before it when the
+        script numbered its steps again."""
+        last = self.last_pass
+        return last is None or step < last or step - last >= (self.n or N_MIN)
 
     def passed(self, step: int) -> None:
         """Step ``step`` runs a pass."""
@@ -521,6 +528,7 @@ def install(program_id: str, declaration: dict, wgsl: str, *, scene: str | None 
     with _LOCK:
         if not ACTIVE:
             _CAD.reset()                             # the measurement starts again from this install
+            _STATE.update(dense=True, drained=0, short=0, long=0, switches=0)
             if _STATE["marks"]:
                 _STATE["marks"].clear()
         p = _Program(str(program_id), dict(declaration or {}), str(wgsl), scene, str(sha256 or ""))
@@ -591,7 +599,8 @@ def stats() -> dict:
         b, d = _CAD.step_s(), _CAD.cost_s()
         out.update({"every": _CAD.n, "step_ms": None if b is None else b * 1e3,
                     "cost_ms": None if d is None else d * 1e3, "overhead_share": _CAD.share(),
-                    "wanted_every": _CAD.want, "ceiling": _CAD.ceiling})
+                    "wanted_every": _CAD.want, "ceiling": _CAD.ceiling,
+                    "sparse_marks": not _STATE["dense"], "mark_switches": _STATE["switches"]})
         return out
 
 
@@ -645,6 +654,40 @@ def _marks():
     return m or None
 
 
+def _mark(marks, step: int, now: float, is_pass: bool) -> list:
+    """Put the mark of ``step`` on torch's queue when it is needed, and return the marks that
+    completed since the last step.
+
+    A mark at each step gives torch's queued work to the GPU at once, which keeps the GPU busy
+    while the training thread queues the next step. A loop that waits for the GPU by itself, for
+    example with ``loss.item()``, gains nothing from it, and there the extra command buffer costs
+    about 4 % of a short step. Such a loop shows two signs: the previous mark has completed before
+    each step, for ``DRAINED_STEPS`` steps in a row, and the first sync point of the last
+    ``SHORT_WAITS`` passes waited less than ``WAIT_EMPTY``, thus torch's queue was empty at the
+    step. Then the facade marks only every ``SPARSE`` steps, the step before a pass and the pass,
+    and times the steps with its own clock. A sparse mark that is still pending at the next one, or
+    ``SHORT_WAITS`` long waits at passes in a row, show that the loop no longer waits by itself, and
+    each step is marked again.
+    """
+    if marks is None:
+        return [(step, now, now)]
+    done = marks.poll(now)
+    if _STATE["dense"]:
+        _STATE["drained"] = _STATE["drained"] + 1 if marks.pending() == 0 else 0
+        if _STATE["drained"] >= DRAINED_STEPS and _STATE["short"] >= SHORT_WAITS:
+            _STATE["dense"] = False
+            _STATE["switches"] += 1
+            _CAD.restart()
+    elif (step % SPARSE == 0 and marks.pending() > 0) or _STATE["long"] >= SHORT_WAITS:
+        _STATE["dense"], _STATE["drained"] = True, 0
+        _STATE["switches"] += 1
+        _CAD.restart()
+        done = []
+    if _STATE["dense"] or is_pass or step % SPARSE == 0 or _CAD.due(step + 1):
+        marks.record(step, now)                  # also gives torch's queued work to the GPU
+    return done
+
+
 def _at_step(step: int) -> None:
     changed = []
     published = []
@@ -657,8 +700,6 @@ def _at_step(step: int) -> None:
             _CAD.restart()
             if marks is not None:
                 marks.clear()
-        if marks is not None:
-            marks.record(step, now)                  # also gives torch's queued work to the GPU
         due = []
         for p in _PROGS.values():
             if p.state not in ("waiting", "compiled", "running"):
@@ -670,12 +711,15 @@ def _at_step(step: int) -> None:
                 due.append(p)
         if due and not _CAD.due(step):
             due = []
+        done = _mark(marks, step, now, bool(due))
         if due:
             _CAD.passed(step)
-        done = marks.poll(now) if marks is not None else [(step, now, now)]
         if due:
             if marks is not None:                    # sync point 1: torch's work is complete
                 done += marks.wait(step, _clock)
+                empty = _clock() - now < WAIT_EMPTY
+                _STATE["short"] = _STATE["short"] + 1 if empty else 0
+                _STATE["long"] = 0 if empty else _STATE["long"] + 1
             else:
                 _torch_adapter().framework_done()
             ran = []
@@ -718,6 +762,8 @@ def _at_step(step: int) -> None:
                         p.state = "running"
                         changed.append(p)
                     published.append((p, _outputs(rt, p)))
+        if not _STATE["dense"]:                      # the loop waits by itself: the clock times it
+            done = [(step, now, now)]
         for k, _lo, hi in done:
             _CAD.completed(k, hi)
         live = [p.every_min for p in _PROGS.values() if p.state in ("waiting", "compiled", "running")]

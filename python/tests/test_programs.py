@@ -151,7 +151,9 @@ class Sim:
     ``pass_gpu`` on the GPU. ``passes`` can give the time of single passes, for an outlier.
     """
 
-    def __init__(self, cpu, gpu, pass_s, pass_gpu=None):
+    def __init__(self, cpu, gpu, pass_s, pass_gpu=None, item=False):
+        self.item = item        # the loop waits for the GPU at each step, as loss.item() does
+        self.records = 0
         self.t = 0.0            # the training thread's clock
         self.gpu_free = 0.0     # when the GPU finishes the work it has
         self.queued = 0.0       # GPU work queued since the last mark
@@ -175,6 +177,10 @@ class Sim:
         for k in range(first, first + steps):
             self.t += self.cpu              # forward and backward of step k, optimizer of k - 1
             self.queued += self.gpu
+            if self.item:                   # torch commits the queue and waits for it
+                self.gpu_free = max(self.gpu_free, self.t) + self.queued
+                self.queued = 0.0
+                self.t = self.gpu_free
             P.at_step(k)
 
     def run(self, handles, step, time_s, every):
@@ -191,6 +197,7 @@ class SimEvent:
 
     def record(self):
         s = self.sim
+        s.records += 1
         s.gpu_free = max(s.gpu_free, s.t) + s.queued
         s.queued = 0.0
         self.at = s.gpu_free
@@ -233,6 +240,8 @@ def sim(monkeypatch):
         monkeypatch.setitem(P._STATE, "rt", SimRuntime(s))
         monkeypatch.setitem(P._STATE, "marks", _adapter.StepMarks(s.event, size=64))
         monkeypatch.setitem(P._STATE, "step", None)
+        for k, v in (("dense", True), ("drained", 0), ("short", 0), ("long", 0), ("switches", 0)):
+            monkeypatch.setitem(P._STATE, k, v)
         monkeypatch.setattr(P, "_outputs", lambda rt, p: {})
         monkeypatch.setattr(P, "_publish", lambda p, outs: None)
         P._CAD.reset()
@@ -283,6 +292,23 @@ def test_the_cadence_converges_on_a_cpu_bound_run(sim):
     assert st["cost_ms"] == pytest.approx(0.5 + 0.2, rel=0.15)
     low, high = _bounds(0.7, 0.0, 1.0)               # 18 and 23.5
     assert low <= st["every"] <= high
+
+
+def test_a_loop_that_waits_at_each_step_gets_sparse_marks(sim):
+    # As with loss.item() at each step: torch's queue is empty at each checkpoint, a mark there
+    # only adds a command buffer, and the facade times the steps with its own clock.
+    s = sim(cpu=0.9e-3, gpu=0.4e-3, pass_s=0.5e-3, item=True)
+    s.train(400)
+    assert not P._STATE["dense"]
+    records = s.records
+    s.train(1600, first=400)
+    st = P.stats()
+    assert st["step_ms"] == pytest.approx(1.3, rel=0.03)
+    assert st["cost_ms"] == pytest.approx(0.5, rel=0.15)
+    low, high = _bounds(0.5, 0.0, 1.3)               # 10 and 13.5
+    assert low <= st["every"] <= high
+    passes = 1600 / st["every"]
+    assert s.records - records <= 1600 / P.SPARSE + 2 * passes + 2
 
 
 def test_a_step_without_a_pass_never_waits(sim):
