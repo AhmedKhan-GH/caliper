@@ -231,6 +231,133 @@ fn run(@builtin(global_invocation_id) id: vec3<u32>) {
     caliper_producer_error_free(&e);
 }
 
+// A store far outside the output values, at an index the script gives through the input aim:
+// the index that, without bounds checks, lands in the tensor guard, which the pass also binds.
+const char* kFarStore = R"(@group(0) @binding(0) var<storage, read> aim: array<i32>;
+@group(0) @binding(1) var<storage, read> guard: array<f32>;
+@group(0) @binding(2) var<storage, read_write> positions: array<f32>;
+@group(0) @binding(3) var<storage, read_write> values: array<f32>;
+@group(0) @binding(4) var<storage, read_write> count: atomic<u32>;
+@compute @workgroup_size(64)
+fn run(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x >= 4u) { return; }
+    let i = atomicAdd(&count, 1u);
+    positions[i * 3u] = f32(id.x);
+    positions[i * 3u + 1u] = guard[0];
+    positions[i * 3u + 2u] = 0.0;
+    values[i] = f32(id.x) + 10.0;
+    if (id.x == 0u) {
+        values[aim[0]] = 12345.0;
+        values[u32(aim[0]) + 4000000000u] = 12345.0;
+    }
+}
+)";
+
+TEST_CASE("a store far outside an output leaves a tensor after it and the rest of the output unchanged") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    constexpr float kSentinel = 7.0f;
+    id<MTLBuffer> aim = [f.device newBufferWithLength:4096 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> guard = [f.device newBufferWithLength:65536 options:MTLResourceStorageModeShared];
+    auto* g = static_cast<float*>([guard contents]);
+    for (size_t i = 0; i < 65536 / 4; ++i) g[i] = kSentinel;
+    std::memset([aim contents], 0, 4096);
+    auto import = [&](id<MTLBuffer> b, const char* name, uint64_t bytes, uint32_t dtype) {
+        caliper_producer_tensor t{};
+        t.name = name;
+        t.buffer = (__bridge void*)b;
+        t.byte_size = bytes;
+        t.dtype = dtype;
+        t.ndim = 1;
+        t.shape[0] = int64_t(bytes / 4);
+        uint32_t h = 0;
+        caliper_producer_error e{};
+        REQUIRE(caliper_producer_import(f.rt, &t, &h, &e) == CALIPER_PRODUCER_OK);
+        return h;
+    };
+    const uint32_t aim_h = import(aim, "aim", 16, CALIPER_PRODUCER_I32);
+    const uint32_t guard_h = import(guard, "guard", 65536, CALIPER_PRODUCER_F32);
+
+    caliper_producer_input inputs[2] = {{"aim", aim_h}, {"guard", guard_h}};
+    const char* arrays[2] = {"positions", "values"};
+    Desc d(kFarStore, 0);
+    d.d.inputs = inputs;
+    d.d.input_count = 2;
+    d.d.arrays = arrays;
+    d.d.array_count = 2;
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d.d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+
+    // The index from values' first element to the middle of guard, in elements of 4 bytes.
+    caliper_producer_output out{};
+    REQUIRE(caliper_producer_read_output(f.rt, prog, "values", &out, &e) == CALIPER_PRODUCER_OK);
+    id<MTLBuffer> values = (__bridge id<MTLBuffer>)out.buffer;
+    const int64_t delta = int64_t(guard.gpuAddress + 32768) - int64_t(values.gpuAddress);
+    REQUIRE(delta % 4 == 0);
+    if (delta / 4 > INT32_MAX || delta / 4 < INT32_MIN) {
+        MESSAGE("guard is more than 8 GiB from the output: the case cannot aim at it");
+        return;
+    }
+    static_cast<int32_t*>([aim contents])[0] = int32_t(delta / 4);
+    MESSAGE("the store aims ", delta, " bytes from the output's first element");
+
+    caliper_producer_frame frame{1, 0.0, 1};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    size_t changed = 0;
+    for (size_t i = 0; i < 65536 / 4; ++i) changed += g[i] != kSentinel;
+    CHECK(changed == 0);
+    REQUIRE(caliper_producer_read_output(f.rt, prog, "values", &out, &e) == CALIPER_PRODUCER_OK);
+    REQUIRE(out.count == 4);
+    const float* v = static_cast<const float*>([values contents]);
+    std::vector<bool> seen(4, false);
+    for (uint32_t i = 0; i < 4; ++i) {
+        const float x = v[i] - 10.0f;
+        REQUIRE((x >= 0.0f && x < 4.0f));
+        seen[size_t(x)] = true;
+    }
+    for (bool s : seen) CHECK(s);
+    REQUIRE(caliper_producer_read_output(f.rt, prog, "positions", &out, &e) == CALIPER_PRODUCER_OK);
+    const float* pos = static_cast<const float*>([(__bridge id<MTLBuffer>)out.buffer contents]);
+    for (uint32_t i = 0; i < 4; ++i) CHECK(pos[i * 3 + 1] == kSentinel);
+    caliper_producer_error_free(&e);
+}
+
+TEST_CASE("a load far past an input reads zero, not the next tensor in the same storage") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    // The import w covers bytes 0 to 127 of the storage; another tensor fills the rest of it.
+    auto* t = static_cast<float*>([f.tensor contents]);
+    for (size_t i = kRows * kCols; i < 4096 / 4; ++i) t[i] = 9.0f;
+    Desc d(R"(@group(0) @binding(0) var<storage, read> w: array<f32>;
+@group(0) @binding(1) var<storage, read_write> positions: array<f32>;
+@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;
+@compute @workgroup_size(64)
+fn run(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x >= 4u) { return; }
+    let i = atomicAdd(&count, 1u);
+    positions[i * 3u] = f32(id.x);
+    positions[i * 3u + 1u] = w[id.x * 8u];
+    positions[i * 3u + 2u] = w[200u + id.x];
+}
+)", f.w);
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d.d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+    caliper_producer_frame frame{1, 0.0, 1};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_output out{};
+    REQUIRE(caliper_producer_read_output(f.rt, prog, "positions", &out, &e) == CALIPER_PRODUCER_OK);
+    REQUIRE(out.count == 4);
+    const float* p = static_cast<const float*>([(__bridge id<MTLBuffer>)out.buffer contents]);
+    for (uint32_t i = 0; i < 4; ++i) {
+        const auto row = uint32_t(p[i * 3]);
+        CHECK(p[i * 3 + 1] == float(row) + 1.0f);   // in range: the row's first column, row + 1
+        CHECK(p[i * 3 + 2] == 0.0f);                // out of range: zero, not 9
+    }
+    caliper_producer_error_free(&e);
+}
+
 TEST_CASE("the read-only rule refuses an input declared read_write and a store to a read input") {
     Fixture f;
     if (f.device == nil) { MESSAGE("no Metal device"); return; }

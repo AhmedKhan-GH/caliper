@@ -458,10 +458,16 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
                 "This build of the runtime has no WGSL compiler, so a program cannot run.");
 #else
     @autoreleasepool {
-        // 4. The compile.
+        // 4. The compile, with every buffer index and texel load checked (caliper/wgsl.h, BOUNDS
+        // CHECKS): Metal has no robust buffer access, and a store past an output would land in
+        // other memory of the process, such as a training tensor.
+        if (caliper_wgsl_abi_version() != CALIPER_WGSL_ABI_VERSION)
+            return fail(error, CALIPER_PRODUCER_UNSUPPORTED, kCompilerUnavailable,
+                        "The WGSL compiler library has another interface version than this runtime.");
         caliper_wgsl_options opt;
         caliper_wgsl_options_init(&opt);
         opt.max_source_bytes = kSourceBytes;
+        opt.bounds_checks = CALIPER_WGSL_BOUNDS_CHECKED;
         caliper_wgsl_module* mod = nullptr;
         caliper_wgsl_error we{};
         if (caliper_wgsl_module_create(wgsl.data(), wgsl.size(), &opt, &mod, &we) != CALIPER_WGSL_OK) {

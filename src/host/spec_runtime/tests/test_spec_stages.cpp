@@ -533,6 +533,52 @@ TEST_CASE("stages: a material stage recolours points, a vertex stage moves them,
     CHECK(cache.size() == 0);
 }
 
+TEST_CASE("stages: a stage that indexes out of range draws, with zero for each read past its resource") {
+    if (!have_compiler()) {
+        MESSAGE("skipped: this build has no caliper-wgsl library");
+        return;
+    }
+    StageRig rig;
+    if (!rig.init()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    uint32_t staged = 0;
+    const std::vector<uint8_t> plain = rig.draw(nullptr, &staged);
+    // A texel load far outside the class table and a column far past the uniform's matrix read
+    // zero; the local array's index is clamped to its last element, 1.0. Thus magenta.
+    const std::string far = R"(fn material(in: MaterialIn) -> vec4<f32> {
+    let far = u32(in.color.a * 0.0) + 100000u;
+    var local = array<f32, 4>(0.0, 0.0, 0.0, 1.0);
+    let texel = textureLoad(class_table, vec2<u32>(far, far), 0);
+    let column = p.mvp[far];
+    return vec4<f32>(local[far] + texel.r + column.x, texel.g + column.y, 1.0 + column.z, 1.0);
+}
+)";
+    const caliper_host::StageCompile c = caliper_host::compile_stage_program(Primitive::Points, &far, nullptr, "test");
+    REQUIRE_MESSAGE(c.build, c.verdict.message);
+    CHECK(c.build->msl.find("DefaultConstructible") != std::string::npos);
+    StageCache cache(*rig.gfx);
+    OneSource src;
+    src.b = c.build;
+    cache.set_source(&src);
+    cache.begin_frame();
+    const std::vector<uint8_t> drawn = rig.draw(&cache, &staged);
+    cache.end_frame();
+    CHECK_MESSAGE(src.refusal.empty(), src.refusal);
+    CHECK(staged == 1);
+    capture("stage-out-of-range.png", drawn);
+    size_t covered = 0, magenta = 0;
+    for (int y = 0; y < StageRig::kSide; ++y)
+        for (int x = 0; x < StageRig::kSide; ++x) {
+            if (pixel(plain, x, y) != StageRig::kClear) ++covered;
+            if (pixel(drawn, x, y) == 0xffff00ffu) ++magenta;
+        }
+    CHECK(covered > 0);
+    CHECK(magenta == covered);
+    cache.set_source(nullptr);
+}
+
 TEST_CASE("stages: a scene view draws its panel's stages, again on a new revision, and reports their frames") {
     if (!have_compiler()) {
         MESSAGE("skipped: this build has no caliper-wgsl library");

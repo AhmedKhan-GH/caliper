@@ -118,9 +118,14 @@ StageCompile compile_stage_program(Primitive primitive, const std::string* mater
         out.verdict = refusal(pg::kProgramCompilerUnavailable, "The WGSL compiler library has another interface version.");
         return out;
     }
+    // Every buffer index and texel load of the stage program is checked (caliper/wgsl.h, BOUNDS
+    // CHECKS), as for a program in the script: a stage comes from a spec.
+    caliper_wgsl_options options;
+    caliper_wgsl_options_init(&options);
+    options.bounds_checks = CALIPER_WGSL_BOUNDS_CHECKED;
     caliper_wgsl_module* module = nullptr;
     caliper_wgsl_error error{};
-    if (caliper_wgsl_module_create(src.data(), src.size(), nullptr, &module, &error) != CALIPER_WGSL_OK) {
+    if (caliper_wgsl_module_create(src.data(), src.size(), &options, &module, &error) != CALIPER_WGSL_OK) {
         place(error.line, error.column, error.message ? error.message : "the source does not compile");
         caliper_wgsl_error_free(&error);
         return out;
