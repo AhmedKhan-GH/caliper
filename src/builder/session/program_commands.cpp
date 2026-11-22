@@ -10,6 +10,7 @@
 #include "program_checks.h"
 
 #include <caliper_builder/session/program_commands.h>
+#include <caliper_builder/session/chain_hooks.h>
 
 #include <string>
 #include <utility>
@@ -164,6 +165,22 @@ CommandOutput program_status(const json& args, const spec::Spec& s, const Progra
                                     spec::program_target(p), p.wgsl);
         st.every_min = p.limits.every;
         st.memory_limit_bytes = p.limits.memory_bytes_or_default();
+        programs_out.push_back(program_status_json(st));
+    }
+    // The program of each operator that runs in the script
+    // (design/instrument-interface.md, Operator Programs): kind operator, and
+    // the source's id in its own.
+    for (const spec::Source& source : s.sources) {
+        if (!operator_runs_in_script(s, source, 0)) continue;
+        const std::string id = "operator." + source.id + ".0";
+        if (!only.empty() && id != only) continue;
+        if (const ProgramStatus* st = reported(hosted_programs, id)) {
+            programs_out.push_back(program_status_json(*st));
+            continue;
+        }
+        ProgramStatus st;
+        st.id = id;
+        st.kind = "operator";
         programs_out.push_back(program_status_json(st));
     }
     json stages_out = json::array();

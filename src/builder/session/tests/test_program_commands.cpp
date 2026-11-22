@@ -12,6 +12,7 @@
 #include <caliper_builder/programs/sandbox.h>
 #include <caliper_builder/session/program_commands.h>
 #include <caliper_builder/session/session.h>
+#include <caliper_builder/spec/format.h>
 
 #include <doctest/doctest.h>
 
@@ -388,6 +389,46 @@ TEST_CASE("programs: program.status lists the spec's items with what each host r
     CHECK(err(*s, "program.status", {{"id", "nothing"}}) == cp::kProgramNotFound);
     s->set_program_host(nullptr);
     s->set_stage_host(nullptr);
+}
+
+TEST_CASE("programs: program.status lists the program of an operator that runs in the script, with kind operator") {
+    // The command table does not take the operator steps yet, thus the spec comes from TOML.
+    const spec::ParseResult parsed = spec::parse_toml(
+        "caliper_spec = 1\n[applet]\nid = \"ops\"\n[[source]]\nid = \"w\"\n"
+        "catalog = \"live:blocks.0.attn.proj.weight\"\ntransform = [{ op = \"surface\", max_cells = 4096 }]\n"
+        "[[source]]\nid = \"recent\"\ncatalog = \"live:blocks.0.attn.proj.act\"\n"
+        "transform = [{ op = \"window\", steps = 8 }, { op = \"surface\" }]\n");
+    REQUIRE(parsed.ok());
+    const CommandDescriptor* d = find_command_descriptor("program.status");
+    REQUIRE(d);
+    CommandInvocation inv;
+    inv.name = "program.status";
+    inv.args = json::object();
+    const CommandContext ctx{inv, *d};
+    CommandOutput out = program_command(ctx, parsed.spec, nullptr, nullptr);
+    REQUIRE_FALSE(out.error);
+    json r = out.result;
+    REQUIRE(r["programs"].size() == 1);   // the operator after a window runs in the app
+    CHECK(r["programs"][0]["id"] == "operator.w.0");
+    CHECK(r["programs"][0]["kind"] == "operator");
+    CHECK(r["programs"][0]["host"] == "none");
+    CHECK(r["programs"][0]["state"] == "waiting");
+
+    FakeProgramHost programs;
+    ProgramStatus running;
+    running.id = "operator.w.0";
+    running.kind = "operator";
+    running.host = "script";
+    running.state = "running";
+    running.runs = 2;
+    programs.items = {running};
+    inv.args = {{"id", "operator.w.0"}};
+    out = program_command(ctx, parsed.spec, &programs, nullptr);
+    REQUIRE_FALSE(out.error);
+    r = out.result;
+    REQUIRE(r["programs"].size() == 1);
+    CHECK(r["programs"][0]["host"] == "script");
+    CHECK(r["programs"][0]["state"] == "running");
 }
 
 TEST_CASE("programs: in a foreign spec an unreviewed source waits for a review and provenance stays as it is") {

@@ -347,8 +347,8 @@ public:
             // GPU programs (design/gpu-programs.md, Attachment): the attached
             // script's programs follow the open spec's, and its PROGRAM_STATE
             // becomes program.status and the program events.
-            if (caliper_builder::Session* s = session_.session()) program_host_.pump(program_link_, &s->events());
-            else program_host_.pump(program_link_, nullptr);
+            // The session also gives the params' values and the operators' input shapes.
+            program_host_.pump(program_link_, session_.session());
 #endif
             save_prompt_.frame(session_);   // "Save changes to <name>?" and what waits on it
             approvals_.frame(session_.session(), session_.worker_busy(), glfwGetTime());

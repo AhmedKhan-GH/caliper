@@ -17,6 +17,7 @@
 #include "builder/panel_renderer.h"
 #include "builder/spec_page.h"
 #include "live/live_attach.h"
+#include "live/live_programs.h"
 #include "job_system.h"
 #include "test_temp.h"
 #ifndef _WIN32
@@ -25,7 +26,9 @@
 
 #include <caliper_builder/commands/approval.h>
 #include <caliper_builder/commands/journal.h>
+#include <caliper_builder/operators/operators.h>
 #include <caliper_builder/session/session.h>
+#include <caliper_builder/spec/format.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -231,6 +234,148 @@ cb::CommandResult call(cb::Session& s, cb::CommandInvocation i) {
 }
 
 }  // namespace
+
+// ---- the program host: the programs of operators and params (live/live_programs.h)
+
+namespace {
+
+// A ProgramLink that records each PROGRAM and hands back the answers a case queues.
+struct RecordingProgramLink final : caliper_live::ProgramLink {
+    std::vector<caliper_net::wire::Program> sent;
+    std::vector<caliper_live::ProgramAnswer> answers;
+    uint32_t next = 1;
+    bool ready() override { return true; }
+    uint64_t epoch() override { return 1; }
+    uint32_t send(caliper_net::wire::Program m) override {
+        m.request_id = next++;
+        sent.push_back(std::move(m));
+        return sent.back().request_id;
+    }
+    std::vector<caliper_live::ProgramAnswer> take() override {
+        std::vector<caliper_live::ProgramAnswer> out;
+        out.swap(answers);
+        return out;
+    }
+    std::vector<caliper_net::wire::Program> of(const std::string& op, const std::string& id) const {
+        std::vector<caliper_net::wire::Program> out;
+        for (const auto& m : sent)
+            if (m.op == op && m.id == id) out.push_back(m);
+        return out;
+    }
+};
+
+const char* kProgramSpec = R"(caliper_spec = 1
+[applet]
+id = "programs"
+[[source]]
+id = "w"
+catalog = "live:blocks.0.attn.proj.weight"
+transform = [{ op = "surface", max_cells = 64 }]
+[[program]]
+id = "rows"
+wgsl = """
+struct Params { level: f32, count: u32 }
+@group(0) @binding(0) var<storage, read> w: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+@compute @workgroup_size(16)
+fn run(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x < params.count) { out[id.x] = w[id.x] * params.level; }
+}
+"""
+inputs = [{ var = "w", source = "live:layers.0.weight" }]
+output = { kind = "tensor", shape = [16] }
+params = { level = { control = "gain", default = 0.5 }, count = 16 }
+)";
+
+double number_of(const caliper_net::Json& o, const char* key) {
+    const caliper_net::Json* j = o.is_object() ? o.find(key) : nullptr;
+    return j && j->is_number() ? j->as_double() : -1.0;
+}
+
+}  // namespace
+
+TEST_CASE("app session: the program host sends an operator's program once the catalog gives its shape, and params as op params") {
+    const cb::spec::ParseResult parsed = cb::spec::parse_toml(kProgramSpec);
+    REQUIRE(parsed.ok());
+    caliper_live::AppProgramHost host;
+    RecordingProgramLink link;
+    host.reconcile(parsed.spec);
+    host.pump(link, static_cast<cb::EventSink*>(nullptr));
+
+    // The program goes out with its params at their defaults; the operator waits for a shape.
+    auto sets = link.of(CALIPER_NET_PROGRAM_SET, "rows");
+    REQUIRE(sets.size() == 1);
+    const caliper_net::Json* params = sets[0].declaration.find("params");
+    REQUIRE(params);
+    CHECK(number_of(*params, "level") == 0.5);
+    CHECK(number_of(*params, "count") == 16);
+    CHECK(link.of(CALIPER_NET_PROGRAM_SET, "operator.w.0").empty());
+    std::vector<cb::ProgramStatus> st = host.status();
+    REQUIRE(st.size() == 1);
+    CHECK(st[0].kind == "tensor");
+
+    // A control moves, and the catalog gives (12, 40): op params for the program, a set for the operator.
+    const cb::spec::SourceResolver resolver = [](const std::string& id) -> std::optional<cb::spec::ResolvedSource> {
+        if (id != "live:blocks.0.attn.proj.weight") return std::nullopt;
+        cb::spec::ResolvedSource r;
+        r.kind = "live";
+        r.dtype = "f32";
+        r.shape = std::vector<std::int64_t>{12, 40};
+        return r;
+    };
+    double gain = 0.75;
+    const caliper_live::AppProgramHost::Evaluate evaluate = [&](const cb::spec::Reference& r) {
+        return r.target == "gain" ? nlohmann::json(gain) : r.fallback;
+    };
+    CHECK(host.refresh(evaluate, &resolver));
+    host.pump(link, static_cast<cb::EventSink*>(nullptr));
+    CHECK(link.of(CALIPER_NET_PROGRAM_SET, "rows").size() == 1);   // no new set, no new hash
+    auto ops = link.of(CALIPER_NET_PROGRAM_PARAMS, "rows");
+    REQUIRE(ops.size() == 1);
+    CHECK(number_of(ops[0].params, "level") == 0.75);
+    auto op_sets = link.of(CALIPER_NET_PROGRAM_SET, "operator.w.0");
+    REQUIRE(op_sets.size() == 1);
+    const caliper_net::Json& d = op_sets[0].declaration;
+    REQUIRE(d.find("builtin"));
+    CHECK(d.find("builtin")->as_string() == "surface@1");
+    const caliper_net::Json* shape = d.find("output")->find("shape");
+    REQUIRE(shape);
+    REQUIRE(shape->size() == 2);
+    CHECK(shape->at(0).as_double() == 4);   // 12 by 40 in at most 64 cells pools with f = 3
+    CHECK(shape->at(1).as_double() == 14);
+    CHECK(op_sets[0].sha256.value_or("") == cb::operators::builtin_sha256("surface"));
+    CHECK(number_of(*d.find("params"), "factor") == 3);
+
+    // The same value again sends nothing; the script reports the operator running.
+    CHECK_FALSE(host.refresh(evaluate, &resolver));
+    caliper_live::ProgramAnswer a;
+    a.programs = caliper_net::Json::array();
+    caliper_net::Json item = caliper_net::Json::object();
+    item.set("id", "operator.w.0");
+    item.set("kind", "operator");
+    item.set("state", "running");
+    item.set("sha256", cb::operators::builtin_sha256("surface"));
+    a.programs.push(std::move(item));
+    link.answers.push_back(std::move(a));
+    host.pump(link, static_cast<cb::EventSink*>(nullptr));
+    st = host.status();
+    REQUIRE(st.size() == 2);
+    CHECK(st[1].id == "operator.w.0");
+    CHECK(st[1].kind == "operator");
+    CHECK(st[1].host == "script");
+    CHECK(st[1].state == "running");
+
+    // A new shape sends the operator again.
+    const cb::spec::SourceResolver wider = [](const std::string&) -> std::optional<cb::spec::ResolvedSource> {
+        cb::spec::ResolvedSource r;
+        r.shape = std::vector<std::int64_t>{12, 50};
+        return r;
+    };
+    CHECK(host.refresh(evaluate, &wider));
+    host.pump(link, static_cast<cb::EventSink*>(nullptr));
+    CHECK(link.of(CALIPER_NET_PROGRAM_SET, "operator.w.0").size() == 2);
+}
 
 TEST_CASE("app session: commands from another thread run on the frame thread, in order, a few per frame") {
     TempDir t("order");
