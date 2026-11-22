@@ -778,6 +778,7 @@ PanelState panel_state_for_error(const std::string& code, const std::string& det
     if (code == "resolve.query_failed" || code == "resolve.timeout") return {PanelStateKind::query_error, "Query error", d};
     if (code == "resolve.unknown_column") return {PanelStateKind::missing, "Missing column", d};
     if (code == "resolve.unknown_source" || code == "resolve.cycle") return {PanelStateKind::missing, "Missing source", d};
+    if (code == "resolve.out_of_range") return {PanelStateKind::error, "Value out of range", d};
     if (code == "panel.not_found") return {PanelStateKind::no_spec, "Missing panel", d};
     if (code == "spec.no_open_spec") return {PanelStateKind::no_spec, "No spec", d};
     if (code == "resolve.not_tabular" || code == "resolve.not_a_tensor") return mismatch(d);

@@ -186,6 +186,75 @@ TEST_CASE("references: substitute_references") {
     CHECK(waiting.code == "resolve.waiting");
 }
 
+// Each value that a reference substitutes is checked against the range of its
+// place, the range the validator applies to a literal there: the window's
+// steps from 1 to 65,536, a slice's step from 1, and every place within
+// +-(2^53 - 1), with a value that does not round exactly refused.
+TEST_CASE("references: a value outside the range of its place is refused at the substitution") {
+    const spec::Spec sp = parse(R"(
+[[state]]
+id = "n"
+type = "number"
+
+[[source]]
+id = "act"
+catalog = "live:a"
+
+[[source]]
+id = "recent"
+from = "act"
+  [[source.transform]]
+  op = "window"
+  steps = { state = "n" }
+
+[[source]]
+id = "cut"
+catalog = "live:b"
+  [[source.transform]]
+  op = "slice"
+  axis = 0
+  start = { state = "n" }
+  step = { state = "n" }
+)");
+    const spec::Transform& window = sp.sources[1].transforms[0];
+    const spec::Transform& slice = sp.sources[2].transforms[0];
+    ValueStore values;
+    values.reset(sp);
+    const ChainContext ctx{&values, nullptr, 0, true};
+    spec::Transform out;
+
+    REQUIRE(values.set_state("n", 2.6, "test", CommandOrigin::ui, nullptr).ok());
+    CHECK(substitute_references(window, ctx, &out).ok());
+    CHECK(out.steps == std::optional<std::int64_t>(3));
+    CHECK(substitute_references(slice, ctx, &out).ok());
+    CHECK(out.step == std::optional<std::int64_t>(3));
+    REQUIRE(values.set_state("n", 65536, "test", CommandOrigin::ui, nullptr).ok());
+    CHECK(substitute_references(window, ctx, &out).ok());
+
+    for (const double bad : {-3.0, 0.0, 0.4, 65537.0, 1e300, 9007199254740992.0, -1e19}) {
+        INFO(bad);
+        REQUIRE(values.set_state("n", bad, "test", CommandOrigin::ui, nullptr).ok());
+        const Error e = substitute_references(window, ctx, &out);
+        CHECK(e.code == "resolve.out_of_range");
+        CHECK(e.where == "steps");
+        CHECK(e.message.find("from 1 to 65536") != std::string::npos);
+    }
+    // A slice's step is at least 1; its start may be negative, within 2^53 - 1.
+    for (const double bad : {0.0, -1.0, 1e300, 9007199254740992.0}) {
+        INFO(bad);
+        REQUIRE(values.set_state("n", bad, "test", CommandOrigin::ui, nullptr).ok());
+        CHECK(substitute_references(slice, ctx, &out).code == "resolve.out_of_range");
+    }
+    // The table holds every key that the validator lets a reference take.
+    for (const spec::IntegerPlace& place : spec::integer_places()) {
+        INFO(place.key);
+        CHECK(place.min <= place.max);
+        CHECK(spec::integer_place(place.op, place.key) == &place);
+    }
+    CHECK(spec::integer_place(spec::TransformOp::window, "index") == nullptr);
+    CHECK(spec::integer_place(spec::TransformOp::reduce, "axis") == nullptr);
+}
+
 // The key holds the values that the chain reads, so it is empty for a chain without references and moves with them.
 TEST_CASE("references: references_key") {
     const spec::Spec sp = parse(kEvalSpec);

@@ -165,6 +165,10 @@ struct PreparedPanel {
     caliper_builder::spec::Primitive primitive = caliper_builder::spec::Primitive::series;
     PanelState state;
     std::string info;                 // the header's info string, in mono
+    // An error that the panel shows in its header over the last good data it
+    // keeps: a reference whose value is outside the range of its place
+    // (resolve.out_of_range). Ready when there is none.
+    PanelState notice;
     std::string x_label, y_label, z_label;
     bool x_log = false, y_log = false;
     bool has_x_range = false, has_y_range = false;

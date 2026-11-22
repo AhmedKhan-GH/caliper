@@ -117,6 +117,25 @@ struct Transform {
     nlohmann::json x;                        // extensions; null when absent
 };
 
+// An integer value place of a step: a key that takes a literal or a
+// reference, the field of the step that holds it, and the range of its
+// values. The validator checks a literal against this range, and the resolver
+// checks each value that a reference gives there against the same range, so
+// every key in the table is checked at both places, and a key that is not in
+// it takes a literal only.
+struct IntegerPlace {
+    TransformOp op;
+    const char* key;
+    std::optional<std::int64_t> Transform::*field;
+    std::int64_t min;
+    std::int64_t max;
+};
+
+// The integer places of every step kind.
+const std::vector<IntegerPlace>& integer_places();
+// The integer place `key` of a step `op`; null when the key takes a literal only.
+const IntegerPlace* integer_place(TransformOp op, std::string_view key);
+
 // A source: exactly one of `catalog`, `sql` and `from`, then transforms.
 struct Source {
     std::string id;

@@ -366,6 +366,9 @@ private:
         SpecPanelView view;
         bool stale = true;
         uint64_t generation = 0;   // the served data's, when it was resolved
+        // The last data that no reference stopped with a value out of range;
+        // the panel and each entity keep it while a reference gives such a value.
+        std::optional<caliper_builder::PanelData> last_good;
     };
     void prepare(Entry& e, const caliper_builder::PanelData& data, const caliper_builder::spec::Spec* spec = nullptr);
     void update_only(const SpecLayout* shown);

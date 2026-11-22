@@ -101,8 +101,7 @@ void validate_history(const AdditionsCheck& c) {
             const bool ends = t.start || t.stop || t.references.count("start") || t.references.count("stop");
             if ((t.steps || t.references.count("steps")) && ends)
                 c.sink.error("spec.bad_transform", "A window takes steps, or start and stop, but not both.", tp);
-            if (t.steps && (*t.steps < 1 || *t.steps > kMaxHistory))
-                c.sink.error("spec.out_of_range", "steps must be an integer from 1 to 65,536.", tp + ".steps");
+            // The range of steps, start and stop: validate.cpp, through integer_places().
             if (t.start && t.stop && *t.start > *t.stop)
                 c.sink.error("spec.out_of_range", "start must not be after stop.", tp + ".start");
             const Source* from = find_source(s, *src.from);

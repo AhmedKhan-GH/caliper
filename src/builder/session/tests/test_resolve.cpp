@@ -6,10 +6,14 @@
 #include <caliper_builder/session/panel_data.h>
 #include <caliper_builder/session/resolve.h>
 #include <caliper_builder/session/session.h>
+#include <caliper_builder/session/values.h>
 
 #include <doctest/doctest.h>
 
 #include "helpers.h"
+
+#include <cstring>
+#include <limits>
 
 using namespace caliper_builder;
 using namespace session_test;
@@ -370,3 +374,65 @@ TEST_CASE("a window stacks the kept steps up to the cursor with the step of each
     ChainContext none{nullptr, &empty, 0, true};
     CHECK(resolve_panel(s, "trail", *opened.store, {}, &sources, &none).error.code == "resolve.unavailable");
 }
+
+// A window whose steps read a state stops with resolve.out_of_range for a
+// value outside 1 to 65,536, and never erases past the stacked steps.
+TEST_CASE("a window whose steps read a state refuses a value outside the range of steps") {
+    const std::string ws = fresh_dir("resolve-window-range");
+    StoreOpen opened = LoaderStore::open(ws);
+    REQUIRE(opened.error.ok());
+    spec::ParseResult parsed = spec::parse_toml(R"(caliper_spec = 1
+[applet]
+id = "steps"
+
+[[state]]
+id = "n"
+type = "integer"
+
+[[source]]
+id = "act"
+catalog = "live:act"
+
+[[source]]
+id = "recent"
+from = "act"
+transform = [{ op = "window", steps = { state = "n" } }]
+
+[[panel]]
+id = "trail"
+primitive = "series"
+bind = { y = "recent" }
+)");
+    INFO((parsed.diagnostics.empty() ? std::string() : parsed.diagnostics.front().message));
+    REQUIRE(parsed.ok());
+    const spec::Spec& s = parsed.spec;
+    auto live = std::make_shared<LiveFake>();
+    DataSources sources;
+    sources.set(CatalogKind::live, live);
+    StepHistory history;
+    history.configure(s);
+    for (int step : {10, 20, 30}) {
+        history.append("live:act", step, row(float(step)));
+        live->put(row(float(step)));
+    }
+    ValueStore values;
+    values.reset(s);
+    const ChainContext ctx{&values, &history, 30, true};
+
+    REQUIRE(values.set_state("n", 2, "test", CommandOrigin::ui, nullptr).ok());
+    PanelData d = resolve_panel(s, "trail", *opened.store, {}, &sources, &ctx);
+    REQUIRE_MESSAGE(d.error.ok(), d.error.message);
+    CHECK(values_of(d.slots[0].steps) == std::vector<double>{20, 30});
+    for (const json bad : {json(-3), json(0), json(65537), json(std::numeric_limits<std::int64_t>::min())}) {
+        INFO(bad.dump());
+        REQUIRE(values.set_state("n", bad, "test", CommandOrigin::ui, nullptr).ok());
+        d = resolve_panel(s, "trail", *opened.store, {}, &sources, &ctx);
+        CHECK(d.error.code == "resolve.out_of_range");
+        CHECK(d.error.where == "source recent, transform[0]");
+    }
+    REQUIRE(values.set_state("n", 1, "test", CommandOrigin::ui, nullptr).ok());
+    d = resolve_panel(s, "trail", *opened.store, {}, &sources, &ctx);
+    REQUIRE(d.error.ok());
+    CHECK(values_of(d.slots[0].steps) == std::vector<double>{30});
+}
+
