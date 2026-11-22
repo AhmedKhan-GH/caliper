@@ -239,6 +239,10 @@ jobs:
       # No test of those four files holds a wall-clock limit: their step and cost times run on a fake clock.
       # So do the stamps of both senders end to end, which need torch, websockets and the native sender, and
       # the shared cadence of the views, whose times run on a fake clock or scale with the measured time.
+      # The tests of programmable graphics run here as well: the wire's resource message and the instance
+      # form of PROGRAM (test_wire.py, numpy only), and the pieces' derive halves in the script
+      # (test_programs_pieces.py), which skip themselves where torch has no MPS device or caliper._producer
+      # is older than ABI version 3, as the tensor test does.
       - name: Python tests of the acceptance Python
         run: >-
           PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -m pytest -q -p no:cacheprovider
@@ -248,11 +252,86 @@ jobs:
           python/tests/test_ablate.py python/tests/test_wire_32.py python/tests/test_step_stamps.py
           python/tests/test_program_tensor.py python/tests/test_step_stamps_senders.py
           python/tests/test_cadence_views.py
+          python/tests/test_wire.py python/tests/test_programs_pieces.py
           --deselect "python/tests/test_watch.py::test_watch_registers_produces_and_removes"
           --deselect "python/tests/test_watch.py::test_watch_include_and_every"
           --deselect "python/tests/test_watch.py::test_watch_is_free_when_nothing_is_attached"
           --deselect "python/tests/test_controls.py::test_a_flood_of_values_from_several_threads"
           --deselect "python/tests/test_programs.py::test_outputs_pass_the_argument_checks_of_the_real_scene_calls"
+      # The pixel comparison of programmable graphics: the app's draw runtime on Metal and the browser
+      # module's on WebGPU draw the same fixture of pieces (tests/draw_parity/), and
+      # web/test/draw_parity.spec.ts compares the color and ID targets within the plan's tolerances.
+      # The app's side writes the fixture and, with a Metal device, its pictures. A skip because the
+      # runner has no Metal device is accepted: the browser then draws the fixture on its own and checks
+      # its refusals, and the comparison reports that it was skipped for that reason. Any other outcome
+      # of the app's side is an error. The browser also draws the fixture over a live connection from
+      # tests/draw_parity/serve_fixture.py, with the acceptance Python. The module is built here with
+      # the pinned Emscripten into a folder of its own; a failed module build fails the step before any
+      # browser runs.
+      - id: emscripten-pin
+        run: echo "emscripten=$(cat web/wasm/emscripten-version.txt)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v5
+        with:
+          path: ~/emsdk
+          key: emsdk-${{ runner.os }}-${{ runner.arch }}-${{ steps.emscripten-pin.outputs.emscripten }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '26'
+      - name: Pixel comparison of the app and the browser module
+        env:
+          EMSCRIPTEN_VERSION: ${{ steps.emscripten-pin.outputs.emscripten }}
+          PLAYWRIGHT_HTML_OPEN: never
+        run: |
+          set -o pipefail
+          out="$RUNNER_TEMP/draw-parity"
+          set +e
+          cmake-build-release/caliper_draw_parity_app "$out" | tee "$RUNNER_TEMP/draw-parity-app.log"
+          app=$?
+          set -e
+          if [ "$app" -eq 0 ]; then
+            echo "Draw parity, app side: drew the fixture on Metal"
+          elif [ "$app" -eq 77 ] && grep -q "skipped: no Metal device" "$RUNNER_TEMP/draw-parity-app.log"; then
+            echo "Draw parity, app side: SKIPPED because the runner has no Metal device; the browser side runs alone"
+          else
+            echo "::error::Draw parity, app side: exit $app, neither drawn nor skipped for lack of Metal"
+            exit 1
+          fi
+          test -s "$out/frames.bin" && test -s "$out/plan.json"
+          if [ ! -x "$HOME/emsdk/emsdk" ]; then
+            git clone --depth 1 --branch "$EMSCRIPTEN_VERSION" https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          fi
+          "$HOME/emsdk/emsdk" install "$EMSCRIPTEN_VERSION"
+          "$HOME/emsdk/emsdk" activate "$EMSCRIPTEN_VERSION"
+          rm -rf "$RUNNER_TEMP/draw-parity-views"
+          EMSDK="$HOME/emsdk" python3 scripts/build_wasm.py --build-dir "$RUNNER_TEMP/draw-parity-wasm" \
+            --out "$RUNNER_TEMP/draw-parity-views"
+          cd web
+          npm ci
+          npx playwright install chromium-headless-shell
+          log="$RUNNER_TEMP/draw-parity-browser.log"
+          CALIPER_WASM_DIR="$RUNNER_TEMP/draw-parity-views" CALIPER_DRAW_PARITY_DIR="$out" \
+          CALIPER_DRAW_PARITY_CAPTURES="$RUNNER_TEMP/draw-parity-captures" \
+          CALIPER_PYTHON="$RUNNER_TEMP/acceptance-py/bin/python" \
+            npx playwright test --project=swiftshader --reporter=list test/draw_parity.spec.ts | tee "$log"
+          grep -q "draw parity: ok" "$log"
+          grep -q "live tower:" "$log"
+          if [ "$app" -eq 0 ]; then
+            grep -q "head_pattern: interior" "$log"
+            grep -q "tower_arcs: interior" "$log"
+            echo "Draw parity: RAN, compared and passed"
+          else
+            grep -q "comparison skipped: no Metal device" "$log"
+            echo "Draw parity: the browser side RAN and passed; the comparison SKIPPED because the runner has no Metal device"
+          fi
+      - if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-draw-parity
+          path: |
+            ${{ runner.temp }}/draw-parity
+            ${{ runner.temp }}/draw-parity-captures
+            ${{ runner.temp }}/draw-parity-*.log
+          if-no-files-found: ignore
       - if: failure()
         uses: actions/upload-artifact@v6
         with:

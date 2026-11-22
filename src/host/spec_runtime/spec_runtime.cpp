@@ -10,6 +10,8 @@
 #include "live/live_views_scene.h"   // a scene drawn into a scene panel's rectangle
 #include "live/live_scene.h"         // the scene view of a panel's entities
 #include "spec_runtime/spec_entities.h"
+#include "spec_runtime/label_layout.h"   // fit_with_ellipsis
+#include "draw/draw_host.h"                 // the programs of the scene panels
 #include "scene/scene.h"   // kPalette
 
 #include "ui/sternbild_fonts.h"
@@ -18,6 +20,8 @@
 #include <caliper_builder/session/session.h>
 #include <caliper_builder/spec/colormaps.h>   // colormap_names
 #include <caliper_builder/session/spec_edit.h>
+#include <caliper_builder/session/piece_commands.h>   // resolve_pin
+#include <caliper_builder/session/history.h>
 
 #include <imgui_internal.h>
 #include <implot.h>
@@ -46,7 +50,6 @@ using caliper_builder::PanelData;
 
 namespace {
 
-const char* const kEllipsis = "\xE2\x80\xA6";   // U+2026
 
 ImU32 with_alpha(ImU32 c, int a) { return (c & 0x00ffffffu) | ((ImU32)a << 24); }
 
@@ -59,19 +62,10 @@ ImVec2 text_size(ImFont* f, float size, const std::string& s) {
 // `s` cut to `w` with an ellipsis, "" when not even that fits (the live
 // views' fit_text).
 std::string fit_text(ImFont* f, float size, const std::string& s, float w) {
-    if (text_size(f, size, s).x <= w) return s;
-    if (text_size(f, size, kEllipsis).x > w) return {};
-    std::string t = s;
-    while (!t.empty()) {
-        while (!t.empty()) {
-            const unsigned char c = (unsigned char)t.back();
-            t.pop_back();
-            if ((c & 0xC0) != 0x80) break;
-        }
-        while (!t.empty() && t.back() == ' ') t.pop_back();
-        if (text_size(f, size, t + kEllipsis).x <= w) return t + kEllipsis;
-    }
-    return {};
+    ImFont* font = font_or_current(f);
+    return caliper_host::fit_with_ellipsis(s, w, [font, size](std::string_view t) {
+        return font->CalcTextSizeA(size, FLT_MAX, 0.0f, t.data(), t.data() + t.size()).x;
+    });
 }
 
 void text_at(ImDrawList* dl, ImFont* f, float size, ImVec2 p, ImU32 c, const std::string& s) {
@@ -1139,6 +1133,142 @@ struct SpecRuntime::SceneStates {
 
 namespace {
 
+// The programs of the spec's scene panels (draw/draw_host.h, design/programmable-graphics.md):
+// one host for the app, as for stages, with the linked selection that every program reads.
+struct ProgramHost {
+    caliper_draw::DrawHost host;
+    std::map<std::string, caliper_draw::Selected> picked;   // the newest program pick of each panel
+    std::int64_t last_step = -1;
+    std::uint64_t moves = 0;
+    std::function<std::string()> workspace;                 // the app's workspace folder, for its pieces
+    std::map<std::string, std::string> seen_picks;          // each panel's last pick that the programs took
+};
+
+// One status item for each program that the scene panels draw: half "draw" and its draw object.
+std::vector<caliper_builder::ProgramStatus> drawn_items(const caliper_draw::DrawHost& host) {
+    std::vector<caliper_builder::ProgramStatus> out;
+    for (const auto& [id, s] : host.status()) {
+        caliper_builder::ProgramStatus st;
+        st.id = id;
+        st.kind = "piece";
+        st.host = "viewer";
+        st.half = "draw";
+        caliper_builder::DrawStatus d;
+        d.state = caliper_draw::draw_status_json(s).value("state", std::string("waiting"));
+        if (s.frame_ms >= 0) d.frame_ms = s.frame_ms;
+        d.frame_limit_ms = s.frame_limit_ms;
+        d.memory_bytes = s.memory_bytes;
+        d.memory_limit_bytes = s.memory_limit_bytes;
+        if (s.resource_step >= 0) d.resource_step = s.resource_step;
+        if (!s.error.ok()) {
+            d.error = caliper_builder::ProgramError{s.error.code, s.error.message, s.error.line, s.error.column};
+            d.error_where = s.error.where;
+        }
+        if (s.pass >= 0) st.pass = static_cast<std::uint32_t>(s.pass);
+        st.state = d.state;
+        st.draw = std::move(d);
+        out.push_back(std::move(st));
+    }
+    return out;
+}
+
+ProgramHost& program_host() {
+    static ProgramHost* h = [] {
+        auto* p = new ProgramHost();
+        // A pin resolves to an inline piece of the spec, a piece of the app's workspace or one of
+        // the built-in library.
+        p->host.set_resolver([p](const spec::Spec& s, const spec::Program& program, spec::Piece* out) {
+            caliper_draw::Verdict v;
+            if (!program.piece) {
+                v.code = caliper_builder::programs::kPieceMissing;
+                v.message = "The program " + program.id + " pins no piece.";
+                return v;
+            }
+            caliper_builder::FoundPiece f =
+                caliper_builder::resolve_pin(caliper_builder::PieceLibrary::builtin(),
+                                             p->workspace ? p->workspace() : std::string(), s, *program.piece);
+            if (f.error) {
+                v.code = f.error.code;
+                v.message = f.error.message;
+                v.where = "piece";
+                return v;
+            }
+            *out = std::move(f.piece);
+            return v;
+        });
+        // program.status shows each draw half through the stage host's items.
+        app_stage_host_impl()->set_drawn([p] { return drawn_items(p->host); });
+        return p;
+    }();
+    return *h;
+}
+
+// The cursor of the step history for the programs, before a panel draws them.
+void give_program_cursor(const caliper_builder::StepHistory* history) {
+    if (!history) return;
+    ProgramHost& p = program_host();
+    const caliper_builder::CursorState c = history->cursor();
+    if (c.step != p.last_step && !c.live) ++p.moves;
+    p.last_step = c.step;
+    p.host.set_cursor({c.step, c.latest, c.live, p.moves});
+}
+
+// A pick event of a panel: a program's item becomes the panel's entry of the linked selection,
+// the newest of all; another pick of the panel, or a cleared selection, removes the entry.
+void note_program_pick(const std::string& panel, const caliper_builder::Event& ev) {
+    ProgramHost& p = program_host();
+    const bool cleared = ev.kind == caliper_builder::EventKind::select && ev.fields.value("entities", nlohmann::json::array()).empty();
+    if (ev.kind != caliper_builder::EventKind::pick && !cleared) return;
+    p.picked.erase(panel);
+    const auto program = ev.fields.find("program");
+    if (!cleared && program != ev.fields.end() && program->is_string()) {
+        caliper_draw::Selected sel;
+        bool found = false;
+        if (caliper_draw::DrawFeed* feed = p.host.feed(panel))
+            for (const caliper_draw::PanelProgram& pp : feed->programs())
+                if (pp.instance.program == program->get<std::string>()) {
+                    sel.pick = pp.pick_id;
+                    found = true;
+                }
+        const auto item = ev.fields.find("item");
+        if (found && item != ev.fields.end() && item->is_number_integer() && item->get<std::int64_t>() >= 0 &&
+            item->get<std::int64_t>() <= 0xffffffffll) {
+            sel.item = std::uint32_t(item->get<std::int64_t>());
+            if (auto ix = ev.fields.find("index"); ix != ev.fields.end() && ix->is_array() && ix->size() == 4)
+                for (std::size_t k = 0; k < 4; ++k)
+                    if ((*ix)[k].is_number_integer()) sel.index[k] = std::int32_t((*ix)[k].get<std::int64_t>());
+            for (auto& [other, s] : p.picked) s.flags &= ~1u;
+            sel.flags = 1u;   // the newest pick
+            p.picked[panel] = sel;
+        }
+    }
+    std::vector<caliper_draw::Selected> all;
+    for (const auto& [id, s] : p.picked)
+        if (all.size() < caliper_builder::programs::kMaxSelected) all.push_back(s);
+    p.host.set_selection(std::move(all));
+}
+
+// A pick that a command made, as selection.set does, reaches the programs as a click does: the
+// panel's last pick in the value store, once each time it changes.
+void sync_program_pick(const std::string& panel, const caliper_builder::ValueStore* values) {
+    if (!values) return;
+    const std::optional<caliper_builder::PickFields> f = values->last_pick(panel);
+    const nlohmann::json fields = f ? caliper_builder::pick_fields_json(*f) : nlohmann::json();
+    std::string& seen = program_host().seen_picks[panel];
+    const std::string key = fields.is_null() ? std::string() : fields.dump();
+    if (key == seen) return;
+    seen = key;
+    caliper_builder::Event ev;
+    if (f) {
+        ev.kind = caliper_builder::EventKind::pick;
+        ev.fields = fields;
+    } else {
+        ev.kind = caliper_builder::EventKind::select;
+        ev.fields = {{"entities", nlohmann::json::array()}};
+    }
+    note_program_pick(panel, ev);
+}
+
 bool same_starting(const caliper_scene::StartingCamera& a, const caliper_scene::StartingCamera& b) {
     auto vec = [](const std::optional<caliper_scene::Vec3>& x, const std::optional<caliper_scene::Vec3>& y) {
         return x.has_value() == y.has_value() && (!x || (x->x == y->x && x->y == y->y && x->z == y->z));
@@ -1148,6 +1278,10 @@ bool same_starting(const caliper_scene::StartingCamera& a, const caliper_scene::
 }
 
 }  // namespace
+
+void set_program_workspace(std::function<std::string()> workspace) {
+    program_host().workspace = std::move(workspace);
+}
 
 caliper_live_views::SceneView* SpecRuntime::entity_view(const std::string& panel_id) {
     auto it = scenes_->entities.find(panel_id);
@@ -1230,6 +1364,7 @@ void SpecRuntime::set_instruments(caliper_builder::EventSink* events, caliper_bu
     events_ = events;
     run_ = run;
     if (events) app_stage_host_impl()->set_events(events);   // the stages' program events
+    if (events) program_host().host.set_events(events);       // the programs' draw events
 }
 
 void SpecRuntime::set_instrument_state(caliper_builder::ValueStore* values, caliper_builder::StepHistory* history) {
@@ -1240,6 +1375,29 @@ void SpecRuntime::set_instrument_state(caliper_builder::ValueStore* values, cali
         values ? std::function<nlohmann::json(const spec::Reference&)>(
                      [values](const spec::Reference& r) { return values->value(r); })
                : nullptr);
+    // The programs' params follow their references, and their resources come from the history.
+    caliper_draw::DrawHost& programs = program_host().host;
+    programs.set_evaluate(values ? caliper_draw::DrawHost::Evaluate(
+                                       [values](const spec::Reference& r) { return values->value(r); })
+                                 : nullptr);
+    programs.set_resources(
+        history ? caliper_draw::DrawHost::Resources(
+                      [history, held = std::make_shared<std::shared_ptr<const std::vector<std::uint8_t>>>()](
+                          const std::string& program, const std::string& resource, std::int64_t cursor,
+                          caliper_draw::ResourceVersion* out, std::uint64_t* epoch) {
+                          const std::optional<caliper_builder::ResourceVersion> v =
+                              history->resource_at(program + "/" + resource, cursor);
+                          if (!v || !v->bytes || !out) return false;
+                          *held = v->bytes;   // the bytes stay valid until the next call
+                          out->resource = resource;
+                          out->step = v->step;
+                          out->count = v->width ? v->width * v->height : v->count;
+                          out->bytes = (*held)->data();
+                          out->size = (*held)->size();
+                          if (epoch) *epoch = 0;
+                          return true;
+                      })
+                : nullptr);
 }
 
 caliper_builder::ChainContext SpecRuntime::chain_context() const {
@@ -1288,9 +1446,23 @@ void SpecRuntime::bind_scene(Entry& e) {
     o.up = so.up.value_or("");
     o.labels = so.labels.value_or(true);
     o.scale_bar = so.scale_bar.value_or(false);
+    // The panel's starting camera and its axes mark. The option box keeps to the entities of a
+    // spec, because a live scene keeps its own units (design/instruments.md).
+    if (!so.view_camera.is_null()) {
+        spec::Panel shown = e.panel;
+        shown.options.scene = so;
+        o.view_camera = spec_starting_camera(shown);
+        o.view_camera_key = so.view_camera.dump();
+    }
+    o.axes = so.axes.value_or(true);
+    o.include = so.include;
+    o.exclude = so.exclude;
+    o.draw_feed = program_host().host.feed(panel);
     e.view.scene = [this, panel, scene, o](const ImRect& content) {
         CaliperCore* core = core_ ? core_() : nullptr;
         if (!core || scene.empty()) return false;
+        give_program_cursor(history_);
+        sync_program_pick(panel, values_);
         const std::string id = "##spec.scene." + panel;
         // The panel's stages (spec_stage_host.h), and the line of a refused or stopped one.
         caliper_live_views::SceneRectOptions so = o;
@@ -1301,6 +1473,7 @@ void SpecRuntime::bind_scene(Entry& e) {
             if (!events_ || !spec_scene_event(type, panel, scene, detail, &ev)) return;
             const bool pick = ev.kind == caliper_builder::EventKind::pick;
             caliper_builder::Event kept = pick ? ev : caliper_builder::Event{};
+            note_program_pick(panel, ev);
             events_->push(std::move(ev));
             if (pick) {   // the panel's last pick and its `select` write (spec_instruments.h)
                 SpecInstrumentHost host = instrument_host(spec_ ? &*spec_ : nullptr);
@@ -1318,7 +1491,10 @@ void SpecRuntime::bind_entity_scene(Entry& e) {
     caliper_live_views::SceneRectOptions o;
     o.labels = e.panel.options.scene.labels.value_or(true);
     o.scale_bar = e.panel.options.scene.scale_bar.value_or(false);
+    o.draw_feed = program_host().host.feed(panel);
     e.view.scene = [this, panel, o](const ImRect& content) {
+        give_program_cursor(history_);
+        sync_program_pick(panel, values_);
         caliper_live_views::SceneView* view = entity_view(panel);
         EntityPanel& ep = scenes_->entity(panel);
         if (!view) return false;   // no backend here: the panel shows its source as offline
@@ -1336,6 +1512,7 @@ void SpecRuntime::bind_entity_scene(Entry& e) {
                                                   ev.fields["index"].get<std::uint64_t>()))
                     ev.fields["fields"] = caliper_builder::pick_fields_json(*f);
             caliper_builder::Event kept = pick ? ev : caliper_builder::Event{};
+            note_program_pick(panel, ev);
             events_->push(std::move(ev));
             if (pick) {
                 SpecInstrumentHost host = instrument_host(spec_ ? &*spec_ : nullptr);
@@ -1387,6 +1564,7 @@ SpecRuntime::~SpecRuntime() {
 
 void SpecRuntime::set_spec(const spec::Spec& s) {
     if (spec_ && *spec_ == s) return;
+    program_host().host.reconcile(s);   // the programs of its scene panels
     // A panel whose fragment or sources changed is resolved again; sources
     // are shared, so any change of a source marks every panel.
     const bool sources_changed = !spec_ || spec_->sources != s.sources;

@@ -1642,7 +1642,7 @@ struct Session::Impl {
                 is_open = true;
             }
         }
-        InstrumentContext ic{open, is_open, values, history, events.get(), store.get(), &sources, options.resolve};
+        InstrumentContext ic{open, is_open, values, history, events.get(), store.get(), &sources, options.resolve, workspace};
         const std::string& n = ctx.invocation.name;
         if (n == "state.set" || n == "state.get" || n == "control.set") return state_command(ctx, ic);
         if (n == "selection.set" || n == "selection.get") return selection_command(ctx, ic);

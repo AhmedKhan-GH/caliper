@@ -348,28 +348,63 @@ fields = ["position: vec4<f32>", "string: u32"]
 count = 32
 
 [derive]
-passes = [
-  { entry = "scores", writes = ["heads"] },
-  { entry = "build", workgroups = [128, 1, 1], writes = ["arcs"] },
-  { entry = "place_labels" },
-]
+
+[[derive.passes]]
+entry = "scores"
+writes = ["heads"]
+
+[[derive.passes]]
+entry = "build"
+workgroups = [128, 1, 1]
+writes = ["arcs"]
+
+[[derive.passes]]
+entry = "place_labels"
 
 [draw]
 camera = "orbit"
-targets = [{ id = "glow", scale = 0.5 }]
-passes = [
-  { kind = "render", vertex = "arc_vs", fragment = "arc_fs", instances = "arcs", vertices = 64,
-    topology = "triangle_strip", blend = "additive", depth = "none", pick = true },
-  { kind = "render", vertex = "arc_vs", fragment = "arc_glow", instances = "arcs", vertices = 64,
-    topology = "triangle_strip", target = "glow" },
-  { kind = "render", fragment = "bloom", reads = ["glow"], blend = "additive" },
-]
-pick = { resource = "arcs", fields = ["layer", "head", "from_token", "to_token", "weight", "score"] }
-text = { anchors = "labels", strings = [
+
+[[draw.targets]]
+id = "glow"
+scale = 0.5
+
+[[draw.passes]]
+kind = "render"
+vertex = "arc_vs"
+fragment = "arc_fs"
+instances = "arcs"
+vertices = 64
+topology = "triangle_strip"
+blend = "additive"
+depth = "none"
+pick = true
+
+[[draw.passes]]
+kind = "render"
+vertex = "arc_vs"
+fragment = "arc_glow"
+instances = "arcs"
+vertices = 64
+topology = "triangle_strip"
+target = "glow"
+
+[[draw.passes]]
+kind = "render"
+fragment = "bloom"
+reads = ["glow"]
+blend = "additive"
+
+[draw.pick]
+resource = "arcs"
+fields = ["layer", "head", "from_token", "to_token", "weight", "score"]
+
+[draw.text]
+anchors = "labels"
+strings = [
   "the", "old", "map", "shows", "red", "fox", "jumps", "over", "lazy", "dogs", "near", "green",
   "hills", "under", "blue", "skies", "red", "fox", "jumps", "over", "lazy", "dogs", "near", "green",
   "hills", "under", "blue", "skies", "and", "then", "it", "ends",
-] }
+]
 ```
 
 `place_labels` names no resource in `writes`, thus `labels` is static and travels once. The tokens 4 to 15 repeat at 16 to 27, so that an induction head attends from token t in the second copy to token t − 11, the token after the previous occurrence.

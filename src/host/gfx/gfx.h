@@ -519,6 +519,13 @@ public:
 
     Serial submit(Frame&& frame);                    // 0: refused and nothing encoded (decision 13)
     bool   completed(Serial s) const;                // never blocks
+    // The GPU time of one submit, for a host that times each of its submits on its own (the
+    // draw half of a program, design/programmable-graphics.md, Safety of Draws). True once
+    // serial s completed and its time is known, with *gpu_ms < 0 on a backend without
+    // timestamps; false while it runs, while the completion handler has not given its time
+    // yet (wait() completes a serial before that), and for a submit older than the last 1,024
+    // completions. Never blocks.
+    bool   submit_gpu_ms(Serial s, double* gpu_ms) const;
     bool   wait(Serial s);                           // tests and WAIT_GPU; false without kCapBlockingWait
     Serial last_use(uint64_t handle) const;          // the last submit that read or wrote it; 0 none
     template <class Tag> Serial last_use(Handle<Tag> h) const { return last_use(h.id); }

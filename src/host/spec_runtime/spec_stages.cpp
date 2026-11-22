@@ -591,11 +591,22 @@ void AppStageHost::reconcile(const spec::Spec& spec) {
 }
 
 std::vector<cb::ProgramStatus> AppStageHost::status() const {
-    std::lock_guard<std::mutex> lock(mutex_);
     std::vector<cb::ProgramStatus> out;
-    out.reserve(records_.size());
-    for (const Record& r : records_) out.push_back(r.status);
+    std::function<std::vector<cb::ProgramStatus>()> drawn;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        out.reserve(records_.size());
+        for (const Record& r : records_) out.push_back(r.status);
+        drawn = drawn_;
+    }
+    if (drawn)
+        for (cb::ProgramStatus& st : drawn()) out.push_back(std::move(st));
     return out;
+}
+
+void AppStageHost::set_drawn(std::function<std::vector<cb::ProgramStatus>()> drawn) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    drawn_ = std::move(drawn);
 }
 
 caliper_scene::StageSource* AppStageHost::source(const std::string& panel) {

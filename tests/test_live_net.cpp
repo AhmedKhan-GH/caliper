@@ -1605,7 +1605,7 @@ TEST_CASE("live/net: the native source announces controls and selection, and a s
     CHECK(p.call([](FakeProducer& f) { return f.hello_caps; }) ==
           std::vector<std::string>{CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_SCENES,
                                    CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
-                                   CALIPER_NET_CAP_TIMELINES});
+                                   CALIPER_NET_CAP_TIMELINES, CALIPER_NET_CAP_RESOURCES});
     CHECK(rc->access().allowed);
     CHECK(rc->why_not(CALIPER_NET_OP_PAUSE).empty());
     REQUIRE(rc->state().params.size() == 1);

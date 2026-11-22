@@ -422,3 +422,127 @@ TEST_CASE("pieces: a spec that pins a missing or changed piece opens, and its pr
     CHECK(status["programs"][0]["error"]["code"] == "piece.missing");
     CHECK(hash.size() == 71);
 }
+
+namespace {
+
+struct ViewerHost : StageHost {
+    std::vector<ProgramStatus> items;
+    void reconcile(const spec::Spec&) override {}
+    std::vector<ProgramStatus> status() const override { return items; }
+};
+
+struct Events : EventSink {
+    std::vector<Event> got;
+    std::uint64_t push(Event event) override {
+        got.push_back(std::move(event));
+        return got.size();
+    }
+};
+
+}  // namespace
+
+TEST_CASE("pieces: program.status takes an instance's draw object from the viewer's host, and events name the half") {
+    auto s = piece_session("piece_draw_status");
+    ok(*s, "piece.update", {{"piece", uv_field()}});
+    ok(*s, "program.create", {{"id", "field"}, {"piece", {{"name", "uv_field"}, {"from", "workspace"}}}, {"panel", "world"}});
+    // Without a host that draws it, the manifest gives the limits.
+    json status = ok(*s, "program.status", {{"id", "field"}});
+    CHECK(status["programs"][0]["draw"]["state"] == "waiting");
+    CHECK(status["programs"][0]["draw"]["frame_ms"].is_null());
+
+    ViewerHost viewer;
+    ProgramStatus item;
+    item.id = "field";
+    item.kind = "piece";
+    item.host = "viewer";
+    item.half = "draw";
+    DrawStatus d;
+    d.state = "stopped";
+    d.frame_ms = 6.5;
+    d.frame_limit_ms = 4;
+    d.memory_bytes = 1024;
+    d.memory_limit_bytes = 64u << 20;
+    d.resource_step = 120;
+    d.error = ProgramError{"program.draw_over_time", "The pass draw.passes[0] took 6.5 ms of its 4 ms.", 0, 0};
+    d.error_where = "draw.passes[0]";
+    item.draw = d;
+    viewer.items = {item};
+    s->set_stage_host(&viewer);
+    status = ok(*s, "program.status", {{"id", "field"}});
+    const json& draw = status["programs"][0]["draw"];
+    CHECK(draw["state"] == "stopped");
+    CHECK(draw["frame_ms"] == 6.5);
+    CHECK(draw["memory_bytes"] == 1024);
+    CHECK(draw["resource_step"] == 120);
+    CHECK(draw["error"]["code"] == "program.draw_over_time");
+    CHECK(draw["error"]["where"] == "draw.passes[0]");
+    CHECK(status["stages"].empty());
+    s->set_stage_host(nullptr);
+
+    // The event of an instance's half names the half and its pass; another program's has neither.
+    Events events;
+    item.state = "stopped";
+    item.pass = 0;
+    item.error = d.error;
+    push_program_event(events, item, "stopped");
+    ProgramStatus plain;
+    plain.id = "rows";
+    push_program_event(events, plain, "compiled");
+    REQUIRE(events.got.size() == 2);
+    CHECK(events.got[0].fields["half"] == "draw");
+    CHECK(events.got[0].fields["pass"] == 0);
+    CHECK(!events.got[1].fields.contains("half"));
+    CHECK(!events.got[1].fields.contains("pass"));
+    // Both keys leave through the events' JSON, which keeps only the keys of the kind.
+    const json out = event_json(events.got[0]);
+    CHECK(out["half"] == "draw");
+    CHECK(out["pass"] == 0);
+    CHECK(out["code"] == "program.draw_over_time");
+}
+
+TEST_CASE("pieces: selection.set picks an item of a program that pins a workspace piece") {
+    auto s = piece_session("piece_pick_workspace");
+    const json piece = {
+        {"name", "picked_rows"},
+        {"imports", {"pick@1"}},
+        {"inputs", {{{"name", "w"}, {"kind", "tensor"}, {"rank_min", 2}, {"rank_max", 2}}}},
+        {"resources", {{{"id", "rows"}, {"kind", "buffer"}, {"struct", "Row"}, {"fields", {"row: u32", "norm: f32"}}, {"count", 4}}}},
+        {"derive", {{"passes", {{{"entry", "run"}, {"writes", {"rows"}}}}}}},
+        {"draw",
+         {{"camera", "none"},
+          {"passes", {{{"kind", "render"}, {"fragment", "fs"}, {"pick", true}}}},
+          {"pick", {{"resource", "rows"}, {"fields", {"row", "norm"}}}}}},
+        {"files",
+         {{"derive", "@compute @workgroup_size(4)\nfn run(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+                     "    rows[id.x] = Row(id.x, w[id.x]);\n}\n"},
+          {"draw", "@fragment\nfn fs(in: CaliperFullscreen) -> CaliperPicked {\n    var out: CaliperPicked;\n"
+                   "    out.color = vec4<f32>(rows[0].norm, in.uv, 1.0);\n    out.id = pick::id(0u);\n    return out;\n}\n"}}}};
+    ok(*s, "piece.update", {{"piece", piece}});
+    ok(*s, "program.create",
+       {{"id", "rows"}, {"piece", {{"name", "picked_rows"}, {"from", "workspace"}}}, {"panel", "world"},
+        {"bind", {{"w", "live:w"}}}});
+    struct Row {
+        std::uint32_t row;
+        float norm;
+    };
+    const std::vector<Row> rows = {{0, 0.5f}, {1, 0.75f}, {2, 1.0f}, {3, 1.25f}};
+    ResourceVersion v;
+    v.step = 10;
+    v.count = 4;
+    v.stride = sizeof(Row);
+    const auto* b = reinterpret_cast<const std::uint8_t*>(rows.data());
+    v.bytes = std::make_shared<const std::vector<std::uint8_t>>(b, b + rows.size() * sizeof(Row));
+    s->history().append_resource("rows", "rows", 4, {}, v);
+    const json r = ok(*s, "selection.set", {{"panel", "world"}, {"program", "rows"}, {"item", 1}});
+    CHECK(r["fields"]["program"] == "rows");
+    CHECK(r["fields"]["item"] == 1);
+    CHECK(r["fields"]["row"] == 1);
+    CHECK(r["fields"]["norm"] == 0.75);
+    // The pick event keeps its program and item in the events' JSON.
+    Event pick;
+    pick.kind = EventKind::pick;
+    pick.fields = r["fields"];
+    const json out = event_json(pick);
+    CHECK(out["program"] == "rows");
+    CHECK(out["item"] == 1);
+}

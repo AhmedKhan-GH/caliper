@@ -155,6 +155,12 @@ uint32_t Frame::uniform(const void* data, uint32_t size) { return arena_push(are
 void CompletionSink::complete(Serial s, double gpu_ms) {
     std::lock_guard<std::mutex> lock(mu_);
     if (gpu_ms >= 0) { gpu_ms_ += gpu_ms; ++gpu_n_; gpu_known_ = true; }
+    // A wait completes a serial without its time (-1) before or after the backend's handler
+    // gives it: only a measured time is kept.
+    if (gpu_ms >= 0) {
+        times_[s] = gpu_ms;
+        while (times_.size() > kSubmitTimes) times_.erase(times_.begin());
+    }
     Serial through = through_.load(std::memory_order_relaxed);
     if (s <= through) return;
     if (s != through + 1) { early_.insert(s); return; }
@@ -172,6 +178,15 @@ double CompletionSink::take_gpu_ms(uint32_t* submits) {
     gpu_n_ = 0;
     gpu_known_ = false;
     return r;
+}
+
+bool CompletionSink::submit_gpu_ms(Serial s, double* gpu_ms) const {
+    if (s == 0 || s > completed_through()) return false;
+    std::lock_guard<std::mutex> lock(mu_);
+    const auto it = times_.find(s);
+    if (it == times_.end()) return false;
+    if (gpu_ms) *gpu_ms = it->second;
+    return true;
 }
 
 // ---- Program lookups ---------------------------------------------------------------------------
@@ -1260,6 +1275,14 @@ Serial Backend::submit(Frame&& frame) {
 }
 
 bool Backend::completed(Serial s) const { return s <= core_->through(); }
+bool Backend::submit_gpu_ms(Serial s, double* gpu_ms) const {
+    if (s == 0 || !completed(s)) return false;
+    if (core_->sink->submit_gpu_ms(s, gpu_ms)) return true;
+    // Without timestamps no time comes; with them, the completion handler may still give it.
+    if (core_->caps.has(kCapTimestamps)) return false;
+    if (gpu_ms) *gpu_ms = -1;
+    return true;
+}
 
 bool Backend::wait(Serial s) {
     Core& c = *core_;

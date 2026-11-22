@@ -10,6 +10,9 @@
 // anchor. The same input always gives the same placement, and a panel
 // places at most kMaxLabels labels. Defined in label_layout.cpp.
 #include <cstddef>
+#include <functional>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace caliper_host {
@@ -39,5 +42,18 @@ struct PlacedLabel {
 // One result for each box, in the order of `boxes`.
 std::vector<PlacedLabel> place_labels(const std::vector<LabelBox>& boxes, const LabelRect& panel,
                                       const std::vector<LabelRect>& markers);
+
+// The ellipsis that ends a cut text, U+2026 in UTF-8.
+inline constexpr const char* kTextEllipsis = "\xE2\x80\xA6";
+
+// A text cut to fit `width` (design/instrument-interface.md, Label
+// Placement): `text` itself when it fits; else its longest prefix that ends
+// on a whole UTF-8 character and on no space, followed by kTextEllipsis, that
+// fits; else "" when not even the ellipsis fits. `width_of` measures a text,
+// as ImGui's text size does; a longer prefix must never measure narrower.
+// The search measures O(log n) prefixes, thus a text of 1,024 bytes costs
+// about a dozen measures.
+std::string fit_with_ellipsis(std::string_view text, float width,
+                              const std::function<float(std::string_view)>& width_of);
 
 }  // namespace caliper_host

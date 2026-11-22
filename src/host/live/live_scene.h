@@ -52,6 +52,7 @@
 #include <vector>
 
 namespace caliper_scene { class BackendResources; }
+namespace caliper_draw { class DrawFeed; class DrawRuntime; }
 namespace caliper_gfx { namespace cmap { class KeyBlockCache; } }
 
 namespace caliper_live_views {
@@ -212,6 +213,12 @@ public:
     caliper_scene::ScaleBar scale_bar(double w, double h) const;
     bool scale_bar_on() const { return scale_bar_on_; }
     void set_scale_bar(bool on) { scale_bar_on_ = on; }
+    // The entities that the view draws, picks and labels: a spec panel's include and exclude.
+    // `keep` answers for an entity's path; an entity it refuses is hidden with its subtree, but
+    // for the ancestors of an entity it keeps. `key` names the filter, so that setting the same
+    // one each frame costs nothing; an empty key with no function keeps every entity. A panel and
+    // the app's window draw one view, thus each sets its own before it renders.
+    void set_entity_filter(const std::string& key, std::function<bool(const std::string&)> keep);
     // What the view keeps of itself across a close and a reopen.
     struct Settings {
         bool up_chosen = false;
@@ -233,6 +240,34 @@ public:
     uint32_t staged_draws() const { return staged_; }
     // The step the stages read: the first stamp of the latest scene update that carried one.
     int64_t stage_step() const { return stamp_step_; }
+
+    // ---- programs of pieces (design/programmable-graphics.md, Render Graph, Draw State and Safety
+    // of Draws) ------------------------------------------------------------------------------------
+    // The draw halves of the programs that the panel shows. The view installs one runtime of the
+    // draw layer (draw/draw_runtime.h) for each program of the feed, on its own backend, and draws
+    // them in every frame: each program in submits of its own after the scene's frame and before
+    // the highlight of a selection, into the view's colour, its ID target (RG32Uint, the program's
+    // pick id and the item, cleared to 0 in each frame) and its depth. A panel of programs alone
+    // frames the box from -1 to 1 on each axis. The view never waits for a program's GPU
+    // work: poll() gives each program the GPU time of its completed submits and the age of its
+    // oldest pending one, which stops a program over its budget, and the programs of the panel
+    // together over 16.7 ms a frame on 30 polls in a row stop the costliest one. Each change of a
+    // program's state goes back to the feed. Null draws no program. Without the draw layer in the
+    // build (CALIPER_HAVE_DRAW), the view draws none.
+    void set_draw_feed(caliper_draw::DrawFeed* feed);
+    // The installed programs, in draw order.
+    std::vector<const caliper_draw::DrawRuntime*> draw_runtimes() const;
+    // The programs' ID target; none while the view draws no program.
+    caliper_gfx::Texture id_target() const { return id_; }
+    // The depth target of the view's frame (Depth32Float, with kCopySrcTex); none in 2-D. A
+    // program's pick reads it beside the ID target, so that an entity's hit wins when nearer.
+    caliper_gfx::Texture depth_target() const { return depth_; }
+    // The clip-from-world matrix of the programs' last frame, with which the panel projects the
+    // anchors of their text tables.
+    const caliper_scene::Mat4& program_clip() const { return program_clip_; }
+    // The pointer over the view, in physical pixels from the top left, its buttons as bits, and
+    // whether it is over the view, for the programs' prelude (caliper_view.pointer).
+    void set_pointer(float x, float y, uint32_t buttons, bool over);
 
     // Compiles and submits when something changed since the last frame, into a target of
     // width x height physical pixels. False with *why when the layer refused the frame.
@@ -353,12 +388,33 @@ private:
     bool up_chosen_ = false;           // the person switched: the scene's up no longer moves the view
     bool was_through_ = false;         // the last frame looked through a pinhole
     bool scale_bar_on_ = true;
+    std::string filter_key_;
+    std::function<bool(const std::string&)> filter_;
+    uint64_t filtered_rev_ = ~0ull;   // the tree's revision after the filter was applied
+    void apply_entity_filter();
 
     caliper_gfx::Texture color_, depth_;
     uint32_t width_ = 0, height_ = 0, clear_ = 0;
     float scale_ = 1.0f;
     uint64_t target_creates_ = 0;
     uint64_t drawn_revision_ = 0, drawn_pose_ = 0;
+
+    // The programs of pieces: their runtimes with their pending submits, the feed's revision drawn,
+    // the ID target, the host's colormaps, the pointer and the polls over the panel's limit.
+    struct ProgramSlot;
+    std::vector<std::unique_ptr<ProgramSlot>> draws_;
+    caliper_draw::DrawFeed* draw_feed_ = nullptr;
+    uint64_t draw_revision_ = ~0ull;
+    caliper_gfx::Texture id_, program_colormaps_;
+    uint32_t id_w_ = 0, id_h_ = 0;
+    caliper_scene::Mat4 program_clip_;
+    float pointer_[4] = {0, 0, 0, 0};
+    uint32_t panel_over_ = 0;
+    std::chrono::steady_clock::time_point last_program_frame_{};
+    void reconcile_programs();
+    bool prepare_program_targets(std::string* why);
+    void draw_programs();
+    void poll_programs();
 
     SceneCounts counts_;
     SceneCost cost_;

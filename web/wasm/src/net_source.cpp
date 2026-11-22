@@ -149,7 +149,8 @@ void NetSource::close(const char* reason) {
 void NetSource::on_open() {
     wire::Hello h;
     h.role = CALIPER_NET_ROLE_VIEWER;
-    h.capabilities = {CALIPER_NET_CAP_SCENES};   // the 3.2 draft: this viewer draws scenes
+    // The 3.2 draft: this viewer draws scenes, and the draw halves of pieces from PROGRAM and RESOURCE.
+    h.capabilities = {CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_RESOURCES};
     Json sw = Json::object();
     sw.set("name", "caliper-views");
     sw.set("version", "0.1");
@@ -434,6 +435,12 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
         } else if constexpr (std::is_same_v<T, wire::Bye>) {
             ended_ = m.reason == CALIPER_NET_BYE_SHUTDOWN || m.reason == CALIPER_NET_BYE_NORMAL;
             set_state(ended_ ? "session ended" : "closed: " + m.reason);
+        } else if constexpr (std::is_same_v<T, wire::Program>) {
+            // A draw half that the script relays (design/programmable-graphics.md, Resource Message).
+            if (cb_.program) cb_.program(m);
+        } else if constexpr (std::is_same_v<T, wire::Resource>) {
+            // Its section points into the callback's bytes: the page host copies what it keeps.
+            if (cb_.resource) cb_.resource(m);
         } else if constexpr (std::is_same_v<T, wire::Error>) {
             std::fprintf(stderr, "[caliper-views] producer error %s: %s\n", m.code.c_str(), m.message.c_str());
             if (m.view) {

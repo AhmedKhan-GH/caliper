@@ -2,7 +2,12 @@
 #include "live/live_scene.h"
 
 #include "gfx/colormap_keys.h"
+#include "gfx/colormap_tables.h"
 #include "scene/backend_resources.h"
+#if defined(CALIPER_HAVE_DRAW)
+#include "draw/draw_host.h"
+#include "draw/draw_runtime.h"
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -118,7 +123,23 @@ std::string count_text(uint64_t n) {
 SceneView::SceneView(caliper_gfx::Backend& backend, const caliper_gfx::ProgramDesc* programs)
     : gfx_(backend), programs_(programs), colormaps_(std::make_shared<caliper_gfx::cmap::KeyBlockCache>()) {}
 
+// One program of pieces that the view draws: its runtime, the submits of its frames that the
+// GPU has not completed with their submit time, the state last reported to the feed, and its install.
+struct SceneView::ProgramSlot {
+#if defined(CALIPER_HAVE_DRAW)
+    std::unique_ptr<caliper_draw::DrawRuntime> runtime;
+#endif
+    std::string program;
+    uint64_t revision = 0;
+    std::deque<std::pair<caliper_gfx::Serial, std::chrono::steady_clock::time_point>> pending;
+    int reported = -1;
+    std::chrono::steady_clock::time_point installed;
+};
+
 SceneView::~SceneView() {
+    draws_.clear();
+    if (id_) gfx_.release(id_);
+    if (program_colormaps_) gfx_.release(program_colormaps_);
     stages_.reset();
     for (auto& kv : slots_) release(kv.second);
     slots_.clear();
@@ -941,6 +962,235 @@ void SceneView::set_stage_source(caliper_scene::StageSource* source) {
     }
 }
 
+void SceneView::set_draw_feed(caliper_draw::DrawFeed* feed) {
+    if (feed == draw_feed_) return;
+    draw_feed_ = feed;
+    draw_revision_ = ~0ull;
+    changed();
+}
+
+void SceneView::set_pointer(float x, float y, uint32_t buttons, bool over) {
+    pointer_[0] = x;
+    pointer_[1] = y;
+    pointer_[2] = float(buttons);
+    pointer_[3] = over ? 1.0f : 0.0f;
+}
+
+std::vector<const caliper_draw::DrawRuntime*> SceneView::draw_runtimes() const {
+    std::vector<const caliper_draw::DrawRuntime*> out;
+#if defined(CALIPER_HAVE_DRAW)
+    for (const auto& d : draws_)
+        if (d->runtime) out.push_back(d->runtime.get());
+#endif
+    return out;
+}
+
+#if defined(CALIPER_HAVE_DRAW)
+namespace {
+
+// The box that a panel of programs alone frames: -1 to 1 on each axis, as clip space spans.
+Aabb program_box() {
+    Aabb b;
+    for (int i = 0; i < 3; ++i) {
+        b.lo[i] = -1.0;
+        b.hi[i] = 1.0;
+    }
+    b.valid = true;
+    return b;
+}
+
+void report_state(caliper_draw::DrawFeed* feed, int* reported, const caliper_draw::DrawRuntime& rt) {
+    const int state = int(rt.status().state);
+    if (state == *reported) return;
+    *reported = state;
+    if (feed) feed->status(rt);
+}
+
+}  // namespace
+#endif
+
+void SceneView::reconcile_programs() {
+#if defined(CALIPER_HAVE_DRAW)
+    if (draw_feed_ == nullptr) {
+        if (!draws_.empty()) {
+            draws_.clear();
+            changed();
+        }
+        return;
+    }
+    if (draw_feed_->revision() == draw_revision_) return;
+    draw_revision_ = draw_feed_->revision();
+    const bool webgpu = std::strcmp(gfx_.caps().backend, "webgpu") == 0 || std::strcmp(gfx_.caps().backend, "dawn") == 0;
+    std::vector<std::unique_ptr<ProgramSlot>> next;
+    for (const caliper_draw::PanelProgram& p : draw_feed_->programs()) {
+        if (!p.refused.ok()) continue;   // the feed reports a refusal before any runtime
+        std::unique_ptr<ProgramSlot> slot;
+        for (auto& d : draws_)
+            if (d && d->program == p.instance.program && d->revision == p.revision) slot = std::move(d);
+        if (!slot) {
+            slot = std::make_unique<ProgramSlot>();
+            slot->program = p.instance.program;
+            slot->revision = p.revision;
+            slot->runtime = std::make_unique<caliper_draw::DrawRuntime>(gfx_, webgpu, draw_feed_->checks());
+            slot->runtime->install(p.piece, p.instance, p.pick_id);
+            slot->installed = std::chrono::steady_clock::now();
+            report_state(draw_feed_, &slot->reported, *slot->runtime);
+        }
+        next.push_back(std::move(slot));
+    }
+    draws_ = std::move(next);   // a program no longer in the feed releases its objects
+    panel_over_ = 0;
+    changed();
+#endif
+}
+
+bool SceneView::prepare_program_targets(std::string* why) {
+#if defined(CALIPER_HAVE_DRAW)
+    if (!id_ || id_w_ != width_ || id_h_ != height_) {
+        if (id_) gfx_.release(id_);
+        caliper_gfx::TextureDesc d;
+        d.width = width_;
+        d.height = height_;
+        d.format = caliper_gfx::Format::RG32Uint;
+        d.usage = caliper_gfx::kRenderTarget | caliper_gfx::kCopySrcTex;
+        d.label = "scene view program ids";
+        id_ = gfx_.create_texture(d);
+        id_w_ = width_;
+        id_h_ = height_;
+        if (!id_) {
+            if (why) *why = "no ID target for the programs: " + gfx_.last_error();
+            return false;
+        }
+    }
+    if (!program_colormaps_) {
+        // The host's colormaps, one row for each colormap id of the layer (caliper_colormaps).
+        caliper_gfx::TextureDesc c;
+        c.width = 256;
+        c.height = uint32_t(caliper_gfx::cmap::kBuiltinColormaps);
+        c.format = caliper_gfx::Format::RGBA8Unorm;
+        c.usage = caliper_gfx::kSampled | caliper_gfx::kCopyDstTex;
+        c.label = "program colormaps";
+        program_colormaps_ = gfx_.create_texture(c);
+        std::vector<uint32_t> rows(256u * uint32_t(caliper_gfx::cmap::kBuiltinColormaps));
+        for (int id = 0; id < caliper_gfx::cmap::kBuiltinColormaps; ++id)
+            std::memcpy(rows.data() + 256u * uint32_t(id), caliper_gfx::cmap::builtin_lut(id), 256 * 4);
+        if (program_colormaps_) gfx_.write_texture(program_colormaps_, rows.data(), 256 * 4);
+    }
+    return true;
+#else
+    (void)why;
+    return false;
+#endif
+}
+
+void SceneView::draw_programs() {
+#if defined(CALIPER_HAVE_DRAW)
+    const auto now = std::chrono::steady_clock::now();
+    const double dt = last_program_frame_.time_since_epoch().count() == 0
+                          ? 0.0
+                          : std::chrono::duration<double>(now - last_program_frame_).count();
+    last_program_frame_ = now;
+    // The camera that the view draws with; a panel of programs alone has the box of program_box().
+    const ViewCamera cam = effective_camera();
+    caliper_scene::CameraMatrices cm;
+    const double aspect = double(width_) / double(std::max<uint32_t>(1, height_));
+    const Aabb bounds = tree_.scene_bounds().valid ? tree_.scene_bounds() : program_box();
+    if (const Orbit* o = std::get_if<Orbit>(&cam)) {
+        cm.view = caliper_scene::orbit_view(*o);
+        cm.proj = caliper_scene::orbit_projection(*o, bounds, aspect);
+        cm.eye = caliper_scene::orbit_eye(*o);
+        cm.perspective = true;
+    } else if (const PanZoom* pz = std::get_if<PanZoom>(&cam)) {
+        cm.proj = caliper_scene::panzoom_projection(*pz, aspect);
+    } else {
+        cm = caliper_scene::camera_matrices(cam, tree_, width_, height_);
+    }
+    const caliper_scene::Mat4 clip = cm.proj * cm.view;
+    program_clip_ = clip;
+    caliper_scene::Mat4 inv;
+    if (!caliper_scene::inverse(clip, &inv)) inv = caliper_scene::Mat4{};
+    caliper_draw::FrameInputs base;
+    for (int i = 0; i < 16; ++i) {
+        base.clip_from_world[size_t(i)] = float(clip.m[i]);
+        base.world_from_clip[size_t(i)] = float(inv.m[i]);
+        base.view_from_world[size_t(i)] = float(cm.view.m[i]);
+    }
+    base.eye = {float(cm.eye.x), float(cm.eye.y), float(cm.eye.z), cm.perspective ? 1.0f : 0.0f};
+    base.viewport = {0, 0, float(width_), float(height_)};
+    base.pointer = {pointer_[0], pointer_[1], pointer_[2], pointer_[3]};
+    base.dt_s = dt;
+    base.pixel_ratio = scale_;
+    caliper_draw::HostTarget target;
+    target.color = color_;
+    target.id = id_;
+    target.depth = depth_;
+    target.width = width_;
+    target.height = height_;
+    target.colormaps = program_colormaps_;
+    for (auto& d : draws_) {
+        if (!d->runtime) continue;
+        caliper_draw::FrameInputs in = base;
+        in.time_s = std::chrono::duration<double>(now - d->installed).count();
+        if (draw_feed_) draw_feed_->frame(*d->runtime, &in);
+        std::vector<caliper_gfx::Frame> frames;
+        if (d->runtime->encode(&frames, in, target)) {
+            for (caliper_gfx::Frame& f : frames) {
+                const caliper_gfx::Serial s = gfx_.submit(std::move(f));
+                if (s == 0) {
+                    d->runtime->frame_refused(gfx_.last_error());
+                    break;
+                }
+                d->pending.emplace_back(s, std::chrono::steady_clock::now());
+            }
+        }
+        report_state(draw_feed_, &d->reported, *d->runtime);
+    }
+#endif
+}
+
+void SceneView::poll_programs() {
+#if defined(CALIPER_HAVE_DRAW)
+    bool completed = false;
+    for (auto& d : draws_) {
+        if (!d->runtime) continue;
+        // Never a wait: the completed submits give their GPU time, or without timestamps the time
+        // from the submit until the work was done, an upper bound.
+        while (!d->pending.empty()) {
+            double ms = -1;
+            if (!gfx_.submit_gpu_ms(d->pending.front().first, &ms)) break;
+            if (ms < 0) ms = ms_since(d->pending.front().second);
+            d->runtime->frame_done(ms);
+            d->pending.pop_front();
+            completed = true;
+        }
+        if (!d->pending.empty()) d->runtime->frame_pending(ms_since(d->pending.front().second));
+        report_state(draw_feed_, &d->reported, *d->runtime);
+    }
+    // The programs of the panel together: over 16.7 ms a frame on 30 polls in a row stops the
+    // costliest one, which names its costliest pass after one more measured frame.
+    if (!completed) return;
+    double total = 0, worst_ms = -1;
+    caliper_draw::DrawRuntime* worst = nullptr;
+    for (auto& d : draws_) {
+        if (!d->runtime) continue;
+        const caliper_draw::DrawStatus st = d->runtime->status();
+        if (st.state != caliper_draw::DrawState::running || st.frame_ms < 0) continue;
+        total += st.frame_ms;
+        if (st.frame_ms > worst_ms) {
+            worst_ms = st.frame_ms;
+            worst = d->runtime.get();
+        }
+    }
+    panel_over_ = total > 16.7 ? panel_over_ + 1 : 0;
+    if (panel_over_ >= 30 && worst != nullptr) {
+        char b[96];
+        std::snprintf(b, sizeof b, "the programs of its panel took %.1f ms a frame together, above 16.7 ms", total);
+        worst->request_stop(caliper_builder::programs::kProgramDrawOverTime, b);
+        panel_over_ = 0;
+    }
+#endif
+}
+
 CompileOptions SceneView::stage_options(CompileOptions opt) const {
     if (stages_ && stages_->source()) {
         opt.stages = stages_.get();
@@ -1362,8 +1612,39 @@ ScaleBar SceneView::scale_bar(double w, double h) const {
 
 // ---- drawing ---------------------------------------------------------------------------------------
 
+void SceneView::set_entity_filter(const std::string& key, std::function<bool(const std::string&)> keep) {
+    if (key == filter_key_ && bool(keep) == bool(filter_)) return;
+    filter_key_ = key;
+    filter_ = std::move(keep);
+    filtered_rev_ = ~0ull;
+}
+
+void SceneView::apply_entity_filter() {
+    if (tree_.revision() == filtered_rev_) return;
+    const uint32_t n = uint32_t(tree_.entity_count());
+    std::vector<uint8_t> keep(n, 1);
+    if (filter_) {
+        for (uint32_t i = 1; i < n; ++i) {
+            const EntityId e = tree_.entity_at(i);
+            keep[i] = tree_.valid(e) && filter_(tree_.path(e)) ? 1 : 0;
+        }
+        for (uint32_t i = 1; i < n; ++i) {   // the ancestors of a kept entity stay, else it would hide
+            const EntityId e = tree_.entity_at(i);
+            if (!keep[i] || !tree_.valid(e)) continue;
+            for (EntityId p = tree_.parent(e); tree_.valid(p) && p.index != 0 && p.index < n; p = tree_.parent(p))
+                keep[p.index] = 1;
+        }
+    }
+    for (uint32_t i = 1; i < n; ++i) {
+        const EntityId e = tree_.entity_at(i);
+        if (tree_.valid(e)) tree_.set_visible(e, keep[i] != 0);
+    }
+    filtered_rev_ = tree_.revision();
+}
+
 bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint32_t clear_rgba, std::string* why) {
     if (width == 0 || height == 0) return true;
+    apply_entity_filter();
     if (!res_) {
         if (why) *why = "the scene view has no resources";
         return false;
@@ -1382,7 +1663,7 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
         color_ = gfx_.create_texture(d);
         if (depth) {
             d.format = caliper_gfx::Format::Depth32Float;
-            d.usage = caliper_gfx::kRenderTarget;
+            d.usage = caliper_gfx::kRenderTarget | caliper_gfx::kCopySrcTex;   // a program's pick reads it
             d.label = "scene view depth";
             depth_ = gfx_.create_texture(d);
         }
@@ -1403,6 +1684,9 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
         changed();
     }
     if (tree_.revision() != drawn_revision_ || tree_.pose_revision() != drawn_pose_) changed();
+    // Programs draw in every frame: their time, their draw state and their resources move.
+    reconcile_programs();
+    if (!draws_.empty()) changed();
     if (stages_ && stages_->source() &&
         (stages_->source()->revision() != stage_revision_ || (staged_ > 0 && stages_->animated())))
         changed();
@@ -1427,13 +1711,20 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     // grow past what it framed (a late attach, parts that arrive one by one) or when the picture
     // changes shape. Once the person orbits, pans or zooms, only a fit or a reset moves it.
     {
-        const Aabb bounds = tree_.scene_bounds();
+        Aabb bounds = tree_.scene_bounds();
+#if defined(CALIPER_HAVE_DRAW)
+        const bool box = !bounds.valid && !draws_.empty();   // a panel of programs alone
+        if (box) bounds = program_box();
+#else
+        const bool box = false;
+#endif
         const double aspect = double(width_) / double(height_);
         const bool can = bounds.valid || start_without_bounds();
         const bool stale = !fitted_ || !caliper_scene::aabb_contains(fitted_bounds_, bounds, 0.01) ||
                            std::fabs(aspect - fitted_aspect_) > 0.01 * fitted_aspect_;
         if (!moved_ && can && stale) {
-            apply_start(aspect);
+            if (box) caliper_scene::fit(camera_, bounds, aspect);
+            else apply_start(aspect);
             fitted_ = true;
             fitted_bounds_ = bounds;
             fitted_aspect_ = aspect;
@@ -1480,6 +1771,20 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     }
     cost_.draws = r.draws;
     frame.render(std::move(list));
+    // With programs, the scene's frame also clears their ID target, the programs draw in submits
+    // of their own, and the highlight follows in a frame after them.
+    std::string program_why;
+    const bool with_programs = !draws_.empty() && prepare_program_targets(&program_why);
+    if (!program_why.empty()) note(program_why);
+    caliper_gfx::Frame after;
+    caliper_gfx::Frame& hl_frame = with_programs ? after : frame;
+    if (with_programs) {
+        caliper_gfx::RenderTarget ids;
+        ids.color = id_;
+        ids.clear = true;
+        ids.clear_rgba = 0;
+        frame.render(caliper_gfx::DrawList(ids));
+    }
     // A selection: the picture dimmed towards the background, as the points view dims, then the
     // selected items over it in their own colours, without depth so that none is hidden.
     highlighted_ = 0;
@@ -1516,11 +1821,11 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
             if (dim_texture_ && dim.set_batch(dim.root(), q, false, &err)) {
                 dim.update();
                 CompileOptions dopt = opt;
-                if (dim_compiler_.compile(dim, pz, dopt, *res_, dl, nullptr).ok) frame.render(std::move(dl));
+                if (dim_compiler_.compile(dim, pz, dopt, *res_, dl, nullptr).ok) hl_frame.render(std::move(dl));
             }
             // The selected items draw with their entity's stages, where and as the picture draws them.
             const CompileResult hr = hl_compiler_.compile(hl, hl_cam, stage_options(opt), *res_, hll, nullptr);
-            if (hr.ok) frame.render(std::move(hll));
+            if (hr.ok) hl_frame.render(std::move(hll));
             else if (!hr.notes.empty()) note("the highlight: " + hr.notes[0]);
         }
     }
@@ -1538,11 +1843,17 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     ++cost_.frames;
     ++generation_;
     if (staged_ > 0) staged_frames_.emplace_back(s, std::chrono::steady_clock::now());
+    if (with_programs) {
+        draw_programs();
+        if (!after.passes().empty() && gfx_.submit(std::move(after)) == 0)
+            note("the layer refused the highlight: " + gfx_.last_error());
+    }
     return true;
 }
 
 void SceneView::poll() {
     gfx_.poll();
+    poll_programs();
     const caliper_gfx::Stats st = gfx_.take_stats();
     if (st.gpu_ms >= 0) cost_.gpu_ms = st.gpu_ms;
     // The stages' time watchdog reads the mean GPU time of the frames completed since the last poll.

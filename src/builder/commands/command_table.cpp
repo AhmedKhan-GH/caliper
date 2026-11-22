@@ -1427,7 +1427,8 @@ const Row kRows[] = {
         "value": {"description": "The value that the control holds now."}}})json",
      R"json({"id": "measure", "value": "mean"})json"},
     {"selection.set", false, false, true,
-     "Makes a pick in a panel: the entity and the item at index, or clear to remove the selection. It makes the "
+     "Makes a pick in a panel: the entity and the item at index, a program that draws in the panel and the item "
+     "of its item map, or clear to remove the selection. It makes the "
      "same pick event, field values and state writes as a person's pick, with the origin of the caller. It returns "
      "the pick fields. It changes the session and not the workspace, so it has no undo step.",
      R"json({"type": "object", "additionalProperties": false, "required": ["panel"],
@@ -1435,6 +1436,8 @@ const Row kRows[] = {
         "panel": {"$use": "id", "description": "The panel's id in the open spec."},
         "entity": {"$use": "entity_path", "description": "The entity of the item to pick."},
         "index": {"type": "integer", "minimum": 0, "description": "The item's index in the entity."},
+        "program": {"$use": "id", "description": "A program of the panel whose item to pick, in place of an entity."},
+        "item": {"type": "integer", "minimum": 0, "maximum": 4294967295, "description": "The element of the program's item map to pick, at the cursor."},
         "clear": {"type": "boolean", "description": "Whether to clear the selection of the panel; false when absent."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["fields"],
       "properties": {

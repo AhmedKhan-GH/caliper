@@ -172,6 +172,11 @@ void pane_name_dims(std::vector<PaneShape>& shapes, const std::vector<spec::Tran
                 break;
             }
             case spec::TransformOp::normalise: break;
+            // A window stacks the kept steps in front of the value's axes.
+            case spec::TransformOp::window: now.insert(now.begin(), "step"); break;
+            // An operator gives geometry, whose arrays have no named axes.
+            case spec::TransformOp::surface:
+            case spec::TransformOp::path: return;
         }
         PaneShape& next = shapes[k + 1];
         if (!tensor(next) || next.dims.size() != now.size()) return;
@@ -201,6 +206,51 @@ int64_t pane_clamp_index(int64_t index, int64_t size, bool* clamped) {
         return index >= size ? size - 1 : 0;
     }
     return index;
+}
+
+std::vector<std::pair<std::string, std::string>> pane_step_fields(const spec::Transform& t) {
+    // A reference as the spec text writes it: its input key, then field,
+    // entity and default when set.
+    auto reference_text = [](const spec::Reference& r) {
+        std::string out = std::string("{ ") + spec::reference_kind_name(r.kind) + " = " + json(r.target).dump();
+        if (r.field) out += ", field = " + json(*r.field).dump();
+        if (r.entity) out += ", entity = " + json(*r.entity).dump();
+        if (!r.fallback.is_null()) out += ", default = " + r.fallback.dump();
+        return out + " }";
+    };
+    // An integer place: its reference, its literal, or nothing.
+    auto place = [&](const char* key, const std::optional<int64_t>& value) -> std::optional<std::string> {
+        if (const auto it = t.references.find(key); it != t.references.end()) return reference_text(it->second);
+        if (value) return std::to_string(*value);
+        return std::nullopt;
+    };
+    std::vector<std::pair<std::string, std::string>> out;
+    switch (t.op) {
+        case spec::TransformOp::slice:
+        case spec::TransformOp::reduce:
+        case spec::TransformOp::normalise: break;
+        case spec::TransformOp::window: {
+            const std::pair<const char*, const std::optional<int64_t>*> keys[] = {
+                {"start", &t.start}, {"stop", &t.stop}, {"steps", &t.steps}};
+            for (const auto& key : keys)
+                if (std::optional<std::string> text = place(key.first, *key.second)) out.emplace_back(key.first, *text);
+            // Without a key, the window holds every kept step.
+            if (out.empty()) out.emplace_back("steps", "every kept step (default)");
+            break;
+        }
+        case spec::TransformOp::surface:
+            out.emplace_back("max_cells", t.max_cells ? std::to_string(*t.max_cells) : "32768 (default)");
+            out.emplace_back("pool", t.pool ? *t.pool : "mean (default)");
+            break;
+        case spec::TransformOp::path: {
+            std::string columns;
+            for (const int64_t c : t.columns) columns += (columns.empty() ? "" : ", ") + std::to_string(c);
+            out.emplace_back("columns", columns.empty() ? "the first three (default)" : columns);
+            out.emplace_back("max_points", t.max_points ? std::to_string(*t.max_points) : "65536 (default)");
+            break;
+        }
+    }
+    return out;
 }
 
 // ---- primitives, slots and options ------------------------------------------------------

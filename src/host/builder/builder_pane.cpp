@@ -1000,6 +1000,14 @@ bool BuilderPane::add_transform(spec::TransformOp op) {
         case spec::TransformOp::slice: t = {{"op", "slice"}, {"axis", 0}, {"index", 0}}; break;
         case spec::TransformOp::reduce: t = {{"op", "reduce"}, {"axis", 0}, {"fn", "mean"}}; break;
         case spec::TransformOp::normalise: t = {{"op", "normalise"}, {"mode", "minmax"}}; break;
+        // Properties shows these steps read-only; they come from source.add or source.patch.
+        case spec::TransformOp::window:
+        case spec::TransformOp::surface:
+        case spec::TransformOp::path:
+            return refuse(Error("spec.bad_transform",
+                                std::string("The builder pane adds slice, reduce and normalise steps; a ") +
+                                    spec::to_string(op) + " step comes from source.add or source.patch.",
+                                ""));
     }
     if (const spec::Source* s = spec_source()) {
         json all = json::array();

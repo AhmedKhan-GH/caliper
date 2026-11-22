@@ -39,9 +39,13 @@ QUEUES device work:
   chunk a pass. Between passes a view call returns after
   NetTransport.attached(). The ring tells the cadence what a pass would take
   (wants_pass: a subscription's own rate allows a snapshot) and the training
-  thread's time of each pass's view calls (gate_cost). Without a checkpoint for
-  STEP_IDLE_S, the ticks follow the clock again, as for a script that calls
-  the views by hand.
+  thread's time of each pass's view calls (gate_cost). A view that the passes
+  leave out, because it was not called in the second before the last gate
+  opened (a view called less than once a second), would never update again:
+  its call goes through the closed gate when a group of it is overdue by more
+  than FLOOR_S, and takes its snapshot with an event of its own (_held).
+  Without a checkpoint for STEP_IDLE_S, the ticks follow the clock again, as
+  for a script that calls the views by hand.
 
 There is no ``.item()``, ``.cpu()``, ``.numpy()``, ``.tolist()`` or
 ``synchronize()`` in this module (python/tests/test_net.py checks it).
@@ -63,6 +67,7 @@ from typing import Any
 
 from . import _wire
 from ._net_dataview import Call, Reduced, make_engine
+from ._programs import FLOOR_S
 from ._ring import DEFAULT_RATE_HZ, KIND_SERIES, rate_interval
 
 OFFER_REFRESH_S = 1.0          # an unsubscribed view's offer is rechecked this often
@@ -254,6 +259,8 @@ class NetRing:
         self.registered = False                 # caliper._programs gates this ring
         self.float_wake_t = -math.inf           # the last wake for a float series value
         self.publish_s = 0.0                    # the sender thread's CPU seconds so far (it adds)
+        self.held_t = math.inf                  # when a view the passes leave out is overdue (_hold_t)
+        self.held: ViewState | None = None      # the view whose call due() let through the gate
 
     # -- the registry (training thread writes, network thread reads) -----------
     def _view(self, name: str, kind: int, now: float) -> ViewState:
@@ -307,6 +314,8 @@ class NetRing:
     def due(self, name: str, interval: float, now: float) -> bool:
         v = self.views.get(name)
         gated = self._gated(now)
+        held = gated and v is not None and self._held(v, now)
+        self.held = v if held else None
         if v is not None:
             v.seen = now
             v.iv = interval
@@ -317,16 +326,16 @@ class NetRing:
             self.counters["unsubscribed"] += 1
             self._idle_due(now)
             return False
-        if gated:
+        if gated and not held:
             self.counters["gated"] += 1
-            self.next_due = self.step_seen + STEP_IDLE_S
+            self.next_due = min(self.step_seen + STEP_IDLE_S, self.held_t)
             return False
         t = self.tick
         if t is not None and now - t.t0 > TICK_MAX_AGE_S:
             self._close_tick()              # its step's calls stopped
             t = None
         if t is None:
-            if now < self.tick_next and not self.gate_open:
+            if now < self.tick_next and not self.gate_open and not held:
                 self.counters["skipped"] += 1
                 if name in self.tick_views:     # the next step began: calls wait for the tick
                     self.next_due = self.tick_next
@@ -372,7 +381,8 @@ class NetRing:
         self.step_seen = now
         self.step_mode = True
         if not self.gate_open:
-            self.next_due = now + STEP_IDLE_S
+            self.held_t = self._hold_t(now)
+            self.next_due = min(now + STEP_IDLE_S, self.held_t)
 
     def wants_pass(self, now: float) -> bool:
         """Whether a pass at the next step would take something: a group of a view called
@@ -424,7 +434,8 @@ class NetRing:
         taken = self.gate_taken
         self.gate_open = False
         self.gate_step = None
-        self.next_due = now + STEP_IDLE_S
+        self.held_t = self._hold_t(now)
+        self.next_due = min(now + STEP_IDLE_S, self.held_t)
         if taken:
             self.pass_t = now
             self.passes.append((now, step))
@@ -453,6 +464,28 @@ class NetRing:
             self.gate_open = False
             return False
         return not self.gate_open
+
+    def _held(self, v: ViewState, now: float) -> bool:
+        """A call of view ``v`` goes through the closed gate: the passes leave the view out
+        (wants_pass), because it was not called in the second before the last gate opened, and a
+        group of it is overdue by more than FLOOR_S. A view called at each step is called in each
+        pass and keeps to the passes."""
+        if v.kind == KIND_SERIES or not v.groups or v.seen >= min(now, self.gate_t) - OFFER_REFRESH_S:
+            return False
+        return any(now - g.last > max(g.interval, v.iv) + FLOOR_S for g in list(v.groups.values()))
+
+    def _hold_t(self, now: float) -> float:
+        """The time from which a group of a view that the passes leave out is overdue by more
+        than FLOOR_S (_held): the closed gate hides the view calls only until then, so that the
+        next call of that view reaches due(). Infinite while there is no such view."""
+        lately = min(now, self.gate_t) - OFFER_REFRESH_S
+        t = math.inf
+        for v in list(self.views.values()):
+            if v.kind == KIND_SERIES or not v.groups or v.seen >= lately:
+                continue
+            for g in list(v.groups.values()):
+                t = min(t, g.last + max(g.interval, v.iv) + FLOOR_S)
+        return t
 
     def _group_due(self, g: Group, v: ViewState, now: float, joining: bool) -> bool:
         """The group may take a snapshot: its subscription's rate and the
@@ -533,8 +566,10 @@ class NetRing:
         call = Call(plan.kind, name, plan, args)
         v = self._register(call, now)
         v.seen = now
-        if not v.groups or self._gated(now):      # outside a pass only the offer is refreshed
-            return False
+        held = self.held is v
+        self.held = None
+        if not v.groups or (self._gated(now) and not held):   # outside a pass only the offer
+            return False                                        # is refreshed
         with self.lock:
             groups = list(v.groups.values())
         t = self.tick
@@ -556,7 +591,7 @@ class NetRing:
                 self.counters["ring_full"] += 1
                 continue
             if t is None:
-                if now < self.tick_next and not self.gate_open:
+                if now < self.tick_next and not self.gate_open and not held:
                     return False
                 t = self._open_tick(now)
             red = self.engine.apply(call, g.resolved)
@@ -573,7 +608,13 @@ class NetRing:
             v.last = now
             self.counters["taken"] += taken
             self.gate_taken += taken
-        if t is not None and self._complete(t, now):
+        if held:
+            # Outside the passes: its own event, and the gate hides the calls again.
+            self.counters["held"] += taken
+            self._close_tick()
+            self.held_t = self._hold_t(now)
+            self.next_due = min(self.step_seen + STEP_IDLE_S, self.held_t)
+        elif t is not None and self._complete(t, now):
             self._close_tick()
         if taken and self.gate_open:        # from the view call's start, its plan included
             self.gate_cost += time.perf_counter() - now

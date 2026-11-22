@@ -41,6 +41,7 @@ export const MSG = {
   time_state: 0x007b, // 3.2 draft
   program: 0x0080, // 3.2 draft
   program_state: 0x0081, // 3.2 draft
+  resource: 0x0082, // 3.2 draft, capability "resources"
 } as const;
 export type MessageType = keyof typeof MSG;
 
@@ -352,7 +353,7 @@ export type Message =
   | ViewsMsg | SubscribeMsg | UnsubscribeMsg | ViewRequestMsg | ViewReplyMsg | SnapshotMsg
   | SeriesMsg | EventMsg | ControlsMsg | ControlMsg | ControlReplyMsg | SelectionMsg
   | SceneUpdateMsg | SceneTransformsMsg | SceneClearMsg | SceneClassesMsg
-  | TextMsg | RecordingsMsg | RecordingOpenMsg | CursorMsg | TimeStateMsg | ProgramMsg | ProgramStateMsg;
+  | TextMsg | RecordingsMsg | RecordingOpenMsg | CursorMsg | TimeStateMsg | ProgramMsg | ProgramStateMsg | ResourceMsg;
 
 /** Effective colour range of a snapshot: AUTO flags read stats[0] and stats[1]. */
 export function snapshotRange(s: SnapshotMsg): [number, number] {
@@ -730,7 +731,7 @@ export const PROGRAM_EVERY_MAX = 10000;
 /** Most of each of the three "workgroups". */
 export const PROGRAM_WORKGROUPS_MAX = 65535;
 
-// --- 3.2 draft: programmable graphics (include/caliper/live_net.h, capability "resources"; the message RESOURCE, 0x0082, comes with its codec) ---
+// --- 3.2 draft: programmable graphics (include/caliper/live_net.h, capability "resources") ---
 
 /** Capability: RESOURCE, and PROGRAM of an instance of a piece with the sections "derive", "draw" and "common". */
 export const CAP_RESOURCES = 'resources';
@@ -741,8 +742,22 @@ export const SECTION_COMMON = 'common';
 export const SECTION_RESOURCE = 'resource';
 /** Resources of one program. */
 export const MAX_RESOURCES = 8;
-/** Bytes of the section "resource". */
-export const RESOURCE_MAX_BYTES = 67108864;
+/** Bytes of the section "resource": 64 MiB less 64 KiB, so that a resource fits one frame with its metadata. */
+export const RESOURCE_MAX_BYTES = 67043328;
+/** Most bytes of one element of a resource, the "stride" (a multiple of 4). */
+export const RESOURCE_STRIDE_MAX = 256;
+/** Most texels of the "width" and of the "height" of a texture resource. */
+export const RESOURCE_SIDE_MAX = 4096;
+/** Most bytes of the "name" of a piece pin, [a-z][a-z0-9_]*. */
+export const PIECE_NAME_MAX = 32;
+/** Most of the "version" of a piece pin, counted from 1. */
+export const PIECE_VERSION_MAX = 1000000;
+/** Most bytes of the section "common": 8 lib modules and common.wgsl of 64 KiB each. */
+export const PIECE_COMMON_MAX = 589824;
+/** Most items of the "segments" of an instance of a piece. */
+export const PIECE_SEGMENTS_MAX = 16;
+/** The kind of a status item for an instance of a piece. */
+export const STATUS_PIECE = 'piece';
 /** Bytes of an input's "source" tensor name. */
 export const TENSOR_NAME_MAX = 255;
 /** A declaration's output kinds. */
@@ -794,6 +809,43 @@ export interface ProgramMsg {
   sha256?: string;
   /** set: the scene of a geometry output's panel. */
   scene?: string;
+  /** Instance of a piece, set: the pin {name, version, hash}, where the hash is "sha256:" and 64 lowercase hex digits. */
+  piece?: { name: string; version: number; hash: string };
+  /** Instance of a piece, set: the piece's manifest. */
+  manifest?: Record<string, unknown>;
+  /** Instance of a piece, set: an input name to "live:<tensor>" or "program:<id>/<resource>". */
+  bind?: Record<string, string>;
+  /** Instance of a piece, set: the scene panel of the draw half. */
+  panel?: string;
+  /** Instance of a piece, set: the {part, first_line, lines} of each part of the section "common". */
+  segments?: { part: string; first_line: number; lines: number }[];
+  /** Instance of a piece, set: the section "common" as UTF-8, the lib modules and common.wgsl. */
+  common?: string;
+  /** Instance of a piece, set: the section "derive" as UTF-8, the derive half's WGSL. */
+  derive?: string;
+  /** Instance of a piece, set: the section "draw" as UTF-8, the draw half's WGSL. */
+  draw?: string;
+}
+
+/** Producer to viewer or hub: one version of one published resource of a program, the valid elements that a derive pass wrote. A texture also has width and height, with a stride of 4 and a count of their product. */
+export interface ResourceMsg {
+  type: 'resource';
+  /** The id of the program. */
+  program: string;
+  /** The WGSL name of the resource. */
+  resource: string;
+  /** The run's step at the pass. */
+  step: number;
+  /** The valid elements. */
+  count: number;
+  /** The bytes of one element, a multiple of 4. */
+  stride: number;
+  /** The section "resource": exactly count * stride bytes, a view of the frame without a copy. */
+  data: Uint8Array;
+  /** A texture's width in texels. */
+  width?: number;
+  /** A texture's height in texels. */
+  height?: number;
 }
 
 /** Producer to viewer: the status items of the programs in order of installation. It answers each PROGRAM with its request_id and goes out without one after a state change. */

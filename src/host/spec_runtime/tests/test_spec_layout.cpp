@@ -399,7 +399,10 @@ children = [
 
 TEST_CASE("shares split the space by weight, after the row of controls") {
     const spec::Spec s = shares_spec();
-    for (const auto& [w, h] : {std::pair<float, float>{2560, 1440}, {1440, 900}}) {
+    for (const auto& size : {std::pair<float, float>{2560, 1440}, {1440, 900}}) {
+        // Plain variables, because CAPTURE takes its argument in a lambda, and C++17 lambdas do not
+        // capture structured bindings.
+        const float w = size.first, h = size.second;
         CAPTURE(w);
         const SpecLayout l = lay(s, w, h);
         check_tiling(l, w, h);
