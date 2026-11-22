@@ -65,10 +65,8 @@ def watching(monkeypatch):
 
 @pytest.fixture
 def flows(mode):
-    """The program flows run on the Python sender; the native server's links do not carry the
-    capability programs to Python yet, so there the native layer's own checks are tested."""
-    if mode == "native":
-        pytest.skip("the native server's links do not carry the capability programs yet")
+    """The program flows run on both senders: the native server's links carry the capabilities
+    programs and interventions to Python."""
 
 
 @pytest.fixture
@@ -121,7 +119,12 @@ def test_set_and_remove_reach_the_facade(flows, watching, facade, server):
     run(go())
 
 
-def test_script_without_runtime_refuses_the_program(flows, watching, server):
+def test_script_without_runtime_refuses_the_program(flows, watching, server, monkeypatch):
+    class NoRuntime(FakeFacade):
+        def install(self, *a, **k):               # a facade that cannot install raises
+            raise NotImplementedError("no producer runtime")
+    monkeypatch.setattr(NP, "_facade", lambda f=NoRuntime(): f)
+
     async def go():
         async with Viewer(server, PROGRAM_CAPS) as v:
             await v.send(_set(7))

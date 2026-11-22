@@ -620,6 +620,7 @@ def watch(model, optimizer=None, *, activations: bool = True, gradients: bool = 
            include=include, rate=rate, groups=groups, scene=scene)
     if optimizer is not None:                     # GPU programs read this model's tensors
         _programs.attach(model, optimizer, h)
+        _controls.CONTROLS.interventions_on(model, h)   # the points of the model, for interventions
     return h
 
 

@@ -157,6 +157,7 @@ Controls parse_controls(const wire::Controls& c) {
         if (const Json* v = a.find("queued"); v && v->is_bool()) ca.queued = v->as_bool();
         out.actions.push_back(std::move(ca));
     }
+    out.interventions = c.interventions;
     return out;
 }
 
@@ -364,6 +365,7 @@ public:
         if (op == CALIPER_NET_OP_SET || op == CALIPER_NET_OP_RUN) o.control.name = name;
         if (op == CALIPER_NET_OP_SET) o.control.value = value;
         if (op == CALIPER_NET_OP_STEP && count > 0) o.control.count = count;
+        if (op == CALIPER_NET_OP_INTERVENE) o.control.intervene = value;
         const uint32_t id = o.control.request_id;
         if (!enqueue(std::move(o))) {
             if (err) *err = "too many controls wait to be sent";

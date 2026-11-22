@@ -107,6 +107,7 @@ struct Controls {
     uint64_t step = 0, steps_left = 0;
     std::vector<ControlParam> params;
     std::vector<ControlAction> actions;
+    caliper_net::Json interventions;          // the key "interventions" ({points, active}) as given; null when absent
     uint64_t version = 0;                     // grows with every CONTROLS received
 };
 // Whether this viewer may send CONTROL, by the protocol's "Who may control":

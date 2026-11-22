@@ -191,11 +191,8 @@ caliper_net::Json to_net_json(const json& v) {
 
 // The CONTROLS key "interventions" of the attached script ({points, active})
 // as the command table's JSON, or null when the script sent none.
-// caliper_live::Controls does not hold that key yet; until it does, the app's
-// attachment takes no interventions.
 json interventions_json(const caliper_live::Controls* c) {
-    (void)c;
-    return json();
+    return c ? from_net_json(c->interventions) : json();
 }
 
 std::optional<std::int64_t> opt_int(const json& o, const char* key) {

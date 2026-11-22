@@ -1261,3 +1261,29 @@ TEST_CASE("app session: the run control refuses interventions from a script that
     CHECK(rc.intervene_clear("").code == cb::kInterveneNotSupported);
     CHECK(link.sent.empty());
 }
+
+TEST_CASE("app session: the run control reads the link's key interventions and sends intervene through the link") {
+    caliper_host::AppRunControl rc;
+    FakeLink link;
+    const std::string text = R"({"points": [{"point": "blocks.0.attn", "kind": "module", "module": "blocks.0.attn",
+        "head": null, "type": "Attention", "shape": null}], "active": []})";
+    std::string err;
+    REQUIRE(caliper_net::Json::parse(text.data(), text.size(), &link.ctl.interventions, &err));
+    rc.set_link(&link);
+    CHECK(rc.interventions_supported());
+    const std::vector<cb::InterventionPoint> pts = rc.intervention_points();
+    REQUIRE(pts.size() == 1);
+    CHECK(pts[0].point == "blocks.0.attn");
+    CHECK(rc.interventions().empty());
+    cb::Intervention i;
+    i.point = "blocks.0.attn";
+    CHECK(rc.intervene_set(i).ok());
+    CHECK(rc.intervene_clear("blocks.0.attn").ok());
+    CHECK(rc.intervene_clear("").ok());
+    REQUIRE(link.sent.size() == 3);
+    CHECK(link.sent[0].op == "intervene");
+    CHECK(json::parse(link.sent[0].value) == json{{"set", {{"point", "blocks.0.attn"}, {"op", "ablate"},
+                                                           {"from_step", nullptr}, {"until_step", nullptr}}}});
+    CHECK(json::parse(link.sent[1].value) == json{{"clear", "blocks.0.attn"}});
+    CHECK(json::parse(link.sent[2].value) == json{{"clear_all", true}});
+}
