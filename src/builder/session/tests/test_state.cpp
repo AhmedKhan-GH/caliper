@@ -358,3 +358,21 @@ TEST_CASE("state: reset") {
     values.reset(parse(body, "b"));
     CHECK(values.value(state_ref("token")) == 0);
 }
+
+// A spec that did not pass the validator may hold a range whose bounds read
+// itself; the store then reads that bound as absent instead of recursing.
+TEST_CASE("state: a range whose bound reads itself reads as unbounded") {
+    const spec::Spec sp = parse(R"(
+[[control]]
+id = "win"
+kind = "range"
+bind = "value"
+options = { min = { control = "win", field = "lo" }, max = 10, value = [2, 8] }
+)");
+    ValueStore values;
+    values.reset(sp);
+    const nlohmann::json v = values.control_value("win");
+    REQUIRE(v.is_array());
+    CHECK(v[1].get<double>() == 8.0);
+    CHECK(values.set_control("win", nlohmann::json::array({1, 9}), CommandOrigin::ui, nullptr).ok());
+}

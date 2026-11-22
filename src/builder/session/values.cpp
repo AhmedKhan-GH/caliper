@@ -200,6 +200,10 @@ struct ValueStore::Impl {
     CursorState cursor;
     std::map<InputKey, std::uint64_t> versions;
     std::uint64_t counter = 0;
+    // The depth of bound evaluations: a spec that did not pass the validator
+    // may hold a range whose bounds read itself (spec.reference_cycle), and
+    // such a bound then reads as absent.
+    mutable int depth = 0;
 
     void bump(const InputKey& k) { versions[k] = ++counter; }
 
@@ -208,7 +212,10 @@ struct ValueStore::Impl {
     std::optional<double> evaluate_bound(const spec::Control& c, const char* key) const {
         const auto ref = c.options.references.find(key);
         if (ref != c.options.references.end()) {
+            if (depth > 8) return std::nullopt;
+            ++depth;
             json v = read(ref->second);
+            --depth;
             if (v.is_null()) v = ref->second.fallback;
             if (v.is_number() && std::isfinite(v.get<double>())) return v.get<double>();
             return std::nullopt;
