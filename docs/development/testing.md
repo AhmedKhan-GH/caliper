@@ -224,6 +224,22 @@ The builder session in the app has its own entries. The entries that start the h
 | `caliper_approval_cards`, `caliper_approval_cards_app` | The approval cards (`src/host/builder/approval_cards.h`): Approve, Deny (`command.denied`), timeout, conflict and destructive commands, then the same through the real `caliper-mcp` and `CALIPER_TEST_APPROVALS`. |
 | `caliper_builder_pane`, `caliper_builder_pane_gpu`, `caliper_builder_app` | The builder pane (`src/host/builder/builder_pane.h`), headless, offscreen with `caliper-builder-shot`, and as a whole build in the hidden app. |
 
+## Instrument Acceptance
+
+The ctest entry `caliper_m1_acceptance` (`tests/m1/driver.py`) is the acceptance test of milestone M1. It runs `tests/m1/train.py`, a script whose only Caliper line is `caliper.watch(model, optimizer)`. It starts the hidden app on the stream of the script and `caliper-mcp` as a child, and it sends `tests/m1/transcript.jsonl` through the MCP tools. The agent creates a spec, a scene panel bound to `live:model` and a slider bound to `param:lr`, and it changes `lr` after an approval card. The test then waits for the line of the script that shows the new rate at its next step. Last, a call of `events_wait` for picks must be held, and it must return the pick with the panel id, the entity and the item index.
+
+The test waits on output lines, events and published state, never for a fixed time. The entry needs a Python with torch, which `CALIPER_M1_PYTHON` names (the default is the builder test Python). It also needs the native sender `caliper._netio`, which `scripts/build_netio.py` builds into `python/caliper/`. The driver puts that folder on `PYTHONPATH`. The entry exits with code 77, which ctest reports as skipped, when the app, Metal, torch or the sender is missing.
+
+The hidden app takes the input of the test through `CALIPER_TEST_UI` and the decisions on cards through `CALIPER_TEST_APPROVALS`. The app reads both only with `--hidden`. The spec page adds three steps to the grammar of `CALIPER_TEST_UI`:
+
+| Step | Meaning |
+|---|---|
+| `panel <id>` | Waits until the spec page draws the scene of the panel |
+| `held [<kind>]` | Waits until a call of `events.wait` waits on the event ring, for that kind when it is given |
+| `pick_panel <id> <fx> <fy>` | Clicks the panel at the fractions of its width and height, such as `0.5 0.5` |
+
+The founder check `examples/python/m1_founder_check.py <folder> --app <caliper> --mcp <caliper-mcp>` runs the same transcript without a window. It saves one capture of the app with the scene panel and the slider into the folder. Then it prints the learning rate that the script reports at its next step and the pick event. It exits with a code other than 0 on any failure, and it stops after five minutes.
+
 ## GPU Tests
 
 A suite that needs a GPU must not report success when it finds none. `tests/gpu_skip.h` provides the convention that the gfx, export, embed, live and torch suites share:

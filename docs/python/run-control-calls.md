@@ -77,8 +77,20 @@ Both travel on the stream as messages of wire protocol 3.1 ([Controls](../refere
 
 ## Watch With an Optimizer
 
-`caliper.watch(model, optimizer)` is the one line that puts a training script under run control. It starts `caliper.serve()` when no server runs, and it makes `optimizer.step()` the checkpoint of the run with a step pre-hook that calls `caliper.step()`. A script that passes an optimizer must not also call `caliper.step()`.
+`caliper.watch(model, optimizer)` is the one line that puts a training script under run control. Its signature is `caliper.watch(model, optimizer=None, *, activations=True, gradients=False, every=1, include=None, rate=None, groups=True, scene=True)`, and every argument after `optimizer` is a keyword. Without an optimizer, the call behaves as before. With one, it starts `caliper.serve()` when no server runs, and it keeps the shared memory session closed. Thus a view does not appear twice in an app that attaches with `--url`.
 
-The call registers the parameter `lr` on a log scale, from the start rate divided by 1,000 to the start rate multiplied by 10. A new value of `lr` scales every parameter group by the same factor and applies to the same optimizer step. The call also publishes the series `loss` and `lr` and the scene `model`. The scene has one entity, `modules`, with one box for each watched module along +y. The row id of a box is the index of its module in `WatchHandle.modules`, thus a pick on a box names the module. The argument `scene=False` leaves the scene out.
+The call makes `optimizer.step()` the checkpoint of the run with a step pre-hook. At each checkpoint the hook publishes the loss, calls `caliper.step()` and writes the parameter `lr` into the parameter groups. Pending parameters apply, queued actions run and a pause waits there, before the weights change. A script that passes an optimizer must not also call `caliper.step()`.
 
-Under a torch learning rate scheduler, a new `lr` scales the scheduled rate from the step where it applies. Without a scheduler, `optimizer.param_groups` holds the new rates after that step.
+The call registers the parameter `lr` on a log scale, from the start rate divided by 1,000 to the start rate multiplied by 10. It registers no parameter when parameter group 0 has no positive rate, and it warns instead. A new value of `lr` is the rate of group 0 and moves every other group by the same factor. It applies to the same optimizer step.
+
+The call also publishes these names:
+
+| Name | Kind | Content |
+|---|---|---|
+| `loss` | Series | The last 0-d tensor that `backward()` ran on before the step, also for a closure that `optimizer.step(closure)` runs |
+| `lr` | Series | The learning rate of group 0 that each step used |
+| `model` | Scene | One entity, `modules`, with one box for each watched module along +y |
+
+The size of a box shows the parameter count of its module, and its color shows the mean absolute value of the last output of the module. The label is the module name. The row id of a box is the index of its module in `WatchHandle.modules`, thus a pick on a box names the module. The scene is computed only while a viewer watches it. The argument `scene=False` leaves it out.
+
+Without a scheduler, the new rates stay in `optimizer.param_groups`. Under a torch learning rate scheduler, a new `lr` scales the schedule from the step where it applies. The hook multiplies the scheduled rates by a factor before each step and takes it off after the step. The scheduler thus neither undoes the change nor compounds it. `param_groups` and `get_last_lr()` show the scheduled rates, and the series `lr` shows the rate that the step used. `WatchHandle.remove()` also removes `lr` and the loss tap, and it leaves the series and the scene.

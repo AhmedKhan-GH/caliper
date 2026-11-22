@@ -69,6 +69,8 @@ A `series` is the exception. Every call appends its values on every attached rou
     options:
       members: [remove, active, views, modules, groups]
 
+With an optimizer, `watch` also puts the script under run control, publishes the series `loss` and `lr` and the scene `model`, and keeps the shared memory session closed. [Watch With an Optimizer](run-control-calls.md#watch-with-an-optimizer) describes it.
+
 ## MPS Zero-Copy
 
 A snapshot is a few torch operations queued on the stream of the tensor. They write into a slot that the route allocated as CPU-readable shared memory and handed to torch through DLPack. The session uses a shared-memory segment, and the window uses a Caliper-made shared `MTLBuffer`.
