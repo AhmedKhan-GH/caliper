@@ -2,7 +2,7 @@
 
 `caliper.hpp` is the header-only, optional C++ layer over the frozen C ABI. A C applet can implement `abi.h` by hand; the sugar exists so C++ authors write a class and a macro instead of five `extern "C"` bridge functions and a hand-built descriptor. It requires **C++20** (the `CALIPER_APPLET` macro uses designated initializers).
 
-## The `CALIPER_APPLET` macro
+## `CALIPER_APPLET` Macro
 
 You write a class deriving from `caliper::Applet` and invoke the macro once:
 
@@ -25,7 +25,7 @@ CALIPER_APPLET(MyApplet,
     .services = {CALIPER_LOG_V1, CALIPER_UI_V1})
 ```
 
-### Required field order
+### Required Field Order
 
 The fields are C++20 designated initializers on `caliper::AppletMeta`, and **the order is fixed** — the aggregate is initialized positionally, so the names are documentation, not a reordering license:
 
@@ -38,7 +38,7 @@ The fields are C++20 designated initializers on `caliper::AppletMeta`, and **the
 
 `.services` is a `const char*[15]`; any trailing slots are zero-initialized, so the array the host sees is **NULL-terminated** automatically. Fifteen slots is the fixed capacity — list only the services your applet truly requires (negotiation refuses to load an applet whose required services the host cannot vend).
 
-### What the macro generates
+### Generated Code
 
 - One `static const caliper::AppletMeta kMeta` holding the six fields.
 - A `Holder` struct pairing your class instance with a `caliper::Host`.
@@ -46,11 +46,11 @@ The fields are C++20 designated initializers on `caliper::AppletMeta`, and **the
 - `caliper::ui::connect(host)` is called inside `initialize`, before `on_init`, so ImGui/ImPlot contexts are live by the time your code runs.
 - The single exported symbol `caliper_applet_descriptor()` returning a `static const CaliperAppletDescriptor` wired to `kMeta` and the five bridges.
 
-### One per dylib
+### One Macro per Library
 
 The macro defines the `caliper_applet_gen` namespace and the exported `caliper_applet_descriptor` symbol, so **exactly one `CALIPER_APPLET` may appear per shared library** (one applet per dylib — the ABI contract). In a test binary that needs to exercise several behaviours, keep a single `CALIPER_APPLET` and toggle behaviour from inside the class (see the fixture-host recipe below).
 
-## `ui::connect` semantics
+## `ui::connect` Semantics
 
 `caliper::ui::connect(const CaliperHost*)` performs the ImGui context + allocator handoff described by [`caliper.ui.v1`](services/caliper-ui-v1.md), in the one order authors get wrong when they do it by hand:
 
@@ -60,7 +60,7 @@ The macro defines the `caliper_applet_gen` namespace and the exported `caliper_a
 
 Because the macro calls `connect` for you inside `initialize`, most applets never call it directly.
 
-## Service wrappers
+## Service Wrappers
 
 `caliper::Host` wraps the raw `CaliperHost`: `service(id)` calls `get_service`, `data_dir()` returns the applet's data folder, and `log_info` and `log_error` write through `caliper.log.v1`. On top of it the header defines one typed wrapper per service. Each wrapper is built from a `Host`, is falsy when the host does not vend the service, and does nothing (returns 0, `false`, an empty string or `nullptr`) when called on a host without it. There is no wrapper for `caliper.feed.v1`; call that table through `Host::service`.
 
@@ -75,7 +75,7 @@ Because the macro calls `connect` for you inside `initialize`, most applets neve
 | `Export` | [`caliper.export.v1`](services/caliper-export-v1.md) | `view_png` and the frame-sequence calls `begin_sequence`, `frame` and `end_sequence`, with the same overloads for each geometry record revision. |
 | `Device` | [`caliper.device.v1`](services/caliper-device-v1.md) | A plain struct filled by `Device::query(host)` with `kind`, `index`, `name` and `free_memory_hint`. It reports the CPU when the service is absent. |
 
-## Fixture-host TDD recipe
+## Fixture-Host TDD Recipe
 
 `caliper::testing::FixtureHost` (from `<caliper/fixture_host.h>`, target `caliper::sdk_testing`) is a headless fake `CaliperHost` for test-driving applets and sugar without launching UI. It vends `caliper.log.v1` only; `get_service` returns `NULL` for everything else (so `ui::connect` no-ops). It records every logged line, exposed via `log_lines()` and `log_contains()`.
 
@@ -107,7 +107,7 @@ TEST_CASE("applet: initialize logs and frame is exception-safe") {
 }
 ```
 
-## Full source
+## Full Source
 
 ```cpp
 --8<-- "sdk/include/caliper/caliper.hpp"

@@ -38,7 +38,7 @@ across channels** so a reader can align series on one timeline.
   samples. Unknown id / null buf / `max == 0` / caught-up → `0`, cursor
   untouched.
 
-### The honest-loss contract
+### Honest-Loss Contract
 
 Each channel keeps a **fixed-capacity ring** (4096 samples ≈ 6+ minutes at
 10 Hz). Overflow drops the oldest. A reader that falls behind sees its `seq`
@@ -48,7 +48,7 @@ resumes at the oldest available one, so the returned seqs skip past
 silent.** A dashboard surfaces it as a gap counter; a stale channel (no new
 samples) is visible through its timestamps, never interpolated.
 
-### Thread-callability
+### Thread Callability
 
 Every entry point is **any-thread and non-blocking** — one mutex per channel
 (writer = the provider thread; readers = anyone, any cadence). Applet job

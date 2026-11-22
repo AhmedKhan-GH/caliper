@@ -113,7 +113,7 @@ those canvases and never paints applet pixels.
 | `HostRenderer` + tensor bridge + geometry | **Caliper Embed** | the zero-copy claim travels with the core |
 | Applet loader + service registry + services | **Caliper Embed** | the same registry applets already see |
 | libtorch (one per process) | **Caliper Embed** | the embedder must NOT link its own torch; the core owns device/pack policy |
-| Crash containment | **Caliper Embed** | applet faults are caught by the core's guard and surfaced via `crash_fn`; the embedder is not taken down. The guard's signal handlers are installed once per process and pass faults outside applet calls on to the handlers installed before them, so an embedder's own crash reporter still sees its own crashes ([trust model](../applets/trust-model.md#every-applet-call-is-guarded)) |
+| Crash containment | **Caliper Embed** | applet faults are caught by the core's guard and surfaced via `crash_fn`; the embedder is not taken down. The guard's signal handlers are installed once per process and pass faults outside applet calls on to the handlers installed before them, so an embedder's own crash reporter still sees its own crashes ([trust model](../applets/trust-model.md#guarded-applet-calls)) |
 
 ## Per-core settings and limits
 

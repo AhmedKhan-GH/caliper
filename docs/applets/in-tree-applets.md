@@ -214,7 +214,7 @@ actually drew the current frame, and says which fallback ran when it did not
   texture is staged on the CPU. Without textured geometry the surface draws per
   vertex. Without a geometry service at all it draws a CPU heatmap.
 
-## Tutorial applets
+## Tutorial Applets
 
 These live in `examples/`. Each builds on its own against the installed SDK, and
 the core build also builds them with the tests, because the tests load them:
@@ -233,7 +233,7 @@ Hello always, and SineScope in a build with libtorch.
   configuration that links libtorch. The
   [first ML applet tutorial](first-ml-applet.md) builds it.
 
-## Embedding example
+## Embedding Example
 
 `examples/embed_host` is a second host of the core, not an applet. It is a bare
 native window (AppKit on macOS, Win32 on Windows) that makes the five embed calls
@@ -246,7 +246,7 @@ offscreen mode that opens no window, and `CALIPER_EMBED_EXIT_AFTER=<seconds>`
 closes it automatically. There is no Linux host. See [Embedding](../web/embedding-api.md)
 and [Embed Caliper in a program](../web/program-embedding.md).
 
-## Archived applets
+## Archived Applets
 
 `applets/legacy/` and `applets/legacy-dev/` hold archived applets that the default
 build skips. `CALIPER_BUILD_OPENGLLAMA` builds the archived OpenGLlama applet,

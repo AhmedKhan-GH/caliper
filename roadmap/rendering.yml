@@ -49,7 +49,7 @@ features:
     status: shipped
     summary: caliper.geometry.v1_2 adds textures on meshes, drawn with a colour mode that samples an imported texture.
     depends_on: [REN-05]
-    docs: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_2-textures-on-meshes
+    docs: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_2-textured-meshes
     issue: null
 
   - id: REN-07
@@ -570,7 +570,7 @@ features:
     status: shipped
     summary: The WebGPU renderer draws the browser views of the WebAssembly module, with a colormap pass whose thresholds come from the CPU reference and instanced quads for points.
     depends_on: [EMB-04]
-    docs: docs/applets/rendering.md#the-webgpu-backend
+    docs: docs/applets/rendering.md#webgpu-backend
     issue: null
 
   - id: REN-70

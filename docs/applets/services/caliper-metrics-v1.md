@@ -28,7 +28,7 @@ The vocabulary is TensorBoard's, deliberately: **experiment / run / tag / step**
   to the run (`{"lr":0.001,"batch":256,...}`) so runs are comparable.
 - **`histogram` / `image`** log a distribution or a picture at a step.
 
-### Thread-callability
+### Thread Callability
 
 Every entry point is callable **from an applet job thread** — which is where
 training lives (never the frame thread). The host serializes writes internally
@@ -37,7 +37,7 @@ also destroys the metrics store *after* it joins job threads, so a scalar logged
 in the last instant before a cancel lands cannot fault — for a job that honours
 cancel; the join gives up after 5 s (see [`caliper.jobs.v1`](caliper-jobs-v1.md)).
 
-### Resource limits
+### Resource Limits
 
 The metrics store (`metrics.duckdb`) opens with its own DuckDB thread count and
 memory limit, sized from the machine's RAM and cores. Override them with
@@ -46,21 +46,21 @@ the all-stores `CALIPER_DUCKDB_THREADS` and `CALIPER_DUCKDB_MEMORY_LIMIT`. The
 defaults and the precedence are in
 [`caliper.data.v1`: Resource limits](caliper-data-v1.md#resource-limits).
 
-### v1 image limitation
+### Image Limitation
 
 `image()` accepts **CPU-resident, contiguous, HWC `u8`** tensors only. The host
 gate enforces this: a tensor that is non-contiguous, not on the CPU, or not
 `u8`-HWC is logged and **dropped**, never misinterpreted. There is no GPU-resident
 path for metrics images.
 
-### The payoff
+### Persisted Runs
 
 Metrics is an **optional** service: probe it, and stream only when present. Every
 applet that logs a scalar this way has its runs persisted in the host's metrics
 store, with no storage code of its own. The host has no run browser, so stored
 runs are read back through `caliper.metrics.v1_1.query` or from SQL tools.
 
-## caliper.metrics.v1_1
+## `caliper.metrics.v1_1`
 
 `caliper.metrics.v1` is write-only across the ABI and immutable, so a consumer
 such as an embedding host ([Embedding Caliper](../../web/embedding-api.md#reaching-services-from-a-host))
@@ -73,7 +73,7 @@ entries: `query` and `last_error`.
 --8<-- "sdk/include/caliper/services/metrics_v1_1.h"
 ```
 
-### query
+### `query`
 
 `query(sql_utf8, out)` runs one SQL statement against the metrics store and
 streams the result as Arrow ([Arrow interchange](../tensor-and-arrow-headers.md#arrow-header)).
@@ -98,7 +98,7 @@ streams the result as Arrow ([Arrow interchange](../tensor-and-arrow-headers.md#
   thread may all call it. The store serializes every writer and reader through
   one DuckDB connection under one mutex.
 
-### Why reads use query and not ATTACH
+### Read Access via `query`
 
 A consumer could in principle open the metrics database file read-only with
 DuckDB `ATTACH`. That second instance sees only checkpointed state, so rows an

@@ -28,7 +28,7 @@ Tabular results from [`caliper.data.v1`](services/caliper-data-v1.md) cross the 
 as **Apache Arrow C Data Interface** structures. This section explains why, and what
 the vendored header is.
 
-### What it is
+### Overview
 
 The [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
 is a tiny, stable, language-agnostic ABI for passing columnar data between
@@ -44,7 +44,7 @@ projects.
 (which sets the callback to NULL). A struct whose `release` is NULL is empty —
 that is also how end-of-stream is signalled.
 
-### Why it is the ABI's tabular boundary
+### Tabular Boundary
 
 Caliper's contract is a **frozen C ABI**: no third-party type may
 appear in a service header, or the applet and host would have to agree on that
@@ -56,7 +56,7 @@ frozen structs and interoperate by layout alone. DuckDB exports its results as
 these structs natively, so `data.v1` gets a zero-invention path from SQL result to
 applet.
 
-### The vendored header
+### Vendored Header
 
 `sdk/include/caliper/arrow_c.h` is the spec's definitions copied verbatim. Two
 details matter:

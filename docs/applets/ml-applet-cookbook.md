@@ -8,7 +8,7 @@ that way. Contracts live in the per-service reference pages; this is the
 page about putting them together. Snippets are condensed from the exemplar —
 open it beside this page.
 
-## 1. The threading spine
+## 1. Threading Spine
 
 One training **worker** (a `jobs.v1` job), one **frame thread** (your
 `on_frame`). Everything they share lives under **one mutex**, published with
@@ -57,7 +57,7 @@ void on_frame(State* st) {
 - Generation counters make every downstream stage cheap: nothing re-uploads,
   re-splits, or re-queries unless its `gen` moved.
 
-## 2. Three cadences — match update rate to what the data is
+## 2. Three Cadences
 
 A rich demo has streams with different natural rates. Name them explicitly
 in the step loop:
@@ -90,7 +90,7 @@ Don't add a config knob for cadence unless a *measured* cost forces one.
 slowdown that turned out to be ~nothing: step time was dominated by GPU sync
 overhead, not compute. The knob died.)
 
-## 3. The device-resident pull (the USP pattern)
+## 3. Device-Resident Pull
 
 The framework's reason to exist: tensors go from training memory to pixels
 **without CPU staging**. Worker side — build *display tensors* on the
@@ -143,7 +143,7 @@ if (any_texture_failed && disp.device().type() != torch::kCPU)
     st->disp_force_cpu.store(true);      // worker adds .to(kCPU) next step
 ```
 
-## 4. Sharp tiny tensors: block-upscale on device
+## 4. Tiny Tensor Upscaling
 
 Bridge textures sample linearly (v1 has no filter flag), so a 3×3 kernel
 drawn at 40 px is interpolated mush. Fix it where the data lives — on the
@@ -157,7 +157,7 @@ auto sharp = w.repeat_interleave(16, 0)      // 3x3 -> 48x48 of HARD blocks
 
 Sharp under any sampler, zero ABI involvement, stays device-resident.
 
-## 5. Texture lifecycle
+## 5. Texture Lifecycle
 
 Bridge textures are **frame-thread-owned**: create/update/release only in
 `on_frame` and `on_cleanup()`. Gate updates on a gen counter. **Create each
@@ -183,7 +183,7 @@ void on_cleanup() {
 Miss a release and the leak is silent; release before the join and you race
 the worker.
 
-## 6. Viewport policy: who owns the camera
+## 6. Viewport Policy
 
 Three plot situations, three correct answers — and every "why is my plot
 fighting me" bug is one of these mismatched:
@@ -218,7 +218,7 @@ if (ImPlot::BeginPlot("train loss", {-1, 150})) {
 
 One visible toggle per plot, sensible motion by default, double-click resets.
 
-## 7. The cancel contract, in practice
+## 7. Cancel Contract
 
 `jobs.v1` promises cancel is honored **≤ 100 ms**. That means a check in
 every loop that can run longer than that:
@@ -244,7 +244,7 @@ additionally joins all workers before teardown, so sloppiness degrades
 instead of crashing — but honor the contract; the bounded wait is what
 keeps app exit fast.
 
-## 8. Data acquisition (the download recipe)
+## 8. Data Acquisition
 
 Datasets are fetched **inside the job** (never the frame thread), cached in
 `host.data_dir()`, written atomically so a crash mid-download can't poison
@@ -291,7 +291,7 @@ if (p) { st->load_path = p;
          st->job_id = st->jobs.submit("load checkpoint", &eval_job, st); }
 ```
 
-## 10. SQL over live data (`data.v1`)
+## 10. SQL over Live Data
 
 A live table is rebuilt from the latest snapshot several times a second. That is
 I/O-class work, so it follows two rules: the table is a **`TEMP` table**, and the
@@ -361,7 +361,7 @@ wait. If the service is absent, say so in the panel and keep running: every
 optional service degrades to a visible "absent (ok)" line, never a crash. Use an
 ordinary table only for data that must outlive the session.
 
-## 11. Pay for a probe only while it is visible
+## 11. Visible-Only Probes
 
 An interpretability probe, such as a logit lens, a residual-stream capture or an
 embedding projection, can cost as much as the training step it observes. Run it

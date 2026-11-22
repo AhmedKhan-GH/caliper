@@ -23,7 +23,7 @@ On the native backends the tensor's device memory becomes the texture with no CP
 graphics API, so the renderer stays swappable (see [Rendering](../rendering.md)). What the paths cost is in
 [Zero-copy tensor visualization](../../python/zero-copy-tensors.md).
 
-### Acceptance rules
+### Acceptance Rules
 
 The host validates every tensor before it becomes a texture. A violation returns `0` or `false` and emits one
 `caliper.log.v1` line. The bridge never misinterprets bytes into a wrong texture. The shipped gate:
@@ -37,7 +37,7 @@ The host validates every tensor before it becomes a texture. A violation returns
 The applet-side [torch adapter](../adapters.md) enforces the mirror of these rules before the tensor reaches the host,
 and rejects rather than silently copying.
 
-### Frame thread only
+### Frame Thread Only
 
 Every bridge entry point is frame-thread-only. Unlike [`caliper.metrics.v1`](caliper-metrics-v1.md), which a job thread
 may call, the bridge touches renderer state and must be called from the applet's `frame()`. In the usual pattern the
@@ -45,7 +45,7 @@ training worker snapshots weights under a mutex and never calls the bridge, and 
 and does every upload. Textures are owned by the frame thread and released on it, after the job wait and before
 renderer teardown.
 
-### Per-backend behavior
+### Per-Backend Behavior
 
 The applet code is identical on every backend. Where the staging happens differs, and the device-path string that the
 renderer reports says which path ran.
@@ -68,7 +68,7 @@ Vulkan with CUDA (device rows). The `compute` path is exact against `map_f32_to_
     create returns `0`, as on a non-Metal renderer, it relocates the tensor to CPU and the bridge stages it. The
     applet does no pixel work on either path. The bridge's own accept or reject drives the choice.
 
-### Lifecycle: create once, update after
+### Texture Lifecycle
 
 - `texture_from_tensor` and `texture_from_tensor_mapped` create a texture and return a `CaliperTextureId`.
 - `update_texture` re-uploads into an existing texture of the same shape and dtype. Create once on the first
@@ -97,7 +97,7 @@ transition. Free it with `free_shared`. What it returns depends on the backend:
   through `update_texture`. The Metal `alloc_shared` is not device-backed.
 - **OpenGL**, and Vulkan without paired interop, return a CPU vector.
 
-### `CaliperTextureId` lifetime
+### `CaliperTextureId` Lifetime
 
 `CaliperTextureId` is a `uint64_t`, opaque to applets: `0` is invalid, and it is compare-only. Never interpret or
 dereference it, because its representation is internal to the backend. Its value can be cast directly to `ImTextureID`
@@ -105,7 +105,7 @@ for `ImGui::Image`, because the host hands out the ImGui-compatible handle for e
 OpenGL, the `id<MTLTexture>` pointer on Metal and the descriptor set on Vulkan. Ids from `texture_from_tensor*` are
 freed with `release_texture`, and ids from `alloc_shared` with `free_shared`.
 
-### Sync model
+### Sync Model
 
 v1 is stream-free: `CaliperTensor.stream` is `NULL`. Correctness on device textures comes from the applet draining
 the device once at the handoff, with `torch::mps::synchronize()` or `torch::cuda::synchronize()` through the adapter's
@@ -118,7 +118,7 @@ and puts the producer's stream in `CaliperTensor.stream`. Otherwise v1's drain a
 reasons are in [Adapters](../adapters.md) and
 [Zero-copy tensor visualization](../../python/zero-copy-tensors.md#sync-ladder).
 
-## Additive revisions: v1_1 and v1_2
+## Additive Revisions
 
 Two additive revisions extend the bridge under one discipline, the [growth rules](../../development/compatibility-and-epochs.md#growth-rules).
 The struct is prefix-identical, with the same members in the same order and with the same semantics. New members are
@@ -126,14 +126,14 @@ appended, and each revision has one new capability bit. There is no ABI epoch bu
 and ids stay frozen. An applet negotiates by asking the host for each id and calling `caps()`. A missing id or an
 unset bit means "fall back to the previous contract", never a crash.
 
-### `caliper.tensor_bridge.v1_1`: stream-ordered handoff
+### `caliper.tensor_bridge.v1_1` Handoff
 
 v1_1 adds one query, `caps()`, to the six v1 operations. Bit 0, `CALIPER_BRIDGE_CAP_STREAM_ORDERED`, set means the host
 honors a non-NULL `CaliperTensor.stream`. The device update is ordered on the producer's stream or queue (`CUstream`
 on CUDA, `MTLCommandQueue*` on Metal), so the adapter may skip its full device drain. Hosts that do not vend this id,
 or leave the bit unset, keep the v1 contract: the adapter drains and `stream` stays `NULL`.
 
-### `caliper.tensor_bridge.v1_2`: imported device allocations
+### `caliper.tensor_bridge.v1_2` Imported Allocations
 
 v1_2 adds three entry points to the seven v1_1 members. Bit 1, `CALIPER_BRIDGE_CAP_IMPORT_ALLOC`, set means the host
 can import an applet-exported device allocation and run device texture updates directly from it, with no copy of the
@@ -153,4 +153,4 @@ tensor data.
 `CaliperAllocId` is an opaque `uint64_t`: `0` is invalid, and it is compare-only. It is the import machinery that
 [`caliper.geometry.v1` and its revisions](caliper-geometry-v1.md) draw from. Geometry sources are pairs of
 `(CaliperAllocId, byte offset)` into these same imports, and they reuse the caches, gates and lifecycle of v1_2. The
-applet side of an import is [`ExportablePool`](../torch-per-platform.md#opting-in-to-exportablepool).
+applet side of an import is [`ExportablePool`](../torch-per-platform.md#exportablepool-opt-in).

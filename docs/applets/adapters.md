@@ -5,7 +5,7 @@ are header-only, and the host never includes them. The first section covers the
 torch adapter. The later sections cover the allocation registry, the exportable
 pool, the OBJ loader and the orbit camera.
 
-## torch.hpp
+## `torch.hpp`
 
 `caliper/adapters/torch.hpp` is a **header-only** bridge from a `torch::Tensor`
 to the frozen [`CaliperTensor`](tensor-and-arrow-headers.md#tensor-header) It compiles
@@ -22,7 +22,7 @@ Three entry points, one ladder:
 | `synced_to_tensor(t)` | full device drain before handoff | device tensors on a v1 host (always correct, costs a barrier) |
 | `stream_to_tensor(t, caps)` | drain **or** stream-ordered handoff, negotiated | device tensors; pass `bridge.caps()` and get the best rung the host honors |
 
-### Reject, never copy
+### Copy Rejection
 
 The adapter's central contract: it **never silently copies**. Each entry point
 returns `std::optional<CaliperTensor>` that aliases the tensor's memory
@@ -40,7 +40,7 @@ The caller repairs the tensor in **applet code** — an explicit `.contiguous()`
 before calling again — so the cost of any copy is *visible where it is paid*, not
 hidden inside the bridge. This is the teaching point the exemplar exists to make.
 
-### The MPS offset-0 / contiguous rule
+### MPS Offset and Contiguity
 
 An MPS tensor must additionally have `storage_offset() == 0`. The reason is
 structural, not conservative: the frozen `CaliperTensor` has **no
@@ -55,7 +55,7 @@ carries a nonzero offset, so the worker takes an **owned clone** of each
 `(3,3)` filter — which also decouples the snapshot from the still-mutating live
 weight.
 
-### CUDA tensors (Windows)
+### Windows CUDA Tensors
 
 A CUDA tensor maps to `CALIPER_DEV_CUDA` with `data` = the device pointer; the
 Vulkan backend imports it via external-memory interop (see [Zero-copy](../python/zero-copy-tensors.md)). The
@@ -74,7 +74,7 @@ while the drain silently returns; the torch test suite carries a tripwire
 case that fails loudly instead (`stream` must round-trip a non-default pool
 stream).
 
-### `synced_to_tensor` — cost, honestly
+### `synced_to_tensor` Cost
 
 `synced_to_tensor` is `to_tensor` preceded by a device drain, so the texture the
 host uploads **this frame** reflects every kernel the applet has enqueued
@@ -84,7 +84,7 @@ device barrier** — it blocks the calling CPU thread until the device drains.
 Pay it **once at the handoff, not per frame**. CPU tensors need no sync, so the
 call is skipped for them.
 
-### `stream_to_tensor` — the negotiated handoff (bridge v1.1)
+### `stream_to_tensor` Handoff
 
 ```cpp
 const uint32_t caps = bridge.caps();          // tensor_bridge.v1_1, additive
@@ -106,7 +106,7 @@ from a CUDA producer still orders correctly — the renderer's NULL rung uses
 that same default stream. Only a producer on a non-default stream carries a
 non-NULL handle. Don't write assertions that assume otherwise.
 
-### Thread safety — the MPS serialization rule
+### MPS Serialization
 
 **None of torch's public MPS stream calls are internally serialized** (proven
 by disassembly; the crashes were real: command-buffer corruption when the
@@ -125,7 +125,7 @@ stream dispatch queue**. Two consequences for applet authors:
 In the exemplar the training **worker** performs the handoff when it
 snapshots, so the **frame thread** never syncs during upload.
 
-## alloc_registry.hpp
+## `alloc_registry.hpp`
 
 `AllocRegistry` maps a raw device pointer back to the exportable allocation that
 contains it, so an adapter can hand the bridge an `(alloc, offset)` pair instead
@@ -142,7 +142,7 @@ on every platform.
 Every call takes one mutex, so any thread may use a registry. `ExportablePool`
 owns one and fills it as blocks are created.
 
-## exportable_pool.hpp
+## `exportable_pool.hpp`
 
 `ExportablePool` gives an applet tensors that the bridge can import, so a texture
 or a geometry buffer updates with zero copies of the data. It is applet-side only,
@@ -188,7 +188,7 @@ MeshScope, InstanceScope and TwinScope all allocate their drawn buffers this way
 [Applets](in-tree-applets.md)). The platform differences are in
 [Torch on each platform](torch-per-platform.md).
 
-## obj.hpp
+## `obj.hpp`
 
 `caliper::obj` is a small Wavefront OBJ loader, with no dependency beyond the
 standard library.
@@ -209,7 +209,7 @@ standard library.
 The loader does only OBJ. glTF and other asset formats are not supported.
 TwinScope loads its housing with it.
 
-## orbit_camera.hpp
+## `orbit_camera.hpp`
 
 Header-only orbit-camera math in `caliper::adapters`, so that drawing and picking
 use one eye computation and a pick ray lands where the draw put the pixel.
@@ -229,7 +229,7 @@ use one eye computation and a pick ray lands where the draw put the pixel.
 
 TwinScope uses it for both its camera and its surface picking.
 
-## Full source of torch.hpp
+## `torch.hpp` Source
 
 ```cpp
 --8<-- "sdk/include/caliper/adapters/torch.hpp"

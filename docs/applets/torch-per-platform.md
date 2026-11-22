@@ -12,7 +12,7 @@ and what each one is on macOS and on Windows. Applet code is the same on both; w
 | `ExportablePool::to_bridge` | the tensor's `MTLBuffer`, imported once | a `cuMemCreate` block, imported into Vulkan |
 | `Bridge::texture_from_tensor_mapped` | a Metal texture | a Vulkan image |
 
-## What each step does
+## Step Details
 
 1. **`torch::Device`: where the tensor is created.** Training has to run on the GPU the app draws with, or there is
    nothing on the GPU to share. [`caliper::Device::query`](services/caliper-device-v1.md) reports which one that is.
@@ -31,7 +31,7 @@ and what each one is on macOS and on Windows. Applet code is the same on both; w
 Most applets call only steps 1, 3 and 6 directly; the SDK does 4 and 5. The walkthrough on the
 [Caliper site](https://ahmedkhan-gh.github.io/caliper/#develop) shows the three in `examples/sine_scope`.
 
-## Two ways to share memory on Windows
+## Windows Memory Sharing
 
 Step 5 above is one of two routes from a CUDA tensor to a Vulkan image, and an applet chooses per tensor.
 
@@ -53,7 +53,7 @@ in place. On macOS it returns a CPU vector in unified memory: that is zero-copy 
 device-backed, so a device writer goes through the normal update path. See
 [caliper.tensor_bridge.v1](services/caliper-tensor-bridge-v1.md#alloc_shared).
 
-## Opting in to ExportablePool
+## `ExportablePool` Opt-In
 
 An applet opts in after the host grants `CALIPER_BRIDGE_CAP_IMPORT_ALLOC`. These rules keep the opt-in safe, and each
 is checked against `sdk/include/caliper/adapters/exportable_pool.hpp`.

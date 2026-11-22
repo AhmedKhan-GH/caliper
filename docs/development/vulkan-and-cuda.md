@@ -25,7 +25,7 @@ software Vulkan drivers. Vulkan still renders, and the bridge CPU-stages tensors
 ## Which path an update takes
 
 Interop has two parts that work independently: the memory that is shared between the APIs, and how the work is
-ordered between them. The update ladder is described first in [Rendering](../applets/rendering.md#the-update-ladder-on-windows).
+ordered between them. The update ladder is described first in [Rendering](../applets/rendering.md#windows-update-ladder).
 This section gives the detail.
 
 ### The direct image path

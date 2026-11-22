@@ -32,7 +32,7 @@ thread**.
 - **`last_error()`** returns why **this thread's** last call returned `false`.
   It is never NULL (`""` when nothing has failed yet).
 
-### Stream ownership protocol
+### Stream Ownership Protocol
 
 This is the sharp edge — read it before you drain a stream.
 
@@ -48,7 +48,7 @@ This is the sharp edge — read it before you drain a stream.
   connection** — one job thread can drain a result while another thread issues a
   new `query`, with no lock contention between them.
 
-### Threading and errors
+### Threading and Errors
 
 `query`/`register_dataset`/`open_dataset` serialize on one internal mutex (the
 [artifacts](caliper-artifacts-v1.md#threading-and-string-lifetime)/metrics model).
@@ -57,7 +57,7 @@ failing call, so one thread's failure never clobbers another's diagnostic. If th
 store failed to open at start-up the service is still vended but inert (every call
 `false` + a `last_error`).
 
-### Persistence and high-frequency rebuilds
+### Persistence and Rebuilds
 
 The store is a file, `data.duckdb`, in the app-data folder, and every ordinary
 table in it is written to disk through DuckDB's write-ahead log. That suits a
@@ -82,7 +82,7 @@ is file and catalog work whose cost differs by platform, and a slow one on the
 frame thread stalls every window. See
 [The frame loop](../../introduction/architecture.md#frame-loop).
 
-### Resource limits
+### Resource Limits
 
 The host runs three DuckDB stores: `data.duckdb` for this service,
 `metrics.duckdb` for [`caliper.metrics.v1`](caliper-metrics-v1.md) and the
@@ -142,7 +142,7 @@ For example, this caps metrics and artifacts at 1 GB and gives the data store
 CALIPER_DUCKDB_MEMORY_LIMIT=1GB CALIPER_DUCKDB_DATA_MEMORY_LIMIT=8GB ./build/caliper
 ```
 
-### C++ sugar
+### C++ Sugar
 
 The [`caliper::Data`](../cpp-sugar.md) wrapper is falsy-inert when absent and exposes
 the raw stream API plus one helper — `drain_numeric` — that drains an

@@ -18,7 +18,7 @@ examples/hello/
 └── CMakeLists.txt       # the build — find_package(caliper-sdk) + caliper_add_applet()
 ```
 
-## 1. The manifest
+## Manifest
 
 The host reads `hello.caliper.toml` **before it loads any of your code**. It
 declares who the applet is, which ABI epoch it was compiled against, and which
@@ -47,7 +47,7 @@ the fields you pass to the `CALIPER_APPLET` macro (below) — the loader verifie
 the two and rejects the applet if they drift. See
 [reference/manifest.md](manifest.md) for the full schema.
 
-## 2. The macro
+## Macro
 
 One include and one class is the entire C++ surface. `#include
 <caliper/caliper.hpp>` pulls in the sugar layer (the `Applet`/`Host`/`Frame`
@@ -66,7 +66,7 @@ allocators with your dylib — so `ImGui::` and `ImPlot::` calls land in the hos
 single UI world. Field order is fixed: `id`, `version`, `name`, `summary`,
 `tag`, `services`.
 
-## 3. The lifecycle: `on_init` → `on_frame` → `on_cleanup`
+## Applet Lifecycle
 
 Your class overrides three methods from `caliper::Applet`:
 
@@ -92,7 +92,7 @@ Hello also reads `CALIPER_HELLO_CRASH` in `on_init` and, when set, faults inside
 `on_frame` *before* any ImGui call. That is a deliberate test hook the loader's
 crash-quarantine tests use — not something your own applets need.
 
-## 3a. Input: the Play/Pause button
+## Input Buttons
 
 The button above the plot is the smallest complete lesson in ImGui **IO**, and
 it turns on three ideas you will use in every applet:
@@ -134,7 +134,7 @@ what you draw from state you control, and let the widgets edit that state. The
 same three ideas scale straight up to sliders (`SliderFloat` returns an edited
 value), checkboxes, and the live training controls the ML applets use.
 
-## 4. Build it
+## Build
 
 An applet builds against the installed SDK, in a folder of its own outside the
 Caliper repository. First build Caliper and install the SDK from your checkout:
@@ -178,7 +178,7 @@ To start an applet of your own, `caliper new <name>` writes a project of the
 same shape, as [Development basics](../development/development-basics.md#the-development-loop)
 shows.
 
-## 5. Load it into Caliper
+## Applet Loading
 
 Check the build first. `caliper check` runs the checks the host makes before it
 opens a library, without opening a window:
@@ -210,7 +210,7 @@ checks and copies the library and its manifest into the user applets folder,
 which the host searches every time it starts. [Caliper CLI](../reference/cli.md)
 describes every subcommand.
 
-## 6. See it in the app
+## App Visibility
 
 Hello appears as a row in the landing screen's **Instruments** pane; select it
 and press Enter (or double-click the row) to open it. The host's epoch-2 loader

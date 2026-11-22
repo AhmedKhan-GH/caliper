@@ -8,7 +8,7 @@ writes vertices/indices/normals/attributes into device memory, exports them once
 through [`caliper.tensor_bridge.v1_2`](caliper-tensor-bridge-v1.md), and the host draws
 them **in place** — zero copies of the geometry data — into an offscreen view
 texture you show with `ImGui::Image`. How the draw works on each backend is in
-[Rendering](../rendering.md#the-geometry-path). This page embeds the headers verbatim; the
+[Rendering](../rendering.md#geometry-path). This page embeds the headers verbatim; the
 docs build fails if any embedded file moves.
 
 Deliberately a **new** service, not a tensor-bridge revision: the bridge's frozen
@@ -45,7 +45,7 @@ v1.2 import machinery, caches, gates, and lifecycle as-is.
 --8<-- "sdk/include/caliper/services/geometry_v1_3.h"
 ```
 
-## Non-goals
+## Non-Goals
 
 The service draws geometry from a fixed menu. These are not provided, and each is a decision rather than a gap.
 
@@ -60,13 +60,13 @@ The service draws geometry from a fixed menu. These are not provided, and each i
 | Per-pixel lighting | Lighting is evaluated per vertex, which keeps the fragment stage trivial and parity easy |
 | Transparency sorting | The applet orders its draw array. Unsorted alpha artifacts are documented, not fixed |
 
-## caliper.geometry.v1 — instanced points
+## `caliper.geometry.v1` Instanced Points
 
 Caps bit 0 (`CALIPER_GEOM_CAP_IMPORTED_POINTS`) set means `create_view` /
 `draw_points` are live. Absent bit → both are inert, the applet keeps its CPU
 fallback.
 
-### The offscreen-view pattern
+### Offscreen View Pattern
 
 1. `create_view(width, height)` returns a `CaliperTextureId` in the tensor-bridge
    texture table. `0` = failure. Sizes are **physical (framebuffer) pixels**;
@@ -93,7 +93,7 @@ no depth test** — v1 is built for particle clouds: order-independent, no sort.
 math**. The service does no camera logic; orbit/zoom/ray-casting are UI and live in
 the applet.
 
-### Memory-stability contract
+### Memory-Stability Contract
 
 The addressed bytes are read **in place** and must not be rewritten until this
 view's next draw. On the worker side, drain the producer stream/queue once at the
@@ -102,7 +102,7 @@ discipline the exemplars use with [`caliper.jobs.v1`](caliper-jobs-v1.md)); the 
 thread does every draw and never touches the learner's tensors. The reasons for the two halves of this rule are in
 [Zero-copy tensor visualization](../../python/zero-copy-tensors.md#drain-rung-geometry).
 
-## caliper.geometry.v1_1 — general primitives
+## `caliper.geometry.v1_1` General Primitives
 
 Additive revision of v1: the first five members are prefix-identical
 (`struct_size`, `caps`, `create_view`, `release_view`, `draw_points`); three
@@ -113,7 +113,7 @@ Caps bit 1 (`CALIPER_GEOM_CAP_PRIMITIVES`) set means `create_view_ex` /
 `draw_primitives` are live. It implies nothing about bit 0; hosts set both when the
 primitives path exists.
 
-### Depth views
+### Depth Views
 
 `create_view_ex(width, height, flags)` is `create_view` plus flags. The one flag,
 `CALIPER_GEOM_VIEW_DEPTH`, attaches a D32-float depth buffer (renderer-internal —
@@ -122,7 +122,7 @@ plain v1 view has no depth: setting any `depth_flags` bit against it is
 **refused**, never silently ignored (degradation ladder — never a silently-wrong
 image).
 
-### One atomic gated frame
+### Atomic Gated Frame
 
 `draw_primitives(view, cam, draws, draw_count, draw_stride, clear_rgba)` renders
 **one** frame of the view, atomically:
@@ -143,7 +143,7 @@ grow additively later; the host reads `min(stride, its own sizeof)`. A stride be
 the host's known minimum is refused. The [C++ sugar](#c-sugar) passes `sizeof`
 for you.
 
-### The `CaliperGeomDraw` descriptor
+### `CaliperGeomDraw` Descriptor
 
 One fixed-layout struct per draw call. `static_assert(sizeof == 192)` in every
 consumer — 8-byte fields first, no packing surprises.
@@ -245,7 +245,7 @@ so you never hit it.
 Clip-space convention (applet-owned camera math): **+Y up, clip Z in `[0, 1]`**
 (Vulkan/Metal/D3D, not GL's `[-1,1]`).
 
-### Fixed-function state
+### Fixed-Function State
 
 The render state is fixed, and both backends use the same values.
 
@@ -261,7 +261,7 @@ The render state is fixed, and both backends use the same values.
 | `ALPHA` | Color `SRC_ALPHA` and `ONE_MINUS_SRC_ALPHA`, alpha `ONE` and `ONE_MINUS_SRC_ALPHA` |
 | `ADDITIVE` | `ONE` and `ONE` on both channels, byte-identical to the v1 points look |
 
-### Gates and refusals
+### Draw Gates
 
 All gates run **before any encoding**, which means before the encoder exists
 (on Metal, creating the encoder performs the clear). That includes the
@@ -279,7 +279,7 @@ pixels untouched, one `caliper.log.v1` line.
 | | `color_mode != FLAT` requires `attr_alloc != 0`, live, aligned, bounds-checked, and a resolvable `colormap` (COLORMAP) |
 | | any `depth_flags` bit against a depthless view → refuse |
 
-### The index-clamp contract
+### Index-Clamp Contract
 
 Index **values** live in device memory and cannot be gated host-side. Both
 backends' vertex shaders clamp: `vi = min(index[i], vertex_count - 1)`. An
@@ -287,7 +287,7 @@ out-of-range index therefore produces a **wrong-looking but defined** image — 
 an out-of-bounds read or UB. This is the applet's contract: a bad index is a visual
 bug in your data, not a crash.
 
-## caliper.geometry.v1_2 — textures on meshes
+## `caliper.geometry.v1_2` Textured Meshes
 
 Additive revision of v1_1: `CaliperGeomDrawV1_2` = the frozen **192-byte**
 `CaliperGeomDraw` record (`base`) plus an appended **texture tail**
@@ -303,7 +303,7 @@ a minimum stride of `192` and cannot request textured colour; calls through the
 v1.2 table accept a minimum stride of `216`. Old binaries keep working while a
 v1.2 caller cannot expose an absent tail (short stride → refused).
 
-### The `COLOR_TEXTURE` color mode
+### `COLOR_TEXTURE` Color Mode
 
 A fourth `color_mode` value, `CALIPER_GEOM_COLOR_TEXTURE` (`3u`), extends the
 v1_1 `FLAT` / `COLORMAP` / `VERTEX_RGBA` set. Each vertex carries a
@@ -325,7 +325,7 @@ Sampling is a **fixed** sampler — no configurable materials or sampler state:
 `0.30 + 0.70 * max(dot(n_vs, headlight), 0.0)` headlight term and leaves alpha
 unchanged; blend and depth modes then apply exactly as in v1_1.
 
-### The render-target-view refusal
+### Render-Target-View Refusal
 
 `texture` names a **bridge texture**, never a geometry view. Naming any geometry
 view — including the view currently being drawn — is **refused whole-frame**
@@ -334,7 +334,7 @@ view is never sampleable by construction, which forecloses a read-after-write
 feedback loop against the target you are painting. This is the degradation
 ladder's usual shape: a wrong request refuses, never renders a wrong image.
 
-### Gates and refusals
+### Texture Gates
 
 `COLOR_TEXTURE` adds these to the v1_1 gate set (all before any encoding; any
 failure refuses the **whole frame**):
@@ -348,7 +348,7 @@ failure refuses the **whole frame**):
 UV **values** are finite shader inputs like any other imported bytes; values
 outside `[0, 1]` are defined by the clamp-to-edge sampler, not a gate.
 
-### Honest ladder
+### Fallback Ladder
 
 When caps bit 2 is absent (the GL fallback, or a host vending only v1/v1_1),
 `has_textured()` is false and the textured path is inert — the applet ladders
@@ -360,7 +360,7 @@ taking `CaliperGeomDrawV1_2*`; seed descriptors so the texture tail is zero over
 the v1_1 defaults (a zero-tail v1_2 record renders byte-identically to the
 equivalent v1_1 draw).
 
-## caliper.geometry.v1_3 — instanced transforms
+## `caliper.geometry.v1_3` Instanced Transforms
 
 Additive revision of v1_1/v1_2: `CaliperGeomDrawV1_3` = the frozen 216-byte
 `CaliperGeomDrawV1_2` record (`base`) plus an appended **instance tail**, 256 bytes
@@ -403,7 +403,7 @@ plain draws) and says so; never a wrong image, never a false status line. The
 `draw_primitives` overload taking `CaliperGeomDrawV1_3*`; seed descriptors from
 `caliper::geom_draw_v1_3_defaults()` (a zero instance tail over the v1_2 defaults).
 
-## Backend notes
+## Backend Notes
 
 These details are host-internal, and applets cannot see them. They matter when a record grows or a gate refuses.
 
@@ -422,7 +422,7 @@ These details are host-internal, and applets cannot see them. They matter when a
   pipeline cache keyed by topology class, blend mode, depth and whether the draw is textured, and a depth-stencil state per test and write
   combination. Indexed draws are issued as non-indexed draws, so no index buffer is bound on either backend.
 
-## C++ sugar
+## C++ Sugar
 
 `caliper::Geometry` (in `caliper.hpp`) wraps every geometry revision. Construct it
 from the
@@ -448,7 +448,7 @@ zero-initialised `CaliperGeomDraw` with `flat_rgba = 0xffffffff`, `vmin/vmax =
 0/1`, `size_px = 1`, and `model` = identity, removing the all-zero-model footgun at
 the source. Set only the fields your draw needs.
 
-### Torch layout notes
+### Torch Layout
 
 - **positions**: `.contiguous()` f32 `(N, 3)`.
 - **indices**: **int32** tensors with non-negative values — torch has no uint32;
@@ -456,7 +456,7 @@ the source. Set only the fields your draw needs.
 - **normals**: f32 `(N, 3)`.
 - **packed colours** (`VERTEX_RGBA`, `flat_rgba`): int32 bit patterns.
 
-## Worked example — a learned surface, three draws
+## Learned Surface Example
 
 A small net's prediction over
 a grid is written into imported device tensors each training step by a

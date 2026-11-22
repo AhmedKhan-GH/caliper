@@ -16,7 +16,7 @@ Service id `caliper.ui.v1_1` is an additive revision of [`caliper.ui.v1`](calipe
 - **Optional for the applet.** An applet that uses hints still lists only `caliper.ui.v1` in `[services].required`. The sugar `caliper::ui::dock_hint(host, title, role)` probes `caliper.ui.v1_1` and does nothing on a host that lacks it, where the windows keep the placement ImGui gives them.
 - **Where hints apply.** The `caliper` executable applies hints on its applet page. An embedding host that has no docked layout, such as Caliper Embed, accepts the calls and ignores them.
 
-## Example
+## Worked Example
 
 ```cpp
 caliper::ui::dock_hint(host, "Viewer: Scene", CALIPER_DOCK_CENTRAL);

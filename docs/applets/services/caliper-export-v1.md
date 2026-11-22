@@ -1,7 +1,7 @@
 # caliper.export.v1 and v1_1
 
 Service id `caliper.export.v1`, and its additive revision `caliper.export.v1_1`,
-which adds `last_error()` (see [below](#caliperexportv1_1-last_error)). Export
+which adds `last_error()` (see [below](#caliperexportv1_1-error-reporting)). Export
 re-renders a submitted draw list **offscreen** at any requested resolution and
 writes a pixel-exact PNG next to a JSON **provenance sidecar**: 4K figures and
 numbered frame sequences from a live session, deterministic and stamped. It
@@ -9,7 +9,7 @@ composes pieces that already exist and are byte-exact tested, and adds no new
 render code. This page embeds the headers verbatim; the docs build fails if an
 embedded file moves.
 
-## Export is a terminal sink
+## Terminal Sink
 
 Export is the one place where pixels leave the one-way data flow described in
 [Platform rules](../../introduction/architecture.md#platform-rules). The readback it performs feeds a
@@ -20,7 +20,7 @@ and subfigure layout belong to the paper toolchain (matplotlib, TikZ) that
 consumes these PNGs. The claim that the pixels are the tensors survives export
 bit for bit; a typography engine would add scope and no claim.
 
-## Platform behaviour
+## Platform Behaviour
 
 Export runs on macOS with Metal and on Windows with Vulkan. On both, a known flat
 quad exports and decodes back to the CPU reference pixels, a second export of the
@@ -43,7 +43,7 @@ inert**: no file is written. This is the
 --8<-- "sdk/include/caliper/services/export_v1.h"
 ```
 
-## The composition (why this is small)
+## Draw Path Reuse
 
 Export is a **veneer** over the geometry draw path, not a second renderer. Each
 call:
@@ -68,7 +68,7 @@ Because export re-renders through the geometry cap, it **degrades in lockstep**
 with it: `caps()` bit 0 (`CALIPER_EXPORT_CAP_VIEW_PNG`) is set **iff**
 `CALIPER_GEOM_CAP_PRIMITIVES` is live on this host.
 
-## Frame-thread only
+## Frame Thread Only
 
 Every entry point composes the **frame-thread-owned** renderer, so export
 carries the same rule as [`caliper.geometry.v1`](caliper-geometry-v1.md): call it from
@@ -82,7 +82,7 @@ export from the same arrays they draw, on the same thread they draw on. (A truly
 background export would need a serialization mutex around the renderer's shared
 maps, which the host does not provide.)
 
-## The sidecar: a figure without it is a screenshot
+## Sidecar File
 
 Every export writes `<path>.json` next to the PNG (for a sequence, one
 `sequence.json` for the whole run). It carries the provenance that makes a PNG
@@ -116,10 +116,10 @@ the next sequence can begin), and the host logs an ERROR through
 ```
 
 `end_sequence()` returns nothing in v1, so this log line is all a v1 applet
-gets; [`caliper.export.v1_1`](#caliperexportv1_1-last_error)'s `last_error()`
+gets; [`caliper.export.v1_1`](#caliperexportv1_1-error-reporting)'s `last_error()`
 reports the same text to the applet.
 
-## Refusal purity extends to the filesystem
+## Filesystem Refusal Purity
 
 A refused export returns `0` and leaves the disk **exactly as it was** — no file
 created, no pre-existing file truncated, and a **previous export at the same path
@@ -146,7 +146,7 @@ strings**. (The atomic-rename-over-existing-file guarantee is verified on POSIX
 **and on NTFS**, including the held-open-handle refusal; see platform behaviour
 above. The pair commit with its `.caliper_bak` backup is tested on macOS.)
 
-## Determinism contract, and its scope
+## Determinism Contract
 
 Same draws + camera + clear + `(w, h)` on the **same backend** → a
 **byte-identical PNG** across calls. The readback is deterministic (the entire
@@ -158,7 +158,7 @@ field makes that honest rather than silent. Determinism is the byte-exact
 discipline extended one step to disk, scoped exactly where the instrument can
 back it.
 
-## Video assembly stays outside the ABI
+## Video Assembly
 
 Export writes numbered frames (`<dir>/frame_%06u.png`) and one sequence sidecar;
 it does **not** encode video (no in-process codecs). Assemble the frames with one
@@ -170,7 +170,7 @@ ffmpeg -framerate 30 -i frame_%06d.png -pix_fmt yuv420p out.mp4
 
 A 300-frame sequence at 30 fps becomes a 10 s clip this way.
 
-## What is not exportable — the ImPlot / metrics split
+## Non-Exportable Panes
 
 ImPlot chart panes (strip charts, metrics plots) are **ImGui chrome, not
 exportable views** — they are not tensors re-rendered offscreen, so export does
@@ -179,7 +179,7 @@ not touch them. Their paper path is the one that already ships: the numbers go t
 downstream. Export is for the 3-D views whose pixels *are* the tensors; charts
 are for the metrics surface. 
 
-## Worked shape — export a figure and record a clip
+## Figure and Clip Example
 
 Modelled on the MeshScope and TwinScope export buttons.
 The applet already draws its 3-D view every frame from worker-published,
@@ -207,10 +207,10 @@ reads back each frame inline, a long high-resolution record paces the UI while i
 runs — the exemplars show a live "Recording N/300" counter; the produced clip is
 correct real-time regardless.
 
-## caliper.export.v1_1 — `last_error()`
+## `caliper.export.v1_1` Error Reporting
 
 An additive revision under the same discipline as `caliper.metrics.v1_1` and
-the [bridge revisions](caliper-tensor-bridge-v1.md#additive-revisions-v1_1-and-v1_2):
+the [bridge revisions](caliper-tensor-bridge-v1.md#additive-revisions):
 `CaliperExportV1_1` repeats the v1 table byte for
 byte, `reserved0` included and still `NULL`, and appends one entry,
 `last_error()`. There is no ABI epoch bump. `caliper.export.v1` is still vended,

@@ -93,7 +93,7 @@ The app, `caliper dev`, `caliper list` and `caliper shot` search these folders, 
 3. The user applets folder: `CALIPER_USER_APPLETS_DIR` when it is set and not empty, otherwise `applets/` under the app-data folder.
 4. The `applets/` folder beside the executable, which holds the applets shipped with the app.
 
-[Spec applets](../applets/manifest.md#where-spec-applets-are-found) are found in the same folders and one folder down. The app, `caliper dev`, `caliper shot` and `caliper list` also search the builder's workspace's `applets/` folder ([The workspace](#the-workspace)) between items 2 and 3: the folder of `--workspace`, else of `CALIPER_WORKSPACE`, else `workspace/` in the app-data folder. They only read it, so a workspace that has not been opened yet is not created.
+[Spec applets](../applets/manifest.md#spec-applet-search-order) are found in the same folders and one folder down. The app, `caliper dev`, `caliper shot` and `caliper list` also search the builder's workspace's `applets/` folder ([The workspace](#the-workspace)) between items 2 and 3: the folder of `--workspace`, else of `CALIPER_WORKSPACE`, else `workspace/` in the app-data folder. They only read it, so a workspace that has not been opened yet is not created.
 
 Each development folder, from items 1 and 2, is resolved as described in [Build folders](#build-folders). A folder named twice is searched once, at its first position, and empty entries are skipped. When several folders hold copies of one applet id, the host loads the highest version that passes every check, and at equal versions the copy found first; the other copies that pass are `SHADOWED`. [Several copies of one applet](../development/compatibility-and-epochs.md#several-copies-of-one-applet) states the rule, and [Folders and environment variables](folders-and-environment.md) gives the folders on each platform.
 
@@ -227,7 +227,7 @@ When none of them holds the SDK, `build` says where it looked and lets CMake sea
 - the configure fails. When CMake found no working C++ compiler, no build tool for its generator, or no SDK, a last line says which and how to install it, such as `caliper: no Caliper SDK was found. Install it from a Caliper build with cmake --install <build folder> --prefix <prefix> --component sdk, then set CALIPER_SDK_DIR=<prefix> or use the prefix ~/caliper-sdk`;
 - the build fails, or an applet in the build folder fails the checks.
 
-`build` is built and tested on macOS. The Windows build refuses it (see [On Windows](#on-windows)); configure and build there with CMake as [SDK package](../applets/sdk-package.md#using-the-package) describes.
+`build` is built and tested on macOS. The Windows build refuses it (see [On Windows](#on-windows)); configure and build there with CMake as [SDK package](../applets/sdk-package.md#package-usage) describes.
 
 ### caliper info
 

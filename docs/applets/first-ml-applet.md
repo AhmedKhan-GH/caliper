@@ -21,7 +21,7 @@ CALIPER_AUTOLAUNCH=dev.example.sine-scope ./cmake-build-release/caliper
 Prereqs: [Development basics](../development/development-basics.md) (the mental model),
 [Your first applet](first-applet.md) (the hello walkthrough).
 
-## Stage 0 — the build and the manifest
+## Build and Manifest
 
 The manifest requires what training needs and marks visualization optional,
 so the applet still runs without the bridge:
@@ -39,10 +39,10 @@ applet if it ever runs beside another libtorch:
 --8<-- "examples/sine_scope/CMakeLists.txt"
 ```
 
-### Build and load your copy
+### Local Copy
 
 Build your copy in a folder of its own against the installed SDK, as
-[Your first applet](first-applet.md#4-build-it) does for hello, with `CALIPER`
+[Your first applet](first-applet.md#build) does for hello, with `CALIPER`
 set to the host you built. The SDK must come from a core build with libtorch,
 which the release preset is:
 
@@ -61,7 +61,7 @@ loads your copy rather than the one the release preset built beside the
 executable. The host keeps a library loaded until it quits, so after each
 rebuild quit Caliper and run `caliper dev` again.
 
-## Stage 1 — the model and the state spine
+## Model and State Spine
 
 Two layers are enough to bend a line into a sine:
 
@@ -85,7 +85,7 @@ demos *show* the degradation (Stage 4):
 --8<-- "examples/sine_scope/sine_scope.cpp:init"
 ```
 
-## Stage 2 — background compute: the training job
+## Training Job
 
 Never compute on the frame thread. A job is a plain function the host runs
 on a worker thread — note the per-step cancel check (the ≤100 ms contract)
@@ -101,7 +101,7 @@ The frame side submits on click, shows progress, offers cancel:
 --8<-- "examples/sine_scope/sine_scope.cpp:controls"
 ```
 
-## Stage 3 — publish and plot: watching it learn
+## Live Plotting
 
 The worker publishes owned copies (plot data) and a tensor handle (the
 weight display) under the mutex, bumping the generation:
@@ -118,7 +118,7 @@ a `PlotScatter` and a `PlotLine`, plus the follow-toggle idiom on the loss curve
 --8<-- "examples/sine_scope/sine_scope.cpp:plots"
 ```
 
-## Stage 4 — the bridge: a tensor as pixels
+## Tensor Texture
 
 The weight matrix as a colormapped texture. Frame thread only, gen-gated,
 released in cleanup — and when the bridge is absent, the panel says so
@@ -142,7 +142,7 @@ Cleanup grows its symmetric duties — cancel, bounded wait, release:
 you should see the flat line snap into a sine within seconds while the
 heatmap's blocks reorganize.
 
-## Stage 5 — real data instead of synthetic
+## Real Data
 
 Everything above holds; only acquisition changes. The rules:
 fetch **inside the job**, cache in `host.data_dir()`, write atomically
@@ -150,7 +150,7 @@ fetch **inside the job**, cache in `host.data_dir()`, write atomically
 via curl's progress callback, and add `CURL::libcurl`/`ZLIB::ZLIB` to the
 CMake links, found with `find_package(CURL)` and `find_package(ZLIB)`.
 
-## Stage 6 — the rest of the framework, one line each
+## Remaining Services
 
 Each remaining service is a small delta from here:
 

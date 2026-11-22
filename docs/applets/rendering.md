@@ -9,7 +9,7 @@ The answer is to keep graphics out of the contract entirely. This page describes
 backends behind it, how each one updates a texture, and how the geometry path draws 3-D data. How a tensor reaches
 pixels without a CPU round trip, and what each path costs, is in [Zero-copy tensor visualization](../python/zero-copy-tensors.md).
 
-## Why the ABI never names a graphics API
+## Graphics API Independence
 
 Applets render only through ImGui and ImPlot. A tensor crosses to the renderer as a [`CaliperTensor`](tensor-and-arrow-headers.md#tensor-header),
 and what comes back is an opaque `CaliperTextureId`. The host keeps a table from that id to the backend's own handle,
@@ -24,9 +24,9 @@ backend is its own translation unit, and the host picks one at startup.
 | Backend | Selected | Update path | Notes |
 |---|---|---|---|
 | Metal | Default on macOS | A compute pass (f32 with a colormap) or a blit (u8) reads the MPS `MTLBuffer` in place | No CPU staging. Apple-only translation unit |
-| Vulkan with CUDA interop | Default on Windows | A CUDA kernel writes the Vulkan image directly; see [the update ladder](#the-update-ladder-on-windows) | Details in [Vulkan and CUDA on Windows](../development/vulkan-and-cuda.md). Windows-only translation unit |
+| Vulkan with CUDA interop | Default on Windows | A CUDA kernel writes the Vulkan image directly; see [the update ladder](#windows-update-ladder) | Details in [Vulkan and CUDA on Windows](../development/vulkan-and-cuda.md). Windows-only translation unit |
 | OpenGL 3.3 core | `CALIPER_RENDERER=gl`, or the only backend on other platforms | The bridge colormaps on the CPU and uploads the result | The fallback, loaded through GLEW. `tex_update_from_device` always returns `false` |
-| WebGPU | The browser views (`web/wasm`) | A WGSL compute pass colormaps the host-memory snapshot into the texture | Browser only; see [the WebGPU backend](#the-webgpu-backend) |
+| WebGPU | The browser views (`web/wasm`) | A WGSL compute pass colormaps the host-memory snapshot into the texture | Browser only; see [the WebGPU backend](#webgpu-backend) |
 
 `core_select_renderer()` in `src/host/core_lifecycle.cpp` picks the default: Metal on macOS and Vulkan on Windows.
 `CALIPER_RENDERER=gl` selects OpenGL on either. If the native backend fails to initialize (no driver, a remote
@@ -36,7 +36,7 @@ the CPU reference conversion (`map_f32_to_rgba8` and `expand_u8_to_rgba8`). The 
 for Metal, for Vulkan (the CPU-staged rows, which run on any Vulkan driver) and for Vulkan with CUDA (the device
 rows, which run when the paired CUDA device is the only one in the machine).
 
-## The WebGPU backend
+## WebGPU Backend
 
 The browser views are the native view layer compiled to WebAssembly, and `src/host/renderer/webgpu_renderer.cpp`
 draws them behind the same `HostRenderer` seam, on the browser's own WebGPU through the standard `webgpu.h`. It
@@ -65,7 +65,7 @@ the OpenGL fallback is to be retired once it covers that case.
 The host's own screens carry no raw OpenGL either. The landing screen, the launch flow and the dashboards are drawn
 with ImGui, so they look the same on every backend.
 
-## The pixel-space contract
+## Pixel-Space Contract
 
 Applets never issue graphics calls. They describe what to draw in ImGui terms and hand tensors to the bridge, and the
 host owns the window, the contexts and every GPU call. A tensor becomes a texture through
@@ -73,7 +73,7 @@ host owns the window, the contexts and every GPU call. A tensor becomes a textur
 difference lives: device compute or blit on Metal and Vulkan, CPU staging on OpenGL. The applet runs the same code on
 every backend.
 
-## The update ladder on Windows
+## Windows Update Ladder
 
 The Vulkan backend tries three rungs for each device-resident CUDA tensor and takes the first that accepts it. The
 string that `last_device_path()` reports says which one ran.
@@ -90,7 +90,7 @@ string that `last_device_path()` reports says which one ran.
 Each rung keeps the output byte-identical to the CPU reference. When a rung is unavailable the next one runs, and the
 startup log says so, as the [fallback rule](../introduction/architecture.md#platform-rules) requires.
 
-## Data flows one way
+## One-Way Data Flow
 
 Data moves from tensors to pixels to ImGui, and no further, as the [platform rules](../introduction/architecture.md#platform-rules)
 require. There is no render-to-tensor entry point, no readback on any hot path, and no way for an applet to supply its
@@ -106,7 +106,7 @@ Several things look as though they need a new host capability and do not:
 - **Annotation and heads-up displays.** ImGui composites over the view image.
 - **Training on the visualized data.** Training reads the tensors the renderer reads.
 
-## The geometry path
+## Geometry Path
 
 Textures show tensors as images. The geometry path draws a tensor as 3-D geometry. The applet writes vertices,
 indices, normals and attributes into device memory, imports them into the host once through
@@ -136,7 +136,7 @@ and a ring of per-draw parameter blocks. The Metal backend keeps the equivalent 
 Metal compiles its shaders at run time, and Vulkan embeds SPIR-V built at compile time
 ([Build-time SPIR-V](../development/vulkan-and-cuda.md#build-time-spir-v)).
 
-## Why Metal pipelines by queue commit order
+## Metal Queue Commit Ordering
 
 The Metal renderer submits tensor operations and the frame's drawing to one `MTLCommandQueue`, and Metal starts the
 command buffers on one queue in the order they were committed. That gives most of what the Vulkan backend needs

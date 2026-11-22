@@ -6,12 +6,12 @@ dylib carries your own symbols (built `Debug`, they're right there), so once
 attached you get full source-level stepping, breakpoints, and variable
 inspection inside `on_init` / `on_frame` / `on_cleanup`.
 
-## Attach a debugger to the running host
+## Debugger Attachment
 
 Build both the host and your applet with debug info, then launch and attach.
 The host builds with the `debug` preset in your Caliper checkout, and the
 applet builds in its own folder against the installed SDK, as in
-[Your first applet](first-applet.md#4-build-it), with
+[Your first applet](first-applet.md#build), with
 `-DCMAKE_BUILD_TYPE=Debug`. Start the host with `caliper dev` and the applet's
 build folder, so that it loads your debug build first.
 
@@ -47,7 +47,7 @@ Because the host loads the dylib after startup, prefer *attaching to the running
 process* over launching the host under the debugger — the symbols resolve when
 the applet is opened, and you avoid stepping through the host's whole boot.
 
-## Log through the host, not `printf`
+## Host Logging
 
 Do **not** use `printf`/`std::cout` for diagnostics. Log through the
 `caliper.log.v1` service, which the sugar layer exposes on your `Host`:
@@ -102,7 +102,7 @@ so it re-runs the same code; it is for checking that the applet recovers, not
 for loading a fix. To run a rebuilt dylib, and after any signal (the Inspector
 then says `restart Caliper to reload`), quit and start Caliper again.
 
-## Where per-applet data lives
+## Data Location
 
 The host hands you a writable directory via `host.data_dir()`, and that is the
 **only** place an applet should read or write files — never build your own paths
@@ -129,7 +129,7 @@ not compile it.)
 When a stored file looks wrong, inspect it directly on disk under that root
 (it's plain files, not a database), delete it to reset to defaults, and relaunch.
 
-## Find what stalls the frame
+## Frame Stall Diagnosis
 
 A window that runs at 2 fps while the applet "does nothing" is a frame-thread
 stall. Start with what the host already tells you, then narrow the cause with
@@ -176,7 +176,7 @@ and each rebuild took longer than the last. The fixes that apply to any applet:
   generation counter.
 - Build tables for live visualization as `TEMP` tables, which live in memory and
   do not write to the store's log. See
-  [`caliper.data.v1`](services/caliper-data-v1.md#persistence-and-high-frequency-rebuilds).
+  [`caliper.data.v1`](services/caliper-data-v1.md#persistence-and-rebuilds).
 - Create a texture once and call `update_texture` afterwards. On Vulkan with CUDA
   a create costs several times an update, so releasing and re-creating a texture
   every refresh is a frame-thread cost.

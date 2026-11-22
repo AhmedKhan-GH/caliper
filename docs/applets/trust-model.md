@@ -7,9 +7,9 @@ the host's privileges, in the host's address space. The trust model is therefore
 stated plainly: **in-process applets are trusted code.** What follows is how the
 host stays alive and honest when that trust is misplaced — not a claim that it is
 sandboxed. Applets do not run out of process. A spec applet is the exception:
-it has no code at all, as [Spec applets are data](#spec-applets-are-data) says.
+it has no code at all, as [Spec applets are data](#spec-applets) says.
 
-## Pre-flight beats post-mortem
+## Pre-Flight Checks
 
 The first line of defence runs before any of the applet's code does. Each applet
 ships a manifest (`<stem>.caliper.toml`) declaring the ABI epoch it was built against, the
@@ -30,7 +30,7 @@ root. And after the `dlopen`, the loader checks the binary's own list of
 required services against the host, so a manifest that under-declares cannot
 start an applet that will call a service the host does not have.
 
-## Every applet call is guarded
+## Guarded Applet Calls
 
 Manifests catch the predictable failures. They cannot catch a null dereference in
 the applet's frame code. So every call from the host into an applet is wrapped in
@@ -69,9 +69,9 @@ a crash guard:
 The guard is the containment primitive the loader wraps around every applet
 entry point — construction, `frame()`, teardown — and the host wraps around every
 job an applet submits through `caliper.jobs.v1` (see
-[Jobs run under the guard](#jobs-run-under-the-guard)).
+[Jobs run under the guard](#guarded-jobs)).
 
-## A faulting applet is quarantined
+## Fault Quarantine
 
 When the guard catches a fault, the host does not retry the call. The faulting
 applet is **quarantined**: the host returns to the landing screen, where the
@@ -92,7 +92,7 @@ What brings the applet back depends on what the guard caught:
   `restart Caliper to reload`: nothing of that applet runs again until the host
   itself restarts.
 
-### The UI is unwound after a fault
+### UI Unwinding
 
 An applet draws into the host's own ImGui, ImPlot and ImPlot3D contexts, so a
 fault partway through `frame()` (or `initialize()`) can leave its windows,
@@ -107,7 +107,7 @@ anything else. What was unwound is reported in one stderr line, e.g.
 and nothing asserts. This is best effort, as ImGui says of its own recovery: a fault
 *inside* an ImGui call can leave that call's state half-written.
 
-## Containment, not a sandbox
+## Best-Effort Containment
 
 This is the honest part. The crash guard is **best-effort containment, not
 isolation.** By the time a signal fires, the applet has already run arbitrary
@@ -127,7 +127,7 @@ requires an address-space boundary, that is, running applets out of process.
 Caliper does not do that. The trust model is manifest-gated loading, guarded
 calls, visible quarantine, and no false promises.
 
-### A quarantined applet's library stays loaded
+### Quarantined Library Retention
 
 The host never closes the library of a quarantined applet with `dlclose` (or
 `FreeLibrary` on Windows). Closing an image runs its static destructors, and
@@ -138,7 +138,7 @@ every applet library mapped when the process exits, because large dependencies
 such as libtorch are not safe to unload (their thread pools and allocator state
 can abort during teardown) and the operating system reclaims the pages anyway.
 
-## Frame watchdog
+## Frame Watchdog
 
 The crash guard catches applets that fault; the watchdog catches applets that
 merely misbehave. The host owns the frame clock and calls each applet's `frame()`
@@ -155,7 +155,7 @@ applet keeps running and nothing is torn down, but the framework's threading rul
 ("keep `frame()` cheap; push slow work to jobs") becomes something you can see
 instead of a convention you have to remember.
 
-## Jobs run under the guard
+## Guarded Jobs
 
 The watchdog tells you to push slow work to `caliper.jobs.v1`, so the worker
 threads get the same net as the frame thread. The Caliper host runs every job
@@ -196,7 +196,7 @@ worker); and make the object you pass as `user` outlive the job
 (cancel-and-bounded-wait in `on_cleanup`). Real isolation for worker code, like
 everything else here, would need an out-of-process boundary, which Caliper does not provide.
 
-## Spec applets are data
+## Spec Applets
 
 A [spec applet](manifest.md#spec-applets) is a folder with a
 manifest and a spec, a text file of sources, panels and a layout, and no
@@ -221,7 +221,7 @@ read with a size bound of 64 KiB and a bound on its dotted keys before it is
 parsed. A compiled applet runs only from the folders a person installs into or
 names for development.
 
-## Supply chain and data
+## Supply Chain and Data
 
 The loader trusts the files in the folders it scans. Two things are in place around them, and two are not.
 

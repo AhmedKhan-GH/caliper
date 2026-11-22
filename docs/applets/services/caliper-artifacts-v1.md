@@ -38,7 +38,7 @@ thread**.
   no-ops (`put` → `false`, `path_of` → `nullptr`, `exists` → `false`); the applet
   degrades, it does not crash.
 
-### Threading and string lifetime
+### Threading and String Lifetime
 
 Every method is host-**serialized** internally (one mutex over one DuckDB
 connection, the same sanctioned model as [MetricsStore](caliper-metrics-v1.md#thread-callability)),
@@ -64,7 +64,7 @@ The defaults and the precedence are in
     `path_of` on the frame thread and hand the *copied* path to the worker to
     sidestep the race entirely.
 
-### C++ sugar
+### C++ Sugar
 
 The [`caliper::Artifacts`](../cpp-sugar.md) wrapper is falsy-inert when the service is
 absent (every call no-ops) and hides the `out_digest` buffer:

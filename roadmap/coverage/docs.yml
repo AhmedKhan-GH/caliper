@@ -97,11 +97,11 @@ entries:
     one.
   ids:
   - COR-03
-- page: docs/applets/services/service-catalog.md#the-ids
+- page: docs/applets/services/service-catalog.md#service-ids
   item: The 19 service ids, their purpose, page and threading.
   ids:
   - COR-03
-- page: docs/applets/services/service-catalog.md#types-that-go-with-the-services
+- page: docs/applets/services/service-catalog.md#companion-types
   item: CaliperTensor and the Arrow C Data Interface are the two interchange types the services pass.
   ids:
   - COR-49
@@ -142,12 +142,12 @@ entries:
     the native backends.
   ids:
   - REN-64
-- page: docs/applets/services/caliper-tensor-bridge-v1.md#calipertensor_bridgev1_1-stream-ordered-handoff
+- page: docs/applets/services/caliper-tensor-bridge-v1.md#calipertensor_bridgev1_1-handoff
   item: caliper.tensor_bridge.v1_1 adds caps() and a stream-ordered handoff.
   ids:
   - REN-08
   - REN-64
-- page: docs/applets/services/caliper-tensor-bridge-v1.md#calipertensor_bridgev1_2-imported-device-allocations
+- page: docs/applets/services/caliper-tensor-bridge-v1.md#calipertensor_bridgev1_2-imported-allocations
   item: caliper.tensor_bridge.v1_2 adds imported device allocations.
   ids:
   - REN-08
@@ -160,7 +160,7 @@ entries:
   item: caliper.geometry.v1_1 adds points, lines and triangles, depth views and one atomic gated frame.
   ids:
   - REN-05
-- page: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_2-textures-on-meshes
+- page: docs/applets/services/caliper-geometry-v1.md#calipergeometryv1_2-textured-meshes
   item: caliper.geometry.v1_2 adds textured meshes with the COLOR_TEXTURE colour mode.
   ids:
   - REN-06
@@ -177,20 +177,20 @@ entries:
   ids:
   - REN-04
   - COR-51
-- page: docs/applets/services/caliper-geometry-v1.md#worked-example-a-learned-surface-three-draws
+- page: docs/applets/services/caliper-geometry-v1.md#learned-surface-example
   item: Worked example of a learned surface in three draws.
   ids:
   - REN-05
-- page: docs/applets/services/caliper-export-v1.md#export-is-a-terminal-sink
+- page: docs/applets/services/caliper-export-v1.md#terminal-sink
   item: caliper.export.v1 re-renders a submitted draw list offscreen at any resolution and writes a pixel-exact
     PNG with a JSON provenance sidecar, and a frame sequence.
   ids:
   - REN-65
-- page: docs/applets/services/caliper-export-v1.md#caliperexportv1_1-last_error
+- page: docs/applets/services/caliper-export-v1.md#caliperexportv1_1-error-reporting
   item: caliper.export.v1_1 adds last_error().
   ids:
   - REN-65
-- page: docs/applets/services/caliper-export-v1.md#worked-shape-export-a-figure-and-record-a-clip
+- page: docs/applets/services/caliper-export-v1.md#figure-and-clip-example
   item: Worked shape for a 4K figure and a recorded clip.
   ids:
   - REN-65
@@ -394,7 +394,7 @@ entries:
   item: The threading rules of the Python calls.
   ids:
   - STR-01
-- page: docs/applets/cpp-sugar.md#the-caliper_applet-macro
+- page: docs/applets/cpp-sugar.md#caliper_applet-macro
   item: The CALIPER_APPLET macro and the caliper::Applet class replace the five extern C bridge functions
     and the hand-built descriptor.
   ids:
@@ -837,7 +837,7 @@ entries:
   item: Publishing results.
   ids:
   - AGT-14
-- page: docs/applets/manifest.md#where-the-host-looks
+- page: docs/applets/manifest.md#search-order
   item: Where the host looks for manifests.
   ids:
   - COR-05
@@ -856,7 +856,7 @@ entries:
   item: Spec applet ids are written as local.<id>.
   ids:
   - SPC-08
-- page: docs/applets/manifest.md#where-spec-applets-are-found
+- page: docs/applets/manifest.md#spec-applet-search-order
   item: Where spec applets are found.
   ids:
   - SPC-08
@@ -864,19 +864,19 @@ entries:
   item: The rules for applet ids.
   ids:
   - COR-05
-- page: docs/applets/manifest.md#example
+- page: docs/applets/manifest.md#worked-example
   item: An example manifest.
   ids:
   - COR-05
-- page: docs/applets/sdk-package.md#installing-the-sdk
+- page: docs/applets/sdk-package.md#installation
   item: Installing the SDK from a core build folder.
   ids:
   - COR-04
-- page: docs/applets/sdk-package.md#what-it-installs
+- page: docs/applets/sdk-package.md#installed-files
   item: What the SDK installs.
   ids:
   - COR-04
-- page: docs/applets/sdk-package.md#using-the-package
+- page: docs/applets/sdk-package.md#package-usage
   item: Targets and variables of the caliper-sdk package.
   ids:
   - COR-04
@@ -884,11 +884,11 @@ entries:
   item: caliper_add_applet() builds, checks and stamps an applet.
   ids:
   - COR-04
-- page: docs/applets/sdk-package.md#the-ui-stack-hash
+- page: docs/applets/sdk-package.md#ui-stack-hash
   item: The UI-stack hash pins the ImGui stack.
   ids:
   - COR-04
-- page: docs/applets/sdk-package.md#applets-in-this-repository
+- page: docs/applets/sdk-package.md#in-tree-applets
   item: Applets in this repository build against the installed SDK.
   ids:
   - COR-13
@@ -915,15 +915,15 @@ entries:
   item: orbit_camera.hpp gives an applet an orbit camera with cursor picking.
   ids:
   - REN-68
-- page: docs/applets/adapters.md#full-source-of-torchhpp
+- page: docs/applets/adapters.md#torchhpp-source
   item: The full source of torch.hpp.
   ids:
   - REN-66
-- page: docs/applets/tensor-and-arrow-headers.md#what-it-is
+- page: docs/applets/tensor-and-arrow-headers.md#overview
   item: The Arrow C Data Interface is the ABI tabular boundary.
   ids:
   - COR-50
-- page: docs/applets/tensor-and-arrow-headers.md#the-vendored-header
+- page: docs/applets/tensor-and-arrow-headers.md#vendored-header
   item: The vendored Arrow header.
   ids:
   - COR-50
@@ -980,18 +980,18 @@ entries:
   item: Refusals for spec applets.
   ids:
   - SPC-08
-- page: docs/applets/torch-per-platform.md#what-each-step-does
+- page: docs/applets/torch-per-platform.md#step-details
   item: The six steps of the zero-copy path on macOS Metal and on Windows Vulkan with CUDA.
   ids:
   - REN-08
   - PLT-01
   - PLT-02
-- page: docs/applets/torch-per-platform.md#two-ways-to-share-memory-on-windows
+- page: docs/applets/torch-per-platform.md#windows-memory-sharing
   item: Two ways to share memory on Windows.
   ids:
   - PLT-02
   - REN-67
-- page: docs/applets/torch-per-platform.md#opting-in-to-exportablepool
+- page: docs/applets/torch-per-platform.md#exportablepool-opt-in
   item: An applet opts in to ExportablePool.
   ids:
   - REN-67
@@ -1113,15 +1113,15 @@ entries:
   ids:
   - STR-03
   - INT-04
-- page: docs/applets/applet-debugging.md#attach-a-debugger-to-the-running-host
+- page: docs/applets/applet-debugging.md#debugger-attachment
   item: Attach a debugger to the running host to step through an applet.
   ids:
   - COR-09
-- page: docs/applets/applet-debugging.md#log-through-the-host-not-printf
+- page: docs/applets/applet-debugging.md#host-logging
   item: Log through caliper.log.v1 instead of printf.
   ids:
   - COR-45
-- page: docs/applets/applet-debugging.md#find-what-stalls-the-frame
+- page: docs/applets/applet-debugging.md#frame-stall-diagnosis
   item: Find what stalls the frame with the frame watchdog.
   ids:
   - COR-53
@@ -1129,11 +1129,11 @@ entries:
   item: 'Embed Caliper in a program: install the package, link it from CMake and drive the core.'
   ids:
   - EMB-07
-- page: docs/applets/ml-applet-cookbook.md#1-the-threading-spine
+- page: docs/applets/ml-applet-cookbook.md#1-threading-spine
   item: The threading spine for ML applets.
   ids:
   - COR-46
-- page: docs/applets/ml-applet-cookbook.md#3-the-device-resident-pull-the-usp-pattern
+- page: docs/applets/ml-applet-cookbook.md#3-device-resident-pull
   item: The device-resident pull of a tensor into a texture.
   ids:
   - REN-08
@@ -1142,11 +1142,11 @@ entries:
   item: Checkpoints through caliper.artifacts.v1.
   ids:
   - RUN-02
-- page: docs/applets/ml-applet-cookbook.md#10-sql-over-live-data-datav1
+- page: docs/applets/ml-applet-cookbook.md#10-sql-over-live-data
   item: SQL over live data through caliper.data.v1.
   ids:
   - COR-48
-- page: docs/applets/ml-applet-cookbook.md#2-three-cadences-match-update-rate-to-what-the-data-is
+- page: docs/applets/ml-applet-cookbook.md#2-three-cadences
   item: Three cadences match the update rate to the data.
   ids:
   - COR-13
@@ -1234,23 +1234,23 @@ entries:
   - REN-02
   - REN-03
   - PLT-01
-- page: docs/applets/rendering.md#the-webgpu-backend
+- page: docs/applets/rendering.md#webgpu-backend
   item: The WebGPU renderer draws the browser views with a WGSL colormap pass and instanced quads for
     points.
   ids:
   - EMB-02
   - EMB-04
   - REN-69
-- page: docs/applets/rendering.md#the-geometry-path
+- page: docs/applets/rendering.md#geometry-path
   item: The geometry path.
   ids:
   - REN-04
   - REN-07
-- page: docs/applets/rendering.md#the-pixel-space-contract
+- page: docs/applets/rendering.md#pixel-space-contract
   item: The pixel-space contract.
   ids:
   - REN-01
-- page: docs/applets/rendering.md#why-the-abi-never-names-a-graphics-api
+- page: docs/applets/rendering.md#graphics-api-independence
   item: Why the ABI never names a graphics API.
   ids:
   - COR-02
@@ -1259,7 +1259,7 @@ entries:
   ids:
   - PLT-03
   - COR-52
-- page: docs/applets/trust-model.md#a-faulting-applet-is-quarantined
+- page: docs/applets/trust-model.md#fault-quarantine
   item: A faulting applet is quarantined and its UI unwound, as containment and not a sandbox.
   ids:
   - COR-53
@@ -1267,12 +1267,12 @@ entries:
   item: The frame watchdog.
   ids:
   - COR-53
-- page: docs/applets/trust-model.md#pre-flight-beats-post-mortem
+- page: docs/applets/trust-model.md#pre-flight-checks
   item: Checks run before any applet code loads.
   ids:
   - COR-06
   - COR-07
-- page: docs/applets/trust-model.md#spec-applets-are-data
+- page: docs/applets/trust-model.md#spec-applets
   item: Spec applets are data and run no code.
   ids:
   - SPC-08

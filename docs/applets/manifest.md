@@ -9,7 +9,7 @@ older hosts (forward compatibility).
 
 An applet is one of two kinds, which `[applet].kind` names. A compiled applet, the default, is a library that the host opens and calls. A spec applet is a folder with a manifest and a spec, the text file that the builder writes, and no library: it is data, which the app is to draw as a page and never executes. [Spec applets](#spec-applets) describes its manifest; the rest of this page describes a compiled applet's.
 
-## Where the host looks
+## Search Order
 
 The manifest is a sidecar file in the same folder as the applet's library, and the two share a stem. For an applet with the stem `sine_scope`, the folder holds:
 
@@ -28,7 +28,7 @@ The host scans these folders at startup, in this order:
 2. The user applets folder, `applets/` under the app-data root: `~/Library/Application Support/Caliper/applets` on macOS and `%APPDATA%\Caliper\applets` on Windows.
 3. `applets/` next to the `caliper` executable.
 
-Spec applets are found in the same folders and also one folder down, as [Where spec applets are found](#where-spec-applets-are-found) says.
+Spec applets are found in the same folders and also one folder down, as [Where spec applets are found](#spec-applet-search-order) says.
 
 Dropping a manifest and its library into the user applets folder, or running `caliper install <folder>`, installs an applet. When several folders hold copies of one applet id, the host loads one of them, as [Several copies of one applet](../development/compatibility-and-epochs.md#several-copies-of-one-applet) describes. [Caliper CLI](../reference/cli.md#the-search-order) gives the search order in full, and [Folders and environment variables](../reference/folders-and-environment.md) gives the folders on each platform and the variables that change them.
 
@@ -48,7 +48,7 @@ Dropping a manifest and its library into the user applets folder, or running `ca
 | `[services]`| `required` | array of strings  | No       | Service IDs the applet cannot run without, e.g. `["caliper.ui.v1"]`.    |
 | `[services]`| `optional` | array of strings  | No       | Service IDs the applet uses if present, e.g. `["caliper.log.v1"]`.      |
 | `[build]`   | `sdk`      | string            | No       | SDK version that built the applet. Written by the build.                |
-| `[build]`   | `ui_stack` | string            | No       | Hash of the ImGui version number, the checked-out commits of ImGui, ImPlot, ImPlot3D and ImGuiFileDialog, the `imconfig.h` and the UI-stack definitions the applet was compiled against. Written by the build. See [The UI-stack hash](sdk-package.md#the-ui-stack-hash). |
+| `[build]`   | `ui_stack` | string            | No       | Hash of the ImGui version number, the checked-out commits of ImGui, ImPlot, ImPlot3D and ImGuiFileDialog, the `imconfig.h` and the UI-stack definitions the applet was compiled against. Written by the build. See [The UI-stack hash](sdk-package.md#ui-stack-hash). |
 | `[data]`    | `schema`   | integer           | No       | Version of the applet's stored data. Must be an integer ≥ 1.            |
 
 Notes:
@@ -76,7 +76,7 @@ Notes:
   `caliper_add_applet()` copies the manifest that the author writes to the
   folder beside the built library and adds the table to that copy, and it
   refuses a source manifest that already has one
-  ([SDK package](sdk-package.md#the-stamped-manifest)). `sdk` is a record for
+  ([SDK package](sdk-package.md#stamped-manifest)). `sdk` is a record for
   diagnosis, which the host shows in the Inspector and never compares.
   `ui_stack`, when present, must be a non-empty string equal to the host's own
   hash, or the applet is refused. See
@@ -87,7 +87,7 @@ Notes:
   is not an integer of at least 1 is a manifest error. See
   [The version of each applet's stored data](../development/compatibility-and-epochs.md#the-version-of-each-applets-stored-data).
 
-## Spec applets
+## Spec Applets
 
 A spec applet is a folder that holds its manifest and its spec, and no library. The spec is a TOML file of sources, panels and a layout, in version 0 of the spec format, which the builder's library in `src/builder/spec/` reads and checks. The builder's `applet.save` command writes a spec applet into a workspace as `applets/<id>/<id>.caliper.toml` and `applets/<id>/<id>.spec.toml`:
 
@@ -119,11 +119,11 @@ The keys that only a library can honour are refused rather than ignored, so that
 
 A spec applet names the version of the spec format it needs in the spec itself, with the key `caliper_spec`, written before the spec's first table as `caliper_spec = 0`. The host reads that line when it lists the applet and refuses a version it cannot read (see [Refusal messages](../reference/refusal-messages.md#spec-applets)).
 
-### Spec applet ids
+### Spec Applet IDs
 
 A workspace names its applets with workspace ids, `[a-z][a-z0-9_-]{0,63}`, which name their folders and files. A manifest id has its own grammar, which has no `_`. `applet.save` therefore writes the manifest id `local.<id>`, with each `_` of the workspace id replaced by `-`: the workspace applet `loss_view` is the applet `local.loss-view` in its folder `applets/loss_view/`. The loader never compares the folder name with the manifest id; the copies of one applet are those with one manifest id, whatever their kind.
 
-### Where spec applets are found
+### Spec Applet Search Order
 
 The loader looks for spec applets in the folders of the [search order](../reference/cli.md#the-search-order), in two places:
 
@@ -134,7 +134,7 @@ A host that has a workspace open also searches the workspace's `applets/` folder
 
 A manifest read one folder down or in the workspace's folder may be at most 64 KiB, and none of its dotted keys may have more than 32 parts, before it is parsed. The spec's file must be a regular file in the manifest's folder, not a symbolic link wherever it points, of at most 512 KiB, the spec format's limit. When the applet is listed the host reads only the spec's first lines, up to `caliper_spec`; the whole spec is parsed and validated when the applet is launched or checked with `caliper check`.
 
-## Applet ids
+## Applet IDs
 
 The `id` names the applet's data folder (`data/<id>/` under the app-data root),
 so it is restricted to a form that is always a single, safe path component:
@@ -151,7 +151,7 @@ so it is restricted to a form that is always a single, safe path component:
 (see [Refusal messages](../reference/refusal-messages.md#failed-messages)), and no data folder is
 created for it.
 
-## Example
+## Worked Example
 
 The canonical minimal manifest is the one shipped by the **hello** fixture
 applet (`examples/hello/`), embedded here verbatim so it can never drift from the

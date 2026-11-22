@@ -6,7 +6,7 @@ The host serves 19 service ids on `main`, which are 11 services and their additi
 
 A revision of a service is a new id with a `_N` suffix after the version, for example `caliper.geometry.v1_2`. A revision is additive: its table begins with a byte-identical copy of the previous table and appends entries, and the host keeps serving the older ids unchanged. An applet built against `caliper.geometry.v1` keeps working when the host also serves `v1_3`. [Compatibility and epochs](../../development/compatibility-and-epochs.md) explains the rule. No service has an incompatible `.v2`.
 
-## The ids
+## Service IDs
 
 | Id | Purpose | Page | Additive over | Threading |
 |---|---|---|---|---|
@@ -32,6 +32,6 @@ A revision of a service is a new id with a `_N` suffix after the version, for ex
 
 The threading column follows the headers, except for the bridge and geometry rows, which come from their pages. Every `v1_N` row keeps the threading rule of the service it extends.
 
-## Types that go with the services
+## Companion Types
 
 The services pass data in two interchange types rather than in framework types: [`CaliperTensor`](../tensor-and-arrow-headers.md#tensor-header) for tensors, and the [Arrow C Data Interface](../tensor-and-arrow-headers.md#arrow-header) for tables. Neither depends on a framework, which is why the SDK headers contain no torch or DuckDB type.
