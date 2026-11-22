@@ -64,6 +64,14 @@ def watching(monkeypatch):
 
 
 @pytest.fixture
+def flows(mode):
+    """The program flows run on the Python sender; the native server's links do not carry the
+    capability programs to Python yet, so there the native layer's own checks are tested."""
+    if mode == "native":
+        pytest.skip("the native server's links do not carry the capability programs yet")
+
+
+@pytest.fixture
 def facade(monkeypatch):
     f = FakeFacade()
     monkeypatch.setattr(NP, "_facade", lambda: f)
@@ -84,6 +92,7 @@ def _set(rid, pid="img", sha=SHA):
 
 def test_capabilities_only_under_watch(monkeypatch, server):
     monkeypatch.setattr(NP, "_watches", 0)
+    NP._native_caps(False)
 
     async def go():
         async with Viewer(server, PROGRAM_CAPS) as v:
@@ -98,7 +107,7 @@ def test_capabilities_only_under_watch(monkeypatch, server):
     run(go())
 
 
-def test_set_and_remove_reach_the_facade(watching, facade, server):
+def test_set_and_remove_reach_the_facade(flows, watching, facade, server):
     async def go():
         async with Viewer(server, PROGRAM_CAPS) as v:
             await v.send(_set(5))
@@ -112,7 +121,7 @@ def test_set_and_remove_reach_the_facade(watching, facade, server):
     run(go())
 
 
-def test_script_without_runtime_refuses_the_program(watching, server):
+def test_script_without_runtime_refuses_the_program(flows, watching, server):
     async def go():
         async with Viewer(server, PROGRAM_CAPS) as v:
             await v.send(_set(7))
@@ -125,8 +134,16 @@ def test_script_without_runtime_refuses_the_program(watching, server):
 
 
 @pytest.mark.parametrize("case", ["no_capability", "no_watch", "bad_hash"])
-def test_refusals(monkeypatch, facade, server, case):
-    monkeypatch.setattr(NP, "_watches", 0 if case == "no_watch" else 1)
+def test_refusals(monkeypatch, mode, facade, server, case):
+    if mode == "native" and case == "bad_hash":
+        pytest.skip("the native server's links do not carry the capability programs yet")
+    monkeypatch.setattr(NP, "_watches", 0)
+    if case != "no_watch":
+        NP.enable()
+        cleanup = NP.disable
+    else:
+        NP._native_caps(False)
+        cleanup = None
     caps = [w.CAP_CONTROLS] if case == "no_capability" else PROGRAM_CAPS
     want = w.ERR_BAD_REQUEST if case == "bad_hash" else w.ERR_UNSUPPORTED
 
@@ -135,11 +152,15 @@ def test_refusals(monkeypatch, facade, server, case):
             await v.send(_set(9, sha="0" * 64 if case == "bad_hash" else SHA))
             e = await v.expect(w.Error)
             assert (e.code, e.in_reply_to, e.request_id) == (want, int(w.MsgType.PROGRAM), 9)
-    run(go())
+    try:
+        run(go())
+    finally:
+        if cleanup is not None:
+            cleanup()
     assert facade.calls == []
 
 
-def test_read_only_server_forbids_programs(watching, facade, make_server):
+def test_read_only_server_forbids_programs(flows, watching, facade, make_server):
     s = make_server(control=False)
 
     async def go():
@@ -150,7 +171,7 @@ def test_read_only_server_forbids_programs(watching, facade, make_server):
     assert facade.calls == []
 
 
-def test_unrequested_state_after_a_change(watching, facade, server):
+def test_unrequested_state_after_a_change(flows, watching, facade, server):
     async def go():
         async with Viewer(server, PROGRAM_CAPS) as v:
             await v.send(_set(1))
@@ -162,7 +183,7 @@ def test_unrequested_state_after_a_change(watching, facade, server):
     run(go())
 
 
-def test_programs_end_after_the_last_viewer(monkeypatch, watching, facade, server):
+def test_programs_end_after_the_last_viewer(flows, monkeypatch, watching, facade, server):
     monkeypatch.setattr(NP, "LINGER_S", 0.2)
 
     async def go():
@@ -174,7 +195,7 @@ def test_programs_end_after_the_last_viewer(monkeypatch, watching, facade, serve
     assert facade.installed == {}
 
 
-def test_interventions_key_only_for_its_viewers(watching, server):
+def test_interventions_key_only_for_its_viewers(flows, watching, server):
     iv = {"points": [{"point": "fc", "kind": "module", "module": "fc"}], "active": []}
     meta = {"run": {"state": "running", "step": 0, "steps_left": 0}, "params": [],
             "actions": [], "interventions": iv}
