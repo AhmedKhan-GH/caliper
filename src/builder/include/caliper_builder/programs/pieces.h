@@ -68,7 +68,7 @@ inline constexpr const char* kProgramCameraConflict = "program.camera_conflict";
 inline constexpr const char* kProgramBindingNotAllowed = "program.binding_not_allowed";  // a file declares @group or @binding
 inline constexpr const char* kProgramReservedName = "program.reserved_name";       // a caliper_ or Caliper name, or a name with "__"
 inline constexpr const char* kProgramEntryStage = "program.entry_stage";           // an entry point of the wrong stage, or none
-inline constexpr const char* kProgramInterfaceMismatch = "program.interface_mismatch";  // stage outputs and inputs disagree
+inline constexpr const char* kProgramInterfaceMismatch = "program.interface_mismatch";  // stage interfaces, or a fragment's outputs and its target, disagree
 inline constexpr const char* kProgramOverWebLimits = "program.over_web_limits";    // over a default limit of WebGPU
 // The hosts' codes.
 inline constexpr const char* kProgramResourcesUnavailable = "program.resources_unavailable";  // no capability "resources"
