@@ -1,6 +1,7 @@
-// The producer runtime (caliper_producer.h, design/gpu-programs.md). The
-// interface is fixed; the runtime comes next, and until then each call that
-// would run on a device answers CALIPER_PRODUCER_UNSUPPORTED.
+// The producer runtime on a platform without its Metal runtime (producer.mm)
+// (caliper_producer.h, design/gpu-programs.md). A Vulkan runtime with CUDA
+// tensors is planned in design/producer-runtime.md; until it exists, each call
+// that would run on a device answers CALIPER_PRODUCER_UNSUPPORTED.
 #include "producer/caliper_producer.h"
 
 #include <cstdlib>
@@ -14,7 +15,7 @@ caliper_producer_status unsupported(caliper_producer_error* error) {
         error->code = "program.unavailable";
         error->line = 0;
         error->column = 0;
-        static const char kText[] = "The producer runtime is not built yet (design/gpu-programs.md).";
+        static const char kText[] = "This platform has no producer runtime yet; it runs on Metal only.";
         error->message = static_cast<char*>(std::malloc(sizeof kText));
         if (error->message) std::memcpy(error->message, kText, sizeof kText);
     }

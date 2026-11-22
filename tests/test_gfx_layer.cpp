@@ -674,6 +674,55 @@ TEST_CASE("gfx layer: a transient host import is always copied, and an import's 
     gfx.release(own);
 }
 
+TEST_CASE("gfx layer: a read-only import binds for reading and is refused in a read_write binding") {
+    RecordingBackend gfx;
+    const size_t page = RecordingBackend::kHostPage;
+    std::vector<uint8_t> storage(2 * page);
+    uint8_t* aligned = storage.data() + (page - reinterpret_cast<uintptr_t>(storage.data()) % page) % page;
+    ExternalBuffer ext;
+    ext.kind = ExternalKind::HostMemory;
+    ext.handle = aligned;
+    ext.size = page;
+    ext.usage = kStorage;
+    ext.allow_copy = false;
+    ext.read_only = true;                                // a training tensor of the producer runtime
+    ImportResult ro = gfx.import_buffer(ext);
+    REQUIRE(ro.buffer);
+    CHECK(ro.route == Route::InPlace);
+    ext.read_only = false;
+    ImportResult rw = gfx.import_buffer(ext);
+    REQUIRE(rw.buffer);
+
+    const EntryDesc cs[] = {{"cs_main", kStageCompute, {64, 1, 1}}};
+    BindingDesc bindings[] = {{0, 0, BindingType::Storage, kStageCompute, false, 4, Format::RGBA8Unorm, 0},
+                              {0, 1, BindingType::StorageReadWrite, kStageCompute, false, 4, Format::RGBA8Unorm, 1}};
+    ProgramDesc pd;
+    pd.label = "read-only rule";
+    pd.entries = cs;
+    pd.entry_count = 1;
+    pd.bindings = bindings;
+    pd.binding_count = 2;
+    Program p = gfx.create_program(pd);
+    REQUIRE(p);
+    Buffer out = gfx.create_buffer({256, kStorage});
+    BindGroupDesc bg;
+    bg.program = p;
+    bg.entry_count = 2;
+    bg.entries[0].binding = 0;
+    bg.entries[0].buffer = ro.buffer;                    // var<storage, read>: allowed
+    bg.entries[1].binding = 1;
+    bg.entries[1].buffer = out;
+    CHECK(gfx.create_bind_group(bg));
+    bg.entries[1].buffer = ro.buffer;                    // var<storage, read_write>: refused
+    CHECK_FALSE(gfx.create_bind_group(bg));
+    CHECK(has(gfx.last_error(), "read-only import"));
+    bg.entries[1].buffer = rw.buffer;                    // an import without the flag keeps the old rule
+    CHECK(gfx.create_bind_group(bg));
+    gfx.release(ro.buffer);
+    gfx.release(rw.buffer);
+    gfx.release(out);
+}
+
 TEST_CASE("gfx layer: copies and dispatches are validated like draws") {
     Scene s;
     Texture t = s.gfx.create_texture({4, 2, Format::RGBA8Unorm, kSampled | kCopyDstTex | kCopySrcTex | kStorageTex});

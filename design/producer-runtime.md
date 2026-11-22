@@ -88,7 +88,20 @@ Naga's MSL also declares the binding `const device`, and the Metal compiler refu
 
 Check 5 of the specification allows 5 % of training throughput for the whole instrument. The runtime gets at most 4 % of it, and the rest stays for the hooks and the publish path. The runtime measures the time of each step between two `caliper.step()` calls and the cost of its own sync points and passes. It then runs the programs every N steps, with the smallest N that keeps its cost under 4 % of the step time. A program over its time limit of the sandbox is skipped for the next steps, and the view says why.
 
+The built facade measures the step time and the cost as Cadence Measurement below states, because the time between two `caliper.step()` calls is often only the time to queue a step.
+
 The measured costs set N. On this machine, a step with all three sync points and the pass added 0.42 ms on the small model and 0.90 ms on the medium model at each step. It added 0.8 ms to 1.6 ms when it ran every 10 or 20 steps, probably because torch's queue then held more work at the wait. The first sync point alone added 0.23 ms, which is 23.6 % of the throughput of the small model with its step of 0.75 ms. Thus a program over the weights of the small model runs about every 27 steps, and the medium model, with its step of 12.2 ms, allows a program every 2 to 4 steps. With a pass every 20 steps, the small model kept 94.6 % and the medium model 99.6 % of its throughput. The measured loops never waited for the GPU. A loop that already waits at each step, for example with `loss.item()`, pays less for the first sync point.
+
+### Cadence Measurement
+
+Torch's MPS queue lets the training thread run ahead of the GPU. Thus the time between two `caliper.step()` calls is often only the time to queue a step, and the first sync point then waits for every queued step. A probe of the built facade measured a step interval of 0.14 ms on a model whose GPU step took about 1 ms. Its first sync point waited 17.4 ms for the queued steps, and the formula then gave N = 2,432.
+
+The facade therefore measures the two times between moments when torch's queue is empty:
+
+- **Step time `T`.** The time from the end of one pass to the end of the next first sync point, divided by the steps in between. Both ends find torch's queue empty, thus the quotient is the true time of a step.
+- **Cost `C`.** The time of the pass, which is sync points 2 and 3, plus the idle time of the GPU after the first sync point. The facade takes that idle time as the wait of the first sync point, but at most the median time to queue a step.
+
+The first step after an install runs one extra first sync point, so that the first `T` starts from an empty queue. With these two times, the same probe gave N = 50 on a small model and N = 15 on a model with layers of 2048. Runtime Results below gives the cadence and the throughput on the spike's two models.
 
 ### Output Path
 
@@ -158,6 +171,19 @@ The functional checks passed on torch 2.14.1 and 2.15.0:
 - The import took the in-place route with 0 bytes copied, and it did not change `MTLDevice.currentAllocatedSize`.
 - The norms matched torch's `w.norm(dim=1)` within 5.4e-7. After an optimizer step changed the weight in place, the same import gave the new norms within 4.8e-7, with no new import.
 - A view with a storage offset of 784 elements came as the storage's buffer with a byte offset of 3,136 bytes. The program read it through an element offset in its uniform block and matched within 2.3e-5. The DLPack `data` field is the storage's `id<MTLBuffer>`, while `tensor.data_ptr()` of the view is that pointer plus the offset, which is no object.
+
+### Runtime Results
+
+The built runtime ran the spike's two models with one program under the facade at its own cadence. The program computes the norm of each row of the bound weight and writes one point for each row. Each loop calls `caliper.step()` at the checkpoint of `caliper.watch(model, optimizer)`, before `optimizer.step()`, and the outputs go to a stand-in of `caliper.scene`, thus the publish path is not part of the numbers. Each number is the median of five runs, one process per run, with the two modes in alternating order. The runs held one heavy slot while the other slots were free. The peak memory footprint was 0.47 GB for the small model and 0.60 GB for the medium model.
+
+| Model | Base Steps per Second | With the Program | Share of Base | Cadence N | Measured `T` | Measured `C` | GPU Time of a Pass | 1-Minute Load |
+|---|---|---|---|---|---|---|---|---|
+| Small | 1,337.9 | 1,286.4 | 96.1 % | 18 to 41 | 0.75 ms | 1.20 ms | 0.07 ms | 2.67 to 3.43 |
+| Medium | 85.11 | 81.34 | 95.6 % | 3 to 4 | 11.9 ms | 1.00 ms | 0.39 ms | 2.61 to 3.56 |
+
+The measured `T` agrees with the spike's step times of 0.75 ms and 12.2 ms. The medium model lost 4.4 % of its throughput, a little above the runtime's share of 4 %, thus `C` slightly underestimates the cost of a pass step there. Both models stay above the 95 % of check 5.
+
+The counters of the runtime showed the in-place route in each run: one import in place, no import refused, 0 bytes copied, and each output given as a DLPack capsule over the runtime's own buffer with 0 bytes copied. The publish path then makes the copy of its route, which the table of Output Path states.
 
 ### Documented and Undocumented Behavior
 
