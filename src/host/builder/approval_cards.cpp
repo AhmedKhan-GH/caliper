@@ -87,6 +87,7 @@ std::string approval_who(const cb::CommandInvocation& inv) {
         case cb::CommandOrigin::api: return "API";
         case cb::CommandOrigin::builder: return "Builder";
         case cb::CommandOrigin::ui: return "App";
+        case cb::CommandOrigin::viewer: return "Viewer";
     }
     return "Agent";
 }
