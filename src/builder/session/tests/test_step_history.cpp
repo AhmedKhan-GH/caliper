@@ -9,6 +9,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -92,10 +93,11 @@ TEST_CASE("one value per step, the newest at or before a step, and a window by s
     h.append("live:other", 3, filled({1}, 9));   // not a root of the spec: nothing kept
     CHECK(h.kept_steps().empty());
     for (int step : {10, 20, 30}) h.append("live:act", step, filled({1}, float(step)));
-    h.append("live:act", 20, filled({1}, 21));   // a later value of a step replaces the earlier one
+    h.append("live:act", 30, filled({1}, 31));   // a later value of the newest step replaces it
     CHECK(h.kept_steps() == std::vector<std::int64_t>{10, 20, 30});
     CHECK(h.at("act", 25)->first == 20);
-    CHECK(h.at("act", 25)->second.element(0) == doctest::Approx(21));
+    CHECK(h.at("act", 25)->second.element(0) == doctest::Approx(20));
+    CHECK(h.at("act", 35)->second.element(0) == doctest::Approx(31));
     CHECK_FALSE(h.at("act", 5));
     const auto w = h.window("act", 15, 30);
     REQUIRE(w.size() == 2);
@@ -270,4 +272,87 @@ TEST_CASE("a live series keeps its newest value at each step only for a source t
     CHECK(at->first == 30);
     CHECK(at->second.rank() == 0);
     CHECK(at->second.element(0) == doctest::Approx(1.0 / 3));
+}
+
+// A step counter that restarts within one attachment (a new run on the same
+// link, or a fork from an earlier step) starts a new epoch: the old run's
+// steps after the new step go, so that a full ring keeps the new values, and
+// a cursor held after the new step goes live.
+TEST_CASE("a step counter that restarts starts a new epoch and keeps the new values") {
+    const spec::Spec s = parse(std::string(kHead) +
+                               "[[source]]\nid = \"act\"\ncatalog = \"live:act\"\nhistory = 3\n"
+                               "[[source]]\nid = \"other\"\ncatalog = \"live:other\"\nhistory = 3\n");
+    StepHistory h;
+    h.configure(s);
+    for (int step : {100, 101, 102, 103}) {
+        h.append("live:act", step, filled({1}, float(step)));
+        h.append("live:other", step, filled({1}, float(step)));
+    }
+    CHECK(h.kept_steps() == std::vector<std::int64_t>{101, 102, 103});
+    CursorState held = h.cursor();
+    held.live = false;
+    held.step = 102;
+    h.set_cursor(held);
+    REQUIRE_FALSE(h.cursor().live);
+
+    // The new run counts from 0: its values are kept, and the old steps go.
+    for (int step : {0, 1}) h.append("live:act", step, filled({1}, float(step)));
+    CHECK(h.kept_steps() == std::vector<std::int64_t>{0, 1});
+    CHECK(h.at("act", 1)->second.element(0) == doctest::Approx(1));
+    CHECK_FALSE(h.at("other", 103));
+    CursorState c = h.cursor();
+    CHECK(c.live);
+    CHECK(c.latest == 1);
+    CHECK(c.first == 0);
+    CHECK(c.step == 1);
+    // The other view of the new run continues in the same epoch.
+    h.append("live:other", 1, filled({1}, 1));
+    for (int step : {2, 3, 4, 5}) h.append("live:act", step, filled({1}, float(step)));
+    CHECK(h.window("act", 0, 10).size() == 3);
+    CHECK(h.window("act", 0, 10).front().first == 3);
+    CHECK(h.at("other", 1).has_value());
+    CHECK(h.cursor().latest == 5);
+    // A step that repeats the newest is a later value of that step, not a restart.
+    h.append("live:act", 5, filled({1}, 50));
+    CHECK(h.kept_steps().size() == 4);
+}
+
+// A fork from step 30 of a run at step 50 keeps the shared steps up to 30 and
+// a cursor held there, and drops the old run's steps after it.
+TEST_CASE("a fork from an earlier step keeps the shared steps and a cursor held on them") {
+    const spec::Spec s = parse(std::string(kHead) + "[[source]]\nid = \"act\"\ncatalog = \"live:act\"\nhistory = 8\n");
+    StepHistory h;
+    h.configure(s);
+    for (int step : {10, 20, 30, 40, 50}) h.append("live:act", step, filled({1}, float(step)));
+    CursorState held = h.cursor();
+    held.live = false;
+    held.step = 20;
+    h.set_cursor(held);
+    h.append("live:act", 30, filled({1}, 300));
+    CHECK(h.kept_steps() == std::vector<std::int64_t>{10, 20, 30});
+    CHECK(h.at("act", 35)->second.element(0) == doctest::Approx(300));
+    CHECK_FALSE(h.cursor().live);
+    CHECK(h.cursor().step == 20);
+    CHECK(h.cursor().latest == 30);
+    h.append("live:act", 31, filled({1}, 31));
+    CHECK(h.kept_steps() == std::vector<std::int64_t>{10, 20, 30, 31});
+}
+
+// The nearest kept step of a held cursor compares distances that do not fit a
+// signed 64-bit value: the step 100 between the stamps -2^63 + 10 and
+// 2^63 - 10 is nearer the upper one.
+TEST_CASE("the nearest kept step is exact for stamps far apart") {
+    const spec::Spec s = parse(std::string(kHead) + "[[source]]\nid = \"act\"\ncatalog = \"live:act\"\nhistory = 3\n");
+    StepHistory h;
+    h.configure(s);
+    const std::int64_t low = std::numeric_limits<std::int64_t>::min() + 10;
+    const std::int64_t high = std::numeric_limits<std::int64_t>::max() - 10;
+    h.append("live:act", low, filled({1}, 1));
+    h.append("live:act", high, filled({1}, 2));
+    CursorState want = h.cursor();
+    want.live = false;
+    want.step = 100;
+    CHECK(h.set_cursor(want).step == high);
+    want.step = -100;
+    CHECK(h.set_cursor(want).step == low);
 }

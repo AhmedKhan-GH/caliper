@@ -206,6 +206,8 @@ struct StepHistory::Impl {
     CursorState cursor;
     std::optional<double> spec_speed;         // the transport's speed at the last configure
     double play = 0;                          // the fraction of a step that play has moved
+    // The newest step of each live view in this epoch, by catalog id.
+    std::map<std::string, std::int64_t> newest;
     std::shared_ptr<CatalogIds> ids = std::make_shared<CatalogIds>();
 
     void publish_ids() {
@@ -263,7 +265,9 @@ struct StepHistory::Impl {
         }
     }
 
-    // The kept step nearest `step`, the older one on a tie.
+    // The kept step nearest `step`, the older one on a tie. below < step <
+    // *hi, so each distance is positive and fits an unsigned 64-bit value,
+    // which the unsigned subtraction gives exactly for any two stamps.
     std::int64_t nearest(std::int64_t step) const {
         const std::vector<std::int64_t> all = steps_locked();
         if (all.empty()) return step;
@@ -271,7 +275,43 @@ struct StepHistory::Impl {
         if (hi == all.end()) return all.back();
         if (*hi == step || hi == all.begin()) return *hi;
         const std::int64_t below = *(hi - 1);
-        return (step - below) <= (*hi - step) ? below : *hi;
+        const std::uint64_t down = static_cast<std::uint64_t>(step) - static_cast<std::uint64_t>(below);
+        const std::uint64_t up = static_cast<std::uint64_t>(*hi) - static_cast<std::uint64_t>(step);
+        return down <= up ? below : *hi;
+    }
+
+    // Clears the kept steps of every source and makes the cursor live, for a
+    // new attachment or a new epoch.
+    void reset() {
+        for (auto& [id, r] : rings) {
+            r.values.clear();
+            r.bytes = 0;
+        }
+        newest.clear();
+        cursor.step = cursor.first = cursor.latest = 0;
+        cursor.live = true;
+        cursor.playing = false;
+        play = 0;
+    }
+
+    // A new epoch at `step`: every source forgets its kept steps after
+    // `step`, which belong to the run before the restart, and keeps the
+    // steps up to it, which a fork shares with the run it came from. Each
+    // view's newest step drops to `step`, so that the other views of the new
+    // run continue in this epoch; a cursor held after `step` goes live.
+    void new_epoch(std::int64_t step) {
+        for (auto& [id, r] : rings)
+            for (auto it = r.values.upper_bound(step); it != r.values.end();) {
+                r.bytes -= it->second.nbytes();
+                it = r.values.erase(it);
+            }
+        for (auto& [id, n] : newest) n = std::min(n, step);
+        if (!cursor.live && cursor.step > step) {
+            cursor.live = true;
+            cursor.playing = false;
+            play = 0;
+        }
+        cursor.latest = step;
     }
 };
 
@@ -327,14 +367,7 @@ void StepHistory::configure(const spec::Spec& spec) {
 
 void StepHistory::clear() {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    for (auto& [id, r] : impl_->rings) {
-        r.values.clear();
-        r.bytes = 0;
-    }
-    impl_->cursor.step = impl_->cursor.first = impl_->cursor.latest = 0;
-    impl_->cursor.live = true;
-    impl_->cursor.playing = false;
-    impl_->play = 0;
+    impl_->reset();
 }
 
 void StepHistory::append(const std::string& catalog_id, std::int64_t step, const TensorData& value) {
@@ -353,10 +386,19 @@ void StepHistory::append_to(const std::string& catalog_id, std::int64_t step, co
     if (!value.valid()) return;
     std::lock_guard<std::mutex> lock(impl_->mutex);
     bool wanted = false;
+    for (const auto& [id, r] : impl_->rings)
+        wanted = wanted || (r.plan.catalog == catalog_id && (!declared_only || r.plan.declared));
+    if (!wanted) return;
+    // A step below the newest step of the same view: the run's step counter
+    // restarted within the attachment (a new run on the same link, or a fork
+    // from an earlier step). A new epoch starts, so that the new values are
+    // kept rather than trimmed as the oldest of a ring full of the old run.
+    const auto seen = impl_->newest.find(catalog_id);
+    if (seen != impl_->newest.end() && step < seen->second) impl_->new_epoch(step);
+    impl_->newest[catalog_id] = step;
     bool resized = false;
     for (auto& [id, r] : impl_->rings) {
         if (r.plan.catalog != catalog_id || (declared_only && !r.plan.declared)) continue;
-        wanted = true;
         TensorData kept = value;
         if (!r.steps.empty()) {
             TensorResult t = apply_transforms(value, r.steps);
@@ -380,7 +422,6 @@ void StepHistory::append_to(const std::string& catalog_id, std::int64_t step, co
         r.values[step] = std::move(kept);
         impl_->trim(r);
     }
-    if (!wanted) return;
     if (resized) impl_->apply_budget();
     impl_->cursor.latest = std::max(impl_->cursor.latest, step);
     impl_->bounds();
