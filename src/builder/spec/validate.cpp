@@ -3,6 +3,8 @@
 // transforms when a SourceResolver knows the catalog sources.
 #include <caliper_builder/spec/validate.h>
 
+#include <caliper_builder/programs/sandbox.h>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -131,6 +133,9 @@ public:
         for (std::size_t i = 0; i < n; ++i) resolve(static_cast<int>(i));
         for (std::size_t i = 0; i < spec_.panels.size(); ++i) panel(i);
         for (std::size_t i = 0; i < spec_.controls.size() && i < limits::kControls; ++i) control(i);
+        for (std::size_t i = 0; i < spec_.programs.size() && i < program_limits::kPrograms; ++i) program(i);
+        stages();
+        provenance();
         layout();
         usage();
         extension(spec_.x, "x");
@@ -202,11 +207,18 @@ private:
                                 std::to_string(primitive_version(p)) + ".",
                             index_path("panel", i) + ".primitive");
         }
-        if (!spec_.controls.empty() && spec_.version < kInstrumentVersion)
-            sink_.error("spec.unknown_key",
-                        "\"control\" is not a key of a spec of format version " + std::to_string(spec_.version) +
-                            "; raise caliper_spec to " + std::to_string(kInstrumentVersion) + ".",
-                        "control");
+        using Table = std::pair<const char*, bool>;
+        const Table tables[] = {{"control", !spec_.controls.empty()},
+                                {"program", !spec_.programs.empty()},
+                                {"stage", !spec_.stages.empty()},
+                                {"provenance", !spec_.provenance.empty()}};
+        for (const Table& t : tables)
+            if (t.second && spec_.version < kInstrumentVersion)
+                sink_.error("spec.unknown_key",
+                            "\"" + std::string(t.first) + "\" is not a key of a spec of format version " +
+                                std::to_string(spec_.version) + "; raise caliper_spec to " +
+                                std::to_string(kInstrumentVersion) + ".",
+                            t.first);
     }
 
     void ids() {
@@ -252,6 +264,20 @@ private:
                 sink_.error("spec.duplicate_id", "Two controls have the id " + quote(v) + ".", path);
             }
         }
+        // Programs have their own set of ids.
+        if (spec_.programs.size() > program_limits::kPrograms)
+            sink_.error("spec.too_many",
+                        "The spec has " + std::to_string(spec_.programs.size()) + " programs; the limit is " +
+                            std::to_string(program_limits::kPrograms) + ".",
+                        "program");
+        std::set<std::string> programs;
+        for (std::size_t i = 0; i < spec_.programs.size(); ++i) {
+            const std::string path = index_path("program", i) + ".id";
+            const std::string& v = spec_.programs[i].id;
+            id(v, path);
+            if (!programs.insert(v).second)
+                sink_.error("spec.duplicate_id", "Two programs have the id " + quote(v) + ".", path);
+        }
     }
 
     // ---- controls (spec version 1) -----------------------------------------------
@@ -264,34 +290,28 @@ private:
         extension(c.x, path + ".x");
         extension(c.options.x, path + ".options.x");
         const std::optional<ControlTarget> target = parse_control_target(c.bind);
-        if (!target) {
-            if (c.bind.rfind("intervene:", 0) == 0) {
-                sink_.error("spec.bad_binding",
-                            "The target " + quote(c.bind) + " is reserved for a later Caliper; a control binds " +
-                                "param:<name>, action:<name>, run:pause or value.",
-                            path + ".bind");
-            } else {
-                sink_.error("spec.bad_binding",
-                            quote(c.bind) + " is not a target; a control binds param:<name>, action:<name>, " +
-                                "run:pause or value, with a name of 1 to 63 bytes.",
-                            path + ".bind");
-            }
-        }
+        if (!target)
+            sink_.error("spec.bad_binding",
+                        quote(c.bind) + " is not a target; a control binds param:<name>, action:<name>, run:pause, " +
+                            "value or intervene:<point>, with a name of 1 to 63 bytes and a point of 1 to 255.",
+                        path + ".bind");
         if (!control_kind_built(c.kind)) {
             sink_.error("spec.unsupported_control",
-                        "This Caliper does not draw a " + kind + " control yet; the kinds it draws are slider and "
-                        "button.",
+                        "This Caliper does not draw a " + kind + " control yet; the kinds it draws are slider, button "
+                        "and toggle.",
                         path + ".kind");
             return;
         }
         if (target && !control_takes_target(c.kind, *target))
             sink_.error("spec.control_mismatch",
                         "A " + kind + " cannot bind " + quote(c.bind) + "; a " + kind + " binds " +
-                            (c.kind == ControlKind::slider ? "param:<name> or value." : "action:<name> or run:pause."),
+                            (c.kind == ControlKind::slider   ? "param:<name> or value."
+                             : c.kind == ControlKind::toggle ? "intervene:<point> or param:<name>."
+                                                             : "action:<name> or run:pause."),
                         path + ".bind");
         const ControlOptions& o = c.options;
         const std::string op = path + ".options";
-        if (c.kind == ControlKind::button) {
+        if (c.kind == ControlKind::button || c.kind == ControlKind::toggle) {
             using Set = std::pair<const char*, bool>;
             const Set set[] = {{"log", o.log.has_value()},
                                {"max", o.max.has_value()},
@@ -301,7 +321,7 @@ private:
             for (const Set& opt : set)
                 if (opt.second)
                     sink_.error("spec.control_mismatch",
-                                quote(opt.first) + " is an option of a slider; a button takes no options.",
+                                quote(opt.first) + " is an option of a slider; a " + kind + " takes no options.",
                                 op + "." + opt.first);
             return;
         }
@@ -323,6 +343,103 @@ private:
             sink_.error("spec.out_of_range", op + ".step must be above 0.", op + ".step");
         if (o.log && *o.log && o.min && !(*o.min > 0))
             sink_.error("spec.out_of_range", "A log slider needs " + op + ".min above 0.", op + ".min");
+    }
+
+    // ---- programs, stages and provenance (spec version 1, program.h) --------------
+    // The declaration of each item is the sandbox's own check
+    // (programs/sandbox.h), with its codes, so that the editor, the script and
+    // the viewer hold a spec to the same limits; the validator adds the text
+    // rules, the uniqueness and the references to the spec's panels.
+
+    void verdict(const programs::Verdict& v, const std::string& path) {
+        if (v.ok()) return;
+        sink_.error(v.code, v.message, v.where.empty() ? path : path + "." + v.where);
+    }
+
+    // The panel a program's output or a stage draws in: a scene panel of the
+    // spec. `code` is the item's code for a panel of another primitive.
+    void scene_target(const std::string& panel, const std::string& path, const char* code, const char* what) {
+        const Panel* p = spec_.find_panel(panel);
+        if (!p) {
+            sink_.error("spec.unknown_panel",
+                        what + std::string(" names the panel ") + quote(panel) + ", which is not a panel of this spec.",
+                        path);
+        } else if (p->primitive != Primitive::scene) {
+            sink_.error(code,
+                        what + std::string(" names the panel ") + quote(panel) + ", which is a " +
+                            to_string(p->primitive) + " panel; it must be a scene panel.",
+                        path);
+        }
+    }
+
+    void program(std::size_t i) {
+        const Program& p = spec_.programs[i];
+        const std::string path = index_path("program", i);
+        if (p.title) text(*p.title, path + ".title", limits::kTitleChars, TextKind::line, false);
+        text(p.wgsl, path + ".wgsl", limits::kStringChars, TextKind::long_text, false);
+        extension(p.x, path + ".x");
+        verdict(programs::check_declaration(p), path);
+        if (p.output.kind == OutputKind::geometry && !p.output.panel.empty())
+            scene_target(p.output.panel, path + ".output.panel", programs::kProgramBadTarget, "The program's output");
+    }
+
+    void stages() {
+        if (spec_.stages.size() > program_limits::kStages)
+            sink_.error("spec.too_many",
+                        "The spec has " + std::to_string(spec_.stages.size()) + " stages; the limit is " +
+                            std::to_string(program_limits::kStages) + ".",
+                        "stage");
+        std::set<std::string> seen;
+        for (std::size_t i = 0; i < spec_.stages.size() && i < program_limits::kStages; ++i) {
+            const Stage& st = spec_.stages[i];
+            const std::string path = index_path("stage", i);
+            text(st.wgsl, path + ".wgsl", limits::kStringChars, TextKind::long_text, false);
+            extension(st.x, path + ".x");
+            verdict(programs::check_stage_declaration(st), path);
+            if (!seen.insert(stage_id(st)).second)
+                sink_.error("spec.duplicate_id",
+                            "Two stages are the " + std::string(stage_kind_name(st.kind)) + " stage of the entity " +
+                                quote(st.entity) + " of the panel " + quote(st.panel) + "; keep one.",
+                            path);
+            if (!st.panel.empty())
+                scene_target(st.panel, path + ".panel", programs::kStageNotScenePanel, "The stage");
+        }
+    }
+
+    void provenance() {
+        const Provenance& pv = spec_.provenance;
+        if (pv.empty()) return;
+        if (pv.from) text(*pv.from, "provenance.from", limits::kDescriptionChars, TextKind::line, false);
+        extension(pv.x, "provenance.x");
+        const std::size_t most = program_limits::kPrograms + program_limits::kStages;
+        if (pv.reviewed.size() > most)
+            sink_.error("spec.too_many",
+                        "provenance.reviewed lists " + std::to_string(pv.reviewed.size()) + " sources; the limit is " +
+                            std::to_string(most) + ".",
+                        "provenance.reviewed");
+        for (std::size_t i = 0; i < pv.reviewed.size() && i < most; ++i) {
+            const ReviewedSource& r = pv.reviewed[i];
+            const std::string path = index_path("provenance.reviewed", i);
+            const bool program_target = r.target.rfind("program:", 0) == 0 && valid_id(r.target.substr(8));
+            auto ends_with = [&](std::string_view tail) {
+                return r.target.size() >= tail.size() &&
+                       r.target.compare(r.target.size() - tail.size(), tail.size(), tail) == 0;
+            };
+            const bool stage_target = r.target.rfind("stage:", 0) == 0 &&
+                                      r.target.size() <= 6 + 64 + 1 + 255 + 1 + 8 &&
+                                      (ends_with("/material") || ends_with("/vertex")) &&
+                                      r.target.size() > 6 + 9 && !has_control(r.target, TextKind::line);
+            if (!program_target && !stage_target)
+                sink_.error("spec.bad_value",
+                            quote(r.target) + " is not a reviewed target; a target is program:<id> or "
+                                              "stage:<panel>/<entity>/<kind>.",
+                            path + ".target");
+            bool hex = r.sha256.size() == 64;
+            for (char c : r.sha256) hex = hex && ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+            if (!hex)
+                sink_.error("spec.bad_value", path + ".sha256 must be 64 lower-case hexadecimal digits.",
+                            path + ".sha256");
+        }
     }
 
     // ---- scene panels (spec version 1) -------------------------------------------

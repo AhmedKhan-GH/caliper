@@ -86,6 +86,8 @@ bool check_values(const json& v, const std::string& path, int depth, std::size_t
 Source decode_source(const json& item, const std::string& path, Sink& sink);
 Panel decode_panel(const json& item, const std::string& path, Sink& sink);
 Control decode_control(const json& item, const std::string& path, Sink& sink);
+Program decode_program(const json& item, const std::string& path, Sink& sink);
+Stage decode_stage(const json& item, const std::string& path, Sink& sink);
 LayoutNode decode_layout(const json& item, const std::string& path, Sink& sink);
 
 }  // namespace caliper_builder::spec::detail

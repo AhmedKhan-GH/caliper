@@ -12,10 +12,14 @@ namespace {
 
 // A target's name: 1 to 63 bytes of valid UTF-8 without a control character,
 // as caliper.param requires.
-bool valid_target_name(std::string_view name) {
-    return !name.empty() && name.size() <= limits::kTargetNameBytes && detail::valid_utf8(name) &&
+bool valid_target_name(std::string_view name, std::size_t max_bytes = limits::kTargetNameBytes) {
+    return !name.empty() && name.size() <= max_bytes && detail::valid_utf8(name) &&
            !detail::has_control(name, detail::TextKind::line);
 }
+
+// An intervention point's name: a module's dotted name or <module>#<h>, up to
+// 255 bytes (design/gpu-programs.md, Intervention Points).
+constexpr std::size_t kPointNameBytes = 255;
 
 bool starts_with(std::string_view s, std::string_view prefix) { return s.substr(0, prefix.size()) == prefix; }
 
@@ -53,7 +57,9 @@ std::optional<ControlKind> control_kind_from_name(std::string_view name) {
     return std::nullopt;
 }
 
-bool control_kind_built(ControlKind kind) { return kind == ControlKind::slider || kind == ControlKind::button; }
+bool control_kind_built(ControlKind kind) {
+    return kind == ControlKind::slider || kind == ControlKind::button || kind == ControlKind::toggle;
+}
 
 bool operator==(const ControlTarget& a, const ControlTarget& b) { return a.kind == b.kind && a.name == b.name; }
 
@@ -68,16 +74,21 @@ std::optional<ControlTarget> parse_control_target(std::string_view bind) {
         return t;
     }
     std::string_view name;
+    std::size_t max_bytes = limits::kTargetNameBytes;
     if (starts_with(bind, "param:")) {
         t.kind = ControlTarget::Kind::param;
         name = bind.substr(6);
     } else if (starts_with(bind, "action:")) {
         t.kind = ControlTarget::Kind::action;
         name = bind.substr(7);
+    } else if (starts_with(bind, "intervene:")) {
+        t.kind = ControlTarget::Kind::intervene;
+        name = bind.substr(10);
+        max_bytes = kPointNameBytes;
     } else {
-        return std::nullopt;   // intervene: is reserved for a later milestone
+        return std::nullopt;
     }
-    if (!valid_target_name(name)) return std::nullopt;
+    if (!valid_target_name(name, max_bytes)) return std::nullopt;
     t.name = std::string(name);
     return t;
 }
@@ -99,8 +110,9 @@ bool control_takes_target(ControlKind kind, const ControlTarget& target) {
             return target.kind == ControlTarget::Kind::param || target.kind == ControlTarget::Kind::value;
         case ControlKind::button:
             return target.kind == ControlTarget::Kind::action || target.kind == ControlTarget::Kind::run_pause;
-        case ControlKind::range:
         case ControlKind::toggle:
+            return target.kind == ControlTarget::Kind::intervene || target.kind == ControlTarget::Kind::param;
+        case ControlKind::range:
         case ControlKind::picker:
         case ControlKind::text: return false;
     }

@@ -181,7 +181,9 @@ public:
         }
         version_ = s.version;
         if (version_ >= kInstrumentVersion) {
-            keys(root, "", {"caliper_spec", "applet", "source", "panel", "control", "layout"}, "a spec");
+            keys(root, "",
+                 {"caliper_spec", "applet", "source", "panel", "control", "program", "stage", "provenance", "layout"},
+                 "a spec");
         } else {
             keys(root, "", {"caliper_spec", "applet", "source", "panel", "layout"}, "a spec");
         }
@@ -229,9 +231,257 @@ public:
                     s.controls.push_back(control((*it)[i], index_path("control", i)));
             }
         }
+        if (version_ >= kInstrumentVersion) {
+            if (auto it = root.find("program"); it != root.end()) {
+                if (!it->is_array()) {
+                    sink_.error("spec.wrong_type",
+                                "program must be an array of tables; write each one as [[program]].", "program");
+                } else {
+                    for (std::size_t i = 0; i < it->size(); ++i)
+                        s.programs.push_back(program((*it)[i], index_path("program", i)));
+                }
+            }
+            if (auto it = root.find("stage"); it != root.end()) {
+                if (!it->is_array()) {
+                    sink_.error("spec.wrong_type", "stage must be an array of tables; write each one as [[stage]].",
+                                "stage");
+                } else {
+                    for (std::size_t i = 0; i < it->size(); ++i)
+                        s.stages.push_back(stage((*it)[i], index_path("stage", i)));
+                }
+            }
+            if (auto it = root.find("provenance"); it != root.end()) s.provenance = provenance(*it, "provenance");
+        }
         if (auto it = root.find("layout"); it != root.end()) s.layout = layout(*it, "layout");
         s.x = extension(root, "");
         return s;
+    }
+
+    // ---- programs, stages and provenance (spec version 1, program.h) ---------
+    // The types, the keys, the required keys and the enumerations are checked
+    // here; the ranges, the limits and the references are the validator's.
+
+    // Reports every key of `o` that is not in `allowed`, `x` among them: the
+    // inner tables of a program carry no extension table.
+    void strict_keys(const json& o, const std::string& path, const std::vector<std::string>& allowed,
+                     const std::string& owner) {
+        for (auto it = o.begin(); it != o.end(); ++it) {
+            if (contains(allowed, it.key())) continue;
+            sink_.error("spec.unknown_key", quote(it.key()) + " is not a key of " + owner + ".",
+                        key_path(path, it.key()));
+        }
+    }
+
+    // A count of a program: an integer from 0 to 2^32 - 1, which the value
+    // type holds; its range is the validator's.
+    std::optional<std::uint32_t> count(const json& o, const char* key, const std::string& path) {
+        auto v = integer(o, key, path);
+        if (!v) return std::nullopt;
+        if (*v < 0 || *v > 0xFFFFFFFFll) {
+            sink_.error("spec.out_of_range", key_path(path, key) + " must be from 0 to 4294967295.",
+                        key_path(path, key));
+            return std::nullopt;
+        }
+        return static_cast<std::uint32_t>(*v);
+    }
+
+    std::string required_string(const json& o, const char* key, const std::string& path, const char* owner) {
+        if (auto v = string(o, key, path)) return *v;
+        if (o.find(key) == o.end()) missing(path, key, owner);
+        return std::string();
+    }
+
+    Program program(const json& o, const std::string& path) {
+        Program p;
+        if (!table(o, path, path)) return p;
+        keys(o, path, {"id", "title", "wgsl", "entry", "inputs", "output", "limits", "workgroups"}, "a program");
+        p.id = required_string(o, "id", path, "A program");
+        p.title = string(o, "title", path);
+        p.wgsl = required_string(o, "wgsl", path, "A program");
+        p.entry = string(o, "entry", path);
+        if (auto it = o.find("inputs"); it == o.end()) {
+            missing(path, "inputs", "A program");
+        } else if (!it->is_array()) {
+            wrong(key_path(path, "inputs"), *it, "a list of inputs");
+        } else {
+            for (std::size_t i = 0; i < it->size(); ++i) {
+                const std::string ip = index_path(key_path(path, "inputs"), i);
+                const json& item = (*it)[i];
+                ProgramInput in;
+                if (table(item, ip, ip)) {
+                    strict_keys(item, ip, {"var", "source"}, "an input");
+                    in.var = required_string(item, "var", ip, "An input");
+                    in.source = required_string(item, "source", ip, "An input");
+                }
+                p.inputs.push_back(std::move(in));
+            }
+        }
+        if (auto it = o.find("output"); it == o.end()) {
+            missing(path, "output", "A program");
+        } else {
+            p.output = output(*it, key_path(path, "output"));
+        }
+        if (auto it = o.find("limits"); it != o.end()) {
+            const std::string lp = key_path(path, "limits");
+            if (table(*it, lp, lp)) {
+                strict_keys(*it, lp, {"time_ms", "memory_mb", "every"}, "the limits");
+                p.limits.time_ms = number(*it, "time_ms", lp);
+                p.limits.memory_mb = count(*it, "memory_mb", lp);
+                p.limits.every = count(*it, "every", lp);
+            }
+        }
+        if (auto it = o.find("workgroups"); it != o.end()) {
+            const std::string wp = key_path(path, "workgroups");
+            std::array<std::uint32_t, 3> w{};
+            bool ok = it->is_array() && it->size() == 3;
+            for (std::size_t i = 0; ok && i < 3; ++i) {
+                std::int64_t v = 0;
+                ok = as_integer((*it)[i], v) && v >= 0 && v <= 0xFFFFFFFFll;
+                if (ok) w[i] = static_cast<std::uint32_t>(v);
+            }
+            if (ok) {
+                p.workgroups = w;
+            } else {
+                sink_.error("spec.wrong_type", wp + " must be [x, y, z], three workgroup counts.", wp);
+            }
+        }
+        p.x = extension(o, path);
+        return p;
+    }
+
+    ProgramOutput output(const json& o, const std::string& path) {
+        ProgramOutput out;
+        if (!table(o, path, path)) return out;
+        auto kind = string(o, "kind", path);
+        if (!kind) {
+            if (o.find("kind") == o.end()) missing(path, "kind", "An output");
+            return out;
+        }
+        auto k = output_kind_from_name(*kind);
+        if (!k) {
+            sink_.error("spec.bad_value", quote(*kind) + " is not a kind of output; the kinds are geometry and pixels.",
+                        key_path(path, "kind"));
+            return out;
+        }
+        out.kind = *k;
+        if (out.kind == OutputKind::geometry) {
+            strict_keys(o, path, {"kind", "panel", "entity", "part", "max_count", "arrays", "style"},
+                        "a geometry output");
+            out.panel = required_string(o, "panel", path, "A geometry output");
+            out.entity = string(o, "entity", path);
+            if (auto part = string(o, "part", path)) {
+                if (auto gp = geometry_part_from_name(*part)) {
+                    out.part = *gp;
+                } else {
+                    sink_.error("spec.bad_value",
+                                quote(*part) + " is not a part of a geometry output; the parts are points and lines.",
+                                key_path(path, "part"));
+                }
+            }
+            if (auto n = count(o, "max_count", path)) {
+                out.max_count = *n;
+            } else if (o.find("max_count") == o.end()) {
+                missing(path, "max_count", "A geometry output");
+            }
+            if (auto it = o.find("arrays"); it == o.end()) {
+                missing(path, "arrays", "A geometry output");
+            } else if (!it->is_array()) {
+                wrong(key_path(path, "arrays"), *it, "a list of array names");
+            } else {
+                for (std::size_t i = 0; i < it->size(); ++i) {
+                    const json& name = (*it)[i];
+                    auto a = name.is_string() ? geometry_array_from_name(name.get<std::string>()) : std::nullopt;
+                    if (a) {
+                        out.arrays.push_back(*a);
+                    } else {
+                        sink_.error("spec.bad_value",
+                                    "An array of a geometry output is positions, colors, values or radii.",
+                                    index_path(key_path(path, "arrays"), i));
+                    }
+                }
+            }
+            if (auto it = o.find("style"); it != o.end()) {
+                const std::string sp = key_path(path, "style");
+                if (table(*it, sp, sp)) {
+                    strict_keys(*it, sp, {"colormap", "vmin", "vmax"}, "a style");
+                    out.style.colormap = enumerated(*it, "colormap", sp, colormaps(), "a colormap");
+                    out.style.vmin = number(*it, "vmin", sp);
+                    out.style.vmax = number(*it, "vmax", sp);
+                }
+            }
+        } else {
+            strict_keys(o, path, {"kind", "width", "height", "format"}, "a pixels output");
+            for (const char* side : {"width", "height"}) {
+                auto n = count(o, side, path);
+                if (n) {
+                    (std::string(side) == "width" ? out.width : out.height) = *n;
+                } else if (o.find(side) == o.end()) {
+                    missing(path, side, "A pixels output");
+                }
+            }
+            if (auto f = string(o, "format", path)) {
+                if (auto pf = pixel_format_from_name(*f)) {
+                    out.format = *pf;
+                } else {
+                    sink_.error("spec.bad_value", quote(*f) + " is not a pixel format; the format is rgba8unorm.",
+                                key_path(path, "format"));
+                }
+            }
+        }
+        return out;
+    }
+
+    Stage stage(const json& o, const std::string& path) {
+        Stage st;
+        if (!table(o, path, path)) return st;
+        keys(o, path, {"panel", "entity", "kind", "wgsl"}, "a stage");
+        st.panel = required_string(o, "panel", path, "A stage");
+        st.entity = required_string(o, "entity", path, "A stage");
+        if (auto kind = string(o, "kind", path)) {
+            if (auto k = stage_kind_from_name(*kind)) {
+                st.kind = *k;
+            } else {
+                sink_.error("spec.bad_value", quote(*kind) + " is not a kind of stage; the kinds are material and vertex.",
+                            key_path(path, "kind"));
+            }
+        } else if (o.find("kind") == o.end()) {
+            missing(path, "kind", "A stage");
+        }
+        st.wgsl = required_string(o, "wgsl", path, "A stage");
+        st.x = extension(o, path);
+        return st;
+    }
+
+    Provenance provenance(const json& o, const std::string& path) {
+        Provenance pv;
+        if (!table(o, path, path)) return pv;
+        keys(o, path, {"foreign", "from", "reviewed"}, "the provenance table");
+        if (auto f = boolean(o, "foreign", path)) {
+            pv.foreign = *f;
+        } else if (o.find("foreign") == o.end()) {
+            missing(path, "foreign", "The provenance table");
+        }
+        pv.from = string(o, "from", path);
+        if (auto it = o.find("reviewed"); it != o.end()) {
+            const std::string rp = key_path(path, "reviewed");
+            if (!it->is_array()) {
+                wrong(rp, *it, "a list of reviewed sources");
+            } else {
+                for (std::size_t i = 0; i < it->size(); ++i) {
+                    const std::string ip = index_path(rp, i);
+                    const json& item = (*it)[i];
+                    ReviewedSource r;
+                    if (table(item, ip, ip)) {
+                        strict_keys(item, ip, {"target", "sha256"}, "a reviewed source");
+                        r.target = required_string(item, "target", ip, "A reviewed source");
+                        r.sha256 = required_string(item, "sha256", ip, "A reviewed source");
+                    }
+                    pv.reviewed.push_back(std::move(r));
+                }
+            }
+        }
+        pv.x = extension(o, path);
+        return pv;
     }
 
     // One entry of the control array (spec version 1, instrument.h). The kind
@@ -608,6 +858,12 @@ Control decode_control(const json& item, const std::string& path, Sink& sink) {
     return Decoder(sink).control(item, path);
 }
 
+Program decode_program(const json& item, const std::string& path, Sink& sink) {
+    return Decoder(sink).program(item, path);
+}
+
+Stage decode_stage(const json& item, const std::string& path, Sink& sink) { return Decoder(sink).stage(item, path); }
+
 }  // namespace detail
 
 using detail::json;
@@ -743,6 +999,14 @@ Decoded<Control> control_from_json(const json& item, const std::string& path) {
     return decode_item<Control>(item, path, 2, detail::decode_control);
 }
 
+Decoded<Program> program_from_json(const json& item, const std::string& path) {
+    return decode_item<Program>(item, path, 2, detail::decode_program);
+}
+
+Decoded<Stage> stage_from_json(const json& item, const std::string& path) {
+    return decode_item<Stage>(item, path, 2, detail::decode_stage);
+}
+
 // ---- writing ----------------------------------------------------------------
 
 namespace {
@@ -855,6 +1119,70 @@ json to_json(const Control& c) {
     return j;
 }
 
+json to_json(const Program& p) {
+    json j = json::object();
+    j["id"] = p.id;
+    if (p.title) j["title"] = *p.title;
+    j["wgsl"] = p.wgsl;
+    if (p.entry) j["entry"] = *p.entry;
+    json inputs = json::array();
+    for (const ProgramInput& in : p.inputs) inputs.push_back(json{{"var", in.var}, {"source", in.source}});
+    j["inputs"] = std::move(inputs);
+    const ProgramOutput& o = p.output;
+    json out = json::object();
+    out["kind"] = output_kind_name(o.kind);
+    if (o.kind == OutputKind::geometry) {
+        out["panel"] = o.panel;
+        if (o.entity) out["entity"] = *o.entity;
+        out["part"] = geometry_part_name(o.part);
+        out["max_count"] = o.max_count;
+        json arrays = json::array();
+        for (GeometryArray a : o.arrays) arrays.push_back(geometry_array_name(a));
+        out["arrays"] = std::move(arrays);
+        json style = json::object();
+        if (o.style.colormap) style["colormap"] = *o.style.colormap;
+        if (o.style.vmin) style["vmin"] = *o.style.vmin;
+        if (o.style.vmax) style["vmax"] = *o.style.vmax;
+        if (!style.empty()) out["style"] = std::move(style);
+    } else {
+        out["width"] = o.width;
+        out["height"] = o.height;
+        out["format"] = pixel_format_name(o.format);
+    }
+    j["output"] = std::move(out);
+    json limits = json::object();
+    if (p.limits.time_ms) limits["time_ms"] = *p.limits.time_ms;
+    if (p.limits.memory_mb) limits["memory_mb"] = *p.limits.memory_mb;
+    if (p.limits.every) limits["every"] = *p.limits.every;
+    if (!limits.empty()) j["limits"] = std::move(limits);
+    if (p.workgroups) j["workgroups"] = json::array({(*p.workgroups)[0], (*p.workgroups)[1], (*p.workgroups)[2]});
+    if (!p.x.is_null()) j["x"] = p.x;
+    return j;
+}
+
+json to_json(const Stage& s) {
+    json j = json::object();
+    j["panel"] = s.panel;
+    j["entity"] = s.entity;
+    j["kind"] = stage_kind_name(s.kind);
+    j["wgsl"] = s.wgsl;
+    if (!s.x.is_null()) j["x"] = s.x;
+    return j;
+}
+
+json to_json(const Provenance& p) {
+    json j = json::object();
+    j["foreign"] = p.foreign;
+    if (p.from) j["from"] = *p.from;
+    if (!p.reviewed.empty()) {
+        json list = json::array();
+        for (const ReviewedSource& r : p.reviewed) list.push_back(json{{"target", r.target}, {"sha256", r.sha256}});
+        j["reviewed"] = std::move(list);
+    }
+    if (!p.x.is_null()) j["x"] = p.x;
+    return j;
+}
+
 json to_json(const LayoutNode& n) {
     if (n.kind == LayoutNode::Kind::panel) return n.panel;
     json j = json::object();
@@ -896,6 +1224,17 @@ json to_json(const Spec& spec) {
         for (const Control& c : spec.controls) list.push_back(to_json(c));
         j["control"] = std::move(list);
     }
+    if (!spec.programs.empty()) {
+        json list = json::array();
+        for (const Program& p : spec.programs) list.push_back(to_json(p));
+        j["program"] = std::move(list);
+    }
+    if (!spec.stages.empty()) {
+        json list = json::array();
+        for (const Stage& s : spec.stages) list.push_back(to_json(s));
+        j["stage"] = std::move(list);
+    }
+    if (!spec.provenance.empty()) j["provenance"] = to_json(spec.provenance);
     if (spec.layout) j["layout"] = to_json(*spec.layout);
     if (!spec.x.is_null()) j["x"] = spec.x;
     return j;
