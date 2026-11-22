@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import warnings
 
 import pytest
 import torch
@@ -328,3 +329,52 @@ def test_a_gradient_input_waits_for_the_first_backward_pass(run):
     _train(net, opt, P.WARMUP_STEPS + 1)
     st = P.status()[0]
     assert st["state"] == "running" and st["runs"] == 1 and calls
+
+
+LINES = """@group(0) @binding(0) var<storage, read> w: array<f32>;
+@group(0) @binding(1) var<storage, read_write> positions: array<f32>;
+@group(0) @binding(2) var<storage, read_write> colors: array<u32>;
+@group(0) @binding(3) var<storage, read_write> count: atomic<u32>;
+@compute @workgroup_size(64)
+fn segments(@builtin(global_invocation_id) id: vec3<u32>) {
+    let row = id.x;
+    if (row >= 4u) { return; }
+    let i = atomicAdd(&count, 2u);
+    for (var k = 0u; k < 2u; k++) {
+        positions[(i + k) * 3u] = f32(row);
+        positions[(i + k) * 3u + 1u] = w[row * 8u + k];
+        positions[(i + k) * 3u + 2u] = 0.0;
+        colors[i + k] = pack4x8unorm(vec4<f32>(1.0, 0.5, 0.0, 1.0));
+    }
+}
+"""
+
+
+@needs_device
+def test_outputs_pass_the_argument_checks_of_the_real_scene_calls(monkeypatch):
+    """The real caliper.scene checks the outputs' shapes and types, attached or not."""
+    from caliper import _scene
+    monkeypatch.setattr(P, "SHARE", 1e6)
+    net = Net().to("mps")
+    opt = torch.optim.SGD(net.parameters(), lr=0.1)
+    P.attach(net, opt)
+    try:
+        decl, src = _geometry(4)
+        P.install("pts", decl, src, scene="progtest")
+        decl = {"inputs": [{"var": "w", "source": "live:fc.weight"}],
+                "output": {"kind": "geometry", "panel": "p", "part": "lines", "max_count": 8,
+                           "arrays": ["positions", "colors"]}}
+        P.install("seg", decl, LINES, scene="progtest")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            _train(net, opt, P.WARMUP_STEPS + 2)
+        assert not [w for w in caught if "program" in str(w.message)], [str(w.message) for w in caught]
+        assert [s["runs"] for s in P.status()] == [2, 2]
+        assert not any(k[0] == "publish" for k in P._WARNED)
+    finally:
+        P.detach()
+        if P._STATE["rt"] is not None:
+            P._STATE["rt"].close()
+            P._STATE["rt"] = None
+        P._CAD.reset()
+        _scene.forget("progtest")
