@@ -211,6 +211,10 @@ CommandOutput program_command(const CommandContext& context, const spec::Spec& s
     const std::string& name = context.invocation.name;
     if (name == "stage.check") return stage_check(context.invocation.args);
     if (name == "program.status") return program_status(context.invocation.args, spec, programs, stages);
+    // design/programmable-graphics.md, Commands: not built yet.
+    if (name == "program.check" || name == "program.read")
+        return CommandOutput::fail(
+            Error(programs::kProgramNotBuilt, name + " of programmable graphics is not built yet."));
     return CommandOutput::fail(Error("command.unknown", name + " is not a stage or program read command."));
 }
 

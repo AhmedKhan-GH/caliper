@@ -41,7 +41,8 @@ const char* const kV0[] = {
     "run.state",
     "run.set_param",   "run.action",      "run.pause",      "run.list",      "run.start",        "run.fork",
     "run.stop",        "run.logs",        "events.wait",    "stage.set",     "stage.remove",     "stage.check",
-    "program.create",  "program.patch",   "program.remove", "program.status", "intervene.points", "intervene.set",
+    "program.create",  "program.patch",   "program.remove", "program.status", "program.check",  "program.read",
+    "intervene.points", "intervene.set",
     "intervene.clear", "intervene.list",  "history.undo",   "history.redo",  "history.list",
 };
 
@@ -157,7 +158,7 @@ TEST_CASE("the flags follow the design page") {
                                 "cursor.step", "camera.get", "camera.set", "camera.save", "run.state", "run.set_param", "run.action", "run.pause",
                                 "run.list", "run.start", "run.fork", "run.stop", "run.logs", "stage.set",
                                 "stage.remove", "program.create", "program.patch", "program.remove", "program.status",
-                                "intervene.points", "intervene.set", "intervene.clear", "intervene.list",
+                                "program.read", "intervene.points", "intervene.set", "intervene.clear", "intervene.list",
                                 "history.undo", "history.redo", "history.list"});
     // Every destructive command mutates.
     for (const auto& d : cb::command_table())

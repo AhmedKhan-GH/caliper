@@ -459,6 +459,112 @@ const std::pair<const char*, const char*> kFragments[] = {
         "workgroups": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "description": "The workgroup counts x, y and z of the dispatch; from max_count or the image size and the entry's workgroup size when absent."},
         "params": {"description": "A JSON object that gives each of the program's named parameters, at most 16 names, a number or a binding reference to a control, a selection or a state; the WGSL reads them by name."}}})json"},
 
+    // The graphics form of a program (design/programmable-graphics.md,
+    // Declaration). program.check takes it now; program.create, program.patch
+    // and the spec schema take it with the codec, which refuses its keys with
+    // spec.not_built until then.
+    {"graphics_resource", R"json({
+      "type": "object", "additionalProperties": false, "required": ["id", "kind"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "The resource's id, a WGSL name of at most 32 characters, unique among the program's resources and draw buffers; both halves read it by this name."},
+        "kind": {"type": "string", "enum": ["buffer", "texture"], "description": "buffer: count elements of a layout; texture: an rgba8unorm image that the derive half writes as a packed array<u32> and the draw half samples as texture_2d<f32>."},
+        "element": {"type": "string", "enum": ["f32", "i32", "u32", "vec2<f32>", "vec4<f32>", "vec2<u32>", "vec4<u32>"], "description": "buffer: a plain element type; give either element, or struct with fields."},
+        "struct": {"type": "string", "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$", "description": "buffer: the name of the struct that the composer generates from fields in both halves."},
+        "fields": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,31}: (f32|i32|u32|vec2<f32>|vec4<f32>|vec2<u32>|vec4<u32>)$"}, "description": "buffer: the struct's fields in order, each written name: type."},
+        "count": {"type": "integer", "minimum": 1, "maximum": 4194304, "description": "buffer: the elements."},
+        "counted": {"type": "boolean", "description": "buffer: the derive half also gets the counter <id>_count, an atomic<u32> set to zero before each run, and the valid elements are the first min(counter, count); false when absent."},
+        "width": {"type": "integer", "minimum": 1, "maximum": 4096, "description": "texture: the width in pixels."},
+        "height": {"type": "integer", "minimum": 1, "maximum": 4096, "description": "texture: the height in pixels."},
+        "publish": {"type": "boolean", "description": "false: a private resource of the derive half that keeps state between runs and is never sent; true when absent."},
+        "clear": {"type": "boolean", "description": "true: zeroed before each run of the derive passes; false when absent, and the contents stay from the run before."},
+        "keep": {"type": "integer", "minimum": 1, "maximum": 4096, "description": "The versions that the app's step history keeps, thinned evenly over the run; 256 when absent."}}})json"},
+
+    {"graphics_derive", R"json({
+      "type": "object", "additionalProperties": false, "required": ["wgsl", "passes"],
+      "properties": {
+        "wgsl": {"type": "string", "minLength": 1, "maxLength": 65536, "description": "The derive half's WGSL: compute entry points, functions and constants, with no binding and no directive; the composer declares the inputs, the resources, caliper and params."},
+        "inputs": {"type": "array", "maxItems": 8, "description": "The tensors that the derive half reads, read-only and in place.",
+                   "items": {"type": "object", "additionalProperties": false, "required": ["var", "source"],
+                             "properties": {
+                               "var": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "The name of the generated array<T> in the WGSL."},
+                               "source": {"$use": "catalog_id", "description": "A live tensor of the script, live:<name>."},
+                               "type": {"type": "string", "enum": ["f32", "i32", "u32"], "description": "The element type of the generated array; f32 when absent. The tensor's dtype must match it."}}}},
+        "passes": {"type": "array", "minItems": 1, "maxItems": 8, "description": "The compute passes, run in this order in one submit at a pass of the shared cadence.",
+                   "items": {"type": "object", "additionalProperties": false, "required": ["entry"],
+                             "properties": {
+                               "entry": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$", "description": "The compute entry point; never main."},
+                               "workgroups": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "description": "The workgroup counts x, y and z; [1, 1, 1] when absent."},
+                               "writes": {"type": "array", "maxItems": 8, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"}, "description": "The resources that the pass may change; the others are read-only in it."}}}},
+        "time_ms": {"type": "number", "minimum": 0.01, "maximum": 50, "description": "The most GPU time of one run of all passes in milliseconds; 4 when absent."},
+        "memory_mb": {"type": "integer", "minimum": 1, "maximum": 512, "description": "The budget of the resources and the bound tensors in MiB; 64 when absent."},
+        "every": {"type": "integer", "minimum": 1, "maximum": 10000, "description": "The fewest steps between two runs; the shared cadence may run it less often, never more often."}}})json"},
+
+    {"graphics_draw_pass", R"json({
+      "type": "object", "additionalProperties": false, "required": ["kind"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["compute", "render"], "description": "compute: a dispatch that may write draw buffers; render: a draw into the host target or an offscreen target."},
+        "entry": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$", "description": "compute: the compute entry point."},
+        "workgroups": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "description": "compute: the workgroup counts; [1, 1, 1] when absent."},
+        "writes": {"type": "array", "maxItems": 4, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"}, "description": "compute: the draw buffers that the pass may change."},
+        "vertex": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$", "description": "render: the vertex entry point; absent for a full-screen triangle drawn by the prelude's caliper_fullscreen."},
+        "fragment": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$", "description": "render: the fragment entry point."},
+        "target": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "render: host, the scene panel's color, ID and depth, or an offscreen target; host when absent."},
+        "reads": {"type": "array", "maxItems": 4, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"}, "description": "Offscreen targets that the pass samples; an earlier pass of the frame wrote them, and the pass never reads its own target."},
+        "instances": {"type": ["integer", "string"], "minimum": 1, "maximum": 4194304, "description": "render: the instance count, or a buffer resource's id whose valid count at the cursor is the count; 1 when absent."},
+        "vertices": {"type": "integer", "minimum": 1, "maximum": 65536, "description": "render: the vertices of one instance; 3 for a full-screen triangle, necessary with vertex."},
+        "topology": {"type": "string", "enum": ["triangle_list", "triangle_strip", "line_list", "line_strip", "point_list"], "description": "render: the topology; triangle_list when absent."},
+        "blend": {"type": "string", "enum": ["opaque", "alpha", "additive"], "description": "render: the color blend; opaque into host, additive into an offscreen target, when absent. The ID never blends."},
+        "depth": {"type": "string", "enum": ["none", "test", "write"], "description": "render into host: none, a less-or-equal test, or the test with a write; write with a vertex entry and none for a full-screen triangle when absent. Offscreen targets have no depth."},
+        "pick": {"type": "boolean", "description": "render into host: the fragment returns CaliperPicked and writes caliper_id(item) at location 1, which the pick readback reads; false when absent."}}})json"},
+
+    {"graphics_draw", R"json({
+      "type": "object", "additionalProperties": false, "required": ["panel", "wgsl", "passes"],
+      "properties": {
+        "panel": {"$use": "id", "description": "The scene panel whose host target the draw half writes."},
+        "wgsl": {"type": "string", "minLength": 1, "maxLength": 65536, "description": "The draw half's WGSL: entry points, functions and constants, with no binding and no directive; the prelude and the composer declare every binding."},
+        "camera": {"type": "string", "enum": ["orbit", "pan_zoom", "none"], "description": "The host camera of the panel: orbit in 3-D, pan_zoom in 2-D, or none for clip space; orbit when absent."},
+        "state": {"type": "array", "maxItems": 16, "items": {"$use": "id"}, "description": "State variables of the spec that the draw half reads as state.<id>."},
+        "buffers": {"type": "array", "maxItems": 4, "description": "Buffers that the draw half keeps between frames.",
+                    "items": {"type": "object", "additionalProperties": false, "required": ["id", "count"],
+                              "properties": {
+                                "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "The buffer's id, unique among the program's resources and draw buffers."},
+                                "element": {"type": "string", "enum": ["f32", "i32", "u32", "vec2<f32>", "vec4<f32>", "vec2<u32>", "vec4<u32>"], "description": "A plain element type; give either element, or struct with fields."},
+                                "struct": {"type": "string", "pattern": "^[A-Z][A-Za-z0-9_]{0,31}$", "description": "The name of the generated struct."},
+                                "fields": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,31}: (f32|i32|u32|vec2<f32>|vec4<f32>|vec2<u32>|vec4<u32>)$"}, "description": "The struct's fields in order, each written name: type."},
+                                "count": {"type": "integer", "minimum": 1, "maximum": 4194304, "description": "The elements."},
+                                "reset": {"type": "string", "enum": ["install", "cursor", "resource"], "description": "When the buffer returns to zero besides an install and a new run: install only, also when the cursor moves by a command, a key or the transport, or also when a resource changes version; install when absent."}}}},
+        "targets": {"type": "array", "maxItems": 4, "description": "Offscreen rgba8unorm targets, such as a glow for a bloom.",
+                    "items": {"type": "object", "additionalProperties": false, "required": ["id"],
+                              "properties": {
+                                "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "The target's id, which the draw half samples as texture_2d<f32>."},
+                                "scale": {"type": "number", "enum": [1, 0.5, 0.25], "description": "The size against the host target; 1 when absent."},
+                                "clear": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number", "minimum": 0, "maximum": 1}, "description": "The color at the start of each frame; transparent black when absent."}}}},
+        "passes": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$use": "graphics_draw_pass"}, "description": "The passes of one frame, in this order."},
+        "pick": {"type": "object", "additionalProperties": false, "required": ["resource", "fields"], "description": "The item map: a picked item is an element index of the resource.",
+                 "properties": {
+                   "resource": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "A buffer resource with a struct."},
+                   "fields": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,31}$"}, "description": "The struct's fields that the pick event carries, in this order; the first four integer fields are the tensor indices of the linked selection."}}},
+        "text": {"type": "object", "additionalProperties": false, "required": ["anchors", "strings"], "description": "Labels that the host draws and places.",
+                 "properties": {
+                   "anchors": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "A buffer resource with a struct; one label at each valid element."},
+                   "position": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,31}$", "description": "The vec4<f32> field whose xyz is the label's world position; position when absent."},
+                   "string": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,31}$", "description": "The u32 field that indexes strings; string when absent."},
+                   "priority": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,31}$", "description": "An f32 field; a label of a higher priority wins an overlap."},
+                   "strings": {"type": "array", "maxItems": 4096, "items": {"type": "string", "maxLength": 64}, "description": "The texts of the labels."}}},
+        "frame_ms": {"type": "number", "minimum": 0.1, "maximum": 16, "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program stops."},
+        "memory_mb": {"type": "integer", "minimum": 1, "maximum": 256, "description": "The budget of the resources, the draw buffers and the targets in the viewer, in MiB; 64 when absent."}}})json"},
+
+    {"graphics_program", R"json({
+      "type": "object", "additionalProperties": false, "required": ["id", "draw"],
+      "properties": {
+        "id": {"$use": "id", "maxLength": 55, "description": "The program's id, unique among programs."},
+        "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The program's label."},
+        "params": {"description": "A JSON object that gives each of the program's named parameters, at most 16 names, a number or a binding reference; both halves read them as params.<name> from the struct Params of common."},
+        "resources": {"type": "array", "maxItems": 8, "items": {"$use": "graphics_resource"}, "description": "The resources that the derive half writes and the draw half reads."},
+        "common": {"type": "string", "maxLength": 16384, "description": "WGSL that both halves include: structs such as Params, constants and functions, with no binding and no entry point."},
+        "derive": {"$use": "graphics_derive", "description": "The derive half, which runs in the training script; absent for a program that only draws."},
+        "draw": {"$use": "graphics_draw", "description": "The draw half, which runs in the viewer every frame."}}})json"},
+
     {"program_status", R"json({
       "type": "object", "additionalProperties": false,
       "required": ["id", "kind", "host", "state", "every", "every_min", "last_pass_ms", "last_cost_ms", "step_ms", "overhead_share", "passes_per_s", "last_step", "runs", "memory_bytes", "memory_limit_bytes", "error", "sha256"],
@@ -1848,6 +1954,56 @@ const Row kRows[] = {
         "stages": {"type": "array", "maxItems": 32, "items": {"$use": "program_status"}, "description": "The stages, in the spec's order."}}})json",
      R"json({"id": "rows"})json"},
 
+    // programmable graphics (design/programmable-graphics.md, Commands)
+    {"program.check", false, false, false,
+     "Checks a program of the graphics form without adding it: the declaration, then each pass of the derive half "
+     "and the draw half composed with the prelude and the generated header and compiled as the script and the viewer "
+     "compile it. Returns the messages with the part, line and column, and the generated header of each half, which "
+     "names every binding the source may use. It changes nothing.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["program"],
+      "properties": {
+        "program": {"$use": "graphics_program", "description": "The program, as program.create takes it."},
+        "headers": {"type": "boolean", "description": "Whether the result carries the generated headers; true when absent."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["ok", "messages", "passes", "headers"],
+      "properties": {
+        "ok": {"type": "boolean", "description": "Whether the declaration and every pass pass the checks."},
+        "messages": {"type": "array", "items": {"$use": "compiler_message"}, "description": "The messages, errors first; line and column are in the part that the message names."},
+        "passes": {"type": "array", "description": "One item for each pass, the derive passes first.",
+                   "items": {"type": "object", "additionalProperties": false, "required": ["half", "index", "ok"],
+                             "properties": {
+                               "half": {"type": "string", "enum": ["derive", "draw"], "description": "The half of the pass."},
+                               "index": {"type": "integer", "minimum": 0, "description": "The pass's index in its half."},
+                               "ok": {"type": "boolean", "description": "Whether the pass compiled and passed its checks."}}}},
+        "headers": {"type": "object", "additionalProperties": false, "required": ["derive", "draw"], "description": "The generated headers, or empty texts when headers is false.",
+                    "properties": {
+                      "derive": {"type": "string", "description": "The derive half's generated header."},
+                      "draw": {"type": "string", "description": "The draw half's generated header for its first pass."}}}}})json",
+     R"json({"program": {"id": "field", "draw": {"panel": "world", "wgsl": "@fragment fn fs(in: CaliperFullscreen) -> @location(0) vec4<f32> { return vec4<f32>(in.uv, 0.0, 1.0); }", "passes": [{"kind": "render", "fragment": "fs"}]}}})json"},
+    {"program.read", false, false, true,
+     "Reads elements of a published resource of a program at a step, as the app's step history keeps it: the step "
+     "of the version, its valid count, and each element's fields as numbers. It lets an agent check what its derive "
+     "half wrote. It changes nothing.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "resource"],
+      "properties": {
+        "id": {"$use": "id", "maxLength": 55, "description": "The program's id."},
+        "resource": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "The resource's id."},
+        "step": {"type": "integer", "minimum": 0, "description": "The newest version at or before this step; the cursor's step when absent."},
+        "first": {"type": "integer", "minimum": 0, "description": "The first element; 0 when absent."},
+        "count": {"type": "integer", "minimum": 1, "maximum": 1024, "description": "The elements to read; 16 when absent."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["id", "resource", "step", "count", "elements", "kept"],
+      "properties": {
+        "id": {"type": "string", "description": "The program's id."},
+        "resource": {"type": "string", "description": "The resource's id."},
+        "step": {"type": ["integer", "null"], "description": "The step of the version, or null when no version is kept."},
+        "count": {"type": "integer", "minimum": 0, "description": "The valid elements of the version."},
+        "elements": {"type": "array", "maxItems": 1024, "items": {"type": "array", "items": {"type": "number"}}, "description": "Each element read, as the numbers of its fields in their order; a vector field gives one number for each component."},
+        "kept": {"type": "object", "additionalProperties": false, "required": ["versions", "first", "last"], "description": "The versions that the step history keeps.",
+                 "properties": {
+                   "versions": {"type": "integer", "minimum": 0, "description": "The count of kept versions."},
+                   "first": {"type": ["integer", "null"], "description": "The step of the oldest kept version."},
+                   "last": {"type": ["integer", "null"], "description": "The step of the newest kept version."}}}}})json",
+     R"json({"id": "arcs", "resource": "arcs", "count": 4})json"},
+
     // interventions (design/gpu-programs.md)
     {"intervene.points", false, false, true,
      "Lists the intervention points of the model that the attached script watches: each module's output by its dotted "
@@ -2045,6 +2201,8 @@ const std::pair<const char*, CommandEffect> kEffects[] = {
     {"program.patch", E::edit},
     {"program.remove", E::edit},
     {"program.status", E::read},
+    {"program.check", E::read},
+    {"program.read", E::read},
     {"intervene.points", E::read},
     {"intervene.set", E::run},  // acts on the running script at its next step
     {"intervene.clear", E::run},

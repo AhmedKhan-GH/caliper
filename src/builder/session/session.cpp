@@ -1549,7 +1549,8 @@ struct Session::Impl {
         return runner_command(ctx, model_runner.load(), workspace, approved);
     }
     CommandOutput events_wait(const CommandContext& ctx) { return events_wait_command(ctx, *events); }
-    // stage.check and program.status (design/gpu-programs.md).
+    // stage.check and program.status (design/gpu-programs.md), and
+    // program.check and program.read (design/programmable-graphics.md).
     // The hosts' status() runs without the document's lock, so that a host
     // may read the open spec.
     CommandOutput program_cmd(const CommandContext& ctx) {
@@ -1701,7 +1702,8 @@ struct Session::Impl {
                                  "cursor.get", "cursor.set", "cursor.step"})
             bind(name, &Impl::instrument_cmd);
         // The stages, programs and interventions (design/gpu-programs.md).
-        for (const char* name : {"stage.check", "program.status"}) bind(name, &Impl::program_cmd);
+        for (const char* name : {"stage.check", "program.status", "program.check", "program.read"})
+            bind(name, &Impl::program_cmd);
         for (const char* name : {"intervene.points", "intervene.set", "intervene.clear", "intervene.list"})
             bind(name, &Impl::intervene_cmd);
         // The run commands and events.wait (design/instruments.md).

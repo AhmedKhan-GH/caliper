@@ -40,6 +40,21 @@ TEST_CASE("programs: the session binds the stage and program commands and has no
     }
 }
 
+TEST_CASE("programs: program.check and program.read are bound and answer program.not_built") {
+    // design/programmable-graphics.md, Commands: the descriptors and their
+    // schemas are the interface; the handlers come with the graphics form.
+    auto s = open_session(fresh_dir("program_commands_graphics") + "/workspace");
+    for (const char* name : {"program.check", "program.read"}) {
+        const CommandDescriptor* d = find_command_descriptor(name);
+        REQUIRE(d);
+        CAPTURE(name);
+        CHECK(!d->mutates);
+        const auto r = invoke(*s, name, d->examples.front());
+        CHECK(!r.ok);
+        CHECK(r.error.code == "program.not_built");
+    }
+}
+
 TEST_CASE("programs: a status item has exactly the keys of the table's program_status") {
     const CommandDescriptor* d = find_command_descriptor("program.status");
     REQUIRE(d);
