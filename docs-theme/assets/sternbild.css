@@ -194,12 +194,8 @@ body { background: var(--ground); -webkit-font-smoothing: antialiased; }
 .md-typeset :is(.sb-toc, .sb-toc-inline) .sb-toc__item > a:hover { color: var(--parchment); background: var(--plate-hover); }
 .md-typeset .sb-toc .sb-toc__item > a.md-nav__link--active { color: var(--bronze-hover); border-left-color: var(--bronze); }
 
-/* The inline list: a plate under the H1, in two columns when there is room. */
+/* The inline list: a plate under the H1, in one column that reads top to bottom. */
 .md-typeset .sb-toc-inline { margin: 0 0 1.6rem; padding: .5rem 0; background: var(--plate); border: 1px solid var(--rule-faint); border-radius: 4px; }
-@media (min-width: 60em) {
-  .md-typeset .sb-toc-inline > ul.sb-toc__list { column-count: 2; column-gap: 1rem; }
-  .md-typeset .sb-toc-inline .sb-toc__item--2 { break-inside: avoid; }
-}
 
 /* Phone: no inline list; the bar sits in the flow, always shown, and sticks when scrolled. */
 @media (max-width: 37.4375em) {
