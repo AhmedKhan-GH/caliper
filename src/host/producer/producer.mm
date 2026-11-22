@@ -161,6 +161,8 @@ struct Prog {
     bool frame = false;                // binds the uniform `caliper` from the frame's arena
     uint32_t dispatch[3] = {1, 1, 1};
     std::vector<uint32_t> tensors;     // the import handles it binds
+    std::vector<Bound> bound;          // the reflection's bindings, for the bind groups
+    std::vector<std::pair<std::string, uint32_t>> inputs;   // WGSL variable, import handle
     double time_limit_ms = 4.0;
     uint64_t memory_bytes = 0;
     uint32_t state = CALIPER_PRODUCER_COMPILED;
@@ -204,6 +206,66 @@ Import* import_of(caliper_producer* rt, uint32_t h) {
 Prog* prog_of(caliper_producer* rt, uint32_t h) {
     if (h == 0 || h > rt->programs.size() || !rt->programs[h - 1].live) return nullptr;
     return &rt->programs[h - 1];
+}
+
+// The bind groups of a program from its bindings, its inputs' imports and its outputs. On a
+// failure the groups made so far are released and *what names the one that failed.
+bool make_groups(caliper_producer* rt, const Prog& p, std::vector<BindGroup>* out, std::string* what) {
+    Backend& be = *rt->be;
+    uint32_t groups = 0;
+    for (const Bound& b : p.bound) groups = std::max(groups, b.group + 1);
+    if (groups > kMaxBindGroups) { *what = "bind groups: a program uses groups 0 to 3"; return false; }
+    std::vector<BindGroup> made(groups, BindGroup{});
+    auto undo = [&] {
+        for (BindGroup g : made)
+            if (g) be.release(g);
+    };
+    const std::string label = "program " + p.id;
+    for (uint32_t g = 0; g < groups; ++g) {
+        BindGroupDesc gd;
+        gd.program = p.program;
+        gd.group = g;
+        gd.label = label.c_str();
+        for (const Bound& b : p.bound) {
+            if (b.group != g) continue;
+            if (gd.entry_count >= kMaxBindingsPerGroup) {
+                undo();
+                *what = "bind group: at most 8 bindings in a group";
+                return false;
+            }
+            BindEntry& e = gd.entries[gd.entry_count++];
+            e.binding = b.binding;
+            const auto in = std::find_if(p.inputs.begin(), p.inputs.end(),
+                                         [&](const auto& x) { return x.first == b.name; });
+            if (in != p.inputs.end()) {
+                const Import* im = import_of(rt, in->second);
+                if (!im) {
+                    undo();
+                    *what = "bind group " + std::to_string(g) + ": the input " + b.name + " has no import";
+                    return false;
+                }
+                e.buffer = im->buffer;
+                e.offset = im->byte_offset;
+                e.size = align4(im->byte_size);
+            } else if (b.name == "caliper") {
+                e.buffer = kArena;
+            } else if (b.name == "count") {
+                e.buffer = p.count;
+            } else {
+                for (const OutputArray& a : p.arrays)
+                    if (a.name == b.name) e.buffer = a.buffer;
+            }
+        }
+        if (gd.entry_count == 0) continue;
+        made[g] = be.create_bind_group(gd);
+        if (!made[g]) {
+            undo();
+            *what = "bind group " + std::to_string(g);
+            return false;
+        }
+    }
+    *out = std::move(made);
+    return true;
 }
 
 void free_prog(caliper_producer* rt, Prog& p) {
@@ -345,6 +407,66 @@ bool sandbox_refused(const sb::Verdict& v, caliper_producer_error* error, calipe
 }
 #endif
 
+#if defined(CALIPER_PRODUCER_HAVE_WGSL)
+using ModuleOwner = std::unique_ptr<caliper_wgsl_module, void (*)(caliper_wgsl_module*)>;
+
+// 4 and 5: the module, compiled with every buffer index and texel load checked (caliper/wgsl.h,
+// BOUNDS CHECKS): Metal has no robust buffer access, and a store past an output would land in
+// other memory of the process, such as a training tensor. Then the compute entry point: the one
+// named `want`, or the only one.
+caliper_producer_status open_module(const std::string& wgsl, const char* want, ModuleOwner* out, std::string* entry,
+                                    uint32_t wg[3], caliper_producer_error* error) {
+    if (caliper_wgsl_abi_version() != CALIPER_WGSL_ABI_VERSION)
+        return fail(error, CALIPER_PRODUCER_UNSUPPORTED, kCompilerUnavailable,
+                    "The WGSL compiler library has another interface version than this runtime.");
+    caliper_wgsl_options opt;
+    caliper_wgsl_options_init(&opt);
+    opt.max_source_bytes = kSourceBytes;
+    opt.bounds_checks = CALIPER_WGSL_BOUNDS_CHECKED;
+    caliper_wgsl_module* mod = nullptr;
+    caliper_wgsl_error we{};
+    if (caliper_wgsl_module_create(wgsl.data(), wgsl.size(), &opt, &mod, &we) != CALIPER_WGSL_OK) {
+        const std::string msg = we.message ? we.message : "The compiler refused the source.";
+        const uint32_t line = we.line, column = we.column;
+        caliper_wgsl_error_free(&we);
+        return fail(error, CALIPER_PRODUCER_REFUSED, kCompileFailed, msg, line, column);
+    }
+    out->reset(mod);
+    size_t computes = 0;
+    for (size_t i = 0, n = caliper_wgsl_module_entry_point_count(mod); i < n; ++i) {
+        caliper_wgsl_entry_point ep{};
+        if (caliper_wgsl_module_entry_point(mod, i, &ep) != CALIPER_WGSL_OK || ep.stage != CALIPER_WGSL_STAGE_COMPUTE)
+            continue;
+        ++computes;
+        if ((want && !std::strcmp(want, ep.name)) || (!want && computes == 1)) {
+            *entry = ep.name;
+            std::memcpy(wg, ep.workgroup_size, 3 * sizeof(uint32_t));
+        }
+    }
+    if (entry->empty() || (!want && computes != 1))
+        return fail(error, CALIPER_PRODUCER_REFUSED, kNoEntry,
+                    want ? std::string("The source has no compute entry point named ") + want + "."
+                         : std::string("The source needs exactly one compute entry point, or `entry`."));
+    return CALIPER_PRODUCER_OK;
+}
+
+// The MSL of the entry point.
+caliper_producer_status msl_of(caliper_wgsl_module* mod, const std::string& entry, std::string* out,
+                               caliper_producer_error* error) {
+    caliper_wgsl_buffer msl{};
+    caliper_wgsl_error we{};
+    if (caliper_wgsl_translate_msl(mod, entry.c_str(), CALIPER_WGSL_STAGE_COMPUTE, &msl, &we) != CALIPER_WGSL_OK) {
+        const std::string msg = we.message ? we.message : "The MSL writer refused the program.";
+        const uint32_t line = we.line, column = we.column;
+        caliper_wgsl_error_free(&we);
+        return fail(error, CALIPER_PRODUCER_REFUSED, kCompileFailed, msg, line, column);
+    }
+    out->assign(reinterpret_cast<const char*>(msl.data), msl.size);
+    caliper_wgsl_buffer_free(&msl);
+    return CALIPER_PRODUCER_OK;
+}
+#endif
+
 }  // namespace
 
 extern "C" {
@@ -458,44 +580,12 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
                 "This build of the runtime has no WGSL compiler, so a program cannot run.");
 #else
     @autoreleasepool {
-        // 4. The compile, with every buffer index and texel load checked (caliper/wgsl.h, BOUNDS
-        // CHECKS): Metal has no robust buffer access, and a store past an output would land in
-        // other memory of the process, such as a training tensor.
-        if (caliper_wgsl_abi_version() != CALIPER_WGSL_ABI_VERSION)
-            return fail(error, CALIPER_PRODUCER_UNSUPPORTED, kCompilerUnavailable,
-                        "The WGSL compiler library has another interface version than this runtime.");
-        caliper_wgsl_options opt;
-        caliper_wgsl_options_init(&opt);
-        opt.max_source_bytes = kSourceBytes;
-        opt.bounds_checks = CALIPER_WGSL_BOUNDS_CHECKED;
-        caliper_wgsl_module* mod = nullptr;
-        caliper_wgsl_error we{};
-        if (caliper_wgsl_module_create(wgsl.data(), wgsl.size(), &opt, &mod, &we) != CALIPER_WGSL_OK) {
-            const std::string msg = we.message ? we.message : "The compiler refused the source.";
-            const uint32_t line = we.line, column = we.column;
-            caliper_wgsl_error_free(&we);
-            return fail(error, CALIPER_PRODUCER_REFUSED, kCompileFailed, msg, line, column);
-        }
-        std::unique_ptr<caliper_wgsl_module, void (*)(caliper_wgsl_module*)> owner(mod, &caliper_wgsl_module_destroy);
-
-        // 5. The entry point.
+        // 4. The compile, with bounds checks, and 5. the entry point.
+        ModuleOwner owner(nullptr, &caliper_wgsl_module_destroy);
         std::string entry;
         uint32_t wg[3] = {1, 1, 1};
-        size_t computes = 0;
-        for (size_t i = 0, n = caliper_wgsl_module_entry_point_count(mod); i < n; ++i) {
-            caliper_wgsl_entry_point ep{};
-            if (caliper_wgsl_module_entry_point(mod, i, &ep) != CALIPER_WGSL_OK || ep.stage != CALIPER_WGSL_STAGE_COMPUTE)
-                continue;
-            ++computes;
-            if ((d->entry && !std::strcmp(d->entry, ep.name)) || (!d->entry && computes == 1)) {
-                entry = ep.name;
-                std::memcpy(wg, ep.workgroup_size, sizeof wg);
-            }
-        }
-        if (entry.empty() || (!d->entry && computes != 1))
-            return fail(error, CALIPER_PRODUCER_REFUSED, kNoEntry,
-                        d->entry ? std::string("The source has no compute entry point named ") + d->entry + "."
-                                 : std::string("The source needs exactly one compute entry point, or `entry`."));
+        if (caliper_producer_status s = open_module(wgsl, d->entry, &owner, &entry, wg, error)) return s;
+        caliper_wgsl_module* mod = owner.get();
         if (uint64_t(wg[0]) * wg[1] * wg[2] > kWorkgroupInvocations)
             return fail(error, CALIPER_PRODUCER_REFUSED, kOverLimits,
                         "The entry point's workgroup has more than 256 invocations.");
@@ -640,16 +730,10 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
             return fail(error, CALIPER_PRODUCER_UNSUPPORTED, kUnavailable, "This machine has no Metal device.");
         Backend& be = *rt->be;
 
-        // The MSL of the entry point.
-        caliper_wgsl_buffer msl{};
-        if (caliper_wgsl_translate_msl(mod, entry.c_str(), CALIPER_WGSL_STAGE_COMPUTE, &msl, &we) != CALIPER_WGSL_OK) {
-            const std::string msg = we.message ? we.message : "The MSL writer refused the program.";
-            const uint32_t line = we.line, column = we.column;
-            caliper_wgsl_error_free(&we);
-            return fail(error, CALIPER_PRODUCER_REFUSED, kCompileFailed, msg, line, column);
-        }
-        const std::string msl_text(reinterpret_cast<const char*>(msl.data), msl.size);
-        caliper_wgsl_buffer_free(&msl);
+        // The MSL of the entry point. A caliper_producer_prepare() of the same source compiled it
+        // already, and the layer then takes that library and pipeline.
+        std::string msl_text;
+        if (caliper_producer_status s = msl_of(mod, entry, &msl_text, error)) return s;
 
         // 9. The layer: the program, the pipeline, the outputs and the bind groups.
         Prog p;
@@ -736,43 +820,88 @@ caliper_producer_status caliper_producer_compile(caliper_producer* rt, const cal
             p.arrays.push_back(std::move(a));
         }
 
-        uint32_t groups = 0;
-        for (const Bound& b : bound) groups = std::max(groups, b.group + 1);
-        if (groups > kMaxBindGroups) return layer_fail("bind groups: a program uses groups 0 to 3");
-        p.groups.assign(groups, BindGroup{});
-        for (uint32_t g = 0; g < groups; ++g) {
-            BindGroupDesc gd;
-            gd.program = p.program;
-            gd.group = g;
-            gd.label = label.c_str();
-            for (const Bound& b : bound) {
-                if (b.group != g) continue;
-                if (gd.entry_count >= kMaxBindingsPerGroup) return layer_fail("bind group: at most 8 bindings in a group");
-                BindEntry& e = gd.entries[gd.entry_count++];
-                e.binding = b.binding;
-                if (const caliper_producer_input* in = input_of(b.name)) {
-                    const Import* im = import_of(rt, in->tensor);
-                    e.buffer = im->buffer;
-                    e.offset = im->byte_offset;
-                    e.size = align4(im->byte_size);
-                } else if (b.name == "caliper") {
-                    e.buffer = kArena;
-                } else if (b.name == "count") {
-                    e.buffer = p.count;
-                } else {
-                    for (const OutputArray& a : p.arrays)
-                        if (a.name == b.name) e.buffer = a.buffer;
-                }
-            }
-            if (gd.entry_count == 0) continue;
-            p.groups[g] = be.create_bind_group(gd);
-            if (!p.groups[g]) return layer_fail("bind group " + std::to_string(g));
-        }
+        p.bound = bound;
+        for (size_t i = 0; i < d->input_count; ++i) p.inputs.emplace_back(d->inputs[i].var, d->inputs[i].tensor);
+        std::string what;
+        if (!make_groups(rt, p, &p.groups, &what)) return layer_fail(what);
         rt->programs.push_back(std::move(p));
         *handle = uint32_t(rt->programs.size());
     }
     return CALIPER_PRODUCER_OK;
 #endif
+}
+
+caliper_producer_status caliper_producer_prepare(void* device, const char* wgsl, size_t wgsl_size, const char* entry,
+                                                 caliper_producer_error* error) {
+    if (!wgsl) return fail(error, CALIPER_PRODUCER_ARGUMENT, kCompileFailed, "The program has no WGSL source.");
+    if (wgsl_size > kSourceBytes)
+        return fail(error, CALIPER_PRODUCER_REFUSED, kTooLarge,
+                    "The source is " + std::to_string(wgsl_size) + " bytes, above the limit of 65536.");
+#if !defined(CALIPER_PRODUCER_HAVE_WGSL)
+    (void)device;
+    (void)entry;
+    return fail(error, CALIPER_PRODUCER_UNSUPPORTED, kCompilerUnavailable,
+                "This build of the runtime has no WGSL compiler, so a program cannot run.");
+#else
+    @autoreleasepool {
+        id<MTLDevice> dev = device ? (__bridge id<MTLDevice>)device : MTLCreateSystemDefaultDevice();
+        if (dev == nil) return fail(error, CALIPER_PRODUCER_UNSUPPORTED, kUnavailable, "This machine has no Metal device.");
+        ModuleOwner owner(nullptr, &caliper_wgsl_module_destroy);
+        std::string name, msl;
+        uint32_t wg[3] = {1, 1, 1};
+        if (caliper_producer_status s = open_module(std::string(wgsl, wgsl_size), entry, &owner, &name, wg, error))
+            return s;
+        if (caliper_producer_status s = msl_of(owner.get(), name, &msl, error)) return s;
+        std::string why;
+        const char* entries[1] = {name.c_str()};
+        if (!metal_precompile((__bridge void*)dev, msl.c_str(), entries, 1, false, &why))
+            return fail(error, CALIPER_PRODUCER_REFUSED, kLayerRefused, "The Metal compiler refused the program: " + why);
+    }
+    return CALIPER_PRODUCER_OK;
+#endif
+}
+
+caliper_producer_status caliper_producer_rebind(caliper_producer* rt, uint32_t program, uint32_t old_tensor,
+                                                uint32_t tensor, caliper_producer_error* error) {
+    if (!rt) return fail(error, CALIPER_PRODUCER_ARGUMENT, kImportRefused, "A pointer is NULL.");
+    if (rt->dead) return refuse_dead(rt, error);
+    Prog* p = prog_of(rt, program);
+    const Import* before = import_of(rt, old_tensor);
+    const Import* after = import_of(rt, tensor);
+    if (!p || !after)
+        return fail(error, CALIPER_PRODUCER_ARGUMENT, kUnknownInput, "The program or the new import is unknown.");
+    if (std::find(p->tensors.begin(), p->tensors.end(), old_tensor) == p->tensors.end())
+        return fail(error, CALIPER_PRODUCER_ARGUMENT, kUnknownInput, "The program does not bind the old import.");
+    if (before && before->byte_size != after->byte_size)
+        return fail(error, CALIPER_PRODUCER_REFUSED, kImportRefused,
+                    "The new import of " + after->name + " has another size; the program must compile again.");
+    @autoreleasepool {
+        Prog next;   // the bindings with the new import, made before the old groups go
+        next.id = p->id;
+        next.program = p->program;
+        next.count = p->count;
+        next.bound = p->bound;
+        next.inputs = p->inputs;
+        for (auto& in : next.inputs)
+            if (in.second == old_tensor) in.second = tensor;
+        next.arrays = p->arrays;
+        std::vector<BindGroup> groups;
+        std::string what;
+        if (!make_groups(rt, next, &groups, &what)) {
+            const std::string why = rt->be->last_error();
+            return fail(error, CALIPER_PRODUCER_REFUSED, kLayerRefused,
+                        "The graphics layer refused the " + what + (why.empty() ? std::string(".") : ": " + why));
+        }
+        for (BindGroup g : p->groups)
+            if (g) rt->be->release(g);
+        p->groups = std::move(groups);
+        p->inputs = std::move(next.inputs);
+        std::vector<uint32_t> tensors;
+        for (const auto& in : p->inputs)
+            if (std::find(tensors.begin(), tensors.end(), in.second) == tensors.end()) tensors.push_back(in.second);
+        p->tensors = std::move(tensors);
+    }
+    return CALIPER_PRODUCER_OK;
 }
 
 caliper_producer_status caliper_producer_run(caliper_producer* rt, const uint32_t* programs, size_t count,

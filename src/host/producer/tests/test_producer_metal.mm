@@ -205,6 +205,55 @@ TEST_CASE("the runtime imports a tensor in place, runs a geometry pass and reads
     caliper_producer_error_free(&e);
 }
 
+TEST_CASE("an input bound again to new storage of the same size runs without a compile") {
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    // A prepare compiles the source ahead; the compile then takes its library.
+    caliper_producer_error e{};
+    const caliper_producer_status prepared = caliper_producer_prepare(nullptr, kRowNorms, std::strlen(kRowNorms), nullptr, &e);
+    caliper_producer_error_free(&e);
+    Desc d(kRowNorms, f.w);
+    uint32_t prog = 0;
+    if (!compile_or_skip(f.rt, d.d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+    CHECK(prepared == CALIPER_PRODUCER_OK);
+    caliper_producer_frame frame{1, 0.0, 1};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+
+    // The gradient's new storage: rows of r + 5.
+    id<MTLBuffer> moved = [f.device newBufferWithLength:4096 options:MTLResourceStorageModeShared];
+    auto* m = static_cast<float*>([moved contents]);
+    for (uint32_t r = 0; r < kRows; ++r)
+        for (uint32_t c = 0; c < kCols; ++c) m[r * kCols + c] = float(r) + 5.0f;
+    caliper_producer_tensor t = f.desc_of(0, kRows * kCols * 4);
+    t.buffer = (__bridge void*)moved;
+    uint32_t h = 0;
+    REQUIRE(caliper_producer_import(f.rt, &t, &h, &e) == CALIPER_PRODUCER_OK);
+    REQUIRE(caliper_producer_rebind(f.rt, prog, f.w, h, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_release(f.rt, f.w);   // the old storage goes; the program no longer binds it
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_program_status st{};
+    REQUIRE(caliper_producer_read_status(f.rt, prog, &st) == CALIPER_PRODUCER_OK);
+    CHECK(st.state == CALIPER_PRODUCER_RUNNING);
+    CHECK(st.runs == 2);   // the same program: its count goes on
+    caliper_producer_output out{};
+    REQUIRE(caliper_producer_read_output(f.rt, prog, "positions", &out, &e) == CALIPER_PRODUCER_OK);
+    REQUIRE(out.count == kRows);
+    const float* p = static_cast<const float*>([(__bridge id<MTLBuffer>)out.buffer contents]);
+    for (uint32_t i = 0; i < kRows; ++i)
+        CHECK(p[i * 3 + 1] == doctest::Approx((p[i * 3] + 5.0f) * std::sqrt(8.0f)).epsilon(1e-5));
+
+    // Another size needs a compile: refused, and the program keeps its binding.
+    t.byte_size = 64;
+    uint32_t small = 0;
+    REQUIRE(caliper_producer_import(f.rt, &t, &small, &e) == CALIPER_PRODUCER_OK);
+    CHECK(caliper_producer_rebind(f.rt, prog, h, small, &e) == CALIPER_PRODUCER_REFUSED);
+    REQUIRE(e.code);
+    CHECK(std::string(e.code) == "program.import_refused");
+    caliper_producer_error_free(&e);
+    CHECK(caliper_producer_run(f.rt, &prog, 1, &frame, 0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_error_free(&e);
+}
+
 TEST_CASE("a pixels program writes its packed RGBA8 image") {
     Fixture f;
     if (f.device == nil) { MESSAGE("no Metal device"); return; }

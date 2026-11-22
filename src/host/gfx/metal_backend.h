@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <string>
 
 namespace caliper_gfx {
 
@@ -20,6 +21,14 @@ std::unique_ptr<Backend> make_metal_backend(void* mtl_device, void* mtl_command_
 // needs. metal_backends_reaping() is the number of such backends whose objects still wait.
 void destroy_metal_backend_without_wait(std::unique_ptr<Backend> backend);
 size_t metal_backends_reaping();
+
+// Compiles MSL text for an id<MTLDevice> (a bridged pointer) ahead of create_program, with the
+// compute pipeline of each named entry point, on any thread. A later create_program of the same
+// text and fast_math on a Metal backend of that device takes the library, and its compute
+// pipelines take those pipelines, instead of compiling again. The store keeps the last 8 such
+// texts. False with *error when the compiler refuses the text.
+bool metal_precompile(void* mtl_device, const char* msl, const char* const* compute_entries, size_t entry_count,
+                      bool fast_math, std::string* error);
 
 // The adapter of migration step 8 (design/renderer-core.md, "Migration"), until step 13 deletes the
 // geometry service: the Metal renderer's old geometry code draws from the buffers the tensor bridge

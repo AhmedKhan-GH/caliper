@@ -786,3 +786,39 @@ def test_training_keeps_its_step_rate_after_a_pass_times_out(run):
     assert _producer.reaping() == 0
     P._reap()
     assert not P._ABANDONED
+
+
+class _Counting:
+    """The real runtime, counting its compiles and its binds of new storage."""
+
+    def __init__(self, rt):
+        self._rt, self.programs, self.rebinds = rt, 0, 0
+
+    def program(self, *args, **kw):
+        self.programs += 1
+        return self._rt.program(*args, **kw)
+
+    def rebind(self, *args, **kw):
+        self.rebinds += 1
+        return self._rt.rebind(*args, **kw)
+
+    def __getattr__(self, name):
+        return getattr(self._rt, name)
+
+
+@needs_device
+def test_a_gradient_in_new_storage_at_each_step_binds_again_without_a_compile(run):
+    net, opt, calls, _ = run
+    decl, src = _geometry(4, source="live:fc.weight.grad")
+    assert P.install("g", decl, src, scene="s")["state"] == "waiting"
+    _train(net, opt, P.WARMUP_STEPS + 1)             # the first compile, at the first pass
+    counting = P._STATE["rt"] = _Counting(P._STATE["rt"])
+    _train(net, opt, 6, first=20)
+    assert counting.programs == 0, "a pass compiled the program again"
+    st = P.status()[0]
+    assert st["state"] == "running" and st["runs"] == 7
+    norms = net.fc.weight.grad.norm(dim=1).cpu()      # the gradient that the last pass read
+    pos = calls[-1][2].cpu()
+    for row, norm in zip(pos[:, 0].tolist(), pos[:, 1].tolist()):
+        assert norm == pytest.approx(float(norms[int(row)]), rel=1e-4)
+    assert P.stats()["imports"] == 1

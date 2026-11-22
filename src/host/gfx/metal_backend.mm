@@ -30,6 +30,7 @@
 #include <atomic>
 #include <cstring>
 #include <deque>
+#include <mutex>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -122,6 +123,43 @@ struct MTex {
 
 // The backends whose Metal objects wait in the reaper for the GPU to end their last submit.
 std::atomic<size_t> g_reaping{0};
+
+// MSL that metal_precompile() compiled ahead of create_program, oldest first.
+struct Precompiled {
+    uint64_t device = 0;
+    bool fast_math = false;
+    std::string msl;
+    id<MTLLibrary> library = nil;
+    std::vector<std::pair<std::string, id<MTLComputePipelineState>>> pipelines;
+};
+std::mutex g_precompiled_mutex;
+std::deque<Precompiled> g_precompiled;
+constexpr size_t kPrecompiledMax = 8;
+
+// Takes the precompiled library of this text, if one waits.
+Precompiled take_precompiled(uint64_t device, bool fast_math, const char* msl) {
+    std::lock_guard<std::mutex> lock(g_precompiled_mutex);
+    for (auto it = g_precompiled.begin(); it != g_precompiled.end(); ++it)
+        if (it->device == device && it->fast_math == fast_math && it->msl == msl) {
+            Precompiled out = std::move(*it);
+            g_precompiled.erase(it);
+            return out;
+        }
+    return {};
+}
+
+MTLCompileOptions* compile_options(bool fast_math) {
+    MTLCompileOptions* opts = [MTLCompileOptions new];
+    if (@available(macOS 15.0, *)) {
+        opts.mathMode = fast_math ? MTLMathModeFast : MTLMathModeSafe;
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        opts.fastMathEnabled = fast_math ? YES : NO;
+#pragma clang diagnostic pop
+    }
+    return opts;
+}
 
 // A ring of shared memory for the uniform arenas. A region is reused once the submit that
 // read it completed; when no region is free the ring grows into a new buffer and the old one
@@ -300,18 +338,17 @@ protected:
     bool on_create_program(uint32_t slot, const ProgramDesc& d, std::string* error) override {
         if (d.msl == nullptr) { *error = "the program has no MSL source"; return false; }
         grow(libraries_, slot);
-        MTLCompileOptions* opts = [MTLCompileOptions new];
-        if (@available(macOS 15.0, *)) {
-            opts.mathMode = d.fast_math ? MTLMathModeFast : MTLMathModeSafe;
-        } else {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-            opts.fastMathEnabled = d.fast_math ? YES : NO;
-#pragma clang diagnostic pop
+        grow(precompiled_, slot);
+        Precompiled pre = take_precompiled(device_.registryID, d.fast_math, d.msl);
+        id<MTLLibrary> lib = pre.library;
+        if (lib == nil) {
+            NSError* err = nil;
+            lib = [device_ newLibraryWithSource:[NSString stringWithUTF8String:d.msl]
+                                        options:compile_options(d.fast_math)
+                                          error:&err];
+            if (lib == nil) { *error = "MSL compile failed: " + ns_error(err); return false; }
         }
-        NSError* err = nil;
-        id<MTLLibrary> lib = [device_ newLibraryWithSource:[NSString stringWithUTF8String:d.msl] options:opts error:&err];
-        if (lib == nil) { *error = "MSL compile failed: " + ns_error(err); return false; }
+        precompiled_[slot] = std::move(pre.pipelines);
         for (uint32_t i = 0; i < d.entry_count; ++i)
             if ([lib newFunctionWithName:[NSString stringWithUTF8String:d.entries[i].name]] == nil) {
                 *error = std::string("the MSL has no function ") + d.entries[i].name;
@@ -438,10 +475,14 @@ protected:
     bool on_create_compute_pipeline(uint32_t slot, const ComputePipelineDesc& d, std::string* error) override {
         grow(pipes_, slot);
         id<MTLLibrary> lib = libraries_[handle_slot(d.program.id)];
-        id<MTLFunction> f = [lib newFunctionWithName:[NSString stringWithUTF8String:d.entry]];
-        NSError* err = nil;
         MPipe p;
-        p.compute = f ? [device_ newComputePipelineStateWithFunction:f error:&err] : nil;
+        for (const auto& [name, pipe] : precompiled_[handle_slot(d.program.id)])
+            if (name == d.entry) p.compute = pipe;
+        NSError* err = nil;
+        if (p.compute == nil) {
+            id<MTLFunction> f = [lib newFunctionWithName:[NSString stringWithUTF8String:d.entry]];
+            p.compute = f ? [device_ newComputePipelineStateWithFunction:f error:&err] : nil;
+        }
         if (p.compute == nil) { *error = "compute pipeline: " + ns_error(err); return false; }
         fill_layout(p, d.program);
         const EntryInfo* e = program_info(d.program).entry(d.entry, kStageCompute);
@@ -496,7 +537,10 @@ protected:
                 if (slot < texture_writes_.size()) texture_writes_[slot] = nil;
                 break;
             case HandleKind::Sampler: if (slot < samplers_.size()) samplers_[slot] = nil; break;
-            case HandleKind::Program: if (slot < libraries_.size()) libraries_[slot] = nil; break;
+            case HandleKind::Program:
+                if (slot < libraries_.size()) libraries_[slot] = nil;
+                if (slot < precompiled_.size()) precompiled_[slot].clear();
+                break;
             case HandleKind::Pipeline: if (slot < pipes_.size()) pipes_[slot] = MPipe{}; break;
             case HandleKind::BindGroup: if (slot < groups_.size()) groups_[slot] = MGroup{}; break;
             case HandleKind::Readback: if (slot < readbacks_.size()) readbacks_[slot] = nil; break;
@@ -940,6 +984,8 @@ private:
     std::vector<MTex> textures_;
     std::vector<id<MTLSamplerState>> samplers_;
     std::vector<id<MTLLibrary>> libraries_;
+    // The compute pipelines that metal_precompile() made for each program's library, by entry.
+    std::vector<std::vector<std::pair<std::string, id<MTLComputePipelineState>>>> precompiled_;
     std::vector<MPipe> pipes_;
     std::vector<MGroup> groups_;
     std::vector<id<MTLBuffer>> readbacks_;
@@ -959,6 +1005,42 @@ void* metal_buffer(Backend& b, Buffer buffer) {
 void* metal_texture(Backend& b, Texture texture) {
     auto* m = dynamic_cast<MetalBackend*>(&b);
     return m ? (__bridge void*)m->texture_object(texture) : nullptr;
+}
+
+bool metal_precompile(void* mtl_device, const char* msl, const char* const* compute_entries, size_t entry_count,
+                      bool fast_math, std::string* error) {
+    id<MTLDevice> device = (__bridge id<MTLDevice>)mtl_device;
+    if (device == nil || msl == nullptr) {
+        if (error) *error = "no device or no MSL";
+        return false;
+    }
+    @autoreleasepool {
+        Precompiled pre;
+        pre.device = device.registryID;
+        pre.fast_math = fast_math;
+        pre.msl = msl;
+        NSError* err = nil;
+        pre.library = [device newLibraryWithSource:[NSString stringWithUTF8String:msl]
+                                           options:compile_options(fast_math)
+                                             error:&err];
+        if (pre.library == nil) {
+            if (error) *error = "MSL compile failed: " + ns_error(err);
+            return false;
+        }
+        for (size_t i = 0; i < entry_count; ++i) {
+            id<MTLFunction> f = [pre.library newFunctionWithName:[NSString stringWithUTF8String:compute_entries[i]]];
+            id<MTLComputePipelineState> pipe = f ? [device newComputePipelineStateWithFunction:f error:&err] : nil;
+            if (pipe == nil) {
+                if (error) *error = "compute pipeline: " + ns_error(err);
+                return false;
+            }
+            pre.pipelines.emplace_back(compute_entries[i], pipe);
+        }
+        std::lock_guard<std::mutex> lock(g_precompiled_mutex);
+        g_precompiled.push_back(std::move(pre));
+        while (g_precompiled.size() > kPrecompiledMax) g_precompiled.pop_front();
+    }
+    return true;
 }
 
 void destroy_metal_backend_without_wait(std::unique_ptr<Backend> backend) {

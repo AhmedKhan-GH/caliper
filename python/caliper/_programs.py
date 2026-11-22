@@ -23,14 +23,19 @@ no function here raises for it.
 THREADS. The wire path may call :func:`install`, :func:`remove` and :func:`status` from any
 thread. One lock orders them with :func:`at_step` on the training thread, thus the runtime is
 never used from two threads at once. :data:`listeners` are called after the lock is released.
+:func:`install` compiles the program for the device before it takes the lock
+(``caliper._producer.prepare``, which uses no runtime and lets the GIL go), thus the compile under
+the lock takes the checks and the binder only, and the training thread never waits for the Metal
+compiler.
 
 INPUTS. An input's source is ``live:<name>``: a parameter or buffer of the watched model by its
 name in ``model.named_parameters()``, a parameter's gradient as ``<parameter>.grad``, or a
 module's last output as ``<module>.act``. A gradient or an output that does not exist yet keeps
 the program in the state ``waiting`` until it does. When the tensor of an input moves to new
 storage (a gradient set to ``None`` and made again, each new output of a module), the facade
-imports it again and compiles the program again at the next pass, because an import binds one
-storage.
+imports it again at the next pass, because an import binds one storage. With the same element
+count and type it binds the new import in the program (``Runtime.rebind``) without a compile;
+otherwise it compiles the program again.
 """
 from __future__ import annotations
 
@@ -566,6 +571,7 @@ def install(program_id: str, declaration: dict, wgsl: str, *, scene: str | None 
         ``waiting`` while an input is a gradient or a module output that does not exist yet.
     """
     _remove(program_id)
+    _prepare(str(wgsl), (declaration or {}).get("entry"))
     with _LOCK:
         if _ABANDONED:
             _reap()
@@ -588,6 +594,18 @@ def install(program_id: str, declaration: dict, wgsl: str, *, scene: str | None 
         item = p.item()
     _notify([item])
     return item
+
+
+def _prepare(wgsl: str, entry) -> None:
+    """Compile the program for the device before the lock: the compile under the lock then takes
+    the compiled library and pipeline. A failure here is reported again by that compile."""
+    try:
+        from . import _producer
+        prepare = getattr(_producer, "prepare", None)
+        if prepare is not None:
+            prepare(wgsl, None if entry is None else str(entry))
+    except Exception:  # the module cannot load: the compile under the lock says why
+        pass
 
 
 def _remove(program_id: str):
@@ -869,10 +887,12 @@ def _stop_over_budget() -> list:
 
 
 def _refresh(p: _Program) -> None:
-    """Compile a waiting program, or compile it again when an input's storage changed."""
+    """Compile a waiting program. When an input's storage changed, bind the new import without a
+    compile if its element count and type are the same, else compile the program again."""
     if p.handle is None:
         _compile(p)
         return
+    moved = False
     for var, src in p.inputs:
         im = p.bound.get(var)
         if im is None:
@@ -881,9 +901,27 @@ def _refresh(p: _Program) -> None:
         if t is None:
             raise _Refused("program.unknown_input", f"The script no longer has the tensor {im.name}.")
         if _storage_key(t) != im.key:
-            _compile(p)
-            _release_unused()
-            return
+            moved = True
+            if not _rebind(p, var, t, im):
+                _compile(p)
+                break
+    if moved:
+        _release_unused()
+
+
+def _rebind(p: _Program, var: str, t, im: _Import) -> bool:
+    """Bind the new storage of input ``var`` in the program without a compile; False when the
+    layout changed or the runtime refuses, and the program must compile again."""
+    key = _storage_key(t)
+    if key[2:4] != im.key[2:4]:                      # another element count or type
+        return False
+    new = _import(im.name, t)
+    try:
+        _STATE["rt"].rebind(p.handle, im.handle, new.handle)
+    except (RuntimeError, AttributeError):
+        return False
+    p.bound[var] = new
+    return True
 
 
 def _outputs(rt, p: _Program) -> dict:
