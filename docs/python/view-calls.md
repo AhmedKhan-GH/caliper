@@ -9,7 +9,7 @@ The view calls of the `caliper` package turn tensors into live views that every 
 
 ## Call Cost
 
-With nothing attached, a view call is one atomic load and a clock read. It takes no snapshot and no slot, and it does no GPU work.
+With nothing attached, a view call is one atomic load and a clock read. It takes no snapshot and no slot, and it does no GPU work. A scene call also runs its argument checks, which read host metadata only. With no viewer of the scene attached, `scene.mesh`, `scene.lines` and `scene.points` cost a few microseconds ([Python Calls](../development/performance.md#python-calls)).
 
 ## Rate Limit
 

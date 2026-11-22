@@ -1,7 +1,7 @@
 """caliper.scene: scenes on the network route.
 
 The scene calls of Caliper LIB on the scenes of the protocol 3.2 draft
-(docs/references/wire-protocol-3-2.md): ``caliper.scene(name, space=, up=,
+(docs/reference/wire-protocol-3-2.md): ``caliper.scene(name, space=, up=,
 units=, rate=, view_camera=)`` and, on the scene it returns, ``points``,
 ``lines`` (segments, strips and index-pair edges), ``arrows``, ``boxes``,
 ``mesh``, ``image``, ``depth``, ``segmentation``, ``camera``, ``transform``,
@@ -628,12 +628,29 @@ def _no(**kw) -> None:
 # the scene object
 # ---------------------------------------------------------------------------
 class Scene:
-    """A scene of entities, each holding batches of primitives, a camera or an
-    entity transform, drawn in one 3-D or 2-D space. What :func:`caliper.scene`
-    returns. Every primitive call logs one part of one entity and returns True
-    if a route took a snapshot, False when every route skipped it (nothing
-    attached, the rate limit); ``camera``, ``transform``, ``classes`` and
-    ``clear`` are kept whether or not anything is attached and return True."""
+    """A scene of entities, drawn in one 3-D or 2-D space, returned by [`scene`][caliper.scene].
+
+    Each entity holds batches of primitives, a camera or an entity transform. A primitive call
+    (`points`, `lines`, `arrows`, `boxes`, `mesh`, `image`, `depth`, `segmentation`) logs one part
+    of one entity and returns `True` if a route took a snapshot. It returns `False` when every
+    route skipped it: nothing is attached, or the rate limit dropped it. `camera`, `transform`,
+    `classes` and `clear` are kept whether or not anything is attached, and return `True`.
+
+    Every call checks its arguments from host metadata only, so a bad call raises at once, attached
+    or not ([Scene Calls](scene-calls.md#primitives)). A call on a scene that
+    [`remove`][caliper.remove] dropped makes it again, empty. Only [`serve`][caliper.serve] and a
+    hub that it connects to carry scenes; with only the shared-memory session or the in-process
+    window open, a scene call warns once and does nothing there. `data_view=`, `items=`, `blend=`
+    and the instance arrays of a mesh are not built yet and raise `NotImplementedError`.
+
+    Attributes:
+        name (str): The scene id.
+        space (str): `"3d"` or `"2d"`.
+        up (str): The axis a 3-D view keeps upright, or the direction of y in 2-D.
+        units (str): The unit note shown with the view.
+        rate (float | None): The default rate limit of each batch, `None` for 60 per second.
+        view_camera (dict | str | None): The camera a 3-D view opens on, `None` for the fit.
+    """
     __slots__ = ("_s",)
 
     def __init__(self, state: SceneState):
@@ -654,11 +671,46 @@ class Scene:
     def points(self, path, positions, *, colors=None, values=None, cmap="viridis", vmin=None,
                vmax=None, class_ids=None, radii=None, labels=None, items=None, blend="normal",
                static=False, rate=None) -> bool:
-        """Points at ``positions`` (N, D), coloured by ``colors`` (N, 3 or 4),
-        one colour (a tuple), ``values`` (N,) through ``cmap`` over [vmin,
-        vmax] (an open end is computed on the device), or ``class_ids`` (N,)
-        through the class table; ``radii`` (N,) or one number, in scene units
-        (default: discs of a few pixels); ``labels`` one str or one per point."""
+        """Log a batch of points at entity `path`, replacing the points it held.
+
+        Points are drawn as discs of a few pixels unless `radii` is given. Give at most one of
+        `colors` and `values`. A static batch is the setup of the scene ([Static Items](scene-calls.md#static-items)).
+
+        Args:
+            path (str): The entity path: 0 to 16 segments of `[A-Za-z0-9_.-]{1,63}` joined by `/`, at
+                most 255 bytes. The empty string is the root.
+            positions (Tensor | ndarray | Sequence): Positions `(N, D)`, with D 3 in a 3-D scene and 2 in
+                a 2-D scene or under a camera. At most 4,194,304 points.
+            colors (Tensor | tuple | None): Colors `(N, 3)` or `(N, 4)` as uint8 or floats in [0, 1], or
+                one color for all as a tuple of 3 or 4 integers from 0 to 255 or floats from 0 to 1. A
+                missing alpha is 255.
+            values (Tensor | None): Values `(N,)` drawn through `cmap`.
+            cmap (str | int): `"viridis"`, `"magma"` or `"rdbu"`, or 0, 1 or 2.
+            vmin (float | None): Fixed lower end of the value range. `None` computes that end on the
+                device. Each end is independent.
+            vmax (float | None): Fixed upper end of the value range, as for `vmin`.
+            class_ids (Tensor | None): Integer class ids `(N,)`, colored by the class table of
+                [`classes`][caliper.Scene.classes].
+            radii (Tensor | float | None): Radii `(N,)` or one number above 0, in scene units.
+            labels (str | Sequence[str] | None): One label for all points, or one per point. Each is at
+                most 63 bytes, and at most 4,096 labels.
+            items (None): Not built yet (picking and linked selection).
+            blend (str): Only `"normal"`. Additive blending is not built yet.
+            static (bool): Copy the batch once at the call and retain it for every viewer.
+            rate (float | None): Snapshots per second for this batch. `None` takes the rate of the
+                scene ([Rate Limits](scene-calls.md#rate-limits)).
+
+        Returns:
+            bool: `True` if a route took a snapshot, `False` if every route skipped it.
+
+        Raises:
+            TypeError: When `path` is not a string, `static` is not a bool, or an argument has the
+                wrong type.
+            ValueError: When `path` is not an entity path, `colors` and `values` are given together, a
+                shape, dtype or row count does not fit, a batch is over the limits, the entity cannot
+                hold points, or the scene is at its limit of 1,024 entities or 2,048 batches.
+            NotImplementedError: When `items` or `blend` is not its default.
+        """
         _no(items=(items, None, "picking and linked selection"),
             blend=(blend, "normal", "additive blending"))
         st = self._s
@@ -692,12 +744,55 @@ class Scene:
     def lines(self, path, positions, *, indices=None, strip_lengths=None, colors=None,
               values=None, cmap="viridis", vmin=None, vmax=None, color_per=None, width=2.0,
               blend="normal", static=False, rate=None) -> bool:
-        """Lines through ``positions`` (V, D): segments (vertices 2k and
-        2k + 1), strips with ``strip_lengths`` (S,), or index-pair edges with
-        ``indices`` (E, 2), PyTorch Geometric's ``edge_index.T``; coloured per
-        vertex, per strip or per edge (``color_per``, read from the row count
-        when None), with one colour, or by ``values`` through ``cmap``;
-        ``width`` in pixels."""
+        """Log a batch of lines at entity `path`, replacing the lines it held.
+
+        `positions` holds the vertices. Without `indices` and `strip_lengths`, vertices 2k and 2k + 1
+        form segment k. With `strip_lengths`, consecutive vertices form strips. With `indices`, each
+        row is an edge between two vertices, as PyTorch Geometric's `edge_index.T`.
+
+        Colors belong to the vertices, the strips or the edges. `color_per` says which; `None` reads it
+        from the row count of `colors` or `values`, and a count that fits two raises `ValueError`.
+
+        Args:
+            path (str): The entity path, as for [`points`][caliper.Scene.points].
+            positions (Tensor | ndarray | Sequence): Vertices `(V, D)`, with D 3 in a 3-D scene and 2 in
+                a 2-D scene or under a camera. At most 4,194,304 vertices. Segments need an even V.
+            indices (Tensor | None): Integer index pairs `(E, 2)`, at most 4,194,304 edges. A `(2, E)`
+                array raises `ValueError` and names the fix. Not together with `strip_lengths`.
+            strip_lengths (Sequence[int] | Tensor | None): The vertices of each strip, `(S,)`, at least
+                1 each and adding up to V, at most 1,048,576 strips. Lengths in a device tensor are
+                checked once their copy reaches host memory; a batch that fails there is dropped with a
+                warning, after the call returned `True`.
+            colors (Tensor | tuple | None): Colors `(rows, 3)` or `(rows, 4)` as uint8 or floats in
+                [0, 1], or one color for all, as for [`points`][caliper.Scene.points]. The rows are V,
+                S or E.
+            values (Tensor | None): Values `(rows,)` drawn through `cmap`. Not together with `colors`.
+            cmap (str | int): `"viridis"`, `"magma"` or `"rdbu"`, or 0, 1 or 2.
+            vmin (float | None): Fixed lower end of the value range. `None` computes that end on the
+                device.
+            vmax (float | None): Fixed upper end of the value range, as for `vmin`.
+            color_per (str | None): `"vertex"`, `"strip"` or `"edge"`. `"strip"` needs `strip_lengths`
+                and `"edge"` needs `indices`.
+            width (float): Line width in pixels, above 0.
+            blend (str): Only `"normal"`. Additive blending is not built yet.
+            static (bool): Copy the batch once at the call and retain it for every viewer.
+            rate (float | None): Snapshots per second for this batch. `None` takes the rate of the
+                scene.
+
+        Returns:
+            bool: `True` if a route took a snapshot, `False` if every route skipped it.
+
+        Raises:
+            TypeError: When `path` is not a string, `static` is not a bool, or an argument has the
+                wrong type.
+            ValueError: When `path` is not an entity path, `color_per` is unknown or does not fit the
+                batch, `indices` and `strip_lengths` are given together, the vertex count is odd for
+                segments, the strip lengths do not add up to V (when they are host data) or one is
+                below 1, `colors` and `values` are given together, a shape, dtype or row count does not
+                fit, a batch is over the limits, the entity cannot hold lines, or the scene is at its
+                limit of 1,024 entities or 2,048 batches.
+            NotImplementedError: When `blend` is not `"normal"`.
+        """
         _no(blend=(blend, "normal", "additive blending"))
         if color_per not in (None, _wire.COLOR_PER_VERTEX, _wire.COLOR_PER_STRIP,
                              _wire.COLOR_PER_EDGE):
@@ -798,8 +893,38 @@ class Scene:
 
     def arrows(self, path, origins, vectors, *, colors=None, values=None, cmap="viridis",
                vmin=None, vmax=None, width=2.0, static=False, rate=None) -> bool:
-        """Arrows from ``origins`` (N, D) along ``vectors`` (N, D), coloured as
-        points are; ``width`` in pixels; the head is a fifth of the length."""
+        """Log a batch of arrows at entity `path`, replacing the arrows it held.
+
+        Each arrow starts at an origin and runs along its vector. The head is a fifth of the length.
+        Colors work as for [`points`][caliper.Scene.points].
+
+        Args:
+            path (str): The entity path, as for [`points`][caliper.Scene.points].
+            origins (Tensor | ndarray | Sequence): Origins `(N, D)`, with D 3 in a 3-D scene and 2 in a
+                2-D scene or under a camera. At most 1,048,576 arrows.
+            vectors (Tensor | ndarray | Sequence): Vectors `(N, D)`, with the shape of `origins`.
+            colors (Tensor | tuple | None): Colors `(N, 3)` or `(N, 4)`, or one color for all.
+            values (Tensor | None): Values `(N,)` drawn through `cmap`. Not together with `colors`.
+            cmap (str | int): `"viridis"`, `"magma"` or `"rdbu"`, or 0, 1 or 2.
+            vmin (float | None): Fixed lower end of the value range. `None` computes that end on the
+                device.
+            vmax (float | None): Fixed upper end of the value range, as for `vmin`.
+            width (float): Arrow width in pixels, above 0.
+            static (bool): Copy the batch once at the call and retain it for every viewer.
+            rate (float | None): Snapshots per second for this batch. `None` takes the rate of the
+                scene.
+
+        Returns:
+            bool: `True` if a route took a snapshot, `False` if every route skipped it.
+
+        Raises:
+            TypeError: When `path` is not a string, `static` is not a bool, or an argument has the
+                wrong type.
+            ValueError: When `path` is not an entity path, `vectors` does not have the shape of
+                `origins`, `colors` and `values` are given together, a shape, dtype or row count does
+                not fit, a batch is over the limits, the entity cannot hold arrows, or the scene is at
+                its limit of 1,024 entities or 2,048 batches.
+        """
         st = self._s
         _check_path(path)
         iv = _check_static_rate(static, rate)
@@ -822,11 +947,45 @@ class Scene:
     def boxes(self, path, centers=None, half_sizes=None, *, corners=None, rotations=None,
               colors=None, class_ids=None, labels=None, fill=False, width=2.0, items=None,
               static=False, rate=None) -> bool:
-        """Boxes at ``centers`` (N, D) with ``half_sizes`` (N, D), or in 2-D
-        ``corners`` (N, 4) as (x0, y0, x1, y1), converted on the device;
-        ``rotations`` (N, 4) quaternions x y z w, 3-D only; coloured by
-        ``colors``, one colour or ``class_ids``; ``fill`` adds translucent
-        faces; ``width`` of the edges in pixels."""
+        """Log a batch of boxes at entity `path`, replacing the boxes it held.
+
+        Give `centers` and `half_sizes`, or in 2-D `corners`. A 3-D box may be rotated. Edges are drawn
+        with `width`, and `fill` adds translucent faces.
+
+        Args:
+            path (str): The entity path, as for [`points`][caliper.Scene.points].
+            centers (Tensor | ndarray | Sequence | None): Centers `(N, D)`, with D 3 in a 3-D scene and
+                2 in a 2-D scene or under a camera. At most 1,048,576 boxes.
+            half_sizes (Tensor | ndarray | Sequence | None): Half sizes `(N, D)`, with the shape of
+                `centers`.
+            corners (Tensor | None): 2-D boxes `(N, 4)` as `(x0, y0, x1, y1)`, converted to centers and
+                half sizes on the device. Replaces `centers` and `half_sizes`.
+            rotations (Tensor | None): Quaternions `(N, 4)` as x y z w, for 3-D boxes only.
+            colors (Tensor | tuple | None): Colors `(N, 3)` or `(N, 4)`, or one color for all.
+            class_ids (Tensor | None): Integer class ids `(N,)`, colored by the class table of
+                [`classes`][caliper.Scene.classes].
+            labels (str | Sequence[str] | None): One label for all boxes, or one per box. Each is at
+                most 63 bytes, and at most 4,096 labels.
+            fill (bool): Also draw translucent faces.
+            width (float): Edge width in pixels, above 0.
+            items (None): Not built yet (picking and linked selection).
+            static (bool): Copy the batch once at the call and retain it for every viewer.
+            rate (float | None): Snapshots per second for this batch. `None` takes the rate of the
+                scene.
+
+        Returns:
+            bool: `True` if a route took a snapshot, `False` if every route skipped it.
+
+        Raises:
+            TypeError: When `path` is not a string, `static` is not a bool, `fill` is not a bool,
+                neither `corners` nor both `centers` and `half_sizes` are given, or an argument has the
+                wrong type.
+            ValueError: When `path` is not an entity path, `corners` is given together with `centers`
+                or `half_sizes` or in a 3-D space, `rotations` is given in 2-D or does not fit, a
+                shape, dtype or row count does not fit, a batch is over the limits, the entity cannot
+                hold boxes, or the scene is at its limit of 1,024 entities or 2,048 batches.
+            NotImplementedError: When `items` is given.
+        """
         _no(items=(items, None, "picking and linked selection"))
         st = self._s
         _check_path(path)
@@ -885,12 +1044,50 @@ class Scene:
     def mesh(self, path, positions, indices=None, *, normals=None, colors=None, values=None,
              cmap="viridis", vmin=None, vmax=None, uvs=None, texture=None, instance_poses=None,
              instance_colors=None, instance_values=None, static=False, rate=None) -> bool:
-        """A triangle mesh of ``positions`` (V, D) and ``indices`` (T, 3), any
-        integer dtype (without indices each three vertices form a triangle),
-        with ``normals`` (V, 3) for smooth shading (faces are flat without),
-        coloured per vertex by ``colors`` (V, 3 or 4), one colour, ``values``
-        (V,) through ``cmap``, or ``uvs`` (V, 2) into a ``texture`` (H, W, 3 or
-        4). An index out of range draws as the last vertex."""
+        """Log a triangle mesh at entity `path`, replacing the mesh it held.
+
+        Without `indices`, each three vertices form a triangle. Faces are flat without `normals`. The
+        color comes from one of `colors`, `values`, or `uvs` with a `texture`. An index out of range
+        draws as the last vertex.
+
+        Args:
+            path (str): The entity path, as for [`points`][caliper.Scene.points].
+            positions (Tensor | ndarray | Sequence): Vertices `(V, D)`, with D 3 in a 3-D scene and 2 in
+                a 2-D scene or under a camera. At most 4,194,304 vertices. Without `indices`, V is a
+                multiple of 3.
+            indices (Tensor | None): Triangles `(T, 3)` in any integer dtype, at most 4,194,304.
+            normals (Tensor | None): Per-vertex normals `(V, 3)` for smooth shading.
+            colors (Tensor | tuple | None): Per-vertex colors `(V, 3)` or `(V, 4)`, or one color for
+                all.
+            values (Tensor | None): Per-vertex values `(V,)` drawn through `cmap`.
+            cmap (str | int): `"viridis"`, `"magma"` or `"rdbu"`, or 0, 1 or 2.
+            vmin (float | None): Fixed lower end of the value range. `None` computes that end on the
+                device.
+            vmax (float | None): Fixed upper end of the value range, as for `vmin`.
+            uvs (Tensor | None): Texture coordinates `(V, 2)`. Given together with `texture`, and
+                instead of `colors` and `values`.
+            texture (Tensor | None): A texture `(H, W, 3)` or `(H, W, 4)`, uint8 or floats in [0, 1],
+                at most 8,192 pixels on a side.
+            instance_poses (None): Not built yet (instanced meshes).
+            instance_colors (None): Not built yet (instanced meshes).
+            instance_values (None): Not built yet (instanced meshes).
+            static (bool): Copy the batch once at the call and retain it for every viewer.
+            rate (float | None): Snapshots per second for this batch. `None` takes the rate of the
+                scene.
+
+        Returns:
+            bool: `True` if a route took a snapshot, `False` if every route skipped it.
+
+        Raises:
+            TypeError: When `path` is not a string, `static` is not a bool, or an argument has the
+                wrong type.
+            ValueError: When `path` is not an entity path, a mesh without `indices` has a vertex count
+                that is not a multiple of 3, `uvs` and `texture` are not given together or are given
+                with `colors` or `values`, `colors` and `values` are given together, a shape, dtype or
+                row count does not fit, a batch is over the limits, the entity cannot hold a mesh, or
+                the scene is at its limit of 1,024 entities or 2,048 batches.
+            NotImplementedError: When an instance argument is given.
+        """
         _no(instance_poses=(instance_poses, None, "instanced meshes"),
             instance_colors=(instance_colors, None, "instanced meshes"),
             instance_values=(instance_values, None, "instanced meshes"))
@@ -936,9 +1133,33 @@ class Scene:
 
     # -- images ------------------------------------------------------------------
     def image(self, path, image, *, opacity=1.0, static=False, rate=None) -> bool:
-        """A colour image: a tensor u8 (H, W, 3 or 4) or (H, W), floats in [0, 1]
-        converted on the device, or the bytes of one JPEG or PNG frame,
-        recognised by its signature. In a 3-D scene it sits under a camera."""
+        """Log a color image at entity `path`, replacing the image it held.
+
+        In a 3-D scene an image sits under a camera, in its pixel space, so log the
+        [`camera`][caliper.Scene.camera] at a parent of `path` first.
+
+        Args:
+            path (str): The entity path, as for [`points`][caliper.Scene.points].
+            image (Tensor | ndarray | bytes): A tensor `(H, W, 3)`, `(H, W, 4)` or `(H, W)` as uint8 or
+                floats in [0, 1] (floats are converted on the device), at most 8,192 pixels on a side.
+                Or the bytes of one JPEG or PNG frame, recognised by its signature, of at most 16 MiB.
+            opacity (float): From 0 to 1.
+            static (bool): Copy the batch once at the call and retain it for every viewer.
+            rate (float | None): Snapshots per second for this batch. `None` takes the rate of the
+                scene.
+
+        Returns:
+            bool: `True` if a route took a snapshot, `False` if every route skipped it.
+
+        Raises:
+            TypeError: When `path` is not a string, `static` is not a bool, or an argument has the
+                wrong type.
+            ValueError: When `path` is not an entity path, `opacity` is outside 0 to 1, the bytes are
+                not one JPEG or PNG frame or are over 16 MiB, the shape or dtype does not fit, the
+                image is over 8,192 pixels on a side, the entity cannot hold an image (in a 3-D scene,
+                one that is not under a camera), or the scene is at its limit of 1,024 entities or
+                2,048 batches.
+        """
         st = self._s
         _check_path(path)
         iv = _check_static_rate(static, rate)
@@ -964,11 +1185,37 @@ class Scene:
 
     def depth(self, path, depth, *, scale=None, cmap="viridis", vmin=None, vmax=None, cloud=None,
               static=False, rate=None) -> bool:
-        """A depth image (H, W), f32 or u16 (any float is cast to f32 on the
-        device). ``scale`` is scene units per stored unit (None: 1 for floats,
-        0.001 for u16, millimetres to metres); ``vmin`` and ``vmax`` in scene
-        units, an open end computed on the device; ``cloud`` also draws the
-        back-projected point cloud (None: under a camera)."""
+        """Log a depth image at entity `path`, replacing the image it held.
+
+        A depth image is an image part, so it replaces a color image at the same path, and it sits
+        under a camera in a 3-D scene as an image does.
+
+        Args:
+            path (str): The entity path, as for [`points`][caliper.Scene.points].
+            depth (Tensor | ndarray): Depths `(H, W)` as floats (cast to float32 on the device) or
+                uint16, at most 8,192 pixels on a side.
+            scale (float | None): Scene units per stored unit, above 0. `None` is 1 for floats and
+                0.001 for uint16, millimetres as metres.
+            cmap (str | int): `"viridis"`, `"magma"` or `"rdbu"`, or 0, 1 or 2.
+            vmin (float | None): Fixed lower end of the range, in scene units. `None` computes that end
+                on the device.
+            vmax (float | None): Fixed upper end of the range, as for `vmin`.
+            cloud (bool | None): Also draw the back-projected point cloud. `None` draws it under a
+                camera.
+            static (bool): Copy the batch once at the call and retain it for every viewer.
+            rate (float | None): Snapshots per second for this batch. `None` takes the rate of the
+                scene.
+
+        Returns:
+            bool: `True` if a route took a snapshot, `False` if every route skipped it.
+
+        Raises:
+            TypeError: When `path` is not a string, `static` is not a bool, `cloud` is not a bool or
+                `None`, or an argument has the wrong type.
+            ValueError: When `path` is not an entity path, `depth` is not floats or uint16 or not
+                `(H, W)`, is over 8,192 pixels on a side, `scale` is not above 0, the entity cannot
+                hold an image, or the scene is at its limit of 1,024 entities or 2,048 batches.
+        """
         st = self._s
         _check_path(path)
         iv = _check_static_rate(static, rate)
@@ -995,9 +1242,30 @@ class Scene:
         return _log(st, path, spec, static, iv)
 
     def segmentation(self, path, class_ids, *, opacity=0.5, static=False, rate=None) -> bool:
-        """A segmentation image of integer class ids (H, W), coloured by the
-        class table; ids travel as u8 when the image is u8 and as u16
-        otherwise (an id outside 0 to 65,535 is clamped)."""
+        """Log a segmentation image at entity `path`, replacing the image it held.
+
+        Each pixel is a class id, colored by the class table of [`classes`][caliper.Scene.classes]. Ids
+        travel as uint8 when the image is uint8 and as uint16 otherwise; an id outside 0 to 65,535 is
+        clamped. The image sits under a camera in a 3-D scene.
+
+        Args:
+            path (str): The entity path, as for [`points`][caliper.Scene.points].
+            class_ids (Tensor | ndarray): Integer class ids `(H, W)`, at most 8,192 pixels on a side.
+            opacity (float): From 0 to 1.
+            static (bool): Copy the batch once at the call and retain it for every viewer.
+            rate (float | None): Snapshots per second for this batch. `None` takes the rate of the
+                scene.
+
+        Returns:
+            bool: `True` if a route took a snapshot, `False` if every route skipped it.
+
+        Raises:
+            TypeError: When `path` is not a string, `static` is not a bool, or an argument has the
+                wrong type.
+            ValueError: When `path` is not an entity path, `class_ids` does not hold integers or is not
+                `(H, W)`, is over 8,192 pixels on a side, `opacity` is outside 0 to 1, the entity
+                cannot hold an image, or the scene is at its limit of 1,024 entities or 2,048 batches.
+        """
         st = self._s
         _check_path(path)
         iv = _check_static_rate(static, rate)
@@ -1015,11 +1283,42 @@ class Scene:
     # -- cameras, entity transforms, the class table, clears ----------------------
     def camera(self, path, *, width, height, focal=None, fov=None, principal=None,
                convention="rdf", plane_distance=None, static=False) -> bool:
-        """A pinhole camera at entity ``path``, posed by the entity's own
-        transform: the image size ``width`` x ``height`` in pixels, ``focal``
-        (fx, fy, or one value for both) or ``fov``, the vertical field of view
-        in degrees; ``principal`` (cx, cy), the image centre by default;
-        ``convention`` "rdf" (x right, y down, z forward) or "rub"."""
+        """Log a pinhole camera at entity `path`.
+
+        The entity transform of `path` poses the camera ([`transform`][caliper.Scene.transform]). The
+        entity holds no primitive, the root holds no camera, and a camera is never under another. Its
+        children live in its pixel space, where images and 2-D points, lines, arrows and boxes sit.
+        The producer keeps the camera whether or not a viewer is attached, and the rate limit never
+        drops it.
+
+        Args:
+            path (str): The entity path of the camera, not the root.
+            width (int): Image width in pixels, from 1 to 8,192.
+            height (int): Image height in pixels, from 1 to 8,192.
+            focal (float | tuple[float, float] | None): `fx` and `fy` in pixels, or one value for both.
+                Give exactly one of `focal` and `fov`.
+            fov (float | None): The vertical field of view in degrees, between 0 and 180, which sets
+                `fx = fy`.
+            principal (tuple[float, float] | None): `(cx, cy)` in pixels. `None` is the image centre.
+            convention (str): `"rdf"` (x right, y down, z forward) or `"rub"` (x right, y up, looking
+                along -z).
+            plane_distance (float | None): How far in front of the camera its image plane is drawn, in
+                scene units, above 0.
+            static (bool): Retain the camera as part of the scene setup, which a later `clear` removes
+                only when it is static too.
+
+        Returns:
+            bool: Always `True`.
+
+        Raises:
+            TypeError: When `path` is not a string, `static` is not a bool, `width` or `height` is not
+                an int, or `focal` or `principal` has the wrong type.
+            ValueError: When `path` is not an entity path or is the root, the entity holds primitives
+                or lies under a camera, `width` or `height` is outside 1 to 8,192, both or neither of
+                `focal` and `fov` are given, `fov`, `focal`, `principal` or `plane_distance` is out of
+                range, `convention` is unknown, or the scene is at its limit of 1,024 entities or
+                2,048 batches.
+        """
         st = self._s
         _check_path(path)
         _check_static(static)
@@ -1075,13 +1374,36 @@ class Scene:
 
     def transform(self, path, *, translation=None, rotation=None, scale=None, matrix=None,
                   static=False) -> bool:
-        """The entity transform of ``path``, mapping its space into its
-        parent's: ``translation``, ``rotation`` (a quaternion x y z w, or one
-        angle in radians in 2-D and under a camera) and ``scale`` (1 or D
-        numbers), applied as T R S, or ``matrix`` (4, 4) in the usual row and
-        column sense. Numbers, arrays or tensors on any device; a tensor's
-        matrix is composed on its device. A call with none of them resets the
-        transform to the identity."""
+        """Set the entity transform of `path`, mapping its space into the space of its parent.
+
+        The parts `translation`, `rotation` and `scale` are applied as T R S. Or give `matrix`, which
+        excludes the parts. Each is numbers, an array or a tensor on any device; the transform of
+        tensors is composed on their device and the transform of numbers on the host. A call with none
+        of them resets the transform to the identity. The producer keeps the transform whether or not a
+        viewer is attached, and the rate limit never drops it.
+
+        Args:
+            path (str): The entity path, not the root.
+            translation (Sequence[float] | Tensor | None): 3 numbers in 3-D, 2 in 2-D and under a
+                camera.
+            rotation (Sequence[float] | Tensor | None): In 3-D a quaternion x y z w, normalized by the
+                call. In 2-D and under a camera one angle in radians.
+            scale (float | Sequence[float] | Tensor | None): 1 number for all axes, or one per axis
+                (3 in 3-D, 2 in 2-D and under a camera).
+            matrix (Sequence | Tensor | None): A `(4, 4)` matrix in the usual row and column sense.
+            static (bool): Retain the transform as part of the scene setup, which a later `clear`
+                removes only when it is static too.
+
+        Returns:
+            bool: Always `True`.
+
+        Raises:
+            TypeError: When `path` is not a string, `static` is not a bool, or a part is not numbers,
+                an array or a tensor.
+            ValueError: When `path` is not an entity path or is the root, `matrix` is given together
+                with a part, a part or `matrix` has the wrong size or holds a type that is not a
+                number, or the scene is at its limit of 1,024 entities.
+        """
         st = self._s
         _check_path(path)
         _check_static(static)
@@ -1104,10 +1426,27 @@ class Scene:
         return True
 
     def classes(self, table, *, static=True) -> bool:
-        """The scene's class table, replaced whole: ``table`` maps a class id
-        (0 to 65,535) to a label, or to (label, colour); an id without a colour
-        takes colour id mod 16 of the categorical palette. Points and boxes
-        with ``class_ids`` and segmentation images use it."""
+        """Replace the class table of the scene.
+
+        Points and boxes with `class_ids` and segmentation images are colored by it. An id without a
+        color takes color `id % 16` of the categorical palette. The producer keeps the table whether or
+        not a viewer is attached, and the rate limit never drops it.
+
+        Args:
+            table (dict): Maps a class id, an int from 0 to 65,535, to a label (at most 63 bytes), or to
+                `(label, color)`. A color is 3 or 4 integers from 0 to 255 or floats from 0 to 1. At
+                most 4,096 entries.
+            static (bool): Retain the table as part of the scene setup, which is the default.
+
+        Returns:
+            bool: Always `True`.
+
+        Raises:
+            TypeError: When `table` is not a dict, `static` is not a bool, or a class id is not an int
+                or a value is neither a label nor `(label, color)`.
+            ValueError: When the table has more than 4,096 classes, a class id is outside 0 to 65,535,
+                a label is over 63 bytes, or a color is not 3 or 4 numbers in range.
+        """
         st = self._s
         _check_static(static)
         if not isinstance(table, dict):
@@ -1142,10 +1481,25 @@ class Scene:
         return True
 
     def clear(self, path="", *, recursive=False, static=False) -> bool:
-        """Clear entity ``path`` (its subtree too with ``recursive``): its
-        primitives, camera and transform. Static parts stay unless the clear
-        is static too; ``clear("", recursive=True)`` empties the scene's live
-        data. A later log at the path brings a part back."""
+        """Clear entity `path`: its primitives, camera and entity transform.
+
+        With `recursive`, the subtree of `path` is cleared too, and `clear("", recursive=True)` empties
+        the live data of the scene. Static parts stay unless the clear is static too. A later log at
+        the path brings a part back. The clear applies at once to what the producer keeps, and the rate
+        limit never drops it.
+
+        Args:
+            path (str): The entity path. The empty string is the root.
+            recursive (bool): Also clear the subtree.
+            static (bool): Also clear static parts.
+
+        Returns:
+            bool: Always `True`.
+
+        Raises:
+            TypeError: When `path` is not a string, or `recursive` or `static` is not a bool.
+            ValueError: When `path` is not an entity path.
+        """
         st = self._s
         _check_path(path)
         _check_static(static)

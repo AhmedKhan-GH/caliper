@@ -183,6 +183,15 @@ class CheckTest(unittest.TestCase):
                      "caliper_core_live_attach", "caliper_core_live_view_count"):
             self.assertIn(name, text)
 
+    def test_name_imported_on_first_use_is_found(self):
+        self.repo.write("python/caliper/_lazy.py", 'class Lazy:\n    """A thing imported on first use."""\n')
+        self.repo.edit("python/caliper/__init__.py", '__all__ += ["Thing"]\n',
+                       '__all__ += ["Thing", "Lazy"]\n\nfrom typing import TYPE_CHECKING\n\n'
+                       'if TYPE_CHECKING:\n    from ._lazy import Lazy\n')
+        self.assertProblem("caliper.Lazy: no page")
+        self.repo.edit("docs/things.md", "::: caliper.Thing\n", "::: caliper.Thing\n\n::: caliper.Lazy\n")
+        self.assertEqual(self.repo.problems(), [])
+
     def test_missing_docstring_fails(self):
         self.repo.edit("python/caliper/__init__.py", '    """Show a tensor."""\n', "    pass\n")
         self.assertProblem("caliper.show: no docstring")
