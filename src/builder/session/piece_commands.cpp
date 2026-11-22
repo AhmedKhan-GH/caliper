@@ -308,6 +308,14 @@ std::mutex& write_mutex() {
 Error write_workspace_piece(const std::string& workspace, const spec::Piece& piece,
                             const std::map<std::string, std::string>& samples, std::string* path) {
     if (cp::Verdict v = cp::check_piece_name(piece.name, piece.version); !v.ok()) return fail(v.code, v.message, v.where);
+    // Only the file names of a piece reach a path: the WGSL files and
+    // sample/<input>.bin for an input name.
+    for (const auto& entry : piece.files)
+        if (!cp::check_piece_file(piece, entry.first).ok() || entry.first == "piece.toml")
+            return fail(cp::kPieceBadPath, "A piece holds no file " + quote(entry.first) + ".");
+    for (const auto& entry : samples)
+        if (!cp::check_piece_name(entry.first, 1).ok())
+            return fail(cp::kPieceBadPath, "A sample names no input " + quote(entry.first) + ".");
     std::lock_guard<std::mutex> lock(write_mutex());
     fs::path root;
     if (Error e = pieces_root(workspace, true, &root)) return e;
