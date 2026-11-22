@@ -326,6 +326,10 @@ public:
     // which the controls, the shortcuts, the transport and the annotations
     // read. Either may be null; neither is owned.
     void set_instrument_state(caliper_builder::ValueStore* values, caliper_builder::StepHistory* history);
+    // What references and kept steps read now (resolve.h): the values, the
+    // kept steps and the cursor of set_instrument_state(); the defaults and
+    // the newest values without them.
+    caliper_builder::ChainContext chain_context() const;
     // Where the live scenes of scene panels come from: the core of the
     // attached script, asked at each draw; null or no getter shows every
     // scene panel as "Source offline".

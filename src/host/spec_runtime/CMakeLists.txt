@@ -27,8 +27,7 @@ add_library(caliper_spec_runtime STATIC
     spec_entities.cpp
     spec_shortcuts.cpp
     spec_transport.cpp
-    spec_annotations.cpp
-    label_layout.cpp)
+    spec_annotations.cpp)
 target_include_directories(caliper_spec_runtime PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_spec_runtime PUBLIC libcaliper caliper_builder_session caliper_sternbild_ui)
 set_target_properties(caliper_spec_runtime PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)

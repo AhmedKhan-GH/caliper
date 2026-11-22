@@ -30,14 +30,6 @@ using namespace caliper_host;
 using namespace spec_test;
 using nlohmann::json;
 
-namespace caliper_host {
-// spec_annotations.cpp: the bound text helpers (to be declared in spec_annotations.h).
-std::map<std::string, json> spec_bound_text_values(const caliper_builder::spec::BoundText& text,
-                                                   const SpecInstrumentHost& host);
-std::string spec_bound_text_string(const caliper_builder::spec::BoundText& text, const SpecInstrumentHost& host,
-                                   const std::map<std::string, json>& extra);
-}  // namespace caliper_host
-
 namespace {
 
 void dump(const Image& img, const std::string& name) {

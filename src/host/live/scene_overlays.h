@@ -20,6 +20,9 @@ struct SceneOverlayInput {
     ImVec2 origin;                    // the view's top-left corner, in screen pixels
     float scale_x = 1, scale_y = 1;   // from the scene's physical pixels to screen pixels
     const std::vector<caliper_scene::LabelAnchor>* labels = nullptr;   // the scene's item labels
+    // One flag for each label: true for an annotation's text, which places
+    // before the items' labels; null when none is an annotation.
+    const std::vector<bool>* annotations = nullptr;
     ImU32 ink = 0, shade = 0;
 };
 

@@ -8,6 +8,7 @@
 // picked triangles; a vertex stage that reads the heights of the grid directly is later work.
 #include "spec_runtime/spec_entities.h"
 #include "spec_runtime/spec_prepare.h"
+#include "spec_runtime/spec_runtime.h"   // house_spec_look
 
 #include "live/live_scene.h"
 #include "net/wire.h"
@@ -658,6 +659,119 @@ void apply_entity_scene(caliper_live_views::SceneView& view, const EntityScene& 
         u.arrays.push_back(section("positions", CALIPER_NET_DTYPE_F32, walls, {int64_t(walls.size() / 3), 3}));
         std::string why;
         if (view.apply(u, &why)) now.push_back(u.path);
+    }
+    for (const std::string& old : *drawn)
+        if (std::find(now.begin(), now.end(), old) == now.end()) {
+            wire::SceneClear c;
+            c.path = old;
+            c.recursive = true;
+            std::string why;
+            view.apply(c, &why);
+        }
+    *drawn = std::move(now);
+}
+
+void apply_annotation_marks(caliper_live_views::SceneView& view, const EntityScene& scene,
+                            const std::vector<SceneAnnotationMark>& marks, std::vector<std::string>* drawn) {
+    const EntityBox& box = scene.box;
+    const SpecLook look = house_spec_look();
+    std::vector<std::string> now;
+    auto color_of = [&](bool muted, bool hole = false) {
+        const ImU32 c = hole ? look.ground : muted ? look.secondary : look.accent;
+        caliper_net::Json out = caliper_net::Json::array();
+        for (int k = 0; k < 4; ++k) out.push(int64_t((c >> (8 * k)) & 0xffu));
+        return out;
+    };
+    auto stats_of = [&] {
+        caliper_net::Json stats = caliper_net::Json::array();
+        stats.push(0.0);
+        stats.push(1.0);
+        for (int a = 0; a < 3; ++a) {
+            stats.push(-box.half[a]);
+            stats.push(box.half[a]);
+        }
+        return stats;
+    };
+    // One point with its label; `size_px` tells a marker from a label's dot, and a hole is the
+    // dark centre that makes a marker's disc a ring.
+    auto point = [&](const std::string& path, const float p[3], const std::string& text, bool muted, float size_px,
+                     bool hole = false) {
+        const std::vector<float> positions(p, p + 3);
+        wire::SceneUpdate u;
+        u.path = path;
+        u.part = CALIPER_NET_PART_POINTS;
+        u.params = caliper_net::Json::object();
+        u.params.set("color", color_of(muted, hole));
+        u.params.set("stats", stats_of());
+        if (!text.empty()) {
+            caliper_net::Json labels = caliper_net::Json::array();
+            labels.push(text);
+            u.params.set("labels", labels);
+        }
+        u.arrays.push_back(section("positions", CALIPER_NET_DTYPE_F32, positions, {1, 3}));
+        std::string why;
+        if (!view.apply(u, &why)) return;
+        caliper_live_views::SceneView::BatchStyle style;
+        style.depth_offset = hole ? 5 : 4;   // in front of the surface it marks
+        style.size_px = size_px;
+        style.point_shape = caliper_scene::PointShape::Disc;
+        view.set_style(path, style);
+        now.push_back(path);
+    };
+    for (const SceneAnnotationMark& m : marks) {
+        const std::string path = "spec-overlay/" + m.id;
+        if (m.kind == spec::AnnotationKind::label || m.kind == spec::AnnotationKind::marker) {
+            float p[3] = {0, 0, 0};
+            if (!m.entity.empty()) {
+                const EntityDraw* d = nullptr;
+                for (const EntityDraw& e : scene.draws)
+                    if (e.entity == m.entity) d = &e;
+                if (!d || m.index < 0 || uint64_t(m.index) * 3 + 2 >= d->positions.size()) continue;
+                for (int a = 0; a < 3; ++a) p[a] = d->positions[size_t(m.index) * 3 + size_t(a)];
+            } else {
+                for (int a = 0; a < 3; ++a) p[a] = float(box.to_box(a, m.at[a]));
+            }
+            if (m.kind == spec::AnnotationKind::marker) {
+                point(path, p, m.text, m.muted, 16.0f);
+                point(path + "/hole", p, std::string(), m.muted, 8.0f, true);
+            } else {
+                point(path, p, m.text, m.muted, 6.0f);
+            }
+            continue;
+        }
+        // A threshold's plane, or a band's two planes, as outlines across the box.
+        const int a = std::clamp(m.axis, 0, 2), b = (a + 1) % 3, c = (a + 2) % 3;
+        std::vector<float> segments;
+        for (double v : m.kind == spec::AnnotationKind::band ? std::vector<double>{m.lo, m.hi} : std::vector<double>{m.lo}) {
+            const float at = float(box.to_box(a, v));
+            const float corners[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+            for (int k = 0; k < 4; ++k)
+                for (int e : {k, (k + 1) % 4}) {
+                    float q[3];
+                    q[a] = at;
+                    q[b] = float(corners[e][0] * box.half[b]);
+                    q[c] = float(corners[e][1] * box.half[c]);
+                    segments.insert(segments.end(), q, q + 3);
+                }
+        }
+        wire::SceneUpdate u;
+        u.path = path;
+        u.part = CALIPER_NET_PART_LINES;
+        u.params = caliper_net::Json::object();
+        u.params.set("mode", CALIPER_NET_LINES_SEGMENTS);
+        u.params.set("width", 2.0);
+        u.params.set("color", color_of(m.muted));
+        u.params.set("stats", stats_of());
+        u.arrays.push_back(section("positions", CALIPER_NET_DTYPE_F32, segments, {int64_t(segments.size() / 3), 3}));
+        std::string why;
+        if (view.apply(u, &why)) now.push_back(path);
+        if (!m.text.empty()) {
+            float corner[3];
+            corner[a] = float(box.to_box(a, m.hi));
+            corner[b] = float(box.half[b]);
+            corner[c] = float(box.half[c]);
+            point(path + "/label", corner, m.text, m.muted, 4.0f);
+        }
     }
     for (const std::string& old : *drawn)
         if (std::find(now.begin(), now.end(), old) == now.end()) {

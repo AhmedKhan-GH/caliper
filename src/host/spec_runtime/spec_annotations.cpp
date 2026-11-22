@@ -333,14 +333,76 @@ void draw_plot_annotations(const spec::Panel& panel, const SpecInstrumentHost& h
 
 void draw_panel_overlays(const spec::Panel& panel, const ImRect& content, const SpecLook& look,
                          const SpecInstrumentHost& host) {
-    // A series panel draws its annotations inside its plot
-    // (draw_plot_annotations); the bound text of a text panel, the legend of
+    // A 2-D panel draws its annotations inside its plot
+    // (draw_plot_annotations), a scene panel through its scene
+    // (scene_annotation_marks) and a text panel its bound text; the legend of
     // a scene and the scale bars of image and points panels wait for their
     // panels' drawing to leave them the room (the validator refuses them).
     (void)panel;
     (void)content;
     (void)look;
     (void)host;
+}
+
+std::vector<SceneAnnotationMark> scene_annotation_marks(const spec::Panel& panel, const SpecInstrumentHost& host) {
+    std::vector<SceneAnnotationMark> out;
+    for (const spec::Annotation& a : panel.annotations) {
+        SceneAnnotationMark m;
+        m.id = a.id;
+        m.kind = a.kind;
+        m.muted = a.emphasis && *a.emphasis == "muted";
+        m.text = a.text ? spec_bound_text_string(*a.text, host, {}) : std::string();
+        const int axis = !a.axis ? 1 : *a.axis == "x" ? 0 : *a.axis == "y" ? 1 : 2;
+        switch (a.kind) {
+            case spec::AnnotationKind::threshold: {
+                const std::optional<double> v = place_number(a.value, host);
+                if (!v) continue;
+                m.axis = axis;
+                m.lo = m.hi = *v;
+                break;
+            }
+            case spec::AnnotationKind::band: {
+                json r = place_value(a.range, host);
+                if (!r.is_array() || r.size() != 2) continue;
+                const std::optional<double> lo = place_number(r[0], host), hi = place_number(r[1], host);
+                if (!lo || !hi) continue;
+                m.axis = axis;
+                m.lo = std::min(*lo, *hi);
+                m.hi = std::max(*lo, *hi);
+                break;
+            }
+            case spec::AnnotationKind::label:
+            case spec::AnnotationKind::marker: {
+                // A pick (its x, y and z), an entity's item, or a point.
+                const json at = place_value(a.at, host);
+                if (at.is_object() && at.contains("x") && at.contains("y") && at.contains("z")) {
+                    if (!at["x"].is_number() || !at["y"].is_number() || !at["z"].is_number()) continue;
+                    m.at[0] = at["x"].get<double>();
+                    m.at[1] = at["y"].get<double>();
+                    m.at[2] = at["z"].get<double>();
+                } else if (at.is_object() && at.contains("entity") && at["entity"].is_string()) {
+                    const std::optional<double> index =
+                        at.contains("index") ? place_number(at["index"], host) : std::nullopt;
+                    if (!index) continue;
+                    m.entity = at["entity"].get<std::string>();
+                    m.index = static_cast<int64_t>(*index);
+                } else if (at.is_array() && (at.size() == 2 || at.size() == 3)) {
+                    bool all = true;
+                    for (std::size_t k = 0; k < at.size(); ++k) {
+                        const std::optional<double> v = place_number(at[k], host);
+                        all = all && v.has_value();
+                        if (v) m.at[k] = *v;
+                    }
+                    if (!all) continue;
+                } else {
+                    continue;
+                }
+                break;
+            }
+        }
+        out.push_back(std::move(m));
+    }
+    return out;
 }
 
 }  // namespace caliper_host

@@ -13,6 +13,7 @@
 #include "builder/widget_app.h"
 #include "builder/widget_surface.h"
 #include "applet_spec.h"
+#include "spec_runtime/spec_annotations.h"
 #include "spec_runtime/spec_offscreen.h"
 #include "spec_runtime/spec_runtime.h"
 #include "live/live_scene.h"   // camera.get and camera.set read and move a panel's scene view
@@ -120,8 +121,11 @@ private:
 // the device of an offscreen canvas of its own.
 class PanelRenderOffscreen final : public PanelRenderSeam {
 public:
+    explicit PanelRenderOffscreen(std::function<cb::Session*()> session) : session_(std::move(session)) {}
     cb::CommandOutput render_panel(const cb::spec::Spec& spec, const cb::PanelData& data, int width,
                                    int height) override {
+        cb::Session* s = session_ ? session_() : nullptr;
+        renderer_.set_instrument_state(s ? &s->values() : nullptr, s ? &s->history() : nullptr);
         const cb::spec::Panel* p = spec.find_panel(data.panel);
         if (p && p->primitive == cb::spec::Primitive::scene && !p->entities.empty())
             return render_entities(*p, data, width, height);
@@ -151,7 +155,16 @@ private:
         view.set_box_fit(true);
         view.set_starting(spec_starting_camera(panel));
         std::vector<std::string> drawn;
-        apply_entity_scene(view, build_entity_scene(panel, data), &drawn);
+        const EntityScene scene = build_entity_scene(panel, data);
+        apply_entity_scene(view, scene, &drawn);
+        // The panel's markers and planes at the session's values; their texts need the page's
+        // overlay, which an offscreen scene does not draw.
+        SpecInstrumentHost host;
+        cb::Session* s = session_ ? session_() : nullptr;
+        host.values = s ? &s->values() : nullptr;
+        host.history = s ? &s->history() : nullptr;
+        std::vector<std::string> marks;
+        apply_annotation_marks(view, scene, scene_annotation_marks(panel, host), &marks);
         std::vector<uint8_t> rgba;
         if (!view.render(uint32_t(width), uint32_t(height), 1.0f, 0xff161616u, &why) || !view.read_pixels(&rgba, &why))
             return refuse("The scene could not be drawn: " + why + ".");
@@ -164,6 +177,7 @@ private:
 #endif
     }
 
+    std::function<cb::Session*()> session_;
     OffscreenPanelRenderer renderer_;
     std::unique_ptr<SpecOffscreen> canvas_;   // its device draws the scenes of entities
 };
@@ -1273,8 +1287,8 @@ void SpecPage::shutdown() {
     impl_->textures.reset();
 }
 
-std::shared_ptr<PanelRenderSeam> SpecPage::make_panel_renderer() {
-    return std::make_shared<PanelRenderOffscreen>();
+std::shared_ptr<PanelRenderSeam> SpecPage::make_panel_renderer(std::function<cb::Session*()> session) {
+    return std::make_shared<PanelRenderOffscreen>(std::move(session));
 }
 
 #else  // !CALIPER_WITH_BUILDER
@@ -1336,7 +1350,9 @@ bool SpecPage::enter_file(AppSession&, const std::string&, std::string* error) {
 }
 bool SpecPage::facts(const std::string&, SpecAppletFacts*) { return false; }
 void SpecPage::shutdown() {}
-std::shared_ptr<PanelRenderSeam> SpecPage::make_panel_renderer() { return nullptr; }
+std::shared_ptr<PanelRenderSeam> SpecPage::make_panel_renderer(std::function<caliper_builder::Session*()>) {
+    return nullptr;
+}
 
 #endif
 

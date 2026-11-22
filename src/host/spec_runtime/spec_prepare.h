@@ -25,6 +25,7 @@
 #include "scene/camera.h"   // StartingCamera
 
 #include <caliper_builder/session/values.h>   // PickFields
+#include <caliper_builder/spec/annotation.h>
 #include <caliper_builder/spec/entity.h>
 
 #include <cstdint>
@@ -142,6 +143,11 @@ struct PreparedText {
     std::string text;
     std::string value;
     bool has_value = false;
+    // A bound text (the options `format` and `fields`): the panel draws it at
+    // each frame from the values at the cursor, with the bound value as its
+    // field `value` (null while the slot has none).
+    bool bound = false;
+    nlohmann::json value_json;
 };
 
 // The ids of the first four colormaps of the format, as the live views number theirs, plus
@@ -255,6 +261,30 @@ std::optional<caliper_builder::PickFields> entity_pick_fields(const EntityScene&
 // The starting camera of a scene panel from its option view_camera: an orbit table, a saved
 // view's name (the option `views`), or a camera entity's path. Angles are in degrees.
 caliper_scene::StartingCamera spec_starting_camera(const caliper_builder::spec::Panel& panel);
+
+// One annotation of a scene panel as the scene draws it (design/instrument-interface.md,
+// Annotation Table): a marker or a label at a point in data units or at an entity's item, or a
+// threshold or a band across the data box on one axis, with its text at the cursor.
+struct SceneAnnotationMark {
+    std::string id;
+    caliper_builder::spec::AnnotationKind kind = caliper_builder::spec::AnnotationKind::label;
+    double at[3] = {0, 0, 0};     // marker and label: the point in data units
+    std::string entity;           // marker and label at an entity's item: its path, with `index`
+    int64_t index = -1;
+    int axis = 0;                 // threshold and band: 0 x, 1 y, 2 z
+    double lo = 0, hi = 0;        // threshold: lo == hi
+    std::string text;
+    bool muted = false;
+};
+
+// Writes a scene panel's annotations into its scene view, under "spec-overlay/<id>": a marker
+// as a large disc and a label as a small one, each with its text as the item's label, and a
+// threshold or a band as the outline of its plane or its two planes across the data box. Each
+// point maps through the scene's data box; a mark whose entity item does not exist is left out.
+// `drawn` holds the paths written by the last call, and the paths it no longer writes are
+// cleared. The scene's labels place these texts before the items' own (scene_overlays.h).
+void apply_annotation_marks(caliper_live_views::SceneView& view, const EntityScene& scene,
+                            const std::vector<SceneAnnotationMark>& marks, std::vector<std::string>* drawn);
 
 class SpecScene;
 // The entities that a SpecScene (spec_entities.h) built last.

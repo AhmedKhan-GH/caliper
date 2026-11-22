@@ -48,6 +48,8 @@
 #include <caliper_builder/spec/state.h>
 #include <caliper_builder/text/bound_text.h>
 
+#include "spec_runtime/spec_annotations.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -807,9 +809,10 @@ bool draw_segmented(const spec::Control& c, const Row& row, const SpecLook& look
     return changed;
 }
 
-// A readout: its bound text, with each field read from its reference; a
-// field that names a source shows a dash here. A format that does not parse
-// shows as written, in the faint colour, with the reason as its tooltip.
+// A readout: its bound text, with each field read from its reference or, for
+// a field that names a source, from the source's kept value at the cursor
+// (spec_annotations.h). A format that does not parse shows as written, in the
+// faint colour, with the reason as its tooltip.
 void draw_readout(const spec::Control& c, const Row& row, const SpecLook& look, const SpecInstrumentHost& host) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float ty = row.widget.GetCenter().y - ImGui::GetTextLineHeight() * 0.5f;
@@ -819,13 +822,8 @@ void draw_readout(const spec::Control& c, const Row& row, const SpecLook& look, 
     }
     const spec::BoundText& bt = *c.options.bound_text;
     std::vector<std::string> names;
-    std::map<std::string, json> values;
-    for (const auto& [name, field] : bt.fields) {
-        names.push_back(name);
-        values[name] = std::holds_alternative<spec::Reference>(field)
-                           ? read_reference(host, std::get<spec::Reference>(field))
-                           : json();
-    }
+    for (const auto& [name, field] : bt.fields) names.push_back(name);
+    const std::map<std::string, json> values = spec_bound_text_values(bt, host);
     caliper_builder::text::ParsedText parsed;
     const cb::Error e = caliper_builder::text::parse_bound_text(bt.format, names, &parsed);
     const std::string text = e ? bt.format : caliper_builder::text::format_bound_text(parsed, values);

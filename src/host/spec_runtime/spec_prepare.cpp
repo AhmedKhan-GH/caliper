@@ -689,6 +689,7 @@ void prepare_table(PreparedPanel& p, const PanelData& d, const PrepareLimits& li
 void prepare_text(PreparedPanel& p, const spec::Panel& panel, const PanelData& d, const PrepareLimits& lim) {
     PreparedText& X = p.text;
     X.text = panel.options.text.value_or("");
+    X.bound = panel.options.bound_text.has_value();
     if (const SlotData* v = slot(d, "value")) {
         if (v->kind == SlotData::Kind::column && v->values.is_array()) {
             for (size_t i = v->values.size(); i-- > 0;) {
@@ -696,22 +697,24 @@ void prepare_text(PreparedPanel& p, const spec::Panel& panel, const PanelData& d
                 if (c.is_null()) continue;
                 const double x = cell_number(c);
                 X.value = c.is_number() || c.is_boolean() ? spec_fmt4(x) : cell_text(c, lim.max_cell_chars);
+                X.value_json = c;
                 X.has_value = true;
                 break;
             }
-            if (!X.has_value && X.text.empty()) {
+            if (!X.has_value && X.text.empty() && !X.bound) {
                 p.state = empty_state(v->binding);
                 return;
             }
         } else if (v->kind == SlotData::Kind::tensor && v->tensor.valid() && v->tensor.numel() == 1) {
             X.value = spec_fmt4(v->tensor.element(0));
+            X.value_json = v->tensor.element(0);
             X.has_value = true;
         } else {
             p.state = mismatch(v->binding);
             return;
         }
     }
-    if (X.text.empty() && !X.has_value) p.state = empty_state(p.id);
+    if (X.text.empty() && !X.has_value && !X.bound) p.state = empty_state(p.id);
 }
 
 }  // namespace

@@ -120,6 +120,9 @@ LiveCatalog::ViewFrame frame_shape_of(CaliperCore* core, const caliper_live_view
             if (!caliper_core_live_view_info(core, v.name.c_str(), &info) || info.width <= 0 || info.height <= 0)
                 return f;
             const std::int64_t h = info.height, w = info.width;
+            // The step stamp of the snapshot, when the script sent one; else the
+            // caller takes the run's step at arrival.
+            if (info.step != INT64_MIN) f.step = info.step;
             f.has_payload = true;
             f.data = v.tex_cpu;
             f.payload_bytes = static_cast<std::uint64_t>(h * w) * 4u;
@@ -283,8 +286,8 @@ void LiveCatalog::apply(bool attached, const std::string& session, const std::ve
             }
             if (!f.has_payload || !f.data || v.copied_updates == f.updates) continue;
             // A view whose steps the history keeps is copied at each snapshot
-            // that has a step.
-            const bool keeps = kept.count(f.name) > 0 && v.step.has_value() && f.kind != CALIPER_LIVE_KIND_SERIES;
+            // that has a step; of a series, the history keeps the newest value.
+            const bool keeps = kept.count(f.name) > 0 && v.step.has_value();
             if (keeps) steps[f.name] = *v.step;
             const bool wanted = keeps || t < v.wanted_until;
             if (!wanted && v.generation != 0 && t - v.copied_at < options_.idle_copy_ns) continue;
@@ -457,8 +460,12 @@ void LiveCatalog::keep_steps(const std::vector<std::pair<const ViewFrame*, Tenso
     for (const auto& [f, tensor] : made) {
         const auto step = steps.find(f->name);
         if (step == steps.end()) continue;
-        options_.history->append(caliper_builder::make_catalog_id(caliper_builder::CatalogKind::live, f->name),
-                                 step->second, tensor);
+        const std::string id = caliper_builder::make_catalog_id(caliper_builder::CatalogKind::live, f->name);
+        if (f->kind == CALIPER_LIVE_KIND_SERIES) {
+            if (tensor.numel() > 0) options_.history->append_series(id, step->second, tensor.element(tensor.numel() - 1));
+            continue;
+        }
+        options_.history->append(id, step->second, tensor);
     }
     // A held cursor that fell out of every source moved to the first kept
     // step: one `cursor` event says so (design/instrument-interface.md,

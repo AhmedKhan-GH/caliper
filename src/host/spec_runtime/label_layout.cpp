@@ -17,15 +17,10 @@
 #include <cmath>
 #include <numeric>
 
-// CALIPER_LABEL_LAYOUT_COPY: the scene overlays of the live views, whose
-// library does not hold this file, include it with that macro set to a
-// namespace of their own, so that they get a private copy of the placement
-// and no symbol is defined twice in a program that links both libraries.
-#ifndef CALIPER_LABEL_LAYOUT_COPY
+// The live views' library (libcaliper, and the view layer of the web build)
+// holds this file, because the scene overlays place their labels with it; the
+// spec runtime links that library.
 namespace caliper_host {
-#else
-namespace caliper_host::CALIPER_LABEL_LAYOUT_COPY {
-#endif
 
 namespace {
 
@@ -110,4 +105,4 @@ std::vector<PlacedLabel> place_labels(const std::vector<LabelBox>& boxes, const 
     return out;
 }
 
-}  // namespace caliper_host, or the copy's namespace
+}  // namespace caliper_host

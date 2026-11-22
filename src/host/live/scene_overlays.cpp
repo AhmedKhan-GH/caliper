@@ -13,13 +13,6 @@
 #include "scene/compile.h"
 #include "spec_runtime/label_layout.h"
 
-// The label placement, as a private copy in its own namespace: the live
-// views' library does not hold label_layout.cpp (label_layout.cpp explains
-// the macro). Once it does, the two lines go and the call below uses
-// caliper_host::place_labels.
-#define CALIPER_LABEL_LAYOUT_COPY overlay_copy
-#include "spec_runtime/label_layout.cpp"
-
 #include <algorithm>
 #include <cmath>
 #include <deque>
@@ -57,7 +50,7 @@ const std::vector<PlacedLabel>& placed_for(const std::vector<LabelBox>& boxes, c
         if (equal) return p.placed;
     }
     if (kept.size() >= 8) kept.pop_back();
-    kept.push_front({boxes, panel, caliper_host::overlay_copy::place_labels(boxes, panel, {})});
+    kept.push_front({boxes, panel, caliper_host::place_labels(boxes, panel, {})});
     return kept.front().placed;
 }
 
@@ -78,7 +71,9 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
         b.anchor_y = std::round(in.origin.y + a.y * in.scale_y);
         b.width = std::ceil(size.x) + 2 * pad;
         b.height = std::ceil(size.y) + 2 * pad;
-        b.priority = 1000 + (int)i;   // item labels after annotations, nearest first
+        // An annotation's text first, then the item labels, nearest first.
+        const bool first = in.annotations && i < in.annotations->size() && (*in.annotations)[i];
+        b.priority = (first ? 0 : 1000) + (int)i;
         boxes.push_back(b);
     }
     const std::vector<PlacedLabel>& placed = placed_for(boxes, panel);

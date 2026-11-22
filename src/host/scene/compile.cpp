@@ -859,8 +859,13 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
                 r.groups[g] = res.stage_bind_group(*s.stage, s.program, g, g == 2 ? s.image : Texture{}, s.image_binding);
                 if (!r.groups[g]) s.stage = nullptr;
             }
+            // A stage's params: its uniform at group 3, in the draw and the pick pass alike.
+            if (s.stage && !s.stage->params.empty()) {
+                r.groups[3] = res.stage_params_group(*s.stage);
+                if (!r.groups[3]) s.stage = nullptr;
+            }
             if (s.stage) ++result.staged;
-            else r.groups[0] = r.groups[1] = r.groups[2] = BindGroup{};
+            else r.groups[0] = r.groups[1] = r.groups[2] = r.groups[3] = BindGroup{};
         }
         if (!s.stage) {
             r.pipeline = res.render_pipeline(s.program, d);
@@ -879,6 +884,13 @@ CompileResult SceneCompiler::run(const SceneTree& tree, const ViewCamera& camera
                     if (bd.group != g || bd.binding != bnd || !bd.dynamic || n_dyn >= caliper_gfx::kMaxDynamicOffsets) continue;
                     r.dynamic_offsets[n_dyn++] = g == 0 ? frame_off : (bnd == 0 ? params_off : cmap_off);
                 }
+        // The stage's params come after the built-in program's dynamic bindings, as group 3 is last;
+        // the block is padded to 16 bytes, as a uniform binding's size is.
+        if (s.stage && !s.stage->params.empty() && n_dyn < caliper_gfx::kMaxDynamicOffsets) {
+            std::vector<uint8_t> block(s.stage->params);
+            block.resize((block.size() + 15) / 16 * 16, 0);
+            r.dynamic_offsets[n_dyn++] = out.uniform(block.data(), uint32_t(block.size()));
+        }
         for (uint8_t i = 0; i < s.layout_count; ++i) r.vertex[i] = s.vertex[i];
         r.index_buffer = s.index_buffer;
         r.count = s.count;

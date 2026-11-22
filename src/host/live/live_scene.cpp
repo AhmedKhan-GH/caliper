@@ -135,6 +135,8 @@ bool SceneView::init(std::string* why) {
     res_ = std::make_unique<BackendResources>(gfx_, programs_, caliper_gfx::cmap::colormap_source(colormaps_));
     pick_ = std::make_unique<PickPass>(gfx_);
     stages_ = std::make_unique<caliper_scene::StageCache>(gfx_);
+    // The draw records bind a stage's params at group 3 (compile.cpp, BackendResources).
+    stages_->set_params_bound(true);
     return res_->init(why);
 }
 

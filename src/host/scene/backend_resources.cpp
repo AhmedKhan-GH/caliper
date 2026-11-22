@@ -189,6 +189,28 @@ BindGroup BackendResources::stage_bind_group(const StageProgram& stage, ProgramI
     return g;
 }
 
+BindGroup BackendResources::stage_params_group(const StageProgram& stage) {
+    if (!stage.program) return {};
+    std::string k = "p";
+    put(k, stage.program.id);
+    auto it = stage_groups_.find(k);
+    if (it != stage_groups_.end()) return BindGroup{it->second.handle};
+    BindGroupDesc d;
+    d.program = stage.program;
+    d.group = 3;   // caliper_builder::programs::kStageParamsGroup
+    BindEntry e;
+    e.binding = 0;
+    e.buffer = kArena;
+    d.entries[d.entry_count++] = e;
+    const BindGroup g = backend_.create_bind_group(d);
+    if (!g) {
+        error_ = backend_.last_error();
+        return {};
+    }
+    stage_groups_[k] = {stage.program, g.id, Texture{}};
+    return g;
+}
+
 BindGroup BackendResources::make_group(Program prog, ProgramId id, uint32_t group, Texture image, uint32_t image_binding) {
     BindGroupDesc d;
     d.program = prog;

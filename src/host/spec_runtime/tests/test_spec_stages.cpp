@@ -605,6 +605,63 @@ TEST_CASE("stages: a material stage recolours points, a vertex stage moves them,
     CHECK(cache.size() == 0);
 }
 
+TEST_CASE("stages: a stage's params reach its program as the uniform at group 3, a new value at the next frame") {
+    if (!have_compiler()) {
+        MESSAGE("skipped: this build has no caliper-wgsl library");
+        return;
+    }
+    StageRig rig;
+    if (!rig.init()) {
+        MESSAGE("skipped: no Metal device");
+        return;
+    }
+    uint32_t staged = 0;
+    const std::vector<uint8_t> plain = rig.draw(nullptr, &staged);
+    const auto [px, py] = rig.at[1];
+    REQUIRE(pixel(plain, px, py) != StageRig::kClear);
+    // Red scaled by the param `level`: 0 draws black, 1 full red, with one program.
+    const std::string level = "fn material(in: MaterialIn) -> vec4<f32> { return vec4<f32>(params.level, 0.0, 0.0, 1.0); }\n";
+    const caliper_host::StageCompile c =
+        caliper_host::compile_stage_program(Primitive::Points, &level, nullptr, "level", {"level"});
+    REQUIRE_MESSAGE(c.build, c.verdict.message);
+    struct LevelSource final : StageSource {
+        std::shared_ptr<const StageBuild> b;
+        float level = 1.0f;
+        std::string refusal;
+        std::shared_ptr<const StageBuild> build(std::string_view p, Primitive prim) const override {
+            return b && p == "cloud" && prim == b->primitive ? b : nullptr;
+        }
+        uint64_t revision() const override { return 1; }
+        float time_s() const override { return 0.0f; }
+        void refused(const StageBuild&, const std::string& m) override { refusal = m; }
+        void frames_done(double, uint32_t, bool) override {}
+        std::vector<uint8_t> params(std::string_view) const override {
+            return pg::pack_params({pg::ParamField{"level", pg::ParamType::f32}}, {{"level", double(level)}});
+        }
+    } src;
+    src.b = c.build;
+    StageCache cache(*rig.gfx);
+    cache.set_source(&src);
+    cache.set_params_bound(true);
+    auto drawn = [&] {
+        cache.begin_frame();
+        std::vector<uint8_t> out = rig.draw(&cache, &staged);
+        cache.end_frame();
+        CHECK_MESSAGE(src.refusal.empty(), src.refusal);
+        return out;
+    };
+    const std::vector<uint8_t> full = drawn();
+    CHECK(staged == 1);
+    CHECK(pixel(full, px, py) == 0xff0000ffu);
+    const uint64_t program = cache.find("cloud", Primitive::Points)->program.id;
+    src.level = 0.0f;
+    const std::vector<uint8_t> dark = drawn();
+    CHECK(staged == 1);
+    CHECK(pixel(dark, px, py) == 0xff000000u);
+    CHECK(cache.find("cloud", Primitive::Points)->program.id == program);   // no new compile
+    capture("stage-params.png", full);
+}
+
 TEST_CASE("stages: a scene view draws its panel's stages, again on a new revision, and reports their frames") {
     if (!have_compiler()) {
         MESSAGE("skipped: this build has no caliper-wgsl library");

@@ -425,6 +425,7 @@ void draw_histogram(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
                                   spec_fmt4(ys[i]).c_str());
             }
         }
+        if (v.spec_panel && v.instruments) draw_plot_annotations(*v.spec_panel, *v.instruments);   // spec_annotations.h
         ImPlot::EndPlot();
     }
     pop_plot_style();
@@ -642,6 +643,7 @@ void draw_points2d(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
         none.Flags = ImPlotItemFlags_NoLegend | ImPlotItemFlags_NoFit;
         ImPlot::PlotDummy("##points", none);
         selection_gesture(v, L, true);
+        if (v.spec_panel && v.instruments) draw_plot_annotations(*v.spec_panel, *v.instruments);   // spec_annotations.h
         ImPlot::EndPlot();
     }
     pop_plot_style();
@@ -782,6 +784,22 @@ void draw_text(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
     const PreparedText& X = v.data.text;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     float y = c.Min.y;
+    // A bound text: formatted at each frame from the values at the cursor
+    // (spec_annotations.h), with the bound value as its field `value`.
+    if (X.bound && v.spec_panel && v.spec_panel->options.bound_text) {
+        static const SpecInstrumentHost no_session;
+        const SpecInstrumentHost& host = v.instruments ? *v.instruments : no_session;
+        std::map<std::string, nlohmann::json> extra;
+        if (v.spec_panel->bind.count("value")) extra["value"] = X.value_json;
+        const std::string t = spec_bound_text_string(*v.spec_panel->options.bound_text, host, extra);
+        if (!X.text.empty()) {
+            text_at(dl, L.ui, L.ui_size, ImVec2(c.Min.x, y), L.secondary, fit_text(L.ui, L.ui_size, X.text, c.GetWidth()));
+            y += L.ui_size + 6.0f * L.text_scale;
+        }
+        const float big = std::round(L.mono_size * 1.6f);
+        text_at(dl, L.mono, big, ImVec2(c.Min.x, y), L.text, fit_text(L.mono, big, t, c.GetWidth()));
+        return;
+    }
     if (!X.text.empty()) {
         ImFont* f = font_or_current(L.ui);
         const float size = std::round(L.ui_size * (X.has_value ? 1.0f : 1.25f));
@@ -936,16 +954,25 @@ void SpecTextures::collect() {
 SessionPanelSource::SessionPanelSource(caliper_builder::Session& session, caliper_builder::ResolveLimits limits)
     : session_(session), limits_(limits) {}
 
+// What references and kept steps read now: the session's values, its kept
+// steps and its cursor.
+static caliper_builder::ChainContext session_chain(caliper_builder::Session& session) {
+    const caliper_builder::CursorState c = session.history().cursor();
+    return caliper_builder::ChainContext{&session.values(), &session.history(), c.step, c.live};
+}
+
 PanelData SessionPanelSource::resolve(const spec::Spec& s, std::string_view panel_id) {
     const auto open = session_.open_spec();
     if (open && open->spec == s) return session_.resolve(panel_id);
-    return caliper_builder::resolve_panel(s, panel_id, session_.store(), limits_);
+    const caliper_builder::ChainContext chain = session_chain(session_);
+    return caliper_builder::resolve_panel(s, panel_id, session_.store(), limits_, &session_.data_sources(), &chain);
 }
 
 uint64_t SessionPanelSource::revision() const { return session_.catalog().revision(); }
 
 uint64_t SessionPanelSource::generation(const spec::Spec& s, std::string_view panel_id) {
-    return caliper_builder::panel_generation(s, panel_id, session_.data_sources());
+    const caliper_builder::ChainContext chain = session_chain(session_);
+    return caliper_builder::panel_generation(s, panel_id, session_.data_sources(), &chain);
 }
 
 // ---- one panel --------------------------------------------------------------------------
@@ -1086,6 +1113,8 @@ struct EntityPanel {
     std::unique_ptr<caliper_gfx::Backend> gfx;   // owned; null when the view borrows a backend
     std::unique_ptr<caliper_live_views::SceneView> view;
     std::vector<std::string> drawn;               // the paths written into the view
+    std::vector<std::string> marks_drawn;         // the annotations' paths written into the view
+    std::string marks_key;                        // what the annotations drew last
     bool dirty = true;                            // built again since the view took it
     std::string notice;                           // why no view could start
     caliper_scene::StartingCamera start;          // the panel's view_camera, applied when it changes
@@ -1149,10 +1178,27 @@ caliper_live_views::SceneView* SpecRuntime::entity_view(const std::string& panel
         ep.view->set_starting(ep.start);
         ep.dirty = true;
     }
+    const bool rebuilt = ep.dirty;
     if (ep.dirty) {
         apply_entity_scene(*ep.view, spec_scene_content(ep.scene), &ep.drawn);
         ep.dirty = false;
     }
+    // The panel's annotations at the cursor, written again when they or the data box change.
+    if (spec_)
+        if (const spec::Panel* p = spec_->find_panel(panel_id)) {
+            const std::vector<SceneAnnotationMark> marks = scene_annotation_marks(*p, instrument_host(&*spec_));
+            std::string key;
+            char t[160];
+            for (const SceneAnnotationMark& m : marks) {
+                std::snprintf(t, sizeof t, "|%d %.9g %.9g %.9g %lld %d %.9g %.9g ", int(m.kind), m.at[0], m.at[1],
+                              m.at[2], (long long)m.index, m.axis, m.lo, m.hi);
+                key += m.id + t + m.entity + "\x1f" + m.text;
+            }
+            if (rebuilt || key != ep.marks_key) {
+                apply_annotation_marks(*ep.view, spec_scene_content(ep.scene), marks, &ep.marks_drawn);
+                ep.marks_key = std::move(key);
+            }
+        }
     return ep.view.get();
 }
 
@@ -1184,6 +1230,21 @@ void SpecRuntime::set_instruments(caliper_builder::EventSink* events, caliper_bu
 void SpecRuntime::set_instrument_state(caliper_builder::ValueStore* values, caliper_builder::StepHistory* history) {
     values_ = values;
     history_ = history;
+    // A stage's params follow their references at the next frame.
+    app_stage_host_impl()->set_evaluate(
+        values ? std::function<nlohmann::json(const spec::Reference&)>(
+                     [values](const spec::Reference& r) { return values->value(r); })
+               : nullptr);
+}
+
+caliper_builder::ChainContext SpecRuntime::chain_context() const {
+    caliper_builder::ChainContext c{values_, history_, 0, true};
+    if (history_) {
+        const caliper_builder::CursorState cursor = history_->cursor();
+        c.cursor_step = cursor.step;
+        c.cursor_live = cursor.live;
+    }
+    return c;
 }
 
 SpecInstrumentHost SpecRuntime::instrument_host(const spec::Spec* shown) const {
@@ -1364,14 +1425,17 @@ void SpecRuntime::invalidate() {
 void SpecRuntime::prepare(Entry& e, const PanelData& data, const spec::Spec* spec) {
     textures_.release(e.view.texture);
     e.view.texture = nullptr;
-    e.view.data = prepare_panel(spec ? *spec : spec_ ? *spec_ : spec::Spec{}, e.panel, data, limits_);
+    // The panel as it draws now: its option references applied.
+    const caliper_builder::ChainContext chain = chain_context();
+    const spec::Panel shown = caliper_builder::panel_with_values(e.panel, &chain);
+    e.view.data = prepare_panel(spec ? *spec : spec_ ? *spec_ : spec::Spec{}, shown, data, limits_);
     e.view.fit_frames = 2;
     ++e.view.version;
     e.stale = false;
     e.generation = data.generation;
     if (e.panel.primitive == spec::Primitive::scene && !e.panel.entities.empty()) {
         EntityPanel& ep = scenes_->entity(e.panel.id);
-        ep.scene.set_entities(e.panel, data);
+        ep.scene.set_entities(shown, data);
         ep.dirty = true;
         const caliper_scene::StartingCamera start = spec_starting_camera(e.panel);
         if (!ep.start_set || !same_starting(start, ep.start)) {
