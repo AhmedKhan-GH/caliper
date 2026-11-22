@@ -25,9 +25,8 @@
 // thread of a Caliper API request), then reads through the queue again.
 // Nothing here throws.
 //
-// This header is an interface of milestone M1: the track "events" writes the
-// ring, the handler and the feeds (src/builder/session/event_ring.cpp); the
-// tracks "spec1" and "controls" push picks, selections, control changes and
+// The ring, the handler and the feeds are in src/builder/session/event_ring.cpp.
+// The spec runtime and its controls push picks, selections, control changes and
 // run changes through EventSink.
 #include <caliper_builder/commands/journal.h>
 #include <caliper_builder/commands/queue.h>

@@ -13,9 +13,8 @@
 //
 // Threads: everything here runs on the frame thread, as the runtime does.
 //
-// This header is an interface of milestone M1: the track "spec1" owns the
-// runtime and its layout and calls these functions; the track "controls"
-// defines them in spec_controls.cpp.
+// The spec runtime and its layout call these functions, and spec_controls.cpp
+// defines them.
 #include "spec_runtime/spec_runtime.h"
 
 #include <caliper_builder/session/events.h>

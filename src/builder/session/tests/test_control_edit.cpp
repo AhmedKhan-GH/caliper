@@ -26,12 +26,6 @@ namespace {
 
 namespace cl = caliper_builder::control_layout;
 
-// The spec library reads, validates and writes version 1 once the M1 track
-// "spec1" is merged: the bind grammar is its first piece. Until then an edit
-// that adds a control fails validation with the version 0 rules, and the
-// cases that need a valid version 1 spec say that they wait for it.
-bool spec_v1_ready() { return spec::parse_control_target("param:lr").has_value(); }
-
 spec::Panel panel(const std::string& id) {
     spec::Panel p;
     p.id = id;
@@ -144,10 +138,6 @@ TEST_CASE("control commands: their own refusals come before the validator") {
 }
 
 TEST_CASE("control commands: create, patch and remove edit the open spec with a diff and undo") {
-    if (!spec_v1_ready()) {
-        MESSAGE("waits for the spec library of version 1 (track spec1): the bind grammar is a stub");
-        return;
-    }
     auto s = open_session(fresh_dir("control_edit") + "/workspace");
     ok(*s, "spec.new", {{"id", "m1"}});
     CHECK(s->open_spec()->spec.version == 0);
@@ -192,10 +182,6 @@ TEST_CASE("control commands: create, patch and remove edit the open spec with a 
 }
 
 TEST_CASE("control commands: a control placed below a scene panel, and the version raise is one undo step") {
-    if (!spec_v1_ready()) {
-        MESSAGE("waits for the spec library of version 1 (track spec1): the bind grammar is a stub");
-        return;
-    }
     auto s = open_session(fresh_dir("control_edit_place") + "/workspace");
     ok(*s, "spec.new", {{"id", "m1"}});
     ok(*s, "panel.create", {{"id", "world"}, {"primitive", "scene"}, {"bind", {{"scene", "live:model"}}}});
