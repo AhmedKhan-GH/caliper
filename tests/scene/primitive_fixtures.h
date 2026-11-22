@@ -11,8 +11,8 @@
 //             vertex, which the clamp draws as the last vertex) and with per-vertex colours, and
 //             the graph's nodes as points coloured by class
 //   mesh      a mesh lit by the headlight from its normals, and a textured quad
-//   cameras   two cameras on posed rigs, drawn as frustums: one with a colour image on its image
-//             plane, one with a depth image and its back-projected cloud
+//   cameras   two cameras on posed rigs, drawn as frustums: one with a colour image filling its
+//             image plane, one with a depth image and its back-projected cloud
 //   through   the same rigs looked through the first camera: the room projected, and the camera's
 //             pixel space (a translucent image over a quarter of it, and 2-D points, boxes and arrows
 //             over the image) flat over it, letterboxed to the camera's aspect
@@ -360,7 +360,11 @@ inline void rigs(Fixture& f, bool pixel_space) {
     cam.params.set("convention", Json(CALIPER_NET_CONVENTION_RDF));
     cam.params.set("plane_distance", Json(0.4));
     f.messages.push_back(cam);
-    // The colour image: smooth gradients, 32 x 24, over the top-left quarter of the camera's pixels.
+    // The colour image: smooth gradients, 32 x 24. Looked through, it covers the top-left quarter of
+    // the camera's pixels, so that the sketch over it and the room beside it can be picked; on the
+    // image plane in 3-D it fills the plane at 2 pixels a texel, because a texture drawn smaller than
+    // about a texel a pixel takes colours from a sample position that differs by a fraction of a texel
+    // between rasterisers, more than the parity rules' one level for a bilinear sample allows.
     std::vector<uint32_t> px(32 * 24);
     for (uint32_t y = 0; y < 24; ++y)
         for (uint32_t x = 0; x < 32; ++x) px[y * 32 + x] = RGBA(40 + 6 * x, 60 + 7 * y, 160, 255);
@@ -369,7 +373,8 @@ inline void rigs(Fixture& f, bool pixel_space) {
     if (pixel_space) img.params.set("opacity", Json(0.6));
     img.arrays.push_back(f.section("pixels", CALIPER_NET_DTYPE_U8, {24, 32, 4}, px));
     f.messages.push_back(img);
-    f.transform("rig/left/rgb", translate(4, 4, 0));   // a 2-D transform in the camera's pixels
+    if (pixel_space) f.transform("rig/left/rgb", translate(4, 4, 0));   // a 2-D transform in the camera's pixels
+    else f.transform("rig/left/rgb", {2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1});   // 2 camera pixels a texel
 
     const float eye2[3] = {1.7f, -1.4f, 0.9f}, fwd2[3] = {-1.5f, 1.7f, -0.6f};
     f.transform("rig/right", look_from(eye2, fwd2), true);
