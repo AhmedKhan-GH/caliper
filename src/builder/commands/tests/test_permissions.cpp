@@ -247,3 +247,63 @@ TEST_CASE("the modes' names, words and cycle") {
     CHECK(next_agent_mode(AgentMode::read_only) == AgentMode::ask);
     CHECK(next_agent_mode(AgentMode::allow_all) == AgentMode::ask);
 }
+
+TEST_CASE("a rule of a run command names one parameter or one action") {
+    // The key of run.set_param and run.action carries the target, so a card's
+    // rule allows "changes of lr" and not every parameter.
+    CHECK(permission_rule_key(chat("run.set_param", {{"name", "lr"}, {"value", 0.01}})) == "run.set_param:lr");
+    CHECK(permission_rule_key(chat("run.action", {{"name", "save_checkpoint"}})) == "run.action:save_checkpoint");
+    CHECK(permission_rule_key(chat("run.pause", {{"op", "pause"}})) == "run.pause");
+    CHECK(permission_rule_key(chat("panel.patch", {{"id", "lr"}})) == "panel.patch");
+    // A request without a valid name gets a key that no rule holds.
+    CHECK(permission_rule_key(chat("run.set_param", {{"value", 1}})) == "run.set_param:");
+    CHECK(permission_rule_key(chat("run.action", {{"name", std::string("a\nb")}})) == "run.action:");
+    CHECK(permission_rule_key(chat("run.action", {{"name", std::string(64, 'a')}})) == "run.action:");
+    CHECK_FALSE(rule_command_allowed("run.action:"));
+
+    CHECK(rule_command_allowed("run.set_param:lr"));
+    CHECK(rule_command_allowed("run.action:save_checkpoint"));
+    CHECK(rule_command_allowed("run.set_param:" + std::string(63, 'x')));
+    CHECK_FALSE(rule_command_allowed("run.set_param:" + std::string(64, 'x')));
+    CHECK_FALSE(rule_command_allowed("run.set_param:a\tb"));
+    CHECK_FALSE(rule_command_allowed("run.pause:x"));       // takes no target
+    CHECK_FALSE(rule_command_allowed("panel.patch:lr"));
+    CHECK_FALSE(rule_command_allowed("run.state:lr"));      // a read
+    CHECK(rule_command_allowed("run.pause"));
+    // The bare name passes as the card's check of the command.
+    CHECK(rule_command_allowed("run.set_param"));
+
+    // A rule of the session or a saved rule allows a run command's card.
+    PermissionContext c;
+    c.saved_rule = true;
+    CHECK(decide("run.set_param", AgentMode::ask, ApprovalDecision::ask, {{"name", "lr"}, {"value", 0.01}}, c).decision ==
+          ApprovalDecision::allow);
+    // Accept edits does not cover a run command; Read only refuses it; Allow all runs it.
+    CHECK(decide("run.set_param", AgentMode::accept_edits, ApprovalDecision::ask, {{"name", "lr"}, {"value", 0.01}})
+              .decision == ApprovalDecision::ask);
+    CHECK(decide("run.pause", AgentMode::read_only, ApprovalDecision::ask, {{"op", "pause"}}).decision ==
+          ApprovalDecision::deny);
+    CHECK(decide("run.action", AgentMode::allow_all, ApprovalDecision::ask, {{"name", "save"}}).decision ==
+          ApprovalDecision::allow);
+}
+
+TEST_CASE("saved rules with a target round-trip, and a run rule without its target is ignored") {
+    const std::string d = dir("targets");
+    const std::string path = d + "/agent-permissions.json";
+    AgentPermissionsFile f;
+    f.rules = {{"mcp", "run.set_param:lr"}, {"claude", "run.action:save_checkpoint"}, {"mcp", "run.pause"}};
+    REQUIRE(write_agent_permissions(path, f).ok());
+    AgentPermissionsRead r = read_agent_permissions(path);
+    CHECK(r.problems.empty());
+    CHECK(r.file.rules == f.rules);
+
+    write(path, R"({"version": 1, "rules": [{"agent": "mcp", "command": "run.set_param"},
+                   {"agent": "mcp", "command": "run.action:"}, {"agent": "mcp", "command": "run.pause:x"},
+                   {"agent": "mcp", "command": "run.set_param:momentum"}]})");
+#ifndef _WIN32
+    ::chmod(path.c_str(), 0600);
+#endif
+    r = read_agent_permissions(path);
+    CHECK(r.file.rules == std::vector<AgentRule>{{"mcp", "run.set_param:momentum"}});
+    CHECK(r.problems.size() == 3);
+}

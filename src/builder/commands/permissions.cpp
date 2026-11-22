@@ -28,6 +28,21 @@ constexpr std::size_t kMaxRules = 4096;
 
 bool saved_mode(AgentMode m) { return m != AgentMode::allow_all; }
 
+// The commands whose rule names one target, the parameter or the action of
+// the argument `name` (design/instruments.md, Run Effect Class).
+bool rule_takes_target(std::string_view command) { return command == "run.set_param" || command == "run.action"; }
+
+// A parameter's or an action's name, as caliper.param and caliper.action
+// allow: 1 to 63 bytes of UTF-8 without control characters.
+bool valid_target_name(std::string_view name) {
+    if (name.empty() || name.size() > 63) return false;
+    for (const char ch : name) {
+        const auto b = static_cast<unsigned char>(ch);
+        if (b < 0x20 || b == 0x7f) return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 const char* agent_mode_name(AgentMode mode) {
@@ -128,13 +143,21 @@ bool valid_rule_agent(std::string_view agent) {
 }
 
 std::string permission_rule_key(const CommandInvocation& invocation) {
-    // Stub of the interface: the rule of a run command for one parameter or
-    // one action is built by the track "controls" (design/instruments.md).
-    return invocation.name;
+    if (!rule_takes_target(invocation.name)) return invocation.name;
+    // A request without a valid name gets a key that no rule can hold, since
+    // a rule's target is never empty.
+    const auto it = invocation.args.is_object() ? invocation.args.find("name") : invocation.args.end();
+    if (it == invocation.args.end() || !it->is_string() || !valid_target_name(it->get_ref<const std::string&>()))
+        return invocation.name + ":";
+    return invocation.name + ":" + it->get<std::string>();
 }
 
 bool rule_command_allowed(std::string_view command) {
-    const CommandDescriptor* d = find_command_descriptor(command);
+    const std::size_t colon = command.find(':');
+    const std::string_view name = command.substr(0, colon);
+    if (colon != std::string_view::npos && (!rule_takes_target(name) || !valid_target_name(command.substr(colon + 1))))
+        return false;
+    const CommandDescriptor* d = find_command_descriptor(name);
     return d && d->agents && d->effect != CommandEffect::read;
 }
 
@@ -209,6 +232,11 @@ AgentPermissionsRead read_agent_permissions(const std::string& path) {
                 }
                 if (!rule_command_allowed(rule.command)) {
                     out.problems.push_back("Ignored " + where + ", whose command is not one an agent may be allowed.");
+                    continue;
+                }
+                if (rule_takes_target(rule.command)) {
+                    out.problems.push_back("Ignored " + where + ", which names no target: a rule of " + rule.command +
+                                           " allows one parameter or one action, as in " + rule.command + ":<name>.");
                     continue;
                 }
                 if (std::find(out.file.rules.begin(), out.file.rules.end(), rule) == out.file.rules.end())

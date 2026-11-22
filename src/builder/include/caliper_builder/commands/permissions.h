@@ -22,9 +22,11 @@
 //     saved, off when the chat's agent ends or the app quits. What would ask
 //     runs without a card.
 // The rules: answering a card "for this session" or "always" allows that
-// command (by the name of the command the command layer runs) for the chat's
-// agent, or for mcp clients, in this session or, saved, until the person
-// revokes it. A saved rule is kept per agent: the chat's agent id, or "mcp".
+// command (by its rule key, permission_rule_key()) for the chat's agent, or
+// for mcp clients, in this session or, saved, until the person revokes it. The
+// key is the command's name, and for run.set_param and run.action the name
+// with its target ("run.set_param:lr"), so a rule allows one parameter or one
+// action. A saved rule is kept per agent: the chat's agent id, or "mcp".
 //
 // What no mode and no rule changes: the registry refuses before any policy a
 // viewer's change and history.undo or history.redo from an agent; an approval
@@ -38,10 +40,12 @@
 // The saved file (agent-permissions.json in the app-data folder), written
 // owner-only (0600) through a temporary file:
 //   {"version": 1, "modes": {"chat": "ask", "mcp": "accept_edits"},
-//    "rules": [{"agent": "claude", "command": "panel.patch"}, ...]}
+//    "rules": [{"agent": "claude", "command": "panel.patch"},
+//              {"agent": "mcp", "command": "run.set_param:lr"}, ...]}
 // read_agent_permissions() ignores, and reports, a malformed file, an unknown
 // field, a mode it does not know or that may not be saved (allow_all), and a
-// rule for an unknown agent id or for a command that is not an agent's; on
+// rule for an unknown agent id, for a command that is not an agent's, or for
+// run.set_param or run.action without its target; on
 // POSIX a file that others may write grants nothing. A missing file is the
 // defaults: Ask, no rules. No function here throws.
 #include <caliper_builder/commands/approval.h>
@@ -119,7 +123,11 @@ std::string permission_rule_key(const CommandInvocation& invocation);
 // for a chat agent ("claude", "custom").
 bool valid_rule_agent(std::string_view agent);
 // A command an agent may be allowed always: in the table, open to agents,
-// and one that changes something.
+// and one that changes something. A rule key with a target passes when the
+// command takes one (run.set_param, run.action) and the target is a valid
+// name (1 to 63 bytes, no control characters). The bare name of such a
+// command passes too, as the check of a card's command; the saved file
+// ignores a rule of it, which would allow no target.
 bool rule_command_allowed(std::string_view command);
 
 struct AgentPermissionsFile {
