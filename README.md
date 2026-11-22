@@ -254,7 +254,7 @@ Caliper is licensed under the [Apache License 2.0](LICENSE), the host and the SD
 
 ## Third-party licenses
 
-Caliper uses the following open-source libraries. Their license texts can be found in the respective directories under `third_party/` and `assets/fonts/`, and beside the JavaScript libraries the docs site's roadmap page loads, under `docs-theme/assets/roadmap/vendor/`. The libraries that CMake fetches at configure time carry their own license files in their source trees.
+Caliper uses the following open-source libraries. Their license texts can be found in the respective directories under `third_party/` and `assets/fonts/`, and beside the JavaScript libraries the docs site's roadmap page loads, in the `vendor/` folders under `theme/assets/` of the `sternbild-docs` package. The libraries that CMake fetches at configure time carry their own license files in their source trees.
 
 | Library | License | Copyright | Permits |
 |---|---|---|---|

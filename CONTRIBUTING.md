@@ -17,11 +17,11 @@ Every pull request is built and tested on macOS and Windows. [Continuous integra
 
 The shaders of the graphics layer are written once in WGSL under `src/host/gfx/shaders/`, and their MSL and SPIR-V are generated and committed. After changing one, run `python3 tools/shaders/generate.py` (it needs a Rust toolchain) and commit the generated files with it; [Shader Authoring](docs/applets/shader-authoring.md) describes the generator and its checks.
 
-To check the documentation, build it the way the Docs workflow does, from the repository root and with the same versions. The first command builds the docs site. Its API reference comes from the code: mkdocstrings renders the Python calls from the docstrings of Caliper LIB, and the hook `docs-theme/hooks/c_reference.py` renders the C tables from the `/** */` comments of the headers. `python3 scripts/check_api_reference.py` fails when a public symbol has no docstring or comment, or no page. The second command checks the design pages, which are built apart from the docs site and are not published.
+To check the documentation, build it the way the Docs workflow does, from the repository root and with the versions of `requirements-docs.txt`. The first command builds the docs site. Its API reference comes from the code: mkdocstrings renders the Python calls from the docstrings of Caliper LIB, and the hook `docs-theme/hooks/c_reference.py` renders the C tables from the `/** */` comments of the headers. `python3 scripts/check_api_reference.py` fails when a public symbol has no docstring or comment, or no page. The second command checks the design pages, which are built apart from the docs site and are not published.
 
 ```sh
-uvx --with mkdocs-material==9.8.1 --with mkdocs-awesome-nav==3.3.0 --with pymdown-extensions==13.1 --with mkdocstrings==1.0.8 --with mkdocstrings-python==2.0.10 --with griffelib==2.4.1 --with mkdocs-autorefs==1.4.5 --with ruff==0.17.3 mkdocs@1.6.1 build --strict
-uvx --with mkdocs-material==9.8.1 --with mkdocs-awesome-nav==3.3.0 --with pymdown-extensions==13.1 mkdocs@1.6.1 build --strict -f design/mkdocs.yml
+uv run --no-project --with-requirements requirements-docs.txt mkdocs build --strict
+uv run --no-project --with-requirements requirements-docs.txt mkdocs build --strict -f design/mkdocs.yml
 ```
 
 ## Submodules
@@ -45,7 +45,7 @@ Third-party code is vendored as git submodules under `third_party/`. Initialize 
 | `tests/` | the test suites, including the pixel-exact `tests/gfx` suite |
 | `docs/` | the documentation, published as the docs site (`mkdocs.yml`) |
 | `design/` | proposals for work that is not built yet, with the roadmap; built on its own (`design/mkdocs.yml`) and not published |
-| `docs-theme/` | the docs site's icons, fonts and stylesheet |
+| `docs-theme/` | the docs site's C reference hook, API reference templates and docstring extension; the theme and roadmap come from the `sternbild-docs` package (`requirements-docs.txt`) |
 | `site/` | the landing page, published with the docs |
 | `.github/workflows/` | the Build and Deploy Pages workflows |
 
