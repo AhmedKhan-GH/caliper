@@ -21,22 +21,6 @@ Each revision is additive. The earlier struct prefix stays frozen, and a revisio
     If a backend lacks a path, the matching caps bit is unset and every entry point is inert.
     Ship a CPU fallback for that case, as in the worked example below. An absent capability never gives a wrong image.
 
-```c
---8<-- "sdk/include/caliper/services/geometry_v1.h"
-```
-
-```c
---8<-- "sdk/include/caliper/services/geometry_v1_1.h"
-```
-
-```c
---8<-- "sdk/include/caliper/services/geometry_v1_2.h"
-```
-
-```c
---8<-- "sdk/include/caliper/services/geometry_v1_3.h"
-```
-
 ## Non-Goals
 
 The service draws geometry from a fixed menu. The table lists what it does not provide.
@@ -52,7 +36,19 @@ The service draws geometry from a fixed menu. The table lists what it does not p
 
 ## `caliper.geometry.v1` Instanced Points
 
-If caps bit 0 is set, `create_view` and `draw_points` are live. If the bit is absent, both are inert and the applet keeps its CPU fallback.
+The v1 service draws instanced points from imported allocations, built for particle clouds. Meshes and lines come with v1_1.
+
+### Point Calls
+
+<!-- c-api calls sdk/include/caliper/services/geometry_v1.h -->
+
+### Camera Type
+
+<!-- c-api types sdk/include/caliper/services/geometry_v1.h level=4 -->
+
+### Point Ids
+
+<!-- c-api ids sdk/include/caliper/services/geometry_v1.h -->
 
 ### Offscreen View Pattern
 
@@ -61,69 +57,45 @@ If caps bit 0 is set, `create_view` and `draw_points` are live. If the bit is ab
 3. Cast the id with `caliper::Bridge::imtex(view)` and show it with `ImGui::Image`. Use the logical size, which is `physical / DisplayFramebufferScale`, so one texel maps to one framebuffer pixel.
 4. Call `release_view(view)` on the frame thread. Do not release the view through the bridge.
 
-`clear_rgba` is packed little-endian as `r | g<<8 | b<<16 | a<<24`. The positions are a contiguous `(count,3)` f32 array at `pos_offset` inside the imported allocation `pos_alloc`. A `count` of `0` is a pure clear.
-
-If `attr_alloc != 0`, it selects a contiguous `(count,)` f32 scalar per point at `attr_offset`. The service colormaps the scalar through the shared LUTs over `[vmin, vmax]`, with the same index rule as `texture_from_tensor_mapped` (see [tensor-bridge](caliper-tensor-bridge-v1.md)). If `attr_alloc == 0`, points draw flat white and the service ignores `attr_offset` and `colormap`. `size_px` is the point size in pixels, clamped to device limits. Points blend additively with no depth test, so a particle cloud needs no sort.
-
-`cam` is a `CaliperGeomCamera` with column-major 4×4 `view` and `proj` matrices. The applet owns the camera math. Orbit, zoom, and ray-casting stay in the applet.
-
 ### Memory-Stability Contract
 
 The host reads the addressed bytes in place. The applet must not rewrite them until the next draw of the same view. On the worker side, drain the producer stream or queue once at the handoff, before it publishes the slot. The exemplars use this triple-buffer discipline with [`caliper.jobs.v1`](caliper-jobs-v1.md). The frame thread does every draw and never touches the learner's tensors. [Zero-copy tensor visualization](../../python/zero-copy-tensors.md#drain-rung-geometry) explains the reasons for both halves of this rule.
 
 ## `caliper.geometry.v1_1` General Primitives
 
-The first five members of the v1 table are identical in v1_1: `struct_size`, `caps`, `create_view`, `release_view`, and `draw_points`. Three members follow: `create_view_ex`, `draw_primitives`, and a reserved slot. The ABI epoch does not change.
+The first five members of the v1 table are identical in v1_1. Three members follow them. The ABI epoch does not change.
 
-If caps bit 1 is set, `create_view_ex` and `draw_primitives` are live. The bit implies nothing about bit 0, and hosts set both when the primitives path exists.
+Hosts set caps bit 0 and bit 1 together when the primitives path exists.
+
+### Primitive Calls
+
+<!-- c-api calls sdk/include/caliper/services/geometry_v1_1.h -->
+
+### Primitive Types
+
+<!-- c-api types sdk/include/caliper/services/geometry_v1_1.h level=4 -->
+
+### Primitive Ids
+
+<!-- c-api ids sdk/include/caliper/services/geometry_v1_1.h -->
 
 ### Depth Views
 
-`create_view_ex(width, height, flags)` is `create_view` plus flags. The one flag, `CALIPER_GEOM_VIEW_DEPTH`, attaches a D32-float depth buffer. The renderer keeps this buffer internal, so it is never sampled and never an id. The view uses the same texture table and `release_view`. A plain v1 view has no depth, and the host refuses any `depth_flags` bit against it.
+`CALIPER_GEOM_VIEW_DEPTH` views use the same texture table and `release_view` as plain views. The renderer never samples the depth buffer, and it never gives the buffer an id.
 
 ### Atomic Gated Frame
 
-`draw_primitives(view, cam, draws, draw_count, draw_stride, clear_rgba)` renders one frame of the view atomically:
+`draw_primitives` renders one frame of the view atomically:
 
 1. Gate every draw (see [Draw Gates](#draw-gates)).
 2. Clear the color to `clear_rgba`, and clear depth to `1.0` if the view has depth.
 3. Encode `draws[0..draw_count)` in array order into a single render pass. Later draws paint over earlier ones, subject to their own depth and blend state.
 
-A `draw_count` of `0` is a pure clear. If any gate fails, the host draws and clears nothing, leaves prior pixels intact, and writes one `caliper.log.v1` line that names the gate. The API is one atomic call with a descriptor array and not a begin/end pair, because a begin/end pair can fail after the clear.
+If any gate fails, the host writes one `caliper.log.v1` line that names the gate. The API is one atomic call with a descriptor array and not a begin/end pair, because a begin/end pair can fail after the clear.
 
-`draw_stride` is the applet's compiled `sizeof(CaliperGeomDraw)`. The host reads `min(stride, its own sizeof)`, so the struct can grow additively. The host refuses a stride below its known minimum. The [C++ sugar](#c-sugar) passes `sizeof` for you.
+The host reads `min(stride, its own sizeof)`, so the struct can grow additively. The [C++ sugar](#c-sugar) passes `sizeof` for you.
 
-### `CaliperGeomDraw` Descriptor
-
-`CaliperGeomDraw` is one fixed-layout struct per draw call, and its size is 192 bytes.
-
-Geometry sources are `(alloc, byte offset)` pairs into a bridge-v1.2 import. An alloc id of `0` means the source is absent. All offsets are 4-byte aligned.
-
-| Field(s) | Meaning |
-|---|---|
-| `pos_alloc`, `pos_offset` | Positions: contiguous `(vertex_count, 3)` f32 |
-| `vertex_count` | Vertex count (must be `> 0`) |
-| `index_alloc`, `index_offset`, `index_count` | Indices: `(index_count,)` **u32** bit patterns, consumed only when `index_alloc != 0` |
-| `normal_alloc`, `normal_offset` | Normals: `(vertex_count, 3)` f32, required for `LAMBERT` |
-| `attr_alloc`, `attr_offset` | Per-vertex attribute, with its meaning set by `color_mode` |
-
-`topology` sets how vertices assemble:
-
-| Constant | Value |
-|---|---|
-| `CALIPER_GEOM_TOPO_POINTS` | `0u` |
-| `CALIPER_GEOM_TOPO_LINES` | `1u` |
-| `CALIPER_GEOM_TOPO_LINE_STRIP` | `2u` |
-| `CALIPER_GEOM_TOPO_TRIANGLES` | `3u` |
-| `CALIPER_GEOM_TOPO_TRIANGLE_STRIP` | `4u` |
-
-`color_mode` sets where each vertex color comes from:
-
-| Constant | `attr` layout | Color |
-|---|---|---|
-| `CALIPER_GEOM_COLOR_FLAT` (`0u`) | None | `flat_rgba` for every vertex, unpacked LE bytes `/255` |
-| `CALIPER_GEOM_COLOR_COLORMAP` (`1u`) | `(vertex_count,)` f32 | `attr` value through the LUT `colormap` over `[vmin, vmax]` |
-| `CALIPER_GEOM_COLOR_VERTEX_RGBA` (`2u`) | `(vertex_count,)` u32 | Packed LE `r\|g<<8\|b<<16\|a<<24` per vertex, unpacked `/255` |
+### Draw Descriptor Semantics
 
 The `COLORMAP` index rule is byte-identical to `texture_from_tensor_mapped` and `map_f32_to_rgba8` in the tensor bridge:
 
@@ -131,14 +103,7 @@ The `COLORMAP` index rule is byte-identical to `texture_from_tensor_mapped` and 
 idx = uint(clamp((v - vmin) / (vmax - vmin), 0, 1) * 255.0 + 0.5)
 ```
 
-`NaN` maps to `0`, and a degenerate range with `vmin == vmax` maps to `0`. The table has 256 entries. `colormap` is a bridge LUT id: `CALIPER_CMAP_VIRIDIS` is 0, `_MAGMA` is 1, and `_RDBU` is 2.
-
-`shade_mode` sets the lighting:
-
-| Constant | Meaning |
-|---|---|
-| `CALIPER_GEOM_SHADE_UNLIT` (`0u`) | Color as computed above |
-| `CALIPER_GEOM_SHADE_LAMBERT` (`1u`) | Single headlight, Gouraud, and requires `normal_alloc != 0` |
+`NaN` maps to `0`, and a degenerate range with `vmin == vmax` maps to `0`. The table has 256 entries. The bridge LUT ids are `CALIPER_CMAP_VIRIDIS` (0), `_MAGMA` (1), and `_RDBU` (2).
 
 `LAMBERT` uses one headlight with the view-space light direction `(0,0,1)`. The host shades per vertex and interpolates:
 
@@ -150,28 +115,9 @@ color.rgb *= lit;                                  // alpha untouched
 
 The host computes `nmat = transpose(inverse(upper3x3(view * model)))` on the CPU for each draw. The `0.30` ambient term is fixed and is not a parameter. For faceted shading, duplicate the vertices with face normals.
 
-`blend_mode` sets the blend equation:
+The depth compare is fixed at `LESS_OR_EQUAL`, so coplanar edges win. For a wireframe over a mesh, make draw 0 the triangles (`TEST | WRITE`) and draw 1 the lines (`TEST` only).
 
-| Constant | Equation |
-|---|---|
-| `CALIPER_GEOM_BLEND_OPAQUE` (`0u`) | Blending disabled |
-| `CALIPER_GEOM_BLEND_ALPHA` (`1u`) | Color `SRC_ALPHA` and `ONE_MINUS_SRC_ALPHA`, alpha `ONE` and `ONE_MINUS_SRC_ALPHA` |
-| `CALIPER_GEOM_BLEND_ADDITIVE` (`2u`) | `ONE` and `ONE` on both channels, identical to the v1 points look |
-
-`depth_flags` is a bit set, valid only on a `CALIPER_GEOM_VIEW_DEPTH` view:
-
-| Constant | Meaning |
-|---|---|
-| `CALIPER_GEOM_DEPTH_TEST` (`1u << 0`) | Depth test on, with a `LESS_OR_EQUAL` compare |
-| `CALIPER_GEOM_DEPTH_WRITE` (`1u << 1`) | Write depth |
-
-The compare is fixed at `LESS_OR_EQUAL`, so coplanar edges win. For a wireframe over a mesh, make draw 0 the triangles (`TEST | WRITE`) and draw 1 the lines (`TEST` only).
-
-The remaining fields are `flat_rgba` (packed LE, used for `COLOR_FLAT`) and `colormap`, `vmin`, and `vmax` (used for `COLOR_COLORMAP`). `size_px` is the point size and is ignored for other topologies. `reserved[2]` must be zero, and the host refuses a nonzero value.
-
-`model[16]` is the per-draw column-major model transform. Pass an identity matrix for world-space vertices. The host premultiplies `mvp = proj * view * model`, and the normal matrix for `LAMBERT`. An all-zero `model` renders nothing. The sugar function `geom_draw_defaults()` sets identity, so you do not hit this case.
-
-The camera convention is +Y up and clip Z in `[0, 1]`, as in Vulkan, Metal, and D3D. It is not the GL range `[-1,1]`.
+The host premultiplies `mvp = proj * view * model`, and the normal matrix for `LAMBERT`. The sugar function `geom_draw_defaults()` sets an identity `model`, so you do not hit the all-zero case. The camera convention is +Y up and clip Z in `[0, 1]`, as in Vulkan, Metal, and D3D. It is not the GL range `[-1,1]`.
 
 ### Fixed-Function State
 
@@ -205,13 +151,25 @@ Index values live in device memory, so the host cannot gate them. Both backends 
 
 ## `caliper.geometry.v1_2` Textured Meshes
 
-`CaliperGeomDrawV1_2` is the frozen 192-byte `CaliperGeomDraw` record (`base`) plus an appended texture tail (`uv_alloc`, `uv_offset`, `texture`). It is 216 bytes, and `offsetof(uv_alloc)` is 192. It uses the same `draw_primitives` and `draw_stride` slot, and `reserved0` stays NULL. If caps bit 2 (`CALIPER_GEOM_CAP_TEXTURED`, `1u << 2`) is set, `COLOR_TEXTURE` draws are live. If the bit is absent, the textured path is inert and the draw behaves as in v1_1.
+`CaliperGeomDrawV1_2` uses the same `draw_primitives` and `draw_stride` slot as v1_1, and `reserved0` stays `NULL`. If caps bit 2 (`CALIPER_GEOM_CAP_TEXTURED`) is set, `COLOR_TEXTURE` draws are live. If the bit is absent, the textured path is inert and the draw behaves as in v1_1.
 
 Calls through the v1.1 table accept a minimum stride of `192` and cannot request textured color. Calls through the v1.2 table need a minimum stride of `216`, and the host refuses a shorter stride.
 
+### Texture Calls
+
+<!-- c-api calls sdk/include/caliper/services/geometry_v1_2.h -->
+
+### Texture Types
+
+<!-- c-api types sdk/include/caliper/services/geometry_v1_2.h level=4 -->
+
+### Texture Ids
+
+<!-- c-api ids sdk/include/caliper/services/geometry_v1_2.h -->
+
 ### `COLOR_TEXTURE` Color Mode
 
-`CALIPER_GEOM_COLOR_TEXTURE` (`3u`) is a fourth `color_mode` value. Each vertex carries a `(vertex_count, 2)` f32 UV pair at `(uv_alloc, uv_offset)`. This is another `(alloc, byte offset)` into a bridge-v1.2 import, and the draw pulls it with the same final vertex index as positions, normals, and attributes. The fragment samples the bridge `CaliperTextureId` in `texture` at that coordinate, and the sampled RGBA value is the draw color. `attr_alloc` is ignored under `COLOR_TEXTURE`.
+`CALIPER_GEOM_COLOR_TEXTURE` is a fourth `color_mode` value. The draw pulls each UV pair with the same final vertex index as positions, normals, and attributes. The fragment samples the bridge texture in `texture` at that coordinate, and the sampled RGBA value is the draw color. `attr_alloc` is ignored under `COLOR_TEXTURE`.
 
 The sampler is fixed, with no configurable materials or sampler state:
 
@@ -243,13 +201,23 @@ If caps bit 2 is absent, `has_textured()` is false. The applet then falls back t
 
 ## `caliper.geometry.v1_3` Instanced Transforms
 
-`CaliperGeomDrawV1_3` is the frozen 216-byte `CaliperGeomDrawV1_2` record (`base`) plus an appended instance tail. It is 256 bytes in all. It uses the same `draw_primitives` and `draw_stride` slot, and `reserved0` stays NULL. If caps bit 3 (`CALIPER_GEOM_CAP_INSTANCED`, `1u << 3`) is set, the instance tail is live. If the bit is absent, the tail is inert and the draw behaves as in v1_2.
+`CaliperGeomDrawV1_3` uses the same `draw_primitives` and `draw_stride` slot as v1_2, and `reserved0` stays `NULL`. If caps bit 3 (`CALIPER_GEOM_CAP_INSTANCED`) is set, the instance tail is live. If the bit is absent, the tail is inert and the draw behaves as in v1_2.
 
-One call draws one imported mesh N times. An imported `(N,16)` f32 column-major pose tensor (`instance_alloc`, `instance_offset`, with `instance_count = N`) supplies the model matrix of each instance. The vertex shader pulls it by instance index and applies it to the world position first, as `mvp · (M_i · v)`. An optional imported `(N,)` f32 per-instance scalar (`instance_attr_alloc`, `instance_attr_offset`) tints each instance through the draw's `colormap`, `vmin`, and `vmax`, with the same index rule as every other `COLORMAP` path. If `instance_attr_alloc == 0`, the base `color_mode` sets the color.
+### Instance Calls
 
-If `instance_count == 0` or `instance_alloc == 0`, the draw takes the exact non-instanced path. A v1_3 record with a zero instance tail renders identically to the equivalent v1_2 record.
+<!-- c-api calls sdk/include/caliper/services/geometry_v1_3.h -->
 
-`LAMBERT` allows only rigid and uniform-scale instance transforms: rotation, uniform scale, and translation, with no shear and no non-uniform scale. Gate G14 refuses the whole frame if an instance matrix on a `LAMBERT` draw is outside this class. The tolerance is `CALIPER_GEOM_RIGID_TOL` (`1e-4f`), and it is not tunable. `UNLIT` instanced draws have no restriction.
+### Instance Types
+
+<!-- c-api types sdk/include/caliper/services/geometry_v1_3.h level=4 -->
+
+### Instance Ids
+
+<!-- c-api ids sdk/include/caliper/services/geometry_v1_3.h -->
+
+One call draws one imported mesh N times. An imported `(N,16)` f32 column-major pose tensor supplies the model matrix of each instance. The vertex shader pulls it by instance index and applies it to the world position first, as `mvp · (M_i · v)`. An optional imported `(N,)` f32 per-instance scalar tints each instance through the draw's `colormap`, `vmin`, and `vmax`, with the same index rule as every other `COLORMAP` path. If `instance_attr_alloc == 0`, the base `color_mode` sets the color.
+
+`LAMBERT` allows only rigid and uniform-scale instance transforms: rotation, uniform scale, and translation, with no shear and no non-uniform scale. Gate G14 refuses the whole frame if an instance matrix on a `LAMBERT` draw is outside this class. The tolerance is `CALIPER_GEOM_RIGID_TOL`. `UNLIT` instanced draws have no restriction.
 
 If caps bit 3 is absent, `has_instanced()` is false. The applet then draws the unit alone or N plain draws, and says so. The `caliper::Geometry` sugar exposes `has_instanced()` and a `draw_primitives` overload that takes `CaliperGeomDrawV1_3*`. Seed descriptors from `caliper::geom_draw_v1_3_defaults()`, which gives a zero instance tail over the v1_2 defaults.
 
