@@ -175,6 +175,13 @@ TEST_CASE("acceptance over MCP: an outside agent builds the dashboard through ca
     CHECK(json::parse(from_app["result"]["contents"][0]["text"].get<std::string>()) == table);
     const json schema = child.request("schema", "resources/read", {{"uri", "caliper://schema/caliper-spec-v0.schema.json"}});
     CHECK(json::parse(schema["result"]["contents"][0]["text"].get<std::string>(), nullptr, false).is_object());
+    // Spec version 1's schema is the second schema resource (design/instruments.md).
+    CHECK(uris.count("caliper://schema/caliper-spec-v1.schema.json") == 1);
+    const json schema_v1 =
+        child.request("schema-v1", "resources/read", {{"uri", "caliper://schema/caliper-spec-v1.schema.json"}});
+    const json v1 = json::parse(schema_v1["result"]["contents"][0]["text"].get<std::string>(), nullptr, false);
+    REQUIRE(v1.is_object());
+    CHECK(v1["$id"] == "urn:caliper:schema:spec:v1");
 
     // Import the two files of the workspace, then run their loaders, which
     // the stand-in holds until the person allows them.
@@ -223,6 +230,30 @@ TEST_CASE("acceptance over MCP: an outside agent builds the dashboard through ca
     REQUIRE(parsed.ok());
     CHECK(parsed.spec == dashboard);
     CHECK(saved_text == spec::to_toml(dashboard));
+
+    // A scene panel bound to a live scene of the attached script raises the
+    // open spec to version 1 in the same edit. The stand-in attaches no
+    // script, so the scene is offline and the edit warns of it.
+    const json scene = structured(child.call("scene", "panel_create",
+                                             {{"id", "world"},
+                                              {"primitive", "scene"},
+                                              {"title", "Model"},
+                                              {"bind", {{"scene", "live:model"}}},
+                                              {"options", {{"up", "+z"}}}}),
+                                  "panel.create");
+    CHECK(scene["id"] == "world");
+    const json with_scene = structured(child.call("get-scene", "spec_get", json::object()), "spec.get");
+    const auto reread = spec::parse_toml(with_scene["text"].get<std::string>());
+    REQUIRE(reread.ok());
+    CHECK(reread.spec.version == 1);
+    const spec::Panel* world = reread.spec.find_panel("world");
+    REQUIRE(world != nullptr);
+    CHECK(world->primitive == spec::Primitive::scene);
+    CHECK(world->options.scene.up == std::optional<std::string>("+z"));
+    // The tool's schema already refuses a scene slot that is not live:<name>.
+    const json refused = child.call("scene-bad", "panel_create",
+                                    {{"id", "w2"}, {"primitive", "scene"}, {"bind", {{"scene", "model"}}}});
+    CHECK(error_code(refused) == "command.invalid_args");
 
     CHECK(child.finish().success());
     CHECK(child.all_out().find(token) == std::string::npos);

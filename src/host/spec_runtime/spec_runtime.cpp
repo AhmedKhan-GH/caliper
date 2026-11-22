@@ -2,6 +2,8 @@
 // textures, the drawing of each primitive and the runtime that lays a spec
 // out and keeps its panels' data.
 #include "spec_runtime/spec_runtime.h"
+#include "spec_runtime/spec_instruments.h"
+#include "live/live_views_scene.h"   // a scene drawn into a scene panel's rectangle
 #include "scene/scene.h"   // kPalette
 
 #include "ui/sternbild_fonts.h"
@@ -1023,6 +1025,14 @@ SpecPanelFrame draw_spec_panel(SpecPanelView& view, const ImRect& rect, const Sp
                 break;
             case spec::Primitive::table: draw_table(view, f.content, L); break;
             case spec::Primitive::text: draw_text(view, f.content, L); break;
+            case spec::Primitive::scene:
+                // The live scene of the attached script; a scene the script
+                // does not send shows as an offline source, as a live: source does.
+                if (!view.scene || !view.scene(f.content))
+                    draw_state({PanelStateKind::offline, "Source offline",
+                                view.data.scene.empty() ? std::string() : "live:" + view.data.scene},
+                               f.content, L);
+                break;
         }
         ImGui::PopClipRect();
     }
@@ -1036,7 +1046,91 @@ SpecPanelFrame draw_spec_panel(SpecPanelView& view, const ImRect& rect, const Sp
 
 // ---- the runtime ------------------------------------------------------------------------
 
-SpecRuntime::SpecRuntime(SpecTextures& textures) : textures_(textures) {}
+bool spec_scene_event(const char* type, const std::string& panel_id, const std::string& scene,
+                      const std::string& detail, caliper_builder::Event* out) {
+    nlohmann::json fields = nlohmann::json::parse(detail, nullptr, false);
+    if (!out || !fields.is_object()) return false;
+    caliper_builder::Event ev;
+    ev.kind = std::strcmp(type, "pick") == 0 ? caliper_builder::EventKind::pick : caliper_builder::EventKind::select;
+    ev.panel = panel_id;
+    ev.view = scene;
+    ev.origin = "ui";
+    if (ev.kind == caliper_builder::EventKind::select && fields.empty())
+        fields = {{"entities", nlohmann::json::array()}, {"truncated", false}};   // the selection was cleared
+    ev.fields = std::move(fields);
+    *out = std::move(ev);
+    return true;
+}
+
+// The gesture and pick state of each scene panel, by panel id.
+struct SpecRuntime::SceneStates {
+    std::map<std::string, caliper_live_views::SceneRectState> by_panel;
+};
+
+SpecRuntime::SpecRuntime(SpecTextures& textures) : textures_(textures), scenes_(std::make_unique<SceneStates>()) {}
+
+void SpecRuntime::set_instruments(caliper_builder::EventSink* events, caliper_builder::RunControl* run) {
+    events_ = events;
+    run_ = run;
+}
+
+bool SpecRuntime::pick_scene(const std::string& panel_id, float u, float v) {
+    if (!spec_) return false;
+    const spec::Panel* p = spec_->find_panel(panel_id);
+    if (!p || p->primitive != spec::Primitive::scene) return false;
+    caliper_live_views::pick_scene_rect(scenes_->by_panel[panel_id], u, v);
+    return true;
+}
+
+void SpecRuntime::bind_scene(Entry& e) {
+    if (e.panel.primitive != spec::Primitive::scene) {
+        e.view.scene = nullptr;
+        return;
+    }
+    // The entry moves between maps when the spec changes, so the call keeps
+    // copies of what it draws; a change of the panel prepares it again.
+    const std::string panel = e.panel.id;
+    const std::string scene = e.view.data.scene;
+    caliper_live_views::SceneRectOptions o;
+    const spec::SceneOptions& so = e.view.data.scene_options;
+    o.up = so.up.value_or("");
+    o.labels = so.labels.value_or(true);
+    o.scale_bar = so.scale_bar.value_or(false);
+    e.view.scene = [this, panel, scene, o](const ImRect& content) {
+        CaliperCore* core = core_ ? core_() : nullptr;
+        if (!core || scene.empty()) return false;
+        const std::string id = "##spec.scene." + panel;
+        auto sink = [this, &panel, &scene](const char* type, const std::string& detail) {
+            caliper_builder::Event ev;
+            if (events_ && spec_scene_event(type, panel, scene, detail, &ev)) events_->push(std::move(ev));
+        };
+        return caliper_live_views::draw_scene_in_rect(core, scene, id.c_str(), content.Min, content.GetSize(), o,
+                                                      scenes_->by_panel[panel],
+                                                      sink) == caliper_live_views::SceneRectResult::drawn;
+    };
+}
+
+void SpecRuntime::draw_control(const spec::Control& control, const ImRect& r, const SpecLook& L) {
+    // Each control in its own child window, as a panel: its own ids and clipping.
+    ImGui::SetCursorScreenPos(r.Min);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+    const std::string child = "##spec.control." + control.id;
+    if (ImGui::BeginChild(child.c_str(), r.GetSize(), ImGuiChildFlags_None,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+                              ImGuiWindowFlags_NoBackground)) {
+        ImGui::PopStyleVar(2);
+        ImGui::GetWindowDrawList()->AddRectFilled(r.Min, r.Max, L.ground);
+        SpecInstrumentHost host{events_, run_};
+        draw_spec_control(control, r, L, host);
+        // An item at the corner, so the child's bounds come from an item.
+        ImGui::SetCursorScreenPos(r.Min);
+        ImGui::Dummy(ImVec2(0.0f, 0.0f));
+    } else {
+        ImGui::PopStyleVar(2);
+    }
+    ImGui::EndChild();
+}
 
 SpecRuntime::~SpecRuntime() {
     for (auto& e : entries_) textures_.release(e.second.view.texture);
@@ -1094,6 +1188,7 @@ void SpecRuntime::prepare(Entry& e, const PanelData& data, const spec::Spec* spe
     ++e.view.version;
     e.stale = false;
     e.generation = data.generation;
+    bind_scene(e);
 }
 
 void SpecRuntime::set_preview(const spec::Panel& panel, const PanelData& data, const spec::Spec* spec) {
@@ -1125,6 +1220,15 @@ void SpecRuntime::update_only(const SpecLayout* shown) {
         if (shown && !shown->find(kv.first)) continue;   // a hidden tab waits until it shows
         // A shown panel whose served data has a new generation is resolved
         // again; the probe reads no data.
+        if (e.panel.primitive == spec::Primitive::scene) {
+            // A scene panel binds no source: its scene comes from the live core at each draw.
+            if (!e.stale) continue;
+            PanelData data;
+            data.panel = e.panel.id;
+            data.primitive = e.panel.primitive;
+            prepare(e, data);
+            continue;
+        }
         if (!e.stale && source_ && source_->generation(*spec_, e.panel.id) != e.generation) e.stale = true;
         if (!e.stale) continue;
         PanelData data;
@@ -1280,13 +1384,21 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
         else draw_hint("No panels", empty_hint_, area, L);
         return;
     }
-    const SpecLayoutMetrics m = SpecLayoutMetrics::for_text_scale(L.text_scale);
+    SpecLayoutMetrics m = SpecLayoutMetrics::for_text_scale(L.text_scale);
+    m.control_height = [&L](const spec::Control& c) { return spec_control_height(c, L); };
     layout_ = compute_spec_layout(*root, shown, {area.Min.x, area.Min.y, area.GetWidth(), area.GetHeight()}, m, tabs_);
     // Only the panels shown are resolved; a panel in a hidden tab is resolved
     // when its tab is chosen.
     update_only(&layout_);
     for (const auto& t : layout_.tabs) draw_tabs(t, L);
     for (const auto& lp : layout_.panels) {
+        if (lp.control) {
+            // A control leaf (spec version 1): its widget, drawn by spec_controls.cpp.
+            const spec::Control* c = shown.find_control(lp.id);
+            const ImRect r(ImVec2(lp.rect.x, lp.rect.y), ImVec2(lp.rect.right(), lp.rect.bottom()));
+            if (c && r.GetWidth() >= 1.0f && r.GetHeight() >= 1.0f) draw_control(*c, r, L);
+            continue;
+        }
         auto pv = previews_.find(lp.id);
         const bool preview = pv != previews_.end();
         auto it = entries_.find(lp.id);
@@ -1304,7 +1416,10 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
                 }
                 if (e.stale) {
                     PanelData data;
-                    if (source_) {
+                    if (pp->primitive == spec::Primitive::scene) {
+                        data.panel = lp.id;
+                        data.primitive = pp->primitive;
+                    } else if (source_) {
                         data = source_->resolve(*spec_preview_, lp.id);
                     } else {
                         data.panel = lp.id;

@@ -104,14 +104,16 @@ public:
         : spec_(spec), resolver_(resolver), report_(report), sink_(report.diagnostics) {}
 
     void run() {
-        if (spec_.version != kFormatVersion) {
+        if (spec_.version < kFormatVersion || spec_.version > kLatestFormatVersion) {
             sink_.error("spec.unsupported_version",
                         "This spec has format version " + std::to_string(spec_.version) +
-                            ", and this reader knows only version " + std::to_string(kFormatVersion) + ".",
+                            ", and this reader knows the versions " + std::to_string(kFormatVersion) + " to " +
+                            std::to_string(kLatestFormatVersion) + ".",
                         "caliper_spec");
             return;
         }
         applet();
+        version_keys();
         ids();
         const std::size_t n = spec_.sources.size();
         report_.sources.resize(n);
@@ -123,6 +125,7 @@ public:
         for (std::size_t i = 0; i < n; ++i) source_local(i);
         for (std::size_t i = 0; i < n; ++i) resolve(static_cast<int>(i));
         for (std::size_t i = 0; i < spec_.panels.size(); ++i) panel(i);
+        for (std::size_t i = 0; i < spec_.controls.size() && i < limits::kControls; ++i) control(i);
         layout();
         usage();
         extension(spec_.x, "x");
@@ -182,6 +185,25 @@ private:
         extension(spec_.applet.x, "applet.x");
     }
 
+    // A Spec of an older version that holds what a later version adds gets the
+    // errors that its version's reader gives (design/instruments.md).
+    void version_keys() {
+        for (std::size_t i = 0; i < spec_.panels.size(); ++i) {
+            const Primitive p = spec_.panels[i].primitive;
+            if (primitive_version(p) > spec_.version)
+                sink_.error("spec.unknown_primitive",
+                            quote(to_string(p)) + " is not a primitive of format version " +
+                                std::to_string(spec_.version) + "; raise caliper_spec to " +
+                                std::to_string(primitive_version(p)) + ".",
+                            index_path("panel", i) + ".primitive");
+        }
+        if (!spec_.controls.empty() && spec_.version < kInstrumentVersion)
+            sink_.error("spec.unknown_key",
+                        "\"control\" is not a key of a spec of format version " + std::to_string(spec_.version) +
+                            "; raise caliper_spec to " + std::to_string(kInstrumentVersion) + ".",
+                        "control");
+    }
+
     void ids() {
         if (spec_.sources.size() > limits::kSources)
             sink_.error("spec.too_many",
@@ -206,6 +228,164 @@ private:
             id(v, path);
             if (!panels_.emplace(v, static_cast<int>(i)).second)
                 sink_.error("spec.duplicate_id", "Two panels have the id " + quote(v) + ".", path);
+        }
+        if (spec_.controls.size() > limits::kControls)
+            sink_.error("spec.too_many",
+                        "The spec has " + std::to_string(spec_.controls.size()) + " controls; the limit is " +
+                            std::to_string(limits::kControls) + ".",
+                        "control");
+        for (std::size_t i = 0; i < spec_.controls.size(); ++i) {
+            const std::string path = index_path("control", i) + ".id";
+            const std::string& v = spec_.controls[i].id;
+            id(v, path);
+            if (panels_.count(v)) {
+                sink_.error("spec.duplicate_id",
+                            "The control id " + quote(v) + " is also a panel id; panels and controls share one set "
+                            "of ids.",
+                            path);
+            } else if (!controls_.emplace(v, static_cast<int>(i)).second) {
+                sink_.error("spec.duplicate_id", "Two controls have the id " + quote(v) + ".", path);
+            }
+        }
+    }
+
+    // ---- controls (spec version 1) -----------------------------------------------
+
+    void control(std::size_t i) {
+        const Control& c = spec_.controls[i];
+        const std::string path = index_path("control", i);
+        const std::string kind = control_kind_name(c.kind);
+        if (c.title) text(*c.title, path + ".title", limits::kTitleChars, TextKind::line, false);
+        extension(c.x, path + ".x");
+        extension(c.options.x, path + ".options.x");
+        const std::optional<ControlTarget> target = parse_control_target(c.bind);
+        if (!target) {
+            if (c.bind.rfind("intervene:", 0) == 0) {
+                sink_.error("spec.bad_binding",
+                            "The target " + quote(c.bind) + " is reserved for a later Caliper; a control binds " +
+                                "param:<name>, action:<name>, run:pause or value.",
+                            path + ".bind");
+            } else {
+                sink_.error("spec.bad_binding",
+                            quote(c.bind) + " is not a target; a control binds param:<name>, action:<name>, " +
+                                "run:pause or value, with a name of 1 to 63 bytes.",
+                            path + ".bind");
+            }
+        }
+        if (!control_kind_built(c.kind)) {
+            sink_.error("spec.unsupported_control",
+                        "This Caliper does not draw a " + kind + " control yet; the kinds it draws are slider and "
+                        "button.",
+                        path + ".kind");
+            return;
+        }
+        if (target && !control_takes_target(c.kind, *target))
+            sink_.error("spec.control_mismatch",
+                        "A " + kind + " cannot bind " + quote(c.bind) + "; a " + kind + " binds " +
+                            (c.kind == ControlKind::slider ? "param:<name> or value." : "action:<name> or run:pause."),
+                        path + ".bind");
+        const ControlOptions& o = c.options;
+        const std::string op = path + ".options";
+        if (c.kind == ControlKind::button) {
+            using Set = std::pair<const char*, bool>;
+            const Set set[] = {{"log", o.log.has_value()},
+                               {"max", o.max.has_value()},
+                               {"min", o.min.has_value()},
+                               {"step", o.step.has_value()},
+                               {"value", o.value.has_value()}};
+            for (const Set& opt : set)
+                if (opt.second)
+                    sink_.error("spec.control_mismatch",
+                                quote(opt.first) + " is an option of a slider; a button takes no options.",
+                                op + "." + opt.first);
+            return;
+        }
+        // A slider.
+        if (o.min && o.max && !(*o.min < *o.max))
+            sink_.error("spec.out_of_range", op + ".min must be below " + op + ".max.", op + ".min");
+        if (o.step && !(*o.step > 0))
+            sink_.error("spec.out_of_range", op + ".step must be above 0.", op + ".step");
+        if (o.log && *o.log && o.min && !(*o.min > 0))
+            sink_.error("spec.out_of_range", "A log slider needs " + op + ".min above 0.", op + ".min");
+    }
+
+    // ---- scene panels (spec version 1) -------------------------------------------
+
+    void scene_panel(const Panel& p, const std::string& path) {
+        for (const auto& [slot, value] : p.bind) {
+            const std::string sp = path + ".bind." + slot;
+            if (slot != kSceneSlot) {
+                sink_.error("spec.unknown_slot", quote(slot) + " is not a slot of a scene; its slots are \"scene\".",
+                            sp);
+                continue;
+            }
+            if (value.bindings.empty()) {
+                sink_.error("spec.missing_slot", sp + " holds no binding.", sp);
+                continue;
+            }
+            if (value.list || value.bindings.size() > 1) {
+                sink_.error("spec.wrong_type", sp + " takes one binding, not a list.", sp);
+                continue;
+            }
+            const std::string& binding = value.bindings[0];
+            if (valid_utf8(binding) && code_points(binding) > 256) {
+                sink_.error("spec.string_too_long", sp + " holds a binding longer than 256 characters.", sp);
+                continue;
+            }
+            const std::optional<std::string> name = live_scene_name(binding);
+            if (!name) {
+                sink_.error("spec.bad_binding",
+                            quote(binding) + " is not a live scene; the slot scene holds live:<scene name>, as "
+                            "catalog.list names the scene.",
+                            sp);
+                continue;
+            }
+            if (!resolver_) continue;
+            std::optional<ResolvedSource> r;
+            try {
+                r = resolver_(binding);
+            } catch (...) {
+                sink_.error("spec.internal", "The source resolver failed for " + quote(binding) + ".", sp);
+                continue;
+            }
+            if (!r)
+                sink_.warning("spec.unresolved_source",
+                              "The attached script does not send the scene " + quote(*name) +
+                                  " now, so the panel shows that its source is offline until it does.",
+                              sp);
+        }
+        if (!p.bind.count(kSceneSlot))
+            sink_.error("spec.missing_slot", "A scene panel needs the slot \"scene\".", path + ".bind.scene");
+    }
+
+    void scene_options(const SceneOptions& o, const std::string& op) {
+        if (o.view_camera.is_string()) {
+            text(o.view_camera.get<std::string>(), op + ".view_camera", 255, TextKind::line, false);
+        } else if (o.view_camera.is_object()) {
+            const std::string cp = op + ".view_camera";
+            if (auto d = o.view_camera.find("distance"); d != o.view_camera.end() && d->is_number() &&
+                                                         !(d->get<double>() >= 0))
+                sink_.error("spec.out_of_range", cp + ".distance must not be below 0.", cp + ".distance");
+            if (auto e = o.view_camera.find("elevation"); e != o.view_camera.end() && e->is_number()) {
+                const double v = e->get<double>();
+                if (!(v >= -89 && v <= 89))
+                    sink_.error("spec.out_of_range", cp + ".elevation must be from -89 to 89 degrees.",
+                                cp + ".elevation");
+            }
+        }
+        using List = std::pair<const char*, const std::vector<std::string>*>;
+        const List lists[] = {{"include", &o.include}, {"exclude", &o.exclude}};
+        for (const List& l : lists) {
+            const std::string lp = op + "." + l.first;
+            if (l.second->size() > limits::kScenePatterns) {
+                sink_.error("spec.too_many",
+                            lp + " lists " + std::to_string(l.second->size()) + " patterns; the limit is " +
+                                std::to_string(limits::kScenePatterns) + ".",
+                            lp);
+                continue;
+            }
+            for (std::size_t k = 0; k < l.second->size(); ++k)
+                text((*l.second)[k], index_path(lp, k), 255, TextKind::line, false);
         }
     }
 
@@ -673,6 +853,11 @@ private:
         const std::string prim = to_string(p.primitive);
         if (p.title) text(*p.title, path + ".title", limits::kTitleChars, TextKind::line, false);
         extension(p.x, path + ".x");
+        if (p.primitive == Primitive::scene) {
+            scene_panel(p, path);
+            options(p, path);
+            return;
+        }
 
         // Slots: names, then the bindings each one holds.
         std::map<std::string, std::vector<Bound>> bound;
@@ -801,6 +986,7 @@ private:
                 }
                 break;
             }
+            case Primitive::scene: break;   // scene_panel() above
             case Primitive::text: {
                 if (!has("value") && !p.options.text)
                     sink_.error("spec.missing_slot", "A text panel needs bind.value, options.text or both.",
@@ -933,6 +1119,7 @@ private:
             }
         }
         if (o.text) text(*o.text, op + ".text", limits::kTextChars, TextKind::long_text, true);
+        if (p.primitive == Primitive::scene) scene_options(o.scene, op);
         extension(o.x, op + ".x");
     }
 
@@ -941,7 +1128,17 @@ private:
     void layout() {
         if (!spec_.layout) return;
         placed_.assign(spec_.panels.size(), 0);
+        placed_controls_.assign(spec_.controls.size(), 0);
         walk(*spec_.layout, "layout", 1);
+        for (std::size_t i = 0; i < spec_.controls.size(); ++i) {
+            auto it = controls_.find(spec_.controls[i].id);
+            if (it == controls_.end() || it->second != static_cast<int>(i)) continue;
+            if (placed_controls_[i] == 0)
+                sink_.warning("spec.unplaced_panel",
+                              "The layout does not place the control " + quote(spec_.controls[i].id) +
+                                  ", so it is not drawn.",
+                              index_path("control", i));
+        }
         for (std::size_t i = 0; i < spec_.panels.size(); ++i) {
             auto it = panels_.find(spec_.panels[i].id);
             if (it == panels_.end() || it->second != static_cast<int>(i)) continue;
@@ -974,8 +1171,16 @@ private:
                             path);
             auto it = panels_.find(n.panel);
             if (it == panels_.end()) {
-                sink_.error("spec.unknown_panel",
-                            "The layout places " + quote(n.panel) + ", which is not a panel of this spec.", path);
+                auto c = controls_.find(n.panel);
+                if (c == controls_.end()) {
+                    sink_.error("spec.unknown_panel",
+                                "The layout places " + quote(n.panel) +
+                                    ", which is neither a panel nor a control of this spec.",
+                                path);
+                } else if (++placed_controls_[c->second] == 2) {
+                    sink_.error("spec.duplicate_placement",
+                                "The layout places the control " + quote(n.panel) + " more than once.", path);
+                }
             } else if (++placed_[it->second] == 2) {
                 sink_.error("spec.duplicate_placement",
                             "The layout places the panel " + quote(n.panel) + " more than once.", path);
@@ -1053,12 +1258,14 @@ private:
     Sink sink_;
     std::map<std::string, int> sources_;  // id to the index of its first source
     std::map<std::string, int> panels_;
+    std::map<std::string, int> controls_;  // control id to its index; a control that repeats a panel id is left out
     std::vector<int> state_;  // 0 not seen, 1 on the chain being resolved, 2 resolved
     std::vector<int> root_;   // the catalog source a source derives from, or -1
     std::vector<bool> form_ok_;
     std::vector<std::vector<bool>> transforms_ok_;
     std::vector<bool> used_;  // bound directly by a panel
     std::vector<int> placed_;
+    std::vector<int> placed_controls_;
     std::size_t layout_nodes_ = 0;
     std::size_t x_values_ = 0;
 };

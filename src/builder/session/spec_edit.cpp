@@ -3,6 +3,7 @@
 #include <caliper_builder/spec/format.h>
 #include <caliper_builder/spec/patch.h>
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
 #include <map>
@@ -211,6 +212,16 @@ SpecEdit source_remove(const spec::Spec& s, const json& args, const spec::Source
     return finish(std::move(next), resolver, json{{"id", id}});
 }
 
+// Whether every leaf under `node` names a control of the spec.
+bool only_controls(const LayoutNode& node, const spec::Spec& s, int depth = 0) {
+    if (depth > kMaxWalkDepth) return false;
+    if (node.kind == LayoutNode::Kind::panel) return s.find_control(node.panel) != nullptr;
+    if (node.children.empty()) return false;
+    for (const auto& c : node.children)
+        if (!only_controls(c, s, depth + 1)) return false;
+    return true;
+}
+
 SpecEdit panel_create(const spec::Spec& s, const json& args, const spec::SourceResolver& resolver) {
     const std::string id = str_arg(args, "id");
     if (s.find_panel(id))
@@ -233,16 +244,44 @@ SpecEdit panel_create(const spec::Spec& s, const json& args, const spec::SourceR
     } else if (!layout) {
         layout = LayoutNode::of_panel(id);
     } else {
-        LayoutNode wrap;
-        wrap.kind = LayoutNode::Kind::split;
-        wrap.split = spec::SplitDirection::horizontal;
-        wrap.children.push_back(std::move(*layout));
-        wrap.children.push_back(LayoutNode::of_panel(id));
-        layout = std::move(wrap);
+        // Beside the panels; a row of controls at the bottom of the layout stays under them.
+        LayoutNode* panels = &*layout;
+        if (layout->kind == LayoutNode::Kind::split && layout->split == spec::SplitDirection::vertical &&
+            layout->children.size() == 2 && only_controls(layout->children[1], s)) {
+            if (only_controls(layout->children[0], s)) {
+                LayoutNode wrap;
+                wrap.kind = LayoutNode::Kind::split;
+                wrap.split = spec::SplitDirection::vertical;
+                wrap.children.push_back(LayoutNode::of_panel(id));
+                wrap.children.push_back(std::move(*layout));
+                layout = std::move(wrap);
+                panels = nullptr;
+            } else {
+                panels = &layout->children[0];
+            }
+        } else if (only_controls(*layout, s)) {
+            LayoutNode wrap;
+            wrap.kind = LayoutNode::Kind::split;
+            wrap.split = spec::SplitDirection::vertical;
+            wrap.children.push_back(LayoutNode::of_panel(id));
+            wrap.children.push_back(std::move(*layout));
+            layout = std::move(wrap);
+            panels = nullptr;
+        }
+        if (panels) {
+            LayoutNode wrap;
+            wrap.kind = LayoutNode::Kind::split;
+            wrap.split = spec::SplitDirection::horizontal;
+            wrap.children.push_back(std::move(*panels));
+            wrap.children.push_back(LayoutNode::of_panel(id));
+            *panels = std::move(wrap);
+        }
     }
     spec::Spec next = s;
     next.panels.push_back(std::move(decoded.value));
     next.layout = std::move(layout);
+    // A scene panel raises a version 0 spec to version 1 in the same step.
+    next.version = std::max(next.version, spec::required_version(next));
     return finish(std::move(next), resolver, json{{"id", id}});
 }
 
@@ -282,11 +321,13 @@ SpecEdit layout_place(const spec::Spec& s, const json& args, const spec::SourceR
     const std::string target = str_arg(args, "target");
     const std::string where = str_arg(args, "where");
     const double share = args.contains("ratio") && args["ratio"].is_number() ? args["ratio"].get<double>() : 0.5;
-    if (!s.find_panel(panel)) return refuse(fail("panel.not_found", "The spec has no panel " + panel + ".", "args.panel"));
+    // From spec version 1 a leaf names a panel or a control.
+    if (!s.find_panel(panel) && !s.find_control(panel))
+        return refuse(fail("panel.not_found", "The spec has no panel or control " + panel + ".", "args.panel"));
     if (panel == target)
         return refuse(fail("layout.same_panel", "A panel cannot be placed next to itself.", "args.target"));
-    if (!s.find_panel(target))
-        return refuse(fail("panel.not_found", "The spec has no panel " + target + ".", "args.target"));
+    if (!s.find_panel(target) && !s.find_control(target))
+        return refuse(fail("panel.not_found", "The spec has no panel or control " + target + ".", "args.target"));
     std::optional<LayoutNode> layout = effective_layout(s);
     if (!layout || !layout_places(*layout, target))
         return refuse(fail("panel.not_found", "The panel " + target + " is not in the layout, so nothing can be placed next to it.",
@@ -409,9 +450,12 @@ struct Unflattener {
     }
 };
 
+// The ids a layout leaf may name: the panels and, from spec version 1, the
+// controls.
 std::set<std::string> panel_ids(const spec::Spec& s) {
     std::set<std::string> out;
     for (const auto& p : s.panels) out.insert(p.id);
+    for (const auto& c : s.controls) out.insert(c.id);
     return out;
 }
 
@@ -447,13 +491,36 @@ json source_result_json(const spec::Source& source) { return source_command_args
 
 std::optional<LayoutNode> effective_layout(const spec::Spec& s) {
     if (s.layout) return s.layout;
-    if (s.panels.empty()) return std::nullopt;
-    if (s.panels.size() == 1) return LayoutNode::of_panel(s.panels[0].id);
-    LayoutNode split;
-    split.kind = LayoutNode::Kind::split;
-    split.split = spec::SplitDirection::vertical;
-    for (const auto& p : s.panels) split.children.push_back(LayoutNode::of_panel(p.id));
-    return split;
+    // The panels as version 0 places them: one alone, or a vertical split.
+    std::optional<LayoutNode> panels;
+    if (s.panels.size() == 1) {
+        panels = LayoutNode::of_panel(s.panels[0].id);
+    } else if (!s.panels.empty()) {
+        LayoutNode split;
+        split.kind = LayoutNode::Kind::split;
+        split.split = spec::SplitDirection::vertical;
+        for (const auto& p : s.panels) split.children.push_back(LayoutNode::of_panel(p.id));
+        panels = std::move(split);
+    }
+    if (s.controls.empty()) return panels;
+    // Version 1: one row of the controls in declaration order, under the panels.
+    std::optional<LayoutNode> row;
+    if (s.controls.size() == 1) {
+        row = LayoutNode::of_panel(s.controls[0].id);
+    } else {
+        LayoutNode split;
+        split.kind = LayoutNode::Kind::split;
+        split.split = spec::SplitDirection::horizontal;
+        for (const auto& c : s.controls) split.children.push_back(LayoutNode::of_panel(c.id));
+        row = std::move(split);
+    }
+    if (!panels) return row;
+    LayoutNode root;
+    root.kind = LayoutNode::Kind::split;
+    root.split = spec::SplitDirection::vertical;
+    root.children.push_back(std::move(*panels));
+    root.children.push_back(std::move(*row));
+    return root;
 }
 
 json layout_to_flat(const LayoutNode& root, const spec::Spec& s) {

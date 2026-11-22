@@ -65,6 +65,7 @@ if(BUILD_TESTS AND TARGET doctest::doctest)
         tests/test_spec_controls.cpp
         tests/test_spec_layout.cpp
         tests/test_spec_prepare.cpp
+        tests/test_spec_scene.cpp
         tests/test_spec_generation.cpp
         tests/test_spec_draw.cpp
         tests/test_panel_render.cpp

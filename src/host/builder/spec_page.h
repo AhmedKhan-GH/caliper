@@ -58,6 +58,7 @@
 #include <vector>
 
 struct SpecAppletFacts;   // ui/landing_screen.h
+struct CaliperCore;       // embed/embed_core.h: the core whose live views hold an attached script's scenes
 
 namespace caliper_host {
 
@@ -203,6 +204,16 @@ public:
     // Where Properties reads the names of a catalog source's dims, such as a
     // live view's (AppProviders::dim_names()); none without it.
     void set_dim_names(std::function<std::vector<std::string>(const std::string& catalog_id)> names);
+    // Where the scene panels of spec version 1 find their live scenes: the
+    // core of the attached script (src/main.cpp gives its LiveAttachment's
+    // core), asked at each frame. Without it every scene panel shows that
+    // its source is offline.
+    void set_live_core(std::function<CaliperCore*()> core);
+    // The app's test seam for a pick in a scene panel: a click at (u, v),
+    // each from 0 to 1 across the panel's content, at the next frame. Its
+    // result is a pick event with the panel's id (design/instruments.md).
+    // False when the open spec has no scene panel `panel_id`.
+    bool pick_scene(const std::string& panel_id, float u, float v);
     // For the hidden app's input driver: a named rectangle of the page's own
     // ("page:browser"), in window points, as the last frame drew it.
     bool item_rect(const std::string& name, float rect[4]) const;

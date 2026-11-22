@@ -52,7 +52,9 @@ bool as_integer(const json& v, std::int64_t& out) {
 
 class Decoder {
 public:
-    explicit Decoder(Sink& sink) : sink_(sink) {}
+    // `version` is the format version whose keys and primitives the items may
+    // use; a whole document sets it from its caliper_spec.
+    explicit Decoder(Sink& sink, std::int64_t version = kLatestFormatVersion) : sink_(sink), version_(version) {}
 
     bool table(const json& v, const std::string& path, const std::string& what) {
         if (v.is_object()) return true;
@@ -165,18 +167,24 @@ public:
             std::int64_t v = 0;
             if (!as_integer(*version, v)) {
                 wrong("caliper_spec", *version, "an integer");
-            } else if (v != kFormatVersion) {
+            } else if (v < kFormatVersion || v > kLatestFormatVersion) {
                 sink_.error("spec.unsupported_version",
                             "This spec has format version " + std::to_string(v) +
-                                ", and this reader knows only version " + std::to_string(kFormatVersion) +
-                                (v > kFormatVersion ? "; open it with a newer Caliper." : "."),
+                                ", and this reader knows the versions " + std::to_string(kFormatVersion) + " to " +
+                                std::to_string(kLatestFormatVersion) +
+                                (v > kLatestFormatVersion ? "; open it with a newer Caliper." : "."),
                             "caliper_spec");
                 return s;
             } else {
                 s.version = v;
             }
         }
-        keys(root, "", {"caliper_spec", "applet", "source", "panel", "layout"}, "a spec");
+        version_ = s.version;
+        if (version_ >= kInstrumentVersion) {
+            keys(root, "", {"caliper_spec", "applet", "source", "panel", "control", "layout"}, "a spec");
+        } else {
+            keys(root, "", {"caliper_spec", "applet", "source", "panel", "layout"}, "a spec");
+        }
 
         auto applet = root.find("applet");
         if (applet == root.end()) {
@@ -212,9 +220,119 @@ public:
                     s.panels.push_back(panel((*it)[i], index_path("panel", i)));
             }
         }
+        if (auto it = root.find("control"); it != root.end() && version_ >= kInstrumentVersion) {
+            if (!it->is_array()) {
+                sink_.error("spec.wrong_type",
+                            "control must be an array of tables; write each one as [[control]].", "control");
+            } else {
+                for (std::size_t i = 0; i < it->size(); ++i)
+                    s.controls.push_back(control((*it)[i], index_path("control", i)));
+            }
+        }
         if (auto it = root.find("layout"); it != root.end()) s.layout = layout(*it, "layout");
         s.x = extension(root, "");
         return s;
+    }
+
+    // One entry of the control array (spec version 1, instrument.h). The kind
+    // is checked here; the target grammar, the kind's targets and options and
+    // the ranges are the validator's.
+    Control control(const json& o, const std::string& path) {
+        Control c;
+        if (!table(o, path, path)) return c;
+        keys(o, path, {"id", "kind", "title", "bind", "options"}, "a control");
+        if (auto id = string(o, "id", path)) {
+            c.id = *id;
+        } else if (o.find("id") == o.end()) {
+            missing(path, "id", "A control");
+        }
+        if (auto kind = string(o, "kind", path)) {
+            if (auto k = control_kind_from_name(*kind)) {
+                c.kind = *k;
+            } else {
+                sink_.error("spec.unknown_control_kind",
+                            quote(*kind) + " is not a kind of control; the kinds are " + join(control_kind_names()) +
+                                ".",
+                            key_path(path, "kind"));
+            }
+        } else if (o.find("kind") == o.end()) {
+            missing(path, "kind", "A control");
+        }
+        c.title = string(o, "title", path);
+        if (auto bind = string(o, "bind", path)) {
+            c.bind = *bind;
+        } else if (o.find("bind") == o.end()) {
+            missing(path, "bind", "A control");
+        }
+        if (auto it = o.find("options"); it != o.end()) {
+            const std::string op = key_path(path, "options");
+            if (table(*it, op, op)) {
+                const json& opts = *it;
+                for (auto k = opts.begin(); k != opts.end(); ++k) {
+                    if (k.key() == "x" || contains(control_option_names(), k.key())) continue;
+                    sink_.error("spec.unknown_option",
+                                quote(k.key()) + " is not an option of a control; its options are " +
+                                    join(control_option_names()) + ".",
+                                key_path(op, k.key()));
+                }
+                c.options.min = number(opts, "min", op);
+                c.options.max = number(opts, "max", op);
+                c.options.step = number(opts, "step", op);
+                c.options.log = boolean(opts, "log", op);
+                c.options.value = number(opts, "value", op);
+                c.options.x = extension(opts, op);
+            }
+        }
+        c.x = extension(o, path);
+        return c;
+    }
+
+    // A list of 1 to 64 entity path patterns; the count and the lengths are
+    // the validator's.
+    std::vector<std::string> patterns(const json& opts, const char* key, const std::string& op) {
+        std::vector<std::string> out;
+        const json& list = opts[key];
+        const std::string lp = key_path(op, key);
+        if (!list.is_array()) {
+            wrong(lp, list, "a list of entity path patterns");
+            return out;
+        }
+        for (std::size_t i = 0; i < list.size(); ++i) {
+            if (list[i].is_string()) {
+                out.push_back(list[i].get<std::string>());
+            } else {
+                wrong(index_path(lp, i), list[i], "an entity path pattern");
+            }
+        }
+        if (list.empty())
+            sink_.error("spec.bad_value", lp + " lists no pattern; leave it out to draw every entity.", lp);
+        return out;
+    }
+
+    // An orbit table {target, distance, azimuth, elevation} or a camera's
+    // entity path, kept as written; the ranges are the validator's.
+    json view_camera(const json& v, const std::string& path) {
+        if (v.is_string()) return v;
+        if (!v.is_object()) {
+            wrong(path, v, "an orbit table or a camera's entity path");
+            return json();
+        }
+        keys(v, path, {"target", "distance", "azimuth", "elevation"}, "an orbit table");
+        json out = json::object();
+        if (auto t = v.find("target"); t != v.end()) {
+            if (!t->is_array() || t->size() != 3 || !(*t)[0].is_number() || !(*t)[1].is_number() ||
+                !(*t)[2].is_number()) {
+                sink_.error("spec.wrong_type", key_path(path, "target") + " must be [x, y, z], three numbers.",
+                            key_path(path, "target"));
+            } else {
+                out["target"] = *t;
+            }
+        }
+        for (const char* k : {"distance", "azimuth", "elevation"})
+            if (auto n = number(v, k, path)) out[k] = *n;
+        if (v.find("x") != v.end())
+            sink_.error("spec.unknown_key", "\"x\" is not a key of an orbit table.", key_path(path, "x"));
+        return out;
     }
 
     Source source(const json& o, const std::string& path) {
@@ -312,11 +430,14 @@ public:
         }
         bool known = false;
         if (auto prim = string(o, "primitive", path)) {
-            known = primitive_from_string(*prim, p.primitive);
+            known = primitive_from_string(*prim, p.primitive) && primitive_version(p.primitive) <= version_;
             if (!known)
                 sink_.error("spec.unknown_primitive",
-                            quote(*prim) + " is not a primitive; the primitives are " + join(all_primitive_names()) +
-                                ".",
+                            quote(*prim) + " is not a primitive" +
+                                (primitive_from_string(*prim, p.primitive) ? " of format version " +
+                                                                                 std::to_string(version_)
+                                                                           : std::string()) +
+                                "; the primitives are " + join(primitive_names(version_)) + ".",
                             key_path(path, "primitive"));
         } else if (o.find("primitive") == o.end()) {
             missing(path, "primitive", "A panel");
@@ -384,6 +505,13 @@ public:
                 if (has("colormap")) out.colormap = enumerated(opts, "colormap", op, colormaps(), "a colormap");
                 if (has("bins")) out.bins = integer(opts, "bins", op);
                 if (has("text")) out.text = string(opts, "text", op);
+                if (has("up")) out.scene.up = enumerated(opts, "up", op, scene_up_axes(), "an axis");
+                if (has("view_camera")) out.scene.view_camera = view_camera(opts["view_camera"], key_path(op, "view_camera"));
+                if (has("include")) out.scene.include = patterns(opts, "include", op);
+                if (has("exclude")) out.scene.exclude = patterns(opts, "exclude", op);
+                if (has("labels")) out.scene.labels = boolean(opts, "labels", op);
+                if (has("axes")) out.scene.axes = boolean(opts, "axes", op);
+                if (has("scale_bar")) out.scene.scale_bar = boolean(opts, "scale_bar", op);
                 if (has("columns")) {
                     const json& c = opts["columns"];
                     const std::string cp = key_path(op, "columns");
@@ -461,6 +589,7 @@ private:
     }
 
     Sink& sink_;
+    std::int64_t version_ = kLatestFormatVersion;
 };
 
 }  // namespace
@@ -473,6 +602,10 @@ Panel decode_panel(const json& item, const std::string& path, Sink& sink) { retu
 
 LayoutNode decode_layout(const json& item, const std::string& path, Sink& sink) {
     return Decoder(sink).layout(item, path);
+}
+
+Control decode_control(const json& item, const std::string& path, Sink& sink) {
+    return Decoder(sink).control(item, path);
 }
 
 }  // namespace detail
@@ -606,6 +739,10 @@ Decoded<LayoutNode> layout_from_json(const json& item, const std::string& path) 
     return decode_item<LayoutNode>(item, path, 1, detail::decode_layout);
 }
 
+Decoded<Control> control_from_json(const json& item, const std::string& path) {
+    return decode_item<Control>(item, path, 2, detail::decode_control);
+}
+
 // ---- writing ----------------------------------------------------------------
 
 namespace {
@@ -646,6 +783,25 @@ json options_json(const Options& o) {
     if (o.bins) j["bins"] = *o.bins;
     if (o.columns) j["columns"] = *o.columns;
     if (o.text) j["text"] = *o.text;
+    const SceneOptions& sc = o.scene;
+    if (sc.up) j["up"] = *sc.up;
+    if (!sc.view_camera.is_null()) j["view_camera"] = sc.view_camera;
+    if (!sc.include.empty()) j["include"] = sc.include;
+    if (!sc.exclude.empty()) j["exclude"] = sc.exclude;
+    if (sc.labels) j["labels"] = *sc.labels;
+    if (sc.axes) j["axes"] = *sc.axes;
+    if (sc.scale_bar) j["scale_bar"] = *sc.scale_bar;
+    if (!o.x.is_null()) j["x"] = o.x;
+    return j;
+}
+
+json control_options_json(const ControlOptions& o) {
+    json j = json::object();
+    if (o.min) j["min"] = *o.min;
+    if (o.max) j["max"] = *o.max;
+    if (o.step) j["step"] = *o.step;
+    if (o.log) j["log"] = *o.log;
+    if (o.value) j["value"] = *o.value;
     if (!o.x.is_null()) j["x"] = o.x;
     return j;
 }
@@ -688,6 +844,17 @@ json to_json(const Panel& p) {
     return j;
 }
 
+json to_json(const Control& c) {
+    json j = json::object();
+    j["id"] = c.id;
+    j["kind"] = control_kind_name(c.kind);
+    if (c.title) j["title"] = *c.title;
+    j["bind"] = c.bind;
+    if (!c.options.empty()) j["options"] = control_options_json(c.options);
+    if (!c.x.is_null()) j["x"] = c.x;
+    return j;
+}
+
 json to_json(const LayoutNode& n) {
     if (n.kind == LayoutNode::Kind::panel) return n.panel;
     json j = json::object();
@@ -723,6 +890,11 @@ json to_json(const Spec& spec) {
         json list = json::array();
         for (const Panel& p : spec.panels) list.push_back(to_json(p));
         j["panel"] = std::move(list);
+    }
+    if (!spec.controls.empty()) {
+        json list = json::array();
+        for (const Control& c : spec.controls) list.push_back(to_json(c));
+        j["control"] = std::move(list);
     }
     if (spec.layout) j["layout"] = to_json(*spec.layout);
     if (!spec.x.is_null()) j["x"] = spec.x;

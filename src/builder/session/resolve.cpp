@@ -132,6 +132,9 @@ public:
             return out;
         }
         out.primitive = panel->primitive;
+        // A scene panel draws a live scene of the attached script, which the
+        // app's live views hold; it binds no source, so it resolves to no slot.
+        if (panel->primitive == spec::Primitive::scene) return out;
         // First, what each tabular root must give, so that each is read once.
         for (const auto& [slot, value] : panel->bind) {
             for (const std::string& b : value.bindings) {
@@ -533,7 +536,7 @@ void DataSources::store_cached(const std::string& key, std::uint64_t generation,
 
 std::uint64_t panel_generation(const spec::Spec& s, std::string_view panel_id, const DataSources& sources) {
     const spec::Panel* panel = s.find_panel(panel_id);
-    if (!panel) return 0;
+    if (!panel || panel->primitive == spec::Primitive::scene) return 0;
     bool served = false;
     std::uint64_t generation = 0;
     for (const auto& [slot, value] : panel->bind) {

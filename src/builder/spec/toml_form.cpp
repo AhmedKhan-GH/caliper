@@ -269,6 +269,12 @@ public:
                 table(p, {"id", "primitive", "title", "bind", "options", "x"}, false, "");
             }
         }
+        if (auto controls = j.find("control"); controls != j.end()) {
+            for (const json& c : *controls) {
+                out_ += "\n[[control]]\n";
+                table(c, {"id", "kind", "title", "bind", "options", "x"}, false, "");
+            }
+        }
         if (layout != j.end() && layout->is_object()) {
             out_ += "\n[layout]\n";
             table(*layout, layout_order(), true, "");
