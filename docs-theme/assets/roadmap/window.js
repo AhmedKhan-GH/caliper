@@ -63,6 +63,21 @@
     tip.style.top = y + "px";
   }
 
+  /* Zoom buttons in the canvas's top-right corner: out, in, and one named action such as Fit or Reset. */
+  function zoomControls(onOut, onIn, actionName, onAction) {
+    var box = el("div", "roadmap-zoom");
+    [["\u2212", "Zoom out", onOut], ["+", "Zoom in", onIn], [actionName, actionName, onAction]].forEach(function (b) {
+      var btn = el("button", "roadmap-zoom__btn", b[0]);
+      btn.type = "button";
+      btn.setAttribute("aria-label", b[1]);
+      btn.title = b[1];
+      btn.addEventListener("click", function (e) { e.stopPropagation(); b[2](); });
+      btn.addEventListener("pointerdown", function (e) { e.stopPropagation(); });
+      box.appendChild(btn);
+    });
+    return box;
+  }
+
   window.RoadmapWindow = { NARROW: NARROW, el: el, fit: fit, searchBox: searchBox, pillarLink: pillarLink,
-    railLink: railLink, placeTip: placeTip };
+    railLink: railLink, placeTip: placeTip, zoomControls: zoomControls };
 })();

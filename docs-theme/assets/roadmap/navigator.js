@@ -48,6 +48,24 @@
       scroll.style.paddingBottom = Math.max(SIDE_PAD, scroll.clientHeight - last.offsetHeight - SIDE_PAD) + "px";
     }
 
+    /* ---- Zoom ---- */
+
+    /* The cards scale with CSS zoom on each pillar section, so the scroller keeps its size and position. */
+    var ZOOM_MIN = 0.3, ZOOM_MAX = 1.5, ZOOM_STEP = 1.25, zoom = 1;
+    function setZoom(k) {
+      zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, k));
+      scroll.style.setProperty("--cn-zoom", String(zoom));
+      hideTip();
+      sizeWindow();
+    }
+    canvas.appendChild(RoadmapWindow.zoomControls(function () { setZoom(zoom / ZOOM_STEP); },
+      function () { setZoom(zoom * ZOOM_STEP); }, "Reset", function () { setZoom(1); }));
+    scroll.addEventListener("wheel", function (e) {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      setZoom(zoom * Math.exp(-e.deltaY * 0.01));
+    }, { passive: false });
+
     /* ---- Tooltip ---- */
 
     function hideTip() { tip.classList.remove("is-open"); }

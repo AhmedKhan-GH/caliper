@@ -30,6 +30,7 @@
 /* The canvas scrolls vertically instead of panning. */
 .roadmap-canvas.cn-canvas { cursor: auto; touch-action: auto; }
 .cn-scroll { height: 100%; overflow-y: auto; overscroll-behavior: contain; box-sizing: border-box; padding: 24px; }
+.cn-scroll > * { zoom: var(--cn-zoom, 1); }
 .cn-pillar + .cn-pillar { margin-top: 56px; }
 .cn-pillar p { margin: 0 0 .3rem; }
 .cn-pillar-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .9rem; margin-bottom: .6rem; }

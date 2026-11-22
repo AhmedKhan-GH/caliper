@@ -137,6 +137,13 @@
 .rm-node:focus-visible .rm-shape, .rm-ref:focus-visible .rm-shape { stroke: var(--rm-accent); stroke-width: 3; }
 .rm-node.is-found .rm-shape, .rm-ref.is-found .rm-shape { stroke: var(--rm-text); stroke-width: 3.2; stroke-dasharray: none; }
 
+.roadmap-zoom { position: absolute; top: 8px; right: 8px; z-index: 4; display: flex; gap: 4px; }
+.roadmap-zoom__btn {
+  min-width: 2rem; height: 2rem; padding: 0 .55rem; font: inherit; font-size: .78rem; line-height: 1; cursor: pointer;
+  color: var(--rm-text); background: var(--rm-stage); border: 1px solid color-mix(in srgb, var(--rm-text-dim) 45%, transparent); border-radius: 4px;
+}
+.roadmap-zoom__btn:hover { background: color-mix(in srgb, var(--rm-accent) 18%, var(--rm-stage)); }
+.roadmap-zoom__btn:focus-visible { outline: 2px solid var(--rm-accent); outline-offset: 1px; }
 .roadmap-tooltip {
   position: absolute; z-index: 3; width: 21rem; max-width: calc(100% - 16px); box-sizing: border-box; padding: .7rem .8rem .75rem;
   background: var(--rm-plate); border: 1px solid var(--rm-plate-rule); border-radius: 6px; box-shadow: var(--rm-shadow);

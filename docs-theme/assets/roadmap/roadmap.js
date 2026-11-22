@@ -7,7 +7,7 @@
 
   var NODE_W = 184, REF_W = 160, PAD_X = 10, PAD_TOP = 7, ID_LINE = 13, ID_GAP = 2, TITLE_LINE = 15,
     PAD_BOTTOM = 8, MARGIN = 24, HEADING_H = 38, PILLAR_GAP = 72, CORNER = 6;
-  var ZOOM_MIN = 0.75, ZOOM_MAX = 1.5;
+  var ZOOM_MIN = 0.1, ZOOM_MAX = 1.5, ZOOM_STEP = 1.25;
   var TEXT_FONT = '"Plex Condensed", sans-serif', CODE_FONT = '"Source Code Pro", monospace';
   var ELK_OPTIONS = {
     "elk.algorithm": "layered",
@@ -321,6 +321,23 @@
       apply();
     }
     api.setView = setView;
+
+    /* Zoom buttons: out and in around the canvas's centre, and Fit, which shows the whole graph. */
+    function zoomBy(f) {
+      if (!layout) return;
+      var cx = canvas.clientWidth / 2, cy = canvas.clientHeight / 2;
+      var k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, view.k * f));
+      setView(cx - (cx - view.x) * k / view.k, cy - (cy - view.y) * k / view.k, k);
+      hideTip();
+    }
+    function fitAll() {
+      if (!layout) return;
+      var k = Math.min((canvas.clientWidth - 2 * MARGIN) / layout.width, (canvas.clientHeight - 2 * MARGIN) / layout.height);
+      setView(MARGIN, MARGIN, k);
+      hideTip();
+    }
+    canvas.appendChild(RoadmapWindow.zoomControls(function () { zoomBy(1 / ZOOM_STEP); },
+      function () { zoomBy(ZOOM_STEP); }, "Fit", fitAll));
     api.view = function () { return { x: view.x, y: view.y, k: view.k }; };
 
     var found = null;

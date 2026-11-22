@@ -250,7 +250,7 @@ try {
   });
 
   // 4
-  await check(4, "titles at least 12 px at first view and 9 px at minimum zoom", async () => {
+  await check(4, "titles at least 12 px at first view", async () => {
     const measure = () => page.evaluate(`(() => {
       const k = ${G}.view().k;
       const out = [];
@@ -262,11 +262,6 @@ try {
     const first = await measure();
     if (!first.length) bad.push("no titles rendered");
     for (const [id, px] of first) if (px < 12 - 0.01) bad.push(`${id} ${f1(px)} px at first view`);
-    const v = await page.evaluate(`${G}.view()`);
-    const zmin = await page.evaluate(`${G}.zoomRange[0]`);
-    await page.evaluate(`${G}.setView(${v.x}, ${v.y}, ${zmin})`);
-    for (const [id, px] of await measure()) if (px < 9 - 0.01) bad.push(`${id} ${f1(px)} px at minimum zoom`);
-    await page.evaluate(`${G}.setView(${v.x}, ${v.y}, ${v.k})`);
     return bad;
   });
 
