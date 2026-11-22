@@ -45,6 +45,20 @@ struct FakeRun final : cb::RunControl {
         sent.push_back({op == cb::RunPauseOp::pause ? "pause" : "resume", json()});
         return {};
     }
+    bool supported = false;
+    std::vector<cb::InterventionPoint> pts;
+    std::vector<cb::Intervention> ivs;
+    bool interventions_supported() override { return supported; }
+    std::vector<cb::InterventionPoint> intervention_points() override { return pts; }
+    std::vector<cb::Intervention> interventions() override { return ivs; }
+    cb::Error intervene_set(const cb::Intervention& i) override {
+        sent.push_back({"ablate " + i.point, i.op});
+        return {};
+    }
+    cb::Error intervene_clear(const std::string& point) override {
+        sent.push_back({"clear " + point, json()});
+        return {};
+    }
 };
 
 struct Recorder final : cb::EventSink {
@@ -330,3 +344,69 @@ TEST_CASE("spec controls: a slider row and a button row in the house look") {
     CHECK(run.sent.empty());   // drawing alone sends nothing
 }
 }  // TEST_SUITE("gpu")
+
+TEST_CASE("spec controls: a toggle bound to intervene:<point> ablates the point while it is on") {
+    Ui ui;
+    FakeRun run;
+    run.run = training();
+    run.supported = true;
+    cb::InterventionPoint attn;
+    attn.point = attn.module = "blocks.0.attn";
+    run.pts = {attn};
+    Recorder rec;
+    SpecInstrumentHost host{&rec, &run};
+    const SpecLook look;
+    spec::Control t = make("ablate", spec::ControlKind::toggle, "intervene:blocks.0.attn");
+    auto draw = [&] { return caliper_host::draw_spec_control(t, kRow, look, host); };
+    CHECK(ui.click(390, 15, draw) == 1);
+    REQUIRE(run.sent.size() == 1);
+    CHECK(run.sent[0] == std::pair<std::string, json>{"ablate blocks.0.attn", "ablate"});
+    REQUIRE(rec.events.size() == 1);
+    CHECK(rec.events[0].kind == cb::EventKind::control);
+    CHECK(rec.events[0].origin == "ui");
+    CHECK(rec.events[0].fields == json{{"control", "ablate"}, {"bind", "intervene:blocks.0.attn"}, {"value", true}});
+
+    // The script applies it; the next click clears it.
+    cb::Intervention iv;
+    iv.point = "blocks.0.attn";
+    iv.since_step = 4;
+    iv.state = "active";
+    run.ivs = {iv};
+    CHECK(ui.click(390, 15, draw) == 1);
+    REQUIRE(run.sent.size() == 2);
+    CHECK(run.sent[1].first == "clear blocks.0.attn");
+    CHECK(rec.events.back().fields["value"] == false);
+    run.ivs.clear();
+
+    // A script without interventions, an unknown point and no script send nothing.
+    run.supported = false;
+    ui.click(390, 15, draw);
+    run.supported = true;
+    spec::Control other = make("other", spec::ControlKind::toggle, "intervene:blocks.9");
+    ui.click(390, 15, [&] { return caliper_host::draw_spec_control(other, kRow, look, host); });
+    run.run.attached = false;
+    ui.click(390, 15, draw);
+    CHECK(run.sent.size() == 2);
+}
+
+TEST_CASE("spec controls: a toggle bound to a boolean parameter sets it") {
+    Ui ui;
+    FakeRun run;
+    run.run = training();
+    cb::RunParam aug;
+    aug.name = "augment";
+    aug.type = "boolean";
+    aug.value = false;
+    run.run.params.push_back(aug);
+    Recorder rec;
+    SpecInstrumentHost host{&rec, &run};
+    const SpecLook look;
+    spec::Control t = make("aug", spec::ControlKind::toggle, "param:augment");
+    CHECK(ui.click(390, 15, [&] { return caliper_host::draw_spec_control(t, kRow, look, host); }) == 1);
+    REQUIRE(run.sent.size() == 1);
+    CHECK(run.sent[0] == std::pair<std::string, json>{"set augment", true});
+    // A parameter that is not boolean takes no toggle.
+    spec::Control lr = make("lr", spec::ControlKind::toggle, "param:lr");
+    ui.click(390, 15, [&] { return caliper_host::draw_spec_control(lr, kRow, look, host); });
+    CHECK(run.sent.size() == 1);
+}

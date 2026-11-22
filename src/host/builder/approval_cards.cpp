@@ -122,6 +122,9 @@ std::string approval_what(const cb::CommandInvocation& inv, const spec::Spec* op
         target = steps_text(steps_arg(a));
     } else if (n == "run.set_param" || n == "run.action") {
         target = str_arg(a, "name");
+    } else if (n == "intervene.set" || n == "intervene.clear") {
+        const auto all = a.find("all");
+        target = all != a.end() && all->is_boolean() && all->get<bool>() ? std::string("all") : str_arg(a, "point");
     } else if (n == "run.pause") {
         target = str_arg(a, "op");
     } else if (n == "run.start") {
@@ -145,6 +148,18 @@ std::string approval_run_text(const cb::CommandInvocation& inv, const std::strin
                ". The change applies at the next step.";
     }
     if (n == "run.action") return "Run action " + str_arg(a, "name") + " in " + in + " at the next step.";
+    // The interventions (design/gpu-programs.md, Intervention Effect).
+    if (n == "intervene.set") {
+        const std::string op = str_arg(a, "op");
+        const std::string verb = op == "ablate" || op.empty() ? std::string("Ablate") : "Apply " + op + " to";
+        return verb + " " + str_arg(a, "point") + " in " + in + " from the next step.";
+    }
+    if (n == "intervene.clear") {
+        const auto all = a.find("all");
+        if (all != a.end() && all->is_boolean() && all->get<bool>())
+            return "Clear every intervention in " + in + " at the next step.";
+        return "Clear the interventions on " + str_arg(a, "point") + " in " + in + " at the next step.";
+    }
     if (n == "run.pause") {
         const std::string op = str_arg(a, "op");
         if (op == "resume") return "Resume " + in + ".";
@@ -338,7 +353,7 @@ ApprovalCard ApprovalCards::make_card(cb::Session& s, const cb::PendingApproval&
     const spec::Spec* before = open ? &open->spec : nullptr;
     c.what = approval_what(inv, before);
     c.loss = approval_loss(inv, before);
-    if (inv.name.rfind("run.", 0) == 0) {
+    if (inv.name.rfind("run.", 0) == 0 || inv.name == "intervene.set" || inv.name == "intervene.clear") {
         // The script of the run that the command names (a managed run), else
         // of the attached script.
         std::string script;
@@ -718,6 +733,8 @@ std::string rule_target_words(const std::string& rule) {
     const std::string command = rule.substr(0, colon), target = rule.substr(colon + 1);
     if (command == "run.set_param") return "changes of " + target;
     if (command == "run.action") return "action " + target;
+    if (command == "intervene.set") return "interventions on " + target;
+    if (command == "intervene.clear") return "clearing the interventions on " + target;
     return "";
 }
 

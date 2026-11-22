@@ -191,6 +191,24 @@ def test_strings_and_limits_mirror_the_codec():
     assert C.RELEASE_GRACE_S * 1000 == w.RELEASE_GRACE_MS
 
 
+def test_intervention_strings_and_limits_mirror_the_codec():
+    if not hasattr(w, "OP_INTERVENE"):
+        pytest.skip("this codec has no CONTROL op intervene (protocol 3.2 draft)")
+    assert C.OP_INTERVENE == w.OP_INTERVENE
+    assert C.INTERVENE_OPS == (w.INTERVENE_ABLATE,)
+    assert (C.IV_PENDING, C.IV_ACTIVE, C.IV_ENDED) == w.INTERVENTION_STATES
+    for name in ("MAX_POINTS_LISTED", "MAX_INTERVENTIONS", "POINT_MAX"):
+        assert getattr(C, name) == getattr(w, name), name
+
+
+def test_a_script_without_a_watched_model_sends_no_interventions_and_refuses_intervene():
+    ctl = C.Controls()
+    assert "interventions" not in ctl.controls_meta()
+    with ctl.lock:
+        assert ctl._intervene({"clear_all": True})[0] == C.ERR_NOT_SUPPORTED
+    assert ctl.summary()["interventions"] == []
+
+
 def test_using_controls_imports_nothing_heavy():
     code = ("import sys, caliper\n"
             "p = caliper.param('lr', 1e-3, min=1e-5, max=0.1, log=True)\n"

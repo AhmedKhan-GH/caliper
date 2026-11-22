@@ -150,8 +150,28 @@ public:
         const char* name = op == cb::RunPauseOp::pause ? "pause" : op == cb::RunPauseOp::resume ? "resume" : "step";
         return send(name, "", json(), static_cast<std::uint32_t>(std::max<std::int64_t>(1, std::min<std::int64_t>(count, 0xFFFFFFFF))));
     }
+    // The interventions (design/gpu-programs.md, Intervention Wire), from the
+    // CONTROLS key "interventions" of the runner's connection and sent as
+    // CONTROL op "intervene" through it.
+    bool interventions_supported() override { return interventions_json().is_object(); }
+    std::vector<cb::InterventionPoint> intervention_points() override;
+    std::vector<cb::Intervention> interventions() override;
+    cb::Error intervene_set(const cb::Intervention& i) override {
+        if (!interventions_supported())
+            return fail(cb::kInterveneNotSupported, "The script of " + id_ + " takes no interventions.");
+        json set{{"point", i.point}, {"op", i.op}};
+        set["from_step"] = i.from_step ? json(*i.from_step) : json();
+        set["until_step"] = i.until_step ? json(*i.until_step) : json();
+        return send("intervene", "", json{{"set", std::move(set)}}, 1);
+    }
+    cb::Error intervene_clear(const std::string& point) override {
+        if (!interventions_supported())
+            return fail(cb::kInterveneNotSupported, "The script of " + id_ + " takes no interventions.");
+        return send("intervene", "", point.empty() ? json{{"clear_all", true}} : json{{"clear", point}}, 1);
+    }
 
 private:
+    json interventions_json();
     cb::Error send(const std::string& op, const std::string& name, const json& value, std::uint32_t count);
     RunnerState* state_;
     std::string id_;
@@ -275,6 +295,66 @@ cb::RunState ConnectionControl::state() {
         st.actions.push_back(std::move(q));
     }
     return st;
+}
+
+json ConnectionControl::interventions_json() {
+    std::lock_guard<std::mutex> lock(state_->m);
+    Run* r = state_->find(id_);
+    if (!r || !r->conn || r->conn->state() != RunConnection::State::open) return json();
+    const json& c = r->conn->controls();
+    return c.is_object() ? c.value("interventions", json()) : json();
+}
+
+namespace {
+
+std::optional<std::int64_t> opt_int(const json& o, const char* key) {
+    const auto it = o.find(key);
+    if (it == o.end() || !it->is_number_integer()) return std::nullopt;
+    return it->get<std::int64_t>();
+}
+
+}  // namespace
+
+std::vector<cb::InterventionPoint> ConnectionControl::intervention_points() {
+    const json iv = interventions_json();
+    std::vector<cb::InterventionPoint> out;
+    if (!iv.is_object() || !iv.contains("points") || !iv["points"].is_array()) return out;
+    for (const json& p : iv["points"]) {
+        if (!p.is_object() || !p.contains("point") || !p["point"].is_string()) continue;
+        cb::InterventionPoint q;
+        q.point = p["point"].get<std::string>();
+        q.kind = p.value("kind", std::string("module"));
+        q.module = p.value("module", q.point);
+        q.head = opt_int(p, "head");
+        if (p.contains("type") && p["type"].is_string()) q.type = p["type"].get<std::string>();
+        if (p.contains("shape") && p["shape"].is_array()) {
+            std::vector<std::int64_t> shape;
+            for (const json& d : p["shape"])
+                if (d.is_number_integer()) shape.push_back(d.get<std::int64_t>());
+            q.shape = std::move(shape);
+        }
+        out.push_back(std::move(q));
+    }
+    return out;
+}
+
+std::vector<cb::Intervention> ConnectionControl::interventions() {
+    const json iv = interventions_json();
+    std::vector<cb::Intervention> pending, rest;
+    if (!iv.is_object() || !iv.contains("active") || !iv["active"].is_array()) return pending;
+    for (const json& a : iv["active"]) {
+        if (!a.is_object() || !a.contains("point") || !a["point"].is_string()) continue;
+        cb::Intervention i;
+        i.point = a["point"].get<std::string>();
+        i.op = a.value("op", std::string("ablate"));
+        i.from_step = opt_int(a, "from_step");
+        i.until_step = opt_int(a, "until_step");
+        i.since_step = opt_int(a, "since_step");
+        i.state = a.value("state", std::string("pending"));
+        (i.state == "pending" ? pending : rest).push_back(std::move(i));
+    }
+    pending.insert(pending.end(), rest.begin(), rest.end());
+    return pending;
 }
 
 cb::Error ConnectionControl::send(const std::string& op, const std::string& name, const json& value,

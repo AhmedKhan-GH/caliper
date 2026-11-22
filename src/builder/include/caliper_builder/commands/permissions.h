@@ -26,7 +26,10 @@
 // for mcp clients, in this session or, saved, until the person revokes it. The
 // key is the command's name, and for run.set_param and run.action the name
 // with its target ("run.set_param:lr"), so a rule allows one parameter or one
-// action. A saved rule is kept per agent: the chat's agent id, or "mcp".
+// action; for intervene.set and intervene.clear the name with the point
+// ("intervene.set:blocks.0.attn#3"), so a rule allows one point, and
+// intervene.clear with all true always asks. A saved rule is kept per agent:
+// the chat's agent id, or "mcp".
 //
 // What no mode and no rule changes: the registry refuses before any policy a
 // viewer's change and history.undo or history.redo from an agent; an approval
@@ -45,7 +48,8 @@
 // read_agent_permissions() ignores, and reports, a malformed file, an unknown
 // field, a mode it does not know or that may not be saved (allow_all), and a
 // rule for an unknown agent id, for a command that is not an agent's, or for
-// run.set_param or run.action without its target; on
+// run.set_param, run.action, intervene.set or intervene.clear without its
+// target; on
 // POSIX a file that others may write grants nothing. A missing file is the
 // defaults: Ask, no rules. No function here throws.
 #include <caliper_builder/commands/approval.h>
@@ -115,8 +119,11 @@ struct AgentRule {
 // for run.set_param and run.action the command's name, ":" and the parameter
 // or the action it names ("run.set_param:lr"), so that a card's rule allows
 // one parameter or one action and not the whole command
-// (design/instruments.md, Run Effect Class). The session looks session and
-// saved rules up by this key.
+// (design/instruments.md, Run Effect Class); for intervene.set and
+// intervene.clear the name, ":" and the argument `point`
+// ("intervene.clear:blocks.0.attn#3"), or a key no rule holds for
+// intervene.clear with all true (design/gpu-programs.md, Intervention
+// Effect). The session looks session and saved rules up by this key.
 std::string permission_rule_key(const CommandInvocation& invocation);
 
 // The id a saved rule names: "mcp", or 1 to 64 characters of a-z 0-9 _ -
@@ -124,8 +131,9 @@ std::string permission_rule_key(const CommandInvocation& invocation);
 bool valid_rule_agent(std::string_view agent);
 // A command an agent may be allowed always: in the table, open to agents,
 // and one that changes something. A rule key with a target passes when the
-// command takes one (run.set_param, run.action) and the target is a valid
-// name (1 to 63 bytes, no control characters). The bare name of such a
+// command takes one (run.set_param, run.action, intervene.set,
+// intervene.clear) and the target is a valid name (1 to 63 bytes, or 1 to 255
+// for a point, no control characters). The bare name of such a
 // command passes too, as the check of a card's command; the saved file
 // ignores a rule of it, which would allow no target.
 bool rule_command_allowed(std::string_view command);

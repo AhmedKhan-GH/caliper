@@ -2,16 +2,23 @@
 // Table).
 //
 // A control is one row: its title on the left, its widget on the right. This file
-// draws two kinds:
+// draws three kinds:
 //   slider  bound to param:<name>, it shows the script's parameter on the
 //           parameter's own range and scale, narrowed by the options, and
 //           sends each new value through the run control while the person
 //           drags; bound to `value`, it holds its value itself.
 //   button  bound to action:<name>, it queues the action; bound to
 //           run:pause, it pauses a run that runs and resumes a paused one.
+//   toggle  bound to intervene:<point>, on it ablates that point of the
+//           attached model and off it clears the point's interventions
+//           (design/gpu-programs.md, Toggle Control); bound to param:<name>
+//           of a boolean parameter, it sets the parameter. It shows the
+//           script's state, and the person's last click until the script
+//           shows it or for a few seconds.
 // A widget bound to the script is disabled, with the reason as its tooltip,
 // when no script is attached, when the connection takes no control or when
-// the script has no such parameter or action.
+// the script has no such parameter, action or intervention point, or takes no
+// interventions.
 //
 // The widget sends through RunControl directly with the origin of the person
 // (design/instruments.md, Open Points): the change is the person's own, the
@@ -44,6 +51,15 @@ struct Held {
 };
 std::map<std::string, Held>& held_values() {
     static std::map<std::string, Held> m;
+    return m;
+}
+// A toggle's state the person set that the script has not shown yet.
+struct HeldToggle {
+    bool on = false;
+    std::chrono::steady_clock::time_point at;
+};
+std::map<std::string, HeldToggle>& held_toggles() {
+    static std::map<std::string, HeldToggle> m;
     return m;
 }
 // The values of sliders bound to `value`, by window and control.
@@ -81,6 +97,9 @@ spec::ControlTarget target_of(const std::string& bind) {
         t.name = bind.substr(7);
     } else if (bind == "run:pause") {
         t.kind = spec::ControlTarget::Kind::run_pause;
+    } else if (bind.rfind("intervene:", 0) == 0) {
+        t.kind = spec::ControlTarget::Kind::intervene;
+        t.name = bind.substr(10);
     } else {
         t.kind = spec::ControlTarget::Kind::value;
     }
@@ -306,6 +325,106 @@ bool draw_button(const spec::Control& c, const spec::ControlTarget& t, const Row
     return true;
 }
 
+// The intervention of a toggle's point that the script holds and has not
+// ended, or null.
+const cb::Intervention* find_intervention(const std::vector<cb::Intervention>& ivs, const std::string& point) {
+    for (const auto& i : ivs)
+        if (i.point == point && i.op == "ablate" && i.state != "ended") return &i;
+    return nullptr;
+}
+
+bool draw_toggle(const spec::Control& c, const spec::ControlTarget& t, const Row& row, const SpecLook& look,
+                 SpecInstrumentHost& host) {
+    const cb::RunState st = host.run ? host.run->state() : cb::RunState{};
+    std::string why = why_disabled(host, st);
+    bool script_on = false;
+    std::string text;
+    if (t.kind == spec::ControlTarget::Kind::intervene) {
+        std::vector<cb::Intervention> ivs;
+        if (why.empty() && !host.run->interventions_supported())
+            why = "The script " + st.script + " takes no interventions; it announces them under caliper.watch(model, "
+                  "optimizer).";
+        if (why.empty()) {
+            const auto points = host.run->intervention_points();
+            bool known = points.empty();   // before the script lists them, it decides
+            for (const auto& p : points) known = known || p.point == t.name;
+            if (!known) why = "The model has no point " + t.name + ".";
+            ivs = host.run->interventions();
+        }
+        const cb::Intervention* iv = find_intervention(ivs, t.name);
+        script_on = iv != nullptr;
+        text = "ablate " + t.name;
+        if (iv && iv->state == "active" && iv->since_step)
+            text += "  \xC2\xB7 since step " + std::to_string(*iv->since_step);   // ·
+        else if (iv)
+            text += "  \xC2\xB7 at the next step";
+    } else if (t.kind == spec::ControlTarget::Kind::param) {
+        const cb::RunParam* p = st.attached ? find_param(st, t.name) : nullptr;
+        if (why.empty() && !p) why = "The script " + st.script + " has no parameter " + t.name + ".";
+        if (why.empty() && p->type != "boolean") why = "A toggle binds a boolean parameter; " + t.name + " is not one.";
+        if (p) {
+            const nlohmann::json& v = p->pending.is_boolean() ? p->pending : p->value;
+            script_on = v.is_boolean() && v.get<bool>();
+        }
+        text = t.name;
+    } else {
+        why = "A toggle binds intervene:<point> or param:<name> of a boolean parameter.";
+    }
+    // The person's click shows until the script shows it, or for a few seconds.
+    const std::string key = key_of(c);
+    const auto now = std::chrono::steady_clock::now();
+    bool on = script_on;
+    if (const auto it = held_toggles().find(key); it != held_toggles().end()) {
+        if (it->second.on == script_on || now - it->second.at > kHoldFor)
+            held_toggles().erase(it);
+        else
+            on = it->second.on;
+    }
+    const bool disabled = !why.empty();
+    ImGui::SetCursorScreenPos(row.widget.Min);
+    ImGui::BeginDisabled(disabled);
+    const bool pressed = ImGui::InvisibleButton("###toggle", row.widget.GetSize());
+    const bool hovered = ImGui::IsItemHovered();
+    ImGui::EndDisabled();
+    disabled_tooltip(why);
+    // The switch: a track with a knob at its left (off) or right (on), then the text.
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float h = std::round(ImGui::GetFrameHeight() * 0.7f);
+    const float w = std::round(h * 1.8f);
+    const ImVec2 a(row.widget.Min.x, std::round(row.widget.GetCenter().y - h * 0.5f));
+    const ImVec2 b(a.x + w, a.y + h);
+    const ImU32 track = disabled ? look.plate : on ? look.accent : hovered ? look.plate_hover : look.plate;
+    dl->AddRectFilled(a, b, track, h * 0.5f);
+    dl->AddRect(a, b, look.rule_faint, h * 0.5f);
+    const float r = h * 0.5f - 2.0f;
+    dl->AddCircleFilled(ImVec2(on ? b.x - h * 0.5f : a.x + h * 0.5f, a.y + h * 0.5f), r,
+                        disabled ? look.faint : look.text);
+    const float tx = b.x + std::round(6.0f * look.text_scale);
+    dl->PushClipRect(ImVec2(tx, row.widget.Min.y), row.widget.Max, true);
+    dl->AddText(ImVec2(tx, row.widget.GetCenter().y - ImGui::GetTextLineHeight() * 0.5f),
+                disabled ? look.faint : look.secondary, text.c_str());
+    dl->PopClipRect();
+    if (!pressed || disabled) return false;
+    const bool want = !on;
+    cb::Error e;
+    if (t.kind == spec::ControlTarget::Kind::intervene) {
+        if (want) {
+            cb::Intervention i;
+            i.point = t.name;
+            i.op = "ablate";
+            e = host.run->intervene_set(i);
+        } else {
+            e = host.run->intervene_clear(t.name);
+        }
+    } else {
+        e = host.run->set_param(t.name, want);
+    }
+    if (e) return false;
+    held_toggles()[key] = HeldToggle{want, now};
+    push_control_event(host, c, want);
+    return true;
+}
+
 }  // namespace
 
 std::string spec_button_label(const caliper_builder::spec::Control& control, const caliper_builder::RunState& state) {
@@ -320,7 +439,7 @@ std::string spec_button_label(const caliper_builder::spec::Control& control, con
 }
 
 float spec_control_height(const caliper_builder::spec::Control& control, const SpecLook& look) {
-    (void)control;   // a slider and a button each take one row
+    (void)control;   // a slider, a button and a toggle each take one row
     return std::round(look.ui_size * look.text_scale * 2.0f);
 }
 
@@ -341,6 +460,8 @@ bool draw_spec_control(const caliper_builder::spec::Control& control, const ImRe
             changed = draw_slider(control, t, row, host);
         } else if (button) {
             changed = draw_button(control, t, row, host);
+        } else if (control.kind == spec::ControlKind::toggle) {
+            changed = draw_toggle(control, t, row, look, host);
         } else {
             ImGui::GetWindowDrawList()->AddText(row.widget.Min, look.faint,
                                                 (std::string(spec::control_kind_name(control.kind)) +
