@@ -9,8 +9,10 @@
 // data view, EVENT for what a person did in a view, PING / PONG both ways and
 // BYE, and the SCENE_UPDATE and SCENE_CLEAR messages of a scene view, which
 // are kept in order for the scene view with a copy of their frame
-// (live/scene_queue.h). Frames go through the shared C++ codec
-// (src/host/net/wire.h).
+// (live/scene_queue.h). With the capability resources, the draw halves of
+// pieces arrive as PROGRAM and the versions of their resources as RESOURCE,
+// which go to the page host's callbacks. Frames go through the shared C++
+// codec (src/host/net/wire.h).
 //
 // Everything runs on the browser's main thread: the socket callbacks run
 // between frames, and the frame loop polls the Source exactly as live_core.cpp
@@ -27,6 +29,7 @@
 #include "live/live_source.h"
 #include "live/scene_queue.h"
 #include "net/json.h"
+#include "net/wire.h"
 
 #include <cstdint>
 #include <deque>
@@ -51,6 +54,10 @@ public:
     struct Callbacks {
         std::function<void(const std::string& view, const std::string& data_view_json)> data_view;
         std::function<void(const std::string& text)> status;   // connection state changes
+        // PROGRAM from the script: the draw half of an instance of a piece (set), remove or params.
+        std::function<void(const caliper_net::wire::Program& m)> program;
+        // RESOURCE: one version of a published resource; its section lives only during the call.
+        std::function<void(const caliper_net::wire::Resource& r)> resource;
     };
 
     NetSource(Options opt, Callbacks cb);

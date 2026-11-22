@@ -81,6 +81,17 @@ target_sources(caliper_view_layer PRIVATE
     ${CALIPER_ROOT}/src/host/scene/backend_resources.cpp)
 # The draw half of pieces (design/programmable-graphics.md): the same render
 # graph, composer, prelude and lib modules as the app, from one source each.
+# The runtime reads a PROGRAM's declaration with nlohmann/json, the release
+# that the builder takes (src/builder/CMakeLists.txt).
+include(FetchContent)
+if(NOT TARGET nlohmann_json::nlohmann_json)
+    set(JSON_BuildTests OFF CACHE INTERNAL "")
+    FetchContent_Declare(nlohmann_json
+        URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+        URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d)
+    FetchContent_MakeAvailable(nlohmann_json)
+endif()
+target_link_libraries(caliper_view_layer PUBLIC nlohmann_json::nlohmann_json)
 include("${CALIPER_ROOT}/src/builder/programs/programs_text.cmake")
 caliper_programs_text_source(_caliper_programs_text_cpp)
 target_sources(caliper_view_layer PRIVATE
@@ -92,6 +103,9 @@ target_sources(caliper_view_layer PRIVATE
     ${CALIPER_ROOT}/src/builder/programs/compose_draw.cpp
     ${_caliper_programs_text_cpp})
 target_include_directories(caliper_view_layer PUBLIC ${CALIPER_ROOT}/src/builder/include)
+# The scene view draws the programs of its panel (live_scene.cpp with CALIPER_HAVE_DRAW), from the
+# feeds of the module's programs (src/web_programs.cpp), as the app's scene view does.
+set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_scene.cpp APPEND PROPERTY COMPILE_DEFINITIONS CALIPER_HAVE_DRAW=1)
 target_compile_definitions(caliper_view_layer PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
 # The scene core's arithmetic without contraction, as natively (the root CMakeLists.txt's caliper_scene),
 # so that both compute the same uniform bytes; WebAssembly has no fused multiply-add, so this only
@@ -119,6 +133,8 @@ add_executable(caliper-views
     src/fonts.cpp
     src/gfx_selftest.cpp
     src/scene_selftest.cpp
+    src/web_programs.cpp
+    src/draw_parity.cpp
 )
 # fonts.cpp embeds the native app's faces from assets/fonts (C23 #embed).
 set_source_files_properties(src/fonts.cpp PROPERTIES
@@ -142,8 +158,8 @@ target_link_options(caliper-views PRIVATE
     -sMAXIMUM_MEMORY=512MB
     -sERROR_ON_UNDEFINED_SYMBOLS=1
     "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$UTF8ToString,$stringToNewUTF8,$stringToUTF8OnStack,$stackSave,$stackRestore,$specialHTMLTargets"
-    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_set_toggle,_caliper_views_set_link,_caliper_views_gfx_selftest,_caliper_views_scene_selftest,_caliper_views_colormap_keys,_caliper_views_destroy"
-    "-sEXPORTED_RUNTIME_METHODS=ccall,UTF8ToString,stringToNewUTF8"
+    "-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_caliper_views_set_data_view,_caliper_views_set_toggle,_caliper_views_set_link,_caliper_views_gfx_selftest,_caliper_views_scene_selftest,_caliper_views_draw_parity,_caliper_views_colormap_keys,_caliper_views_destroy"
+    "-sEXPORTED_RUNTIME_METHODS=ccall,UTF8ToString,stringToNewUTF8,HEAPU8"
 )
 if(CALIPER_WEB_CLOSURE AND CMAKE_BUILD_TYPE STREQUAL "Release")
     target_link_options(caliper-views PRIVATE --closure=1)
