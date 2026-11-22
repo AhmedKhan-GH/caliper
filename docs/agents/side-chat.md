@@ -14,7 +14,7 @@ status bar, the jobs tray and the approval cards keep their places, and the page
 The chat stays open when the page changes. For each `spec.new`, `spec.open` and `applet.open` of the agent, the app
 shows the spec page, so you see the spec whose edits you review beside the same conversation. A compiled applet's page
 is the exception, because an agent never ends it. There the spec opens in the session, the page stays, and Activity says
-how to get to it ([Caliper CLI](../reference/cli.md#the-spec-page)).
+how to get to it ([Caliper CLI](../reference/cli.md)).
 
 The app keeps the chat settings in `side-chat.json` in the app-data folder ([Folders and environment
 variables](../reference/folders-and-environment.md)). The file holds the chosen agent, the name and command line of the

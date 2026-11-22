@@ -63,7 +63,7 @@ The server limits the replies and other control messages that wait to be sent on
 | `events()` | The events received since the last call, oldest first. It clears them and never blocks |
 | `close()` | Deliver what is pending (for about a second), end every connection and stop the server |
 
-An event is a dict with `view`, `type` (`"select"`, `"pick"` or `"hover"`), `detail`, `sub`, `seq`, `data_view`, `connection` and `time`. The `detail` is in source indices, as the [Wire Protocol](../reference/wire-protocol.md#events) reference lists for each kind. Events are data for Python code to read, and nothing in them runs as a command.
+An event is a dict with `view`, `type` (`"select"`, `"pick"` or `"hover"`), `detail`, `sub`, `seq`, `data_view`, `connection` and `time`. The `detail` is in source indices, as the [Wire Protocol](../reference/data-messages.md#events) reference lists for each kind. Events are data for Python code to read, and nothing in them runs as a command.
 
 The `on_event` functions run on a thread named `caliper.events`, never on the training thread. An exception in one becomes a `RuntimeWarning` and does not stop the others. The server keeps at most 256 unread events for `events()` and drops the oldest.
 

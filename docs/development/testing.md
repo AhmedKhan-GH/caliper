@@ -51,7 +51,7 @@ The app itself takes the same mechanism with `--hidden` or `CALIPER_HIDDEN=1` ([
 
 The entries named `caliper_cli_*` (label `cli`) run the `caliper` executable as a user runs it, through `tests/cli_run.cmake`: each checks the exit code and what the run printed. They run with `CALIPER_APPLET_PATH` unset, the user applets folder in the build tree, and `CALIPER_DATA_DIR` on a folder of their own that must still not exist after the run, which proves that the read-only subcommands create nothing in the app-data folder. `caliper_cli_new_builds` (labels `cli` and `sdk`) configures, builds and tests the project that `caliper new` writes against this build's installed SDK.
 
-`caliper_cli_shot_temp` and `caliper_cli_shot_data_dir` (labels `cli` and `shot`) run [`caliper shot`](../reference/cli.md#caliper-shot) on the `hello` fixture through `tests/shot_run.cmake`, and `caliper_png_check` checks that the image has the requested size and is not one flat colour. The first runs without `CALIPER_DATA_DIR` and checks that the temporary data folder is gone afterwards and that nothing was created under `HOME`; the second runs with it and checks that the applet's data folder is there and that no `imgui.ini` was written. Without a GPU both are reported as skipped, unless `CALIPER_REQUIRE_GPU=1` makes that a failure.
+`caliper_cli_shot_temp` and `caliper_cli_shot_data_dir` (labels `cli` and `shot`) run [`caliper shot`](../reference/shot-and-serve-commands.md#caliper-shot) on the `hello` fixture through `tests/shot_run.cmake`, and `caliper_png_check` checks that the image has the requested size and is not one flat colour. The first runs without `CALIPER_DATA_DIR` and checks that the temporary data folder is gone afterwards and that nothing was created under `HOME`; the second runs with it and checks that the applet's data folder is there and that no `imgui.ini` was written. Without a GPU both are reported as skipped, unless `CALIPER_REQUIRE_GPU=1` makes that a failure.
 
 ## Test Data Location
 
@@ -107,3 +107,11 @@ caliper-chat-shot --workspace <dir> --agent <stub agent> --out-dir <dir> [--size
 The tool builds the dashboard in an empty workspace from the files of `--inputs`, or from small files that it writes itself. The input files are `run42_metrics.parquet`, with the columns `step`, `loss`, `accuracy` and `lr`, and `attn.safetensors`. The tool starts Caliper API on 127.0.0.1 and runs the agent as a custom command with the name "Stub agent".
 
 The states are `1-empty`, `2-turn`, `3-permission` (`3-approval` with `--review on`), `4-done`, `5-exited` and `6-no-agent`. Each state goes to `<prefix>-<state>-<W>x<H>.png`. The tool prints one JSON object with the files, the conversation items, the panels of the open spec and the result of a check for the agent's `panel.create` in the journal.
+
+## Windows Coverage
+
+The socket tests of the WebSocket layer, the hub and Caliper API do not run in the Windows CI lane. The network source that `--url` attaches through exists only on macOS. The code of `serve`, `build`, `--api` and `--url` compiles on Windows, but no test runs it there.
+
+## Wire Golden Frames
+
+The script `generate.py` in `tests/fixtures/wire_v3` writes the golden frames of that folder with `python/caliper/_wire.py`. The test `python/tests/test_wire.py` makes sure that the writer gives the same bytes again.

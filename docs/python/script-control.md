@@ -1,6 +1,6 @@
 # Script Control
 
-A training loop that streams its views with `caliper.serve()` can also take controls from its viewers while it trains. A viewer can pause the loop, run it one step at a time, change a learning rate and save a checkpoint. A viewer can also select samples in one view to highlight them in the others. This guide adds each control to a loop with Caliper LIB, the `caliper` Python package. The calls are in [Caliper LIB](run-control-calls.md#controls), and the messages that carry them are in [wire protocol 3.1](../reference/wire-protocol.md#controls).
+A training loop that streams its views with `caliper.serve()` can also take controls from its viewers while it trains. A viewer can pause the loop, run it one step at a time, change a learning rate and save a checkpoint. A viewer can also select samples in one view to highlight them in the others. This guide adds each control to a loop with Caliper LIB, the `caliper` Python package. The calls are in [Caliper LIB](run-control-calls.md#controls), and the messages that carry them are in [wire protocol 3.1](../reference/run-control-messages.md#controls).
 
 ```mermaid
 flowchart LR

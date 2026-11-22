@@ -21,8 +21,8 @@ One live view of the stream. It has a header and a drawing area. The header show
 | `kind` | `heatmap`, `image`, `points`, `series` or `histogram`. Without it, the kind comes from the stream |
 | `height` | The element's height in CSS pixels, header included. Default 320 |
 | `renderer` | `auto` (the default) uses the WebAssembly views for the kinds their loader lists when WebGPU gives an adapter. `wasm` uses them with any adapter. `ts` uses the TypeScript views |
-| `run-controls` | The header shows Pause or Resume and Step beside the run state if the producer has [controls](../reference/wire-protocol.md#controls) |
-| `link` | [Linked selection](../reference/wire-protocol.md#linked-selection): The view sends a selection with its item space and items. It also draws the producer's selections when one of its axes carries their space |
+| `run-controls` | The header shows Pause or Resume and Step beside the run state if the producer has [controls](../reference/run-control-messages.md#controls) |
+| `link` | [Linked selection](../reference/linked-selection-messages.md#linked-selection): The view sends a selection with its item space and items. It also draws the producer's selections when one of its axes carries their space |
 | `details` | With `link`, the details of a selection made in this view show under it, with one row per item |
 
 The header shows the run state, such as `running` or `paused at 1200`, when the producer announces a state other than `none`. This is true with or without `run-controls`. Pause, Resume and Step are disabled, with the reason as their tooltip, in three cases: the server does not let this viewer control the run, the session has ended, or the script has not reached a checkpoint yet.

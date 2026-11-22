@@ -96,13 +96,13 @@ The hover value of a heatmap comes from the shared slot. As a result, it can com
 
 ### View Pickers
 
-A view of a stream can offer more than it draws by default. It can have several sources, such as the layers of a model. It can also have dimensions that its kind does not draw, such as the heads of an attention map ([Data Views](../reference/wire-protocol.md#data-views)). In the app and in `caliper-viewer`, such a view has a picker under its header, as in the browser. The picker has a menu of the sources when the view has several. It has a menu for each dimension, which keeps the dimension (`all`), reduces it (`mean`, `sum`, `max`, `min` or `norm`), or picks one index. A field of more than 256 positions uses the index pick.
+A view of a stream can offer more than it draws by default. It can have several sources, such as the layers of a model. It can also have dimensions that its kind does not draw, such as the heads of an attention map ([Data Views](../reference/data-view-messages.md#data-views)). In the app and in `caliper-viewer`, such a view has a picker under its header, as in the browser. The picker has a menu of the sources when the view has several. It has a menu for each dimension, which keeps the dimension (`all`), reduces it (`mean`, `sum`, `max`, `min` or `norm`), or picks one index. A field of more than 256 positions uses the index pick.
 
 A heatmap that keeps three dimensions shows the first one as a mosaic of tiles. A view with nothing to choose has no picker. A choice goes to the script at once. The script calculates the new data view on its device, and only the result travels. The menus then show the data view that the script resolved, and thus a choice that the script refused or clamped returns to what the script shows. A shared-memory session offers no choices.
 
 ### Run Bar
 
-A script on protocol 3.1 can take controls from its viewers. It calls a checkpoint one time for each training step with `caliper.step()`. It can register parameters and actions, and it can declare which axes of its views index the same items, such as the samples of a test set ([Controls](../reference/wire-protocol.md#controls) and [Item Spaces](../reference/wire-protocol.md#item-spaces)). The live page of the app and `caliper-viewer` show these for a stream. A shared-memory session has no channel back to the script, and thus its page has no run bar.
+A script on protocol 3.1 can take controls from its viewers. It calls a checkpoint one time for each training step with `caliper.step()`. It can register parameters and actions, and it can declare which axes of its views index the same items, such as the samples of a test set ([Controls](../reference/run-control-messages.md#controls) and [Item Spaces](../reference/linked-selection-messages.md#item-spaces)). The live page of the app and `caliper-viewer` show these for a stream. A shared-memory session has no channel back to the script, and thus its page has no run bar.
 
 The run bar is under the page bar and above the views.
 

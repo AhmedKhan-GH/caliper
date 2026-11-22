@@ -17,7 +17,7 @@ entries:
   item: The --workspace option and the builder session that the app, caliper dev and caliper shot hold.
   ids:
   - SPC-06
-- page: docs/reference/cli.md#the-spec-page
+- page: docs/builder/workspace.md#spec-page
   item: Launching a spec applet or opening a spec through a command shows the spec page.
   ids:
   - SPC-08
@@ -36,40 +36,40 @@ entries:
   item: A build folder stands for its applets/ subfolder in every search list.
   ids:
   - COR-06
-- page: docs/reference/cli.md#caliper-list
+- page: docs/reference/applet-commands.md#caliper-list
   item: caliper list prints every applet in the search folders with its status, id, version, kind and
     folder, without opening a library.
   ids:
   - COR-39
-- page: docs/reference/cli.md#caliper-check
+- page: docs/reference/applet-commands.md#caliper-check
   item: caliper check runs the pre-load checks on every applet of one folder and validates each spec applet
     in full.
   ids:
   - COR-07
   - SPC-02
-- page: docs/reference/cli.md#caliper-install
+- page: docs/reference/applet-commands.md#caliper-install
   item: caliper install checks a folder and copies the applets into the user applets folder all or nothing.
   ids:
   - COR-12
-- page: docs/reference/cli.md#caliper-new
+- page: docs/reference/applet-commands.md#caliper-new
   item: caliper new creates an applet project from a built-in template with a manifest, a source file,
     a CMake file and a test.
   ids:
   - COR-41
-- page: docs/reference/cli.md#caliper-build
+- page: docs/reference/applet-commands.md#caliper-build
   item: caliper build configures and builds an applet folder against the installed SDK and runs the checks.
   ids:
   - COR-10
-- page: docs/reference/cli.md#caliper-info
+- page: docs/reference/applet-commands.md#caliper-info
   item: caliper info prints the host version, ABI epoch, SDK version, libtorch version, UI-stack hash
     and every service the host serves.
   ids:
   - COR-40
-- page: docs/reference/cli.md#caliper-shot
+- page: docs/reference/shot-and-serve-commands.md#caliper-shot
   item: caliper shot draws one applet page without a window and writes the last frame as a PNG.
   ids:
   - COR-08
-- page: docs/reference/cli.md#caliper-serve
+- page: docs/reference/shot-and-serve-commands.md#caliper-serve
   item: caliper serve runs the hub with --port, --token-file, --assets and --allow-control, and writes
     a hub file.
   ids:
@@ -566,7 +566,7 @@ entries:
   ids:
   - STR-02
   - STR-06
-- page: docs/reference/wire-protocol.md#frames
+- page: docs/reference/wire-frames.md#frames
   item: The binary frame layout with metadata and sections.
   ids:
   - STR-02
@@ -574,20 +574,20 @@ entries:
   item: The message types from hello to selection.
   ids:
   - STR-02
-- page: docs/reference/wire-protocol.md#data-views
+- page: docs/reference/data-view-messages.md#data-views
   item: Data views tell the producer which part of a large tensor to send.
   ids:
   - STR-08
-- page: docs/reference/wire-protocol.md#events
+- page: docs/reference/data-messages.md#events
   item: Events carried on the stream.
   ids:
   - STR-02
-- page: docs/reference/wire-protocol.md#controls_1
+- page: docs/reference/run-control-messages.md#controls
   item: 'Protocol 3.1 controls: the checkpoint, pause, resume and step, parameters, actions, ordering
     and who may control.'
   ids:
   - STR-03
-- page: docs/reference/wire-protocol.md#linked-selection
+- page: docs/reference/linked-selection-messages.md#linked-selection
   item: Linked selection shares a selection between views through item spaces.
   ids:
   - STR-03
@@ -616,7 +616,7 @@ entries:
   item: The stream binds to 127.0.0.1 and requires a token.
   ids:
   - STR-02
-- page: docs/reference/wire-protocol.md#worked-example
+- page: docs/reference/wire-frames.md#worked-example
   item: A worked example of a session.
   ids:
   - STR-02

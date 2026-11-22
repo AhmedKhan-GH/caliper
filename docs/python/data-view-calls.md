@@ -9,7 +9,7 @@ The data view arguments and calls let a producer and its viewers choose which pa
 
 ## Data Views
 
-A data view decides which data of a tensor travels. It is a slice, selection, projection or aggregation that the producer computes on the device of the tensor. [Data Views](data-views.md) explains the idea, and the [Wire Protocol](../reference/wire-protocol.md#data-views) reference defines the rules exactly. A view offers data views when its tensors have named dimensions:
+A data view decides which data of a tensor travels. It is a slice, selection, projection or aggregation that the producer computes on the device of the tensor. [Data Views](data-views.md) explains the idea, and the [Wire Protocol](../reference/data-view-messages.md#data-views) reference defines the rules exactly. A view offers data views when its tensors have named dimensions:
 
 ```python
 caliper.show(t, name="tensor", ..., *, dims=None, data_view=None)

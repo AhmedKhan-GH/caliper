@@ -11,7 +11,7 @@ The run control calls let viewers pause a training loop, change its parameters, 
 
 Controls let viewers reach back into the running script. They pause, resume and single-step its training loop, change the parameters it registered and run the actions it registered. Linked selection makes a selection in one view highlight the same items in the other views.
 
-Both travel on the stream as messages of wire protocol 3.1 ([Controls](../reference/wire-protocol.md#controls) and [Linked selection](../reference/wire-protocol.md#linked-selection)). Thus they work while a notebook cell runs, when the kernel cannot read widget messages. The viewers of `caliper.serve()` may control unless it started with `control=False`. The viewers of a hub that `connect()` streams to may control only when the hub started with `--allow-control`. Both senders carry them.
+Both travel on the stream as messages of wire protocol 3.1 ([Controls](../reference/run-control-messages.md#controls) and [Linked selection](../reference/linked-selection-messages.md#linked-selection)). Thus they work while a notebook cell runs, when the kernel cannot read widget messages. The viewers of `caliper.serve()` may control unless it started with `control=False`. The viewers of a hub that `connect()` streams to may control only when the hub started with `--allow-control`. Both senders carry them.
 
 [Script Control](script-control.md) uses them in a training loop. Every call also works without a server. Parameters keep their values, `step()` returns at once, and Python code can call an action.
 
@@ -38,7 +38,7 @@ A waiting `step()` returns in these cases:
 - The server closes.
 - No connection that may control has been open for 10 seconds. A page reload stays well within this time.
 
-While it waits, it still sets values and runs actions as they arrive. Ctrl-C, or the interrupt of a notebook, ends the wait with `KeyboardInterrupt`, and the run is no longer paused afterward. Right before it waits, it sends the snapshots and series values of the step where it paused. The run state goes to each viewer after them, so a view that reads `paused` already shows that step ([What a viewer may rely on](../reference/wire-protocol.md#what-a-viewer-may-rely-on-when-a-run-pauses)).
+While it waits, it still sets values and runs actions as they arrive. Ctrl-C, or the interrupt of a notebook, ends the wait with `KeyboardInterrupt`, and the run is no longer paused afterward. Right before it waits, it sends the snapshots and series values of the step where it paused. The run state goes to each viewer after them, so a view that reads `paused` already shows that step ([What a viewer may rely on](../reference/run-control-messages.md#what-a-viewer-may-rely-on-when-a-run-pauses)).
 
 With nothing waiting, a call only counts the step and reads one flag. It costs the same with a viewer attached or not.
 

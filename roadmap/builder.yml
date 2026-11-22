@@ -18,7 +18,7 @@ features:
     status: shipped
     summary: The spec validator checks a spec against the format and reports each error and warning with a stable code, a line and a column.
     depends_on: [SPC-01]
-    docs: docs/reference/cli.md#caliper-check
+    docs: docs/reference/applet-commands.md#caliper-check
     design: design/spec-format.md#validation
     issue: null
 

@@ -1,7 +1,15 @@
 nav:
   - index.md
   - cli.md
+  - applet-commands.md
+  - shot-and-serve-commands.md
   - wire-protocol.md
+  - wire-frames.md
+  - session-messages.md
+  - data-messages.md
+  - data-view-messages.md
+  - run-control-messages.md
+  - linked-selection-messages.md
   - folders-and-environment.md
   - refusal-messages.md
   - glossary.md

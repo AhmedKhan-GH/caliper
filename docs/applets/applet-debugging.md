@@ -58,7 +58,7 @@ When the loader turns an applet away, the diagnostic is on the **landing screen*
 - An unmet required service
 - An ABI-epoch mismatch
 
-The same rows name the fault for applets that crashed and were quarantined. The Activity pane logs each `launch failed` and `quarantined` event with the applet's name. If an applet does not appear at all, run `caliper check` on its folder. It lists every manifest there, with the status and reason the host would give, and opens no window ([Caliper CLI](../reference/cli.md#caliper-check)).
+The same rows name the fault for applets that crashed and were quarantined. The Activity pane logs each `launch failed` and `quarantined` event with the applet's name. If an applet does not appear at all, run `caliper check` on its folder. It lists every manifest there, with the status and reason the host would give, and opens no window ([Caliper CLI](../reference/applet-commands.md#caliper-check)).
 
 A background job that faults or throws prints one line on the host's stderr, for example `[jobs] job #3 "train" failed: SIGSEGV (invalid memory access)`. The jobs tray marks the job `FAILED` with the reason until you press `clear finished`. Activity logs a `job failed` row. If an entry point of the applet submitted the job, the host also quarantines the applet, and the status reads `crashed in background job "train": <reason>` (see [`caliper.jobs.v1`](services/caliper-jobs-v1.md)).
 
@@ -74,7 +74,7 @@ The host gives you a writable directory through `host.data_dir()`. It is the **o
 - **Linux:** `$XDG_DATA_HOME/caliper/`, or `~/.local/share/caliper/` (the folder name is lowercase)
 - **Windows:** `%APPDATA%/Caliper/`
 
-`CALIPER_DATA_DIR` moves the whole root. With `CALIPER_DATA_DIR=/tmp/caliper-try`, an applet with the id `com.example.viewer` gets `/tmp/caliper-try/data/com.example.viewer/`. Use this to run an applet against an empty data folder. `caliper shot` uses a temporary root of its own unless `CALIPER_DATA_DIR` is set (see [Caliper CLI](../reference/cli.md#caliper-shot)).
+`CALIPER_DATA_DIR` moves the whole root. With `CALIPER_DATA_DIR=/tmp/caliper-try`, an applet with the id `com.example.viewer` gets `/tmp/caliper-try/data/com.example.viewer/`. Use this to run an applet against an empty data folder. `caliper shot` uses a temporary root of its own unless `CALIPER_DATA_DIR` is set (see [Caliper CLI](../reference/shot-and-serve-commands.md#caliper-shot)).
 
 An applet can build `data_dir() + "/settings.txt"` and keep a value across relaunches. The host also keeps `.caliper-data.toml` there for an applet that declares a data schema. Leave that file alone.
 

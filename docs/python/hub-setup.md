@@ -1,6 +1,6 @@
 # Hub Setup
 
-The hub is a separate process, `caliper serve`, that holds the live sessions of several training scripts at once. Each script connects to it as a producer. Viewers connect to it, list the sessions and attach to one. The hub speaks [wire protocol v3](../reference/wire-protocol.md), and [Caliper CLI](../reference/cli.md#caliper-serve) lists every option.
+The hub is a separate process, `caliper serve`, that holds the live sessions of several training scripts at once. Each script connects to it as a producer. Viewers connect to it, list the sessions and attach to one. The hub speaks [wire protocol v3](../reference/wire-protocol.md), and [Caliper CLI](../reference/shot-and-serve-commands.md#caliper-serve) lists every option.
 
 ```mermaid
 flowchart LR
@@ -123,7 +123,7 @@ The hub applies the protocol [flow control](../reference/wire-protocol.md#flow-c
 
 ## Controls and Selections
 
-From [protocol 3.1](../reference/wire-protocol.md#hub-forwarding), a viewer can pause, resume and step the training loop of a script, change the parameters the script registered and run its actions. A selection in one view highlights the same items in the other views of the session. The hub announces both capabilities, `controls` and `selection`, to viewers and to scripts.
+From [protocol 3.1](../reference/run-control-messages.md#hub-forwarding), a viewer can pause, resume and step the training loop of a script, change the parameters the script registered and run its actions. A selection in one view highlights the same items in the other views of the session. The hub announces both capabilities, `controls` and `selection`, to viewers and to scripts.
 
 **Controls are off unless you allow them.** Without `--allow-control`, the hub tells every viewer in WELCOME that it may not control. It answers every CONTROL with the error `forbidden`. Viewers still show the run state, the parameters and the actions, but they cannot change them. To forward controls, start the hub with the option:
 

@@ -123,7 +123,7 @@ ctest --test-dir build
 with the stem `my_applet`: the manifest, the `CMakeLists.txt`, a source file with
 one window, and a test that runs the applet on the fixture host. Pass a full id,
 such as `com.example.my-applet`, to choose the id yourself.
-[Caliper CLI](../reference/cli.md#caliper-new) describes the template.
+[Caliper CLI](../reference/applet-commands.md#caliper-new) describes the template.
 
 ### Applet Loading
 
@@ -332,6 +332,15 @@ would report the suite as passed.
 Each applet folder under `applets/` and `examples/` also builds alone against the installed SDK. `scripts/build_applets_against_sdk.sh <core build folder> <work folder> [applet folder...]` installs the SDK and builds them that way, as CI does.
 
 An older build folder can keep libraries from in-tree builds that predate `caliper_add_applet()`. Their manifests have no `[build]` table, so the host does not check them against the UI-stack hash. Delete the `applets/` folder of the build after you turn `CALIPER_BUILD_APPLETS` off, and when you reuse such a build folder.
+
+## Test Hooks
+
+Some environment variables exist only for tests, and the user page Folders and Environment does not list them:
+
+- `CALIPER_TEST_UI` and `CALIPER_TEST_SPEC_UI` take step grammars, which `src/host/live/live_ui_driver.h` and `src/host/builder/spec_ui_driver.h` define.
+- `CALIPER_TEST_APPROVALS` takes the line forms `approve`, `deny`, `session` and `always`, which `src/host/builder/approval_cards.h` defines. `CALIPER_TEST_OPEN_URL`, `CALIPER_TEST_SPEC_UI_SHOTS` and `CALIPER_AGENT_TEST_SCRIPT` are in the same file.
+- The Python tests read `CALIPER_TEST_NO_WINDOW`, `CALIPER_REQUIRE_WEB_VIEWS`, `CALIPER_PY_LIVE_APPLY` and `CALIPER_THROWING_WHERE`.
+- `scripts/fetch_wasm.py` reads `GITHUB_TOKEN` or `GH_TOKEN`.
 
 ## Rules
 

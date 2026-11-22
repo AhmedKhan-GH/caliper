@@ -74,7 +74,7 @@ A hidden app opens no browser. A test gives it `CALIPER_TEST_OPEN_URL`, a file t
 
 ## Windowless Mode
 
-`caliper shot` draws the app's applet page into an offscreen canvas and shows nothing on screen ([caliper shot](../reference/cli.md#caliper-shot)). With `--api`, it serves the API while it draws its frames, so it is the app without a window. `--frames` sets how long it runs, and SIGINT (Ctrl-C) or SIGTERM ends the frames early. It then writes its image, stops the API, removes the API file and exits with 0. A capture reads the offscreen canvas at the end of a frame.
+`caliper shot` draws the app's applet page into an offscreen canvas and shows nothing on screen ([caliper shot](../reference/shot-and-serve-commands.md#caliper-shot)). With `--api`, it serves the API while it draws its frames, so it is the app without a window. `--frames` sets how long it runs, and SIGINT (Ctrl-C) or SIGTERM ends the frames early. It then writes its image, stops the API, removes the API file and exits with 0. A capture reads the offscreen canvas at the end of a frame.
 
 ## Security
 
@@ -141,7 +141,7 @@ What `caliper list` prints for the applets the running app found, in the same or
 
 Opens the page of the applet with that manifest id, as a click on its row on the landing screen does. The app tears down an open applet first, and an attached live session stays attached. If the new applet fails to launch, the app stays on the landing screen with the reason in the Activity pane.
 
-For a [spec applet](../applets/manifest.md#spec-applets) the page is the spec page ([Caliper CLI](../reference/cli.md#the-spec-page)). The answer comes once the app validated the spec, and the page opens a frame or two later with an `applet.open` from the origin of the request's token. If the open spec has unsaved changes, a launch with the token of `mcp` or `agent` waits on an approval card in the app. The answer then comes at once, with `status` `PENDING_APPROVAL` instead of `ACTIVE` and a `note` that explains the wait. A denial leaves the open spec as it was.
+For a [spec applet](../applets/manifest.md#spec-applets) the page is the spec page ([Caliper CLI](../reference/cli.md)). The answer comes once the app validated the spec, and the page opens a frame or two later with an `applet.open` from the origin of the request's token. If the open spec has unsaved changes, a launch with the token of `mcp` or `agent` waits on an approval card in the app. The answer then comes at once, with `status` `PENDING_APPROVAL` instead of `ACTIVE` and a `note` that explains the wait. A denial leaves the open spec as it was.
 
 ```json
 {"already_open":false,"id":"local.attention-entropy","note":"Accepted, not open yet: opening it would replace the open spec's unsaved changes, so it waits for the person's approval in the app. spec.get names the open spec once it has opened; if the person denies it, the open spec stays as it is.","status":"PENDING_APPROVAL","version":"0.1.0"}
