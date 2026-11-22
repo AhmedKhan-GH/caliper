@@ -5,22 +5,32 @@
 //
 // One DrawRuntime runs the draw half of one program, an instance of a piece,
 // in one scene view, on that view's backend of the graphics layer
-// (gfx/gfx.h). It decodes the piece's manifest and its resolved files from a
-// PROGRAM message, checks the piece's hash against the pin, composes each
-// pass with programs/pieces.h, creates the pipelines, allocates the resources,
-// the draw buffers and the offscreen targets, and records the passes of one
-// frame in their declared order into a frame of their own, so that the
-// layer's GPU time of a submit is the program's time. The app and the
-// browser module compile this same file: on Metal the composed WGSL goes
-// through caliper-wgsl to MSL, and on WebGPU it goes to the device as it is.
+// (gfx/gfx.h). It decodes the piece's manifest and its files from a PROGRAM
+// message, checks the piece's hash against the pin, runs the checks of the
+// sandbox before it makes any program or pipeline, composes each pass with
+// programs/pieces.h, creates the pipelines, allocates the resources, the draw
+// buffers and the offscreen targets, and records the passes of one frame in
+// their declared order into a frame of their own, so that the layer's GPU
+// time of a submit is the program's time. The app and the browser module
+// compile this same file: on Metal the composed WGSL goes through caliper-wgsl
+// with its bounds checks to MSL, and on WebGPU it goes to the device as it is.
 //
 // The scene view owns the camera, the host target (color, ID and depth),
 // the pick readback, the labels and the step cursor; it gives each frame's
 // values in FrameInputs. Every function runs on the view's frame thread.
 // Params that follow controls or state reach it as the packed bytes of the
 // struct Params; a piece reads no state variable by name.
-// Until the draw half is built, install() answers program.not_built and the
-// runtime draws nothing. Nothing here throws.
+//
+// Safety (design/programmable-graphics.md, Safety of Draws): the host cannot
+// stop a pass on the GPU, thus the runtime never waits for one. The host
+// reports each submit's GPU time with frame_done() and the age of the oldest
+// pending one with frame_pending(). A program over draw.frame_ms on 30 frames
+// in a row records one more frame with each pass in a submit of its own, and
+// then stops with program.draw_over_time, naming its costliest pass; a frame
+// still pending after 1 s stops it at once with program.draw_timeout; a
+// resource, draw buffer or target over draw.memory_mb stops it with
+// program.draw_over_memory. A stopped program releases its objects and draws
+// nothing; the other programs of the panel keep drawing. Nothing here throws.
 #include "gfx/gfx.h"
 
 #include <caliper_builder/programs/pieces.h>
@@ -39,6 +49,20 @@
 namespace caliper_draw {
 
 using caliper_builder::programs::Verdict;
+
+// The checks and the helpers of programs/pieces.h that the runtime runs
+// before it makes anything (Check Order 2, 4 and 5, and the layouts). The
+// app and the browser give pieces(); a test may give others, to reach the
+// render graph in a tree whose piece checks are not built.
+struct DrawChecks {
+    Verdict (*manifest)(const caliper_builder::spec::Piece&) = nullptr;
+    Verdict (*source)(std::string_view, std::size_t) = nullptr;
+    caliper_builder::programs::Resolved (*resolve)(const caliper_builder::spec::Piece&) = nullptr;
+    Verdict (*layout)(const caliper_builder::spec::Layout&, caliper_builder::programs::ElementLayout*) = nullptr;
+    std::string (*hash)(const caliper_builder::spec::Piece&) = nullptr;
+    // The functions of programs/pieces.h.
+    static DrawChecks pieces();
+};
 
 // The instance that a viewer draws: the program's id, its bindings and the
 // scene panel of its draw half. The piece holds the manifest and the
@@ -83,6 +107,9 @@ struct FrameInputs {
     std::int64_t latest_step = -1;
     bool live = true;
     bool cursor_moved = false;       // a command, a key or the transport moved the cursor
+    // The attachment and the epoch of the resources: a change (a new attachment, or a version
+    // at an earlier step than the newest of the same attachment) zeroes every draw buffer.
+    std::uint64_t epoch = 0;
     std::vector<Selected> selection; // at most kMaxSelected
     std::vector<std::uint8_t> params;   // the generated struct Params, in the manifest's order
 };
@@ -96,6 +123,10 @@ struct HostTarget {
     caliper_gfx::Texture depth;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
+    // The host's colormaps, caliper_colormaps of the prelude: RGBA8, 256 texels wide, one row
+    // for each colormap id of the graphics layer (gfx/colormap_tables.h), sampled. Absent, the
+    // runtime binds grey ramps.
+    caliper_gfx::Texture colormaps;
 };
 
 // A picked element of the item map: the resource's element `item` at the
@@ -127,13 +158,15 @@ struct DrawStatus {
     std::int64_t resource_step = -1; // the step of the resources of the last frame
     std::uint64_t frames = 0;
     Verdict error;                   // the refusal or the stop; `where` names the pass, e.g. "draw.passes[2]"
+    int pass = -1;                   // the index of the pass that the error names, or -1
+    std::string entry;               // that pass's entry point (its fragment for a render pass)
 };
 
 class DrawRuntime {
 public:
     // `webgpu`: the backend takes WGSL as it is (the browser module); else
     // the runtime translates each composed module with caliper-wgsl to MSL.
-    DrawRuntime(caliper_gfx::Backend& gfx, bool webgpu);
+    DrawRuntime(caliper_gfx::Backend& gfx, bool webgpu, DrawChecks checks = DrawChecks::pieces());
     ~DrawRuntime();
     DrawRuntime(const DrawRuntime&) = delete;
     DrawRuntime& operator=(const DrawRuntime&) = delete;
@@ -143,8 +176,16 @@ public:
     // the piece's hash against the pin (piece.hash_mismatch). The app decodes
     // the JSON of its own spec with the same function, so that both viewers
     // read one form.
+    //
+    // The declaration holds "id" (or "program"), "piece" (the pin: name, version, hash),
+    // "manifest" (the keys of piece.toml), "bind" and "panel". The sections may hold the
+    // author's files or the files with the imports resolved (the lib modules before
+    // common.wgsl, and "::" rewritten to "__"); the decoder returns the author's files, whose
+    // hash is the pin's. The pin's hash covers derive.wgsl too, thus a viewer checks it only
+    // with that section (`derive_wgsl`); without it every hash differs.
     static Verdict decode(std::string_view declaration_json, std::string_view common_wgsl, std::string_view draw_wgsl,
-                          caliper_builder::spec::Piece* piece, Instance* instance);
+                          caliper_builder::spec::Piece* piece, Instance* instance,
+                          const DrawChecks& checks = DrawChecks::pieces(), std::string_view derive_wgsl = {});
 
     // Checks, composes and compiles each pass, then allocates the draw
     // buffers and the targets. `pick_id` is the program's id in the ID
@@ -159,16 +200,32 @@ public:
     // resource's declared bytes is program.resource_too_large.
     Verdict set_resource(const ResourceVersion& version);
 
-    // Records the program's passes of one frame into `frame`, which the scene
-    // view submits on its own after the scene's frame; false when the program
-    // draws nothing in this frame. Applies the reset rules of the draw buffers.
-    bool encode(caliper_gfx::Frame& frame, const FrameInputs& in, const HostTarget& target);
-    // Reports the GPU time of the program's submit (< 0 when the backend has
-    // no timestamps) and whether the frame completed. Over draw.frame_ms on
-    // 30 frames in a row, or a frame still pending after 1 s, stops the
-    // program with program.draw_over_time or program.draw_timeout.
+    // Records the program's passes of one frame into frames that it appends to
+    // `frames`: one frame, or one for each pass while it measures its passes.
+    // The scene view submits each on its own, in order, after the scene's
+    // frame. False when the program draws nothing in this frame (not
+    // installed, stopped, a resource without a version, or a refusal, which
+    // stops it). Applies the reset rules of the draw buffers.
+    bool encode(std::vector<caliper_gfx::Frame>* frames, const FrameInputs& in, const HostTarget& target);
+    // Reports the GPU time of one submitted frame, in the order of encode()'s
+    // frames: from the layer's timestamps, or the time from the submit until
+    // the work was done where the backend has none. Over draw.frame_ms on 30
+    // frames in a row stops the program with program.draw_over_time.
     void frame_done(double gpu_ms);
+    // The oldest submitted frame of the program that is not done has waited
+    // this long; after 1 s the program stops at once with program.draw_timeout.
     void frame_pending(double waited_ms);
+    // The layer refused a submitted frame (Backend::last_error()): the program
+    // stops with program.layer_refused; the panel's other programs go on.
+    void frame_refused(const std::string& why);
+    // Stops the program after one more frame that measures each pass, naming
+    // the costliest: the scene view's rule for the programs of one panel
+    // together over 16.7 ms a frame. `message` says why.
+    void request_stop(const char* code, const std::string& message);
+    // The camera that the piece selects, the instance and the pick id.
+    caliper_builder::spec::CameraMode camera() const;
+    const Instance& instance() const;
+    std::uint32_t pick_id() const;
 
     // The item map's fields of `item` in the version of the last frame, or
     // nothing when the program has no map or no such element.
@@ -178,8 +235,12 @@ public:
 
     DrawStatus status() const;
 
-private:
+    // The runtime's state, defined in draw_runtime_impl.h and internal to src/host/draw; the
+    // tests read it through internals().
     struct Impl;
+    const Impl& internals() const { return *impl_; }
+
+private:
     std::unique_ptr<Impl> impl_;
 };
 

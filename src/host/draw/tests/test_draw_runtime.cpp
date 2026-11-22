@@ -1,35 +1,556 @@
-// Tests of the interface of the draw half in a viewer (draw/draw_runtime.h,
-// design/programmable-graphics.md) on the graphics layer's recording
-// backend, with no GPU: until the render graph is built, a program is
-// refused with program.not_built and the runtime records nothing.
+// Tests of the draw half of a program in a viewer (draw/draw_runtime.h,
+// design/programmable-graphics.md, Render Graph, Draw State and Safety of
+// Draws) on the graphics layer's recording backend, with no GPU: the two
+// worked examples install and record their passes in order, everything is
+// checked before anything is made, the reset rules zero the draw buffers,
+// and a program over its time or memory, or with a refused frame, stops with
+// its pass named while the panel's other programs go on.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
 #include "draw/draw_runtime.h"
+#include "draw/draw_runtime_impl.h"
 #include "gfx/recording_backend.h"
+
+#include <caliper_builder/programs/sandbox.h>
+
+#include "../../../../tests/gfx/example_pieces.h"
+
+#include <cstring>
 
 namespace cd = caliper_draw;
 namespace cp = caliper_builder::programs;
+namespace cs = caliper_builder::spec;
+namespace ex = caliper_test_pieces;
+namespace gfx = caliper_gfx;
 
-TEST_CASE("a draw runtime refuses a program as not built and draws nothing") {
-    caliper_gfx::RecordingBackend gfx;
-    cd::DrawRuntime runtime(gfx, /*webgpu=*/false);
-    CHECK(runtime.status().state == cd::DrawState::waiting);
+namespace {
 
-    caliper_builder::spec::Piece piece;
+// The checks of pieces, with the stand-ins of example_pieces.h where this tree's answer
+// program.not_built.
+cd::DrawChecks checks() {
+    cd::DrawChecks c = cd::DrawChecks::pieces();
+    const cs::Piece p = ex::attention_arcs();
+    if (cp::check_piece_manifest(p).code == cp::kProgramNotBuilt) c.manifest = [](const cs::Piece&) { return cp::Verdict{}; };
+    if (cp::check_piece_source("", 1).code == cp::kProgramNotBuilt)
+        c.source = [](std::string_view, std::size_t) { return cp::Verdict{}; };
+    if (cp::resolve_imports(p).verdict.code == cp::kProgramNotBuilt) c.resolve = ex::resolve;
+    cp::ElementLayout e;
+    if (cp::element_layout(ex::element("f32"), &e).code == cp::kProgramNotBuilt) c.layout = ex::layout;
+    if (cp::piece_hash(p).empty()) c.hash = ex::hash;
+    return c;
+}
+
+// The modes to test: the WGSL as it is (the browser's path), and the translation to MSL with
+// caliper-wgsl where the build has it.
+std::vector<bool> modes() {
+    std::vector<bool> m{true};
+    if (cp::compiler_available()) m.push_back(false);
+    return m;
+}
+
+struct Host {
+    gfx::RecordingBackend gfx;
+    cd::HostTarget target;
+    explicit Host(std::uint32_t w = 64, std::uint32_t h = 48) {
+        gfx::TextureDesc c;
+        c.width = w;
+        c.height = h;
+        c.format = gfx::Format::RGBA8Unorm;
+        c.usage = gfx::kRenderTarget | gfx::kSampled;
+        target.color = gfx.create_texture(c);
+        c.format = gfx::Format::RG32Uint;
+        c.usage = gfx::kRenderTarget;
+        target.id = gfx.create_texture(c);
+        c.format = gfx::Format::Depth32Float;
+        target.depth = gfx.create_texture(c);
+        target.width = w;
+        target.height = h;
+    }
+};
+
+template <typename T>
+cd::ResourceVersion version(const char* id, const std::vector<T>& v, std::int64_t step) {
+    cd::ResourceVersion r;
+    r.resource = id;
+    r.step = step;
+    r.count = std::uint32_t(v.size());
+    r.bytes = reinterpret_cast<const std::uint8_t*>(v.data());
+    r.size = v.size() * sizeof(T);
+    return r;
+}
+
+void give_arcs(cd::DrawRuntime& rt, const ex::ArcResources& res, std::int64_t step) {
+    REQUIRE(rt.set_resource(version("heads", res.heads, step)).ok());
+    REQUIRE(rt.set_resource(version("arcs", res.arcs, step)).ok());
+    REQUIRE(rt.set_resource(version("labels", res.labels, step)).ok());
+}
+
+// Records and submits one frame of a runtime; the frames encode() appended.
+std::vector<gfx::Frame> frame(Host& h, cd::DrawRuntime& rt, const cd::FrameInputs& in = {}) {
+    std::vector<gfx::Frame> frames;
+    if (!rt.encode(&frames, in, h.target)) return frames;
+    std::vector<gfx::Frame> copies = frames;
+    for (gfx::Frame& f : copies) {
+        const gfx::Serial s = h.gfx.submit(std::move(f));
+        CHECK_MESSAGE(s != 0, h.gfx.last_error());
+    }
+    return frames;
+}
+
+const gfx::DrawList& list_of(const gfx::Frame& f, std::size_t i) {
+    return std::get<gfx::RenderPass>(f.passes()[i]).list;
+}
+
+}  // namespace
+
+TEST_CASE("the field installs, waits for its resource, then draws one full-screen triangle") {
+    for (bool webgpu : modes()) {
+        CAPTURE(webgpu);
+        Host h;
+        cd::DrawRuntime rt(h.gfx, webgpu, checks());
+        CHECK(rt.status().state == cd::DrawState::waiting);
+        cd::Instance in;
+        in.program = "head_pattern";
+        in.panel = "pattern";
+        const cp::Verdict v = rt.install(ex::attention_field(), in, 7);
+        REQUIRE_MESSAGE(v.ok(), v.message);
+        CHECK(rt.status().state == cd::DrawState::compiled);
+        CHECK(rt.camera() == cs::CameraMode::none);
+        std::vector<gfx::Frame> none;
+        CHECK(!rt.encode(&none, {}, h.target));   // no version of `pattern` yet
+
+        const std::vector<float> pattern = ex::field_pattern();
+        REQUIRE(rt.set_resource(version("pattern", pattern, 40)).ok());
+        const std::vector<gfx::Frame> frames = frame(h, rt);
+        REQUIRE(frames.size() == 1);
+        REQUIRE(frames[0].passes().size == 1);
+        const gfx::DrawList& list = list_of(frames[0], 0);
+        CHECK(list.target().color == h.target.color);
+        CHECK(!list.target().id);
+        CHECK(!list.target().clear);
+        REQUIRE(list.records().size == 1);
+        CHECK(list.records()[0].count == 3);
+        CHECK(list.records()[0].instance_count == 1);
+        CHECK(rt.status().state == cd::DrawState::running);
+        CHECK(rt.status().resource_step == 40);
+    }
+}
+
+TEST_CASE("the arcs record the instanced pass with its ID, the glow target and the bloom, in order") {
+    for (bool webgpu : modes()) {
+        CAPTURE(webgpu);
+        Host h;
+        cd::DrawRuntime rt(h.gfx, webgpu, checks());
+        cd::Instance in;
+        in.program = "tower_arcs";
+        REQUIRE(rt.install(ex::attention_arcs(), in, 9).ok());
+        const ex::ArcResources res = ex::arc_resources();
+        REQUIRE(res.arcs.size() > 10);
+        give_arcs(rt, res, 100);
+        const std::vector<gfx::Frame> frames = frame(h, rt);
+        REQUIRE(frames.size() == 1);
+        REQUIRE(frames[0].passes().size == 3);
+        const gfx::DrawList& arcs = list_of(frames[0], 0);
+        CHECK(arcs.target().color == h.target.color);
+        CHECK(arcs.target().id == h.target.id);
+        CHECK(arcs.target().depth == h.target.depth);
+        CHECK(arcs.records()[0].instance_count == res.arcs.size());
+        CHECK(arcs.records()[0].count == 64);
+        CHECK(arcs.records()[0].pick_id == 9);
+        const gfx::DrawList& glow = list_of(frames[0], 1);
+        const auto& m = rt.internals();
+        REQUIRE(m.targets.size() == 1);
+        CHECK(glow.target().color == m.targets[0].tex);
+        CHECK(glow.target().clear);
+        CHECK(m.targets[0].width == 32);
+        CHECK(m.targets[0].height == 24);
+        const gfx::DrawList& bloom = list_of(frames[0], 2);
+        CHECK(bloom.target().color == h.target.color);
+        CHECK(!bloom.target().id);
+        CHECK(bloom.records()[0].count == 3);
+
+        // The view of the frame: its pick id and the frame counters.
+        std::vector<std::uint8_t> view = h.gfx.buffer_bytes(m.view);
+        REQUIRE(view.size() >= cp::kViewBytes);
+        std::uint32_t frame_x = 0, frame_y = 0, pick = 0;
+        std::memcpy(&frame_x, view.data() + 272, 4);
+        std::memcpy(&frame_y, view.data() + 276, 4);
+        std::memcpy(&pick, view.data() + 280, 4);
+        CHECK(frame_x == 0);
+        CHECK(frame_y == 1);
+        CHECK(pick == 9);
+        frame(h, rt);
+        view = h.gfx.buffer_bytes(m.view);
+        std::memcpy(&frame_x, view.data() + 272, 4);
+        std::memcpy(&frame_y, view.data() + 276, 4);
+        CHECK(frame_x == 1);
+        CHECK(frame_y == 0);
+    }
+}
+
+TEST_CASE("a pass whose instance count is zero is skipped, and its target is still cleared") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    REQUIRE(rt.install(ex::attention_arcs(), {}, 1).ok());
+    ex::ArcResources res = ex::arc_resources();
+    res.arcs.clear();
+    give_arcs(rt, res, 5);
+    const std::vector<gfx::Frame> frames = frame(h, rt);
+    REQUIRE(frames.size() == 1);
+    REQUIRE(frames[0].passes().size == 2);
+    CHECK(list_of(frames[0], 0).records().size == 0);   // the glow target's clear
+    CHECK(list_of(frames[0], 0).target().clear);
+    CHECK(list_of(frames[0], 1).records().size == 1);   // the bloom
+}
+
+TEST_CASE("the checks run before anything is made") {
+    Host h;
+    const std::size_t before = h.gfx.ops().size();
+    cd::DrawChecks refusing = checks();
+    refusing.manifest = [](const cs::Piece&) {
+        cp::Verdict v;
+        v.code = cp::kPieceBadManifest;
+        v.message = "refused";
+        return v;
+    };
+    cd::DrawRuntime rt(h.gfx, true, refusing);
+    const cp::Verdict v = rt.install(ex::attention_arcs(), {}, 1);
+    CHECK(v.code == cp::kPieceBadManifest);
+    CHECK(rt.status().state == cd::DrawState::refused);
+    CHECK(h.gfx.ops().size() == before);   // no buffer, texture, program or pipeline
+
+    cd::DrawRuntime pinned(h.gfx, true, checks());
+    cs::Piece p = ex::attention_arcs();
+    p.hash = "sha256:" + std::string(64, '0');
+    CHECK(pinned.install(p, {}, 1).code == cp::kPieceHashMismatch);
+    CHECK(h.gfx.ops().size() == before);
+
+    cd::DrawRuntime pick_offscreen(h.gfx, true, checks());
+    p = ex::attention_arcs();
+    p.draw->passes[1].pick = true;
+    const cp::Verdict off = pick_offscreen.install(p, {}, 1);
+    CHECK(off.code == cp::kProgramBadPass);
+    CHECK(off.where == "draw.passes[1]");
+    CHECK(h.gfx.ops().size() == before);
+}
+
+TEST_CASE("a pass that does not compile is refused with its file and line") {
+    if (!cp::compiler_available()) return;
+    Host h;
+    cd::DrawRuntime rt(h.gfx, false, checks());
+    cs::Piece p = ex::attention_field();
+    p.files["draw.wgsl"] += "\nfn broken( {\n";
+    const cp::Verdict v = rt.install(p, {}, 1);
+    CHECK(v.code == cp::kProgramCompileFailed);
+    CHECK(v.where == "draw.passes[0]");
+    CHECK(v.message.find("draw.wgsl line") != std::string::npos);
+    CHECK(rt.status().state == cd::DrawState::refused);
+}
+
+TEST_CASE("a version is held to its resource's layout and count") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    REQUIRE(rt.install(ex::attention_arcs(), {}, 1).ok());
+    std::vector<float> too_many(9, 0.0f);
+    CHECK(rt.set_resource(version("heads", too_many, 1)).code == cp::kProgramResourceTooLarge);
+    cd::ResourceVersion odd = version("heads", std::vector<float>(4, 0.0f), 1);
+    odd.size = 12;
+    CHECK(rt.set_resource(odd).code == cp::kProgramBadResource);
+    CHECK(rt.set_resource(version("nothing", too_many, 1)).code == cp::kProgramUnknownResource);
+    // A larger version grows the resource's buffer and binds it again.
+    const ex::ArcResources res = ex::arc_resources();
+    give_arcs(rt, res, 1);
+    CHECK(rt.internals().slots[1].capacity >= res.arcs.size() * sizeof(ex::Arc));
+    CHECK(frame(h, rt).size() == 1);
+}
+
+TEST_CASE("the reset rules zero the draw buffers at a new epoch, a cursor move or a new version") {
+    Host h;
+    cs::Piece p = ex::attention_arcs();
+    cs::DrawBuffer trail, age, fixed;
+    trail.id = "trail";
+    trail.layout = ex::element("f32");
+    trail.count = 16;
+    trail.reset = cs::BufferReset::cursor;
+    age.id = "age";
+    age.layout = ex::element("u32");
+    age.count = 16;
+    age.reset = cs::BufferReset::resource;
+    fixed.id = "fixed";
+    fixed.layout = ex::element("u32");
+    fixed.count = 16;
+    p.draw->buffers = {trail, age, fixed};
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    REQUIRE(rt.install(p, {}, 1).ok());
+    const ex::ArcResources res = ex::arc_resources();
+    give_arcs(rt, res, 10);
+    const auto& m = rt.internals();
+    auto fill = [&] {
+        const std::vector<std::uint8_t> ones(64, 1);
+        for (const auto& b : m.buffers) h.gfx.write_buffer(b.buffer, 0, ones.data(), ones.size());
+    };
+    auto zeroed = [&](std::size_t i) {
+        const std::vector<std::uint8_t> bytes = h.gfx.buffer_bytes(m.buffers[i].buffer);
+        return bytes[0] == 0 && bytes[63] == 0;
+    };
+    cd::FrameInputs in;
+    frame(h, rt, in);
+    fill();
+    frame(h, rt, in);
+    CHECK(!zeroed(0));
+    CHECK(!zeroed(1));
+    CHECK(!zeroed(2));
+
+    in.cursor_moved = true;
+    frame(h, rt, in);
+    CHECK(zeroed(0));
+    CHECK(!zeroed(1));
+    CHECK(!zeroed(2));
+    in.cursor_moved = false;
+
+    fill();
+    give_arcs(rt, res, 20);   // a new version of the resources
+    frame(h, rt, in);
+    CHECK(!zeroed(0));
+    CHECK(zeroed(1));
+    CHECK(!zeroed(2));
+
+    fill();
+    frame(h, rt, in);   // a parameter or nothing changed: nothing returns to zero
+    CHECK(!zeroed(0));
+    CHECK(!zeroed(1));
+
+    in.epoch = 1;       // a new attachment or epoch
+    frame(h, rt, in);
+    CHECK(zeroed(0));
+    CHECK(zeroed(1));
+    CHECK(zeroed(2));
+}
+
+TEST_CASE("a program over its frame time for 30 frames stops, naming its costliest pass") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cd::Instance in;
+    in.program = "tower_arcs";
+    REQUIRE(rt.install(ex::attention_arcs(), in, 1).ok());
+    give_arcs(rt, ex::arc_resources(), 1);
+    CHECK(rt.status().frame_limit_ms == doctest::Approx(4.0));
+
+    // A spike, and 29 slow frames then a fast one, never stop it.
+    for (int i = 0; i < 29; ++i) {
+        REQUIRE(frame(h, rt).size() == 1);
+        rt.frame_done(9.0);
+    }
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_done(1.0);
+    CHECK(rt.status().state == cd::DrawState::running);
+    for (int i = 0; i < 30; ++i) {
+        REQUIRE(frame(h, rt).size() == 1);
+        rt.frame_done(20.0);
+    }
+    CHECK(rt.status().state == cd::DrawState::running);
+    CHECK(rt.status().frame_ms == doctest::Approx(20.0));
+    // The next frame measures each pass in a submit of its own.
+    const std::vector<gfx::Frame> measured = frame(h, rt);
+    REQUIRE(measured.size() == 3);
+    rt.frame_done(1.0);
+    rt.frame_done(1.5);
+    CHECK(rt.status().state == cd::DrawState::running);
+    rt.frame_done(50.0);
+    const cd::DrawStatus s = rt.status();
+    CHECK(s.state == cd::DrawState::stopped);
+    CHECK(s.error.code == cp::kProgramDrawOverTime);
+    CHECK(s.error.where == "draw.passes[2]");
+    CHECK(s.pass == 2);
+    CHECK(s.entry == "bloom");
+    CHECK(s.error.message == "Stopped tower_arcs: draw pass 2 (bloom) took 50.0 ms a frame, above its 4 ms");
+    std::vector<gfx::Frame> after;
+    CHECK(!rt.encode(&after, {}, h.target));
+    CHECK(rt.internals().passes.empty());   // its objects are released
+}
+
+TEST_CASE("a measured frame back under the limit keeps the program") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    REQUIRE(rt.install(ex::attention_arcs(), {}, 1).ok());
+    give_arcs(rt, ex::arc_resources(), 1);
+    for (int i = 0; i < 30; ++i) {
+        frame(h, rt);
+        rt.frame_done(6.0);
+    }
+    REQUIRE(frame(h, rt).size() == 3);
+    rt.frame_done(1.0);
+    rt.frame_done(1.0);
+    rt.frame_done(1.0);
+    CHECK(rt.status().state == cd::DrawState::running);
+    CHECK(frame(h, rt).size() == 1);
+}
+
+TEST_CASE("a frame not done after 1 s stops its program at once, and the other program of the panel goes on") {
+    Host h;
+    h.gfx.set_auto_complete(false);
+    cd::DrawRuntime slow(h.gfx, true, checks()), other(h.gfx, true, checks());
+    cd::Instance a, b;
+    a.program = "slow";
+    b.program = "other";
+    REQUIRE(slow.install(ex::attention_arcs(), a, 1).ok());
+    REQUIRE(other.install(ex::attention_field(), b, 2).ok());
+    give_arcs(slow, ex::arc_resources(), 1);
+    const std::vector<float> pattern = ex::field_pattern();
+    REQUIRE(other.set_resource(version("pattern", pattern, 1)).ok());
+    REQUIRE(frame(h, slow).size() == 1);
+    REQUIRE(frame(h, other).size() == 1);
+    slow.frame_pending(400.0);
+    CHECK(slow.status().state == cd::DrawState::running);
+    slow.frame_pending(1000.5);
+    CHECK(slow.status().state == cd::DrawState::stopped);
+    CHECK(slow.status().error.code == cp::kProgramDrawTimeout);
+    CHECK(slow.status().error.message.find("Stopped slow:") == 0);
+    CHECK(frame(h, other).size() == 1);
+    CHECK(other.status().state == cd::DrawState::running);
+}
+
+TEST_CASE("a refused frame is an error of its program only") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cd::Instance in;
+    in.program = "tower_arcs";
+    REQUIRE(rt.install(ex::attention_arcs(), in, 1).ok());
+    rt.frame_refused("a bind group was released");
+    CHECK(rt.status().state == cd::DrawState::stopped);
+    CHECK(rt.status().error.code == cp::kProgramLayerRefused);
+}
+
+TEST_CASE("the panel's rule stops a program after one measured frame") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cd::Instance in;
+    in.program = "tower_arcs";
+    REQUIRE(rt.install(ex::attention_arcs(), in, 1).ok());
+    give_arcs(rt, ex::arc_resources(), 1);
+    rt.request_stop(cp::kProgramDrawOverTime, "the programs of its panel took 18.0 ms a frame, above 16.7 ms");
+    REQUIRE(frame(h, rt).size() == 3);
+    rt.frame_done(3.0);
+    rt.frame_done(2.0);
+    rt.frame_done(1.0);
+    CHECK(rt.status().state == cd::DrawState::stopped);
+    CHECK(rt.status().error.where == "draw.passes[0]");
+    CHECK(rt.status().error.message.find("above 16.7 ms") != std::string::npos);
+}
+
+TEST_CASE("draw memory over draw.memory_mb stops the program and names the object") {
+    SUBCASE("a draw buffer at the install") {
+        Host h;
+        cs::Piece p = ex::attention_field();
+        p.draw->memory_mb = 1;
+        cs::DrawBuffer big;
+        big.id = "big";
+        big.layout = ex::element("vec4<f32>");
+        big.count = 1u << 17;   // 2 MiB
+        p.draw->buffers = {big};
+        cd::DrawRuntime rt(h.gfx, true, checks());
+        const cp::Verdict v = rt.install(p, {}, 1);
+        CHECK(v.code == cp::kProgramDrawOverMemory);
+        CHECK(v.where == "draw.buffers[0]");
+        CHECK(rt.status().state == cd::DrawState::stopped);
+    }
+    SUBCASE("a resource that grows") {
+        Host h;
+        cs::Piece p = ex::attention_field();
+        p.draw->memory_mb = 1;
+        p.resources[0].count = 1u << 20;
+        cd::DrawRuntime rt(h.gfx, true, checks());
+        REQUIRE(rt.install(p, {}, 1).ok());
+        const std::vector<float> big(1u << 19, 0.5f);   // 2 MiB
+        const cp::Verdict v = rt.set_resource(version("pattern", big, 1));
+        CHECK(v.code == cp::kProgramDrawOverMemory);
+        CHECK(v.where == "resources[pattern]");
+        CHECK(rt.status().state == cd::DrawState::stopped);
+    }
+    SUBCASE("a target at the panel's size") {
+        Host h(1024, 1024);
+        cs::Piece p = ex::attention_arcs();
+        p.draw->memory_mb = 1;
+        p.draw->targets[0].scale = 1.0f;   // 4 MiB at 1,024 by 1,024
+        cd::DrawRuntime rt(h.gfx, true, checks());
+        REQUIRE(rt.install(p, {}, 1).ok());
+        give_arcs(rt, ex::arc_resources(), 1);
+        std::vector<gfx::Frame> frames;
+        CHECK(!rt.encode(&frames, {}, h.target));
+        CHECK(rt.status().error.code == cp::kProgramDrawOverMemory);
+        CHECK(rt.status().error.where == "draw.targets[0]");
+    }
+}
+
+TEST_CASE("decode reads a PROGRAM's declaration and checks the hash against the pin") {
+    const cs::Piece field = ex::attention_field();
+    const cd::DrawChecks c = checks();
+    const cs::Piece hashed = field;
+    const std::string pin = c.hash(hashed);
+    const std::string manifest = R"({"name": "attention_field", "version": 1,
+        "description": "The attention pattern of one head of a two-layer model, as a field with contour lines",
+        "imports": ["colormap@1"],
+        "inputs": [{"name": "attn0", "kind": "tensor", "rank_min": 4, "rank_max": 4},
+                   {"name": "attn1", "kind": "tensor", "rank_min": 4, "rank_max": 4}],
+        "params": [{"name": "layer", "type": "i32", "min": 0, "max": 1},
+                   {"name": "head", "type": "i32", "min": 0, "max": 3},
+                   {"name": "gain", "default": 1.0, "min": 0.1, "max": 10.0}],
+        "resources": [{"id": "pattern", "kind": "buffer", "element": "f32", "count": 8192}],
+        "derive": {"passes": [{"entry": "copy_rows", "workgroups": [16, 1, 1], "writes": ["pattern"]}]},
+        "draw": {"camera": "none", "passes": [{"kind": "render", "fragment": "field"}]}})";
+    const std::string decl = R"({"id": "head_pattern", "panel": "pattern",
+        "piece": {"name": "attention_field", "version": 1, "hash": ")" + pin + R"("},
+        "bind": {"attn0": "live:blocks.0.attn.weights.act"}, "manifest": )" + manifest + "}";
+    cs::Piece piece;
     cd::Instance instance;
-    CHECK(cd::DrawRuntime::decode("{}", "", "", &piece, &instance).code == cp::kProgramNotBuilt);
-    piece.name = "attention_arcs";
-    instance.program = "tower_arcs";
-    const cp::Verdict v = runtime.install(piece, instance, 1);
-    CHECK(v.code == cp::kProgramNotBuilt);
-    CHECK(runtime.status().state == cd::DrawState::refused);
-    CHECK(runtime.status().error.code == cp::kProgramNotBuilt);
+    const cp::Verdict v = cd::DrawRuntime::decode(decl, ex::kFieldCommon, ex::kFieldDraw, &piece, &instance, c,
+                                                      ex::kFieldDerive);
+    REQUIRE_MESSAGE(v.ok(), v.message);
+    CHECK(instance.program == "head_pattern");
+    CHECK(instance.panel == "pattern");
+    CHECK(instance.bind.at("attn0") == "live:blocks.0.attn.weights.act");
+    CHECK(piece.name == "attention_field");
+    CHECK(piece.params == field.params);
+    CHECK(piece.resources == field.resources);
+    CHECK(piece.derive == field.derive);
+    CHECK(piece.draw == field.draw);
+    CHECK(piece.hash == pin);
 
-    caliper_gfx::Frame frame;
-    CHECK(!runtime.encode(frame, cd::FrameInputs{}, cd::HostTarget{}));
-    CHECK(!runtime.pick(0));
-    CHECK(runtime.labels().empty());
-    runtime.remove();
-    CHECK(runtime.status().state == cd::DrawState::waiting);
+    // Sections with the imports resolved give back the author's files.
+    const cp::Resolved r = ex::resolve(hashed);
+    const std::string common = r.lib_text + r.files.at("common.wgsl");
+    cs::Piece again;
+    REQUIRE(cd::DrawRuntime::decode(decl, common, r.files.at("draw.wgsl"), &again, &instance, c,
+                                    r.files.at("derive.wgsl"))
+                .ok());
+    CHECK(again.files == piece.files);
+
+    // Another file, or a broken declaration, is refused.
+    std::string changed = ex::kFieldDraw;
+    changed += "// changed\n";
+    CHECK(cd::DrawRuntime::decode(decl, ex::kFieldCommon, changed, &piece, &instance, c, ex::kFieldDerive).code ==
+          cp::kPieceHashMismatch);
+    CHECK(cd::DrawRuntime::decode(decl, ex::kFieldCommon, ex::kFieldDraw, &piece, &instance, c).code ==
+          cp::kPieceHashMismatch);   // without derive.wgsl the pin's hash cannot hold
+    CHECK(cd::DrawRuntime::decode("{", "", "", &piece, &instance, c).code == cp::kPieceBadManifest);
+    CHECK(cd::DrawRuntime::decode(R"({"id": "x", "manifest": {"name": 3}})", "", "", &piece, &instance, c).code ==
+          cp::kPieceBadManifest);
+
+    // The decoded piece installs and draws.
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, c);
+    const cp::Verdict installed = rt.install(again, instance, 3);
+    REQUIRE_MESSAGE(installed.ok(), installed.message);
+}
+
+TEST_CASE("remove releases the program and returns to waiting") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    REQUIRE(rt.install(ex::attention_arcs(), {}, 1).ok());
+    rt.remove();
+    CHECK(rt.status().state == cd::DrawState::waiting);
+    CHECK(rt.internals().passes.empty());
+    CHECK(!rt.pick(0));
+    CHECK(rt.labels().empty());
 }

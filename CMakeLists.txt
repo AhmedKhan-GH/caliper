@@ -938,6 +938,12 @@ if(CALIPER_WITH_BUILDER)
                 src/host/draw/draw_text.cpp)
     target_include_directories(caliper_draw PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
     target_link_libraries(caliper_draw PUBLIC caliper_gfx caliper_builder_programs)
+    # On Metal the runtime translates each composed pass with caliper-wgsl and its bounds
+    # checks (CALIPER_HAS_WGSL); without the library a program is refused with
+    # program.compiler_unavailable, and the browser module takes the WGSL as it is.
+    if(TARGET caliper::wgsl)
+        target_link_libraries(caliper_draw PRIVATE caliper::wgsl)
+    endif()
     set_target_properties(caliper_draw PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
     if(BUILD_TESTS)
