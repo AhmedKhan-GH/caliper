@@ -163,3 +163,12 @@
   .roadmap-legend, .roadmap-search, .roadmap-search-status, .roadmap-canvas { display: none; }
   .roadmap-pillar-name { color: var(--rm-accent); }
 }
+
+/* The two buttons at the foot of a feature page: Roadmap Graph and Feature in Graph. */
+.md-typeset a.md-button {
+  color: var(--parchment, var(--rm-text)); background: var(--plate, transparent);
+  border: 1px solid var(--rule, var(--rm-faint)); border-radius: 4px; padding: .45em 1.2em; margin: .2rem .4rem .2rem 0;
+}
+.md-typeset a.md-button:hover, .md-typeset a.md-button:focus-visible {
+  color: var(--parchment, var(--rm-text)); background: var(--plate-hover, transparent); border-color: var(--bronze, var(--rm-accent));
+}

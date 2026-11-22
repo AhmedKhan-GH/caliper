@@ -426,15 +426,13 @@ def feature_page(feature, pillars_by_prefix, features, root, base):
                   "progress."]
     lines += [""]
     if feature["sources"]:
-        lines += ["## Sources", "",
-                  "The [coverage ledger](%s/tree/main/roadmap/coverage) records where this "
-                  "feature comes from:" % base, ""]
+        lines += ["## Coverage Ledger", ""]
         lines += ["- " + source_line(root, group, entry, base)
                   for group, entry in feature["sources"]]
         lines += [""]
-    # A raw link, because the node's anchor exists only once the graph is drawn.
-    lines += ['Back to the [roadmap graph](index.md), or to <a href="../#%s">this feature in it</a>.'
-              % feature["id"], ""]
+    # Raw links, because the node's anchor exists only once the graph is drawn.
+    lines += ['<a class="md-button" href="../">Roadmap Graph</a> '
+              '<a class="md-button" href="../#%s">Feature in Graph</a>' % feature["id"], ""]
     return "\n".join(lines)
 
 
@@ -444,7 +442,7 @@ def _sentence(text):
 
 
 def source_line(root, group, entry, base):
-    """One line of a feature page's Sources list: where the item is, then the item."""
+    """One line of a feature page's Coverage Ledger list: where the item is, then the item."""
     kind = group.get("kind")
     ref = entry.get("ref") or group.get("ref") or "main"
     if kind == "page":

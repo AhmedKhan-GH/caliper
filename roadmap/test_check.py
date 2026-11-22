@@ -771,8 +771,9 @@ class BuildTest(unittest.TestCase):
                       "(https://github.com/AhmedKhan-GH/caliper/blob/main/design/plan.md"
                       "#the-plan) |", page)
         self.assertTrue(page.rstrip().endswith(
-            'Back to the [roadmap graph](index.md), or to <a href="../#COR-03">this feature in it</a>.'))
-        self.assertIn("## Sources", page)
+            '<a class="md-button" href="../">Roadmap Graph</a> '
+            '<a class="md-button" href="../#COR-03">Feature in Graph</a>'))
+        self.assertIn("## Coverage Ledger", page)
         self.assertIn("- [design/plan.md](https://github.com/AhmedKhan-GH/caliper/blob/main/"
                       "design/plan.md#the-plan), under *The plan*. The packaging step and the "
                       "scene core after it.", page)
