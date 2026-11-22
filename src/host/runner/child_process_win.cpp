@@ -15,6 +15,7 @@
 #include <windows.h>
 
 #include <cstdlib>
+#include <cwchar>
 
 namespace caliper_runner {
 
