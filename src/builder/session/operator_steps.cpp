@@ -83,21 +83,24 @@ Error apply_operator(const spec::Transform& step, const TensorData& input, const
         (*out)["y"] = float_tensor({g.cols}, g.y);
         return {};
     }
-    // path
-    std::array<int, 3> columns{0, 1, 2};
+    // path: the columns are checked as the spec gives them, before they narrow to int
+    std::array<int64_t, 3> wanted{0, 1, 2};
     int ncolumns = cols == 2 ? 2 : 3;
     if (!step.columns.empty()) {
         ncolumns = static_cast<int>(std::min<std::size_t>(step.columns.size(), 3));
-        for (int c = 0; c < ncolumns; ++c) columns[static_cast<std::size_t>(c)] = static_cast<int>(step.columns[c]);
+        for (int c = 0; c < ncolumns; ++c) wanted[static_cast<std::size_t>(c)] = step.columns[c];
     }
     if (cols < 2)
         return Error("resolve.operator_shape", "The operator path takes a tensor (R, D) with D at least 2, and its "
                                                "input has the shape " + shape_text(input.shape()) + ".");
-    for (int c = 0; c < ncolumns; ++c)
-        if (columns[static_cast<std::size_t>(c)] < 0 || columns[static_cast<std::size_t>(c)] >= cols)
-            return Error("resolve.operator_shape", "The path reads the column " +
-                                                       std::to_string(columns[static_cast<std::size_t>(c)]) +
+    std::array<int, 3> columns{0, 1, 2};
+    for (int c = 0; c < ncolumns; ++c) {
+        const int64_t col = wanted[static_cast<std::size_t>(c)];
+        if (col < 0 || col >= cols)
+            return Error("resolve.operator_shape", "The path reads the column " + std::to_string(col) +
                                                        ", and its input has " + std::to_string(cols) + " columns.");
+        columns[static_cast<std::size_t>(c)] = static_cast<int>(col);
+    }
     if (rows < 1) {
         (*out)["positions"] = float_tensor({0, 3}, {});
         (*out)["values"] = float_tensor({0}, {});
