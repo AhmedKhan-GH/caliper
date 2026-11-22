@@ -641,7 +641,7 @@ TEST_CASE("a spec built in code needs version 1 for each new key") {
     CHECK(cs::required_version(with_shares) == 1);
 }
 
-TEST_CASE("the validator refuses each new key that is not built yet with spec.not_built") {
+TEST_CASE("the validator refuses no key of the instrument document as not built") {
     auto parsed = parse(kInstrumentDocument);
     REQUIRE_MESSAGE(parsed.ok(), dump(parsed.diagnostics));
     const cs::ValidationReport report = cs::validate(parsed.spec);
@@ -650,13 +650,13 @@ TEST_CASE("the validator refuses each new key that is not built yet with spec.no
         CHECK(d.code != "spec.internal");
         if (d.code == "spec.not_built") refused.insert(d.path);
     }
-    // One refusal at least for state, an entity, an annotation, a window step and an operator.
-    CHECK(refused.count("state") == 1);
+    // State, entities, annotations, window steps and operators are built, so none of them is refused.
+    CHECK(refused.count("state") == 0);
     bool entity = false, annotation = false;
     for (const std::string& p : refused) {
         entity = entity || p.find(".entity") != std::string::npos;
         annotation = annotation || p.find(".annotation") != std::string::npos;
     }
-    CHECK(entity);
-    CHECK(annotation);
+    CHECK_FALSE(entity);
+    CHECK_FALSE(annotation);
 }

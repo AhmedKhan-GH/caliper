@@ -27,11 +27,6 @@
 
 namespace caliper_builder {
 
-namespace spec {
-// state.cpp: why `v` does not fit `s`, or empty when it fits.
-std::string state_value_problem(const StateVar& s, const nlohmann::json& v);
-}  // namespace spec
-
 namespace {
 
 using json = nlohmann::json;

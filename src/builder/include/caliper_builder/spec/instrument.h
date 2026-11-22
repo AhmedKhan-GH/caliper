@@ -70,8 +70,12 @@ enum class ControlKind { slider, button, range, toggle, picker, text, segmented,
 // "readout", "transport".
 const char* control_kind_name(ControlKind kind);
 std::optional<ControlKind> control_kind_from_name(std::string_view name);
-// Whether this Caliper draws the kind (slider, button and toggle).
+// Whether this Caliper draws the kind; every kind of the plan is built.
 bool control_kind_built(ControlKind kind);
+// The keys that the app reserves for itself (Keyboard Shortcuts), which a
+// shortcut of a choice never takes, with or without Shift. Defined in
+// validate_controls.cpp.
+const std::vector<std::string>& reserved_shortcut_keys();
 
 // The one target of a control, parsed from its `bind` string:
 //   param:<name>   a parameter the script registered with caliper.param

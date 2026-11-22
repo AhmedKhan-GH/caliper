@@ -58,4 +58,8 @@ inline bool operator!=(const StateVar& a, const StateVar& b) { return !(a == b);
 // empty list.
 nlohmann::json state_initial_value(const StateVar& state);
 
+// Why `v` does not fit `s` (its type, bounds, choices and sizes), or empty
+// when it fits. Defined in state.cpp.
+std::string state_value_problem(const StateVar& s, const nlohmann::json& v);
+
 }  // namespace caliper_builder::spec

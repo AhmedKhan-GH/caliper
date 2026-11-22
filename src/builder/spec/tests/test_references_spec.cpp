@@ -241,16 +241,25 @@ TEST_CASE("references spec: reference cycles") {
     CHECK_MESSAGE(has(through_state.diagnostics, "spec.reference_cycle"), dump(through_state.diagnostics));
 }
 
-// References in the options and the slots of a panel are not applied yet.
-TEST_CASE("references spec: panel references are not built") {
-    const std::string base = control("k", "slider", "value", "min = 0, max = 9") + slice_source("0");
-    auto option = check(base + "[[panel]]\nid = \"h\"\nprimitive = \"heatmap\"\nbind = { values = \"s\" }\n"
-                               "options = { range = { control = \"k\" } }\n");
-    CHECK_MESSAGE(has(option.diagnostics, "spec.not_built"), dump(option.diagnostics));
+// References in the options and the slots of a panel are applied, and checked against their place.
+TEST_CASE("references spec: panel references are checked against their place") {
+    const std::string heat = "[[panel]]\nid = \"h\"\nprimitive = \"heatmap\"\nbind = { values = \"s\" }\n";
+    auto range = check(control("k", "range", "value", "min = 0, max = 9, value = [1, 2]") + slice_source("0") + heat +
+                       "options = { range = { control = \"k\" } }\n");
+    CHECK_MESSAGE(range.ok(), dump(range.diagnostics));
+    CHECK_FALSE(has(range.diagnostics, "spec.not_built"));
+    auto number = check(control("k", "slider", "value", "min = 0, max = 9") + slice_source("0") + heat +
+                        "options = { range = { control = \"k\" } }\n");
+    CHECK_MESSAGE(has(number.diagnostics, "spec.reference_type", "panel[0].options.range"), dump(number.diagnostics));
 
-    auto slot = check(state("s", "text", "default = \"a\"") + slice_source("0") +
-                      "[[panel]]\nid = \"h\"\nprimitive = \"heatmap\"\nbind = { values = { state = \"s\" } }\n");
-    CHECK_MESSAGE(has(slot.diagnostics, "spec.not_built"), dump(slot.diagnostics));
+    // A slot reads a text state whose choices are source ids; each choice counts as a use of its source.
+    auto slot = check(state("pick", "text", "default = \"s\"\nchoices = [\"s\"]") + slice_source("0") +
+                      "[[panel]]\nid = \"h\"\nprimitive = \"heatmap\"\nbind = { values = { state = \"pick\" } }\n");
+    CHECK_MESSAGE(slot.ok(), dump(slot.diagnostics));
+    CHECK_FALSE(has(slot.diagnostics, "spec.unused_source"));
+    auto not_source = check(state("pick", "text", "default = \"a\"") + slice_source("0") + heat +
+                            "[[panel]]\nid = \"g\"\nprimitive = \"heatmap\"\nbind = { values = { state = \"pick\" } }\n");
+    CHECK_MESSAGE(has(not_source.diagnostics, "spec.reference_type", "panel[1].bind.values"), dump(not_source.diagnostics));
 }
 
 // A window over a source whose own steps read a reference is refused.
@@ -261,4 +270,11 @@ TEST_CASE("references spec: reference in history") {
                              "[[source]]\nid = \"w\"\nfrom = \"act\"\n  [[source.transform]]\n  op = \"window\"\n  steps = 8\n";
     auto r = check(body);
     CHECK_MESSAGE(has(r.diagnostics, "spec.reference_in_history", "source[1].transform[0]"), dump(r.diagnostics));
+}
+
+// A reference at a key that takes a literal only is reference_not_allowed, not a wrong type.
+TEST_CASE("references spec: a reference at a literal key is not allowed") {
+    auto history = check(std::string(kToken) + "[[source]]\nid = \"s\"\ncatalog = \"live:x\"\nhistory = { state = \"token\" }\n");
+    CHECK_MESSAGE(has(history.diagnostics, "spec.reference_not_allowed", "source[0].history"), dump(history.diagnostics));
+    CHECK_FALSE(has(history.diagnostics, "spec.wrong_type"));
 }

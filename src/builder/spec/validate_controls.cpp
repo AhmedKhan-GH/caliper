@@ -16,9 +16,6 @@
 #include <set>
 
 namespace caliper_builder::spec {
-// state.cpp: why `v` does not fit `s`, or empty when it fits.
-std::string state_value_problem(const StateVar& s, const nlohmann::json& v);
-
 // The keys that the app reserves for itself (Keyboard Shortcuts): the
 // transport's and the text fields' keys, and each single key that a view of
 // the app uses (F fits a live view's camera, U turns a live scene's up axis).

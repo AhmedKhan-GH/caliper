@@ -8,11 +8,9 @@
 // writes, has no cycle. A window never reads a source whose own steps read a
 // reference.
 //
-// References in the options of a panel and in its slots stay refused with
-// spec.not_built until the code that draws a panel applies them; the places
-// whose features other parts build (entities, annotations, bound texts,
-// windows, params) are checked here and refused by those features until they
-// are built.
+// Every place is checked here: the steps of sources, the slots and options of
+// panels, entities, annotations, bound texts and the min and max of controls;
+// the features that read them refuse what they do not build yet.
 #include "validate_additions.h"
 
 #include <caliper_builder/spec/colormaps.h>
@@ -339,13 +337,6 @@ private:
         return true;
     }
 
-    void refuse_map(const std::map<std::string, Reference>& refs, const std::string& path, const char* what) {
-        for (const auto& [key, ref] : refs) {
-            (void)ref;
-            not_built(c_.sink, what, path + "." + key);
-        }
-    }
-
     void sources() {
         for (std::size_t i = 0; i < c_.spec.sources.size(); ++i) {
             const auto& transforms = c_.spec.sources[i].transforms;
@@ -418,10 +409,12 @@ private:
         for (std::size_t i = 0; i < c_.spec.panels.size(); ++i) {
             const Panel& p = c_.spec.panels[i];
             const std::string path = index_path("panel", i);
-            // The drawing of a panel does not apply these yet.
-            refuse_map(p.options.references, path + ".options", "references in the options of a panel");
+            // The resolver applies these (resolve.h, panel_with_values and the
+            // slot's binding read now).
+            for (const auto& [key, ref] : p.options.references)
+                check(ref, key == "colormap" ? VT::colormap : VT::pair, path + ".options." + key);
             for (const auto& [slot, value] : p.bind)
-                if (value.reference) not_built(c_.sink, "references in the slots of a panel", path + ".bind." + slot);
+                if (value.reference) check(*value.reference, VT::source, path + ".bind." + slot);
             if (p.options.bound_text) bound_text(*p.options.bound_text, path + ".options");
             for (std::size_t k = 0; k < p.entities.size(); ++k) entity(p.entities[k], index_path(path + ".entity", k));
             for (std::size_t k = 0; k < p.annotations.size(); ++k)

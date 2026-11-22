@@ -315,25 +315,30 @@ private:
         if (c.title) text(*c.title, path + ".title", limits::kTitleChars, TextKind::line, false);
         extension(c.x, path + ".x");
         extension(c.options.x, path + ".options.x");
-        const std::optional<ControlTarget> target = parse_control_target(c.bind);
-        if (!target)
+        // A readout binds nothing: its text reads references (validate_controls.cpp).
+        const bool unbound_readout = c.kind == ControlKind::readout && c.bind.empty();
+        const std::optional<ControlTarget> target =
+            unbound_readout ? std::nullopt : parse_control_target(c.bind);
+        if (!target && !unbound_readout)
             sink_.error("spec.bad_binding",
                         quote(c.bind) + " is not a target; a control binds param:<name>, action:<name>, run:pause, " +
-                            "value or intervene:<point>, with a name of 1 to 63 bytes and a point of 1 to 255.",
+                            "value, state:<id>, cursor or intervene:<point>, with a name of 1 to 63 bytes and a "
+                            "point of 1 to 255.",
                         path + ".bind");
         if (!control_kind_built(c.kind)) {
-            sink_.error("spec.unsupported_control",
-                        "This Caliper does not draw a " + kind + " control yet; the kinds it draws are slider, button "
-                        "and toggle.",
+            sink_.error("spec.unsupported_control", "This Caliper does not draw a " + kind + " control yet.",
                         path + ".kind");
             return;
         }
         if (target && !control_takes_target(c.kind, *target))
             sink_.error("spec.control_mismatch",
                         "A " + kind + " cannot bind " + quote(c.bind) + "; a " + kind + " binds " +
-                            (c.kind == ControlKind::slider   ? "param:<name> or value."
-                             : c.kind == ControlKind::toggle ? "intervene:<point> or param:<name>."
-                                                             : "action:<name> or run:pause."),
+                            (c.kind == ControlKind::slider      ? "param:<name>, value or state:<id>."
+                             : c.kind == ControlKind::toggle    ? "intervene:<point>, param:<name>, value or state:<id>."
+                             : c.kind == ControlKind::button    ? "action:<name> or run:pause."
+                             : c.kind == ControlKind::transport ? "cursor."
+                             : c.kind == ControlKind::readout   ? "nothing; its text reads references."
+                                                                : "value or state:<id>."),
                         path + ".bind");
         const ControlOptions& o = c.options;
         const std::string op = path + ".options";
@@ -1387,8 +1392,46 @@ private:
 
     // ---- usage and portability -----------------------------------------------
 
+    // Marks the sources that a panel reads other than through its slot
+    // strings (version 1): its entities' bindings, the choices of the state
+    // that a slot reference reads, and the sources of bound texts.
+    void mark_reads() {
+        auto mark = [&](const std::string& binding) {
+            const auto it = sources_.find(binding.substr(0, binding.find('.')));
+            if (it != sources_.end()) used_[it->second] = true;
+        };
+        auto mark_reference = [&](const Reference& r) {
+            if (r.kind != Reference::Kind::state) return;
+            for (const StateVar& s : spec_.states)
+                if (s.id == r.target)
+                    for (const nlohmann::json& c : s.choices)
+                        if (c.is_string()) mark(c.get<std::string>());
+        };
+        auto mark_text = [&](const BoundText& t) {
+            for (const auto& [name, field] : t.fields)
+                if (const std::string* source = std::get_if<std::string>(&field)) mark(*source);
+        };
+        for (const Panel& p : spec_.panels) {
+            for (const auto& [slot, value] : p.bind)
+                if (value.reference) mark_reference(*value.reference);
+            for (const Entity& e : p.entities) {
+                if (e.source) mark(*e.source);
+                for (const auto& [slot, value] : e.slots) {
+                    if (const std::string* b = std::get_if<std::string>(&value)) mark(*b);
+                    else mark_reference(std::get<Reference>(value));
+                }
+            }
+            if (p.options.bound_text) mark_text(*p.options.bound_text);
+            for (const Annotation& a : p.annotations)
+                if (a.text) mark_text(*a.text);
+        }
+        for (const Control& c : spec_.controls)
+            if (c.options.bound_text) mark_text(*c.options.bound_text);
+    }
+
     void usage() {
         const std::size_t n = spec_.sources.size();
+        mark_reads();
         // A source a panel binds uses its whole chain of `from`.
         std::vector<bool> used(n, false);
         for (std::size_t i = 0; i < n; ++i) {

@@ -62,8 +62,10 @@ std::optional<ControlKind> control_kind_from_name(std::string_view name) {
 }
 
 bool control_kind_built(ControlKind kind) {
-    // The transport joins when the time transport is built (validate_history.cpp).
-    return kind != ControlKind::transport;
+    // Every kind of design/instrument-interface.md is built, the transport
+    // with the time transport (validate_history.cpp).
+    (void)kind;
+    return true;
 }
 
 bool operator==(const ControlTarget& a, const ControlTarget& b) { return a.kind == b.kind && a.name == b.name; }

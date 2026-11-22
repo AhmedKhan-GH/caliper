@@ -604,7 +604,7 @@ TEST_CASE("the bind grammar of a control") {
     CHECK_FALSE(cs::control_takes_target(cs::ControlKind::button, {K::param, "lr"}));
     CHECK(cs::control_takes_target(cs::ControlKind::toggle, {K::param, "lr"}));
     CHECK(cs::control_takes_target(cs::ControlKind::toggle, {K::intervene, "layer.0"}));
-    CHECK_FALSE(cs::control_takes_target(cs::ControlKind::toggle, {K::value, ""}));
+    CHECK(cs::control_takes_target(cs::ControlKind::toggle, {K::value, ""}));
     CHECK_FALSE(cs::control_takes_target(cs::ControlKind::range, {K::param, "lr"}));
     CHECK(cs::live_scene_name("live:model") == std::optional<std::string>("model"));
     CHECK_FALSE(cs::live_scene_name("live:").has_value());

@@ -13,13 +13,6 @@
 #include <caliper_builder/spec/annotation.h>
 #include <caliper_builder/text/bound_text.h>
 
-// The parser of the format language, as a private copy in its own namespace:
-// this library does not link caliper_builder_text (bound_text.cpp explains
-// the macro). Once it links that library, the two lines go and the calls
-// below use caliper_builder::text.
-#define CALIPER_BOUND_TEXT_COPY spec_bound_text
-#include "../text/bound_text.cpp"
-
 namespace caliper_builder::spec::detail {
 
 namespace {
@@ -212,7 +205,7 @@ void check_bound_text(const AdditionsCheck& c, const BoundText& t, const std::st
     }
     text::ParsedText parsed;   // the type, from bound_text.h
     const std::string formp = key_path(path, format_key);
-    if (Error e = spec_bound_text::parse_bound_text(t.format, names, &parsed)) {
+    if (Error e = text::parse_bound_text(t.format, names, &parsed)) {
         c.sink.error(e.code, formp + ": " + e.message, formp);
         return;
     }
@@ -233,9 +226,6 @@ void validate_bound_text(const AdditionsCheck& c) {
         const Panel& p = c.spec.panels[i];
         if (!p.options.bound_text) continue;
         const std::string op = index_path("panel", i) + ".options";
-        // The text panel's drawing shows its static text and its bound value
-        // and has no place for a bound text yet; the readout draws one.
-        not_built(c.sink, "a bound text in a text panel", op + ".format");
         if (p.options.text)
             c.sink.error("spec.bad_value",
                          op + " has both text and format; a text panel shows a static text or a bound text.",

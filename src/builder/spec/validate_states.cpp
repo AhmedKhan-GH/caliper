@@ -16,12 +16,6 @@
 #include <map>
 #include <set>
 
-namespace caliper_builder::spec {
-// state.cpp: why `v` does not fit `s` (its type, bounds, choices and sizes),
-// or empty when it fits.
-std::string state_value_problem(const StateVar& s, const nlohmann::json& v);
-}  // namespace caliper_builder::spec
-
 namespace caliper_builder::spec::detail {
 
 namespace {

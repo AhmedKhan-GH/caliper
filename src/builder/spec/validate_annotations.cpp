@@ -7,11 +7,11 @@
 // and `range`, a marker `at`. A key that the kind does not take is
 // spec.unknown_option and a missing key spec.missing_key. A value place
 // holds a literal or a reference, checked as validate_bound_text.cpp checks
-// one. The spec runtime draws annotations in series panels, so the other
-// panels still refuse them with spec.not_built, as they refuse a legend set
-// to true or false and a scale bar outside a scene, which their drawing does
-// not read yet. The checks of each annotation already hold for a scene, so
-// that a scene panel needs only its hook.
+// one. The spec runtime draws annotations in series, histogram, 2-D points
+// and scene panels; heatmaps and images still refuse them with
+// spec.not_built, as every panel but a series refuses a legend set to true or
+// false and every panel but a scene a scale bar, which their drawing does not
+// read yet.
 #include "validate_additions.h"
 
 #include <caliper_builder/spec/annotation.h>
@@ -221,11 +221,11 @@ void validate_annotations(const AdditionsCheck& c) {
                          ap);
             continue;
         }
-        // A scene panel's annotations need the runtime to pass their
-        // overlays to its scene; the other 2-D panels need the hook that a
-        // series panel calls inside its plot. Their annotations are still
+        // Series, histogram and 2-D points panels draw annotations inside
+        // their plots, and a scene panel through its projection; a heatmap
+        // and an image do not draw them yet. Their annotations are still
         // checked below.
-        if (p.primitive != Primitive::series)
+        if (p.primitive == Primitive::heatmap || p.primitive == Primitive::image)
             not_built(c.sink, std::string("annotations on a ") + to_string(p.primitive) + " panel", ap);
         if (p.annotations.size() > limits::kAnnotations)
             c.sink.error("spec.too_many",

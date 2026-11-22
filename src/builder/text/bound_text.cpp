@@ -20,17 +20,7 @@
 #include <cstdlib>
 #include <string>
 
-// CALIPER_BOUND_TEXT_COPY: the spec validator, whose library does not link
-// this one, includes this file with that macro set to a namespace of its own,
-// so that it gets a private copy of the parser under another name and no
-// symbol is defined twice in a program that links both libraries.
-#ifndef CALIPER_BOUND_TEXT_COPY
 namespace caliper_builder::text {
-#else
-namespace caliper_builder::CALIPER_BOUND_TEXT_COPY {
-using text::FieldFormat;
-using text::ParsedText;
-#endif
 
 namespace {
 
@@ -310,4 +300,4 @@ std::string format_bound_text(const ParsedText& text, const std::map<std::string
     return limit_output(std::move(out));
 }
 
-}  // namespace caliper_builder::text, or the copy's namespace
+}  // namespace caliper_builder::text

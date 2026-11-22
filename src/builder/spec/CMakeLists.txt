@@ -31,7 +31,7 @@ target_include_directories(caliper_builder_spec PUBLIC "${CALIPER_BUILDER_INCLUD
 # of limits.
 target_link_libraries(caliper_builder_spec
     PUBLIC nlohmann_json::nlohmann_json
-    PRIVATE tomlplusplus::tomlplusplus caliper_builder_programs)
+    PRIVATE tomlplusplus::tomlplusplus caliper_builder_programs caliper_builder_text)
 target_compile_features(caliper_builder_spec PUBLIC cxx_std_17)
 if(NOT MSVC)
     target_compile_options(caliper_builder_spec PRIVATE -Wall -Wextra)

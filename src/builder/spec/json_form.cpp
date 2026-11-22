@@ -85,7 +85,19 @@ public:
         sink_.error("spec.missing_key", owner + " needs the key " + quote(key) + ".", key_path(path, key));
     }
 
+    // A binding reference at a key that takes a literal is
+    // spec.reference_not_allowed (design/instrument-interface.md, Reference
+    // Places) from version 1 on; any other value of the wrong type is
+    // spec.wrong_type, as is a reference in a version 0 document.
     void wrong(const std::string& path, const json& v, const std::string& expected) {
+        if (version_ >= kInstrumentVersion && looks_like_reference(v)) {
+            sink_.error("spec.reference_not_allowed",
+                        path + " takes " + expected +
+                            " only; a reference stands only where a value changes data, never where it changes the "
+                            "shape of the spec.",
+                        path);
+            return;
+        }
         sink_.error("spec.wrong_type", path + " must be " + expected + ", not " + type_name(v) + ".", path);
     }
 

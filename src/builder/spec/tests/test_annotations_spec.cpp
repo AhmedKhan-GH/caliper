@@ -199,12 +199,10 @@ TEST_CASE("a bound text in an annotation, a text panel and a readout") {
 
     // A text panel: a bound value is the field `value`, and text excludes format.
     const std::string text_panel = "[[panel]]\nid = \"now\"\nprimitive = \"text\"\nbind = { value = \"m.loss\" }\n";
-    // Its drawing has no place for a bound text yet, so the only refusal of a
-    // correct one is spec.not_built.
+    // The panel draws a correct one at each frame, so it has no diagnostic.
     const auto bound = ours(doc("", text_panel + "options = { format = \"Loss {value:.3f} at {s:,d}\", fields = { s = "
                                                  "{ state = \"cursor\", field = \"step\" } } }\n"));
-    CHECK_MESSAGE(bound.size() == 1, dump(bound));
-    CHECK(has(bound, "spec.not_built", "panel[1].options.format"));
+    CHECK_MESSAGE(bound.empty(), dump(bound));
     CHECK(has(ours(doc("", text_panel + "options = { text = \"Loss\", format = \"{value}\" }\n")), "spec.bad_value",
               "panel[1].options.format"));
     CHECK(has(ours(doc("", text_panel + "options = { format = \"{value}\", fields = { value = \"m.loss\" } }\n")),
