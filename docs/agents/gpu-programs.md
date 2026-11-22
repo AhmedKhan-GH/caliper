@@ -135,3 +135,21 @@ All programs share the pass steps, and one pass runs every due program. A declar
 With one geometry program under `caliper.watch(model, optimizer)`, a small model with steps of about 0.4 ms kept 95.9 % of its speed in a quiet run. A medium model with steps of about 11 ms kept 96.8 %. Loops that read the loss at each step kept 97.4 % and 98.7 %.
 
 On the small model, the marks themselves cost about 1 % to 3 % of its short steps, thus its loss is larger than the measured share. On a loaded machine, the small model kept 93.6 % to 94.4 %. Each number is the median of five runs on one Apple machine with torch on MPS. Thus a model with steps below 1 ms can keep less than 95 % of its speed when the machine is busy.
+
+## Views in the Cadence
+
+The cadence of the programs also gates what viewers ask of the run. While the script calls `caliper.step()` and a viewer subscribes, snapshots, series chunks and scene colors run only on the pass steps. As a result, an attached instrument updates its panels a few times a second on a fast run. In the measurement, the panels updated 2.3 times a second when each step slept 10 ms, and 4.4 times a second at full speed.
+
+Every value of a watched series, for example the loss, still arrives. The script gathers the value of each step on the device and moves the values in one chunk at each pass.
+
+While views are attached, the passes keep to 2 % of the training time. GPU programs alone keep to 4 %. The script measures only its own part of a pass, and the work of the viewer on the same snapshots costs the run about as much again.
+
+When the passes come less often than every 0.5 s, for example beside a costly program, the views can get a pass of their own every 0.5 s. They get it only while their own time in a pass is at most 2 % of 0.5 s, which is 10 ms. The cadence does not count such a pass, and the programs keep to N. A script that calls the views by hand without `caliper.step()` keeps its ticks on the clock, at most 60 a second. A script whose checkpoints stop for a second does the same.
+
+Each snapshot of a pass carries the cadence in the SNAPSHOT key `cadence` for a peer that announced `programs`. The keys are `every`, `passes_per_s`, `step_ms`, `pass_ms`, `share`, `budget` and `limit`. See [Wire Protocol 3.2](../reference/wire-protocol-3-2.md). The live catalog of the app gives a live view that the cadence thinned a warning when `limit` is `budget` or `floor`. The tool `catalog_list` shows it in the `warnings` of the entry. For example:
+
+```text
+Updates every 19 steps, about 3.4 times a second, because the views and programs that viewers attach keep to 2 % of the training time, and one pass of them costs 8.13 ms against a step of 22.12 ms.
+```
+
+A small model with a full instrument attached through the app, with live panels, kept steps, controls and an operator, kept 95.8 % of its speed on a quiet machine. A medium model under the same instrument kept 99.6 %. Before the budget, the same instrument left the small model 55 % of its speed. Each number is the median of five runs on one Apple machine with torch on MPS.

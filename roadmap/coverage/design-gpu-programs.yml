@@ -77,6 +77,16 @@ entries:
   ids:
   - SPC-14
   - REN-31
+- heading: Views in the Cadence
+  item: The snapshots, series chunks and scene colors that viewers ask for run only on the pass steps of the same cadence, inside 2 percent of the training time while views are attached.
+  ids:
+  - SPC-14
+  - REN-31
+- heading: Waiting Loops
+  item: A loop that already waits for the GPU at each step gets a mark only every 8 steps and around a pass.
+  ids:
+  - SPC-14
+  - REN-31
 - heading: Wire Path
   item: A program reaches the script in a new PROGRAM message, and its outputs return as scene updates and snapshots.
   ids:

@@ -1,6 +1,6 @@
 # Wire Protocol 3.2
 
-This page specifies what is built of wire protocol 3.2. Producers, the hub and viewers build scenes: the capability `scenes`, the live view kind `scene`, the messages SCENE_UPDATE with every part, SCENE_TRANSFORMS, SCENE_CLEAR and SCENE_CLASSES, the VIEWS key `scene` with its starting camera, and the default data view of a scene. The codecs build the whole draft besides: timelines and stamps, the dtype `u16`, text logs, bar charts, split updates and the messages of recordings, which no producer or server sends yet, except the stamps of snapshots from the Python sender ([Timelines, text logs, bar charts and recordings](#timelines-text-logs-bar-charts-and-recordings)). Everything else follows [Wire protocol v3](wire-protocol.md), whose frame layout, decoding order, terms and rules apply unchanged.
+This page specifies what is built of wire protocol 3.2. Producers, the hub and viewers build scenes: the capability `scenes`, the live view kind `scene`, the messages SCENE_UPDATE with every part, SCENE_TRANSFORMS, SCENE_CLEAR and SCENE_CLASSES, the VIEWS key `scene` with its starting camera, and the default data view of a scene. The codecs build the whole draft besides: timelines and stamps, the dtype `u16`, text logs, bar charts, split updates and the messages of recordings, which no producer or server sends yet, except the stamps of snapshots from the two senders of `caliper.serve()` ([Timelines, text logs, bar charts and recordings](#timelines-text-logs-bar-charts-and-recordings)). Everything else follows [Wire protocol v3](wire-protocol.md), whose frame layout, decoding order, terms and rules apply unchanged.
 
 !!! note "Status"
     A draft. The minor version 2, the capabilities, the kinds 6 to 8, the message types `0x0070` to `0x0074`, `0x0078` to `0x007B`, `0x0080` and `0x0081`, the dtype 6 and the error codes are proposals that the owners of the protocol have not confirmed, so they may still be renumbered. They are one line each in a separate block at the end of `include/caliper/live_net.h` and of each codec. Senders keep writing minor 1 in their frames until 3.2 is confirmed; a peer decides by a capability, never by the minor version. Every 3.1 message keeps its meaning and its encoding.
@@ -20,7 +20,7 @@ This page specifies what is built of wire protocol 3.2. Producers, the hub and v
 | GPU programs | The capabilities `programs` and `interventions`, PROGRAM and PROGRAM_STATE, the CONTROL op `intervene` and the CONTROLS key `interventions` in the three codecs; Caliper LIB on both senders, the hub and the Caliper app send and forward them ([GPU Programs and Interventions](#gpu-programs-and-interventions)) |
 | Viewers | The Caliper app, `caliper-viewer` and the WebAssembly views announce `scenes` and draw every part with one scene view, all but encoded images, and apply SCENE_TRANSFORMS and SCENE_CLASSES; the TypeScript client announces it so that the `<caliper-view>` element and the viewer page hand a scene to the WebAssembly views |
 
-The Python sender and the Caliper app build timelines for snapshots ([Timelines](#timelines-text-logs-bar-charts-and-recordings)): to a peer that announces `timelines`, the sender declares the timelines `step` and `time` and stamps each SNAPSHOT with the step of the run, and the app announces `timelines` and keeps the step of the newest snapshot of each live view. Not built beyond the codecs: timelines in the other senders (they declare none and send no stamp, and a receiver reads one and keeps it), timelines of series, text logs and bar charts in Caliper LIB and the viewers, split updates in the senders and viewers, and recordings in a server. Not built at all: scene data views other than the default, and scene events. [Versioning](#versioning) says what a receiver does when one of them arrives, and what a viewer does with a part it does not draw yet.
+Both senders of `caliper.serve()`, the native sender and the Python sender, and the Caliper app build timelines for snapshots ([Timelines](#timelines-text-logs-bar-charts-and-recordings)): to a peer that announces `timelines`, the sender declares the timelines `step` and `time` and stamps each SNAPSHOT with the step of the run at the view call that took it, and the app announces `timelines` and keeps the step of the newest snapshot of each live view. Not built beyond the codecs: timelines in the other senders (they declare none and send no stamp, and a receiver reads one and keeps it), timelines of series, text logs and bar charts in Caliper LIB and the viewers, split updates in the senders and viewers, and recordings in a server. Not built at all: scene data views other than the default, and scene events. [Versioning](#versioning) says what a receiver does when one of them arrives, and what a viewer does with a part it does not draw yet.
 
 ## Capability
 
@@ -87,7 +87,7 @@ Every scene message has the keys `sub`, `view`, `seq` and `stamp_ns`, and may ca
 
 ### Stamp
 
-A **stamp** is T signed 64-bit integers, one per timeline in the order of their ids, from 1 to 8 (`CALIPER_NET_MAX_TIMELINES`) of them; the value −2<sup>63</sup> (`CALIPER_NET_STAMP_ABSENT`) means absent on that timeline. A scene message carries its stamp in the section `stamp`, i64 (T,), written after every other section; SCENE_TRANSFORMS may instead carry `stamps`, i64 (K, T), one stamp per entity transform. A message with `static` true carries neither. The Python sender declares the timelines `step` (sequence) and `time` (time, with an epoch) in VIEWS when the peer announces `timelines`, and it stamps each SNAPSHOT with the step of the run, or the absent value before the first step, and the time in nanoseconds. The other senders declare no timelines and send no stamp. A receiver checks a stamp and keeps it with the message.
+A **stamp** is T signed 64-bit integers, one per timeline in the order of their ids, from 1 to 8 (`CALIPER_NET_MAX_TIMELINES`) of them; the value −2<sup>63</sup> (`CALIPER_NET_STAMP_ABSENT`) means absent on that timeline. A scene message carries its stamp in the section `stamp`, i64 (T,), written after every other section; SCENE_TRANSFORMS may instead carry `stamps`, i64 (K, T), one stamp per entity transform. A message with `static` true carries neither. The native sender and the Python sender of `caliper.serve()` announce `timelines`. They declare the timelines `step` (sequence) and `time` (time, with an epoch) in VIEWS when the peer announces `timelines`. They stamp each SNAPSHOT to that peer with the step of the run at the view call that took the snapshot, or the absent value before the first step, and the time of the call in nanoseconds. A snapshot thus keeps its step when it arrives steps later. The other senders declare no timelines and send no stamp. A receiver checks a stamp and keeps it with the message.
 
 ### scene_update
 
@@ -341,7 +341,7 @@ An agent writes a GPU program in WGSL over a live tensor of a training script, a
 
 | Capability | Adds |
 |---|---|
-| `programs` | PROGRAM and PROGRAM_STATE |
+| `programs` | PROGRAM and PROGRAM_STATE, and the SNAPSHOT key `cadence` |
 | `interventions` | The CONTROLS key `interventions` and the CONTROL op `intervene` ([Run control messages](run-control-messages.md#interventions)) |
 
 Caliper LIB announces both only while a `caliper.watch(model, optimizer)` is on, and only beside `controls`. A peer that connected before that call does not get them. A viewer sends PROGRAM only to a server that announced `programs`, and through a hub only to a session whose producer announced it. A PROGRAM needs the same permission as CONTROL: a server that does not allow control answers it with ERROR `forbidden`.
@@ -386,6 +386,21 @@ A server refuses a PROGRAM with a non-fatal ERROR that names it in `in_reply_to`
 | `bad_request` | The message breaks this page, or `sha256` is not the hash of the source |
 
 A hub maps the `request_id` of a PROGRAM as it maps the one of a CONTROL, and keeps the latest PROGRAM_STATE without `request_id` for a viewer that attaches later. The script removes every program when no viewer with `programs` stayed connected for 5 seconds, and the app sends each program again after it attaches.
+
+### Snapshot Cadence
+
+The script runs the programs, the snapshots of the subscribed views and the chunks of the watched series at the passes of one cadence, which keeps their overhead inside a share of the training time: 2 % while a viewer subscribes, 4 % for programs alone. To a peer with `programs`, a SNAPSHOT taken at a pass may carry the key `cadence`, an object with these members:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `every` | integer | Steps between two passes of the cadence |
+| `passes_per_s` | number or null | Passes that took something, a second, over the last 8 |
+| `step_ms`, `pass_ms` | number or null | The measured time of a step without a pass, and the overhead of a pass |
+| `share` | number or null | The measured share of the training time that the passes take |
+| `budget` | number | The share that the cadence keeps to, 0.02 while a viewer subscribes |
+| `limit` | string | `budget` when the passes come less often than the views ask, `floor` for a pass of cheap views on their own, `rate` when the views' own rate sets the pace |
+
+A reader that does not know the key ignores it.
 
 ### Program Limits
 

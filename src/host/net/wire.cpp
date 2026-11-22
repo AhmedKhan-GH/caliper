@@ -1555,6 +1555,7 @@ void snapshot_32(const Frame& f, Snapshot& s) {
     }
     if (const Json* v = opt(m, "static", is_bool, "a boolean")) s.is_static = v->as_bool();
     if (const Json* v = opt(m, "cursor", is_u32, "a uint32")) s.cursor = u32(*v);
+    if (const Json* v = opt(m, "cadence", is_obj, "an object")) s.cadence = *v;
     scene_stamp(f, s.is_static, -1, &s.stamp);
 }
 
@@ -2130,6 +2131,7 @@ Encoded to_meta(const Message& msg) {
         if (s->is_static) m.set("static", true);
         if (s->cursor) m.set("cursor", *s->cursor);
         if (s->empty) m.set("empty", true);
+        if (!s->cadence.is_null()) m.set("cadence", s->cadence);
         if (!s->empty) e.sections.push_back(named(s->data, "data"));
         if (s->aux) e.sections.push_back(named(*s->aux, "aux"));
         if (s->colors) e.sections.push_back(named(*s->colors, "colors"));
