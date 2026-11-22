@@ -8,11 +8,15 @@ scene ``model`` when a viewer watches it. A step post-hook puts the scheduler's 
 below) and publishes the loss of a closure that ran inside ``optimizer.step(closure)``.
 
 THE LOSS is the last 0-d tensor that ``backward()`` ran on. A wrapper of
-``torch.autograd.backward`` (which ``Tensor.backward`` calls) keeps it, detached, while a watch
-with an optimizer is on; the wrapper goes when the last such watch is removed. The step post-hook
-does not receive the value that ``optimizer.step(closure)`` returns, and wrapping
-``optimizer.step`` would break the check of a learning rate scheduler, so the loss of a closure is
-the 0-d tensor that its own ``backward()`` ran on.
+``torch.autograd.backward`` (which ``Tensor.backward`` calls), the loss tap of the framework
+adapter (``caliper._adapter``), keeps it, detached, while a watch with an optimizer is on; the
+wrapper goes when the last such watch is removed. The step post-hook does not receive the value
+that ``optimizer.step(closure)`` returns, and wrapping ``optimizer.step`` would break the check
+of a learning rate scheduler, so the loss of a closure is the 0-d tensor that its own
+``backward()`` ran on.
+
+A MANAGED RUN (``caliper._managed``) ends at the checkpoint where its stop action ran: the
+pre-hook raises ``SystemExit(0)`` right after caliper.step(), before the weights change.
 
 LEARNING RATE AND A SCHEDULER. The parameter ``lr`` is the rate of parameter group 0 at the step
 where a new value applies; the other groups move by the same factor. Without a scheduler, the hook
@@ -32,11 +36,11 @@ watches the scene. Nothing here reads a value back from the device.
 """
 from __future__ import annotations
 
-import functools
 import math
-import threading
 import time
 import warnings
+
+from ._adapter import TORCH
 
 __all__ = ["RunHooks"]
 
@@ -57,47 +61,9 @@ _VIRIDIS = ((0.267, 0.005, 0.329), (0.229, 0.322, 0.546), (0.128, 0.567, 0.551),
             (0.369, 0.789, 0.383), (0.993, 0.906, 0.144))
 
 
-# ---------------------------------------------------------------------------
-# the loss tap: the last 0-d tensor that backward() ran on, shared by every watch
-# ---------------------------------------------------------------------------
-_tap_lock = threading.Lock()
-_tap_users = 0
-_tap_orig = None
-_loss = [0, None]          # [number of 0-d backward calls, the last one detached]
-
-
-def _tap_on() -> None:
-    global _tap_users, _tap_orig
-    import torch
-    with _tap_lock:
-        _tap_users += 1
-        if _tap_orig is not None:
-            return
-        orig = torch.autograd.backward
-        Tensor = torch.Tensor
-
-        @functools.wraps(orig)
-        def backward(tensors, *args, **kwargs):
-            if type(tensors) is Tensor and tensors.ndim == 0:
-                _loss[1] = tensors.detach()
-                _loss[0] += 1
-            return orig(tensors, *args, **kwargs)
-        backward._caliper_loss_tap = True
-        torch.autograd.backward = backward
-        _tap_orig = orig
-
-
-def _tap_off() -> None:
-    global _tap_users, _tap_orig
-    import torch
-    with _tap_lock:
-        _tap_users -= 1
-        if _tap_users > 0 or _tap_orig is None:
-            return
-        if getattr(torch.autograd.backward, "_caliper_loss_tap", False):
-            torch.autograd.backward = _tap_orig
-        _tap_orig = None                 # a wrapper another library put on top stays; ours no-ops
-        _loss[1] = None
+# the loss tap: the last 0-d tensor that backward() ran on, shared by every watch; it patches
+# torch, so it lives in the framework adapter
+_loss = TORCH.loss         # [number of 0-d backward calls, the last one detached]
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +94,7 @@ class RunHooks:
         armed (bool): Whether the next forward pass records the scene's colors.
     """
 
-    def __init__(self, pkg, handle, optimizer, scene: bool, rate=None):
+    def __init__(self, pkg, handle, optimizer, scene: bool, rate=None, managed=None):
         import torch
         if not (hasattr(optimizer, "register_step_pre_hook")
                 and hasattr(optimizer, "param_groups")):
@@ -136,6 +102,7 @@ class RunHooks:
         self.pkg = pkg
         self.opt = optimizer
         self.rate = rate
+        self.managed = managed          # caliper._managed.ManagedRun or None
         self.factor = 1.0
         self._saved = None               # the scheduler's rates while the step runs
         self._written = None
@@ -158,14 +125,15 @@ class RunHooks:
             self.lr = pkg.param("lr", start, min=start / LR_DOWN, max=start * LR_UP, log=True,
                                 help="The learning rate of parameter group 0. A new value applies "
                                      "at the next step and moves every group by the same factor.")
-            self._seen = self.lr._version
+            # a value that the model runner set at registration applies at the first step
+            self._seen = self.lr._version if self.lr.value == start else -1
         else:
             warnings.warn(f"caliper.watch: parameter group 0 has the learning rate {start!r}, so "
                           "the parameter 'lr' is not registered", RuntimeWarning, stacklevel=4)
         self.scene = pkg.scene(SCENE_NAME) if scene else None
         handle._handles.append(optimizer.register_step_pre_hook(self._pre))
         handle._handles.append(optimizer.register_step_post_hook(self._post))
-        _tap_on()
+        TORCH.tap_on()
         self._tapped = True
 
     # -- the scene -------------------------------------------------------------
@@ -285,6 +253,9 @@ class RunHooks:
     def _pre(self, opt, args, kwargs):
         self._loss_tick()
         self.pkg.step()
+        m = self.managed
+        if m is not None and m.stopping:
+            m.exit()                     # SystemExit(0) before the weights change
         groups = opt.param_groups
         if groups:
             self.pkg.series(self._apply_lr(groups), "lr", rate=self.rate)
@@ -303,7 +274,7 @@ class RunHooks:
             self.lr.remove()
         if self._tapped:
             self._tapped = False
-            _tap_off()
+            TORCH.tap_off()
 
 
 def _cut(label: str) -> str:

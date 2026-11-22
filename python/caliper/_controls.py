@@ -204,6 +204,21 @@ def _scalar(v):
 # ===========================================================================
 # parameters
 # ===========================================================================
+def _run_value(p) -> None:
+    """Give ``p`` the value that the model runner set for it (caliper._managed), checked and
+    clamped like a value from a viewer."""
+    from . import _managed
+    v = _managed.value(p.name)
+    if v is _managed.NONE:
+        return
+    w = _w()
+    try:
+        p._value = w.param_value(p.entry(), _scalar(v))
+    except w.MessageError as e:
+        warnings.warn(f"caliper: the managed run's value of parameter {p.name!r} does not "
+                      f"apply: {e.message}", RuntimeWarning, stacklevel=4)
+
+
 class Param:
     """A parameter that viewers can change while the script runs, made by [`param`][caliper.param].
 
@@ -922,6 +937,7 @@ class Controls:
             if old is None and len(self.params) >= MAX_PARAMS:
                 raise ValueError(f"at most {MAX_PARAMS} parameters")
             p = Param(self, name, *spec)
+            _run_value(p)
             if old is not None:
                 old.removed = True
                 if old._pending is not _NO:
