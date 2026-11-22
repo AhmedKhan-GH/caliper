@@ -72,6 +72,13 @@ Decoded<Control> control_from_json(const nlohmann::json& item, const std::string
 // program.patch and stage.set, with the checks of a whole document.
 Decoded<Program> program_from_json(const nlohmann::json& item, const std::string& path = "program");
 Decoded<Stage> stage_from_json(const nlohmann::json& item, const std::string& path = "stage");
+// One state variable, one entity of a scene panel and one annotation of a
+// panel (spec version 1, state.h, entity.h and annotation.h), for the state,
+// entity and annotation commands. An entity or an annotation reads as an item
+// of a panel, so that the path "panel[2].entity[0]" prefixes its diagnostics.
+Decoded<StateVar> state_from_json(const nlohmann::json& item, const std::string& path = "state");
+Decoded<Entity> entity_from_json(const nlohmann::json& item, const std::string& path = "entity");
+Decoded<Annotation> annotation_from_json(const nlohmann::json& item, const std::string& path = "annotation");
 
 nlohmann::json to_json(const Source& source);
 nlohmann::json to_json(const Panel& panel);
@@ -83,6 +90,10 @@ nlohmann::json to_json(const Control& control);
 nlohmann::json to_json(const Program& program);
 nlohmann::json to_json(const Stage& stage);
 nlohmann::json to_json(const Provenance& provenance);
+// The canonical JSON of a state variable, an entity and an annotation.
+nlohmann::json to_json(const StateVar& state);
+nlohmann::json to_json(const Entity& entity);
+nlohmann::json to_json(const Annotation& annotation);
 
 // Fills the line and column of each diagnostic that has none from the
 // positions of a parsed TOML text: the position of its path, or of the nearest

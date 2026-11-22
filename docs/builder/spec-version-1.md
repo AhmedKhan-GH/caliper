@@ -1,18 +1,41 @@
 # Spec Version 1
 
-Spec version 1 is spec version 0 with two additions: the panel primitive `scene` and the top-level array `control`. A version 0 document stays valid and is read as before. A document of version 1 starts with `caliper_spec = 1`. The reader knows the versions 0 and 1 and refuses any other with `spec.unsupported_version`. The JSON Schema of version 1 is `caliper-spec-v1.schema.json`, and `caliper-mcp` serves it beside the schema of version 0.
+Spec version 1 is spec version 0 with additions: the panel primitive `scene`, the top-level arrays `control` and `state`, and the keys that instruments need. The [Instrument Keys](#instrument-keys) section lists them. A version 0 document stays valid and is read as before. A document of version 1 starts with `caliper_spec = 1`. The reader knows the versions 0 and 1 and refuses any other with `spec.unsupported_version`. The JSON Schema of version 1 is `caliper-spec-v1.schema.json`, and `caliper-mcp` serves it beside the schema of version 0.
+
+## Instrument Keys
+
+An instrument is a spec that reacts to a run: its panels read live tensors, kept steps and the values of controls. All keys of an instrument belong to version 1, and each one raises the required version to 1. This table lists the keys and the page that describes each one.
+
+| Key | Place | Content | Page |
+|---|---|---|---|
+| `state` | Top level | An array of state variables, at most 64 | [State and References](state-and-references.md) |
+| `history` | Source | The number of recent steps that Caliper keeps | [Time Cursor](time-cursor.md) |
+| `window` | Transform `op` | A step over the kept steps | [Time Cursor](time-cursor.md#window-step) |
+| `surface`, `path` | Transform `op` | The two operators | [Operators](operators.md) |
+| `entity` | Scene panel | An array of entities, at most 64 | [Scene Entities](scene-entities.md) |
+| `annotation` | Panel | An array of labels, thresholds, bands and markers, at most 64 | [Annotations](annotations.md) |
+| `select`, `box`, `views` | Scene panel options | A pick that writes state, the data box and the saved views | [Scene Entities](scene-entities.md) |
+| `legend` | Series panel option | The legend of a series panel | [Annotations](annotations.md#legends-and-scale-bars) |
+| `format`, `fields` | Text panel and readout options | A bound text and its values | [Bound Text](bound-text.md) |
+| `range`, `picker`, `text`, `segmented`, `readout`, `transport` | Control `kind` | The control kinds | [Controls](controls.md) |
+| `state:<id>`, `cursor` | Control `bind` | The state and the cursor as targets | [Controls](controls.md) |
+| `shares`, `min` | Layout | The shares of a split and the minimum of a leaf | [Layout Shares](#layout-shares) |
+| `params` | Program and stage | Named numbers that the program or the stage reads | [Operators](operators.md#program-parameters) |
+| `tensor` | Program output `kind` | An output that the script publishes as a live tensor | [Operators](operators.md#tensor-output) |
+
+A binding reference can stand at some of these keys. [State and References](state-and-references.md#reference-places) lists the places.
 
 ## Version Rules
 
 A version 0 document that uses a key of version 1 gets the errors of version 0, `spec.unknown_primitive` or `spec.unknown_key`. A version 0 document with the number changed to 1 is a valid version 1 document, because version 1 is a strict superset. The canonical writers write the version that the spec holds and do not raise it.
 
-An edit that adds a scene panel or a control to a version 0 spec raises the version to 1 in the same command. The edit and the new number are one undo step. This holds for `panel.create` of a scene panel and for the first `control.create`.
+An edit that adds a scene panel, a control, a state variable or another key of version 1 to a version 0 spec raises the version to 1 in the same command. The edit and the new number are one undo step. This holds for `panel.create` of a scene panel, for the first `control.create` and for the first `state.create`.
 
 A saved spec applet of format 1 loads from the workspace. The host refuses only a format above the newest one or below 0.
 
 ## Scene Panel
 
-A panel with `primitive = "scene"` shows a live scene of the attached script. Its one slot, `scene`, is required. The slot holds `live:<scene name>`, the name that `catalog.list` gives for the scene, and not a source id.
+A panel with `primitive = "scene"` shows a live scene of the attached script. Its one slot, `scene`, is required. The slot holds `live:<scene name>`, the name that `catalog.list` gives for the scene, and not a source id. A scene panel with at least one [entity](scene-entities.md) needs no `scene` slot.
 
 ```toml
 [[panel]]
@@ -32,10 +55,14 @@ options = { up = "+z", axes = true }
 | `labels` | Boolean | `true` | Whether the panel draws the entity labels |
 | `axes` | Boolean | `true` | Whether the panel draws the axes and the ground grid |
 | `scale_bar` | Boolean | `false` | Whether the panel draws a scale bar in the units of the scene |
+| `box` | `auto` or three positive numbers | `auto` | The proportions of the data box of the entities |
+| `views` | At most 16 tables | None | The saved views of the camera |
+| `select` | `{ state, field, entity }` | None | The state that a pick writes |
+| `x_label`, `y_label`, `z_label` | Text | None | The titles of the axes of the data box |
 
 An orbit table has the keys `target`, `distance`, `azimuth` and `elevation`. In a pattern, `*` matches one path segment and `**` matches any number of segments. A scene that the script does not send shows "Source offline", and the validator warns with `spec.unresolved_source`, because a live scene can come later.
 
-In the app, the spec page draws the panel from the live scene of the attached script. A drag orbits the view, the wheel zooms, a click picks and a shift-drag selects. The panel sends its picks and selections to the event ring as `pick` and `select` events that carry its panel id. [Run Control and Events](../agents/run-control-and-events.md) lists their keys. The command `panel.data` of a scene panel gives `{"scene": "<name>"}`.
+In the app, the spec page draws the panel from the live scene of the attached script. A drag orbits the view, the wheel zooms, a click picks and a shift-drag selects. The panel sends its picks and selections to the event ring as `pick` and `select` events that carry its panel id. [Run Control and Events](../agents/run-control-and-events.md) lists their keys. The command `panel.data` of a scene panel gives `{"scene": "<name>"}` and, for each entity, the shape, the minimum, the maximum and the values of its arrays.
 
 ## Controls
 
@@ -44,19 +71,20 @@ The array `control` holds the controls of the spec. A control acts on one target
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `id` | Id | Yes | The id of the control. Panels and controls share one set of ids. |
-| `kind` | `slider`, `button`, `range`, `toggle`, `picker` or `text` | Yes | The widget |
+| `kind` | `slider`, `button`, `range`, `toggle`, `picker`, `text`, `segmented`, `readout` or `transport` | Yes | The widget |
 | `title` | Text, at most 256 characters | No | The label. The default is the `id`. |
-| `bind` | Target string | Yes | The one target of the control |
+| `bind` | Target string | Yes, except for a `readout` | The one target of the control |
 | `options` | Table | No | The options of the kind |
 
-The `bind` string has one of four forms:
+The `bind` string has one of these forms:
 
 - `param:<name>` is a parameter that the script registered with `caliper.param`.
 - `action:<name>` is an action that the script registered with `caliper.action`.
 - `run:pause` is the pause and the resume of the run.
 - `value` is a value that the spec holds.
+- `state:<id>` is a [state variable](state-and-references.md). A `readout` has no target and a `transport` binds `cursor`.
 
-Version 1 builds the kinds `slider`, `button` and `toggle`. A toggle binds `intervene:<point>`, which it ablates while it is on, or `param:<name>` of a boolean parameter. The other three kinds are part of the format, but the validator refuses them with `spec.unsupported_control`.
+Version 1 builds all nine kinds: `slider`, `button`, `range`, `toggle`, `picker`, `text`, `segmented`, `readout` and `transport`. [Controls](controls.md) describes each kind. A toggle binds `intervene:<point>`, which it ablates while it is on, or `param:<name>` of a boolean parameter.
 
 | Kind | Targets | Options |
 |---|---|---|
@@ -83,6 +111,23 @@ A control is a leaf of the layout, as a panel is. A leaf is an id, and the id na
 
 A spec with no `layout` places its panels as version 0 does. When the spec has controls, the default root is a vertical split of two children: the panels, then one horizontal split of the controls in declaration order. A single control is a leaf and not a split. The validator warns with `spec.unplaced_panel` for a control that the layout does not place.
 
+## Layout Shares
+
+A split takes the key `shares`: one positive number for each child. It replaces `ratio`, and a split with both is `spec.bad_layout`. A leaf may be a table `{ panel = "<id>", min = [columns, lines] }`, whose minimum is in characters and lines of the text scale, from 4 to 400 each.
+
+```toml
+[layout]
+split = "vertical"
+shares = [6, 3, 1]
+children = [
+  { split = "horizontal", shares = [3, 2], children = [{ panel = "world", min = [48, 20] }, "detail"] },
+  "loss",
+  { split = "horizontal", children = ["window", "measure", "transport", "now"] },
+]
+```
+
+Each child first gets its minimum. The rest of the space goes to the children in proportion to their shares. A child whose share falls below its minimum keeps the minimum, and the other children share the rest again. When the minimums do not fit, the children share the space in proportion to their minimums. The result has whole pixels. A control leaf keeps its height. The command `layout.set` takes the nodes with `shares` and `mins`.
+
 ## Control Commands
 
 The commands `control.create`, `control.patch` and `control.remove` edit the open spec as the panel commands do. Each one has a dry run, a diff, review for the origins that have it on, one undo step and a journal entry.
@@ -93,11 +138,11 @@ The result of `control.create` and `control.remove` holds `id`, `warnings`, `dif
 
 ## Validator Codes
 
-Version 1 adds three error codes for controls. A spec with more than 16 programs or 32 stages fails with `spec.too_many`. The other errors of controls and scene panels use the codes of version 0.
+Version 1 adds three error codes for controls. The first one is given for an unknown kind. A spec with more than 16 programs or 32 stages fails with `spec.too_many`. The other errors of controls and scene panels use the codes of version 0.
 
 | Code | Stage | Cause |
 |---|---|---|
-| `spec.unknown_control_kind` | Parse | A `kind` that is not one of the six kinds |
+| `spec.unknown_control_kind` | Parse | A `kind` that is not one of the nine kinds |
 | `spec.unsupported_control` | Validate | A kind of the format that this Caliper does not draw yet |
 | `spec.control_mismatch` | Validate | A target that the kind cannot take, or an option of another kind |
 
@@ -108,3 +153,20 @@ Version 1 adds three error codes for controls. A spec with more than 16 programs
 | `spec.unknown_panel` | A layout leaf that names no panel and no control |
 | `spec.out_of_range` | A slider with `min` not below `max`, a `step` not above 0, or `log` with `min` not above 0 |
 | `spec.too_many` | More than 64 controls or more than 64 patterns |
+
+## Instrument Codes
+
+The keys of an instrument add these codes. The pages named above state when each one applies.
+
+| Code | Severity | Cause |
+|---|---|---|
+| `spec.bad_reference`, `spec.reference_not_allowed`, `spec.unknown_control`, `spec.unknown_state`, `spec.unknown_panel`, `spec.unknown_field`, `spec.reference_type`, `spec.reference_cycle`, `spec.reference_in_history` | Error | A binding reference that is wrong ([State and References](state-and-references.md#reference-errors)) |
+| `spec.history_not_allowed`, `spec.no_history` | Error | `history` on a source that is not a live tensor, and a `window` over a source that keeps no steps |
+| `spec.operator_shape` | Error | An operator input of another rank, or a column past the last |
+| `spec.duplicate_shortcut`, `spec.reserved_shortcut` | Error | A key of a segmented choice that is used twice, or that the app keeps |
+| `spec.bad_format` | Error | A bound text that does not parse |
+| `program.params_mismatch`, `stage.params_mismatch` | Error | A `Params` struct whose fields differ from the names |
+| `spec.state_writers` | Warning | Two controls write one state variable |
+| `spec.not_built` | Error | A key that is part of the format but not built: annotations on heatmaps and images, `legend` set to `true` or `false` outside a series panel, `scale_bar` outside a scene, and `choices_from` of a picker |
+
+The code `spec.unsupported_control` is no longer given, because Caliper draws all nine control kinds.

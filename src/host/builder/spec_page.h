@@ -58,6 +58,9 @@
 #include <vector>
 
 struct SpecAppletFacts;   // ui/landing_screen.h
+namespace caliper_builder {
+class Session;
+}
 struct CaliperCore;       // embed/embed_core.h: the core whose live views hold an attached script's scenes
 
 namespace caliper_host {
@@ -280,8 +283,11 @@ public:
     void shutdown();
 
     // panel.render's renderer for AppSession::set_panel_renderer(); null
-    // without the builder.
-    static std::shared_ptr<PanelRenderSeam> make_panel_renderer();
+    // without the builder. With the app's builder session, a panel's
+    // annotations, cursor line and bound texts read its values.
+    // `session` gives the adopted session on the frame thread, or null.
+    static std::shared_ptr<PanelRenderSeam> make_panel_renderer(
+        std::function<caliper_builder::Session*()> session = nullptr);
 
     struct Impl;
 

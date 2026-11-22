@@ -19,6 +19,12 @@
 //   caliper_host::unregister_catalog_providers(*session);
 //   providers_ = {};                  // joins the metrics summary's thread
 //
+// The live catalog keeps the steps of the session's history
+// (Session::history(), design/instrument-interface.md, Step History): unless
+// `live_options` names its own, it appends to the session's history, pushes
+// the cursor's `clamped` event to the session's ring, and takes the run's
+// step from the session's run control for a snapshot without a step stamp.
+//
 // The providers are named `live`, `feed` and `metrics`, at priority 0 (their
 // ids never meet the loader outputs', whose kinds are table and tensor). A
 // null store leaves its kind out.

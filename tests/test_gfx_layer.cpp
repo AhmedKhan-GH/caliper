@@ -4,6 +4,8 @@
 // asynchronous readback and the routes of import, including the failure paths.
 #include <doctest/doctest.h>
 
+#include "gfx/colormap_keys.h"
+#include "gfx/colormap_tables.h"
 #include "gfx/recording_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
 #include "gfx/shaders/generated/uniforms.h"
@@ -1046,4 +1048,63 @@ TEST_CASE("gfx layer: update_texture_from_tensor records the colormap and the fi
     Texture sampled = gfx.create_texture({W, H, Format::RGBA8Unorm, kSampled});
     CHECK_FALSE(gfx.update_texture_from_tensor(sampled, src, m).ok);
     CHECK(has(gfx.last_error(), "kStorageTex"));
+}
+
+// ---- Colormaps (src/host/gfx/colormap_tables.h) -----------------------------------------------
+namespace {
+struct CmapSample { const char* name; int32_t id; uint32_t at[5]; };
+// Entries 0, 64, 128, 191 and 255, printed by colormap_tables_gen.py --samples from matplotlib
+// 3.11.2 (ids 4 to 9) and cmcrameri 1.8 (ids 10 to 15).
+const CmapSample kCmapSamples[] = {
+    {"cividis", 4, {0xff4e2200u, 0xff6c4e43u, 0xff787c7du, 0xff6dadbbu, 0xff38e8feu}},
+    {"inferno", 5, {0xff040000u, 0xff6e1057u, 0xff5437bcu, 0xff0a8cf9u, 0xffa4fffcu}},
+    {"plasma", 6, {0xff87080du, 0xffa8037eu, 0xff7847ccu, 0xff4194f8u, 0xff21f9f0u}},
+    {"turbo", 7, {0xff3b1230u, 0xffebbc28u, 0xff3cfca4u, 0xff2281fbu, 0xff03047au}},
+    {"twilight", 8, {0xffe2d9e2u, 0xffba7562u, 0xff371430u, 0xff5256b2u, 0xffe2d9e2u}},
+    {"coolwarm", 9, {0xffc04c3bu, 0xfffeb08du, 0xffdcdcddu, 0xff7b9af4u, 0xff2604b4u}},
+    {"batlow", 10, {0xff591901u, 0xff616022u, 0xff318282u, 0xff6b9df1u, 0xfffaccfau}},
+    {"vik", 11, {0xff611200u, 0xffa67d30u, 0xffe0e5ecu, 0xff4372c3u, 0xff080059u}},
+    {"roma", 12, {0xff00177eu, 0xff328cb6u, 0xffc3eac0u, 0xffc79d39u, 0xff983103u}},
+    {"oslo", 13, {0xff010101u, 0xff5b3915u, 0xffbc7b50u, 0xffcab0a2u, 0xffffffffu}},
+    {"lajolla", 14, {0xff001919u, 0xff2a3467u, 0xff4e60d9u, 0xff54acecu, 0xffcbfeffu}},
+    {"berlin", 15, {0xffffb09eu, 0xff866828u, 0xff090c19u, 0xff1c327bu, 0xffadadffu}},
+};
+}  // namespace
+TEST_CASE("colormaps: each added colormap has the exact packed RGBA at five entries") {
+    constexpr int kAt[5] = {0, 64, 128, 191, 255};
+    for (const CmapSample& s : kCmapSamples) {
+        CAPTURE(s.name);
+        const uint32_t* lut = cmap::builtin_lut(s.id);
+        REQUIRE(lut != nullptr);
+        for (int k = 0; k < 5; ++k) {
+            CAPTURE(kAt[k]);
+            CHECK(lut[kAt[k]] == s.at[k]);
+        }
+        for (int k = 0; k < 256; ++k) CHECK((lut[k] >> 24) == 0xffu);
+    }
+}
+
+TEST_CASE("colormaps: ids outside 0 to 15 have no table, and ids 0 to 3 are the host's and the grey ramp") {
+    CHECK(cmap::kBuiltinColormaps == 16);
+    CHECK(cmap::builtin_lut(16) == nullptr);
+    CHECK(cmap::builtin_lut(-1) == nullptr);
+    CHECK(cmap::builtin_lut(0) == caliper_host::colormap_lut(CALIPER_CMAP_VIRIDIS));
+    CHECK(cmap::builtin_lut(1) == caliper_host::colormap_lut(CALIPER_CMAP_MAGMA));
+    CHECK(cmap::builtin_lut(2) == caliper_host::colormap_lut(CALIPER_CMAP_RDBU));
+    const uint32_t* greys = cmap::builtin_lut(3);
+    REQUIRE(greys != nullptr);
+    for (uint32_t i = 0; i < 256; ++i) CHECK(greys[i] == (0xff000000u | (i << 16) | (i << 8) | i));
+}
+
+TEST_CASE("colormaps: derive_block fills level k with the table's entry k for all sixteen ids") {
+    for (int32_t id = 0; id < cmap::kBuiltinColormaps; ++id) {
+        CAPTURE(id);
+        shaders::Cmap block{};
+        REQUIRE(cmap::derive_block(id, 0.0f, 1.0f, &block));
+        const uint32_t* lut = cmap::builtin_lut(id);
+        REQUIRE(lut != nullptr);
+        for (uint32_t k = 0; k < 256; ++k) CHECK(block.levels[k][2] == lut[k]);
+    }
+    shaders::Cmap unknown{};
+    CHECK_FALSE(cmap::derive_block(16, 0.0f, 1.0f, &unknown));
 }

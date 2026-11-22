@@ -28,8 +28,12 @@
 #include <nlohmann/json.hpp>
 
 #include <caliper_builder/error.h>
+#include <caliper_builder/spec/annotation.h>
+#include <caliper_builder/spec/entity.h>
 #include <caliper_builder/spec/instrument.h>
 #include <caliper_builder/spec/program.h>
+#include <caliper_builder/spec/reference.h>
+#include <caliper_builder/spec/state.h>
 
 namespace caliper_builder::spec {
 
@@ -67,11 +71,18 @@ inline constexpr std::int64_t kMaxSafeInteger = 9007199254740991;  // 2^53 - 1
 inline constexpr int kMaxRank = 8;
 inline constexpr std::int64_t kMaxBins = 65536;
 inline constexpr std::size_t kDiagnostics = 256;  // one report keeps at most this many
+// Version 1 (design/instrument-interface.md).
+inline constexpr std::int64_t kHistorySteps = 65536;         // a source's `history` and a window's `steps`
+inline constexpr std::size_t kSavedViews = 16;
+inline constexpr std::int64_t kLeafMinimum = 400;            // a layout leaf's `min`, from 4
 }  // namespace limits
 
 // The primitives of a panel. `scene` is part of version 1 only.
 enum class Primitive { series, heatmap, points, histogram, table, image, text, scene };
-enum class TransformOp { slice, reduce, normalise };
+// `window`, `surface` and `path` are part of version 1 only
+// (design/instrument-interface.md): a step over the kept steps of a source,
+// and the two operators that turn a tensor into geometry.
+enum class TransformOp { slice, reduce, normalise, window, surface, path };
 enum class SplitDirection { horizontal, vertical };
 
 const char* to_string(Primitive p);
@@ -94,6 +105,15 @@ struct Transform {
     std::optional<std::string> fn;           // reduce: mean sum min max std var norm argmax argmin entropy
     std::optional<bool> keepdims;            // reduce
     std::optional<std::string> mode;         // normalise: minmax zscore softmax l2
+    std::optional<std::int64_t> steps;       // window: the last N kept steps up to the cursor
+    std::optional<std::int64_t> max_cells;   // surface: 1 to 262,144, default 32,768
+    std::optional<std::string> pool;         // surface: mean max min
+    std::vector<std::int64_t> columns;       // path: two or three column indices; empty when absent
+    std::optional<std::int64_t> max_points;  // path: 2 to 1,048,576, default 65,536
+    // The references at the value places of this step, by key: `index`,
+    // `start`, `stop` and `step` of a slice, `start`, `stop` and `steps` of a
+    // window. The literal field of a key with a reference is empty.
+    std::map<std::string, Reference> references;
     nlohmann::json x;                        // extensions; null when absent
 };
 
@@ -104,6 +124,7 @@ struct Source {
     std::optional<std::string> sql;          // one read-only SELECT
     std::optional<std::string> from;         // another source's id
     std::vector<Transform> transforms;       // the `transform` array
+    std::optional<std::int64_t> history;     // version 1: the steps the app keeps, 0 to 65,536
     nlohmann::json x;
 };
 
@@ -111,7 +132,28 @@ struct Source {
 struct SlotValue {
     std::vector<std::string> bindings;
     bool list = false;  // written as a list
+    // Version 1: a reference to a text state whose choices are source ids,
+    // written in place of the binding; `bindings` is then empty.
+    std::optional<Reference> reference;
 };
+
+// A saved camera view of a scene panel (the option `views`).
+struct SavedView {
+    std::string name;                        // unique in the panel
+    std::array<double, 3> target{0, 0, 0};
+    double distance = 1;
+    double azimuth = 0;                      // degrees
+    double elevation = 0;                    // degrees
+};
+bool operator==(const SavedView& a, const SavedView& b);
+
+// The option `select`: the field of each pick that goes into a state variable.
+struct StateWrite {
+    std::string state;
+    std::string field;                       // a pick field (design/instrument-interface.md, Pick Fields)
+    std::optional<std::string> entity;       // only picks on this entity
+};
+bool operator==(const StateWrite& a, const StateWrite& b);
 
 // The options of every primitive; each primitive takes only some of them.
 struct Options {
@@ -128,6 +170,15 @@ struct Options {
     std::optional<std::vector<std::string>> columns;
     std::optional<std::string> text;
     SceneOptions scene;                      // scene: up, view_camera, include, exclude, labels, axes, scale_bar
+    // Version 1 (design/instrument-interface.md):
+    nlohmann::json legend;                   // "auto", true or false; null when absent
+    nlohmann::json box;                      // scene: "auto" or three positive numbers; null when absent
+    std::vector<SavedView> views;            // scene: at most 16 saved views
+    std::optional<StateWrite> select;        // a pick writes one of its fields into a state variable
+    std::optional<BoundText> bound_text;     // text: the options `format` and `fields`
+    // The references at the value places of the options, by key: `range`,
+    // `x_range`, `y_range` and `colormap`. The literal field is then empty.
+    std::map<std::string, Reference> references;
     nlohmann::json x;
 
     bool empty() const;
@@ -141,6 +192,8 @@ struct Panel {
     std::optional<std::string> title;
     std::map<std::string, SlotValue> bind;   // slot name to its value
     Options options;
+    std::vector<Entity> entities;            // scene, version 1: the array `entity`
+    std::vector<Annotation> annotations;     // version 1: the array `annotation`
     nlohmann::json x;
 };
 
@@ -153,6 +206,10 @@ struct LayoutNode {
     std::string panel;                         // Kind::panel
     SplitDirection split = SplitDirection::horizontal;  // Kind::split
     std::optional<double> ratio;               // Kind::split, two children only
+    std::vector<double> shares;                // Kind::split, version 1: one positive share per child
+    // Kind::panel, version 1: the minimum size in columns and lines of the
+    // text scale, written as the leaf table { panel, min }.
+    std::optional<std::array<std::int64_t, 2>> min;
     std::vector<LayoutNode> children;          // the children of a split, or the tabs
     std::optional<std::string> title;          // Kind::split and Kind::tabs
     nlohmann::json x;
@@ -176,6 +233,7 @@ struct Spec {
     std::vector<Control> controls;   // `control`, spec version 1 (instrument.h); empty in version 0
     std::vector<Program> programs;   // `program`, spec version 1 (program.h); empty in version 0
     std::vector<Stage> stages;       // `stage`, spec version 1 (program.h); empty in version 0
+    std::vector<StateVar> states;    // `state`, spec version 1 (state.h); empty in version 0
     Provenance provenance;           // `provenance`, spec version 1 (program.h); empty for the person's own spec
     nlohmann::json x;
 
@@ -184,10 +242,12 @@ struct Spec {
     const Panel* find_panel(std::string_view id) const;
     const Control* find_control(std::string_view id) const;
     const Program* find_program(std::string_view id) const;
+    const StateVar* find_state(std::string_view id) const;
 };
 
 // The lowest format version that holds `spec`: 1 when it has a scene panel, a
-// control, a program, a stage or a provenance table, else 0. An edit that adds
+// control, a program, a stage, a provenance table or any key of
+// design/instrument-interface.md, else 0. An edit that adds
 // one of them to a version 0 spec raises the version to this one in the same
 // step.
 std::int64_t required_version(const Spec& spec);

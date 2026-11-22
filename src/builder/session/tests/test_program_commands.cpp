@@ -12,9 +12,13 @@
 #include <caliper_builder/programs/sandbox.h>
 #include <caliper_builder/session/program_commands.h>
 #include <caliper_builder/session/session.h>
+#include <caliper_builder/spec/format.h>
 
 #include <doctest/doctest.h>
 
+#include <caliper_builder/session/chain_hooks.h>
+
+#include <cstring>
 #include <set>
 
 using namespace caliper_builder;
@@ -387,6 +391,46 @@ TEST_CASE("programs: program.status lists the spec's items with what each host r
     s->set_stage_host(nullptr);
 }
 
+TEST_CASE("programs: program.status lists the program of an operator that runs in the script, with kind operator") {
+    // program.status reads the spec it is given, so the test parses it from TOML without a session.
+    const spec::ParseResult parsed = spec::parse_toml(
+        "caliper_spec = 1\n[applet]\nid = \"ops\"\n[[source]]\nid = \"w\"\n"
+        "catalog = \"live:blocks.0.attn.proj.weight\"\ntransform = [{ op = \"surface\", max_cells = 4096 }]\n"
+        "[[source]]\nid = \"recent\"\ncatalog = \"live:blocks.0.attn.proj.act\"\n"
+        "transform = [{ op = \"window\", steps = 8 }, { op = \"surface\" }]\n");
+    REQUIRE(parsed.ok());
+    const CommandDescriptor* d = find_command_descriptor("program.status");
+    REQUIRE(d);
+    CommandInvocation inv;
+    inv.name = "program.status";
+    inv.args = json::object();
+    const CommandContext ctx{inv, *d};
+    CommandOutput out = program_command(ctx, parsed.spec, nullptr, nullptr);
+    REQUIRE_FALSE(out.error);
+    json r = out.result;
+    REQUIRE(r["programs"].size() == 1);   // the operator after a window runs in the app
+    CHECK(r["programs"][0]["id"] == "operator.w.0");
+    CHECK(r["programs"][0]["kind"] == "operator");
+    CHECK(r["programs"][0]["host"] == "none");
+    CHECK(r["programs"][0]["state"] == "waiting");
+
+    FakeProgramHost programs;
+    ProgramStatus running;
+    running.id = "operator.w.0";
+    running.kind = "operator";
+    running.host = "script";
+    running.state = "running";
+    running.runs = 2;
+    programs.items = {running};
+    inv.args = {{"id", "operator.w.0"}};
+    out = program_command(ctx, parsed.spec, &programs, nullptr);
+    REQUIRE_FALSE(out.error);
+    r = out.result;
+    REQUIRE(r["programs"].size() == 1);
+    CHECK(r["programs"][0]["host"] == "script");
+    CHECK(r["programs"][0]["state"] == "running");
+}
+
 TEST_CASE("programs: in a foreign spec an unreviewed source waits for a review and provenance stays as it is") {
     const std::string ws = fresh_dir("program_foreign") + "/workspace";
     auto s = open_session(ws);
@@ -413,4 +457,93 @@ TEST_CASE("programs: a toggle bound to an intervention point enters the spec") {
     REQUIRE(s->open_spec()->spec.controls.size() == 1);
     CHECK(s->open_spec()->spec.controls[0].kind == spec::ControlKind::toggle);
     CHECK(s->open_spec()->spec.controls[0].bind == "intervene:blocks.0.attn#3");
+}
+
+// ---- the operator steps in the app (chain_hooks.h, operator_steps.cpp)
+
+namespace {
+
+TensorData floats(std::vector<int64_t> shape, const std::vector<float>& v) {
+    std::vector<uint8_t> bytes(v.size() * 4);
+    std::memcpy(bytes.data(), v.data(), bytes.size());
+    TensorResult r = TensorData::from_bytes(DType::f32, std::move(shape), std::move(bytes));
+    REQUIRE_FALSE(r.error);
+    return std::move(r.tensor);
+}
+
+std::vector<float> values_of(const TensorData& t) {
+    std::vector<float> v(static_cast<std::size_t>(t.numel()));
+    std::memcpy(v.data(), t.data(), v.size() * 4);
+    return v;
+}
+
+}  // namespace
+
+TEST_CASE("operator steps: surface and path give their named arrays, with the window's steps as coordinates") {
+    // A window of 4 kept steps of a row of 6: (4, 6), cell (r, c) = 10 r + c.
+    std::vector<float> g;
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 6; ++c) g.push_back(float(10 * r + c));
+    const TensorData input = floats({4, 6}, g);
+    const TensorData steps = floats({4}, {200, 201, 202, 203});
+
+    spec::Transform surface;
+    surface.op = spec::TransformOp::surface;
+    surface.max_cells = 6;
+    GeometryArrays out;
+    REQUIRE_FALSE(apply_operator(surface, input, &steps, &out));
+    REQUIRE(out.count("height"));
+    CHECK(out["height"].shape() == std::vector<int64_t>{2, 3});
+    CHECK(values_of(out["height"]) == std::vector<float>{5.5f, 7.5f, 9.5f, 25.5f, 27.5f, 29.5f});
+    CHECK(values_of(out["x"]) == std::vector<float>{200.5f, 202.5f});
+    CHECK(values_of(out["y"]) == std::vector<float>{0.5f, 2.5f, 4.5f});
+
+    spec::Transform path;
+    path.op = spec::TransformOp::path;
+    path.columns = {5, 0};
+    path.max_points = 2;
+    REQUIRE_FALSE(apply_operator(path, input, &steps, &out));
+    CHECK(out.count("height") == 0);
+    CHECK(out["positions"].shape() == std::vector<int64_t>{2, 3});
+    CHECK(values_of(out["positions"]) == std::vector<float>{5, 0, 0, 25, 20, 0});
+    CHECK(values_of(out["values"]) == std::vector<float>{200, 202});
+
+    // Another rank, and a column past the input.
+    Error err = apply_operator(surface, floats({24}, g), nullptr, &out);
+    CHECK(err.code == "resolve.operator_shape");
+    path.columns = {6, 0};
+    CHECK(apply_operator(path, input, nullptr, &out).code == "resolve.operator_shape");
+}
+
+TEST_CASE("operator steps: only the first step of a live tensor source runs in the script") {
+    spec::Spec s;
+    spec::Source live;
+    live.id = "w";
+    live.catalog = "live:blocks.0.attn.proj.weight";
+    spec::Transform op;
+    op.op = spec::TransformOp::surface;
+    live.transforms = {op};
+    spec::Source plain;
+    plain.id = "act";
+    plain.catalog = "live:blocks.0.attn.proj.act";
+    spec::Source derived;
+    derived.id = "terrain";
+    derived.from = "act";
+    derived.transforms = {op};
+    spec::Source windowed = derived;
+    windowed.id = "recent";
+    spec::Transform window;
+    window.op = spec::TransformOp::window;
+    window.steps = 16;
+    windowed.transforms = {window, op};
+    spec::Source file = live;
+    file.id = "f";
+    file.catalog = "tensor:acts";
+    s.sources = {live, plain, derived, windowed, file};
+    CHECK(operator_runs_in_script(s, s.sources[0], 0));
+    CHECK(operator_runs_in_script(s, s.sources[2], 0));    // from a live source without steps
+    CHECK_FALSE(operator_runs_in_script(s, s.sources[3], 1));   // after a window: in the app
+    CHECK_FALSE(operator_runs_in_script(s, s.sources[4], 0));   // not live
+    s.sources[1].transforms = {window};
+    CHECK_FALSE(operator_runs_in_script(s, s.sources[2], 0));   // its root has a step
 }

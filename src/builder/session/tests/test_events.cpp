@@ -89,7 +89,7 @@ CommandInvocation wait_call(json args) {
 
 TEST_CASE("the event kinds have stable names and the ring keeps 1024 events") {
     for (EventKind k : {EventKind::pick, EventKind::select, EventKind::control, EventKind::run, EventKind::spec,
-                        EventKind::approval, EventKind::program})
+                        EventKind::approval, EventKind::program, EventKind::state, EventKind::cursor})
         CHECK(event_kind_from_name(event_kind_name(k)) == k);
     CHECK_FALSE(event_kind_from_name("hover"));
     CHECK(EventRing::kCapacity == 1024);

@@ -32,11 +32,24 @@ add_library(caliper_builder_session STATIC
     runner_commands.cpp
     session.cpp
     spec_edit.cpp
-    util.cpp)
+    util.cpp
+    instrument_commands.cpp
+    state_commands.cpp
+    selection_commands.cpp
+    cursor_commands.cpp
+    entity_commands.cpp
+    camera_commands.cpp
+    annotation_commands.cpp
+    values.cpp
+    history.cpp
+    references.cpp
+    steps_window.cpp
+    operator_steps.cpp
+    panel_data_scene.cpp)
 target_include_directories(caliper_builder_session PUBLIC "${CALIPER_BUILDER_INCLUDE_ROOT}")
 target_link_libraries(caliper_builder_session
     PUBLIC caliper_builder_spec caliper_builder_programs caliper_builder_catalog caliper_builder_commands
-           caliper_builder_loaders nlohmann_json::nlohmann_json
+           caliper_builder_loaders caliper_builder_operators caliper_builder_text nlohmann_json::nlohmann_json
     PRIVATE tomlplusplus::tomlplusplus)
 target_compile_features(caliper_builder_session PUBLIC cxx_std_17)
 if(NOT MSVC)
@@ -83,6 +96,13 @@ caliper_builder_add_tests(session
         tests/test_command_server.cpp
         tests/test_acceptance.cpp
         tests/test_agent_modes.cpp
+        tests/test_instrument_commands.cpp
+        tests/test_entity_commands.cpp
+        tests/test_references.cpp
+        tests/test_state.cpp
+        tests/test_step_history.cpp
+        tests/test_cursor.cpp
+        tests/test_annotation_commands.cpp
     LIBS caliper_builder_session caliper_builder_session_host caliper_builder_acp caliper_builder_duckdb)
 if(TARGET caliper_builder_session_tests)
     # The HTTP acceptance test runs the stand-in host as a child process.

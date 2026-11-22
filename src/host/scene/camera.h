@@ -96,6 +96,15 @@ Mat4 pinhole_projection(const Pinhole& c, double zn, double zf, double view_aspe
 // larger extent for the aspect; looking through a pinhole returns to zoom 1 and no pan. Without
 // valid bounds the fit frames the box from -1 to 1, as the points view does.
 void fit(ViewCamera& cam, const Aabb& world, double aspect);
+// The fit of a data box (design/instrument-interface.md, Data Box): at the orbit's angles, the
+// smallest distance at which all eight corners of the bounds lie inside the view with a margin
+// of kBoxFitMargin on each side, and a target near the bounds' centre that centres the box's
+// picture, so that a wide flat box fills the view instead of a sphere around it. Other cameras
+// fit as fit().
+void fit_box(ViewCamera& cam, const Aabb& world, double aspect);
+inline constexpr double kBoxFitMargin = 1.08;
+// Whether `inner` lies inside `outer` grown by `tolerance` times the larger of outer's extents.
+bool aabb_contains(const Aabb& outer, const Aabb& inner, double tolerance);
 
 // ---- The starting camera and reset ------------------------------------------------------------------------
 
@@ -119,7 +128,8 @@ struct StartResult {
 // The camera a view opens on: the orbit's keys given are used as given and the rest filled from
 // the fit, the angles read against the scene's up; the entity form looks through that entity's
 // pinhole; a 2-D scene opens on the fit of its pan and zoom.
-StartResult starting_camera(const StartingCamera& s, const SceneTree& tree, double aspect);
+// `box_fit` fills the keys left out with fit_box() instead of fit().
+StartResult starting_camera(const StartingCamera& s, const SceneTree& tree, double aspect, bool box_fit = false);
 
 // A view's camera state: where it starts, where it is, and whether the person moved it. A
 // remembered camera wins until reset; a new starting camera moves an unmoved camera at once.

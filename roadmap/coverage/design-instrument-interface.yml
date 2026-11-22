@@ -1,0 +1,269 @@
+# yaml-language-server: $schema=schema.json
+title: Instrument Interface plan page
+kind: page
+source: design/instrument-interface.md
+summary: The plan page design/instrument-interface.md, read heading by heading; each plan heading has an entry
+  or is listed as holding no feature.
+not_features:
+- Status
+- Browser Position
+- Left Out
+- Decisions
+- Open Points
+entries:
+- heading: Spec Additions
+  item: Spec version 1 gains state variables, entities, annotations, kept steps, three steps, new control kinds, layout shares and program parameters.
+  ids:
+  - SPC-11
+  - SPC-12
+- heading: Binding References
+  item: A binding reference reads a control, a selection or a state variable where the spec takes a literal value.
+  ids:
+  - SPC-12
+- heading: Reference Forms
+  item: The three reference forms share one grammar with an optional field and default.
+  ids:
+  - SPC-12
+- heading: Reference Places
+  item: References stand only at keys whose value changes data and never the shape of the spec.
+  ids:
+  - SPC-12
+- heading: Re-Evaluation
+  item: A dependency index evaluates again only the readers of a changed input, at most once a frame.
+  ids:
+  - SPC-12
+- heading: Reference Rules
+  item: The validator refuses bad references, wrong places, unknown targets, type mismatches and cycles with fixed codes.
+  ids:
+  - SPC-12
+- heading: Shared State
+  item: Named state variables that controls and picks write and panels read, saved as declarations with session values.
+  ids:
+  - SPC-12
+- heading: State Table
+  item: A state variable has an id, a type, a default, bounds and choices.
+  ids:
+  - SPC-12
+- heading: State Writers
+  item: Controls bound to state:<id>, picks with the option select and the command state.set write state.
+  ids:
+  - SPC-12
+  - REN-46
+- heading: State Readers
+  item: References to state filter, highlight, recolor and retarget panels.
+  ids:
+  - SPC-12
+- heading: State Events
+  item: The event kind state reports each changed value with its writer.
+  ids:
+  - SPC-12
+  - AGT-21
+- heading: Scene Entities
+  item: A scene panel draws entities that it builds from spec sources, with no scene call in the script.
+  ids:
+  - SPC-11
+- heading: Entity Table
+  item: An entity has a path, a draw kind, slots bound to sources, options and a pose.
+  ids:
+  - SPC-11
+- heading: Draw Kinds
+  item: Entities draw as points, lines or the new surface height field.
+  ids:
+  - SPC-11
+  - REN-34
+- heading: Array Resolution
+  item: The app resolves, checks, converts and uploads an entity's arrays and writes them again on a new value.
+  ids:
+  - SPC-11
+- heading: Pick Fields
+  item: A pick on an entity gives fixed fields that events, references and state writes read.
+  ids:
+  - REN-46
+- heading: Entity Limits
+  item: Entities, items, cells and bytes of a scene panel have fixed limits.
+  ids:
+  - SPC-11
+- heading: Operators
+  item: An operator is a step of a source whose output is geometry for entity slots.
+  ids:
+  - SPC-28
+  - SPC-35
+- heading: Surface Operator
+  item: The operator surface makes a pooled height field from a tensor of rank 2.
+  ids:
+  - SPC-35
+- heading: Path Operator
+  item: The operator path makes a polyline through the rows of a tensor.
+  ids:
+  - REN-20
+- heading: Operator Placement
+  item: The first operator of a live tensor source runs in the script on the producer runtime, and other steps run in the app.
+  ids:
+  - SPC-14
+  - SPC-35
+- heading: Operator Programs
+  item: A placed operator travels as a built-in program in the message PROGRAM, with the same sandbox and cadence.
+  ids:
+  - SPC-14
+- heading: Tensor Output
+  item: Programs gain the output kind tensor, which the script publishes as a live tensor view.
+  ids:
+  - SPC-14
+- heading: Program Parameters
+  item: Programs and stages read named parameters, which may be references, in a uniform struct.
+  ids:
+  - SPC-14
+- heading: Controls
+  item: The control kinds range, picker and text are built, and segmented, readout and transport join them.
+  ids:
+  - SPC-12
+- heading: Control Kinds
+  item: Each control kind has fixed targets, options and a value type.
+  ids:
+  - SPC-12
+- heading: Segmented Groups
+  item: Single-select and multi-select button groups write a value or a state variable.
+  ids:
+  - SPC-12
+- heading: Keyboard Shortcuts
+  item: A choice of a segmented group may have a key, scoped to the instrument and refused when the app reserves it.
+  ids:
+  - SPC-12
+- heading: Control Values
+  item: The command control.set sets the value of a control bound to a value or a state variable.
+  ids:
+  - SPC-12
+- heading: Time Transport
+  item: One time cursor moves several panels over the recent steps that the app keeps.
+  ids:
+  - SPC-38
+  - RUN-06
+- heading: Step History
+  item: The app keeps the recent values of a source for a number of steps within a memory budget.
+  ids:
+  - SPC-38
+- heading: Window Step
+  item: The step window stacks the kept steps of a source between two step numbers or up to the cursor.
+  ids:
+  - SPC-38
+- heading: Cursor
+  item: The built-in state cursor holds the step, the kept range, the live mode, play and speed.
+  ids:
+  - RUN-06
+- heading: Latest at the Cursor
+  item: Each panel kind shows the newest kept value at or before the cursor.
+  ids:
+  - RUN-06
+- heading: Transport Control
+  item: The control kind transport steps, plays, holds and goes live, with keys.
+  ids:
+  - SPC-12
+  - RUN-06
+- heading: Run Pause and Cursor
+  item: The interface keeps the run's pause apart from the hold of the view.
+  ids:
+  - RUN-06
+- heading: Cursor Commands
+  item: The commands cursor.get, cursor.set and cursor.step read and move the cursor.
+  ids:
+  - RUN-06
+  - SPC-05
+- heading: Cursor Events
+  item: The event kind cursor reports holds, plays, moves and clamps of the cursor.
+  ids:
+  - RUN-06
+  - AGT-21
+- heading: Bound Text
+  item: Bound texts format live values and state into short texts.
+  ids:
+  - SPC-12
+- heading: Format Language
+  item: A bound text has named fields and number formats, and no expressions.
+  ids:
+  - SPC-12
+- heading: Text Places
+  item: Bound text stands in text panels, readout controls and annotations.
+  ids:
+  - SPC-12
+- heading: Text Limits
+  item: A bound text has limits on its length, its fields and its update rate.
+  ids:
+  - SPC-12
+- heading: Annotations and Markers
+  item: Labels with leader lines, thresholds, bands and markers mark values in scene and 2-D panels.
+  ids:
+  - REN-41
+- heading: Annotation Table
+  item: Each annotation kind has fixed keys and a meaning in 2-D and scene panels.
+  ids:
+  - REN-41
+- heading: Legends and Scale Bars
+  item: The option legend joins six panel kinds, and the scale bar joins image and points panels.
+  ids:
+  - SPC-39
+  - REN-44
+- heading: Label Placement
+  item: One pure function places annotation and item labels without overlap.
+  ids:
+  - REN-41
+- heading: Annotation Picking
+  item: Labels and markers take picks before the data under them.
+  ids:
+  - REN-46
+- heading: Layout and Viewport
+  item: The layout gains shares and minimums, and a scene panel gains its viewport options.
+  ids:
+  - SPC-17
+  - REN-45
+- heading: Layout Shares
+  item: A split takes shares and a leaf takes a minimum in characters and lines.
+  ids:
+  - SPC-17
+- heading: Depth Offset
+  item: An entity's depth offset lets lines win over the surface that they lie on.
+  ids:
+  - REN-34
+- heading: Colormaps
+  item: Twelve colormaps join the four of version 0, from one table of names and one of colors.
+  ids:
+  - REN-22
+- heading: Starting Camera and Saved Views
+  item: A scene panel applies view_camera and keeps up to 16 saved views.
+  ids:
+  - REN-45
+  - REN-23
+- heading: Data Box
+  item: A scene panel with entities scales its data box on each axis and draws its walls with ticks.
+  ids:
+  - REN-45
+- heading: Commands
+  item: Eighteen commands for state, controls, selections, entities, annotations, the cursor and the camera join the command layer.
+  ids:
+  - SPC-05
+  - AGT-02
+- heading: Command Errors
+  item: The new commands answer with fixed error codes.
+  ids:
+  - SPC-05
+- heading: Validator Codes
+  item: The validator gains fixed codes for references, history, operators, shortcuts, formats and parameters.
+  ids:
+  - SPC-11
+  - SPC-12
+- heading: Events
+  item: The event kinds state and cursor are new, and pick and control gain keys.
+  ids:
+  - AGT-21
+  - REN-46
+- heading: Work Placement
+  item: Each piece runs in the app or in the script as the table states.
+  ids:
+  - SPC-14
+- heading: Tests
+  item: Tests prove each piece without a window.
+  reason: test
+- heading: Acceptance Test
+  item: A test through caliper-mcp builds the training debugger's instrument without the agent's own programs on a managed run.
+  ids:
+  - SPC-11
+  - SPC-12

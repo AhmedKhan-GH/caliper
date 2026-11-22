@@ -99,15 +99,19 @@ Each event has the keys `seq`, `time`, `kind`, `panel`, `view` and `origin`. The
 
 | Kind | Cause | Keys of the kind |
 |---|---|---|
-| `pick` | A click on an item of a scene | `entity`, `primitive`, `index`, `row_id`, `position`, and `pixel` for an image |
+| `pick` | A click on an item of a scene, or `selection.set` | `entity`, `primitive`, `index`, `row_id`, `position`, `fields`, `annotation`, and `pixel` for an image |
 | `select` | A selection in a scene, made or cleared | `entities`, `truncated` |
-| `control` | The person finished an edit of a control | `control`, `bind`, `value` |
+| `control` | The person finished an edit of a control, or `control.set` set one | `control`, `bind`, `value`, and `key` when a shortcut made the change |
+| `state` | A state variable changed | `state`, `value`, `previous`, `writer` |
+| `cursor` | The time cursor changed | `change`, `step`, `first`, `latest`, `playing`, `speed` |
 | `run` | The attached script changed | `change`, then the keys of the change |
 | `spec` | A command changed the open spec | `command`, `event`, `applet` |
 | `approval` | A card asked or was decided | `approval`, `command`, `state`, `target` |
 | `program` | A program or a stage changed its state ([GPU Programs and Stages](gpu-programs.md#program-events)) | `program`, `change`, `host`, `code`, `message`, `line`, `column` |
 
 A pick in a scene panel has the panel id in `panel` and the name of the scene in `view`. A pick or a selection in a live view outside a spec has `panel` null. The key `index` is the index of the item in the batch that the script sent. The key `row_id` is its row in the source tensor of the script, or null. The key `position` is the point that the click hit in scene coordinates, or null without depth. Each entry of `entities` in a selection has `entity`, `primitive`, `indices` and `row_ids`, and an empty list means that the selection was cleared. The key `truncated` is true when the selection held more than 32,768 items.
+
+The key `fields` of a `pick` event holds the pick fields of the item, such as `row`, `column`, `x`, `y`, `z`, `value` and `step` for a surface ([Pick Fields](../builder/scene-entities.md#pick-fields)). The key `annotation` is set when the pick hit a label or a marker. The `writer` of a `state` event is a control id, a panel id or the command name. The `change` of a `cursor` event is `live`, `held`, `playing`, `moved` or `clamped`. A move by play or by a new live step adds no event.
 
 A `control` event is one event for each finished edit. A slider sends each value to the script while you drag it, but the ring gets only the last value, at the end of the drag or typed entry. A button gives one event for each click.
 

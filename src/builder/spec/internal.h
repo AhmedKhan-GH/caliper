@@ -23,6 +23,7 @@ const std::vector<std::string>& options_of(Primitive p);  // `x` excluded
 const std::vector<std::string>& transform_keys(TransformOp op);
 const std::vector<std::string>& reduce_fns();
 const std::vector<std::string>& normalise_modes();
+const std::vector<std::string>& pool_modes();   // of the surface operator
 const std::vector<std::string>& colormaps();
 const std::vector<std::string>& catalog_kinds();
 const std::vector<std::string>& all_primitive_names();   // of the newest version
@@ -87,6 +88,9 @@ Source decode_source(const json& item, const std::string& path, Sink& sink);
 Panel decode_panel(const json& item, const std::string& path, Sink& sink);
 Control decode_control(const json& item, const std::string& path, Sink& sink);
 Program decode_program(const json& item, const std::string& path, Sink& sink);
+StateVar decode_state(const json& item, const std::string& path, Sink& sink);
+Entity decode_entity(const json& item, const std::string& path, Sink& sink);
+Annotation decode_annotation(const json& item, const std::string& path, Sink& sink);
 Stage decode_stage(const json& item, const std::string& path, Sink& sink);
 LayoutNode decode_layout(const json& item, const std::string& path, Sink& sink);
 

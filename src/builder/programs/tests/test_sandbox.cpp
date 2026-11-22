@@ -4,6 +4,8 @@
 // against a reflection made by hand (which need no compiler), and, when the
 // build has caliper-wgsl, the same checks on reflections of real sources.
 #include <caliper_builder/programs/sandbox.h>
+#include <array>
+#include <cstring>
 
 #include <doctest/doctest.h>
 
@@ -419,4 +421,107 @@ TEST_CASE("with the compiler library the sandbox checks real sources") {
     const cp::Compiled st = cp::compile_and_reflect(std::string(cp::stage_prelude()) + s.wgsl);
     REQUIRE(st.verdict.ok());
     CHECK(cp::check_stage(s, st.reflection).ok());
+}
+
+TEST_CASE("sandbox: params of a program follow its struct Params, and pack into the uniform by name") {
+    caliper_builder::spec::Program p;
+    p.id = "scaled";
+    p.wgsl = "struct Params { gain: f32, rows: u32, shift: i32 }\n"
+             "@group(0) @binding(0) var<uniform> params: Params;\n";
+    p.params = {{"gain", 0.5}, {"rows", 4.0}, {"shift", -2.0}};
+    CHECK(caliper_builder::programs::check_params(p).ok());
+    p.params.erase("shift");
+    caliper_builder::programs::Verdict v = caliper_builder::programs::check_params(p);
+    CHECK(v.code == "program.params_mismatch");
+    CHECK(v.line == 1);
+    CHECK(v.message.find("shift") != std::string::npos);
+
+    std::vector<caliper_builder::programs::ParamField> fields;
+    caliper_builder::programs::Verdict why;
+    REQUIRE(caliper_builder::programs::params_fields(p.wgsl, &fields, &why));
+    REQUIRE(fields.size() == 3);
+    CHECK(fields[1].type == caliper_builder::programs::ParamType::u32);
+    const std::vector<std::uint8_t> bytes =
+        caliper_builder::programs::pack_params(fields, {{"shift", -2.4}, {"gain", 0.5}, {"rows", 7.6}});
+    REQUIRE(bytes.size() == 16);
+    float gain = 0;
+    std::uint32_t rows = 0;
+    std::int32_t shift = 0;
+    std::memcpy(&gain, bytes.data(), 4);
+    std::memcpy(&rows, bytes.data() + 4, 4);
+    std::memcpy(&shift, bytes.data() + 8, 4);
+    CHECK(gain == 0.5f);
+    CHECK(rows == 8u);
+    CHECK(shift == -2);
+
+    // A field of another type, and a params variable without params.
+    REQUIRE(caliper_builder::programs::params_fields("struct Params { v: vec2<f32> }", &fields, &why));
+    CHECK(why.code == "program.params_mismatch");
+    caliper_builder::spec::Program bare;
+    bare.wgsl = "@group(0) @binding(0) var<uniform> params: vec4<f32>;\n";
+    CHECK(caliper_builder::programs::check_params(bare).code == "program.params_mismatch");
+}
+
+TEST_CASE("sandbox: a stage reads its params by name, and the viewer declares them after its source") {
+    caliper_builder::spec::Stage s;
+    s.panel = "world";
+    s.entity = "spec/terrain";
+    s.params = {{"level", 0.25}, {"band", 0.01}};
+    s.wgsl = "fn material(in: MaterialIn) -> vec4<f32> {\n"
+             "  if (abs(in.value - params.level) < params.band) { return vec4<f32>(1.0); }\n"
+             "  return in.color;\n}\n";
+    CHECK(caliper_builder::programs::check_stage_params(s).ok());
+    const std::string uniform = caliper_builder::programs::stage_params_declaration(s, true);
+    CHECK(uniform == "\nstruct Params { band: f32, level: f32 }\n@group(3) @binding(0) var<uniform> params: Params;\n");
+    CHECK(caliper_builder::programs::stage_params_declaration(s, false).find("var<private> params") != std::string::npos);
+    if (caliper_builder::programs::compiler_available()) {
+        const std::string composed = std::string(caliper_builder::programs::stage_prelude()) + s.wgsl +
+                                     caliper_builder::programs::stage_params_declaration(s, false);
+        const caliper_builder::programs::Compiled c = caliper_builder::programs::compile_and_reflect(composed);
+        INFO(c.verdict.message);
+        CHECK(c.verdict.ok());
+        CHECK(caliper_builder::programs::check_stage(s, c.reflection).ok());
+    }
+    s.wgsl = "fn material(in: MaterialIn) -> vec4<f32> {\n  return in.color * params.gain;\n}\n";
+    caliper_builder::programs::Verdict v = caliper_builder::programs::check_stage_params(s);
+    CHECK(v.code == "stage.params_mismatch");
+    CHECK(v.line == 2);
+    s.wgsl = "struct Params { level: f32 }\nfn material(in: MaterialIn) -> vec4<f32> { return in.color; }\n";
+    CHECK(caliper_builder::programs::check_stage_params(s).code == "stage.params_mismatch");
+}
+
+TEST_CASE("sandbox: a tensor output writes out, and an operator's id holds dots") {
+    caliper_builder::spec::Program p;
+    p.id = "operator.terrain.0";
+    p.wgsl = "@group(0) @binding(0) var<storage, read_write> out: array<f32>;\n"
+             "@compute @workgroup_size(64)\nfn run(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+             "  if (id.x < 16u) { out[id.x] = f32(id.x); }\n}\n";
+    p.output.kind = caliper_builder::spec::OutputKind::tensor;
+    p.output.shape = {4, 4};
+    CHECK(caliper_builder::programs::check_declaration(p).ok());
+    CHECK(caliper_builder::programs::output_bytes(p) == 64);
+    p.output.shape = {1001, 1000};
+    CHECK(caliper_builder::programs::check_declaration(p).code == "program.over_limits");
+    p.output.shape = {1, 1, 1, 1, 1};
+    CHECK(caliper_builder::programs::check_declaration(p).code == "program.over_limits");
+    p.output.shape = {16};
+    p.output.max_count = 3;
+    CHECK(caliper_builder::programs::check_declaration(p).code == "program.output_mismatch");
+    p.output.max_count = 0;
+    for (const char* bad : {"operator.Terrain.0", "operator.terrain.", "operator..0", "op.terrain.0"}) {
+        p.id = bad;
+        CHECK(caliper_builder::programs::check_declaration(p).code == "program.over_limits");
+    }
+    p.id = "operator.terrain.12";
+    if (caliper_builder::programs::compiler_available()) {
+        const caliper_builder::programs::Compiled c = caliper_builder::programs::compile_and_reflect(p.wgsl);
+        REQUIRE(c.verdict.ok());
+        CHECK(caliper_builder::programs::check_program(p, c.reflection).ok());
+        CHECK(caliper_builder::programs::dispatch_size(p, c.reflection) == std::array<std::uint32_t, 3>{1, 1, 1});
+        p.wgsl.replace(p.wgsl.find("out:"), 4, "res:");
+        p.wgsl.replace(p.wgsl.find("out["), 4, "res[");
+        const caliper_builder::programs::Compiled d = caliper_builder::programs::compile_and_reflect(p.wgsl);
+        REQUIRE(d.verdict.ok());
+        CHECK(caliper_builder::programs::check_program(p, d.reflection).code == "program.binding_undeclared");
+    }
 }

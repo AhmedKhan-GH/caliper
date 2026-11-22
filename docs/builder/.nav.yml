@@ -4,3 +4,10 @@ nav:
       - builder-pane.md
       - workspace.md
       - spec-version-1.md
+      - scene-entities.md
+      - operators.md
+      - state-and-references.md
+      - controls.md
+      - time-cursor.md
+      - bound-text.md
+      - annotations.md

@@ -203,6 +203,29 @@ jobs:
             echo "::error::GPU programs acceptance: neither passed nor skipped for lack of Metal"
             exit 1
           fi
+      # The instrument building acceptance test on its own. It uses both build folders of this job: the app
+      # and caliper-mcp of cmake-build-release, and caliper._producer, which cmake-build-python builds with
+      # the compiler library of cmake-build-release and the step above copies into python/caliper beside
+      # caliper._netio, because the surface operator runs as a program in the training script. A skip
+      # because the runner has no Metal device is accepted. Any other skip (a program that is not built,
+      # or a missing torch, sender or producer module) is a setup error, and so is any outcome that is
+      # neither a pass nor a Metal skip.
+      - name: Instrument building acceptance test
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/instrument-building-acceptance.log"
+          ctest --test-dir cmake-build-release -R caliper_instrument_building_acceptance --output-on-failure -V --timeout 600 | tee "$log"
+          if grep -q "caliper_instrument_building_acceptance passed" "$log"; then
+            echo "Instrument building acceptance: RAN and passed"
+          elif grep -qE "caliper_instrument_building_acceptance skipped: (this machine has no Metal device|the renderer is .*, not Metal)" "$log"; then
+            echo "Instrument building acceptance: SKIPPED because the runner has no Metal device"
+          elif grep -q "caliper_instrument_building_acceptance skipped" "$log"; then
+            echo "::error::Instrument building acceptance: SKIPPED for a reason other than a missing Metal device (CI setup error)"
+            exit 1
+          else
+            echo "::error::Instrument building acceptance: neither passed nor skipped for lack of Metal"
+            exit 1
+          fi
       # The Python tests of managed runs, the adapter, watch and controls run with the acceptance
       # Python, which has torch, websockets and the native sender. The four tests of test_watch.py that
       # need the native core module (caliper._native, which the CMake build does not install into

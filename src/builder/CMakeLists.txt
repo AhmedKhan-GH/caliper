@@ -107,7 +107,7 @@ endfunction()
 # Public headers are included as <caliper_builder/<module>/<header>.h>.
 set(CALIPER_BUILDER_INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
-foreach(_module spec programs catalog commands loaders acp session mcp agent)
+foreach(_module spec programs text operators catalog commands loaders acp session mcp agent)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_module}/CMakeLists.txt")
         add_subdirectory(${_module})
     endif()

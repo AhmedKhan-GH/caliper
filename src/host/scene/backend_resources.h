@@ -53,6 +53,7 @@ public:
                                          const caliper_gfx::RenderPipelineDesc& desc) override;
     caliper_gfx::BindGroup stage_bind_group(const StageProgram& stage, ProgramId builtin, uint32_t group,
                                             caliper_gfx::Texture image, uint32_t image_binding) override;
+    caliper_gfx::BindGroup stage_params_group(const StageProgram& stage) override;
     // The pipelines and groups of stage programs held (tests).
     size_t stage_objects() const { return stage_pipelines_.size() + stage_groups_.size(); }
 

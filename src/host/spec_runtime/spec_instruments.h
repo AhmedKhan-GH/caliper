@@ -18,7 +18,9 @@
 #include "spec_runtime/spec_runtime.h"
 
 #include <caliper_builder/session/events.h>
+#include <caliper_builder/session/history.h>
 #include <caliper_builder/session/run_control.h>
+#include <caliper_builder/session/values.h>
 #include <caliper_builder/spec/instrument.h>
 
 #include <imgui.h>
@@ -34,7 +36,18 @@ namespace caliper_host {
 struct SpecInstrumentHost {
     caliper_builder::EventSink* events = nullptr;      // the session's EventRing
     caliper_builder::RunControl* run = nullptr;        // the app's run control
+    // design/instrument-interface.md: the session's values of controls,
+    // state, picks and the cursor, its kept steps, and the spec shown. Null
+    // when the app has no session; references then read their defaults.
+    caliper_builder::ValueStore* values = nullptr;
+    caliper_builder::StepHistory* history = nullptr;
+    const caliper_builder::spec::Spec* spec = nullptr;
 };
+
+// Records a pick of a scene panel in the session's values (the panel's last
+// pick and its `select` write), after the runtime pushed its `pick` event.
+// Defined in spec_controls.cpp.
+void record_spec_pick(const std::string& panel, const caliper_builder::Event& pick, SpecInstrumentHost& host);
 
 // The height that a control of this kind takes in a vertical split: one row
 // of the look's type with its padding. The layout gives a control leaf this

@@ -115,13 +115,15 @@ const char* event_kind_name(EventKind kind) {
         case EventKind::spec: return "spec";
         case EventKind::approval: return "approval";
         case EventKind::program: return "program";
+        case EventKind::state: return "state";
+        case EventKind::cursor: return "cursor";
     }
     return "pick";
 }
 
 std::optional<EventKind> event_kind_from_name(std::string_view name) {
     for (EventKind k : {EventKind::pick, EventKind::select, EventKind::control, EventKind::run, EventKind::spec,
-                        EventKind::approval, EventKind::program})
+                        EventKind::approval, EventKind::program, EventKind::state, EventKind::cursor})
         if (name == event_kind_name(k)) return k;
     return std::nullopt;
 }
@@ -130,9 +132,9 @@ std::optional<EventKind> event_kind_from_name(std::string_view name) {
 // event_json() keeps only these, so that a producer's extra detail, such as
 // the item space of a scene's selection, never leaves the schema.
 const std::vector<const char*>& kind_keys(EventKind kind) {
-    static const std::vector<const char*> pick = {"entity", "primitive", "index", "row_id", "position", "pixel"};
+    static const std::vector<const char*> pick = {"entity", "primitive", "index", "row_id", "position", "pixel", "fields", "annotation"};
     static const std::vector<const char*> select = {"entities", "truncated"};
-    static const std::vector<const char*> control = {"control", "bind", "value"};
+    static const std::vector<const char*> control = {"control", "bind", "value", "key"};
     // The runner's change (design/hosted-runs.md, Runner Events) adds run,
     // parent, exit_code and error.
     // An intervention applied at a step (design/gpu-programs.md) adds point and op.
@@ -143,6 +145,9 @@ const std::vector<const char*>& kind_keys(EventKind kind) {
     static const std::vector<const char*> approval = {"approval", "command", "state", "target"};
     // design/gpu-programs.md, Program Events.
     static const std::vector<const char*> program = {"program", "change", "host", "code", "message", "line", "column"};
+    // design/instrument-interface.md, Events.
+    static const std::vector<const char*> state = {"state", "value", "previous", "writer"};
+    static const std::vector<const char*> cursor = {"change", "step", "first", "latest", "playing", "speed"};
     switch (kind) {
         case EventKind::pick: return pick;
         case EventKind::select: return select;
@@ -151,6 +156,8 @@ const std::vector<const char*>& kind_keys(EventKind kind) {
         case EventKind::spec: return spec;
         case EventKind::approval: return approval;
         case EventKind::program: return program;
+        case EventKind::state: return state;
+        case EventKind::cursor: return cursor;
     }
     return pick;
 }

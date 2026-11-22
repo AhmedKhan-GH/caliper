@@ -124,6 +124,17 @@ class ViewState:
         return e
 
 
+def _run_step() -> int | None:
+    """The run's step, ``caliper._controls.CONTROLS.n``, or None when it is
+    out of range or cannot be read."""
+    try:
+        from . import _controls
+        n = int(_controls.CONTROLS.n)
+    except Exception:
+        return None
+    return n if 0 <= n <= _wire._SAFE_INT else None
+
+
 @dataclass(eq=False)
 class Pending:
     """A snapshot queued on the device, waiting for its event."""
@@ -137,6 +148,7 @@ class Pending:
     kind: int
     event: Any = None
     mps: bool = False                           # its copies are on torch's MPS stream
+    stamp_steps: tuple | None = None            # (run step or None, wall ns) of the call
 
     def ready(self) -> bool:
         return self.event is None or self.event.query()
@@ -387,6 +399,7 @@ class NetRing:
             groups = list(v.groups.values())
         t = self.tick
         stamp = time.monotonic_ns()
+        steps = (_run_step(), time.time_ns())
         taken = 0
         serves = getattr(self.engine, "serves", None)
         for g in groups:
@@ -407,7 +420,7 @@ class NetRing:
                     return False
                 t = self._open_tick(now)
             red = self.engine.apply(call, g.resolved)
-            p = self._stage(g, v, red, stamp)
+            p = self._stage(g, v, red, stamp, steps)
             if p is None:
                 self.counters["ring_full"] += 1
                 continue
@@ -423,7 +436,8 @@ class NetRing:
             self._close_tick()
         return bool(taken)
 
-    def _stage(self, g: Group, v: ViewState, red: Reduced, stamp: int) -> Pending | None:
+    def _stage(self, g: Group, v: ViewState, red: Reduced, stamp: int,
+               steps: tuple | None = None) -> Pending | None:
         import torch
         data, aux = red.data, red.aux
         key = (tuple(data.shape), data.dtype, None if aux is None else tuple(aux.shape))
@@ -451,7 +465,7 @@ class NetRing:
         stage.busy = True
         v.seq += 1
         return Pending(g, v.name, v.id, v.seq, stamp, stage, red, v.kind, None,
-                       data.device.type == "mps")
+                       data.device.type == "mps", steps)
 
     def append(self, name, sp, now, interval) -> bool:
         return False                         # series come through tap()

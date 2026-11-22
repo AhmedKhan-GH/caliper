@@ -1,4 +1,5 @@
 #include <caliper_builder/session/spec_edit.h>
+#include <caliper_builder/session/instrument_commands.h>
 #include <caliper_builder/session/program_commands.h>
 
 #include <caliper_builder/spec/format.h>
@@ -405,6 +406,12 @@ struct Flattener {
                {"ratio", node.kind == LayoutNode::Kind::split && node.ratio ? json(*node.ratio) : json(nullptr)},
                {"children", std::move(children)}};
         if (node.title) n["title"] = *node.title;
+        // Version 1: the shares of a split and the minimums of its leaves.
+        if (!node.shares.empty()) n["shares"] = node.shares;
+        json mins = json::object();
+        for (const auto& c : node.children)
+            if (c.kind == LayoutNode::Kind::panel && c.min) mins[c.panel] = json::array({(*c.min)[0], (*c.min)[1]});
+        if (!mins.empty()) n["mins"] = std::move(mins);
         nodes[slot] = std::move(n);
         return id;
     }
@@ -452,6 +459,14 @@ struct Unflattener {
             if (has_ratio) out.ratio = node["ratio"].get<double>();
         }
         if (node.contains("title") && node["title"].is_string()) out.title = node["title"].get<std::string>();
+        if (node.contains("shares") && node["shares"].is_array()) {
+            if (split == "tabs" || has_ratio) {
+                error = fail("layout.invalid", "Shares belong to a split without a ratio.", base + ".shares");
+                return false;
+            }
+            for (const json& v : node["shares"]) out.shares.push_back(v.is_number() ? v.get<double>() : 0.0);
+        }
+        const json& mins = node.contains("mins") && node["mins"].is_object() ? node["mins"] : json::object();
         const json& children = node.contains("children") ? node["children"] : json::array();
         for (std::size_t i = 0; i < children.size(); ++i) {
             if (!children[i].is_string()) {
@@ -461,6 +476,16 @@ struct Unflattener {
             LayoutNode child;
             if (!build(children[i].get<std::string>(), base + ".children[" + std::to_string(i) + "]", depth + 1, child))
                 return false;
+            const auto min = mins.find(children[i].get<std::string>());
+            if (min != mins.end()) {
+                if (child.kind != LayoutNode::Kind::panel || !min->is_array() || min->size() != 2 ||
+                    !(*min)[0].is_number_integer() || !(*min)[1].is_number_integer()) {
+                    error = fail("layout.invalid", "A minimum is [columns, lines] for a panel or control leaf.",
+                                 base + ".mins." + children[i].get<std::string>());
+                    return false;
+                }
+                child.min = std::array<std::int64_t, 2>{(*min)[0].get<std::int64_t>(), (*min)[1].get<std::int64_t>()};
+            }
             out.children.push_back(std::move(child));
         }
         return true;
@@ -617,7 +642,9 @@ bool is_spec_edit_command(std::string_view name) {
            name == "panel.create" || name == "panel.patch" || name == "panel.remove" || name == "layout.place" ||
            name == "layout.set" || name == "control.create" || name == "control.patch" || name == "control.remove" ||
            name == "stage.set" || name == "stage.remove" || name == "program.create" || name == "program.patch" ||
-           name == "program.remove";
+           name == "program.remove" || name == "state.create" || name == "state.patch" || name == "state.remove" ||
+           name == "entity.set" || name == "entity.remove" || name == "annotation.set" ||
+           name == "annotation.remove" || name == "camera.save";
 }
 
 SpecEdit apply_spec_edit(const spec::Spec& s, std::string_view name, const json& raw_args,
@@ -638,6 +665,13 @@ SpecEdit apply_spec_edit(const spec::Spec& s, std::string_view name, const json&
         if (name == "stage.set" || name == "stage.remove" || name == "program.create" || name == "program.patch" ||
             name == "program.remove")
             return apply_program_edit(s, name, args, resolver);
+        // design/instrument-interface.md (instrument_commands.h)
+        if (name == "state.create" || name == "state.patch" || name == "state.remove")
+            return apply_state_edit(s, name, args, resolver);
+        if (name == "entity.set" || name == "entity.remove") return apply_entity_edit(s, name, args, resolver);
+        if (name == "annotation.set" || name == "annotation.remove")
+            return apply_annotation_edit(s, name, args, resolver);
+        if (name == "camera.save") return apply_camera_edit(s, name, args, resolver);
         return refuse(fail("command.unknown", "This is not a command that edits the open spec.", std::string(name)));
     } catch (const std::exception& e) {
         return refuse(fail("spec.internal", std::string("The edit failed unexpectedly: ") + e.what()));

@@ -21,6 +21,7 @@
 #pragma once
 #include "live/live_net_source.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -33,12 +34,16 @@ class Attachment;
 // One program that the app wants the script to run.
 struct WantedProgram {
     std::string id;
-    std::string kind;                  // "geometry" or "pixels"
+    std::string kind;                  // "geometry", "pixels", "tensor", or "operator" for a built-in operator
     std::string panel;                 // geometry: the target scene panel's id; "" otherwise
     std::string scene;                 // geometry: that panel's scene name; "" otherwise
     std::string wgsl;
     std::string sha256;                // of wgsl, lowercase hex
-    caliper_net::Json declaration;     // the declaration without wgsl
+    caliper_net::Json declaration;     // the declaration without wgsl and without params
+    // The values of the uniform `params` by name, null when the program has
+    // none. A change of the values alone goes out as PROGRAM op params, and a
+    // set carries the values of its time in its declaration.
+    caliper_net::Json params;
     // Set when the app refuses the program before it sends it: the record
     // shows it as refused and nothing goes out.
     std::string refused_code, refused_message;
@@ -118,6 +123,7 @@ private:
         uint32_t pending = 0;          // the request id of the last set
         std::string seen;              // "<state>/<error code>/<sha256>" of the last change
         std::string seen_state, seen_sha;
+        bool params_dirty = false;     // the values changed after the set of this epoch
     };
     void apply_item(const caliper_net::Json& item);
     void note_change(Entry& e);
@@ -131,34 +137,344 @@ private:
     bool was_ready_ = false;
 };
 
+// ---- ProgramSync, inline so that a test with the builder and without libcaliper links it ------------------------------------------------------------------------------
+
+namespace program_sync_detail {
+
+inline std::string str_of(const caliper_net::Json& o, const char* key) {
+    const caliper_net::Json* j = o.is_object() ? o.find(key) : nullptr;
+    return j && j->is_string() ? j->as_string() : std::string();
+}
+
+inline uint32_t u32_of(const caliper_net::Json& o, const char* key) {
+    uint64_t v = 0;
+    const caliper_net::Json* j = o.is_object() ? o.find(key) : nullptr;
+    return j && j->get_u64(&v) && v <= 0xffffffffull ? static_cast<uint32_t>(v) : 0;
+}
+
+}  // namespace program_sync_detail
+
+inline ProgramSync::Entry* ProgramSync::find(const std::string& id) {
+    for (Entry& e : entries_)
+        if (e.rec.want.id == id) return &e;
+    return nullptr;
+}
+
+inline void ProgramSync::want(std::vector<WantedProgram> programs) {
+    std::lock_guard<std::mutex> g(mu_);
+    std::vector<Entry> next;
+    next.reserve(programs.size());
+    for (WantedProgram& w : programs) {
+        Entry e;
+        if (Entry* old = find(w.id)) {
+            e = *old;
+            if (old->rec.want.sha256 != w.sha256 || old->rec.want.declaration != w.declaration ||
+                old->rec.want.scene != w.scene) {
+                e.sent_sha.clear();   // changed: send it again
+                e.sends = 0;
+                e.pending = 0;
+                e.params_dirty = false;
+            } else if (old->rec.want.params != w.params && !e.sent_sha.empty()) {
+                e.params_dirty = true;   // only the values: PROGRAM op params, no new set
+            }
+        }
+        e.rec.want = std::move(w);
+        next.push_back(std::move(e));
+    }
+    for (const Entry& old : entries_) {
+        const bool kept = std::any_of(next.begin(), next.end(),
+                                      [&](const Entry& e) { return e.rec.want.id == old.rec.want.id; });
+        if (!kept && (old.rec.host == "script" || !old.sent_sha.empty()) &&
+            std::find(removing_.begin(), removing_.end(), old.rec.want.id) == removing_.end())
+            removing_.push_back(old.rec.want.id);
+    }
+    entries_ = std::move(next);
+    for (Entry& e : entries_) {
+        // A program the app refuses itself never goes out; a removal of the
+        // same id that was queued before is dropped once it is wanted again.
+        removing_.erase(std::remove(removing_.begin(), removing_.end(), e.rec.want.id), removing_.end());
+        if (!e.rec.want.refused_code.empty()) {
+            if (e.rec.host == "script" || !e.sent_sha.empty()) removing_.push_back(e.rec.want.id);
+            e.sent_sha.clear();
+            e.pending = 0;
+            e.rec.host = "none";
+            e.rec.item = caliper_net::Json();
+            e.rec.state = "refused";
+            e.rec.error_code = e.rec.want.refused_code;
+            e.rec.error_message = e.rec.want.refused_message;
+            e.rec.line = e.rec.column = 0;
+            note_change(e);
+        }
+    }
+}
+
+inline void ProgramSync::note_change(Entry& e) {
+    const std::string sha = program_sync_detail::str_of(e.rec.item, "sha256");
+    const std::string key = e.rec.state + "/" + e.rec.error_code + "/" + sha;
+    if (key == e.seen) return;
+    const std::string before = e.seen_state, before_sha = e.seen_sha;
+    e.seen = key;
+    e.seen_state = e.rec.state;
+    e.seen_sha = sha;
+    const std::string& st = e.rec.state;
+    const bool ok = st == "compiled" || st == "running";
+    const bool was_ok = before == "compiled" || before == "running";
+    if (st == "refused" || st == "stopped") changes_.push_back({e.rec.want.id, st});
+    else if (ok && (!was_ok || sha != before_sha)) changes_.push_back({e.rec.want.id, "compiled"});
+}
+
+inline void ProgramSync::apply_item(const caliper_net::Json& item) {
+    const std::string id = program_sync_detail::str_of(item, "id");
+    Entry* e = find(id);
+    if (!e) {
+        if (std::find(removing_.begin(), removing_.end(), id) == removing_.end()) removing_.push_back(id);
+        return;
+    }
+    if (!e->rec.want.refused_code.empty()) return;
+    e->rec.item = item;
+    e->rec.host = "script";
+    // The script runs this source already (after a reconnect, say): it is
+    // not sent again, so a stopped program stays stopped.
+    if (program_sync_detail::str_of(item, "sha256") == e->rec.want.sha256) e->sent_sha = e->rec.want.sha256;
+    e->rec.state = program_sync_detail::str_of(item, "state");
+    if (e->rec.state.empty()) e->rec.state = "waiting";
+    const caliper_net::Json* err = item.find("error");
+    if (err && err->is_object()) {
+        e->rec.error_code = program_sync_detail::str_of(*err, "code");
+        e->rec.error_message = program_sync_detail::str_of(*err, "message");
+        e->rec.line = program_sync_detail::u32_of(*err, "line");
+        e->rec.column = program_sync_detail::u32_of(*err, "column");
+    } else {
+        e->rec.error_code.clear();
+        e->rec.error_message.clear();
+        e->rec.line = e->rec.column = 0;
+    }
+    note_change(*e);
+}
+
+inline void ProgramSync::poll(ProgramLink& link) {
+    const bool ready = link.ready();
+    std::vector<ProgramAnswer> answers = link.take();
+    std::lock_guard<std::mutex> g(mu_);
+    if (!ready) {
+        // No script takes programs: each wanted program waits, and is sent
+        // again once one does.
+        if (was_ready_) {
+            for (Entry& e : entries_) {
+                e.sent_sha.clear();
+                e.sends = 0;
+                e.pending = 0;
+                if (!e.rec.want.refused_code.empty()) continue;
+                e.rec.host = "none";
+                e.rec.state = "waiting";
+                e.rec.item = caliper_net::Json();
+                e.seen.clear();
+                e.seen_state.clear();
+                e.seen_sha.clear();
+            }
+            removing_.clear();
+        }
+        was_ready_ = false;
+        return;
+    }
+    was_ready_ = true;
+    const uint64_t epoch = link.epoch();
+    if (epoch != epoch_) {
+        epoch_ = epoch;
+        for (Entry& e : entries_) {
+            e.sent_sha.clear();
+            e.sends = 0;
+            e.pending = 0;
+        }
+    }
+
+    for (ProgramAnswer& a : answers) {
+        if (!a.error_code.empty()) {
+            // A refused PROGRAM: the program it set shows the refusal.
+            for (Entry& e : entries_) {
+                if (!a.request_id || e.pending != *a.request_id) continue;
+                e.pending = 0;
+                e.rec.state = "refused";
+                e.rec.error_code = "program.unavailable";
+                e.rec.error_message = "The stream refused the program (" + a.error_code + ")" +
+                                      (a.error_message.empty() ? std::string(".") : ": " + a.error_message);
+                e.rec.line = e.rec.column = 0;
+                note_change(e);
+            }
+            continue;
+        }
+        if (!a.programs.is_array()) continue;
+        std::vector<std::string> reported;
+        for (const caliper_net::Json& item : a.programs.items()) {
+            reported.push_back(program_sync_detail::str_of(item, "id"));
+            apply_item(item);
+        }
+        for (Entry& e : entries_) {
+            if (a.request_id && e.pending == *a.request_id) e.pending = 0;
+            // A program the script no longer holds (it removed its programs
+            // while no viewer watched) goes out again, a few times at most.
+            const bool held = std::find(reported.begin(), reported.end(), e.rec.want.id) != reported.end();
+            if (!held && e.pending == 0 && !e.sent_sha.empty() && e.rec.host == "script") {
+                e.sent_sha.clear();
+                e.rec.host = "none";
+                e.rec.state = "waiting";
+                e.rec.item = caliper_net::Json();
+            }
+        }
+    }
+
+    for (Entry& e : entries_) {
+        if (!e.rec.want.refused_code.empty() || e.sent_sha == e.rec.want.sha256) continue;
+        if (e.sends >= kMaxSends) continue;
+        caliper_net::wire::Program m;
+        m.op = CALIPER_NET_PROGRAM_SET;
+        m.id = e.rec.want.id;
+        m.declaration = e.rec.want.declaration;
+        if (e.rec.want.params.is_object()) m.declaration.set("params", e.rec.want.params);
+        m.wgsl = e.rec.want.wgsl;
+        m.sha256 = e.rec.want.sha256;
+        if (!e.rec.want.scene.empty()) m.scene = e.rec.want.scene;
+        const uint32_t rid = link.send(std::move(m));
+        if (rid == 0) break;   // the queue is full: the next frame tries again
+        e.pending = rid;
+        e.sent_sha = e.rec.want.sha256;
+        e.params_dirty = false;   // the set carries the values of now
+        ++e.sends;
+    }
+    // New values of a program that the script holds: they apply at its next pass.
+    for (Entry& e : entries_) {
+        if (!e.params_dirty || e.sent_sha != e.rec.want.sha256 || !e.rec.want.params.is_object()) continue;
+        caliper_net::wire::Program m;
+        m.op = CALIPER_NET_PROGRAM_PARAMS;
+        m.id = e.rec.want.id;
+        m.params = e.rec.want.params;
+        if (link.send(std::move(m)) == 0) break;
+        e.params_dirty = false;
+    }
+    while (!removing_.empty()) {
+        caliper_net::wire::Program m;
+        m.op = CALIPER_NET_PROGRAM_REMOVE;
+        m.id = removing_.front();
+        if (link.send(std::move(m)) == 0) break;
+        removing_.erase(removing_.begin());
+    }
+}
+
+inline std::vector<ProgramRecord> ProgramSync::records() const {
+    std::lock_guard<std::mutex> g(mu_);
+    std::vector<ProgramRecord> out;
+    out.reserve(entries_.size());
+    for (const Entry& e : entries_) out.push_back(e.rec);
+    return out;
+}
+
+inline std::vector<ProgramChange> ProgramSync::take_changes() {
+    std::lock_guard<std::mutex> g(mu_);
+    std::vector<ProgramChange> out;
+    out.swap(changes_);
+    return out;
+}
+
 }  // namespace caliper_live
 
 #if defined(CALIPER_WITH_BUILDER) && CALIPER_WITH_BUILDER
 // ---- the builder session's ProgramHost (the caliper executable only) --------------------------
 #include "sha256.h"
 
+#include <caliper_builder/operators/operators.h>
+#include <caliper_builder/session/chain_hooks.h>
 #include <caliper_builder/session/program_host.h>
+#include <caliper_builder/session/session.h>
+#include <caliper_builder/session/values.h>
 #include <caliper_builder/spec/instrument.h>
 #include <caliper_builder/spec/program.h>
 
 #include <nlohmann/json.hpp>
+
+#include <cmath>
+#include <functional>
+#include <map>
 
 namespace caliper_live {
 
 class AppProgramHost final : public caliper_builder::ProgramHost {
 public:
     // The programs of `spec`, each with its declaration, its target scene and
-    // its hash; the next pump() sends what differs. Frame thread.
+    // its hash, and the program of each operator that runs in the script
+    // (design/instrument-interface.md, Operator Programs); the next pump()
+    // sends what differs. Frame thread.
     void reconcile(const caliper_builder::spec::Spec& spec) override {
-        std::vector<WantedProgram> wanted;
-        for (const auto& p : spec.programs) wanted.push_back(wanted_program(spec, p));
-        sync_.want(std::move(wanted));
+        spec_ = spec;
+        operators_.clear();
+        for (const auto& source : spec_.sources)
+            if (caliper_builder::operator_runs_in_script(spec_, source, 0)) {
+                Operator op;
+                op.source = source;
+                op.source.catalog = root_catalog(spec_, source);
+                operators_.push_back(std::move(op));
+            }
+        rebuild();
     }
 
     std::vector<caliper_builder::ProgramStatus> status() const override {
         std::vector<caliper_builder::ProgramStatus> out;
         for (const ProgramRecord& r : sync_.records()) out.push_back(to_status(r));
         return out;
+    }
+
+    // What a reference reads now (ValueStore::value() in the app).
+    using Evaluate = std::function<nlohmann::json(const caliper_builder::spec::Reference&)>;
+
+    // Evaluates the references of each program's params with `evaluate` and,
+    // when `resolver` is given, asks it for the shape of each operator's
+    // input. A changed value goes out at the next pump() as PROGRAM op params
+    // (applied at the next pass, with no new hash), and a changed shape sends
+    // the operator again. Returns whether anything changed. Frame thread.
+    bool refresh(const Evaluate& evaluate, const caliper_builder::spec::SourceResolver* resolver) {
+        bool changed = false;
+        if (evaluate)
+            for (auto& [id, params] : params_) {
+                (void)id;
+                for (auto& [name, slot] : params) {
+                    (void)name;
+                    if (!caliper_builder::spec::is_reference(slot.place)) continue;
+                    const nlohmann::json v = evaluate(std::get<caliper_builder::spec::Reference>(slot.place));
+                    if (v.is_number() && std::isfinite(v.get<double>()) && v.get<double>() != slot.value) {
+                        slot.value = v.get<double>();
+                        changed = true;
+                    }
+                }
+            }
+        if (resolver && *resolver)
+            for (Operator& op : operators_) {
+                std::vector<std::int64_t> shape;
+                if (op.source.catalog)
+                    if (auto r = (*resolver)(*op.source.catalog))
+                        if (r->shape) shape = *r->shape;
+                if (shape != op.shape) {
+                    op.shape = std::move(shape);
+                    changed = true;
+                }
+            }
+        if (changed) rebuild();
+        return changed;
+    }
+
+    // Once per frame with the open session: refresh() with the session's
+    // values, and with its catalog every kShapeFrames frames, then the sync
+    // and the program events. Frame thread.
+    void pump(ProgramLink& link, caliper_builder::Session* session) {
+        if (session) {
+            const caliper_builder::ValueStore& values = session->values();
+            const Evaluate evaluate = [&values](const caliper_builder::spec::Reference& r) { return values.value(r); };
+            if (!operators_.empty() && frames_++ % kShapeFrames == 0) {
+                const caliper_builder::spec::SourceResolver resolver = session->source_resolver();
+                refresh(evaluate, &resolver);
+            } else if (!params_.empty()) {
+                refresh(evaluate, nullptr);
+            }
+        }
+        pump(link, session ? &session->events() : nullptr);
     }
 
     // Once per frame: runs the sync through `link` and pushes one `program`
@@ -174,17 +490,21 @@ public:
     }
 
     // The wanted program of `p`: its declaration without the source, the
-    // scene of a geometry output's panel, and the SHA-256 of the source.
+    // scene of a geometry output's panel, the SHA-256 of the source, and its
+    // params with `values` in place of the references (each reference's
+    // default, else 0, when `values` has none).
     static WantedProgram wanted_program(const caliper_builder::spec::Spec& spec,
-                                        const caliper_builder::spec::Program& p) {
+                                        const caliper_builder::spec::Program& p,
+                                        const std::map<std::string, double>* values = nullptr) {
         namespace sp = caliper_builder::spec;
         WantedProgram w;
         w.id = p.id;
         w.wgsl = p.wgsl;
         w.sha256 = caliper_host::sha256_hex(p.wgsl.data(), p.wgsl.size());
         const bool geometry = p.output.kind == sp::OutputKind::geometry;
-        w.kind = geometry ? "geometry" : "pixels";
-        nlohmann::json out = {{"kind", w.kind}};
+        const bool tensor = p.output.kind == sp::OutputKind::tensor;
+        w.kind = p.builtin ? "operator" : sp::output_kind_name(p.output.kind);
+        nlohmann::json out = {{"kind", sp::output_kind_name(p.output.kind)}};
         if (geometry) {
             w.panel = p.output.panel;
             for (const auto& panel : spec.panels) {
@@ -209,6 +529,8 @@ public:
             if (p.output.style.vmin) style["vmin"] = *p.output.style.vmin;
             if (p.output.style.vmax) style["vmax"] = *p.output.style.vmax;
             if (!style.empty()) out["style"] = style;
+        } else if (tensor) {
+            out["shape"] = p.output.shape;
         } else {
             out["width"] = p.output.width;
             out["height"] = p.output.height;
@@ -226,13 +548,32 @@ public:
         if (p.limits.every) limits["every"] = *p.limits.every;
         if (!limits.empty()) d["limits"] = limits;
         if (p.workgroups) d["workgroups"] = *p.workgroups;
+        if (p.builtin) d["builtin"] = *p.builtin;
         const std::string text = d.dump();
         std::string err;
         caliper_net::Json::parse(text.data(), text.size(), &w.declaration, &err);
+        if (!p.params.empty()) {
+            nlohmann::json params = nlohmann::json::object();
+            for (const auto& [name, place] : p.params) {
+                double v = 0;
+                if (!sp::is_reference(place)) {
+                    v = std::get<double>(place);
+                } else if (values && values->count(name)) {
+                    v = values->at(name);
+                } else {
+                    const nlohmann::json& fallback = std::get<sp::Reference>(place).fallback;
+                    if (fallback.is_number()) v = fallback.get<double>();
+                }
+                params[name] = v;
+            }
+            const std::string ptext = params.dump();
+            caliper_net::Json::parse(ptext.data(), ptext.size(), &w.params, &err);
+        }
         if (p.id.size() > CALIPER_NET_PROGRAM_ID_MAX) {
             w.refused_code = "program.bad_target";
             w.refused_message = "A program id is at most " + std::to_string(CALIPER_NET_PROGRAM_ID_MAX) +
-                                " bytes on the wire, so that its view program.<id> fits a view name.";
+                                " bytes on the wire, so that its view program.<id> fits a view name" +
+                                (p.builtin ? "; give the operator's source a shorter id." : ".");
         } else if (geometry && w.scene.empty()) {
             w.refused_code = "program.bad_target";
             w.refused_message = "The panel " + p.output.panel + " is not a scene panel bound to a live scene.";
@@ -286,8 +627,82 @@ public:
         return s;
     }
 
+    // The catalog id of the root of `source`'s chain: its own catalog, or the
+    // catalog of the first source up its `from` links that has one.
+    static std::optional<std::string> root_catalog(const caliper_builder::spec::Spec& spec,
+                                                   const caliper_builder::spec::Source& source) {
+        const caliper_builder::spec::Source* s = &source;
+        for (std::size_t depth = 0; s && depth <= spec.sources.size(); ++depth) {
+            if (s->catalog) return s->catalog;
+            if (!s->from) return std::nullopt;
+            const caliper_builder::spec::Source* up = nullptr;
+            for (const auto& c : spec.sources)
+                if (c.id == *s->from) up = &c;
+            s = up;
+        }
+        return std::nullopt;
+    }
+
 private:
+    // The frames between two reads of the operators' input shapes.
+    static constexpr std::uint64_t kShapeFrames = 30;
+
+    // An operator that runs in the script: its source with the root's
+    // catalog, and the input shape the catalog gave last (empty before).
+    struct Operator {
+        caliper_builder::spec::Source source;
+        std::vector<std::int64_t> shape;
+    };
+    // One param of a program: its place in the spec and its value now.
+    struct ParamSlot {
+        caliper_builder::spec::ValueOr<double> place;
+        double value = 0;
+    };
+
+    // The wanted programs from the spec, the operators and the params' values.
+    void rebuild() {
+        namespace sp = caliper_builder::spec;
+        std::vector<WantedProgram> wanted;
+        std::map<std::string, std::map<std::string, ParamSlot>> next;
+        for (const auto& p : spec_.programs) {
+            std::map<std::string, double> values;
+            for (const auto& [name, place] : p.params) {
+                ParamSlot slot{place, 0};
+                if (!sp::is_reference(place)) {
+                    slot.value = std::get<double>(place);
+                } else if (auto old = params_.find(p.id); old != params_.end() && old->second.count(name)) {
+                    slot.value = old->second.at(name).value;   // the last evaluated value
+                } else if (std::get<sp::Reference>(place).fallback.is_number()) {
+                    slot.value = std::get<sp::Reference>(place).fallback.get<double>();
+                }
+                values[name] = slot.value;
+                next[p.id][name] = slot;
+            }
+            wanted.push_back(wanted_program(spec_, p, &values));
+        }
+        for (const Operator& op : operators_) {
+            const sp::Program p = caliper_builder::operators::operator_program(op.source, 0, op.shape);
+            // Before the catalog gives the input's shape, the operator waits
+            // and program.status reports it with host none.
+            if (op.shape.empty()) continue;
+            WantedProgram w = wanted_program(spec_, p);
+            if (p.output.shape.empty()) {
+                w.refused_code = "spec.operator_shape";
+                w.refused_message = "The operator " + std::string(sp::to_string(op.source.transforms[0].op)) +
+                                    " takes a tensor of rank 2, and " + op.source.catalog.value_or("its input") +
+                                    " has rank " + std::to_string(op.shape.size()) + ".";
+            }
+            wanted.push_back(std::move(w));
+        }
+        params_ = std::move(next);
+        sync_.want(std::move(wanted));
+    }
+
     ProgramSync sync_;
+    caliper_builder::spec::Spec spec_;
+    std::vector<Operator> operators_;
+    std::map<std::string, std::map<std::string, ParamSlot>> params_;   // by program id, then name
+    std::uint64_t frames_ = 0;
 };
 
 }  // namespace caliper_live
