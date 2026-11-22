@@ -31,9 +31,10 @@ META = {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
 # The decisions the person gives at the cards, through the app's test seam.
 APPROVALS = ["approve spec.new mcp", "approve panel.create mcp", "approve control.create mcp",
              "approve run.set_param mcp"]
-# The scripted input of the hidden app: a click in the middle of the model's scene view. It waits
-# for the frames that the MCP steps need first, and for the view to be drawn.
-UI_SCRIPT = "wait 300; pick model 0.5 0.5; wait 30"
+# The scripted input of the hidden app (the steps of CALIPER_TEST_UI, read only with --hidden): it
+# waits until the spec page shows the panel "world", then until a call of events.wait for picks is
+# held, and only then clicks in the middle of the panel. The pick thus answers a held call.
+UI_SCRIPT = "panel world; held pick; pick_panel world 0.5 0.5"
 
 
 class Fail(Exception):
@@ -229,10 +230,18 @@ def run(a):
                 if not found:
                     raise Fail(f"{name}: no event matches {s['until']}")
                 result[name] = found
-        if "pick" in result:
-            for k in ("entity", "primitive", "index", "row_id", "position"):
-                if k not in result["pick"]:
-                    raise Fail(f"the pick event lacks {k}: {result['pick']}")
+        if "pick" not in result:
+            raise Fail("the transcript gave no pick event")
+        for k in ("panel", "entity", "primitive", "index", "row_id", "position"):
+            if k not in result["pick"]:
+                raise Fail(f"the pick event lacks {k}: {result['pick']}")
+        if not isinstance(result["pick"]["index"], int):
+            raise Fail(f"the pick event has no item index: {result['pick']}")
+        held = next((i for i, l in enumerate(aout.lines) if "[ui] events.wait is held for pick" in l), None)
+        picked = next((i for i, l in enumerate(aout.lines) if "[ui] pick_panel world" in l), None)
+        result["ui_log"] = [l for l in aout.lines if l.startswith("[ui]")]
+        if held is None or picked is None or picked < held:
+            raise Fail(f"events.wait was not held before the pick: {result['ui_log']}")
         return result
     finally:
         for p in reversed(procs):
