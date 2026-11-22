@@ -62,7 +62,8 @@ std::optional<ControlKind> control_kind_from_name(std::string_view name) {
 }
 
 bool control_kind_built(ControlKind kind) {
-    return kind == ControlKind::slider || kind == ControlKind::button || kind == ControlKind::toggle;
+    // The transport joins when the time transport is built (validate_history.cpp).
+    return kind != ControlKind::transport;
 }
 
 bool operator==(const ControlTarget& a, const ControlTarget& b) { return a.kind == b.kind && a.name == b.name; }
@@ -122,19 +123,20 @@ std::string control_target_string(const ControlTarget& target) {
 }
 
 bool control_takes_target(ControlKind kind, const ControlTarget& target) {
+    using K = ControlTarget::Kind;
+    // The kinds that hold a value bind `value` or a state variable; the type
+    // of the state is the validator's check (validate_states.cpp).
+    const bool holds = target.kind == K::value || target.kind == K::state;
     switch (kind) {
-        case ControlKind::slider:
-            return target.kind == ControlTarget::Kind::param || target.kind == ControlTarget::Kind::value;
-        case ControlKind::button:
-            return target.kind == ControlTarget::Kind::action || target.kind == ControlTarget::Kind::run_pause;
-        case ControlKind::toggle:
-            return target.kind == ControlTarget::Kind::intervene || target.kind == ControlTarget::Kind::param;
+        case ControlKind::slider: return holds || target.kind == K::param;
+        case ControlKind::button: return target.kind == K::action || target.kind == K::run_pause;
+        case ControlKind::toggle: return holds || target.kind == K::intervene || target.kind == K::param;
         case ControlKind::range:
         case ControlKind::picker:
         case ControlKind::text:
-        case ControlKind::segmented:
-        case ControlKind::readout:
-        case ControlKind::transport: return false;
+        case ControlKind::segmented: return holds;
+        case ControlKind::readout: return false;   // a readout binds nothing
+        case ControlKind::transport: return target.kind == K::cursor;
     }
     return false;
 }
