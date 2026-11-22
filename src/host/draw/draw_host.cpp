@@ -2,6 +2,7 @@
 #include "draw/draw_host.h"
 
 #include <caliper_builder/programs/pieces.h>
+#include <caliper_builder/programs/sandbox.h>
 
 #include <algorithm>
 #include <cstring>
@@ -20,6 +21,7 @@ const char* state_name(DrawState s) {
         case DrawState::running: return "running";
         case DrawState::refused: return "refused";
         case DrawState::stopped: return "stopped";
+        case DrawState::review: return "review";
     }
     return "waiting";
 }
@@ -30,6 +32,19 @@ Verdict refusal(const char* code, std::string message, std::string where = {}) {
     v.message = std::move(message);
     v.where = std::move(where);
     return v;
+}
+
+// Whether the program `p` of `spec` may draw its resolved `piece`: always in the person's own
+// spec, and in a foreign spec only when provenance.reviewed holds program:<id> with the 64 hex
+// digits of the hash of the piece that would compile, whatever its source (library, workspace
+// or inline). Else program.needs_review.
+Verdict review(const cs::Spec& spec, const cs::Program& p, const cs::Piece& piece) {
+    if (!spec.provenance.foreign) return {};
+    const std::string hash = cp::piece_hash(piece);
+    const std::string hex = hash.substr(hash.find(':') + 1);
+    const cp::Verdict v = cp::check_provenance(spec.provenance, cs::program_target(p), hex);
+    if (v.ok()) return {};
+    return refusal(cp::kProgramNeedsReview, v.message, "piece");
 }
 
 // "program:<id>/<resource>" as its two names; false for another form.
@@ -178,6 +193,8 @@ void DrawHost::reconcile(const cs::Spec& spec) {
             r.draw.refused = v;
         } else if (!r.draw.piece.draw) {
             continue;   // a piece that only publishes draws nothing in a viewer
+        } else if (Verdict v = review(spec, p, r.draw.piece); !v.ok()) {
+            r.draw.refused = v;   // nothing of a foreign piece compiles before a review of its hash
         } else {
             const cs::CameraMode camera = r.draw.piece.draw->camera;
             const auto it = cameras.find(r.panel);
@@ -221,10 +238,24 @@ void DrawHost::reconcile(const cs::Spec& spec) {
         }
     }
     for (const Record& r : records_) {
-        if (r.draw.refused.ok()) continue;
+        if (r.draw.refused.ok()) {
+            // A program that left review waits for its view to install it; only the host sets review.
+            bool was_review = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                const auto it = status_.find(r.program);
+                was_review = it != status_.end() && it->second.state == DrawState::review;
+            }
+            if (was_review) report(r.program, r.panel, DrawStatus{});
+            continue;
+        }
         DrawStatus s;
-        s.state = DrawState::refused;
-        s.error = r.draw.refused;
+        if (r.draw.refused.code == cp::kProgramNeedsReview) {
+            s.state = DrawState::review;   // a state, not an error: no event
+        } else {
+            s.state = DrawState::refused;
+            s.error = r.draw.refused;
+        }
         report(r.program, r.panel, s);
     }
 }

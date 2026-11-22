@@ -51,7 +51,10 @@ struct WantedProgram {
     // set carries the values of its time in its declaration.
     caliper_net::Json params;
     // Set when the app refuses the program before it sends it: the record
-    // shows it as refused and nothing goes out.
+    // shows it as refused and nothing goes out. The code
+    // program.needs_review (kNeedsReview) holds back a program of a foreign
+    // spec whose hash nobody reviewed: the record shows the state review,
+    // without an error, and nothing goes out either.
     std::string refused_code, refused_message;
     // An instance of a piece, when `piece` is an object: the pin {name,
     // version, hash}, the manifest, the bindings, the segments of `common`,
@@ -100,6 +103,14 @@ private:
     NetSource* source() const;
     const Attachment& attachment_;
 };
+
+// The refusal of a program of a foreign spec whose hash is not in
+// provenance.reviewed (design/gpu-programs.md, Provenance): its state is
+// review, and it never goes out to the script, which would compile it and
+// relay its draw half to the viewers. The same string as
+// caliper_builder::programs::kProgramNeedsReview, which this part of the
+// header cannot include.
+inline constexpr const char* kNeedsReview = "program.needs_review";
 
 // One wanted program as the app shows it.
 struct ProgramRecord {
@@ -184,9 +195,14 @@ inline void ProgramSync::want(std::vector<WantedProgram> programs) {
     std::lock_guard<std::mutex> g(mu_);
     std::vector<Entry> next;
     next.reserve(programs.size());
+    // For each wanted program: whether the script may hold an earlier version of it, and whether
+    // the app refused that earlier version itself.
+    std::vector<char> was_out(programs.size(), 0), was_refused(programs.size(), 0);
     for (WantedProgram& w : programs) {
         Entry e;
         if (Entry* old = find(w.id)) {
+            was_out[next.size()] = old->rec.host == "script" || !old->sent_sha.empty();
+            was_refused[next.size()] = !old->rec.want.refused_code.empty();
             e = *old;
             if (old->rec.want.sha256 != w.sha256 || old->rec.want.declaration != w.declaration ||
                 old->rec.want.scene != w.scene || old->rec.want.piece != w.piece || old->rec.want.bind != w.bind ||
@@ -210,19 +226,33 @@ inline void ProgramSync::want(std::vector<WantedProgram> programs) {
             removing_.push_back(old.rec.want.id);
     }
     entries_ = std::move(next);
-    for (Entry& e : entries_) {
-        // A program the app refuses itself never goes out; a removal of the
-        // same id that was queued before is dropped once it is wanted again.
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+        Entry& e = entries_[i];
+        // A program the app refuses itself never goes out, and the script
+        // removes an earlier version of it, even one sent and not yet
+        // reported; a removal of the same id that was queued before is
+        // dropped once it is wanted again.
         removing_.erase(std::remove(removing_.begin(), removing_.end(), e.rec.want.id), removing_.end());
+        if (e.rec.want.refused_code.empty() && was_refused[i]) {
+            // The app's own refusal ended (a review, say): the program waits to go out.
+            e.rec.host = "none";
+            e.rec.item = caliper_net::Json();
+            e.rec.state = "waiting";
+            e.rec.error_code.clear();
+            e.rec.error_message.clear();
+            e.rec.line = e.rec.column = 0;
+            note_change(e);
+        }
         if (!e.rec.want.refused_code.empty()) {
-            if (e.rec.host == "script" || !e.sent_sha.empty()) removing_.push_back(e.rec.want.id);
+            if (e.rec.host == "script" || !e.sent_sha.empty() || was_out[i]) removing_.push_back(e.rec.want.id);
             e.sent_sha.clear();
             e.pending = 0;
             e.rec.host = "none";
             e.rec.item = caliper_net::Json();
-            e.rec.state = "refused";
-            e.rec.error_code = e.rec.want.refused_code;
-            e.rec.error_message = e.rec.want.refused_message;
+            const bool review = e.rec.want.refused_code == kNeedsReview;
+            e.rec.state = review ? "review" : "refused";
+            e.rec.error_code = review ? std::string() : e.rec.want.refused_code;
+            e.rec.error_message = review ? std::string() : e.rec.want.refused_message;
             e.rec.line = e.rec.column = 0;
             note_change(e);
         }
@@ -922,8 +952,21 @@ private:
                 values[name] = slot.value;
                 next[p.id][name] = slot;
             }
-            if (p.piece) wanted.push_back(wanted_instance(p, piece ? &*piece : nullptr, values));
-            else wanted.push_back(wanted_program(spec_, p, &values));
+            WantedProgram w = p.piece ? wanted_instance(p, piece ? &*piece : nullptr, values)
+                                      : wanted_program(spec_, p, &values);
+            // A program of a foreign spec runs only after a review of its hash: the source's
+            // SHA-256 for the one-pass form, the 64 hex digits of the piece's hash for an
+            // instance, whatever the piece's source. wanted_instance() has checked that hash
+            // against the piece's text already, thus the reviewed hash is the text that would go out.
+            if (w.refused_code.empty() && spec_.provenance.foreign) {
+                const caliper_builder::programs::Verdict v =
+                    caliper_builder::programs::check_provenance(spec_.provenance, sp::program_target(p), w.sha256);
+                if (!v.ok()) {
+                    w.refused_code = kNeedsReview;
+                    w.refused_message = v.message;
+                }
+            }
+            wanted.push_back(std::move(w));
         }
         for (const Operator& op : operators_) {
             const sp::Program p = caliper_builder::operators::operator_program(op.source, 0, op.shape);

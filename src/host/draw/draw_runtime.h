@@ -150,7 +150,9 @@ struct Label {
 };
 
 // The state of the program in this view (design/programmable-graphics.md, Status).
-enum class DrawState { waiting, compiled, running, refused, stopped };
+// review: a program of a foreign spec whose piece hash nobody reviewed yet
+// (design/gpu-programs.md, Provenance); the host installs nothing for it.
+enum class DrawState { waiting, compiled, running, refused, stopped, review };
 
 struct DrawStatus {
     DrawState state = DrawState::waiting;

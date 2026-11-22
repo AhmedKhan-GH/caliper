@@ -39,7 +39,7 @@ struct ProgramError {
 // (design/programmable-graphics.md, Program Commands): program.status's
 // `draw` object.
 struct DrawStatus {
-    std::string state = "waiting";                // "waiting", "compiled", "running", "refused" or "stopped"
+    std::string state = "waiting";                // "waiting", "review", "compiled", "running", "refused" or "stopped"
     std::optional<double> frame_ms;               // GPU time of the last frame; null when unknown
     double frame_limit_ms = 4;                    // the piece's draw.frame_ms
     std::uint64_t memory_bytes = 0;               // resources, buffer inputs, draw buffers and targets

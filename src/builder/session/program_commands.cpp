@@ -207,7 +207,7 @@ json instance_status(const spec::Spec& s, const spec::Program& p, const ProgramS
     if (drawn && drawn->draw) out["draw"] = draw_status_json(*drawn->draw);
     if (!found.error && found.piece.draw && !out.contains("draw")) {
         const spec::Draw& d = *found.piece.draw;
-        const std::string state = out["state"] == "refused" ? "refused" : "waiting";
+        const std::string state = out["state"] == "refused" ? "refused" : out["state"] == "review" ? "review" : "waiting";
         out["draw"] = {{"state", state},
                        {"frame_ms", nullptr},
                        {"frame_limit_ms", d.frame_ms.value_or(spec::piece_limits::kFrameMsDefault)},
