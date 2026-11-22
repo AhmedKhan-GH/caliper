@@ -1,12 +1,12 @@
 # Web and Embedding
 
-Web and Embedding covers showing Caliper inside another program, through the embeddable host interface, and inside a web page, through the browser elements.
+Caliper can run inside another program through the embeddable host interface. It can also run inside a web page through the browser elements.
 
 ## Guides
 
-- [Program Embedding](program-embedding.md)
+- [Program Embedding](program-embedding.md): Show Caliper inside another program.
 
 ## Reference
 
-- [Embedding API](embedding-api.md)
-- [Browser Elements](browser-elements.md)
+- [Embedding API](embedding-api.md): The embeddable host interface.
+- [Browser Elements](browser-elements.md): The elements that show Caliper inside a web page.

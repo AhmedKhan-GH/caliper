@@ -1,6 +1,6 @@
 # Applets
 
-Applets covers the shared libraries that the Caliper app loads at run time: how to write and debug one, how the host renders and contains it, and the contract and services it builds against.
+Applets are shared libraries that the Caliper app loads at run time. These pages show how to write and debug an applet. They also describe how the host renders and contains it, and the contract and services it uses.
 
 ## Tutorials
 
@@ -11,7 +11,7 @@ Applets covers the shared libraries that the Caliper app loads at run time: how 
 
 - [Applet Debugging](applet-debugging.md)
 
-The [ML Applet Cookbook](https://github.com/AhmedKhan-GH/caliper/blob/main/docs/applets/ml-applet-cookbook.md) collects patterns from the applets in this repository. It stays in the repository and is not published on this site, because the applets are not shipped.
+The [ML Applet Cookbook](https://github.com/AhmedKhan-GH/caliper/blob/main/docs/applets/ml-applet-cookbook.md) collects patterns from the applets in this repository. It stays in the repository and does not appear on this site, because the applets are not shipped.
 
 ## Concepts
 

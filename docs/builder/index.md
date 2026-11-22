@@ -1,7 +1,7 @@
 # Builder
 
-Builder covers the builder pane, where a spec is built by hand on the spec page.
+The builder pane lets you build a spec by hand on the spec page.
 
 ## Reference
 
-- [Builder Pane](builder-pane.md)
+- [Builder Pane](builder-pane.md): How the pane works on the spec page.
