@@ -353,6 +353,28 @@ def test_the_gate_holds_snapshots_back_between_passes(monkeypatch):
     assert not r.due("v", r.default_interval, time.perf_counter())
 
 
+def test_a_closed_ring_leaves_the_cadence():
+    # A server that closes takes its ring out of the shared cadence, so that later steps neither
+    # keep the programs at the share of attached views nor gate the scene colors; a ring that
+    # empties after another took its place leaves the newer one registered.
+    r, _ = _subscribed_ring()
+    r2, _ = _subscribed_ring()
+    try:
+        r.changed()
+        assert P._VIEWS["ring"] is r and P.ACTIVE
+        r2.changed()
+        assert P._VIEWS["ring"] is r2 and not r.gate_open
+        r.views["v"].groups.clear()
+        r.changed()                                  # the old ring empties: the new one stays
+        assert P._VIEWS["ring"] is r2 and P.ACTIVE
+        r2.close()
+        assert P._VIEWS["ring"] is None and not r2.registered
+        r2.changed()                                 # a link that leaves after the close
+        assert P._VIEWS["ring"] is None
+    finally:
+        P.views(None)
+
+
 def test_the_ring_follows_the_clock_again_when_the_checkpoints_stop(monkeypatch):
     monkeypatch.setattr(P, "views", lambda ring: None)
     r, plan = _subscribed_ring()

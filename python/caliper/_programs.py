@@ -1083,6 +1083,17 @@ def views(ring) -> None:
         _set_active()
 
 
+def views_closed(ring) -> None:
+    """The ring ``ring`` has nothing to take any more, or its server closed: the shared cadence
+    stops gating it, unless another ring has taken its place already."""
+    with _LOCK:
+        if _VIEWS["ring"] is not ring:
+            return
+        ring.release_gate()
+        _VIEWS["ring"] = None
+        _set_active()
+
+
 def pass_next() -> bool:
     """Whether the next step may do the work that viewers ask for: always while the shared
     cadence is off, else when the checkpoint made the next step a pass."""

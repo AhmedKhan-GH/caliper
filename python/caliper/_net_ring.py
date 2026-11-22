@@ -354,12 +354,15 @@ class NetRing:
         shared cadence whether this ring has snapshots to take."""
         self.next_due = 0.0
         with self.lock:
-            busy = (any(v.groups for v in self.views.values())
-                    or any(s.watched for s in self.series.values()))
+            busy = not self.closed and (any(v.groups for v in self.views.values())
+                                        or any(s.watched for s in self.series.values()))
         if busy != self.registered:
             self.registered = busy
             from . import _programs
-            _programs.views(self if busy else None)
+            if busy:
+                _programs.views(self)
+            else:
+                _programs.views_closed(self)        # only while no other ring took its place
 
     # -- the pass gate (caliper._programs, on the training thread) --------------
     def step_tick(self, step: int, now: float) -> None:
@@ -804,7 +807,14 @@ class NetRing:
             forget(name)
 
     def close(self) -> None:
+        """The server closed: the shared cadence stops gating this ring, so that a later step
+        neither keeps the programs at the share of attached views nor gates the scene colors for
+        a route that is gone."""
         self.closed = True
+        if self.registered:
+            self.registered = False
+            from . import _programs
+            _programs.views_closed(self)
 
     def views_list(self) -> list:
         return list(self.views)
