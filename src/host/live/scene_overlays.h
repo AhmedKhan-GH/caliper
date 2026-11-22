@@ -35,6 +35,9 @@ struct SceneOverlayInput {
     // selection count, the scale bar with its label and a stage's message:
     // no label covers them, as no label covers a ring. Null when there are none.
     const std::vector<caliper_host::LabelRect>* keep_clear = nullptr;
+    // One priority for each label, lower placed first, in place of the default (an annotation's
+    // index, else 1000 and its index); null for the default.
+    const std::vector<int>* priorities = nullptr;
 };
 
 void draw_scene_overlays(const SceneOverlayInput& input);

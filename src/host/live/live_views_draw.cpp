@@ -1404,6 +1404,7 @@ void draw_scene(CaliperCore* core, CaliperLiveViewsState* S, View& v) {
     const uint32_t clear = ImGui::GetColorU32(ImGuiCol_WindowBg) | 0xff000000u;
     std::string why;
     const uint64_t uploaded = sc->counts().bytes_total;
+    sc->set_entity_filter("", nullptr);   // the app's window draws every entity; a panel filters its own draws
     if (!sc->render((uint32_t)want_w, (uint32_t)want_h, core->scale, clear, &why)) sc->note(why);
     if (const uint64_t copied = sc->counts().bytes_total - uploaded)   // the class table's texture
         caliper_stats::note_copy(core, v.name, copied);

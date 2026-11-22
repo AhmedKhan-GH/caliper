@@ -81,7 +81,7 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
         b.height = std::ceil(size.y) + 2 * pad;
         // An annotation's text first, then the item labels, nearest first.
         const bool first = in.annotations && i < in.annotations->size() && (*in.annotations)[i];
-        b.priority = (first ? 0 : 1000) + (int)i;
+        b.priority = in.priorities && i < in.priorities->size() ? (*in.priorities)[i] : (first ? 0 : 1000) + (int)i;
         boxes.push_back(b);
     }
     // The markers' rings: drawn at their anchors over the picture, and kept free of labels.

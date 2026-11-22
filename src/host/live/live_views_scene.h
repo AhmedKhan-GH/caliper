@@ -28,7 +28,12 @@ struct SceneClasses;
 }  // namespace caliper_net::wire
 namespace caliper_scene {
 class StageSource;
+class FramePick;
 }  // namespace caliper_scene
+namespace caliper_draw {
+class DrawFeed;
+struct PickedItem;
+}  // namespace caliper_draw
 
 namespace caliper_live_views {
 
@@ -104,6 +109,13 @@ struct SceneRectOptions {
     // The axes mark in the picture's bottom-right corner (the option axes): an arrow for each of
     // x, y and z that turns with the camera, in a 3-D scene. A live scene has no ground grid.
     bool axes = false;
+    // The entity path patterns of a live scene panel (scene_path_matches): the panel draws, picks
+    // and labels the entities that match one of `include` (every entity when it is empty) and
+    // none of `exclude`.
+    std::vector<std::string> include, exclude;
+    // The panel's programs (draw/draw_host.h), which the view draws after the scene, picks
+    // through its ID target and labels with their text tables; null: none.
+    caliper_draw::DrawFeed* draw_feed = nullptr;
     // The panel's stages (scene/stage_cache.h), or null for the built-in programs, and a line that
     // the picture shows at its bottom, such as a stage's refusal with its line and column.
     caliper_scene::StageSource* stages = nullptr;
@@ -125,6 +137,14 @@ struct SceneRectState {
     bool seam_asked = false; // the request in flight is the seam pick's
     std::string up_applied;  // the option `up` that was applied, so that it is applied once
     std::string camera_applied;   // the key of the option `view_camera` that was applied, the same way
+    // A click's pick of the programs, read from the frame's ID target beside the entities' pick
+    // pass (scene/pick.h FramePick), and what each of the two answered so far.
+    std::shared_ptr<caliper_scene::FramePick> frame_pick;
+    bool entity_pending = false, frame_pending = false, entity_dropped = false;
+    std::string entity_detail;    // the entities' hit, "" for none
+    float entity_depth = 1.0f;
+    std::string program_detail;   // the programs' hit, "" for none
+    float program_depth = 1.0f;
 };
 
 // Asks for a pick at (u, v), each from 0 to 1 across the rectangle, at the next draw, as if the
@@ -136,6 +156,16 @@ void pick_scene_rect(SceneRectState& state, float u, float v);
 // the JSON text the scene view gives (live_scene.h: pick_detail(), select_polygon(); "{}" for a
 // cleared selection).
 using SceneRectSink = std::function<void(const char* type, const std::string& detail)>;
+
+// Whether an entity path matches a pattern of a panel's include or exclude: segments split at
+// "/", "*" matches one segment and "**" any number of them, none included; every other segment
+// matches itself. At most 16 segments are compared, as a path has.
+bool scene_path_matches(const std::string& pattern, const std::string& path);
+
+// The detail of a program's pick as the pick event carries it (design/programmable-graphics.md,
+// Picking): program, item, step, the item map's fields by name and index, the first four
+// integer fields as tensor indices.
+std::string program_pick_detail(const caliper_draw::PickedItem& picked);
 
 enum class SceneRectResult { drawn, missing, too_small };
 

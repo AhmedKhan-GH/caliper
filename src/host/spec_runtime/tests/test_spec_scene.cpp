@@ -2,6 +2,7 @@
 // window: the events of a scene panel's picks and selections, and the test
 // seam that asks for a pick.
 #include "spec_runtime/spec_runtime.h"
+#include "live/live_views_scene.h"   // scene_path_matches
 
 #include <caliper_builder/session/events.h>
 #include <caliper_builder/spec/format.h>
@@ -53,6 +54,27 @@ TEST_CASE("scene panel: the test seam asks for a pick only in a scene panel of t
     CHECK(runtime.pick_scene("world", 0.5f, 0.5f));
     CHECK_FALSE(runtime.pick_scene("lr", 0.5f, 0.5f));      // a control
     CHECK_FALSE(runtime.pick_scene("nothing", 0.5f, 0.5f));
+}
+
+TEST_CASE("scene panel: include and exclude patterns match a path by segments, with * for one and ** for any") {
+    using caliper_live_views::scene_path_matches;
+    CHECK(scene_path_matches("blocks/3", "blocks/3"));
+    CHECK_FALSE(scene_path_matches("blocks/3", "blocks/30"));
+    CHECK(scene_path_matches("blocks/*", "blocks/3"));
+    CHECK_FALSE(scene_path_matches("blocks/*", "blocks/3/attn"));
+    CHECK_FALSE(scene_path_matches("blocks/*", "blocks"));
+    CHECK(scene_path_matches("blocks/**", "blocks"));
+    CHECK(scene_path_matches("blocks/**", "blocks/3/attn/heads"));
+    CHECK(scene_path_matches("**/heads", "blocks/3/attn/heads"));
+    CHECK(scene_path_matches("*/3/**", "blocks/3/attn"));
+    CHECK(scene_path_matches("**", "anything/at/all"));
+    // An empty pattern or path, and a pattern or path past 16 segments, match nothing.
+    CHECK_FALSE(scene_path_matches("", "blocks"));
+    CHECK_FALSE(scene_path_matches("blocks", ""));
+    std::string deep = "a";
+    for (int i = 0; i < 16; ++i) deep += "/a";
+    CHECK_FALSE(scene_path_matches("**", deep));
+    CHECK_FALSE(scene_path_matches(deep, "a"));
 }
 
 // ---- The scene view's starting camera and its fit as the scene arrives ---------------------------
@@ -274,5 +296,46 @@ TEST_CASE("scene panel: a panel bound to a live scene opens on its view_camera a
     CHECK(orbit->elevation == doctest::Approx(35.0 * caliper_scene::kPi / 180.0));
     CHECK(all_inside(v, {pts}));
     CHECK(red(after) > red(before) + 10);
+}
+TEST_CASE("scene panel: a live scene panel's include and exclude leave entities out of the view, and the app's window keeps them") {
+    SpecOffscreen* c = spec_test::canvas();
+    if (!c || !c->native_device()) return;
+    OwnedView o = make_view(c, "+z");
+    caliper_live_views::SceneView& v = *o.view;
+    std::vector<float> a, b, d;
+    REQUIRE(add_cluster(v, "keep/one", 0, 0, 0, &a));
+    REQUIRE(add_cluster(v, "drop/two", 2, 0, 0, &b));
+    REQUIRE(add_cluster(v, "drop/two/kept", 4, 0, 0, &d));
+    const auto shown = [&](const char* path) { return v.tree().drawable(v.tree().find(path)); };
+    std::string why;
+    caliper_live_views::SceneRectState state;
+    caliper_live_views::SceneRectOptions opt;
+    opt.include = {"keep/**", "drop/two/kept"};
+    opt.exclude = {"keep/one/none"};
+    const spec_test::Image img = spec_test::render(400, 300, [&](const ImRect& area) {
+        caliper_live_views::draw_scene_view_in_rect(v, 1.0f, "##filter", area.Min, area.GetSize(), opt, state, nullptr);
+    });
+    REQUIRE(img.w == 400);
+    CHECK(shown("keep/one"));
+    CHECK(shown("drop/two/kept"));
+    CHECK(shown("drop/two"));   // the ancestor of a kept entity stays, else it would hide it
+    opt.include = {"keep/**"};
+    spec_test::render(400, 300, [&](const ImRect& area) {
+        caliper_live_views::draw_scene_view_in_rect(v, 1.0f, "##filter", area.Min, area.GetSize(), opt, state, nullptr);
+    });
+    CHECK(shown("keep/one"));
+    CHECK_FALSE(shown("drop/two"));
+    CHECK_FALSE(shown("drop/two/kept"));
+    opt.exclude = {"keep/*"};
+    spec_test::render(400, 300, [&](const ImRect& area) {
+        caliper_live_views::draw_scene_view_in_rect(v, 1.0f, "##filter", area.Min, area.GetSize(), opt, state, nullptr);
+    });
+    CHECK_FALSE(shown("keep/one"));
+    // Without a filter, as the app's own window draws the view, every entity shows again.
+    v.set_entity_filter("", nullptr);
+    REQUIRE(v.render(400, 300, 1.0f, 0xff161616u, &why));
+    CHECK(shown("keep/one"));
+    CHECK(shown("drop/two"));
+    CHECK(shown("drop/two/kept"));
 }
 #endif  // __APPLE__
