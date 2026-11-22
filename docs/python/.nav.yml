@@ -4,11 +4,14 @@ nav:
       - notebook-training-runs.md
   - Guides:
       - script-attachment.md
+      - stream-links.md
       - script-control.md
       - hub-setup.md
   - Concepts:
       - live-streaming.md
       - network-streaming.md
+      - data-views.md
       - zero-copy-tensors.md
   - Reference:
       - caliper-lib-api.md
+      - viewer.md

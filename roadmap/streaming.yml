@@ -65,7 +65,7 @@ features:
     status: shipped
     summary: A data view tells the producer which part of a large tensor to send, such as a slice, a reduction or a downsample, so the reduction runs on the device and only the result travels.
     depends_on: [STR-05]
-    docs: docs/python/network-streaming.md#data-views
+    docs: docs/python/data-views.md
     issue: null
 
   - id: STR-09
@@ -345,7 +345,7 @@ features:
     status: shipped
     summary: The app lists the live sessions and streams on the machine, attaches to one from the landing screen or with --url, and shows it on the live page.
     depends_on: [STR-05]
-    docs: docs/python/script-attachment.md#caliper-app-attachment
+    docs: docs/python/script-attachment.md#app-attachment
     issue: null
 
   - id: STR-44
@@ -353,7 +353,7 @@ features:
     status: shipped
     summary: caliper-viewer is the standalone viewer in Caliper LIB's wheel that lists live sessions and attaches to one without the Caliper app.
     depends_on: [STR-04]
-    docs: docs/python/script-attachment.md#caliper-viewer-attachment
+    docs: docs/python/script-attachment.md#viewer-attachment
     issue: null
 
   - id: STR-45

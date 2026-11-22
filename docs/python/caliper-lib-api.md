@@ -502,7 +502,7 @@ the stream and takes effect during the cell.
 
 A data view decides which data of a tensor travels: a slice, selection,
 projection or aggregation that the producer computes on the tensor's device.
-[Network streaming](network-streaming.md#data-views) explains
+[Network streaming](data-views.md) explains
 the idea, and the [Wire protocol](../reference/wire-protocol.md#data-views) reference
 defines the rules exactly. A view offers data views when its tensors have
 named dimensions:

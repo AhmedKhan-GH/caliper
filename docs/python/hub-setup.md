@@ -66,7 +66,7 @@ Any viewer of protocol v3 connects to the hub with the viewer link or the stream
 
 - **A browser tab** opens the viewer link, `http://127.0.0.1:<port>/?token=<token>`, when the hub serves the page (`--assets`).
 - **A notebook widget or a `<caliper-view>` element** takes the stream link, `ws://127.0.0.1:<port>/v3/stream?token=<token>`, as its source.
-- **The Caliper app and caliper-viewer** take either link, as [Attach to a stream by its link](script-attachment.md#stream-link-attachment) describes. With several sessions, add `&session=<session id>` to choose one:
+- **The Caliper app and caliper-viewer** take either link, as [Attach to a stream by its link](stream-links.md) describes. With several sessions, add `&session=<session id>` to choose one:
 
 ```sh
 caliper-viewer --headless --url "http://127.0.0.1:7340/?token=$TOKEN&session=clp-41222-9f03ab" --exit-after 5 --stats
