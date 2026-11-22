@@ -6,7 +6,7 @@ The page states the spec additions, the validator codes, the commands, the event
 
 ## Status
 
-The interfaces are in the code, and the features are not. The value types, the codec, the schema keys, the eighteen command descriptors, the event keys and the hooks in the shared files exist. The codec reads and writes every new key, and each command answers `command.not_implemented`. Until a feature is built, the validator refuses its keys with `spec.not_built`, so that a spec never reaches code that ignores a key. Parallel work then fills these interfaces, one feature set for each part.
+The features are built and joined. State and references, the step history with the cursor and the transport, the operators with their programs in the script, the scene entities with the data box, and the annotations, bound texts and layout shares work together in the app, through the eighteen commands and `caliper-mcp`. The validator still refuses a few keys with `spec.not_built`, because the code that would read them is later work: annotations on heatmap and image panels, the option `legend` set to `true` or `false` outside a series panel, the option `scale_bar` outside a scene, and the option `choices_from` of a picker.
 
 ## Spec Additions
 
@@ -411,7 +411,7 @@ transform = [
 - **Steps.** The app keeps each value that it receives, with the step of the stamp of the snapshot, or else the run's step at arrival. It keeps one value for each step, and a later value of a step replaces the earlier one. A program's cadence of N steps gives values N steps apart. A watched view publishes at most 60 times a second, so a fast run keeps steps with gaps between them.
 - **Stamps.** No snapshot carries a step stamp today: the script's sender writes a sequence number and a time only, although the wire's `timelines` capability carries stamps. This work makes the sender stamp each snapshot with the run's step, and the live catalog keep the step of each view's newest snapshot.
 - **Depth.** `history` is from 0 to 65,536 steps. A source whose root is a live tensor and that has no `from` keeps 64 steps by default. Other sources keep none by default. A series already keeps its own ring and needs no `history`.
-- **Budget.** All kept steps of the open spec share 512 MiB. When the requested steps need more, the app shortens the largest rings first, and `cursor.get` gives the depth that each source keeps.
+- **Budget.** All kept steps of the open spec share 512 MiB, and one source keeps at most a quarter of it, 128 MiB. When the requested steps need more, the app shortens the largest rings first, and `cursor.get` gives the depth that each source keeps. A source that keeps fewer steps than it requests has a `note` in `cursor.get`, which names the source, the size of one step and the two limits, and suggests a reduce step before the kept value. A raw activation of 512 by 4096 values thus keeps 16 steps and leaves the rest of the budget to the other sources.
 - **Reset.** A new attachment, a change of the source's chain and the opening of a spec clear the source's kept steps.
 
 `history` on a source whose root is not a live tensor is `spec.history_not_allowed`, and a value outside its range is `spec.out_of_range`.
@@ -425,7 +425,9 @@ The step `window` stacks the kept steps of another source. It is the first step 
 | `start`, `stop` | Integer step numbers or references | The first and last step, both included |
 | `steps` | Integer from 1 to 65,536, or a reference | The last N kept steps up to the cursor |
 
-`steps` excludes `start` and `stop`, and both together are `spec.bad_transform`. Without a key, the window holds every kept step. The window never holds a step after the cursor. A window over a tensor source gives a tensor (W, ...) in step order and the array `step`, (W). A window over a series gives a table with the columns `step` and `value`.
+`steps` excludes `start` and `stop`, and both together are `spec.bad_transform`. Without a key, the window holds every kept step. The window never holds a step after the cursor. A window over a tensor source gives a tensor (W, ...) in step order and the array `step`, (W). Its columns `step` and `value` bind the slots of an entity, such as `x = "loss_window.step"` and `z = "loss_window.value"`.
+
+A live series keeps its own ring of values, but the ring holds no steps. Thus a source over a live series that states `history` keeps the newest value of the series at each step, as a value of no axes, and a window over that source gives the values (W) with their steps. A source over a series without `history` keeps nothing, and the series panel draws the ring as before.
 
 ### Cursor
 
@@ -627,7 +629,7 @@ Eighteen commands join the command layer and the MCP tool table. The `edit` comm
 | `camera.set` | `panel`, then `view` or `orbit` | The orbit | `change` |
 | `camera.save` | `panel`, `name` | The diff | `edit` |
 
-`camera.get` and `camera.set` need the app's view, and the app answers them. `camera.save` asks the app for the current orbit first and then edits the spec. `entity.set` creates an entity or replaces the entity with the same path, and `annotation.set` does the same by id. `panel.create` and `panel.patch` also accept the arrays `entity` and `annotation`. `selection.set` makes the same pick event, field values and state writes as a person's pick, with the origin of the caller.
+`camera.get` and `camera.set` need the app's view, and the app answers them. `camera.save` asks the app for the current orbit first and then edits the spec, and the journal records that orbit with the arguments. `entity.set` creates an entity or replaces the entity with the same path, and `annotation.set` does the same by id. `panel.create` and `panel.patch` also accept the arrays `entity` and `annotation`. `selection.set` makes the same pick event, field values and state writes as a person's pick, with the origin of the caller.
 
 ### Command Errors
 
@@ -772,11 +774,13 @@ Each decision below has its reason in one line.
 - **Shares on splits.** Shares extend the split, not a new grid node, because nested splits express every layout that the demos need.
 - **Data box.** A scene with entities scales its data box on each axis, because a terrain of 2,048 steps by 16 rows is a strip otherwise.
 - **Session commands.** State, cursor, selection and camera moves use the effect `change` without undo, because they change the view and not the workspace.
+- **Orbit in the journal.** The journal and the redo record of `camera.save` keep the orbit that the app gave, because a replay then rebuilds the saved view without the app.
+- **Share of one source.** One source keeps at most a quarter of the budget, because a raw activation otherwise takes the steps of every other source.
+- **Series steps by history.** A window over a live series reads the newest values that the history keeps with their steps, because the ring of a series holds no steps.
 
 ## Open Points
 
 - **Attention weights.** The watch hook publishes the output of each leaf module as `<module>.act`, the first tensor of a tuple output, and no attention weights. An attention block that holds other modules is not a leaf, and so the acceptance test reads a leaf inside it, such as its output projection `blocks.0.attn.proj.act` of shape (B, T, D).
 - **Snapshot stamps.** Resolved: no watched view carries a stamp today, and the live catalog keeps no step. The step history adds both, and until then a value gets the run's step at arrival, which can be one step late.
-- **Camera save in the journal.** The session gives `camera.save` the app's orbit in its arguments before the edit runs. A replay of the journal needs that orbit in the recorded arguments, and the camera work decides whether the journal records it or the command refuses a replay without it.
-- **Budget.** The 512 MiB of kept steps is an estimate. It needs a measurement with the medium model.
+- **Budget.** The 512 MiB of kept steps was measured with one raw hidden activation of the medium model, 512 by 4096 values: at 64 steps it fills the whole budget, with 551.6 MB of peak memory in all. The share of one source, 128 MiB, keeps such a source from taking the budget of the others. Whether a quarter is the right share needs a longer use of real instruments.
 - **Registry entries.** State variables, the time transport, bound text, annotations and segmented groups have no registry ids of their own. The coverage file maps them to the nearest entries.
