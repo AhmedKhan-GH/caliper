@@ -215,6 +215,14 @@ class _Cadence:
             self.passes.discard(step)
             self.last_pass = self.prev_pass
 
+    def repass(self, old: int, new: int) -> None:
+        """The pass decided for step ``old`` runs at step ``new``, the number of the next
+        checkpoint, because the script's step numbers jumped past ``old``."""
+        if old in self.passes and self.last_pass == old:
+            self.passes.discard(old)
+            self.passes.add(new)
+            self.last_pass = new
+
     def period(self, every_min: int) -> int:
         """The steps between two passes of a program: max(N, every), rounded up to a multiple of N."""
         n = self.n or N_MIN
@@ -902,6 +910,12 @@ def _at_step(step: int) -> None:
                 marks.clear()
             if _STATE["pass"] is not None and _STATE["pass"] != step:
                 _STATE["pass"] = None
+        elif _STATE["pass"] is not None and step > _STATE["pass"]:
+            # The checkpoint before made its next step a pass and opened the gate for it, but the
+            # script numbered that step higher (a loop that skips numbers, a resumed count): the
+            # pass is this step, whatever its number.
+            _CAD.repass(_STATE["pass"], step)
+            _STATE["pass"] = step
         is_pass = _STATE["pass"] == step             # decided at the checkpoint before
         _CAD.target = VIEWS_SHARE if ring is not None else SHARE
         budget = _STATE.get("pass_budget", True)
