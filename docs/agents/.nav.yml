@@ -12,4 +12,5 @@ nav:
       - inline-prompt.md
       - widget-agent-conformance.md
       - mcp-server.md
+      - run-control-and-events.md
       - http-api.md

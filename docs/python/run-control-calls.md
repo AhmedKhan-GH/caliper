@@ -74,3 +74,11 @@ Both travel on the stream as messages of wire protocol 3.1 ([Controls](../refere
     options:
       show_root_heading: false
       show_root_toc_entry: false
+
+## Watch With an Optimizer
+
+`caliper.watch(model, optimizer)` is the one line that puts a training script under run control. It starts `caliper.serve()` when no server runs, and it makes `optimizer.step()` the checkpoint of the run with a step pre-hook that calls `caliper.step()`. A script that passes an optimizer must not also call `caliper.step()`.
+
+The call registers the parameter `lr` on a log scale, from the start rate divided by 1,000 to the start rate multiplied by 10. A new value of `lr` scales every parameter group by the same factor and applies to the same optimizer step. The call also publishes the series `loss` and `lr` and the scene `model`. The scene has one entity, `modules`, with one box for each watched module along +y. The row id of a box is the index of its module in `WatchHandle.modules`, thus a pick on a box names the module. The argument `scene=False` leaves the scene out.
+
+Under a torch learning rate scheduler, a new `lr` scales the scheduled rate from the step where it applies. Without a scheduler, `optimizer.param_groups` holds the new rates after that step.
