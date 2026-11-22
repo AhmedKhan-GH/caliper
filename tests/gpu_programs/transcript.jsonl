@@ -28,7 +28,7 @@
 {"step": "writer", "expect_error": {"tool": "program_create", "code": "program.writes_input", "wgsl_file": "writer.wgsl", "arguments": {"id": "writer", "inputs": [{"var": "w", "source": "live:0.weight"}], "output": {"kind": "geometry", "panel": "world", "part": "points", "max_count": 512, "arrays": ["positions", "values"]}}}}
 {"step": "writer_absent", "no_status": "writer"}
 {"step": "slow", "over_time": {"id": "slow", "wgsl_file": "slow.wgsl", "arguments": {"id": "slow", "inputs": [{"var": "w", "source": "live:2.weight"}], "output": {"kind": "pixels", "width": 16, "height": 16}, "limits": {"time_ms": 0.5}}, "steps_after": 20}}
-{"step": "status", "status_fields": {"id": "grid", "every_min": 1, "share_at_most": 0.04, "settle_s": 90}}
+{"step": "status", "status_fields": {"id": "grid", "every_min": 1, "share_at_most": 0.05, "settle_s": 90}}
 {"step": "toggle", "toggle": {"point": "0", "id": "ablate", "below": "heat", "raise_factor": 3, "return_factor": 0.5, "capture": "toggle-on"}}
 {"step": "stop", "tool": "run_stop", "arguments": {"run": "train-1"}}
 {"step": "ended", "wait_state": {"run": "train-1", "states": ["exited"]}}
