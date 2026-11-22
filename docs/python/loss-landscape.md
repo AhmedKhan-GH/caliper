@@ -1,23 +1,18 @@
-# Watch the loss landscape in a notebook
+---
+kind: procedure
+---
 
-The notebook `demos/loss_landscape/loss_landscape.ipynb` trains the small
-transformer of [Watch a training run in a notebook](watch-a-training-run-in-a-notebook.md)
-and streams, while it trains, the loss surface around the model's current
-weights as a 3-D scene: the loss of a fixed batch on a 41 by 41 grid over a
-plane through the current weights, the optimizer's path in that plane as a
-line, the current point as a marker, and a box with a floor grid. Every 2,000
-steps the plane and the surface are computed again on the GPU, and every 10th
-step the path gets a new point. By default the
-plane is the one in which the weights have moved most so far, so the picture
-shows how the optimizer moves across the surface, and a control switches it to
-two random directions. The notebook downloads nothing.
+# Loss Landscape
 
-Prereqs: the setup of [Watch a training run in a notebook](watch-a-training-run-in-a-notebook.md#install),
-which installs Caliper LIB with the extra `caliper[notebook]`, PyTorch and
-JupyterLab. The model trains on the GPU through MPS on an Apple Silicon Mac,
-and on the CPU, more slowly, elsewhere.
+The notebook `demos/loss_landscape/loss_landscape.ipynb` trains the small transformer of [Notebook Training Runs](notebook-training-runs.md) and streams, while it trains, the loss surface around the model's current weights as a 3-D scene.
 
-## Run it
+## Requirements
+
+The setup of [Notebook Training Runs](notebook-training-runs.md#wheel-installation) installs Caliper LIB with the extra `caliper[notebook]`, PyTorch and JupyterLab. The model trains on the GPU through MPS on an Apple Silicon Mac, and on the CPU, more slowly, elsewhere. The notebook downloads nothing.
+
+## Steps
+
+### Notebook Start
 
 From the repository root:
 
@@ -28,14 +23,33 @@ From the repository root:
 Run the cells in order. The first cell starts `caliper.serve()` and prints the
 link of the viewer page, which shows the same scene and controls in a browser
 tab. `CALIPER_NOTEBOOK_STEPS` sets the number of training steps, 8,000 by
-default. The notebook repeats the tutorial's model, data and training loop,
-so the run is the same run as the tutorial's, and `landscape.py` beside it
+default. The notebook repeats the model, data and training loop of
+[Notebook Training Runs](notebook-training-runs.md), so the run is the same run, and `landscape.py` beside it
 computes the landscape.
 
-## What the scene holds
+### Controls
+
+`caliper.controls()` above the scene widget shows the run's Pause, Resume and
+Step, three parameters and one action:
+
+| Control | Range | Does |
+|---|---|---|
+| `every` | 10 to 5,000 steps, 2,000 by default | The steps between refits |
+| `span` | 0.05 to 4, on a log scale, 1 by default | What the box's half-width covers, read per mode as above |
+| `directions` | `path` or `random` | The plane |
+| `surface now` | An action | Refits at once, also while the run is paused |
+
+A new `span` or `directions` takes effect at the next refit. The notebook's
+last cells switch to random directions from Python and train a little longer.
+
+## Result
+
+The scene shows the loss of a fixed batch on a 41 by 41 grid over a plane through the current weights, the optimizer's path in that plane as a line, the current point as a marker, and a box with a floor grid. Every 2,000 steps the plane and the surface are computed again on the GPU, and every 10th step the path gets a new point. By default the plane is the one in which the weights have moved most so far, so the picture shows how the optimizer moves across the surface, and a control switches it to two random directions. The viewer page shows the same scene and controls in a browser tab.
+
+### Scene Contents
 
 The scene `landscape` is logged with `caliper.scene("landscape", up="+z", units="")`
-and the scene calls of [Caliper LIB](../references/python-api.md#scenes):
+and the scene calls of [Scene Calls](scene-calls.md):
 
 | Entity | Call | Sent | Holds |
 |---|---|---|---|
@@ -65,7 +79,7 @@ model, so the path runs close to the surface and not exactly on it. A `span`
 below 1 zooms in on the surface around the current weights; the earlier part
 of the path then lies outside the box.
 
-## The two modes
+### Plane Modes
 
 The landscape moves the 102,098 entries of the weight matrices and of the
 token and position embeddings. The biases and the LayerNorm gains and
@@ -79,22 +93,7 @@ offsets, about 1,800 parameters, keep their current values.
 | The path | One point per kept snapshot, then one point every 10th step until the next refit, where it is drawn again in the new plane | One point every 10th step, never drawn again; it barely moves and reads as an almost vertical line at the centre |
 | `plane share` | The share of the kept snapshots' variance that the plane of the last refit holds | NaN at every step, a gap |
 
-## Controls
-
-`caliper.controls()` above the scene widget shows the run's Pause, Resume and
-Step, three parameters and one action:
-
-| Control | Range | Does |
-|---|---|---|
-| `every` | 10 to 5,000 steps, 2,000 by default | The steps between refits |
-| `span` | 0.05 to 4, on a log scale, 1 by default | What the box's half-width covers, read per mode as above |
-| `directions` | `path` or `random` | The plane |
-| `surface now` | An action | Refits at once, also while the run is paused |
-
-A new `span` or `directions` takes effect at the next refit. The notebook's
-last cells switch to random directions from Python and train a little longer.
-
-## Landscape
+## Landscape Class
 
 `Landscape(model, x, y, *, grid=41, seed=0, point_every=10, snapshot_every=20, keep=256, loss=F.cross_entropy)`
 in `landscape.py` holds everything on the model's device and reads nothing

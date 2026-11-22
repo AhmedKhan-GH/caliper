@@ -28,7 +28,7 @@ features:
     scope: supporting
     summary: The OpenGL fallback draws where neither Metal nor Vulkan is available and stages tensors through the CPU, so it is the slow path and says so.
     depends_on: []
-    docs: docs/python/zero-copy-tensors.md#opengl-fallback
+    docs: docs/python/zero-copy-tensors.md#cpu-tensors
     issue: null
 
   - id: REN-04

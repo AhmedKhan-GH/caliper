@@ -18,7 +18,7 @@ The Caliper app and `caliper-viewer` attach to a live session or a stream and sh
 | `--data-dir <root>` | Session-file root, `$CALIPER_DATA_DIR` by default, then the app-data folder |
 | `--exit-after <s>` | Close the window after `s` seconds |
 | `--size <w>x<h>` | Window size in points, 1280x800 by default |
-| `--stats` | Print a stats line to stderr each 2 s: fps, updates, step-to-screen median, p95 and maximum, skipped and client-dropped counts, renderer path of each view, RSS and footprint |
+| `--stats` | Print a stats line to stderr each 2 s: fps, updates, step-to-screen median, p95 and maximum, skipped and client-dropped counts, renderer path and copies of each view, RSS and footprint, and the copies per frame, frame times and GPU times of the renderer ([Copy Counters and Frame Statistics](../applets/rendering.md#copy-counters-and-frame-statistics)) |
 | `--latency-log <file>` | Write each latency sample as `t_ns lat_ms` on one line, and imply `--stats` |
 | `--headless` | Use an offscreen canvas and no window, for CI and tests. It needs `--session` or `--url`, and prints one `received` line for each view when it exits |
 | `--dump-dir <dir>` | With `--headless`, write the pixels or values of each view to `<dir>` when its sequence number changes |
@@ -91,6 +91,25 @@ With `CALIPER_VIEWS_DEBUG=1`, a line under each header also shows the diagnostic
 A heatmap and an image have axes of the source row and column indices. The axes carry the names of the dims as titles, and they follow a pan or a zoom. A heatmap cell uses nearest sampling when it covers a pixel, and thus each cell stays a cell.
 
 The hover value of a heatmap comes from the shared slot. As a result, it can come from a newer snapshot than the pixels under the cursor. The `pause` tool reads `paused` in bronze until a click ends the pause. When the display resumes, the newest snapshot shows again.
+
+### Scene Windows
+
+A scene of `caliper.scene` ([Scene Calls](scene-calls.md)) reaches the app and `caliper-viewer` on a stream, never through a shared-memory session. The viewer announces the capability `scenes` of the [protocol 3.2 draft](../reference/wire-protocol-3-2.md), so the script lists its scenes and sends their messages. The window of a scene shows the scene drawn on the GPU: its batches of points, lines and meshes, with depth, under an orbit camera about the up axis of the scene. The camera frames the scene once, when the scene first has bounds. The entity transforms and the class table of a scene are not drawn yet, and the window lists each in its notes.
+
+| Input | Effect |
+|---|---|
+| Drag | Orbits around the target |
+| Right, middle, alt or ctrl drag | Pans |
+| Wheel | Zooms |
+| F, or a double click | Frames the scene again, at the angles that the camera has |
+| `Y up` and `Z up` in the header, or U | Switches the axis that the orbit keeps upright, for a 3-D scene only |
+| `display` in the header | Shows or hides the scale bar, or resets the view to the `up` of the scene |
+
+The switch changes only the camera, and the script is told nothing. A third segment shows the own axis of the scene when it is neither y nor z. The scale bar in the bottom-right corner of the picture reads a round length in the `units` of the scene, such as "0.5 m at target". In 3-D it holds at the target of the orbit, the center of the picture. The window keeps its mode and its scale bar option when the scene goes and comes back.
+
+The header says how many entities hold batches, how many items they hold (points, line segments and triangles), the bytes that the latest updates copied and the GPU time of the latest frame, for example `4 entities  3,242 items  copied 64.5 KB  gpu 0.21 ms`. Each array arrives as bytes on the stream and is copied once into a GPU buffer, and thus the header says `copied`. The drawing reads that buffer in place. A part that this viewer does not build yet, such as arrows or boxes, is ignored, and a line under the header says so. The scene is drawn again only when the scene, the camera or the size of the window changes.
+
+A viewer that attaches late receives the state of the scene: its static items and the newest batch of each other entity part that the script still holds. Pause holds the messages of a scene until Resume, and the scene then shows the newest state.
 
 ## Stream Controls
 
