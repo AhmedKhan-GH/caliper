@@ -493,6 +493,61 @@ TEST_CASE("net/wire 3.2: the pieces of a split update are put together and check
     CHECK(e.add(odd, &whole, &err) == SplitUpdates::Result::Refused);
 }
 
+TEST_CASE("net/wire 3.2: a split piece whose rows pass the update's rows is refused before any copy") {
+    std::vector<std::vector<uint8_t>> frames;
+    std::vector<SceneUpdate> pieces;
+    for (int k = 0; k < 2; ++k)
+        frames.push_back(read_bytes(v32_dir() / ("scene_update_split_" + std::to_string(k) + ".bin")));
+    for (const auto& fr : frames) {
+        Message m;
+        REQUIRE(decode_bytes(fr, &m).ok());
+        pieces.push_back(std::get<SceneUpdate>(m));
+    }
+    REQUIRE_FALSE(pieces[1].arrays.empty());
+    const std::string name = pieces[1].arrays[0].name;
+    const uint64_t rows = 20, n = (uint64_t)pieces[1].arrays[0].shape[0];
+    REQUIRE(n >= 1);
+    // A first row of 2^64 - 1 was -1 as int64_t and wrote before the buffer; 2^64 - n wraps first + n
+    // to 0; rows itself and rows + 1 - n pass the end by n rows and by one row.
+    for (const uint64_t f : {UINT64_MAX, UINT64_MAX - n + 1, rows, rows + 1 - n}) {
+        CAPTURE(f);
+        SceneUpdate p = pieces[1];
+        Json first = *p.split.find("first");
+        first.set(name, f);
+        p.split.set("first", first);
+        SplitUpdates su;
+        WholeUpdate whole;
+        std::string err;
+        CHECK(su.add(pieces[0], &whole, &err) == SplitUpdates::Result::Pending);
+        CHECK(su.add(p, &whole, &err) == SplitUpdates::Result::Refused);
+        CHECK(err.find("pass its rows") != std::string::npos);
+        CHECK(su.held() == 0);
+        CHECK(su.discarded() == 1);
+    }
+    // A piece whose bytes disagree with its shape, and one with a negative row count, are refused too.
+    for (int k = 0; k < 2; ++k) {
+        SceneUpdate p = pieces[1];
+        if (k == 0) p.arrays[0].size -= 1;
+        else p.arrays[0].shape[0] = -1;
+        SplitUpdates su;
+        WholeUpdate whole;
+        std::string err;
+        CHECK(su.add(pieces[0], &whole, &err) == SplitUpdates::Result::Pending);
+        CHECK(su.add(p, &whole, &err) == SplitUpdates::Result::Refused);
+        CHECK(err.find(k == 0 ? "disagree with its shape" : "has no rows") != std::string::npos);
+    }
+    // The last rows of the update still fit: first = rows - n is accepted.
+    SceneUpdate last = pieces[1];
+    Json first = *last.split.find("first");
+    first.set(name, rows - n);
+    last.split.set("first", first);
+    SplitUpdates su;
+    WholeUpdate whole;
+    std::string err;
+    CHECK(su.add(pieces[0], &whole, &err) == SplitUpdates::Result::Pending);
+    CHECK(su.add(last, &whole, &err) == SplitUpdates::Result::Pending);
+}
+
 TEST_CASE("net/wire 3.2: every invalid golden frame is refused as expect.json says") {
     const Json expect = read_json(v32_dir() / "invalid" / "expect.json");
     REQUIRE(expect.size() >= 93);

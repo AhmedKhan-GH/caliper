@@ -192,7 +192,16 @@
   "snapshot_stamp_static.bin": {
     "error": "bad_request"
   },
+  "split_first_max.bin": {
+    "error": "bad_request"
+  },
   "split_first_names.bin": {
+    "error": "bad_request"
+  },
+  "split_first_rows.bin": {
+    "error": "bad_request"
+  },
+  "split_first_wraps.bin": {
     "error": "bad_request"
   },
   "split_one_piece.bin": {

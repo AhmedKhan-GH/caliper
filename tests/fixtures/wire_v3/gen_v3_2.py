@@ -604,4 +604,15 @@ def _timeline_invalid(valid: dict) -> dict:
         "split_rows_pass": (_frame("points", "p", pos, split={
             "update": 1, "piece": 0, "pieces": 2, "first": {"positions": 2},
             "rows": {"positions": 4}}), bad),
+        # A first row that a 64-bit sum wraps back below the rows: 2^64 - 1 is -1 as a signed
+        # number, and 2^64 - 3 plus the 3 rows of the piece is 0.
+        "split_first_max": (_frame("points", "p", pos, split={
+            "update": 1, "piece": 0, "pieces": 2, "first": {"positions": 2**64 - 1},
+            "rows": {"positions": 6}}), bad),
+        "split_first_wraps": (_frame("points", "p", pos, split={
+            "update": 1, "piece": 0, "pieces": 2, "first": {"positions": 2**64 - 3},
+            "rows": {"positions": 6}}), bad),
+        "split_first_rows": (_frame("points", "p", pos, split={
+            "update": 1, "piece": 0, "pieces": 2, "first": {"positions": 6},
+            "rows": {"positions": 6}}), bad),
     }

@@ -1211,9 +1211,11 @@ void scene_piece(const Frame& f, const Json& m, int part, SceneUpdate& u) {
     if (rows) {
         for (const auto& kv : rows->members())
             if (!in_part(part, kv.first)) bad("'split.rows' names '" + kv.first + "', not an array of the part");
+        // Unsigned, with no sum that can wrap: a first row near 2^64 must not come back below the count.
         for (const Section& s : u.arrays) {
             const Json* r = rows->find(s.name);
-            if (!r || u64(*first.find(s.name)) + (uint64_t)s.shape[0] > u64(*r))
+            const uint64_t f0 = u64(*first.find(s.name)), n = (uint64_t)s.shape[0];
+            if (!r || s.shape[0] < 0 || f0 > u64(*r) || n > u64(*r) - f0)
                 bad("the rows of '" + s.name + "' in piece 0 pass 'split.rows'");
         }
     }
@@ -2334,10 +2336,19 @@ SplitUpdates::Result SplitUpdates::add(const SceneUpdate& piece, WholeUpdate* ou
         if (!rows_j) return refuse("a piece holds '" + s.name + "', which 'split.rows' does not name");
         const uint32_t item = s.dtype >= 0 && s.dtype <= 0x7fffffff ? caliper_net_dtype_size((int32_t)s.dtype) : 0u;
         if (item == 0) return refuse("a piece of '" + s.name + "' has an unknown dtype");
+        if (s.shape.empty() || s.shape[0] < 0) return refuse("a piece of '" + s.name + "' has no rows");
         const std::vector<int64_t> trailing(s.shape.begin() + 1, s.shape.end());
+        // The bytes of one row, held at most at one past the update limit so that no product wraps: a
+        // larger row refuses any count of rows but 0 below.
         uint64_t rowbytes = item;
-        for (int64_t d : trailing) rowbytes *= (uint64_t)d;
+        for (int64_t d : trailing) {
+            if (d < 0) return refuse("a piece of '" + s.name + "' has a negative dimension");
+            rowbytes = d && rowbytes > (CALIPER_NET_MAX_UPDATE_BYTES + 1) / (uint64_t)d
+                           ? CALIPER_NET_MAX_UPDATE_BYTES + 1
+                           : rowbytes * (uint64_t)d;
+        }
         const uint64_t rows = u64(*rows_j);
+        if (rows > (uint64_t)INT64_MAX) return refuse("'split.rows' of '" + s.name + "' is too large");
         auto ai = std::find_if(a.arrays.begin(), a.arrays.end(), [&](const auto& x) { return x.first == s.name; });
         if (ai == a.arrays.end()) {
             const uint64_t total = rows * rowbytes;
@@ -2354,20 +2365,26 @@ SplitUpdates::Result SplitUpdates::add(const SceneUpdate& piece, WholeUpdate* ou
         } else if (ai->second.dtype != s.dtype || ai->second.trailing != trailing) {
             return refuse("the pieces of '" + s.name + "' differ in dtype or shape");
         }
-        const int64_t f0 = (int64_t)u64(*first.find(s.name)), n = s.shape[0];
-        if ((uint64_t)(f0 + n) > rows) return refuse("rows of '" + s.name + "' pass its rows");
+        // Unsigned, with no sum that can wrap: f0 + n <= rows holds after this check, so the overlap test
+        // and the copy below stay inside the array.
+        const Json* fj = first.find(s.name);
+        if (!fj || !is_uint(*fj)) return refuse("'split.first' does not name '" + s.name + "'");
+        const uint64_t f0 = u64(*fj), n = (uint64_t)s.shape[0];
+        if (f0 > rows || n > rows - f0) return refuse("rows of '" + s.name + "' pass its rows");
+        if ((uint64_t)s.size != n * rowbytes)
+            return refuse("a piece of '" + s.name + "' holds bytes that disagree with its shape");
         for (const auto& r : ai->second.ranges)
             if (f0 < r.first + r.second && r.first < f0 + n) return refuse("two pieces hold the same rows of '" + s.name + "'");
         ai->second.ranges.emplace_back(f0, n);
-        if (s.size) std::memcpy(ai->second.bytes.data() + (size_t)f0 * rowbytes, s.data, s.size);
+        if (s.size) std::memcpy(ai->second.bytes.data() + (size_t)(f0 * rowbytes), s.data, s.size);
     }
     if ((int64_t)a.seen.size() < a.pieces) return Result::Pending;
     for (const auto& kv : a.rows.members()) {
         auto ai = std::find_if(a.arrays.begin(), a.arrays.end(), [&](const auto& x) { return x.first == kv.first; });
-        int64_t got = 0;
+        uint64_t got = 0;
         if (ai != a.arrays.end())
             for (const auto& r : ai->second.ranges) got += r.second;
-        if ((uint64_t)got != u64(kv.second)) return refuse("the pieces ended before every row of '" + kv.first + "' arrived");
+        if (got != u64(kv.second)) return refuse("the pieces ended before every row of '" + kv.first + "' arrived");
     }
     // The whole update: piece 0's keys with the whole arrays and the stamp, checked as an unsplit update.
     struct Keep {

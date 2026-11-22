@@ -480,7 +480,7 @@ private:
         int64_t dtype = 0;
         std::vector<int64_t> trailing;
         std::vector<uint8_t> bytes;
-        std::vector<std::pair<int64_t, int64_t>> ranges;   // (first row, rows)
+        std::vector<std::pair<uint64_t, uint64_t>> ranges;   // (first row, rows), within the rows
     };
     struct Assembly {
         uint64_t update = 0;
