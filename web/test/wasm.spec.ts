@@ -760,3 +760,33 @@ test('data view changes and resizes do not grow what the module holds', async ({
   expect(after.retired).toBe(0);
   expect(after.heap - before.heap).toBeLessThan(256 * 1024);
 });
+
+// A scene's entity transform reaches the scene view intact through the stream (protocol 3.2):
+// mock_server.py --scene3 puts five points under the entity "moved" and moves that entity by
+// (10, 2, 0), and then sends the points four more times. The module decodes SCENE_TRANSFORMS on the
+// socket's callback and applies it at the next frame, after it decoded the frames that follow, so its
+// matrices must live in a copy of their frame, as an update's sections do. The view's fit must then
+// frame the moved points' bounds, (9, 1, 0) to (11, 3, 0.5), at a finite distance, with a scale bar.
+test('a scene\'s entity transform arrives intact through the stream, and the fit frames the moved points with a scale bar', async ({ page }) => {
+  const p = await producerWith(['--scene3']);
+  try {
+    await page.goto(p.url);
+    await plates(page, 7);
+    expect((await state(page, 'world')).drawer).toBe('wasm');
+    const geo = async () => JSON.parse(String((await wasmStats(page, 'world')).geometry ?? '{}')).world ?? null;
+    const fit = async () => {
+      const g = await geo();
+      const o = g?.orbit;
+      if (!Array.isArray(o)) return `orbit ${JSON.stringify(o ?? null)}`;
+      const [x, y, z, d] = o as number[];
+      const near = Math.abs(x - 10) < 1e-3 && Math.abs(y - 2) < 1e-3 && Math.abs(z - 0.25) < 1e-3;
+      return near && Number.isFinite(d) && d > 0.5 && d < 50 ? 'framed' : `orbit ${JSON.stringify(o)}`;
+    };
+    await expect.poll(fit, { timeout: 30_000 }).toBe('framed');
+    const bar = (await geo())?.scaleBar as number[] | null;
+    expect(bar, 'the scale bar is drawn').not.toBeNull();
+    expect(bar!.every(Number.isFinite) && bar![2] > bar![0] && bar![3] > bar![1]).toBe(true);
+  } finally {
+    p.proc.kill();
+  }
+});

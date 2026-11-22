@@ -214,11 +214,13 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
         return;
     }
     // A scene message is kept for the frame's poll, so it is decoded from a copy of its
-    // frame that lives as long as the message (the callback's bytes do not).
+    // frame that lives as long as the message (the callback's bytes do not): the sections
+    // of an update and the matrices of entity transforms point into it.
     std::shared_ptr<std::vector<uint8_t>> keep;
     uint16_t type = 0;
     if (n >= 10) std::memcpy(&type, data + 8, 2);
-    if (type == CALIPER_NET_MSG_SCENE_UPDATE || type == CALIPER_NET_MSG_SCENE_CLEAR) {
+    if (type == CALIPER_NET_MSG_SCENE_UPDATE || type == CALIPER_NET_MSG_SCENE_CLEAR ||
+        type == CALIPER_NET_MSG_SCENE_TRANSFORMS || type == CALIPER_NET_MSG_SCENE_CLASSES) {
         keep = std::make_shared<std::vector<uint8_t>>(data, data + n);
         data = keep->data();
     }

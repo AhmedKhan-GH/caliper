@@ -42,6 +42,14 @@ details for the sample spaces, for each select event that names a space.
 forbidden), --no-checkpoint keeps the run state none, and --v30 makes it a
 3.0 producer: frames at minor 0 and none of the 3.1 additions.
 
+Wire protocol 3.2 (--scene3): the producer also announces the capability
+scenes and offers a scene view, "world" (3-D, +z up, metres), to viewers that
+announce it. A subscription receives the scene's state: a reset, a class
+table, five points at the entity "moved/cloud", and an entity transform that
+moves "moved" by (10, 2, 0), then the same points again four times (see
+scene3_state()). A viewer that applies the transform frames the points around
+(10, 2, 0.25).
+
 It prints the viewer page's URL on the first line, then one JSON line for
 each EVENT and each CONTROL a viewer sends.
 """
@@ -482,14 +490,42 @@ def snapshot(run: Run, view: dict, sub: int, seq: int, dv: dict):
 # ---------------------------------------------------------------------------
 # the server
 # ---------------------------------------------------------------------------
+SCENE3_VIEW = {"id": 100, "name": "world", "kind": 6, "sources": [],
+               "scene": {"space": "3d", "up": "+z", "units": "m"}}
+SCENE3_SHIFT = (10.0, 2.0, 0.0)
+
+
+def scene3_state(sub: int) -> list:
+    """The state of the --scene3 scene for subscription sub: a reset, a class table, the points, the
+    transform of their parent entity, and four more updates of the same points after it, so that a
+    viewer decodes several frames between the transform's arrival and the frame that applies it."""
+    now = time.monotonic_ns()
+    pts = np.array([[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, 0.5]], np.float32)
+    m = np.eye(4, dtype=np.float32)
+    m[:3, 3] = SCENE3_SHIFT
+    flags = {"static": True, "state": True}
+    out = [W.SceneClear(sub, "world", 1, now, reset=True, state=True),
+           W.SceneClasses(sub, "world", 2, now, [{"id": 1, "label": "marker", "color": [255, 80, 80, 255]}], **flags)]
+
+    def cloud(seq):
+        return W.SceneUpdate(sub, "world", seq, now, "moved/cloud", W.PART_POINTS, {"positions": pts},
+                             {"color": [255, 80, 80, 255], "radius": 0.1}, **flags)
+    out.append(cloud(3))
+    out.append(W.SceneTransforms(sub, "world", 4, now, ["moved"], m.T.reshape(1, 16).copy(), **flags))
+    out += [cloud(5 + k) for k in range(4)]
+    return out
+
+
 ORIGIN = re.compile(r"^(https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?|vscode-webview://[^/]+|null)$", re.I)
 
 
 class Producer:
     def __init__(self, run: Run, token: str, dist: Path, session_id: str, wasm: Path | None = None,
-                 fixed: bool = False, controls: bool = False, read_only: bool = False, v30: bool = False):
+                 fixed: bool = False, controls: bool = False, read_only: bool = False, v30: bool = False,
+                 scene3: bool = False):
         self.run, self.token, self.dist, self.wasm, self.fixed = run, token, dist, wasm, fixed
         self.v30 = v30
+        self.scene3 = scene3 and not v30
         self.has_controls = controls and not v30
         self.read_only = read_only
         self.conns: dict = {}                      # send -> set of the viewer's capabilities
@@ -540,7 +576,7 @@ class Producer:
         subs: dict[int, dict] = {}
         lock = asyncio.Lock()
 
-        minor = 0 if self.v30 else W.MINOR
+        minor = 0 if self.v30 else W.MINOR_3_2 if self.scene3 else W.MINOR
 
         async def send(msg):
             async with lock:
@@ -559,7 +595,8 @@ class Producer:
         if not self.v30:
             entry["capabilities"] = self.capabilities()
         await send(W.Sessions([entry]))
-        await send(W.Views(self.views(caps), self.identity["id"]))
+        scene = [SCENE3_VIEW] if self.scene3 and W.CAP_SCENES in caps else []
+        await send(W.Views(self.views(caps) + scene, self.identity["id"]))
         if W.CAP_CONTROLS in caps:
             await send(self.ctl.message())
         if W.CAP_SELECTION in caps:
@@ -595,6 +632,8 @@ class Producer:
         caps = [W.CAP_EVENTS]
         if self.has_controls:
             caps += [W.CAP_CONTROLS, W.CAP_SELECTION]
+        if self.scene3:
+            caps.append(W.CAP_SCENES)
         return caps
 
     async def broadcast_controls(self):
@@ -612,6 +651,8 @@ class Producer:
 
     async def answer(self, msg, subs, send, ws):
         vs = {v["name"]: v for v in self.views()}
+        if self.scene3 and W.CAP_SCENES in self.conns.get(send, set()):
+            vs[SCENE3_VIEW["name"]] = SCENE3_VIEW
         if isinstance(msg, (W.Subscribe, W.ViewRequest)):
             v = vs.get(msg.view)
             if v is None:
@@ -623,6 +664,11 @@ class Producer:
                 await send(W.ViewReply(msg.request_id, msg.sub, msg.view, error={"code": e.code, "message": e.message}))
                 return
             await send(W.ViewReply(msg.request_id, msg.sub, msg.view, data_view=dv))
+            if v is SCENE3_VIEW:
+                if isinstance(msg, W.Subscribe):
+                    for m in scene3_state(msg.sub):
+                        await send(m)
+                return
             if isinstance(msg, W.Subscribe):
                 back = dv.get("budget", {}).get("max_backfill", 0)
                 subs[msg.sub] = {"view": v, "dv": dv, "sent": max(0, self.retained() - back), "fresh": True}
@@ -702,6 +748,7 @@ async def main():
     ap.add_argument("--no-checkpoint", action="store_true", help="never call the checkpoint (run state none)")
     ap.add_argument("--v30", action="store_true", help="a 3.0 producer: minor 0, none of the 3.1 additions")
     ap.add_argument("--step-ms", type=float, default=50.0, help="the time of one training step")
+    ap.add_argument("--scene3", action="store_true", help="3.2: also a scene view whose points sit under a moved entity")
     a = ap.parse_args()
     W = load_wire(a.wire)
     run = Run(a.points, a.dims, a.seed, a.scene)
@@ -713,7 +760,7 @@ async def main():
               flush=True)
     token = secrets.token_urlsafe(24)
     prod = Producer(run, token, Path(a.dist), "mock", Path(a.wasm) if a.wasm else None, fixed=a.fixed,
-                    controls=a.controls, read_only=a.read_only, v30=a.v30)
+                    controls=a.controls, read_only=a.read_only, v30=a.v30, scene3=a.scene3)
     async with serve(prod.handler, "127.0.0.1", a.port, process_request=prod.process_request,
                      compression=None, max_size=W.MAX_FRAME_BYTES) as server:
         prod.port = server.sockets[0].getsockname()[1]

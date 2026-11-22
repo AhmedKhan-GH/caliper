@@ -280,6 +280,20 @@ void publish() {
                 else
                     std::snprintf(b, sizeof b, ",\"scaleBar\":null");
                 geo += b;
+                // The orbit the view draws with, [target x, y, z, distance], null for a pan and zoom or a
+                // pinhole: a test checks that the fit framed the scene's bounds with finite numbers.
+                const caliper_live_views::SceneView* sv = caliper_live_views::scene_view(*v);
+                const caliper_scene::Orbit* o = sv ? std::get_if<caliper_scene::Orbit>(&sv->camera()) : nullptr;
+                const bool finite = o && std::isfinite(o->target[0]) && std::isfinite(o->target[1]) &&
+                                    std::isfinite(o->target[2]) && std::isfinite(o->distance);
+                if (o && sv->fitted() && finite)
+                    std::snprintf(b, sizeof b, ",\"orbit\":[%.17g,%.17g,%.17g,%.17g]", o->target[0], o->target[1],
+                                  o->target[2], o->distance);
+                else if (o && sv->fitted())
+                    std::snprintf(b, sizeof b, ",\"orbit\":\"not finite\"");
+                else
+                    std::snprintf(b, sizeof b, ",\"orbit\":null");
+                geo += b;
             }
             geo += "}";
         }
