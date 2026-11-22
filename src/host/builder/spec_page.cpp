@@ -431,6 +431,10 @@ struct SpecPage::Impl {
         this->app = &app;
         if (workspace.empty()) workspace = folder_name(app.workspace());
         cb::Session* s = app.session();
+        // The instruments of spec version 1 (spec_instruments.h): the
+        // session's event ring and the app's run control, which acts on the
+        // attached script.
+        runtime->set_instruments(s ? &s->events() : nullptr, app.run_control());
         if (s == bound) return;
         if (widget) {
             // Its session has gone or changed: the surface forgets its

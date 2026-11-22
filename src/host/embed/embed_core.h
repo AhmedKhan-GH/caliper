@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -173,6 +174,13 @@ caliper_live::Source* caliper_live_stream(CaliperCore* core);
 // The source's key of the attached view `name` (Source::send_event,
 // request_data_view, data_view_of); 0 when there is none.
 uint64_t caliper_live_view_key(CaliperCore* core, const char* name);
+// The host's tap on each pick and selection that a person makes in a scene
+// view of the attached stream (live_core.cpp), which the app gives to the
+// agent as an event without a panel (design/instruments.md, Event Feeds). A
+// hover never reaches it. An empty tap removes it; the core's shutdown removes
+// it too. Frame-thread only.
+namespace caliper_live_views { struct LiveEvent; }
+void caliper_live_set_event_tap(CaliperCore* core, std::function<void(const caliper_live_views::LiveEvent&)> tap);
 // Typed-views hooks (src/host/live/live_views.cpp): draw the points/series/
 // histogram windows after the v1.2 views; release their GPU resources before
 // the v1.2 views are destroyed.

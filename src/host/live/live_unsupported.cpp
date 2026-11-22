@@ -20,6 +20,7 @@ void caliper_live_shutdown(CaliperCore*) {}
 caliper_live::RunControls* caliper_live_controls(CaliperCore*) { return nullptr; }
 caliper_live::Source* caliper_live_stream(CaliperCore*) { return nullptr; }
 uint64_t caliper_live_view_key(CaliperCore*, const char*) { return 0; }
+void caliper_live_set_event_tap(CaliperCore*, std::function<void(const caliper_live_views::LiveEvent&)>) {}
 
 extern "C" {
 
