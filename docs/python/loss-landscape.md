@@ -169,14 +169,15 @@ Its capture row, `test_capture`, runs where `CALIPER_TEST_CALIPER_EXE` names
 the Caliper app and Metal draws it, and skips elsewhere. It runs the same 300
 steps, forces a surface at step 299, attaches the hidden app
 (`caliper --hidden --url`) from the start so that its camera fits the box,
-takes the window's frame from Caliper API once two frames agree, finds the
+and again when the scene view's area narrows as the view of the plane share
+joins it, takes the window's frame from Caliper API once two frames agree, finds the
 marker at the current point's pixel, and compares the scene view's area with
 the reference `tests/demos/reference/loss_landscape_app_step299.png` under
 the parity rules of the scene rows: a flat colour exact away from edges, a
 lit pixel of the surface within 2 levels, and a pixel within one pixel of an
 edge either side's colour. The scale bar in the area's bottom-right corner,
-an overlay that the view drew after the reference was taken, is left out of
-the comparison; the app reports where it drew it. Without the reference it writes the capture for a
+an overlay with tests of its own, is left out of the comparison; the app
+reports where it drew it. Without the reference it writes the capture for a
 person to review and skips; `CALIPER_DEMO0_WRITE_REFERENCE=1` writes it as
 the reference. `CALIPER_SCENE_CAPTURE_DIR` keeps the frame and the area.
 

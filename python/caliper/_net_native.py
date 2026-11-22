@@ -430,7 +430,9 @@ class NativeServer(NetServer):
             self.nio.wake()
             self._thread.join(PUMP_END_S)
         ctl = self.producer.controls
-        if ctl is not None:
+        # While the pump thread still runs (its join timed out), it flushes the controls itself:
+        # a flush here as well would let two threads hand over the same stored messages.
+        if ctl is not None and (pump or not self._thread.is_alive()):
             try:
                 ctl.flush(final=True)
             except Exception:

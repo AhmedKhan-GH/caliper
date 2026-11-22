@@ -294,16 +294,17 @@ class Test:
         """The terrain entity of world: its row count, its x values and the panel data's version."""
         b = self.pdata("world")
         (self.work / "world_data.json").write_text(json.dumps(b)[:200000])
-        rows, xs = 0, []
+        rows, cols, xs = 0, 0, []
         for ent in (b.get("data") or {}).get("entities", []):
             if ent.get("path") != "terrain":
                 continue
             for slot in ent.get("slots", []):
                 if slot.get("slot") == "height" and slot.get("shape"):
                     rows = slot["shape"][0]
+                    cols = slot["shape"][1] if len(slot["shape"]) > 1 else 0
                 if slot.get("slot") == "x":
                     xs = [v for v in slot.get("values", []) if v is not None]
-        return {"rows": rows, "x": xs, "version": b.get("version"), "state": b.get("state"),
+        return {"rows": rows, "cols": cols, "x": xs, "version": b.get("version"), "state": b.get("state"),
                 "error": b.get("error")}
 
     def kept_gap(self):
@@ -647,20 +648,33 @@ class Test:
         self.save("pick-detail", self.render("detail"))
 
     def step_j_cursor(self):
-        """The transport holds the cursor at an earlier step: each panel shows the value at that step. Then live."""
+        """The transport holds the cursor at an earlier kept step of act: each panel shows its value at that step.
+        One step back, each panel shows its newest value at or before the new step."""
         live = {"detail": self.detail(), "world": self.terrain(), "trace": self.pdata("trace"),
                 "loss": self.pdata("loss")}
         c = self.cursor_now()
-        # The kept steps stand apart by the gap of the cadence, and the cursor snaps to the kept step nearest the
-        # step asked for: 100 steps back, give or take 100 steps before it and 50 after it, or the gap if larger.
-        gap = self.kept_gap()
-        lo_ok, hi_ok = c["latest"] - 100 - max(100, gap), min(c["latest"] - 1, c["latest"] - 100 + max(50, gap))
-        self.res["cursor_kept_gap"] = gap
-        held = self.answer("cursor_set", {"step": c["latest"] - 100, "live": False})["cursor"]
-        step = held.get("step")   # the cursor snaps to a kept step, which is not always the step asked for
-        if held.get("live") or step is None or not lo_ok <= step <= hi_ok:
-            raise Fail(f"step {self.cur}: cursor_set of {c['latest'] - 100} gave {json.dumps(held)}, not an "
-                       f"earlier step held")
+        # The sources keep different steps: act keeps the step stamp of each snapshot that the app reads, at the
+        # passes of the shared cadence, and loss keeps the run's step when a chunk of its series arrives, because a
+        # series value has no stamp. The cursor goes to the kept step of any source nearest the step asked for, and
+        # each panel shows the newest value of its source at or before the cursor. Detail and the terrain thus show
+        # the held step itself only at a step that act keeps, so the test holds the cursor at the newest kept step
+        # of act at least 100 steps back: a row of the terrain, whose x values are those steps while its grid keeps
+        # all 64 columns (an unpooled grid).
+        t = live["world"]
+        if t["cols"] != 64:
+            raise Fail(f"step {self.cur}: the terrain has {t['cols']} columns, so it pools its rows and its x values "
+                       f"are not kept steps")
+        rows = sorted(int(x) for x in t["x"] if x == int(x) and x <= c["latest"] - 100)
+        if not rows:
+            raise Fail(f"step {self.cur}: the terrain has no row at or before step {c['latest'] - 100}: x "
+                       f"{t['x'][:3]} to {t['x'][-3:]}")
+        target = rows[-1]
+        self.res["cursor_kept_gap"] = self.kept_gap()
+        held = self.answer("cursor_set", {"step": target, "live": False})["cursor"]
+        step = held.get("step")
+        if held.get("live") or step != target:
+            raise Fail(f"step {self.cur}: cursor_set of the kept step {target} gave {json.dumps(held)}, not that step "
+                       f"held")
 
         def at_step():
             d, w = self.detail(), self.terrain()
@@ -668,13 +682,15 @@ class Test:
                 else None
         d, w = self.until("detail and world change at the held step", at_step, 30)
         # A scene's terrain is a window, so its data states the window that ends at the held step; the heatmap
-        # detail is one value and states the step itself.
+        # detail is one value and states the step of that value. Both agree on the held step, and the terrain's
+        # newest row is that step.
         wc = self.pdata("world")["data"].get("cursor") or {}
         dc = (self.pdata("detail").get("data") or {}).get("cursor") or {}
         if (wc.get("window") or [None, None])[1] != step or dc.get("step") != step:
             raise Fail(f"step {self.cur}: at step {step} world states {wc} and detail states {dc}")
-        if w["x"] and max(w["x"]) > step:
-            raise Fail(f"step {self.cur}: the terrain at step {step} holds x values up to {max(w['x'])}")
+        if not w["x"] or max(w["x"]) != step:
+            raise Fail(f"step {self.cur}: the terrain at step {step} holds x values up to "
+                       f"{max(w['x']) if w['x'] else None}, not up to the held step")
         for panel in ("trace", "loss"):
             xs = self.series_x(panel)
             if xs and max(xs) > step:
@@ -682,7 +698,8 @@ class Test:
         steady = self.detail()
         if steady["values"] != d["values"]:
             raise Fail(f"step {self.cur}: the detail changed while the cursor was held")
-        # One step back: both panels change again.
+        # One step back: the cursor goes to the previous step that any source keeps, which act need not keep. Both
+        # panels change again, each shows the newest value of act at or before that step, and the two agree on it.
         stepped = self.answer("cursor_step", {"count": -1})["cursor"]
         if stepped.get("live") or stepped.get("step") is None or stepped["step"] >= step:
             raise Fail(f"step {self.cur}: cursor_step -1 gave {json.dumps(stepped)}, not a step before {step}")
@@ -690,7 +707,14 @@ class Test:
                                                                   else None)(self.detail()), 30)
         w2 = self.until("world changes one step back", lambda: (lambda x: x if x["version"] != w["version"]
                                                                  else None)(self.terrain()), 30)
-        self.res["cursor"] = {"held_step": step, "stepped_to": stepped["step"],
+        wc2 = self.pdata("world")["data"].get("cursor") or {}
+        dc2 = (self.pdata("detail").get("data") or {}).get("cursor") or {}
+        newest = max(w2["x"]) if w2["x"] else None
+        if (wc2.get("window") or [None, None])[1] != stepped["step"] or newest is None \
+                or dc2.get("step") != newest or newest > stepped["step"]:
+            raise Fail(f"step {self.cur}: at step {stepped['step']} world states {wc2}, the terrain's newest row is "
+                       f"{newest} and detail states {dc2}")
+        self.res["cursor"] = {"held_step": step, "stepped_to": stepped["step"], "stepped_value_step": newest,
                               "versions": {"live": [live["detail"]["version"], live["world"]["version"]],
                                            "held": [d["version"], w["version"]],
                                            "stepped": [d2["version"], w2["version"]]}}

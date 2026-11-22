@@ -1201,7 +1201,6 @@ const std::string& AppSession::workspace() const { return impl_->opt.workspace; 
 bool AppSession::worker_busy() const { return false; }
 bool AppSession::script_running() const { return false; }
 void AppSession::set_panel_renderer(std::shared_ptr<PanelRenderSeam>) {}
-void AppSession::set_camera_seam(CameraSeam) {}
 void AppSession::set_run_link(caliper_live::RunLink*) {}
 caliper_builder::RunControl* AppSession::run_control() { return nullptr; }
 void AppSession::set_model_runner(caliper_builder::ModelRunner*) {}

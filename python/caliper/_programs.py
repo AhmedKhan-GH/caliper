@@ -71,6 +71,8 @@ import time
 import warnings
 from collections import deque
 
+from . import _controls
+
 __all__ = ["install", "install_piece", "remove", "set_params", "status", "at_step", "loaded"]
 
 ACTIVE = False
@@ -1047,9 +1049,11 @@ def _at_step(step: int) -> None:
                 if ring is not None:
                     ring.cadence = _views_status(ring, False)
                     ring.open_pass(nxt)
-        elif ring is not None and _floor_due(ring, now) and ring.wants_pass(now):
+        elif ring is not None and (_floor_due(ring, now) or _last_single_step()) and \
+                ring.wants_pass(now):
             # The floor: a pass of the views alone, which the cadence does not count, because
-            # their own work is cheap; the programs keep to N.
+            # their own work is cheap, or because the run pauses after the next step; the
+            # programs keep to N.
             _STATE["pass"] = nxt
             _STATE["pass_budget"] = False
             _STATE["floor"] += 1
@@ -1074,6 +1078,13 @@ def _floor_due(ring, now: float) -> bool:
         return False
     v = _STATE["view_s"]
     return not v or _median(v) <= _CAD.target * FLOOR_S
+
+
+def _last_single_step() -> bool:
+    """The run single-steps and pauses after the next step: that step is a pass whatever its
+    views cost, so that the paused run shows its own step and not an older one."""
+    c = _controls.CONTROLS
+    return c.state == _controls.RUN_STEPPING and c.steps_left == 1
 
 
 def _views_status(ring, floor: bool) -> dict:
