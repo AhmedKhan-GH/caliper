@@ -659,3 +659,30 @@ TEST_CASE("approval cards: the strip's height changes while open only after the 
     CHECK(h.update(4.01, true, 100) == 100);
     CHECK(h.update(4.1, false, 100) == 0);
 }
+
+TEST_CASE("approval cards: a run command's card states the change and the script, and its rules name the target") {
+    CommandInvocation set;
+    set.name = "run.set_param";
+    set.args = {{"name", "lr"}, {"value", 0.001}};
+    set.origin = CommandOrigin::mcp;
+    CHECK(approval_what(set, nullptr) == "run.set_param \xC2\xB7 lr");
+    CHECK(approval_run_text(set, "train.py") == "Set parameter lr to 0.001 in train.py. The change applies at the next step.");
+    CommandInvocation act;
+    act.name = "run.action";
+    act.args = {{"name", "save"}};
+    CHECK(approval_run_text(act, "train.py") == "Run action save in train.py at the next step.");
+    CommandInvocation p;
+    p.name = "run.pause";
+    p.args = {{"op", "pause"}};
+    CHECK(approval_run_text(p, "train.py") == "Pause train.py at the next step.");
+    p.args = {{"op", "resume"}};
+    CHECK(approval_run_text(p, "") == "Resume the attached script.");
+    p.args = {{"op", "step"}, {"count", 5}};
+    CHECK(approval_run_text(p, "train.py") == "Run 5 steps of train.py, then pause.");
+    CHECK(approval_run_text(act, "x").size() > 0);
+    CHECK(approval_always_label("run.set_param:lr") == "Always allow changes of lr");
+    CHECK(approval_session_label("run.set_param:lr") == "Allow changes of lr for this session");
+    CHECK(approval_always_label("run.action:save") == "Always allow action save");
+    CHECK(approval_always_label("run.pause") == "Always allow run.pause");
+    CHECK(approval_session_label("panel.patch") == "Allow always for this session");
+}
