@@ -188,7 +188,7 @@ body { background: var(--ground); -webkit-font-smoothing: antialiased; }
 .md-typeset .sb-toc ul.sb-toc__list, .md-typeset .sb-toc-inline ul.sb-toc__list { list-style: none; margin: 0; padding: 0; }
 .md-typeset :is(.sb-toc, .sb-toc-inline) li.sb-toc__item { list-style: none; margin: 0; padding: 0; }
 .md-typeset :is(.sb-toc, .sb-toc-inline) .sb-toc__item > a {
-  display: block; padding: .18rem .8rem; font-size: .72rem; line-height: 1.4; color: var(--secondary); border-left: 2px solid transparent;
+  display: block; margin: 0; padding: .18rem .8rem; font-size: .72rem; line-height: 1.4; color: var(--secondary); border-left: 2px solid transparent;
 }
 .md-typeset :is(.sb-toc, .sb-toc-inline) .sb-toc__item--3 > a { padding-left: 1.7rem; color: var(--faint); font-size: .68rem; }
 .md-typeset :is(.sb-toc, .sb-toc-inline) .sb-toc__item > a:hover { color: var(--parchment); background: var(--plate-hover); }
