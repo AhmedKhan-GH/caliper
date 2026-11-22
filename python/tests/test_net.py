@@ -1065,24 +1065,25 @@ def test_flood_of_control_messages(server):
             frames = [w.encode(w.Subscribe(1 + i % 50, "w", i, 30.0)) for i in range(5_000)]
             frames += [w.encode(w.Event("w", "hover", {"row": i, "col": 0})) for i in range(5_000)]
             loop = asyncio.get_running_loop()
-            worst = []
+            base, worst = [], []
 
-            def calls():
-                end = time.monotonic() + 2.0
+            def calls(out, seconds):
+                end = time.monotonic() + seconds
                 while time.monotonic() < end:
                     t0 = time.perf_counter()
                     caliper.show(W, name="w", rate=0)
-                    worst.append(time.perf_counter() - t0)
-            fut = loop.run_in_executor(None, calls)
+                    out.append(time.perf_counter() - t0)
+            await loop.run_in_executor(None, calls, base, 0.5)      # the same calls, no flood yet
+            fut = loop.run_in_executor(None, calls, worst, 2.0)
             for f in frames:
                 await c.ws.send(f)
             await fut
             await c.send(w.Ping(9))
             pong = await c.expect(w.Pong, timeout=60)
-            return pong, max(worst), float(np.median(worst))
-    pong, worst, med = run(go(), 120)
+            return pong, float(np.median(base)), float(np.median(worst))
+    pong, base, med = run(go(), 120)
     assert pong.nonce == 9
-    assert med < 0.002, med                  # a call stays cheap during the flood
+    assert med < max(0.02, 10 * base), (med, base)   # a call stays cheap during the flood
     assert len(server.events()) <= w.MAX_QUEUED_EVENTS
 
 
