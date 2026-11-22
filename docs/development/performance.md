@@ -135,6 +135,24 @@ On an RTX 500 Ada, `embed_scope` gave approximately the same steps per second wi
 
 A stress test in `tests/test_torch_adapter.cpp` makes 500 CUDA handoffs on a pool stream while a second thread trains. The largest measured stall of the frame thread came from a database table that the UI thread rebuilt, not from tensors.
 
+## Embed Tensor Views
+
+These numbers come from `caliper_embed_tests` and `bench_show.py` on Apple silicon. A 1024x1024 f32 view update, as the mean of 20 updates, takes 0.97 ms with CPU staging and 0.34 ms with METAL zero-copy and a GPU wait.
+
+The native call, as the median of 50 calls in an offscreen 1280x800 window, gives these times:
+
+| Size | CPU Staging | METAL with GPU Wait |
+|---|---|---|
+| 256² | 0.047 ms | 0.169 ms |
+| 1024² | 0.680 ms | 0.174 ms |
+| 2048² | 2.991 ms | 0.270 ms |
+
+A 64x48 f32 METAL update takes 0.129 ms with `WAIT_GPU` and 0.009 ms without it. The first METAL f32 view compiles the colormap shader one time. This takes 1.6 ms with a warm cache and about 40 ms with a cold cache.
+
+## Torch-Free Build
+
+Slang and llama.cpp take about two thirds of a 12.7 s configure. A fresh torch-free configure takes 6.5 s. A cold torch-free build of all targets has 462 steps and takes 120 s at `-j 8`. Then `libcaliper.a` is 276 KB, in six objects. A cold `libcaliper` build with torch on takes 123 s. An offscreen Caliper Embed run of `hello` draws 43 frames in 1.02 s.
+
 ## Related Pages
 
 - [Live Streaming](../python/live-streaming.md)

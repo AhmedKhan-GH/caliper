@@ -4,12 +4,23 @@ A program that owns its own window can run Caliper applets inside a view of
 that window. It links the `caliper-embed` package, a shared library with a C
 interface, and drives the core with five calls from its own event loop. This
 guide builds such a program outside this repository, from the package to a
-first run that opens no window. The contract behind each step is in
-[Embedding Caliper](embedding-api.md), and `examples/embed_host` is a
-complete program that follows this guide.
+first run that opens no window.
 
-Everything here has been run on macOS with Metal. Windows uses the same
-package with Vulkan (`caliper_embed.dll`), but that path has not been run yet.
+```mermaid
+flowchart LR
+    pkg[caliper-embed package] -->|link| host[Host program]
+    host -->|create core and attach canvas| core[Core]
+    core -->|load applet| applet[Applet]
+    host -->|one frame per tick| core
+```
+
+The host links the package, then creates the core, attaches a canvas, loads an applet and pumps frames.
+
+The contract behind each step is in [Embedding Caliper](embedding-api.md).
+`examples/embed_host` is a complete program that follows this guide.
+
+The steps use macOS with Metal. Windows uses the same package with Vulkan
+(`caliper_embed.dll`).
 
 ## Installation
 
@@ -29,10 +40,10 @@ under `include/caliper-embed/caliper/` and the CMake package under
 ## CMake Linking
 
 `find_package(caliper-embed)` gives one target, `caliper::embed`, which brings
-the library and the include root. Nothing else of Caliper needs linking: the
-core's own dependencies (DuckDB, ImGui, GLFW and the rest) live inside the
-library, and only the C functions of the embed headers are exported. Link
-whatever your own window code needs beside it.
+the library and the include root. Nothing else of Caliper needs linking,
+because the core's dependencies (DuckDB, ImGui, GLFW and the rest) live inside
+the library. The library exports only the C functions of the embed headers.
+Link whatever your own window code needs beside it.
 
 ```cmake
 cmake_minimum_required(VERSION 3.18)
@@ -48,16 +59,17 @@ cmake -S . -B build -DCMAKE_PREFIX_PATH=<prefix>
 cmake --build build
 ```
 
-The program finds the library through the rpath CMake adds to binaries in
-their build folder. An installed copy of the program needs an rpath that
-reaches `<prefix>/lib`, because the library's install name is
+The program finds the library through the rpath that CMake adds to binaries in
+their build folder. An installed copy needs an rpath that reaches
+`<prefix>/lib`, because the install name of the library is
 `@rpath/libcaliper_embed.dylib`.
 
 ## Version Check
 
-`caliper/embed.h` carries the version of the header you compiled against, and
-`caliper_embed_api_version()` returns the version of the library the process
-loaded. Refuse a library of another major or of an older minor:
+`caliper/embed.h` carries the version of the header you compiled against.
+`caliper_embed_api_version()` returns the version of the library that the
+process loaded. Refuse a library of another major version or of an older minor
+version:
 
 ```c
 #include <caliper/embed.h>
@@ -75,9 +87,8 @@ The encoding and the rule are in [Versions](embedding-api.md#versions).
 Create one core, attach one canvas, load an applet, and then pump one frame per
 tick of your own loop. The canvas is either your native view (`NSView*` on
 macOS, `HWND` on Windows) with `CALIPER_CANVAS_WINDOW`, or an offscreen target
-with `CALIPER_CANVAS_OFFSCREEN`, which takes no view and opens nothing on
-screen. This is the offscreen form; `examples/embed_host/embed_host.h` holds
-the whole of it.
+with `CALIPER_CANVAS_OFFSCREEN`. The offscreen target takes no view and opens
+nothing on screen. This example uses the offscreen form.
 
 ```c
 CaliperCoreDesc desc = { .struct_size = sizeof desc };
@@ -99,26 +110,28 @@ caliper_core_shutdown(core);
 ```
 
 For a window, pass your view and its size in physical pixels to
-`caliper_core_attach_canvas`, call `caliper_core_frame` from a timer or display
-link, and translate your toolkit's input into `CaliperInputEvent` values for
-`caliper_core_event`. `examples/embed_host/main.mm` does this for AppKit and
-`main_win32.cpp` for Win32.
+`caliper_core_attach_canvas`. Call `caliper_core_frame` from a timer or display
+link. Translate the input of your toolkit into `CaliperInputEvent` values for
+`caliper_core_event`. `examples/embed_host` does this for AppKit and Win32.
 
 The core looks for applets in `applets_dir`, then in the folders of
 `CALIPER_APPLET_PATH`, then in the user applets folder, and last in an
-`applets` folder beside the executable. An applet loads when its ABI epoch and
-UI-stack hash match the core's and the core serves the services it requires
-([Compatibility](../development/compatibility-and-epochs.md)), which holds for applets
-built against the `caliper-sdk` package of the same core build. Without
-`data_dir` the core keeps its stores in the app-data folder: the folder that
-`CALIPER_DATA_DIR` names when it is set, and otherwise the operating system's
-Caliper data folder.
+`applets` folder beside the executable.
+
+An applet loads when its ABI epoch and UI-stack hash match those of the core,
+and the core serves the services that the applet requires
+([Compatibility](../development/compatibility-and-epochs.md)). This holds for
+applets built against the `caliper-sdk` package of the same core build.
+
+Without `data_dir`, the core keeps its stores in the app-data folder. This is
+the folder that `CALIPER_DATA_DIR` names when it is set. Otherwise it is the
+Caliper data folder of the operating system.
 
 ## Windowless Mode
 
-`embed_host` shows the whole path on a machine where no window may open.
-Build it against the package as above, put the `hello` fixture (or any applet
-built from the same core build) in a folder, and run its offscreen mode:
+`embed_host` runs the whole path on a machine where no window may open. Build
+it against the package as above. Put the `hello` fixture (or any applet built
+from the same core build) in a folder, and run its offscreen mode:
 
 ```sh
 cp -R examples/embed_host <work>/embed_host
@@ -128,8 +141,7 @@ CALIPER_EMBED_OFFSCREEN=1 CALIPER_EMBED_APPLETS=<applets> \
     <work>/embed_host-build/embed_host dev.caliper.hello
 ```
 
-It prints the library's version, the core's log lines and the applet's own
-log lines, then one line with the frames it pumped and the pixels the applet
-drew, and exits 0 when the applet drew. `CALIPER_EMBED_EXIT_AFTER` sets how
-many seconds it runs (1 by default). The `caliper_embed_install` test runs the
-same steps in a work folder of its own.
+It prints the version of the library, the log lines of the core and the log
+lines of the applet. Then it prints one line with the frames it pumped and the
+pixels the applet drew. It exits with code 0 when the applet drew.
+`CALIPER_EMBED_EXIT_AFTER` sets how many seconds it runs (1 by default).
