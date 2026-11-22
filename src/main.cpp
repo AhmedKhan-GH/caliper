@@ -1646,7 +1646,7 @@ private:
         if (spec_ui_->take_shot_request()) captures_.add(caliper_host::SpecUiDriver::kShotTicket);
         for (const std::string& line : spec_ui_->take_log()) std::cerr << "[ui] " << line << std::endl;
         if (spec_ui_->quit()) glfwSetWindowShouldClose(window_, GLFW_TRUE);
-        if (spec_ui_->done()) {
+        if (spec_ui_->done() && spec_ui_->released()) {   // a last click is released first
             std::cerr << "[ui] " << (spec_ui_->error().empty() ? "done" : "stopped: " + spec_ui_->error()) << std::endl;
             spec_ui_.reset();
         }
