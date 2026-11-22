@@ -74,7 +74,7 @@ torch 2.14.1, 18 cores, load average about 3):
 | Step to screen, median, `rate=0` | 8.39 to 9.9 ms | 9.23 to 9.75 ms |
 
 The control is the same loop recording a `torch.mps.Event` at 60 Hz without
-snapshots; [the commit effect](live-streaming.md#sync) explains
+snapshots; [the commit effect](../development/performance.md#commit-effect) explains
 why. `torch.mps.current_allocated_memory()` changed by 0.0 MB in every row. A
 CPU 256x256 snapshot cost 80.0 µs (window) and 66.1 µs (attach) median.
 

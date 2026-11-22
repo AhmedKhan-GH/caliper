@@ -139,7 +139,7 @@ those canvases and never paints applet pixels.
   directory. `CALIPER_DATA_DIR` is read once, when the process first looks the
   folder up.
 - **Live session files follow `CALIPER_DATA_DIR` first.** The session files
-  under `live/` (see [Live streaming](../python/live-streaming.md#sessions))
+  under `live/` (see [Live Session Layout](../development/live-session-layout.md#session-file))
   are found in an explicit root when the caller gives one, else in
   `CALIPER_DATA_DIR`, and only then in the core's `data_dir` or the operating
   system's folder (`src/host/live/live_shm.h`).

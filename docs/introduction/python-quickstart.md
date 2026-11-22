@@ -222,7 +222,7 @@ newest completed one at up to 60 fps, so most steps are skipped by design. In
 the benchmark behind these numbers (the same TinyCNN plus a 1024x1024 weight
 shown every step, attach mode, MPS), 468 of 9,460 calls in 8 s took a snapshot,
 training ran at 98.1 % of the commit-matched control (see
-[the commit effect](../python/live-streaming.md#sync)) and the median step
+[the commit effect](../development/performance.md#commit-effect)) and the median step
 to screen was 23.53 ms. A call that took a snapshot cost 35.5 µs median, a
 skipped one 2.0 µs.
 
@@ -248,4 +248,4 @@ the step-to-screen median and p95, one line per view, and **Detach**.
 - [Attach to a running script](../python/script-attachment.md) for the
   session workflow.
 - [Live streaming](../python/live-streaming.md) for how snapshots, the
-  slot ring and the two modes work, with the measurements.
+  slot ring and the two modes work.

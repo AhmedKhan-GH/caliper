@@ -1212,11 +1212,11 @@ entries:
   item: Live streaming over shared memory with sessions, snapshots, sampling and sync.
   ids:
   - STR-04
-- page: docs/python/live-streaming.md#torch-free-caliper-embed
+- page: docs/python/live-streaming.md#components
   item: The torch-free Caliper Embed behind Caliper LIB.
   ids:
   - EMB-26
-- page: docs/python/live-streaming.md#known-limits
+- page: docs/python/live-streaming.md#limits
   item: Known limits of live streaming.
   ids:
   - STR-18

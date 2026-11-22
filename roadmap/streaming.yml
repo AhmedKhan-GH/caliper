@@ -152,7 +152,7 @@ features:
     status: planned
     summary: A live session over shared memory is read by one viewer today, and this work lets several viewers read the same session by giving each reader its own claims.
     depends_on: [STR-04]
-    docs: docs/python/live-streaming.md#known-limits
+    docs: docs/python/live-streaming.md#limits
     issue: null
 
   - id: STR-19

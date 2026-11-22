@@ -5,7 +5,7 @@ Protocol v3 carries live data from a training process to viewers over one WebSoc
 !!! note "Status"
     Version 3.1, which adds [controls](#controls) and [linked selection](#linked-selection) to 3.0. It is used on the loopback interface only, with a session token, until a dedicated security review. [Network streaming](../python/network-streaming.md) explains the design decisions behind it.
 
-Protocol v2 ([`caliper/live.h`](../python/live-streaming.md), shared memory) is unchanged. v2 stays the zero-copy path between two processes on the same machine. v3 sends copies of reduced snapshots over a socket. A producer reduces each snapshot on its own device before it sends it, so the copy is small.
+Protocol v2 ([`caliper/live.h`](../development/live-session-layout.md#versions), shared memory) is unchanged. v2 stays the zero-copy path between two processes on the same machine. v3 sends copies of reduced snapshots over a socket. A producer reduces each snapshot on its own device before it sends it, so the copy is small.
 
 ## Roles and Terms
 

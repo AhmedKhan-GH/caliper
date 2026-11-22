@@ -98,7 +98,7 @@ in the machine's load.
 On MPS, `torch.mps.Event.record()` commits torch's command buffer. On this small
 model a periodic commit by itself raises throughput by 40 to 75 %: torch holds
 many small kernels until a sync, and a commit lets the GPU start on them early
-([the commit effect](../../docs/python/live-streaming.md#sync)). Every
+([the commit effect](../../docs/development/performance.md#commit-effect)). Every
 snapshot path records an event or syncs, so comparing it only with the plain
 baseline flatters it. The `control` arm is the same loop recording an event at
 the snapshot rate and taking no snapshot, and "% of control" is the number to

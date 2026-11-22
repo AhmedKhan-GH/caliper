@@ -79,8 +79,8 @@ snapshot is pooled to at most 512 by 512 values, which is 1 MiB.
 The reduction runs where the data lives because the alternative defeats its
 purpose. Reading the whole tensor back to the host to reduce it there costs the
 transfer that the reduction is meant to avoid, and on MPS a read-back waits for
-torch's queue, which stalls training ([Live streaming](live-streaming.md)
-measured that wait). The viewer, in turn, never needs the whole tensor, so no
+torch's queue, which stalls training ([Performance](../development/performance.md#live-streaming)
+records that wait). The viewer, in turn, never needs the whole tensor, so no
 computation runs in the browser, and torch stays native in the producer.
 
 ## Data Views
@@ -202,7 +202,7 @@ The table gives throughput as a percentage of a reference, for the workload of
 that calls its views every step, with a 1024 by 1024 weight, the loss and
 100,000 3-D points with 4-class labels, at 60 snapshots per second unless the
 row says otherwise. With viewers the reference is the commit-matched control
-(see [Live streaming](live-streaming.md#sync)); with no viewer it is the plain
+(see [the commit effect](../development/performance.md#commit-effect)); with no viewer it is the plain
 loop. Each figure is the median of 24 interleaved pairs of one-second segments
 from three runs of `python/bench/bench_net_pairs.py`, with the runs' medians in
 brackets and the step-time p99 against the reference's.
