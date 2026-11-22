@@ -14,10 +14,26 @@
  * resolved, so that the script checks the same text as the app.
  *
  * caliper_producer_run() runs a derive program like any other, and
- * caliper_producer_read_status() reports it. After a pass, the facade reads
+ * caliper_producer_read_status() reports it; caliper_producer_rebind() and
+ * caliper_producer_set_params() work on it too. After a pass, the facade reads
  * each published resource with caliper_producer_read_resource() and sends it
- * as one RESOURCE message. Not built yet: both functions answer
- * CALIPER_PRODUCER_UNSUPPORTED with the code "program.not_built".
+ * as one RESOURCE message.
+ *
+ * The runtime holds the rules of one-pass programs for every derive pass:
+ *   - Read-only: a tensor input is var<storage, read> in the header that the
+ *     runtime composes; a binding of the reflection that is not a binding of
+ *     that header at its place refuses the program
+ *     ("program.binding_not_allowed"), a tensor input that writes refuses it
+ *     ("program.writes_input"), and the layer's read_only flag refuses it again.
+ *   - Bounds: the composed module is translated with every buffer index
+ *     checked, as a one-pass program is.
+ *   - Sizes: every count, side, stride and byte size is bounded before
+ *     allocation, in 64-bit arithmetic that cannot wrap.
+ *   - Time and memory: one run of all passes is one submit under the time
+ *     watchdog and the timeout of caliper_producer_run(), and the resources,
+ *     counters and bound tensors stay inside memory_limit_bytes.
+ * On a platform without the Metal runtime, both functions answer
+ * CALIPER_PRODUCER_UNSUPPORTED with the code "program.unavailable".
  */
 #ifndef CALIPER_PRODUCER_DERIVE_H
 #define CALIPER_PRODUCER_DERIVE_H
@@ -66,7 +82,9 @@ typedef struct caliper_producer_derive_desc {
     size_t wgsl_size;
     const char* common;               /* the lib modules and common.wgsl, or NULL             */
     size_t common_size;
-    const caliper_producer_input* inputs;   /* `var` is the piece's input name                */
+    const caliper_producer_input* inputs;   /* `var` is the piece's input name; an entry with   */
+                                            /* tensor 0 holds the place of a buffer input, which */
+                                            /* the derive half does not bind                     */
     size_t input_count;               /* at most 8                                            */
     const char* const* input_types;   /* "f32", "i32" or "u32" for each input; NULL: all f32  */
     const caliper_producer_resource_desc* resources;
