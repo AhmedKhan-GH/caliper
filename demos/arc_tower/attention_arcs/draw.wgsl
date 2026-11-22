@@ -6,16 +6,26 @@ struct ArcOut {
     @location(1) @interpolate(flat) item: u32,
 }
 
-// A point of the arc's quadratic curve, raised above its ring by its weight.
+// The color of each head of a layer, four hues that stay apart when arcs add up.
+fn head_color(head: u32) -> vec3<f32> {
+    var colors = array<vec3<f32>, 4>(vec3<f32>(1.0, 0.55, 0.2), vec3<f32>(0.25, 0.75, 1.0),
+                                     vec3<f32>(0.85, 0.4, 1.0), vec3<f32>(0.45, 0.95, 0.45));
+    return colors[head % 4u];
+}
+
+// A point of the arc's quadratic curve, raised above its ring by its weight, and by its head, so
+// that the same token pair of four heads gives four arcs and not one.
 fn arc_point(arc: Arc, t: f32) -> vec3<f32> {
     let p0 = ring_point(arc.layer, arc.from_token);
     let p2 = ring_point(arc.layer, arc.to_token);
-    let p1 = 0.5 * (p0 + p2) + vec3<f32>(0.0, 0.1 + 0.5 * arc.weight, 0.0);
+    let lift = 0.08 + 0.45 * arc.weight + 0.12 * f32(arc.head);
+    let p1 = 0.5 * (p0 + p2) + vec3<f32>(0.0, lift, 0.0);
     let u = 1.0 - t;
     return u * u * p0 + 2.0 * u * t * p1 + t * t * p2;
 }
 
-// A strip along the arc, of a width in pixels that grows with the weight, colored by the head.
+// A strip along the arc, of a width in pixels that grows with the weight, colored by the head. A
+// weak weight gives a faint arc and a strong one a bright arc, below white even where a few add up.
 @vertex
 fn arc_vs(@builtin(instance_index) i: u32, @builtin(vertex_index) v: u32) -> ArcOut {
     let arc = arcs[i];
@@ -26,13 +36,19 @@ fn arc_vs(@builtin(instance_index) i: u32, @builtin(vertex_index) v: u32) -> Arc
     let b = camera::clip(arc_point(arc, min(t + e, 1.0)));
     let d = camera::pixel_direction(a, b);
     let side = f32(v % 2u) - 0.5;
-    let width = (1.0 + 5.0 * arc.weight) * caliper_view.time.z;
+    let selected = pick::selected(i);
+    var width = (1.0 + 2.5 * arc.weight) * caliper_view.time.z;
+    if (selected) {
+        width = width * 1.6;
+    }
     var out: ArcOut;
     out.position = camera::offset_pixels(c, vec2<f32>(-d.y, d.x) * side * width);
-    let rgb = colormap::viridis(f32(arc.head) / f32(H - 1u)).rgb * (0.3 + 0.7 * arc.weight);
-    out.color = vec4<f32>(rgb * arc.weight, arc.weight);
+    // Fainter towards the ends, where the arcs of one token meet and would add up to white.
+    let taper = 0.3 + 0.7 * sin(3.14159265 * t);
+    let k = (0.025 + 0.28 * arc.weight * arc.weight) * taper;
+    out.color = vec4<f32>(head_color(arc.head) * k, k);
     out.item = i;
-    if (pick::selected(i)) {
+    if (selected) {
         out.color = vec4<f32>(1.0, 0.9, 0.6, 1.0);
     }
     return out;
@@ -63,5 +79,5 @@ fn bloom(in: CaliperFullscreen) -> @location(0) vec4<f32> {
             sum = sum + w * textureSampleLevel(glow, caliper_linear, uv, 0.0);
         }
     }
-    return sum * 0.12 * params.glow;
+    return sum * 0.03 * params.glow;
 }
