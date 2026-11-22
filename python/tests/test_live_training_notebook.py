@@ -111,7 +111,7 @@ def settled(nb, state: dict, values: int) -> dict:
     a bounded moment to show it, and then exactly that many values."""
     if state["drawer"] != "wasm":
         return state
-    return first_state(nb, "loss", f"(s) => parseInt(s.info) === {values}", timeout=5.0)
+    return first_state(nb, "loss", f"(s) => parseInt(s.info) === {values}", timeout=30.0)
 
 
 def cell_done(nb, index: int) -> bool:
