@@ -889,3 +889,29 @@ else()
     set_tests_properties(caliper_wgsl_tests PROPERTIES SKIP_REGULAR_EXPRESSION "skipped: no caliper_wgsl library")
 endif()
 set_tests_properties(caliper_wgsl_tests PROPERTIES LABELS "wgsl")
+
+# The acceptance test of milestone M1 (design/instruments.md, Acceptance Test): a script whose only
+# Caliper line is caliper.watch(model, optimizer), the hidden app attached to it, and caliper-mcp
+# as a child. tests/m1/driver.py runs tests/m1/transcript.jsonl through the MCP tools and exits 77
+# where the app, Metal, torch or the native network sender is missing, which ctest reports as skipped.
+# CALIPER_M1_PYTHON names a Python with torch; the builder's test Python or the one found is the default.
+if(NOT WIN32 AND CALIPER_WITH_BUILDER)
+    set(CALIPER_M1_PYTHON "" CACHE FILEPATH "A Python with torch for the M1 acceptance test; empty uses the test Python")
+    set(_m1_python "${CALIPER_M1_PYTHON}")
+    if(NOT _m1_python AND CALIPER_BUILDER_TEST_PYTHON)
+        set(_m1_python "${CALIPER_BUILDER_TEST_PYTHON}")
+    endif()
+    if(NOT _m1_python)
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_FOUND)
+            set(_m1_python "${Python3_EXECUTABLE}")
+        endif()
+    endif()
+    if(_m1_python)
+        add_test(NAME caliper_m1_acceptance COMMAND "${_m1_python}" "${CMAKE_CURRENT_SOURCE_DIR}/m1/driver.py"
+            --app "$<TARGET_FILE:caliper>" --mcp "$<TARGET_FILE:caliper-mcp>" --python "${_m1_python}"
+            --work "${CMAKE_CURRENT_BINARY_DIR}/m1-work")
+        set_tests_properties(caliper_m1_acceptance PROPERTIES LABELS "m1;acceptance" TIMEOUT 300
+            SKIP_RETURN_CODE 77)
+    endif()
+endif()

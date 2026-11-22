@@ -105,6 +105,8 @@ name is the command name with `_` for its first dot (`panel_create` for `panel.c
 name. The input schema is the command's arguments, the output schema is the command's result, and the description is
 the command's summary.
 
+The tools `control_create`, `control_patch` and `control_remove` edit the controls of the open spec. The tools `run_state`, `run_set_param`, `run_action` and `run_pause` act on the attached script, and `events_wait` reads the events of the app. [Run Control and Events](run-control-and-events.md) describes them. `caliper-mcp` waits for `events_wait` up to its `timeout_s` plus the margin of a call of Caliper API.
+
 `history.undo` and `history.redo` are yours and are not offered. An agent takes back a change with an edit that you
 review. The list comes from the table of the running app, or from the table built into `caliper-mcp` when no app
 answers. Thus `tools/list` always answers.
