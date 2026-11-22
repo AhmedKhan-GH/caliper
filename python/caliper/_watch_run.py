@@ -7,6 +7,11 @@ parameter groups, publishes the rate that the step uses as the series ``lr``, an
 scene ``model`` when a viewer watches it. A step post-hook puts the scheduler's rates back (see
 below) and publishes the loss of a closure that ran inside ``optimizer.step(closure)``.
 
+AN ERROR in a hook never stops ``optimizer.step()``. Each part of the hooks except the checkpoint
+catches its errors, and the first one shows as a ``RuntimeWarning``. When a step raised before
+its post-hook ran, the next pre-hook first puts the scheduler's rates back, so the factor never
+compounds.
+
 THE LOSS is the last 0-d tensor that ``backward()`` ran on. A wrapper of
 ``torch.autograd.backward`` (which ``Tensor.backward`` calls) keeps it, detached, while a watch
 with an optimizer is on; the wrapper goes when the last such watch is removed. The step post-hook
@@ -139,6 +144,7 @@ class RunHooks:
         self.factor = 1.0
         self._saved = None               # the scheduler's rates while the step runs
         self._written = None
+        self._warned = False             # an error of the hooks was reported
         self._loss_seen = _loss[0]
         self.armed = False
         self.means: list = []
@@ -282,19 +288,39 @@ class RunHooks:
             self._loss_seen = n
             self.pkg.series(t, "loss", rate=self.rate)
 
+    def _failed(self, e: Exception) -> None:
+        """Warn about the first error of the hooks; the step itself goes on."""
+        if not self._warned:
+            self._warned = True
+            warnings.warn(f"caliper.watch: the step hook raised {type(e).__name__}: {e}; the "
+                          "optimizer step goes on, and later errors of the hook are not "
+                          "reported", RuntimeWarning, stacklevel=3)
+
     def _pre(self, opt, args, kwargs):
-        self._loss_tick()
+        # An error here must never stop optimizer.step(), so only the checkpoint is unguarded.
+        try:
+            if self._saved is not None:  # a step that raised before the post-hook ran
+                self._restore()
+            self._loss_tick()
+        except Exception as e:
+            self._failed(e)
         self.pkg.step()
-        groups = opt.param_groups
-        if groups:
-            self.pkg.series(self._apply_lr(groups), "lr", rate=self.rate)
-        if self.scene is not None:
-            self._scene_tick()
+        try:
+            groups = opt.param_groups
+            if groups:
+                self.pkg.series(self._apply_lr(groups), "lr", rate=self.rate)
+            if self.scene is not None:
+                self._scene_tick()
+        except Exception as e:
+            self._failed(e)
 
     def _post(self, opt, args, kwargs):
-        if self._saved is not None:
-            self._restore()
-        self._loss_tick()                # the loss of a closure that ran inside step()
+        try:
+            if self._saved is not None:
+                self._restore()
+            self._loss_tick()            # the loss of a closure that ran inside step()
+        except Exception as e:
+            self._failed(e)
 
     def close(self) -> None:
         """Put the scheduler's rates back if a step is under way, remove ``lr`` and the loss tap."""
