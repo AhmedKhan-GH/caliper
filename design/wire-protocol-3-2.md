@@ -1,6 +1,6 @@
 # Wire protocol 3.2 draft
 
-This page drafts version 3.2 of wire protocol v3, an additive minor version after 3.1. It adds timelines and the stamps that place every item on them, three kinds of live view (scenes, text logs and bar charts) and the messages that list, open and seek recordings. It follows the reference page of wire protocol v3 on the sprint 2 branch, uses its terms and refers to its sections by name. [Scenes](scenes.md) defines the scene model and [Recordings](recordings.md) the timelines, the recording file and the scrubber that these messages serve.
+This page drafts version 3.2 of wire protocol v3, an additive minor version after 3.1. It adds timelines and the stamps that place every item on them, three kinds of live view (scenes, text logs and bar charts) and the messages that list, open and seek recordings. It follows the reference page of wire protocol v3 on the sprint 2 branch, uses its terms and refers to its sections by name. [Scenes](scenes.md) defines the scene model and Recordings the timelines, the recording file and the scrubber that these messages serve.
 
 !!! note "Status"
     A draft for sprint 2 to review. Sprint 2 owns the wire protocol reference and `include/caliper/live_net.h`; the number 3.2 and every id, kind, dtype, key and code on this page are proposals until sprint 2 takes them into both. [What sprint 2 must confirm](#what-sprint-2-must-confirm) lists them.
@@ -102,7 +102,7 @@ A producer lists a view of a new kind only to a peer that announced its capabili
 | `0x007A` | `cursor` | viewer to server | none | `time_state` |
 | `0x007B` | `time_state` | server to viewer | none | |
 
-A recording stores these messages as they are, in an MCAP file ([Recordings](recordings.md#the-recording-file)), so the protocol reserves no message types for a recording file.
+A recording stores these messages as they are, in an MCAP file (Recordings), so the protocol reserves no message types for a recording file.
 
 ### scene_update
 
@@ -269,7 +269,7 @@ A viewer's request to move its cursor. `section_count` is 0.
 | `pace` | string | `play` on a sequence timeline: `recorded` (default) or `even` |
 | `loop` | array or null | `play`: `[start, end]` as stamp text to loop over, or null for no loop |
 
-A cursor belongs to one viewer connection and the session it is attached to; attaching to another session drops it. `pause` holds the cursor where it is, `step` moves it to the next or previous position with an item of a view the viewer subscribes to, and `follow` returns a live session's viewer to the live edge. Playback follows [Playing](recordings.md#playing). A viewer sends at most 30 CURSOR messages a second, for example while a person drags the scrubber, ending with the position where the drag stops, and a server may skip a `seek` it has not started when a newer one arrives. The server answers each CURSOR with TIME_STATE, or with ERROR `not_seekable` or `bad_cursor`: an unknown timeline, malformed stamp text, a speed or count out of range, or `follow` on an ended session.
+A cursor belongs to one viewer connection and the session it is attached to; attaching to another session drops it. `pause` holds the cursor where it is, `step` moves it to the next or previous position with an item of a view the viewer subscribes to, and `follow` returns a live session's viewer to the live edge. Playback follows Playing. A viewer sends at most 30 CURSOR messages a second, for example while a person drags the scrubber, ending with the position where the drag stops, and a server may skip a `seek` it has not started when a newer one arrives. The server answers each CURSOR with TIME_STATE, or with ERROR `not_seekable` or `bad_cursor`: an unknown timeline, malformed stamp text, a speed or count out of range, or `follow` on an ended session.
 
 While the cursor does not follow the live edge, the server sends each of the viewer's subscriptions to that session what lies at the cursor, each data message with the key `cursor`, the generation of the TIME_STATE it answers:
 
@@ -360,7 +360,7 @@ The scene limits are those of [Scenes](scenes.md#limits); that page is their aut
 | Code | Meaning |
 |---|---|
 | `unknown_recording` | RECORDING_OPEN named a recording the server does not list |
-| `bad_recording` | The recording's file failed a check of [Recordings](recordings.md#limits-of-the-format) |
+| `bad_recording` | The recording's file failed a check of Recordings |
 | `not_seekable` | CURSOR for a session without a recording the server holds |
 | `bad_cursor` | CURSOR with an unknown timeline, malformed stamp text, a value out of range, or `follow` on an ended session |
 

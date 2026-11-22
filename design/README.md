@@ -40,11 +40,7 @@ Both fail with a configuration error when run from inside `design/` or with an a
 | [Data and Cloud](data-and-cloud.md) | Run history, run comparison and session recording in the desktop app's local database, and Caliper Cloud and Caliper Web, which offer them online |
 | [Windows parity](windows-parity.md) | The steps that bring Windows level with macOS: the applet platform, Caliper LIB, streaming and Caliper API, the web viewer, Caliper Embed, the renderer fallbacks and distribution |
 | [Streaming and embedding](streaming-and-embedding.md) | What remains of using Caliper from other programs: the rest of the web viewer, applets in a browser, WebTransport, the security review and the rest of C++ embedding |
-| [Sprint 4](sprint-4.md) | The renderer core, scenes and recordings as increments in order, starting with a loss-landscape demo in a notebook after the renderer core's minimum cut |
 | [Renderer core](renderer-core.md) | One graphics layer that each backend implements once, one shader source, a shared scene core, and zero-copy as an import capability |
 | [Scenes](scenes.md) | 3-D and 2-D scenes of entities with entity transforms, primitives and cameras, logged from Caliper LIB, with a text log and a bar chart |
-| [Recordings](recordings.md) | Timelines, recorders, the recording file, recordings in the workspace database, and the scrubber |
 | [Wire protocol 3.2 draft](wire-protocol-3-2.md) | An additive minor version of the wire protocol for timelines, scenes, text logs, bar charts and recordings |
 | [Web geometry](web-geometry.md) | Scenes in the browser on the WebGPU backend of the renderer core, and the fallback without WebGPU |
-| [Demos](demos.md) | A loss-landscape demo in a notebook and four demos of scenes and recordings on openly licensed data, with acceptance criteria |
-| [Sprint 5](sprint-5.md) | What sprint 4 leaves out: run comparison, fields, robotics, the viewport and scene additions |

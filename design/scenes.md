@@ -1,6 +1,6 @@
 # Scenes
 
-This page plans scenes: a new kind of live view that draws a tree of entities in one 2-D or 3-D space, with points, lines, arrows, boxes, meshes, images and pinhole cameras, each entity placed by an entity transform. It defines the scene model, the Caliper LIB calls that log to a scene, what each route copies when a scene is viewed on the same machine, how the native view draws a scene through the scene core and graphics layer of the [renderer core](renderer-core.md), and how picks and selections in a scene reach the script. It also plans the two small views of the same sprint, the text log and the bar chart. Timelines, stamps and recordings are planned in [Recordings](recordings.md), the messages on the wire in [Wire protocol 3.2](wire-protocol-3-2.md), and the browser's pipeline in [Web geometry](web-geometry.md).
+This page plans scenes: a new kind of live view that draws a tree of entities in one 2-D or 3-D space, with points, lines, arrows, boxes, meshes, images and pinhole cameras, each entity placed by an entity transform. It defines the scene model, the Caliper LIB calls that log to a scene, what each route copies when a scene is viewed on the same machine, how the native view draws a scene through the scene core and graphics layer of the [renderer core](renderer-core.md), and how picks and selections in a scene reach the script. It also plans the two small views of the same sprint, the text log and the bar chart. Timelines, stamps and recordings are planned in Recordings, the messages on the wire in [Wire protocol 3.2](wire-protocol-3-2.md), and the browser's pipeline in [Web geometry](web-geometry.md).
 
 ## What is built and what is planned
 
@@ -225,7 +225,7 @@ The tests are headless. A test of the scene core builds, for both forms, both up
 
 The work is about 1.5 builder days natively (the argument and its checks in Caliper LIB, the starting state and the reset in the scene core and the view, and the tests) and 0.5 in the browser, where the viewer reads the key from VIEWS and the capture row runs in Chromium. It needs from the scene core only the azimuth convention above and a stored starting state for reset, and from recordings nothing beyond keeping the views list.
 
-Not in this sprint: preset views, an orthographic projection, following an entity, saved viewpoints, linked cameras and a fly mode, which [Sprint 5](sprint-5.md) plans as its viewport step, apart from the fly mode, which it leaves out.
+Not in this sprint: preset views, an orthographic projection, following an entity, saved viewpoints, linked cameras and a fly mode, which Sprint 5 plans as its viewport step, apart from the fly mode, which it leaves out.
 
 ### The scene's calls
 
@@ -353,7 +353,7 @@ caliper.bars(values, name="bars", labels=None, colors=None, horizontal=False, ra
 
 ### Stamps on the timelines
 
-Every call of a scene, and every `text` and `bars` call, is stamped at the call with the session's position on each timeline: `step`, which the script advances with `caliper.step`; `time`, the wall clock; and the timelines the script defines. The calls that define and advance timelines belong to the [Recordings](recordings.md) page. A call with `static=True` has no stamp. A snapshot carries the stamp of the call that made it, so a batch dropped by its rate limit leaves no stamp. Each snapshot keeps its monotonic `stamp_ns` for latency display, as today.
+Every call of a scene, and every `text` and `bars` call, is stamped at the call with the session's position on each timeline: `step`, which the script advances with `caliper.step`; `time`, the wall clock; and the timelines the script defines. The calls that define and advance timelines belong to the Recordings page. A call with `static=True` has no stamp. A snapshot carries the stamp of the call that made it, so a batch dropped by its rate limit leaves no stamp. Each snapshot keeps its monotonic `stamp_ns` for latency display, as today.
 
 ### A worked example
 
@@ -786,7 +786,7 @@ An applet that moves from the geometry service to the scene service deletes its 
 
 ### Wire-capable scenes
 
-An applet's scene is the same model that protocol 3.2 carries, so the host can send it where a script's scene goes. A scene is wire-capable when every array can be read by the host and fits the wire: the host can read it back (an `SRC_ALLOC` array on a backend that copies buffers back, which Metal does, or a CPU tensor), and each batch is within the limits of a frame and of the receiving viewer's data view. The host then reads the arrays back in a job, never on the frame thread, packs strided columns into rows, and encodes the scene's parts as protocol 3.2 messages for the app's recorder and for a hub that relays the app's views. A recorded applet scene opens in the scrubber like any recorded scene, in the app and in a browser, and a browser attached to that hub draws it under the parity rules of [Web geometry](web-geometry.md). Native-only are zero-copy, since every array that leaves the process is copied; the applet's events, since a pick in a browser reaches no applet in this sprint; and the applet's cadence, since the host sends at most at the view's rate. [Sprint 4](sprint-4.md) sizes this, 3 builder days, with the app's recorder in its increment 9.
+An applet's scene is the same model that protocol 3.2 carries, so the host can send it where a script's scene goes. A scene is wire-capable when every array can be read by the host and fits the wire: the host can read it back (an `SRC_ALLOC` array on a backend that copies buffers back, which Metal does, or a CPU tensor), and each batch is within the limits of a frame and of the receiving viewer's data view. The host then reads the arrays back in a job, never on the frame thread, packs strided columns into rows, and encodes the scene's parts as protocol 3.2 messages for the app's recorder and for a hub that relays the app's views. A recorded applet scene opens in the scrubber like any recorded scene, in the app and in a browser, and a browser attached to that hub draws it under the parity rules of [Web geometry](web-geometry.md). Native-only are zero-copy, since every array that leaves the process is copied; the applet's events, since a pick in a browser reaches no applet in this sprint; and the applet's cadence, since the host sends at most at the view's rate. Sprint 4 sizes this, 3 builder days, with the app's recorder in its increment 9.
 
 ### The C++ sugar
 
@@ -866,7 +866,7 @@ The geometry service drew a fixed menu of draws into an offscreen texture, with 
 
 ## Left to sprint 5
 
-The user moved what this sprint leaves out to [Sprint 5](sprint-5.md), which plans it:
+The user moved what this sprint leaves out to Sprint 5, which plans it:
 
 - **More shapes:** ellipsoids, capsules, cylinders and planes, drawn from their parameters.
 - **Mesh files** (glTF, OBJ, STL) through sprint 3's loaders, and a URDF helper in Caliper LIB.
