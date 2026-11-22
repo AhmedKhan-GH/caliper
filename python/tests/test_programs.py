@@ -720,3 +720,69 @@ def test_activation_hooks_stay_while_another_program_needs_them(monkeypatch):
     finally:
         P._PROGS.clear()
         P.detach()
+
+
+SPIN = """@group(0) @binding(0) var<storage, read> w: array<f32>;
+@group(0) @binding(1) var<storage, read> spin: array<f32>;
+@group(0) @binding(2) var<storage, read_write> positions: array<f32>;
+@group(0) @binding(3) var<storage, read_write> count: atomic<u32>;
+@compute @workgroup_size(1)
+fn run(@builtin(global_invocation_id) id: vec3<u32>) {
+    var s = w[0];
+    let n = u32(spin[0]);
+    for (var k = 0u; k < n; k++) { s = s * 0.999999 + w[k % 8u]; }
+    let i = atomicAdd(&count, 1u);
+    positions[i * 3u] = s;
+    positions[i * 3u + 1u] = 0.0;
+    positions[i * 3u + 2u] = 0.0;
+}
+"""
+
+
+@needs_device
+def test_training_keeps_its_step_rate_after_a_pass_times_out(run):
+    """A pass that runs far longer than the timeout: the step with the timeout returns after the
+    timeout while the GPU still runs the pass, and the next steps keep the rate of the steps
+    before it."""
+    import time
+    from caliper import _producer
+    net, opt, _, _ = run
+
+    def timed(first, steps):
+        out = []
+        for i in range(first, first + steps):
+            t = time.perf_counter()
+            _train(net, opt, 1, first=i)
+            out.append(time.perf_counter() - t)
+        return out
+
+    timed(0, 3)                                      # MPS warms up
+    baseline = timed(3, 5)                           # steps without a program
+    net.register_buffer("spin", torch.tensor([1e5, 0.0, 0.0, 0.0], device="mps"))
+    decl = {"inputs": [{"var": "w", "source": "live:fc.weight"}, {"var": "spin", "source": "live:spin"}],
+            "output": {"kind": "geometry", "panel": "p", "part": "points", "max_count": 1,
+                       "arrays": ["positions"]},
+            "limits": {"time_ms": 50}, "workgroups": [1, 1, 1]}
+    assert P.install("spin", decl, SPIN, scene="s")["state"] == "compiled"
+    _train(net, opt, P.WARMUP_STEPS + 1, first=10)   # one pass of 100,000 iterations
+    st = P.status()[0]
+    assert st["state"] == "running" and st["last_pass_ms"]
+    target_ms = 2000.0                               # 4 times the timeout of max(100, 10 x 50) ms
+    net.spin[0] = min(2e9, 1e5 * target_ms / st["last_pass_ms"])
+    torch.mps.synchronize()
+
+    before = timed(20, 1)                            # the long pass, with the timeout
+    reaping = _producer.reaping()
+    st = P.status()[0]
+    after = timed(21, 10)
+    assert st["state"] == "stopped" and st["error"]["code"] == "program.timeout", st
+    assert "cannot be stopped" in st["error"]["message"]
+    assert reaping == 1, "the step returned only after the GPU ended the pass"
+    assert before[0] < 1.0, before                   # the timeout of 0.5 s, not the pass of 2 s
+    assert sorted(after)[5] < 3 * sorted(baseline)[2] + 0.02, (after, baseline)
+    deadline = time.monotonic() + 30
+    while _producer.reaping() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert _producer.reaping() == 0
+    P._reap()
+    assert not P._ABANDONED

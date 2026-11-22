@@ -55,6 +55,10 @@ public:
     // The GPU time of frames the view completed since the last call: their mean in milliseconds,
     // their count, and whether they drew a stage program. The time watchdog's input.
     virtual void frames_done(double gpu_ms, uint32_t frames, bool staged) = 0;
+    // The oldest frame with a stage program that the view submitted and the GPU has not completed
+    // has waited this long, on the wall clock. The view never waits for a frame; a stage that does
+    // not end makes its frame wait here, and the source may turn its stages off.
+    virtual void frame_pending(double waited_ms) { (void)waited_ms; }
 };
 
 // The StageLookup of one scene view over its panel's StageSource, which makes and keeps the

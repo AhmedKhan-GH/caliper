@@ -27,6 +27,7 @@
 #import <Metal/Metal.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <deque>
 #include <string>
@@ -119,6 +120,9 @@ struct MTex {
     bool shared = false;
 };
 
+// The backends whose Metal objects wait in the reaper for the GPU to end their last submit.
+std::atomic<size_t> g_reaping{0};
+
 // A ring of shared memory for the uniform arenas. A region is reused once the submit that
 // read it completed; when no region is free the ring grows into a new buffer and the old one
 // is dropped once its last submit completed. Nothing ever waits.
@@ -198,6 +202,8 @@ public:
         set_programs(shaders::kMetalPrograms, shaders::kProgramCount);
     }
 
+    bool reap_ = false;   // the destructor gives the objects to the reaper instead of a wait
+
     // The geometry service's adapter (metal_backend.h): a live buffer's or texture's Metal object.
     id<MTLBuffer> buffer_object(Buffer b) const {
         return alive(b) && handle_slot(b.id) < buffers_.size() ? buffers_[handle_slot(b.id)] : nil;
@@ -206,8 +212,44 @@ public:
         return alive(t) && handle_slot(t.id) < textures_.size() ? textures_[handle_slot(t.id)].texture : nil;
     }
 
+    // A backend waits for its last submit when it goes, because its submits hold no references
+    // (commandBufferWithUnretainedReferences) and the renderer's teardown needs that order.
+    // destroy_metal_backend_without_wait() sets reap_: then, while the last submit still runs, as
+    // a pass that does not end, the Metal objects go to a reaper instead. A marker committed
+    // after that submit on the same queue completes when the driver ends the work, and its
+    // handler releases them. The GPU cannot be stopped; the destroying thread only stops waiting.
     ~MetalBackend() override {
-        if (!inflight_.empty()) [inflight_.back().cb waitUntilCompleted];
+        if (!reap_) {
+            if (!inflight_.empty()) [inflight_.back().cb waitUntilCompleted];
+            return;
+        }
+        if (inflight_.empty() || inflight_.back().cb.status >= MTLCommandBufferStatusCompleted) return;
+        auto kept = std::make_shared<Reaped>();
+        kept->ring = std::move(ring_);
+        kept->inflight = std::move(inflight_);
+        kept->buffers = std::move(buffers_);
+        kept->readbacks = std::move(readbacks_);
+        kept->textures = std::move(textures_);
+        kept->samplers = std::move(samplers_);
+        kept->libraries = std::move(libraries_);
+        kept->pipes = std::move(pipes_);
+        kept->groups = std::move(groups_);
+        kept->buffer_writes = std::move(buffer_writes_);
+        kept->texture_writes = std::move(texture_writes_);
+        kept->events = std::move(producer_events_);
+        @autoreleasepool {
+            id<MTLCommandBuffer> marker = [queue_ commandBuffer];
+            if (marker == nil) {   // no marker: the objects stay until the process exits
+                new std::shared_ptr<Reaped>(std::move(kept));
+                return;
+            }
+            g_reaping.fetch_add(1);
+            [marker addCompletedHandler:^(id<MTLCommandBuffer>) {
+                kept->inflight.clear();
+                g_reaping.fetch_sub(1);
+            }];
+            [marker commit];
+        }
     }
 
 protected:
@@ -874,6 +916,20 @@ protected:
 
 private:
     struct Inflight { Serial serial; id<MTLCommandBuffer> cb; };
+    struct QueueEvent { id<MTLSharedEvent> event = nil; uint64_t value = 0; };
+    // The Metal objects of a backend that went while its last submit ran (~MetalBackend).
+    struct Reaped {
+        UniformRing ring;
+        std::deque<Inflight> inflight;
+        std::vector<id<MTLBuffer>> buffers, readbacks;
+        std::vector<MTex> textures;
+        std::vector<id<MTLSamplerState>> samplers;
+        std::vector<id<MTLLibrary>> libraries;
+        std::vector<MPipe> pipes;
+        std::vector<MGroup> groups;
+        std::vector<id<MTLCommandBuffer>> buffer_writes, texture_writes;
+        std::unordered_map<void*, QueueEvent> events;
+    };
     id<MTLDevice> device_;
     id<MTLCommandQueue> queue_;
     bool unified_ = true;
@@ -890,7 +946,6 @@ private:
     // The command buffer of each resource's last queued write, until it completed.
     std::vector<id<MTLCommandBuffer>> buffer_writes_, texture_writes_;
     // One event per producer queue that an update was ordered after, with its last signalled value.
-    struct QueueEvent { id<MTLSharedEvent> event = nil; uint64_t value = 0; };
     std::unordered_map<void*, QueueEvent> producer_events_;
 };
 
@@ -905,6 +960,13 @@ void* metal_texture(Backend& b, Texture texture) {
     auto* m = dynamic_cast<MetalBackend*>(&b);
     return m ? (__bridge void*)m->texture_object(texture) : nullptr;
 }
+
+void destroy_metal_backend_without_wait(std::unique_ptr<Backend> backend) {
+    if (auto* m = dynamic_cast<MetalBackend*>(backend.get())) m->reap_ = true;
+    backend.reset();
+}
+
+size_t metal_backends_reaping() { return g_reaping.load(); }
 
 std::unique_ptr<Backend> make_metal_backend(void* mtl_device, void* mtl_command_queue) {
     if (mtl_device == nullptr || mtl_command_queue == nullptr) return nullptr;

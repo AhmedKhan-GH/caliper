@@ -1402,6 +1402,7 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     }
     ++cost_.frames;
     ++generation_;
+    if (staged_ > 0) staged_frames_.emplace_back(s, std::chrono::steady_clock::now());
     return true;
 }
 
@@ -1412,6 +1413,11 @@ void SceneView::poll() {
     // The stages' time watchdog reads the mean GPU time of the frames completed since the last poll.
     if (st.gpu_ms >= 0 && st.gpu_submits > 0 && stages_ && stages_->source())
         stages_->source()->frames_done(st.gpu_ms / double(st.gpu_submits), st.gpu_submits, staged_ > 0);
+    // A frame with stages that has not completed: the source learns how long it waits, without a
+    // wait here, and may turn the stages off.
+    while (!staged_frames_.empty() && gfx_.completed(staged_frames_.front().first)) staged_frames_.pop_front();
+    if (!staged_frames_.empty() && stages_ && stages_->source())
+        stages_->source()->frame_pending(ms_since(staged_frames_.front().second));
 }
 
 uint64_t SceneView::imgui_texture() const { return color_ ? gfx_.imgui_texture_id(color_) : 0; }

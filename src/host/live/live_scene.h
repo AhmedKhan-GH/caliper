@@ -42,7 +42,9 @@
 #include "scene/scene.h"
 #include "scene/stage_cache.h"
 
+#include <chrono>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
 #include <string>
@@ -288,6 +290,9 @@ private:
     std::unique_ptr<caliper_scene::StageCache> stages_;
     uint64_t stage_revision_ = 0;
     uint32_t staged_ = 0;
+    // The frames with stage draws that the GPU has not completed, oldest first, with their submit
+    // time: poll() tells the stage source how long the oldest one waits.
+    std::deque<std::pair<caliper_gfx::Serial, std::chrono::steady_clock::time_point>> staged_frames_;
     int64_t stamp_step_ = 0;
     caliper_scene::CompileOptions stage_options(caliper_scene::CompileOptions opt) const;
 

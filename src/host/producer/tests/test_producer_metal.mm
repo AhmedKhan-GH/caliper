@@ -10,9 +10,12 @@
 
 #include "producer/caliper_producer.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -474,4 +477,65 @@ TEST_CASE("the watchdog stops a program over its time limit, and a timeout stops
     uint32_t after = 0;
     CHECK(caliper_producer_compile(f.rt, &d.d, &after, &e) == CALIPER_PRODUCER_TIMEOUT);
     caliper_producer_error_free(&e);
+}
+
+TEST_CASE("after a timeout the runtime goes without a wait while its pass still runs on the GPU") {
+    using clock = std::chrono::steady_clock;
+    const auto settle = clock::now() + std::chrono::seconds(20);   // the reaper of earlier cases
+    while (caliper_producer_reaping() != 0 && clock::now() < settle)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    REQUIRE(caliper_producer_reaping() == 0);
+    Fixture f;
+    if (f.device == nil) { MESSAGE("no Metal device"); return; }
+    // One invocation that loops w[1] times: the case sets the count so that the pass lasts
+    // about 400 ms, far past a timeout of 50 ms.
+    Desc d(R"(@group(0) @binding(0) var<storage, read> w: array<f32>;
+@group(0) @binding(1) var<storage, read_write> positions: array<f32>;
+@group(0) @binding(2) var<storage, read_write> count: atomic<u32>;
+@compute @workgroup_size(1)
+fn run(@builtin(global_invocation_id) id: vec3<u32>) {
+    var s = w[0];
+    let n = u32(w[1]);
+    for (var k = 0u; k < n; k++) { s = s * 0.999999 + w[k % 8u]; }
+    let i = atomicAdd(&count, 1u);
+    positions[i * 3u] = s;
+    positions[i * 3u + 1u] = 0.0;
+    positions[i * 3u + 2u] = 0.0;
+}
+)", f.w);
+    d.d.max_count = 1;
+    d.d.workgroups[0] = d.d.workgroups[1] = d.d.workgroups[2] = 1;
+    auto* w = static_cast<float*>([f.tensor contents]);
+    w[1] = 100000.0f;
+    uint32_t prog = 0;
+    caliper_producer_error e{};
+    if (!compile_or_skip(f.rt, d.d, &prog, &e)) { caliper_producer_error_free(&e); return; }
+    caliper_producer_frame frame{1, 0.0, 1};
+    REQUIRE(caliper_producer_run(f.rt, &prog, 1, &frame, 5000.0, nullptr, &e) == CALIPER_PRODUCER_OK);
+    caliper_producer_program_status st{};
+    REQUIRE(caliper_producer_read_status(f.rt, prog, &st) == CALIPER_PRODUCER_OK);
+    REQUIRE(st.last_pass_ms > 0.0);
+    w[1] = float(std::min(1e9, 100000.0 * 400.0 / st.last_pass_ms));
+    MESSAGE("100000 iterations took ", st.last_pass_ms, " ms; the long pass runs ", w[1], " of them");
+
+    const auto t0 = clock::now();
+    CHECK(caliper_producer_run(f.rt, &prog, 1, &frame, 50.0, nullptr, &e) == CALIPER_PRODUCER_TIMEOUT);
+    REQUIRE(e.code);
+    CHECK(std::string(e.code) == "program.timeout");
+    CHECK(std::string(e.message).find("cannot be stopped") != std::string::npos);
+    caliper_producer_error_free(&e);
+    const auto t1 = clock::now();
+    caliper_producer_destroy(f.rt);   // no wait for the pass that still runs
+    f.rt = nullptr;
+    const double destroy_ms = std::chrono::duration<double, std::milli>(clock::now() - t1).count();
+    const size_t reaping = caliper_producer_reaping();
+    MESSAGE("the timeout came after ", std::chrono::duration<double, std::milli>(t1 - t0).count(),
+            " ms; the destroy took ", destroy_ms, " ms");
+    CHECK(destroy_ms < 50.0);
+    CHECK(reaping == 1);
+    // The reaper lets the runtime's objects go when the GPU ends the pass.
+    const auto deadline = clock::now() + std::chrono::seconds(20);
+    while (caliper_producer_reaping() != 0 && clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    CHECK(caliper_producer_reaping() == 0);
 }

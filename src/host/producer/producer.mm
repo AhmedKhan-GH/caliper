@@ -829,8 +829,10 @@ caliper_producer_status caliper_producer_run(caliper_producer* rt, const uint32_
                     stop_all(rt, kTimeout);
                     if (pass) pass->wall_ms = now_ms() - start;
                     return fail(error, CALIPER_PRODUCER_TIMEOUT, kTimeout,
-                                "The pass of " + p->id + " did not finish in " + std::to_string(timeout_ms) +
-                                    " ms; every program stopped, and training continues without them.");
+                                "The pass of " + p->id + " did not finish in " + std::to_string(int(timeout_ms)) +
+                                    " ms, thus Caliper stopped waiting for it and stopped every program. A pass "
+                                    "on the GPU cannot be stopped: the GPU stays busy until the driver ends it, "
+                                    "and training goes on meanwhile.");
                 }
                 if (++spins < 2000) std::this_thread::yield();
                 else std::this_thread::sleep_for(std::chrono::microseconds(20));
@@ -916,14 +918,17 @@ void caliper_producer_destroy(caliper_producer* rt) {
                 if (p.live) free_prog(rt, p);
             for (Import& im : rt->imports)
                 if (im.live) rt->be->release(im.buffer);
-            // The last submit may still read an import; the layer frees nothing under it.
-            rt->be.reset();
+            // The last submit may still run, as after a timeout. The backend does not wait for
+            // it: its objects, with the imports' buffers, wait in the layer's reaper.
+            destroy_metal_backend_without_wait(std::move(rt->be));
         }
         rt->queue = nil;
         rt->device = nil;
         delete rt;
     }
 }
+
+size_t caliper_producer_reaping(void) { return metal_backends_reaping(); }
 
 void caliper_producer_error_free(caliper_producer_error* error) {
     if (!error) return;

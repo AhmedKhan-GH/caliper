@@ -245,6 +245,7 @@ public:
     }
     void refused(const StageBuild& build, const std::string& message) override;
     void frames_done(double gpu_ms, uint32_t frames, bool staged) override;
+    void frame_pending(double waited_ms) override;
 
     // The builds of the panel's entities, by entity_key(); the sources each entity was built from.
     std::map<std::string, std::shared_ptr<const StageBuild>> builds_;
@@ -311,6 +312,32 @@ void AppStageHost::Panel::frames_done(double gpu_ms, uint32_t frames, bool stage
                     stopped.push_back(r.status);
                 }
         }
+    }
+    for (const cb::ProgramStatus& s : stopped) host_.push(s, "stopped");
+}
+
+// A frame with the stages that the GPU has not completed after StageWatchdog::kHangMs: the panel
+// draws without its stages from now on. The view never waited for the frame, and the GPU runs it
+// until the driver ends the work.
+void AppStageHost::Panel::frame_pending(double waited_ms) {
+    if (builds_.empty() || off_ || StageWatchdog::pending(waited_ms) != StageWatchdog::Action::stop) return;
+    std::vector<cb::ProgramStatus> stopped;
+    {
+        std::lock_guard<std::mutex> lock(host_.mutex_);
+        off_ = true;
+        ++revision_;
+        for (Record& r : host_.records_)
+            if (r.stage.panel == id_ && r.usable && !r.stopped) {
+                r.stopped = true;
+                r.status.state = "stopped";
+                r.status.error = cb::ProgramError{
+                    pg::kStageOverTime,
+                    "A frame of the panel with its stages did not finish in " + std::to_string(int(waited_ms)) +
+                        " ms, so it draws without its stages. A stage on the GPU cannot be stopped: the GPU stays "
+                        "busy until the driver ends that frame.",
+                    0, 0};
+                stopped.push_back(r.status);
+            }
     }
     for (const cb::ProgramStatus& s : stopped) host_.push(s, "stopped");
 }

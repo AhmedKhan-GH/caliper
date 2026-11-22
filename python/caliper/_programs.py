@@ -75,6 +75,7 @@ _IMPORTS: dict = {}     # input name -> its newest _Import
 _LIVE: dict = {}        # handle -> each _Import not released yet (an older one may still be bound)
 _ACTS: dict = {}        # module name -> its last output, for the inputs <module>.act
 _ACT_HOOKS: dict = {}   # module name -> the forward hook's handle
+_ABANDONED: list = []   # runtimes given up after a timeout, kept until the GPU ends their last pass
 _STATE = {"rt": None, "mod": None, "model": None, "optimizer": None, "marks": None, "step": None,
           "dense": True, "drained": 0, "short": 0, "long": 0, "switches": 0}
 _clock = time.perf_counter
@@ -566,6 +567,8 @@ def install(program_id: str, declaration: dict, wgsl: str, *, scene: str | None 
     """
     _remove(program_id)
     with _LOCK:
+        if _ABANDONED:
+            _reap()
         if not ACTIVE:
             _CAD.reset()                             # the measurement starts again from this install
             _STATE.update(dense=True, drained=0, short=0, long=0, switches=0)
@@ -645,7 +648,14 @@ def stats() -> dict:
 
 
 def _stop_all(code: str, message: str) -> list:
-    """A timeout or a lost device: every program stops, the runtime closes, training continues."""
+    """A timeout or a lost device: every program stops, and the training thread goes on at once.
+
+    Caliper cannot stop a pass that runs on the GPU. It stops waiting for it, and the GPU stays
+    busy until the driver ends the work. Thus the runtime is given up without a wait
+    (``Runtime.abandon()``): its GPU objects wait in the layer's reaper, and the facade keeps the
+    runtime, with the capsules of its imports, in ``_ABANDONED`` until the GPU ended the last pass
+    (:func:`_reap`) or the process exits. Nothing touches its imports again.
+    """
     changed = []
     for p in _PROGS.values():
         if p.state in ("waiting", "compiled", "running"):
@@ -659,8 +669,24 @@ def _stop_all(code: str, message: str) -> list:
     rt = _STATE["rt"]
     _STATE["rt"] = None
     if rt is not None:
-        rt.close()
+        abandon = getattr(rt, "abandon", None)
+        if abandon is None:
+            rt.close()
+        else:
+            abandon()
+            _ABANDONED.append(rt)
     return changed
+
+
+def _reap() -> None:
+    """Let the runtimes given up after a timeout go once the GPU ended their last passes."""
+    mod = _STATE["mod"]
+    try:
+        done = mod is None or mod.reaping() == 0
+    except Exception:                                # an older module: keep them until exit
+        done = False
+    if done:
+        _ABANDONED.clear()
 
 
 _STOP_TEXT = {
@@ -732,6 +758,8 @@ def _at_step(step: int) -> None:
     changed = []
     published = []
     with _LOCK:
+        if _ABANDONED:
+            _reap()
         now = _clock()
         marks = _marks()
         last = _STATE["step"]

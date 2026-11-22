@@ -203,7 +203,9 @@ caliper_producer_status caliper_producer_compile(caliper_producer* runtime, cons
  * at most `timeout_ms`. The caller calls it only after the framework's work on
  * the bound tensors is complete (TorchAdapter.framework_done()). A program over
  * its time limit on 3 passes in a row stops with "program.over_time". A timeout
- * stops every program and returns CALIPER_PRODUCER_TIMEOUT. */
+ * stops every program and returns CALIPER_PRODUCER_TIMEOUT. The pass itself
+ * cannot be stopped: the GPU runs it until the driver ends the work, and the
+ * runtime only stops waiting for it. */
 caliper_producer_status caliper_producer_run(caliper_producer* runtime, const uint32_t* programs, size_t count,
                                              const caliper_producer_frame* frame, double timeout_ms,
                                              caliper_producer_pass* pass, caliper_producer_error* error);
@@ -220,8 +222,16 @@ caliper_producer_status caliper_producer_read_status(caliper_producer* runtime, 
 /* Removes a program and frees its outputs. */
 void caliper_producer_remove(caliper_producer* runtime, uint32_t program);
 
-/* Stops every program, releases every import and frees the runtime. NULL is a no-op. */
+/* Stops every program, releases every import and frees the runtime. NULL is a
+ * no-op. It never waits for the GPU: while a pass still runs, as after a
+ * timeout, the runtime's GPU objects, with the buffers of its imports, wait in
+ * a reaper until the driver ends that work. */
 void caliper_producer_destroy(caliper_producer* runtime);
+
+/* The number of destroyed runtimes whose last pass still runs on the GPU. The
+ * caller keeps the tensors of their imports, such as their DLPack capsules,
+ * until it is 0. */
+size_t caliper_producer_reaping(void);
 
 void caliper_producer_error_free(caliper_producer_error* error);
 

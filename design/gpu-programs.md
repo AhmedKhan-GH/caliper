@@ -213,9 +213,13 @@ A runtime-sized array is checked against the byte size of its binding's range. T
 
 ### Time Watchdog
 
-The runtime measures the GPU time of each program's dispatch, with one submit for each due program. A program over `time_ms` on 3 passes in a row stops with `program.over_time`. A wait of a pass that lasts longer than 10 times the sum of the due programs' limits, and at least 100 ms, stops every program with `program.timeout`, and the runtime releases its imports. Training continues without the programs.
+The runtime measures the GPU time of each program's dispatch, with one submit for each due program. A program over `time_ms` on 3 passes in a row stops with `program.over_time`. A wait of a pass that lasts longer than 10 times the sum of the due programs' limits, and at least 100 ms, stops every program with `program.timeout`.
 
-The viewer measures the GPU time of each frame of a scene panel with stages. When it is above 16.7 ms for 30 frames in a row, and above the same panel's time without its stages, the panel draws without its stages, and each one stops with `stage.over_time`.
+Caliper cannot stop a pass that runs on the GPU. After a timeout it stops waiting for the pass, and the GPU stays busy until the driver ends the work. The facade then gives up the runtime without a wait. The runtime destroys its backend of the graphics layer with `destroy_metal_backend_without_wait()`: while the last submit runs, the Metal objects, with the buffers of the imports, wait in a reaper until a marker after that submit completes. The facade keeps the runtime's DLPack capsules of the imports until the reaper is empty, or until the process exits, and it never touches those imports again. Thus the training thread goes on after the timeout at its own rate, but its GPU work shares the device with the pass until the driver ends it.
+
+The sandbox bounds no loop statically, and the timeouts are the only bound. A limit on loop nesting and on literal loop bounds does not bound the cost of a pass, because that cost is the product of the invocation count, the iterations and the memory traffic of each iteration. A loop over the length of an input is also the usual case, and a rule of literal bounds would refuse it. The time watchdog, the timeout and the driver's limit on a command buffer bound the cost instead.
+
+The viewer measures the GPU time of each frame of a scene panel with stages. When it is above 16.7 ms for 30 frames in a row, and above the same panel's time without its stages, the panel draws without its stages, and each one stops with `stage.over_time`. The view never waits for a frame. When a frame with the stages has not completed after 1 s, the panel draws without its stages at once, and each one stops with `stage.over_time`. The GPU runs that frame until the driver ends it. A scene view that closes meanwhile still waits for that frame in its backend's destructor, because the renderer's teardown needs that order.
 
 ### Host Errors
 
@@ -229,10 +233,10 @@ The hosts report these codes in a status item and in a `program` event. The cons
 | `program.layer_refused` | The frame validation of the graphics layer refused the pass |
 | `program.over_time` | The program went over `time_ms` on 3 passes in a row |
 | `program.over_budget` | Even a pass every 10 s or every 10,000 steps takes more than 4 % of the training time, and every program stopped |
-| `program.timeout` | A wait of a pass timed out, and every program stopped |
+| `program.timeout` | A pass did not finish in time: every program stopped, and the GPU runs the pass until the driver ends it |
 | `program.device_lost` | The device was lost, and every program stopped |
 | `program.unavailable` | The script cannot load the runtime, such as a torch without DLPack export on MPS |
-| `stage.over_time` | The panel's frame time went over its limit with the stages |
+| `stage.over_time` | The panel's frame time went over its limit with the stages, or a frame with the stages did not finish in 1 s |
 
 ## Cadence
 
@@ -422,6 +426,8 @@ Each decision below has its reason in one line.
 - **Sandbox library.** The sandbox is the builder module `caliper_builder_programs` without dependencies, because the builder configures on its own and all three hosts must run the same checks.
 - **Unchecked edits.** Without the compiler library, an edit applies with `program.not_checked`, because the hosts check again before any run.
 - **Bounds checks.** Every program and stage from a spec compiles with `ReadZeroSkipWrite` on buffers and texel loads, because a store past an output landed in a training tensor on Metal.
+- **No wait after a timeout.** The runtime's backend gives its Metal objects to a reaper, because a wait on the GPU on the training thread froze training while a pass ran.
+- **Timeouts only.** The sandbox has no static loop limit, because literal bounds bound neither the invocation count nor the work of an iteration, and they refuse loops over an input's length.
 - **One submit each.** The runtime submits each due program on its own, because the layer gives the GPU time of a submit, and the watchdog needs each program's time.
 - **Shared cadence.** All programs share the pass steps of one N, because the sync points cost more than a pass, and a shared step pays them once.
 - **Cadence by feedback.** N follows the overhead that a pass adds to the wall clock, because a model of the pass missed the GPU's idle time on MPS.

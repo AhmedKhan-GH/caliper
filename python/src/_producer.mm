@@ -345,10 +345,21 @@ public:
     }
 
     // Stops every program, releases every import and frees the runtime; later calls raise.
+    // It never waits for the GPU (caliper_producer_destroy()).
     void close() {
         if (rt_) caliper_producer_destroy(rt_);
         rt_ = nullptr;
         capsules_.clear();
+        shapes_.clear();
+    }
+
+    // After a timeout: frees the runtime without a wait, while its last pass may still run on
+    // the GPU, and keeps the imported tensors' capsules, so that their storage stays theirs
+    // until this object goes. The facade keeps the object until reaping() is 0. Later calls
+    // raise.
+    void abandon() {
+        if (rt_) caliper_producer_destroy(rt_);
+        rt_ = nullptr;
         shapes_.clear();
     }
 
@@ -377,6 +388,8 @@ NB_MODULE(_producer, m) {
         nullptr);
     m.attr("ProducerError") = nb::borrow(g_error_type);
     m.attr("ABI_VERSION") = caliper_producer_abi_version();
+    m.def("reaping", []() { return caliper_producer_reaping(); },
+          "The number of freed runtimes whose last pass still runs on the GPU.");
 
     nb::class_<Runtime>(m, "Runtime", "The producer runtime of this process, on the device of the first bound tensor.")
         .def(nb::init<>())
@@ -397,5 +410,7 @@ NB_MODULE(_producer, m) {
         .def("remove", &Runtime::remove, nb::arg("program"), "Remove a program and free its outputs.")
         .def("stats", &Runtime::stats, "The counters of imports, outputs and passes.")
         .def("close", &Runtime::close, "Stop every program, release every import and free the runtime.")
+        .def("abandon", &Runtime::abandon,
+             "Free the runtime without a wait for the GPU, and keep the imports' capsules until this object goes.")
         .def_prop_ro("closed", &Runtime::closed, "Whether close() ran.");
 }

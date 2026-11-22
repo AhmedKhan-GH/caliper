@@ -52,14 +52,18 @@ std::string merge_msl(const std::vector<std::string>& texts);
 // The time watchdog of one scene panel with stages: when the GPU time of a frame with its stages
 // is above kLimitMs for kFrames frames in a row, and above the panel's time without its stages,
 // the stages stop. Without a time of the panel without its stages it asks for one frame without
-// them (probe) before it decides.
+// them (probe) before it decides. A frame with the stages that the GPU has not completed after
+// kHangMs stops them at once: its stage may not end, and the GPU cannot stop it.
 class StageWatchdog {
 public:
     static constexpr double kLimitMs = 16.7;
     static constexpr uint32_t kFrames = 30;
+    static constexpr double kHangMs = 1000.0;
     enum class Action { none, probe, stop };
     // Frames completed: their mean GPU time, their count, and whether they drew the stages.
     Action frames(double gpu_ms, uint32_t count, bool staged);
+    // The oldest frame with the stages that has not completed has waited this long.
+    static Action pending(double waited_ms) { return waited_ms > kHangMs ? Action::stop : Action::none; }
     // Forgets what it measured (new stages).
     void reset() { *this = StageWatchdog(); }
     uint32_t over() const { return over_; }
