@@ -153,6 +153,20 @@ A 64x48 f32 METAL update takes 0.129 ms with `WAIT_GPU` and 0.009 ms without it.
 
 Slang and llama.cpp take about two thirds of a 12.7 s configure. A fresh torch-free configure takes 6.5 s. A cold torch-free build of all targets has 462 steps and takes 120 s at `-j 8`. Then `libcaliper.a` is 276 KB, in six objects. A cold `libcaliper` build with torch on takes 123 s. An offscreen Caliper Embed run of `hello` draws 43 frames in 1.02 s.
 
+## Widget Agent Models
+
+With a local model, `qwen3.8:27b` on an Apple M5 Max took 5 to 30 seconds for each ⌘K request in tests. The first request takes longer while Ollama loads the model. The model has a context length of 262,144 tokens, and its context cache is about 18 GB at full length. The cache is about 1 GB at 16,384 tokens for ⌘K and about 2 GB at 32,768 tokens for the side chat.
+
+The first request of the widget agent has about 7,000 tokens before the reply of the model. It holds ten tools, the context bundle and the render, and the default `num_ctx` is 16,384. The first request of the general role has every command of the table as a tool. It has about 11,000 tokens and grows with each tool result, and the default `num_ctx` is 32,768. The OpenAI-compatible endpoint of Ollama ignores `options.num_ctx`.
+
+## HTTP API Threads
+
+One thread runs the loop of the hub and answers every request, and it never waits for the app. A request that needs app state waits for the frame thread, which takes it at the start of a frame. A launch runs there, as `CALIPER_AUTOLAUNCH` runs before the first frame.
+
+A command goes to the queue of the command layer, which the frame thread drains. The request then has no thread of its own, and the frame thread and the hub thread both look for the answer without a wait. A capture copies the presented frame on the GPU, and a later frame takes the copy. A separate thread encodes the PNG, and thus the frame loop never waits for the encoder.
+
+The windowless mode runs at about 60 frames per second. The first command opens the default workspace in a few milliseconds. The code is in `src/host/api/api_server.h`, `src/host/api/app_api.h`, `src/host/builder/app_session.h` and `src/host/api/session_gateway.h`. The spec page is in `web/src/spec/`, and the build makes it from `python/caliper/_web/spec.html`.
+
 ## Related Pages
 
 - [Live Streaming](../python/live-streaming.md)

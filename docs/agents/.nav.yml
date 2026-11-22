@@ -7,6 +7,9 @@ nav:
   - Reference:
       - side-chat.md
       - widget-agent.md
+      - widget-agent-startup.md
+      - widget-session-protocol.md
+      - inline-prompt.md
       - widget-agent-conformance.md
       - mcp-server.md
       - http-api.md

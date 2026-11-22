@@ -1,38 +1,30 @@
 # Side Chat
 
-The side chat is the pane where your own agent works with you over the Agent Client Protocol (ACP): Claude Code through
-its adapter, Codex through its adapter, Gemini CLI, opencode, or any other ACP agent that you add by its command. This
-page gives what Caliper starts, what it hands the agent, and what the pane shows. [Agent roles](agent-roles.md)
-explains when to use the side chat and when the widget agent.
-
-!!! note "Status"
-    The side chat is on the app's spec page and live page (`src/host/builder/chat_pane.h`, over the component in
-    `src/host/builder/side_chat.h`), and is tested in the hidden app with stub agents, and with `caliper-agent` on a local
-    model served by Ollama in the dry run `examples/build_a_dashboard/dry_run/step4_side_chat.py`. It is not on the
-    landing page.
-    In the spec page's build mode it is the lower part of the builder pane's right column, under Properties
-    ([Builder pane](../builder/builder-pane.md)).
+The side chat is the pane where your own agent works with you over the Agent Client Protocol (ACP). It supports Claude
+Code and Codex through their adapters, Gemini CLI, opencode, and any other ACP agent that you add by its command.
+[Agent roles](agent-roles.md) explains when to use the side chat and when to use the widget agent.
 
 ## Side Chat Access
 
-⌘L Chat in the page bar (Ctrl+L Chat elsewhere), to the left of ⌘K Command, opens and closes the side chat on the spec
-page and on the live page; it is outlined in bronze while the chat is open. The chat is the right column of the window,
-28 % of its width and at least 300 points, a minimum that grows with the text scale. The page bar, a stream's run bar,
-the status bar, the jobs tray and the approval cards keep their places at the window's edges, and the page's panels or
-views fill what the column leaves. The chat stays open when the page changes, so a spec that the agent makes or opens
-from the live page shows beside the same conversation: the app shows the spec page for each `spec.new`, `spec.open` and
-`applet.open` of the agent, so that you see the spec whose edits you review, except over a compiled applet's page,
-which an agent never ends: there the spec opens in the session, the page stays, and Activity says how to get to it
-([Caliper CLI](../reference/cli.md#the-spec-page)).
+⌘L Chat in the page bar (Ctrl+L Chat elsewhere) opens and closes the side chat on the spec page and on the live page.
+The button has a bronze outline while the chat is open. The chat is the right column of the window. It is 28 % of the
+window width and at least 300 points wide, and the minimum grows with the text scale. The page bar, the run bar, the
+status bar, the jobs tray and the approval cards keep their places, and the page fills the space that the column leaves.
 
-The chat's settings are kept in `side-chat.json` in the app-data folder ([Folders and environment
-variables](../reference/folders-and-environment.md)): the chosen agent, the custom agent's name and command line, whether an agent's "always
-allow" options are offered, the agents you marked as running on a local model (`local_model_agents`, a list of agent
-ids), and whether the chat is open. They never hold a key.
+The chat stays open when the page changes. For each `spec.new`, `spec.open` and `applet.open` of the agent, the app
+shows the spec page, so you see the spec whose edits you review beside the same conversation. A compiled applet's page
+is the exception, because an agent never ends it. There the spec opens in the session, the page stays, and Activity says
+how to get to it ([Caliper CLI](../reference/cli.md#the-spec-page)).
+
+The app keeps the chat settings in `side-chat.json` in the app-data folder ([Folders and environment
+variables](../reference/folders-and-environment.md)). The file holds the chosen agent, the name and command line of the
+custom agent, and whether the "always allow" options of an agent are offered. It also holds the agents that you marked
+as running on a local model (`local_model_agents`, a list of agent ids) and whether the chat is open. It never holds a
+key.
 
 ## Agents
 
-Caliper detects four agents by looking for their commands on `PATH`. It runs nothing to find them.
+Caliper detects four agents by a search for their commands on `PATH`. It runs nothing to find them.
 
 | Agent | Launch command | Looked for on `PATH` |
 |---|---|---|
@@ -41,57 +33,55 @@ Caliper detects four agents by looking for their commands on `PATH`. It runs not
 | Gemini CLI | `gemini --acp` | `gemini` |
 | opencode | `opencode acp` | `opencode` |
 
-A custom agent is a name and one command line. The line is split into words as a POSIX shell splits them, with single
-quotes, double quotes and backslashes and nothing else (no variables, globbing or redirection), and the program is run
-without a shell. The chosen agent and the custom command belong to the app's own settings, never to a workspace.
+A custom agent is a name and one command line. Caliper splits the line into words as a POSIX shell does, with single
+quotes, double quotes and backslashes only. It supports no variables, globbing or redirection, and it runs the program
+without a shell. The chosen agent and the custom command belong to the settings of the app, never to a workspace.
 
-`caliper-agent`, the agent behind ⌘K ([Widget agent](widget-agent.md#side-chat-use)), can be the custom agent too,
-which runs the chat on a local model with no account. It runs from the repository's source with a Python that has its
-dependencies (`src/builder/agent/pyproject.toml`), and with Ollama serving a model that calls tools the command line
-is:
+`caliper-agent`, the agent behind ⌘K ([Widget agent](widget-agent.md#side-chat-use)), can be the custom agent. It then
+runs the chat on a local model with no account. It needs a Python with its dependencies and an Ollama model that calls
+tools. The command line is:
 
 ```text
 /usr/bin/env PYTHONPATH=/path/to/caliper/src/builder/agent /path/to/python -P -m caliper_agent --preset ollama --base-url http://127.0.0.1:11434/v1 --model <model>
 ```
 
-The script `examples/build_a_dashboard/chat-agent.sh` wraps this line: give its absolute path as the custom command,
-and it finds the source from its own place, takes the interpreter from `CALIPER_AGENT_PYTHON` (the repository's
-`.venv` by default) and the model from `CALIPER_CHAT_MODEL`. An app started from the Finder gives its agents only the
-system's `PATH`, so set such a variable in the line itself, as `/usr/bin/env CALIPER_AGENT_PYTHON=... /path/to/chat-agent.sh`.
-It reaches Caliper with the session's own API file, so its edits wait on the approval cards like any other agent's.
+The script `examples/build_a_dashboard/chat-agent.sh` wraps this line. Give its absolute path as the custom command. The
+script reads the interpreter from `CALIPER_AGENT_PYTHON` (the `.venv` of the repository by default) and the model from
+`CALIPER_CHAT_MODEL`. An app that starts from the Finder gives its agents only the system `PATH`. Thus set such a
+variable in the line itself, as `/usr/bin/env CALIPER_AGENT_PYTHON=... /path/to/chat-agent.sh`. This agent reaches
+Caliper with the API file of its session, so its edits wait on the approval cards like those of any other agent.
 
-The agent uses its own login. When it answers that it needs one, the pane shows LOGIN with the login methods the agent
-names and the command its maker documents; Caliper never asks for a key and runs no login flow. Log in in your own
-terminal and choose Restart.
+The agent uses its own login. When it answers that it needs a login, the pane shows LOGIN with the login methods that
+the agent names. Caliper never asks for a key and runs no login flow. Log in in your own terminal and choose Restart.
 
 ## Agent Startup
 
 The agent starts when you send your first message. Caliper starts its command with the workspace folder as the working
-folder, and sends:
+folder and sends these items:
 
-- `initialize` with protocol version 1, declining the file-system and terminal capabilities, so the agent uses its own
-  file and shell tools under its own permission settings;
-- `session/new` with the workspace as `cwd` and one MCP server, named `caliper`: this build's `caliper-mcp` by
-  absolute path, with the arguments `--origin agent --api-file <this session's API file>`. `caliper-mcp` needs Caliper
-  API: when the app was started without `--api`, the side chat starts it then, on 127.0.0.1 at a free port, says so in
-  the conversation ("Caliper API started on 127.0.0.1:<port> for this chat"), in Activity and in the status bar, and
-  stops it when the agent ends, unless Open in browser has given out a link of it since
-  ([Started by the app](http-api.md#app-startup)). The API file is the
-  session's own, `api-agent-<pid>-<n>.json` in the app-data folder, never `api.json`: its token is the agent's, with the
-  origin `agent`, and the app revokes it and removes the file when the agent's session ends. The origin comes from that
-  token, not from `--origin`, so every command the agent sends through Caliper API, by `caliper-mcp` or by any other
-  client that reads the file, is validated, journaled, undoable and reviewed, and your session token from the start
-  line is in nothing the agent is given;
-- before the session's first message, a block for the assistant (`annotations.audience: ["assistant"]`) that asks the
-  agent to change specs through the `caliper` tools and not to ask before calling one, since Caliper asks the person
-  itself.
+- `initialize` with protocol version 1. It declines the file-system and terminal capabilities, so the agent uses its
+  own file and shell tools under its own permission settings.
+- `session/new` with the workspace as `cwd` and one MCP server named `caliper`. The server is the `caliper-mcp` of this
+  build with the arguments `--origin agent --api-file <this session's API file>`.
+- Before the first message, a block for the assistant (`annotations.audience: ["assistant"]`). The block asks the agent
+  to change specs through the `caliper` tools and not to ask before it calls one, because Caliper asks the person.
+
+`caliper-mcp` needs Caliper API. If the app started without `--api`, the side chat starts the API on 127.0.0.1 at a free
+port and says so in the conversation, in Activity and in the status bar. It stops the API when the agent ends, unless
+Open in browser gave out a link of it ([Started by the app](http-api.md#app-startup)).
+
+The API file belongs to the session and is never `api.json`. Its token belongs to the agent and has the origin `agent`.
+The app revokes the token and removes the file when the session ends. The origin comes from the token and not from
+`--origin`. Thus Caliper validates, journals and reviews every command that the agent sends through Caliper API, and you
+can undo it. Your session token is in nothing that the agent receives.
 
 ## Pane
 
-The pane is the lower part of the right column, under Selection and Properties. Its header shows CHAT, Caliper's
-mode for the agent (see [Modes](#modes)), the agent's name, Shared GPU when it applies (see
-[Local models](#local-models)), its version and its own mode, the state as a tag, a FAULTS chip when the agent sent
-messages Caliper dropped, and Restart when the agent must start again.
+The pane is the lower part of the right column, under Selection and Properties. In the build mode of the spec page it
+sits under Properties ([Builder pane](../builder/builder-pane.md)). The header shows CHAT, the Caliper mode for the
+agent (see [Modes](#modes)), the name of the agent, and Shared GPU when it applies (see
+[Local models](#local-models)). It also shows the version and mode of the agent and the state as a tag. A FAULTS chip
+marks dropped agent messages, and Restart appears when the agent must start again.
 
 | Tag | State | Action |
 |---|---|---|
@@ -100,98 +90,76 @@ messages Caliper dropped, and Restart when the agent must start again.
 | STALLED | The agent has sent nothing for two minutes in a turn | Cancel, Restart |
 | STOPPING | A cancel waits for the agent to end the turn | Restart |
 | LOGIN | The agent needs a login | Restart |
-| EXITED | The agent's process ended; the exit status and its last line of standard error | Restart |
-| FAILED | The agent could not be started, such as one that speaks another protocol version | Restart |
+| EXITED | The process of the agent ended. The tag shows the exit status and the last line of standard error | Restart |
+| FAILED | The agent could not start, for example because it speaks another protocol version | Restart |
 | NO AGENT | No agent was found and no custom command is set | Custom command |
 
-The conversation holds your messages, the agent's text, its thoughts as one line, its tool calls as rows (the
-command's name for a Caliper tool, the title, and the status: pending, running, done, failed or stopped), its plan, and
-the end of each turn in a word: DONE, STOPPED, DECLINED, LIMIT or FAILED.
+The conversation holds your messages, the text of the agent, its thoughts as one line, and its plan. Each tool call is a
+row with its command name or title and its status (pending, running, done, failed or stopped). Each turn ends with one word: DONE, STOPPED, DECLINED, LIMIT or FAILED.
 
-**The agent's text** shows a small part of Markdown: **bold**, `inline code` in the mono face, fenced code blocks on a
-plate, bulleted and numbered lists, and paragraphs. Everything else shows as plain text with its marks taken out:
-headings, emphasis, a link's or an image's text (its address is dropped, and nothing in the text can be clicked or
-loads anything), HTML tags, quotes and table rows. A mark that is not closed yet, as the text streams in, is left out
-until its pair arrives. Only the first 64 KiB of a message are read as Markdown, and a line longer than 2,000 bytes or
-a paragraph longer than 8,000 shows as plain text, so a long or malformed message costs no more to draw than its
-length. The conversation keeps the text as the agent sent it.
+**The agent's text** shows a small part of Markdown: **bold**, `inline code`, fenced code blocks, bulleted and numbered
+lists, and paragraphs. Everything else shows as plain text with its marks removed, including headings, emphasis, link
+and image text, HTML tags, quotes and table rows. Nothing in the text can be clicked or loads anything. Caliper reads
+only the first 64 KiB of a message as Markdown, and a line longer than 2,000 bytes or a paragraph longer than 8,000
+bytes shows as plain text. The conversation keeps the text as the agent sent it.
 
-**The agent's permission requests** are cards: the file, the change, and one button per option the agent offers.
-For a `*.spec.toml` the change is the compact diff that the inline surface and the approval cards show (a new panel's
-primitive and title first, then its other keys and every other change), with Diff for the full diff; for any other
-file it is the unified diff. An agent's "always allow" option is offered only when the setting allows it.
+**The agent's permission requests** are cards with the file, the change, and one button for each option that the agent
+offers. For a `*.spec.toml` file the change is the compact diff of the approval cards, and Diff shows the full diff. For
+any other file the change is the unified diff. The "always allow" option of an agent appears only when the setting
+allows it.
 
-**Command approvals.** A command of the agent that needs your approval, such as an edit of the open spec while review
-is on, is decided on the approval cards at the bottom of the window. While it waits, the conversation shows one row
-for it, APPROVAL with the command and "waiting"; a click on the row outlines its card in bronze for a moment. Once it
-is decided, the row folds into its call's group. When what a card showed changes while it waits, such as the open spec
-that an overwrite would write, your approval no longer holds: the card is replaced by a new one for the new content,
-and the row keeps waiting, on the new card.
+**Command approvals.** A command that needs your approval, such as an edit of the open spec while review is on, waits on
+the approval cards at the bottom of the window. The conversation shows one row for it, APPROVAL with the command and
+"waiting". When you decide, the row folds into the group of its call. If
+the content that a card showed changes while it waits, your approval no longer holds. Then a new card replaces the old
+one, and the row keeps waiting.
 
-**Groups.** Consecutive calls of the same command fold into one row with the count, the approvals' outcome and the
-status, such as "source.add ×9 · approved · done"; a click opens it to show each call and its approval. A group with a
-failed call or an approval that was denied, timed out or failed says so in bronze and is open from the start. A lone
-call without an approval is a plain row.
+**Groups.** Consecutive calls of the same command fold into one row with the count, the outcome of the approvals and the
+status, such as "source.add ×9 · approved · done". A click opens the row. A group with a failed call, or with an
+approval that was denied, timed out or failed, says so in bronze and starts open. A lone call without an approval is a
+plain row.
 
-**The input** is one line that grows to six with Shift+Enter or Command+Enter; Enter sends; Shift+Tab changes
-Caliper's mode. The agent picker beside it
-lists the agents by name, with NOT FOUND for those not on `PATH`, Custom command, and Local model.
+**The input** is one line that grows to six lines with Shift+Enter or Command+Enter. Enter sends the message, and
+Shift+Tab changes the Caliper mode. The agent picker beside it lists the agents by name, with NOT FOUND for those not on
+`PATH`, Custom command, and Local model.
 
 ## Modes
 
-Caliper decides which of the agent's commands wait for your card, whatever the agent itself asks. The mode is the
-framed word after CHAT in the header; a click on it opens its menu, and Shift+Tab, while the input has the keyboard,
-moves through the first three:
+Caliper decides which commands of the agent wait for your card, whatever the agent itself asks. The mode is the framed
+word after CHAT in the header. A click on it opens its menu. Shift+Tab moves through the first three modes while the
+input has the keyboard.
 
 | Mode | What the agent's commands do |
 |---|---|
 | Ask | Edits of the open spec and commands that delete or overwrite saved data or run a Python loader wait for your card. This is the default. |
-| Accept edits | Edits of the open spec apply at once; everything else that asked still asks. |
-| Read only | The agent can read and propose (dry runs, edits of a preview); every other change is refused, and the agent is told why. |
-| Allow all | Only from the menu's last item, Allow all for this session: nothing waits for a card, except an overwrite of a saved applet or the replacement of a spec with unsaved changes. A banner, ALLOW ALL with End, stays under the header while it is on. It is never saved and ends when the agent's session ends. |
+| Accept edits | Edits of the open spec apply at once. Everything else that asked still asks. |
+| Read only | The agent can read and propose (dry runs, edits of a preview). Every other change is refused, and the agent is told why. |
+| Allow all | Only from the last item of the menu, Allow all for this session. Nothing waits for a card, except an overwrite of a saved applet or the replacement of a spec with unsaved changes. A banner, ALLOW ALL with End, stays under the header while the mode is on. Caliper never saves it, and it ends when the session of the agent ends. |
 
-A command that runs without a card because of the mode or a rule shows as an APPLIED row with what allowed it, and
-Undo, which takes it back while it is the newest change. An approval card of the chat's agent offers Allow once,
-Allow always for this session, Always allow `<command>` and Deny; Always allow is saved for this agent. The settings
-(⌘,) set the saved mode of the side chat and of `caliper-mcp`'s clients and list the saved rules under Permissions,
-each with Revoke; they are kept in `agent-permissions.json` in the app-data folder, which only you can read and write.
-That file is no protection against an agent that has its own access to your files, which can change it as it can
-change any of them. The widget agent (⌘K) is not affected: its changes always wait in its preview for Accept.
+A command that runs without a card because of the mode or a rule shows as an APPLIED row with what allowed it. The row
+has Undo, which takes the command back while it is the newest change. An approval card of the chat agent offers Allow
+once, Allow always for this session, Always allow `<command>` and Deny. Caliper saves Always allow for this agent.
+
+The settings (⌘,) set the saved mode of the side chat and of the clients of `caliper-mcp`. They list the saved rules
+under Permissions, each with Revoke. The rules are in `agent-permissions.json` in the app-data folder, which only you can
+read and write. An agent with its own access to your files can change this file, so it gives no protection against such
+an agent. The widget agent (⌘K) is not affected, because its changes always wait in its preview for Accept.
 
 ## Local Models
 
 Your agent may run its model on your own machine, such as opencode with a model served by Ollama. Caliper cannot tell
-where an agent's model runs, so you say so: choose Local model in the agent picker, which marks the chosen agent, or
-clears the mark when it is set. The mark belongs to that agent, kept by its id, so choosing another agent leaves it
-behind and choosing the agent again brings it back.
+where the model runs, so you say so. Choose Local model in the agent picker to mark the chosen agent, or to clear the
+mark. The mark belongs to that agent by its id, so it returns when you choose the same agent again.
 
 While a training run streams into Caliper (the app is attached to a live session) and the chosen agent is marked, the
-chat's header shows **Shared GPU** after the agent's name, framed in bronze, as the widget agent's settings and its ⌘K
-prompt do for a model server on this machine. The model and the run then share the same GPU and memory; Set up the
-widget agent ([Share the GPU with a training run](widget-agent-setup.md#gpu-sharing))
-gives the advice. As the header narrows, the note gives way after the agent's version and before its name.
+header of the chat shows **Shared GPU** after the name of the agent, framed in bronze. The model and the run then share
+the same GPU and memory. [Share the GPU with a training run](widget-agent-setup.md#gpu-sharing) gives the advice.
 
 ## Ask in Chat Action
 
-Ask in chat in the widget agent's prompt on the spec page opens the side chat with a draft: your request in the input, and above it one
-chip for each block of context that goes with it (the target's spec fragment, its sources, the panel's render, the
-widget conversation, the preview's diff marked as not applied, and the target's ids). Nothing is sent until you send
-it; Clear drops the context. The blocks are shaped for the agent when you send: as embedded resources when it accepts
-them and as text otherwise. The context of a handoff in the app leaves the panel's render out.
-
-## `caliper-chat-shot`
-
-`caliper-chat-shot` is a development tool, not installed, that draws a dashboard with the spec runtime beside the side
-chat on the offscreen canvas and writes a PNG at each state of a scripted conversation with a stub agent:
-
-```sh
-caliper-chat-shot --workspace <dir> --agent <stub agent> --out-dir <dir> [--size WxH] [--prefix NAME]
-                  [--frames N] [--review on|off] [--mcp PATH] [--inputs DIR]
-```
-
-It builds the dashboard in an empty workspace from the files of `--inputs` (`run42_metrics.parquet` with the columns
-`step`, `loss`, `accuracy` and `lr`, and `attn.safetensors`), or from small files it writes itself, starts Caliper API on 127.0.0.1 with the session's command layer and an
-API file, and runs the agent as a custom command named "Stub agent". The states are `1-empty`, `2-turn`,
-`3-permission` (with `--review on`, `3-approval`), `4-done`, `5-exited` and `6-no-agent`, each written as
-`<prefix>-<state>-<W>x<H>.png`. It prints one JSON object with the files, the conversation's items, the open spec's
-panels and whether the journal recorded the agent's `panel.create`.
+Ask in chat in the prompt of the widget agent on the spec page opens the side chat with a draft. The draft has your
+request in the input and, above it, one chip for each block of context that goes with it. The blocks are the spec
+fragment of the target, its sources, the render of the panel, the widget conversation, the diff of the preview marked as
+not applied, and the ids of the target. Caliper sends nothing until you send the draft, and Clear drops the context.
+Caliper sends the blocks as embedded resources if the agent accepts them and as text if not. A handoff in the app leaves
+out the render of the panel.

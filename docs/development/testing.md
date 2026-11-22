@@ -94,3 +94,16 @@ ctest --test-dir cmake-build-release --output-on-failure
 ```
 
 A ctest label selects a group: `gfx` (`caliper_gfx_tests`), `export` (`caliper_export_tests`), `torch` (`caliper_torch_tests`), `cli` (the command-line tests), `shot` (the `caliper shot` runs), `sdk` and `embed` (the package tests) and `boundary` (`caliper_host_names_no_applet`). For example, `ctest --test-dir cmake-build-release -L gfx` runs only the pixel-exact graphics suite. CI runs the whole set on macOS and Windows; see [Continuous integration](ci.md).
+
+## Chat Captures
+
+`caliper-chat-shot` is a development tool, and the install does not include it. It draws a dashboard with the spec runtime beside the side chat on the offscreen canvas. It writes a PNG at each state of a scripted conversation with a stub agent.
+
+```bash
+caliper-chat-shot --workspace <dir> --agent <stub agent> --out-dir <dir> [--size WxH] [--prefix NAME]
+                  [--frames N] [--review on|off] [--mcp PATH] [--inputs DIR]
+```
+
+The tool builds the dashboard in an empty workspace from the files of `--inputs`, or from small files that it writes itself. The input files are `run42_metrics.parquet`, with the columns `step`, `loss`, `accuracy` and `lr`, and `attn.safetensors`. The tool starts Caliper API on 127.0.0.1 and runs the agent as a custom command with the name "Stub agent".
+
+The states are `1-empty`, `2-turn`, `3-permission` (`3-approval` with `--review on`), `4-done`, `5-exited` and `6-no-agent`. Each state goes to `<prefix>-<state>-<W>x<H>.png`. The tool prints one JSON object with the files, the conversation items, the panels of the open spec and the result of a check for the agent's `panel.create` in the journal.

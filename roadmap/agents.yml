@@ -126,7 +126,7 @@ features:
     status: shipped
     summary: The widget agent offers presets for hosted providers, for Ollama and LM Studio and for any OpenAI-compatible server, each with its own key in the system's credential store.
     depends_on: [AGT-05]
-    docs: docs/agents/widget-agent.md#presets
+    docs: docs/agents/widget-agent-startup.md#presets
     issue: null
 
   - id: AGT-16
@@ -134,7 +134,7 @@ features:
     status: shipped
     summary: caliper-agent probe checks a model's tool calling, vision and context length with two short calls and caches the answer, which the settings run when a person picks a model.
     depends_on: [AGT-15]
-    docs: docs/agents/widget-agent.md#model-checks
+    docs: docs/agents/widget-agent-startup.md#model-checks
     issue: null
 
   - id: AGT-17

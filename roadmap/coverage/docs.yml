@@ -732,7 +732,7 @@ entries:
   item: 'The agents the side chat runs: Claude Code, Codex, Gemini CLI, opencode or any ACP agent.'
   ids:
   - AGT-03
-- page: docs/agents/side-chat.md#agent-startup
+- page: docs/agents/widget-agent-startup.md#agent-startup
   item: What Caliper starts and hands to the agent.
   ids:
   - AGT-03
@@ -753,34 +753,34 @@ entries:
   ids:
   - AGT-03
   - AGT-05
-- page: docs/agents/side-chat.md#caliper-chat-shot
+- page: docs/agents/side-chat.md
   item: caliper-chat-shot is a development tool that draws the side chat with a stub agent and writes
     a PNG per state.
   ids:
   - AGT-03
-- page: docs/agents/widget-agent.md#agent-startup
+- page: docs/agents/widget-agent-startup.md#agent-startup
   item: caliper-agent starts as an ACP child process with provider presets.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent.md#presets
+- page: docs/agents/widget-agent-startup.md#presets
   item: The provider presets of caliper-agent.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent.md#model-checks
+- page: docs/agents/widget-agent-startup.md#model-checks
   item: caliper-agent probe checks what a model can do and prints a JSON result, which the settings run
     when a model is picked.
   ids:
   - AGT-16
-- page: docs/agents/widget-agent.md#model-assumptions
+- page: docs/agents/widget-agent-startup.md#model-assumptions
   item: What the agent assumes of a model.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent.md#ollama-chat-api
+- page: docs/agents/widget-agent-startup.md#ollama-chat-api
   item: Ollama is driven through its own chat API.
   ids:
   - AGT-05
   - AGT-07
-- page: docs/agents/widget-agent.md#widget-session-startup
+- page: docs/agents/widget-session-protocol.md#widget-session-startup
   item: How a widget session is opened.
   ids:
   - AGT-05
@@ -788,15 +788,15 @@ entries:
   item: The commands a widget session may use.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent.md#context-bundle
+- page: docs/agents/widget-session-protocol.md#context-bundle
   item: The context bundle a prompt carries.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent.md#prompts
+- page: docs/agents/widget-session-protocol.md#prompts
   item: What a prompt may hold.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent.md#answers
+- page: docs/agents/widget-session-protocol.md#answers
   item: What each answer carries, held in a preview for accept.
   ids:
   - AGT-05
@@ -805,15 +805,15 @@ entries:
   ids:
   - AGT-05
   - AGT-03
-- page: docs/agents/widget-agent.md#session-closing
+- page: docs/agents/widget-session-protocol.md#session-closing
   item: Closing a widget session.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent.md#inline-surface
+- page: docs/agents/inline-prompt.md#inline-surface
   item: The inline surface opens a one-line prompt with Command K on the focused panel.
   ids:
   - AGT-05
-- page: docs/agents/widget-agent.md#app-settings
+- page: docs/agents/inline-prompt.md#app-settings
   item: The widget agent settings popup holds provider, key and model.
   ids:
   - AGT-05
