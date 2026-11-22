@@ -60,6 +60,8 @@ struct Snapshot {
     uint32_t slot = 0;
     uint64_t seq = 0;               // producer's publish counter for this view
     uint64_t stamp_ns = 0;          // producer CLOCK_UPTIME_RAW at show()
+    /// The step stamp of the snapshot (the first timeline of its stamp section); INT64_MIN when none.
+    int64_t step = INT64_MIN;
     const PayloadMap* map = nullptr; // borrowed until the next take() of the view; null = identity
     // Bytes the source copied to make this payload: a network snapshot
     // received into its slot, or series values appended to the ring; 0 when

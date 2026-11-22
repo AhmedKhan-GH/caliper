@@ -39,7 +39,9 @@ enum {
      * source. The latency is then the delay above the fastest recent message and excludes a constant
      * transit time, and the view labels it "rel lat".
      */
-    CALIPER_LIVE_APPLY_STAMP_RELATIVE = 1u << 4
+    CALIPER_LIVE_APPLY_STAMP_RELATIVE = 1u << 4,
+    /** Bit flag that marks `step` of the snapshot as valid. Without it the snapshot has no step. */
+    CALIPER_LIVE_APPLY_HAS_STEP = 1u << 5
 };
 
 /**
@@ -136,6 +138,11 @@ typedef struct CaliperLiveSnapshot {
      * of the producer into it. The value 0 means unknown.
      */
     uint64_t             stamp_ns;
+    /**
+     * The step stamp of the snapshot, valid only with `CALIPER_LIVE_APPLY_HAS_STEP` in `flags`.
+     * `caliper_core_live_view_info` reports it as `step`.
+     */
+    int64_t              step;
 } CaliperLiveSnapshot;
 
 /** The measured state of one typed live view, which `caliper_core_live_view_info` fills. */
@@ -186,6 +193,8 @@ typedef struct CaliperLiveViewInfo {
     int32_t     read_done;
     /** For `SERIES`, the values held. For `HISTOGRAM`, the bins. For `POINTS`, N. Otherwise 0. */
     int64_t     count;
+    /** The step stamp of the last applied snapshot, or INT64_MIN when it had none. */
+    int64_t     step;
 } CaliperLiveViewInfo;
 
 /**
