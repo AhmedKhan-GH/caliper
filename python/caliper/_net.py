@@ -167,6 +167,7 @@ class SnapData:
     stats: list
     red: Any                  # the Reduced (colormap, flags, range, axes, points fields)
     stamp_steps: tuple | None = None   # (run step or None, wall ns) for the "timelines" stamp
+    cadence: dict | None = None        # the shared cadence of its pass, for "programs" peers
 
 
 class _History:
@@ -542,7 +543,8 @@ class Link:
             snap, best.snap = best.snap, None
             best.last_sent = now
             try:
-                frame = self._snapshot_frame(best.sub, snap, _wire.CAP_TIMELINES in self.caps)
+                frame = self._snapshot_frame(best.sub, snap, _wire.CAP_TIMELINES in self.caps,
+                                             _wire.CAP_PROGRAMS in self.caps)
             except _wire.WireError:              # over the frame limit: counted, not sent
                 self.p.counters["encode_failed"] += 1
                 return self.next_frame(now)
@@ -551,7 +553,7 @@ class Link:
         return None, wait
 
     @staticmethod
-    def _snapshot_frame(sub: int, snap: SnapData, stamped: bool = False):
+    def _snapshot_frame(sub: int, snap: SnapData, stamped: bool = False, cadence: bool = False):
         r = snap.red
         stamp = None
         if stamped and snap.stamp_steps is not None:
@@ -563,7 +565,8 @@ class Link:
             sub, snap.view, snap.seq, snap.stamp_ns, snap.kind, snap.resolved, snap.data,
             aux=snap.aux, colormap=r.colormap, flags=r.flags, vmin=r.vmin, vmax=r.vmax,
             stats=snap.stats, axes=r.axes, tile=r.tile, points_dims=r.points_dims,
-            label_count=r.label_count, stamp=stamp))
+            label_count=r.label_count, stamp=stamp,
+            cadence=snap.cadence if cadence and snap.cadence else None))
 
     def close(self) -> None:
         if self.closed:
@@ -658,6 +661,7 @@ class _Producer:
             s.next = max(h.first(), h.total - back)
             st.watched = True
             link.wake.set()
+            self.ring.changed()
             return
         with self.ring.lock:
             v = self.ring.views.get(s.view)
@@ -682,6 +686,7 @@ class _Producer:
             st = s.series
             s.series = None
             st.watched = any(x.series is st for ln in self.links for x in ln.subs.values())
+            self.ring.changed()
             return
         g = s.group
         if g is None:
@@ -787,7 +792,7 @@ class _Producer:
         stage.busy = False
         self.counters["published"] += 1
         snap = SnapData(p.view, p.view_id, p.seq, p.stamp_ns, p.kind, p.group.resolved,
-                        data, aux, stats, red, p.stamp_steps)
+                        data, aux, stats, red, p.stamp_steps, p.cadence)
         with self.ring.lock:
             subs = list(p.group.subs)
         for link, sub in subs:

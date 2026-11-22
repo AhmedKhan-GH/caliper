@@ -439,6 +439,11 @@ public:
         return item_axes_;
     }
 
+    std::map<std::string, std::string> view_cadences() override {
+        std::lock_guard<std::mutex> g(mu_);
+        return cadences_;
+    }
+
     bool data_view_of(uint64_t key, Json* resolved, Json* offer) override {
         NetView* v = find(key);
         if (!v) return false;
@@ -1260,6 +1265,7 @@ private:
     // session or none (wire protocol 3.1).
     void forget_session_state() {
         std::lock_guard<std::mutex> g(mu_);
+        cadences_.clear();
         have_controls_ = false;
         const uint64_t version = controls_.version + 1;
         controls_ = Controls{};
@@ -1396,6 +1402,10 @@ private:
         if (d.encoding != CALIPER_NET_ENCODING_RAW || (s.aux && s.aux->encoding != CALIPER_NET_ENCODING_RAW)) {
             unsupported(v.name, "section encoding " + std::to_string(d.encoding));
             return;
+        }
+        if (s.cadence.is_object()) {   // 3.2 draft: the script's shared cadence of its snapshots
+            std::lock_guard<std::mutex> g(mu_);
+            cadences_[v.name] = s.cadence.dump();
         }
         for (int64_t x : d.shape)
             if (x <= 0) return;   // nothing to draw
@@ -1553,6 +1563,7 @@ private:
     std::map<std::string, LinkedSelection> selections_;
     uint64_t sel_version_ = 0;
     std::vector<ItemAxis> item_axes_;
+    std::map<std::string, std::string> cadences_;   // 3.2 draft: view name -> its cadence (JSON)
     // The frame thread's requests for the network thread.
     std::mutex out_mu_;
     std::deque<Outgoing> outbox_;

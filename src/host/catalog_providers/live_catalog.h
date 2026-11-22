@@ -142,6 +142,9 @@ public:
         // The step stamp of the newest snapshot (the `step` timeline of wire
         // protocol 3.2); nullopt when the producer sent none.
         std::optional<std::int64_t> step;
+        // Why the view updates less often than it asks: the script's shared
+        // cadence of its snapshots thinned it (cadence_note()); empty otherwise.
+        std::string note;
     };
     // The frame-thread step that update() ends with: `views` is the full list,
     // `attached` false means detached.
@@ -169,6 +172,7 @@ private:
         std::uint64_t copied_at = 0;
         std::deque<std::uint64_t> arrivals;
         std::optional<std::int64_t> step;   // of the newest snapshot
+        std::string note;                   // ViewFrame::note, as a warning of the entry
     };
     std::uint64_t now() const;
     caliper_builder::CatalogEntry entry_of(const View& v) const;

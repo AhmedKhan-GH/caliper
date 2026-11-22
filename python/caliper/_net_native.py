@@ -95,6 +95,7 @@ class _NativeProducer(_Producer):
             st.watched = True
             self.nio.sub_open(link.conn, s.sub, s.view, int(s.kind), -1, "{}", s.max_rate,
                               int(s.resolved["budget"]["max_backfill"]))
+            self.ring.changed()
             return
         super().join(link, s)
         g = s.group
@@ -220,7 +221,8 @@ class _NativeProducer(_Producer):
                 int(red.points_dims or 0), int(red.label_count if red.label_count is not None else -1),
                 int(_DTYPE[str(data.dtype)]), list(data.shape), data.data_ptr(),
                 data.numel() * data.element_size(),
-                aux.data_ptr() if aux is not None else 0, aux.numel() if aux is not None else 0)
+                aux.data_ptr() if aux is not None else 0, aux.numel() if aux is not None else 0,
+                json.dumps(p.cadence, sort_keys=True) if p.cadence else "")
         stage.busy = False
         self.counters["published"] += 1
 

@@ -279,6 +279,9 @@ struct Snapshot {
     bool horizontal = false, is_static = false, empty = false;
     std::optional<Section> stamp;
     std::optional<uint32_t> cursor;
+    // 3.2 draft, capability "programs": the shared cadence of the views' snapshots (an object:
+    // every, passes_per_s, step_ms, pass_ms, share, budget, limit); null when absent.
+    Json cadence;
 };
 struct Series {
     static constexpr uint16_t kType = CALIPER_NET_MSG_SERIES;

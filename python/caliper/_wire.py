@@ -851,6 +851,8 @@ class Snapshot(_Msg):
     stamp: Any = None
     cursor: int | None = None
     empty: bool = False
+    # 3.2 draft, capability "programs": the shared cadence of the views' snapshots
+    cadence: dict | None = None
 
     def to_meta(self):
         return _drop_none({"sub": self.sub, "view": self.view, "seq": self.seq,
@@ -863,7 +865,7 @@ class Snapshot(_Msg):
                            "labels": None if self.labels is None else list(self.labels),
                            "horizontal": True if self.horizontal else None,
                            "static": True if self.static else None, "cursor": self.cursor,
-                           "empty": True if self.empty else None})
+                           "empty": True if self.empty else None, "cadence": self.cadence})
 
     def to_sections(self):
         s = []
@@ -2433,6 +2435,7 @@ def _snapshot_32(f: Frame, snap) -> None:
         snap.horizontal = _opt(m, "horizontal", _bool, "a boolean", False)
     snap.static = _opt(m, "static", _bool, "a boolean", False)
     snap.cursor = _opt(m, "cursor", _u32, "a uint32")
+    snap.cadence = _opt(m, "cadence", _obj, "an object")
     snap.stamp, _ = _stamp(f, snap.static)
 
 
