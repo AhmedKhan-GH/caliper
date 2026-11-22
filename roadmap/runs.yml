@@ -21,7 +21,7 @@ features:
     issue: null
 
   - id: RUN-03
-    title: The run database
+    title: Run database
     status: planned
     summary: A local database keeps the runs that the metrics and artifacts stores record as a history that outlives each session.
     depends_on: [RUN-01, RUN-02]
@@ -29,13 +29,12 @@ features:
     issue: null
 
   - id: RUN-04
-    title: The history browser
+    title: History browser
     status: planned
     summary: A browser in the app lists the stored runs and opens any of them.
     depends_on: [RUN-03]
     sprint: 5
     issue: null
-    draft: true
 
   - id: RUN-05
     title: Run comparison
@@ -46,7 +45,7 @@ features:
     issue: null
 
   - id: RUN-06
-    title: A shared cursor across runs
+    title: Shared cursor across runs
     status: planned
     summary: One cursor moves every run on the page together, aligning runs by step or by time and showing the latest earlier item, with its distance, for a run that has none at the cursor.
     depends_on: [RUN-05]
@@ -54,13 +53,12 @@ features:
     issue: null
 
   - id: RUN-07
-    title: Linked cameras
+    title: Linked cameras and selections
     status: planned
-    summary: Orbiting the scene of one run turns the matching scene of the other runs, and selecting items in one run highlights the items with the same row ids in the others.
-    depends_on: [RUN-05, REN-12]
+    summary: Runs compared on one page share their cameras and their selections, so that moving or selecting in one run does the same in the others.
+    depends_on: [REN-12, RUN-05]
     sprint: 5
     issue: null
-    draft: true
 
   - id: RUN-08
     title: Difference views
@@ -77,12 +75,33 @@ features:
     depends_on: [RUN-05]
     sprint: 5
     issue: null
-    draft: true
 
   - id: RUN-10
-    title: A checkpoint browser
+    title: Checkpoint browser
     status: idea
     summary: A checkpoint browser would list stored checkpoints with previews and might resume training from one.
     depends_on: [RUN-02]
     design: design/roadmap.md#undecided
+    issue: null
+
+  - id: RUN-11
+    title: Learning-rate comparison demo
+    status: planned
+    summary: A demo compares two learning rates and shows which one separates the Fashion-MNIST classes first.
+    depends_on: [RUN-08]
+    sprint: 5
+    issue: null
+
+  - id: RUN-12
+    title: Import of other trackers' logs
+    status: idea
+    summary: Logs from other experiment trackers, such as TensorBoard, could be imported into the run database.
+    depends_on: [RUN-03]
+    issue: null
+
+  - id: RUN-13
+    title: Hyperparameter sweep views
+    status: idea
+    summary: Views could show the runs of a hyperparameter sweep together.
+    depends_on: [RUN-05]
     issue: null

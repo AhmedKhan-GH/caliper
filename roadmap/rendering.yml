@@ -69,12 +69,12 @@ features:
     issue: null
 
   - id: REN-09
-    title: The graphics layer
+    title: Graphics layer
     status: built
     summary: The graphics layer, an internal C++ layer shaped like WebGPU, holds buffers, textures, pipelines, draw lists and a uniform arena, validates every frame, and has a Metal backend.
     depends_on: [REN-01]
     sprint: 4
-    branches: [sprint4-pr1-main2]
+    branches: [sprint4-integ3, sprint4-pr1-main2]
     issue: null
 
   - id: REN-10
@@ -83,34 +83,34 @@ features:
     summary: Scene shaders are written once in WGSL, and a generator with a pinned Naga translates them into the programs that each backend of the graphics layer loads.
     depends_on: [REN-09]
     sprint: 4
-    branches: [sprint4-pr1-main2]
+    branches: [sprint4-integ3, sprint4-pr1-main2]
     issue: null
 
   - id: REN-11
-    title: The scene core
+    title: Scene core
     status: built
     summary: "The scene core is the one camera and scene model of the views: an entity tree with cameras, bounds and fitting, which it compiles into a draw list of the graphics layer, with a pick pass."
     depends_on: [REN-10]
     sprint: 4
-    branches: [sprint4-pr1-main2]
+    branches: [sprint4-integ3, sprint4-pr1-main2]
     issue: null
 
   - id: REN-12
-    title: The scene view
+    title: Scene view
     status: built
     summary: The scene view is a live view of kind scene that draws the points, lines and meshes of a protocol 3.2 scene through the scene core, in the app and in the browser, with an orbit camera.
     depends_on: [REN-11, REN-14, STR-09]
     sprint: 4
-    branches: [sprint4-pr1-main2]
+    branches: [sprint4-integ3, sprint4-pr1-main2]
     issue: null
 
   - id: REN-13
     title: WebGPU backend of the graphics layer
     status: built
     summary: The WebGPU backend of the graphics layer runs in the browser, so the WebAssembly views draw scenes through the same layer as the native renderers.
-    depends_on: [REN-10, EMB-04]
+    depends_on: [EMB-04, REN-10]
     sprint: 4
-    branches: [sprint4-pr1-main2]
+    branches: [sprint4-integ3, sprint4-pr1-main2]
     issue: null
 
   - id: REN-14
@@ -119,33 +119,34 @@ features:
     summary: A colormap is decided by integer comparisons against keys derived once from the CPU reference, so every shader and adapter gives the same colours as the reference.
     depends_on: [REN-13]
     sprint: 4
-    branches: [sprint4-pr1-main2]
+    branches: [sprint4-integ3, sprint4-pr1-main2]
     issue: null
 
   - id: REN-15
     title: Picking
     status: built
-    summary: Picking draws the scene's entity and item ids into a small ID texture around the cursor and decodes them to name the entity and item under it.
+    summary: Picking finds the entity, item and row under the pointer through a pick pass of the scene core on the graphics layer, natively and in a browser.
     depends_on: [REN-11]
     sprint: 4
-    branches: [sprint4-pr1-main2]
+    branches: [sprint4-integ3, sprint4-draws]
     issue: null
 
   - id: REN-16
-    title: Every applet on the scene service
+    title: Applets on the scene service
     status: planned
-    summary: The applets that draw in 3-D, such as FieldScope, FlowScope, MeshScope, SculptScope and TwinScope, draw through a scene service that replaces the geometry service, which is then removed.
-    depends_on: [REN-12, REN-15]
+    summary: EmbedScope, GPTScope, InstanceScope, MeshScope and TwinScope draw through the scene service, export draws scenes, and the geometry service is deleted, so that every 3-D applet of the repository draws through one scene model.
+    depends_on: [REN-35]
     sprint: 4
     design: design/roadmap.md#renderers
     issue: null
 
   - id: REN-17
-    title: The end of OpenGL
-    status: planned
+    title: End of OpenGL
+    status: built
     summary: The GLEW OpenGL fallback is removed, and where neither Metal nor Vulkan starts, the app says so and exits instead of drawing through the CPU.
     depends_on: [REN-03]
     sprint: 4
+    branches: [sprint4-integ3, sprint4-pr2]
     issue: null
 
   - id: REN-18
@@ -175,40 +176,37 @@ features:
   - id: REN-21
     title: More shapes
     status: planned
-    summary: Capsules, cylinders and planes join the scene's ellipsoids and boxes, each drawn from its parameters rather than sent as a mesh.
-    depends_on: [REN-11]
+    summary: Capsules, cylinders, planes and ellipsoids join the scene's boxes, each drawn from its parameters.
+    depends_on: [REN-37]
     sprint: 5
     issue: null
 
   - id: REN-22
     title: More colormaps
     status: planned
-    summary: More colormaps join the built-in ones, each decided by keys like the first set.
+    summary: About twelve scientific colormaps from matplotlib and Crameri's tables join the built-in ones, checked by the exact colour tests.
     depends_on: [REN-14]
     sprint: 5
     issue: null
-    draft: true
 
   - id: REN-23
     title: Saved viewpoints
     status: planned
-    summary: A named camera position is kept with a view, in recordings and in spec applets, so that a chosen angle can be returned to and shared.
-    depends_on: [REN-12]
+    summary: Saved viewpoints keep a view's camera in views, recordings and spec applets, so that a person returns to the same angle.
+    depends_on: [REN-45]
     sprint: 5
     issue: null
-    draft: true
 
   - id: REN-24
-    title: A scale pass
+    title: Scale pass
     status: planned
-    summary: This step checks the limits and costs of the scene core and scene view on larger scenes.
-    depends_on: [REN-12]
+    summary: A scale pass measures and tunes scenes with millions of points, long recordings and many entities in Chromium, WebKit and Firefox, against the budgets and level of detail.
+    depends_on: [EMB-18, STR-12]
     sprint: 5
     issue: null
-    draft: true
 
   - id: REN-25
-    title: The Dawn fallback
+    title: Dawn fallback
     status: planned
     summary: The WebGPU backend also serves as the native fallback through Dawn, chosen only when Metal or Vulkan is unavailable, and draws through Direct3D, OpenGL ES or SwiftShader.
     depends_on: [REN-13]
@@ -219,10 +217,9 @@ features:
     title: Slice planes
     status: planned
     summary: A slice plane cuts a 3-D field along an axis and is dragged within the scene; the slice is computed on the device and drawn on a textured quad.
-    depends_on: [REN-11, STR-10]
+    depends_on: [REN-11, STR-25]
     sprint: 6
     issue: null
-    draft: true
 
   - id: REN-27
     title: Isosurfaces
@@ -239,7 +236,6 @@ features:
     depends_on: [REN-26]
     design: design/roadmap.md#undecided
     issue: null
-    draft: true
 
   - id: REN-29
     title: MSAA
@@ -248,13 +244,379 @@ features:
     depends_on: [REN-09]
     design: design/roadmap.md#undecided
     issue: null
-    draft: true
 
   - id: REN-30
-    title: Thick lines
+    title: Thick lines and ribbons
     status: idea
     summary: Thick lines and ribbons would draw with a width in pixels, which WebGPU does not offer natively, and they are not yet decided.
     depends_on: [REN-11]
     design: design/roadmap.md#undecided
     issue: null
-    draft: true
+
+  - id: REN-31
+    title: Renderer baseline and counters
+    status: built
+    summary: Copy counters, frame-time statistics on Metal and benchmark rows record a baseline before the renderer core's migration, so that every later step is measured against it.
+    depends_on: [REN-01, REN-02]
+    sprint: 4
+    branches: [sprint4-integ3, sprint4-pr1-main2]
+    issue: null
+
+  - id: REN-32
+    title: Points view on the scene core
+    status: built
+    summary: The points live view draws as a scene of one entity through the scene core, with its pixels checked against references from the old path, which is deleted.
+    depends_on: [REN-11, REN-31]
+    sprint: 4
+    branches: [sprint4-integ3, sprint4-pr2]
+    issue: null
+
+  - id: REN-33
+    title: Texture path on the graphics layer
+    status: built
+    summary: Heatmaps, images, the tensor bridge's textures and the embed views update their textures through the graphics layer with the colormap decided by keys, and the Vulkan renderer is reduced to the window, the canvas and ImGui.
+    depends_on: [REN-14, REN-31]
+    sprint: 4
+    branches: [sprint4-tex]
+    in_progress: true
+    issue: null
+
+  - id: REN-34
+    title: Scene model additions
+    status: planned
+    summary: The scene model gains additive points and lines, meshes drawn many times from instance poses, and a depth offset that lets edges win over the surface they lie on, natively and in a browser.
+    depends_on: [REN-11, STR-10]
+    sprint: 4
+    issue: null
+
+  - id: REN-35
+    title: Scene service for applets
+    status: planned
+    summary: The scene service offers the scene model to applets through the ABI, with the shared camera, the up-axis switch, the scale bar and picks returned as events, and the particle applets FieldScope, FlowScope and SculptScope draw through it.
+    depends_on: [REN-15, REN-34]
+    sprint: 4
+    issue: null
+
+  - id: REN-36
+    title: Final renderer seam
+    status: planned
+    summary: HostRenderer is reduced to the window, the frame loop, the canvas, window capture and the graphics layer, once every applet draws through the scene service.
+    depends_on: [REN-16]
+    sprint: 4
+    issue: null
+
+  - id: REN-37
+    title: Arrows and boxes in scenes
+    status: built
+    summary: Scenes draw arrows and boxes, with rotations, colours or values through a colormap, class ids, labels, optional fill and a corner form in 2-D.
+    depends_on: [REN-11, STR-10]
+    sprint: 4
+    branches: [sprint4-draws, sprint4-integ3]
+    issue: null
+
+  - id: REN-38
+    title: Images in scenes
+    status: built
+    summary: A scene shows colour, depth and segmentation images on a camera's image plane and draws a depth image as a point cloud projected back through the camera; encoded images are not drawn yet.
+    depends_on: [REN-39]
+    sprint: 4
+    branches: [sprint4-draws, sprint4-integ3]
+    issue: null
+
+  - id: REN-39
+    title: Pinhole cameras in scenes
+    status: built
+    summary: A scene holds pinhole cameras drawn as frustums, with 2-D items in each camera's pixel space, and a person can look through a camera.
+    depends_on: [REN-40]
+    sprint: 4
+    branches: [sprint4-draws, sprint4-integ3]
+    issue: null
+
+  - id: REN-40
+    title: Entity transforms
+    status: built
+    summary: Each entity of a scene carries a transform, as translation, rotation and scale or as a matrix, that composes down its path in 2-D and 3-D scenes.
+    depends_on: [REN-11, STR-10]
+    sprint: 4
+    branches: [sprint4-draws, sprint4-integ3]
+    issue: null
+
+  - id: REN-41
+    title: Class table and labels
+    status: built
+    summary: A scene's class table gives each class id a label and a colour for points, boxes and segmentation, and items may carry labels of their own.
+    depends_on: [REN-11, STR-10]
+    sprint: 4
+    branches: [sprint4-draws, sprint4-integ3]
+    issue: null
+
+  - id: REN-42
+    title: Index-pair edges
+    status: built
+    summary: Lines can be given as pairs of indices into a positions array, so that graph edges, bonds and skeletons reuse their points instead of repeating them.
+    depends_on: [REN-11, STR-10]
+    sprint: 4
+    branches: [sprint4-draws, sprint4-integ3]
+    issue: null
+
+  - id: REN-43
+    title: Up-axis switch
+    status: built
+    summary: Every 3-D view has a switch between Y up and Z up that changes only the camera's basis, never the data, and is remembered with the view.
+    depends_on: [REN-12]
+    sprint: 4
+    branches: [sprint4-integ3, sprint4-pr2]
+    issue: null
+
+  - id: REN-44
+    title: Scale bar
+    status: built
+    summary: A scene view shows a scale bar in the scene's units, measured at the orbit target in 3-D and exact in 2-D.
+    depends_on: [REN-12]
+    sprint: 4
+    branches: [sprint4-integ3, sprint4-pr2]
+    issue: null
+
+  - id: REN-45
+    title: Starting camera of a scene
+    status: built
+    summary: A script sets the camera a scene view opens on with view_camera, by a target, a distance and angles or by a camera entity.
+    depends_on: [REN-12, STR-10]
+    sprint: 4
+    branches: [sprint4-integ3, sprint4-draws]
+    issue: null
+
+  - id: REN-46
+    title: Scene selection and events
+    status: built
+    summary: Hover, click, rectangle and lasso work in a scene, natively and in a browser, picks and selections reach the script through caliper.serve() and the widget's selection, and a selection links to the other views.
+    depends_on: [REN-15, STR-03]
+    sprint: 4
+    branches: [sprint4-draws]
+    in_progress: true
+    issue: null
+
+  - id: REN-47
+    title: Following an entity
+    status: planned
+    summary: The camera of a scene view follows a chosen entity, such as a gripper, as it moves, while the person orbits around it.
+    depends_on: [REN-12, REN-40]
+    sprint: 5
+    issue: null
+
+  - id: REN-48
+    title: Keypoint skeletons
+    status: planned
+    summary: The class table of a scene holds keypoints and their connections, so that skeletons draw with names and colours.
+    depends_on: [REN-41, REN-42]
+    sprint: 5
+    issue: null
+
+  - id: REN-49
+    title: Line widths in world units
+    status: planned
+    summary: Lines in a scene take a width in world units as well as in pixels.
+    depends_on: [REN-12]
+    sprint: 5
+    issue: null
+
+  - id: REN-50
+    title: Orthographic projection and preset views
+    status: planned
+    summary: A 3-D view switches between perspective and orthographic projection and takes top, front, side and three-quarter presets, for measuring shapes without perspective.
+    depends_on: [REN-43]
+    sprint: 5
+    issue: null
+
+  - id: REN-51
+    title: Text log view
+    status: planned
+    summary: A text log view lists logged lines with their levels, drawn natively and, in a browser, in the page itself.
+    depends_on: [REN-12]
+    sprint: 5
+    issue: null
+
+  - id: REN-52
+    title: Bar chart view
+    status: planned
+    summary: A bar chart view draws a labelled array of bars, natively and, in a browser, in Canvas 2D.
+    depends_on: [REN-12]
+    sprint: 5
+    issue: null
+
+  - id: REN-53
+    title: Vulkan backend of the graphics layer
+    status: planned
+    summary: The graphics layer gains a Vulkan backend with the CUDA path, so that bridge textures, scenes and export, which Windows refuses until then, draw on Windows through the same layer as on macOS.
+    depends_on: [PLT-05, REN-10]
+    issue: null
+
+  - id: REN-54
+    title: Structure from motion demo
+    status: planned
+    summary: A demo reconstructs a scene from the frames of a short film and shows the cameras, their images and the point cloud, with the shot chosen to suit it.
+    depends_on: [REN-38, STR-13]
+    sprint: 5
+    issue: null
+
+  - id: REN-55
+    title: Robot arm demo
+    status: planned
+    summary: A demo loads a robot arm from its URDF and shows it following a target, with the gripper followed and trailed.
+    depends_on: [REN-19, REN-20, REN-47]
+    sprint: 5
+    issue: null
+
+  - id: REN-56
+    title: Detection boxes demo
+    status: planned
+    summary: A demo shows a detection model's boxes, classes and scores over the images they were found in.
+    depends_on: [REN-37, REN-38, REN-51]
+    sprint: 5
+    issue: null
+
+  - id: REN-57
+    title: Flow field demo
+    status: planned
+    summary: A demo shows where a neural surrogate's error concentrates inside a 3-D flow, with slice planes and isosurfaces.
+    depends_on: [REN-27]
+    sprint: 6
+    issue: null
+
+  - id: REN-58
+    title: Culling flag
+    status: idea
+    summary: Geometry draws could take a flag that turns face culling on or off.
+    depends_on: [REN-11]
+    issue: null
+
+  - id: REN-59
+    title: Exportable Vulkan image pool
+    status: idea
+    summary: The Vulkan renderer could keep a pool of exportable images for zero-copy sharing.
+    depends_on: [REN-02]
+    issue: null
+
+  - id: REN-60
+    title: Device-backed shared allocation on Metal
+    status: idea
+    summary: The alloc_shared call could be backed by device memory on Metal.
+    depends_on: [REN-01]
+    issue: null
+
+  - id: REN-61
+    title: Camera paths and fly mode
+    status: idea
+    summary: A scene view could play its camera along a recorded path and offer a fly mode for moving through a scene.
+    depends_on: [REN-12]
+    issue: null
+
+  - id: REN-62
+    title: Gizmos and scene editing
+    status: idea
+    summary: Gizmos could let a person move and edit the entities of a scene in its view.
+    depends_on: [REN-12]
+    issue: null
+
+  - id: REN-63
+    title: Lights and materials
+    status: idea
+    summary: Scenes could carry lights and materials beyond the fixed shading they have today.
+    depends_on: [REN-11]
+    issue: null
+
+  - id: REN-64
+    title: Tensor bridge service
+    status: shipped
+    summary: caliper.tensor_bridge.v1 to v1_2 turn a CaliperTensor into a live texture in the same frame, with a handoff ordered on the stream and imported device allocations.
+    depends_on: [COR-49, REN-08]
+    docs: docs/references/service-tensor-bridge-v1.md
+    issue: null
+
+  - id: REN-65
+    title: Export service
+    status: shipped
+    summary: caliper.export.v1 draws a draw list again offscreen at any resolution into a pixel-exact PNG with a JSON provenance file, and into frame sequences.
+    depends_on: [REN-05]
+    docs: docs/references/service-export-v1.md
+    issue: null
+
+  - id: REN-66
+    title: Torch adapter
+    status: shipped
+    summary: torch.hpp turns a torch tensor into a CaliperTensor, refuses a tensor it cannot share rather than copying it, and applies the rules of MPS and CUDA.
+    depends_on: [COR-49, REN-08]
+    docs: docs/references/adapters.md#torchhpp
+    issue: null
+
+  - id: REN-67
+    title: Exportable pool
+    status: shipped
+    summary: ExportablePool allocates the tensors that the renderer draws in place, and an allocation registry tracks the allocations the host can import.
+    depends_on: [REN-08]
+    docs: docs/references/adapters.md#exportable_poolhpp
+    issue: null
+
+  - id: REN-68
+    title: OBJ loader and orbit camera
+    status: shipped
+    summary: Two adapters give an applet an OBJ mesh loader and an orbit camera with picking under the cursor.
+    depends_on: [REN-05]
+    docs: docs/references/adapters.md#objhpp
+    issue: null
+
+  - id: REN-69
+    title: WebGPU renderer for browser views
+    status: shipped
+    summary: The WebGPU renderer draws the browser views of the WebAssembly module, with a colormap pass whose thresholds come from the CPU reference and instanced quads for points.
+    depends_on: [EMB-04]
+    docs: docs/explanations/rendering.md#the-webgpu-backend
+    issue: null
+
+  - id: REN-70
+    title: FieldScope
+    status: shipped
+    summary: FieldScope simulates charged particles in electromagnetic fields, 200,000 of them on a GPU, and draws them in place from device memory.
+    depends_on: [REN-04]
+    docs: docs/references/applets.md#fieldscope
+    issue: null
+
+  - id: REN-71
+    title: FlowScope
+    status: shipped
+    summary: FlowScope drives a flow field of one million particles on a GPU, drawn in place from the simulation's buffers.
+    depends_on: [REN-04]
+    docs: docs/references/applets.md#flowscope
+    issue: null
+
+  - id: REN-72
+    title: InstanceScope
+    status: shipped
+    summary: InstanceScope draws a field of procedural gems with one instanced draw call, with poses and tints computed again on the device every frame.
+    depends_on: [REN-07]
+    docs: docs/references/applets.md#instancescope
+    issue: null
+
+  - id: REN-73
+    title: MeshScope
+    status: shipped
+    summary: MeshScope trains a small network on a 2-D surface while it runs and draws its prediction as lit triangles with a wireframe, with export of figures and recordings.
+    depends_on: [REN-65]
+    docs: docs/references/applets.md#meshscope
+    issue: null
+
+  - id: REN-74
+    title: SculptScope
+    status: shipped
+    summary: SculptScope trains a small network that maps latent codes to a cloud of 150,000 points fitted to a target shape, with the last layer writing the buffer the GPU draws.
+    depends_on: [REN-04]
+    docs: docs/references/applets.md#sculptscope
+    issue: null
+
+  - id: REN-75
+    title: TwinScope
+    status: shipped
+    summary: TwinScope runs a synthetic heat twin of a textured housing, with the simulated physics and the learned belief side by side.
+    depends_on: [REN-06, REN-65]
+    docs: docs/references/applets.md#twinscope
+    issue: null

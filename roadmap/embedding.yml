@@ -5,7 +5,7 @@ order: 8
 summary: "This pillar covers how Caliper reaches a browser or another program: the web viewer, its views and elements, the embedding package, and the planned steps to the whole interface in a browser and to other languages."
 features:
   - id: EMB-01
-    title: The web viewer
+    title: Web viewer
     status: shipped
     summary: The web viewer shows live views from a Caliper stream in a browser, as the viewer page that caliper.serve() serves and as the notebook widget.
     depends_on: [EMB-05, STR-05]
@@ -48,10 +48,10 @@ features:
     issue: null
 
   - id: EMB-06
-    title: The spec page
+    title: Spec page
     status: shipped
     summary: A saved spec applet opens in a browser tab at the page that Caliper API serves at /v0/spec, drawn with the spec page's layout and look from the app's panel data.
-    depends_on: [SPC-08, AGT-01]
+    depends_on: [AGT-01, SPC-08]
     docs: docs/references/api.md#get-v0spec
     design: design/streaming-and-embedding.md#spec-applets
     issue: null
@@ -66,13 +66,13 @@ features:
     issue: null
 
   - id: EMB-08
-    title: The geometry path in the browser
-    status: planned
-    summary: The geometry path, with its meshes, lines and primitives, draws in the browser through a WebGPU geometry pipeline that works within the limit on storage buffers of a vertex stage.
-    depends_on: [EMB-02, REN-07]
-    design: design/streaming-and-embedding.md#the-web-viewer
+    title: Scenes in the browser
+    status: built
+    summary: Every scene primitive draws in the browser through the WebGPU backend of the graphics layer, under the parity rules, so that a scene looks the same in the app and in a browser; the geometry service does not come to the browser.
+    depends_on: [REN-12]
+    sprint: 4
+    branches: [sprint4-draws, sprint4-integ3]
     issue: null
-    draft: true
 
   - id: EMB-09
     title: ImPlot3D in the browser
@@ -83,7 +83,7 @@ features:
     issue: null
 
   - id: EMB-10
-    title: The whole interface in a browser
+    title: Whole interface in a browser
     status: planned
     summary: The whole Caliper interface runs in a browser, with the landing screen, docking and the panes, using the browser's file system, DuckDB's WebAssembly build and cross-origin isolation.
     depends_on: [EMB-04]
@@ -94,7 +94,7 @@ features:
     title: Applets in a browser
     status: planned
     summary: Applets run in a browser by splitting each into a native computation and a WebAssembly interface that draws from the data stream.
-    depends_on: [SPC-21, EMB-10]
+    depends_on: [EMB-10, SPC-21]
     design: design/streaming-and-embedding.md#applets-in-the-browser
     issue: null
 
@@ -109,10 +109,9 @@ features:
   - id: EMB-13
     title: Embedding in web pages
     status: planned
-    summary: Caliper's browser views are embedded in web pages beyond the viewer page and the notebook widgets.
-    depends_on: [EMB-05]
+    summary: A small JavaScript interface over the WebAssembly views lets a web product place Caliper views in its own pages, as a native host does through Caliper Embed.
+    depends_on: [EMB-04]
     issue: null
-    draft: true
 
   - id: EMB-14
     title: Rust bindings
@@ -128,4 +127,108 @@ features:
     summary: Swift bindings let a Swift program embed Caliper through the embed ABI.
     depends_on: [EMB-07]
     design: design/streaming-and-embedding.md#the-order-of-surfaces
+    issue: null
+
+  - id: EMB-16
+    title: One WebGPU path in the browser
+    status: built
+    summary: The TypeScript WebGPU views are removed, so that the WebAssembly views are the browser's one WebGPU path and the element's own views draw with Canvas 2D.
+    depends_on: [REN-13]
+    sprint: 4
+    branches: [sprint4-integ3, sprint4-pr2]
+    issue: null
+
+  - id: EMB-17
+    title: Scene fallback without WebGPU
+    status: planned
+    summary: Where WebGPU is absent, refused or lost, the browser element draws a scene's points in Canvas 2D with a notice that names what it does not draw.
+    depends_on: [EMB-03, STR-09]
+    sprint: 5
+    issue: null
+
+  - id: EMB-18
+    title: Scene budgets and device loss in the browser
+    status: planned
+    summary: A browser holds at most a set budget of a scene, leaves out the batches over it with a line that says so, and draws the scene again after a lost device.
+    depends_on: [REN-12, STR-25]
+    sprint: 5
+    issue: null
+
+  - id: EMB-19
+    title: Clipboard and multi-touch in the browser
+    status: planned
+    summary: The browser views accept the clipboard and multi-touch gestures in the canvas.
+    depends_on: [EMB-04]
+    issue: null
+
+  - id: EMB-20
+    title: More browsers tested
+    status: planned
+    summary: The browser views are tested in Safari, in Firefox and on Windows, beside headless Chromium.
+    depends_on: [EMB-04]
+    issue: null
+
+  - id: EMB-21
+    title: Canvas info query
+    status: idea
+    summary: Caliper Embed could answer a query that reports the state of a canvas it hosts.
+    depends_on: [EMB-07]
+    issue: null
+
+  - id: EMB-22
+    title: Frame to image in Caliper Embed
+    status: planned
+    summary: A host program can ask Caliper Embed to render one frame into an image file.
+    depends_on: [EMB-07]
+    issue: null
+
+  - id: EMB-23
+    title: HiDPI in Caliper Embed
+    status: planned
+    summary: Caliper Embed draws at the full resolution of high-density displays.
+    depends_on: [EMB-07]
+    issue: null
+
+  - id: EMB-24
+    title: Qt widget for Caliper Embed
+    status: planned
+    summary: A Qt widget hosts a Caliper Embed canvas in a Qt program.
+    depends_on: [EMB-07]
+    issue: null
+
+  - id: EMB-25
+    title: Tensor views in Caliper Embed
+    status: shipped
+    summary: A host program hands the embedded core a CaliperTensor and the core draws it as a texture in a window named after the view, over a device path with no silent fallback.
+    depends_on: [COR-49, EMB-07]
+    docs: docs/references/embedding.md#built-in-tensor-views
+    issue: null
+
+  - id: EMB-26
+    title: Torch-free Caliper Embed
+    status: shipped
+    summary: The caliper-embed package builds and runs without libtorch, so that a host program that embeds it links no torch.
+    depends_on: [EMB-07]
+    docs: docs/references/embedding.md#the-torch-free-build
+    issue: null
+
+  - id: EMB-27
+    title: Spec page from a hub or a script
+    status: planned
+    summary: The browser page of a spec applet reads its data from a hub or from a script's caliper.serve(), follows live sources over the stream and runs the tensor transforms itself.
+    depends_on: [EMB-06, STR-06]
+    issue: null
+
+  - id: EMB-28
+    title: Spec page tooltips and selection
+    status: planned
+    summary: The browser page of a spec applet draws tooltips, selection, zoom and the grid and ticks of 3-D walls, as the app does.
+    depends_on: [EMB-06]
+    issue: null
+
+  - id: EMB-29
+    title: SQL sources in the spec page
+    status: idea
+    summary: A spec's SQL sources could run in the browser page with DuckDB's WebAssembly build over data loaded into the page.
+    depends_on: [EMB-06]
     issue: null
