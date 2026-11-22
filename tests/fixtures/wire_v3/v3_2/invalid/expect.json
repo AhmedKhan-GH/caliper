@@ -59,6 +59,36 @@
   "colors_rgb.bin": {
     "error": "bad_request"
   },
+  "control_intervene_clear_all.bin": {
+    "error": "bad_request"
+  },
+  "control_intervene_missing.bin": {
+    "error": "bad_request"
+  },
+  "control_intervene_op.bin": {
+    "error": "bad_request"
+  },
+  "control_intervene_point.bin": {
+    "error": "bad_request"
+  },
+  "control_intervene_step.bin": {
+    "error": "bad_request"
+  },
+  "control_intervene_two.bin": {
+    "error": "bad_request"
+  },
+  "controls_interventions_active.bin": {
+    "error": "bad_request"
+  },
+  "controls_interventions_kind.bin": {
+    "error": "bad_request"
+  },
+  "controls_interventions_shape.bin": {
+    "error": "bad_request"
+  },
+  "controls_interventions_state.bin": {
+    "error": "bad_request"
+  },
   "controls_stamp_f32.bin": {
     "error": "bad_request"
   },
@@ -166,6 +196,108 @@
     "reason": "malformed"
   },
   "positions_missing.bin": {
+    "error": "bad_request"
+  },
+  "program_arrays_positions.bin": {
+    "error": "bad_request"
+  },
+  "program_arrays_repeat.bin": {
+    "error": "bad_request"
+  },
+  "program_declaration_missing.bin": {
+    "error": "bad_request"
+  },
+  "program_entity.bin": {
+    "error": "bad_request"
+  },
+  "program_every.bin": {
+    "error": "bad_request"
+  },
+  "program_id_long.bin": {
+    "error": "bad_request"
+  },
+  "program_id_upper.bin": {
+    "error": "bad_request"
+  },
+  "program_input_source.bin": {
+    "error": "bad_request"
+  },
+  "program_inputs_many.bin": {
+    "error": "bad_request"
+  },
+  "program_max_count.bin": {
+    "error": "bad_request"
+  },
+  "program_op.bin": {
+    "error": "bad_request"
+  },
+  "program_output_kind.bin": {
+    "error": "bad_request"
+  },
+  "program_pixels_side.bin": {
+    "error": "bad_request"
+  },
+  "program_request_id.bin": {
+    "error": "bad_request"
+  },
+  "program_scene_missing.bin": {
+    "error": "bad_request"
+  },
+  "program_sha256.bin": {
+    "error": "bad_request"
+  },
+  "program_state_error.bin": {
+    "error": "bad_request"
+  },
+  "program_state_every.bin": {
+    "error": "bad_request"
+  },
+  "program_state_kind.bin": {
+    "error": "bad_request"
+  },
+  "program_state_many.bin": {
+    "error": "bad_request"
+  },
+  "program_state_programs.bin": {
+    "error": "bad_request"
+  },
+  "program_state_repeat.bin": {
+    "error": "bad_request"
+  },
+  "program_state_runs.bin": {
+    "error": "bad_request"
+  },
+  "program_state_runs_exact.bin": {
+    "error": "bad_request"
+  },
+  "program_state_sha256.bin": {
+    "error": "bad_request"
+  },
+  "program_state_state.bin": {
+    "error": "bad_request"
+  },
+  "program_state_step.bin": {
+    "error": "bad_request"
+  },
+  "program_time_ms.bin": {
+    "error": "bad_request"
+  },
+  "program_wgsl_big.bin": {
+    "error": "bad_request"
+  },
+  "program_wgsl_dtype.bin": {
+    "error": "bad_request"
+  },
+  "program_wgsl_empty.bin": {
+    "error": "bad_request"
+  },
+  "program_wgsl_missing.bin": {
+    "error": "bad_request"
+  },
+  "program_wgsl_utf8.bin": {
+    "error": "bad_request"
+  },
+  "program_workgroups.bin": {
     "error": "bad_request"
   },
   "recording_open_id.bin": {

@@ -1,0 +1,124 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 504,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 426,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 1,
+    "type": 128
+  },
+  "meta": {
+    "declaration": {
+      "entry": "main",
+      "inputs": [
+        {
+          "source": "live:fc1.weight",
+          "var": "w"
+        }
+      ],
+      "limits": {
+        "every": 5
+      },
+      "output": {
+        "arrays": [
+          "positions",
+          "values"
+        ],
+        "entity": "programs/rows",
+        "kind": "geometry",
+        "max_count": 4096,
+        "part": "lines"
+      },
+      "workgroups": [
+        64,
+        1,
+        1
+      ]
+    },
+    "id": "rows",
+    "op": "set",
+    "request_id": 11,
+    "scene": "world",
+    "sections": [
+      {
+        "dtype": 5,
+        "name": "wgsl",
+        "shape": [
+          48
+        ]
+      }
+    ],
+    "sha256": "9a7ef4fcc70936b5fac959d3326c5b417fae5391b16ec39a183985933b64812e"
+  },
+  "meta_offset": 28,
+  "name": "v3_2/program_set_geometry",
+  "section_lengths": [
+    48
+  ],
+  "sections": [
+    {
+      "dtype": 5,
+      "encoding": 0,
+      "length": 48,
+      "name": "wgsl",
+      "offset": 456,
+      "shape": [
+        48
+      ],
+      "values": [
+        64,
+        99,
+        111,
+        109,
+        112,
+        117,
+        116,
+        101,
+        32,
+        64,
+        119,
+        111,
+        114,
+        107,
+        103,
+        114,
+        111,
+        117,
+        112,
+        95,
+        115,
+        105,
+        122,
+        101,
+        40,
+        54,
+        52,
+        41,
+        32,
+        102,
+        110,
+        32,
+        109,
+        97,
+        105,
+        110,
+        40,
+        41,
+        32,
+        123,
+        125,
+        32,
+        47,
+        47,
+        32,
+        194,
+        181,
+        10
+      ]
+    }
+  ],
+  "type_name": "program"
+}

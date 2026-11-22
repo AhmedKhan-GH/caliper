@@ -1,0 +1,61 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 480,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 456,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 80
+  },
+  "meta": {
+    "actions": [],
+    "interventions": {
+      "active": [
+        {
+          "from_step": 1201,
+          "op": "ablate",
+          "point": "blocks.0.attn#3",
+          "since_step": 1201,
+          "state": "active",
+          "until_step": null
+        }
+      ],
+      "points": [
+        {
+          "head": null,
+          "kind": "module",
+          "module": "blocks.0.attn",
+          "point": "blocks.0.attn",
+          "shape": [
+            8,
+            64,
+            128
+          ],
+          "type": "Attention"
+        },
+        {
+          "head": 3,
+          "kind": "head",
+          "module": "blocks.0.attn",
+          "point": "blocks.0.attn#3",
+          "shape": null,
+          "type": "Attention"
+        }
+      ]
+    },
+    "params": [],
+    "run": {
+      "state": "running",
+      "step": 1200,
+      "steps_left": 0
+    }
+  },
+  "meta_offset": 24,
+  "name": "v3_2/controls_interventions",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "controls"
+}

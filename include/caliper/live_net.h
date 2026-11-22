@@ -535,6 +535,15 @@ static inline uint32_t caliper_net_align(uint32_t n) {
 #define CALIPER_NET_POINT_MAX            255u         /* bytes of an intervention point     */
 #define CALIPER_NET_MAX_POINTS_LISTED    4096u        /* CONTROLS "interventions" "points"  */
 #define CALIPER_NET_MAX_INTERVENTIONS    64u          /* CONTROLS "interventions" "active"  */
+/* the PROGRAM set declaration's bounds: each count that sizes a buffer */
+#define CALIPER_NET_PROGRAM_MAX_INPUTS   8u           /* "inputs"                           */
+#define CALIPER_NET_PROGRAM_MAX_COUNT    1000000u     /* geometry "max_count"               */
+#define CALIPER_NET_PROGRAM_SIDE_MAX     2048u        /* pixels "width" and "height"        */
+#define CALIPER_NET_PROGRAM_TIME_MS_MAX  50u          /* "limits" "time_ms"                 */
+#define CALIPER_NET_PROGRAM_MEMORY_MB_MAX 512u        /* "limits" "memory_mb"               */
+#define CALIPER_NET_PROGRAM_EVERY_MAX    10000u       /* "limits" "every", and the cadence N */
+#define CALIPER_NET_PROGRAM_WORKGROUPS_MAX 65535u     /* each of the three "workgroups"     */
+#define CALIPER_NET_TENSOR_NAME_MAX      255u         /* bytes of an input's "source"       */
 
 #ifdef __cplusplus
 }  /* extern "C" */

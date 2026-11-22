@@ -1,0 +1,53 @@
+{
+  "header": {
+    "flags": 0,
+    "frame_len": 538,
+    "magic": 1464615235,
+    "major": 3,
+    "meta_len": 514,
+    "minor": 2,
+    "reserved": 0,
+    "section_count": 0,
+    "type": 129
+  },
+  "meta": {
+    "programs": [
+      {
+        "error": null,
+        "every": 12,
+        "every_min": 5,
+        "id": "rows",
+        "kind": "geometry",
+        "last_cost_ms": 1.5,
+        "last_pass_ms": 0.25,
+        "last_step": 1200,
+        "memory_bytes": 1310720,
+        "memory_limit_bytes": 67108864,
+        "runs": 7,
+        "sha256": "9a7ef4fcc70936b5fac959d3326c5b417fae5391b16ec39a183985933b64812e",
+        "state": "running",
+        "step_ms": 31.25
+      },
+      {
+        "error": {
+          "code": "program.unknown_input",
+          "column": 0,
+          "line": 0,
+          "message": "No tensor fc9.weight."
+        },
+        "every_min": 1,
+        "id": "image",
+        "kind": "pixels",
+        "state": "refused"
+      }
+    ],
+    "request_id": 12,
+    "step": 1200,
+    "step_ms": 31.25
+  },
+  "meta_offset": 24,
+  "name": "v3_2/program_state_reply",
+  "section_lengths": [],
+  "sections": [],
+  "type_name": "program_state"
+}
